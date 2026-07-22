@@ -41,6 +41,14 @@ public:
     [[nodiscard]] virtual VkQueue          compute_queue() const noexcept      = 0; // dedicated compute if present, else graphics
     [[nodiscard]] virtual crd::u32         compute_family() const noexcept     = 0;
     [[nodiscard]] virtual bool             cooperative_matrix2() const noexcept = 0; // VK_NV_cooperative_matrix2 enabled?
+    // C6: cooperative VECTOR (VK_NV_cooperative_vector) — per-invocation matrix×vector, the neural-shading inference primitive
+    // (the device half of the B10 moat). `_training` = the backward ops (OuterProductAccumulate/ReduceSum) for differentiable
+    // neural shading; `coopvec_max_components` = the max cooperative-vector dimension; `coopvec_supported_stages` = the shader
+    // stages that support it (VkShaderStageFlags — compute always, fragment on this HW). All 0/false when the ext is absent.
+    [[nodiscard]] virtual bool             cooperative_vector() const noexcept = 0;
+    [[nodiscard]] virtual bool             cooperative_vector_training() const noexcept = 0;
+    [[nodiscard]] virtual crd::u32         coopvec_max_components() const noexcept = 0;
+    [[nodiscard]] virtual crd::u32         coopvec_supported_stages() const noexcept = 0;
     [[nodiscard]] virtual bool             shader_int64() const noexcept        = 0; // shaderInt64 enabled (geometry 60-bit)?
 
     // D-008 C1: the converged device is graphics-capable too (ADR-0099 "one device, both concerns"). A GRAPHICS queue +

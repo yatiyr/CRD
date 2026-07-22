@@ -950,3 +950,342 @@ TEST_CASE("B19-a4 FULL GPU BINNING: tilecount->scan->scatter->sort->ranges->bloc
     std::printf("[B19-a4] full GPU bin: %d splats, T=%d instances over %d tiles; worst |block - brute| = %.3e\n", n, total, n_tiles, worst);
     CHECK(worst < 1.0e-5); // the block render composites exactly the brute set, in depth order ⇒ bit-exact (f32)
 }
+
+TEST_CASE("B19-d quantise: the K-bit attribute codec round-trips within the quantisation step", "[ckir][gsplat]")
+{
+    crd::memory::TlsfAllocator alloc(64U << 20U, nullptr, "gsplat-quant");
+    constexpr int n    = 256;
+    constexpr int natt = 14;
+    constexpr int bits = 12;
+    const double  levels = static_cast<double>((1U << bits) - 1U);
+
+    crd::containers::Array<double> gs(&alloc);
+    gs.resize(static_cast<crd::usize>(n) * natt, 0.0);
+    crd::u32 st = 0xC0DEU;
+    const auto rnd = [&]() { st = st * 1664525U + 1013904223U; return static_cast<double>(st >> 8U) / 16777216.0; };
+    for (int i = 0; i < n * natt; ++i) { gs[static_cast<crd::usize>(i)] = (rnd() * 2.0 - 1.0) * 3.0; }
+
+    // per-attribute observed ranges
+    crd::containers::Array<double> rng(&alloc);
+    rng.resize(static_cast<crd::usize>(natt) * 2U, 0.0);
+    for (int k = 0; k < natt; ++k)
+    {
+        double lo = 1.0e30; double hi = -1.0e30;
+        for (int i = 0; i < n; ++i) { const double v = gs[static_cast<crd::usize>(i) * static_cast<crd::usize>(natt) + static_cast<crd::usize>(k)]; if (v < lo) { lo = v; } if (v > hi) { hi = v; } }
+        rng[static_cast<crd::usize>(k) * 2U] = lo; rng[static_cast<crd::usize>(k) * 2U + 1U] = hi;
+    }
+
+    kir::gsplat::GsplatQuantizeConfig qc;
+    qc.natt = natt; qc.bits = bits;
+    crd::containers::Array<double> codes(&alloc);
+    crd::containers::Array<double> recon(&alloc);
+    codes.resize(static_cast<crd::usize>(n) * natt, 0.0);
+    recon.resize(static_cast<crd::usize>(n) * natt, 0.0);
+    kir::KGraph       qg(&alloc);
+    const kir::KEntry qe = kir::gsplat::build_gsplat_quantize_kernel(qg, qc);
+    kir::KernelBuffer qb[3] = {{gs.data(), n * natt, 0, 0}, {rng.data(), natt * 2, 0, 1}, {codes.data(), n * natt, 0, 2}};
+    kir::eval_cpu_kernel(qg, qe, qb, 3, qe.local_size[0], &alloc, static_cast<crd::u32>(n / qc.local_size));
+    kir::KGraph       dg(&alloc);
+    const kir::KEntry de = kir::gsplat::build_gsplat_dequantize_kernel(dg, qc);
+    kir::KernelBuffer db[3] = {{codes.data(), n * natt, 0, 0}, {rng.data(), natt * 2, 0, 1}, {recon.data(), n * natt, 0, 2}};
+    kir::eval_cpu_kernel(dg, de, db, 3, de.local_size[0], &alloc, static_cast<crd::u32>(n / qc.local_size));
+
+    double worst = 0.0; int bad_code = 0;
+    for (int k = 0; k < natt; ++k)
+    {
+        const double step = (rng[static_cast<crd::usize>(k) * 2U + 1U] - rng[static_cast<crd::usize>(k) * 2U]) / levels;
+        for (int i = 0; i < n; ++i)
+        {
+            const double err = crd::math::abs(recon[static_cast<crd::usize>(i) * static_cast<crd::usize>(natt) + static_cast<crd::usize>(k)] - gs[static_cast<crd::usize>(i) * static_cast<crd::usize>(natt) + static_cast<crd::usize>(k)]);
+            if (err > worst) { worst = err; }
+            if (err > 0.5001 * step + 1.0e-6) { ++bad_code; } // nearest-code error ≤ half a step
+        }
+    }
+    std::printf("[B19-d quant] %d-bit codec: worst round-trip err %.3e; ratio 32/%d = %.1fx\n", bits, worst, bits, 32.0 / bits);
+    CHECK(bad_code == 0);                       // every attribute reconstructs within half a quantisation step
+    CHECK(32.0 / static_cast<double>(bits) > 2.0); // real bit-rate reduction (packed: 32/bits×)
+}
+
+TEST_CASE("B19-d Morton: sorting by the Z-order key gives spatial locality (adjacent deltas shrink)", "[ckir][gsplat]")
+{
+    crd::memory::TlsfAllocator alloc(96U << 20U, nullptr, "gsplat-morton");
+    constexpr int n          = 1024;
+    constexpr int threads    = 256;
+    constexpr int radix_bits = 8;
+    constexpr int nbins      = 256;
+    constexpr int epb        = 512;
+    constexpr int nblocks    = n / epb;
+    constexpr int scan_threads = nblocks < threads ? nblocks : threads;
+
+    crd::containers::Array<double> gs(&alloc);
+    gs.resize(static_cast<crd::usize>(n) * 14U, 0.0);
+    crd::u32 st = 0x37EU;
+    const auto rnd = [&]() { st = st * 1664525U + 1013904223U; return static_cast<double>(st >> 8U) / 16777216.0; };
+    for (int i = 0; i < n; ++i) { gs[static_cast<crd::usize>(i) * 14U] = rnd(); gs[static_cast<crd::usize>(i) * 14U + 1U] = rnd(); gs[static_cast<crd::usize>(i) * 14U + 2U] = rnd(); }
+    crd::containers::Array<double> bd(&alloc);
+    bd.resize(6U, 0.0); bd[3] = 1.0; bd[4] = 1.0; bd[5] = 1.0;
+
+    // Morton keys + index
+    crd::containers::Array<double> ka(&alloc);
+    crd::containers::Array<double> kb(&alloc);
+    crd::containers::Array<double> va(&alloc);
+    crd::containers::Array<double> vb(&alloc);
+    ka.resize(n, 0.0); kb.resize(n, 0.0); va.resize(n, 0.0); vb.resize(n, 0.0);
+    kir::KGraph       mg(&alloc);
+    const kir::KEntry me = kir::gsplat::build_gsplat_morton_kernel(mg, {});
+    kir::KernelBuffer mb[4] = {{gs.data(), n * 14, 0, 0}, {bd.data(), 6, 0, 1}, {ka.data(), n, 0, 2}, {va.data(), n, 0, 3}};
+    kir::eval_cpu_kernel(mg, me, mb, 4, me.local_size[0], &alloc, static_cast<crd::u32>(n / 64));
+
+    // KV radix sort by Morton key (4 passes)
+    crd::containers::Array<double> bh(&alloc);
+    crd::containers::Array<double> go(&alloc);
+    crd::containers::Array<double> tot(&alloc);
+    crd::containers::Array<double> gb(&alloc);
+    bh.resize(static_cast<crd::usize>(nblocks) * nbins, 0.0); go.resize(static_cast<crd::usize>(nblocks) * nbins, 0.0);
+    tot.resize(nbins, 0.0); gb.resize(nbins, 0.0);
+    double* ck = ka.data(); double* ok = kb.data();
+    double* cv = va.data(); double* ov = vb.data();
+    for (int pass = 0; pass < 4; ++pass)
+    {
+        const int shift = pass * 8;
+        kir::KGraph gh(&alloc);
+        kir::KGraph gof1(&alloc);
+        kir::KGraph gof2(&alloc);
+        kir::KGraph gscat(&alloc);
+        const kir::KEntry eh  = kir::build_sort_histogram(gh, epb, threads, radix_bits, shift, nblocks);
+        const kir::KEntry eo1 = kir::build_sort_offset_local(gof1, nblocks, radix_bits, scan_threads);
+        const kir::KEntry eo2 = kir::build_sort_gbase(gof2, radix_bits);
+        const kir::KEntry es  = kir::build_sort_scatter(gscat, epb, threads, radix_bits, shift, nblocks, true);
+        kir::KernelBuffer h[2] = {{ck, n, 0, 0}, {bh.data(), nblocks * nbins, 0, 1}};
+        kir::eval_cpu_kernel(gh, eh, h, 2, eh.local_size[0], &alloc, static_cast<crd::u32>(nblocks));
+        kir::KernelBuffer o1[3] = {{bh.data(), nblocks * nbins, 0, 0}, {go.data(), nblocks * nbins, 0, 1}, {tot.data(), nbins, 0, 2}};
+        kir::eval_cpu_kernel(gof1, eo1, o1, 3, eo1.local_size[0], &alloc, static_cast<crd::u32>(nbins));
+        kir::KernelBuffer o2[2] = {{tot.data(), nbins, 0, 0}, {gb.data(), nbins, 0, 1}};
+        kir::eval_cpu_kernel(gof2, eo2, o2, 2, eo2.local_size[0], &alloc, 1U);
+        kir::KernelBuffer s[6] = {{ck, n, 0, 0}, {ok, n, 0, 1}, {go.data(), nblocks * nbins, 0, 2}, {gb.data(), nbins, 0, 3}, {cv, n, 0, 4}, {ov, n, 0, 5}};
+        kir::eval_cpu_kernel(gscat, es, s, 6, es.local_size[0], &alloc, static_cast<crd::u32>(nblocks));
+        double* tk = ck; ck = ok; ok = tk;
+        double* tv = cv; cv = ov; ov = tv;
+    }
+    // cv = index in Morton order
+
+    const auto pos = [&](int idx, int c) { return gs[static_cast<crd::usize>(idx) * 14U + static_cast<crd::usize>(c)]; };
+    const auto dist = [&](int ia, int ib) { const double dxp = pos(ia, 0) - pos(ib, 0); const double dyp = pos(ia, 1) - pos(ib, 1); const double dzp = pos(ia, 2) - pos(ib, 2); return crd::math::sqrt(dxp * dxp + dyp * dyp + dzp * dzp); };
+    double orig_delta = 0.0; double morton_delta = 0.0;
+    for (int i = 1; i < n; ++i)
+    {
+        orig_delta += dist(i, i - 1); // original (random) order
+        const int a = static_cast<int>(cv[static_cast<crd::usize>(i)]);
+        const int b = static_cast<int>(cv[static_cast<crd::usize>(i - 1)]);
+        morton_delta += dist(a, b);   // Morton order
+    }
+    orig_delta /= static_cast<double>(n - 1);
+    morton_delta /= static_cast<double>(n - 1);
+    std::printf("[B19-d Morton] mean adjacent |Δpos|: random %.4f → Morton %.4f (%.1f× more local)\n", orig_delta, morton_delta, orig_delta / morton_delta);
+    CHECK(morton_delta < orig_delta * 0.5); // Morton order is markedly more spatially local ⇒ smaller residuals ⇒ compressible
+}
+
+namespace
+{
+// render the differentiable Gaussian and return the sum-of-squares loss against `target`.
+double diff_loss(crd::memory::TlsfAllocator& alloc, const kir::gsplat::GsplatDiffConfig& cfg,
+                 crd::containers::Array<double>& params, crd::containers::Array<double>& target)
+{
+    kir::KGraph       fg(&alloc);
+    const kir::KEntry fe = kir::gsplat::build_gsplat_diff_forward_kernel(fg, cfg);
+    crd::containers::Array<double> img(&alloc);
+    img.resize((static_cast<crd::usize>(cfg.width) * static_cast<crd::usize>(cfg.height)), 0.0);
+    kir::KernelBuffer fb[2] = {{params.data(), 5, 0, 0}, {img.data(), cfg.width * cfg.height, 0, 1}};
+    kir::eval_cpu_kernel(fg, fe, fb, 2, fe.local_size[0], &alloc, static_cast<crd::u32>(cfg.width * cfg.height / cfg.local_size));
+    double l = 0.0;
+    for (int i = 0; i < cfg.width * cfg.height; ++i) { const double d = img[static_cast<crd::usize>(i)] - target[static_cast<crd::usize>(i)]; l += d * d; }
+    return l;
+}
+} // namespace
+
+TEST_CASE("B19-f differentiable: analytic gradients match finite differences", "[ckir][gsplat]")
+{
+    crd::memory::TlsfAllocator alloc(64U << 20U, nullptr, "gsplat-diff");
+    kir::gsplat::GsplatDiffConfig cfg;
+    cfg.width = 16; cfg.height = 16; cfg.local_size = 64;
+
+    // target image = render of a "true" Gaussian
+    crd::containers::Array<double> tgtp(&alloc);
+    tgtp.resize(5U, 0.0); tgtp[0] = 8.0; tgtp[1] = 8.0; tgtp[2] = 3.0; tgtp[3] = 0.9; tgtp[4] = 0.8;
+    crd::containers::Array<double> target(&alloc);
+    {
+        kir::KGraph fg(&alloc);
+        const kir::KEntry fe = kir::gsplat::build_gsplat_diff_forward_kernel(fg, cfg);
+        target.resize((static_cast<crd::usize>(cfg.width) * static_cast<crd::usize>(cfg.height)), 0.0);
+        kir::KernelBuffer fb[2] = {{tgtp.data(), 5, 0, 0}, {target.data(), cfg.width * cfg.height, 0, 1}};
+        kir::eval_cpu_kernel(fg, fe, fb, 2, fe.local_size[0], &alloc, static_cast<crd::u32>(cfg.width * cfg.height / cfg.local_size));
+    }
+
+    // a DIFFERENT test point (non-zero gradient)
+    crd::containers::Array<double> params(&alloc);
+    params.resize(5U, 0.0); params[0] = 7.0; params[1] = 9.0; params[2] = 2.5; params[3] = 0.7; params[4] = 0.6;
+
+    // analytic gradient
+    crd::containers::Array<double> grad(&alloc);
+    grad.resize(5U, 0.0);
+    kir::KGraph       bg(&alloc);
+    const kir::KEntry be = kir::gsplat::build_gsplat_diff_backward_kernel(bg, cfg);
+    kir::KernelBuffer bb[3] = {{params.data(), 5, 0, 0}, {target.data(), cfg.width * cfg.height, 0, 1}, {grad.data(), 5, 0, 2}};
+    kir::eval_cpu_kernel(bg, be, bb, 3, be.local_size[0], &alloc, 1U);
+
+    // finite differences
+    const double eps[5] = {1.0e-3, 1.0e-3, 1.0e-3, 1.0e-4, 1.0e-4};
+    int worst_ok = 0;
+    for (int k = 0; k < 5; ++k)
+    {
+        const double save = params[static_cast<crd::usize>(k)];
+        params[static_cast<crd::usize>(k)] = save + eps[k]; const double lp = diff_loss(alloc, cfg, params, target);
+        params[static_cast<crd::usize>(k)] = save - eps[k]; const double lm = diff_loss(alloc, cfg, params, target);
+        params[static_cast<crd::usize>(k)] = save;
+        const double fd = (lp - lm) / (2.0 * eps[k]);
+        const double an = grad[static_cast<crd::usize>(k)];
+        const double rel = crd::math::abs(fd - an) / (crd::math::abs(fd) + crd::math::abs(an) + 1.0e-6);
+        INFO("param " << k << ": analytic " << an << " vs FD " << fd);
+        CHECK(rel < 1.0e-2); // analytic gradient matches finite differences
+        if (rel < 1.0e-2) { ++worst_ok; }
+    }
+    CHECK(worst_ok == 5);
+}
+
+TEST_CASE("B19-f differentiable: SGD fits a Gaussian to a target image (loss decreases)", "[ckir][gsplat]")
+{
+    crd::memory::TlsfAllocator alloc(96U << 20U, nullptr, "gsplat-train");
+    kir::gsplat::GsplatDiffConfig cfg;
+    cfg.width = 16; cfg.height = 16; cfg.local_size = 64;
+
+    crd::containers::Array<double> tgtp(&alloc);
+    tgtp.resize(5U, 0.0); tgtp[0] = 8.0; tgtp[1] = 8.0; tgtp[2] = 3.0; tgtp[3] = 0.9; tgtp[4] = 0.8;
+    crd::containers::Array<double> target(&alloc);
+    {
+        kir::KGraph fg(&alloc);
+        const kir::KEntry fe = kir::gsplat::build_gsplat_diff_forward_kernel(fg, cfg);
+        target.resize((static_cast<crd::usize>(cfg.width) * static_cast<crd::usize>(cfg.height)), 0.0);
+        kir::KernelBuffer fb[2] = {{tgtp.data(), 5, 0, 0}, {target.data(), cfg.width * cfg.height, 0, 1}};
+        kir::eval_cpu_kernel(fg, fe, fb, 2, fe.local_size[0], &alloc, static_cast<crd::u32>(cfg.width * cfg.height / cfg.local_size));
+    }
+
+    // start from wrong parameters
+    crd::containers::Array<double> params(&alloc);
+    params.resize(5U, 0.0); params[0] = 6.5; params[1] = 9.5; params[2] = 2.2; params[3] = 0.55; params[4] = 0.5;
+    const double loss0 = diff_loss(alloc, cfg, params, target);
+
+    crd::containers::Array<double> grad(&alloc);
+    crd::containers::Array<double> lr(&alloc);
+    grad.resize(5U, 0.0); lr.resize(5U, 0.0);
+    kir::KGraph       bg(&alloc);
+    const kir::KEntry be = kir::gsplat::build_gsplat_diff_backward_kernel(bg, cfg);
+    kir::KGraph       sg(&alloc);
+    const kir::KEntry se = kir::gsplat::build_gsplat_sgd_step_kernel(sg, 5);
+    lr[0] = 0.004; // one lr broadcast to all params (buffer[0]) — the sgd kernel reads lr[0]
+
+    for (int step = 0; step < 300; ++step)
+    {
+        kir::KernelBuffer bb[3] = {{params.data(), 5, 0, 0}, {target.data(), cfg.width * cfg.height, 0, 1}, {grad.data(), 5, 0, 2}};
+        kir::eval_cpu_kernel(bg, be, bb, 3, be.local_size[0], &alloc, 1U);
+        kir::KernelBuffer sb[3] = {{params.data(), 5, 0, 0}, {grad.data(), 5, 0, 1}, {lr.data(), 5, 0, 2}};
+        kir::eval_cpu_kernel(sg, se, sb, 3, se.local_size[0], &alloc, 1U);
+    }
+    const double loss1 = diff_loss(alloc, cfg, params, target);
+    std::printf("[B19-f train] SGD 300 steps: loss %.4f → %.4f (params μ=(%.2f,%.2f) s=%.2f op=%.2f col=%.2f)\n",
+                loss0, loss1, params[0], params[1], params[2], params[3], params[4]);
+    CHECK(loss1 < loss0 * 0.1);          // the fit converges — loss falls by >10×
+    CHECK(crd::math::abs(params[0] - 8.0) < 0.5); // μx recovered
+    CHECK(crd::math::abs(params[1] - 8.0) < 0.5); // μy recovered
+}
+
+TEST_CASE("B19 perf: shared-memory block render == direct block render (bit-exact, multi-chunk)", "[ckir][gsplat]")
+{
+    crd::memory::TlsfAllocator     alloc(96U << 20U, nullptr, "gsplat-smem");
+    crd::containers::Array<double> gauss(&alloc);
+    crd::containers::Array<double> cam(&alloc);
+    crd::containers::Array<double> proj(&alloc);
+
+    constexpr int n       = 100;      // > 64 ⇒ the shared-mem render runs 2 chunks (BS = tile_px² = 64)
+    constexpr int imw     = 8;
+    constexpr int imh     = 8;
+    constexpr int tile_px = 8;
+    constexpr int n_tiles = (imw / tile_px) * (imh / tile_px); // 1 (the lockstep oracle can only afford a tiny workgroup)
+
+    gauss.resize(static_cast<crd::usize>(n) * 14U, 0.0);
+    cam.resize(20U, 0.0);
+    cam[0] = 1.0; cam[4] = 1.0; cam[8] = 1.0;
+    cam[9] = 0.0; cam[10] = 0.0; cam[11] = 5.0;
+    cam[12] = 60.0; cam[13] = 60.0; cam[14] = 4.0; cam[15] = 4.0; // project onto the single tile (pixels 0..7)
+    cam[16] = 0.2; cam[17] = static_cast<double>(imw); cam[18] = static_cast<double>(imh);
+    crd::u32 st = 0x5E11U;
+    const auto rnd = [&]() { st = st * 1664525U + 1013904223U; return static_cast<double>(st >> 8U) / 16777216.0; };
+    for (int i = 0; i < n; ++i)
+    {
+        const double z = 3.0 + 4.0 * (static_cast<double>(i) + 0.5) / static_cast<double>(n); // distinct depths
+        put_gauss(gauss, i, (rnd() * 2.0 - 1.0) * 0.4, (rnd() * 2.0 - 1.0) * 0.4, z, 0.08, 0, 0, 0, 1, 0.25,
+                  (rnd() - 0.5) / kir::gsplat::detail::kShC0, (rnd() - 0.5) / kir::gsplat::detail::kShC0, (rnd() - 0.5) / kir::gsplat::detail::kShC0);
+    }
+
+    kir::gsplat::GsplatProjectConfig pcfg;
+    kir::KGraph                      pg(&alloc);
+    const kir::KEntry                pe = kir::gsplat::build_gsplat_project_kernel(pg, pcfg);
+    proj.resize(static_cast<crd::usize>(n) * 12U, 0.0);
+    kir::KernelBuffer pb[3] = {{gauss.data(), n * 14, 0, 0}, {cam.data(), 20, 0, 1}, {proj.data(), n * 12, 0, 2}};
+    kir::eval_cpu_kernel(pg, pe, pb, 3, pe.local_size[0], &alloc, static_cast<crd::u32>((n + 63) / 64));
+
+    // host depth sort → sorted; order = identity; ranges: all n instances in tile 0.
+    crd::containers::Array<int> ord(&alloc);
+    ord.resize(static_cast<crd::usize>(n), 0);
+    for (int i = 0; i < n; ++i) { ord[static_cast<crd::usize>(i)] = i; }
+    for (int i = 1; i < n; ++i)
+    {
+        const int key = ord[static_cast<crd::usize>(i)]; const double kd = proj[static_cast<crd::usize>(key) * 12U + 2U]; int j = i - 1;
+        while (j >= 0 && proj[static_cast<crd::usize>(ord[static_cast<crd::usize>(j)]) * 12U + 2U] > kd) { const int jp1 = j + 1; ord[static_cast<crd::usize>(jp1)] = ord[static_cast<crd::usize>(j)]; --j; }
+        const int jp1 = j + 1; ord[static_cast<crd::usize>(jp1)] = key;
+    }
+    crd::containers::Array<double> sorted(&alloc);
+    sorted.resize(static_cast<crd::usize>(n) * 12U, 0.0);
+    for (int i = 0; i < n; ++i) { for (int k = 0; k < 12; ++k) { sorted[static_cast<crd::usize>(i) * 12U + static_cast<crd::usize>(k)] = proj[static_cast<crd::usize>(ord[static_cast<crd::usize>(i)]) * 12U + static_cast<crd::usize>(k)]; } }
+    crd::containers::Array<double> order(&alloc);
+    order.resize(static_cast<crd::usize>(n), 0.0);
+    for (int i = 0; i < n; ++i) { order[static_cast<crd::usize>(i)] = static_cast<double>(i); } // identity (sorted[] already in depth order)
+    crd::containers::Array<double> ranges(&alloc);
+    ranges.resize(static_cast<crd::usize>(n_tiles) * 2U, 0.0);
+    ranges[0] = 0.0; ranges[1] = static_cast<double>(n); // tile 0 = [0,n); tiles 1..3 = [0,0)
+
+    crd::containers::Array<double> par(&alloc);
+    par.resize(4U, 0.0); par[0] = 0.02; par[1] = 0.03; par[2] = 0.04; par[3] = 1.0 / 255.0;
+
+    kir::gsplat::GsplatBlockConfig bc;
+    bc.width = imw; bc.height = imh; bc.tile_px = tile_px;
+
+    // direct block render
+    crd::containers::Array<double> img_d(&alloc);
+    img_d.resize(static_cast<crd::usize>(imw * imh) * 4U, 0.0);
+    kir::KGraph       dg(&alloc);
+    const kir::KEntry de = kir::gsplat::build_gsplat_block_render_kernel(dg, bc);
+    kir::KernelBuffer db[5] = {{sorted.data(), n * 12, 0, 0}, {order.data(), n, 0, 1}, {ranges.data(), n_tiles * 2, 0, 2}, {par.data(), 4, 0, 3}, {img_d.data(), imw * imh * 4, 0, 4}};
+    kir::eval_cpu_kernel(dg, de, db, 5, de.local_size[0], &alloc, static_cast<crd::u32>(n_tiles));
+
+    // shared-memory block render
+    crd::containers::Array<double> img_s(&alloc);
+    img_s.resize(static_cast<crd::usize>(imw * imh) * 4U, 0.0);
+    kir::KGraph       sg(&alloc);
+    const kir::KEntry se = kir::gsplat::build_gsplat_block_render_smem_kernel(sg, bc);
+    kir::KernelBuffer sb[5] = {{sorted.data(), n * 12, 0, 0}, {order.data(), n, 0, 1}, {ranges.data(), n_tiles * 2, 0, 2}, {par.data(), 4, 0, 3}, {img_s.data(), imw * imh * 4, 0, 4}};
+    kir::eval_cpu_kernel(sg, se, sb, 5, se.local_size[0], &alloc, static_cast<crd::u32>(n_tiles));
+
+    double worst = 0.0; double lum = 0.0;
+    for (int q = 0; q < imw * imh; ++q)
+    {
+        for (int c = 0; c < 3; ++c)
+        {
+            const double d = crd::math::abs(img_s[static_cast<crd::usize>(q) * 4U + static_cast<crd::usize>(c)] - img_d[static_cast<crd::usize>(q) * 4U + static_cast<crd::usize>(c)]);
+            if (d > worst) { worst = d; }
+            lum += img_s[static_cast<crd::usize>(q) * 4U + static_cast<crd::usize>(c)];
+        }
+    }
+    std::printf("[B19 smem] shared-mem render vs direct: %d splats (2 chunks), worst |diff| = %.3e, mean lum %.4f\n", n, worst, lum / static_cast<double>(imw * imh * 3));
+    CHECK(lum > 0.01);      // the tile actually composited a lot of overdraw
+    CHECK(worst < 1.0e-6);  // shared-mem batched render == direct render (same order ⇒ bit-exact f32)
+}

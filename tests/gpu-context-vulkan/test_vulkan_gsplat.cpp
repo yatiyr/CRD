@@ -16,6 +16,8 @@
 #include <crd/kir/ckir.hpp>
 #include <crd/kir/ckir_glsl.hpp>
 #include <crd/kir/ckir_gsplat.hpp>
+#include <crd/kir/ckir_gsplat2d.hpp>
+#include <crd/kir/ckir_mesh.hpp>
 #include <crd/kir/ckir_scan.hpp>
 #include <crd/kir/ckir_sort.hpp>
 
@@ -783,4 +785,929 @@ TEST_CASE("B19-a4: full GPU tile binning + block render on Vulkan == brute rende
                 n, total, n_tiles, lum / static_cast<float>(imw * imh * 3), worst);
     CHECK(lum > 0.0F);        // the block render actually drew something
     CHECK(worst == 0.0F);     // GPU block render == GPU brute render, splat-for-splat (bit-exact f32)
+}
+
+// D-007 B19-c: the 2D GAUSSIAN SPLATTING surfel primitive runs ON THE GPU. Both kernels (project + ray-surfel render)
+// dispatch on real Vulkan and match the CPU oracle: the project prepares the view-space surfel, the render solves the
+// ray-surfel intersection per pixel and writes colour + the depth/normal geometry G-buffer. Host depth-sort between them
+// (the a3/a4 machinery already sorts on-device). Same graph on both paths ⇒ the GPU floats match the oracle.
+TEST_CASE("B19-c: 2DGS surfel project + ray-surfel render on Vulkan == CPU oracle", "[gpu-context][vulkan][gpu][gsplat2d]")
+{
+    crd::memory::TlsfAllocator alloc(128U << 20U, nullptr, "gsplat2d-gpu");
+    gpu::GpuContextConfig      gcfg;
+    gcfg.backend  = gpu::GpuBackend::Vulkan;
+    gcfg.headless = true;
+    auto ctx      = gpu::create_vulkan_gpu_context(gcfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+
+    constexpr int imw = 64;
+    constexpr int imh = 64;
+    constexpr int ns  = 24;
+    const double  c0  = kir::gsplat::detail::kShC0;
+
+    // scene: surfels scattered in view, each with a random orientation (so depth/normal genuinely vary per pixel).
+    crd::containers::Array<float> surf(&alloc);
+    surf.resize(uz(ns) * 13U, 0.0F);
+    crd::u32   st = 0x2D65U;
+    const auto rnd = [&]() { st = st * 1664525U + 1013904223U; return static_cast<double>(st >> 8U) / 16777216.0; };
+    for (int i = 0; i < ns; ++i)
+    {
+        float* q = surf.data() + uz(i) * 13U;
+        q[0] = static_cast<float>((rnd() * 2.0 - 1.0) * 0.8);
+        q[1] = static_cast<float>((rnd() * 2.0 - 1.0) * 0.8);
+        q[2] = static_cast<float>(-1.0 + rnd() * 2.0);
+        q[3] = static_cast<float>(0.25 + rnd() * 0.35); // su
+        q[4] = static_cast<float>(0.25 + rnd() * 0.35); // sv
+        // random unit quaternion
+        const double a1 = rnd() * 6.2831853; const double a2 = rnd() * 6.2831853; const double u1 = rnd();
+        q[5] = static_cast<float>(crd::math::sqrt(1.0 - u1) * crd::math::sin(a1));
+        q[6] = static_cast<float>(crd::math::sqrt(1.0 - u1) * crd::math::cos(a1));
+        q[7] = static_cast<float>(crd::math::sqrt(u1) * crd::math::sin(a2));
+        q[8] = static_cast<float>(crd::math::sqrt(u1) * crd::math::cos(a2));
+        q[9] = 0.85F;
+        q[10] = static_cast<float>((rnd() - 0.5) / c0); q[11] = static_cast<float>((rnd() - 0.5) / c0); q[12] = static_cast<float>((rnd() - 0.5) / c0);
+    }
+    crd::containers::Array<float> cam(&alloc);
+    cam.resize(20U, 0.0F);
+    cam[0] = 1.0F; cam[4] = 1.0F; cam[8] = 1.0F;
+    cam[9] = 0.0F; cam[10] = 0.0F; cam[11] = 5.0F;
+    cam[12] = 90.0F; cam[13] = 90.0F; cam[14] = 32.0F; cam[15] = 32.0F;
+    cam[16] = 0.2F; cam[17] = static_cast<float>(imw); cam[18] = static_cast<float>(imh);
+
+    const auto mk = [&](kir::KGraph& g, const kir::KEntry& e, int nb, const char* nm) -> std::unique_ptr<crd::gpu::ComputePipeline> {
+        kir::GlslKernel k(&alloc);
+        REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, k));
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(k.source), nm, &alloc);
+        if (!spv.ok) { WARN("[" << nm << "] SPIR-V compile failed: " << spv.error_message.c_str()); }
+        REQUIRE(spv.ok);
+        return compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
+    };
+
+    // GPU project
+    kir::gsplat::Gsplat2dProjectConfig pcfg;
+    kir::KGraph                        pg(&alloc);
+    auto p_proj = mk(pg, kir::gsplat::build_gsplat2d_project_kernel(pg, pcfg), 3, "gs2d_project");
+    REQUIRE(p_proj != nullptr);
+    crd::containers::Array<float> prep(&alloc);
+    prep.resize(uz(ns) * 19U, 0.0F);
+    {
+        float*    hb[3] = {surf.data(), cam.data(), prep.data()};
+        const int ln[3] = {ns * 13, 20, ns * 19};
+        crd::kir_test::dispatch_kernel_1wg(compute, *p_proj, hb, ln, 3, static_cast<crd::u32>((ns + 63) / 64));
+    }
+
+    // CPU oracle project (as doubles) for the prep comparison
+    crd::containers::Array<double> surfd(&alloc);
+    crd::containers::Array<double> camd(&alloc);
+    surfd.resize(uz(ns) * 13U, 0.0); camd.resize(20U, 0.0);
+    for (int i = 0; i < ns * 13; ++i) { surfd[uz(i)] = surf[uz(i)]; }
+    for (int i = 0; i < 20; ++i) { camd[uz(i)] = cam[uz(i)]; }
+    kir::KGraph       pg2(&alloc);
+    const kir::KEntry pe2 = kir::gsplat::build_gsplat2d_project_kernel(pg2, pcfg);
+    crd::containers::Array<double> prep_ref(&alloc);
+    prep_ref.resize(uz(ns) * 19U, 0.0);
+    kir::KernelBuffer pbb[3] = {{surfd.data(), ns * 13, 0, 0}, {camd.data(), 20, 0, 1}, {prep_ref.data(), ns * 19, 0, 2}};
+    kir::eval_cpu_kernel(pg2, pe2, pbb, 3, pe2.local_size[0], &alloc, 1U);
+
+    float worst_prep = 0.0F;
+    for (int i = 0; i < ns * 19; ++i)
+    {
+        const float d = crd::math::abs(prep[uz(i)] - static_cast<float>(prep_ref[uz(i)]));
+        if (d > worst_prep) { worst_prep = d; }
+    }
+    CHECK(worst_prep < 1.0e-3F); // GPU project == oracle project
+
+    // host depth sort the GPU-projected surfels (slot 12), nearest-first
+    crd::containers::Array<int> ord(&alloc);
+    ord.resize(uz(ns), 0);
+    for (int i = 0; i < ns; ++i) { ord[uz(i)] = i; }
+    for (int i = 1; i < ns; ++i)
+    {
+        const int   key = ord[uz(i)];
+        const float kd  = prep[uz(key) * 19U + 12U];
+        int         j   = i - 1;
+        while (j >= 0 && prep[uz(ord[uz(j)]) * 19U + 12U] > kd)
+        {
+            const int jp1 = j + 1;
+            ord[uz(jp1)] = ord[uz(j)];
+            --j;
+        }
+        const int jp1 = j + 1;
+        ord[uz(jp1)] = key;
+    }
+    crd::containers::Array<float>  sorted(&alloc);
+    crd::containers::Array<double> sortedd(&alloc);
+    sorted.resize(uz(ns) * 19U, 0.0F);
+    sortedd.resize(uz(ns) * 19U, 0.0);
+    for (int i = 0; i < ns; ++i)
+    {
+        for (int k = 0; k < 19; ++k)
+        {
+            sorted[uz(i) * 19U + uz(k)]  = prep[uz(ord[uz(i)]) * 19U + uz(k)];
+            sortedd[uz(i) * 19U + uz(k)] = sorted[uz(i) * 19U + uz(k)];
+        }
+    }
+
+    // GPU render
+    kir::gsplat::Gsplat2dRenderConfig rcfg;
+    rcfg.width = imw; rcfg.height = imh; rcfg.max_splats = ns;
+    kir::KGraph rg(&alloc);
+    auto p_rend = mk(rg, kir::gsplat::build_gsplat2d_render_kernel(rg, rcfg), 4, "gs2d_render");
+    REQUIRE(p_rend != nullptr);
+    crd::containers::Array<float> par(&alloc);
+    par.resize(5U, 0.0F); par[0] = static_cast<float>(ns); par[1] = 0.02F; par[2] = 0.02F; par[3] = 0.03F; par[4] = 1.0F / 255.0F;
+    crd::containers::Array<float> img(&alloc);
+    img.resize(uz(imw * imh) * 8U, 0.0F);
+    {
+        float*    hb[4] = {sorted.data(), cam.data(), par.data(), img.data()};
+        const int ln[4] = {ns * 19, 20, 5, imw * imh * 8};
+        crd::kir_test::dispatch_kernel_1wg(compute, *p_rend, hb, ln, 4, static_cast<crd::u32>((imw * imh + 63) / 64));
+    }
+
+    // CPU oracle render (same sorted surfels)
+    kir::KGraph       rg2(&alloc);
+    const kir::KEntry re2 = kir::gsplat::build_gsplat2d_render_kernel(rg2, rcfg);
+    crd::containers::Array<double> pard(&alloc);
+    pard.resize(5U, 0.0); for (int i = 0; i < 5; ++i) { pard[uz(i)] = par[uz(i)]; }
+    crd::containers::Array<double> img_ref(&alloc);
+    img_ref.resize(uz(imw * imh) * 8U, 0.0);
+    kir::KernelBuffer rbb[4] = {{sortedd.data(), ns * 19, 0, 0}, {camd.data(), 20, 0, 1}, {pard.data(), 5, 0, 2}, {img_ref.data(), imw * imh * 8, 0, 3}};
+    kir::eval_cpu_kernel(rg2, re2, rbb, 4, re2.local_size[0], &alloc, static_cast<crd::u32>(imw * imh / 64));
+
+    float worst = 0.0F;
+    float lum   = 0.0F;
+    for (int q = 0; q < imw * imh * 8; ++q)
+    {
+        const float d = crd::math::abs(img[uz(q)] - static_cast<float>(img_ref[uz(q)]));
+        if (d > worst) { worst = d; }
+    }
+    for (int p = 0; p < imw * imh; ++p) { lum += img[uz(p) * 8U + 0U] + img[uz(p) * 8U + 1U] + img[uz(p) * 8U + 2U]; }
+    std::printf("[B19-c GPU] 2DGS %d surfels %dx%d: mean lum %.4f; worst |GPU render - oracle| = %.3e (prep %.3e)\n",
+                ns, imw, imh, lum / static_cast<float>(imw * imh * 3), worst, worst_prep);
+    CHECK(lum > 0.0F);
+    CHECK(worst < 2.0e-3F); // GPU ray-surfel render (colour + depth + normal) == oracle
+}
+
+// D-007 B19-c2: TSDF FUSION runs ON THE GPU. A posed plane depth map integrated into a Truncated Signed Distance Field
+// on a voxel grid, dispatched on real Vulkan, matches the CPU oracle bit-for-bit — the fused field is the signed ramp
+// whose zero crossing is the surface. (Marching cubes turns this field into a mesh next.)
+TEST_CASE("B19-c2: TSDF fusion on Vulkan == CPU oracle (signed ramp on a voxel grid)", "[gpu-context][vulkan][gpu][mesh]")
+{
+    crd::memory::TlsfAllocator alloc(96U << 20U, nullptr, "tsdf-gpu");
+    gpu::GpuContextConfig      gcfg;
+    gcfg.backend  = gpu::GpuBackend::Vulkan;
+    gcfg.headless = true;
+    auto ctx      = gpu::create_vulkan_gpu_context(gcfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+
+    constexpr int nx = 8;
+    constexpr int ny = 8;
+    constexpr int nz = 16;
+    constexpr int nvox = nx * ny * nz;
+    constexpr int imw = 32;
+    constexpr int imh = 32;
+
+    crd::containers::Array<float> depth(&alloc);
+    depth.resize(uz(imw * imh), 0.0F);
+    for (int i = 0; i < imw * imh; ++i) { depth[uz(i)] = 5.0F; } // a plane at view-z 5
+    crd::containers::Array<float> cam(&alloc);
+    cam.resize(20U, 0.0F);
+    cam[0] = 1.0F; cam[4] = 1.0F; cam[8] = 1.0F;
+    cam[12] = 30.0F; cam[13] = 30.0F; cam[14] = 16.0F; cam[15] = 16.0F;
+    cam[16] = 0.2F; cam[17] = static_cast<float>(imw); cam[18] = static_cast<float>(imh);
+    crd::containers::Array<float> gp(&alloc);
+    gp.resize(5U, 0.0F); gp[0] = -1.0F; gp[1] = -1.0F; gp[2] = 3.0F; gp[3] = 0.25F; gp[4] = 1.0F;
+
+    kir::mesh::TsdfConfig cfg;
+    cfg.nx = nx; cfg.ny = ny; cfg.nz = nz; cfg.img_w = imw; cfg.img_h = imh;
+    kir::KGraph       tg(&alloc);
+    const kir::KEntry te = kir::mesh::build_tsdf_integrate_kernel(tg, cfg);
+    kir::GlslKernel   tk(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(tg, te, &alloc, tk));
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(tk.source), "tsdf", &alloc);
+    INFO("tsdf GLSL: " << spv.error_message.c_str());
+    REQUIRE(spv.ok);
+    auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 5, 0U);
+    REQUIRE(pipe != nullptr);
+
+    crd::containers::Array<float> tsum(&alloc);
+    crd::containers::Array<float> wsum(&alloc);
+    tsum.resize(uz(nvox), 0.0F);
+    wsum.resize(uz(nvox), 0.0F);
+    {
+        float*    hb[5] = {depth.data(), cam.data(), gp.data(), tsum.data(), wsum.data()};
+        const int ln[5] = {imw * imh, 20, 5, nvox, nvox};
+        crd::kir_test::dispatch_kernel_1wg(compute, *pipe, hb, ln, 5, static_cast<crd::u32>(nvox / 64));
+    }
+
+    // CPU oracle (doubles)
+    crd::containers::Array<double> depthd(&alloc);
+    crd::containers::Array<double> camd(&alloc);
+    crd::containers::Array<double> gpd(&alloc);
+    crd::containers::Array<double> tsr(&alloc);
+    crd::containers::Array<double> wsr(&alloc);
+    depthd.resize(uz(imw * imh), 0.0); for (int i = 0; i < imw * imh; ++i) { depthd[uz(i)] = 5.0; }
+    camd.resize(20U, 0.0); for (int i = 0; i < 20; ++i) { camd[uz(i)] = cam[uz(i)]; }
+    gpd.resize(5U, 0.0); for (int i = 0; i < 5; ++i) { gpd[uz(i)] = gp[uz(i)]; }
+    tsr.resize(uz(nvox), 0.0); wsr.resize(uz(nvox), 0.0);
+    kir::KGraph       tg2(&alloc);
+    const kir::KEntry te2 = kir::mesh::build_tsdf_integrate_kernel(tg2, cfg);
+    kir::KernelBuffer bb[5] = {{depthd.data(), imw * imh, 0, 0}, {camd.data(), 20, 0, 1}, {gpd.data(), 5, 0, 2}, {tsr.data(), nvox, 0, 3}, {wsr.data(), nvox, 0, 4}};
+    kir::eval_cpu_kernel(tg2, te2, bb, 5, te2.local_size[0], &alloc, static_cast<crd::u32>(nvox / 64));
+
+    float worst = 0.0F;
+    int   observed = 0;
+    for (int i = 0; i < nvox; ++i)
+    {
+        const float dt = crd::math::abs(tsum[uz(i)] - static_cast<float>(tsr[uz(i)]));
+        const float dw = crd::math::abs(wsum[uz(i)] - static_cast<float>(wsr[uz(i)]));
+        if (dt > worst) { worst = dt; }
+        if (dw > worst) { worst = dw; }
+        if (wsum[uz(i)] > 0.5F) { ++observed; }
+    }
+    std::printf("[B19-c2 GPU] TSDF %dx%dx%d: %d observed voxels; worst |GPU - oracle| = %.3e\n", nx, ny, nz, observed, worst);
+    CHECK(observed > 0);       // the grid saw the surface
+    CHECK(worst < 1.0e-4F);    // GPU TSDF == oracle
+}
+
+// D-007 B19-c2b: MARCHING CUBES runs ON THE GPU. The full extract pipeline — count → scan → emit — dispatched on real
+// Vulkan over an analytic sphere SDF, producing a triangle mesh (positions + outward normals) that matches the CPU
+// oracle mesh vertex-for-vertex. This closes the mesh bridge: a fused field becomes real geometry on-device.
+TEST_CASE("B19-c2b: marching cubes on Vulkan == CPU oracle (sphere mesh)", "[gpu-context][vulkan][gpu][mesh]")
+{
+    namespace cg = crd::gpu;
+    crd::memory::TlsfAllocator alloc(160U << 20U, nullptr, "mc-gpu");
+    gpu::GpuContextConfig      gcfg;
+    gcfg.backend  = gpu::GpuBackend::Vulkan;
+    gcfg.headless = true;
+    auto ctx      = gpu::create_vulkan_gpu_context(gcfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    using cg::compute_usage::storage;
+    using cg::compute_usage::transfer_dst;
+    using cg::compute_usage::transfer_src;
+
+    constexpr int nx = 9;
+    constexpr int ny = 9;
+    constexpr int nz = 9;
+    constexpr int nvox = nx * ny * nz;
+    constexpr int ncells = (nx - 1) * (ny - 1) * (nz - 1); // 512
+    constexpr int max_tris = ncells * 5;
+    const double  h  = 0.25;
+    const double  o  = -1.0;
+    const double  rr = 0.5;
+
+    // analytic sphere SDF field
+    crd::containers::Array<float> field(&alloc);
+    field.resize(uz(nvox), 0.0F);
+    for (int k = 0; k < nz; ++k)
+    {
+        for (int j = 0; j < ny; ++j)
+        {
+            for (int i = 0; i < nx; ++i)
+            {
+                const double x = o + (static_cast<double>(i) + 0.5) * h;
+                const double y = o + (static_cast<double>(j) + 0.5) * h;
+                const double z = o + (static_cast<double>(k) + 0.5) * h;
+                field[uz(k * nx * ny + j * nx + i)] = static_cast<float>(crd::math::sqrt(x * x + y * y + z * z) - rr);
+            }
+        }
+    }
+    crd::containers::Array<float> gpm(&alloc);
+    gpm.resize(4U, 0.0F); gpm[0] = static_cast<float>(o); gpm[1] = static_cast<float>(o); gpm[2] = static_cast<float>(o); gpm[3] = static_cast<float>(h);
+
+    kir::mesh::McConfig cfg;
+    cfg.nx = nx; cfg.ny = ny; cfg.nz = nz;
+
+    // ── CPU ORACLE mesh (count -> scan -> emit) ──
+    crd::containers::Array<double> fieldd(&alloc);
+    fieldd.resize(uz(nvox), 0.0); for (int i = 0; i < nvox; ++i) { fieldd[uz(i)] = field[uz(i)]; }
+    crd::containers::Array<double> trid(&alloc); trid.resize(256U * 16U, 0.0);
+    for (int i = 0; i < 256 * 16; ++i) { trid[uz(i)] = static_cast<double>(kir::mesh::kMcTriTable[i]); }
+    crd::containers::Array<double> econd(&alloc); crd::containers::Array<double> cofd(&alloc);
+    econd.resize(24U, 0.0); cofd.resize(24U, 0.0);
+    for (int i = 0; i < 24; ++i) { econd[uz(i)] = static_cast<double>(kir::mesh::kMcEdgeConn[i]); cofd[uz(i)] = static_cast<double>(kir::mesh::kMcCornerOff[i]); }
+    crd::containers::Array<double> gpmd(&alloc); gpmd.resize(4U, 0.0); for (int i = 0; i < 4; ++i) { gpmd[uz(i)] = gpm[uz(i)]; }
+    crd::containers::Array<double> countd(&alloc); countd.resize(uz(ncells), 0.0);
+    kir::KGraph cgo(&alloc);
+    const kir::KEntry ceo = kir::mesh::build_mc_count_kernel(cgo, cfg);
+    kir::KernelBuffer cbo[3] = {{fieldd.data(), nvox, 0, 0}, {trid.data(), 256 * 16, 0, 1}, {countd.data(), ncells, 0, 2}};
+    kir::eval_cpu_kernel(cgo, ceo, cbo, 3, ceo.local_size[0], &alloc, static_cast<crd::u32>(ncells / 64));
+    kir::KGraph s0(&alloc); kir::KGraph s1(&alloc); kir::KGraph s2(&alloc);
+    kir::KGraph* sgo[3] = {&s0, &s1, &s2};
+    const kir::ScanPlan plano = kir::build_scan(sgo, ncells, false, 256, 1);
+    crd::containers::Array<double> offd(&alloc); offd.resize(uz(ncells), 0.0);
+    kir::KernelBuffer sbo[2] = {{countd.data(), ncells, 0, 0}, {offd.data(), ncells, 0, 1}};
+    kir::eval_cpu_kernel(*plano.block_graph, plano.block, sbo, 2, plano.block.local_size[0], &alloc, static_cast<crd::u32>(plano.nblocks));
+    const int total = static_cast<int>(offd[uz(ncells - 1)] + countd[uz(ncells - 1)]);
+    REQUIRE(total > 50);
+    REQUIRE(total <= max_tris);
+    crd::containers::Array<double> outd(&alloc); outd.resize(uz(total) * 18U, 0.0);
+    kir::KGraph ego(&alloc);
+    const kir::KEntry eeo = kir::mesh::build_mc_emit_kernel(ego, cfg);
+    kir::KernelBuffer ebo[7] = {{fieldd.data(), nvox, 0, 0}, {gpmd.data(), 4, 0, 1}, {trid.data(), 256 * 16, 0, 2},
+                                {econd.data(), 24, 0, 3}, {cofd.data(), 24, 0, 4}, {offd.data(), ncells, 0, 5}, {outd.data(), total * 18, 0, 6}};
+    kir::eval_cpu_kernel(ego, eeo, ebo, 7, eeo.local_size[0], &alloc, static_cast<crd::u32>(ncells / 64));
+
+    // ── GPU pipeline ──
+    const auto mk = [&](kir::KGraph& g, const kir::KEntry& e, int nb, const char* nm) -> std::unique_ptr<cg::ComputePipeline> {
+        kir::GlslKernel k(&alloc);
+        REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, k));
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(k.source), nm, &alloc);
+        if (!spv.ok) { WARN("[" << nm << "] SPIR-V compile failed: " << spv.error_message.c_str()); }
+        REQUIRE(spv.ok);
+        return compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
+    };
+    kir::KGraph cg2(&alloc); kir::KGraph eg2(&alloc); kir::KGraph gs0(&alloc); kir::KGraph gs1(&alloc); kir::KGraph gs2(&alloc);
+    kir::KGraph* sgp[3] = {&gs0, &gs1, &gs2};
+    const kir::ScanPlan plang = kir::build_scan(sgp, ncells, false, 256, 1);
+    auto p_count = mk(cg2, kir::mesh::build_mc_count_kernel(cg2, cfg), 3, "mc_count");
+    auto p_scan  = mk(*plang.block_graph, plang.block, 2, "mc_scan");
+    auto p_emit  = mk(eg2, kir::mesh::build_mc_emit_kernel(eg2, cfg), 7, "mc_emit");
+    REQUIRE(p_count != nullptr); REQUIRE(p_scan != nullptr); REQUIRE(p_emit != nullptr);
+
+    const auto dbuf = [&](crd::u64 bytes) { return compute.create_buffer(bytes, storage | transfer_dst | transfer_src, cg::ComputeMemory::GpuOnly); };
+    auto d_field = dbuf(uz(nvox) * 4U);
+    auto d_tri   = dbuf(256U * 16U * 4U);
+    auto d_gp    = dbuf(4U * 4U);
+    auto d_econ  = dbuf(24U * 4U);
+    auto d_coff  = dbuf(24U * 4U);
+    auto d_count = dbuf(uz(ncells) * 4U);
+    auto d_off   = dbuf(uz(ncells) * 4U);
+    auto d_out   = dbuf(uz(max_tris) * 18U * 4U);
+
+    const auto up_f = [&](cg::ComputeBuffer& dev, const float* src, int len) {
+        auto stg = compute.create_buffer(static_cast<crd::u64>(len) * 4U, transfer_src, cg::ComputeMemory::CpuToGpu);
+        auto* p = static_cast<float*>(stg->map()); for (int i = 0; i < len; ++i) { p[i] = src[i]; } stg->unmap();
+        auto& rc = compute.begin(); rc.copy(*stg, dev, 0U, 0U, static_cast<crd::u64>(len) * 4U); compute.submit_and_wait();
+    };
+    const auto up_i = [&](cg::ComputeBuffer& dev, const int* src, int len) {
+        auto stg = compute.create_buffer(static_cast<crd::u64>(len) * 4U, transfer_src, cg::ComputeMemory::CpuToGpu);
+        auto* p = static_cast<crd::i32*>(stg->map()); for (int i = 0; i < len; ++i) { p[i] = src[i]; } stg->unmap();
+        auto& rc = compute.begin(); rc.copy(*stg, dev, 0U, 0U, static_cast<crd::u64>(len) * 4U); compute.submit_and_wait();
+    };
+    up_f(*d_field, field.data(), nvox);
+    up_f(*d_gp, gpm.data(), 4);
+    up_i(*d_tri, kir::mesh::kMcTriTable, 256 * 16);
+    up_i(*d_econ, kir::mesh::kMcEdgeConn, 24);
+    up_i(*d_coff, kir::mesh::kMcCornerOff, 24);
+
+    {
+        auto& rec = compute.begin();
+        const auto bar = [&](cg::ComputeBuffer& b) { rec.barrier(b, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead); };
+        cg::ComputeBuffer* cb[3] = {d_field.get(), d_tri.get(), d_count.get()};
+        rec.dispatch(*p_count, crd::containers::ConstSpan<cg::ComputeBuffer*>(cb, 3), nullptr, 0U, static_cast<crd::u32>(ncells / 64), 1U, 1U);
+        bar(*d_count);
+        cg::ComputeBuffer* sb[2] = {d_count.get(), d_off.get()};
+        rec.dispatch(*p_scan, crd::containers::ConstSpan<cg::ComputeBuffer*>(sb, 2), nullptr, 0U, static_cast<crd::u32>(plang.nblocks), 1U, 1U);
+        bar(*d_off);
+        cg::ComputeBuffer* eb[7] = {d_field.get(), d_gp.get(), d_tri.get(), d_econ.get(), d_coff.get(), d_off.get(), d_out.get()};
+        rec.dispatch(*p_emit, crd::containers::ConstSpan<cg::ComputeBuffer*>(eb, 7), nullptr, 0U, static_cast<crd::u32>(ncells / 64), 1U, 1U);
+        rec.barrier(*d_out, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::TransferSrc);
+        compute.submit_and_wait();
+    }
+
+    auto rb = compute.create_buffer(static_cast<crd::u64>(total) * 18U * 4U, transfer_dst, cg::ComputeMemory::GpuToCpu);
+    {
+        auto& rec = compute.begin();
+        rec.copy(*d_out, *rb, 0U, 0U, static_cast<crd::u64>(total) * 18U * 4U);
+        compute.submit_and_wait();
+    }
+    const auto* g = static_cast<const float*>(rb->map());
+    float worst = 0.0F;
+    for (int i = 0; i < total * 18; ++i)
+    {
+        const float d = crd::math::abs(g[uz(i)] - static_cast<float>(outd[uz(i)]));
+        if (d > worst) { worst = d; }
+    }
+    rb->unmap();
+    std::printf("[B19-c2b GPU] marching cubes: %d triangles; worst |GPU mesh - oracle| = %.3e\n", total, worst);
+    CHECK(worst < 1.0e-4F); // GPU marching cubes == oracle, vertex for vertex
+}
+
+// D-007 B19-e: RELIGHTABLE 2DGS on the GPU. The PBR shade (Lambert + GGX under a directional light, using the surfel's
+// intrinsic normal) dispatches on real Vulkan and matches the CPU oracle — captured content re-lit on-device.
+TEST_CASE("B19-e: relightable 2DGS render on Vulkan == CPU oracle", "[gpu-context][vulkan][gpu][gsplat2d]")
+{
+    crd::memory::TlsfAllocator alloc(96U << 20U, nullptr, "gsplat2d-relight-gpu");
+    gpu::GpuContextConfig      gcfg;
+    gcfg.backend  = gpu::GpuBackend::Vulkan;
+    gcfg.headless = true;
+    auto ctx      = gpu::create_vulkan_gpu_context(gcfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+
+    constexpr int imw = 64;
+    constexpr int imh = 64;
+    constexpr int ns  = 16;
+
+    crd::containers::Array<float> surf(&alloc);
+    surf.resize(uz(ns) * 13U, 0.0F);
+    crd::u32   st = 0x2E11U;
+    const auto rnd = [&]() { st = st * 1664525U + 1013904223U; return static_cast<double>(st >> 8U) / 16777216.0; };
+    for (int i = 0; i < ns; ++i)
+    {
+        float* q = surf.data() + uz(i) * 13U;
+        q[0] = static_cast<float>((rnd() * 2.0 - 1.0) * 0.6); q[1] = static_cast<float>((rnd() * 2.0 - 1.0) * 0.6); q[2] = static_cast<float>(-0.5 + rnd());
+        q[3] = static_cast<float>(0.3 + rnd() * 0.3); q[4] = static_cast<float>(0.3 + rnd() * 0.3);
+        const double a1 = rnd() * 6.2831853; const double a2 = rnd() * 6.2831853; const double u1 = rnd();
+        q[5] = static_cast<float>(crd::math::sqrt(1.0 - u1) * crd::math::sin(a1)); q[6] = static_cast<float>(crd::math::sqrt(1.0 - u1) * crd::math::cos(a1));
+        q[7] = static_cast<float>(crd::math::sqrt(u1) * crd::math::sin(a2)); q[8] = static_cast<float>(crd::math::sqrt(u1) * crd::math::cos(a2));
+        q[9] = 0.9F; q[10] = static_cast<float>(rnd()); q[11] = static_cast<float>(rnd()); q[12] = static_cast<float>(rnd());
+    }
+    crd::containers::Array<float> cam(&alloc);
+    cam.resize(20U, 0.0F);
+    cam[0] = 1.0F; cam[4] = 1.0F; cam[8] = 1.0F; cam[11] = 5.0F;
+    cam[12] = 90.0F; cam[13] = 90.0F; cam[14] = 32.0F; cam[15] = 32.0F;
+    cam[16] = 0.2F; cam[17] = static_cast<float>(imw); cam[18] = static_cast<float>(imh);
+    crd::containers::Array<float> par(&alloc);
+    par.resize(13U, 0.0F);
+    par[0] = static_cast<float>(ns); par[1] = 0.02F; par[2] = 0.02F; par[3] = 0.03F;
+    par[4] = 0.3F; par[5] = 0.4F; par[6] = -1.0F; par[7] = 1.0F; par[8] = 0.95F; par[9] = 0.9F; par[10] = 0.05F; par[11] = 0.35F; par[12] = 1.0F / 255.0F;
+
+    const auto mk = [&](kir::KGraph& g, const kir::KEntry& e, int nb, const char* nm) -> std::unique_ptr<crd::gpu::ComputePipeline> {
+        kir::GlslKernel k(&alloc);
+        REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, k));
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(k.source), nm, &alloc);
+        if (!spv.ok) { WARN("[" << nm << "] SPIR-V compile failed: " << spv.error_message.c_str()); }
+        REQUIRE(spv.ok);
+        return compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
+    };
+    kir::gsplat::Gsplat2dProjectConfig pcfg;
+    kir::KGraph pg(&alloc);
+    auto p_proj = mk(pg, kir::gsplat::build_gsplat2d_project_kernel(pg, pcfg), 3, "gs2d_proj");
+    crd::containers::Array<float> prep(&alloc);
+    prep.resize(uz(ns) * 19U, 0.0F);
+    {
+        float* hb[3] = {surf.data(), cam.data(), prep.data()};
+        const int ln[3] = {ns * 13, 20, ns * 19};
+        crd::kir_test::dispatch_kernel_1wg(compute, *p_proj, hb, ln, 3, static_cast<crd::u32>((ns + 63) / 64));
+    }
+    // host depth sort
+    crd::containers::Array<int> ord(&alloc); ord.resize(uz(ns), 0);
+    for (int i = 0; i < ns; ++i) { ord[uz(i)] = i; }
+    for (int i = 1; i < ns; ++i)
+    {
+        const int key = ord[uz(i)]; const float kd = prep[uz(key) * 19U + 12U]; int j = i - 1;
+        while (j >= 0 && prep[uz(ord[uz(j)]) * 19U + 12U] > kd) { const int jp1 = j + 1; ord[uz(jp1)] = ord[uz(j)]; --j; }
+        const int jp1 = j + 1; ord[uz(jp1)] = key;
+    }
+    crd::containers::Array<float>  sorted(&alloc); crd::containers::Array<double> sortedd(&alloc);
+    sorted.resize(uz(ns) * 19U, 0.0F); sortedd.resize(uz(ns) * 19U, 0.0);
+    for (int i = 0; i < ns; ++i) { for (int k = 0; k < 19; ++k) { sorted[uz(i) * 19U + uz(k)] = prep[uz(ord[uz(i)]) * 19U + uz(k)]; sortedd[uz(i) * 19U + uz(k)] = sorted[uz(i) * 19U + uz(k)]; } }
+
+    kir::gsplat::Gsplat2dRelightConfig rcfg;
+    rcfg.width = imw; rcfg.height = imh; rcfg.max_splats = ns;
+    kir::KGraph rg(&alloc);
+    auto p_rl = mk(rg, kir::gsplat::build_gsplat2d_relight_render_kernel(rg, rcfg), 4, "gs2d_relight");
+    crd::containers::Array<float> img(&alloc); img.resize(uz(imw * imh) * 4U, 0.0F);
+    {
+        float* hb[4] = {sorted.data(), cam.data(), par.data(), img.data()};
+        const int ln[4] = {ns * 19, 20, 13, imw * imh * 4};
+        crd::kir_test::dispatch_kernel_1wg(compute, *p_rl, hb, ln, 4, static_cast<crd::u32>((imw * imh + 63) / 64));
+    }
+    // CPU oracle
+    crd::containers::Array<double> camd(&alloc); crd::containers::Array<double> pard(&alloc);
+    camd.resize(20U, 0.0); for (int i = 0; i < 20; ++i) { camd[uz(i)] = cam[uz(i)]; }
+    pard.resize(13U, 0.0); for (int i = 0; i < 13; ++i) { pard[uz(i)] = par[uz(i)]; }
+    kir::KGraph rg2(&alloc);
+    const kir::KEntry re2 = kir::gsplat::build_gsplat2d_relight_render_kernel(rg2, rcfg);
+    crd::containers::Array<double> imgref(&alloc); imgref.resize(uz(imw * imh) * 4U, 0.0);
+    kir::KernelBuffer rbb[4] = {{sortedd.data(), ns * 19, 0, 0}, {camd.data(), 20, 0, 1}, {pard.data(), 13, 0, 2}, {imgref.data(), imw * imh * 4, 0, 3}};
+    kir::eval_cpu_kernel(rg2, re2, rbb, 4, re2.local_size[0], &alloc, static_cast<crd::u32>(imw * imh / 64));
+
+    float worst = 0.0F; float lum = 0.0F;
+    for (int q = 0; q < imw * imh * 4; ++q) { const float d = crd::math::abs(img[uz(q)] - static_cast<float>(imgref[uz(q)])); if (d > worst) { worst = d; } }
+    for (int p = 0; p < imw * imh; ++p) { lum += img[uz(p) * 4U + 0U] + img[uz(p) * 4U + 1U] + img[uz(p) * 4U + 2U]; }
+    std::printf("[B19-e GPU] relightable 2DGS %d surfels %dx%d: mean lum %.4f; worst |GPU - oracle| = %.3e\n", ns, imw, imh, lum / static_cast<float>(imw * imh * 3), worst);
+    CHECK(lum > 0.0F);
+    CHECK(worst < 2.0e-3F); // GPU PBR relight == oracle
+}
+
+// D-007 B19 StopThePop: the PER-PIXEL RESORT render (nested loops + a per-pixel scratch buffer for the O(N²) selection)
+// dispatches on real Vulkan and matches the CPU oracle. Proves the nested-For + scratch-RMW construct lowers to GLSL.
+TEST_CASE("B19 StopThePop: per-pixel resort render on Vulkan == CPU oracle", "[gpu-context][vulkan][gpu][gsplat2d]")
+{
+    crd::memory::TlsfAllocator alloc(96U << 20U, nullptr, "gsplat2d-resort-gpu");
+    gpu::GpuContextConfig      gcfg;
+    gcfg.backend  = gpu::GpuBackend::Vulkan;
+    gcfg.headless = true;
+    auto ctx      = gpu::create_vulkan_gpu_context(gcfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+
+    constexpr int imw = 48;
+    constexpr int imh = 48;
+    constexpr int ns  = 8;
+    const double  c0  = kir::gsplat::detail::kShC0;
+
+    crd::containers::Array<float> surf(&alloc);
+    surf.resize(uz(ns) * 13U, 0.0F);
+    crd::u32   st = 0x570BU;
+    const auto rnd = [&]() { st = st * 1664525U + 1013904223U; return static_cast<double>(st >> 8U) / 16777216.0; };
+    for (int i = 0; i < ns; ++i)
+    {
+        float* q = surf.data() + uz(i) * 13U;
+        q[0] = static_cast<float>((rnd() * 2.0 - 1.0) * 0.5); q[1] = static_cast<float>((rnd() * 2.0 - 1.0) * 0.5); q[2] = static_cast<float>(-0.4 + rnd() * 0.8);
+        q[3] = static_cast<float>(0.5 + rnd() * 0.5); q[4] = static_cast<float>(0.5 + rnd() * 0.5);
+        const double a1 = rnd() * 6.2831853; const double a2 = rnd() * 6.2831853; const double u1 = rnd();
+        q[5] = static_cast<float>(crd::math::sqrt(1.0 - u1) * crd::math::sin(a1)); q[6] = static_cast<float>(crd::math::sqrt(1.0 - u1) * crd::math::cos(a1));
+        q[7] = static_cast<float>(crd::math::sqrt(u1) * crd::math::sin(a2)); q[8] = static_cast<float>(crd::math::sqrt(u1) * crd::math::cos(a2));
+        q[9] = 0.7F; q[10] = static_cast<float>((rnd() - 0.5) / c0); q[11] = static_cast<float>((rnd() - 0.5) / c0); q[12] = static_cast<float>((rnd() - 0.5) / c0);
+    }
+    crd::containers::Array<float> cam(&alloc);
+    cam.resize(20U, 0.0F);
+    cam[0] = 1.0F; cam[4] = 1.0F; cam[8] = 1.0F; cam[11] = 5.0F;
+    cam[12] = 70.0F; cam[13] = 70.0F; cam[14] = 24.0F; cam[15] = 24.0F;
+    cam[16] = 0.2F; cam[17] = static_cast<float>(imw); cam[18] = static_cast<float>(imh);
+
+    const auto mk = [&](kir::KGraph& g, const kir::KEntry& e, int nb, const char* nm) -> std::unique_ptr<crd::gpu::ComputePipeline> {
+        kir::GlslKernel k(&alloc);
+        REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, k));
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(k.source), nm, &alloc);
+        if (!spv.ok) { WARN("[" << nm << "] SPIR-V compile failed: " << spv.error_message.c_str()); }
+        REQUIRE(spv.ok);
+        return compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
+    };
+    kir::gsplat::Gsplat2dProjectConfig pcfg;
+    kir::KGraph pg(&alloc);
+    auto p_proj = mk(pg, kir::gsplat::build_gsplat2d_project_kernel(pg, pcfg), 3, "gs2d_proj");
+    crd::containers::Array<float> prep(&alloc);
+    prep.resize(uz(ns) * 19U, 0.0F);
+    {
+        float* hb[3] = {surf.data(), cam.data(), prep.data()};
+        const int ln[3] = {ns * 13, 20, ns * 19};
+        crd::kir_test::dispatch_kernel_1wg(compute, *p_proj, hb, ln, 3, static_cast<crd::u32>((ns + 63) / 64));
+    }
+    crd::containers::Array<double> prepd(&alloc); prepd.resize(uz(ns) * 19U, 0.0);
+    for (int i = 0; i < ns * 19; ++i) { prepd[uz(i)] = prep[uz(i)]; }
+
+    kir::gsplat::Gsplat2dResortConfig rrc;
+    rrc.width = imw; rrc.height = imh; rrc.max_splats = ns;
+    kir::KGraph rg(&alloc);
+    auto p_rs = mk(rg, kir::gsplat::build_gsplat2d_resort_render_kernel(rg, rrc), 5, "gs2d_resort");
+    crd::containers::Array<float> par(&alloc);
+    par.resize(5U, 0.0F); par[0] = static_cast<float>(ns); par[4] = 1.0F / 255.0F;
+    crd::containers::Array<float> img(&alloc); crd::containers::Array<float> scr(&alloc);
+    img.resize(uz(imw * imh) * 4U, 0.0F); scr.resize(uz(imw * imh) * 4U, 0.0F);
+    {
+        float* hb[5] = {prep.data(), cam.data(), par.data(), img.data(), scr.data()};
+        const int ln[5] = {ns * 19, 20, 5, imw * imh * 4, imw * imh * 4};
+        crd::kir_test::dispatch_kernel_1wg(compute, *p_rs, hb, ln, 5, static_cast<crd::u32>((imw * imh + 63) / 64));
+    }
+    // CPU oracle
+    crd::containers::Array<double> camd(&alloc); crd::containers::Array<double> pard(&alloc);
+    camd.resize(20U, 0.0); for (int i = 0; i < 20; ++i) { camd[uz(i)] = cam[uz(i)]; }
+    pard.resize(5U, 0.0); pard[0] = static_cast<double>(ns); pard[4] = 1.0 / 255.0;
+    kir::KGraph rg2(&alloc);
+    const kir::KEntry re2 = kir::gsplat::build_gsplat2d_resort_render_kernel(rg2, rrc);
+    crd::containers::Array<double> imgref(&alloc); crd::containers::Array<double> scrref(&alloc);
+    imgref.resize(uz(imw * imh) * 4U, 0.0); scrref.resize(uz(imw * imh) * 4U, 0.0);
+    kir::KernelBuffer rbb[5] = {{prepd.data(), ns * 19, 0, 0}, {camd.data(), 20, 0, 1}, {pard.data(), 5, 0, 2}, {imgref.data(), imw * imh * 4, 0, 3}, {scrref.data(), imw * imh * 4, 0, 4}};
+    kir::eval_cpu_kernel(rg2, re2, rbb, 5, re2.local_size[0], &alloc, static_cast<crd::u32>(imw * imh / 64));
+
+    float worst = 0.0F; float lum = 0.0F;
+    for (int q = 0; q < imw * imh * 4; ++q) { const float d = crd::math::abs(img[uz(q)] - static_cast<float>(imgref[uz(q)])); if (d > worst) { worst = d; } }
+    for (int p = 0; p < imw * imh; ++p) { lum += img[uz(p) * 4U + 0U] + img[uz(p) * 4U + 1U] + img[uz(p) * 4U + 2U]; }
+    std::printf("[B19 StopThePop GPU] resort %d surfels %dx%d: mean lum %.4f; worst |GPU - oracle| = %.3e\n", ns, imw, imh, lum / static_cast<float>(imw * imh * 3), worst);
+    CHECK(lum > 0.0F);
+    CHECK(worst < 2.0e-3F); // GPU per-pixel resort == oracle
+}
+
+// D-007 B19-d: the Gaussian COMPRESSION codec on the GPU. Quantise → dequantise (the K-bit attribute codec) dispatches
+// on real Vulkan and reconstructs == the CPU oracle. (Morton reorder is bit-ops, oracle-gated.)
+TEST_CASE("B19-d: quantise/dequantise codec on Vulkan == CPU oracle", "[gpu-context][vulkan][gpu][gsplat]")
+{
+    crd::memory::TlsfAllocator alloc(64U << 20U, nullptr, "gsplat-quant-gpu");
+    gpu::GpuContextConfig      gcfg;
+    gcfg.backend  = gpu::GpuBackend::Vulkan;
+    gcfg.headless = true;
+    auto ctx      = gpu::create_vulkan_gpu_context(gcfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+
+    constexpr int n    = 256;
+    constexpr int natt = 14;
+    constexpr int bits = 12;
+
+    crd::containers::Array<float> gs(&alloc);
+    gs.resize(uz(n) * natt, 0.0F);
+    crd::u32 st = 0xC0FFEEU;
+    const auto rnd = [&]() { st = st * 1664525U + 1013904223U; return static_cast<double>(st >> 8U) / 16777216.0; };
+    for (int i = 0; i < n * natt; ++i) { gs[uz(i)] = static_cast<float>((rnd() * 2.0 - 1.0) * 2.0); }
+    crd::containers::Array<float> rng(&alloc);
+    rng.resize(uz(natt) * 2U, 0.0F);
+    for (int k = 0; k < natt; ++k)
+    {
+        float lo = 1.0e30F; float hi = -1.0e30F;
+        for (int i = 0; i < n; ++i) { const float v = gs[uz(i * natt + k)]; if (v < lo) { lo = v; } if (v > hi) { hi = v; } }
+        rng[uz(k) * 2U] = lo; rng[uz(k) * 2U + 1U] = hi;
+    }
+
+    const auto mk = [&](kir::KGraph& g, const kir::KEntry& e, int nb, const char* nm) -> std::unique_ptr<crd::gpu::ComputePipeline> {
+        kir::GlslKernel k(&alloc);
+        REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, k));
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(k.source), nm, &alloc);
+        if (!spv.ok) { WARN("[" << nm << "] SPIR-V compile failed: " << spv.error_message.c_str()); }
+        REQUIRE(spv.ok);
+        return compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
+    };
+    kir::gsplat::GsplatQuantizeConfig qc;
+    qc.natt = natt; qc.bits = bits;
+    kir::KGraph qg(&alloc); kir::KGraph dg(&alloc);
+    auto p_q = mk(qg, kir::gsplat::build_gsplat_quantize_kernel(qg, qc), 3, "gs_quant");
+    auto p_d = mk(dg, kir::gsplat::build_gsplat_dequantize_kernel(dg, qc), 3, "gs_dequant");
+
+    crd::containers::Array<float> codes(&alloc); crd::containers::Array<float> recon(&alloc);
+    codes.resize(uz(n) * natt, 0.0F); recon.resize(uz(n) * natt, 0.0F);
+    {
+        float* hb[3] = {gs.data(), rng.data(), codes.data()};
+        const int ln[3] = {n * natt, natt * 2, n * natt};
+        crd::kir_test::dispatch_kernel_1wg(compute, *p_q, hb, ln, 3, static_cast<crd::u32>((n + 63) / 64));
+    }
+    {
+        float* hb[3] = {codes.data(), rng.data(), recon.data()};
+        const int ln[3] = {n * natt, natt * 2, n * natt};
+        crd::kir_test::dispatch_kernel_1wg(compute, *p_d, hb, ln, 3, static_cast<crd::u32>((n + 63) / 64));
+    }
+
+    // CPU oracle
+    crd::containers::Array<double> gsd(&alloc); crd::containers::Array<double> rngd(&alloc);
+    gsd.resize(uz(n) * natt, 0.0); rngd.resize(uz(natt) * 2U, 0.0);
+    for (int i = 0; i < n * natt; ++i) { gsd[uz(i)] = gs[uz(i)]; }
+    for (int i = 0; i < natt * 2; ++i) { rngd[uz(i)] = rng[uz(i)]; }
+    crd::containers::Array<double> cref(&alloc); crd::containers::Array<double> rref(&alloc);
+    cref.resize(uz(n) * natt, 0.0); rref.resize(uz(n) * natt, 0.0);
+    kir::KGraph qg2(&alloc); const kir::KEntry qe2 = kir::gsplat::build_gsplat_quantize_kernel(qg2, qc);
+    kir::KernelBuffer qb[3] = {{gsd.data(), n * natt, 0, 0}, {rngd.data(), natt * 2, 0, 1}, {cref.data(), n * natt, 0, 2}};
+    kir::eval_cpu_kernel(qg2, qe2, qb, 3, qe2.local_size[0], &alloc, static_cast<crd::u32>(n / 64));
+    kir::KGraph dg2(&alloc); const kir::KEntry de2 = kir::gsplat::build_gsplat_dequantize_kernel(dg2, qc);
+    kir::KernelBuffer db[3] = {{cref.data(), n * natt, 0, 0}, {rngd.data(), natt * 2, 0, 1}, {rref.data(), n * natt, 0, 2}};
+    kir::eval_cpu_kernel(dg2, de2, db, 3, de2.local_size[0], &alloc, static_cast<crd::u32>(n / 64));
+
+    float worst = 0.0F;
+    for (int i = 0; i < n * natt; ++i) { const float d = crd::math::abs(recon[uz(i)] - static_cast<float>(rref[uz(i)])); if (d > worst) { worst = d; } }
+    std::printf("[B19-d GPU] %d-bit codec on Vulkan: worst |GPU - oracle| = %.3e\n", bits, worst);
+    CHECK(worst < 1.0e-4F); // GPU codec == oracle
+}
+
+// D-007 B19-f: DIFFERENTIABLE TRAINING on the GPU. The forward differentiable splat and the exact backward gradient
+// reduction dispatch on real Vulkan and match the CPU oracle — the render+gradient loop that fits Gaussians runs on-device.
+TEST_CASE("B19-f: differentiable forward + backward on Vulkan == CPU oracle", "[gpu-context][vulkan][gpu][gsplat]")
+{
+    crd::memory::TlsfAllocator alloc(64U << 20U, nullptr, "gsplat-diff-gpu");
+    gpu::GpuContextConfig      gcfg;
+    gcfg.backend  = gpu::GpuBackend::Vulkan;
+    gcfg.headless = true;
+    auto ctx      = gpu::create_vulkan_gpu_context(gcfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+
+    kir::gsplat::GsplatDiffConfig cfg;
+    cfg.width = 32; cfg.height = 32; cfg.local_size = 64;
+    const int np = cfg.width * cfg.height;
+
+    crd::containers::Array<float> tgtp(&alloc);
+    tgtp.resize(5U, 0.0F); tgtp[0] = 16.0F; tgtp[1] = 16.0F; tgtp[2] = 5.0F; tgtp[3] = 0.9F; tgtp[4] = 0.8F;
+    crd::containers::Array<float> params(&alloc);
+    params.resize(5U, 0.0F); params[0] = 14.0F; params[1] = 18.0F; params[2] = 4.0F; params[3] = 0.6F; params[4] = 0.55F;
+
+    const auto mk = [&](kir::KGraph& g, const kir::KEntry& e, int nb, const char* nm) -> std::unique_ptr<crd::gpu::ComputePipeline> {
+        kir::GlslKernel k(&alloc);
+        REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, k));
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(k.source), nm, &alloc);
+        if (!spv.ok) { WARN("[" << nm << "] SPIR-V compile failed: " << spv.error_message.c_str()); }
+        REQUIRE(spv.ok);
+        return compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
+    };
+    kir::KGraph fg(&alloc); kir::KGraph bg(&alloc);
+    auto p_f = mk(fg, kir::gsplat::build_gsplat_diff_forward_kernel(fg, cfg), 2, "gs_dfwd");
+    auto p_b = mk(bg, kir::gsplat::build_gsplat_diff_backward_kernel(bg, cfg), 3, "gs_dbwd");
+
+    // target (GPU forward with target params)
+    crd::containers::Array<float> target(&alloc); target.resize(uz(np), 0.0F);
+    { float* hb[2] = {tgtp.data(), target.data()}; const int ln[2] = {5, np}; crd::kir_test::dispatch_kernel_1wg(compute, *p_f, hb, ln, 2, static_cast<crd::u32>((np + 63) / 64)); }
+    // GPU forward at the test params + GPU backward gradient
+    crd::containers::Array<float> img(&alloc); img.resize(uz(np), 0.0F);
+    { float* hb[2] = {params.data(), img.data()}; const int ln[2] = {5, np}; crd::kir_test::dispatch_kernel_1wg(compute, *p_f, hb, ln, 2, static_cast<crd::u32>((np + 63) / 64)); }
+    crd::containers::Array<float> grad(&alloc); grad.resize(5U, 0.0F);
+    { float* hb[3] = {params.data(), target.data(), grad.data()}; const int ln[3] = {5, np, 5}; crd::kir_test::dispatch_kernel_1wg(compute, *p_b, hb, ln, 3, 1U); }
+
+    // CPU oracle
+    crd::containers::Array<double> pd(&alloc); crd::containers::Array<double> td(&alloc);
+    pd.resize(5U, 0.0); for (int i = 0; i < 5; ++i) { pd[uz(i)] = params[uz(i)]; }
+    td.resize(uz(np), 0.0); for (int i = 0; i < np; ++i) { td[uz(i)] = target[uz(i)]; }
+    crd::containers::Array<double> imgref(&alloc); crd::containers::Array<double> gref(&alloc);
+    imgref.resize(uz(np), 0.0); gref.resize(5U, 0.0);
+    kir::KGraph fg2(&alloc); const kir::KEntry fe2 = kir::gsplat::build_gsplat_diff_forward_kernel(fg2, cfg);
+    kir::KernelBuffer fb[2] = {{pd.data(), 5, 0, 0}, {imgref.data(), np, 0, 1}};
+    kir::eval_cpu_kernel(fg2, fe2, fb, 2, fe2.local_size[0], &alloc, static_cast<crd::u32>(np / cfg.local_size));
+    kir::KGraph bg2(&alloc); const kir::KEntry be2 = kir::gsplat::build_gsplat_diff_backward_kernel(bg2, cfg);
+    kir::KernelBuffer bb[3] = {{pd.data(), 5, 0, 0}, {td.data(), np, 0, 1}, {gref.data(), 5, 0, 2}};
+    kir::eval_cpu_kernel(bg2, be2, bb, 3, be2.local_size[0], &alloc, 1U);
+
+    float wf = 0.0F; float wg = 0.0F;
+    for (int i = 0; i < np; ++i) { const float d = crd::math::abs(img[uz(i)] - static_cast<float>(imgref[uz(i)])); if (d > wf) { wf = d; } }
+    for (int k = 0; k < 5; ++k) { const float d = crd::math::abs(grad[uz(k)] - static_cast<float>(gref[uz(k)])); const float rel = d / (crd::math::abs(static_cast<float>(gref[uz(k)])) + 1.0e-4F); if (rel > wg) { wg = rel; } }
+    std::printf("[B19-f GPU] diff forward+backward on Vulkan: worst |fwd - oracle| = %.3e, worst grad rel = %.3e\n", wf, wg);
+    CHECK(wf < 1.0e-4F);   // GPU forward == oracle
+    CHECK(wg < 1.0e-3F);   // GPU gradient == oracle
+}
+
+// D-007 B19 PERFORMANCE: the shared-memory tiled rasteriser at 1080p with MILLIONS of splats, GPU-timed, vs the direct
+// block render. Proves Cerid does real-scale 3DGS AND measures the shared-memory optimisation. Scene binned host-side
+// (counting sort by tile — untimed setup); the TIMED work is the render, min-of-N GPU-timestamped. Hidden ([.]).
+TEST_CASE("B19 perf: shared-mem 3DGS rasteriser at 1080p, millions of splats -- GPU benchmark", "[.gsplat-bench]")
+{
+    namespace cg = crd::gpu;
+    crd::memory::TlsfAllocator alloc(1536U << 20U, nullptr, "gsplat-bench");
+    gpu::GpuContextConfig      gcfg;
+    gcfg.backend  = gpu::GpuBackend::Vulkan;
+    gcfg.headless = true;
+    auto ctx      = gpu::create_vulkan_gpu_context(gcfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    using cg::compute_usage::storage;
+    using cg::compute_usage::transfer_dst;
+    using cg::compute_usage::transfer_src;
+
+    constexpr int imw     = 1920;
+    constexpr int tile_px = 16;
+    constexpr int tiles_x = (imw + tile_px - 1) / tile_px;       // 120
+    constexpr int tiles_y = (1080 + tile_px - 1) / tile_px;      // 68
+    constexpr int n_tiles = tiles_x * tiles_y;                   // 8160
+    constexpr int padded_w = tiles_x * tile_px;                  // 1920
+    constexpr int padded_h = tiles_y * tile_px;                  // 1088
+
+    const auto mk = [&](kir::KGraph& g, const kir::KEntry& e, int nb, const char* nm) -> std::unique_ptr<cg::ComputePipeline> {
+        kir::GlslKernel k(&alloc);
+        REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, k));
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(k.source), nm, &alloc);
+        if (!spv.ok) { WARN("[" << nm << "] " << spv.error_message.c_str()); }
+        REQUIRE(spv.ok);
+        return compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
+    };
+    kir::gsplat::GsplatBlockConfig bc;
+    bc.width = imw; bc.height = 1080; bc.tile_px = tile_px;
+    kir::KGraph pg(&alloc);
+    kir::KGraph dg(&alloc);
+    kir::KGraph sg(&alloc);
+    kir::gsplat::GsplatBlockConfig bc_et = bc;
+    bc_et.early_terminate = true;
+    kir::KGraph eg(&alloc);
+    auto p_proj   = mk(pg, kir::gsplat::build_gsplat_project_kernel(pg, {}), 3, "proj");
+    auto p_direct = mk(dg, kir::gsplat::build_gsplat_block_render_kernel(dg, bc), 5, "block_direct");
+    auto p_smem   = mk(sg, kir::gsplat::build_gsplat_block_render_smem_kernel(sg, bc), 5, "block_smem");
+    auto p_smem_et = mk(eg, kir::gsplat::build_gsplat_block_render_smem_kernel(eg, bc_et), 5, "block_smem_et");
+    REQUIRE(p_proj != nullptr); REQUIRE(p_direct != nullptr); REQUIRE(p_smem != nullptr); REQUIRE(p_smem_et != nullptr);
+
+    const auto dbuf = [&](crd::u64 bytes) { return compute.create_buffer(bytes, storage | transfer_dst | transfer_src, cg::ComputeMemory::GpuOnly); };
+
+    const int scenes[2] = {1000000, 4000000};
+    std::printf("\n=== B19 3DGS shared-mem rasteriser @ %dx1080 (%d tiles) ===\n", imw, n_tiles);
+    for (int sc = 0; sc < 2; ++sc)
+    {
+        const int n = scenes[sc];
+        // ── scene: n splats spread across the frame, moderate scale (realistic per-tile overdraw) ──
+        crd::containers::Array<float> gauss(&alloc);
+        gauss.resize(uz(n) * 14U, 0.0F);
+        crd::u32 st = 0xBEE5U + static_cast<crd::u32>(sc);
+        const auto rnd = [&]() { st = st * 1664525U + 1013904223U; return static_cast<double>(st >> 8U) / 16777216.0; };
+        for (int i = 0; i < n; ++i)
+        {
+            float* q = gauss.data() + uz(i) * 14U;
+            q[0] = static_cast<float>((rnd() * 2.0 - 1.0) * 1.6); q[1] = static_cast<float>((rnd() * 2.0 - 1.0) * 0.9); q[2] = static_cast<float>(1.0 + rnd() * 6.0);
+            q[3] = q[4] = q[5] = static_cast<float>(0.01 + rnd() * 0.02);
+            q[6] = 0.0F; q[7] = 0.0F; q[8] = 0.0F; q[9] = 1.0F;
+            q[10] = static_cast<float>(0.2 + rnd() * 0.6);
+            q[11] = static_cast<float>(rnd()); q[12] = static_cast<float>(rnd()); q[13] = static_cast<float>(rnd());
+        }
+        crd::containers::Array<float> cam(&alloc);
+        cam.resize(20U, 0.0F);
+        cam[0] = 1.0F; cam[4] = 1.0F; cam[8] = 1.0F; cam[11] = 0.5F;
+        cam[12] = 1400.0F; cam[13] = 1400.0F; cam[14] = static_cast<float>(imw) * 0.5F; cam[15] = 540.0F;
+        cam[16] = 0.2F; cam[17] = static_cast<float>(imw); cam[18] = 1080.0F;
+
+        auto d_gauss = dbuf(uz(n) * 14U * 4U);
+        auto d_cam   = dbuf(20U * 4U);
+        auto d_proj  = dbuf(uz(n) * 12U * 4U);
+        {
+            auto stg = compute.create_buffer(uz(n) * 14U * 4U, transfer_src, cg::ComputeMemory::CpuToGpu);
+            auto* p = static_cast<float*>(stg->map()); for (int i = 0; i < n * 14; ++i) { p[i] = gauss[uz(i)]; } stg->unmap();
+            auto stc = compute.create_buffer(20U * 4U, transfer_src, cg::ComputeMemory::CpuToGpu);
+            auto* pc = static_cast<float*>(stc->map()); for (int i = 0; i < 20; ++i) { pc[i] = cam[uz(i)]; } stc->unmap();
+            auto& rc = compute.begin();
+            rc.copy(*stg, *d_gauss, 0U, 0U, uz(n) * 14U * 4U); rc.copy(*stc, *d_cam, 0U, 0U, 20U * 4U);
+            compute.submit_and_wait();
+        }
+        // project on GPU, read back
+        {
+            auto& rec = compute.begin();
+            cg::ComputeBuffer* pb[3] = {d_gauss.get(), d_cam.get(), d_proj.get()};
+            rec.dispatch(*p_proj, crd::containers::ConstSpan<cg::ComputeBuffer*>(pb, 3), nullptr, 0U, static_cast<crd::u32>((n + 63) / 64), 1U, 1U);
+            rec.barrier(*d_proj, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::TransferSrc);
+            compute.submit_and_wait();
+        }
+        crd::containers::Array<float> proj(&alloc); proj.resize(uz(n) * 12U, 0.0F);
+        {
+            auto rb = compute.create_buffer(uz(n) * 12U * 4U, transfer_dst, cg::ComputeMemory::GpuToCpu);
+            auto& rec = compute.begin(); rec.copy(*d_proj, *rb, 0U, 0U, uz(n) * 12U * 4U); compute.submit_and_wait();
+            const auto* r = static_cast<const float*>(rb->map()); for (int i = 0; i < n * 12; ++i) { proj[uz(i)] = r[i]; } rb->unmap();
+        }
+        // ── host bin: counting sort by centre tile → order[] + ranges[] (UNTIMED setup) ──
+        crd::containers::Array<crd::u32> cnt(&alloc); cnt.resize(uz(n_tiles), 0U);
+        crd::containers::Array<int> tof(&alloc); tof.resize(uz(n), -1);
+        for (int i = 0; i < n; ++i)
+        {
+            if (proj[uz(i) * 12U + 11U] <= 0.5F) { continue; }
+            const int tx = static_cast<int>(proj[uz(i) * 12U + 0U]) / tile_px;
+            const int ty = static_cast<int>(proj[uz(i) * 12U + 1U]) / tile_px;
+            if (tx < 0 || tx >= tiles_x || ty < 0 || ty >= tiles_y) { continue; }
+            const int t = ty * tiles_x + tx; tof[uz(i)] = t; ++cnt[uz(t)];
+        }
+        crd::containers::Array<crd::u32> ranges(&alloc); ranges.resize(uz(n_tiles) * 2U, 0U);
+        crd::u32 acc = 0U;
+        for (int t = 0; t < n_tiles; ++t) { ranges[uz(t) * 2U] = acc; acc += cnt[uz(t)]; ranges[uz(t) * 2U + 1U] = acc; }
+        const int total = static_cast<int>(acc);
+        crd::containers::Array<crd::u32> wptr(&alloc); wptr.resize(uz(n_tiles), 0U);
+        for (int t = 0; t < n_tiles; ++t) { wptr[uz(t)] = ranges[uz(t) * 2U]; }
+        crd::containers::Array<crd::u32> order(&alloc); order.resize(uz(total > 0 ? total : 1), 0U);
+        for (int i = 0; i < n; ++i) { const int t = tof[uz(i)]; if (t >= 0) { order[static_cast<crd::usize>(wptr[uz(t)])] = static_cast<crd::u32>(i); ++wptr[uz(t)]; } }
+
+        // upload sorted(=proj), order, ranges, params
+        auto d_ord = dbuf(uz(total > 0 ? total : 1) * 4U);
+        auto d_rng = dbuf(uz(n_tiles) * 2U * 4U);
+        auto d_par = dbuf(4U * 4U);
+        auto d_od  = dbuf(uz(padded_w * padded_h) * 4U * 4U); // direct out
+        auto d_os  = dbuf(uz(padded_w * padded_h) * 4U * 4U); // smem out
+        {
+            const auto upu = [&](cg::ComputeBuffer& dev, const crd::u32* src, int len) {
+                auto stg = compute.create_buffer(static_cast<crd::u64>(len) * 4U, transfer_src, cg::ComputeMemory::CpuToGpu);
+                auto* p = static_cast<crd::u32*>(stg->map()); for (int i = 0; i < len; ++i) { p[i] = src[i]; } stg->unmap();
+                auto& rc = compute.begin(); rc.copy(*stg, dev, 0U, 0U, static_cast<crd::u64>(len) * 4U); compute.submit_and_wait();
+            };
+            upu(*d_ord, order.data(), total > 0 ? total : 1);
+            upu(*d_rng, ranges.data(), n_tiles * 2);
+            crd::containers::Array<float> par(&alloc); par.resize(4U, 0.0F); par[0] = 0.02F; par[1] = 0.02F; par[2] = 0.03F; par[3] = 1.0F / 255.0F;
+            auto stp = compute.create_buffer(4U * 4U, transfer_src, cg::ComputeMemory::CpuToGpu);
+            auto* pp = static_cast<float*>(stp->map()); for (int i = 0; i < 4; ++i) { pp[i] = par[uz(i)]; } stp->unmap();
+            auto& rc = compute.begin(); rc.copy(*stp, *d_par, 0U, 0U, 4U * 4U); compute.submit_and_wait();
+        }
+
+        const auto time_render = [&](cg::ComputePipeline& pipe, cg::ComputeBuffer& outb) {
+            const auto rec1 = [&]() {
+                auto& rec = compute.begin();
+                cg::ComputeBuffer* b[5] = {d_proj.get(), d_ord.get(), d_rng.get(), d_par.get(), &outb};
+                rec.dispatch(pipe, crd::containers::ConstSpan<cg::ComputeBuffer*>(b, 5), nullptr, 0U, static_cast<crd::u32>(n_tiles), 1U, 1U);
+                compute.submit_and_wait();
+            };
+            rec1(); rec1(); // warm
+            double best = 1.0e30;
+            for (int r = 0; r < 6; ++r) { rec1(); const double ms = compute.last_gpu_ms(); if (ms > 0.0 && ms < best) { best = ms; } }
+            return best;
+        };
+        auto d_oe  = dbuf(uz(padded_w * padded_h) * 4U * 4U); // smem + early-out out
+        const double ms_d = time_render(*p_direct, *d_od);
+        const double ms_s = time_render(*p_smem, *d_os);
+        const double ms_e = time_render(*p_smem_et, *d_oe);
+
+        // bit-exact check (smem == direct) + early-out approximation error (smem_et vs direct)
+        double worst = 0.0; double worst_et = 0.0;
+        {
+            auto rbd = compute.create_buffer(uz(padded_w * padded_h) * 4U * 4U, transfer_dst, cg::ComputeMemory::GpuToCpu);
+            auto rbs = compute.create_buffer(uz(padded_w * padded_h) * 4U * 4U, transfer_dst, cg::ComputeMemory::GpuToCpu);
+            auto rbe = compute.create_buffer(uz(padded_w * padded_h) * 4U * 4U, transfer_dst, cg::ComputeMemory::GpuToCpu);
+            auto& rec = compute.begin();
+            rec.copy(*d_od, *rbd, 0U, 0U, uz(padded_w * padded_h) * 4U * 4U);
+            rec.copy(*d_os, *rbs, 0U, 0U, uz(padded_w * padded_h) * 4U * 4U);
+            rec.copy(*d_oe, *rbe, 0U, 0U, uz(padded_w * padded_h) * 4U * 4U);
+            compute.submit_and_wait();
+            const auto* a = static_cast<const float*>(rbd->map());
+            const auto* b = static_cast<const float*>(rbs->map());
+            const auto* c = static_cast<const float*>(rbe->map());
+            for (int i = 0; i < padded_w * padded_h * 4; i += 977)
+            {
+                const double d = crd::math::abs(static_cast<double>(a[i] - b[i])); if (d > worst) { worst = d; }
+                const double e = crd::math::abs(static_cast<double>(a[i] - c[i])); if (e > worst_et) { worst_et = e; }
+            }
+            rbd->unmap(); rbs->unmap(); rbe->unmap();
+        }
+        std::printf("  N=%7d  T=%8d  |  direct %6.3f ms (%5.1f fps)  smem %6.3f ms (%6.1f fps) %.2fx  smem+earlyout %6.3f ms (%6.1f fps) %.2fx  |  %.0f Minst/s  |  exact %.0e  approx %.1e\n",
+                    n, total, ms_d, 1000.0 / ms_d, ms_s, 1000.0 / ms_s, ms_d / ms_s, ms_e, 1000.0 / ms_e, ms_d / ms_e,
+                    static_cast<double>(total) / (ms_e * 1000.0), worst, worst_et);
+        CHECK(worst < 1.0e-5);      // smem (no early-out) == direct, bit-exact
+        CHECK(worst_et < 5.0e-3);   // early-out drops only the saturated tail (≤ ~t_stop·colour)
+    }
 }

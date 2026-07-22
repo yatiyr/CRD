@@ -14,6 +14,7 @@
 #include <crd/kir/ckir_scan.hpp>   // B-cmp: build_scan (the CKIR device-wide prefix sum)
 #include <crd/kir/ckir_sort.hpp>   // B-cmp: build_sort_* (the CKIR stable LSD radix sort)
 #include <crd/kir/ckir_mlp.hpp>    // v17 NRC: build_mlp_fwd_fp32 (the portable+bit-exact fused-MLP forward)
+#include <crd/kir/ckir_neural.hpp> // B10: emit_coopvec_mlp_glsl (the per-invocation cooperative-vector neural-shading MLP)
 #include <crd/kir/ckir_svgf.hpp>   // B14-c: build_svgf_atrous (the SVGF edge-stopping denoiser)
 #include <crd/kir/ckir_ddgi.hpp>   // B14-b: build_ddgi_sample (the DDGI probe-sampling GI lookup)
 #include <crd/kir/ckir_restir.hpp> // B14-a: build_restir_ris/temporal (the ReSTIR reservoir/RIS estimator)
@@ -29,6 +30,7 @@
 #include <crd/kir/ckir_visbuffer.hpp> // B4-vis: build_sw_raster_visbuffer (the compute software rasterizer)
 
 #include <crd/math/cmath.hpp> // Phase-1 FFT: host-side twiddle table (cos/sin)
+#include <crd/math/float_convert.hpp> // C6-b: f32<->f16 bit conversion for the cooperative-vector oracle
 
 #include <ckir_kernel_dispatch.hpp> // B-cmp: the SHARED both-backend kernel dispatch + oracle-compare harness
 #include <ckir_raster_triangle.hpp> // B3-e: the SHARED, backend-neutral CKIR triangle (identical on Vulkan + DX12)
@@ -79,6 +81,762 @@ TEST_CASE("v17-i-a: headless Vulkan compute context via the GpuContextManager", 
                 vk->adapter_name(), vk->cooperative_matrix2() ? "YES" : "no", vk->compute_family());
     // coopmat2 is the tensor lever (present on the RTX 4070 Ti Super); a soft note so the test stays portable.
     if (!vk->cooperative_matrix2()) { WARN("adapter has no VK_NV_cooperative_matrix2 — tensor tier will be unavailable"); }
+}
+
+// D-007 C6: cooperative-VECTOR device enable (VK_NV_cooperative_vector) — the PER-INVOCATION matrix×vector inference primitive
+// for neural shading (each pixel/thread runs a small MLP inline), the device half of the B10 moat. This gate proves the device
+// comes up with the extension + feature ENABLED (a legal feature request under validation), reports the queried capabilities, and
+// exercises the type-combination PROPERTY query. Portable: soft-skips on an adapter without the extension.
+TEST_CASE("D-007 C6: cooperative-vector device enable (VK_NV_cooperative_vector) -- the B10 neural-shading device half",
+          "[gpu-context][vulkan][gpu][coopvec]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    REQUIRE(vk->valid());
+    std::printf("[coopvec] adapter=%s  coopvec=%s  training=%s  max_components=%u  stages=0x%x\n", vk->adapter_name(),
+                vk->cooperative_vector() ? "YES" : "no", vk->cooperative_vector_training() ? "YES" : "no",
+                vk->coopvec_max_components(), vk->coopvec_supported_stages());
+    if (!vk->cooperative_vector())
+    {
+        WARN("adapter has no VK_NV_cooperative_vector -- the B10 neural-shading tier will be unavailable");
+        return;
+    }
+
+    // the device CREATED successfully with VK_NV_cooperative_vector + cooperativeVector=VK_TRUE chained ⇒ the feature request was
+    // legal (a validation layer would have failed device creation otherwise). Capabilities came from the feature/property query.
+    CHECK(vk->vk_device() != VK_NULL_HANDLE);
+    CHECK(vk->coopvec_max_components() > 0U);                                             // a real max cooperative-vector dimension
+    CHECK((vk->coopvec_supported_stages() & VK_SHADER_STAGE_COMPUTE_BIT) != 0U);          // compute always supports coopvec
+
+    // PROPERTY QUERY: the supported {input, matrix, bias, result} TYPE COMBINATIONS for the matrix×vector op (proc-loaded — this
+    // is a physical-device extension function). nullptr ⇒ just the count; assert the device advertises at least one combo.
+    auto pfn = reinterpret_cast<PFN_vkGetPhysicalDeviceCooperativeVectorPropertiesNV>(
+        vkGetInstanceProcAddr(vk->vk_instance(), "vkGetPhysicalDeviceCooperativeVectorPropertiesNV"));
+    REQUIRE(pfn != nullptr);
+    crd::u32 combo_count = 0U;
+    REQUIRE(pfn(vk->vk_physical_device(), &combo_count, nullptr) == VK_SUCCESS);
+    CHECK(combo_count > 0U);
+    std::printf("[coopvec] supported matrix-vector type combinations: %u\n", combo_count);
+}
+
+// D-007 C6-b: the cooperative-vector PROGRAM PATH — a real per-invocation matrix×vector (the inference primitive B10 builds on)
+// DISPATCHES on the device and matches a CPU oracle. Each of B threads loads its own K-vector, multiplies it by a shared M×K
+// fp16 weight matrix (RowMajor, fp32 accumulate — the standard inference combo), and stores its M-vector. Matched-accuracy vs a
+// f16-rounded fp32 oracle (NOT bit-exact — tensor-core matmul reorders the sum; the FP32-precise CKIR tier owns bit-exactness).
+TEST_CASE("D-007 C6-b: cooperative-vector matrix-vector DISPATCHES on Vulkan == fp16 oracle (the B10 program path)",
+          "[gpu-context][vulkan][gpu][coopvec]")
+{
+    namespace cg = crd::gpu;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->cooperative_vector()) { WARN("no VK_NV_cooperative_vector; skipping"); return; }
+    cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    crd::memory::TlsfAllocator alloc(32U << 20U);
+    using cg::compute_usage::storage;
+    using cg::compute_usage::transfer_dst;
+    using cg::compute_usage::transfer_src;
+    const auto uz = [](int v) { return static_cast<crd::usize>(v); };
+
+    static const char* const kCoopVecSrc =
+        "#version 460\n"
+        "#extension GL_NV_cooperative_vector : require\n"
+        "#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require\n"
+        "#extension GL_EXT_shader_explicit_arithmetic_types : require\n"
+        "layout(local_size_x = 64) in;\n"
+        "layout(set=0, binding=0) readonly  buffer InBuf  { float16_t data[]; } inb;\n"
+        "layout(set=0, binding=1) readonly  buffer MatBuf { float16_t data[]; } matb;\n"
+        "layout(set=0, binding=2) writeonly buffer OutBuf { float16_t data[]; } outb;\n"
+        "layout(set=0, binding=3) readonly  buffer CfgBuf { uint      data[]; } cfg;\n"
+        "void main() {\n"
+        "    uint tid = gl_GlobalInvocationID.x;\n"
+        "    uint B = cfg.data[0];\n"
+        "    if (tid >= B) { return; }\n"
+        "    const uint K = 16u; const uint M = 16u;\n"
+        "    coopvecNV<float16_t, 16> v;\n"
+        "    coopVecLoadNV(v, inb.data, tid * K * 2u);\n" // load offset: BYTES (float16_t buffer)
+        "    coopvecNV<float16_t, 16> r;\n"               // fp16 result (the only fp16-input combo the HW supports)
+        "    coopVecMatMulNV(r, v, gl_ComponentTypeFloat16NV, matb.data, 0u, gl_ComponentTypeFloat16NV,\n"
+        "                    M, K, gl_CooperativeVectorMatrixLayoutRowMajorNV, false, K * 2u);\n" // matrixStride: BYTES/row
+        "    coopVecStoreNV(r, outb.data, tid * M * 2u);\n" // store offset: BYTES (float16_t buffer)
+
+        "}\n";
+
+    const auto spv =
+        gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::StringView(kCoopVecSrc), "coopvec_matvec", &alloc);
+    if (!spv.ok) { WARN("coopvec GLSL->SPIR-V failed: " << spv.error_message.c_str()); }
+    REQUIRE(spv.ok);
+    auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 4, 0U);
+    REQUIRE(pipe != nullptr);
+    // NOTE: on this HW the only fp16-input matmul combination is {input f16, matrix f16, result f16} (the integer combos are
+    // int8/fp8 quantized inference). The RowMajor layout multiplies correctly with tightly-packed weights — no optimal-layout
+    // conversion is needed for CORRECTNESS (the optimal layout is a later perf lever).
+
+    constexpr int b_n = 256;
+    constexpr int k_n = 16;
+    constexpr int m_n = 16;
+    crd::containers::Array<crd::u16> in_h(&alloc);  in_h.resize(uz(b_n * k_n));
+    crd::containers::Array<crd::u16> w_h(&alloc);   w_h.resize(uz(m_n * k_n));
+    // deterministic pseudo-random in ~[-1,1], stored as the f16-ROUNDED values (both device and oracle read these exact bits).
+    const auto rnd = [](int i) { const crd::u32 h = (static_cast<crd::u32>(i) * 2654435761U) ^ 0x9E3779B9U; return (static_cast<float>(h & 0xFFFFU) / 32768.0F) - 1.0F; };
+    for (int i = 0; i < b_n * k_n; ++i) { in_h[uz(i)] = crd::math::f32_to_f16_bits(rnd(i)); }
+    for (int i = 0; i < m_n * k_n; ++i) { w_h[uz(i)] = crd::math::f32_to_f16_bits(rnd(i + 991)); }
+    // oracle: accumulate in fp32 (using the f16-rounded operands), then ROUND the result to fp16 — the device stores an fp16
+    // result (combo 0), so the comparison is against the f16-rounded sum. Matched-accuracy, not bit-exact.
+    crd::containers::Array<float> ref(&alloc); ref.resize(uz(b_n * m_n), 0.0F);
+    for (int b = 0; b < b_n; ++b)
+    {
+        for (int m = 0; m < m_n; ++m)
+        {
+            float acc = 0.0F;
+            for (int k = 0; k < k_n; ++k) { acc += crd::math::f16_bits_to_f32(in_h[uz(b * k_n + k)]) * crd::math::f16_bits_to_f32(w_h[uz(m * k_n + k)]); }
+            ref[uz(b * m_n + m)] = crd::math::f16_bits_to_f32(crd::math::f32_to_f16_bits(acc));
+        }
+    }
+
+    auto d_in  = compute.create_buffer(static_cast<crd::u64>(b_n * k_n) * 2U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
+    auto d_w   = compute.create_buffer(static_cast<crd::u64>(m_n * k_n) * 2U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
+    auto d_out = compute.create_buffer(static_cast<crd::u64>(b_n * m_n) * 2U, storage | transfer_src, cg::ComputeMemory::GpuOnly);
+    auto d_cfg = compute.create_buffer(4U * 4U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
+    const auto up_bytes = [&](cg::ComputeBuffer& dst, const void* src, crd::u64 nbytes) {
+        auto stg  = compute.create_buffer(nbytes, transfer_src, cg::ComputeMemory::CpuToGpu);
+        auto* p   = static_cast<crd::u8*>(stg->map());
+        const auto* s = static_cast<const crd::u8*>(src);
+        for (crd::u64 i = 0; i < nbytes; ++i) { p[i] = s[i]; }
+        stg->unmap();
+        auto& rc = compute.begin();
+        rc.copy(*stg, dst, 0U, 0U, nbytes);
+        compute.submit_and_wait();
+    };
+    const crd::u32 cfgv[4] = {static_cast<crd::u32>(b_n), static_cast<crd::u32>(k_n), static_cast<crd::u32>(m_n), 0U};
+    up_bytes(*d_in, in_h.data(), static_cast<crd::u64>(b_n * k_n) * 2U);
+    up_bytes(*d_w, w_h.data(), static_cast<crd::u64>(m_n * k_n) * 2U);
+    up_bytes(*d_cfg, cfgv, 4U * 4U);
+
+    auto& rec = compute.begin();
+    cg::ComputeBuffer* binds[4] = {d_in.get(), d_w.get(), d_out.get(), d_cfg.get()};
+    rec.dispatch(*pipe, crd::containers::ConstSpan<cg::ComputeBuffer*>(binds, 4), nullptr, 0U, static_cast<crd::u32>((b_n + 63) / 64), 1U, 1U);
+    rec.barrier(*d_out, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::TransferSrc);
+    compute.submit_and_wait();
+
+    auto rb = compute.create_buffer(static_cast<crd::u64>(b_n * m_n) * 2U, transfer_dst, cg::ComputeMemory::GpuToCpu);
+    {
+        auto& r2 = compute.begin();
+        r2.copy(*d_out, *rb, 0U, 0U, static_cast<crd::u64>(b_n * m_n) * 2U);
+        compute.submit_and_wait();
+    }
+    const auto* out = static_cast<const crd::u16*>(rb->map()); // fp16 bits
+    float worst = 0.0F;
+    for (int i = 0; i < b_n * m_n; ++i) { const float d0 = crd::math::f16_bits_to_f32(out[uz(i)]) - ref[uz(i)]; const float d = d0 < 0.0F ? -d0 : d0; if (d > worst) { worst = d; } }
+    rb->unmap();
+    std::printf("[coopvec] matvec B=%d K=%d M=%d  worst |device - oracle| = %.5f\n", b_n, k_n, m_n, static_cast<double>(worst));
+    CHECK(worst < 0.06F); // matched fp16 accuracy (fp16 products + fp16-rounded result; the HW accumulation order differs from the oracle's)
+}
+
+// D-007 B10: the NEURAL-SHADING MOAT — a per-invocation multi-layer MLP (crd::kir::neural::emit_coopvec_mlp_glsl) runs inline on
+// the cooperative-vector tensor units and matches the CPU reference. This is the substrate for per-pixel neural materials/textures:
+// each thread feeds its feature vector through a 16→16→16→16 ReLU MLP (2 hidden + linear output). Matched fp16 accuracy.
+TEST_CASE("D-007 B10: cooperative-vector MLP (neural shading) DISPATCHES on Vulkan == fp16 reference",
+          "[gpu-context][vulkan][gpu][coopvec][neural]")
+{
+    namespace cg  = crd::gpu;
+    namespace kir = crd::kir;
+    namespace nn  = crd::kir::neural;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->cooperative_vector()) { WARN("no VK_NV_cooperative_vector; skipping"); return; }
+    cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    crd::memory::TlsfAllocator alloc(32U << 20U);
+    using cg::compute_usage::storage;
+    using cg::compute_usage::transfer_dst;
+    using cg::compute_usage::transfer_src;
+    const auto uz = [](int v) { return static_cast<crd::usize>(v); };
+
+    nn::CoopVecMlpConfig mlp;
+    mlp.in_dim = 16; mlp.hidden = 16; mlp.out_dim = 16; mlp.hidden_layers = 2;
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(nn::emit_coopvec_mlp_glsl(mlp, kern));
+    const auto spv =
+        gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "coopvec_mlp", &alloc);
+    if (!spv.ok) { WARN("coopvec MLP GLSL->SPIR-V failed: " << spv.error_message.c_str()); }
+    REQUIRE(spv.ok);
+    auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 5, 0U);
+    REQUIRE(pipe != nullptr);
+
+    constexpr int n_s = 256;
+    const int     wc  = mlp.weight_count();
+    const int     bc  = mlp.bias_count();
+    crd::containers::Array<crd::u16> in_h(&alloc);  in_h.resize(uz(n_s * mlp.in_dim));
+    crd::containers::Array<crd::u16> w_h(&alloc);   w_h.resize(uz(wc));
+    crd::containers::Array<crd::u16> b_h(&alloc);   b_h.resize(uz(bc));
+    // small deterministic pseudo-random weights/inputs (scaled so activations stay in fp16's accurate range, no ReLU-dead net)
+    const auto rnd = [](int i, float scale) { const crd::u32 h = (static_cast<crd::u32>(i) * 2654435761U) ^ 0x9E3779B9U; return ((static_cast<float>(h & 0xFFFFU) / 32768.0F) - 1.0F) * scale; };
+    for (int i = 0; i < n_s * mlp.in_dim; ++i) { in_h[uz(i)] = crd::math::f32_to_f16_bits(rnd(i, 1.0F)); }
+    for (int i = 0; i < wc; ++i) { w_h[uz(i)] = crd::math::f32_to_f16_bits(rnd(i + 17, 0.25F)); }   // 1/sqrt(16) ~ 0.25 init
+    for (int i = 0; i < bc; ++i) { b_h[uz(i)] = crd::math::f32_to_f16_bits(rnd(i + 7919, 0.1F)); }
+    crd::containers::Array<crd::u16> ref(&alloc); ref.resize(uz(n_s * mlp.out_dim), static_cast<crd::u16>(0));
+    nn::eval_coopvec_mlp_cpu(mlp, w_h.data(), b_h.data(), in_h.data(), n_s, ref.data());
+
+    auto d_in  = compute.create_buffer(static_cast<crd::u64>(n_s * mlp.in_dim) * 2U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
+    auto d_w   = compute.create_buffer(static_cast<crd::u64>(wc) * 2U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
+    auto d_b   = compute.create_buffer(static_cast<crd::u64>(bc) * 2U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
+    auto d_out = compute.create_buffer(static_cast<crd::u64>(n_s * mlp.out_dim) * 2U, storage | transfer_src, cg::ComputeMemory::GpuOnly);
+    auto d_cfg = compute.create_buffer(4U * 4U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
+    const auto up_bytes = [&](cg::ComputeBuffer& dst, const void* src, crd::u64 nbytes) {
+        auto  stg = compute.create_buffer(nbytes, transfer_src, cg::ComputeMemory::CpuToGpu);
+        auto* p   = static_cast<crd::u8*>(stg->map());
+        const auto* srcb = static_cast<const crd::u8*>(src);
+        for (crd::u64 i = 0; i < nbytes; ++i) { p[i] = srcb[i]; }
+        stg->unmap();
+        auto& rc = compute.begin();
+        rc.copy(*stg, dst, 0U, 0U, nbytes);
+        compute.submit_and_wait();
+    };
+    const crd::u32 cfgv[4] = {static_cast<crd::u32>(n_s), 0U, 0U, 0U};
+    up_bytes(*d_in, in_h.data(), static_cast<crd::u64>(n_s * mlp.in_dim) * 2U);
+    up_bytes(*d_w, w_h.data(), static_cast<crd::u64>(wc) * 2U);
+    up_bytes(*d_b, b_h.data(), static_cast<crd::u64>(bc) * 2U);
+    up_bytes(*d_cfg, cfgv, 4U * 4U);
+
+    auto& rec = compute.begin();
+    cg::ComputeBuffer* binds[5] = {d_in.get(), d_w.get(), d_b.get(), d_out.get(), d_cfg.get()};
+    rec.dispatch(*pipe, crd::containers::ConstSpan<cg::ComputeBuffer*>(binds, 5), nullptr, 0U, static_cast<crd::u32>((n_s + 63) / 64), 1U, 1U);
+    rec.barrier(*d_out, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::TransferSrc);
+    compute.submit_and_wait();
+
+    auto rb = compute.create_buffer(static_cast<crd::u64>(n_s * mlp.out_dim) * 2U, transfer_dst, cg::ComputeMemory::GpuToCpu);
+    {
+        auto& r2 = compute.begin();
+        r2.copy(*d_out, *rb, 0U, 0U, static_cast<crd::u64>(n_s * mlp.out_dim) * 2U);
+        compute.submit_and_wait();
+    }
+    const auto* out = static_cast<const crd::u16*>(rb->map());
+    float worst = 0.0F;
+    for (int i = 0; i < n_s * mlp.out_dim; ++i) { const float d0 = crd::math::f16_bits_to_f32(out[uz(i)]) - crd::math::f16_bits_to_f32(ref[uz(i)]); const float d = d0 < 0.0F ? -d0 : d0; if (d > worst) { worst = d; } }
+    rb->unmap();
+    std::printf("[coopvec] MLP %d->%dx%d->%d  N=%d  worst |device - reference| = %.5f\n", mlp.in_dim, mlp.hidden, mlp.hidden_layers, mlp.out_dim, n_s, static_cast<double>(worst));
+    CHECK(worst < 0.05F); // matched fp16 accuracy across 3 layers
+}
+
+// D-007 B10 PERFORMANCE: the neural-shading CRUSH — run a small MLP PER PIXEL at 1080p (2,073,600 invocations) on the cooperative-
+// vector tensor units vs the identical MLP as a hand-written scalar-FMA shader. GPU-timestamped (min-of-6), self-verifying (both
+// compute the same MLP ⇒ outputs match to fp16). This is the moat: real-time per-pixel neural materials/textures. Hidden ([.]).
+TEST_CASE("D-007 B10: cooperative-vector MLP CRUSH -- per-pixel neural shading vs a scalar-FMA baseline (GPU-timed)",
+          "[.coopvec-bench]")
+{
+    namespace cg  = crd::gpu;
+    namespace kir = crd::kir;
+    namespace nn  = crd::kir::neural;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->cooperative_vector()) { WARN("no VK_NV_cooperative_vector; skipping"); return; }
+    cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    crd::memory::TlsfAllocator alloc(512U << 20U);
+    using cg::compute_usage::storage;
+    using cg::compute_usage::transfer_dst;
+    using cg::compute_usage::transfer_src;
+    const auto uz = [](int v) { return static_cast<crd::usize>(v); };
+
+    nn::CoopVecMlpConfig mlp;
+    mlp.in_dim = 16; mlp.hidden = 32; mlp.out_dim = 16; mlp.hidden_layers = 3; // a realistic per-pixel neural material MLP
+    kir::GlslKernel kcv(&alloc);
+    kir::GlslKernel ksc(&alloc);
+    REQUIRE(nn::emit_coopvec_mlp_glsl(mlp, kcv));
+    REQUIRE(nn::emit_scalar_mlp_glsl(mlp, ksc));
+    const auto spv_cv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kcv.source), "cv_mlp", &alloc);
+    const auto spv_sc = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(ksc.source), "sc_mlp", &alloc);
+    REQUIRE(spv_cv.ok);
+    REQUIRE(spv_sc.ok);
+    auto pipe_cv = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv_cv.spirv.data(), spv_cv.spirv.size()), 5, 0U);
+    auto pipe_sc = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv_sc.spirv.data(), spv_sc.spirv.size()), 5, 0U);
+    REQUIRE(pipe_cv != nullptr);
+    REQUIRE(pipe_sc != nullptr);
+
+    constexpr int n_px = 1920 * 1080; // one MLP evaluation per pixel at 1080p
+    const int     wc   = mlp.weight_count();
+    const int     bc   = mlp.bias_count();
+    crd::containers::Array<crd::u16> in_h(&alloc);  in_h.resize(uz(n_px * mlp.in_dim));
+    crd::containers::Array<crd::u16> w_h(&alloc);   w_h.resize(uz(wc));
+    crd::containers::Array<crd::u16> b_h(&alloc);   b_h.resize(uz(bc));
+    const auto rnd = [](int i, float scale) { const crd::u32 h = (static_cast<crd::u32>(i) * 2654435761U) ^ 0x9E3779B9U; return ((static_cast<float>(h & 0xFFFFU) / 32768.0F) - 1.0F) * scale; };
+    for (int i = 0; i < n_px * mlp.in_dim; ++i) { in_h[uz(i)] = crd::math::f32_to_f16_bits(rnd(i, 1.0F)); }
+    for (int i = 0; i < wc; ++i) { w_h[uz(i)] = crd::math::f32_to_f16_bits(rnd(i + 17, 0.18F)); }
+    for (int i = 0; i < bc; ++i) { b_h[uz(i)] = crd::math::f32_to_f16_bits(rnd(i + 7919, 0.1F)); }
+
+    auto d_in   = compute.create_buffer(static_cast<crd::u64>(n_px * mlp.in_dim) * 2U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
+    auto d_w    = compute.create_buffer(static_cast<crd::u64>(wc) * 2U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
+    auto d_b    = compute.create_buffer(static_cast<crd::u64>(bc) * 2U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
+    auto d_ocv  = compute.create_buffer(static_cast<crd::u64>(n_px * mlp.out_dim) * 2U, storage | transfer_src, cg::ComputeMemory::GpuOnly);
+    auto d_osc  = compute.create_buffer(static_cast<crd::u64>(n_px * mlp.out_dim) * 2U, storage | transfer_src, cg::ComputeMemory::GpuOnly);
+    auto d_cfg  = compute.create_buffer(4U * 4U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
+    const auto up_bytes = [&](cg::ComputeBuffer& dst, const void* src, crd::u64 nbytes) {
+        auto  stg = compute.create_buffer(nbytes, transfer_src, cg::ComputeMemory::CpuToGpu);
+        auto* p   = static_cast<crd::u8*>(stg->map());
+        const auto* srcb = static_cast<const crd::u8*>(src);
+        for (crd::u64 i = 0; i < nbytes; ++i) { p[i] = srcb[i]; }
+        stg->unmap();
+        auto& rc = compute.begin();
+        rc.copy(*stg, dst, 0U, 0U, nbytes);
+        compute.submit_and_wait();
+    };
+    const crd::u32 cfgv[4] = {static_cast<crd::u32>(n_px), 0U, 0U, 0U};
+    up_bytes(*d_in, in_h.data(), static_cast<crd::u64>(n_px * mlp.in_dim) * 2U);
+    up_bytes(*d_w, w_h.data(), static_cast<crd::u64>(wc) * 2U);
+    up_bytes(*d_b, b_h.data(), static_cast<crd::u64>(bc) * 2U);
+    up_bytes(*d_cfg, cfgv, 4U * 4U);
+
+    const crd::u32 groups = static_cast<crd::u32>((n_px + 63) / 64);
+    const auto     run    = [&](cg::ComputePipeline& pipe, cg::ComputeBuffer& d_out) {
+        auto& rec = compute.begin();
+        cg::ComputeBuffer* binds[5] = {d_in.get(), d_w.get(), d_b.get(), &d_out, d_cfg.get()};
+        rec.dispatch(pipe, crd::containers::ConstSpan<cg::ComputeBuffer*>(binds, 5), nullptr, 0U, groups, 1U, 1U);
+        rec.barrier(d_out, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead);
+        compute.submit_and_wait();
+    };
+    double best_cv = 1.0e30;
+    double best_sc = 1.0e30;
+    run(*pipe_cv, *d_ocv); // warmup
+    run(*pipe_sc, *d_osc);
+    for (int r = 0; r < 6; ++r) { run(*pipe_cv, *d_ocv); const double ms = compute.last_gpu_ms(); if (ms > 0.0 && ms < best_cv) { best_cv = ms; } }
+    for (int r = 0; r < 6; ++r) { run(*pipe_sc, *d_osc); const double ms = compute.last_gpu_ms(); if (ms > 0.0 && ms < best_sc) { best_sc = ms; } }
+
+    // self-verify: both kernels compute the SAME MLP ⇒ their fp16 outputs must match (a modest tolerance for the different
+    // accumulation paths — tensor-core vs scalar fp32).
+    auto rb_cv = compute.create_buffer(static_cast<crd::u64>(n_px * mlp.out_dim) * 2U, transfer_dst, cg::ComputeMemory::GpuToCpu);
+    auto rb_sc = compute.create_buffer(static_cast<crd::u64>(n_px * mlp.out_dim) * 2U, transfer_dst, cg::ComputeMemory::GpuToCpu);
+    { auto& r2 = compute.begin(); r2.copy(*d_ocv, *rb_cv, 0U, 0U, static_cast<crd::u64>(n_px * mlp.out_dim) * 2U); r2.copy(*d_osc, *rb_sc, 0U, 0U, static_cast<crd::u64>(n_px * mlp.out_dim) * 2U); compute.submit_and_wait(); }
+    const auto* ocv = static_cast<const crd::u16*>(rb_cv->map());
+    const auto* osc = static_cast<const crd::u16*>(rb_sc->map());
+    float worst = 0.0F;
+    for (int i = 0; i < 4096; ++i) { const int idx = (i * 509) % (n_px * mlp.out_dim); const float d0 = crd::math::f16_bits_to_f32(ocv[uz(idx)]) - crd::math::f16_bits_to_f32(osc[uz(idx)]); const float d = d0 < 0.0F ? -d0 : d0; if (d > worst) { worst = d; } }
+    rb_cv->unmap();
+    rb_sc->unmap();
+
+    const double macs = static_cast<double>(n_px) * static_cast<double>(mlp.weight_count()); // ~one MAC per weight per pixel
+    std::printf("\n=== B10 neural-shading CRUSH (RTX 4070 Ti SUPER) — MLP %d->%dx%d->%d, %d px (1080p) ===\n",
+                mlp.in_dim, mlp.hidden, mlp.hidden_layers, mlp.out_dim, n_px);
+    std::printf("  coopvec (tensor units): %.3f ms  (%.1f fps, %.1f GMAC/s)\n", best_cv, 1000.0 / best_cv, macs / best_cv / 1.0e6);
+    std::printf("  scalar  (ALU FMA)     : %.3f ms  (%.1f fps, %.1f GMAC/s)\n", best_sc, 1000.0 / best_sc, macs / best_sc / 1.0e6);
+    std::printf("  SPEEDUP (coopvec / scalar): %.2fx     [cross-check worst |cv - scalar| = %.4f]\n", best_sc / best_cv, static_cast<double>(worst));
+    CHECK(best_cv > 0.0);
+    CHECK(best_sc > 0.0);
+    CHECK(worst < 0.20F); // both compute the same MLP
+}
+
+// D-007 B10: a NEURAL MATERIAL — a 2-D neural field (frequency-encoded uv → MLP → RGB) CPU-trained to reproduce a target pattern,
+// then RENDERED per pixel on the cooperative-vector tensor path to a BMP. The tangible neural-shading deliverable: a learned
+// texture evaluated inline in a shader. Reports PSNR (rendered vs target) + writes neural_material.bmp / neural_target.bmp. Hidden.
+TEST_CASE("D-007 B10: NEURAL MATERIAL -- CPU-trained 2D neural field rendered per-pixel on the coopvec tensor path (-> BMP)",
+          "[.neural-material]")
+{
+    namespace cg  = crd::gpu;
+    namespace kir = crd::kir;
+    namespace nn  = crd::kir::neural;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->cooperative_vector()) { WARN("no VK_NV_cooperative_vector; skipping"); return; }
+    cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    crd::memory::TlsfAllocator alloc(128U << 20U);
+    using cg::compute_usage::storage;
+    using cg::compute_usage::transfer_dst;
+    using cg::compute_usage::transfer_src;
+    const auto uz = [](int v) { return static_cast<crd::usize>(v); };
+
+    nn::CoopVecMlpConfig mlp;
+    mlp.in_dim = 16; mlp.hidden = 32; mlp.out_dim = 3; mlp.hidden_layers = 2; // 16(enc) -> 32 -> 32 -> 3(rgb)
+
+    // the target pattern — a smooth colourful field the neural material learns to reproduce.
+    const auto target = [](float u, float v, float* rgb) {
+        const float s1 = crd::math::sin(6.2831853F * (u * 1.3F + 0.10F));
+        const float s2 = crd::math::cos(6.2831853F * (v * 1.1F + 0.20F));
+        const float s3 = crd::math::sin(6.2831853F * ((u + v) * 0.8F));
+        rgb[0] = 0.5F + 0.35F * crd::math::sin(2.0F * s1 + s3);
+        rgb[1] = 0.5F + 0.35F * crd::math::cos(2.0F * s2 - s3);
+        rgb[2] = 0.5F + 0.35F * crd::math::sin(1.5F * (s1 + s2) + 0.5F);
+    };
+
+    // ── TRAIN the MLP on the CPU (fp32 full-batch gradient descent, 3-layer backprop) ──
+    const int wc = mlp.weight_count();
+    const int bc = mlp.bias_count();
+    crd::containers::Array<float> w(&alloc);  w.resize(uz(wc), 0.0F);
+    crd::containers::Array<float> bd(&alloc); bd.resize(uz(bc), 0.0F);
+    const auto rnd = [](int i) { const crd::u32 h = (static_cast<crd::u32>(i) * 2654435761U) ^ 0x9E3779B9U; return (static_cast<float>(h & 0xFFFFU) / 32768.0F) - 1.0F; };
+    for (int i = 0; i < 32 * 16; ++i) { w[uz(i)] = rnd(i) * 0.30F; }             // W0 (fan-in 16)
+    for (int i = 0; i < 32 * 32; ++i) { w[uz(512 + i)] = rnd(i + 101) * 0.18F; } // W1 (fan-in 32)
+    for (int i = 0; i < 3 * 32; ++i) { w[uz(1536 + i)] = rnd(i + 907) * 0.18F; } // W2
+    const int   grid   = 32;
+    const int   epochs = 1200;
+    const float lr     = 0.01F; // Adam
+    crd::containers::Array<float> gw(&alloc);  gw.resize(uz(wc), 0.0F);
+    crd::containers::Array<float> gb(&alloc);  gb.resize(uz(bc), 0.0F);
+    crd::containers::Array<float> mw(&alloc);  mw.resize(uz(wc), 0.0F);
+    crd::containers::Array<float> vw(&alloc);  vw.resize(uz(wc), 0.0F);
+    crd::containers::Array<float> mb(&alloc);  mb.resize(uz(bc), 0.0F);
+    crd::containers::Array<float> vb(&alloc);  vb.resize(uz(bc), 0.0F);
+    float b1t = 1.0F;
+    float b2t = 1.0F;
+    for (int ep = 0; ep < epochs; ++ep)
+    {
+        for (int i = 0; i < wc; ++i) { gw[uz(i)] = 0.0F; }
+        for (int i = 0; i < bc; ++i) { gb[uz(i)] = 0.0F; }
+        for (int gy = 0; gy < grid; ++gy)
+        {
+            for (int gx = 0; gx < grid; ++gx)
+            {
+                const float uu = (static_cast<float>(gx) + 0.5F) / static_cast<float>(grid);
+                const float vv = (static_cast<float>(gy) + 0.5F) / static_cast<float>(grid);
+                float a0[16];
+                nn::neural_uv_encode(uu, vv, 16, a0);
+                float z1[32];
+                float a1[32];
+                for (int r = 0; r < 32; ++r) { float acc = bd[uz(r)]; for (int k = 0; k < 16; ++k) { acc += w[uz(r * 16 + k)] * a0[k]; } z1[r] = acc; a1[r] = acc > 0.0F ? acc : 0.0F; }
+                float z2[32];
+                float a2[32];
+                for (int r = 0; r < 32; ++r) { float acc = bd[uz(32 + r)]; for (int k = 0; k < 32; ++k) { acc += w[uz(512 + r * 32 + k)] * a1[k]; } z2[r] = acc; a2[r] = acc > 0.0F ? acc : 0.0F; }
+                float out3[3];
+                for (int o = 0; o < 3; ++o) { float acc = bd[uz(64 + o)]; for (int k = 0; k < 32; ++k) { acc += w[uz(1536 + o * 32 + k)] * a2[k]; } out3[o] = acc; }
+                float tgt[3];
+                target(uu, vv, tgt);
+                float d3[3];
+                for (int o = 0; o < 3; ++o) { d3[o] = 2.0F * (out3[o] - tgt[o]); }
+                for (int o = 0; o < 3; ++o) { gb[uz(64 + o)] += d3[o]; for (int k = 0; k < 32; ++k) { gw[uz(1536 + o * 32 + k)] += d3[o] * a2[k]; } }
+                float d2[32];
+                for (int k = 0; k < 32; ++k) { float acc = 0.0F; for (int o = 0; o < 3; ++o) { acc += w[uz(1536 + o * 32 + k)] * d3[o]; } d2[k] = z2[k] > 0.0F ? acc : 0.0F; }
+                for (int r = 0; r < 32; ++r) { gb[uz(32 + r)] += d2[r]; for (int k = 0; k < 32; ++k) { gw[uz(512 + r * 32 + k)] += d2[r] * a1[k]; } }
+                float d1[32];
+                for (int k = 0; k < 32; ++k) { float acc = 0.0F; for (int r = 0; r < 32; ++r) { acc += w[uz(512 + r * 32 + k)] * d2[r]; } d1[k] = z1[k] > 0.0F ? acc : 0.0F; }
+                for (int r = 0; r < 32; ++r) { gb[uz(r)] += d1[r]; for (int k = 0; k < 16; ++k) { gw[uz(r * 16 + k)] += d1[r] * a0[k]; } }
+            }
+        }
+        b1t *= 0.9F;
+        b2t *= 0.999F;
+        const float bc1 = 1.0F - b1t;
+        const float bc2 = 1.0F - b2t;
+        const float ns  = 1.0F / static_cast<float>(grid * grid);
+        for (int i = 0; i < wc; ++i) { const float g = gw[uz(i)] * ns; mw[uz(i)] = 0.9F * mw[uz(i)] + 0.1F * g; vw[uz(i)] = 0.999F * vw[uz(i)] + 0.001F * g * g; w[uz(i)] -= lr * (mw[uz(i)] / bc1) / (crd::math::sqrt(vw[uz(i)] / bc2) + 1.0e-8F); }
+        for (int i = 0; i < bc; ++i) { const float g = gb[uz(i)] * ns; mb[uz(i)] = 0.9F * mb[uz(i)] + 0.1F * g; vb[uz(i)] = 0.999F * vb[uz(i)] + 0.001F * g * g; bd[uz(i)] -= lr * (mb[uz(i)] / bc1) / (crd::math::sqrt(vb[uz(i)] / bc2) + 1.0e-8F); }
+    }
+
+    // ISOLATION: PSNR of a CPU fp32 forward of the trained net (vs target) over a 128² grid — separates training from the fp16 render.
+    {
+        double cmse = 0.0;
+        const int cg = 128;
+        for (int gy = 0; gy < cg; ++gy)
+        {
+            for (int gx = 0; gx < cg; ++gx)
+            {
+                const float uu = (static_cast<float>(gx) + 0.5F) / static_cast<float>(cg);
+                const float vv = (static_cast<float>(gy) + 0.5F) / static_cast<float>(cg);
+                float a0[16]; nn::neural_uv_encode(uu, vv, 16, a0);
+                float a1[32]; for (int r = 0; r < 32; ++r) { float acc = bd[uz(r)]; for (int k = 0; k < 16; ++k) { acc += w[uz(r * 16 + k)] * a0[k]; } a1[r] = acc > 0.0F ? acc : 0.0F; }
+                float a2[32]; for (int r = 0; r < 32; ++r) { float acc = bd[uz(32 + r)]; for (int k = 0; k < 32; ++k) { acc += w[uz(512 + r * 32 + k)] * a1[k]; } a2[r] = acc > 0.0F ? acc : 0.0F; }
+                float o3[3]; for (int o = 0; o < 3; ++o) { float acc = bd[uz(64 + o)]; for (int k = 0; k < 32; ++k) { acc += w[uz(1536 + o * 32 + k)] * a2[k]; } o3[o] = acc; }
+                float t[3]; target(uu, vv, t);
+                for (int o = 0; o < 3; ++o) { cmse += static_cast<double>((o3[o] - t[o]) * (o3[o] - t[o])); }
+            }
+        }
+        cmse /= static_cast<double>(cg * cg * 3);
+        std::printf("[neural-material] CPU fp32 forward PSNR = %.2f dB (isolates training from the fp16 render)\n", 10.0 * crd::math::log10(1.0 / cmse));
+    }
+
+    // quantize the trained weights to fp16 for the tensor render.
+    crd::containers::Array<crd::u16> w16(&alloc); w16.resize(uz(wc));
+    crd::containers::Array<crd::u16> b16(&alloc); b16.resize(uz(bc));
+    for (int i = 0; i < wc; ++i) { w16[uz(i)] = crd::math::f32_to_f16_bits(w[uz(i)]); }
+    for (int i = 0; i < bc; ++i) { b16[uz(i)] = crd::math::f32_to_f16_bits(bd[uz(i)]); }
+
+    // ── RENDER the neural material per pixel on the coopvec tensor path ──
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(nn::emit_neural_material_render_glsl(mlp, kern));
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "neural_mat", &alloc);
+    if (!spv.ok) { WARN("neural material GLSL->SPIR-V failed: " << spv.error_message.c_str()); }
+    REQUIRE(spv.ok);
+    auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 4, 0U);
+    REQUIRE(pipe != nullptr);
+
+    constexpr int dim = 512;
+    auto d_w   = compute.create_buffer(static_cast<crd::u64>(wc) * 2U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
+    auto d_b   = compute.create_buffer(static_cast<crd::u64>(bc) * 2U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
+    auto d_out = compute.create_buffer(static_cast<crd::u64>(dim * dim) * 4U, storage | transfer_src, cg::ComputeMemory::GpuOnly);
+    auto d_cfg = compute.create_buffer(4U * 4U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
+    const auto up_bytes = [&](cg::ComputeBuffer& dst, const void* src, crd::u64 nbytes) {
+        auto  stg = compute.create_buffer(nbytes, transfer_src, cg::ComputeMemory::CpuToGpu);
+        auto* p   = static_cast<crd::u8*>(stg->map());
+        const auto* srcb = static_cast<const crd::u8*>(src);
+        for (crd::u64 i = 0; i < nbytes; ++i) { p[i] = srcb[i]; }
+        stg->unmap();
+        auto& rc = compute.begin();
+        rc.copy(*stg, dst, 0U, 0U, nbytes);
+        compute.submit_and_wait();
+    };
+    const crd::u32 cfgv[4] = {static_cast<crd::u32>(dim), static_cast<crd::u32>(dim), 0U, 0U};
+    up_bytes(*d_w, w16.data(), static_cast<crd::u64>(wc) * 2U);
+    up_bytes(*d_b, b16.data(), static_cast<crd::u64>(bc) * 2U);
+    up_bytes(*d_cfg, cfgv, 4U * 4U);
+
+    auto& rec = compute.begin();
+    cg::ComputeBuffer* binds[4] = {d_w.get(), d_b.get(), d_out.get(), d_cfg.get()};
+    rec.dispatch(*pipe, crd::containers::ConstSpan<cg::ComputeBuffer*>(binds, 4), nullptr, 0U, static_cast<crd::u32>(dim / 8), static_cast<crd::u32>(dim / 8), 1U);
+    rec.barrier(*d_out, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::TransferSrc);
+    compute.submit_and_wait();
+
+    auto rb = compute.create_buffer(static_cast<crd::u64>(dim * dim) * 4U, transfer_dst, cg::ComputeMemory::GpuToCpu);
+    { auto& r2 = compute.begin(); r2.copy(*d_out, *rb, 0U, 0U, static_cast<crd::u64>(dim * dim) * 4U); compute.submit_and_wait(); }
+    const auto* img = static_cast<const crd::u32*>(rb->map());
+
+    // PSNR (rendered neural material vs the target) + write both BMPs.
+    double mse = 0.0;
+    for (int y = 0; y < dim; ++y)
+    {
+        for (int x = 0; x < dim; ++x)
+        {
+            const crd::u32 pv = img[uz(y * dim + x)];
+            const float    nr = static_cast<float>(pv & 0xFFU) / 255.0F;
+            const float    ng = static_cast<float>((pv >> 8U) & 0xFFU) / 255.0F;
+            const float    nb = static_cast<float>((pv >> 16U) & 0xFFU) / 255.0F;
+            float          tgt[3];
+            target((static_cast<float>(x) + 0.5F) / dim, (static_cast<float>(y) + 0.5F) / dim, tgt);
+            mse += static_cast<double>((nr - tgt[0]) * (nr - tgt[0]) + (ng - tgt[1]) * (ng - tgt[1]) + (nb - tgt[2]) * (nb - tgt[2]));
+        }
+    }
+    mse /= static_cast<double>(dim * dim * 3);
+    const double psnr = 10.0 * crd::math::log10(1.0 / mse);
+
+    const auto write_bmp = [&](const char* path, bool from_target) {
+        const crd::u32 rowsize = (static_cast<crd::u32>(dim) * 3U + 3U) & ~3U;
+        crd::containers::Array<unsigned char> bmp(&alloc);
+        bmp.resize(54U + static_cast<crd::usize>(rowsize) * static_cast<crd::u32>(dim), static_cast<unsigned char>(0));
+        const auto p4 = [&](crd::u32 o, crd::u32 vv) { bmp[o] = static_cast<unsigned char>(vv & 0xFFU); bmp[o + 1] = static_cast<unsigned char>((vv >> 8U) & 0xFFU); bmp[o + 2] = static_cast<unsigned char>((vv >> 16U) & 0xFFU); bmp[o + 3] = static_cast<unsigned char>((vv >> 24U) & 0xFFU); };
+        bmp[0] = 'B'; bmp[1] = 'M';
+        p4(2U, 54U + rowsize * static_cast<crd::u32>(dim)); p4(10U, 54U); p4(14U, 40U);
+        p4(18U, static_cast<crd::u32>(dim)); p4(22U, static_cast<crd::u32>(dim)); bmp[26] = 1U; bmp[28] = 24U; p4(34U, rowsize * static_cast<crd::u32>(dim));
+        for (int fy = 0; fy < dim; ++fy)
+        {
+            const int sy = dim - 1 - fy;
+            for (int x = 0; x < dim; ++x)
+            {
+                float rr = 0.0F;
+                float gg = 0.0F;
+                float bbl = 0.0F;
+                if (from_target) { float t[3]; target((static_cast<float>(x) + 0.5F) / dim, (static_cast<float>(sy) + 0.5F) / dim, t); rr = t[0]; gg = t[1]; bbl = t[2]; }
+                else { const crd::u32 pv = img[uz(sy * dim + x)]; rr = static_cast<float>(pv & 0xFFU) / 255.0F; gg = static_cast<float>((pv >> 8U) & 0xFFU) / 255.0F; bbl = static_cast<float>((pv >> 16U) & 0xFFU) / 255.0F; }
+                const auto q = [](float c) { const float cc = c < 0.0F ? 0.0F : (c > 1.0F ? 1.0F : c); return static_cast<unsigned char>(cc * 255.0F + 0.5F); };
+                const crd::u32 o = 54U + static_cast<crd::u32>(fy) * rowsize + static_cast<crd::u32>(x) * 3U;
+                bmp[o] = q(bbl); bmp[o + 1] = q(gg); bmp[o + 2] = q(rr);
+            }
+        }
+        FILE* f = nullptr;
+        if (fopen_s(&f, path, "wb") == 0 && f != nullptr) { fwrite(bmp.data(), 1U, bmp.size(), f); fclose(f); }
+    };
+    write_bmp("D:/Dev/cerid/build/neural_material.bmp", false);
+    write_bmp("D:/Dev/cerid/build/neural_target.bmp", true);
+    rb->unmap();
+    std::printf("[neural-material] trained %d->32->32->3 field, %dx%d render on tensor path -> PSNR %.2f dB (neural_material.bmp)\n", mlp.in_dim, dim, dim, psnr);
+    CHECK(psnr > 32.0); // the neural field reproduces the target faithfully (Adam-trained; fp16 tensor render tracks the fp32 net)
+}
+
+// D-007 B10: ON-DEVICE DIFFERENTIABLE TRAINING — the moat's defining claim. A single linear layer y=Wx+b is TRAINED ON THE GPU to
+// fit a known target map: each step the forward + the loss gradient + the WEIGHT-gradient outer product (coopVecOuterProductAccumulate)
+// + the BIAS gradient (coopVecReduceSumAccumulate) all run on the cooperative-vector tensor path; the host converts the
+// TrainingOptimal weight-grad → RowMajor (vkConvertCooperativeVectorMatrixNV) and applies SGD. Verifies (a) the on-device gradient
+// == the CPU reference gradient (the hardware training op is correct) and (b) the loss CONVERGES to ~0 (it learns).
+TEST_CASE("D-007 B10: on-device coopvec TRAINING -- hardware gradients fit a linear map, loss converges",
+          "[gpu-context][vulkan][gpu][coopvec][neural][train]")
+{
+    namespace cg  = crd::gpu;
+    namespace kir = crd::kir;
+    namespace nn  = crd::kir::neural;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->cooperative_vector()) { WARN("no VK_NV_cooperative_vector; skipping"); return; }
+    if (!vk->cooperative_vector_training()) { WARN("no cooperativeVectorTraining; skipping"); return; }
+    cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    crd::memory::TlsfAllocator alloc(64U << 20U);
+    using cg::compute_usage::storage;
+    using cg::compute_usage::transfer_dst;
+    using cg::compute_usage::transfer_src;
+    const auto uz = [](int v) { return static_cast<crd::usize>(v); };
+
+    constexpr int d_n = 16;
+    constexpr int n_s = 256;
+    // the KNOWN target linear map W*,b* (small, so activations/gradients stay in fp16's accurate range) + random inputs → targets.
+    const auto rnd = [](int i) { const crd::u32 h = (static_cast<crd::u32>(i) * 2654435761U) ^ 0x9E3779B9U; return (static_cast<float>(h & 0xFFFFU) / 32768.0F) - 1.0F; };
+    crd::containers::Array<float> wstar(&alloc); wstar.resize(uz(d_n * d_n));
+    crd::containers::Array<float> bstar(&alloc); bstar.resize(uz(d_n));
+    for (int i = 0; i < d_n * d_n; ++i) { wstar[uz(i)] = rnd(i) * 0.20F; }
+    for (int i = 0; i < d_n; ++i) { bstar[uz(i)] = rnd(i + 555) * 0.10F; }
+    crd::containers::Array<crd::u16> x16(&alloc);  x16.resize(uz(n_s * d_n));
+    crd::containers::Array<crd::u16> t16(&alloc);  t16.resize(uz(n_s * d_n));
+    crd::containers::Array<float>    xf(&alloc);   xf.resize(uz(n_s * d_n));
+    for (int i = 0; i < n_s * d_n; ++i) { const float xv = rnd(i + 9001); xf[uz(i)] = crd::math::f16_bits_to_f32(crd::math::f32_to_f16_bits(xv)); x16[uz(i)] = crd::math::f32_to_f16_bits(xv); }
+    for (int s = 0; s < n_s; ++s) { for (int m = 0; m < d_n; ++m) { float acc = bstar[uz(m)]; for (int k = 0; k < d_n; ++k) { acc += wstar[uz(m * d_n + k)] * xf[uz(s * d_n + k)]; } t16[uz(s * d_n + m)] = crd::math::f32_to_f16_bits(acc); } }
+
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(nn::emit_coopvec_linear_train_glsl(d_n, kern));
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "coopvec_train", &alloc);
+    if (!spv.ok) { WARN("coopvec train GLSL->SPIR-V failed: " << spv.error_message.c_str()); }
+    REQUIRE(spv.ok);
+    auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 8, 0U);
+    REQUIRE(pipe != nullptr);
+
+    // the host layout-convert (TrainingOptimal weight-grad → RowMajor) — a device-level extension function.
+    auto pfn_conv = reinterpret_cast<PFN_vkConvertCooperativeVectorMatrixNV>(vkGetDeviceProcAddr(vk->vk_device(), "vkConvertCooperativeVectorMatrixNV"));
+    REQUIRE(pfn_conv != nullptr);
+    // query the TrainingOptimal byte size of a d_n×d_n fp16 matrix (dstData null ⇒ just fill *pDstSize).
+    size_t to_size = 0;
+    {
+        VkConvertCooperativeVectorMatrixInfoNV q{};
+        q.sType             = VK_STRUCTURE_TYPE_CONVERT_COOPERATIVE_VECTOR_MATRIX_INFO_NV;
+        q.srcSize           = static_cast<size_t>(d_n * d_n) * 2U;
+        q.pDstSize          = &to_size;
+        q.srcComponentType  = VK_COMPONENT_TYPE_FLOAT16_KHR;
+        q.dstComponentType  = VK_COMPONENT_TYPE_FLOAT16_KHR;
+        q.numRows           = static_cast<crd::u32>(d_n);
+        q.numColumns        = static_cast<crd::u32>(d_n);
+        q.srcLayout         = VK_COOPERATIVE_VECTOR_MATRIX_LAYOUT_ROW_MAJOR_NV;
+        q.srcStride         = static_cast<size_t>(d_n) * 2U;
+        q.dstLayout         = VK_COOPERATIVE_VECTOR_MATRIX_LAYOUT_TRAINING_OPTIMAL_NV;
+        REQUIRE(pfn_conv(vk->vk_device(), &q) == VK_SUCCESS);
+    }
+    REQUIRE(to_size > 0U);
+
+    auto d_x   = compute.create_buffer(static_cast<crd::u64>(n_s * d_n) * 2U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
+    auto d_t   = compute.create_buffer(static_cast<crd::u64>(n_s * d_n) * 2U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
+    auto d_w   = compute.create_buffer(static_cast<crd::u64>(d_n * d_n) * 2U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
+    auto d_b   = compute.create_buffer(static_cast<crd::u64>(d_n) * 2U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
+    auto d_gw  = compute.create_buffer(static_cast<crd::u64>(to_size), storage | transfer_dst | transfer_src, cg::ComputeMemory::GpuOnly);
+    auto d_gb  = compute.create_buffer(static_cast<crd::u64>(d_n) * 2U, storage | transfer_dst | transfer_src, cg::ComputeMemory::GpuOnly);
+    auto d_y   = compute.create_buffer(static_cast<crd::u64>(n_s * d_n) * 2U, storage | transfer_src, cg::ComputeMemory::GpuOnly);
+    auto d_cfg = compute.create_buffer(4U * 4U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
+    const auto up_bytes = [&](cg::ComputeBuffer& dst, const void* src, crd::u64 nbytes) {
+        auto  stg = compute.create_buffer(nbytes, transfer_src, cg::ComputeMemory::CpuToGpu);
+        auto* p   = static_cast<crd::u8*>(stg->map());
+        const auto* srcb = static_cast<const crd::u8*>(src);
+        for (crd::u64 i = 0; i < nbytes; ++i) { p[i] = srcb[i]; }
+        stg->unmap();
+        auto& rc = compute.begin();
+        rc.copy(*stg, dst, 0U, 0U, nbytes);
+        compute.submit_and_wait();
+    };
+    const auto read_bytes = [&](cg::ComputeBuffer& src, void* dstp, crd::u64 nbytes) {
+        auto rbf = compute.create_buffer(nbytes, transfer_dst, cg::ComputeMemory::GpuToCpu);
+        auto& r2 = compute.begin();
+        r2.barrier(src, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::TransferSrc);
+        r2.copy(src, *rbf, 0U, 0U, nbytes);
+        compute.submit_and_wait();
+        const auto* p = static_cast<const crd::u8*>(rbf->map());
+        auto*       d = static_cast<crd::u8*>(dstp);
+        for (crd::u64 i = 0; i < nbytes; ++i) { d[i] = p[i]; }
+        rbf->unmap();
+    };
+    const crd::u32 cfgv[4] = {static_cast<crd::u32>(n_s), 0U, 0U, 0U};
+    up_bytes(*d_x, x16.data(), static_cast<crd::u64>(n_s * d_n) * 2U);
+    up_bytes(*d_t, t16.data(), static_cast<crd::u64>(n_s * d_n) * 2U);
+    up_bytes(*d_cfg, cfgv, 4U * 4U);
+
+    // train from W=0, b=0.
+    crd::containers::Array<float>    wf(&alloc);   wf.resize(uz(d_n * d_n), 0.0F);
+    crd::containers::Array<float>    bf(&alloc);   bf.resize(uz(d_n), 0.0F);
+    crd::containers::Array<crd::u16> w16(&alloc);  w16.resize(uz(d_n * d_n), static_cast<crd::u16>(0));
+    crd::containers::Array<crd::u16> b16(&alloc);  b16.resize(uz(d_n), static_cast<crd::u16>(0));
+    crd::containers::Array<crd::u8>  zw(&alloc);   zw.resize(uz(static_cast<int>(to_size)), static_cast<crd::u8>(0));
+    crd::containers::Array<crd::u16> zb(&alloc);   zb.resize(uz(d_n), static_cast<crd::u16>(0));
+    crd::containers::Array<crd::u8>  gw_to(&alloc); gw_to.resize(uz(static_cast<int>(to_size)));
+    crd::containers::Array<crd::u16> gw_rm(&alloc); gw_rm.resize(uz(d_n * d_n));
+    crd::containers::Array<crd::u16> gb16(&alloc);  gb16.resize(uz(d_n));
+    crd::containers::Array<crd::u16> yout(&alloc);  yout.resize(uz(n_s * d_n));
+
+    const float lr    = 0.1F;
+    const int   steps = 150;
+    double      loss0 = 0.0;
+    double      lossf = 0.0;
+    for (int step = 0; step < steps; ++step)
+    {
+        up_bytes(*d_w, w16.data(), static_cast<crd::u64>(d_n * d_n) * 2U);
+        up_bytes(*d_b, b16.data(), static_cast<crd::u64>(d_n) * 2U);
+        up_bytes(*d_gw, zw.data(), static_cast<crd::u64>(to_size));   // zero the gradient accumulators
+        up_bytes(*d_gb, zb.data(), static_cast<crd::u64>(d_n) * 2U);
+        auto& rec = compute.begin();
+        cg::ComputeBuffer* binds[8] = {d_x.get(), d_t.get(), d_w.get(), d_b.get(), d_gw.get(), d_gb.get(), d_y.get(), d_cfg.get()};
+        rec.dispatch(*pipe, crd::containers::ConstSpan<cg::ComputeBuffer*>(binds, 8), nullptr, 0U, static_cast<crd::u32>((n_s + 63) / 64), 1U, 1U);
+        rec.barrier(*d_y, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead);
+        compute.submit_and_wait();
+
+        read_bytes(*d_y, yout.data(), static_cast<crd::u64>(n_s * d_n) * 2U);
+        double loss = 0.0;
+        for (int i = 0; i < n_s * d_n; ++i) { const float e = crd::math::f16_bits_to_f32(yout[uz(i)]) - crd::math::f16_bits_to_f32(t16[uz(i)]); loss += static_cast<double>(e * e); }
+        loss /= static_cast<double>(n_s * d_n);
+        if (step == 0) { loss0 = loss; }
+        lossf = loss;
+
+        // read the TrainingOptimal weight-grad, convert → RowMajor; read the bias-grad.
+        read_bytes(*d_gw, gw_to.data(), static_cast<crd::u64>(to_size));
+        read_bytes(*d_gb, gb16.data(), static_cast<crd::u64>(d_n) * 2U);
+        size_t rm_size = static_cast<size_t>(d_n * d_n) * 2U;
+        VkConvertCooperativeVectorMatrixInfoNV c{};
+        c.sType             = VK_STRUCTURE_TYPE_CONVERT_COOPERATIVE_VECTOR_MATRIX_INFO_NV;
+        c.srcSize           = to_size;
+        c.srcData.hostAddress = gw_to.data();
+        c.pDstSize          = &rm_size;
+        c.dstData.hostAddress = gw_rm.data();
+        c.srcComponentType  = VK_COMPONENT_TYPE_FLOAT16_KHR;
+        c.dstComponentType  = VK_COMPONENT_TYPE_FLOAT16_KHR;
+        c.numRows           = static_cast<crd::u32>(d_n);
+        c.numColumns        = static_cast<crd::u32>(d_n);
+        c.srcLayout         = VK_COOPERATIVE_VECTOR_MATRIX_LAYOUT_TRAINING_OPTIMAL_NV;
+        c.dstLayout         = VK_COOPERATIVE_VECTOR_MATRIX_LAYOUT_ROW_MAJOR_NV;
+        c.dstStride         = static_cast<size_t>(d_n) * 2U;
+        REQUIRE(pfn_conv(vk->vk_device(), &c) == VK_SUCCESS);
+
+        if (step == 0) // the on-device hardware gradient must equal the CPU reference gradient (W=0,b=0 ⇒ y=0 ⇒ δ = -2t)
+        {
+            crd::containers::Array<float> gw_ref(&alloc); gw_ref.resize(uz(d_n * d_n), 0.0F);
+            crd::containers::Array<float> gb_ref(&alloc); gb_ref.resize(uz(d_n), 0.0F);
+            for (int s = 0; s < n_s; ++s) { for (int m = 0; m < d_n; ++m) { const float dm = 2.0F * (0.0F - crd::math::f16_bits_to_f32(t16[uz(s * d_n + m)])); gb_ref[uz(m)] += dm; for (int k = 0; k < d_n; ++k) { gw_ref[uz(m * d_n + k)] += dm * crd::math::f16_bits_to_f32(x16[uz(s * d_n + k)]); } } }
+            float gwerr = 0.0F;
+            for (int i = 0; i < d_n * d_n; ++i) { const float e = crd::math::f16_bits_to_f32(gw_rm[uz(i)]) - gw_ref[uz(i)]; const float a = e < 0.0F ? -e : e; if (a > gwerr) { gwerr = a; } }
+            float gberr = 0.0F;
+            for (int i = 0; i < d_n; ++i) { const float e = crd::math::f16_bits_to_f32(gb16[uz(i)]) - gb_ref[uz(i)]; const float a = e < 0.0F ? -e : e; if (a > gberr) { gberr = a; } }
+            std::printf("[coopvec-train] step0 device gradient vs CPU ref: worst dW err=%.3f, worst db err=%.3f (accum magnitude ~%d)\n", static_cast<double>(gwerr), static_cast<double>(gberr), n_s);
+            CHECK(gwerr < 2.0F); // fp16 accumulation over the batch (values ~O(N)); the hardware outer-product matches the reference
+            CHECK(gberr < 2.0F);
+        }
+
+        // SGD apply (host; the heavy backprop was on the tensor path) + re-quantize for the next step.
+        const float inv = lr / static_cast<float>(n_s);
+        for (int i = 0; i < d_n * d_n; ++i) { wf[uz(i)] -= inv * crd::math::f16_bits_to_f32(gw_rm[uz(i)]); w16[uz(i)] = crd::math::f32_to_f16_bits(wf[uz(i)]); }
+        for (int i = 0; i < d_n; ++i) { bf[uz(i)] -= inv * crd::math::f16_bits_to_f32(gb16[uz(i)]); b16[uz(i)] = crd::math::f32_to_f16_bits(bf[uz(i)]); }
+    }
+    std::printf("[coopvec-train] linear %dx%d, N=%d, %d steps: loss %.5f -> %.5f (%.1f%% down) -- trained on the tensor path\n", d_n, d_n, n_s, steps, loss0, lossf, 100.0 * (1.0 - lossf / loss0));
+    CHECK(lossf < loss0 * 0.05); // the on-device gradients drove the loss to <5% of its start (it learned the map)
 }
 
 TEST_CASE("D-008 C0: the program seam -- cooked SPIR-V -> IGpuProgram (ADR-0103)", "[gpu-context][vulkan][gpu][program]")

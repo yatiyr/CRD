@@ -372,8 +372,128 @@
 > host-scaffold; a3 gates the on-device sort) == the GPU brute render **bit-exact (worst 0.000e+00)**, T=290 over 16 tiles.
 > ⛔ scar: the ranges kernel's `If` bodies needed `stmt_materialize` on the shared u32 store-index but must NEVER
 > materialize the Bool guards (a bool has no temp type) — only the real-backend SPIR-V emit caught it, the CPU oracle
-> passed the same graph. **⬜ NEXT: B19-c** 2DGS surfels + mesh (the bridge to B1 materials) or **StopThePop** per-pixel
-> resort (view consistency) or **cross-backend** (wire all of B19 to DX12/HLSL — the whole line is Vulkan-only so far).
+> passed the same graph.
+> **[✅ B19-c1 2DGS SURFELS 2026-07-21 — the geometrically-accurate primitive, Huang et al. SIGGRAPH 2024]:** a new
+> primitive alongside 3DGS: flat oriented DISKS (surfels) rendered by an EXACT ray–surfel intersection instead of the
+> EWA projection. Two payoffs the ellipsoid can't give: VIEW-CONSISTENT splats (a disk has no perspective-dependent
+> thickness) and a geometrically-meaningful DEPTH + NORMAL per pixel (the disk IS the surface) — the G-buffer a mesh
+> extractor consumes (the bridge toward B1 mesh/materials). `ckir_gsplat2d.hpp`: `build_gsplat2d_project_kernel`
+> (surfel[13: μ·s_u s_v·quat·α·SH] + camera → prepared view-space surfel[19: vc·A=s_u·R·t_u·B=s_v·R·t_v·N·depth·col·α·
+> radius·valid]) + `build_gsplat2d_render_kernel` (per pixel, solve the 3×3 ray-surfel system `vc+u·A+v·B=λ·d` by
+> Cramer, G=exp(−½(u²+v²)) with 3σ cull, over-composite colour + α-weighted depth(λ) + normal → 8 floats/pixel
+> [R G B T·depthSum·N]). **Gates (CPU oracle, 4 cases, 36 assertions):** facing-surfel depth=view-z + normal=+z exact;
+> **SLANTED surfel per-pixel depth matches the EXACT plane `λ=(vc·N)/(d·N)` to <2e-2** (the geometry win — a 3DGS
+> ellipsoid gives one flat depth); near-over-far composite. **Real Vulkan `[gsplat2d]`:** GPU project+render == oracle,
+> **worst 1.4e-06** (24 surfels, 64×64). Recipe: `docs/recipes/2026-07-21-2d-gaussian-splatting-surfels.md`.
+> **[✅ B19-c2a TSDF FUSION 2026-07-21 — the first half of the mesh bridge]:** the depth+normal G-buffer → a fused
+> surface field. New `ckir_mesh.hpp` (`crd::kir::mesh`, source-agnostic mesh extraction): `build_surface_depth_kernel`
+> (render 8-float G-buffer → surface depth `depthSum/(1−T)`, 0 if no surface) + `build_tsdf_integrate_kernel` (one
+> thread per voxel: project into the view, `sdf = d_obs − voxel_view_z`, truncate to [−1,1]/μ, running weighted average
+> into (tsdf_sum,w_sum) via RMW; skip out-of-bounds / no-surface / behind-by->μ; call once per posed depth map). SIGN:
+> free space (in front) +, behind −, surface = zero crossing. **Gates (CPU oracle, 2 cases, 31 assertions):** a plane
+> depth map → the fused field is the EXACT truncated SDF ramp, **zero-crossing at the surface to 1e-3**, unobserved
+> voxels weight 0, multi-view accumulation exact; **end-to-end 2DGS render → surface depth → TSDF crosses zero at the
+> surfel plane** (world z=0, <2e-2). **Real Vulkan `[mesh]`:** GPU TSDF == oracle **bit-exact (worst 0.000e+00)**, 768
+> observed voxels.
+> **[✅ B19-c2b MARCHING CUBES 2026-07-21 — the mesh bridge is COMPLETE; captured content is now a triangle mesh]:** the
+> fused SDF → a watertight triangle mesh, entirely on-device. `ckir_mesh.hpp` + `mc_tables.hpp` (canonical
+> Lorensen/Bourke 256-case tables): `build_tsdf_finalize_kernel` (tsdf_sum/w_sum → field, unobserved=+1) +
+> `build_mc_count_kernel` (per cell → cubeindex from 8 corner signs → triangle count) + **reuse `ckir_scan`** (exclusive
+> prefix-sum → per-cell output offset + total) + `build_mc_emit_kernel` (per cell → each valid triangle's 3 edge-crossing
+> vertices `v = P[a] + (f[a]/(f[a]−f[b]))·(P[b]−P[a])` + outward face normal, written at the scanned offset; 18 floats/tri
+> [3×pos·normal]). Same variable-output compaction as B19-a4 (count→scan→emit). Corner/edge tables baked at authoring
+> time; only the 256×16 triTable is a runtime I32 buffer. **Gates (CPU oracle, 2 cases, 39 total mesh assertions):**
+> per-cell triangle count == host MC reference exactly (sphere, 4096 cells); extracted sphere mesh — **vertices on the
+> surface (worst |r−R|=0.0104), area 2.90 vs ideal 3.14, outward normals 140/140, and vertex-for-vertex identical to a
+> host MC reference**. **Real Vulkan `[mesh]`:** the full count→scan→emit marching cubes == oracle mesh **bit-exact
+> (worst 5.96e-08)**, 140 triangles. ⛔ scar: the canonical triTable winds INWARD for inside=(field<0) → reverse winding
+> (emit v0,v2,v1) + negate normal for outward; a self-comparison can't catch this, an independent area/normal metric
+> does. Recipe: `docs/recipes/2026-07-21-mesh-extraction-tsdf-marching-cubes.md`. **The full B19-c chain — 2DGS surfel
+> render → depth → TSDF → marching cubes → mesh — runs on-device and bridges captured radiance fields into the B1
+> mesh/material pipeline.**
+> **[✅ B19 ALL FRONTIER AXES COMPLETE 2026-07-21 — the 3DGS slice is CLOSED]:** the remaining five axes, each gated
+> CPU-oracle + real Vulkan (+ DX12 for the cross-backend pass):
+> • **B19-e RELIGHTABLE** (`build_gsplat2d_relight_render_kernel`): captured surfels carry ALBEDO + their intrinsic
+>   normal and are shaded per-pixel with a PBR BRDF (Lambert + Cook-Torrance GGX) under a directional light ⇒ captured
+>   content responds to NEW lighting (the prereq for dynamic scenes). Gate: facing-light bright, back-lit ambient-only,
+>   roughness controls the highlight; Vulkan worst 2.4e-07, DX12 worst 4.8e-07.
+> • **StopThePop PER-PIXEL RESORT** (`build_gsplat2d_resort_render_kernel`, Radl 2024): composites each pixel's splats
+>   in EXACT per-pixel λ order (O(N²) selection, state in a per-pixel scratch buffer since a CKIR `For` carries no
+>   register state) ⇒ no popping. Gate: two depth-crossing surfels → base render shows one colour everywhere, resort
+>   flips per pixel (red-left/blue-right); Vulkan worst 1.8e-07.
+> • **B19-d COMPRESSION** (`build_gsplat_morton_kernel` + `build_gsplat_quantize/dequantize_kernel`): Morton (Z-order)
+>   reorder for locality (reuse the KV radix sort) + a K-bit attribute codec. Gate: 12-bit round-trips within a
+>   half-step (7.3e-4), Morton makes adjacent |Δpos| 5.2× smaller; Vulkan codec worst 2.4e-07.
+> • **B19-f DIFFERENTIABLE TRAINING** (`build_gsplat_diff_forward/backward_kernel` + `build_gsplat_sgd_step_kernel`):
+>   the forward differentiable splat + the EXACT backward gradients of L=Σ(C−target)² w.r.t. position/scale/opacity/
+>   colour. **Gates: analytic gradients == finite differences (all 5 params); SGD fits a Gaussian to a target, loss
+>   9.15→0.093 (98%↓), μ/s/opacity/colour recovered.** Vulkan fwd 3e-08, gradient 7e-08. ⭐ Cerid now TRAINS Gaussians
+>   on-device — capture-to-render, not just a viewer.
+> • **CROSS-BACKEND DX12/HLSL** (`test_dx12_gsplat.cpp`): the B19 family (2DGS render/relight, differentiable backward)
+>   lowers to HLSL and runs on DirectX 12 == oracle (worst 2.6e-06) — no emitter gaps.
+> **B19 (3D Gaussian Splatting) is COMPLETE: on-device forward renderer (a→a4) · 2DGS + mesh bridge (c) · relightable ·
+> pop-free · compressible · differentiably trainable · cross-backend.** Recipes: relightable/StopThePop/compression/
+> training folded into the gsplat recipes.
+> **[✅ B19 PERFORMANCE 2026-07-21 — real 3DGS at millions of splats @ 1080p, GPU-benchmarked, gap CLOSED]:** built the
+> production rasteriser architecture: `build_gsplat_block_render_smem_kernel` — workgroup=tile collaboratively loads a
+> splat batch into SHARED memory (accumulator also in shared ⇒ per-splat global traffic ~0), plus **early termination**
+> (a shared active-count + `for_break_if` stops a tile once every pixel's T<1e-4 — config `early_terminate`). Two levers:
+> the composite inner bound = the chunk's ACTUAL count `min(BS,re−cbase)` not a fixed 256 (else low-overdraw tiles waste
+> the loop on padding — the first un-tuned smem was a 0.92× LOSS); + early-out. **GPU benchmark @ 1920×1080 on RTX 4070
+> Ti SUPER** (`[.gsplat-bench]`, GPU-timestamped min-of-6): **1M splats → 2.30 ms (435 fps), 4M → 4.04 ms (248 fps)** with
+> early-out (4.9×/10.5× over the direct render, 417/951 Minst/s); the no-early-out smem variant is **bit-exact vs the
+> direct render (0.0)**, early-out approx error 1e-13 (saturated tail is nothing). Full frame ≈ render + measured sort/bin
+> (~0.3–0.8 ms, from the CUB-crush sort bench) ≈ **~385 fps @ 1M / ~210 fps @ 4M**. Board: `docs/bench/2026-07-21-3dgs-
+> 1080p-rasterizer.md`. **Honest peer status:** in the same class as / top-end of the Inria CUDA reference (~130–240 fps),
+> portable + bit-exact which it is not; a DIRECT reference run is blocked in this env (CPU-only PyTorch, no py3.14 CUDA
+> wheel) — documented, not declined.
+> **[✅ B16 OCEAN CINEMATIC PASS 2026-07-22 — the user-flagged visual polish is CLOSED]:** horizon · atmosphere · clouds ·
+> reflections taken to a cinematic bar, all 3 render paths consistent (fragment · vertex-pull geometry · mesh-shader).
+> (1) **Seamless horizon** — the projected-grid's dark sawtooth top edge is dissolved: far crests flatten earlier
+> (`ocean_projected_vertex` taper from s=180), the far grid rows fade into the real sky via a range-based coverage-α
+> (`dist∈[193,248]`), and `fogc = hazeh` so sea and sky meet in one tone (no grey band). (2) **Physical sky** — new
+> SHARED `crd::kir::water::analytic_sky` (Rayleigh+Mie dome, tight sun disk + compact warm halo — no more blown-out sun),
+> the ONE atmosphere source called by both the sky pass and the water reflection. (3) **Puffy cumulus** (Worley billows ×
+> a broad fbm, sunlit tops + shadowed bases). (4) **The sea mirrors the sky incl. clouds** (`analytic_sky(with_clouds)` on
+> the reflected ray) + Fresnel/glitter/teal-SSS. Gates: Vulkan `[.ocean-frame]` 105/1 (3 frames), DX12 `[ocean]` 22/3 (HLSL
+> emit + render), kir `[ocean]` 4167/8; both changed headers tidy-clean (LLVM-20.1.8). Recipe `docs/recipes/2026-07-22-
+> cinematic-ocean-sky-and-seamless-horizon.md`; session `docs/sessions/2026-07-22-b16-cinematic-ocean.md`. DEFERRED (prior
+> user sequencing, explicit): SSR/planar/screen-space refraction/underwater Beer + B16-b caustics — need scene objects to
+> matter.
+> **[✅ D-007 TABLE AUDIT 2026-07-22 — B4 + B-cmp ticked (user-requested)]:** verified the unticked earlier rows. **B4** (mesh) was
+> a STALE 🚧 — every sub-feature GPU-green both backends (Vulkan 128/13 · DX12 86/11: mesh/task/payload/compute-cull→indirect/VRS/
+> tess/B4-vis), only the WGSL `texture_2d_array` cascade open (WebGPU-milestone scope, not D-007) → ✅. **B-cmp** (compute prims): FFT/
+> scan/reduce/GEMM-MLP already bit-exact both backends; the one gap was **GPU sort had no DX12 gate** → added it (4-pass radix ==
+> sorted permutation, 22 asserts), which surfaced + fixed a real **HLSL compute-emitter gap** (SubgroupBallot/ExclCount/Match wired
+> for GLSL not HLSL → `WaveActiveBallot`/`countbits+WaveGetLaneIndex`/`WaveMatch`) → ✅. B16 stays ◧ (its deferred water-volume scope
+> is real, left for a dedicated pass). Audit session `docs/sessions/2026-07-22-detour-audit-b4-bcmp-sort.md`.
+> **[✅ C6 COOPERATIVE-VECTOR DEVICE ENABLE 2026-07-22 — the B10 neural-shading device half, GPU-verified]:** `VK_NV_cooperative_vector`
+> (rev 4) enabled on the RTX 4070 Ti SUPER (gated like coopmat2; feature-queried before enable so we never request an unsupported
+> bit): accessors `cooperative_vector()`/`_training()`/`coopvec_max_components()`/`coopvec_supported_stages()`. Device reports
+> coopvec=YES, training=YES, max_components=1024, all 14 stages (fragment incl.), 16 matmul combos. The PROGRAM PATH works: a real
+> per-invocation `coopVecMatMulNV` kernel (`GL_NV_cooperative_vector`) dispatches == a CPU fp16 oracle to worst 0.00391. ⛔ scar:
+> fp16 matmul only supports the fp16-RESULT combo (fp32 result = garbage). coopvec = per-invocation matvec ⇒ maps onto CKIR's
+> statement tier (unlike coopmat = workgroup GEMM template). `[coopvec]` 11/2, no regression, tidy-clean. Session
+> `docs/sessions/2026-07-22-c6-coopvec-device-enable.md`.
+> **[🚧 B10 NEURAL-SHADING MOAT — CORE + PERF CRUSH LANDED 2026-07-22, GPU-verified]:** `ckir_neural.hpp` (`crd::kir::neural`):
+> `emit_coopvec_mlp_glsl` = a config-keyed per-invocation MLP on `GL_NV_cooperative_vector` (`coopVecMatMulAddNV` + ReLU, fp16) —
+> the per-pixel neural-material substrate (per-invocation counterpart to the coopmat workgroup GEMM) + a scalar-FMA baseline +
+> a matched-fp16 CPU reference. `[coopvec][neural]`: a 16→16×2→16 MLP == reference to worst 0.00027. **⭐⭐ CRUSH (`[.coopvec-bench]`):
+> a per-pixel 16→32×3→16 MLP over 1080p (2.07M invocations) = 0.204 ms (4893 fps, 31 TMAC/s) on the tensor units vs 2.547 ms scalar
+> — 12.46×, outputs bit-identical.** Board `docs/bench/2026-07-22-coopvec-neural-shading-crush.md`; session
+> `docs/sessions/2026-07-22-b10-neural-shading-moat.md`. **[✅ VISUAL NEURAL MATERIAL 2026-07-22]:** a 2-D neural field (16-D
+> freq-encoded uv → 32→32→3 MLP) CPU-trained with Adam, rendered per-pixel in ONE fused coopvec pass → `neural_material.bmp`,
+> **PSNR 38.9 dB** (fp16 render tracks the fp32 net to 0.08 dB). ⛔ scar: under-fit = "right structure, wrong colours" = TRAINING
+> not render (plain GD 11 dB → Adam 39 dB). Recipe `docs/recipes/2026-07-22-neural-material-coopvec-field.md`. **[⏭ DX12 coopvec
+> ENV-BLOCKED]:** no HLSL `dx/linalg.h` / D3D12 Cooperative-Vector tier / Agility SDK (honest, like WGSL-raster). **[✅ ON-DEVICE
+> DIFFERENTIABLE TRAINING 2026-07-22 — the moat's defining claim]:** `emit_coopvec_linear_train_glsl` — forward + loss-grad +
+> weight-grad (`coopVecOuterProductAccumulateNV`, TrainingOptimal) + bias-grad (`coopVecReduceSumAccumulateNV`) ALL on the tensor
+> path; host converts TrainingOptimal→RowMajor + SGD. `[coopvec][neural][train]`: on-device gradient == CPU ref (worst 0.106) AND
+> a 16×16 layer from W=0 → **loss 0.261→0.00004 (100% down)** — it LEARNS. ⛔ scar: lr=0.8→nan (fp16 overflow); nan-loss +
+> passing-gradient = optimizer not gradient. **B10 is GPU-complete on Vulkan** (inference + 12.46× perf + 38.9dB material + training).
+> REMAINING (documented, not gaps): inferencing-optimal layout perf lever · multi-layer on-device backprop · DX12 (env-blocked).
+> **▶ NEXT (on user command): return to the D-007 main line — B11 wave/work-graph · C5 GPU-driven dispatch · D1–D5 deploy · OFF-*
+> offline path tracer. (B4/B-cmp/B16/C6/B10 all closed this run.)**
 > **[✅ B18-f FULLY CLOSED 2026-07-21]:** path-traced hair renderer + real-time levers + recipes (`docs/recipes/` —
 > new folder + AGENTS.md standing rule: study something → write a recipe). Tidy-clean at the gate, all touched gates
 > green. Perf board `docs/bench/2026-07-20-hair-rt-swatch-perf.md` (194 ms/sample offline; 29 ms/frame real-time).

@@ -539,49 +539,16 @@ inline void build_ocean_frame_fft_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe, 
     const int rdx  = g.swizzle(rdir, 0);
     const int rdz  = g.swizzle(rdir, 2);
 
-    // a HIGH, soft daytime sun — bright hazy sky, no harsh disk (AC4 tropical daylight).
-    const int ldir  = unit3(kc(0.25, 0.28, 0.93)); // daytime sun, low enough to sit in the upper frame → rays leak from clouds
-    const int sunc  = kc(2.4, 2.5, 2.4);    // soft near-white sun (broad sheen, not an orange blob)
-    const int hazeh = kc(0.52, 0.67, 0.80); // hazy blue horizon
-    const int zen   = kc(0.13, 0.40, 0.78); // richer blue zenith
+    // TIME OF DAY (dusk→noon by the sun's elevation). A cinematic bright day: sun ~33° up, sitting in the upper frame so it
+    // casts a glint on the sea and grazes the clouds; warm-white. Lower ldir.y → golden hour; higher → high noon.
+    const int ldir  = unit3(kc(0.30, 0.52, 0.80)); // sun direction (elevation ≈ 33°)
+    const int sunc  = kc(2.05, 1.86, 1.55);        // warm-white sunlight
+    const int hazeh = kc(0.56, 0.71, 0.86);        // luminous pale horizon (Rayleigh air-mass whitening)
+    const int zen   = kc(0.07, 0.27, 0.64);        // deep saturated blue zenith
 
-    // ── SKY: a bright hazy-blue daytime dome (pale toward the horizon), a soft broad sun sheen, bright white cumulus. ──
-    crd::kir::clouds::CloudConfig ccfg;
-    ccfg.coverage    = 0.66; // fuller cover — thicker, more-defined masses with clear-sky gaps the sun rays leak through
-    ccfg.base_freq   = 2.2;
-    ccfg.detail_freq = 7.0;
-    ccfg.erosion     = 0.42;
-    const auto sky_of = [&](int dir, bool hi) {
-        const int ty   = g.unary(kir::KOp::Sqrt, sat(g.swizzle(dir, 1))); // bias gradient toward the pale horizon
-        const int grad = add(b3(kir::KOp::Mul, hazeh, sub(k(1.0), ty)), b3(kir::KOp::Mul, zen, ty));
-        const int sd   = g.binary(kir::KOp::Max, g.dot(dir, ldir), k(0.0));
-        const int disk = g.unary(kir::KOp::Exp, mul(sub(sd, k(1.0)), k(280.0))); // sun disc — bright enough to LEAK through cloud gaps
-        const int glow = g.unary(kir::KOp::Exp, mul(sub(sd, k(1.0)), k(5.0)));   // broad soft sun haze
-        const int suns = b3(kir::KOp::Mul, sunc, add(mul(disk, k(1.8)), mul(glow, k(0.4))));
-        // bright white cumulus (bounded coords → no horizon aliasing).
-        const int cy    = add(g.swizzle(dir, 1), k(0.5));
-        const int cu    = mul(g.binary(kir::KOp::Div, g.swizzle(dir, 0), cy), k(0.7));
-        const int cw    = mul(g.binary(kir::KOp::Div, g.swizzle(dir, 2), cy), k(0.7));
-        const int hmask = sat(add(mul(g.swizzle(dir, 1), k(2.0)), k(0.12))); // clouds reach lower toward the horizon (background)
-        const int pf    = nz::fractal2(g, cu, cw, 4, 2.0, 0.55);
-        const int pf01  = sat(mul(add(pf, k(1.0)), k(0.5)));
-        const int carv  = sat(mul(sub(pf01, k(1.0 - ccfg.coverage)), k(4.6)));  // THICK, defined cloud masses (partial cover)
-        int       dens  = carv;
-        if (hi) // light erosion only → thick clouds, not thin wisps
-        {
-            const int det = nz::fractal2(g, mul(cu, k(3.3)), mul(cw, k(3.3)), 3, 2.0, 0.5);
-            dens          = sat(sub(carv, mul(sat(mul(add(det, k(1.0)), k(0.5))), k(0.08))));
-        }
-        const int cov    = mul(dens, hmask);
-        // VOLUME shading: a DENSITY-driven self-shadow (thick cloud → darker underside) + a grey base ⇒ defined, three-dimensional
-        // clouds that read DARKER and more VISIBLE against the bright hazy sky (the user's ask), while the thin edges stay sunlit.
-        const int clit   = add(mul(sat(g.swizzle(dir, 1)), k(1.15)), k(0.34)); // sky-height brightness
-        const int cshad  = sub(k(1.0), mul(dens, k(0.58)));                    // thick cores self-shadow → darker undersides
-        const int cloudc = b3(kir::KOp::Mul, kc(0.96, 1.02, 1.14), mul(clit, cshad));
-        const int skyc   = add(grad, suns);
-        return add(b3(kir::KOp::Mul, skyc, sub(k(1.0), cov)), b3(kir::KOp::Mul, cloudc, cov)); // clouds occlude the sky
-    };
-    const int sky = sky_of(rdir, true);
+    // ── SKY: the SHARED analytic Rayleigh+Mie dome + puffy cumulus (crd::kir::water::analytic_sky) — the ONE atmosphere source,
+    //    so this primary sky and the water's reflection agree exactly. hi_detail ON here (the sky we look straight at). ──
+    const int sky = crd::kir::water::analytic_sky(g, rdir, ldir, sunc, hazeh, zen, /*with_clouds=*/true, /*hi_detail=*/true);
 
     // ── WATER: the real Tessendorf MULTI-CASCADE — sample the SWELL (index 0, world/patchS: long "tidal" rollers) and the CHOP
     //    (index 1, world/patchC: fine detail) and SUM their slopes. No single-tile compromise between swell and chop. ──
@@ -621,7 +588,7 @@ inline void build_ocean_frame_fft_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe, 
     const int nov  = g.binary(kir::KOp::Max, g.dot(n, v), k(1e-3));
     const int fr   = wt::fresnel_water(g, nov);
     const int rfl  = sub(rdir, b3(kir::KOp::Mul, n, mul(k(2.0), g.dot(rdir, n))));
-    const int skyr = sky_of(unit3(rfl), false);
+    const int skyr = crd::kir::water::analytic_sky(g, unit3(rfl), ldir, sunc, hazeh, zen, /*with_clouds=*/true, /*hi_detail=*/false);
     const int glit = wt::ocean_sun_glitter(g, n, v, ldir, sunc, add(k(0.025), mul(distf, k(0.06)))); // soft broad daytime sheen
     const int refl = add(b3(kir::KOp::Mul, skyr, k(0.68)), b3(kir::KOp::Mul, glit, k(0.4))); // damp mirror + gentle sheen (soft day)
 
@@ -655,12 +622,12 @@ inline void build_ocean_frame_fft_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe, 
     const int water0 = add(b3(kir::KOp::Mul, refl, fr), b3(kir::KOp::Mul, refr, sub(k(1.0), fr)));
     const int water1 = add(b3(kir::KOp::Mul, water0, sub(k(1.0), foam)), b3(kir::KOp::Mul, foamc, foam));
 
-    // pale hazy aerial fog: a mild DISTANCE haze + a sharp ANGLE haze in the grazing horizon band (where isotropic mip filtering
-    // can't resolve the extreme foreshortening → aliasing). The angle haze veils that band (a real hazy horizon) without fogging
-    // the mid-field, so wave topology stays visible where it matters.
-    const int fogc  = kc(0.70, 0.78, 0.85);
-    const int fogd  = sat(sub(k(1.0), g.unary(kir::KOp::Exp, mul(tplane, k(-0.004)))));
-    const int fogh  = sat(mul(sub(k(0.12), g.unary(kir::KOp::Neg, ry)), k(14.0)));
+    // aerial fog. The far sea fades into the SKY-AT-THE-HORIZON colour (== the sky dome's own horizon value `hazeh`), so water
+    // and sky meet SEAMLESSLY — no bright band. A mild distance haze + a gentle grazing-angle haze (veils the aliasing where mip
+    // filtering can't resolve the extreme foreshortening), both tinted to hazeh so they read as the atmosphere, not a grey strip.
+    const int fogc  = hazeh; // sky-at-horizon colour ⇒ the horizon is a seamless fade, not a band
+    const int fogd  = sat(sub(k(1.0), g.unary(kir::KOp::Exp, mul(tplane, k(-0.0035)))));
+    const int fogh  = sat(mul(sub(k(0.11), g.unary(kir::KOp::Neg, ry)), k(13.0))); // veil the grazing-aliasing band (hazeh-tinted)
     const int fog   = g.binary(kir::KOp::Max, fogd, fogh);
     const int water = add(b3(kir::KOp::Mul, water1, sub(k(1.0), fog)), b3(kir::KOp::Mul, fogc, fog));
 

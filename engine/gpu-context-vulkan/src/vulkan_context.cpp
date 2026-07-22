@@ -78,6 +78,10 @@ public:
     [[nodiscard]] VkQueue          compute_queue() const noexcept override { return m_compute_queue; }
     [[nodiscard]] crd::u32         compute_family() const noexcept override { return m_compute_family; }
     [[nodiscard]] bool             cooperative_matrix2() const noexcept override { return m_coopmat2; }
+    [[nodiscard]] bool             cooperative_vector() const noexcept override { return m_coopvec; }
+    [[nodiscard]] bool             cooperative_vector_training() const noexcept override { return m_coopvec_train; }
+    [[nodiscard]] crd::u32         coopvec_max_components() const noexcept override { return m_coopvec_max_components; }
+    [[nodiscard]] crd::u32         coopvec_supported_stages() const noexcept override { return m_coopvec_stages; }
     [[nodiscard]] bool             shader_int64() const noexcept override { return m_int64; }
 
     [[nodiscard]] bool     graphics_capable() const noexcept override { return m_graphics_family != UINT32_MAX; }
@@ -297,6 +301,7 @@ private:
         bool has_ser       = false; // FA-2: VK_NV_ray_tracing_invocation_reorder (shader execution reordering)
         bool has_cluster   = false; // FA-3: VK_NV_cluster_acceleration_structure (mega-geometry cluster BLAS)
         bool has_lss       = false; // B18-f: VK_NV_ray_tracing_linear_swept_spheres (native curve/strand primitive)
+        bool has_coopvec   = false; // C6: VK_NV_cooperative_vector (per-invocation matrix×vector — the B10 neural-shading device half)
         for (std::uint32_t i = 0; i < ne; ++i)
         {
             if (std::strcmp(exts[i].extensionName, "VK_EXT_opacity_micromap") == 0) { has_omm = true; }
@@ -307,6 +312,7 @@ private:
             if (std::strcmp(exts[i].extensionName, VK_EXT_MESH_SHADER_EXTENSION_NAME) == 0) { has_mesh = true; } // B4
             if (std::strcmp(exts[i].extensionName, "VK_KHR_cooperative_matrix") == 0) { has_cm1 = true; }
             if (std::strcmp(exts[i].extensionName, "VK_NV_cooperative_matrix2") == 0) { has_cm2 = true; }
+            if (std::strcmp(exts[i].extensionName, "VK_NV_cooperative_vector") == 0) { has_coopvec = true; }
             if (std::strcmp(exts[i].extensionName, "VK_NV_shader_subgroup_partitioned") == 0) { has_sgpart = true; }
             if (std::strcmp(exts[i].extensionName, VK_EXT_SHADER_OBJECT_EXTENSION_NAME) == 0) { has_shobj = true; }
             if (std::strcmp(exts[i].extensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME) == 0) { has_swapchain = true; }
@@ -344,6 +350,35 @@ private:
         m_invocation_reorder = m_ray_query && has_rtpipe && has_ser;
         m_cluster_as        = m_ray_query && has_cluster;
         m_lss               = m_ray_query && has_lss;
+        // C6: cooperative VECTOR (VK_NV_cooperative_vector) — PER-INVOCATION matrix×vector, the inference primitive for neural
+        // shading (each pixel/thread evaluates a small MLP inline; the device half of the B10 moat). Unlike coopmat (workgroup
+        // GEMM, whole-kernel templates), coopvec maps onto CKIR's per-invocation statement tier. Query the FEATURE bits first so
+        // we never REQUEST an unsupported feature (cooperativeVector is implied by the ext; cooperativeVectorTraining — the
+        // OuterProductAccumulate/ReduceSum backward ops for B10 differentiable neural shading — is optional), and the coopvec
+        // PROPERTIES for the supported stages + max component dimension. Gated ⇒ a device without it is byte-identical.
+        if (has_coopvec)
+        {
+            VkPhysicalDeviceCooperativeVectorFeaturesNV cvf{};
+            cvf.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_VECTOR_FEATURES_NV;
+            VkPhysicalDeviceFeatures2 cvf2{};
+            cvf2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            cvf2.pNext = &cvf;
+            vkGetPhysicalDeviceFeatures2(m_physical, &cvf2);
+            m_coopvec       = cvf.cooperativeVector == VK_TRUE;
+            m_coopvec_train = m_coopvec && cvf.cooperativeVectorTraining == VK_TRUE;
+            if (m_coopvec)
+            {
+                VkPhysicalDeviceCooperativeVectorPropertiesNV cvp{};
+                cvp.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_VECTOR_PROPERTIES_NV;
+                VkPhysicalDeviceProperties2 cvp2{};
+                cvp2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+                cvp2.pNext = &cvp;
+                vkGetPhysicalDeviceProperties2(m_physical, &cvp2);
+                m_coopvec_stages         = cvp.cooperativeVectorSupportedStages;
+                m_coopvec_max_components = cvp.maxCooperativeVectorComponents;
+            }
+        }
+
         // C2-a: render-capable iff surface (instance) + swapchain (device) + a graphics queue all present.
         m_windowed = surface_ok && has_swapchain && m_graphics_family != UINT32_MAX;
 
@@ -420,6 +455,11 @@ private:
         cm2.sType                              = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_2_FEATURES_NV;
         cm2.cooperativeMatrixWorkgroupScope    = VK_TRUE;
         cm2.cooperativeMatrixFlexibleDimensions = VK_TRUE;
+        // C6: cooperative-vector features to ENABLE at device creation (only chained when m_coopvec; training only when supported).
+        VkPhysicalDeviceCooperativeVectorFeaturesNV cv{};
+        cv.sType                     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_VECTOR_FEATURES_NV;
+        cv.cooperativeVector         = VK_TRUE;
+        cv.cooperativeVectorTraining = m_coopvec_train ? VK_TRUE : VK_FALSE;
 
         // D-008 C1 chain (always): DYNAMIC RENDERING (core 1.3 feature, the modern no-render-pass raster path) + SHADER
         // OBJECTS (VK_EXT_shader_object) when present — the frontier pipeline model. The coopmat chain links in after.
@@ -586,6 +626,7 @@ private:
         if (m_shader_object) { sho.pNext = chain; chain = &sho; }
         if (m_mesh_shader) { mesh.pNext = chain; chain = &mesh; maint4.pNext = chain; chain = &maint4; }
         if (m_coopmat2) { cm2.pNext = chain; cmk.pNext = &cm2; chain = &cmk; }
+        if (m_coopvec) { cv.pNext = chain; chain = &cv; } // C6: cooperative-vector inference (+ training when supported)
         if (m_ray_query) { accel_feat.pNext = chain; chain = &accel_feat; rq_feat.pNext = chain; chain = &rq_feat; bda_feat.pNext = chain; chain = &bda_feat; }
         if (m_opacity_micromap) { omm_feat.pNext = chain; chain = &omm_feat; }
         if (m_rt_pipeline) { rtp_feat.pNext = chain; chain = &rtp_feat; }
@@ -593,7 +634,7 @@ private:
         if (m_cluster_as) { clu_feat.pNext = chain; chain = &clu_feat; }
         if (m_lss) { lss_feat.pNext = chain; chain = &lss_feat; }
 
-        const char* devexts[28];
+        const char* devexts[30];
         crd::u32    ndevext = 0;
         // B-cmp: hardware subgroup partition (match_any) — the radix-sort rank's cheap deterministic match. Shader-only
         // capability (no feature struct); enabling the extension unlocks the SPIR-V GroupNonUniformPartitionedNV cap.
@@ -603,6 +644,7 @@ private:
             devexts[ndevext++] = "VK_KHR_cooperative_matrix";
             devexts[ndevext++] = "VK_NV_cooperative_matrix2";
         }
+        if (m_coopvec) { devexts[ndevext++] = "VK_NV_cooperative_vector"; } // C6: per-invocation MLP inference
         if (m_shader_object) { devexts[ndevext++] = VK_EXT_SHADER_OBJECT_EXTENSION_NAME; }
         if (m_windowed) { devexts[ndevext++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME; }
         if (m_fragment_shading_rate) { devexts[ndevext++] = VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME; }
@@ -652,6 +694,10 @@ private:
     VkQueue          m_graphics_queue  = VK_NULL_HANDLE;
     crd::u32         m_graphics_family = UINT32_MAX;
     bool             m_coopmat2        = false;
+    bool             m_coopvec         = false; // C6: VK_NV_cooperative_vector enabled (per-invocation MLP inference)
+    bool             m_coopvec_train   = false; // C6: + the training ops (OuterProductAccumulate/ReduceSum) for B10 backprop
+    crd::u32         m_coopvec_stages  = 0U;    // C6: shader stages that support coopvec (compute always; fragment on this HW)
+    crd::u32         m_coopvec_max_components = 0U; // C6: max cooperative-vector component dimension
     bool             m_int64           = false;
     bool             m_shader_object   = false;
     bool             m_windowed        = false;

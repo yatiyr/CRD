@@ -322,6 +322,12 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::Mod: if (dt_is_int(nd.dtype()) || dt_is_uint(nd.dtype())) { b2(" % "); } else { f2("fmod"); } break;
         case KOp::Fma: s.append("fma("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(", "); pv(pv, nd.c); s.append(")"); break;
         case KOp::Clamp: s.append("min(max("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append("), "); pv(pv, nd.c); s.append(")"); break; // B4-vis: bbox clamp — min(max()) matches the GLSL emitter + oracle bit-for-bit
+        // ── SUBGROUP (wave) ops — the DX12 mirror of the GLSL subgroupBallot path (the radix-sort scatter's deterministic rank).
+        //    HLSL SM6.0 wave intrinsics: WaveActiveBallot returns a uint4 (.x = the 32-lane mask under our forced 32-wide subgroup);
+        //    the exclusive bit-count of an arbitrary mask is countbits(mask & below-this-lane); WaveMatch (SM6.5) mirrors partitionNV.
+        case KOp::SubgroupBallot: s.append("WaveActiveBallot("); pv(pv, nd.a); s.append(" != 0u).x"); break;
+        case KOp::SubgroupBallotExclCount: s.append("countbits("); pv(pv, nd.a); s.append(" & ((1u << WaveGetLaneIndex()) - 1u))"); break;
+        case KOp::SubgroupMatch: s.append("WaveMatch("); pv(pv, nd.a); s.append(").x"); break;
         default: ok = false; s.append("0"); break;
         }
     };

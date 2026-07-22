@@ -6,6 +6,7 @@ endif()
 
 add_executable(crd-gpu-context-dx12-tests
     test_dx12_compute.cpp
+    test_dx12_gsplat.cpp
     test_dx12_raster.cpp
     test_dx12_rt.cpp
 )

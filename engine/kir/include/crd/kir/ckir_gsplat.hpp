@@ -840,9 +840,11 @@ struct GsplatBinConfig
 //   b3 params (F32,4: [bgR bgG bgB alphaMin]) · b4 out (F32,4·padded_w·padded_h RGBA)
 struct GsplatBlockConfig
 {
-    int width   = 512;
-    int height  = 512;
-    int tile_px = 16;
+    int    width           = 512;
+    int    height          = 512;
+    int    tile_px         = 16;
+    bool   early_terminate = false; // smem render only: stop a tile once every pixel's transmittance saturates (< t_stop)
+    double t_stop          = 1.0e-4;
 };
 
 [[nodiscard]] inline KEntry build_gsplat_block_render_kernel(KGraph& g, const GsplatBlockConfig& cfg)
@@ -972,6 +974,448 @@ struct GsplatBlockConfig
     e.kernel_body_begin = mark;
     e.kernel_body_count = g.stmt_count() - mark;
     (void)cfg.height;
+    return e;
+}
+
+// ⭐ PERFORMANT BLOCK RENDER (the Kerbl-2023 / Inria rasteriser architecture). The direct block render above reads every
+// splat's 12 floats from GLOBAL memory once per pixel per splat — at scale (millions of splats, high overdraw) that
+// bandwidth dominates. Here the workgroup COLLABORATIVELY LOADS a batch of BS = tile_px² splats into SHARED memory
+// (each thread loads one, coalesced), barriers, then every pixel composites the whole batch from shared. The per-pixel
+// RGBA accumulator ALSO lives in shared (each thread owns its slot, re-read across the loop since a CKIR `For` carries
+// no register state), so per-splat GLOBAL traffic is ~zero: splats and output touch DRAM once each. Bit-exact vs the
+// direct block render (same instance order). Buffers identical to build_gsplat_block_render_kernel.
+[[nodiscard]] inline KEntry build_gsplat_block_render_smem_kernel(KGraph& g, const GsplatBlockConfig& cfg)
+{
+    using namespace detail;
+    const Shape shu = make_shape({1});
+    const auto  cu  = [&](crd::u32 v) { return g.constant(static_cast<double>(v), shu, DType::U32); };
+    const auto  ks  = [&](double v) { return g.constant(v, shu, DType::F32); };
+
+    const int sorted_b = g.buffer_decl(DType::F32, 0, 0, false);
+    const int order_b  = g.buffer_decl(DType::U32, 0, 1, false);
+    const int rng_b    = g.buffer_decl(DType::U32, 0, 2, false);
+    const int par_b    = g.buffer_decl(DType::F32, 0, 3, false);
+    const int out_b    = g.buffer_decl(DType::F32, 0, 4, true);
+
+    const int tiles_x  = (cfg.width + cfg.tile_px - 1) / cfg.tile_px;
+    const int padded_w = tiles_x * cfg.tile_px;
+    const int tpx      = cfg.tile_px;
+    const int bs       = cfg.tile_px * cfg.tile_px; // batch = one splat per thread
+    const int tile     = g.builtin(KBuiltin::WorkgroupIndex);
+    const int lid      = g.builtin(KBuiltin::LocalInvocationIndex);
+    const int sh_sp    = g.shared_decl(DType::F32, bs * 11); // batch of splats (11 fields each)
+    const int sh_ac    = g.shared_decl(DType::F32, bs * 4);  // per-thread RGBA accumulator
+    const int sh_act   = cfg.early_terminate ? g.shared_decl(DType::U32, 1) : 0; // count of still-active pixels this round
+
+    const int mark = g.kernel_stmt_mark();
+    const int tx = g.binary(KOp::Mod, tile, cu(static_cast<crd::u32>(tiles_x)));
+    const int ty = g.binary(KOp::Div, tile, cu(static_cast<crd::u32>(tiles_x)));
+    const int lx = g.binary(KOp::Mod, lid, cu(static_cast<crd::u32>(tpx)));
+    const int ly = g.binary(KOp::Div, lid, cu(static_cast<crd::u32>(tpx)));
+    const int px = g.binary(KOp::Add, g.binary(KOp::Mul, tx, cu(static_cast<crd::u32>(tpx))), lx);
+    const int py = g.binary(KOp::Add, g.binary(KOp::Mul, ty, cu(static_cast<crd::u32>(tpx))), ly);
+    g.stmt_materialize(px); g.stmt_materialize(py); g.stmt_materialize(lid);
+    const int pxc = add(g, g.cast(px, DType::F32), ks(0.5));
+    const int pyc = add(g, g.cast(py, DType::F32), ks(0.5));
+    const int pix = g.binary(KOp::Add, px, g.binary(KOp::Mul, py, cu(static_cast<crd::u32>(padded_w))));
+    const int p4  = g.binary(KOp::Mul, pix, cu(4U));
+    g.stmt_materialize(p4);
+    const int a4  = g.binary(KOp::Mul, lid, cu(4U)); // this thread's accumulator base in shared
+    g.stmt_materialize(a4);
+
+    const auto pl = [&](int k) { const int v = g.buffer_load(par_b, cu(static_cast<crd::u32>(k))); g.stmt_materialize(v); return v; };
+    const int bg_r = pl(0); const int bg_g = pl(1); const int bg_b = pl(2); const int amin = pl(3);
+
+    const int r2   = g.binary(KOp::Mul, tile, cu(2U));
+    const int rs   = g.buffer_load(rng_b, r2);
+    const int re   = g.buffer_load(rng_b, g.binary(KOp::Add, r2, cu(1U)));
+    g.stmt_materialize(rs); g.stmt_materialize(re);
+    const int span = g.select(g.binary(KOp::CmpGt, re, rs), g.binary(KOp::Sub, re, rs), cu(0U));
+    g.stmt_materialize(span);
+    // n_chunks = ceil(span / BS) — variable but workgroup-uniform
+    const int nchunks = g.binary(KOp::Div, g.binary(KOp::Add, span, cu(static_cast<crd::u32>(bs - 1))), cu(static_cast<crd::u32>(bs)));
+    g.stmt_materialize(nchunks);
+
+    // init the shared accumulator
+    g.stmt_shared_store(sh_ac, a4, ks(0.0));
+    g.stmt_shared_store(sh_ac, g.binary(KOp::Add, a4, cu(1U)), ks(0.0));
+    g.stmt_shared_store(sh_ac, g.binary(KOp::Add, a4, cu(2U)), ks(0.0));
+    g.stmt_shared_store(sh_ac, g.binary(KOp::Add, a4, cu(3U)), ks(1.0));
+
+    const int cloop = g.stmt_for_begin(nchunks);
+    const int ch    = g.kernel_loop_var(cloop);
+    const int cbase = g.binary(KOp::Add, rs, g.binary(KOp::Mul, ch, cu(static_cast<crd::u32>(bs))));
+    // ── collaborative load: thread lid → instance cbase+lid into sh_sp[lid·11 + …] ──
+    const int inst_l  = g.binary(KOp::Add, cbase, lid);
+    const int inr_l   = g.binary(KOp::CmpLt, inst_l, re);
+    const int inst_lc = g.select(inr_l, inst_l, g.binary(KOp::Sub, re, cu(1U)));
+    const int splat   = g.buffer_load(order_b, inst_lc);
+    g.stmt_materialize(splat);
+    const int sbase   = g.binary(KOp::Mul, splat, cu(12U));
+    const int sl11    = g.binary(KOp::Mul, lid, cu(11U));
+    const auto sload  = [&](int k) { const int v = g.buffer_load(sorted_b, g.binary(KOp::Add, sbase, cu(static_cast<crd::u32>(k)))); g.stmt_materialize(v); return v; };
+    // fields: 0 mnx,1 mny,2 conA,3 conB,4 conC,5 rad,6 colR,7 colG,8 colB,9 opac,10 valid  (from sorted slots 0,1,3,4,5,6,7,8,9,10,11)
+    g.stmt_shared_store(sh_sp, sl11, sload(0));
+    g.stmt_shared_store(sh_sp, g.binary(KOp::Add, sl11, cu(1U)), sload(1));
+    g.stmt_shared_store(sh_sp, g.binary(KOp::Add, sl11, cu(2U)), sload(3));
+    g.stmt_shared_store(sh_sp, g.binary(KOp::Add, sl11, cu(3U)), sload(4));
+    g.stmt_shared_store(sh_sp, g.binary(KOp::Add, sl11, cu(4U)), sload(5));
+    g.stmt_shared_store(sh_sp, g.binary(KOp::Add, sl11, cu(5U)), sload(6));
+    g.stmt_shared_store(sh_sp, g.binary(KOp::Add, sl11, cu(6U)), sload(7));
+    g.stmt_shared_store(sh_sp, g.binary(KOp::Add, sl11, cu(7U)), sload(8));
+    g.stmt_shared_store(sh_sp, g.binary(KOp::Add, sl11, cu(8U)), sload(9));
+    g.stmt_shared_store(sh_sp, g.binary(KOp::Add, sl11, cu(9U)), sload(10));
+    g.stmt_shared_store(sh_sp, g.binary(KOp::Add, sl11, cu(10U)), g.select(inr_l, sload(11), ks(0.0))); // valid=0 for padding
+    g.stmt_barrier();
+
+    // ── composite: every pixel over the shared batch. Bound = the chunk's ACTUAL splat count (min(BS, re−cbase)), not a
+    //    fixed BS — so a low-overdraw tile doesn't waste the whole 256-wide inner loop on padding. Workgroup-uniform. ──
+    const int chunk_n = g.binary(KOp::Min, cu(static_cast<crd::u32>(bs)), g.binary(KOp::Sub, re, cbase));
+    g.stmt_materialize(chunk_n);
+    const int jloop = g.stmt_for_begin(chunk_n);
+    const int j     = g.kernel_loop_var(jloop);
+    const int inst_j = g.binary(KOp::Add, cbase, j);
+    const int inr_j  = g.binary(KOp::CmpLt, inst_j, re);
+    const int sj11   = g.binary(KOp::Mul, j, cu(11U));
+    const auto shl   = [&](int k) { const int v = g.shared_load(sh_sp, g.binary(KOp::Add, sj11, cu(static_cast<crd::u32>(k)))); g.stmt_materialize(v); return v; };
+    const int mnx = shl(0); const int mny = shl(1);
+    const int cna = shl(2); const int cnb = shl(3); const int cnc = shl(4); const int grad = shl(5);
+    const int colr = shl(6); const int colg = shl(7); const int colb = shl(8); const int gopac = shl(9); const int gvalid = shl(10);
+    const int dx = sub(g, mnx, pxc);
+    const int dy = sub(g, mny, pyc);
+    const int power = g.binary(KOp::Min, sub(g, mul(g, ks(-0.5), add(g, mul(g, cna, sq(g, dx)), mul(g, cnc, sq(g, dy)))), mul(g, cnb, mul(g, dx, dy))), ks(0.0));
+    const int aeff = g.binary(KOp::Min, mul(g, gopac, g.unary(KOp::Exp, power)), ks(0.99));
+    const int inb  = g.binary(KOp::BitAnd, g.binary(KOp::CmpLt, g.unary(KOp::Abs, dx), grad), g.binary(KOp::CmpLt, g.unary(KOp::Abs, dy), grad));
+    const int keep = g.binary(KOp::BitAnd, g.binary(KOp::BitAnd, inr_j, g.binary(KOp::CmpGt, gvalid, ks(0.5))),
+                              g.binary(KOp::BitAnd, inb, g.binary(KOp::CmpGe, aeff, amin)));
+    const int a = g.select(keep, aeff, ks(0.0));
+    const int t_old = g.shared_load(sh_ac, g.binary(KOp::Add, a4, cu(3U)));
+    g.stmt_materialize(t_old);
+    const int wgt = mul(g, a, t_old);
+    const int r_old = g.shared_load(sh_ac, a4);
+    const int g_old = g.shared_load(sh_ac, g.binary(KOp::Add, a4, cu(1U)));
+    const int b_old = g.shared_load(sh_ac, g.binary(KOp::Add, a4, cu(2U)));
+    g.stmt_materialize(r_old); g.stmt_materialize(g_old); g.stmt_materialize(b_old);
+    g.stmt_shared_store(sh_ac, a4, add(g, r_old, mul(g, colr, wgt)));
+    g.stmt_shared_store(sh_ac, g.binary(KOp::Add, a4, cu(1U)), add(g, g_old, mul(g, colg, wgt)));
+    g.stmt_shared_store(sh_ac, g.binary(KOp::Add, a4, cu(2U)), add(g, b_old, mul(g, colb, wgt)));
+    g.stmt_shared_store(sh_ac, g.binary(KOp::Add, a4, cu(3U)), mul(g, t_old, sub(g, ks(1.0), a)));
+    g.stmt_for_end(jloop);
+    g.stmt_barrier(); // done reading sh_sp before the next chunk overwrites it
+    // ── EARLY TERMINATION: break the chunk loop once EVERY pixel in the tile has saturated (T < t_stop). This is the
+    //    reference rasteriser's big win at high overdraw; it drops the negligible saturated tail, so it is not bit-exact
+    //    vs the no-early-out render (≤ t_stop·colour), hence gated as a config option. ──
+    if (cfg.early_terminate)
+    {
+        g.stmt_shared_store(sh_act, cu(0U), cu(0U)); // reset (all threads write 0 — same value, race-safe)
+        g.stmt_barrier();
+        const int myt = g.shared_load(sh_ac, g.binary(KOp::Add, a4, cu(3U)));
+        g.stmt_materialize(myt);
+        const int cif = g.stmt_if_begin(g.binary(KOp::CmpGe, myt, ks(cfg.t_stop))); // still active ⇒ count it
+        {
+            g.stmt_shared_atomic_add(sh_act, cu(0U), cu(1U));
+        }
+        g.stmt_if_end(cif);
+        g.stmt_barrier();
+        const int nact = g.shared_load(sh_act, cu(0U));
+        g.stmt_materialize(nact);
+        g.stmt_for_break_if(g.binary(KOp::CmpEq, nact, cu(0U))); // all pixels saturated ⇒ stop this tile
+        g.stmt_barrier(); // before the next chunk's load overwrites sh_sp
+    }
+    g.stmt_for_end(cloop);
+
+    // ── resolve: composite the background under the accumulated colour, write the pixel once ──
+    const int tf = g.shared_load(sh_ac, g.binary(KOp::Add, a4, cu(3U)));
+    const int rf = g.shared_load(sh_ac, a4);
+    const int gf = g.shared_load(sh_ac, g.binary(KOp::Add, a4, cu(1U)));
+    const int bf = g.shared_load(sh_ac, g.binary(KOp::Add, a4, cu(2U)));
+    g.stmt_materialize(tf); g.stmt_materialize(rf); g.stmt_materialize(gf); g.stmt_materialize(bf);
+    g.stmt_buffer_store(out_b, p4, add(g, rf, mul(g, bg_r, tf)));
+    g.stmt_buffer_store(out_b, g.binary(KOp::Add, p4, cu(1U)), add(g, gf, mul(g, bg_g, tf)));
+    g.stmt_buffer_store(out_b, g.binary(KOp::Add, p4, cu(2U)), add(g, bf, mul(g, bg_b, tf)));
+    g.stmt_buffer_store(out_b, g.binary(KOp::Add, p4, cu(3U)), tf);
+
+    KEntry e;
+    e.stage             = KStage::Compute;
+    e.local_size[0]     = static_cast<crd::u32>(bs);
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
+    (void)cfg.height;
+    return e;
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// B19-d — COMPRESSION. A captured scene is millions of Gaussians × 14 floats = far too big to ship. The frontier route
+// (Self-Organizing Gaussians, Morgenstern 2024): REORDER the Gaussians for LOCALITY so neighbouring entries have
+// similar attributes (smooth attribute "planes"), then QUANTISE — a smooth, low-entropy signal an image codec (our own
+// HDR codec) compresses hard. This file provides the two on-device primitives: a Morton (Z-order) key from the
+// position (sort by it to get spatial locality — reuse the KV radix sort), and a K-bit quantise/dequantise codec.
+
+// MORTON: per Gaussian, quantise its position to 10 bits/axis over the scene bounds and interleave → a 30-bit Z-order
+// key; the index rides as the KV-sort payload. Sorting by this key lays spatially-near Gaussians next to each other.
+//   b0 gaussians (F32, 14/g)  b1 bounds (F32, 6: [minX minY minZ maxX maxY maxZ])  b2 keys (U32)  b3 index (U32)
+struct GsplatMortonConfig
+{
+    int local_size = 64;
+};
+
+[[nodiscard]] inline KEntry build_gsplat_morton_kernel(KGraph& g, const GsplatMortonConfig& cfg)
+{
+    using namespace detail;
+    const Shape shu = make_shape({1});
+    const auto  cu  = [&](crd::u32 v) { return g.constant(static_cast<double>(v), shu, DType::U32); };
+    const auto  ks  = [&](double v) { return g.constant(v, shu, DType::F32); };
+    const auto  shl = [&](int a, crd::u32 s) { return g.binary(KOp::Shl, a, cu(s)); };
+    const auto  ba  = [&](int a, crd::u32 m) { return g.binary(KOp::BitAnd, a, cu(m)); };
+    const auto  bo  = [&](int a, int b) { return g.binary(KOp::BitOr, a, b); };
+    // interleave a 10-bit value with two zero bits between each bit (part-1-by-2)
+    const auto part = [&](int x0) {
+        int x = ba(x0, 0x000003FFU);
+        x = ba(bo(x, shl(x, 16)), 0xFF0000FFU);
+        x = ba(bo(x, shl(x, 8)), 0x0300F00FU);
+        x = ba(bo(x, shl(x, 4)), 0x030C30C3U);
+        x = ba(bo(x, shl(x, 2)), 0x09249249U);
+        return x;
+    };
+
+    const int gb   = g.buffer_decl(DType::F32, 0, 0, false);
+    const int bd_b = g.buffer_decl(DType::F32, 0, 1, false);
+    const int key_b = g.buffer_decl(DType::U32, 0, 2, true);
+    const int ordidx_b = g.buffer_decl(DType::U32, 0, 3, true); // the index payload the Morton sort carries
+    const int tid  = g.binary(KOp::Add, g.binary(KOp::Mul, g.builtin(KBuiltin::WorkgroupIndex), cu(static_cast<crd::u32>(cfg.local_size))),
+                          g.builtin(KBuiltin::LocalInvocationIndex));
+
+    const int mark = g.kernel_stmt_mark();
+    const auto bl = [&](int k) { const int v = g.buffer_load(bd_b, cu(static_cast<crd::u32>(k))); g.stmt_materialize(v); return v; };
+    const int mnx = bl(0); const int mny = bl(1); const int mnz = bl(2);
+    const int mxx = bl(3); const int mxy = bl(4); const int mxz = bl(5);
+    const int base = g.binary(KOp::Mul, tid, cu(14U));
+    const auto q10 = [&](int val, int lo, int hi) {
+        const int t01 = g.binary(KOp::Max, g.binary(KOp::Min, dv(g, sub(g, val, lo), g.binary(KOp::Max, sub(g, hi, lo), ks(1.0e-12))), ks(1.0)), ks(0.0));
+        return g.cast(g.unary(KOp::Floor, mul(g, t01, ks(1023.0))), DType::U32);
+    };
+    const int qx = q10(g.buffer_load(gb, base), mnx, mxx);
+    const int qy = q10(g.buffer_load(gb, g.binary(KOp::Add, base, cu(1U))), mny, mxy);
+    const int qz = q10(g.buffer_load(gb, g.binary(KOp::Add, base, cu(2U))), mnz, mxz);
+    const int morton = bo(bo(part(qx), shl(part(qy), 1)), shl(part(qz), 2));
+    g.stmt_buffer_store(key_b, tid, morton);
+    g.stmt_buffer_store(ordidx_b, tid, g.cast(tid, DType::U32));
+
+    KEntry e;
+    e.stage             = KStage::Compute;
+    e.local_size[0]     = static_cast<crd::u32>(cfg.local_size);
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
+    return e;
+}
+
+// QUANTISE: per Gaussian, map each of `natt` attributes to a K-bit integer code over its [min,max] range. Codes stored
+// as F32 (integer-valued) for the oracle; a real codec packs them (32/bits× smaller) and entropy-codes the smooth planes.
+//   b0 gaussians (F32, natt/g)  b1 ranges (F32, 2·natt: [min0 max0 …])  b2 codes (F32, natt/g)
+struct GsplatQuantizeConfig
+{
+    int natt       = 14;
+    int bits       = 12;
+    int local_size = 64;
+};
+
+[[nodiscard]] inline KEntry build_gsplat_quantize_kernel(KGraph& g, const GsplatQuantizeConfig& cfg)
+{
+    using namespace detail;
+    const Shape shu = make_shape({1});
+    const auto  cu  = [&](crd::u32 v) { return g.constant(static_cast<double>(v), shu, DType::U32); };
+    const auto  ks  = [&](double v) { return g.constant(v, shu, DType::F32); };
+    const double levels = static_cast<double>((1U << static_cast<crd::u32>(cfg.bits)) - 1U);
+
+    const int gb  = g.buffer_decl(DType::F32, 0, 0, false);
+    const int rb  = g.buffer_decl(DType::F32, 0, 1, false);
+    const int qb  = g.buffer_decl(DType::F32, 0, 2, true);
+    const int tid = g.binary(KOp::Add, g.binary(KOp::Mul, g.builtin(KBuiltin::WorkgroupIndex), cu(static_cast<crd::u32>(cfg.local_size))),
+                         g.builtin(KBuiltin::LocalInvocationIndex));
+    const int mark = g.kernel_stmt_mark();
+    const int base = g.binary(KOp::Mul, tid, cu(static_cast<crd::u32>(cfg.natt)));
+    const int loop = g.stmt_for_begin(cu(static_cast<crd::u32>(cfg.natt)));
+    const int k    = g.kernel_loop_var(loop);
+    const int gi   = g.binary(KOp::Add, base, k);
+    const int x    = g.buffer_load(gb, gi);
+    const int lo   = g.buffer_load(rb, g.binary(KOp::Mul, k, cu(2U)));
+    const int hi   = g.buffer_load(rb, g.binary(KOp::Add, g.binary(KOp::Mul, k, cu(2U)), cu(1U)));
+    g.stmt_materialize(x); g.stmt_materialize(lo); g.stmt_materialize(hi);
+    const int t01 = g.binary(KOp::Max, g.binary(KOp::Min, dv(g, sub(g, x, lo), g.binary(KOp::Max, sub(g, hi, lo), ks(1.0e-12))), ks(1.0)), ks(0.0));
+    const int q   = g.unary(KOp::Round, mul(g, t01, ks(levels))); // nearest code
+    g.stmt_buffer_store(qb, gi, q);
+    g.stmt_for_end(loop);
+
+    KEntry e;
+    e.stage             = KStage::Compute;
+    e.local_size[0]     = static_cast<crd::u32>(cfg.local_size);
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
+    return e;
+}
+
+// DEQUANTISE: codes → reconstructed attributes.  x' = min + code/levels · (max − min).
+//   b0 codes (F32, natt/g)  b1 ranges (F32, 2·natt)  b2 out (F32, natt/g)
+[[nodiscard]] inline KEntry build_gsplat_dequantize_kernel(KGraph& g, const GsplatQuantizeConfig& cfg)
+{
+    using namespace detail;
+    const Shape shu = make_shape({1});
+    const auto  cu  = [&](crd::u32 v) { return g.constant(static_cast<double>(v), shu, DType::U32); };
+    const auto  ks  = [&](double v) { return g.constant(v, shu, DType::F32); };
+    const double levels = static_cast<double>((1U << static_cast<crd::u32>(cfg.bits)) - 1U);
+
+    const int qb  = g.buffer_decl(DType::F32, 0, 0, false);
+    const int rb  = g.buffer_decl(DType::F32, 0, 1, false);
+    const int ob  = g.buffer_decl(DType::F32, 0, 2, true);
+    const int tid = g.binary(KOp::Add, g.binary(KOp::Mul, g.builtin(KBuiltin::WorkgroupIndex), cu(static_cast<crd::u32>(cfg.local_size))),
+                         g.builtin(KBuiltin::LocalInvocationIndex));
+    const int mark = g.kernel_stmt_mark();
+    const int base = g.binary(KOp::Mul, tid, cu(static_cast<crd::u32>(cfg.natt)));
+    const int loop = g.stmt_for_begin(cu(static_cast<crd::u32>(cfg.natt)));
+    const int k    = g.kernel_loop_var(loop);
+    const int gi   = g.binary(KOp::Add, base, k);
+    const int q    = g.buffer_load(qb, gi);
+    const int lo   = g.buffer_load(rb, g.binary(KOp::Mul, k, cu(2U)));
+    const int hi   = g.buffer_load(rb, g.binary(KOp::Add, g.binary(KOp::Mul, k, cu(2U)), cu(1U)));
+    g.stmt_materialize(q); g.stmt_materialize(lo); g.stmt_materialize(hi);
+    const int xr = add(g, lo, mul(g, dv(g, q, ks(levels)), sub(g, hi, lo)));
+    g.stmt_buffer_store(ob, gi, xr);
+    g.stmt_for_end(loop);
+
+    KEntry e;
+    e.stage             = KStage::Compute;
+    e.local_size[0]     = static_cast<crd::u32>(cfg.local_size);
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
+    return e;
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// B19-f — DIFFERENTIABLE TRAINING. 3DGS is FIT to images by gradient descent: render, compare to the photo, and push
+// every Gaussian's parameters down the gradient of the photometric loss. This is what makes an engine a CAPTURE-to-
+// render tool, not just a viewer. Here is the training core for an isotropic screen Gaussian — the FORWARD splat and
+// the exact BACKWARD gradients of L = Σ(C−target)² w.r.t. its position, scale, opacity and colour. The gradients are
+// FD-verified and an SGD loop fits the Gaussian to a target. (The multi-splat composite backward extends this with a
+// back-to-front suffix accumulation; the single-splat core proves the autodiff-training path end to end.)
+//   Params (5): [μx μy · s · opacity · colour]
+
+struct GsplatDiffConfig
+{
+    int width      = 64;
+    int height     = 64;
+    int local_size = 64;
+};
+
+// FORWARD: C_p = colour · opacity · exp(−½·((px−μx)²+(py−μy)²)/s²). One thread per pixel.
+//   b0 params (F32,5)  b1 out (F32, 1/pixel)
+[[nodiscard]] inline KEntry build_gsplat_diff_forward_kernel(KGraph& g, const GsplatDiffConfig& cfg)
+{
+    using namespace detail;
+    const Shape shu = make_shape({1});
+    const auto  cu  = [&](crd::u32 v) { return g.constant(static_cast<double>(v), shu, DType::U32); };
+    const auto  ks  = [&](double v) { return g.constant(v, shu, DType::F32); };
+
+    const int par_b = g.buffer_decl(DType::F32, 0, 0, false);
+    const int out_b = g.buffer_decl(DType::F32, 0, 1, true);
+    const int tid   = g.binary(KOp::Add, g.binary(KOp::Mul, g.builtin(KBuiltin::WorkgroupIndex), cu(static_cast<crd::u32>(cfg.local_size))),
+                          g.builtin(KBuiltin::LocalInvocationIndex));
+    const int mark = g.kernel_stmt_mark();
+    const int w    = cu(static_cast<crd::u32>(cfg.width));
+    const int pxc  = add(g, g.cast(g.binary(KOp::Mod, tid, w), DType::F32), ks(0.5));
+    const int pyc  = add(g, g.cast(g.binary(KOp::Div, tid, w), DType::F32), ks(0.5));
+    const auto pl  = [&](int k) { const int v = g.buffer_load(par_b, cu(static_cast<crd::u32>(k))); g.stmt_materialize(v); return v; };
+    const int mux = pl(0); const int muy = pl(1); const int s = pl(2); const int op = pl(3); const int col = pl(4);
+    const int dxp = sub(g, pxc, mux);
+    const int dyp = sub(g, pyc, muy);
+    const int s2  = g.binary(KOp::Max, sq(g, s), ks(1.0e-9));
+    const int e   = g.unary(KOp::Exp, mul(g, ks(-0.5), dv(g, add(g, sq(g, dxp), sq(g, dyp)), s2)));
+    g.stmt_buffer_store(out_b, tid, mul(g, col, mul(g, op, e)));
+
+    KEntry e2;
+    e2.stage             = KStage::Compute;
+    e2.local_size[0]     = static_cast<crd::u32>(cfg.local_size);
+    e2.kernel_body_begin = mark;
+    e2.kernel_body_count = g.stmt_count() - mark;
+    return e2;
+}
+
+// BACKWARD: dL/d(params) of L = Σ_pixels (C_p − target_p)², summed over the image. One thread reduces over all pixels
+// (accumulating the 5 gradients in the output buffer — the same RMW pattern the render composite uses for a loop sum).
+//   b0 params (F32,5)  b1 target (F32, 1/pixel)  b2 grad (F32,5, write)
+[[nodiscard]] inline KEntry build_gsplat_diff_backward_kernel(KGraph& g, const GsplatDiffConfig& cfg)
+{
+    using namespace detail;
+    const Shape shu = make_shape({1});
+    const auto  cu  = [&](crd::u32 v) { return g.constant(static_cast<double>(v), shu, DType::U32); };
+    const auto  ks  = [&](double v) { return g.constant(v, shu, DType::F32); };
+
+    const int par_b = g.buffer_decl(DType::F32, 0, 0, false);
+    const int tgt_b = g.buffer_decl(DType::F32, 0, 1, false);
+    const int grd_b = g.buffer_decl(DType::F32, 0, 2, true);
+    const int mark  = g.kernel_stmt_mark();
+    const auto pl   = [&](int k) { const int v = g.buffer_load(par_b, cu(static_cast<crd::u32>(k))); g.stmt_materialize(v); return v; };
+    const int mux = pl(0); const int muy = pl(1); const int s = pl(2); const int op = pl(3); const int col = pl(4);
+    const int s2  = g.binary(KOp::Max, sq(g, s), ks(1.0e-9));
+    const int s3  = g.binary(KOp::Max, mul(g, s2, s), ks(1.0e-9));
+    for (int k = 0; k < 5; ++k) { g.stmt_buffer_store(grd_b, cu(static_cast<crd::u32>(k)), ks(0.0)); }
+
+    const int loop = g.stmt_for_begin(cu(static_cast<crd::u32>(cfg.width * cfg.height)));
+    const int q    = g.kernel_loop_var(loop);
+    const int pxc  = add(g, g.cast(g.binary(KOp::Mod, q, cu(static_cast<crd::u32>(cfg.width))), DType::F32), ks(0.5));
+    const int pyc  = add(g, g.cast(g.binary(KOp::Div, q, cu(static_cast<crd::u32>(cfg.width))), DType::F32), ks(0.5));
+    const int dxp  = sub(g, pxc, mux);
+    const int dyp  = sub(g, pyc, muy);
+    const int r2   = add(g, sq(g, dxp), sq(g, dyp));
+    const int e    = g.unary(KOp::Exp, mul(g, ks(-0.5), dv(g, r2, s2)));
+    const int a    = mul(g, op, e);
+    const int cval = mul(g, col, a);
+    const int tval = g.buffer_load(tgt_b, q);
+    g.stmt_materialize(tval);
+    const int diff = mul(g, ks(2.0), sub(g, cval, tval)); // dL/dC_p
+    const int coe  = mul(g, diff, mul(g, col, op));       // dL/dC · colour·opacity (shared factor for μ/s)
+    // per-pixel contributions
+    const int d_col = mul(g, diff, a);
+    const int d_op  = mul(g, diff, mul(g, col, e));
+    const int d_mux = mul(g, coe, mul(g, e, dv(g, dxp, s2)));
+    const int d_muy = mul(g, coe, mul(g, e, dv(g, dyp, s2)));
+    const int d_s   = mul(g, coe, mul(g, e, dv(g, r2, s3)));
+    const auto acc  = [&](int k, int val) {
+        const int idx = cu(static_cast<crd::u32>(k));
+        const int old = g.buffer_load(grd_b, idx);
+        g.stmt_materialize(old);
+        g.stmt_buffer_store(grd_b, idx, add(g, old, val));
+    };
+    acc(0, d_mux); acc(1, d_muy); acc(2, d_s); acc(3, d_op); acc(4, d_col);
+    g.stmt_for_end(loop);
+
+    KEntry e2;
+    e2.stage             = KStage::Compute;
+    e2.local_size[0]     = 1U;
+    e2.kernel_body_begin = mark;
+    e2.kernel_body_count = g.stmt_count() - mark;
+    return e2;
+}
+
+// SGD STEP: params -= lr · grad (one thread over the 5 params). b0 params (F32,5, rw)  b1 grad (F32,5)  b2 lr (F32,1)
+[[nodiscard]] inline KEntry build_gsplat_sgd_step_kernel(KGraph& g, int nparam = 5)
+{
+    const Shape shu = make_shape({1});
+    const auto  cu  = [&](crd::u32 v) { return g.constant(static_cast<double>(v), shu, DType::U32); };
+    const int par_b = g.buffer_decl(DType::F32, 0, 0, true);
+    const int grd_b = g.buffer_decl(DType::F32, 0, 1, false);
+    const int lr_b  = g.buffer_decl(DType::F32, 0, 2, false);
+    const int tid   = g.builtin(KBuiltin::LocalInvocationIndex);
+    const int mark  = g.kernel_stmt_mark();
+    const int lr    = g.buffer_load(lr_b, cu(0U));
+    const int p     = g.buffer_load(par_b, tid);
+    const int gr    = g.buffer_load(grd_b, tid);
+    g.stmt_materialize(lr); g.stmt_materialize(p); g.stmt_materialize(gr);
+    g.stmt_buffer_store(par_b, tid, g.binary(KOp::Sub, p, g.binary(KOp::Mul, lr, gr)));
+    KEntry e;
+    e.stage             = KStage::Compute;
+    e.local_size[0]     = static_cast<crd::u32>(nparam);
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
     return e;
 }
 

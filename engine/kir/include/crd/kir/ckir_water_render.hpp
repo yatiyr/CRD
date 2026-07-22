@@ -89,8 +89,9 @@ inline void ocean_projected_vertex(KGraph& g, int ux, int uy, const OceanCascade
         const int    h   = mul(sub(g.swizzle(t, 2), k(0.5)), k(2.0 * oc.hmax[c]));
         wy0              = add(wy0, mul(h, k(oc.geo_w[c])));
     }
-    // taper the displacement to FLAT as it nears the horizon (s → far) so distant crests meet the sky in a clean line.
-    const int wy    = mul(wy0, sub(k(1.0), mn(mx(mul(sub(s, k(250.0)), k(0.005)), k(0.0)), k(1.0))));
+    // taper the displacement to FLAT well BEFORE the horizon (s → far) so distant crests flatten out and the last grid rows meet
+    // the sky in a clean line (no tall sawtooth silhouette). Starts at s=180, fully flat by s≈340.
+    const int wy    = mul(wy0, sub(k(1.0), mn(mx(mul(sub(s, k(180.0)), k(0.00625)), k(0.0)), k(1.0))));
     // PROJECT world → clip (the exact inverse of the FS camera; no mat4). Vulkan clip: NDC.y = −uy ⇒ the sign flip.
     const int clipx = g.binary(kir::KOp::Div, wx, k(kFovx));
     const int clipy = g.unary(kir::KOp::Neg, g.binary(kir::KOp::Div, add(sub(wy, k(kEyeH)), mul(wz, k(kPitch))), k(kFovy)));
@@ -198,6 +199,61 @@ inline void build_ocean_displaced_mesh(KGraph& g, KEntry& me, int np, int kk, co
     me.mesh_prim       = g.vec3(u32(i0), u32(i1), u32(i2));
 }
 
+// ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// SHARED analytic sky — the ONE source of the ocean's atmosphere, so the SKY PASS and the water's REFLECTION agree exactly. A
+// physically-motivated Rayleigh+Mie dome: deep-blue zenith → pale luminous horizon (air-mass whitening), a compact warm Mie halo
+// and a tight bright sun disk; decorated with PUFFY WHITE CUMULUS (round Worley billows × a fractal break-up gives a decorative
+// puff field with clear-sky gaps, sunlit billow tops + self-shadowed bases, warm where the sun grazes). `dir` = a normalized
+// view / reflection ray; the sun/haze/zenith COLOURS come in as nodes (built in the caller's graph, so the time-of-day dial lives
+// with the caller). `with_clouds` overlays the cumulus; `hi_detail` adds edge erosion — ON for the primary sky, OFF for the
+// reflection (the choppy surface hides the detail and it keeps the reflection cheap). Returns HDR linear sky radiance.
+inline int analytic_sky(KGraph& g, int dir, int ldir, int sunc, int hazeh, int zen, bool with_clouds, bool hi_detail)
+{
+    namespace kir = crd::kir;
+    namespace nd  = crd::kir::nodes;
+    namespace nz  = crd::kir::nodes::noise;
+    const auto sh  = kir::make_shape({1});
+    const auto k   = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const auto kc  = [&](double x, double y, double z) { return g.vec3(k(x), k(y), k(z)); };
+    const auto add = [&](int a, int b) { return g.binary(kir::KOp::Add, a, b); };
+    const auto sub = [&](int a, int b) { return g.binary(kir::KOp::Sub, a, b); };
+    const auto mul = [&](int a, int b) { return g.binary(kir::KOp::Mul, a, b); };
+    const auto b3  = [&](kir::KOp op, int a, int c) { return nd::detail::bin(g, op, a, c); };
+    const auto sat = [&](int x) { return g.binary(kir::KOp::Max, g.binary(kir::KOp::Min, x, k(1.0)), k(0.0)); };
+
+    const int dy   = sat(g.swizzle(dir, 1));
+    const int mu   = g.binary(kir::KOp::Max, g.dot(dir, ldir), k(0.0)); // cos(view, sun)
+    const int tg   = g.binary(kir::KOp::Pow, dy, k(0.42));
+    const int grad = add(b3(kir::KOp::Mul, hazeh, sub(k(1.0), tg)), b3(kir::KOp::Mul, zen, tg));
+    const int mie  = b3(kir::KOp::Mul, kc(0.34, 0.25, 0.15), mul(g.binary(kir::KOp::Pow, mu, k(11.0)), sub(k(1.25), tg)));
+    const int disk = g.unary(kir::KOp::Exp, mul(sub(mu, k(1.0)), k(1800.0)));
+    const int glow = g.unary(kir::KOp::Exp, mul(sub(mu, k(1.0)), k(60.0)));
+    const int suns = b3(kir::KOp::Mul, sunc, add(mul(disk, k(18.0)), mul(glow, k(0.40))));
+    const int skyc = add(add(grad, mie), suns);
+    if (!with_clouds) { return skyc; }
+
+    const int cy    = add(g.swizzle(dir, 1), k(0.42));
+    const int cu    = mul(g.binary(kir::KOp::Div, g.swizzle(dir, 0), cy), k(0.85));
+    const int cw    = mul(g.binary(kir::KOp::Div, g.swizzle(dir, 2), cy), k(0.85));
+    const int bill  = sub(k(1.0), g.unary(kir::KOp::Sqrt, nz::worley2(g, mul(cu, k(0.95)), mul(cw, k(0.95)), 1.0, 0, 0))); // big round puffs
+    const int fbm   = sat(mul(add(nz::fractal2(g, mul(cu, k(1.7)), mul(cw, k(1.7)), 4, 2.0, 0.55), k(1.0)), k(0.5)));
+    const int shape = mul(fbm, add(k(0.48), mul(bill, k(0.72)))); // fbm = broad field, billows sculpt it into puffs
+    int       dens  = sat(mul(sub(shape, k(0.32)), k(3.0)));
+    if (hi_detail)
+    {
+        const int det = sat(mul(add(nz::fractal2(g, mul(cu, k(5.5)), mul(cw, k(5.5)), 3, 2.0, 0.5), k(1.0)), k(0.5)));
+        dens          = sat(sub(dens, mul(det, k(0.12)))); // cauliflower edge erosion
+    }
+    const int hmask = sat(add(mul(g.swizzle(dir, 1), k(3.0)), k(0.14))); // decorate from just above the horizon upward
+    const int cov   = mul(dens, hmask);
+    const int lit   = add(k(0.70), mul(bill, k(0.55)));               // billow centres sunlit-bright
+    const int shad  = sub(k(1.0), mul(dens, k(0.38)));               // thick cores self-shadow toward the base
+    const int base  = b3(kir::KOp::Mul, kc(1.12, 1.13, 1.15), mul(lit, shad));
+    const int warm  = b3(kir::KOp::Mul, kc(0.18, 0.11, 0.03), mul(g.binary(kir::KOp::Pow, mu, k(3.0)), dens));
+    const int cloudc = add(base, warm);
+    return add(b3(kir::KOp::Mul, skyc, sub(k(1.0), cov)), b3(kir::KOp::Mul, cloudc, cov)); // clouds occlude the sky
+}
+
 // The ocean surface FRAGMENT — shade the displaced geometry from the VS world position. The high-frequency CHOP lives HERE as a
 // per-pixel, mip-filtered normal map (the FS has derivatives ⇒ no minification aliasing) summed with the smooth swell slope; the
 // geometry carries the silhouette. Teal-green body + broad daytime sheen + turquoise sun-backlit SSS + HDR-white JOINT-Jacobian
@@ -258,27 +314,19 @@ inline void build_ocean_water_geo_fs(KGraph& g, KEntry& fe, const OceanCascadeRe
     const int v     = unit3(sub(eye, world));         // surface → eye
     const int rdir  = g.unary(kir::KOp::Neg, v);      // incident view ray
 
-    const int ldir  = unit3(kc(0.25, 0.28, 0.93));
-    const int sunc  = kc(2.4, 2.5, 2.4);
-    const int hazeh = kc(0.52, 0.67, 0.80);
-    const int zen   = kc(0.13, 0.40, 0.78);
+    // reflection-sky constants — IDENTICAL to the sky pass (build_ocean_frame_fft_fs) so the sea MIRRORS the real sky/sun.
+    const int ldir  = unit3(kc(0.30, 0.52, 0.80));
+    const int sunc  = kc(2.05, 1.86, 1.55);
+    const int hazeh = kc(0.56, 0.71, 0.86);
+    const int zen   = kc(0.07, 0.27, 0.64);
 
-    // compact reflection-sky (gradient + broad sun sheen; clouds are the sky pass's job, reflections stay cheap).
-    const auto sky_of = [&](int dir) {
-        const int ty   = g.unary(kir::KOp::Sqrt, sat(g.swizzle(dir, 1)));
-        const int grad = add(b3(kir::KOp::Mul, hazeh, sub(k(1.0), ty)), b3(kir::KOp::Mul, zen, ty));
-        const int sd   = g.binary(kir::KOp::Max, g.dot(dir, ldir), k(0.0));
-        const int disk = g.unary(kir::KOp::Exp, mul(sub(sd, k(1.0)), k(280.0)));
-        const int glow = g.unary(kir::KOp::Exp, mul(sub(sd, k(1.0)), k(5.0)));
-        const int suns = b3(kir::KOp::Mul, sunc, add(mul(disk, k(1.8)), mul(glow, k(0.4))));
-        return add(grad, suns);
-    };
-
-    // Fresnel: bright-sky reflection + broad daytime sheen vs tropical-teal body + turquoise sun-backlit SSS.
+    // Fresnel: bright-sky reflection + broad daytime sheen vs tropical-teal body + turquoise sun-backlit SSS. The reflection uses
+    // the SHARED analytic sky (with clouds ⇒ the sea MIRRORS the puffy sky) — the choppy surface distorts it into realistic broken
+    // reflections. hi_detail=false keeps it cheap; the erosion detail is invisible once the normal scatters the reflection anyway.
     const int nov  = g.binary(kir::KOp::Max, g.dot(n, v), k(1e-3));
     const int fr   = fresnel_water(g, nov);
     const int rfl  = sub(rdir, b3(kir::KOp::Mul, n, mul(k(2.0), g.dot(rdir, n))));
-    const int skyr = sky_of(unit3(rfl));
+    const int skyr = analytic_sky(g, unit3(rfl), ldir, sunc, hazeh, zen, /*with_clouds=*/true, /*hi_detail=*/false);
     const int glit = ocean_sun_glitter(g, n, v, ldir, sunc, add(k(0.02), mul(distf, k(0.05))));
     const int refl = add(b3(kir::KOp::Mul, skyr, k(0.66)), b3(kir::KOp::Mul, glit, k(0.62))); // stronger sun-glitter path (ref)
 
@@ -299,9 +347,8 @@ inline void build_ocean_water_geo_fs(KGraph& g, KEntry& fe, const OceanCascadeRe
     // aerial perspective: the DISTANCE fog tints the water body toward the hazy horizon colour; the GRAZING-horizon veil becomes
     // the output ALPHA (transparency to the REAL sky in the composite) so the far crests dissolve into the actual sky ⇒ a truly
     // SEAMLESS horizon — no dark outline where the geometry silhouette meets the sky (the earlier colour-veil left a hard edge).
-    const int fogc  = kc(0.74, 0.81, 0.88);
+    const int fogc  = hazeh; // == the sky-at-horizon colour ⇒ the far sea hazes into the SAME tone as the sky behind it
     const int fogd  = sat(sub(k(1.0), g.unary(kir::KOp::Exp, mul(dist, k(-0.0050)))));
-    const int fogh  = mul(sat(mul(sub(k(0.13), g.swizzle(v, 1)), k(5.0))), k(0.98)); // grazing veil → the alpha fade at the horizon
     const int water = add(b3(kir::KOp::Mul, water1, sub(k(1.0), fogd)), b3(kir::KOp::Mul, fogc, fogd)); // distance haze on the body
 
     const int ce   = b3(kir::KOp::Mul, water, k(0.42)); // exposure + Narkowicz ACES tonemap + sRGB
@@ -309,7 +356,10 @@ inline void build_ocean_water_geo_fs(KGraph& g, KEntry& fe, const OceanCascadeRe
     const int den  = b3(kir::KOp::Add, b3(kir::KOp::Mul, ce, b3(kir::KOp::Add, b3(kir::KOp::Mul, ce, k(2.43)), k(0.59))), k(0.14));
     const int aces = sat3(b3(kir::KOp::Div, num, den));
     const int srgb = b3(kir::KOp::Pow, aces, k(1.0 / 2.2));
-    const int alpha = sat(sub(k(1.0), fogh)); // coverage mask: near water = 1, the horizon band → 0 ⇒ the real sky shows through
+    // HORIZON coverage: the far grid rows (the sawtooth top edge of the projected grid) DISSOLVE into the real sky over the last
+    // ~55 m of range (dist∈[193,248]) ⇒ no dark mesh-edge silhouette; near/mid water stays fully opaque. The revealed sky is the
+    // same hazeh tone the far water already hazed to, so the meeting line is seamless.
+    const int alpha = sat(sub(k(1.0), sat(mul(sub(dist, k(193.0)), k(1.0 / 55.0)))));
     fe.stage       = kir::KStage::Fragment;
     fe.n_out       = 1;
     fe.out[0]      = {g.vec4(g.swizzle(srgb, 0), g.swizzle(srgb, 1), g.swizzle(srgb, 2), alpha), 0};

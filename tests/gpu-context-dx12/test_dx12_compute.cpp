@@ -9,6 +9,7 @@
 #include <crd/kir/ckir_fft.hpp>    // B-cmp Phase 1: build_fft1d_radix2 (the CKIR FFT authoring layer)
 #include <crd/kir/ckir_reduce.hpp> // B-cmp: build_reduce (the CKIR device-wide reduction)
 #include <crd/kir/ckir_scan.hpp>   // B-cmp: build_scan (the CKIR device-wide prefix sum)
+#include <crd/kir/ckir_sort.hpp>   // B-cmp: build_sort_* (the CKIR 4-pass radix sort — the DX12 portability gate)
 #include <crd/kir/ckir_mlp.hpp>    // v17 NRC: build_mlp_fwd_fp32 (the portable+bit-exact fused-MLP forward)
 #include <crd/kir/ckir_svgf.hpp>   // B14-c: build_svgf_atrous (the SVGF edge-stopping denoiser)
 #include <crd/kir/ckir_hair.hpp>   // B18-a: build_hair_bcsdf_kernel (the Chiang R/TT/TRT/TRRT hair/fur BCSDF)
@@ -1859,4 +1860,112 @@ TEST_CASE("B-cmp: CKIR device SCAN DISPATCHES on DX12 == CPU oracle bit-exact", 
         for (int i = 0; i < n; ++i) { if (out32[static_cast<crd::usize>(i)] != static_cast<float>(out64[static_cast<crd::usize>(i)])) { ++bad; } }
         CHECK(bad == 0);
     }
+}
+
+// B-cmp: the CKIR 4-pass radix sort on DX12 — the portability gate the Vulkan sort (test_vulkan_context.cpp) lacked a DX12 mirror
+// for. The sort's histogram / parallel-offset / gbase / scatter kernels use shared memory + barriers + BufferAtomicAdd; HLSL
+// coerces types (masking bugs Vulkan catches), so a DX12 dispatch that produces a fully-sorted permutation is the real check that
+// the sort emits correct HLSL. Same 12-dispatch chain + the shared IComputeContext record API as the Vulkan gate.
+TEST_CASE("B-cmp: CKIR radix sort DISPATCHES on DX12 == sorted permutation", "[dx12][compute][gpu][kernel][sort]")
+{
+    namespace kir = crd::kir;
+    crd::memory::TlsfAllocator alloc(64U << 20U);
+    g::Dx12ComputeContext      ctx(&alloc);
+    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    using g::compute_usage::storage;
+    using g::compute_usage::transfer_dst;
+    using g::compute_usage::transfer_src;
+
+    constexpr int n          = 16384;
+    constexpr int threads    = 256;
+    constexpr int radix_bits = 8;
+    constexpr int nbins      = 256;
+    constexpr int epb        = 1024;
+    constexpr int nblocks    = n / epb;
+
+    constexpr int scan_threads = nblocks < threads ? nblocks : threads; // divides nblocks
+    std::unique_ptr<g::ComputePipeline> ph_s[4];
+    std::unique_ptr<g::ComputePipeline> ps_s[4];
+    std::unique_ptr<g::ComputePipeline> po1_s;
+    std::unique_ptr<g::ComputePipeline> po2_s;
+    g::ComputePipeline*                 ph[4] = {};
+    g::ComputePipeline*                 ps[4] = {};
+    const auto mk = [&](kir::KGraph& gg, const kir::KEntry& e, int nb, const char* nm) -> std::unique_ptr<g::ComputePipeline> {
+        kir::GlslKernel k(&alloc);
+        REQUIRE(kir::emit_compute_kernel_hlsl(gg, e, &alloc, k));
+        auto pipe = ctx.create_pipeline_from_hlsl(crd::containers::to_view(k.source), nb, 0U);
+        if (pipe == nullptr) { WARN("[" << nm << "] HLSL pipeline failed"); }
+        return pipe;
+    };
+    kir::KGraph gof1(&alloc); kir::KGraph gof2(&alloc);
+    po1_s = mk(gof1, kir::build_sort_offset_local(gof1, nblocks, radix_bits, scan_threads), 3, "sort_off1");
+    po2_s = mk(gof2, kir::build_sort_gbase(gof2, radix_bits), 2, "sort_gb");
+    g::ComputePipeline* po1 = po1_s.get();
+    g::ComputePipeline* po2 = po2_s.get();
+    kir::KGraph ghg[4] = {kir::KGraph(&alloc), kir::KGraph(&alloc), kir::KGraph(&alloc), kir::KGraph(&alloc)};
+    kir::KGraph gsg[4] = {kir::KGraph(&alloc), kir::KGraph(&alloc), kir::KGraph(&alloc), kir::KGraph(&alloc)};
+    for (int p = 0; p < 4; ++p)
+    {
+        ph_s[p] = mk(ghg[p], kir::build_sort_histogram(ghg[p], epb, threads, radix_bits, p * 8, nblocks), 2, "sort_hist");
+        ps_s[p] = mk(gsg[p], kir::build_sort_scatter(gsg[p], epb, threads, radix_bits, p * 8, nblocks), 4, "sort_scat");
+        ph[p] = ph_s[p].get(); ps[p] = ps_s[p].get();
+        REQUIRE(ph[p] != nullptr); REQUIRE(ps[p] != nullptr);
+    }
+    REQUIRE(po1 != nullptr); REQUIRE(po2 != nullptr);
+
+    crd::containers::Array<crd::u32> keys(&alloc); keys.resize(n);
+    for (int i = 0; i < n; ++i) { keys[static_cast<crd::usize>(i)] = (static_cast<crd::u32>(i) * 1103515245U + 12345U) ^ (static_cast<crd::u32>(i) << 13U); }
+
+    auto d_a  = ctx.create_buffer(static_cast<crd::u64>(n) * sizeof(crd::u32), storage | transfer_dst | transfer_src, g::ComputeMemory::GpuOnly);
+    auto d_b  = ctx.create_buffer(static_cast<crd::u64>(n) * sizeof(crd::u32), storage | transfer_dst | transfer_src, g::ComputeMemory::GpuOnly);
+    auto d_h  = ctx.create_buffer(static_cast<crd::u64>(nblocks * nbins) * sizeof(crd::u32), storage | transfer_dst | transfer_src, g::ComputeMemory::GpuOnly);
+    auto d_o  = ctx.create_buffer(static_cast<crd::u64>(nblocks * nbins) * sizeof(crd::u32), storage | transfer_dst | transfer_src, g::ComputeMemory::GpuOnly);
+    auto d_t  = ctx.create_buffer(static_cast<crd::u64>(nbins) * sizeof(crd::u32), storage | transfer_dst | transfer_src, g::ComputeMemory::GpuOnly); // bin totals
+    auto d_gb = ctx.create_buffer(static_cast<crd::u64>(nbins) * sizeof(crd::u32), storage | transfer_dst | transfer_src, g::ComputeMemory::GpuOnly); // per-bin global base
+    {
+        auto stg = ctx.create_buffer(static_cast<crd::u64>(n) * sizeof(crd::u32), transfer_src, g::ComputeMemory::CpuToGpu);
+        auto* p  = static_cast<crd::u32*>(stg->map());
+        for (int i = 0; i < n; ++i) { p[i] = keys[static_cast<crd::usize>(i)]; }
+        stg->unmap();
+        auto& rec = ctx.begin();
+        rec.copy(*stg, *d_a, 0U, 0U, static_cast<crd::u64>(n) * sizeof(crd::u32));
+        ctx.submit_and_wait();
+    }
+
+    auto& rec = ctx.begin();
+    g::ComputeBuffer* in = d_a.get(); g::ComputeBuffer* out = d_b.get();
+    for (int p = 0; p < 4; ++p)
+    {
+        g::ComputeBuffer* hb[2] = {in, d_h.get()};
+        rec.dispatch(*ph[p], crd::containers::ConstSpan<g::ComputeBuffer*>(hb, 2), nullptr, 0U, static_cast<crd::u32>(nblocks), 1U, 1U);
+        rec.barrier(*d_h, g::ComputeAccess::ShaderWrite, g::ComputeAccess::ShaderRead);
+        g::ComputeBuffer* o1[3] = {d_h.get(), d_o.get(), d_t.get()}; // parallel offset: local (per-bin prefix + totals)
+        rec.dispatch(*po1, crd::containers::ConstSpan<g::ComputeBuffer*>(o1, 3), nullptr, 0U, static_cast<crd::u32>(nbins), 1U, 1U);
+        rec.barrier(*d_o, g::ComputeAccess::ShaderWrite, g::ComputeAccess::ShaderRead);
+        rec.barrier(*d_t, g::ComputeAccess::ShaderWrite, g::ComputeAccess::ShaderRead);
+        g::ComputeBuffer* o2[2] = {d_t.get(), d_gb.get()}; // gbase: tiny 1-WG scan of the totals
+        rec.dispatch(*po2, crd::containers::ConstSpan<g::ComputeBuffer*>(o2, 2), nullptr, 0U, 1U, 1U, 1U);
+        rec.barrier(*d_gb, g::ComputeAccess::ShaderWrite, g::ComputeAccess::ShaderRead);
+        g::ComputeBuffer* sb[4] = {in, out, d_o.get(), d_gb.get()};
+        rec.dispatch(*ps[p], crd::containers::ConstSpan<g::ComputeBuffer*>(sb, 4), nullptr, 0U, static_cast<crd::u32>(nblocks), 1U, 1U);
+        rec.barrier(*out, g::ComputeAccess::ShaderWrite, g::ComputeAccess::ShaderRead);
+        g::ComputeBuffer* tmp = in; in = out; out = tmp;
+    }
+    ctx.submit_and_wait();
+
+    auto rb = ctx.create_buffer(static_cast<crd::u64>(n) * sizeof(crd::u32), transfer_dst, g::ComputeMemory::GpuToCpu);
+    {
+        auto& r2 = ctx.begin();
+        r2.barrier(*in, g::ComputeAccess::ShaderWrite, g::ComputeAccess::TransferSrc);
+        r2.copy(*in, *rb, 0U, 0U, static_cast<crd::u64>(n) * sizeof(crd::u32));
+        ctx.submit_and_wait();
+    }
+    const auto* o = static_cast<const crd::u32*>(rb->map());
+    int      bad = 0;
+    crd::u32 ix  = 0U;
+    crd::u32 sx  = 0U;
+    for (int i = 0; i < n; ++i) { if (i > 0 && o[i - 1] > o[i]) { ++bad; } ix ^= keys[static_cast<crd::usize>(i)]; sx ^= o[i]; }
+    rb->unmap();
+    CHECK(bad == 0);   // fully sorted
+    CHECK(ix == sx);   // permutation of the input
 }
