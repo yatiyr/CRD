@@ -10,6 +10,7 @@
 #include <crd/kir/ckir_reduce.hpp> // B-cmp: build_reduce (the CKIR device-wide reduction)
 #include <crd/kir/ckir_scan.hpp>   // B-cmp: build_scan (the CKIR device-wide prefix sum)
 #include <crd/kir/ckir_sort.hpp>   // B-cmp: build_sort_* (the CKIR 4-pass radix sort — the DX12 portability gate)
+#include <ckir_subgroup_test.hpp>  // B11: build_subgroup_ops_kernel (the shared wave/subgroup reduce/scan/broadcast/shuffle kernel)
 #include <crd/kir/ckir_mlp.hpp>    // v17 NRC: build_mlp_fwd_fp32 (the portable+bit-exact fused-MLP forward)
 #include <crd/kir/ckir_svgf.hpp>   // B14-c: build_svgf_atrous (the SVGF edge-stopping denoiser)
 #include <crd/kir/ckir_hair.hpp>   // B18-a: build_hair_bcsdf_kernel (the Chiang R/TT/TRT/TRRT hair/fur BCSDF)
@@ -18,6 +19,7 @@
 #include <crd/kir/ckir_hair_scatter.hpp> // B18-c: multiple-scattering tiers (moment LUT, dual scattering, DOM, volumetric MS)
 #include <crd/kir/ckir_hlsl.hpp> // B-cmp: emit_compute_kernel_hlsl (the DX12 kernel emitter)
 #include <crd/kir/ckir_visbuffer.hpp> // B4-vis: build_sw_raster_visbuffer (the compute software rasterizer)
+#include <crd/shadercook/cook.hpp>   // D-007 D2: the offline shader cook — run the cooked DXIL (zero-runtime-compile)
 
 #include <crd/math/cmath.hpp>        // Phase-1 FFT: host-side twiddle table
 #include <ckir_kernel_dispatch.hpp> // B-cmp: the SHARED both-backend kernel dispatch + oracle-compare harness
@@ -1968,4 +1970,232 @@ TEST_CASE("B-cmp: CKIR radix sort DISPATCHES on DX12 == sorted permutation", "[d
     rb->unmap();
     CHECK(bad == 0);   // fully sorted
     CHECK(ix == sx);   // permutation of the input
+}
+
+// D-007 B11: the CKIR WAVE / SUBGROUP ops on DX12 — the SAME kernel as the Vulkan gate, emitted to HLSL (`WaveActiveSum`/
+// `WavePrefixSum`/`WaveReadLaneFirst`/`WaveReadLaneAt`/…) == the CPU oracle bit-exact. HLSL coerces types (masks bugs Vulkan
+// catches), so both backends must run. One 64-thread group = two 32-lane waves (this NVIDIA HW; SM6.0 wave intrinsics).
+TEST_CASE("D-007 B11: CKIR wave/subgroup ops DISPATCH on DX12 == oracle bit-exact", "[dx12][compute][gpu][kernel][subgroup]")
+{
+    namespace kir = crd::kir;
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    g::Dx12ComputeContext      ctx(&alloc);
+    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    using g::compute_usage::storage;
+    using g::compute_usage::transfer_dst;
+    using g::compute_usage::transfer_src;
+    const auto uz = [](int v) { return static_cast<crd::usize>(v); };
+
+    constexpr int t_n = 64;
+    constexpr int no  = crd::gputest::kSubgroupNOut;
+    kir::KGraph       g0(&alloc);
+    const kir::KEntry e = crd::gputest::build_subgroup_ops_kernel(g0, t_n);
+
+    crd::containers::Array<crd::u32> xin(&alloc);   xin.resize(uz(t_n));
+    for (int i = 0; i < t_n; ++i) { xin[uz(i)] = (static_cast<crd::u32>(i) * 2654435761U) & 0xFFU; }
+    crd::containers::Array<crd::f64> xin64(&alloc); xin64.resize(uz(t_n));
+    crd::containers::Array<crd::f64> out64(&alloc); out64.resize(uz(no * t_n), 0.0);
+    for (int i = 0; i < t_n; ++i) { xin64[uz(i)] = static_cast<crd::f64>(xin[uz(i)]); }
+    kir::KernelBuffer bufs[2] = {{xin64.data(), t_n, 0, 0}, {out64.data(), no * t_n, 0, 1}};
+    kir::eval_cpu_kernel(g0, e, bufs, 2, static_cast<crd::u32>(t_n), &alloc, 1U);
+
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_hlsl(g0, e, &alloc, kern));
+    auto pipe = ctx.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), 2, 0U);
+    REQUIRE(pipe != nullptr);
+
+    auto d_in  = ctx.create_buffer(static_cast<crd::u64>(t_n) * 4U, storage | transfer_dst, g::ComputeMemory::GpuOnly);
+    auto d_out = ctx.create_buffer(static_cast<crd::u64>(no * t_n) * 4U, storage | transfer_src, g::ComputeMemory::GpuOnly);
+    {
+        auto  stg = ctx.create_buffer(static_cast<crd::u64>(t_n) * 4U, transfer_src, g::ComputeMemory::CpuToGpu);
+        auto* p   = static_cast<crd::u32*>(stg->map());
+        for (int i = 0; i < t_n; ++i) { p[i] = xin[uz(i)]; }
+        stg->unmap();
+        auto& rc = ctx.begin();
+        rc.copy(*stg, *d_in, 0U, 0U, static_cast<crd::u64>(t_n) * 4U);
+        ctx.submit_and_wait();
+    }
+    auto& rec = ctx.begin();
+    g::ComputeBuffer* binds[2] = {d_in.get(), d_out.get()};
+    rec.dispatch(*pipe, crd::containers::ConstSpan<g::ComputeBuffer*>(binds, 2), nullptr, 0U, 1U, 1U, 1U);
+    rec.barrier(*d_out, g::ComputeAccess::ShaderWrite, g::ComputeAccess::TransferSrc);
+    ctx.submit_and_wait();
+
+    auto rb = ctx.create_buffer(static_cast<crd::u64>(no * t_n) * 4U, transfer_dst, g::ComputeMemory::GpuToCpu);
+    { auto& r2 = ctx.begin(); r2.copy(*d_out, *rb, 0U, 0U, static_cast<crd::u64>(no * t_n) * 4U); ctx.submit_and_wait(); }
+    const auto* out = static_cast<const crd::u32*>(rb->map());
+    int bad = 0;
+    for (int i = 0; i < no * t_n; ++i) { if (out[uz(i)] != static_cast<crd::u32>(static_cast<crd::i64>(out64[uz(i)]))) { ++bad; } }
+    rb->unmap();
+    CHECK(bad == 0); // DX12 HLSL wave ops == CPU oracle, bit-exact (== the Vulkan result)
+}
+
+// D-007 C5: GPU-DRIVEN DISPATCH on DX12 — a compute pass counts the inputs that pass a predicate + writes the next dispatch's
+// thread-group count; `dispatch_indirect` (ExecuteIndirect + a DISPATCH command signature) launches EXACTLY that many groups. ==
+// the Vulkan result: the GPU decides its own workload with no CPU round-trip.
+TEST_CASE("D-007 C5: GPU-driven indirect dispatch on DX12 -- a compute pass decides the next dispatch's size",
+          "[dx12][compute][gpu][indirect]")
+{
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    g::Dx12ComputeContext      ctx(&alloc);
+    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    using g::compute_usage::indirect;
+    using g::compute_usage::storage;
+    using g::compute_usage::transfer_dst;
+    using g::compute_usage::transfer_src;
+    const auto uz = [](int v) { return static_cast<crd::usize>(v); };
+
+    const char* const count_src =
+        "RWByteAddressBuffer vals : register(u0);\n"
+        "RWByteAddressBuffer args : register(u1);\n"
+        "RWByteAddressBuffer cfg  : register(u2);\n"
+        "[numthreads(1,1,1)] void cs_main() {\n"
+        "  uint n = cfg.Load(0); uint c = 0u;\n"
+        "  for (uint i = 0u; i < n; ++i) { if ((vals.Load(i * 4u) & 1u) == 0u) { c += 1u; } }\n"
+        "  args.Store(0, c); args.Store(4, 1u); args.Store(8, 1u); }\n";
+    const char* const work_src =
+        "RWByteAddressBuffer o : register(u0);\n"
+        "[numthreads(1,1,1)] void cs_main(uint3 gid : SV_GroupID) { o.Store(gid.x * 4u, gid.x + 1u); }\n";
+    auto pipe_count = ctx.create_pipeline_from_hlsl(crd::containers::StringView(count_src), 3, 0U);
+    auto pipe_work  = ctx.create_pipeline_from_hlsl(crd::containers::StringView(work_src), 1, 0U);
+    REQUIRE(pipe_count != nullptr);
+    REQUIRE(pipe_work != nullptr);
+
+    constexpr int n_v = 256;
+    int           ref = 0;
+    crd::containers::Array<crd::u32> vals(&alloc); vals.resize(uz(n_v));
+    for (int i = 0; i < n_v; ++i) { const crd::u32 v = (static_cast<crd::u32>(i) * 2654435761U) >> 3U; vals[uz(i)] = v; if ((v & 1U) == 0U) { ++ref; } }
+
+    auto d_in   = ctx.create_buffer(static_cast<crd::u64>(n_v) * 4U, storage | transfer_dst, g::ComputeMemory::GpuOnly);
+    auto d_args = ctx.create_buffer(3U * 4U, storage | indirect | transfer_dst, g::ComputeMemory::GpuOnly);
+    auto d_cfg  = ctx.create_buffer(4U, storage | transfer_dst, g::ComputeMemory::GpuOnly);
+    auto d_out  = ctx.create_buffer(static_cast<crd::u64>(n_v) * 4U, storage | transfer_dst | transfer_src, g::ComputeMemory::GpuOnly);
+    const auto up = [&](g::ComputeBuffer& dst, const void* src, crd::u64 nb) {
+        auto stg = ctx.create_buffer(nb, transfer_src, g::ComputeMemory::CpuToGpu);
+        auto* p = static_cast<crd::u8*>(stg->map()); const auto* s = static_cast<const crd::u8*>(src);
+        for (crd::u64 i = 0; i < nb; ++i) { p[i] = s[i]; } stg->unmap();
+        auto& rc = ctx.begin(); rc.copy(*stg, dst, 0U, 0U, nb); ctx.submit_and_wait();
+    };
+    const crd::u32 cfgv = static_cast<crd::u32>(n_v);
+    const crd::u32 zeros[3] = {0U, 0U, 0U};
+    up(*d_in, vals.data(), static_cast<crd::u64>(n_v) * 4U);
+    up(*d_cfg, &cfgv, 4U);
+    up(*d_args, zeros, 3U * 4U);
+    { crd::containers::Array<crd::u32> z(&alloc); z.resize(uz(n_v), 0U); up(*d_out, z.data(), static_cast<crd::u64>(n_v) * 4U); }
+
+    auto& rec = ctx.begin();
+    g::ComputeBuffer* cb[3] = {d_in.get(), d_args.get(), d_cfg.get()};
+    rec.dispatch(*pipe_count, crd::containers::ConstSpan<g::ComputeBuffer*>(cb, 3), nullptr, 0U, 1U, 1U, 1U);
+    rec.barrier(*d_args, g::ComputeAccess::ShaderWrite, g::ComputeAccess::IndirectRead);
+    g::ComputeBuffer* wb[1] = {d_out.get()};
+    rec.dispatch_indirect(*pipe_work, crd::containers::ConstSpan<g::ComputeBuffer*>(wb, 1), nullptr, 0U, *d_args, 0U);
+    rec.barrier(*d_out, g::ComputeAccess::ShaderWrite, g::ComputeAccess::TransferSrc);
+    ctx.submit_and_wait();
+
+    auto rb = ctx.create_buffer(static_cast<crd::u64>(n_v) * 4U, transfer_dst, g::ComputeMemory::GpuToCpu);
+    { auto& r2 = ctx.begin(); r2.copy(*d_out, *rb, 0U, 0U, static_cast<crd::u64>(n_v) * 4U); ctx.submit_and_wait(); }
+    const auto* out = static_cast<const crd::u32*>(rb->map());
+    int written = 0;
+    for (int i = 0; i < n_v; ++i) { if (out[uz(i)] != 0U) { ++written; } }
+    rb->unmap();
+    std::printf("[c5-indirect] DX12: GPU counted %d even inputs -> ExecuteIndirect launched %d groups (CPU ref = %d)\n", written, written, ref);
+    CHECK(written == ref);
+}
+
+// D-007 D2 (ADR-0104): run the COOKED DXIL. The offline cook packs a `.crdr` bundle; here the DX12 backend loads the DXIL blob
+// straight from that bundle (create_pipeline_from_dxil — zero runtime dxc) and runs it. Proves the OTHER production backend's
+// cooked bytecode executes correctly, closing "both shipping backends run their cooked bytecode" for the reverse kernel.
+TEST_CASE("D-007 D2: DX12 runs the COOKED DXIL from a .crdr bundle (zero runtime compile)", "[gpu-context][dx12][gpu][cook]")
+{
+    namespace kir = crd::kir;
+    namespace sc  = crd::shadercook;
+    crd::memory::TlsfAllocator alloc(64U << 20U);
+    g::Dx12ComputeContext      ctx(&alloc);
+    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+
+    constexpr int ls = 32;
+    kir::KGraph       g(&alloc);
+    const kir::KEntry e = crd::kir_test::build_reverse_kernel(g, ls);
+
+    // Cook DXIL (+ SPIR-V, so the same bundle serves both backends).
+    sc::CookOptions opts;
+    opts.backends = sc::CookBackend::SpirV | sc::CookBackend::Dxil;
+    sc::CookResult ck = sc::cook_compute_shader(g, e, crd::containers::StringView("reverse"), opts, &alloc);
+    REQUIRE(ck.ok);
+    REQUIRE(ck.dxil_bytes > 0U);
+
+    sc::ShaderBundle bundle(&alloc);
+    REQUIRE(sc::read_shader_bundle(crd::containers::as_const_span(ck.crdr), bundle));
+    const auto dxil = bundle.bytecode(sc::CookBackend::Dxil);
+    REQUIRE(!dxil.empty());
+
+    // Load the COOKED DXIL directly — no HLSL, no dxc at runtime.
+    auto pipe = ctx.create_pipeline_from_dxil(dxil, 2, 0U);
+    REQUIRE(pipe != nullptr);
+
+    float in_h[ls];
+    float out_h[ls];
+    for (int i = 0; i < ls; ++i) { in_h[i] = static_cast<float>(i) + 0.5F; out_h[i] = 0.0F; }
+    float*    host[2] = {in_h, out_h};
+    const int lens[2] = {ls, ls};
+    crd::kir_test::dispatch_kernel_1wg(ctx, *pipe, host, lens, 2, 1U);
+    int mism = 0;
+    for (int i = 0; i < ls; ++i) { if (out_h[i] != in_h[ls - 1 - i]) { ++mism; } }
+    std::printf("[cook] DX12 ran COOKED DXIL (%u B) from the .crdr bundle: %d/%d reversed\n", ck.dxil_bytes, ls - mism, ls);
+    CHECK(mism == 0);
+}
+
+// D-007 D4 (ADR-0104): DX12 PERSISTENT PIPELINE LIBRARY (the PSO cache — the D3D12 analog of VkPipelineCache). Cook DXIL, create
+// the PSO (the library stores it by a hash-name), serialize the library, and warm-start a FRESH context from that blob so it
+// reuses the cached PSO. Runs the cooked DXIL both times to prove correctness end-to-end.
+TEST_CASE("D-007 D4: DX12 persistent pipeline library (PSO cache) warm restart", "[gpu-context][dx12][gpu][d4]")
+{
+    namespace kir = crd::kir;
+    namespace sc  = crd::shadercook;
+    crd::memory::TlsfAllocator alloc(64U << 20U);
+    g::Dx12ComputeContext      ctx(&alloc);
+    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+
+    constexpr int     ls = 32;
+    kir::KGraph       gg(&alloc);
+    const kir::KEntry e = crd::kir_test::build_reverse_kernel(gg, ls);
+    sc::CookOptions   opts;
+    opts.backends     = static_cast<crd::u32>(sc::CookBackend::Dxil);
+    sc::CookResult ck = sc::cook_compute_shader(gg, e, crd::containers::StringView("reverse"), opts, &alloc);
+    REQUIRE(ck.ok);
+    REQUIRE(ck.dxil_bytes > 0U);
+    sc::ShaderBundle b(&alloc);
+    REQUIRE(sc::read_shader_bundle(crd::containers::as_const_span(ck.crdr), b));
+    const auto dxil = b.bytecode(sc::CookBackend::Dxil);
+    REQUIRE(!dxil.empty());
+
+    const auto run = [&](g::Dx12ComputeContext& c, crd::gpu::ComputePipeline& pipe) {
+        float in_h[ls];
+        float out_h[ls];
+        for (int i = 0; i < ls; ++i) { in_h[i] = static_cast<float>(i) + 0.5F; out_h[i] = 0.0F; }
+        float*    host[2] = {in_h, out_h};
+        const int lens[2] = {ls, ls};
+        crd::kir_test::dispatch_kernel_1wg(c, pipe, host, lens, 2, 1U);
+        int bad = 0;
+        for (int i = 0; i < ls; ++i) { if (out_h[i] != in_h[ls - 1 - i]) { ++bad; } }
+        return bad;
+    };
+
+    // create the PSO — the pipeline library stores it by its DXIL-hash name.
+    auto pipe = ctx.create_pipeline_from_dxil(dxil, 2, 0U);
+    REQUIRE(pipe != nullptr);
+    CHECK(run(ctx, *pipe) == 0);
+
+    // serialize the library (the PSO cache) and warm-start a FRESH context from the blob.
+    crd::containers::Array<crd::u8> blob(&alloc);
+    ctx.pipeline_cache_data(blob);
+    CHECK(blob.size() > 0U); // a PSO was stored ⇒ the serialized library is non-empty
+    g::Dx12ComputeContext ctx2(&alloc);
+    REQUIRE(ctx2.valid());
+    REQUIRE(ctx2.warm_pipeline_cache(crd::containers::as_const_span(blob)));
+    auto pipe2 = ctx2.create_pipeline_from_dxil(dxil, 2, 0U); // LoadComputePipeline hits the warmed library
+    REQUIRE(pipe2 != nullptr);
+    CHECK(run(ctx2, *pipe2) == 0);
+    std::printf("[d4] DX12 pipeline library persisted %zu B; a fresh context warm-started from it and ran the cooked DXIL 32/32\n",
+                static_cast<size_t>(blob.size()));
 }

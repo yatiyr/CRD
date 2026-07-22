@@ -1,5 +1,6 @@
 add_executable(crd-math-tests
     test_math.cpp
+    test_select.cpp
     test_simd.cpp
     test_soa.cpp
     test_deterministic.cpp

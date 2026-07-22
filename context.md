@@ -492,8 +492,78 @@
 > a 16×16 layer from W=0 → **loss 0.261→0.00004 (100% down)** — it LEARNS. ⛔ scar: lr=0.8→nan (fp16 overflow); nan-loss +
 > passing-gradient = optimizer not gradient. **B10 is GPU-complete on Vulkan** (inference + 12.46× perf + 38.9dB material + training).
 > REMAINING (documented, not gaps): inferencing-optimal layout perf lever · multi-layer on-device backprop · DX12 (env-blocked).
-> **▶ NEXT (on user command): return to the D-007 main line — B11 wave/work-graph · C5 GPU-driven dispatch · D1–D5 deploy · OFF-*
-> offline path tracer. (B4/B-cmp/B16/C6/B10 all closed this run.)**
+> **[✅ B11 SUBGROUP OP CLASS 2026-07-22 — bit-exact both backends]:** the full wave op class in CKIR (append at END of `KOp`):
+> reduce `SubgroupAdd/Min/Max/And/Or/Xor` · scan `SubgroupInclusive/ExclusiveAdd` · `SubgroupBroadcastFirst`/`SubgroupShuffle`.
+> Wired GLSL (`subgroup*` + arithmetic/shuffle exts, all 3 emit paths) + HLSL (`WaveActive*`/`WavePrefixSum`/`WaveReadLane*`) +
+> CPU oracle (32-lane sim; integer reductions bit-exact via f64+round_dtype wrap). `[subgroup]` gate: 64-thread wg (2×32-lane) ==
+> oracle **BIT-EXACT Vulkan (0/448) AND DX12**. Full kir regression green (52400/229). The perf primitive for workgroup
+> reductions/scans (no shared-mem barriers). Session `docs/sessions/2026-07-22-b11-subgroup-ops.md`. REMAINING B11: quad ops (SM6.6)
+> · work-graph node shaders (⏭ env-blocked — no `VK_AMDX_shader_enqueue` on NVIDIA Vulkan / no Agility SDK).
+> **[✅ B11 QUAD OPS + C5 GPU-DRIVEN DISPATCH 2026-07-22 — both bit-exact/verified both backends]:** B11 quad ops (`QuadBroadcast`/
+> `QuadSwapX/Y/Diagonal` — GLSL `subgroupQuad*` + HLSL `QuadRead*` + oracle) → `[subgroup]` now 11 ops, **0/704 Vulkan+DX12**, kir
+> regression green (52400/229); B11 FUNCTIONALLY COMPLETE (only env-blocked work-graph node shaders remain). C5 (row 32):
+> `ComputeRecorder::dispatch_indirect` — Vulkan `vkCmdDispatchIndirect` + DX12 `ExecuteIndirect` (DISPATCH command signature) +
+> `ComputeAccess::IndirectRead`; `[indirect]` gate: a compute pass counts even inputs (128/256) → indirect dispatch launches
+> exactly 128 groups == CPU ref, **both backends**. C5 frontier tier (multi-token NV DGC) documented; work graphs env-blocked.
+> Sessions `docs/sessions/2026-07-22-{b11-subgroup-ops,c5-gpu-driven-dispatch}.md`.
+> **[✅ C5 DEVICE-GENERATED COMMANDS 2026-07-22 — the full multi-token DGC, C5 now fully closed]:** `VK_NV_device_generated_commands`
+> (+`_compute`) enabled (gated; BDA shared with the RT chain; `device_generated_commands()`). Two `[dgc]` raw-Vulkan gates: (1)
+> `[PUSH_CONSTANT,DISPATCH]` tokens → a stream where each of 4 sequences has its OWN push constant + dispatch, one execute call (4/4);
+> (2) `[PIPELINE,PUSH_CONSTANT,DISPATCH]` + indirect-bindable pipelines (`VK_PIPELINE_CREATE_2_INDIRECT_BINDABLE_BIT_NV` + metadata
+> buffer → device address) → the GPU-authored stream **switches PIPELINE per sequence** (4/4). The GPU authors its own command buffer
+> (Nanite-class). No regression (1418/44). **C5 fully closed** (dispatch_indirect + DGC; only work graphs env-blocked). Session
+> `docs/sessions/2026-07-22-c5-gpu-driven-dispatch.md`.
+> **[✅ D1 IR-AS-CRDR 2026-07-22]:** serialize/deserialize KGraph + IR-reflection, byte-identical re-emit both backends (ADR-0104).
+> **[✅ D2 COOK 2026-07-22 — the cook ships bytecode; both production backends RUN it zero-runtime-compile]:** new module
+> `engine/shader-cook/` (`crd-shader-cook` lib + `shader_cook` CLI). `cook_compute_shader` → a `.crdr` CRDR bundle (ADR-0038):
+> serialized IR + IR-reflection + per-backend blobs (**SPIR-V** shaderc + **DXIL** dxc + **real PTX** CUDA→NVRTC = 3 REAL bytecode;
+> **MSL/WGSL** source) + content-hash cache. Added `Dx12ComputeContext::create_pipeline_from_dxil` (the zero-runtime-compile load primitive,
+> mirrors from_spirv). `[cook]`: cooked SPIR-V byte-identical to runtime + **runs 32/32 on Vulkan**; cooked DXIL **runs 32/32 on
+> DX12**; cache byte-identical; CLI `.kgph`→`.crdr`. Real PTX via NVRTC (guarded); fixed a latent kir `-Wswitch` gap. Session
+> `docs/sessions/2026-07-22-d2-shader-cook.md`.
+> **[✅ D3 VARIANTS 2026-07-22 — the permutation matrix cooks on-demand with content-hash dedup]:** `engine/shader-cook/variant.{hpp,cpp}`.
+> `cook_variant_matrix(build_fn, keys[], opts)`: per-key builder (emits the live path) → content-hash each specialized IR → **DEDUP**
+> identical hashes (cooked once via the cook's cache) → manifest (key→hash) + telemetry (requested vs unique). `cook_one_variant` =
+> on-demand single. `[variant]`: 4 keys → `requested=4 unique=2` (50% reduction), dedup proven, each variant's cooked SPIR-V runs
+> GPU-correct. 271/13 smoke green, tidy-clean. Session `docs/sessions/2026-07-22-d3-variants.md`.
+> **[✅ D4 RUNTIME LOAD + PIPELINE CACHE 2026-07-22 — zero-compile load + persistent driver cache, BOTH backends warm-restart]:**
+> (1) read a cooked `.crdr` from disk → dispatchable pipeline from the cooked bytecode + IR-reflection, NO shaderc/dxc (Vulkan
+> `create_pipeline_from_spirv`, DX12 `create_pipeline_from_dxil`). (2) Vulkan `VkPipelineCache` (111 KB, warm restart) + DX12
+> `ID3D12PipelineLibrary` (1824 B, warm restart) — `pipeline_cache_data`/`warm_pipeline_cache` on both contexts. `[d4]`: Vulkan
+> 15/1, DX12 11/1; no regression (DX12 full 968/104). Session `docs/sessions/2026-07-22-d4-runtime-load-pipeline-cache.md`.
+> **[✅ D5 HOT-RELOAD 2026-07-22 — the D1–D5 deploy chain is CLOSED]:** `engine/shader-cook/reload.{hpp,cpp}`. `ReloadableCompute::reload`
+> recooks + content-hashes the IR → unchanged=no-op, changed=build new pipeline from cooked bytecode + reflection + **atomic swap**
+> (old retired one generation; backend-agnostic create-callback). `[d5]`: edit kernel ×1→×2 hot-swaps the live pipeline in the SAME
+> context (gen1→no-op→gen2), no restart. 76/4 smoke green. Session `docs/sessions/2026-07-22-d5-hot-reload.md`.
+> **[also this run]** 9 native `crd::math` cmath gap-fills (signbit/fmax/fmin/fdim/rint/nearbyint/modf/frexp/**remainder** — bit-exact
+> vs std, `tests/math/test_select.cpp` 3380 assertions); real PTX via NVRTC in the cook.
+> **[✅ D6–D12 SHADER-SYSTEM POLISH BAND 2026-07-22 — detour slices 37–45 ✅, the deploy chain hardened to gold]:** **D6** joint
+> VS+FS specialize (fold once over both entries' roots — no sibling-entry stale) · **D7** entry-scoped `reflect()` (a shared VS+FS
+> graph reflects each stage's own interface: 3 vtx attrs + 0 FS bindings; `.crdr` carries `REFL`(fs)+`REFV`(vs input layout)) ·
+> **D8** multi-variant container (`cook_variant_container`: one `.crdr` = `VART` key→unique-idx table + `VB00/01…`; `bytecode(key)`
+> touches only the asked blob; 4→2, load-by-key GPU-correct) · **D9** neural completeness (LEARNED normal [5..7], out_dim=8; on-device
+> coopvec Adam MSE 0.27→5e-6, 53.2 dB) · **D10** parallel cook (`cook_variant_matrix_parallel` on `crd-jobs` fibers, byte-identical to
+> serial; ⛔⛔ shaderc compiler is thread-HOSTILE → `thread_local` compiler + the cook overflows the 64 KB Small fiber → `StackSize::Large`)
+> · **D11** async pipeline warmup (`AsyncPipelineWarmer`: `submit()` non-blocking, pipelines built off the render thread on `crd-jobs`,
+> `wait()` joins, `pipeline_for_key`) · **D12** spec constants (`KGraph::spec_constant` = a `Const` tagged `kSpecConstFlag`; GLSL
+> emitters lower to `layout(constant_id=N)`, `optimize()` never folds it, CSE never fuses it — ZERO new-KOp surface;
+> `create_pipeline_from_spirv(...,specs)` binds via `VkSpecializationInfo` → ONE 756 B bundle serves scale 2.0/3.5/0.25/default, zero
+> recook). Reused the fiber `crd-jobs` scheduler (no bespoke pool, per user direction). Gates GREEN: **kir 52420/230 · vulkan D-band
+> 1072/1072 · dx12 968/104 · tidy-clean (LLVM 20.1.8)**. Sessions `docs/sessions/2026-07-22-d6-d12-shader-polish.md`.
+> **[✅ AS band 1-3 — the AUTO-SCHEDULER / AUTOTUNER (ADR-0098 §4, detour rows 55-60), user-directed 2026-07-22]:** the last gap to
+> world-class (Slang/Triton/IREE-class codegen) — vendor-beating perf as a COMPILER PROPERTY, not a hand-tuned table. **AS-1** (`ckir_autotune.hpp`):
+> `enumerate_contract_schedules` = the valid `TileSchedule` space (every CUTLASS block→warp→thread relationship + smem/reg/occupancy
+> guards; 1516 for 1024³) + `KirBackendCuda::time_contract_schedule` (GPU-event-timed, schedule-injectable). The search is
+> **DETERMINISM-GATED** (each candidate certified vs the CPU oracle — wrong can't win) + **seeded** (§4). AS-1b: 21 candidates → 4493
+> GFLOP/s, 5.1× naive, deterministic. **AS-2**: a CHECKED-IN generated DB (`ckir_tuning_db.inc`) `select_schedule` replays (DB→heuristic→Naive)
+> + the offline **`kir_autotune` CLI** (`tools/kir-autotune`, `autotune_contract`) regenerates it from GPU measurements (512/1024/2048³ →
+> 128×128×8, up to 9886 GFLOP/s, 8.4× naive). **AS-3**: `predict_contract_ms` roofline×occupancy cost model — ⛔ MUST include the
+> register-file limiter ([[feedback_gpu_cost_model_must_include_register_occupancy]]) — top-6 of 1516 BEATS the hand optimum (0.957×), 253× fewer
+> compiles. Gates GREEN: kir [autotune] + CUDA 81377/15, tidy-clean. **▶ AS-4 (broaden ops + beat cuBLAS/cuFFT/cuDNN boards) · AS-5
+> (e-graph superopt) · AS-6 (cross-backend/device) NEXT; then generics/modules; node editor after crd-hesap.**
+> **▶ ALSO PENDING: OFF-* offline path tracer (detour rows 46-54). CKIR = a FULL shipping pipeline (IR-as-crdr → cook → variants →
+> zero-compile load + pipeline cache → hot-reload → parallel cook + async warmup + spec constants → auto-scheduler). Closed this arc:
+> B4·B-cmp·B16·C6·B10·B11·C5·D1–D12 + native math + real PTX + AS-1/2/3.)**
 > **[✅ B18-f FULLY CLOSED 2026-07-21]:** path-traced hair renderer + real-time levers + recipes (`docs/recipes/` —
 > new folder + AGENTS.md standing rule: study something → write a recipe). Tidy-clean at the gate, all touched gates
 > green. Perf board `docs/bench/2026-07-20-hair-rt-swatch-perf.md` (194 ms/sample offline; 29 ms/frame real-time).

@@ -13,6 +13,7 @@
 #include <crd/kir/ckir_hlsl.hpp>
 #include <crd/kir/ckir_msl.hpp>
 #include <crd/kir/ckir_ocean.hpp> // B16-a: the FFT-ocean kernels — cross-backend emit gate
+#include <crd/kir/ckir_serialize.hpp> // D1: serialize_graph/deserialize_graph + reflect (IR-as-crdr)
 #include <crd/kir/ckir_visbuffer.hpp> // B4-vis: the software-rasterizer kernel — cross-backend emit gate
 #include <crd/kir/ckir_wgsl.hpp>
 
@@ -447,4 +448,80 @@ TEST_CASE("B-cmp profile: emit the FFT kernels as CUDA for the ncu harness", "[.
         REQUIRE(kir::emit_compute_kernel_cuda(g, e, &alloc, k));
         dump("D:/Dev/cerid/bench/gpu-fft/generated/transpose1024_t32.cu", k);
     }
+}
+
+// D-007 D1: IR-AS-CRDR — serialize a KGraph+KEntry to a versioned blob, deserialize into a FRESH graph, and prove the re-emitted
+// backend source is BIT-IDENTICAL (GLSL + HLSL) — the round-trip that makes a shader a loadable resource (ADR-0101). Plus the
+// IR-derived reflection (descriptor bindings + workgroup size) and the version/layout guards.
+TEST_CASE("D-007 D1: IR-as-crdr round-trips (serialize->deserialize == byte-identical re-emit, both backends) + reflection",
+          "[kir][serialize][d1]")
+{
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+
+    // a representative compute kernel: out[tid] = subgroupAdd(in[tid]) + tid — has bindings, a builtin, a wave op, and a store.
+    kir::KGraph g(&alloc);
+    const int   in   = g.buffer_decl(kir::DType::U32, 0, 0, false);
+    const int   out  = g.buffer_decl(kir::DType::U32, 0, 1, true);
+    const int   mark = g.kernel_stmt_mark();
+    const int   tid  = g.builtin(kir::KBuiltin::LocalInvocationIndex);
+    const int   x    = g.buffer_load(in, tid);
+    g.stmt_materialize(x);
+    const int s = g.subgroup_add(x);
+    g.stmt_materialize(s);
+    const int r = g.binary(kir::KOp::Add, s, tid);
+    g.stmt_materialize(r);
+    g.stmt_buffer_store(out, tid, r);
+    kir::KEntry e;
+    e.stage             = kir::KStage::Compute;
+    e.local_size[0]     = 64;
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
+
+    kir::GlslKernel g0(&alloc);
+    kir::GlslKernel h0(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, g0));
+    REQUIRE(kir::emit_compute_kernel_hlsl(g, e, &alloc, h0));
+
+    // serialize → deserialize into a FRESH graph
+    auto        blob = kir::serialize_graph(g, e, &alloc);
+    kir::KGraph g2(&alloc);
+    kir::KEntry e2;
+    REQUIRE(kir::deserialize_graph(crd::containers::ConstSpan<crd::u8>(blob.data(), blob.size()), g2, e2));
+
+    // structural round-trip
+    CHECK(g2.size() == g.size());
+    CHECK(e2.stage == e.stage);
+    CHECK(e2.local_size[0] == 64U);
+    CHECK(e2.kernel_body_count == e.kernel_body_count);
+
+    // re-emit from the DESERIALIZED graph → BIT-IDENTICAL backend source (the load-bearing D1 proof)
+    kir::GlslKernel g1(&alloc);
+    kir::GlslKernel h1(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(g2, e2, &alloc, g1));
+    REQUIRE(kir::emit_compute_kernel_hlsl(g2, e2, &alloc, h1));
+    CHECK(std::strcmp(g0.source.c_str(), g1.source.c_str()) == 0); // GLSL byte-identical
+    CHECK(std::strcmp(h0.source.c_str(), h1.source.c_str()) == 0); // HLSL byte-identical
+
+    // reflection from the IR: two storage-buffer bindings (set 0, binding 0 read-only, binding 1 writable) + workgroup size
+    const kir::ShaderReflection refl = kir::reflect(g, e);
+    CHECK(refl.is_kernel());
+    CHECK(refl.local_size[0] == 64U);
+    CHECK(refl.n_bindings == 2);
+    bool b1_writable = false;
+    bool b0_present  = false;
+    for (int i = 0; i < refl.n_bindings; ++i)
+    {
+        if (refl.bindings[i].set == 0U && refl.bindings[i].binding == 0U) { b0_present = true; }
+        if (refl.bindings[i].binding == 1U) { b1_writable = refl.bindings[i].writable; }
+        CHECK(refl.bindings[i].kind == kir::BindKind::StorageBuffer);
+    }
+    CHECK(b0_present);
+    CHECK(b1_writable);
+
+    // guards: junk / truncated / wrong-magic blobs are cleanly REJECTED (never mis-read)
+    kir::KGraph  gb(&alloc);
+    kir::KEntry  eb;
+    const crd::u8 junk[8] = {1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U};
+    CHECK_FALSE(kir::deserialize_graph(crd::containers::ConstSpan<crd::u8>(junk, 8U), gb, eb));
+    CHECK_FALSE(kir::deserialize_graph(crd::containers::ConstSpan<crd::u8>(blob.data(), 6U), gb, eb)); // truncated header
 }

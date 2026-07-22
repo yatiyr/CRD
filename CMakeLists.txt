@@ -579,6 +579,7 @@ add_subdirectory(engine/kir-dx12)  # v17-d; CKIR DirectX 12 backend (KirBackend 
 add_subdirectory(engine/kir-webgpu)  # v17-d; CKIR WebGPU backend (KirBackend over wgpu-native); browser/everywhere; guarded on the prebuilt; ADR-0098
 add_subdirectory(engine/kir-hip)  # v17-d; CKIR HIP/ROCm backend (KirBackend over HIP + hiprtc); guarded on the HIP SDK; validated at Part C; ADR-0098
 add_subdirectory(engine/kir-metal)  # v17-d; CKIR Metal backend (KirBackend over Apple Metal, Objective-C++); APPLE-only; validated at Part C; ADR-0098
+add_subdirectory(engine/shader-cook)  # D-007 D2; OFFLINE shader cook — CKIR graph -> .crdr bundle (IR + reflection + per-backend blobs); ADR-0104
 add_subdirectory(engine/hesap-opt)  # v7; OPTIMISATION (unconstrained + constrained) over Objective<T>; ADR-0090 (now consumes hesap-autodiff)
 add_subdirectory(engine/hesap-stats)  # v12 cluster (created early as a v12-pull: Philox counter-RNG for v7-i)
 add_subdirectory(engine/hesap-ode)  # v9; ODE/DAE — stepper kernel headers + driver substrate; ADR-0091
@@ -606,6 +607,8 @@ add_subdirectory(engine/geometry-viz)
 # ----- Tools ----------------------------------------------------------------
 
 add_subdirectory(tools/asset_cooker)
+add_subdirectory(tools/shader-cook)  # D-007 D2: the offline shader-cook CLI (.kgph -> .crdr); ADR-0104
+add_subdirectory(tools/kir-autotune) # ADR-0098 §4 AS-2b: the offline auto-scheduler CLI (GEMM schedule search -> tuning DB)
 
 # Optional 'cook' target: cmake --build --preset win-debug --target cook
 # Requires CRD_COOK_ROOT and CRD_COOK_OUT to be set (e.g. via -D flags).

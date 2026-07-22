@@ -18,6 +18,7 @@ target_link_libraries(crd-gpu-context-dx12-tests PRIVATE
     crd-kir
     crd-gpu-context
     crd-gpu-context-dx12
+    crd-shader-cook          # D-007 D2: the offline cook (CKIR graph -> .crdr bundle) — the DXIL run-the-cooked-bytecode gate
     Catch2::Catch2WithMain
 )
 

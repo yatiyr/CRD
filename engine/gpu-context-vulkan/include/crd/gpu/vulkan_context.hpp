@@ -49,6 +49,9 @@ public:
     [[nodiscard]] virtual bool             cooperative_vector_training() const noexcept = 0;
     [[nodiscard]] virtual crd::u32         coopvec_max_components() const noexcept = 0;
     [[nodiscard]] virtual crd::u32         coopvec_supported_stages() const noexcept = 0;
+    // C5: VK_NV_device_generated_commands (+ _compute) — the GPU authors a stream of varied compute commands (pipeline switch +
+    // per-sequence push constants + dispatch), executed via `vkCmdExecuteGeneratedCommandsNV`. False when the extension is absent.
+    [[nodiscard]] virtual bool             device_generated_commands() const noexcept = 0;
     [[nodiscard]] virtual bool             shader_int64() const noexcept        = 0; // shaderInt64 enabled (geometry 60-bit)?
 
     // D-008 C1: the converged device is graphics-capable too (ADR-0099 "one device, both concerns"). A GRAPHICS queue +

@@ -83,6 +83,9 @@ inline void app_int_const(crd::containers::String& s, crd::f64 v, DType dt) { ap
     case KOp::BitNot: case KOp::BitCount: case KOp::FindLSB: case KOp::FindMSB: case KOp::BitfieldExtract:
     case KOp::BitReverse: case KOp::Ldexp: case KOp::FloatBitsToInt: case KOp::IntBitsToFloat:
     case KOp::SubgroupBallot: case KOp::SubgroupBallotExclCount: case KOp::SubgroupMatch:
+    case KOp::SubgroupAdd: case KOp::SubgroupMin: case KOp::SubgroupMax: case KOp::SubgroupAnd: case KOp::SubgroupOr: case KOp::SubgroupXor:
+    case KOp::SubgroupInclusiveAdd: case KOp::SubgroupExclusiveAdd: case KOp::SubgroupBroadcastFirst: case KOp::SubgroupShuffle:
+    case KOp::QuadBroadcast: case KOp::QuadSwapX: case KOp::QuadSwapY: case KOp::QuadSwapDiagonal:
     case KOp::Select: return true;
     default: return false;
     }
@@ -406,7 +409,8 @@ inline bool emit_value_stmt(const KGraph& g, int i, crd::containers::String& s, 
     switch (nd.op)
     {
     // Int/uint constants MUST emit an integer literal — type-strict GLSL rejects `int t = 0.0` (HLSL would coerce it).
-    case KOp::Const: if (dt_is_int(nd.dtype()) || dt_is_uint(nd.dtype())) { app_int_const(s, nd.cval, nd.dtype()); } else { app_flit(s, nd.cval); } break;
+    // D12: a spec constant references its module-scope `layout(constant_id=N)` name (declared in the stage prologue).
+    case KOp::Const: if (is_spec_const(nd)) { s.append("_spec"); app_uint(s, static_cast<int>(spec_const_id(nd))); } else if (dt_is_int(nd.dtype()) || dt_is_uint(nd.dtype())) { app_int_const(s, nd.cval, nd.dtype()); } else { app_flit(s, nd.cval); } break;
     case KOp::Cast: s.append(vtype(nd.type)); s.append("("); ta(nd.a); s.append(")"); break;
     case KOp::Neg: s.append("-"); ta(nd.a); break;
     case KOp::Recip: s.append("(1.0 / "); ta(nd.a); s.append(")"); break;
@@ -549,6 +553,21 @@ inline bool emit_value_stmt(const KGraph& g, int i, crd::containers::String& s, 
     case KOp::FindMSB: s.append("findMSB("); ta(nd.a); s.append(")"); break;
     case KOp::SubgroupBallot: s.append("subgroupBallot("); ta(nd.a); s.append(" != 0u).x"); break;
     case KOp::SubgroupBallotExclCount: s.append("subgroupBallotExclusiveBitCount(uvec4("); ta(nd.a); s.append(", 0u, 0u, 0u))"); break;
+    case KOp::SubgroupMatch: s.append("subgroupPartitionNV("); ta(nd.a); s.append(").x"); break;
+    case KOp::SubgroupAdd: s.append("subgroupAdd("); ta(nd.a); s.append(")"); break;
+    case KOp::SubgroupMin: s.append("subgroupMin("); ta(nd.a); s.append(")"); break;
+    case KOp::SubgroupMax: s.append("subgroupMax("); ta(nd.a); s.append(")"); break;
+    case KOp::SubgroupAnd: s.append("subgroupAnd("); ta(nd.a); s.append(")"); break;
+    case KOp::SubgroupOr: s.append("subgroupOr("); ta(nd.a); s.append(")"); break;
+    case KOp::SubgroupXor: s.append("subgroupXor("); ta(nd.a); s.append(")"); break;
+    case KOp::SubgroupInclusiveAdd: s.append("subgroupInclusiveAdd("); ta(nd.a); s.append(")"); break;
+    case KOp::SubgroupExclusiveAdd: s.append("subgroupExclusiveAdd("); ta(nd.a); s.append(")"); break;
+    case KOp::SubgroupBroadcastFirst: s.append("subgroupBroadcastFirst("); ta(nd.a); s.append(")"); break;
+    case KOp::SubgroupShuffle: s.append("subgroupShuffle("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+    case KOp::QuadBroadcast: s.append("subgroupQuadBroadcast("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+    case KOp::QuadSwapX: s.append("subgroupQuadSwapHorizontal("); ta(nd.a); s.append(")"); break;
+    case KOp::QuadSwapY: s.append("subgroupQuadSwapVertical("); ta(nd.a); s.append(")"); break;
+    case KOp::QuadSwapDiagonal: s.append("subgroupQuadSwapDiagonal("); ta(nd.a); s.append(")"); break;
     default: return false;
     }
     s.append(";\n");
@@ -619,20 +638,39 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
     s.append(uses_rayquery ? "#version 460\n" : "#version 450\n"); // GL_EXT_ray_query's rayQueryEXT type requires #version 460
     s.append("#extension GL_KHR_shader_subgroup_basic : require\n");  // B-cmp: subgroup (wave) ops — the cheap deterministic
     s.append("#extension GL_KHR_shader_subgroup_ballot : require\n"); // radix rank; bit-exact under a forced 32-lane subgroup
+    s.append("#extension GL_KHR_shader_subgroup_arithmetic : require\n"); // B11: subgroupAdd/Min/Max/And/Or/Xor + inclusive/exclusive scan
+    s.append("#extension GL_KHR_shader_subgroup_shuffle : require\n"); // B11: subgroupShuffle (broadcastFirst is in _ballot)
+    s.append("#extension GL_KHR_shader_subgroup_quad : require\n"); // B11: subgroupQuadBroadcast / subgroupQuadSwap{Horizontal,Vertical,Diagonal}
     s.append("#extension GL_NV_shader_subgroup_partitioned : enable\n"); // hardware match_any (SubgroupMatch); SPIR-V cap emitted only when used
     if (uses_rayquery) { s.append("#extension GL_EXT_ray_query : require\n"); }
     s.append("layout(local_size_x = "); app_uint(s, entry.local_size[0]);
     s.append(", local_size_y = ");      app_uint(s, entry.local_size[1]);
     s.append(", local_size_z = ");      app_uint(s, entry.local_size[2]); s.append(") in;\n");
+    bool spec_declared[256] = {}; // D12: dedup spec-constant declarations by constant_id (one `layout(constant_id=N)` per id)
     for (int i = 0; i < n; ++i) // resource decls: storage buffers + workgroup shared arrays + acceleration structures
     {
         const KNode& nd = g.node(i);
-        if (nd.op == KOp::BufferDecl)
+        if (nd.op == KOp::BufferDecl && !is_spec_const(nd))
         {
             s.append("layout(std430, binding = "); app_uint(s, nd.iidx); s.append(") ");
             if ((nd.axes & 2U) != 0U) { s.append("coherent volatile "); } // cross-workgroup visible (spin-wait publish/read)
             s.append(nd.axes != 0U ? "" : "readonly "); s.append("buffer B"); app_uint(s, nd.iidx);
             s.append(" { "); s.append(buf_ctype(nd.dtype())); s.append(" buf"); app_uint(s, nd.iidx); s.append("[]; };\n");
+        }
+        else if (is_spec_const(nd)) // D12: a specialization constant — pipeline-time-overridable module-scope scalar const
+        {
+            const crd::u32 id = spec_const_id(nd);
+            if (id < 256U && !spec_declared[id])
+            {
+                spec_declared[id] = true;
+                s.append("layout(constant_id = "); app_uint(s, static_cast<int>(id)); s.append(") const ");
+                s.append(nd.dtype() == DType::Bool ? "bool" : (dt_is_uint(nd.dtype()) ? "uint" : (dt_is_int(nd.dtype()) ? "int" : "float")));
+                s.append(" _spec"); app_uint(s, static_cast<int>(id)); s.append(" = ");
+                if (nd.dtype() == DType::Bool) { s.append(nd.cval != 0.0 ? "true" : "false"); }
+                else if (dt_is_uint(nd.dtype()) || dt_is_int(nd.dtype())) { app_int_const(s, nd.cval, nd.dtype()); }
+                else { app_flit(s, nd.cval); }
+                s.append(";\n");
+            }
         }
         else if (nd.op == KOp::SharedDecl)
         {
@@ -682,7 +720,8 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
         switch (nd.op)
         {
         case KOp::Const:
-            if (nd.dtype() == DType::Bool) { s.append(nd.cval != 0.0 ? "true" : "false"); }
+            if (is_spec_const(nd)) { s.append("_spec"); app_uint(s, static_cast<int>(spec_const_id(nd))); } // D12: the pipeline-time spec constant
+            else if (nd.dtype() == DType::Bool) { s.append(nd.cval != 0.0 ? "true" : "false"); }
             // app_int_const uses %lld (full 64-bit) + a `u` suffix for uint — a u32 const > INT_MAX (hash seeds like
             // 2654435761) must NOT go through static_cast<int> (MSVC clamps out-of-range double→int to INT_MIN, mangling it).
             else if (dt_is_uint(nd.dtype()) || dt_is_int(nd.dtype())) { app_int_const(s, nd.cval, nd.dtype()); }
@@ -714,6 +753,20 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::SubgroupBallot: s.append("subgroupBallot("); self(self, nd.a); s.append(" != 0u).x"); break;
         case KOp::SubgroupBallotExclCount: s.append("subgroupBallotExclusiveBitCount(uvec4("); self(self, nd.a); s.append(", 0u, 0u, 0u))"); break;
         case KOp::SubgroupMatch: s.append("subgroupPartitionNV("); self(self, nd.a); s.append(").x"); break;
+        case KOp::SubgroupAdd: s.append("subgroupAdd("); self(self, nd.a); s.append(")"); break;
+        case KOp::SubgroupMin: s.append("subgroupMin("); self(self, nd.a); s.append(")"); break;
+        case KOp::SubgroupMax: s.append("subgroupMax("); self(self, nd.a); s.append(")"); break;
+        case KOp::SubgroupAnd: s.append("subgroupAnd("); self(self, nd.a); s.append(")"); break;
+        case KOp::SubgroupOr: s.append("subgroupOr("); self(self, nd.a); s.append(")"); break;
+        case KOp::SubgroupXor: s.append("subgroupXor("); self(self, nd.a); s.append(")"); break;
+        case KOp::SubgroupInclusiveAdd: s.append("subgroupInclusiveAdd("); self(self, nd.a); s.append(")"); break;
+        case KOp::SubgroupExclusiveAdd: s.append("subgroupExclusiveAdd("); self(self, nd.a); s.append(")"); break;
+        case KOp::SubgroupBroadcastFirst: s.append("subgroupBroadcastFirst("); self(self, nd.a); s.append(")"); break;
+        case KOp::SubgroupShuffle: s.append("subgroupShuffle("); self(self, nd.a); s.append(", "); self(self, nd.b); s.append(")"); break;
+        case KOp::QuadBroadcast: s.append("subgroupQuadBroadcast("); self(self, nd.a); s.append(", "); self(self, nd.b); s.append(")"); break;
+        case KOp::QuadSwapX: s.append("subgroupQuadSwapHorizontal("); self(self, nd.a); s.append(")"); break;
+        case KOp::QuadSwapY: s.append("subgroupQuadSwapVertical("); self(self, nd.a); s.append(")"); break;
+        case KOp::QuadSwapDiagonal: s.append("subgroupQuadSwapDiagonal("); self(self, nd.a); s.append(")"); break;
         default: ok = false; s.append("0"); break; // an arithmetic node reaches pv only via a temp ref above
         }
     };
@@ -784,6 +837,20 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::SubgroupBallot: s.append("subgroupBallot("); pv(pv, nd.a); s.append(" != 0u).x"); break;
         case KOp::SubgroupBallotExclCount: s.append("subgroupBallotExclusiveBitCount(uvec4("); pv(pv, nd.a); s.append(", 0u, 0u, 0u))"); break;
         case KOp::SubgroupMatch: s.append("subgroupPartitionNV("); pv(pv, nd.a); s.append(").x"); break;
+        case KOp::SubgroupAdd: s.append("subgroupAdd("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::SubgroupMin: s.append("subgroupMin("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::SubgroupMax: s.append("subgroupMax("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::SubgroupAnd: s.append("subgroupAnd("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::SubgroupOr: s.append("subgroupOr("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::SubgroupXor: s.append("subgroupXor("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::SubgroupInclusiveAdd: s.append("subgroupInclusiveAdd("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::SubgroupExclusiveAdd: s.append("subgroupExclusiveAdd("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::SubgroupBroadcastFirst: s.append("subgroupBroadcastFirst("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::SubgroupShuffle: s.append("subgroupShuffle("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
+        case KOp::QuadBroadcast: s.append("subgroupQuadBroadcast("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
+        case KOp::QuadSwapX: s.append("subgroupQuadSwapHorizontal("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::QuadSwapY: s.append("subgroupQuadSwapVertical("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::QuadSwapDiagonal: s.append("subgroupQuadSwapDiagonal("); pv(pv, nd.a); s.append(")"); break;
         default: ok = false; s.append("0"); break;
         }
     };
@@ -1223,6 +1290,25 @@ inline bool emit_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory::I
         const int fc = g.struct_field_count(sid);
         for (int f = 0; f < fc; ++f) { s.append("  "); s.append(vtype(g.struct_field(sid, f))); s.append(" f"); app_uint(s, static_cast<crd::u32>(f)); s.append(";\n"); }
         s.append("} ubo_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(";\n");
+    }
+    { // D12: specialization constants — module-scope `layout(constant_id=N) const t _specN = default;` (pipeline-time overridable)
+        bool spec_declared[256] = {};
+        for (int i = 0; i < n; ++i)
+        {
+            if (!reach[static_cast<crd::usize>(i)]) { continue; }
+            const KNode& nd = g.node(i);
+            if (!is_spec_const(nd)) { continue; }
+            const crd::u32 id = spec_const_id(nd);
+            if (id >= 256U || spec_declared[id]) { continue; }
+            spec_declared[id] = true;
+            s.append("layout(constant_id = "); app_uint(s, static_cast<crd::u32>(id)); s.append(") const ");
+            s.append(nd.dtype() == DType::Bool ? "bool" : (dt_is_uint(nd.dtype()) ? "uint" : (dt_is_int(nd.dtype()) ? "int" : "float")));
+            s.append(" _spec"); app_uint(s, static_cast<crd::u32>(id)); s.append(" = ");
+            if (nd.dtype() == DType::Bool) { s.append(nd.cval != 0.0 ? "true" : "false"); }
+            else if (dt_is_uint(nd.dtype()) || dt_is_int(nd.dtype())) { app_int_const(s, nd.cval, nd.dtype()); }
+            else { app_flit(s, nd.cval); }
+            s.append(";\n");
+        }
     }
     { // quaternion/slerp helper functions (no GLSL builtins) — emitted once when the graph uses them (shared with compute)
         bool qm = false;

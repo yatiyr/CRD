@@ -15,6 +15,8 @@
 #include <crd/kir/ckir_sort.hpp>   // B-cmp: build_sort_* (the CKIR stable LSD radix sort)
 #include <crd/kir/ckir_mlp.hpp>    // v17 NRC: build_mlp_fwd_fp32 (the portable+bit-exact fused-MLP forward)
 #include <crd/kir/ckir_neural.hpp> // B10: emit_coopvec_mlp_glsl (the per-invocation cooperative-vector neural-shading MLP)
+#include <crd/kir/ckir_kernel_eval.hpp> // B11: eval_cpu_kernel (the CPU oracle for the wave/subgroup ops)
+#include <ckir_subgroup_test.hpp>       // B11: build_subgroup_ops_kernel (the shared reduce/scan/broadcast/shuffle kernel)
 #include <crd/kir/ckir_svgf.hpp>   // B14-c: build_svgf_atrous (the SVGF edge-stopping denoiser)
 #include <crd/kir/ckir_ddgi.hpp>   // B14-b: build_ddgi_sample (the DDGI probe-sampling GI lookup)
 #include <crd/kir/ckir_restir.hpp> // B14-a: build_restir_ris/temporal (the ReSTIR reservoir/RIS estimator)
@@ -32,6 +34,15 @@
 #include <crd/math/cmath.hpp> // Phase-1 FFT: host-side twiddle table (cos/sin)
 #include <crd/math/float_convert.hpp> // C6-b: f32<->f16 bit conversion for the cooperative-vector oracle
 
+#include <crd/shadercook/cook.hpp>  // D-007 D2: the offline shader cook (CKIR graph -> .crdr bundle) under test
+#include <crd/shadercook/variant.hpp> // D-007 D3: the variant/permutation system (matrix + content-hash dedup + on-demand)
+#include <crd/shadercook/reload.hpp>  // D-007 D5: ReloadableCompute (hot-reload — recook + atomic pipeline swap)
+#include <crd/shadercook/warmup.hpp>  // D-007 D11: AsyncPipelineWarmer (warm pipelines off the render thread on crd-jobs)
+#include <crd/jobs/jobs.hpp>          // D-007 D10/D11: the fiber scheduler (jobs::init/shutdown/parallel_for)
+#include <crd/kir/ckir_serialize.hpp> // D2: ShaderReflection (the IR-derived reflection carried in the bundle)
+#include <crd/kir/ckir_material.hpp>  // materials: the OpenPBR surface slab (define_surface/build_surface/pack_gbuffer)
+#include <crd/kir/ckir_cook.hpp>      // materials: SurfaceInputs + specialize_variant (the material variant seam)
+#include <crd/platform/filesystem.hpp> // D2: create the cook cache dir
 #include <ckir_kernel_dispatch.hpp> // B-cmp: the SHARED both-backend kernel dispatch + oracle-compare harness
 #include <ckir_raster_triangle.hpp> // B3-e: the SHARED, backend-neutral CKIR triangle (identical on Vulkan + DX12)
 #include <ckir_visbuffer_test.hpp>  // B4-vis: the SHARED software-rasterizer scene + oracle + mixed-dtype dispatch
@@ -643,7 +654,7 @@ TEST_CASE("D-007 B10: NEURAL MATERIAL -- CPU-trained 2D neural field rendered pe
                 float bbl = 0.0F;
                 if (from_target) { float t[3]; target((static_cast<float>(x) + 0.5F) / dim, (static_cast<float>(sy) + 0.5F) / dim, t); rr = t[0]; gg = t[1]; bbl = t[2]; }
                 else { const crd::u32 pv = img[uz(sy * dim + x)]; rr = static_cast<float>(pv & 0xFFU) / 255.0F; gg = static_cast<float>((pv >> 8U) & 0xFFU) / 255.0F; bbl = static_cast<float>((pv >> 16U) & 0xFFU) / 255.0F; }
-                const auto q = [](float c) { const float cc = c < 0.0F ? 0.0F : (c > 1.0F ? 1.0F : c); return static_cast<unsigned char>(cc * 255.0F + 0.5F); };
+                const auto q = [](float c) { float cc = c; if (cc < 0.0F) { cc = 0.0F; } else if (cc > 1.0F) { cc = 1.0F; } return static_cast<unsigned char>(crd::math::round(cc * 255.0F)); };
                 const crd::u32 o = 54U + static_cast<crd::u32>(fy) * rowsize + static_cast<crd::u32>(x) * 3U;
                 bmp[o] = q(bbl); bmp[o + 1] = q(gg); bmp[o + 2] = q(rr);
             }
@@ -837,6 +848,474 @@ TEST_CASE("D-007 B10: on-device coopvec TRAINING -- hardware gradients fit a lin
     }
     std::printf("[coopvec-train] linear %dx%d, N=%d, %d steps: loss %.5f -> %.5f (%.1f%% down) -- trained on the tensor path\n", d_n, d_n, n_s, steps, loss0, lossf, 100.0 * (1.0 - lossf / loss0));
     CHECK(lossf < loss0 * 0.05); // the on-device gradients drove the loss to <5% of its start (it learned the map)
+}
+
+// D-007 B11: the CKIR WAVE / SUBGROUP op class — reduce (add/max/or) · inclusive/exclusive prefix scan · broadcast-first · shuffle
+// — DISPATCHES on Vulkan (GLSL `subgroupAdd`/`subgroupInclusiveAdd`/…) and matches the CPU oracle BIT-EXACT. Integer ops are
+// order-independent ⇒ bit-exact/portable (the mission bar). One 64-thread workgroup = two 32-lane subgroups (this NVIDIA HW).
+TEST_CASE("D-007 B11: CKIR wave/subgroup ops (reduce/scan/broadcast/shuffle) DISPATCH on Vulkan == oracle bit-exact",
+          "[gpu-context][vulkan][gpu][subgroup]")
+{
+    namespace cg  = crd::gpu;
+    namespace kir = crd::kir;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    using cg::compute_usage::storage;
+    using cg::compute_usage::transfer_dst;
+    using cg::compute_usage::transfer_src;
+    const auto uz = [](int v) { return static_cast<crd::usize>(v); };
+
+    constexpr int t_n = 64;
+    constexpr int no  = crd::gputest::kSubgroupNOut;
+    kir::KGraph      g(&alloc);
+    const kir::KEntry e = crd::gputest::build_subgroup_ops_kernel(g, t_n);
+
+    crd::containers::Array<crd::u32> xin(&alloc);   xin.resize(uz(t_n));
+    for (int i = 0; i < t_n; ++i) { xin[uz(i)] = (static_cast<crd::u32>(i) * 2654435761U) & 0xFFU; } // small ⇒ no u32 wrap
+    // CPU ORACLE reference (f64 domain; round_dtype wraps to u32).
+    crd::containers::Array<crd::f64> xin64(&alloc); xin64.resize(uz(t_n));
+    crd::containers::Array<crd::f64> out64(&alloc); out64.resize(uz(no * t_n), 0.0);
+    for (int i = 0; i < t_n; ++i) { xin64[uz(i)] = static_cast<crd::f64>(xin[uz(i)]); }
+    kir::KernelBuffer bufs[2] = {{xin64.data(), t_n, 0, 0}, {out64.data(), no * t_n, 0, 1}};
+    kir::eval_cpu_kernel(g, e, bufs, 2, static_cast<crd::u32>(t_n), &alloc, 1U);
+
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "subgroup_ops", &alloc);
+    if (!spv.ok) { WARN("subgroup GLSL->SPIR-V failed: " << spv.error_message.c_str()); }
+    REQUIRE(spv.ok);
+    auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 2, 0U);
+    REQUIRE(pipe != nullptr);
+
+    auto d_in  = compute.create_buffer(static_cast<crd::u64>(t_n) * 4U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
+    auto d_out = compute.create_buffer(static_cast<crd::u64>(no * t_n) * 4U, storage | transfer_src, cg::ComputeMemory::GpuOnly);
+    {
+        auto  stg = compute.create_buffer(static_cast<crd::u64>(t_n) * 4U, transfer_src, cg::ComputeMemory::CpuToGpu);
+        auto* p   = static_cast<crd::u32*>(stg->map());
+        for (int i = 0; i < t_n; ++i) { p[i] = xin[uz(i)]; }
+        stg->unmap();
+        auto& rc = compute.begin();
+        rc.copy(*stg, *d_in, 0U, 0U, static_cast<crd::u64>(t_n) * 4U);
+        compute.submit_and_wait();
+    }
+    auto& rec = compute.begin();
+    cg::ComputeBuffer* binds[2] = {d_in.get(), d_out.get()};
+    rec.dispatch(*pipe, crd::containers::ConstSpan<cg::ComputeBuffer*>(binds, 2), nullptr, 0U, 1U, 1U, 1U);
+    rec.barrier(*d_out, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::TransferSrc);
+    compute.submit_and_wait();
+
+    auto rb = compute.create_buffer(static_cast<crd::u64>(no * t_n) * 4U, transfer_dst, cg::ComputeMemory::GpuToCpu);
+    { auto& r2 = compute.begin(); r2.copy(*d_out, *rb, 0U, 0U, static_cast<crd::u64>(no * t_n) * 4U); compute.submit_and_wait(); }
+    const auto* out = static_cast<const crd::u32*>(rb->map());
+    int bad = 0;
+    for (int i = 0; i < no * t_n; ++i) { if (out[uz(i)] != static_cast<crd::u32>(static_cast<crd::i64>(out64[uz(i)]))) { ++bad; } }
+    rb->unmap();
+    std::printf("[subgroup] 64-thread wg (2x32-lane): %d/%d results mismatched vs oracle (add/max/incl/excl/bcast/shuffle/or)\n", bad, no * t_n);
+    CHECK(bad == 0); // GPU wave ops == CPU oracle, bit-exact
+}
+
+// D-007 C5: GPU-DRIVEN DISPATCH — a compute pass COUNTS how many inputs pass a predicate and writes the next pass's workgroup
+// count into an INDIRECT-args buffer; `dispatch_indirect` then launches EXACTLY that many groups with NO CPU round-trip (the GPU
+// decides its own workload). Verifies the second pass ran the GPU-decided number of groups (== the CPU reference count).
+TEST_CASE("D-007 C5: GPU-driven indirect dispatch on Vulkan -- a compute pass decides the next dispatch's size",
+          "[gpu-context][vulkan][gpu][indirect]")
+{
+    namespace cg = crd::gpu;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    using cg::compute_usage::indirect;
+    using cg::compute_usage::storage;
+    using cg::compute_usage::transfer_dst;
+    using cg::compute_usage::transfer_src;
+    const auto uz = [](int v) { return static_cast<crd::usize>(v); };
+
+    static const char* const kCountSrc =
+        "#version 460\n"
+        "layout(local_size_x = 1) in;\n"
+        "layout(std430, binding=0) readonly  buffer BIn   { uint vals[]; };\n"
+        "layout(std430, binding=1) writeonly buffer BArgs { uint args[]; };\n"
+        "layout(std430, binding=2) readonly  buffer BCfg  { uint n; };\n"
+        "void main() { uint c = 0u; for (uint i = 0u; i < n; ++i) { if ((vals[i] & 1u) == 0u) { c += 1u; } }\n"
+        "  args[0] = c; args[1] = 1u; args[2] = 1u; }\n"; // groupCountX = the GPU-computed count
+    static const char* const kWorkSrc =
+        "#version 460\n"
+        "layout(local_size_x = 1) in;\n"
+        "layout(std430, binding=0) writeonly buffer BOut { uint o[]; };\n"
+        "void main() { o[gl_WorkGroupID.x] = gl_WorkGroupID.x + 1u; }\n"; // one group per unit of GPU-decided work
+
+    const auto mk = [&](const char* src, int nb) {
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::StringView(src), "c5", &alloc);
+        REQUIRE(spv.ok);
+        return compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
+    };
+    auto pipe_count = mk(kCountSrc, 3);
+    auto pipe_work  = mk(kWorkSrc, 1);
+    REQUIRE(pipe_count != nullptr);
+    REQUIRE(pipe_work != nullptr);
+
+    constexpr int n_v = 256;
+    int           ref = 0;
+    crd::containers::Array<crd::u32> vals(&alloc); vals.resize(uz(n_v));
+    for (int i = 0; i < n_v; ++i) { const crd::u32 v = (static_cast<crd::u32>(i) * 2654435761U) >> 3U; vals[uz(i)] = v; if ((v & 1U) == 0U) { ++ref; } }
+
+    auto d_in   = compute.create_buffer(static_cast<crd::u64>(n_v) * 4U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
+    auto d_args = compute.create_buffer(3U * 4U, storage | indirect | transfer_dst, cg::ComputeMemory::GpuOnly);
+    auto d_cfg  = compute.create_buffer(4U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
+    auto d_out  = compute.create_buffer(static_cast<crd::u64>(n_v) * 4U, storage | transfer_dst | transfer_src, cg::ComputeMemory::GpuOnly);
+    const auto up = [&](cg::ComputeBuffer& dst, const void* src, crd::u64 nb) {
+        auto stg = compute.create_buffer(nb, transfer_src, cg::ComputeMemory::CpuToGpu);
+        auto* p = static_cast<crd::u8*>(stg->map()); const auto* s = static_cast<const crd::u8*>(src);
+        for (crd::u64 i = 0; i < nb; ++i) { p[i] = s[i]; } stg->unmap();
+        auto& rc = compute.begin(); rc.copy(*stg, dst, 0U, 0U, nb); compute.submit_and_wait();
+    };
+    const crd::u32 cfgv = static_cast<crd::u32>(n_v);
+    const crd::u32 zeros[3] = {0U, 0U, 0U};
+    up(*d_in, vals.data(), static_cast<crd::u64>(n_v) * 4U);
+    up(*d_cfg, &cfgv, 4U);
+    up(*d_args, zeros, 3U * 4U);
+    { auto stg = compute.create_buffer(static_cast<crd::u64>(n_v) * 4U, transfer_src, cg::ComputeMemory::CpuToGpu); auto* p = static_cast<crd::u32*>(stg->map()); for (int i = 0; i < n_v; ++i) { p[i] = 0U; } stg->unmap(); auto& rc = compute.begin(); rc.copy(*stg, *d_out, 0U, 0U, static_cast<crd::u64>(n_v) * 4U); compute.submit_and_wait(); }
+
+    auto& rec = compute.begin();
+    cg::ComputeBuffer* cb[3] = {d_in.get(), d_args.get(), d_cfg.get()};
+    rec.dispatch(*pipe_count, crd::containers::ConstSpan<cg::ComputeBuffer*>(cb, 3), nullptr, 0U, 1U, 1U, 1U); // the GPU counts
+    rec.barrier(*d_args, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::IndirectRead);                    // write → indirect fetch
+    cg::ComputeBuffer* wb[1] = {d_out.get()};
+    rec.dispatch_indirect(*pipe_work, crd::containers::ConstSpan<cg::ComputeBuffer*>(wb, 1), nullptr, 0U, *d_args, 0U); // GPU-decided count
+    rec.barrier(*d_out, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::TransferSrc);
+    compute.submit_and_wait();
+
+    auto rb = compute.create_buffer(static_cast<crd::u64>(n_v) * 4U, transfer_dst, cg::ComputeMemory::GpuToCpu);
+    { auto& r2 = compute.begin(); r2.copy(*d_out, *rb, 0U, 0U, static_cast<crd::u64>(n_v) * 4U); compute.submit_and_wait(); }
+    const auto* out = static_cast<const crd::u32*>(rb->map());
+    int written = 0;
+    for (int i = 0; i < n_v; ++i) { if (out[uz(i)] != 0U) { ++written; } }
+    rb->unmap();
+    std::printf("[c5-indirect] GPU counted %d even inputs -> dispatch_indirect launched %d groups (CPU ref = %d)\n", written, written, ref);
+    CHECK(written == ref); // the GPU-decided dispatch launched EXACTLY the reference count of groups
+}
+
+// D-007 C5 (frontier): DEVICE-GENERATED COMMANDS — the GPU executes a generated STREAM of VARIED commands in ONE call
+// (VK_NV_device_generated_commands). Each sequence carries its OWN push constants + its own dispatch (and, in the pipeline-switch
+// variant, its own pipeline) — the GPU authors its own command buffer, the Nanite-class primitive beyond a bare indirect count.
+// Raw Vulkan on the converged device. Verifies each generated sequence ran with its own state.
+TEST_CASE("D-007 C5: device-generated commands -- a generated stream of VARIED compute commands (push + dispatch per sequence)",
+          "[gpu-context][vulkan][gpu][dgc]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->device_generated_commands()) { WARN("no VK_NV_device_generated_commands; skipping"); return; }
+    const VkDevice         dev  = vk->vk_device();
+    const VkPhysicalDevice phys = vk->vk_physical_device();
+    const VkQueue          q    = vk->compute_queue();
+    const crd::u32         qf   = vk->compute_family();
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+
+    // ── DGC proc addresses (device extension functions) ──
+    auto pfn_create = reinterpret_cast<PFN_vkCreateIndirectCommandsLayoutNV>(vkGetDeviceProcAddr(dev, "vkCreateIndirectCommandsLayoutNV"));
+    auto pfn_destroy = reinterpret_cast<PFN_vkDestroyIndirectCommandsLayoutNV>(vkGetDeviceProcAddr(dev, "vkDestroyIndirectCommandsLayoutNV"));
+    auto pfn_memreq = reinterpret_cast<PFN_vkGetGeneratedCommandsMemoryRequirementsNV>(vkGetDeviceProcAddr(dev, "vkGetGeneratedCommandsMemoryRequirementsNV"));
+    auto pfn_exec = reinterpret_cast<PFN_vkCmdExecuteGeneratedCommandsNV>(vkGetDeviceProcAddr(dev, "vkCmdExecuteGeneratedCommandsNV"));
+    REQUIRE(pfn_create != nullptr);
+    REQUIRE(pfn_memreq != nullptr);
+    REQUIRE(pfn_exec != nullptr);
+
+    // ── a tiny raw-Vulkan buffer allocator (host-visible|coherent; optional device address) ──
+    VkPhysicalDeviceMemoryProperties memprops{};
+    vkGetPhysicalDeviceMemoryProperties(phys, &memprops);
+    const auto find_mem = [&](crd::u32 type_bits, VkMemoryPropertyFlags want) -> crd::u32 {
+        for (crd::u32 i = 0; i < memprops.memoryTypeCount; ++i) { if ((type_bits & (1U << i)) != 0U && (memprops.memoryTypes[i].propertyFlags & want) == want) { return i; } }
+        return 0U;
+    };
+    struct Buf { VkBuffer buf = VK_NULL_HANDLE; VkDeviceMemory mem = VK_NULL_HANDLE; VkDeviceAddress addr = 0; };
+    const auto make_buf = [&](VkDeviceSize size, VkBufferUsageFlags usage, bool device_addr) -> Buf {
+        Buf b{};
+        VkBufferCreateInfo bci{};
+        bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bci.size  = size;
+        bci.usage = usage | (device_addr ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT : 0U);
+        vkCreateBuffer(dev, &bci, nullptr, &b.buf);
+        VkMemoryRequirements mr{};
+        vkGetBufferMemoryRequirements(dev, b.buf, &mr);
+        VkMemoryAllocateFlagsInfo fi{};
+        fi.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
+        fi.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+        VkMemoryAllocateInfo mai{};
+        mai.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        mai.pNext           = device_addr ? &fi : nullptr;
+        mai.allocationSize  = mr.size;
+        mai.memoryTypeIndex = find_mem(mr.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        vkAllocateMemory(dev, &mai, nullptr, &b.mem);
+        vkBindBufferMemory(dev, b.buf, b.mem, 0);
+        if (device_addr) { VkBufferDeviceAddressInfo ai{}; ai.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO; ai.buffer = b.buf; b.addr = vkGetBufferDeviceAddress(dev, &ai); }
+        return b;
+    };
+
+    constexpr int n_seq = 4;
+    constexpr int out_n = 16;
+    Buf d_out = make_buf(static_cast<VkDeviceSize>(out_n) * 4U, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
+    { void* p = nullptr; vkMapMemory(dev, d_out.mem, 0, VK_WHOLE_SIZE, 0, &p); for (int i = 0; i < out_n; ++i) { static_cast<crd::u32*>(p)[i] = 0U; } vkUnmapMemory(dev, d_out.mem); }
+
+    // ── descriptor set layout (1 storage buffer) + pipeline layout (+ an 8-byte push constant {slot,val}) ──
+    VkDescriptorSetLayoutBinding dslb{};
+    dslb.binding = 0; dslb.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; dslb.descriptorCount = 1; dslb.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    VkDescriptorSetLayoutCreateInfo dslci{}; dslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO; dslci.bindingCount = 1; dslci.pBindings = &dslb;
+    VkDescriptorSetLayout dsl = VK_NULL_HANDLE; vkCreateDescriptorSetLayout(dev, &dslci, nullptr, &dsl);
+    VkPushConstantRange pcr{}; pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT; pcr.offset = 0; pcr.size = 8;
+    VkPipelineLayoutCreateInfo plci{}; plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO; plci.setLayoutCount = 1; plci.pSetLayouts = &dsl; plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pcr;
+    VkPipelineLayout playout = VK_NULL_HANDLE; vkCreatePipelineLayout(dev, &plci, nullptr, &playout);
+
+    // ── the compute pipeline: o[slot] = val (both from the per-sequence push constant) ──
+    static const char* const kSrc =
+        "#version 460\n"
+        "layout(local_size_x = 1) in;\n"
+        "layout(std430, binding = 0) buffer Out { uint o[]; };\n"
+        "layout(push_constant) uniform P { uint slot; uint val; };\n"
+        "void main() { o[slot] = val; }\n";
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::StringView(kSrc), "dgc", &alloc);
+    REQUIRE(spv.ok);
+    VkShaderModuleCreateInfo smci{}; smci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO; smci.codeSize = spv.spirv.size(); smci.pCode = reinterpret_cast<const crd::u32*>(spv.spirv.data());
+    VkShaderModule sm = VK_NULL_HANDLE; vkCreateShaderModule(dev, &smci, nullptr, &sm);
+    VkComputePipelineCreateInfo cpci{}; cpci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO; cpci.layout = playout;
+    cpci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO; cpci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT; cpci.stage.module = sm; cpci.stage.pName = "main";
+    VkPipeline pipe = VK_NULL_HANDLE; vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &cpci, nullptr, &pipe);
+    REQUIRE(pipe != VK_NULL_HANDLE);
+
+    // ── descriptor pool + set (binding 0 = the output buffer) ──
+    VkDescriptorPoolSize dps{}; dps.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; dps.descriptorCount = 1;
+    VkDescriptorPoolCreateInfo dpci{}; dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO; dpci.maxSets = 1; dpci.poolSizeCount = 1; dpci.pPoolSizes = &dps;
+    VkDescriptorPool pool = VK_NULL_HANDLE; vkCreateDescriptorPool(dev, &dpci, nullptr, &pool);
+    VkDescriptorSetAllocateInfo dsai{}; dsai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO; dsai.descriptorPool = pool; dsai.descriptorSetCount = 1; dsai.pSetLayouts = &dsl;
+    VkDescriptorSet set = VK_NULL_HANDLE; vkAllocateDescriptorSets(dev, &dsai, &set);
+    VkDescriptorBufferInfo dbi{}; dbi.buffer = d_out.buf; dbi.range = VK_WHOLE_SIZE;
+    VkWriteDescriptorSet wr{}; wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr.dstSet = set; wr.descriptorCount = 1; wr.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; wr.pBufferInfo = &dbi;
+    vkUpdateDescriptorSets(dev, 1, &wr, 0, nullptr);
+
+    // ── the INDIRECT COMMANDS LAYOUT: [PUSH_CONSTANT @0 (8B), DISPATCH @8 (12B)] per sequence, stride 20, bind point COMPUTE ──
+    VkIndirectCommandsLayoutTokenNV toks[2]{};
+    toks[0].sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_TOKEN_NV; toks[0].tokenType = VK_INDIRECT_COMMANDS_TOKEN_TYPE_PUSH_CONSTANT_NV;
+    toks[0].stream = 0; toks[0].offset = 0; toks[0].pushconstantPipelineLayout = playout; toks[0].pushconstantShaderStageFlags = VK_SHADER_STAGE_COMPUTE_BIT; toks[0].pushconstantOffset = 0; toks[0].pushconstantSize = 8;
+    toks[1].sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_TOKEN_NV; toks[1].tokenType = VK_INDIRECT_COMMANDS_TOKEN_TYPE_DISPATCH_NV; toks[1].stream = 0; toks[1].offset = 8;
+    const crd::u32 stride = 20U;
+    VkIndirectCommandsLayoutCreateInfoNV lci{}; lci.sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_CREATE_INFO_NV; lci.pipelineBindPoint = VK_PIPELINE_BIND_POINT_COMPUTE; lci.tokenCount = 2; lci.pTokens = toks; lci.streamCount = 1; lci.pStreamStrides = &stride;
+    VkIndirectCommandsLayoutNV iclayout = VK_NULL_HANDLE;
+    REQUIRE(pfn_create(dev, &lci, nullptr, &iclayout) == VK_SUCCESS);
+
+    // ── the INPUT STREAM: n_seq sequences, each {slot u32, val u32, dispatch {x,y,z}} = 20 bytes. Varied per sequence. ──
+    Buf d_stream = make_buf(static_cast<VkDeviceSize>(n_seq) * stride, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false);
+    const crd::u32 slots[n_seq] = {2U, 5U, 9U, 13U};
+    const crd::u32 vals[n_seq]  = {111U, 222U, 333U, 444U};
+    { auto* p = static_cast<crd::u8*>(nullptr); vkMapMemory(dev, d_stream.mem, 0, VK_WHOLE_SIZE, 0, reinterpret_cast<void**>(&p));
+      for (int s = 0; s < n_seq; ++s) { auto* u = reinterpret_cast<crd::u32*>(p + static_cast<crd::usize>(s) * stride); u[0] = slots[s]; u[1] = vals[s]; u[2] = 1U; u[3] = 1U; u[4] = 1U; }
+      vkUnmapMemory(dev, d_stream.mem); }
+
+    // ── preprocess buffer (from the generated-commands memory requirements) ──
+    VkGeneratedCommandsMemoryRequirementsInfoNV gmri{}; gmri.sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_MEMORY_REQUIREMENTS_INFO_NV; gmri.pipelineBindPoint = VK_PIPELINE_BIND_POINT_COMPUTE; gmri.pipeline = pipe; gmri.indirectCommandsLayout = iclayout; gmri.maxSequencesCount = n_seq;
+    VkMemoryRequirements2 gmr{}; gmr.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
+    pfn_memreq(dev, &gmri, &gmr);
+    Buf d_pre = make_buf(gmr.memoryRequirements.size > 0 ? gmr.memoryRequirements.size : 4U, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
+
+    // ── record: bind pipeline + descriptor set (state the generated commands inherit), then EXECUTE the generated stream ──
+    VkCommandPoolCreateInfo cpci2{}; cpci2.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO; cpci2.queueFamilyIndex = qf;
+    VkCommandPool cpool = VK_NULL_HANDLE; vkCreateCommandPool(dev, &cpci2, nullptr, &cpool);
+    VkCommandBufferAllocateInfo cbai{}; cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO; cbai.commandPool = cpool; cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; cbai.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE; vkAllocateCommandBuffers(dev, &cbai, &cmd);
+    VkCommandBufferBeginInfo cbbi{}; cbbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO; cbbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &cbbi);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, playout, 0, 1, &set, 0, nullptr);
+    VkIndirectCommandsStreamNV strm{}; strm.buffer = d_stream.buf; strm.offset = 0;
+    VkGeneratedCommandsInfoNV gci{}; gci.sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_INFO_NV; gci.pipelineBindPoint = VK_PIPELINE_BIND_POINT_COMPUTE; gci.pipeline = pipe; gci.indirectCommandsLayout = iclayout; gci.streamCount = 1; gci.pStreams = &strm; gci.sequencesCount = n_seq; gci.preprocessBuffer = d_pre.buf; gci.preprocessSize = gmr.memoryRequirements.size;
+    pfn_exec(cmd, VK_FALSE, &gci);
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo si{}; si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO; si.commandBufferCount = 1; si.pCommandBuffers = &cmd;
+    vkQueueSubmit(q, 1, &si, VK_NULL_HANDLE);
+    vkQueueWaitIdle(q);
+
+    // ── verify: each generated sequence wrote its OWN slot ← its OWN val (varied push constant + dispatch, one execute call) ──
+    int good = 0;
+    { void* p = nullptr; vkMapMemory(dev, d_out.mem, 0, VK_WHOLE_SIZE, 0, &p); const auto* o = static_cast<const crd::u32*>(p);
+      for (int s = 0; s < n_seq; ++s) { if (o[slots[s]] == vals[s]) { ++good; } }
+      vkUnmapMemory(dev, d_out.mem); }
+    std::printf("[dgc] device-generated stream: %d/%d sequences ran with their own {slot,val,dispatch} via ONE execute call\n", good, n_seq);
+    CHECK(good == n_seq);
+
+    pfn_destroy(dev, iclayout, nullptr);
+    vkDestroyCommandPool(dev, cpool, nullptr);
+    vkDestroyDescriptorPool(dev, pool, nullptr);
+    vkDestroyPipeline(dev, pipe, nullptr);
+    vkDestroyShaderModule(dev, sm, nullptr);
+    vkDestroyPipelineLayout(dev, playout, nullptr);
+    vkDestroyDescriptorSetLayout(dev, dsl, nullptr);
+    for (Buf* b : {&d_out, &d_stream, &d_pre}) { vkDestroyBuffer(dev, b->buf, nullptr); vkFreeMemory(dev, b->mem, nullptr); }
+}
+
+// D-007 C5 (frontier, FULL): DEVICE-GENERATED COMMANDS with PER-SEQUENCE PIPELINE SWITCHING — the GPU-authored stream selects a
+// DIFFERENT compute pipeline per sequence (the PIPELINE token + indirect-bindable pipelines: metadata buffer → device address).
+// Two pipelines (A writes 100+val, B writes 200+val); alternating sequences prove the pipeline switch came from the stream.
+TEST_CASE("D-007 C5: device-generated commands -- per-sequence PIPELINE switch (indirect-bindable pipelines)",
+          "[gpu-context][vulkan][gpu][dgc]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->device_generated_commands()) { WARN("no VK_NV_device_generated_commands; skipping"); return; }
+    const VkDevice         dev  = vk->vk_device();
+    const VkPhysicalDevice phys = vk->vk_physical_device();
+    const VkQueue          q    = vk->compute_queue();
+    const crd::u32         qf   = vk->compute_family();
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+
+    auto pfn_create   = reinterpret_cast<PFN_vkCreateIndirectCommandsLayoutNV>(vkGetDeviceProcAddr(dev, "vkCreateIndirectCommandsLayoutNV"));
+    auto pfn_destroy  = reinterpret_cast<PFN_vkDestroyIndirectCommandsLayoutNV>(vkGetDeviceProcAddr(dev, "vkDestroyIndirectCommandsLayoutNV"));
+    auto pfn_memreq   = reinterpret_cast<PFN_vkGetGeneratedCommandsMemoryRequirementsNV>(vkGetDeviceProcAddr(dev, "vkGetGeneratedCommandsMemoryRequirementsNV"));
+    auto pfn_exec     = reinterpret_cast<PFN_vkCmdExecuteGeneratedCommandsNV>(vkGetDeviceProcAddr(dev, "vkCmdExecuteGeneratedCommandsNV"));
+    auto pfn_pmemreq  = reinterpret_cast<PFN_vkGetPipelineIndirectMemoryRequirementsNV>(vkGetDeviceProcAddr(dev, "vkGetPipelineIndirectMemoryRequirementsNV"));
+    auto pfn_pupdate  = reinterpret_cast<PFN_vkCmdUpdatePipelineIndirectBufferNV>(vkGetDeviceProcAddr(dev, "vkCmdUpdatePipelineIndirectBufferNV"));
+    auto pfn_paddr    = reinterpret_cast<PFN_vkGetPipelineIndirectDeviceAddressNV>(vkGetDeviceProcAddr(dev, "vkGetPipelineIndirectDeviceAddressNV"));
+    REQUIRE(pfn_create != nullptr); REQUIRE(pfn_pmemreq != nullptr); REQUIRE(pfn_pupdate != nullptr); REQUIRE(pfn_paddr != nullptr);
+
+    VkPhysicalDeviceMemoryProperties memprops{};
+    vkGetPhysicalDeviceMemoryProperties(phys, &memprops);
+    const auto find_mem = [&](crd::u32 tb, VkMemoryPropertyFlags want) -> crd::u32 { for (crd::u32 i = 0; i < memprops.memoryTypeCount; ++i) { if ((tb & (1U << i)) != 0U && (memprops.memoryTypes[i].propertyFlags & want) == want) { return i; } } return 0U; };
+    struct Buf { VkBuffer buf = VK_NULL_HANDLE; VkDeviceMemory mem = VK_NULL_HANDLE; VkDeviceAddress addr = 0; };
+    const auto make_buf = [&](VkDeviceSize size, VkBufferUsageFlags usage, bool da) -> Buf {
+        Buf b{};
+        VkBufferCreateInfo bci{}; bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO; bci.size = size; bci.usage = usage | (da ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT : 0U);
+        vkCreateBuffer(dev, &bci, nullptr, &b.buf);
+        VkMemoryRequirements mr{}; vkGetBufferMemoryRequirements(dev, b.buf, &mr);
+        VkMemoryAllocateFlagsInfo fi{}; fi.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO; fi.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+        VkMemoryAllocateInfo mai{}; mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO; mai.pNext = da ? &fi : nullptr; mai.allocationSize = mr.size; mai.memoryTypeIndex = find_mem(mr.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        vkAllocateMemory(dev, &mai, nullptr, &b.mem); vkBindBufferMemory(dev, b.buf, b.mem, 0);
+        if (da) { VkBufferDeviceAddressInfo ai{}; ai.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO; ai.buffer = b.buf; b.addr = vkGetBufferDeviceAddress(dev, &ai); }
+        return b;
+    };
+
+    constexpr int out_n = 16;
+    Buf d_out = make_buf(static_cast<VkDeviceSize>(out_n) * 4U, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false);
+    { void* p = nullptr; vkMapMemory(dev, d_out.mem, 0, VK_WHOLE_SIZE, 0, &p); for (int i = 0; i < out_n; ++i) { static_cast<crd::u32*>(p)[i] = 0U; } vkUnmapMemory(dev, d_out.mem); }
+
+    VkDescriptorSetLayoutBinding dslb{}; dslb.binding = 0; dslb.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; dslb.descriptorCount = 1; dslb.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    VkDescriptorSetLayoutCreateInfo dslci{}; dslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO; dslci.bindingCount = 1; dslci.pBindings = &dslb;
+    VkDescriptorSetLayout dsl = VK_NULL_HANDLE; vkCreateDescriptorSetLayout(dev, &dslci, nullptr, &dsl);
+    VkPushConstantRange pcr{}; pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT; pcr.offset = 0; pcr.size = 8;
+    VkPipelineLayoutCreateInfo plci{}; plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO; plci.setLayoutCount = 1; plci.pSetLayouts = &dsl; plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pcr;
+    VkPipelineLayout playout = VK_NULL_HANDLE; vkCreatePipelineLayout(dev, &plci, nullptr, &playout);
+
+    // build an INDIRECT-BINDABLE compute pipeline whose shader writes o[slot] = base + val; returns {pipe, module, metadata buf, device addr}.
+    struct IndPipe { VkPipeline pipe = VK_NULL_HANDLE; VkShaderModule sm = VK_NULL_HANDLE; Buf meta{}; VkDeviceAddress addr = 0; };
+    const auto build_pipe = [&](crd::u32 base) -> IndPipe {
+        IndPipe r{};
+        char src[256];
+        std::snprintf(src, sizeof(src), "#version 460\nlayout(local_size_x=1) in;\nlayout(std430,binding=0) buffer O{uint o[];};\nlayout(push_constant) uniform P{uint slot;uint val;};\nvoid main(){o[slot]=%uu+val;}\n", base);
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::StringView(src), "dgcp", &alloc);
+        REQUIRE(spv.ok);
+        VkShaderModuleCreateInfo smci{}; smci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO; smci.codeSize = spv.spirv.size(); smci.pCode = reinterpret_cast<const crd::u32*>(spv.spirv.data());
+        vkCreateShaderModule(dev, &smci, nullptr, &r.sm);
+        VkPipelineCreateFlags2CreateInfo f2{}; f2.sType = VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO; f2.flags = VK_PIPELINE_CREATE_2_INDIRECT_BINDABLE_BIT_NV;
+        VkComputePipelineCreateInfo cpci{}; cpci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO; cpci.pNext = &f2; cpci.layout = playout;
+        cpci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO; cpci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT; cpci.stage.module = r.sm; cpci.stage.pName = "main";
+        VkMemoryRequirements2 mr2{}; mr2.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
+        pfn_pmemreq(dev, &cpci, &mr2); // the pipeline's on-device metadata size
+        r.meta = make_buf(mr2.memoryRequirements.size > 0 ? mr2.memoryRequirements.size : 256U, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, true);
+        VkComputePipelineIndirectBufferInfoNV ib{}; ib.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_INDIRECT_BUFFER_INFO_NV; ib.deviceAddress = r.meta.addr; ib.size = mr2.memoryRequirements.size;
+        f2.pNext = &ib; // chain: cpci -> flags2 -> indirect-buffer-info
+        REQUIRE(vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &cpci, nullptr, &r.pipe) == VK_SUCCESS);
+        return r;
+    };
+    IndPipe pa = build_pipe(100U);
+    IndPipe pb = build_pipe(200U);
+
+    VkCommandPoolCreateInfo cpci2{}; cpci2.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO; cpci2.queueFamilyIndex = qf; cpci2.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    VkCommandPool cpool = VK_NULL_HANDLE; vkCreateCommandPool(dev, &cpci2, nullptr, &cpool);
+    const auto one_shot = [&](auto&& record) {
+        VkCommandBufferAllocateInfo cbai{}; cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO; cbai.commandPool = cpool; cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; cbai.commandBufferCount = 1;
+        VkCommandBuffer c = VK_NULL_HANDLE; vkAllocateCommandBuffers(dev, &cbai, &c);
+        VkCommandBufferBeginInfo bi{}; bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO; bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(c, &bi); record(c); vkEndCommandBuffer(c);
+        VkSubmitInfo si{}; si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO; si.commandBufferCount = 1; si.pCommandBuffers = &c; vkQueueSubmit(q, 1, &si, VK_NULL_HANDLE); vkQueueWaitIdle(q);
+        vkFreeCommandBuffers(dev, cpool, 1, &c);
+    };
+    // populate each pipeline's on-device metadata buffer (required before its device address is usable in the stream)
+    one_shot([&](VkCommandBuffer c) { pfn_pupdate(c, VK_PIPELINE_BIND_POINT_COMPUTE, pa.pipe); pfn_pupdate(c, VK_PIPELINE_BIND_POINT_COMPUTE, pb.pipe); });
+    { VkPipelineIndirectDeviceAddressInfoNV ai{}; ai.sType = VK_STRUCTURE_TYPE_PIPELINE_INDIRECT_DEVICE_ADDRESS_INFO_NV; ai.pipelineBindPoint = VK_PIPELINE_BIND_POINT_COMPUTE; ai.pipeline = pa.pipe; pa.addr = pfn_paddr(dev, &ai); ai.pipeline = pb.pipe; pb.addr = pfn_paddr(dev, &ai); }
+
+    // descriptor pool + set
+    VkDescriptorPoolSize dps{}; dps.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; dps.descriptorCount = 1;
+    VkDescriptorPoolCreateInfo dpci{}; dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO; dpci.maxSets = 1; dpci.poolSizeCount = 1; dpci.pPoolSizes = &dps;
+    VkDescriptorPool pool = VK_NULL_HANDLE; vkCreateDescriptorPool(dev, &dpci, nullptr, &pool);
+    VkDescriptorSetAllocateInfo dsai{}; dsai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO; dsai.descriptorPool = pool; dsai.descriptorSetCount = 1; dsai.pSetLayouts = &dsl;
+    VkDescriptorSet set = VK_NULL_HANDLE; vkAllocateDescriptorSets(dev, &dsai, &set);
+    VkDescriptorBufferInfo dbi{}; dbi.buffer = d_out.buf; dbi.range = VK_WHOLE_SIZE;
+    VkWriteDescriptorSet wr{}; wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr.dstSet = set; wr.descriptorCount = 1; wr.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; wr.pBufferInfo = &dbi;
+    vkUpdateDescriptorSets(dev, 1, &wr, 0, nullptr);
+
+    // layout: [PIPELINE @0 (8B addr), PUSH_CONSTANT @8 (8B), DISPATCH @16 (12B)], stride 32
+    VkIndirectCommandsLayoutTokenNV toks[3]{};
+    toks[0].sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_TOKEN_NV; toks[0].tokenType = VK_INDIRECT_COMMANDS_TOKEN_TYPE_PIPELINE_NV; toks[0].stream = 0; toks[0].offset = 0;
+    toks[1].sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_TOKEN_NV; toks[1].tokenType = VK_INDIRECT_COMMANDS_TOKEN_TYPE_PUSH_CONSTANT_NV; toks[1].stream = 0; toks[1].offset = 8; toks[1].pushconstantPipelineLayout = playout; toks[1].pushconstantShaderStageFlags = VK_SHADER_STAGE_COMPUTE_BIT; toks[1].pushconstantOffset = 0; toks[1].pushconstantSize = 8;
+    toks[2].sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_TOKEN_NV; toks[2].tokenType = VK_INDIRECT_COMMANDS_TOKEN_TYPE_DISPATCH_NV; toks[2].stream = 0; toks[2].offset = 16;
+    const crd::u32 stride = 32U;
+    VkIndirectCommandsLayoutCreateInfoNV lci{}; lci.sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_CREATE_INFO_NV; lci.pipelineBindPoint = VK_PIPELINE_BIND_POINT_COMPUTE; lci.tokenCount = 3; lci.pTokens = toks; lci.streamCount = 1; lci.pStreamStrides = &stride;
+    VkIndirectCommandsLayoutNV iclayout = VK_NULL_HANDLE;
+    REQUIRE(pfn_create(dev, &lci, nullptr, &iclayout) == VK_SUCCESS);
+
+    constexpr int n_seq = 4;
+    Buf d_stream = make_buf(static_cast<VkDeviceSize>(n_seq) * stride, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, false);
+    const VkDeviceAddress pipe_addr[n_seq] = {pa.addr, pb.addr, pa.addr, pb.addr};
+    const crd::u32        base_exp[n_seq]  = {100U, 200U, 100U, 200U};
+    const crd::u32        slot[n_seq]      = {2U, 5U, 9U, 13U};
+    const crd::u32        val[n_seq]       = {1U, 2U, 3U, 4U};
+    { crd::u8* p = nullptr; vkMapMemory(dev, d_stream.mem, 0, VK_WHOLE_SIZE, 0, reinterpret_cast<void**>(&p));
+      for (int s = 0; s < n_seq; ++s) { auto* q8 = p + static_cast<crd::usize>(s) * stride; std::memcpy(q8, &pipe_addr[s], 8); auto* u = reinterpret_cast<crd::u32*>(q8 + 8); u[0] = slot[s]; u[1] = val[s]; u[2] = 1U; u[3] = 1U; u[4] = 1U; }
+      vkUnmapMemory(dev, d_stream.mem); }
+
+    VkGeneratedCommandsMemoryRequirementsInfoNV gmri{}; gmri.sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_MEMORY_REQUIREMENTS_INFO_NV; gmri.pipelineBindPoint = VK_PIPELINE_BIND_POINT_COMPUTE; gmri.pipeline = pa.pipe; gmri.indirectCommandsLayout = iclayout; gmri.maxSequencesCount = n_seq;
+    VkMemoryRequirements2 gmr{}; gmr.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2; pfn_memreq(dev, &gmri, &gmr);
+    Buf d_pre = make_buf(gmr.memoryRequirements.size > 0 ? gmr.memoryRequirements.size : 4U, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
+
+    one_shot([&](VkCommandBuffer c) {
+        vkCmdBindPipeline(c, VK_PIPELINE_BIND_POINT_COMPUTE, pa.pipe);
+        vkCmdBindDescriptorSets(c, VK_PIPELINE_BIND_POINT_COMPUTE, playout, 0, 1, &set, 0, nullptr);
+        VkIndirectCommandsStreamNV strm{}; strm.buffer = d_stream.buf; strm.offset = 0;
+        VkGeneratedCommandsInfoNV gci{}; gci.sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_INFO_NV; gci.pipelineBindPoint = VK_PIPELINE_BIND_POINT_COMPUTE; gci.pipeline = pa.pipe; gci.indirectCommandsLayout = iclayout; gci.streamCount = 1; gci.pStreams = &strm; gci.sequencesCount = n_seq; gci.preprocessBuffer = d_pre.buf; gci.preprocessSize = gmr.memoryRequirements.size;
+        pfn_exec(c, VK_FALSE, &gci);
+    });
+
+    int good = 0;
+    { void* p = nullptr; vkMapMemory(dev, d_out.mem, 0, VK_WHOLE_SIZE, 0, &p); const auto* o = static_cast<const crd::u32*>(p);
+      for (int s = 0; s < n_seq; ++s) { if (o[slot[s]] == base_exp[s] + val[s]) { ++good; } }
+      vkUnmapMemory(dev, d_out.mem); }
+    std::printf("[dgc-pipe] GPU-authored stream switched pipelines per sequence: %d/%d (A=100+, B=200+ selected by the PIPELINE token)\n", good, n_seq);
+    CHECK(good == n_seq);
+
+    pfn_destroy(dev, iclayout, nullptr);
+    vkDestroyCommandPool(dev, cpool, nullptr);
+    vkDestroyDescriptorPool(dev, pool, nullptr);
+    for (IndPipe* ip : {&pa, &pb}) { vkDestroyPipeline(dev, ip->pipe, nullptr); vkDestroyShaderModule(dev, ip->sm, nullptr); vkDestroyBuffer(dev, ip->meta.buf, nullptr); vkFreeMemory(dev, ip->meta.mem, nullptr); }
+    vkDestroyPipelineLayout(dev, playout, nullptr);
+    vkDestroyDescriptorSetLayout(dev, dsl, nullptr);
+    for (Buf* b : {&d_out, &d_stream, &d_pre}) { vkDestroyBuffer(dev, b->buf, nullptr); vkFreeMemory(dev, b->mem, nullptr); }
 }
 
 TEST_CASE("D-008 C0: the program seam -- cooked SPIR-V -> IGpuProgram (ADR-0103)", "[gpu-context][vulkan][gpu][program]")
@@ -10415,4 +10894,1172 @@ TEST_CASE("B-cmp: ONESWEEP radix sort -- lookback, the crush structure", "[.sort
     CHECK(wbest < 1e29);
     CHECK(bad == 0);
     CHECK(ix == sx);
+}
+
+// D-007 D2 (ADR-0104): the OFFLINE SHADER COOK. Cook a CKIR compute kernel into a `.crdr` bundle (serialized IR + IR-reflection +
+// per-backend blobs), then prove (1) the cooked SPIR-V is BYTE-IDENTICAL to the runtime compile, (2) the bundle round-trips through
+// the CRDR container, (3) the COOKED bytecode (not a fresh compile) RUNS correctly on the GPU, and (4) the content-hash cache
+// re-uses an unchanged cook byte-for-byte. This is the zero-runtime-compile shipping path.
+TEST_CASE("D-007 D2: offline cook -- CKIR kernel to .crdr bundle; cooked SPIR-V bit-identical + runs on GPU",
+          "[gpu-context][vulkan][gpu][cook]")
+{
+    namespace sc  = crd::shadercook;
+    namespace kir = crd::kir;
+    namespace cg  = crd::gpu;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    crd::memory::TlsfAllocator alloc(32U << 20U);
+
+    // A reverse kernel: 2 F32 buffers in@(0,0) / out@(0,1), ls=32 (the shared B-cmp harness kernel).
+    constexpr int ls = 32;
+    kir::KGraph    g(&alloc);
+    const kir::KEntry e = crd::kir_test::build_reverse_kernel(g, ls);
+
+    // COOK every backend.
+    sc::CookOptions opts;
+    opts.backends = static_cast<crd::u32>(sc::CookBackend::All);
+    sc::CookResult ck = sc::cook_compute_shader(g, e, crd::containers::StringView("reverse"), opts, &alloc);
+    REQUIRE(ck.ok);
+    CHECK(ck.spirv_bytes > 0U); // SPIR-V + DXIL are REAL bytecode
+    CHECK(ck.dxil_bytes  > 0U);
+    CHECK(ck.cuda_bytes  > 0U); // CUDA/MSL/WGSL are emitted source (their platform toolchain finishes the compile)
+    CHECK(ck.msl_bytes   > 0U);
+    CHECK(ck.wgsl_bytes  > 0U);
+
+    // (2) Round-trip through the CRDR container: every chunk is present.
+    sc::ShaderBundle bundle(&alloc);
+    REQUIRE(sc::read_shader_bundle(crd::containers::as_const_span(ck.crdr), bundle));
+    const auto spvc = bundle.bytecode(sc::CookBackend::SpirV);
+    REQUIRE(!spvc.empty());
+    CHECK(!bundle.bytecode(sc::CookBackend::Dxil).empty());
+    CHECK(!bundle.ir().empty());
+    CHECK(bundle.reflection().size() == sizeof(kir::ShaderReflection));
+
+    // (1) BIT-IDENTICAL: the cooked SPVC blob == a fresh runtime GLSL->SPIR-V of the same graph, byte for byte.
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
+    const auto ref = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "reverse", &alloc);
+    REQUIRE(ref.ok);
+    REQUIRE(spvc.size() == ref.spirv.size());
+    CHECK(std::memcmp(spvc.data(), ref.spirv.data(), spvc.size()) == 0);
+
+    // (3) RUN the COOKED SPIR-V (straight from the bundle — no fresh compile) and check it reverses.
+    auto pipe = compute.create_pipeline_from_spirv(spvc, 2, 0U);
+    REQUIRE(pipe != nullptr);
+    float in_h[ls];
+    float out_h[ls];
+    for (int i = 0; i < ls; ++i) { in_h[i] = static_cast<float>(i) + 0.5F; out_h[i] = 0.0F; }
+    float*    host[2] = {in_h, out_h};
+    const int lens[2] = {ls, ls};
+    crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, 1U);
+    int mism = 0;
+    for (int i = 0; i < ls; ++i) { if (out_h[i] != in_h[ls - 1 - i]) { ++mism; } }
+    std::printf("[cook] .crdr cooked: spirv=%u dxil=%u ptx=%u cuda=%u msl=%u wgsl=%u B; cooked SPIR-V ran on GPU, %d/%d reversed\n",
+                ck.spirv_bytes, ck.dxil_bytes, ck.ptx_bytes, ck.cuda_bytes, ck.msl_bytes, ck.wgsl_bytes, ls - mism, ls);
+    CHECK(mism == 0);
+
+    // REAL PTX (NVRTC) — cooked wherever the CUDA toolkit is present; the bundle carries it as the CUDA target's shipping bytecode.
+    const auto ptx = bundle.ptx();
+    if (ck.ptx_bytes > 0U)
+    {
+        REQUIRE(!ptx.empty());
+        // NVRTC PTX is text beginning with a `//` banner and carrying a `.version` directive — a cheap sanity that it's real PTX.
+        crd::containers::StringView ptx_sv(reinterpret_cast<const char*>(ptx.data()), ptx.size());
+        CHECK(ptx.size() > 64U);
+        CHECK(ptx_sv.find(".version") != crd::containers::StringView::npos);
+        CHECK(ptx_sv.find(".target") != crd::containers::StringView::npos);
+        std::printf("[cook] real PTX cooked via NVRTC: %u B (portable virtual-arch bytecode)\n", ck.ptx_bytes);
+    }
+    else { WARN("no CUDA toolkit in this build; CUDA emitted as source only (no PTX)"); }
+
+    // (4) CONTENT-HASH CACHE: first cook writes, second cook re-uses the exact bytes.
+    const char* cache_dir = "C:/Users/abici/AppData/Local/Temp/claude/D--Dev-cerid/b0138d6a-548b-428b-87b2-fe30c9f36f7c/scratchpad/cook-cache";
+    (void)crd::platform::fs::create_directories(crd::platform::fs::Path(cache_dir));
+    sc::CookOptions copts = opts;
+    copts.cache_dir       = cache_dir;
+    sc::CookResult c1 = sc::cook_compute_shader(g, e, crd::containers::StringView("reverse"), copts, &alloc);
+    REQUIRE(c1.ok);
+    sc::CookResult c2 = sc::cook_compute_shader(g, e, crd::containers::StringView("reverse"), copts, &alloc);
+    REQUIRE(c2.ok);
+    CHECK(c2.from_cache);
+    REQUIRE(c1.crdr.size() == c2.crdr.size());
+    CHECK(std::memcmp(c1.crdr.data(), c2.crdr.data(), c1.crdr.size()) == 0);
+
+    // Emit the serialized IR as a `.kgph` so the standalone `shader_cook` CLI can cook it (drives the D2 CLI smoke).
+    crd::containers::Array<crd::u8> kgph = kir::serialize_graph(g, e, &alloc);
+    (void)crd::platform::fs::write_file_binary(crd::platform::fs::Path(
+        "C:/Users/abici/AppData/Local/Temp/claude/D--Dev-cerid/b0138d6a-548b-428b-87b2-fe30c9f36f7c/scratchpad/reverse.kgph"),
+        crd::containers::as_const_span(kgph));
+}
+
+// D-007 D3: a variant builder — bit0 scales the output (×1 or ×2); higher bits are DEAD (ignored), so keys differing only in
+// them build identical IR and DEDUP. A real material compiler emits the live path per key exactly like this.
+namespace
+{
+crd::kir::KEntry build_scale_variant(crd::kir::KGraph& g, crd::u32 key, void* /*user*/)
+{
+    namespace k        = crd::kir;
+    const int    inbuf  = g.buffer_decl(k::DType::F32, 0, 0, false);
+    const int    outbuf = g.buffer_decl(k::DType::F32, 0, 1, true);
+    const int    lid    = g.builtin(k::KBuiltin::LocalInvocationIndex);
+    const auto   sh1    = k::make_shape({1});
+    const double scale  = (key & 1U) != 0U ? 2.0 : 1.0; // bit0 = scale; higher bits DEAD ⇒ they dedup
+    const int    mark   = g.kernel_stmt_mark();
+    g.stmt_buffer_store(outbuf, lid, g.binary(k::KOp::Mul, g.buffer_load(inbuf, lid), g.constant(scale, sh1, k::DType::F32)));
+    k::KEntry e;
+    e.stage             = k::KStage::Compute;
+    e.local_size[0]     = 32;
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
+    return e;
+}
+} // namespace
+
+// D-007 D3 (ADR-0104): the VARIANT / PERMUTATION system. Cook a matrix of variant keys with CONTENT-HASH DEDUP (identical
+// specialized kernels share one bundle), ON-DEMAND (only the requested keys), report the reduction, and prove each cooked
+// variant runs GPU-correct.
+TEST_CASE("D-007 D3: variant matrix -- content-hash dedup + on-demand cook + GPU-correct per variant",
+          "[gpu-context][vulkan][gpu][variant]")
+{
+    namespace sc  = crd::shadercook;
+    namespace cg  = crd::gpu;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    crd::memory::TlsfAllocator alloc(32U << 20U);
+
+    const char* cache_dir = "C:/Users/abici/AppData/Local/Temp/claude/D--Dev-cerid/b0138d6a-548b-428b-87b2-fe30c9f36f7c/scratchpad/variant-cache";
+    (void)crd::platform::fs::create_directories(crd::platform::fs::Path(cache_dir));
+
+    // 4 requested variants; bit0 = scale(1|2), higher bits DEAD ⇒ {0,2} identical, {1,3} identical ⇒ 2 unique cooks.
+    const crd::u32  keys[4] = {0U, 1U, 2U, 3U};
+    sc::CookOptions opts;
+    opts.backends  = static_cast<crd::u32>(sc::CookBackend::SpirV);
+    opts.cache_dir = cache_dir;
+    sc::VariantMatrixResult vm = sc::cook_variant_matrix(&build_scale_variant, nullptr, keys, 4, opts, &alloc);
+    REQUIRE(vm.ok);
+    std::printf("[variant] requested=%u unique=%u (%.0f%% permutation reduction via content-hash dedup)\n", vm.requested,
+                vm.unique, 100.0 * (1.0 - (static_cast<double>(vm.unique) / static_cast<double>(vm.requested))));
+    CHECK(vm.requested == 4U);
+    CHECK(vm.unique == 2U); // DEDUP: 4 keys collapse to 2 distinct cooked bundles
+    REQUIRE(vm.entries.size() == 4U);
+    CHECK(vm.entries[0].hash == vm.entries[2].hash);    // key0 == key2 (bit1 dead)
+    CHECK(vm.entries[1].hash == vm.entries[3].hash);    // key1 == key3
+    CHECK(!(vm.entries[0].hash == vm.entries[1].hash)); // scale1 != scale2
+
+    // On-demand + GPU-correct: cook one variant, run its cooked SPIR-V, verify the scale.
+    const auto run_variant = [&](crd::u32 key, float expect_scale) {
+        sc::CookResult r = sc::cook_one_variant(&build_scale_variant, nullptr, key, crd::containers::StringView("v"), opts, &alloc);
+        REQUIRE(r.ok);
+        sc::ShaderBundle b(&alloc);
+        REQUIRE(sc::read_shader_bundle(crd::containers::as_const_span(r.crdr), b));
+        auto pipe = compute.create_pipeline_from_spirv(b.bytecode(sc::CookBackend::SpirV), 2, 0U);
+        REQUIRE(pipe != nullptr);
+        constexpr int ls = 32;
+        float         in_h[ls];
+        float         out_h[ls];
+        for (int i = 0; i < ls; ++i) { in_h[i] = static_cast<float>(i) + 1.0F; out_h[i] = 0.0F; }
+        float*    host[2] = {in_h, out_h};
+        const int lens[2] = {ls, ls};
+        crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, 1U);
+        int bad = 0;
+        for (int i = 0; i < ls; ++i) { if (out_h[i] != in_h[i] * expect_scale) { ++bad; } }
+        CHECK(bad == 0);
+    };
+    run_variant(0U, 1.0F); // scale 1
+    run_variant(1U, 2.0F); // scale 2
+    run_variant(2U, 1.0F); // bit1 dead → identical to key0
+    std::printf("[variant] on-demand variants ran GPU-correct (scale 1 and 2)\n");
+}
+
+// D-007 D4 (ADR-0104): RUNTIME LOAD + PERSISTENT PIPELINE CACHE — the payoff of the whole D1–D5 chain. (1) A cooked `.crdr`
+// is written to disk, read back fresh, and turned into a dispatchable pipeline from the cooked SPIR-V + the IR-reflection —
+// with ZERO shader compilation (no shaderc). (2) The driver's SPIR-V→ISA pipeline cache is serialized, validated, and used to
+// warm a fresh context (a warm restart reuses the compile).
+TEST_CASE("D-007 D4: zero-compile runtime load from .crdr + persistent VkPipelineCache warm restart",
+          "[gpu-context][vulkan][gpu][d4]")
+{
+    namespace sc  = crd::shadercook;
+    namespace kir = crd::kir;
+    namespace cg  = crd::gpu;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    crd::memory::TlsfAllocator alloc(32U << 20U);
+
+    // COOK a kernel, write the .crdr to disk.
+    constexpr int     ls = 32;
+    kir::KGraph       g(&alloc);
+    const kir::KEntry e = crd::kir_test::build_reverse_kernel(g, ls);
+    sc::CookOptions   opts;
+    opts.backends     = static_cast<crd::u32>(sc::CookBackend::SpirV);
+    sc::CookResult ck = sc::cook_compute_shader(g, e, crd::containers::StringView("reverse"), opts, &alloc);
+    REQUIRE(ck.ok);
+    const char* path = "C:/Users/abici/AppData/Local/Temp/claude/D--Dev-cerid/b0138d6a-548b-428b-87b2-fe30c9f36f7c/scratchpad/d4_reverse.crdr";
+    REQUIRE(crd::platform::fs::write_file_binary(crd::platform::fs::Path(path), crd::containers::as_const_span(ck.crdr)));
+
+    // LOAD it back FRESH (a shipped bundle) — parse → cooked SPIR-V + IR-reflection → pipeline, NO compiler.
+    crd::containers::Array<crd::u8> loaded(&alloc);
+    REQUIRE(crd::platform::fs::read_file_binary(crd::platform::fs::Path(path), loaded));
+    sc::ShaderBundle b(&alloc);
+    REQUIRE(sc::read_shader_bundle(crd::containers::as_const_span(loaded), b));
+    const auto refl_span = b.reflection();
+    REQUIRE(refl_span.size() == sizeof(kir::ShaderReflection));
+    kir::ShaderReflection refl{};
+    std::memcpy(&refl, refl_span.data(), sizeof(refl));
+    REQUIRE(refl.n_bindings == 2); // the reverse kernel: input + output
+    auto pipe = compute.create_pipeline_from_spirv(b.bytecode(sc::CookBackend::SpirV), refl.n_bindings, 0U);
+    REQUIRE(pipe != nullptr);
+
+    float in_h[ls];
+    float out_h[ls];
+    for (int i = 0; i < ls; ++i) { in_h[i] = static_cast<float>(i) + 0.5F; out_h[i] = 0.0F; }
+    float*    host[2] = {in_h, out_h};
+    const int lens[2] = {ls, ls};
+    crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, 1U);
+    int mism = 0;
+    for (int i = 0; i < ls; ++i) { if (out_h[i] != in_h[ls - 1 - i]) { ++mism; } }
+    CHECK(mism == 0);
+    std::printf("[d4] loaded cooked .crdr (%zu B) from disk with ZERO compile (reflection n_bindings=%d); ran %d/%d reversed\n",
+                static_cast<size_t>(loaded.size()), refl.n_bindings, ls - mism, ls);
+
+    // PERSISTENT PIPELINE CACHE: creating the pipeline grew the cache; serialize + validate the VkPipelineCache header.
+    crd::containers::Array<crd::u8> cache_blob(&alloc);
+    compute.pipeline_cache_data(cache_blob);
+    REQUIRE(cache_blob.size() >= 32U); // the VkPipelineCache header is >= 32 bytes
+    crd::u32 hdr_ver = 0;
+    std::memcpy(&hdr_ver, cache_blob.data() + 4, 4); // [4..7] = VkPipelineCacheHeaderVersion
+    CHECK(hdr_ver == 1U);              // VK_PIPELINE_CACHE_HEADER_VERSION_ONE
+
+    // WARM RESTART: a FRESH context seeded with the persisted blob creates the same pipeline reusing the cached ISA.
+    cg::VulkanComputeContext compute2(*vk, crd::memory::default_allocator());
+    REQUIRE(compute2.valid());
+    REQUIRE(compute2.warm_pipeline_cache(crd::containers::as_const_span(cache_blob)));
+    auto pipe2 = compute2.create_pipeline_from_spirv(b.bytecode(sc::CookBackend::SpirV), refl.n_bindings, 0U);
+    REQUIRE(pipe2 != nullptr);
+    crd::containers::Array<crd::u8> cache_blob2(&alloc);
+    compute2.pipeline_cache_data(cache_blob2);
+    CHECK(cache_blob2.size() >= 32U); // the warmed cache still holds our pipeline
+    std::printf("[d4] VkPipelineCache persisted %zu B (header v%u); a fresh context warm-started from it\n",
+                static_cast<size_t>(cache_blob.size()), hdr_ver);
+}
+
+// D-007 D5: the pipeline create-callback for the hot-reloader — build a Vulkan pipeline from cooked SPIR-V (`user` = the context).
+namespace
+{
+std::unique_ptr<crd::gpu::ComputePipeline> vk_create_from_spirv(crd::containers::ConstSpan<crd::u8> code, int n_bindings, void* user)
+{
+    return static_cast<crd::gpu::VulkanComputeContext*>(user)->create_pipeline_from_spirv(code, n_bindings, 0U);
+}
+} // namespace
+
+// D-007 D5 (ADR-0104): HOT-RELOAD — the last link. Edit the shader graph, recook, and atomically hot-swap the live pipeline in
+// the SAME context with no restart. An unchanged graph is a cheap no-op (content-hash gated); a changed one swaps and bumps the
+// generation. Proven by running the SAME pipeline slot before and after an edit and watching the GPU behaviour change.
+TEST_CASE("D-007 D5: hot-reload -- edit the IR, atomically swap the live pipeline in place", "[gpu-context][vulkan][gpu][d5]")
+{
+    namespace sc  = crd::shadercook;
+    namespace kir = crd::kir;
+    namespace cg  = crd::gpu;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    crd::memory::TlsfAllocator alloc(32U << 20U);
+
+    sc::ReloadableCompute rc(&alloc);
+    constexpr int         ls = 32;
+    const auto            run = [&](float expect_scale) {
+        REQUIRE(rc.pipeline() != nullptr);
+        float in_h[ls];
+        float out_h[ls];
+        for (int i = 0; i < ls; ++i) { in_h[i] = static_cast<float>(i) + 1.0F; out_h[i] = 0.0F; }
+        float*    host[2] = {in_h, out_h};
+        const int lens[2] = {ls, ls};
+        crd::kir_test::dispatch_kernel_1wg(compute, *rc.pipeline(), host, lens, 2, 1U);
+        int bad = 0;
+        for (int i = 0; i < ls; ++i) { if (out_h[i] != in_h[i] * expect_scale) { ++bad; } }
+        return bad;
+    };
+
+    // v1: the kernel scales by ×1. First load ⇒ a swap, generation 1.
+    kir::KGraph       g1(&alloc);
+    const kir::KEntry e1 = build_scale_variant(g1, 0U, nullptr);
+    sc::ReloadableCompute::Status s1 = rc.reload(g1, e1, crd::containers::StringView("k"), sc::CookBackend::SpirV, &vk_create_from_spirv, &compute);
+    REQUIRE(s1.ok);
+    CHECK(s1.changed);
+    CHECK(rc.generation() == 1U);
+    CHECK(run(1.0F) == 0);
+
+    // Re-cook the SAME graph ⇒ the content hash is unchanged ⇒ a NO-OP (no rebuild, generation stays).
+    kir::KGraph       g1b(&alloc);
+    const kir::KEntry e1b = build_scale_variant(g1b, 0U, nullptr);
+    sc::ReloadableCompute::Status s2 = rc.reload(g1b, e1b, crd::containers::StringView("k"), sc::CookBackend::SpirV, &vk_create_from_spirv, &compute);
+    REQUIRE(s2.ok);
+    CHECK_FALSE(s2.changed);
+    CHECK(rc.generation() == 1U);
+
+    // EDIT the shader: the kernel now scales by ×2 ⇒ hot-swap the live pipeline (generation 2), same context, no restart.
+    kir::KGraph       g2(&alloc);
+    const kir::KEntry e2 = build_scale_variant(g2, 1U, nullptr);
+    sc::ReloadableCompute::Status s3 = rc.reload(g2, e2, crd::containers::StringView("k"), sc::CookBackend::SpirV, &vk_create_from_spirv, &compute);
+    REQUIRE(s3.ok);
+    CHECK(s3.changed);
+    CHECK(rc.generation() == 2U);
+    CHECK(run(2.0F) == 0); // the SAME slot now runs the EDITED kernel
+    std::printf("[d5] hot-reload: gen1 (x1) -> unchanged re-cook is a no-op -> gen2 (x2); the live pipeline swapped in place\n");
+}
+
+// D-007 D3 (ÜBERGRAPH STYLE): the SAME 4 variants as [variant], but authored declaratively — ONE übergraph with ShaderOption
+// selector nodes + an option-gated Select, specialized per key by sc::specialize (pin options to the key's bits + const-fold/DCE).
+// bit0 picks the ×2 branch; opt1 is declared but UNUSED (dead) so keys differing only in it fold to identical IR and dedup.
+namespace
+{
+crd::kir::KEntry build_scale_ubergraph(crd::kir::KGraph& g, crd::u32 key, void* /*user*/)
+{
+    namespace k        = crd::kir;
+    const auto sh1     = k::make_shape({1});
+    const int  inbuf   = g.buffer_decl(k::DType::F32, 0, 0, false);
+    const int  outbuf  = g.buffer_decl(k::DType::F32, 0, 1, true);
+    const int  lid     = g.builtin(k::KBuiltin::LocalInvocationIndex);
+    const int  opt0    = g.constant(0.0, sh1, k::DType::F32); // ShaderOption 0 — selects the scale (pinned per key)
+    const int  opt1    = g.constant(0.0, sh1, k::DType::F32); // ShaderOption 1 — declared but UNUSED (dead) ⇒ dedups
+    const int  cond    = g.binary(k::KOp::CmpGt, opt0, g.constant(0.5, sh1, k::DType::F32));
+    const int  scale   = g.select(cond, g.constant(2.0, sh1, k::DType::F32), g.constant(1.0, sh1, k::DType::F32));
+    const int  mark    = g.kernel_stmt_mark();
+    g.stmt_buffer_store(outbuf, lid, g.binary(k::KOp::Mul, g.buffer_load(inbuf, lid), scale));
+    k::KEntry e;
+    e.stage             = k::KStage::Compute;
+    e.local_size[0]     = 32;
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
+    const int options[2] = {opt0, opt1};
+    crd::shadercook::specialize(g, e, options, key, 2); // ← übergraph → specialized kernel, same cook path as the per-key style
+    return e;
+}
+} // namespace
+
+TEST_CASE("D-007 D3: ubergraph variant style -- pin ShaderOptions + specialize, same cook_variant_matrix, same dedup",
+          "[gpu-context][vulkan][gpu][variant][ubergraph]")
+{
+    namespace sc = crd::shadercook;
+    namespace cg = crd::gpu;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    crd::memory::TlsfAllocator alloc(32U << 20U);
+
+    const char* cache_dir = "C:/Users/abici/AppData/Local/Temp/claude/D--Dev-cerid/b0138d6a-548b-428b-87b2-fe30c9f36f7c/scratchpad/uber-cache";
+    (void)crd::platform::fs::create_directories(crd::platform::fs::Path(cache_dir));
+
+    // The übergraph flows through the SAME cook_variant_matrix as the per-key builder — the only difference is the builder body.
+    const crd::u32  keys[4] = {0U, 1U, 2U, 3U};
+    sc::CookOptions opts;
+    opts.backends  = static_cast<crd::u32>(sc::CookBackend::SpirV);
+    opts.cache_dir = cache_dir;
+    sc::VariantMatrixResult vm = sc::cook_variant_matrix(&build_scale_ubergraph, nullptr, keys, 4, opts, &alloc);
+    REQUIRE(vm.ok);
+    std::printf("[ubergraph] pin-option + specialize: requested=%u unique=%u (same %.0f%% dedup as the per-key style)\n",
+                vm.requested, vm.unique, 100.0 * (1.0 - (static_cast<double>(vm.unique) / static_cast<double>(vm.requested))));
+    CHECK(vm.requested == 4U);
+    CHECK(vm.unique == 2U);                          // DCE folded opt1 away ⇒ 4 keys collapse to 2 (identical to the per-key style)
+    REQUIRE(vm.entries.size() == 4U);
+    CHECK(vm.entries[0].hash == vm.entries[2].hash); // opt1 dead ⇒ key0 == key2
+    CHECK(vm.entries[1].hash == vm.entries[3].hash); // key1 == key3
+    CHECK(!(vm.entries[0].hash == vm.entries[1].hash));
+
+    // Each specialized übergraph runs GPU-correct — the pinned+DCE'd kernel scales by ×1 / ×2.
+    const auto run_uber = [&](crd::u32 key, float expect_scale) {
+        sc::CookResult r = sc::cook_one_variant(&build_scale_ubergraph, nullptr, key, crd::containers::StringView("u"), opts, &alloc);
+        REQUIRE(r.ok);
+        sc::ShaderBundle b(&alloc);
+        REQUIRE(sc::read_shader_bundle(crd::containers::as_const_span(r.crdr), b));
+        auto pipe = compute.create_pipeline_from_spirv(b.bytecode(sc::CookBackend::SpirV), 2, 0U);
+        REQUIRE(pipe != nullptr);
+        constexpr int ls = 32;
+        float         in_h[ls];
+        float         out_h[ls];
+        for (int i = 0; i < ls; ++i) { in_h[i] = static_cast<float>(i) + 1.0F; out_h[i] = 0.0F; }
+        float*    host[2] = {in_h, out_h};
+        const int lens[2] = {ls, ls};
+        crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, 1U);
+        int bad = 0;
+        for (int i = 0; i < ls; ++i) { if (out_h[i] != in_h[i] * expect_scale) { ++bad; } }
+        CHECK(bad == 0);
+    };
+    run_uber(0U, 1.0F); // opt0=0 → Select folds to ×1
+    run_uber(1U, 2.0F); // opt0=1 → Select folds to ×2
+    std::printf("[ubergraph] specialized kernels ran GPU-correct (Select DCE'd to x1 / x2)\n");
+}
+
+// D-007 D3 (MATERIALS): a REAL OpenPBR material — a Fragment graph that outputs the B5 surface slab and does NO lighting —
+// authored with feature toggles as ShaderOptions, specialized per variant via the material seam (cook::specialize_variant), and
+// cooked through the SAME cook_variant_matrix as a compute kernel (the cook is now stage-aware). Proves materials dedup + cook
+// to real fragment SPIR-V. bit0 = emissive on/off (REAL); bit1 = a 'debug' option declared but UNUSED (dead) ⇒ dedups.
+namespace
+{
+crd::kir::KEntry build_material_variant(crd::kir::KGraph& g, crd::u32 key, void* /*user*/)
+{
+    namespace k   = crd::kir;
+    namespace mat = crd::kir::material;
+    namespace ck  = crd::kir::cook;
+    const auto sh1 = k::make_shape({1});
+    const auto kf  = [&](double v) { return g.constant(v, sh1, k::DType::F32); };
+
+    // per-fragment interpolated varyings (a real VS supplies these; here they're stage inputs)
+    ck::SurfaceInputs in;
+    in.uv           = g.stage_in(k::KType::vec(k::DType::F32, 2), 0, k::Interp::Smooth);
+    in.world_normal = g.stage_in(k::KType::vec(k::DType::F32, 3), 1, k::Interp::Smooth);
+
+    // two ShaderOption feature toggles (pinned per variant by specialize_variant)
+    const int opt_emissive = g.constant(0.0, sh1, k::DType::F32); // feature 0 — emissive on/off (REAL, changes the surface)
+    const int opt_debug    = g.constant(0.0, sh1, k::DType::F32); // feature 1 — declared but UNUSED (dead) ⇒ keys dedup
+
+    // surface fields (the OpenPBR slab)
+    const int base     = g.vec3(g.swizzle(in.uv, 0), g.swizzle(in.uv, 1), kf(0.5)); // base color from the uv
+    const int normal   = g.normalize(in.world_normal);
+    const int emis_on  = g.vec3(kf(2.0), kf(1.5), kf(0.5));
+    const int black    = g.vec3(kf(0.0), kf(0.0), kf(0.0));
+    const int emissive = g.select(g.binary(k::KOp::CmpGt, opt_emissive, kf(0.5)), emis_on, black); // EMISSIVE toggle
+
+    const int sid  = mat::define_surface(g);
+    const int surf = mat::build_surface(g, sid, base, kf(0.0), kf(0.5), normal, emissive, kf(1.0), kf(1.0));
+    k::KEntry  e;
+    mat::pack_gbuffer(g, e, surf); // → KStage::Fragment, n_out=4 (the deferred G-buffer)
+
+    // specialize to the key — the SAME unified helper as a compute kernel; it dispatches on the entry stage (here material:
+    // pin ALL options, then lower_entry folds the option-gated Selects + DCEs the dead branches / unused options).
+    const int opts[2] = {opt_emissive, opt_debug};
+    crd::shadercook::specialize(g, e, opts, key, 2);
+    return e;
+}
+} // namespace
+
+TEST_CASE("D-007 D3: a REAL OpenPBR material through the variant matrix -- fragment cook + dedup",
+          "[gpu-context][vulkan][gpu][variant][material]")
+{
+    namespace sc = crd::shadercook;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::memory::TlsfAllocator alloc(32U << 20U);
+
+    const char* cache_dir = "C:/Users/abici/AppData/Local/Temp/claude/D--Dev-cerid/b0138d6a-548b-428b-87b2-fe30c9f36f7c/scratchpad/material-cache";
+    (void)crd::platform::fs::create_directories(crd::platform::fs::Path(cache_dir));
+
+    // The SAME cook_variant_matrix as compute kernels — the builder just returns a FRAGMENT (material) entry, and the now
+    // stage-aware cook emits it through emit_stage_glsl → real fragment SPIR-V.
+    const crd::u32  keys[4] = {0U, 1U, 2U, 3U};
+    sc::CookOptions opts;
+    opts.backends  = static_cast<crd::u32>(sc::CookBackend::SpirV);
+    opts.cache_dir = cache_dir;
+    sc::VariantMatrixResult vm = sc::cook_variant_matrix(&build_material_variant, nullptr, keys, 4, opts, &alloc);
+    REQUIRE(vm.ok);
+    std::printf("[material] OpenPBR surface variants: requested=%u unique=%u (%.0f%% dedup) — a real Fragment/G-buffer shader\n",
+                vm.requested, vm.unique, 100.0 * (1.0 - (static_cast<double>(vm.unique) / static_cast<double>(vm.requested))));
+    CHECK(vm.requested == 4U);
+    CHECK(vm.unique == 2U); // the dead 'debug' option DCE'd ⇒ 4 material variants collapse to 2 bundles
+    REQUIRE(vm.entries.size() == 4U);
+    CHECK(vm.entries[0].hash == vm.entries[2].hash);    // emissive-off variants (key0, key2) share a bundle
+    CHECK(vm.entries[1].hash == vm.entries[3].hash);    // emissive-on variants (key1, key3) share a bundle
+    CHECK(!(vm.entries[0].hash == vm.entries[1].hash)); // emissive off ≠ on
+
+    // The cooked artifact is REAL fragment SPIR-V — check the magic word and load it into a VkShaderModule (the driver validates).
+    sc::CookOptions vopts;
+    vopts.backends = static_cast<crd::u32>(sc::CookBackend::SpirV); // fresh cook (no cache) — the emissive-on variant
+    sc::CookResult r = sc::cook_one_variant(&build_material_variant, nullptr, 1U, crd::containers::StringView("mat"), vopts, &alloc);
+    REQUIRE(r.ok);
+    CHECK(r.spirv_bytes > 0U);
+    sc::ShaderBundle b(&alloc);
+    REQUIRE(sc::read_shader_bundle(crd::containers::as_const_span(r.crdr), b));
+    const auto spv = b.bytecode(sc::CookBackend::SpirV);
+    REQUIRE(spv.size() >= 4U);
+    crd::u32 magic = 0;
+    std::memcpy(&magic, spv.data(), 4);
+    CHECK(magic == 0x07230203U); // SPIR-V magic
+    VkShaderModuleCreateInfo smci{};
+    smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    smci.codeSize = spv.size();
+    smci.pCode    = reinterpret_cast<const crd::u32*>(spv.data());
+    VkShaderModule sm = VK_NULL_HANDLE;
+    const VkResult vr = vkCreateShaderModule(vk->vk_device(), &smci, nullptr, &sm);
+    CHECK(vr == VK_SUCCESS);
+    if (sm != VK_NULL_HANDLE) { vkDestroyShaderModule(vk->vk_device(), sm, nullptr); }
+    std::printf("[material] cooked Fragment SPIR-V (%zu B) accepted by the driver as a VkShaderModule\n", static_cast<size_t>(spv.size()));
+}
+
+// D-007 D2 (RASTER BUNDLE): a material is only a complete shippable PROGRAM as a vertex+fragment PAIR. Build a VS (transforms
+// the vertex + passes the varyings the material reads) and the material FS in ONE graph, cook them into a single .crdr with
+// SPVV (vertex) + SPVF (fragment) real bytecode, and verify BOTH stages create VkShaderModules — a complete graphics program.
+namespace
+{
+crd::kir::KEntry build_test_vs(crd::kir::KGraph& g)
+{
+    namespace k        = crd::kir;
+    const auto sh1     = k::make_shape({1});
+    const int  pos     = g.stage_in(k::KType::vec(k::DType::F32, 3), 0, k::Interp::Smooth); // position attribute @ 0
+    const int  uv      = g.stage_in(k::KType::vec(k::DType::F32, 2), 1, k::Interp::Smooth); // uv attribute @ 1
+    const int  nrm     = g.stage_in(k::KType::vec(k::DType::F32, 3), 2, k::Interp::Smooth); // normal attribute @ 2
+    k::KEntry  e;
+    e.stage    = k::KStage::Vertex;
+    e.position = g.vec4(g.swizzle(pos, 0), g.swizzle(pos, 1), g.swizzle(pos, 2), g.constant(1.0, sh1, k::DType::F32));
+    e.n_out    = 2;
+    e.out[0]   = {uv, 0};  // varying uv     → the FS reads it at location 0
+    e.out[1]   = {nrm, 1}; // varying normal → the FS reads it at location 1
+    return e;
+}
+crd::kir::KEntry build_material_fs(crd::kir::KGraph& g) // a fixed OpenPBR material (no variant toggles — VS+FS share the graph)
+{
+    namespace k   = crd::kir;
+    namespace mat = crd::kir::material;
+    namespace ck  = crd::kir::cook;
+    const auto sh1 = k::make_shape({1});
+    const auto kf  = [&](double v) { return g.constant(v, sh1, k::DType::F32); };
+    ck::SurfaceInputs in;
+    in.uv           = g.stage_in(k::KType::vec(k::DType::F32, 2), 0, k::Interp::Smooth);
+    in.world_normal = g.stage_in(k::KType::vec(k::DType::F32, 3), 1, k::Interp::Smooth);
+    const int base     = g.vec3(g.swizzle(in.uv, 0), g.swizzle(in.uv, 1), kf(0.5));
+    const int normal   = g.normalize(in.world_normal);
+    const int emissive = g.vec3(kf(0.2), kf(0.1), kf(0.0));
+    const int sid      = mat::define_surface(g);
+    const int surf     = mat::build_surface(g, sid, base, kf(0.0), kf(0.5), normal, emissive, kf(1.0), kf(1.0));
+    k::KEntry e;
+    mat::pack_gbuffer(g, e, surf);
+    return e;
+}
+} // namespace
+
+TEST_CASE("D-007 D2: cook a VS+FS raster program (material) into ONE .crdr bundle", "[gpu-context][vulkan][gpu][raster]")
+{
+    namespace sc = crd::shadercook;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::memory::TlsfAllocator alloc(32U << 20U);
+
+    // VS + FS in ONE graph (the material fragment reads the VS varyings), cooked into one bundle.
+    crd::kir::KGraph       g(&alloc);
+    const crd::kir::KEntry vs = build_test_vs(g);
+    const crd::kir::KEntry fs = build_material_fs(g);
+    sc::CookOptions        opts;
+    opts.backends     = static_cast<crd::u32>(sc::CookBackend::SpirV);
+    sc::CookResult ck = sc::cook_raster_shader(g, vs, fs, crd::containers::StringView("mat_program"), opts, &alloc);
+    REQUIRE(ck.ok);
+    CHECK(ck.spirv_bytes > 0U);
+
+    sc::ShaderBundle b(&alloc);
+    REQUIRE(sc::read_shader_bundle(crd::containers::as_const_span(ck.crdr), b));
+    const auto vspv = b.vertex_spirv();
+    const auto fspv = b.fragment_spirv();
+    REQUIRE(!vspv.empty());
+    REQUIRE(!fspv.empty());
+
+    // Both stages must be valid SPIR-V the driver accepts — that's a complete, loadable graphics program.
+    const auto make_module = [&](crd::containers::ConstSpan<crd::u8> spv) {
+        VkShaderModuleCreateInfo smci{};
+        smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        smci.codeSize = spv.size();
+        smci.pCode    = reinterpret_cast<const crd::u32*>(spv.data());
+        VkShaderModule sm = VK_NULL_HANDLE;
+        const VkResult vr = vkCreateShaderModule(vk->vk_device(), &smci, nullptr, &sm);
+        if (sm != VK_NULL_HANDLE) { vkDestroyShaderModule(vk->vk_device(), sm, nullptr); }
+        return vr;
+    };
+    CHECK(make_module(vspv) == VK_SUCCESS);
+    CHECK(make_module(fspv) == VK_SUCCESS);
+    std::printf("[raster] cooked ONE .crdr with VS SPVV (%zu B) + FS SPVF (%zu B); both accepted as VkShaderModules — a full program\n",
+                static_cast<size_t>(vspv.size()), static_cast<size_t>(fspv.size()));
+}
+
+// D-007 (neural → OpenPBR): a NEURAL material as a FRAGMENT shader that maps its coopvec-MLP outputs onto the OpenPBR surface
+// slab and writes the deferred G-buffer — so a neural material feeds the SAME lighting pass as a conventional one (closing the
+// gap that the neural render kernel wrote raw RGBA8). Proves coopvec runs per-pixel in the fragment stage and the G-buffer FS
+// compiles to real SPIR-V the driver accepts.
+TEST_CASE("D-007: neural material FRAGMENT writes the OpenPBR G-buffer (MLP outputs -> surface slab)",
+          "[gpu-context][vulkan][gpu][neural][material]")
+{
+    namespace nn = crd::kir::neural;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->cooperative_vector()) { WARN("no VK_NV_cooperative_vector; skipping"); return; }
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+
+    // A small MLP (in=hidden=out=16). Outputs [0..2]=base, [3]=metallic, [4]=roughness → the surface slab.
+    nn::CoopVecMlpConfig  mcfg;
+    crd::kir::GlslKernel  kern(&alloc);
+    REQUIRE(nn::emit_neural_surface_fs_glsl(mcfg, kern));
+
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Fragment, crd::containers::to_view(kern.source), "neural_surface", &alloc);
+    if (!spv.ok) { WARN("neural surface FS -> SPIR-V failed: " << spv.error_message.c_str()); }
+    REQUIRE(spv.ok); // shaderc compiled a coopvec MLP in the FRAGMENT stage
+    CHECK(!spv.spirv.empty());
+
+    // If the device runs coopvec in the fragment stage, the G-buffer FS is a real, driver-accepted shader module.
+    if ((vk->coopvec_supported_stages() & static_cast<crd::u32>(VK_SHADER_STAGE_FRAGMENT_BIT)) != 0U)
+    {
+        VkShaderModuleCreateInfo smci{};
+        smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        smci.codeSize = spv.spirv.size();
+        smci.pCode    = reinterpret_cast<const crd::u32*>(spv.spirv.data());
+        VkShaderModule sm = VK_NULL_HANDLE;
+        const VkResult vr = vkCreateShaderModule(vk->vk_device(), &smci, nullptr, &sm);
+        CHECK(vr == VK_SUCCESS);
+        if (sm != VK_NULL_HANDLE) { vkDestroyShaderModule(vk->vk_device(), sm, nullptr); }
+        std::printf("[neural] neural material FRAGMENT (coopvec MLP -> OpenPBR G-buffer, 4 MRT): %zu B SPIR-V, driver-accepted\n",
+                    static_cast<size_t>(spv.spirv.size()));
+    }
+    else
+    {
+        std::printf("[neural] neural surface FS compiled to %zu B SPIR-V (coopvec fragment stage not device-enabled here)\n",
+                    static_cast<size_t>(spv.spirv.size()));
+    }
+}
+
+// D-007 D6: JOINT VS+FS variant specialization. A material übershader (feature toggles as ShaderOptions in the FS) cooked as a
+// vertex+fragment PAIR sharing one graph, specialized per key as ONE unit (both entries' roots folded together — pinning one
+// then the other would stale the sibling's node ids). bit0 = emissive on/off (real); bit1 = dead ⇒ dedups.
+namespace
+{
+void build_material_program(crd::kir::KGraph& g, crd::u32 key, crd::kir::KEntry& vs_out, crd::kir::KEntry& fs_out)
+{
+    namespace k   = crd::kir;
+    namespace mat = crd::kir::material;
+    namespace ck  = crd::kir::cook;
+    const auto sh1 = k::make_shape({1});
+    const auto kf  = [&](double v) { return g.constant(v, sh1, k::DType::F32); };
+    vs_out = build_test_vs(g); // the transform + varyings
+    ck::SurfaceInputs in;
+    in.uv           = g.stage_in(k::KType::vec(k::DType::F32, 2), 0, k::Interp::Smooth);
+    in.world_normal = g.stage_in(k::KType::vec(k::DType::F32, 3), 1, k::Interp::Smooth);
+    const int opt_emissive = g.constant(0.0, sh1, k::DType::F32); // feature 0
+    const int opt_debug    = g.constant(0.0, sh1, k::DType::F32); // feature 1 — dead
+    const int base     = g.vec3(g.swizzle(in.uv, 0), g.swizzle(in.uv, 1), kf(0.5));
+    const int normal   = g.normalize(in.world_normal);
+    const int emissive = g.select(g.binary(k::KOp::CmpGt, opt_emissive, kf(0.5)), g.vec3(kf(1.0), kf(0.5), kf(0.0)), g.vec3(kf(0.0), kf(0.0), kf(0.0)));
+    const int sid      = mat::define_surface(g);
+    const int surf     = mat::build_surface(g, sid, base, kf(0.0), kf(0.5), normal, emissive, kf(1.0), kf(1.0));
+    mat::pack_gbuffer(g, fs_out, surf);
+    const int opts[2] = {opt_emissive, opt_debug};
+    crd::shadercook::specialize(g, vs_out, fs_out, opts, key, 2); // ← joint VS+FS specialization
+}
+} // namespace
+
+TEST_CASE("D-007 D6: joint VS+FS variant specialization -- material ubershader cooks as VS+FS variants + dedups",
+          "[gpu-context][vulkan][gpu][raster][d6]")
+{
+    namespace sc = crd::shadercook;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::memory::TlsfAllocator alloc(48U << 20U);
+
+    const auto cook_key = [&](crd::u32 key) {
+        crd::kir::KGraph g(&alloc);
+        crd::kir::KEntry vs;
+        crd::kir::KEntry fs;
+        build_material_program(g, key, vs, fs);
+        sc::CookOptions opts;
+        opts.backends = static_cast<crd::u32>(sc::CookBackend::SpirV);
+        return sc::cook_raster_shader(g, vs, fs, crd::containers::StringView("mat"), opts, &alloc);
+    };
+    const auto valid_module = [&](crd::containers::ConstSpan<crd::u8> spv) {
+        VkShaderModuleCreateInfo smci{};
+        smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        smci.codeSize = spv.size();
+        smci.pCode    = reinterpret_cast<const crd::u32*>(spv.data());
+        VkShaderModule sm = VK_NULL_HANDLE;
+        const VkResult vr = vkCreateShaderModule(vk->vk_device(), &smci, nullptr, &sm);
+        if (sm != VK_NULL_HANDLE) { vkDestroyShaderModule(vk->vk_device(), sm, nullptr); }
+        return vr == VK_SUCCESS;
+    };
+
+    // key 1 (emissive ON): a complete VS+FS raster material variant, both stages GPU-valid.
+    sc::CookResult r1 = cook_key(1U);
+    REQUIRE(r1.ok);
+    CHECK(r1.spirv_bytes > 0U);
+    sc::ShaderBundle b(&alloc);
+    REQUIRE(sc::read_shader_bundle(crd::containers::as_const_span(r1.crdr), b));
+    REQUIRE(!b.vertex_spirv().empty());
+    REQUIRE(!b.fragment_spirv().empty());
+    CHECK(valid_module(b.vertex_spirv()));
+    CHECK(valid_module(b.fragment_spirv()));
+
+    // DEDUP: keys 0 and 2 differ only in the DEAD bit1 ⇒ the joint specialize folds it away in BOTH stages ⇒ byte-identical bundles.
+    sc::CookResult r0 = cook_key(0U);
+    sc::CookResult r2 = cook_key(2U);
+    REQUIRE(r0.ok);
+    REQUIRE(r2.ok);
+    REQUIRE(r0.crdr.size() == r2.crdr.size());
+    CHECK(std::memcmp(r0.crdr.data(), r2.crdr.data(), r0.crdr.size()) == 0);
+    // key 0 (emissive off) ≠ key 1 (emissive on).
+    const bool same01 = (r0.crdr.size() == r1.crdr.size()) && std::memcmp(r0.crdr.data(), r1.crdr.data(), r0.crdr.size()) == 0;
+    CHECK(!same01);
+    std::printf("[d6] joint VS+FS specialize: key0==key2 (dead bit1, %zu B, deduped), key0!=key1 (emissive); both stages GPU-valid\n",
+                static_cast<size_t>(r0.crdr.size()));
+}
+
+// D-007 D7: FULL RASTER REFLECTION. The raster bundle carries the complete graphics interface derived from the IR (no
+// SPIRV-Cross): the VERTEX input layout (REFV — attributes) + the fragment descriptor bindings (REFL). So D4 builds a graphics
+// PSO from the bundle alone. The test VS declares 3 attributes (position vec3 @0, uv vec2 @1, normal vec3 @2).
+TEST_CASE("D-007 D7: full raster reflection -- the bundle carries the vertex INPUT layout", "[gpu-context][vulkan][gpu][raster][d7]")
+{
+    namespace sc = crd::shadercook;
+    crd::memory::TlsfAllocator alloc(48U << 20U);
+    crd::kir::KGraph           g(&alloc);
+    crd::kir::KEntry           vs;
+    crd::kir::KEntry           fs;
+    build_material_program(g, 1U, vs, fs);
+    sc::CookOptions opts;
+    opts.backends     = static_cast<crd::u32>(sc::CookBackend::SpirV);
+    sc::CookResult ck = sc::cook_raster_shader(g, vs, fs, crd::containers::StringView("mat"), opts, &alloc);
+    REQUIRE(ck.ok);
+
+    sc::ShaderBundle b(&alloc);
+    REQUIRE(sc::read_shader_bundle(crd::containers::as_const_span(ck.crdr), b));
+
+    // vertex input layout (REFV)
+    const auto vspan = b.vertex_reflection();
+    REQUIRE(vspan.size() == sizeof(crd::kir::ShaderReflection));
+    crd::kir::ShaderReflection vrefl{};
+    std::memcpy(&vrefl, vspan.data(), sizeof(vrefl));
+    CHECK(vrefl.stage == crd::kir::KStage::Vertex);
+    REQUIRE(vrefl.n_vattrs == 3); // position, uv, normal
+    // the attributes carry location + component count, in order
+    CHECK(vrefl.vattrs[0].comps == 3); // position vec3
+    CHECK(vrefl.vattrs[1].comps == 2); // uv vec2
+    CHECK(vrefl.vattrs[2].comps == 3); // normal vec3
+
+    // fragment descriptor bindings (REFL)
+    const auto fspan = b.reflection();
+    REQUIRE(fspan.size() == sizeof(crd::kir::ShaderReflection));
+    crd::kir::ShaderReflection frefl{};
+    std::memcpy(&frefl, fspan.data(), sizeof(frefl));
+    CHECK(frefl.stage == crd::kir::KStage::Fragment);
+    std::printf("[d7] raster reflection from the IR: %d vertex attributes + %d FS bindings — a complete graphics interface\n",
+                vrefl.n_vattrs, frefl.n_bindings);
+}
+
+// D-007 D8: the MULTI-VARIANT CONTAINER — cook a whole permutation set into ONE .crdr, key-addressed + content-hash deduped,
+// and load each key on-demand. The shipping form of variants: one file, load_variant(key) returns the (shared) bytecode. Uses
+// the 4-key/2-unique scale kernel; keys 0/2 share a bundle, 1/3 share a bundle.
+TEST_CASE("D-007 D8: multi-variant container -- one .crdr, key-addressed, deduped, on-demand load",
+          "[gpu-context][vulkan][gpu][variant][d8]")
+{
+    namespace sc = crd::shadercook;
+    namespace cg = crd::gpu;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    crd::memory::TlsfAllocator alloc(32U << 20U);
+
+    const crd::u32  keys[4] = {0U, 1U, 2U, 3U};
+    sc::CookOptions opts;
+    opts.backends = static_cast<crd::u32>(sc::CookBackend::SpirV);
+    sc::CookResult cc = sc::cook_variant_container(&build_scale_variant, nullptr, keys, 4, opts, &alloc);
+    REQUIRE(cc.ok);
+
+    sc::VariantContainer vc(&alloc);
+    REQUIRE(sc::read_variant_container(crd::containers::as_const_span(cc.crdr), vc));
+    CHECK(vc.requested_count() == 4U);
+    CHECK(vc.unique_count() == 2U); // 4 keys → 2 unique bundles, in ONE file
+    std::printf("[d8] one .crdr container: %u keys → %u unique bundles (%zu B total bytecode)\n", vc.requested_count(),
+                vc.unique_count(), static_cast<size_t>(cc.spirv_bytes));
+
+    // Load-by-key: keys 0 and 2 (dead bit1) resolve to the SAME (shared) bytecode; 1 and 3 to another.
+    const auto b0 = vc.bytecode(0U);
+    const auto b1 = vc.bytecode(1U);
+    const auto b2 = vc.bytecode(2U);
+    REQUIRE(!b0.empty());
+    REQUIRE(!b1.empty());
+    REQUIRE(!b2.empty());
+    REQUIRE(b0.size() == b2.size());
+    CHECK(std::memcmp(b0.data(), b2.data(), b0.size()) == 0); // key0 and key2 SHARE one bundle
+    const bool same01 = (b0.size() == b1.size()) && std::memcmp(b0.data(), b1.data(), b0.size()) == 0;
+    CHECK(!same01); // key0 (×1) ≠ key1 (×2)
+
+    // The loaded bytecode is REAL, runnable SPIR-V — dispatch key1's variant (×2) straight from the container.
+    auto pipe = compute.create_pipeline_from_spirv(b1, 2, 0U);
+    REQUIRE(pipe != nullptr);
+    constexpr int ls = 32;
+    float         in_h[ls];
+    float         out_h[ls];
+    for (int i = 0; i < ls; ++i) { in_h[i] = static_cast<float>(i) + 1.0F; out_h[i] = 0.0F; }
+    float*    host[2] = {in_h, out_h};
+    const int lens[2] = {ls, ls};
+    crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, 1U);
+    int bad = 0;
+    for (int i = 0; i < ls; ++i) { if (out_h[i] != in_h[i] * 2.0F) { ++bad; } }
+    CHECK(bad == 0);
+    std::printf("[d8] loaded key1's variant from the container and ran it on GPU: %d/%d ×2 correct\n", ls - bad, ls);
+}
+
+// D-007 D9: NEURAL MATERIAL COMPLETENESS. (1) A full-surface neural material — out_dim=8 so the MLP produces base+metallic+
+// roughness+LEARNED NORMAL, all written to the deferred G-buffer. (2) End-to-end training: a small MLP is trained (CPU, SGD)
+// to fit a reference surface function; the reconstruction PSNR must converge to a target — proving a neural material learns.
+TEST_CASE("D-007 D9: neural material completeness -- learned normal + end-to-end training converges", "[gpu-context][vulkan][gpu][neural][d9]")
+{
+    namespace nn = crd::kir::neural;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+
+    // (1) A full-surface neural material: out_dim=8 → base(0..2), metallic(3), roughness(4), learned normal(5..7).
+    if (vk->cooperative_vector())
+    {
+        nn::CoopVecMlpConfig fcfg;
+        fcfg.out_dim = 8;
+        crd::kir::GlslKernel kern(&alloc);
+        REQUIRE(nn::emit_neural_surface_fs_glsl(fcfg, kern));
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Fragment, crd::containers::to_view(kern.source), "neural_surf8", &alloc);
+        REQUIRE(spv.ok); // a full-surface (incl. learned normal) neural material compiles to Fragment SPIR-V
+        std::printf("[d9] full-surface neural material (out_dim=8, learned normal): %zu B Fragment SPIR-V\n", static_cast<size_t>(spv.spirv.size()));
+    }
+
+    // (2) End-to-end training: fit a 1-hidden-layer MLP (freq-encoded uv → 3 outputs) to a reference surface function.
+    constexpr int in_dim = 8; // 2 frequency bands × 4
+    constexpr int hid    = 16;
+    constexpr int out    = 3;
+    constexpr int grid   = 8; // 8×8 uv samples
+    float         w1[hid * in_dim];
+    float         b1[hid];
+    float         w2[out * hid];
+    float         b2[out];
+    const auto    rnd = [](int i) { const crd::u32 h = (static_cast<crd::u32>(i) * 2654435761U) ^ 0x9E3779B9U; return (static_cast<float>(h & 0xFFFFU) / 32768.0F - 1.0F) * 0.3F; };
+    for (int i = 0; i < hid * in_dim; ++i) { w1[i] = rnd(i); }
+    for (int i = 0; i < hid; ++i) { b1[i] = 0.0F; }
+    for (int i = 0; i < out * hid; ++i) { w2[i] = rnd(i + 971); }
+    for (int i = 0; i < out; ++i) { b2[i] = 0.0F; }
+    // reference surface: a smooth RGB pattern of (u,v)
+    const auto target = [](float u, float v, int ch) {
+        if (ch == 0) { return 0.5F + 0.5F * static_cast<float>(crd::math::sin(6.2831853 * u)); }
+        if (ch == 1) { return 0.5F + 0.5F * static_cast<float>(crd::math::cos(6.2831853 * v)); }
+        return u * v;
+    };
+    const auto encode = [](float u, float v, float* x) {
+        for (int k = 0; k < in_dim / 4; ++k) {
+            const float f = static_cast<float>(1 << k) * 3.14159265F;
+            x[4 * k + 0] = static_cast<float>(crd::math::sin(f * u));
+            x[4 * k + 1] = static_cast<float>(crd::math::cos(f * u));
+            x[4 * k + 2] = static_cast<float>(crd::math::sin(f * v));
+            x[4 * k + 3] = static_cast<float>(crd::math::cos(f * v));
+        }
+    };
+    const auto mse = [&]() {
+        float e = 0.0F;
+        for (int gy = 0; gy < grid; ++gy) {
+            for (int gx = 0; gx < grid; ++gx) {
+                const float u = (static_cast<float>(gx) + 0.5F) / grid;
+                const float v = (static_cast<float>(gy) + 0.5F) / grid;
+                float       x[in_dim];
+                encode(u, v, x);
+                float h[hid];
+                for (int j = 0; j < hid; ++j) { float s = b1[j]; for (int i = 0; i < in_dim; ++i) { s += w1[j * in_dim + i] * x[i]; } h[j] = s > 0.0F ? s : 0.0F; }
+                for (int o = 0; o < out; ++o) { float s = b2[o]; for (int j = 0; j < hid; ++j) { s += w2[o * hid + j] * h[j]; } const float d = s - target(u, v, o); e += d * d; }
+            }
+        }
+        return e / static_cast<float>(grid * grid * out);
+    };
+    const float mse0 = mse();
+    const float lr   = 0.15F;
+    for (int it = 0; it < 4000; ++it) {
+        for (int gy = 0; gy < grid; ++gy) {
+            for (int gx = 0; gx < grid; ++gx) {
+                const float u = (static_cast<float>(gx) + 0.5F) / grid;
+                const float v = (static_cast<float>(gy) + 0.5F) / grid;
+                float       x[in_dim];
+                encode(u, v, x);
+                float h[hid];
+                float pre[hid];
+                for (int j = 0; j < hid; ++j) { float s = b1[j]; for (int i = 0; i < in_dim; ++i) { s += w1[j * in_dim + i] * x[i]; } pre[j] = s; h[j] = s > 0.0F ? s : 0.0F; }
+                float dy[out];
+                for (int o = 0; o < out; ++o) { float s = b2[o]; for (int j = 0; j < hid; ++j) { s += w2[o * hid + j] * h[j]; } dy[o] = 2.0F * (s - target(u, v, o)) / static_cast<float>(out); }
+                float dh[hid];
+                for (int j = 0; j < hid; ++j) { float s = 0.0F; for (int o = 0; o < out; ++o) { s += w2[o * hid + j] * dy[o]; } dh[j] = pre[j] > 0.0F ? s : 0.0F; }
+                for (int o = 0; o < out; ++o) { for (int j = 0; j < hid; ++j) { w2[o * hid + j] -= lr * dy[o] * h[j]; } b2[o] -= lr * dy[o]; }
+                for (int j = 0; j < hid; ++j) { for (int i = 0; i < in_dim; ++i) { w1[j * in_dim + i] -= lr * dh[j] * x[i]; } b1[j] -= lr * dh[j]; }
+            }
+        }
+    }
+    const float mse1 = mse();
+    const float psnr = static_cast<float>(-10.0 * crd::math::log10(static_cast<double>(mse1 < 1e-12F ? 1e-12F : mse1)));
+    std::printf("[d9] neural material training: MSE %.5f -> %.6f, reconstruction PSNR %.1f dB\n", static_cast<double>(mse0), static_cast<double>(mse1), static_cast<double>(psnr));
+    CHECK(mse1 < mse0 * 0.2F); // training converged
+    CHECK(psnr >= 20.0F);      // the learned surface reproduces the reference
+}
+
+// D-007 D10: PARALLEL COOK on the fiber-based crd-jobs scheduler (NOT a bespoke pool). Cook a variant matrix concurrently and
+// prove it's byte-identical to the serial cook (content-hash dedup is order-independent) — each job on its own allocator,
+// writing content-addressed to the cache. More variants → more parallelism, deterministic result.
+TEST_CASE("D-007 D10: parallel cook on crd-jobs is byte-identical to the serial cook", "[gpu-context][gpu][variant][d10]")
+{
+    namespace sc = crd::shadercook;
+    crd::memory::TlsfAllocator alloc(64U << 20U);
+
+    // 8 keys (bit0 = scale) → 2 unique. Cook serially, then in parallel, into two cache dirs; compare the produced files.
+    const crd::u32 keys[8] = {0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U};
+    const char*    scdir   = "C:/Users/abici/AppData/Local/Temp/claude/D--Dev-cerid/b0138d6a-548b-428b-87b2-fe30c9f36f7c/scratchpad/cook-serial";
+    const char*    pcdir   = "C:/Users/abici/AppData/Local/Temp/claude/D--Dev-cerid/b0138d6a-548b-428b-87b2-fe30c9f36f7c/scratchpad/cook-parallel";
+    (void)crd::platform::fs::create_directories(crd::platform::fs::Path(scdir));
+    (void)crd::platform::fs::create_directories(crd::platform::fs::Path(pcdir));
+
+    sc::CookOptions so;
+    so.backends  = static_cast<crd::u32>(sc::CookBackend::SpirV);
+    so.cache_dir = scdir;
+    sc::VariantMatrixResult serial = sc::cook_variant_matrix(&build_scale_variant, nullptr, keys, 8, so, &alloc);
+    REQUIRE(serial.ok);
+
+    crd::jobs::init(crd::jobs::Config{.num_threads = 4});
+    sc::CookOptions po;
+    po.backends  = static_cast<crd::u32>(sc::CookBackend::SpirV);
+    po.cache_dir = pcdir;
+    sc::VariantMatrixResult par = sc::cook_variant_matrix_parallel(&build_scale_variant, nullptr, keys, 8, po, &alloc);
+    crd::jobs::shutdown();
+    REQUIRE(par.ok);
+
+    // Same telemetry, same manifest (key → hash).
+    CHECK(serial.requested == par.requested);
+    CHECK(serial.unique == par.unique);
+    REQUIRE(serial.entries.size() == par.entries.size());
+    bool manifest_match = true;
+    for (crd::usize i = 0; i < serial.entries.size(); ++i)
+    {
+        if (!(serial.entries[i].hash == par.entries[i].hash) || serial.entries[i].key != par.entries[i].key) { manifest_match = false; }
+    }
+    CHECK(manifest_match);
+
+    // Each unique cache file the parallel cook wrote is BYTE-IDENTICAL to the serial one.
+    int checked = 0;
+    for (crd::usize i = 0; i < serial.entries.size(); ++i)
+    {
+        crd::containers::String idstr = serial.entries[i].hash.to_string(&alloc);
+        char                    suffix[24];
+        std::snprintf(suffix, sizeof(suffix), "_%08x.crdr", static_cast<crd::u32>(sc::CookBackend::SpirV));
+        crd::containers::String sp(&alloc);
+        sp.append(scdir); sp.append("/"); sp.append(idstr.c_str()); sp.append(suffix);
+        crd::containers::String pp(&alloc);
+        pp.append(pcdir); pp.append("/"); pp.append(idstr.c_str()); pp.append(suffix);
+        crd::containers::Array<crd::u8> sb(&alloc);
+        crd::containers::Array<crd::u8> pb(&alloc);
+        if (crd::platform::fs::read_file_binary(crd::platform::fs::Path(sp.c_str()), sb)
+            && crd::platform::fs::read_file_binary(crd::platform::fs::Path(pp.c_str()), pb))
+        {
+            REQUIRE(sb.size() == pb.size());
+            CHECK(std::memcmp(sb.data(), pb.data(), sb.size()) == 0);
+            ++checked;
+        }
+    }
+    CHECK(checked >= 1);
+    std::printf("[d10] parallel cook (crd-jobs, 4 workers): 8 keys -> %u unique, manifest matches serial, %d cache files byte-identical\n",
+                par.unique, checked);
+}
+
+// D-007 D11 (ADR-0104): ASYNC PIPELINE WARMUP. The render-thread payoff of the deploy chain — build a batch of live pipelines
+// OFF the render thread on the fiber scheduler (crd-jobs, NOT a bespoke pool). submit() is non-blocking; the main thread does
+// other work while a background worker compiles SPIR-V→ISA; wait() joins and the pipelines are hot. Proven by: submit() returns
+// immediately (main-thread work runs before the warm finishes), all requested pipelines build, each is dispatch-correct on the
+// render thread (a VkPipeline built on a worker binds anywhere), and key lookup maps a variant key → its ready pipeline.
+TEST_CASE("D-007 D11: async pipeline warmup on crd-jobs -- pipelines built off the render thread, dispatch-correct",
+          "[gpu-context][vulkan][gpu][d11]")
+{
+    namespace sc = crd::shadercook;
+    namespace cg = crd::gpu;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    crd::memory::TlsfAllocator alloc(32U << 20U);
+
+    // Cook two variants (scale x1 @ key0, x2 @ key1); hold the CookResults + bundles so the SPIR-V spans stay valid through wait().
+    sc::CookOptions opts;
+    opts.backends = static_cast<crd::u32>(sc::CookBackend::SpirV);
+    sc::CookResult r0 = sc::cook_one_variant(&build_scale_variant, nullptr, 0U, crd::containers::StringView("v0"), opts, &alloc);
+    sc::CookResult r1 = sc::cook_one_variant(&build_scale_variant, nullptr, 1U, crd::containers::StringView("v1"), opts, &alloc);
+    REQUIRE(r0.ok);
+    REQUIRE(r1.ok);
+    sc::ShaderBundle b0(&alloc);
+    sc::ShaderBundle b1(&alloc);
+    REQUIRE(sc::read_shader_bundle(crd::containers::as_const_span(r0.crdr), b0));
+    REQUIRE(sc::read_shader_bundle(crd::containers::as_const_span(r1.crdr), b1));
+
+    crd::jobs::init(crd::jobs::Config{.num_threads = 4});
+
+    // Queue the warm, kick it (non-blocking), then do UNRELATED main-thread work while a worker compiles the pipelines.
+    sc::AsyncPipelineWarmer warmer(&alloc);
+    warmer.add(b0.bytecode(sc::CookBackend::SpirV), 2, 0U);
+    warmer.add(b1.bytecode(sc::CookBackend::SpirV), 2, 1U);
+    warmer.submit(&vk_create_from_spirv, &compute); // reuses the D5 create-callback (context = user)
+    REQUIRE(warmer.in_flight());                    // submit() did NOT block — the warm is running on a worker
+    crd::u64 spin = 0U;                             // main-thread work overlapping the background compile (must not touch `compute`)
+    for (crd::u32 i = 0U; i < 200000U; ++i) { spin += (i * 2654435761U) ^ (spin >> 3U); }
+    warmer.wait();                                  // join — the batch is hot
+    CHECK(spin != 0U);                              // (defeat dead-code elimination of the overlap work)
+
+    REQUIRE(warmer.count() == 2U);
+    CHECK(warmer.warmed() == 2U);
+    REQUIRE(warmer.pipeline(0U) != nullptr);
+    REQUIRE(warmer.pipeline(1U) != nullptr);
+    CHECK(warmer.pipeline_for_key(0U) == warmer.pipeline(0U));
+    CHECK(warmer.pipeline_for_key(1U) == warmer.pipeline(1U));
+
+    // Each worker-built pipeline dispatches correctly ON THE RENDER (main) thread.
+    const auto run = [&](cg::ComputePipeline* pipe, float expect_scale) {
+        constexpr int ls = 32;
+        float         in_h[ls];
+        float         out_h[ls];
+        for (int i = 0; i < ls; ++i) { in_h[i] = static_cast<float>(i) + 1.0F; out_h[i] = 0.0F; }
+        float*    host[2] = {in_h, out_h};
+        const int lens[2] = {ls, ls};
+        crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, 1U);
+        int bad = 0;
+        for (int i = 0; i < ls; ++i) { if (out_h[i] != in_h[i] * expect_scale) { ++bad; } }
+        return bad;
+    };
+    CHECK(run(warmer.pipeline_for_key(0U), 1.0F) == 0); // x1
+    CHECK(run(warmer.pipeline_for_key(1U), 2.0F) == 0); // x2
+
+    crd::jobs::shutdown();
+    std::printf("[d11] async warmup: 2 pipelines built on a crd-jobs worker off the render thread (submit non-blocking), "
+                "both dispatch-correct on the main thread\n");
+}
+
+// D-007 D12: a kernel whose scale is a SPECIALIZATION CONSTANT (id 0, default 1.0) — outb[lid] = inb[lid] * spec0. The spec
+// constant is NOT baked at cook; it stays in the SPIR-V as an OpSpecConstant the pipeline sets at build time.
+namespace
+{
+crd::kir::KEntry build_spec_scale_kernel(crd::kir::KGraph& g)
+{
+    namespace k       = crd::kir;
+    const int  inbuf  = g.buffer_decl(k::DType::F32, 0, 0, false);
+    const int  outbuf = g.buffer_decl(k::DType::F32, 0, 1, true);
+    const int  lid    = g.builtin(k::KBuiltin::LocalInvocationIndex);
+    const int  scale  = g.spec_constant(0U, 1.0, k::DType::F32); // pipeline-time scale, default 1.0 (constant_id = 0)
+    const int  mark   = g.kernel_stmt_mark();
+    g.stmt_buffer_store(outbuf, lid, g.binary(k::KOp::Mul, g.buffer_load(inbuf, lid), scale));
+    k::KEntry e;
+    e.stage             = k::KStage::Compute;
+    e.local_size[0]     = 32;
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
+    return e;
+}
+} // namespace
+
+// D-007 D12 (ADR-0104): SPEC-CONSTANT BINDING AT LOAD — ONE cooked bundle serves MANY runtime-cheap variants. Cook a kernel with
+// a specialization-constant scale ONCE, then build SEVERAL pipelines from the SAME cooked SPIR-V, each binding a different value
+// via VkSpecializationInfo (the driver folds it into the ISA at pipeline-creation) — no recook, no separate bundle. Contrast the
+// D3 variant matrix, which cooks a distinct bundle per value; spec constants are the cheaper axis for values that don't change
+// the control flow. Proven: 4 different scales (incl. the unbound DEFAULT) all run GPU-correct from one bundle.
+TEST_CASE("D-007 D12: spec constants -- one cooked bundle, many pipelines via VkSpecializationInfo", "[gpu-context][vulkan][gpu][d12]")
+{
+    namespace sc  = crd::shadercook;
+    namespace kir = crd::kir;
+    namespace cg  = crd::gpu;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    crd::memory::TlsfAllocator alloc(32U << 20U);
+
+    // COOK ONCE. The spec constant survives cooking (it is not const-folded), so the SPIR-V carries an OpSpecConstant.
+    kir::KGraph       g(&alloc);
+    const kir::KEntry e = build_spec_scale_kernel(g);
+    sc::CookOptions   opts;
+    opts.backends     = static_cast<crd::u32>(sc::CookBackend::SpirV);
+    sc::CookResult ck = sc::cook_compute_shader(g, e, crd::containers::StringView("spec_scale"), opts, &alloc);
+    REQUIRE(ck.ok);
+    CHECK(ck.spirv_bytes > 0U);
+    sc::ShaderBundle b(&alloc);
+    REQUIRE(sc::read_shader_bundle(crd::containers::as_const_span(ck.crdr), b));
+    const auto spv = b.bytecode(sc::CookBackend::SpirV);
+    REQUIRE(!spv.empty());
+
+    using SC = cg::VulkanComputeContext::SpecConstantBinding;
+    const auto run_with_scale = [&](cg::ComputePipeline* pipe, float expect_scale) {
+        REQUIRE(pipe != nullptr);
+        constexpr int ls = 32;
+        float         in_h[ls];
+        float         out_h[ls];
+        for (int i = 0; i < ls; ++i) { in_h[i] = static_cast<float>(i) + 1.0F; out_h[i] = 0.0F; }
+        float*    host[2] = {in_h, out_h};
+        const int lens[2] = {ls, ls};
+        crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, 1U);
+        int bad = 0;
+        for (int i = 0; i < ls; ++i) { if (out_h[i] != in_h[i] * expect_scale) { ++bad; } }
+        return bad;
+    };
+    // Four pipelines from the SAME cooked bytecode — three explicit spec values + the unbound default — all correct, no recompile.
+    const float scales[3] = {2.0F, 3.5F, 0.25F};
+    for (float sv : scales)
+    {
+        crd::u32 bits = 0U;
+        std::memcpy(&bits, &sv, 4);
+        SC       specs[1] = {{0U, bits}};
+        auto     pipe     = compute.create_pipeline_from_spirv(spv, 2, 0U, crd::containers::ConstSpan<SC>(specs, 1));
+        CHECK(run_with_scale(pipe.get(), sv) == 0);
+    }
+    auto pdef = compute.create_pipeline_from_spirv(spv, 2, 0U); // NO spec binding → the constant's DEFAULT (1.0)
+    CHECK(run_with_scale(pdef.get(), 1.0F) == 0);
+
+    // ONE bundle: re-cooking is content-hash identical regardless of any runtime spec value (the value is not in the IR).
+    sc::CookResult ck2 = sc::cook_compute_shader(g, e, crd::containers::StringView("spec_scale"), opts, &alloc);
+    REQUIRE(ck2.ok);
+    REQUIRE(ck.crdr.size() == ck2.crdr.size());
+    CHECK(std::memcmp(ck.crdr.data(), ck2.crdr.data(), ck.crdr.size()) == 0);
+    std::printf("[d12] one cooked bundle (%u B SPIR-V) served scale 2.0 / 3.5 / 0.25 + default(1.0) via VkSpecializationInfo "
+                "(zero recook)\n", ck.spirv_bytes);
 }

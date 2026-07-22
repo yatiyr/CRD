@@ -60,15 +60,21 @@ namespace
 {
 // NVRTC: compile CUDA C (null-terminated `src`) → a CUBIN for the GPU's exact `arch` (e.g. "sm_89"), into `cubin`.
 // CUBIN loads directly (no PTX JIT) ⇒ no unsupported-PTX-version when the driver is older than the toolkit.
-// Deterministic flags (--fmad=false + correctly-rounded div/sqrt). false on failure (dumps the NVRTC log).
-bool compile_cubin(const char* src, const char* arch, crd::containers::Array<char>& cubin)
+// `allow_fma=false` = the DETERMINISTIC flags (--fmad=false + correctly-rounded div/sqrt) ⇒ bit-exact vs the CPU oracle — the
+// default for every bit-exact kernel. `allow_fma=true` = the FAST/PERF tier (T1, already ULP-tolerant, NOT bit-exact): enable
+// FMA fusion, which nearly DOUBLES GEMM throughput (--fmad=false forces every a*b+c into a separate mul+add — the AS-4 vendor-gap
+// cause). Only the fast-tier WarpTiled GEMM opts in. false on failure (dumps the NVRTC log).
+bool compile_cubin(const char* src, const char* arch, crd::containers::Array<char>& cubin, bool allow_fma)
 {
     nvrtcProgram prog = nullptr;
     if (nvrtcCreateProgram(&prog, src, "ckir.cu", 0, nullptr, nullptr) != NVRTC_SUCCESS) { return false; }
     char archopt[32];
     std::snprintf(archopt, sizeof(archopt), "--gpu-architecture=%s", arch);
-    const char*       opts[] = {"--fmad=false", "--prec-div=true", "--prec-sqrt=true", archopt};
-    const nvrtcResult r      = nvrtcCompileProgram(prog, 4, opts);
+    const char*       fast_opts[] = {"--fmad=true", archopt};
+    const char*       det_opts[]  = {"--fmad=false", "--prec-div=true", "--prec-sqrt=true", archopt};
+    const char* const* opts       = allow_fma ? fast_opts : det_opts;
+    const int          nopt       = allow_fma ? 2 : 4;
+    const nvrtcResult  r          = nvrtcCompileProgram(prog, nopt, opts);
     if (r != NVRTC_SUCCESS)
     {
         size_t logsz = 0;
@@ -157,6 +163,7 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
     crd::u32   d3 = 0;
     bool       tiled = false;                  // WarpTiled Contract schedule chosen (2D grid, M,N,K arg order)
     bool       fused = false;                  // GEMM+epilogue fusion chosen (extra bias params, epilogue in the store)
+    bool       fast_fma = false;               // the WarpTiled fast tier (fma=true) ⇒ compile with FMA fusion (AS-4 perf)
     crd::u32   tgx = 0;
     crd::u32   tgy = 0;
     crd::u32   tbx = 0;
@@ -182,6 +189,7 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
             out_bytes = static_cast<crd::u64>(d0) * d2 * sizeof(float);
             tiled     = true;
             fused     = true;
+            fast_fma  = sch.fma;
             tgx       = d2 / static_cast<crd::u32>(sch.bn);
             tgy       = d0 / static_cast<crd::u32>(sch.bm);
             tbx       = static_cast<crd::u32>(sch.nt);
@@ -207,8 +215,9 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
         const TileSchedule sch = select_schedule(g, output);
         if (sch.kind == Sched::WarpTiled && emit_contract_tiled_cuda(g, output, sch, kern) && kern.n_inputs == n_inputs)
         {
-            tiled = true;
-            tgx   = d2 / static_cast<crd::u32>(sch.bn); // N / BN
+            tiled    = true;
+            fast_fma = sch.fma;
+            tgx      = d2 / static_cast<crd::u32>(sch.bn); // N / BN
             tgy   = d0 / static_cast<crd::u32>(sch.bm); // M / BM
             tbx   = static_cast<crd::u32>(sch.nt);
         }
@@ -299,7 +308,7 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
     if (fn == nullptr)
     {
         crd::containers::Array<char> cubin(impl.alloc);
-        if (!compile_cubin(kern.source.c_str(), impl.arch, cubin)) { return false; }
+        if (!compile_cubin(kern.source.c_str(), impl.arch, cubin, fast_fma)) { return false; }
         CUmodule       mod = nullptr;
         const CUresult ldr = cuModuleLoadData(&mod, cubin.data());
         if (ldr != CUDA_SUCCESS) { std::fprintf(stderr, "[ckir-cuda] cuModuleLoadData failed: %d\n", static_cast<int>(ldr)); return false; }
@@ -355,6 +364,210 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
     const crd::u32 gy = tiled ? tgy : 1U;
     const crd::u32 bx = tiled ? tbx : 256U;
     return launch_and_readback(impl.stream, fn, gx, gy, bx, params, impl.pool_in, in_bytes, n_inputs, kern.input_iidx, inputs, impl.pool_out, out_bytes, out);
+}
+
+// AS-1b: measure ONE explicit schedule for a Contract. Self-contained (local module + buffers, freed here) so the autotuner can
+// sweep hundreds of candidates without polluting run()'s persistent cache. Timing is CUDA-event (GPU timestamps) over `iters`
+// launches after `warmup`, min-of-iters — upload/readback are OUTSIDE the timed region. `out` gets the last launch's result.
+ContractTiming KirBackendCuda::time_contract_schedule(const KGraph& g, int output, const TileSchedule& sched,
+                                                      const float* const* inputs, int n_inputs, float* out, int warmup,
+                                                      int iters)
+{
+    ContractTiming t;
+    auto&          impl = *m_impl;
+    if (!impl.ok || n_inputs != 2 || iters <= 0) { return t; }
+    const KNode& c = g.node(output);
+    if (c.op != KOp::Contract) { return t; }
+    const KNode&   an = g.node(c.a);
+    const KNode&   bn = g.node(c.b);
+    const int      r  = an.shape.rank;
+    if (r < 2 || bn.shape.rank < 2) { return t; }
+    const crd::u32 mm = static_cast<crd::u32>(an.shape.dims[r - 2]);
+    const crd::u32 kk = static_cast<crd::u32>(an.shape.dims[r - 1]);
+    const crd::u32 nn = static_cast<crd::u32>(bn.shape.dims[bn.shape.rank - 1]);
+    crd::u32       batch = 1U;
+    for (int k = 0; k < r - 2; ++k) { batch *= static_cast<crd::u32>(an.shape.dims[k]); }
+
+    // 1. emit with the GIVEN schedule (tiled), else the naive baseline
+    GlslKernel kern(impl.alloc);
+    bool       tiled = false;
+    if (sched.kind == Sched::WarpTiled && batch == 1U && emit_contract_tiled_cuda(g, output, sched, kern) && kern.n_inputs == n_inputs)
+    {
+        tiled = true;
+    }
+    else if (!emit_contract_cuda(g, output, kern) || kern.n_inputs != n_inputs) { return t; }
+
+    // 2. compile locally (own module — freed at the end; no persistent-cache churn during a sweep). The fast tier (WarpTiled
+    // fma=true) compiles WITH FMA fusion — the AS-4 perf lever (--fmad=false halves GEMM throughput).
+    crd::containers::Array<char> cubin(impl.alloc);
+    if (!compile_cubin(kern.source.c_str(), impl.arch, cubin, tiled && sched.fma)) { return t; }
+    CUmodule mod = nullptr;
+    if (cuModuleLoadData(&mod, cubin.data()) != CUDA_SUCCESS) { return t; }
+    CUfunction fn = nullptr;
+    if (cuModuleGetFunction(&fn, mod, "ckir") != CUDA_SUCCESS) { cuModuleUnload(mod); return t; }
+
+    // 3. buffers + upload (outside the timed region)
+    const crd::u64 in0_bytes = static_cast<crd::u64>(mm) * kk * batch * sizeof(float);
+    const crd::u64 in1_bytes = static_cast<crd::u64>(kk) * nn * batch * sizeof(float);
+    const crd::u64 out_bytes = static_cast<crd::u64>(mm) * nn * batch * sizeof(float);
+    CUdeviceptr    d_in0 = 0;
+    CUdeviceptr    d_in1 = 0;
+    CUdeviceptr    d_out = 0;
+    bool           mok   = cuMemAlloc(&d_in0, in0_bytes) == CUDA_SUCCESS && cuMemAlloc(&d_in1, in1_bytes) == CUDA_SUCCESS
+                       && cuMemAlloc(&d_out, out_bytes) == CUDA_SUCCESS;
+    if (mok)
+    {
+        mok = cuMemcpyHtoD(d_in0, inputs[kern.input_iidx[0]], in0_bytes) == CUDA_SUCCESS
+           && cuMemcpyHtoD(d_in1, inputs[kern.input_iidx[1]], in1_bytes) == CUDA_SUCCESS;
+    }
+    if (mok)
+    {
+        // 4. params + grid (tiled: ckir(A,Bm,C,M,N,K); naive: ckir(A,Bm,C,M,K,N,batch))
+        void*    params[8];
+        int      np = 0;
+        crd::u32 pm = mm;
+        crd::u32 pn = nn;
+        crd::u32 pk = kk;
+        crd::u32 pb = batch;
+        params[np++] = &d_in0;
+        params[np++] = &d_in1;
+        params[np++] = &d_out;
+        if (tiled) { params[np++] = &pm; params[np++] = &pn; params[np++] = &pk; }
+        else { params[np++] = &pm; params[np++] = &pk; params[np++] = &pn; params[np++] = &pb; }
+        const crd::u32 gx = tiled ? (nn / static_cast<crd::u32>(sched.bn)) : (mm * nn * batch + 255U) / 256U;
+        const crd::u32 gy = tiled ? (mm / static_cast<crd::u32>(sched.bm)) : 1U;
+        const crd::u32 bx = tiled ? static_cast<crd::u32>(sched.nt) : 256U;
+
+        // 5. warmup, then GPU-event-timed min-of-iters
+        for (int w = 0; w < warmup; ++w)
+        {
+            cuLaunchKernel(fn, gx, gy, 1U, bx, 1U, 1U, 0U, impl.stream, params, nullptr);
+        }
+        cuStreamSynchronize(impl.stream);
+        CUevent ev0 = nullptr;
+        CUevent ev1 = nullptr;
+        if (cuEventCreate(&ev0, CU_EVENT_DEFAULT) == CUDA_SUCCESS && cuEventCreate(&ev1, CU_EVENT_DEFAULT) == CUDA_SUCCESS)
+        {
+            double best = 1.0e30;
+            bool   any  = false;
+            for (int it = 0; it < iters; ++it)
+            {
+                cuEventRecord(ev0, impl.stream);
+                const CUresult lr = cuLaunchKernel(fn, gx, gy, 1U, bx, 1U, 1U, 0U, impl.stream, params, nullptr);
+                cuEventRecord(ev1, impl.stream);
+                if (cuEventSynchronize(ev1) != CUDA_SUCCESS || lr != CUDA_SUCCESS) { break; }
+                float ms = 0.0F;
+                if (cuEventElapsedTime(&ms, ev0, ev1) == CUDA_SUCCESS) { any = true; if (ms < best) { best = static_cast<double>(ms); } }
+            }
+            if (any)
+            {
+                cuMemcpyDtoH(out, d_out, out_bytes); // readback for the oracle
+                t.ok     = true;
+                t.min_ms = best;
+            }
+            cuEventDestroy(ev0);
+            cuEventDestroy(ev1);
+        }
+    }
+    if (d_in0 != 0) { cuMemFree(d_in0); }
+    if (d_in1 != 0) { cuMemFree(d_in1); }
+    if (d_out != 0) { cuMemFree(d_out); }
+    cuModuleUnload(mod);
+    return t;
+}
+
+// AS-4 (the FUSED crush): time the fused GEMM+epilogue kernel — one launch does GEMM + per-column bias + activation, the pass
+// cuBLAS must do separately. Mirrors time_contract_schedule (local module, event-timed) but emits the fused kernel + binds the
+// bias inputs. Self-contained; freed here.
+ContractTiming KirBackendCuda::time_fused_contract(const KGraph& g, int output, const float* const* inputs, int n_inputs,
+                                                   float* out, int warmup, int iters)
+{
+    ContractTiming t;
+    auto&          impl = *m_impl;
+    if (!impl.ok || n_inputs < 2 || n_inputs > kMaxIn || iters <= 0) { return t; }
+    const FuseInfo fuse = detect_fuse(g, output, impl.alloc);
+    if (!fuse.ok) { return t; }
+    const TileSchedule sch = select_schedule(g, fuse.contract);
+    if (sch.kind != Sched::WarpTiled) { return t; }
+    GlslKernel kern(impl.alloc);
+    if (!emit_contract_tiled_fused_cuda(g, output, fuse.contract, sch, fuse, impl.alloc, kern) || kern.n_inputs != n_inputs) { return t; }
+
+    const KNode&   cn = g.node(fuse.contract);
+    const KNode&   an = g.node(cn.a);
+    const KNode&   bn = g.node(cn.b);
+    const int      r  = an.shape.rank;
+    const crd::u32 mm = static_cast<crd::u32>(an.shape.dims[r - 2]);
+    const crd::u32 kk = static_cast<crd::u32>(an.shape.dims[r - 1]);
+    const crd::u32 nn = static_cast<crd::u32>(bn.shape.dims[bn.shape.rank - 1]);
+
+    crd::containers::Array<char> cubin(impl.alloc);
+    if (!compile_cubin(kern.source.c_str(), impl.arch, cubin, sch.fma)) { return t; }
+    CUmodule mod = nullptr;
+    if (cuModuleLoadData(&mod, cubin.data()) != CUDA_SUCCESS) { return t; }
+    CUfunction fn = nullptr;
+    if (cuModuleGetFunction(&fn, mod, "ckir") != CUDA_SUCCESS) { cuModuleUnload(mod); return t; }
+
+    crd::u64    in_bytes[kMaxIn] = {};
+    in_bytes[0]                  = static_cast<crd::u64>(mm) * kk * sizeof(float);
+    in_bytes[1]                  = static_cast<crd::u64>(kk) * nn * sizeof(float);
+    for (int j = 2; j < n_inputs; ++j) { in_bytes[j] = static_cast<crd::u64>(nn) * sizeof(float); } // per-column bias [N]
+    const crd::u64 out_bytes = static_cast<crd::u64>(mm) * nn * sizeof(float);
+    CUdeviceptr    d_in[kMaxIn] = {};
+    CUdeviceptr    d_out        = 0;
+    bool           mok          = cuMemAlloc(&d_out, out_bytes) == CUDA_SUCCESS;
+    for (int i = 0; i < n_inputs && mok; ++i)
+    {
+        mok = cuMemAlloc(&d_in[i], in_bytes[i]) == CUDA_SUCCESS
+           && cuMemcpyHtoD(d_in[i], inputs[kern.input_iidx[i]], in_bytes[i]) == CUDA_SUCCESS;
+    }
+    if (mok)
+    {
+        void*    params[kMaxIn + 8];
+        int      np = 0;
+        crd::u32 pm = mm;
+        crd::u32 pn = nn;
+        crd::u32 pk = kk;
+        params[np++] = &d_in[0]; // A
+        params[np++] = &d_in[1]; // Bm
+        params[np++] = &d_out;   // C
+        for (int j = 2; j < n_inputs; ++j) { params[np++] = &d_in[j]; } // bias0..
+        params[np++] = &pm;
+        params[np++] = &pn;
+        params[np++] = &pk; // ckir(A,Bm,C,bias..,M,N,K)
+        const crd::u32 gx = nn / static_cast<crd::u32>(sch.bn);
+        const crd::u32 gy = mm / static_cast<crd::u32>(sch.bm);
+        const crd::u32 bx = static_cast<crd::u32>(sch.nt);
+        for (int w = 0; w < warmup; ++w) { cuLaunchKernel(fn, gx, gy, 1U, bx, 1U, 1U, 0U, impl.stream, params, nullptr); }
+        cuStreamSynchronize(impl.stream);
+        CUevent ev0 = nullptr;
+        CUevent ev1 = nullptr;
+        if (cuEventCreate(&ev0, CU_EVENT_DEFAULT) == CUDA_SUCCESS && cuEventCreate(&ev1, CU_EVENT_DEFAULT) == CUDA_SUCCESS)
+        {
+            double best = 1.0e30;
+            bool   any  = false;
+            for (int it = 0; it < iters; ++it)
+            {
+                cuEventRecord(ev0, impl.stream);
+                const CUresult lr = cuLaunchKernel(fn, gx, gy, 1U, bx, 1U, 1U, 0U, impl.stream, params, nullptr);
+                cuEventRecord(ev1, impl.stream);
+                if (cuEventSynchronize(ev1) != CUDA_SUCCESS || lr != CUDA_SUCCESS) { break; }
+                float ms = 0.0F;
+                if (cuEventElapsedTime(&ms, ev0, ev1) == CUDA_SUCCESS) { any = true; if (ms < best) { best = static_cast<double>(ms); } }
+            }
+            if (any)
+            {
+                cuMemcpyDtoH(out, d_out, out_bytes);
+                t.ok     = true;
+                t.min_ms = best;
+            }
+            cuEventDestroy(ev0);
+            cuEventDestroy(ev1);
+        }
+    }
+    for (int i = 0; i < n_inputs; ++i) { if (d_in[i] != 0) { cuMemFree(d_in[i]); } }
+    if (d_out != 0) { cuMemFree(d_out); }
+    cuModuleUnload(mod);
+    return t;
 }
 
 } // namespace crd::kir

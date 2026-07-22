@@ -41,7 +41,8 @@ enum class ComputeAccess : crd::u8
     TransferDst,
     ShaderRead,
     ShaderWrite,
-    HostRead, // for CPU readback of a shader-written host-visible buffer (barrier before map())
+    HostRead,     // for CPU readback of a shader-written host-visible buffer (barrier before map())
+    IndirectRead, // C5: a compute-written args buffer read by vkCmdDispatchIndirect (ShaderWrite → IndirectRead). Appended at END.
 };
 
 // Opaque GPU buffer. `map`/`unmap` valid only for CpuToGpu/GpuToCpu.
@@ -95,6 +96,11 @@ public:
     // must equal the pipeline's binding count.
     virtual void dispatch(ComputePipeline& pipeline, crd::containers::ConstSpan<ComputeBuffer*> bindings,
                           const void* push, crd::u32 push_size, crd::u32 gx, crd::u32 gy, crd::u32 gz)             = 0;
+    // C5: GPU-DRIVEN DISPATCH — the workgroup count comes from `args` (a compute-written buffer, usage `indirect`: three u32
+    // {gx,gy,gz} at `args_offset`) instead of the CPU, so a preceding compute pass DECIDES the next pass's size with no CPU
+    // round-trip (`vkCmdDispatchIndirect`). Appended at END (vtable stability); default no-op ⇒ backends opt in.
+    virtual void dispatch_indirect(ComputePipeline& /*pipeline*/, crd::containers::ConstSpan<ComputeBuffer*> /*bindings*/,
+                                   const void* /*push*/, crd::u32 /*push_size*/, ComputeBuffer& /*args*/, crd::u64 /*args_offset*/) {}
 };
 
 // The one GPU compute dispatch surface (ADR-0100). Kernel-source-agnostic: pipelines are requested BY NAME and the

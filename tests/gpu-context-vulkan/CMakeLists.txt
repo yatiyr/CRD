@@ -18,6 +18,8 @@ target_link_libraries(crd-gpu-context-vulkan-tests PRIVATE
     crd-kir                  # the CKIR IR + GLSL emitter under test
     crd-gpu-context
     crd-gpu-context-vulkan
+    crd-shader-cook          # D-007 D2: the offline cook (CKIR graph -> .crdr bundle) under test
+    crd-jobs                 # D-007 D10: the fiber scheduler for the parallel-cook test (jobs::init/shutdown)
     Catch2::Catch2WithMain
 )
 

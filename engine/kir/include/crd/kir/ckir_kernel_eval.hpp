@@ -108,7 +108,7 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
     // Collapses the recursive re-walk that makes deep noise / cloud-density graphs intractable. DISABLED when the graph has
     // subgroup ops (they change `tid` MID-eval ⇒ a value cached under one lane would be wrong for another).
     bool has_subgroup = false;
-    for (int i = 0; i < nnode; ++i) { const KOp op = g.node(i).op; if (op == KOp::SubgroupBallot || op == KOp::SubgroupMatch || op == KOp::SubgroupBallotExclCount) { has_subgroup = true; break; } }
+    for (int i = 0; i < nnode; ++i) { const KOp op = g.node(i).op; if (op == KOp::SubgroupBallot || op == KOp::SubgroupMatch || op == KOp::SubgroupBallotExclCount || (op >= KOp::SubgroupAdd && op <= KOp::QuadSwapDiagonal)) { has_subgroup = true; break; } }
     Array<crd::f64> memo(scratch);     memo.resize(static_cast<crd::usize>(nnode), 0.0);
     Array<crd::i64> memo_gen(scratch); memo_gen.resize(static_cast<crd::usize>(nnode), -1);
     crd::i64        cur_gen    = 0;
@@ -176,6 +176,93 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                 int            cnt  = 0;
                 for (crd::u32 v = low; v != 0U; v >>= 1U) { cnt += static_cast<int>(v & 1U); }
                 r = static_cast<crd::f64>(cnt);
+                break;
+            }
+            // B11: WAVE reductions over the 32-lane subgroup. Sums accumulate in f64 (32·u32 < 2^53) then `round_dtype` wraps
+            //   mod-2^32 for U32 (modular add is associative ⇒ == the GPU's per-step wrap); bitwise stay in u32; min/max compare.
+            case KOp::SubgroupAdd:
+            case KOp::SubgroupMin:
+            case KOp::SubgroupMax:
+            case KOp::SubgroupAnd:
+            case KOp::SubgroupOr:
+            case KOp::SubgroupXor:
+            {
+                const crd::u32 saved  = tid;
+                const crd::u32 sgbase = (saved / 32U) * 32U;
+                const bool     bitw   = n.op == KOp::SubgroupAnd || n.op == KOp::SubgroupOr || n.op == KOp::SubgroupXor;
+                crd::f64       acc    = 0.0;
+                crd::u32       bacc   = n.op == KOp::SubgroupAnd ? 0xFFFFFFFFU : 0U;
+                bool           first  = true;
+                for (crd::u32 l = sgbase; l < sgbase + 32U && l < local_size; ++l)
+                {
+                    tid              = l;
+                    const crd::f64 v = self(self, n.a);
+                    if (n.op == KOp::SubgroupAdd) { acc += v; }
+                    else if (n.op == KOp::SubgroupMin) { acc = first ? v : (v < acc ? v : acc); }
+                    else if (n.op == KOp::SubgroupMax) { acc = first ? v : (v > acc ? v : acc); }
+                    else
+                    {
+                        const crd::u32 u = static_cast<crd::u32>(static_cast<crd::i64>(v));
+                        if (n.op == KOp::SubgroupAnd) { bacc &= u; }
+                        else if (n.op == KOp::SubgroupOr) { bacc |= u; }
+                        else { bacc ^= u; }
+                    }
+                    first = false;
+                }
+                tid = saved;
+                r   = bitw ? static_cast<crd::f64>(bacc) : acc;
+                break;
+            }
+            case KOp::SubgroupInclusiveAdd:
+            case KOp::SubgroupExclusiveAdd:
+            {
+                const crd::u32 saved  = tid;
+                const crd::u32 sgbase = (saved / 32U) * 32U;
+                const crd::u32 upto   = n.op == KOp::SubgroupInclusiveAdd ? saved + 1U : saved; // prefix over lanes < upto
+                crd::f64       acc    = 0.0;
+                for (crd::u32 l = sgbase; l < upto && l < local_size; ++l) { tid = l; acc += self(self, n.a); }
+                tid = saved;
+                r   = acc;
+                break;
+            }
+            case KOp::SubgroupBroadcastFirst:
+            {
+                const crd::u32 saved = tid;
+                tid                  = (saved / 32U) * 32U; // the lowest lane of this subgroup
+                r                    = self(self, n.a);
+                tid                  = saved;
+                break;
+            }
+            case KOp::SubgroupShuffle:
+            {
+                const crd::u32 saved  = tid;
+                const crd::u32 sgbase = (saved / 32U) * 32U;
+                const crd::u32 lane   = static_cast<crd::u32>(static_cast<crd::i64>(self(self, n.b))) & 31U; // source lane (this lane's request)
+                tid                   = sgbase + lane;
+                r                     = self(self, n.a);
+                tid                   = saved;
+                break;
+            }
+            // B11: QUAD ops — cross-lane within a 2×2 quad (4 consecutive lanes). Broadcast reads a chosen quad lane; the swaps
+            //   XOR the local id (X=^1, Y=^2, Diagonal=^3). Pure data movement ⇒ bit-exact.
+            case KOp::QuadBroadcast:
+            {
+                const crd::u32 saved = tid;
+                const crd::u32 qlane = static_cast<crd::u32>(static_cast<crd::i64>(self(self, n.b))) & 3U;
+                tid                  = (saved & ~3U) + qlane;
+                r                    = self(self, n.a);
+                tid                  = saved;
+                break;
+            }
+            case KOp::QuadSwapX:
+            case KOp::QuadSwapY:
+            case KOp::QuadSwapDiagonal:
+            {
+                const crd::u32 saved = tid;
+                const crd::u32 xr    = n.op == KOp::QuadSwapX ? 1U : (n.op == KOp::QuadSwapY ? 2U : 3U);
+                tid                  = saved ^ xr;
+                r                    = self(self, n.a);
+                tid                  = saved;
                 break;
             }
             // ⛔ THIS EVALUATOR IS SCALAR. One f64 per node per lane — there is nowhere to put a second or third

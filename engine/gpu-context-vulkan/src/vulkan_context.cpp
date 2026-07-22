@@ -82,6 +82,7 @@ public:
     [[nodiscard]] bool             cooperative_vector_training() const noexcept override { return m_coopvec_train; }
     [[nodiscard]] crd::u32         coopvec_max_components() const noexcept override { return m_coopvec_max_components; }
     [[nodiscard]] crd::u32         coopvec_supported_stages() const noexcept override { return m_coopvec_stages; }
+    [[nodiscard]] bool             device_generated_commands() const noexcept override { return m_dgc; } // C5: VK_NV_device_generated_commands(+compute)
     [[nodiscard]] bool             shader_int64() const noexcept override { return m_int64; }
 
     [[nodiscard]] bool     graphics_capable() const noexcept override { return m_graphics_family != UINT32_MAX; }
@@ -302,8 +303,12 @@ private:
         bool has_cluster   = false; // FA-3: VK_NV_cluster_acceleration_structure (mega-geometry cluster BLAS)
         bool has_lss       = false; // B18-f: VK_NV_ray_tracing_linear_swept_spheres (native curve/strand primitive)
         bool has_coopvec   = false; // C6: VK_NV_cooperative_vector (per-invocation matrix×vector — the B10 neural-shading device half)
+        bool has_dgc       = false; // C5: VK_NV_device_generated_commands (GPU-authored command streams)
+        bool has_dgc_comp  = false; // C5: VK_NV_device_generated_commands_compute (compute dispatch + indirect-bindable pipelines)
         for (std::uint32_t i = 0; i < ne; ++i)
         {
+            if (std::strcmp(exts[i].extensionName, "VK_NV_device_generated_commands") == 0) { has_dgc = true; }
+            if (std::strcmp(exts[i].extensionName, "VK_NV_device_generated_commands_compute") == 0) { has_dgc_comp = true; }
             if (std::strcmp(exts[i].extensionName, "VK_EXT_opacity_micromap") == 0) { has_omm = true; }
             if (std::strcmp(exts[i].extensionName, "VK_KHR_ray_tracing_pipeline") == 0) { has_rtpipe = true; }
             if (std::strcmp(exts[i].extensionName, "VK_NV_ray_tracing_invocation_reorder") == 0) { has_ser = true; }
@@ -460,6 +465,16 @@ private:
         cv.sType                     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_VECTOR_FEATURES_NV;
         cv.cooperativeVector         = VK_TRUE;
         cv.cooperativeVectorTraining = m_coopvec_train ? VK_TRUE : VK_FALSE;
+        // C5: DEVICE-GENERATED COMMANDS — the GPU authors a stream of varied compute commands (pipeline switch + per-sequence push
+        // constants + dispatch) executed via `vkCmdExecuteGeneratedCommandsNV`. `deviceGeneratedComputePipelines` = the indirect-
+        // bindable pipeline path (the PIPELINE token). Needs buffer-device-address (pipeline device addresses). Only chained when m_dgc.
+        VkPhysicalDeviceDeviceGeneratedCommandsFeaturesNV dgc_feat{};
+        dgc_feat.sType                   = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEVICE_GENERATED_COMMANDS_FEATURES_NV;
+        dgc_feat.deviceGeneratedCommands = VK_TRUE;
+        VkPhysicalDeviceDeviceGeneratedCommandsComputeFeaturesNV dgcc_feat{};
+        dgcc_feat.sType                          = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEVICE_GENERATED_COMMANDS_COMPUTE_FEATURES_NV;
+        dgcc_feat.deviceGeneratedCompute         = VK_TRUE;
+        dgcc_feat.deviceGeneratedComputePipelines = VK_TRUE;
 
         // D-008 C1 chain (always): DYNAMIC RENDERING (core 1.3 feature, the modern no-render-pass raster path) + SHADER
         // OBJECTS (VK_EXT_shader_object) when present — the frontier pipeline model. The coopmat chain links in after.
@@ -583,6 +598,9 @@ private:
             VkPhysicalDeviceRayQueryFeaturesKHR rk{}; rk.sType = rq_feat.sType; rk.rayQuery = rq_feat.rayQuery; rq_feat = rk;
             VkPhysicalDeviceBufferDeviceAddressFeatures bk{}; bk.sType = bda_feat.sType; bk.bufferDeviceAddress = bda_feat.bufferDeviceAddress; bda_feat = bk;
         }
+        // C5: device-generated commands need buffer-device-address (pipeline device addresses for the PIPELINE token). BDA is
+        // queried in the RT block above; this adapter always has RT, so it is available when DGC is present.
+        m_dgc = has_dgc && has_dgc_comp && bda_feat.bufferDeviceAddress == VK_TRUE;
 
         // FA-1/2/3: vendor RT frontier feature bits (opacity micromap · RT pipeline · SER invocation-reorder · cluster-AS). Live
         // to vkCreateDevice (referenced by the chain). Confirm each bit, then keep ONLY it (so the struct is clean for creation).
@@ -627,14 +645,16 @@ private:
         if (m_mesh_shader) { mesh.pNext = chain; chain = &mesh; maint4.pNext = chain; chain = &maint4; }
         if (m_coopmat2) { cm2.pNext = chain; cmk.pNext = &cm2; chain = &cmk; }
         if (m_coopvec) { cv.pNext = chain; chain = &cv; } // C6: cooperative-vector inference (+ training when supported)
-        if (m_ray_query) { accel_feat.pNext = chain; chain = &accel_feat; rq_feat.pNext = chain; chain = &rq_feat; bda_feat.pNext = chain; chain = &bda_feat; }
+        if (m_ray_query) { accel_feat.pNext = chain; chain = &accel_feat; rq_feat.pNext = chain; chain = &rq_feat; }
+        if (m_ray_query || m_dgc) { bda_feat.pNext = chain; chain = &bda_feat; } // BDA: RT (AS build) + DGC (pipeline device addrs) — chained ONCE
+        if (m_dgc) { dgc_feat.pNext = chain; chain = &dgc_feat; dgcc_feat.pNext = chain; chain = &dgcc_feat; } // C5
         if (m_opacity_micromap) { omm_feat.pNext = chain; chain = &omm_feat; }
         if (m_rt_pipeline) { rtp_feat.pNext = chain; chain = &rtp_feat; }
         if (m_invocation_reorder) { ser_feat.pNext = chain; chain = &ser_feat; }
         if (m_cluster_as) { clu_feat.pNext = chain; chain = &clu_feat; }
         if (m_lss) { lss_feat.pNext = chain; chain = &lss_feat; }
 
-        const char* devexts[30];
+        const char* devexts[32];
         crd::u32    ndevext = 0;
         // B-cmp: hardware subgroup partition (match_any) — the radix-sort rank's cheap deterministic match. Shader-only
         // capability (no feature struct); enabling the extension unlocks the SPIR-V GroupNonUniformPartitionedNV cap.
@@ -645,6 +665,7 @@ private:
             devexts[ndevext++] = "VK_NV_cooperative_matrix2";
         }
         if (m_coopvec) { devexts[ndevext++] = "VK_NV_cooperative_vector"; } // C6: per-invocation MLP inference
+        if (m_dgc) { devexts[ndevext++] = "VK_NV_device_generated_commands"; devexts[ndevext++] = "VK_NV_device_generated_commands_compute"; } // C5
         if (m_shader_object) { devexts[ndevext++] = VK_EXT_SHADER_OBJECT_EXTENSION_NAME; }
         if (m_windowed) { devexts[ndevext++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME; }
         if (m_fragment_shading_rate) { devexts[ndevext++] = VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME; }
@@ -696,6 +717,7 @@ private:
     bool             m_coopmat2        = false;
     bool             m_coopvec         = false; // C6: VK_NV_cooperative_vector enabled (per-invocation MLP inference)
     bool             m_coopvec_train   = false; // C6: + the training ops (OuterProductAccumulate/ReduceSum) for B10 backprop
+    bool             m_dgc             = false; // C5: VK_NV_device_generated_commands + _compute enabled (GPU-authored command streams)
     crd::u32         m_coopvec_stages  = 0U;    // C6: shader stages that support coopvec (compute always; fragment on this HW)
     crd::u32         m_coopvec_max_components = 0U; // C6: max cooperative-vector component dimension
     bool             m_int64           = false;

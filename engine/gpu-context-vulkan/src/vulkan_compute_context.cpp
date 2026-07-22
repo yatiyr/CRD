@@ -26,6 +26,7 @@ constexpr int kMaxBindings = 8;
     case ComputeAccess::ShaderRead:  return VK_ACCESS_SHADER_READ_BIT;
     case ComputeAccess::ShaderWrite: return VK_ACCESS_SHADER_WRITE_BIT;
     case ComputeAccess::HostRead:    return VK_ACCESS_HOST_READ_BIT;
+    case ComputeAccess::IndirectRead: return VK_ACCESS_INDIRECT_COMMAND_READ_BIT; // C5
     }
     return 0;
 }
@@ -38,6 +39,7 @@ constexpr int kMaxBindings = 8;
     case ComputeAccess::ShaderRead:
     case ComputeAccess::ShaderWrite: return VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
     case ComputeAccess::HostRead:    return VK_PIPELINE_STAGE_HOST_BIT;
+    case ComputeAccess::IndirectRead: return VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT; // C5: the indirect-args fetch stage
     }
     return VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
 }
@@ -117,6 +119,7 @@ struct VulkanComputeContext::Impl final : public ComputeRecorder
     VkDescriptorPool desc_pool = VK_NULL_HANDLE;
     VkCommandBuffer  cmd       = VK_NULL_HANDLE;
     VkFence          fence     = VK_NULL_HANDLE;
+    VkPipelineCache  pipeline_cache = VK_NULL_HANDLE; // D4: persisted across runs — the driver reuses SPIR-V→ISA compiles
     bool             ok        = false;
     // Descriptor-set memo: an identical consecutive dispatch (same pipeline + same bound buffers) reuses ONE set instead
     // of allocating a fresh one — avoids GPU descriptor-cache thrash in a benchmark/rep loop (500 sets ⇒ ~20% slower) +
@@ -159,8 +162,8 @@ struct VulkanComputeContext::Impl final : public ComputeRecorder
         b.size                = VK_WHOLE_SIZE;
         vkCmdPipelineBarrier(cmd, access_stage(from), access_stage(to), 0, 0, nullptr, 1, &b, 0, nullptr);
     }
-    void dispatch(ComputePipeline& pipeline, crd::containers::ConstSpan<ComputeBuffer*> bindings, const void* push,
-                  crd::u32 push_size, crd::u32 gx, crd::u32 gy, crd::u32 gz) override
+    // Bind the pipeline + descriptor set + push constants for a (direct or indirect) dispatch. Shared by dispatch/dispatch_indirect.
+    void bind_dispatch(ComputePipeline& pipeline, crd::containers::ConstSpan<ComputeBuffer*> bindings, const void* push, crd::u32 push_size)
     {
         auto&     p  = static_cast<PipelineImpl&>(pipeline);
         const int nb = p.nb();
@@ -209,7 +212,22 @@ struct VulkanComputeContext::Impl final : public ComputeRecorder
         if (p.pipeline() != memo_pipeline) { vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipeline()); memo_pipeline = p.pipeline(); }
         if (set != memo_bound) { vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipe_layout(), 0, 1, &set, 0, nullptr); memo_bound = set; }
         if (push_size > 0 && push != nullptr) { vkCmdPushConstants(cmd, p.pipe_layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, push_size, push); }
+    }
+
+    void dispatch(ComputePipeline& pipeline, crd::containers::ConstSpan<ComputeBuffer*> bindings, const void* push,
+                  crd::u32 push_size, crd::u32 gx, crd::u32 gy, crd::u32 gz) override
+    {
+        bind_dispatch(pipeline, bindings, push, push_size);
         vkCmdDispatch(cmd, gx > 0 ? gx : 1, gy > 0 ? gy : 1, gz > 0 ? gz : 1);
+    }
+
+    // C5: the workgroup count is read from `args` (a compute-written INDIRECT buffer: three u32 {gx,gy,gz} at `args_offset`).
+    void dispatch_indirect(ComputePipeline& pipeline, crd::containers::ConstSpan<ComputeBuffer*> bindings, const void* push,
+                           crd::u32 push_size, ComputeBuffer& args, crd::u64 args_offset) override
+    {
+        bind_dispatch(pipeline, bindings, push, push_size);
+        auto& ab = static_cast<BufferImpl&>(args);
+        vkCmdDispatchIndirect(cmd, ab.buffer(), static_cast<VkDeviceSize>(args_offset));
     }
 };
 
@@ -264,6 +282,10 @@ VulkanComputeContext::VulkanComputeContext(VulkanGpuContext& ctx, crd::memory::I
     qpci.queryCount = 2;
     vkCreateQueryPool(impl.device, &qpci, nullptr, &impl.ts_pool); // GPU-only timing (best-effort; null ⇒ last_gpu_ms=0)
 
+    VkPipelineCacheCreateInfo pcci{}; // D4: start empty; warm_pipeline_cache() reseeds from a persisted blob
+    pcci.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+    vkCreatePipelineCache(impl.device, &pcci, nullptr, &impl.pipeline_cache);
+
     impl.ok = true;
 }
 
@@ -272,6 +294,7 @@ VulkanComputeContext::~VulkanComputeContext()
     auto& impl = *m_impl;
     if (impl.device == VK_NULL_HANDLE) { return; }
     vkDeviceWaitIdle(impl.device);
+    if (impl.pipeline_cache != VK_NULL_HANDLE) { vkDestroyPipelineCache(impl.device, impl.pipeline_cache, nullptr); }
     if (impl.ts_pool != VK_NULL_HANDLE) { vkDestroyQueryPool(impl.device, impl.ts_pool, nullptr); }
     if (impl.fence != VK_NULL_HANDLE) { vkDestroyFence(impl.device, impl.fence, nullptr); }
     if (impl.desc_pool != VK_NULL_HANDLE) { vkDestroyDescriptorPool(impl.device, impl.desc_pool, nullptr); }
@@ -280,6 +303,35 @@ VulkanComputeContext::~VulkanComputeContext()
 
 bool VulkanComputeContext::valid() const noexcept { return m_impl->ok; }
 bool VulkanComputeContext::supports_shader_int64() const noexcept { return m_impl->int64; }
+
+// D4: serialize the driver's pipeline cache (grows as pipelines are created) so it can be persisted to disk.
+void VulkanComputeContext::pipeline_cache_data(crd::containers::Array<crd::u8>& out) const
+{
+    auto& impl = *m_impl;
+    out.resize(0);
+    if (impl.pipeline_cache == VK_NULL_HANDLE) { return; }
+    crd::usize sz = 0;
+    if (vkGetPipelineCacheData(impl.device, impl.pipeline_cache, &sz, nullptr) != VK_SUCCESS || sz == 0) { return; }
+    out.resize(sz);
+    if (vkGetPipelineCacheData(impl.device, impl.pipeline_cache, &sz, out.data()) != VK_SUCCESS) { out.resize(0); }
+}
+
+// D4: reseed the pipeline cache from a persisted blob — call BEFORE creating pipelines so the driver reuses cached ISA
+// (a warm start skips the SPIR-V→ISA compile). A blob from another device/driver is safely ignored (header UUID mismatch).
+bool VulkanComputeContext::warm_pipeline_cache(crd::containers::ConstSpan<crd::u8> blob)
+{
+    auto& impl = *m_impl;
+    if (!impl.ok) { return false; }
+    VkPipelineCacheCreateInfo pcci{};
+    pcci.sType           = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+    pcci.initialDataSize = blob.size();
+    pcci.pInitialData    = blob.empty() ? nullptr : blob.data();
+    VkPipelineCache fresh = VK_NULL_HANDLE;
+    if (vkCreatePipelineCache(impl.device, &pcci, nullptr, &fresh) != VK_SUCCESS) { return false; }
+    if (impl.pipeline_cache != VK_NULL_HANDLE) { vkDestroyPipelineCache(impl.device, impl.pipeline_cache, nullptr); }
+    impl.pipeline_cache = fresh;
+    return true;
+}
 
 std::unique_ptr<ComputeBuffer> VulkanComputeContext::create_buffer(crd::u64 bytes, crd::u32 usage, ComputeMemory memory)
 {
@@ -359,6 +411,13 @@ std::unique_ptr<ComputePipeline> VulkanComputeContext::create_pipeline(crd::cont
 std::unique_ptr<ComputePipeline> VulkanComputeContext::create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8> spirv,
                                                                                  int n_bindings, crd::u32 push_size)
 {
+    return create_pipeline_from_spirv(spirv, n_bindings, push_size, crd::containers::ConstSpan<SpecConstantBinding>{});
+}
+
+std::unique_ptr<ComputePipeline> VulkanComputeContext::create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8> spirv,
+                                                                                 int n_bindings, crd::u32 push_size,
+                                                                                 crd::containers::ConstSpan<SpecConstantBinding> specs)
+{
     auto& impl = *m_impl;
     if (!impl.ok || n_bindings <= 0 || n_bindings > kMaxBindings) { return nullptr; }
 
@@ -414,8 +473,32 @@ std::unique_ptr<ComputePipeline> VulkanComputeContext::create_pipeline_from_spir
     cpci.stage.module = sh;
     cpci.stage.pName  = "main";
     cpci.layout       = pl;
+
+    // D-007 D12: bind specialization constants at pipeline creation. Each spec's 4-byte value is packed contiguously and mapped
+    // to its SPIR-V constant_id; the driver folds them into the ISA it builds now — ONE bundle, per-variant baked pipelines.
+    constexpr int            max_spec = 32;
+    VkSpecializationMapEntry map_entries[max_spec];
+    crd::u32                 spec_data[max_spec];
+    const int                n_spec = specs.size() < static_cast<crd::usize>(max_spec) ? static_cast<int>(specs.size()) : max_spec;
+    VkSpecializationInfo     spec_info{};
+    for (int i = 0; i < n_spec; ++i)
+    {
+        map_entries[i].constantID = specs[static_cast<crd::usize>(i)].constant_id;
+        map_entries[i].offset     = static_cast<crd::u32>(i) * 4U;
+        map_entries[i].size       = 4U;
+        spec_data[i]              = specs[static_cast<crd::usize>(i)].value;
+    }
+    if (n_spec > 0)
+    {
+        spec_info.mapEntryCount     = static_cast<crd::u32>(n_spec);
+        spec_info.pMapEntries       = map_entries;
+        spec_info.dataSize          = static_cast<crd::usize>(n_spec) * 4U;
+        spec_info.pData             = spec_data;
+        cpci.stage.pSpecializationInfo = &spec_info; // valid until vkCreateComputePipelines below returns (same scope)
+    }
+
     VkPipeline pipe   = VK_NULL_HANDLE;
-    if (vkCreateComputePipelines(impl.device, VK_NULL_HANDLE, 1, &cpci, nullptr, &pipe) != VK_SUCCESS)
+    if (vkCreateComputePipelines(impl.device, impl.pipeline_cache, 1, &cpci, nullptr, &pipe) != VK_SUCCESS) // D4: reuse cached ISA
     {
         vkDestroyPipelineLayout(impl.device, pl, nullptr);
         vkDestroyDescriptorSetLayout(impl.device, sl, nullptr);

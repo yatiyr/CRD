@@ -162,6 +162,27 @@ public:
 
     [[nodiscard]] bool is_valid() const noexcept { return m_lib.is_valid() && m_compiler != nullptr; }
 
+    // A per-thread shaderc compiler (D10: concurrent cooks). Initialized on first use per thread, released at thread exit by the
+    // thread_local holder — so no compiler is shared across threads and none leaks. Falls back to the ctor-created m_compiler on
+    // the (single) thread that built the loader iff init is unavailable.
+    [[nodiscard]] shaderc_compiler_t thread_compiler() const noexcept
+    {
+        struct TlsCompiler
+        {
+            shaderc_compiler_t  c   = nullptr;
+            const ShadercApi*   api = nullptr;
+            TlsCompiler() = default;
+            ~TlsCompiler() { if (c != nullptr && api != nullptr && api->compiler_release != nullptr) { api->compiler_release(c); } }
+            TlsCompiler(const TlsCompiler&)            = delete;
+            TlsCompiler& operator=(const TlsCompiler&) = delete;
+            TlsCompiler(TlsCompiler&&)                 = delete;
+            TlsCompiler& operator=(TlsCompiler&&)      = delete;
+        };
+        thread_local TlsCompiler tls;
+        if (tls.c == nullptr && m_api.compiler_initialize != nullptr) { tls.api = &m_api; tls.c = m_api.compiler_initialize(); }
+        return tls.c != nullptr ? tls.c : m_compiler;
+    }
+
     [[nodiscard]] ShaderCompileResult compile(ShaderStage stage, crd::containers::StringView source,
                                               crd::containers::StringView name, crd::memory::IAllocator* a,
                                               bool optimize) const
@@ -189,8 +210,13 @@ public:
 
         crd::containers::String name_str(name.data(), name.size(), a); // null-terminate for the C API
 
-        const shaderc_compilation_result_t res = m_api.compile_into_spv(
-            m_compiler, source.data(), source.size(), to_shaderc_kind(stage), name_str.c_str(), "main", opts);
+        // D-007 D10: a `shaderc_compiler_t` is NOT thread-safe (shaderc docs: "use from one thread at a time"), and the parallel
+        // cook compiles from several crd-jobs workers at once — a shared compiler races → access violation. Give each thread its
+        // OWN compiler, initialized once (no hot-path regression — the single-thread path still inits exactly one) and released
+        // when the thread exits via the thread_local holder's destructor (the singleton loader's m_api outlives every worker).
+        const shaderc_compiler_t           comp = thread_compiler();
+        const shaderc_compilation_result_t res  = m_api.compile_into_spv(
+            comp, source.data(), source.size(), to_shaderc_kind(stage), name_str.c_str(), "main", opts);
 
         m_api.options_release(opts);
 

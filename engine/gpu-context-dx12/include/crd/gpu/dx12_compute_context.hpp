@@ -12,6 +12,7 @@
 
 #include <crd/gpu/compute.hpp>
 
+#include <crd/containers/array.hpp>
 #include <crd/containers/string_view.hpp>
 
 #include <memory>
@@ -50,6 +51,16 @@ public:
     // CKIR's runtime-emitted kernels + tests — NOT on the backend-agnostic IComputeContext (HLSL is a DX12 concern).
     [[nodiscard]] std::unique_ptr<ComputePipeline> create_pipeline_from_hlsl(crd::containers::StringView hlsl,
                                                                              int n_bindings, crd::u32 push_size);
+
+    // DX12-specific: a pipeline straight from PRE-COMPILED DXIL (mirrors create_pipeline_from_spirv). The zero-runtime-compile
+    // load path for D-007 D2 cooked `.crdr` bundles — no dxc at runtime.
+    [[nodiscard]] std::unique_ptr<ComputePipeline> create_pipeline_from_dxil(crd::containers::ConstSpan<crd::u8> dxil,
+                                                                             int n_bindings, crd::u32 push_size);
+
+    // D-007 D4: persist/seed the pipeline library (the PSO cache) across runs — the D3D12 analog of VkPipelineCache. Serialize
+    // with pipeline_cache_data() to a file; on the next run, warm_pipeline_cache(blob) BEFORE creating pipelines.
+    void               pipeline_cache_data(crd::containers::Array<crd::u8>& out) const;
+    [[nodiscard]] bool warm_pipeline_cache(crd::containers::ConstSpan<crd::u8> blob);
 
     [[nodiscard]] ComputeRecorder& begin() override;
     void                           submit_and_wait() override;

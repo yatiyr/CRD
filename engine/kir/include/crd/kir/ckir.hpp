@@ -205,7 +205,28 @@ enum class KOp : crd::u8
     // payload struct (iidx = component count) — `rayPayloadEXT`/`rayPayloadInEXT` in GLSL, an `inout` struct param in DXR HLSL.
     // `PayloadLoad` reads component `iidx` of the payload node `a`. Written by `PayloadStore`. Appended at END (cook-stable).
     RayPayloadDecl,
-    PayloadLoad
+    PayloadLoad,
+    // B11: WAVE / SUBGROUP arithmetic · scan · data-movement over a fixed 32-lane subgroup. INTEGER reductions/scans are
+    // order-independent ⇒ BIT-EXACT across backends (the mission bar); broadcast/shuffle are pure data movement (exact). FLOAT
+    // reductions are NOT bit-exact (the hardware picks the reduction order) — use the integer forms, or a fixed-tree butterfly.
+    // All UNARY (a → the per-lane result) except Shuffle (a=value, b=source lane). Appended at END (cook/serialization stability).
+    SubgroupAdd,            // reduce: every lane ← Σ over the active subgroup
+    SubgroupMin,            // reduce: min over the subgroup
+    SubgroupMax,            // reduce: max over the subgroup
+    SubgroupAnd,            // reduce: bitwise AND (u32)
+    SubgroupOr,             // reduce: bitwise OR (u32)
+    SubgroupXor,            // reduce: bitwise XOR (u32)
+    SubgroupInclusiveAdd,   // prefix scan: lane i ← Σ lanes 0..i
+    SubgroupExclusiveAdd,   // prefix scan: lane i ← Σ lanes 0..i−1 (lane 0 ← 0)
+    SubgroupBroadcastFirst, // a → the value held by the LOWEST active lane, replicated to all lanes
+    SubgroupShuffle,        // a (value), b (source lane) → a's value read from lane `b` (per-lane b allowed)
+    // B11: QUAD ops (SM6.6 / GL_KHR_shader_subgroup_quad) — cross-lane within a 2×2 quad (4 consecutive lanes: local id 0..3 =
+    // (0,0)(1,0)(0,1)(1,1)). Pure data movement ⇒ BIT-EXACT. QuadBroadcast is binary (a=value, b=quad lane 0..3); the swaps XOR
+    // the local id (X=^1 horizontal, Y=^2 vertical, Diagonal=^3). Appended at END (cook/serialization stability).
+    QuadBroadcast,          // a (value), b (quad lane 0..3) → a's value from that quad lane, to all 4
+    QuadSwapX,              // horizontal swap: lane ↔ lane^1
+    QuadSwapY,              // vertical swap: lane ↔ lane^2
+    QuadSwapDiagonal        // diagonal swap: lane ↔ lane^3
 };
 
 // B1: fragment derivatives are the only ops that read NEIGHBOURING invocations (the 2×2 pixel quad), so they are legal
@@ -485,6 +506,25 @@ struct KBuiltinInfo
 {
     return op == KOp::StageIn || op == KOp::Builtin || op == KOp::UniformBlock;
 }
+
+// Operand-less RESOURCE leaves — descriptor / shared-memory declarations that NAME storage, not a value. They must never be
+// const-folded (having no operands, the folder would otherwise turn them into a garbage `Const`) nor CSE'd away. optimize()
+// treats them like inputs so a kernel survives specialization (D3 übergraph `specialize_kernel`).
+[[nodiscard]] inline bool is_resource_leaf(KOp op) noexcept
+{
+    return op == KOp::BufferDecl || op == KOp::SharedDecl || op == KOp::Texture || op == KOp::Sampler
+        || op == KOp::AccelStructDecl || op == KOp::RayPayloadDecl;
+}
+
+// D-007 D12: a SPECIALIZATION CONSTANT — a scalar leaf whose value is fixed at PIPELINE-CREATION (Vulkan VkSpecializationInfo,
+// WGSL `override`, MSL `[[function_constant]]`), NOT baked at cook. ONE cooked bundle then serves many runtime-cheap variants:
+// the loader binds the per-variant value when it builds the pipeline (no recook, no separate bundle). It is a `KOp::Const`
+// tagged with `kSpecConstFlag` in `axes` + the SPIR-V constant_id in `iidx`; every non-spec consumer (the CPU oracle, and the
+// D3D12/CUDA backends that lack pipeline-time constants) reads a plain Const = its DEFAULT — the honest portable realization (a
+// baked default is exactly a variant pinned to that value). CSE never fuses it with a literal (node identity includes axes+iidx)
+// and optimize() never folds it away (below). Reusing Const keeps every existing pass correct with ZERO new-KOp switch surface.
+// (`is_spec_const`/`spec_const_id` are defined just after KNode, which they read.)
+inline constexpr crd::u32 kSpecConstFlag = 0x8000'0000U;
 
 // B1-c: how a VS→FS interpolant is interpolated across the primitive. `Smooth` = perspective-correct (the default);
 // `Flat` = no interpolation (provoking-vertex value) — MANDATORY for integer interpolants (GLSL rejects a smooth int);
@@ -781,6 +821,12 @@ struct KNode
     [[nodiscard]] constexpr DType dtype() const noexcept { return type.scalar; }
     [[nodiscard]] constexpr int   comps() const noexcept { return type.comps(); }
 };
+
+// D-007 D12 spec-constant predicates (see kSpecConstFlag above): a Const tagged as a pipeline-time specialization constant, and
+// its SPIR-V constant_id (parked in iidx). Used by the emitters (declare `layout(constant_id=id)` / reference the name) and by
+// optimize() (never fold a spec constant into a literal).
+[[nodiscard]] inline bool   is_spec_const(const KNode& n) noexcept { return n.op == KOp::Const && (n.axes & kSpecConstFlag) != 0U; }
+[[nodiscard]] inline crd::u32 spec_const_id(const KNode& n) noexcept { return static_cast<crd::u32>(n.iidx); }
 
 // round an f64 accumulator to a storage dtype so the reference is bit-faithful to that precision.
 [[nodiscard]] inline crd::f64 round_dtype(crd::f64 v, DType dt) noexcept
@@ -1097,6 +1143,10 @@ public:
     [[nodiscard]] int          stmt_count() const noexcept { return static_cast<int>(m_stmts.size()); }
     [[nodiscard]] const KStmt& stmt(int i)  const noexcept { return m_stmts[static_cast<crd::usize>(i)]; }
     [[nodiscard]] int constant(crd::f64 v, const Shape& shape, DType dt) { KNode n; n.op = KOp::Const; n.type = KType::make_scalar(dt); n.shape = shape; n.cval = v; return push(n); }
+    // D-007 D12: a SPECIALIZATION CONSTANT — a scalar Const whose value the pipeline sets at build time (SPIR-V constant_id =
+    // `constant_id`), defaulting to `default_value` when unbound. ONE cooked bundle serves every value (no recook). Scalar only
+    // (SPIR-V spec constants are scalar): dt ∈ {F32, I32, U32, Bool}. See kSpecConstFlag / is_spec_const.
+    [[nodiscard]] int spec_constant(crd::u32 constant_id, crd::f64 default_value, DType dt) { KNode n; n.op = KOp::Const; n.type = KType::make_scalar(dt); n.shape = make_shape({1}); n.cval = default_value; n.iidx = static_cast<crd::i32>(constant_id); n.axes = kSpecConstFlag; return push(n); }
     [[nodiscard]] int iota(const Shape& shape, int axis, DType dt) { KNode n; n.op = KOp::Iota; n.type = KType::make_scalar(dt); n.shape = shape; n.iidx = axis; return push(n); }
 
     [[nodiscard]] int unary(KOp op, int a) { KNode n; n.op = op; n.type = t(a).type; n.shape = t(a).shape; n.a = a; return push(n); }
@@ -1108,6 +1158,22 @@ public:
     [[nodiscard]] int subgroup_ballot(int pred) { KNode n; n.op = KOp::SubgroupBallot; n.type = KType::make_scalar(DType::U32); n.shape = t(pred).shape; n.a = pred; return push(n); }
     [[nodiscard]] int subgroup_ballot_excl_count(int mask) { KNode n; n.op = KOp::SubgroupBallotExclCount; n.type = KType::make_scalar(DType::U32); n.shape = t(mask).shape; n.a = mask; return push(n); }
     [[nodiscard]] int subgroup_match(int value) { KNode n; n.op = KOp::SubgroupMatch; n.type = KType::make_scalar(DType::U32); n.shape = t(value).shape; n.a = value; return push(n); }
+    // B11: wave/subgroup reductions · prefix scans · broadcast/shuffle. The result carries the operand's type (per-lane scalar);
+    // INTEGER forms are bit-exact (order-independent). Compose a workgroup reduction/scan from these + a shared-mem cross-subgroup step.
+    [[nodiscard]] int subgroup_add(int a) { KNode n; n.op = KOp::SubgroupAdd; n.type = t(a).type; n.shape = t(a).shape; n.a = a; return push(n); }
+    [[nodiscard]] int subgroup_min(int a) { KNode n; n.op = KOp::SubgroupMin; n.type = t(a).type; n.shape = t(a).shape; n.a = a; return push(n); }
+    [[nodiscard]] int subgroup_max(int a) { KNode n; n.op = KOp::SubgroupMax; n.type = t(a).type; n.shape = t(a).shape; n.a = a; return push(n); }
+    [[nodiscard]] int subgroup_and(int a) { KNode n; n.op = KOp::SubgroupAnd; n.type = t(a).type; n.shape = t(a).shape; n.a = a; return push(n); }
+    [[nodiscard]] int subgroup_or(int a) { KNode n; n.op = KOp::SubgroupOr; n.type = t(a).type; n.shape = t(a).shape; n.a = a; return push(n); }
+    [[nodiscard]] int subgroup_xor(int a) { KNode n; n.op = KOp::SubgroupXor; n.type = t(a).type; n.shape = t(a).shape; n.a = a; return push(n); }
+    [[nodiscard]] int subgroup_inclusive_add(int a) { KNode n; n.op = KOp::SubgroupInclusiveAdd; n.type = t(a).type; n.shape = t(a).shape; n.a = a; return push(n); }
+    [[nodiscard]] int subgroup_exclusive_add(int a) { KNode n; n.op = KOp::SubgroupExclusiveAdd; n.type = t(a).type; n.shape = t(a).shape; n.a = a; return push(n); }
+    [[nodiscard]] int subgroup_broadcast_first(int a) { KNode n; n.op = KOp::SubgroupBroadcastFirst; n.type = t(a).type; n.shape = t(a).shape; n.a = a; return push(n); }
+    [[nodiscard]] int subgroup_shuffle(int a, int lane) { KNode n; n.op = KOp::SubgroupShuffle; n.type = t(a).type; n.shape = t(a).shape; n.a = a; n.b = lane; return push(n); }
+    [[nodiscard]] int quad_broadcast(int a, int quad_lane) { KNode n; n.op = KOp::QuadBroadcast; n.type = t(a).type; n.shape = t(a).shape; n.a = a; n.b = quad_lane; return push(n); }
+    [[nodiscard]] int quad_swap_x(int a) { KNode n; n.op = KOp::QuadSwapX; n.type = t(a).type; n.shape = t(a).shape; n.a = a; return push(n); }
+    [[nodiscard]] int quad_swap_y(int a) { KNode n; n.op = KOp::QuadSwapY; n.type = t(a).type; n.shape = t(a).shape; n.a = a; return push(n); }
+    [[nodiscard]] int quad_swap_diagonal(int a) { KNode n; n.op = KOp::QuadSwapDiagonal; n.type = t(a).type; n.shape = t(a).shape; n.a = a; return push(n); }
     // Structured control flow — FIXED-count loop (A4 tier 1): acc = init; for it in [0,count): acc = body(it, acc); return acc.
     // Compile-time UNROLL ⇒ pure dataflow ⇒ runs on EVERY backend through the existing emitters (no IR/eval/emit change).
     // `body(int it, int acc) -> int` returns the next accumulator node. For DYNAMIC/large trip counts, the region-based
@@ -1525,6 +1591,25 @@ public:
     [[nodiscard]] int          n_inputs() const noexcept { return m_ninput; }
     [[nodiscard]] const KNode& node(int i) const noexcept { return m_nodes[static_cast<crd::usize>(i)]; }
 
+    // ── D1: RAW POOL access for (de)serialization — the cook artifact is a versioned container of these POD pools (all
+    //    trivially-copyable). Read side: expose the five pools + n_inputs; restore side: overwrite them from deserialized data.
+    //    A rebuilt graph is byte-identical to the original ⇒ re-emit is bit-identical (the whole point of IR-as-crdr, ADR-0101).
+    [[nodiscard]] const crd::containers::Array<KNode>&    serial_nodes() const noexcept { return m_nodes; }
+    [[nodiscard]] const crd::containers::Array<crd::i32>& serial_ext() const noexcept { return m_ext; }
+    [[nodiscard]] const crd::containers::Array<KType>&    serial_sfields() const noexcept { return m_sfields; }
+    [[nodiscard]] const crd::containers::Array<crd::u32>& serial_sbegin() const noexcept { return m_sbegin; }
+    [[nodiscard]] const crd::containers::Array<KStmt>&    serial_stmts() const noexcept { return m_stmts; }
+    void serial_restore(const KNode* nodes, crd::u64 n_nodes, const crd::i32* ext, crd::u64 n_ext, const KType* sfields,
+                        crd::u64 n_sfields, const crd::u32* sbegin, crd::u64 n_sbegin, const KStmt* stmts, crd::u64 n_stmts, int ninputs)
+    {
+        m_nodes.clear();   for (crd::u64 i = 0; i < n_nodes; ++i) { m_nodes.push_back(nodes[i]); }
+        m_ext.clear();     for (crd::u64 i = 0; i < n_ext; ++i) { m_ext.push_back(ext[i]); }
+        m_sfields.clear(); for (crd::u64 i = 0; i < n_sfields; ++i) { m_sfields.push_back(sfields[i]); }
+        m_sbegin.clear();  for (crd::u64 i = 0; i < n_sbegin; ++i) { m_sbegin.push_back(sbegin[i]); }
+        m_stmts.clear();   for (crd::u64 i = 0; i < n_stmts; ++i) { m_stmts.push_back(stmts[i]); }
+        m_ninput = ninputs;
+    }
+
     // Structural invariant: every operand references a STRICTLY EARLIER node, because `push()` appends and an operand
     // always exists before its consumer — push order IS topological order. A pass that compacts and renumbers the array
     // must remap all FOUR operands; one left behind surfaces here as a forward or out-of-range reference.
@@ -1583,6 +1668,35 @@ public:
         n.cval  = value;
     }
 
+    // D3 ÜBERGRAPH VARIANT primitive: pin `ShaderOption` selector nodes to per-variant compile-time values, then const-fold +
+    // DCE the KERNEL BODY — the imperative-statement analogue of `lower_entry` (which lowers a material entry's DAG roots).
+    // Pinning turns an option-gated `Select` into its live branch; `optimize()` folds it and drops the dead branch. Each body
+    // statement's node references (target/index/value/result — nested For/If bodies live CONTIGUOUSLY in the range, so they are
+    // covered) are gathered as roots, optimized (the compaction preserves relative order ⇒ input/binding order is stable), and
+    // written back. Destructive — build or copy the graph per variant. This is what lets an übershader graph specialize the same
+    // way a per-key builder does, so two keys that fold to the same kernel produce identical IR and DEDUP.
+    void specialize_kernel(const KEntry& e, const int* options, const crd::f64* values, int n_options)
+    {
+        for (int i = 0; i < n_options; ++i) { pin_const(options[i], values[i]); }
+        if (e.kernel_body_count <= 0) { return; }
+        auto*                             al = m_nodes.allocator();
+        crd::containers::Array<crd::i32*> slots(al); // addresses of the body's node-ref fields (written back post-renumber)
+        const int                         end = e.kernel_body_begin + e.kernel_body_count;
+        for (int s = e.kernel_body_begin; s < end; ++s)
+        {
+            KStmt& st = m_stmts[static_cast<crd::usize>(s)];
+            if (st.target >= 0) { slots.push_back(&st.target); }
+            if (st.index >= 0) { slots.push_back(&st.index); }
+            if (st.value >= 0) { slots.push_back(&st.value); }
+            if (st.result >= 0) { slots.push_back(&st.result); }
+        }
+        crd::containers::Array<int> roots(al);
+        roots.resize(slots.size());
+        for (crd::usize i = 0; i < slots.size(); ++i) { roots[i] = *slots[i]; }
+        optimize(roots.data(), static_cast<int>(roots.size()));
+        for (crd::usize i = 0; i < slots.size(); ++i) { *slots[i] = roots[i]; }
+    }
+
     // B7 branch-elimination primitive: make node `node` an exact copy of `target` (every consumer now reads target's
     // computation). Used to collapse a `Select` with a compile-time-constant condition to its chosen branch. `target` is
     // always an operand of `node` (a/b), hence < `node` in topological order, so the copied operands stay backward
@@ -1602,8 +1716,13 @@ public:
         for (int i = 0; i < n; ++i) // const-fold in place (Const is a uniform fill, so foldable ops track one value)
         {
             KNode& g = m_nodes[static_cast<crd::usize>(i)];
+            // D12: a spec constant is a PIPELINE-TIME value — treat it as opaque (not a compile-time const), so it is never
+            // folded into a literal nor folded THROUGH (an expression reading it stays runtime). The leaf itself survives DCE
+            // when referenced; its axes+iidx are preserved (a leaf is never mutated by the folder).
+            if (is_spec_const(g)) { continue; }
             if (g.op == KOp::Const) { isc[static_cast<crd::usize>(i)] = 1; cval[static_cast<crd::usize>(i)] = g.cval; continue; }
             if (g.op == KOp::Input || g.op == KOp::Iota || g.op == KOp::Contract || g.op == KOp::For || g.op == KOp::LoopIndex || g.op == KOp::LoopAcc) { continue; }
+            if (is_resource_leaf(g.op)) { continue; } // buffer/shared/texture/sampler/AS/payload decls NAME storage — never fold
             if (is_stage_leaf(g.op)) { continue; } // B3 leaves have no operands — a SCALAR one (Builtin::VertexIndex, a
                                                   // scalar StageIn) would otherwise const-fold into a compile-time value
             if (g.n_ext != 0 || g.op == KOp::FieldGet || g.op == KOp::ArrayGet) { continue; } // aggregates never fold to one scalar Const

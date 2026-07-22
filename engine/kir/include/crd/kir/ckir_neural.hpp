@@ -399,4 +399,109 @@ inline bool emit_neural_material_render_glsl(const CoopVecMlpConfig& c, GlslKern
     return true;
 }
 
+// D-007 (neural → OpenPBR surface): a FRAGMENT neural material. The SAME coopvec MLP, evaluated PER-PIXEL in the fragment stage,
+// but its outputs are mapped onto the OpenPBR SURFACE SLAB and written to the deferred G-BUFFER in the `material::pack_gbuffer`
+// layout — so a neural material feeds the exact SAME lighting pass as a conventional one (closing the gap that the neural render
+// kernel wrote raw RGBA8). MLP outputs → surface: [0..2]=base color, [3]=metallic (out_dim>3), [4]=roughness (out_dim>4); the
+// normal comes from the interpolated varying. uv/normal are varyings @ locations 0/1; W/B are fp16 SSBOs @ 0/1. in_dim % 4 == 0,
+// out_dim ≥ 3. Runs coopvec in the FRAGMENT stage (the intended neural-material path — per-pixel MLP).
+inline bool emit_neural_surface_fs_glsl(const CoopVecMlpConfig& c, GlslKernel& out)
+{
+    if (!c.valid() || (c.in_dim % 4) != 0 || c.out_dim < 3) { return false; }
+    using neural_detail::u;
+    crd::containers::String& s = out.source;
+    s.clear();
+    s.append("#version 460\n");
+    s.append("#extension GL_NV_cooperative_vector : require\n");
+    s.append("#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require\n");
+    s.append("#extension GL_EXT_shader_explicit_arithmetic_types : require\n");
+    s.append("layout(location = 0) in vec2 v_uv;\n");
+    s.append("layout(location = 1) in vec3 v_normal;\n");
+    s.append("layout(location = 0) out vec4 o_0;\n"); // (base_color.rgb, metallic)
+    s.append("layout(location = 1) out vec4 o_1;\n"); // (enc_normal.rgb, roughness)
+    s.append("layout(location = 2) out vec4 o_2;\n"); // (emissive.rgb, occlusion)
+    s.append("layout(location = 3) out vec4 o_3;\n"); // (opacity, shading_model/255, alpha_mode/255, 1)
+    s.append("layout(std430, binding = 0) readonly buffer BW { float16_t Wb[]; };\n");
+    s.append("layout(std430, binding = 1) readonly buffer BB { float16_t Bb[]; };\n");
+    s.append("void main() {\n");
+    s.append("  const int F16 = gl_ComponentTypeFloat16NV;\n");
+    s.append("  const int RM = gl_CooperativeVectorMatrixLayoutRowMajorNV;\n");
+    s.append("  float uu = v_uv.x; float vv = v_uv.y;\n");
+    s.append("  coopvecNV<float16_t, ");
+    u(s, c.in_dim);
+    s.append("> a0;\n  for (int k = 0; k < ");
+    u(s, c.in_dim / 4);
+    s.append("; ++k) {\n    float f = float(1 << k) * 3.14159265;\n");
+    s.append("    a0[4*k+0] = float16_t(sin(f*uu)); a0[4*k+1] = float16_t(cos(f*uu));\n");
+    s.append("    a0[4*k+2] = float16_t(sin(f*vv)); a0[4*k+3] = float16_t(cos(f*vv));\n  }\n");
+    int woff = 0;
+    int boff = 0;
+    for (int l = 0; l < c.layers(); ++l)
+    {
+        int rows = 0;
+        int cols = 0;
+        coopvec_layer_dims(c, l, rows, cols);
+        s.append("  coopvecNV<float16_t, ");
+        u(s, rows);
+        s.append("> a");
+        u(s, l + 1);
+        s.append(";\n  coopVecMatMulAddNV(a");
+        u(s, l + 1);
+        s.append(", a");
+        u(s, l);
+        s.append(", F16, Wb, ");
+        u(s, woff * 2);
+        s.append("u, F16, Bb, ");
+        u(s, boff * 2);
+        s.append("u, F16, ");
+        u(s, rows);
+        s.append("u, ");
+        u(s, cols);
+        s.append("u, RM, false, ");
+        u(s, cols * 2);
+        s.append("u);\n");
+        if (l + 1 < c.layers())
+        {
+            s.append("  a");
+            u(s, l + 1);
+            s.append(" = max(a");
+            u(s, l + 1);
+            s.append(", coopvecNV<float16_t, ");
+            u(s, rows);
+            s.append(">(float16_t(0.0)));\n");
+        }
+        woff += rows * cols;
+        boff += rows;
+    }
+    const int nl = c.layers();
+    s.append("  vec3 base = clamp(vec3(float(a");
+    u(s, nl);
+    s.append("[0]), float(a");
+    u(s, nl);
+    s.append("[1]), float(a");
+    u(s, nl);
+    s.append("[2])), 0.0, 1.0);\n");
+    if (c.out_dim > 3) { s.append("  float metallic = clamp(float(a"); u(s, nl); s.append("[3]), 0.0, 1.0);\n"); }
+    else { s.append("  float metallic = 0.0;\n"); }
+    if (c.out_dim > 4) { s.append("  float roughness = clamp(float(a"); u(s, nl); s.append("[4]), 0.045, 1.0);\n"); }
+    else { s.append("  float roughness = 0.5;\n"); }
+    if (c.out_dim >= 8) // a LEARNED normal: outputs 5..7 → tangent-space normal, [0,1]→[-1,1], normalized then re-encoded
+    {
+        s.append("  vec3 ln = vec3(float(a");
+        u(s, nl);
+        s.append("[5]), float(a");
+        u(s, nl);
+        s.append("[6]), float(a");
+        u(s, nl);
+        s.append("[7])) * 2.0 - 1.0;\n  vec3 enc_n = normalize(ln + vec3(0.0,0.0,1e-4)) * 0.5 + 0.5;\n");
+    }
+    else { s.append("  vec3 enc_n = normalize(v_normal) * 0.5 + 0.5;\n"); } // geometric fallback
+    s.append("  o_0 = vec4(base, metallic);\n");
+    s.append("  o_1 = vec4(enc_n, roughness);\n");
+    s.append("  o_2 = vec4(0.0, 0.0, 0.0, 1.0);\n"); // emissive = 0, occlusion = 1
+    s.append("  o_3 = vec4(1.0, 0.0, 0.0, 1.0);\n"); // opacity = 1, ShadingModel::Standard(0), AlphaMode::Opaque(0)
+    s.append("}\n");
+    return true;
+}
+
 } // namespace crd::kir::neural

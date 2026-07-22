@@ -136,6 +136,24 @@ inline bool emit_elementwise_hlsl(const KGraph& g, int output, crd::memory::IAll
         case KOp::Mod: s.append("fmod("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break; // C fmod (sign of x)
         case KOp::Fma: s.append("fma("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
         case KOp::Select: s.append("("); if (g.node(nd.c).dtype() == DType::Bool) { ta(nd.c); } else { s.append("("); ta(nd.c); s.append(" != 0.0)"); } s.append(" ? "); ta(nd.a); s.append(" : "); ta(nd.b); s.append(")"); break;
+        // B11: wave ops in the fused elementwise path (symmetry with the GLSL emitter; kernels use the pv path above).
+        case KOp::SubgroupBallot: s.append("WaveActiveBallot("); ta(nd.a); s.append(" != 0u).x"); break;
+        case KOp::SubgroupBallotExclCount: s.append("countbits("); ta(nd.a); s.append(" & ((1u << WaveGetLaneIndex()) - 1u))"); break;
+        case KOp::SubgroupMatch: s.append("WaveMatch("); ta(nd.a); s.append(").x"); break;
+        case KOp::SubgroupAdd: s.append("WaveActiveSum("); ta(nd.a); s.append(")"); break;
+        case KOp::SubgroupMin: s.append("WaveActiveMin("); ta(nd.a); s.append(")"); break;
+        case KOp::SubgroupMax: s.append("WaveActiveMax("); ta(nd.a); s.append(")"); break;
+        case KOp::SubgroupAnd: s.append("WaveActiveBitAnd("); ta(nd.a); s.append(")"); break;
+        case KOp::SubgroupOr: s.append("WaveActiveBitOr("); ta(nd.a); s.append(")"); break;
+        case KOp::SubgroupXor: s.append("WaveActiveBitXor("); ta(nd.a); s.append(")"); break;
+        case KOp::SubgroupInclusiveAdd: s.append("(WavePrefixSum("); ta(nd.a); s.append(") + "); ta(nd.a); s.append(")"); break;
+        case KOp::SubgroupExclusiveAdd: s.append("WavePrefixSum("); ta(nd.a); s.append(")"); break;
+        case KOp::SubgroupBroadcastFirst: s.append("WaveReadLaneFirst("); ta(nd.a); s.append(")"); break;
+        case KOp::SubgroupShuffle: s.append("WaveReadLaneAt("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+        case KOp::QuadBroadcast: s.append("QuadReadLaneAt("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
+        case KOp::QuadSwapX: s.append("QuadReadAcrossX("); ta(nd.a); s.append(")"); break;
+        case KOp::QuadSwapY: s.append("QuadReadAcrossY("); ta(nd.a); s.append(")"); break;
+        case KOp::QuadSwapDiagonal: s.append("QuadReadAcrossDiagonal("); ta(nd.a); s.append(")"); break;
         default: return false;
         }
         s.append(";\n");
@@ -328,6 +346,21 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::SubgroupBallot: s.append("WaveActiveBallot("); pv(pv, nd.a); s.append(" != 0u).x"); break;
         case KOp::SubgroupBallotExclCount: s.append("countbits("); pv(pv, nd.a); s.append(" & ((1u << WaveGetLaneIndex()) - 1u))"); break;
         case KOp::SubgroupMatch: s.append("WaveMatch("); pv(pv, nd.a); s.append(").x"); break;
+        // B11: wave reductions/scans/data-movement (SM6.0). WavePrefixSum is EXCLUSIVE ⇒ inclusive = prefix + self.
+        case KOp::SubgroupAdd: s.append("WaveActiveSum("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::SubgroupMin: s.append("WaveActiveMin("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::SubgroupMax: s.append("WaveActiveMax("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::SubgroupAnd: s.append("WaveActiveBitAnd("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::SubgroupOr: s.append("WaveActiveBitOr("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::SubgroupXor: s.append("WaveActiveBitXor("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::SubgroupInclusiveAdd: s.append("(WavePrefixSum("); pv(pv, nd.a); s.append(") + "); pv(pv, nd.a); s.append(")"); break;
+        case KOp::SubgroupExclusiveAdd: s.append("WavePrefixSum("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::SubgroupBroadcastFirst: s.append("WaveReadLaneFirst("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::SubgroupShuffle: s.append("WaveReadLaneAt("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
+        case KOp::QuadBroadcast: s.append("QuadReadLaneAt("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
+        case KOp::QuadSwapX: s.append("QuadReadAcrossX("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::QuadSwapY: s.append("QuadReadAcrossY("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::QuadSwapDiagonal: s.append("QuadReadAcrossDiagonal("); pv(pv, nd.a); s.append(")"); break;
         default: ok = false; s.append("0"); break;
         }
     };

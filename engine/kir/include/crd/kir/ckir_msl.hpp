@@ -317,6 +317,13 @@ inline bool emit_compute_kernel_msl(const KGraph& g, const KEntry& entry, crd::m
             case KStmtKind::ForBreakIf: decl(decl, st.value); s.append("  if (("); ev(ev, st.value); s.append(") != 0u) break;\n"); ++i; break;
             case KStmtKind::BufferTicket: decl(decl, st.index); s.append("  if (lidx == 0u) { sh"); app_uint(s, st.value); s.append("[0] = atomic_fetch_add_explicit((device atomic_uint*)&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], 1u, memory_order_relaxed); }\n"); ++i; break;
             case KStmtKind::SyncWarp: s.append("  simdgroup_barrier(mem_flags::mem_threadgroup);\n"); ++i; break;
+            case KStmtKind::TraceRayClosest:  case KStmtKind::TraceRayHit:   case KStmtKind::TraceRayCurves:
+            case KStmtKind::TraceRayPipeline:  case KStmtKind::PayloadStore:  case KStmtKind::ReorderThread:
+            case KStmtKind::IgnoreHitIf:
+                // Inline ray tracing / RT-pipeline statements are GLSL/HLSL-only; Metal has no inline-RT path here, so a kernel
+                // carrying them is never routed to this emitter. Listed explicitly (not a catch-all default) so a future
+                // NON-RT KStmtKind still trips -Wswitch and gets wired to every backend. Advance past the statement.
+                ++i; break;
             }
         }
     };
