@@ -11,6 +11,7 @@
 #include <crd/core/types.hpp>
 
 #include <d3d12.h>
+#include <dxgi1_5.h> // RET-2: IDXGIFactory2/IDXGISwapChain3 (present) + IDXGIFactory5 (the tearing capability probe)
 #include <windows.h>
 #include <wrl/client.h>
 
@@ -368,6 +369,156 @@ private:
     crd::u32                            m_samples = 1;
     crd::u32                            m_w = 0;
     crd::u32                            m_h = 0;
+};
+
+// ── RET-2 (ADR-0105): the DX12 present surface — the DXGI mirror of the Vulkan sink design ────────────────────────────
+// The app renders into a NORMAL color target (post-draw state: COMMON) and `present(target)` CopyResource-s the canvas
+// into the current backbuffer, then Presents. Self-contained (own allocator/list/fence) and fully serialized per frame,
+// exactly like the Vulkan surface. DXGI has no headless-surface equivalent — a real HWND is the one path here.
+class Dx12PresentSurface final : public IPresentSurface
+{
+public:
+    Dx12PresentSurface(ID3D12Device* device, ID3D12CommandQueue* queue, void* hwnd, crd::u32 w, crd::u32 h,
+                       PresentMode mode) noexcept
+        : m_queue(queue), m_mode(mode)
+    {
+        if (hwnd == nullptr) { return; } // DXGI presents to windows only — nullptr is the Vulkan headless path
+        ComPtr<IDXGIFactory2> factory;
+        if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) { return; }
+        {
+            ComPtr<IDXGIFactory5> f5; // tearing (true immediate mode) is a CAPABILITY — probe, never assume
+            BOOL                  allow = FALSE;
+            if (SUCCEEDED(factory.As(&f5))
+                && SUCCEEDED(f5->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &allow, sizeof(allow))))
+            {
+                m_tearing = allow == TRUE && mode == PresentMode::Immediate;
+            }
+        }
+        DXGI_SWAP_CHAIN_DESC1 sd{};
+        sd.Width            = w;
+        sd.Height           = h;
+        sd.Format           = kColorFormat; // matches the canvas ⇒ CopyResource is legal
+        sd.SampleDesc.Count = 1;
+        sd.BufferUsage      = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        sd.BufferCount      = 2;
+        sd.SwapEffect       = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        sd.Flags            = m_tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0U;
+        ComPtr<IDXGISwapChain1> sc1;
+        if (FAILED(factory->CreateSwapChainForHwnd(queue, static_cast<HWND>(hwnd), &sd, nullptr, nullptr, &sc1)))
+        {
+            return;
+        }
+        if (FAILED(sc1.As(&m_swapchain))) { return; }
+
+        if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_alloc)))) { return; }
+        if (FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_alloc.Get(), nullptr,
+                                             IID_PPV_ARGS(&m_list))))
+        {
+            return;
+        }
+        m_list->Close();
+        if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence)))) { return; }
+        m_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        if (m_event == nullptr) { return; }
+        m_w     = w;
+        m_h     = h;
+        m_valid = true;
+    }
+
+    ~Dx12PresentSurface() override
+    {
+        wait_gpu();
+        if (m_event != nullptr) { CloseHandle(m_event); }
+    }
+    Dx12PresentSurface(const Dx12PresentSurface&)            = delete;
+    Dx12PresentSurface& operator=(const Dx12PresentSurface&) = delete;
+    Dx12PresentSurface(Dx12PresentSurface&&)                 = delete;
+    Dx12PresentSurface& operator=(Dx12PresentSurface&&)      = delete;
+
+    [[nodiscard]] bool     valid() const noexcept override { return m_valid; }
+    [[nodiscard]] crd::u32 width() const noexcept override { return m_w; }
+    [[nodiscard]] crd::u32 height() const noexcept override { return m_h; }
+    [[nodiscard]] crd::u64 frame_count() const noexcept override { return m_frames; }
+
+    [[nodiscard]] bool present(IRasterTarget& target) override
+    {
+        if (!m_valid) { return false; }
+        auto& t = static_cast<Dx12RasterTarget&>(target);
+        if (t.width() != m_w || t.height() != m_h) { return false; } // never a stretched half-frame
+
+        const UINT             idx = m_swapchain->GetCurrentBackBufferIndex();
+        ComPtr<ID3D12Resource> bb;
+        if (FAILED(m_swapchain->GetBuffer(idx, IID_PPV_ARGS(&bb)))) { return false; }
+
+        m_alloc->Reset();
+        m_list->Reset(m_alloc.Get(), nullptr);
+        barrier(bb.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST);
+        barrier(t.copy_src(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        m_list->CopyResource(bb.Get(), t.copy_src()); // same format + extent — the whole-resource copy
+        barrier(t.copy_src(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
+        barrier(bb.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
+        m_list->Close();
+        ID3D12CommandList* lists[] = {m_list.Get()};
+        m_queue->ExecuteCommandLists(1, lists);
+
+        const UINT sync  = m_mode == PresentMode::Fifo ? 1U : 0U;
+        const UINT flags = m_tearing ? DXGI_PRESENT_ALLOW_TEARING : 0U;
+        const HRESULT pr = m_swapchain->Present(sync, flags);
+        wait_gpu(); // full per-frame serialization (v1 pacing — the frame graph takes over later)
+        if (FAILED(pr)) { return false; }
+        ++m_frames;
+        return true;
+    }
+
+    [[nodiscard]] bool resize(crd::u32 width, crd::u32 height) override
+    {
+        if (!m_valid) { return false; }
+        wait_gpu();
+        const UINT flags = m_tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0U;
+        if (FAILED(m_swapchain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, flags))) { return false; }
+        DXGI_SWAP_CHAIN_DESC1 sd{};
+        if (FAILED(m_swapchain->GetDesc1(&sd))) { return false; }
+        m_w = sd.Width; // a real window's swapchain follows the client area — report the truth
+        m_h = sd.Height;
+        return true;
+    }
+
+private:
+    void barrier(ID3D12Resource* res, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
+    {
+        D3D12_RESOURCE_BARRIER b{};
+        b.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b.Transition.pResource   = res;
+        b.Transition.StateBefore = before;
+        b.Transition.StateAfter  = after;
+        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        m_list->ResourceBarrier(1, &b);
+    }
+    void wait_gpu()
+    {
+        if (m_fence == nullptr || m_event == nullptr) { return; }
+        const crd::u64 v = ++m_fence_value;
+        m_queue->Signal(m_fence.Get(), v);
+        if (m_fence->GetCompletedValue() < v)
+        {
+            m_fence->SetEventOnCompletion(v, m_event);
+            WaitForSingleObject(m_event, INFINITE);
+        }
+    }
+
+    ID3D12CommandQueue*               m_queue = nullptr;
+    PresentMode                       m_mode  = PresentMode::Fifo;
+    ComPtr<IDXGISwapChain3>           m_swapchain;
+    ComPtr<ID3D12CommandAllocator>    m_alloc;
+    ComPtr<ID3D12GraphicsCommandList> m_list;
+    ComPtr<ID3D12Fence>               m_fence;
+    HANDLE                            m_event       = nullptr;
+    crd::u64                          m_fence_value = 0;
+    crd::u32                          m_w           = 0;
+    crd::u32                          m_h           = 0;
+    crd::u64                          m_frames      = 0;
+    bool                              m_tearing     = false;
+    bool                              m_valid       = false;
 };
 
 // An assembled graphics program: a root signature + a graphics PSO (VS+FS), built once and drawn many. The DX12 analog of
@@ -1076,7 +1227,7 @@ public:
         // param 0 = UAV (u0, storage) · 1 = SRV (t1, texture) · 2 = sampler (s2) · 3 = bindless SRV array (t3[N]). Every
         // program carries all four; a draw sets only the tables its FS uses (an unreferenced table needs no binding).
         D3D12_ROOT_PARAMETER param[4]{};
-        param[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[0].DescriptorTable.NumDescriptorRanges = 1; param[0].DescriptorTable.pDescriptorRanges = &uav_range;      param[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        param[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[0].DescriptorTable.NumDescriptorRanges = 1; param[0].DescriptorTable.pDescriptorRanges = &uav_range;      param[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL; // GEO-1: + VERTEX (vertex pulling reads u0 in the VS)
         param[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[1].DescriptorTable.NumDescriptorRanges = 1; param[1].DescriptorTable.pDescriptorRanges = &srv_range;      param[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
         param[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[2].DescriptorTable.NumDescriptorRanges = 1; param[2].DescriptorTable.pDescriptorRanges = &samp_range;     param[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
         param[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[3].DescriptorTable.NumDescriptorRanges = 1; param[3].DescriptorTable.pDescriptorRanges = &bindless_range; param[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
@@ -1143,7 +1294,7 @@ public:
         bindless_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; bindless_range.NumDescriptors = kBindlessMax; bindless_range.BaseShaderRegister = 3;
         bindless_range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
         D3D12_ROOT_PARAMETER param[4]{};
-        param[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[0].DescriptorTable.NumDescriptorRanges = 1; param[0].DescriptorTable.pDescriptorRanges = &uav_range;      param[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        param[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[0].DescriptorTable.NumDescriptorRanges = 1; param[0].DescriptorTable.pDescriptorRanges = &uav_range;      param[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL; // GEO-1: + VERTEX (vertex pulling reads u0 in the VS)
         param[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[1].DescriptorTable.NumDescriptorRanges = 1; param[1].DescriptorTable.pDescriptorRanges = &srv_range;      param[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
         param[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[2].DescriptorTable.NumDescriptorRanges = 1; param[2].DescriptorTable.pDescriptorRanges = &samp_range;     param[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
         param[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[3].DescriptorTable.NumDescriptorRanges = 1; param[3].DescriptorTable.pDescriptorRanges = &bindless_range; param[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -1202,7 +1353,7 @@ public:
         bindless_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; bindless_range.NumDescriptors = kBindlessMax; bindless_range.BaseShaderRegister = 3;
         bindless_range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
         D3D12_ROOT_PARAMETER param[4]{};
-        param[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[0].DescriptorTable.NumDescriptorRanges = 1; param[0].DescriptorTable.pDescriptorRanges = &uav_range;      param[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        param[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[0].DescriptorTable.NumDescriptorRanges = 1; param[0].DescriptorTable.pDescriptorRanges = &uav_range;      param[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL; // GEO-1: + VERTEX (vertex pulling reads u0 in the VS)
         param[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[1].DescriptorTable.NumDescriptorRanges = 1; param[1].DescriptorTable.pDescriptorRanges = &srv_range;      param[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
         param[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[2].DescriptorTable.NumDescriptorRanges = 1; param[2].DescriptorTable.pDescriptorRanges = &samp_range;     param[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
         param[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[3].DescriptorTable.NumDescriptorRanges = 1; param[3].DescriptorTable.pDescriptorRanges = &bindless_range; param[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -1267,7 +1418,7 @@ public:
         bindless_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; bindless_range.NumDescriptors = kBindlessMax; bindless_range.BaseShaderRegister = 3;
         bindless_range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
         D3D12_ROOT_PARAMETER param[4]{};
-        param[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[0].DescriptorTable.NumDescriptorRanges = 1; param[0].DescriptorTable.pDescriptorRanges = &uav_range;      param[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        param[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[0].DescriptorTable.NumDescriptorRanges = 1; param[0].DescriptorTable.pDescriptorRanges = &uav_range;      param[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL; // GEO-1: + VERTEX (vertex pulling reads u0 in the VS)
         param[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[1].DescriptorTable.NumDescriptorRanges = 1; param[1].DescriptorTable.pDescriptorRanges = &srv_range;      param[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
         param[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[2].DescriptorTable.NumDescriptorRanges = 1; param[2].DescriptorTable.pDescriptorRanges = &samp_range;     param[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
         param[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[3].DescriptorTable.NumDescriptorRanges = 1; param[3].DescriptorTable.pDescriptorRanges = &bindless_range; param[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -1911,6 +2062,31 @@ public:
         return std::make_unique<Dx12StorageBuffer>(std::move(buf), std::move(readback), mapped, size_bytes);
     }
 
+    // GEO-1: staged CPU→UAV upload (vertex pulling — the cooked vertex stream the VS fetches by SV_VertexID). Mirrors the
+    // zero-init pattern: UPLOAD buffer + CopyBufferRegion, UAV→COPY_DEST→UAV transitions, blocking submit.
+    [[nodiscard]] bool upload_storage(IStorageBuffer& storage, crd::u32 byte_offset, const void* data,
+                                      crd::u32 size_bytes) override
+    {
+        if (!m_ok || data == nullptr || size_bytes == 0U) { return false; }
+        auto& s = static_cast<Dx12StorageBuffer&>(storage);
+        if (static_cast<crd::u64>(byte_offset) + size_bytes > s.size_bytes()) { return false; }
+
+        ComPtr<ID3D12Resource> upload = make_upload_buffer(m_device.Get(), size_bytes);
+        if (upload == nullptr) { return false; }
+        void* umap = nullptr;
+        if (FAILED(upload->Map(0, nullptr, &umap))) { return false; }
+        std::memcpy(umap, data, size_bytes);
+        upload->Unmap(0, nullptr);
+
+        m_cmd_alloc->Reset();
+        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        transition(s.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST);
+        m_list->CopyBufferRegion(s.buf(), byte_offset, upload.Get(), 0, size_bytes);
+        transition(s.buf(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        submit_and_wait();
+        return true;
+    }
+
     void draw_storage(IRasterTarget& target, IRasterProgram& program, ClearColor clear, IStorageBuffer& storage,
                       crd::u32 vertex_count) override
     {
@@ -2030,6 +2206,103 @@ public:
         srv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
         srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         srv.Texture2D.MipLevels     = 1;
+        return std::make_unique<Dx12Texture>(std::move(tex), width, height, srv);
+    }
+
+    // RET-2 (ADR-0105): the DXGI present seam. `native_window` must be a real HWND (DXGI has no headless surface).
+    [[nodiscard]] std::unique_ptr<IPresentSurface> create_present_surface(void* native_window, crd::u32 width,
+                                                                          crd::u32 height, PresentMode mode) override
+    {
+        if (!m_ok || native_window == nullptr) { return nullptr; }
+        auto surface =
+            std::make_unique<Dx12PresentSurface>(m_device.Get(), m_queue.Get(), native_window, width, height, mode);
+        if (!surface->valid()) { return nullptr; }
+        return surface;
+    }
+
+    // GEO-3 stage 4 / RET-3: the cooked chain uploads VERBATIM (one footprint copy per level, no device-side
+    // re-derivation); `srgb` picks the _SRGB format so sampling hardware-decodes.
+    [[nodiscard]] std::unique_ptr<ITexture> create_texture_from_mips(crd::u32 width, crd::u32 height, crd::u32 mip_count,
+                                                                    const void* const* mips, bool srgb) override
+    {
+        if (!m_ok || width == 0U || height == 0U || mip_count == 0U || mip_count > 16U || mips == nullptr)
+        {
+            return nullptr;
+        }
+        for (crd::u32 i = 0; i < mip_count; ++i)
+        {
+            if (mips[i] == nullptr) { return nullptr; }
+        }
+        const DXGI_FORMAT fmt = srgb ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : kColorFormat;
+
+        D3D12_HEAP_PROPERTIES hp{};
+        hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC rd{};
+        rd.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        rd.Width            = width;
+        rd.Height           = height;
+        rd.DepthOrArraySize = 1;
+        rd.MipLevels        = static_cast<UINT16>(mip_count);
+        rd.Format           = fmt;
+        rd.SampleDesc.Count = 1;
+        rd.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        ComPtr<ID3D12Resource> tex;
+        if (FAILED(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COPY_DEST,
+                                                     nullptr, IID_PPV_ARGS(&tex))))
+        {
+            return nullptr;
+        }
+
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT fps[16]{};
+        UINT                               rows[16]{};
+        UINT64                             rowbytes[16]{};
+        UINT64                             total = 0;
+        m_device->GetCopyableFootprints(&rd, 0, mip_count, 0, fps, rows, rowbytes, &total);
+        ComPtr<ID3D12Resource> upload = make_upload_buffer(m_device.Get(), total);
+        if (upload == nullptr) { return nullptr; }
+        void* mapped = nullptr;
+        if (FAILED(upload->Map(0, nullptr, &mapped))) { return nullptr; }
+        {
+            crd::u32 mw = width;
+            crd::u32 mh = height;
+            for (crd::u32 i = 0; i < mip_count; ++i)
+            {
+                auto*            dst_base = static_cast<crd::u8*>(mapped) + fps[i].Offset;
+                const auto*      src_base = static_cast<const crd::u8*>(mips[i]);
+                const crd::usize src_row  = static_cast<crd::usize>(mw) * 4U;
+                for (crd::u32 y = 0; y < mh; ++y)
+                {
+                    std::memcpy(dst_base + static_cast<crd::usize>(y) * fps[i].Footprint.RowPitch,
+                                src_base + static_cast<crd::usize>(y) * src_row, src_row);
+                }
+                mw = mw > 1U ? mw / 2U : 1U;
+                mh = mh > 1U ? mh / 2U : 1U;
+            }
+        }
+        upload->Unmap(0, nullptr);
+
+        m_cmd_alloc->Reset();
+        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        for (crd::u32 i = 0; i < mip_count; ++i)
+        {
+            D3D12_TEXTURE_COPY_LOCATION dst{};
+            dst.pResource        = tex.Get();
+            dst.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            dst.SubresourceIndex = i;
+            D3D12_TEXTURE_COPY_LOCATION src{};
+            src.pResource       = upload.Get();
+            src.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            src.PlacedFootprint = fps[i];
+            m_list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+        }
+        transition(tex.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        submit_and_wait();
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+        srv.Format                  = fmt;
+        srv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srv.Texture2D.MipLevels     = mip_count;
         return std::make_unique<Dx12Texture>(std::move(tex), width, height, srv);
     }
 

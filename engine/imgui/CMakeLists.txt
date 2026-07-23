@@ -63,26 +63,29 @@ set(CRDI_GUI_HEADERS
 
 add_library(crd-imgui STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/imgui_layer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/imgui_gpu_backend.cpp # RET-5: the render backend on gpu-context (ADR-0105)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/log_channel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/settings.cpp
     ${CRDI_GUI_HEADERS}
     $<TARGET_OBJECTS:crd-imgui-vendor>
 )
 
-target_include_directories(crd-imgui
-    PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/include"
-    SYSTEM PRIVATE
-        "${imgui_SOURCE_DIR}"
-        "${imgui_SOURCE_DIR}/backends"
+# CI-1 (2026-07-23): SYSTEM must be the FIRST argument of its own call — mid-list it parses as a literal
+# include dir named "SYSTEM" and the imgui dirs silently lose -isystem (GCC then -Werror's imgui's own headers).
+target_include_directories(crd-imgui PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_include_directories(crd-imgui SYSTEM PRIVATE
+    "${imgui_SOURCE_DIR}"
+    "${imgui_SOURCE_DIR}/backends"
 )
 
 target_link_libraries(crd-imgui
     PUBLIC
         crd-app
         crd-config
-        crd-rhi
-        crd-rhi-vulkan
+        crd-rhi                # ⛔ FROZEN half (ImGuiLayer) — dies with the sandbox flip completion (RET-7)
+        crd-rhi-vulkan         # ⛔ FROZEN half
+        crd-gpu-context        # RET-5: ImGuiGpuBackend — the render backend on the ONE graphics layer
+        crd-gpu-context-vulkan # RET-5
         crd-platform
         crd-log
         crd-units  # v0d-6: unit_preferences_inspector consumes UnitPreferences

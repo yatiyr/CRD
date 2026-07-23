@@ -4,8 +4,7 @@
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <new>
 #include <crd/platform/filesystem.hpp>
-#include <crd/renderer/texture_resource.hpp>
-#include <crd/renderer/texture_resource_loader.hpp>
+#include <crd/resources/texture_resource.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/load_state.hpp>
 #include <crd/resources/resource_handle.hpp>
@@ -97,7 +96,7 @@ static fs::Path write_txtr_pack(crd::containers::Array<TxtrArt>& arts)
 // Build a TXTR CRDR artifact with HEAD + MIP0..MIP(count-1) for a 4×4 base.
 // All pixels filled with `fill` (4 bytes, RGBA).
 static crd::containers::Array<crd::u8> make_txtr_artifact(
-    ResourceId id, crd::u32 mip_count, const crd::u8 fill[4])
+    ResourceId id, crd::u32 mip_count, const crd::u8 fill[4], crd::u8 format_byte = 0U)
 {
     CrdrWriter writer(&s_alloc, id, kFourCC_TXTR);
 
@@ -108,7 +107,7 @@ static crd::containers::Array<crd::u8> make_txtr_artifact(
     std::memcpy(head + 0, &base_w,     sizeof(crd::u32));
     std::memcpy(head + 4, &base_h,     sizeof(crd::u32));
     std::memcpy(head + 8, &mip_count,  sizeof(crd::u32));
-    head[12] = 0U; // RGBA8Unorm
+    head[12] = format_byte; // TextureFormat byte value (0 = RGBA8Unorm, 3 = RGBA8UnormSrgb)
     writer.add_chunk(kFourCC_HEAD, crd::containers::ConstSpan<crd::u8>(head, 16U));
 
     // MIP chunks
@@ -155,20 +154,50 @@ TEST_CASE("TextureResource loads from CRDR artifact", "[resources][texture][load
     const fs::Path pack_path = write_txtr_pack(arts);
 
     ResourceManager rm(&s_alloc);
-    crd::renderer::register_texture_loader(&rm);
+    crd::resources::register_texture_loader(&rm);
 
     const MountId mid = rm.mount_manifest(pack_path.generic());
     REQUIRE(mid.is_valid());
 
-    auto handle = rm.load_sync<crd::renderer::TextureResource>(txtr_id);
+    auto handle = rm.load_sync<crd::resources::TextureResource>(txtr_id);
     CHECK(handle.is_ready());
 
-    const crd::renderer::TextureResource* tex = handle.get();
+    const crd::resources::TextureResource* tex = handle.get();
     REQUIRE(tex != nullptr);
     CHECK(tex->mip_count == 3U);
     CHECK(tex->mips.size() == 3U);
     CHECK(tex->mips[0].width  == 4U);
-    CHECK(tex->format == crd::renderer::TextureFormat::RGBA8Unorm);
+    CHECK(tex->format == crd::resources::TextureFormat::RGBA8Unorm);
+
+    (void)fs::remove_file(pack_path);
+}
+
+// ── Test 1b: the sRGB format byte (GEO-3 stage 2b) ───────────────────────────
+
+TEST_CASE("TextureResource loads the RGBA8UnormSrgb format byte", "[resources][texture][loader][geo]")
+{
+    constexpr crd::u8 k_grey[4] = { 188U, 188U, 188U, 255U };
+
+    const ResourceId txtr_id = ResourceId::mint_random();
+    crd::containers::Array<TxtrArt> arts(&s_alloc);
+    arts.push_back(TxtrArt{
+        txtr_id, kFourCC_TXTR,
+        make_txtr_artifact(txtr_id, 2U, k_grey, 3U), // 3 = RGBA8UnormSrgb (the sRGB-cooked color path)
+        "test_srgb.txtr"
+    });
+    const fs::Path pack_path = write_txtr_pack(arts);
+
+    ResourceManager rm(&s_alloc);
+    crd::resources::register_texture_loader(&rm);
+    const MountId mid = rm.mount_manifest(pack_path.generic());
+    REQUIRE(mid.is_valid());
+
+    auto handle = rm.load_sync<crd::resources::TextureResource>(txtr_id);
+    CHECK(handle.is_ready());
+    const crd::resources::TextureResource* tex = handle.get();
+    REQUIRE(tex != nullptr);
+    CHECK(tex->format == crd::resources::TextureFormat::RGBA8UnormSrgb);
+    CHECK(tex->mip_count == 2U); // the size validation applies to sRGB exactly like unorm
 
     (void)fs::remove_file(pack_path);
 }
@@ -191,13 +220,13 @@ TEST_CASE("TextureResource mip chain has correct dimensions", "[resources][textu
     const fs::Path pack_path = write_txtr_pack(arts);
 
     ResourceManager rm(&s_alloc);
-    crd::renderer::register_texture_loader(&rm);
+    crd::resources::register_texture_loader(&rm);
     REQUIRE(rm.mount_manifest(pack_path.generic()).is_valid());
 
-    auto handle = rm.load_sync<crd::renderer::TextureResource>(txtr_id);
+    auto handle = rm.load_sync<crd::resources::TextureResource>(txtr_id);
     REQUIRE(handle.is_ready());
 
-    const crd::renderer::TextureResource* tex = handle.get();
+    const crd::resources::TextureResource* tex = handle.get();
     REQUIRE(tex != nullptr);
     REQUIRE(tex->mips.size() == 3U);
 
@@ -231,10 +260,10 @@ TEST_CASE("TextureResource fails when HEAD chunk is absent", "[resources][textur
     const fs::Path pack_path = write_txtr_pack(arts);
 
     ResourceManager rm(&s_alloc);
-    crd::renderer::register_texture_loader(&rm);
+    crd::resources::register_texture_loader(&rm);
     REQUIRE(rm.mount_manifest(pack_path.generic()).is_valid());
 
-    auto handle = rm.load_sync<crd::renderer::TextureResource>(txtr_id);
+    auto handle = rm.load_sync<crd::resources::TextureResource>(txtr_id);
     CHECK(handle.state() == LoadState::Failed);
 
     (void)fs::remove_file(pack_path);
@@ -308,13 +337,13 @@ TEST_CASE("TextureResource cooked from TGA round-trip", "[resources][texture][co
     const fs::Path pack_path = write_txtr_pack(arts);
 
     ResourceManager rm(&s_alloc);
-    crd::renderer::register_texture_loader(&rm);
+    crd::resources::register_texture_loader(&rm);
     REQUIRE(rm.mount_manifest(pack_path.generic()).is_valid());
 
-    auto handle = rm.load_sync<crd::renderer::TextureResource>(txtr_id);
+    auto handle = rm.load_sync<crd::resources::TextureResource>(txtr_id);
     REQUIRE(handle.is_ready());
 
-    const crd::renderer::TextureResource* tex = handle.get();
+    const crd::resources::TextureResource* tex = handle.get();
     REQUIRE(tex != nullptr);
     REQUIRE(!tex->mips.empty());
     REQUIRE(!tex->mips[0].pixels.empty());

@@ -415,6 +415,9 @@ inline bool emit_value_stmt(const KGraph& g, int i, crd::containers::String& s, 
     case KOp::Neg: s.append("-"); ta(nd.a); break;
     case KOp::Recip: s.append("(1.0 / "); ta(nd.a); s.append(")"); break;
     case KOp::Abs: s.append("abs("); ta(nd.a); s.append(")"); break;
+    // GEO-1 (the compute-emitter-lag scar, 5th occurrence): the bit reinterprets — needed by the vertex-pulling VS
+    case KOp::FloatBitsToInt: s.append("floatBitsToInt("); ta(nd.a); s.append(")"); break;
+    case KOp::IntBitsToFloat: s.append("intBitsToFloat("); ta(nd.a); s.append(")"); break;
     case KOp::DFdx: s.append("dFdx("); ta(nd.a); s.append(")"); break;   // B1 fragment derivative ∂/∂x
     case KOp::DFdy: s.append("dFdy("); ta(nd.a); s.append(")"); break;   // B1 fragment derivative ∂/∂y
     case KOp::StorageLoad: s.append("sbuf.data["); ta(nd.a); s.append("]"); break; // B1-f: read the FS storage buffer
@@ -1228,17 +1231,16 @@ inline bool emit_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory::I
             }
         }
     }
-    bool fs_uses_storage = false; // B1-f: does the FS read/write the storage buffer (a StorageLoad or a storage write)?
-    if (!is_vertex)
+    // B1-f (FS) + GEO-1 (VS vertex pulling): does this stage touch the storage buffer? The FS may read AND write (+ROV);
+    // a VERTEX stage may READ (StorageLoad by VertexIndex — the bindless vertex-feeding path). Writes stay FS-only.
+    bool fs_uses_storage = false;
+    if (!is_vertex && entry.storage_write_index >= 0) { fs_uses_storage = true; }
+    for (int i = 0; !fs_uses_storage && i < n; ++i)
     {
-        if (entry.storage_write_index >= 0) { fs_uses_storage = true; }
-        for (int i = 0; !fs_uses_storage && i < n; ++i)
-        {
-            if (reach[static_cast<crd::usize>(i)] && g.node(i).op == KOp::StorageLoad) { fs_uses_storage = true; }
-        }
-        // Rasterizer-ordered access (ROV) — the whole main() body serialises per pixel between begin/endInvocationInterlockARB.
-        if (fs_uses_storage && entry.interlock) { s.append("#extension GL_ARB_fragment_shader_interlock : require\n"); }
+        if (reach[static_cast<crd::usize>(i)] && g.node(i).op == KOp::StorageLoad) { fs_uses_storage = true; }
     }
+    // Rasterizer-ordered access (ROV) — the whole main() body serialises per pixel between begin/endInvocationInterlockARB.
+    if (!is_vertex && fs_uses_storage && entry.interlock) { s.append("#extension GL_ARB_fragment_shader_interlock : require\n"); }
     for (int i = 0; i < n; ++i) // stage inputs: StageIn at (location) — VS attribute / FS interpolant
     {
         if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::StageIn) { continue; }
@@ -1261,10 +1263,12 @@ inline bool emit_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory::I
         s.append("layout(depth_"); s.append(entry.depth_mode == DepthMode::Greater ? "greater" : "less");
         s.append(") out float gl_FragDepth;\n");
     }
-    if (fs_uses_storage) // B1-f: the FS storage buffer at set 0 / binding 0 (matches draw_storage's descriptor). `coherent`
-    {                    // so ordinary writes are visible cross-invocation; `layout(pixel_interlock_ordered)` when ROV.
-        if (entry.interlock) { s.append("layout(pixel_interlock_ordered) in;\n"); }
-        s.append("layout(set = 0, binding = 0, std430) coherent buffer StorageBuf { uint data[]; } sbuf;\n");
+    if (fs_uses_storage) // B1-f: the storage buffer at set 0 / binding 0 (matches draw_storage's descriptor). FS: `coherent`
+    {                    // (writes visible cross-invocation) + `pixel_interlock_ordered` when ROV. VS (GEO-1 vertex
+                         // pulling): READONLY — the vertex stage only ever fetches.
+        if (!is_vertex && entry.interlock) { s.append("layout(pixel_interlock_ordered) in;\n"); }
+        s.append(is_vertex ? "layout(set = 0, binding = 0, std430) readonly buffer StorageBuf { uint data[]; } sbuf;\n"
+                           : "layout(set = 0, binding = 0, std430) coherent buffer StorageBuf { uint data[]; } sbuf;\n");
     }
     for (int i = 0; i < n; ++i) // B2: separable texture + sampler bindings — `uniform texture2D tex_S_B` / `uniform sampler samp_S_B`
     {

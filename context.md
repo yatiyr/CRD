@@ -15,8 +15,266 @@
 > guarantee, so we reuse everything (row 122's design). Sequence by convergence-leverage: OFF-1 (mode seam, wavefront, adaptive)
 > → OFF-4 path guiding PROMOTED (ReSTIR PG / neural NASG / wavefront-friendly, the biggest convergence multiplier) → OFF-6/7
 > spectral + volumetrics/SSS → OFF-2/3/5 (ReSTIR-BDPT for caustics / MLT tail) → OFF-8/9 (adaptive+firefly / deep-EXR·cryptomatte·LPE).
-> **▶ NEXT: per-pillar deep-dive research docs (OFF-1 orchestrator, OFF-4 guiding), then OFF-1 implementation.** Denoising (OIDN-class
-> AOV CNN) is a FINISHING filter, never in the reference path (the offline mode IS the ground truth that certifies real-time).
+> **[⭐⭐ GEO band ADDED 2026-07-23 — the geometry-resource pipeline PRECEDES the offline renderer (user-directed).]** Cerid is
+> Blender/CAD/CAM/slicer-class: mesh manipulation is OUR job; **every resource type is first-class with its own reason; bundle
+> formats (glTF/USD) are INTERCHANGE ONLY — import = DECOMPOSE into native per-type resources (scene·mesh·material·texture, each
+> UUID'd+cooked), export = re-bundle; materials are AUTHORED onto our OpenPBR MaterialTemplates + CKIR shaders (no foreign shader
+> ever enters).** Research: `docs/research/2026-07-23-geometry-resource-pipeline.md`. Found in-tree: crd-geometry substrate
+> (half-edge/subdiv/decimate/remesh/repair/winding/BVH), per-type resource system (UUID ResourceIds, cooked packs, mounts,
+> streaming, hot-reload), native cooked MeshResource (48B vertex, SI units), our OWN inflate (RFC 1950/1951) + HDR/EXR codecs.
+> **[⭐⭐⭐ GEO band EXPANDED to WORLD-CLASS NO-GAP 2026-07-23 (user round 2: Cerid = game engine + Blender-class DCC + CAD/CAM/
+> slicer + film/video compositor + DAW substrate, ALL agent-drivable via MCP/CLI; missing modules get BUILT not patched).]**
+> Round-2 research `docs/research/2026-07-23-resource-scene-world-class.md`. ⭐ KEY DISCOVERY: the two hardest pillars are ALREADY
+> BUILT in-tree — the **ECS (`crd-scene` ADR-0050: archetype+sparse-set hybrid, 16KB SoA chunks, Flecs-class relations,
+> change-detect, command buffers, TESTED)** + **SCEN scene artifact (ADR-0055) + öbek prefab/decomposition (ADR-0058, `obekc`
+> CLI planned)**; hesap-dsp (v11 DONE) IS the DAW math engine; the agent-native charter exists (`cerid-agent-native-engine.md`,
+> ADR-0081 pending). Industry validation: USD-authors/glTF-delivers; OTIO = timeline-referencing-external-media (our philosophy
+> applied to editorial); CLAP (MIT, thread-pool, MIDI 2.0 per-note) shapes the audio graph; Bevy-v2/O3DE prove the dependency-
+> graph processor; Blender-MCP (50+ tools) proves agent-driven DCC. The GEO band (D-007 rows 66-76, 4 sub-bands): **A import**
+> GEO-1 ImportedAsset+STL/OBJ/PLY → GEO-2 MikkTSpace tangents → GEO-3 glTF decompose into SCEN → GEO-4 scene cook+öbek+glTF
+> export → GEO-5 3MF · **B infra** GEO-6 dependency-graph asset processor (source→job→product, content-hash incremental,
+> undeclared deps structurally impossible) · **C scene/anim** GEO-7 SCEN→World instantiation + chunk-grain (SoA) draw submission
+> → GEO-8 Skeleton/AnimClip resources (hesap-interp; ONE curve engine for anim+timeline+audio) · **D new domains** GEO-9
+> TIMELINE resource (OTIO-shaped, RATIONAL time, references-never-embeds; .otio interchange; EXR-sequence masters, ~~video codecs
+> deliberately OUT~~ superseded — the MED band owns them) → GEO-10 `crd-audio` NEW module (own WAV/AIFF/FLAC, audio-graph-as-resource, hesap-dsp kernels, MIDI 2.0-
+> native model, lock-free realtime on crd-jobs; CLAP-shaped, hosting = future phase) → GEO-11 AGENT SURFACE (`ceridc` verbs +
+> MCP server, TRANSACTIONAL edits, grows with every slice). NURBS/B-rep + CLAP hosting = own future phases.
+> **[🔄 GEO-1 IN FLIGHT 2026-07-23 — parser + COOK layers LANDED]:** new `engine/asset-io` module (`crd-asset-io`): `ImportedAsset`
+> seam (allocator-aware, precise failure classes, `as_view()`→TriangleMeshViewf = the crd-geometry seam) + our OWN **STL**
+> (structural binary detection beats the "solid"-header trap, zero-normal recompute), **OBJ+MTL** (exact corner dedup via HashMap,
+> negative indices, n-gon fans, object×material splitting, dirty-file warn-and-survive), **PLY** (schema-driven, ascii+binary
+> LE/BE, exact skip of unknown properties incl. lists, point clouds valid). Gates: **133 assertions/17 cases, 8 files tidy-clean.**
+> **COOK: `mesh_wave1.cpp` handler in the EXISTING asset_cooker** (⭐ found: a glTF cooker already existed using 3rd-party
+> cgltf+mikktspace.c — the legacy GEO-2/3 replace; mikktspace.c becomes GEO-2's oracle): .stl/.obj/.ply → parse → the
+> crd-geometry VALIDATE hook (OOB=fail, degenerate=warn-and-cook) → 48B interleave (`.meta position_scale`→SI + sanity warn;
+> tangent zero until GEO-2) → the IDENTICAL MESH CRDR (VERT/INDX/PRIM) the existing loader's own tests fixture ⇒ loads by
+> construction; multi-mesh OBJ → sidecar-.meta extras with STABLE recook ids; point clouds fail honestly. Gates: **34
+> assertions/3 cases (byte-exact readback, mm→m applied, id stability), tidy-clean.**
+> **[✅✅ GEO-1 CLOSED 2026-07-23 pt 3 — AN IMPORTED FILE RENDERS THROUGH CERID FOR THE FIRST TIME.]** (1) RM-mounted load:
+> STL → wave1 cook → pack → mount → `load_sync<MeshResource>` = SI-scaled geometry (14 asserts). (2) the DRAW via **VERTEX
+> PULLING** (the new device capability, also GEO-7's leaf): `IRasterContext::upload_storage` (append-at-END; Vulkan staged
+> copy; DX12 UPLOAD+CopyBufferRegion) + storage binding widened to VERTEX (VK stageFlags; DX12 root PIXEL→ALL ×4 layouts) +
+> both stage emitters emit a READONLY SSBO decl for VS StorageLoad reach + `build_vertex_pull_vs` (fetch by VertexIndex
+> against the cooked 48B stride via storage_load→cast→int_bits_to_float). ⛔ the compute-emitter-lag scar bit a **5th** time
+> (`emit_value_stmt`/`_hlsl` lacked IntBitsToFloat/FloatBitsToInt ⇒ silent nullptr) — wired both + a PERMANENT kir
+> emit-completeness gate; ⭐ raw `unary()` MISTYPES reinterprets — the typed builders are mandatory. **Gate GREEN (Vulkan):
+> left=(255,b0) right=(0,b255) — the imported quad draws red left, blue right, PROVING the mm→m scale reached the drawn
+> geometry (18 asserts). DX12 968/104 no regression; 9 files tidy-clean.**
+> **[✅ GEO-2 DELIVERED 2026-07-23 — weld · crease-angle normals · OUR MikkTSpace-compatible tangents, all first-run green]:**
+> `condition.hpp/.cpp` (crd-asset-io) — `weld_exact` (u32 BIT-PATTERN tuple keys ⇒ exact identity; hard edges stay split),
+> `generate_normals` (Thürmer-Wüthrich angle weights + CREASE-ANGLE auto-smooth, `.meta smooth_angle_deg` default 30°),
+> `generate_tangents` (per-face UV-gradient dP/du, angle-weighted accumulation, **UV-MIRROR SEAM SPLITTING**, Gram-Schmidt,
+> w=±1) — ALL **BIT-STABLE under face reordering** (canonically sorted contributions). Wired into the wave1 cook (real
+> tangents in the 48-byte vertex). Gates: **153 asserts/6 cases** — analytic weld/normals/tangents, mirror-seam split,
+> **byte-identical permuted-face import**, and **the mikktspace.c ORACLE: every corner dot>0.999 + EXACT sign** (3rd-party
+> as test oracle only; the product path is OURS). Draw gate re-green on the FULL conditioned pipeline (welded+indexed,
+> CPU-expanded pull; GPU indexed pulling = GEO-7); cooker 49/15; asset-io suite 286/23; 8 files tidy-clean.
+> **[🔄 GEO-3 STAGE 1 LANDED 2026-07-23 — OUR JSON + OUR glTF parsers; cgltf RETIRED from the cook path]:** `json.hpp/.cpp`
+> (RFC-8259, flat DOM, surrogate-pair escapes → UTF-8, depth-capped, no partial DOM on failure) + `gltf.hpp/.cpp` (GLB ·
+> data-URI base64 · strided views · all component types + normalized + SPARSE · authored TANGENT import · PBR +
+> KHR_{emissive_strength,ior,transmission} → ImportedMaterial appended fields). Meshes import as the UNTRANSFORMED library
+> (scene → SCEN = stage 2, the decompose philosophy). Cook: `.glb/.gltf` → OUR handler (first-wins over cgltf); the
+> AUTHORED-DATA rule (authored tangents skip conditioning — proven byte-exact in the cooked artifact). Gates: JSON+glTF
+> 74/9 first-run green; cooker 44/4; asset-io suite 360/32; 10 files tidy-clean.
+> **[✅ GEO-3 STAGE 2a 2026-07-23 — OUR FULL-SPEC PNG DECODER]:** `png_image.hpp/.cpp` (engine/resources, the LDR peer of
+> the HDR/EXR codecs, on OUR zlib inflate): all 5 color types × all legal bit depths, PLTE+tRNS incl. color keys, all 5
+> filters, **Adam7 interlace**, per-chunk **CRC-32 verification** (own crc32), 16→8 downconversion, exact size contracts,
+> RGBA8 out. Gates: **62/4 — fixtures built with OUR deflate+crc32** (the codec proves itself through its own stack),
+> filters byte-exact, Adam7 byte-exact scatter, CRC corruption REJECTED; resources suite 12574/104; tidy-clean.
+> **[✅ GEO-3 STAGE 2a+ 2026-07-23 — THE FULL OWNED LDR CODEC FAMILY]:** `ldr_image.hpp` (shared `LdrImage`/`LdrError` +
+> `ldr_decode` auto-dispatch; PNG re-aliased onto it) + **TGA** (raw+RLE all 6 types, palettes, A1R5G5B5, both origins,
+> heuristic sniff LAST) + **BMP** (V4/V5+INFOHEADER, palettes 1/4/8, BITFIELDS arbitrary masks — ⭐ V4-only alpha-mask bug
+> caught by the gate, RLE8/RLE4 full escapes, top-down+bottom-up) + **JPEG baseline** (SOF0/1, general h/v≤4 sampling,
+> DRI/RSTn predictor reset, canonical T.81 Huffman, exact float IDCT, JFIF BT.601; progressive/CMYK Unsupported BY NAME).
+> Gates: **1020 asserts/3 codecs — JPEG fixtures hand-encoded with Annex-K tables ⇒ ANALYTIC per-pixel expectations**;
+> resources suite 13594/111; 11 files tidy-clean. ~~Excluded with reasons: WebP/AVIF/GIF/TIFF~~ superseded same-day — the
+> MED band schedules ALL of them (user: no gaps, full media platform).
+> **[⭐ MED band ADDED 2026-07-23 — the OWNED MEDIA-CODEC PLATFORM, D-007 rows 77-88]** (user-directed: "videos, sound
+> files, image files… webp avif gif tiff… video codecs, lossless and lossy sound formats… convert one into another").
+> Research: `docs/research/2026-07-23-media-codec-platform.md` — the legal map decides the roster: fully royalty-free
+> (build everything) AV1/AVIF · VP9 · VP8/WebP · Opus · Vorbis · FLAC · MP3 (free since 2017) · MPEG-2 (last patent
+> expires 2026) · GIF · TIFF; **H.264 time-gated** (last US patent 2027-11-29; Baseline royalty-free by design ⇒ Baseline
+> decode now, full at expiry); **H.265/HEVC + AAC EXCLUDED BY NAME** (active pools — AV1+Opus replace them). Architecture:
+> decode → OWNED INTERMEDIATE (`LdrImage`/`HdrImage`/`ImageSeq` · `AudioPcm` f32 · demuxed packets) → encode = ONE
+> transcode engine, not N². Slices: MED-1 GIF+TIFF+progressive-JPEG → MED-2 image ENCODERS + `ceridc convert` → MED-3
+> WebP (VP8L→VP8) → MED-4 AVIF/AV1-intra → MED-5 AudioPcm+WAV/AIFF+FLAC dec+enc (= GEO-10's parsers, ONE build) → MED-6
+> MP3/Vorbis/Opus decode → MED-7 Opus+MP3 encode → MED-8 MP4/MKV/AVI demux+mux → MED-9 MJPEG+image-seq+MPEG-2 →
+> MED-10 VP9/AV1/H.264-Baseline decode → MED-11 video encode (MJPEG/MPEG-2 → VP9/AV1) → MED-12 the TRANSCODE ENGINE +
+> streamed Video/AudioStream resources + agent verbs. Bar: entropy coders gated STANDALONE; official conformance vectors
+> for the big codecs (ffmpeg/dav1d as ORACLES only); lossless round-trips BIT-EXACT; sizes honest (VP9/AV1/Opus-encode
+> are month-class — scheduled, not denied). GEO-9's "codecs out" + GEO-10's parser clauses struck in place.
+> **[✅ GEO-3 STAGE 2b 2026-07-23 — TEXTURES through OUR codecs; stb RETIRED from the cook]:** the SHARED texture cook
+> core (`texture_cook.hpp/.cpp`): LdrImage → full-mip TXTR with the color-space contract STRUCTURAL — **sRGB mips filter
+> in LINEAR space** (the 188-vs-127 gate: linear-avg(black,white)→sRGB=188, the naive byte-box=127), linear data straight,
+> **normal maps renormalize per mip texel** ((218,128,218) gate), alpha always linear; `.meta [cook] srgb/normal_map`.
+> Format chain BUILT not patched: `TextureFormat::RGBA8UnormSrgb=3` + rhi `Format::R8G8B8A8Srgb` + VK mapping + loader +
+> uploader. texture.cpp handler v2 on `ldr_decode` (stb DELETED from cooker+CMake). Import seam widened: `ImportedImage`
+> (embedded bytes XOR percent-decoded uri) + material texture SLOTS (baseColor/MR/normal+scale/occlusion+strength/
+> emissive) from glTF images/textures. The wave1 glTF TEXTURE DECOMPOSE: every image → its OWN TXTR extra artifact,
+> **color space DERIVED FROM SLOT USAGE** (baseColor/emissive⇒sRGB · MR/occlusion⇒linear · normal⇒renormalized),
+> sidecar `.tex.<idx>_<name>.meta` STABLE ids, sibling-uri resolution (absolute/../scheme refused). Gates first-run
+> green: cooker 168/23 · asset-io 381/33 · resources 13600/112 · renderer 192/40 · rhi 151/32 · rhi-vulkan 4806/27 (GPU)
+> · GEO-1 draw gate re-green. 16 files tidy-clean. **[✅ same-day FIX — the rhi-vulkan queue-family validation error]:**
+> the v0d async-compute test allocated cmd1 from `create_command_buffer()` (GRAPHICS pool) but submitted it on
+> `compute_queue()` (dedicated family 2 on this RTX 4070) → VUID-vkQueueSubmit-pCommandBuffers-00074; the test PREDATED
+> D139 `create_command_buffer_for_queue` and was never migrated. Fixed to the family-matched pool + the test now runs
+> under `ValidationCapture` with error/warning==0 gates (print-and-pass can never regress silently again). rhi-vulkan
+> 4809/27, output validation-SILENT, tidy-clean.
+> **[⭐⭐ ADR-0105 — RETIRE crd-rhi + crd-renderer; gpu-context IS the graphics layer (2026-07-23, user: "squeaky
+> clean, ASAP")]:** two facades over ONE device (D-008 already made rhi ADOPT gpu-context's VkDevice) = a standing
+> double-wiring tax (stage 2b wired sRGB TWICE in one day and cooked mips still don't reach the real renderer —
+> gpu-context re-derives mips naively, no sRGB sampling). rhi/renderer FROZEN NOW (no new features/consumers). The
+> **RET band (D-007 rows 89-96)**: RET-1 inventory+freeze+ADR-strikes → RET-2 gpu-context PRESENT (swapchain/window —
+> the sandbox flips) → RET-3 cooked-resource seam (create_texture_from_mips + sRGB sampling + MESH upload; resource
+> types move to crd-resources) → RET-4 allocator/async parity (ADR-0085 absorbed; S6/S7 suites ported) → RET-5 ImGui
+> → RET-6 crd-draw port (viz layers follow) → RET-7 bvh-gpu Morton→IComputeContext + meshgen/shader/smokes swept →
+> RET-8 DELETE rhi+rhi-vulkan+renderer+their tests (coverage parity ~5k asserts = deletion PREcondition; the
+> legacy-GLSL-Effect precedent). Consumers inventoried: imgui→perf-ui · draw→geometry/eylem-viz/draw-imgui · shader
+> (ADR-0104 superseded it) · meshgen · bvh-gpu Morton · loaders/uploader · sandbox+smokes · 6 test suites.
+> **[✅ GEO-3 STAGE 3 2026-07-23 — the SCENE-GRAPH DECOMPOSE: glTF nodes → a REAL ECS World → SCEN]:** the render
+> components BUILT (`render_components.hpp` — 'MRND' MeshRenderer{mesh,material ResourceIds}, 'CAMR' SceneCamera,
+> 'LGHT' SceneLight(KHR punctual); layouts pinned; one `register_render_components` for cook AND runtime); parser:
+> ImportedNode/Camera/Light/roots + MATRIX-node TRS decompose (column-norm scale, neg-det flip, max-trace quat —
+> analytically gated) + `source_mesh` library indices; cook: nodes build a real World (Transform + relations::ChildOf
+> + render comps; node translations × position_scale — SI applies to OFFSETS too), multi-primitive fan-out to child
+> entities, MeshRenderer → the actual cooked artifact ids, propagation BAKED pre-serialize → SceneArtifactBuilder →
+> SCEN extra artifact, stable `.scen.meta` id. Gate: GLB → SceneLoader → instantiate_scene → SI transforms + baked
+> hierarchy (1.0, 0.5, 0) + exact light/camera + 0 skipped + recook id-stable — first-run green. cooker 204/24 ·
+> asset-io 411/34 · crd-scene 35192/279; serialize.hpp legacy tidy debt cleaned en route. 7 files tidy-clean.
+> **[✅✅ GEO-3 CLOSED 2026-07-23 — stage 4: material AUTHORING + the RENDER gate on the ADR-0105 stack]:** the
+> NEW-WORLD material resource `'PBRM'` (crd-resources, GPU-free, RET-3-homed from day one — frozen crd-renderer NEVER
+> touched): PbrmParams (OpenPBR surface verbatim, 60B version-pinned append-only) + PbrmTextures (5 ResourceId slots)
+> + pbrm_build + OpenPbrMaterialLoader; the cook AUTHORS one PBRM per material (stable .mtl sidecar ids, slots → the
+> cooked TXTR ids, per-PRIMITIVE binding in the SCEN's MeshRenderers). The RET-3 down payment:
+> **`create_texture_from_mips`** (IRasterContext append-at-END, Vulkan + DX12) — cooked chains upload VERBATIM (no
+> device re-derivation) + sRGB hardware decode. ⭐ the gate CAUGHT a latent device bug: create_image_bundle's view
+> hardcoded levelCount=1 (every fetch beyond mip 0 silently ZERO — create_texture_mipped shipped with it); FIXED.
+> **The CLOSE gate: a textured GLB decomposes into ALL FOUR native artifacts (MESH + TXTR fmt=3 + PBRM slot-wired +
+> SCEN) and RENDERS through gpu-context — texelFetch MIP 1 × loaded base_color → readback EXACTLY (64,128,32)
+> (188→sRGB-decode 0.503 × (0.5,1.0,0.25)); the byte-box counterfactual (28,55,14) unconfusable.** Vulkan FULL
+> 3118/183 · DX12 FULL 968/104 · cooker 220/24 · resources 13600/112; 10 files tidy-clean. **GEO-3 COMPLETE: import →
+> decompose → author → cook → load → RENDER, end to end.** (Live-sandbox Khronos render = RET-2 present + GEO-7.)
+> **[✅ RET-1 2026-07-23 — FREEZE + strikes + inventory]:** ⛔ CMake banners on engine/{rhi,rhi-vulkan,renderer};
+> ADR-0036/0042/0080/0085 struck IN PLACE (what survives vs what re-homes, per ADR); the consumer→slice map + the
+> test-assertion homes recorded in the D-007 row (imgui→RET-5 · draw+viz→RET-6 · shader/meshgen/bvh-gpu/smokes→RET-7
+> · loaders→RET-3 · allocator+async 4809 asserts→RET-4 · deletion+parity→RET-8).
+> **[🔄 RET-2 2026-07-23 — gpu-context PRESENTS (Vulkan landed)]:** present = a pure SINK — render into a NORMAL
+> target through the unchanged draw paths, `present(target)` blits into the acquired backbuffer. `IPresentSurface` +
+> `create_present_surface(native_window, w, h, mode)` (append-at-END); TWO surface kinds behind one interface: REAL
+> Win32 window (proc-addr vkCreateWin32SurfaceKHR, TU stays windows.h-free) + HEADLESS (VK_EXT_headless_surface).
+> Context capability split kept clean: `render_capable()` unchanged; new `present_capable()`/`headless_surface()`;
+> surface/swapchain enablement availability-driven. **Gate GREEN: 4 real frames through a Win32 swapchain at 256×256
+> (the isolated win32_test_window TU), mismatched canvas REFUSED, resize/recreate re-presents; full vulkan suite
+> 3136/184 no regression; 7 files tidy-clean.**
+> **[🔄 RET-2 pt 2 — DX12 PRESENTS: BOTH backends drive real swapchains]:** `Dx12PresentSurface` — the DXGI mirror
+> of the sink (canvas COMMON → CopyResource → Present; FLIP_DISCARD; tearing as a PROBED capability with clean
+> fallback; ResizeBuffers reports the TRUE client extent); the window helper moved to tests/gpu-shared (ONE
+> quarantined <windows.h> TU, both suites). Gate GREEN: 4 DXGI frames at 256×256, mismatch refused, resize
+> re-presents (14 asserts). Full suites: DX12 982/105 · Vulkan 3136/184; tidy-clean. REMAINING in RET-2: the sandbox
+> flip — SEQUENCED WITH RET-5's ImGui port (present alone would straddle the sandbox across TWO swapchains) · Linux
+> surface (linux sweep) · validation capture (RET-4).
+> **[✅ RET-3 2026-07-23 — the resource seam + THE STREAMING-ALLOCATOR INTEGRATION]:** Texture/Mesh types + loaders
+> RE-HOMED to crd-resources (crd::resources, loader v2; crd-renderer's headers = ⛔ alias-only compat shims dying at
+> RET-8); crd-meshgen repointed OFF crd-renderer entirely; tests/resources dropped its crd-renderer link (legacy
+> MATR/shader coverage moved to tests/renderer). **The ADR-0085 S5 integration its header deferred "until the first
+> real streaming consumer" is REAL: the loaders are that consumer** — new `StreamingCategoryAllocator` (the
+> IAllocator view over one category's RESIDENT store; allocate fatal-honest, try_allocate graceful, internally
+> serialized), all THREE loaders take an injected payload allocator with the SCRATCH/PAYLOAD split (parse scratch on
+> the owned heap; only the resident payload charges the category). Gate `[streaming]` 22 asserts: used() rises on
+> load ≥ payload bytes · categories ISOLATED · zero on manager death (nothing leaked) · under-budget loads REFUSED
+> gracefully. Residency policy stays injected-null per the ADR (2Q-LRU wrapper lands with open-world streaming).
+> Suites: resources 13541/102 · renderer 273/51 · meshgen 17265/11 · cooker 220/24; 12 files tidy-clean.
+> **[🔄 RET-4 pt 1 2026-07-23 — the VALIDATION CAPTURE ported; it immediately EARNED ITS KEEP]:**
+> `crd::gpu::ValidationCapture(VulkanGpuContext&)` (the rhi original dies at RET-8) — RAII messenger, atomic
+> counters, 256 records, whitelist; `VK_EXT_debug_utils` enabled EXPLICITLY with validation. ⭐ The port instantly
+> caught a LATENT ERROR IN EVERY DRAW: tessellationShader enabled ⇒ vkCmdBindShadersEXT must receive the tess stages
+> (VK_NULL_HANDLE for non-tess draws) — never bound, 10 errors/run scrolling by uncounted since B4-tess. FIXED
+> centrally in set_draw_state (every draw path at once; tess draws override the nulls). The RET-2 present gate now
+> runs UNDER capture with error==0 ∧ warning==0 asserts — the present path is validation-SILENT BY COUNTER (closes
+> RET-2's deferred validation item); on-failure it prints the captured messages verbatim. [ret] 20/20 · full Vulkan
+> 3138/184 · 5 files tidy-clean. REMAINING pt 2: absorb the ADR-0085 GPU suballocator (blocks/relocation/defrag)
+> into gpu-context + port the S6/S7 + async suites (~4.8k asserts) — the RET-8 deletion precondition.
+> **[🔄 RET-4 pt 2 2026-07-23 — the S6 SUBALLOCATOR ABSORBED]:** `crd::gpu::VulkanGpuAllocator` — pooled
+> VkDeviceMemory blocks per (memory-type × linearity) over the EXISTING crd::memory::OffsetAllocator (O(1)
+> coalescing free), dedicated ≥16 MiB, host mapping, non-coherent-atom alignment, teardown tombstone. Wired at ONE
+> seam (ImageBundle carries {owner, alloc}) — EVERY image in the engine now suballocates, dozens of call sites
+> untouched. Gate: 48 images → 1 pooled block; destroy→recreate REUSES it (count unchanged); ValidationCapture 0/0
+> throughout. [ret] 123/2 · FULL vulkan 3241/185 (every image in every test pools — no regression); tidy-clean.
+> **[🔄 RET-4 pt 3 — S7 COMPACTION]:** `compact()` + `vulkan_raster_compact(IRasterContext&)` (the level-unload /
+> memory-pressure verb): drained blocks return their VkDeviceMemory; INDEX STABILITY by nullptr TOMBSTONES (live
+> allocations store block_index — released slots never shift; create_block reuses tombstones; every path aware).
+> Gate: live block never released · drained block returns (count→0) · fresh alloc reuses the tombstone slot ·
+> validation-silent. [ret] 136/3 · FULL 3254/186; tidy-clean.
+> **[🔄 RET-4 pt 4 — the BUFFER-BUNDLE SWEEP: every raster allocation pools]:** `BufferBundle` + a make_buffer
+> SIGNATURE change so the COMPILER enumerated the sweep (13 sites: RasterTarget/StorageBuffer/GBuffer readbacks ·
+> create_readback · 6 transient staging sites · make_target); every consumer-side vkFreeMemory/vkUnmapMemory/
+> vkDestroyBuffer triple GONE; block-base mapping (pooled memory never per-buffer unmapped). Gates richer: 48
+> images + staging → 2 pooled blocks (was ~96 driver allocations); compact proves drained-vs-live EXACTLY. FULL
+> suite 3254/186 on the pooled path; [ret] 136/3; tidy-clean.
+> **[🔄 RET-4 pt 5 — S7 RELOCATION + download_storage: the allocator story COMPLETE]:** `vulkan_raster_defragment`
+> — every live storage buffer relocates (recreate + GPU copy + swap_device_bundle), idle-gated by construction,
+> graceful on unplaceable; live-set registry (dtors swap-remove). NEW `download_storage` (upload's twin — read
+> compute/defrag results without a draw). Gate = the rhi S7 contract re-proven: punch holes → relocations==4 →
+> every surviving byte INTACT (signatures, first/middle/last words) → validation-SILENT. [ret] 172/4 · FULL
+> 3290/187 · tidy-clean. PARITY LEDGER for RET-8: S6 ✅ · S7 compact ✅ · S7 relocate ✅ · device↔host residency =
+> the streaming feature (mechanism absorbed, policy injected later — the ADR-0085 design) · the rhi async
+> SubmitInfo test gates rhi's own API (dies with it); gpu-context = family-matched pools BY CONSTRUCTION.
+> **[✅✅ RET-2 + RET-4 CLOSED 2026-07-23 (the "no gaps" pass)]:** RET-2 ✅ — both backends present, validation-
+> silent by counter, modes with graceful fallback; the sandbox flip RE-HOMED to RET-5 by recorded design, Linux
+> surface creation RE-HOMED to RET-8's cross-platform sweep (extension enablement done; blind untestable xcb code
+> ≠ a close). RET-4 ✅ — capture (+the tess bug it caught) · S6 (48→2 blocks) · S7 compaction (tombstones) · S7
+> BUFFER relocation (byte-exact) · **S7 IMAGE relocation (pt 5b: self-describing ImageBundles + live-texture
+> registry + per-mip vkCmdCopyImage + swap_bundle; the gate verifies the relocated texture through a REAL SAMPLED
+> DRAW — left-red/right-green intact post-move; a captured barrier-stage error fixed before merge)** ·
+> download_storage · dispositions recorded (residency promotion = streaming; rhi async test dies with rhi's API;
+> family-matched pools by construction). [ret] 180/4 · FULL vulkan 3298/187 · tidy-clean.
+> **[🔄 RET-5 pt 1 — ImGui ON gpu-context: the backend + the OVERLAY-PRESENT seam]:** `present(target, OverlayFn,
+> user)` — canvas blit → backbuffer to COLOR_ATTACHMENT → dynamic rendering (LOAD: scene stays, overlay composites
+> on top) → the callback records into the frame cmd → PRESENT; refusal over silent drops; lazy backbuffer views;
+> image_count/color_format exposed. `crd::imgui::ImGuiGpuBackend` — APP-FREE + WINDOW-FREE (exactly the GPU half:
+> pool + ImGui_ImplVulkan on the context's handles + the surface's params + overlay_thunk); platform input layered
+> separately ⇒ gate-testable windowless. Gate: a windowless ImGui context on a REAL Win32 swapchain — init + fonts
+> + 3 composited frames, validation-SILENT. [ret] 193/5 · FULL 3311/188 · 6 files tidy-clean.
+> **[✅ RET-5 pt 2 — THE SANDBOX FLIP: the live Cerid window runs END TO END on gpu-context]:** main.cpp rewritten —
+> windowed VulkanGpuContext (validation ON except --headless) → raster context → `create_present_surface(HWND, fb, Fifo)`
+> (HWND via glfwGetWin32Window; `native_handle()` is the GLFWwindow*) → an in-file CKIR canvas triangle →
+> `present(canvas, overlay_thunk, &backend)`. ImGui = ImGui_ImplGlfw (install_callbacks=true — chains app input) +
+> the pt-1 ImGuiGpuBackend + ProfilerPanel in-frame; NO Layer machinery (the stack returns with RET-6 content).
+> Resize = fb poll → surface->resize + canvas recreate. CLI contract EXACT (--headless · --smoke-test, exit 2 on 0
+> presents). CMake: sources = main.cpp only (showcase layers out of BUILD, back via RET-6), links 27→11 — rhi/renderer/
+> draw/scene/shader/eylem/geometry gone (crd-imgui's frozen rhi half transitive until RET-7); the rhi GPU-profiler
+> backend died with the flip — its gpu-context port is RET-7's. Gate: smoke 691 frames @172.7fps validation-ON
+> clean · headless exit 0 · tidy-clean. **RET-5 CLOSED.**
+> **[✅ the CLOSE-GATE ONION (the full per-slice sweep peeled uncommitted debt — all SOLVED):** 18 non-ASCII
+> TEST_CASE names ASCII-fied (guard + all 18 mojibake-"failures" green) · 6 bare-scalar physical fields markered
+> (non-SI kernel knobs, the svgf/ddgi precedent) · the AS-4 flash-attention gate REDESIGNED (same-pass timings only;
+> DB row gated on near-optimality ≤best·1.15, wiring checked exactly — cross-call GPU timings drift 16%, argmin-vs-DB
+> is noise; memory `gpu-timing-asserts-same-pass-only`) · RT-header latent tidy debt paid (~40 renames + 157
+> multi-decl splits; ReSTIR/RIS PAPER SYMBOLS under justified scoped NOLINT — the kFourCC precedent; RT/ReSTIR/hair
+> oracle suites 11,800+ asserts green on 3 backends). Full win-debug ctest post-onion: **5342/5342 GREEN**.**]**
+> **[✅ CI-1 — CI un-redded (row 97; 8+ straight red pushes, all Build-phase):** Vulkan SDK pin 1.3.290.0→**1.4.341.1**
+> (four NV extensions — cluster-AS/coopvec/coopmat2/LSS — need ≥1.4.305; installer filename convention changed,
+> verified) + Linux now clones Vulkan-Headers @ the matching tag (apt ships ~1.3.275) + SPIRV-Reflect pins bumped ·
+> the E4 fused GEMM kernels were OUTSIDE the AVX2 guard (both sse2 jobs dead — reproduced + fixed via the local
+> win-debug-sse2 preset) · 3 GCC-only bugs fixed (`<cstring>` for std::memcpy ×6, two enum?:0 conditionals cast,
+> instanceCustomIndex masked to its 24-bit field). WSL replication env staged (runner-identical Ubuntu 24.04/g++
+> 13.3 + 1.4.341 headers, native ext4): full linux-gcc-shipping build runs post-sweep — GCC died 150/1636 targets
+> in, deeper errors may hide; peel BEFORE push. CI Test phases never ran behind the broken builds — first green
+> build = first look at the Linux tests.**]**
+> **[✅ WSL campaign CONVERGED — full 1,685-target linux-gcc-shipping GREEN.]** 9 layers beyond the CI-visible
+> errors: the mid-list `SYSTEM` CMake bug (4 files — imgui dirs were never -isystem AND leaked PUBLIC) · 9-bit
+> cluster-AS bitfields · CUDA autotuner float/double ×3 (WSL covers kir-cuda, runners don't) · fopen_s ×3 sites +
+> idiom sweep · 10 float-vs-double literals + 8 printf varargs · kir-webgpu linked the WINDOWS lib on Linux
+> (platform-selected; Linux skips until a .so is vendored) · crd-hesap-tensor's HIDDEN crd-platform dep (io.hpp;
+> MSVC linker masked, GCC LTO exposed) declared PUBLIC. LTO value-range warnings = known false-positive family
+> (verified not-real-UB). Windows re-certified after every fix (2,841 asserts across touched suites; all files
+> tidy-clean; test_vulkan_rt latent debt paid ~40 renames + 45 splits). User-directed flow: sweep stopped at
+> win-debug-GREEN (5342/5342) → WSL green → PUSH; asan/shipping/tidy configs deferred to CI by explicit call.
+> **▶ NEXT: RET-6 draw port (crd-draw → IRasterContext/CKIR; geometry-viz/eylem-viz/draw-imgui follow; sandbox scene
+> content returns) → RET-7 consumer sweep (kills ImGuiLayer + the rhi links; GPU profiler backend port; bvh-gpu Morton
+> → IComputeContext bit-exact) → RET-8 DELETE rhi+rhi-vulkan+renderer. Then GEO-4..7 → OFF.**
+> Denoising (OIDN-class AOV CNN) is a FINISHING filter, never in the reference path (the offline mode IS the ground truth
+> that certifies real-time).
 > **[✅ conv-via-FFT / fast-FMA closed 2026-07-23]:** conv-via-FFT already shipped (crushes 4/5); the fast-FMA experiment was the
 > wrong lever (memory-bound loss, 0%) and was REVERTED. D-007 auto-scheduler + generics/modules + flash-attention all stand.
 

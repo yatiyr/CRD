@@ -46,6 +46,17 @@
 #include <crd/platform/filesystem.hpp> // D2: create the cook cache dir
 #include <ckir_kernel_dispatch.hpp> // B-cmp: the SHARED both-backend kernel dispatch + oracle-compare harness
 #include <ckir_raster_triangle.hpp> // B3-e: the SHARED, backend-neutral CKIR triangle (identical on Vulkan + DX12)
+#include <ckir_vertex_pull.hpp>     // GEO-1: the vertex-pulling VS (cooked MeshResource stream fetched by VertexIndex)
+#include <crd/cooker/cook_handler.hpp> // GEO-1: the wave1 (.stl/.obj/.ply) cook handler — the import→cook→draw gate
+#include <crd/resources/crdr.hpp>      // GEO-1: crdr_read (the cooked MESH artifact readback)
+#include <crd/resources/deflate.hpp>          // GEO-3 close: OUR zlib deflate (the in-test PNG fixture)
+#include <crd/resources/png_image.hpp>        // GEO-3 close: OUR crc32 (the in-test PNG fixture)
+#include <crd/resources/openpbr_material.hpp> // GEO-3 close: the authored 'PBRM' material (params + texture slots)
+#include <crd/scene/serialize.hpp>            // GEO-3 close: kFourCC_SCEN (the decomposed scene artifact)
+#include "win32_test_window.hpp"              // RET-2: the isolated real-window helper for the present gate
+#include <crd/gpu/vulkan_validation_capture.hpp> // RET-4: the capture PORTED onto gpu-context (the rhi original dies)
+#include <crd/imgui/imgui_gpu_backend.hpp>       // RET-5: the ImGui render backend on gpu-context
+#include <imgui.h>                               // RET-5: driving a windowless ImGui context through the overlay gate
 #include <ckir_visbuffer_test.hpp>  // B4-vis: the SHARED software-rasterizer scene + oracle + mixed-dtype dispatch
 #include <ckir_oit_test.hpp>        // B17: the SHARED order-independent-transparency shaders + CPU oracle (WBOIT/...)
 #include <ckir_abuffer_test.hpp>    // B17-c: the SHARED exact-reference A-buffer OIT scene + oracle + 2-kernel dispatch
@@ -661,7 +672,12 @@ TEST_CASE("D-007 B10: NEURAL MATERIAL -- CPU-trained 2D neural field rendered pe
             }
         }
         FILE* f = nullptr;
-        if (fopen_s(&f, path, "wb") == 0 && f != nullptr) { fwrite(bmp.data(), 1U, bmp.size(), f); fclose(f); }
+#ifdef _MSC_VER
+        if (fopen_s(&f, path, "wb") != 0) { f = nullptr; } // MSVC: the deprecated fopen errors under /WX
+#else
+        f = std::fopen(path, "wb"); // fopen_s is MSVC-only (the hair_render.hpp idiom)
+#endif
+        if (f != nullptr) { fwrite(bmp.data(), 1U, bmp.size(), f); fclose(f); }
     };
     write_bmp("D:/Dev/cerid/build/neural_material.bmp", false);
     write_bmp("D:/Dev/cerid/build/neural_target.bmp", true);
@@ -1051,7 +1067,7 @@ TEST_CASE("D-007 C5: device-generated commands -- a generated stream of VARIED c
         VkBufferCreateInfo bci{};
         bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         bci.size  = size;
-        bci.usage = usage | (device_addr ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT : 0U);
+        bci.usage = usage | (device_addr ? static_cast<VkBufferUsageFlags>(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) : 0U);
         vkCreateBuffer(dev, &bci, nullptr, &b.buf);
         VkMemoryRequirements mr{};
         vkGetBufferMemoryRequirements(dev, b.buf, &mr);
@@ -1202,7 +1218,7 @@ TEST_CASE("D-007 C5: device-generated commands -- per-sequence PIPELINE switch (
     struct Buf { VkBuffer buf = VK_NULL_HANDLE; VkDeviceMemory mem = VK_NULL_HANDLE; VkDeviceAddress addr = 0; };
     const auto make_buf = [&](VkDeviceSize size, VkBufferUsageFlags usage, bool da) -> Buf {
         Buf b{};
-        VkBufferCreateInfo bci{}; bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO; bci.size = size; bci.usage = usage | (da ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT : 0U);
+        VkBufferCreateInfo bci{}; bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO; bci.size = size; bci.usage = usage | (da ? static_cast<VkBufferUsageFlags>(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) : 0U);
         vkCreateBuffer(dev, &bci, nullptr, &b.buf);
         VkMemoryRequirements mr{}; vkGetBufferMemoryRequirements(dev, b.buf, &mr);
         VkMemoryAllocateFlagsInfo fi{}; fi.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO; fi.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
@@ -1898,7 +1914,7 @@ TEST_CASE("D-007 B17-c: exact-reference A-buffer OIT on Vulkan (deferred store +
 // EXACTLY, MBOIT is BIT-EXACT at 2-layer depth complexity (glass front+back, thin foliage) — capturing the exact depth
 // ordering the crude single-weight WBOIT tier cannot (30 LSB off the same scene). Higher depth complexity scales with the
 // moment count (6/8-moment extension) — the standard MBOIT scaling.
-TEST_CASE("D-007 B17-b: moment-based OIT (MBOIT) on Vulkan (4-power-moment reconstruction — exact depth ordering, beats WBOIT)",
+TEST_CASE("D-007 B17-b: moment-based OIT (MBOIT) on Vulkan (4-power-moment reconstruction -- exact depth ordering, beats WBOIT)",
           "[gpu-context][vulkan][gpu][oit][compute]")
 {
     namespace kir = crd::kir;
@@ -1979,7 +1995,7 @@ TEST_CASE("D-007 B17-b: moment-based OIT (MBOIT) on Vulkan (4-power-moment recon
 // D-007 B17-b (extension): 6-POWER-MOMENT MBOIT on Vulkan — the hero tier LIFTED to 3-mass depth complexity via the larger
 // 4×4 Hankel Cholesky + a cubic root-solve + Gauss-Radau form factor (`oit::msm_hamburger6_scalar`). 6 moments resolve 3
 // depth masses EXACTLY ⇒ MBOIT is bit-exact at 3-layer complexity, where WBOIT's single weight cannot order the layers.
-TEST_CASE("D-007 B17-b: 6-moment MBOIT on Vulkan (larger Cholesky + cubic — exact at 3 masses, beats WBOIT)",
+TEST_CASE("D-007 B17-b: 6-moment MBOIT on Vulkan (larger Cholesky + cubic -- exact at 3 masses, beats WBOIT)",
           "[gpu-context][vulkan][gpu][oit][compute]")
 {
     namespace kir = crd::kir;
@@ -2467,7 +2483,7 @@ TEST_CASE("D-007 B4: IR-authored MESH-shader triangle draws on Vulkan (CKIR mesh
 // D-007 B4: the TASK / AMPLIFICATION path on Vulkan. ONE task workgroup runs EmitMeshTasksEXT(N) to launch N mesh workgroups
 // (GPU-driven amplification) and passes a single-uint PAYLOAD; each mesh workgroup renders one triangle coloured by the payload.
 // Proves both amplification (draw with a TASK-group count of 1 ⇒ N triangles) and the task→mesh payload channel (red == payload).
-TEST_CASE("D-007 B4: Vulkan TASK amplification — 1 task workgroup emits N mesh triangles + payload",
+TEST_CASE("D-007 B4: Vulkan TASK amplification -- 1 task workgroup emits N mesh triangles + payload",
           "[gpu-context][vulkan][gpu][raster][mesh][task]")
 {
     namespace kir = crd::kir;
@@ -2528,7 +2544,7 @@ TEST_CASE("D-007 B4: Vulkan TASK amplification — 1 task workgroup emits N mesh
 // D-007 B4: the MULTI-FIELD task→mesh payload — a task passes a 3-uint payload (v0,v1,v2), each read by the mesh via
 // KBuiltin::TaskPayload{,1,2} and coloured into R/G/B. Proves the payload channel carries richer per-meshlet data (bounds /
 // LOD / material), not just one uint — the centre pixel's R,G,B must equal the three payload fields.
-TEST_CASE("D-007 B4: Vulkan TASK multi-field payload — a 3-uint payload flows task->mesh",
+TEST_CASE("D-007 B4: Vulkan TASK multi-field payload -- a 3-uint payload flows task->mesh",
           "[gpu-context][vulkan][gpu][raster][mesh][task]")
 {
     namespace kir = crd::kir;
@@ -2586,7 +2602,7 @@ TEST_CASE("D-007 B4: Vulkan TASK multi-field payload — a 3-uint payload flows 
 // count straight into an INDIRECT-dispatch args buffer; vkCmdDrawMeshTasksIndirectEXT then launches EXACTLY that many mesh
 // workgroups — the count decided entirely on the GPU (the CPU never sets it). Proves the Nanite scale loop: only the 5
 // surviving meshlets render their triangle; the 3 culled ones never dispatch.
-TEST_CASE("D-007 B4: Vulkan GPU-driven indirect meshlet dispatch — a compute cull writes the dispatch count",
+TEST_CASE("D-007 B4: Vulkan GPU-driven indirect meshlet dispatch -- a compute cull writes the dispatch count",
           "[gpu-context][vulkan][gpu][raster][mesh][indirect]")
 {
     namespace kir = crd::kir;
@@ -2691,7 +2707,7 @@ TEST_CASE("D-007 B4: Vulkan GPU-driven indirect meshlet dispatch — a compute c
 // the hull sets 8x8 tess levels, the domain reads TessPatchPosition (the bilerp) + EXPANDS the quad x1.3 (a per-vertex domain
 // transform), the FS paints it red. Proves the tessellator ran end to end: a pixel between the base edge (0.6) and the
 // expanded edge (0.78) is red ONLY because the domain shader displaced the generated vertices.
-TEST_CASE("D-007 B4-tess: Vulkan tessellation — a VS->TCS->TES->FS quad subdivides + displaces",
+TEST_CASE("D-007 B4-tess: Vulkan tessellation -- a VS->TCS->TES->FS quad subdivides + displaces",
           "[gpu-context][vulkan][gpu][raster][tess]")
 {
     namespace kir = crd::kir;
@@ -8529,7 +8545,12 @@ TEST_CASE("B16-a-4: RENDER ocean frames to BMP (open them!)", "[.ocean-frame]")
             }
         }
         FILE* f = nullptr;
-        if (fopen_s(&f, path, "wb") == 0 && f != nullptr)
+#ifdef _MSC_VER
+        if (fopen_s(&f, path, "wb") != 0) { f = nullptr; } // MSVC: the deprecated fopen errors under /WX
+#else
+        f = std::fopen(path, "wb"); // fopen_s is MSVC-only (the hair_render.hpp idiom)
+#endif
+        if (f != nullptr)
         {
             fwrite(bmp.data(), 1U, bmp.size(), f);
             fclose(f);
@@ -11906,8 +11927,8 @@ TEST_CASE("D-007 D9: neural material completeness -- learned normal + end-to-end
     for (int i = 0; i < out; ++i) { b2[i] = 0.0F; }
     // reference surface: a smooth RGB pattern of (u,v)
     const auto target = [](float u, float v, int ch) {
-        if (ch == 0) { return 0.5F + 0.5F * static_cast<float>(crd::math::sin(6.2831853 * u)); }
-        if (ch == 1) { return 0.5F + 0.5F * static_cast<float>(crd::math::cos(6.2831853 * v)); }
+        if (ch == 0) { return 0.5F + 0.5F * static_cast<float>(crd::math::sin(6.2831853 * static_cast<double>(u))); }
+        if (ch == 1) { return 0.5F + 0.5F * static_cast<float>(crd::math::cos(6.2831853 * static_cast<double>(v))); }
         return u * v;
     };
     const auto encode = [](float u, float v, float* x) {
@@ -12323,4 +12344,724 @@ TEST_CASE("D-007 AS-6b: autotune the Vulkan/SPIR-V GEMM -- parameterized GLSL sc
     std::printf("[AS-6b] Vulkan GEMM %dx%dx%d: autotuned BT%d BK%d TM%d -> %.3f ms (%.0f GFLOP/s) from %d/%d correct GLSL schedules\n",
                 mm, nn, kk, best.bt, best.bk, best.tm, best_ms, gflops, correct, measured);
     CHECK(gflops > 200.0); // the tiled+autotuned Vulkan GEMM is real (a naive one-thread-per-output kernel is ~tens of GFLOP/s)
+}
+
+// ═══ GEO-1 (D-007 row 66): THE DRAW GATE — an IMPORTED file renders through the engine ═════════════════════════════════
+// The full chain, end to end: millimetre-authored STL bytes → the wave1 cook handler (crd-asset-io parse → the
+// crd-geometry validate hook → the 48-byte interleave with `.meta position_scale` mm→m) → `crdr_read` the cooked MESH
+// artifact → `upload_storage` (the NEW vertex-feeding path) → a VERTEX-PULLING VS (storage_load by VertexIndex against
+// the cooked stride) → flat-red FS → readback. The cooked quad covers the LEFT half of clip space ⇒ left = red, right =
+// the blue clear — and the geometry is only correct if the mm→m cook scale actually landed (unscaled positions would be
+// ±1000 clip units: the quad would cover EVERYTHING). The first time a real imported file draws through Cerid.
+
+namespace crd::cooker
+{
+void register_wave1_mesh_handler(); // mesh_wave1.cpp (crd-cooker)
+} // namespace crd::cooker
+
+TEST_CASE("GEO-1: an IMPORTED STL cooks, uploads, and DRAWS via vertex pulling (Vulkan)",
+          "[gpu-context][vulkan][gpu][raster][geo]")
+{
+    namespace kir = crd::kir;
+    namespace pfs = crd::platform::fs;
+    auto        r = vk_raster_or_skip();
+    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    REQUIRE(r.raster != nullptr);
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+
+    // 1. the source: a left-half-of-clip-space quad, authored in MILLIMETRES (2 CCW triangles, +Z normals)
+    crd::containers::Array<crd::u8> stl(&alloc);
+    {
+        const auto pushf = [&](crd::f32 v) {
+            crd::u8 raw[4];
+            std::memcpy(raw, &v, 4);
+            for (crd::u8 x : raw) { stl.push_back(x); }
+        };
+        const auto pushtri = [&](const crd::f32* a, const crd::f32* b, const crd::f32* c) {
+            const crd::f32 nz[3] = {0.0F, 0.0F, 1.0F};
+            for (int i = 0; i < 3; ++i) { pushf(nz[i]); }
+            for (int i = 0; i < 3; ++i) { pushf(a[i]); }
+            for (int i = 0; i < 3; ++i) { pushf(b[i]); }
+            for (int i = 0; i < 3; ++i) { pushf(c[i]); }
+            stl.push_back(0);
+            stl.push_back(0);
+        };
+        for (int i = 0; i < 80; ++i) { stl.push_back(0); } // header
+        const crd::u32 count = 2;
+        crd::u8        raw[4];
+        std::memcpy(raw, &count, 4);
+        for (crd::u8 x : raw) { stl.push_back(x); }
+        const crd::f32 p00[3] = {-1000.0F, -1000.0F, 0.0F};
+        const crd::f32 p10[3] = {0.0F, -1000.0F, 0.0F};
+        const crd::f32 p11[3] = {0.0F, 1000.0F, 0.0F};
+        const crd::f32 p01[3] = {-1000.0F, 1000.0F, 0.0F};
+        pushtri(p00, p10, p11);
+        pushtri(p00, p11, p01);
+    }
+    const char* src_path  = "cerid_geo1_draw.stl";
+    const char* meta_path = "cerid_geo1_draw.stl.meta";
+    REQUIRE(pfs::write_file_binary(pfs::Path(crd::containers::StringView(src_path)), crd::containers::as_const_span(stl)));
+    REQUIRE(pfs::write_file_text(pfs::Path(crd::containers::StringView(meta_path)),
+                                 crd::containers::StringView("[cook]\nposition_scale = 0.001\n")));
+
+    // 2. COOK through the real wave1 handler (register once for this binary)
+    static bool s_registered = false;
+    if (!s_registered)
+    {
+        crd::cooker::register_wave1_mesh_handler();
+        s_registered = true;
+    }
+    crd::cooker::CookHandlerFn handler = crd::cooker::find_cook_handler(crd::containers::StringView(".stl"));
+    REQUIRE(handler != nullptr);
+    crd::cooker::CookContext cctx;
+    cctx.source_path = crd::containers::StringView(src_path);
+    cctx.meta_path   = crd::containers::StringView(meta_path);
+    cctx.id          = crd::resources::ResourceId::mint_random();
+    cctx.allocator   = &alloc;
+    const crd::cooker::CookResult cooked = handler(cctx);
+    REQUIRE(cooked.ok);
+
+    // 3. the cooked MESH artifact → the vertex stream
+    crd::resources::CrdrFile file(&alloc);
+    REQUIRE(crd::resources::crdr_read(crd::containers::as_const_span(cooked.cooked_bytes), file, &alloc)
+            == crd::resources::CrdrError::Ok);
+    const crd::resources::CrdrChunk* vert = crd::resources::crdr_find_chunk(file, crd::resources::kFourCC_VERT);
+    const crd::resources::CrdrChunk* indx = crd::resources::crdr_find_chunk(file, crd::resources::kFourCC_INDX);
+    REQUIRE(vert != nullptr);
+    REQUIRE(indx != nullptr);
+    REQUIRE(vert->payload.size() == 4U * 48U); // GEO-2: the soup quad WELDS to 4 indexed vertices at the cooked stride
+    REQUIRE(indx->payload.size() == 6U * 4U);  // ... drawn through 6 indices
+    // CPU-expand the index buffer into the pulled stream (a non-indexed vertex-pull draw; GPU-side indexed pulling is the
+    // GEO-7 render-path item — a second storage binding for the index buffer)
+    crd::containers::Array<crd::u8> stream(&alloc);
+    stream.reserve(6U * 48U);
+    for (crd::u32 ii = 0; ii < 6U; ++ii)
+    {
+        crd::u32 vi = 0;
+        std::memcpy(&vi, indx->payload.data() + ii * 4U, 4U);
+        REQUIRE(vi < 4U);
+        for (crd::u32 b = 0; b < 48U; ++b) { stream.push_back(vert->payload[vi * 48U + b]); }
+    }
+
+    // 4. the DRAW: vertex-pulling VS + flat-red FS; the cooked stream uploaded into the storage buffer
+    kir::KGraph vg(&alloc);
+    kir::KEntry ve;
+    crd::gputest::build_vertex_pull_vs(vg, ve);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_triangle_fs(fg, fe); // constant red
+
+    auto vs = r.ctx->create_program(vg, ve);
+    auto fs = r.ctx->create_program(fg, fe);
+    REQUIRE(vs != nullptr); // the VERTEX stage emits the readonly SSBO decl + compiles (the GEO-1 emitter extension)
+    REQUIRE(fs != nullptr);
+    auto program = r.raster->create_raster_program(*vs, *fs);
+    REQUIRE(program != nullptr);
+
+    constexpr crd::u32 dim    = 64U;
+    auto               target = r.raster->create_color_target(dim, dim);
+    auto storage = r.raster->create_storage_buffer(static_cast<crd::u32>(stream.size()));
+    REQUIRE(target != nullptr);
+    REQUIRE(storage != nullptr);
+    REQUIRE(r.raster->upload_storage(*storage, 0U, stream.data(),
+                                     static_cast<crd::u32>(stream.size()))); // the NEW vertex-feeding upload
+    r.raster->draw_storage(*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, *storage, 6U);
+
+    // 5. the gate: the left half (the imported quad, mm→m scaled to x ∈ [-1,0]) is RED; the right half stays BLUE
+    const crd::u32 left  = target->read_pixel(dim / 4U, dim / 2U);
+    const crd::u32 right = target->read_pixel((3U * dim) / 4U, dim / 2U);
+    const crd::u32 lr    = left & 0xFFU;
+    const crd::u32 lb    = (left >> 16U) & 0xFFU;
+    const crd::u32 rr    = right & 0xFFU;
+    const crd::u32 rb    = (right >> 16U) & 0xFFU;
+    WARN("[geo1-draw vulkan] left=(" << lr << ",b" << lb << ") right=(" << rr << ",b" << rb << ")");
+    CHECK(lr > 200U); // imported geometry covers the left half — RED
+    CHECK(lb < 50U);
+    CHECK(rr < 50U); // the right half is untouched clear — BLUE (also proves the mm→m scale: unscaled would cover ALL)
+    CHECK(rb > 200U);
+
+    (void)pfs::remove_file(pfs::Path(crd::containers::StringView(src_path)));
+    (void)pfs::remove_file(pfs::Path(crd::containers::StringView(meta_path)));
+}
+
+// ═══ GEO-3 CLOSE (D-007 row 68): a TEXTURED glTF decomposes into 4 native artifact types and RENDERS through the ═══════
+// gpu-context stack (ADR-0105's one graphics layer). The chain: a GLB (embedded 2×2 black/white-checker PNG as
+// baseColorTexture + an authored baseColorFactor) → the wave1 cook (MESH + TXTR + PBRM + SCEN artifacts) → the cooked
+// TXTR's mip chain uploads VERBATIM via `create_texture_from_mips` (sRGB) → a CKIR FS texelFetches MIP 1 and modulates
+// by the LOADED material's base_color → readback. The observable is razor-sharp: the cooked linear-space mip-1 byte is
+// 188 → hardware sRGB decode ≈ 0.503 → × (0.5, 1.0, 0.25) → target bytes ≈ (64, 128, 32). A device-side re-derived
+// byte-box mip (127) would decode to 0.216 and land at (28, 55, 14) — the two pipelines are unconfusable.
+
+TEST_CASE("GEO-3 CLOSE: a textured glTF decomposes (MESH+TXTR+PBRM+SCEN) and RENDERS through gpu-context (Vulkan)",
+          "[gpu-context][vulkan][gpu][raster][geo]")
+{
+    namespace kir = crd::kir;
+    namespace pfs = crd::platform::fs;
+    auto        r = vk_raster_or_skip();
+    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    REQUIRE(r.raster != nullptr);
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+
+    // 1. the source: a GLB — 1 triangle + an EMBEDDED 2×2 checker PNG (white,black / black,white) bound as the
+    //    baseColorTexture of a material with baseColorFactor (0.5, 1.0, 0.25); one node referencing the mesh
+    crd::containers::Array<crd::u8> png(&alloc);
+    {
+        const auto push_be = [&](crd::containers::Array<crd::u8>& b, crd::u32 v) {
+            b.push_back(static_cast<crd::u8>(v >> 24U));
+            b.push_back(static_cast<crd::u8>(v >> 16U));
+            b.push_back(static_cast<crd::u8>(v >> 8U));
+            b.push_back(static_cast<crd::u8>(v));
+        };
+        const auto add_chunk = [&](const char* type, const crd::containers::Array<crd::u8>& payload) {
+            push_be(png, static_cast<crd::u32>(payload.size()));
+            crd::containers::Array<crd::u8> crc_in(&alloc);
+            for (int i = 0; i < 4; ++i) { crc_in.push_back(static_cast<crd::u8>(type[i])); }
+            for (crd::usize i = 0; i < payload.size(); ++i) { crc_in.push_back(payload[i]); }
+            for (int i = 0; i < 4; ++i) { png.push_back(static_cast<crd::u8>(type[i])); }
+            for (crd::usize i = 0; i < payload.size(); ++i) { png.push_back(payload[i]); }
+            push_be(png, crd::resources::png_crc32(crd::containers::as_const_span(crc_in)));
+        };
+        const crd::u8 sig[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+        for (crd::u8 s : sig) { png.push_back(s); }
+        crd::containers::Array<crd::u8> ihdr(&alloc);
+        push_be(ihdr, 2U);
+        push_be(ihdr, 2U);
+        ihdr.push_back(8);
+        ihdr.push_back(6); // RGBA8
+        ihdr.push_back(0);
+        ihdr.push_back(0);
+        ihdr.push_back(0);
+        add_chunk("IHDR", ihdr);
+        crd::containers::Array<crd::u8> raw(&alloc); // 2 scanlines, filter 0: (white, black) / (black, white)
+        const crd::u8 rows[2][9] = {{0, 255, 255, 255, 255, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 255, 255, 255, 255}};
+        for (const auto& row : rows)
+        {
+            for (crd::u8 b : row) { raw.push_back(b); }
+        }
+        auto idat = crd::resources::zlib_deflate(crd::containers::as_const_span(raw), &alloc);
+        add_chunk("IDAT", idat);
+        crd::containers::Array<crd::u8> iend(&alloc);
+        add_chunk("IEND", iend);
+    }
+
+    crd::containers::Array<crd::u8> bin(&alloc);
+    {
+        const auto pushf = [&](crd::f32 v) {
+            crd::u8 raw4[4];
+            std::memcpy(raw4, &v, 4);
+            for (crd::u8 x : raw4) { bin.push_back(x); }
+        };
+        const crd::f32 pos[9] = {0, 0, 0, 1, 0, 0, 0, 1, 0};
+        for (crd::f32 v : pos) { pushf(v); }
+        for (crd::usize i = 0; i < png.size(); ++i) { bin.push_back(png[i]); }
+    }
+
+    crd::containers::String json(&alloc);
+    json.append(R"({"asset": {"version": "2.0"}, "scene": 0, "scenes": [{"nodes": [0]}],)");
+    {
+        char buf[256];
+        (void)std::snprintf(buf, sizeof(buf),
+                            R"("buffers": [{"byteLength": %u}],)"
+                            R"("bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 36},)"
+                            R"({"buffer": 0, "byteOffset": 36, "byteLength": %u}],)",
+                            static_cast<crd::u32>(bin.size()), static_cast<crd::u32>(png.size()));
+        json.append(buf);
+    }
+    json.append(R"("accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"}],)"
+                R"("images": [{"name": "checker", "bufferView": 1}],)"
+                R"("textures": [{"source": 0}],)"
+                R"("materials": [{"name": "tinted", "pbrMetallicRoughness": {)"
+                R"("baseColorFactor": [0.5, 1.0, 0.25, 1.0], "baseColorTexture": {"index": 0}}}],)"
+                R"("nodes": [{"name": "obj", "mesh": 0}],)"
+                R"("meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "material": 0}]}]})");
+
+    crd::containers::Array<crd::u8> glb(&alloc);
+    {
+        const auto pushu = [&](crd::u32 v) {
+            crd::u8 raw4[4];
+            std::memcpy(raw4, &v, 4);
+            for (crd::u8 x : raw4) { glb.push_back(x); }
+        };
+        const crd::u32 jlen = static_cast<crd::u32>(json.size());
+        const crd::u32 jpad = (4U - (jlen % 4U)) % 4U;
+        const crd::u32 blen = static_cast<crd::u32>(bin.size());
+        const crd::u32 bpad = (4U - (blen % 4U)) % 4U;
+        pushu(0x46546C67U);
+        pushu(2U);
+        pushu(12U + 8U + jlen + jpad + 8U + blen + bpad);
+        pushu(jlen + jpad);
+        pushu(0x4E4F534AU);
+        for (crd::u32 i = 0; i < jlen; ++i) { glb.push_back(static_cast<crd::u8>(json.c_str()[i])); }
+        for (crd::u32 i = 0; i < jpad; ++i) { glb.push_back(' '); }
+        pushu(blen + bpad);
+        pushu(0x004E4942U);
+        for (crd::usize i = 0; i < bin.size(); ++i) { glb.push_back(bin[i]); }
+        for (crd::u32 i = 0; i < bpad; ++i) { glb.push_back(0); }
+    }
+
+    const char* src_path = "cerid_geo3_close.glb";
+    REQUIRE(pfs::write_file_binary(pfs::Path(crd::containers::StringView(src_path)), crd::containers::as_const_span(glb)));
+
+    // 2. COOK: the FULL decompose — MESH (main) + TXTR + PBRM + SCEN extras
+    static bool s_geo3_registered = false;
+    if (!s_geo3_registered)
+    {
+        crd::cooker::register_wave1_mesh_handler();
+        s_geo3_registered = true;
+    }
+    crd::cooker::CookHandlerFn handler = crd::cooker::find_cook_handler(crd::containers::StringView(".glb"));
+    REQUIRE(handler != nullptr);
+    crd::cooker::CookContext cctx;
+    cctx.source_path = crd::containers::StringView(src_path);
+    cctx.id          = crd::resources::ResourceId::mint_random();
+    cctx.allocator   = &alloc;
+    const crd::cooker::CookResult cooked = handler(cctx);
+    REQUIRE(cooked.ok);
+    REQUIRE(cooked.extra_artifacts.size() == 3U); // TXTR + PBRM + SCEN — every resource type, natively decomposed
+    const crd::cooker::ExtraArtifact* txtr = nullptr;
+    const crd::cooker::ExtraArtifact* pbrm = nullptr;
+    const crd::cooker::ExtraArtifact* scen = nullptr;
+    for (crd::usize i = 0; i < cooked.extra_artifacts.size(); ++i)
+    {
+        const auto& e = cooked.extra_artifacts[i];
+        if (e.type_fourcc == crd::resources::kFourCC_TXTR) { txtr = &e; }
+        if (e.type_fourcc == crd::resources::kFourCC_PBRM) { pbrm = &e; }
+        if (e.type_fourcc == crd::scene::kFourCC_SCEN) { scen = &e; }
+    }
+    REQUIRE(txtr != nullptr);
+    REQUIRE(pbrm != nullptr);
+    REQUIRE(scen != nullptr);
+
+    // 3. the AUTHORED material: params verbatim + the base_color slot references the cooked TXTR
+    crd::resources::OpenPbrMaterialLoader mloader;
+    crd::resources::LoadContext           mctx;
+    mctx.id        = pbrm->id;
+    mctx.bytes     = crd::containers::as_const_span(pbrm->cooked_bytes);
+    mctx.manager   = nullptr;
+    mctx.allocator = &alloc;
+    void* mp = mloader.load(mctx);
+    REQUIRE(mp != nullptr);
+    auto* mat = static_cast<crd::resources::OpenPbrMaterial*>(mp);
+    CHECK(mat->textures.base_color == txtr->id);
+    CHECK(mat->params.base_color[0] == 0.5F);
+    CHECK(mat->params.base_color[1] == 1.0F);
+    CHECK(mat->params.base_color[2] == 0.25F);
+
+    // 4. the cooked TXTR chain → the DEVICE, VERBATIM (sRGB format byte 3 → hardware decode-on-sample)
+    crd::resources::CrdrFile tfile(&alloc);
+    REQUIRE(crd::resources::crdr_read(crd::containers::as_const_span(txtr->cooked_bytes), tfile, &alloc)
+            == crd::resources::CrdrError::Ok);
+    const crd::resources::CrdrChunk* thead = crd::resources::crdr_find_chunk(tfile, crd::resources::kFourCC_HEAD);
+    const crd::resources::CrdrChunk* tmip0 = crd::resources::crdr_find_chunk(tfile, crd::resources::kFourCC_MIP0);
+    const crd::resources::CrdrChunk* tmip1 = crd::resources::crdr_find_chunk(tfile, crd::resources::kFourCC_MIP1);
+    REQUIRE(thead != nullptr);
+    REQUIRE(tmip0 != nullptr);
+    REQUIRE(tmip1 != nullptr);
+    CHECK(thead->payload[12] == 3U);  // RGBA8UnormSrgb — the slot decided the color space
+    CHECK(tmip1->payload[0] == 188U); // the LINEAR-SPACE-filtered mip (the byte-box bug would be 127)
+    const void* mips[2] = {tmip0->payload.data(), tmip1->payload.data()};
+    auto        texture = r.raster->create_texture_from_mips(2U, 2U, 2U, mips, /*srgb=*/true);
+    REQUIRE(texture != nullptr);
+
+    // 5. RENDER through the gpu-context stack: CKIR FS texelFetches MIP 1 and modulates by the authored base_color
+    kir::KGraph vg(&alloc);
+    kir::KEntry ve;
+    crd::gputest::build_textured_vs(vg, ve);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_geo3_material_fetch_fs(fg, fe, mat->params.base_color[0], mat->params.base_color[1],
+                                               mat->params.base_color[2]);
+    auto vs = r.ctx->create_program(vg, ve);
+    auto fs = r.ctx->create_program(fg, fe);
+    REQUIRE(vs != nullptr);
+    REQUIRE(fs != nullptr);
+    auto program = r.raster->create_raster_program(*vs, *fs);
+    REQUIRE(program != nullptr);
+
+    constexpr crd::u32 dim    = 16U;
+    auto               target = r.raster->create_color_target(dim, dim);
+    REQUIRE(target != nullptr);
+    r.raster->draw_textured(*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, *texture, 3U);
+
+    // 6. the gate: cooked 188 → sRGB decode ≈ 0.503 → × (0.5, 1.0, 0.25) → ≈ (64, 128, 32). The re-derived-box
+    //    counterfactual (127 → 0.216) would land at (28, 55, 14) — unconfusable.
+    const crd::u32 px = target->read_pixel(dim / 2U, dim / 2U);
+    const crd::u32 pr = px & 0xFFU;
+    const crd::u32 pg = (px >> 8U) & 0xFFU;
+    const crd::u32 pb = (px >> 16U) & 0xFFU;
+    WARN("[geo3-close vulkan] rgb=(" << pr << "," << pg << "," << pb << ") expect ~(64,128,32)");
+    CHECK(pr >= 60U);
+    CHECK(pr <= 68U);
+    CHECK(pg >= 124U);
+    CHECK(pg <= 132U);
+    CHECK(pb >= 29U);
+    CHECK(pb <= 35U);
+
+    mloader.unload(mp);
+    (void)pfs::remove_file(pfs::Path(crd::containers::StringView(src_path)));
+    (void)pfs::remove_file(pfs::Path(crd::containers::StringView("cerid_geo3_close.glb.tex.0_checker.meta")));
+    (void)pfs::remove_file(pfs::Path(crd::containers::StringView("cerid_geo3_close.glb.mtl.0_tinted.meta")));
+    (void)pfs::remove_file(pfs::Path(crd::containers::StringView("cerid_geo3_close.glb.scen.meta")));
+}
+
+// ═══ RET-2 (D-007 row 90, ADR-0105): the PRESENT surface — gpu-context drives a real swapchain ═════════════════════════
+// The retirement capability crd-rhi held hostage: acquire → blit-the-canvas → present → resize/recreate, on a
+// HEADLESS surface (VK_EXT_headless_surface — the FULL VkSwapchainKHR machinery with zero window system, so the gate
+// runs anywhere). The canvas design: the app renders into a normal color target through the UNCHANGED draw paths and
+// present() blits it into the backbuffer — present is a pure sink.
+
+TEST_CASE("RET-2: gpu-context PRESENTS -- acquire/blit/present/resize through a real swapchain (Vulkan)",
+          "[gpu-context][vulkan][gpu][raster][ret]")
+{
+    namespace kir = crd::kir;
+
+    // the WINDOWED context configuration — the exact one the sandbox ships on (headless contexts still work when the
+    // loader offers VK_EXT_headless_surface; this Windows stack doesn't, so the gate runs the REAL-window path)
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = false;
+    cfg.enable_validation = true; // RET-4: the present path must be validation-SILENT, asserted by counters
+    auto ctx              = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->shader_object()) { WARN("no VK_EXT_shader_object; skipping"); return; }
+    crd::gpu::ValidationCapture capture(*vk); // RET-4: the gpu-context capture — the whole gate runs under it
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+    if (!vk->present_capable())
+    {
+        WARN("no present capability on this device; skipping");
+        return;
+    }
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+
+    // a HEADLESS surface when the loader offers one; else a REAL Win32 window (the isolated helper TU).
+    // 256×256 sits above the OS minimum window width, so the swapchain extent matches the request exactly.
+    void* native = nullptr;
+    if (!vk->headless_surface())
+    {
+        native = crd::gputest::create_test_window(256U, 256U);
+        if (native == nullptr)
+        {
+            WARN("no VK_EXT_headless_surface and no platform window available; skipping");
+            return;
+        }
+    }
+    auto surface = raster->create_present_surface(native, 256U, 256U, gpu::PresentMode::Fifo);
+    REQUIRE(surface != nullptr);
+    CHECK(surface->valid());
+    CHECK(surface->width() == 256U);
+    CHECK(surface->height() == 256U);
+
+    // the canvas: the CKIR triangle drawn through the normal offscreen path (present is a pure sink over it)
+    kir::KGraph vg(&alloc);
+    kir::KEntry ve;
+    crd::gputest::build_triangle_vs(vg, ve);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_triangle_fs(fg, fe);
+    auto vs = ctx->create_program(vg, ve);
+    auto fs = ctx->create_program(fg, fe);
+    REQUIRE(vs != nullptr);
+    REQUIRE(fs != nullptr);
+    auto program = raster->create_raster_program(*vs, *fs);
+    REQUIRE(program != nullptr);
+
+    const crd::u32 sw     = surface->width(); // a real window's swapchain follows the WINDOW's client extent
+    const crd::u32 sh     = surface->height();
+    auto           target = raster->create_color_target(sw, sh);
+    REQUIRE(target != nullptr);
+
+    for (int frame = 0; frame < 3; ++frame) // three full acquire→blit→present cycles
+    {
+        raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+        CHECK(surface->present(*target));
+        crd::gputest::pump_test_window();
+    }
+    CHECK(surface->frame_count() == 3U);
+
+    // a mismatched canvas is REFUSED (never a stretched half-frame)
+    auto small = raster->create_color_target(sw / 2U, sh / 2U);
+    REQUIRE(small != nullptr);
+    raster->draw(*small, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    CHECK(!surface->present(*small));
+
+    // resize RECREATES the swapchain (oldSwapchain retire path) and the matching canvas presents again
+    REQUIRE(surface->resize(sw, sh));
+    raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    CHECK(surface->present(*target));
+    CHECK(surface->frame_count() == 4U);
+
+    WARN("[ret2-present vulkan] 4 frames presented through a REAL swapchain ("
+         << (native != nullptr ? "win32 window" : "headless surface") << ", " << sw << "x" << sh << ")");
+    surface.reset(); // the surface dies BEFORE its window
+    crd::gputest::destroy_test_window(native);
+
+    // RET-4: the whole present lifecycle — creation, 4 presents, a REFUSED mismatch, resize/recreate, teardown —
+    // was validation-SILENT (counters, never eyeballed logs; the ported crd::gpu::ValidationCapture)
+    // (the S6 suballocation gate lives in the next TEST_CASE)
+    if (capture.error_or_warning_count() > 0U) // diagnose on failure: the FIRST few captured messages, verbatim
+    {
+        const auto msgs  = capture.messages();
+        crd::u32   shown = 0;
+        for (crd::usize i = 0; i < msgs.size() && shown < 4U; ++i)
+        {
+            if (msgs[i].severity == crd::gpu::ValidationSeverity::Info) { continue; }
+            WARN("[ret2 capture] id=" << msgs[i].message_id_number << " " << msgs[i].message_text.c_str());
+            ++shown;
+        }
+    }
+    CHECK(capture.error_count() == 0U);
+    CHECK(capture.warning_count() == 0U);
+}
+
+// ═══ RET-4 pt 2 (D-007 row 92, ADR-0085 S6 absorbed): the SUBALLOCATOR — pooled device memory on gpu-context ═══════════
+// The retired rhi allocator's S6 contract, re-proven on the one graphics layer: MANY small images share FEW
+// VkDeviceMemory blocks (per-image vkAllocateMemory burned maxMemoryAllocationCount ≈ 4096 and driver time), and a
+// full destroy → recreate cycle REUSES the pooled blocks (O(1) coalescing free, zero growth). Validation-SILENT.
+
+TEST_CASE("RET-4: the absorbed S6 suballocator -- 48 small images share pooled blocks, freed space is REUSED (Vulkan)",
+          "[gpu-context][vulkan][gpu][raster][ret]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto ctx              = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->shader_object()) { WARN("no VK_EXT_shader_object; skipping"); return; }
+    crd::gpu::ValidationCapture capture(*vk);
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+    CHECK(gpu::vulkan_raster_block_count(*raster) == 0U); // no images yet — no blocks
+
+    constexpr crd::u32 image_count = 48U;
+    crd::u8            px[16U * 16U * 4U];
+    for (crd::usize i = 0; i < sizeof(px); ++i) { px[i] = static_cast<crd::u8>(i); }
+
+    crd::containers::Array<std::unique_ptr<gpu::ITexture>> textures(crd::memory::default_allocator());
+    for (crd::u32 i = 0; i < image_count; ++i)
+    {
+        auto t = raster->create_texture(16U, 16U, px);
+        REQUIRE(t != nullptr);
+        textures.push_back(std::move(t));
+    }
+    const crd::u32 blocks_full = gpu::vulkan_raster_block_count(*raster);
+    WARN("[ret4-suballoc vulkan] " << image_count << " images -> " << blocks_full << " pooled VkDeviceMemory block(s)");
+    CHECK(blocks_full >= 1U);
+    CHECK(blocks_full <= 3U); // 48 tiny images pool into a handful of blocks — never 48 driver allocations
+
+    textures.clear(); // free all 48 → the pooled space coalesces (blocks stay, ready for reuse)
+    for (crd::u32 i = 0; i < image_count; ++i)
+    {
+        auto t = raster->create_texture(16U, 16U, px);
+        REQUIRE(t != nullptr);
+        textures.push_back(std::move(t));
+    }
+    CHECK(gpu::vulkan_raster_block_count(*raster) == blocks_full); // REUSE, not growth — the O(1)-free proof
+
+    textures.clear();
+    CHECK(capture.error_count() == 0U); // the whole pool/free/reuse cycle validation-SILENT
+    CHECK(capture.warning_count() == 0U);
+}
+
+// ═══ RET-4 pt 3 (S7 compaction): DRAINED pools return their VkDeviceMemory to the driver ══════════════════════════════
+TEST_CASE("RET-4: compact() releases drained blocks; indices stay STABLE across the tombstone (Vulkan)",
+          "[gpu-context][vulkan][gpu][raster][ret]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto ctx              = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->shader_object()) { WARN("no VK_EXT_shader_object; skipping"); return; }
+    crd::gpu::ValidationCapture capture(*vk);
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    crd::u8 px[8U * 8U * 4U] = {};
+
+    { // create → an IMAGE pool block + a LINEAR pool block (pt 4: even transient upload STAGING pools now)
+        auto a = raster->create_texture(8U, 8U, px);
+        auto b = raster->create_texture(8U, 8U, px);
+        REQUIRE(a != nullptr);
+        REQUIRE(b != nullptr);
+        CHECK(gpu::vulkan_raster_block_count(*raster) == 2U);
+        // compact with the textures ALIVE: exactly the drained staging block releases; the live image block NEVER
+        CHECK(gpu::vulkan_raster_compact(*raster) == 1U);
+        CHECK(gpu::vulkan_raster_block_count(*raster) == 1U);
+    } // both textures die → the image pool drains too
+
+    CHECK(gpu::vulkan_raster_block_count(*raster) == 1U); // still held (reuse-ready)
+    CHECK(gpu::vulkan_raster_compact(*raster) == 1U);     // the S7 verb: the drained block RETURNS to the driver
+    CHECK(gpu::vulkan_raster_block_count(*raster) == 0U);
+
+    // allocation after compaction: fresh blocks occupy the TOMBSTONE slots (index stability by design)
+    auto keep = raster->create_texture(8U, 8U, px);
+    REQUIRE(keep != nullptr);
+    CHECK(gpu::vulkan_raster_block_count(*raster) == 2U); // image + staging pools again, in the reused slots
+
+    CHECK(capture.error_count() == 0U);
+    CHECK(capture.warning_count() == 0U);
+}
+
+// ═══ RET-4 pt 5 (S7 relocation, absorbed): defrag RELOCATES live storage and PRESERVES contents ═══════════════════════
+// The retired rhi S7 buffer-defrag contract, re-proven on gpu-context: punch holes in the pool (destroy half the
+// buffers), relocate the survivors (recreate + GPU copy + swap inside the bundle), and every surviving byte is
+// intact — verified through the NEW `download_storage` (upload_storage's twin). Validation-SILENT throughout.
+
+TEST_CASE("RET-4: storage defrag relocates live buffers and PRESERVES contents (Vulkan)",
+          "[gpu-context][vulkan][gpu][raster][ret]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto ctx              = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->shader_object()) { WARN("no VK_EXT_shader_object; skipping"); return; }
+    crd::gpu::ValidationCapture capture(*vk);
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    constexpr crd::u32 n      = 8U;
+    constexpr crd::u32 words  = 256U; // 1 KiB per buffer
+    std::unique_ptr<gpu::IStorageBuffer> bufs[n];
+    crd::u32                             pattern[words];
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        bufs[i] = raster->create_storage_buffer(words * 4U);
+        REQUIRE(bufs[i] != nullptr);
+        for (crd::u32 w = 0; w < words; ++w) { pattern[w] = (i << 16U) | w; } // a per-buffer, per-word signature
+        REQUIRE(raster->upload_storage(*bufs[i], 0U, pattern, words * 4U));
+    }
+
+    for (crd::u32 i = 0; i < n; i += 2U) { bufs[i].reset(); } // punch holes: destroy the even-indexed buffers
+
+    const crd::u32 relocations = gpu::vulkan_raster_defragment(*raster);
+    CHECK(relocations == n / 2U); // every SURVIVOR moved (recreate + copy + swap)
+
+    for (crd::u32 i = 1U; i < n; i += 2U) // every surviving byte is intact at the relocated address
+    {
+        REQUIRE(raster->download_storage(*bufs[i]));
+        CHECK(bufs[i]->read_u32(0U) == ((i << 16U) | 0U));
+        CHECK(bufs[i]->read_u32(words - 1U) == ((i << 16U) | (words - 1U)));
+        CHECK(bufs[i]->read_u32(words / 2U) == ((i << 16U) | (words / 2U)));
+    }
+
+    // ── the IMAGE half of the S7 contract: a mipped texture relocates and still SAMPLES correctly ─────────────────
+    namespace kir = crd::kir;
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+    constexpr crd::u32         tw = 16U;
+    crd::u8                    tex_px[tw * tw * 4U];
+    crd::gputest::fill_left_red_right_green(tex_px, tw, tw);
+    auto texture = raster->create_texture_mipped(tw, tw, tex_px); // TRANSFER_SRC-capable ⇒ relocatable
+    REQUIRE(texture != nullptr);
+
+    const crd::u32 img_relocations = gpu::vulkan_raster_defragment(*raster);
+    CHECK(img_relocations >= n / 2U + 1U); // the storage buffers again + AT LEAST the texture moved
+
+    kir::KGraph vg(&alloc);
+    kir::KEntry ve;
+    crd::gputest::build_textured_vs(vg, ve);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_sample_fs(fg, fe);
+    auto vs = ctx->create_program(vg, ve);
+    auto fs = ctx->create_program(fg, fe);
+    REQUIRE(vs != nullptr);
+    REQUIRE(fs != nullptr);
+    auto program = raster->create_raster_program(*vs, *fs);
+    REQUIRE(program != nullptr);
+    auto target = raster->create_color_target(32U, 32U);
+    REQUIRE(target != nullptr);
+    raster->draw_textured(*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, *texture, 3U);
+    const crd::u32 left  = target->read_pixel(8U, 16U);  // the RELOCATED texture samples exactly as before the move
+    const crd::u32 right = target->read_pixel(24U, 16U);
+    CHECK((left & 0xFFU) > 200U);          // left: red
+    CHECK(((right >> 8U) & 0xFFU) > 200U); // right: green
+
+    CHECK(capture.error_count() == 0U); // barriers + copies + swaps all validation-SILENT
+    CHECK(capture.warning_count() == 0U);
+}
+
+// ═══ RET-5 (D-007 row 93, ADR-0105): ImGui renders through the gpu-context OVERLAY present ════════════════════════════
+// The crd-imgui GPU backend (ImGuiGpuBackend — app-free, window-free) initializes against the context's handles +
+// the surface's swapchain parameters and records its draw data into the present overlay pass: scene canvas blitted,
+// ImGui composited onto the backbuffer, presented — the full HUD path on the ONE graphics layer, validation-SILENT.
+
+TEST_CASE("RET-5: ImGui composites through the gpu-context overlay present (Vulkan)",
+          "[gpu-context][vulkan][gpu][raster][ret]")
+{
+    namespace kir = crd::kir;
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = false;
+    cfg.enable_validation = true;
+    auto ctx              = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->shader_object()) { WARN("no VK_EXT_shader_object; skipping"); return; }
+    crd::gpu::ValidationCapture capture(*vk);
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+    if (!vk->present_capable()) { WARN("no present capability; skipping"); return; }
+
+    void* native = nullptr;
+    if (!vk->headless_surface())
+    {
+        native = crd::gputest::create_test_window(256U, 256U);
+        if (native == nullptr) { WARN("no platform window available; skipping"); return; }
+    }
+    auto surface = raster->create_present_surface(native, 256U, 256U, gpu::PresentMode::Fifo);
+    REQUIRE(surface != nullptr);
+
+    // a WINDOWLESS ImGui context (no GLFW — the platform-input layer is a separate concern; IO driven by hand)
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::GetIO().DisplaySize = ImVec2(256.0F, 256.0F);
+    {
+        crd::imgui::ImGuiGpuBackend backend(*vk, *surface);
+        REQUIRE(backend.valid());
+
+        crd::memory::TlsfAllocator alloc(4U << 20U);
+        kir::KGraph                vg(&alloc);
+        kir::KEntry                ve;
+        crd::gputest::build_triangle_vs(vg, ve);
+        kir::KGraph fg(&alloc);
+        kir::KEntry fe;
+        crd::gputest::build_triangle_fs(fg, fe);
+        auto vs = ctx->create_program(vg, ve);
+        auto fs = ctx->create_program(fg, fe);
+        REQUIRE(vs != nullptr);
+        REQUIRE(fs != nullptr);
+        auto program = raster->create_raster_program(*vs, *fs);
+        REQUIRE(program != nullptr);
+        auto target = raster->create_color_target(surface->width(), surface->height());
+        REQUIRE(target != nullptr);
+
+        for (int frame = 0; frame < 3; ++frame) // scene → blit → ImGui overlay → present, three full frames
+        {
+            raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+            backend.new_frame();
+            ImGui::NewFrame();
+            ImGui::Begin("cerid");
+            ImGui::Text("gpu-context overlay frame %d", frame);
+            ImGui::End();
+            ImGui::Render();
+            CHECK(surface->present(*target, &crd::imgui::ImGuiGpuBackend::overlay_thunk, &backend));
+            crd::gputest::pump_test_window();
+        }
+        CHECK(surface->frame_count() == 3U);
+    } // the backend drains + shuts down BEFORE the ImGui context dies
+    ImGui::DestroyContext();
+
+    CHECK(capture.error_count() == 0U); // init + font upload + 3 composited frames + teardown, all SILENT
+    CHECK(capture.warning_count() == 0U);
+    surface.reset(); // the surface dies BEFORE its window
+    crd::gputest::destroy_test_window(native);
 }

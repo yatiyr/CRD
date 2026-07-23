@@ -98,6 +98,8 @@ public:
     [[nodiscard]] bool     linear_swept_spheres() const noexcept override { return m_lss; }          // B18-f
     [[nodiscard]] bool     tessellation() const noexcept override { return m_tessellation; } // B4-tess: tess + patch-ctrl-points
     [[nodiscard]] bool     render_capable() const noexcept override { return m_windowed; }
+    [[nodiscard]] bool     present_capable() const noexcept override { return m_present_capable; }   // RET-2
+    [[nodiscard]] bool     headless_surface() const noexcept override { return m_headless_surface; } // RET-2
     [[nodiscard]] bool       fragment_shading_rate() const noexcept override { return m_fragment_shading_rate; } // B1-e
     [[nodiscard]] VkExtent2D vrs_tile_size() const noexcept override { return m_vrs_tile_size; }
     [[nodiscard]] bool       conservative_raster() const noexcept override { return m_conservative_raster; } // B1-f
@@ -219,28 +221,57 @@ private:
 #else
         const char* platform_surface = nullptr;
 #endif
-        const char* inst_exts[2]  = {"VK_KHR_surface", platform_surface};
-        bool        surface_ok    = false;
-        if (!config.headless && platform_surface != nullptr)
+        // RET-2 (ADR-0105): surface enablement is AVAILABILITY-driven — VK_KHR_surface + (windowed) the platform
+        // surface + VK_EXT_headless_surface (a swapchain WITHOUT a window — the fully-testable present path) are all
+        // enabled whenever the loader offers them. A headless context can therefore still drive the present machinery
+        // through a headless surface; a windowed one presents to a real window. Purely additive.
+        const char*   inst_exts[4];
+        std::uint32_t n_inst_exts = 0;
+        bool          surface_ok  = false;
         {
             std::uint32_t nie = 0;
             vkEnumerateInstanceExtensionProperties(nullptr, &nie, nullptr);
             auto iavail = std::make_unique<VkExtensionProperties[]>(nie == 0 ? 1 : nie);
             vkEnumerateInstanceExtensionProperties(nullptr, &nie, iavail.get());
-            bool has_surf = false;
-            bool has_plat = false;
+            bool has_surf     = false;
+            bool has_plat     = false;
+            bool has_headless = false;
+            bool has_dbg      = false;
             for (std::uint32_t i = 0; i < nie; ++i)
             {
                 if (std::strcmp(iavail[i].extensionName, "VK_KHR_surface") == 0) { has_surf = true; }
-                if (std::strcmp(iavail[i].extensionName, platform_surface) == 0) { has_plat = true; }
+                if (platform_surface != nullptr && std::strcmp(iavail[i].extensionName, platform_surface) == 0)
+                {
+                    has_plat = true;
+                }
+                if (std::strcmp(iavail[i].extensionName, "VK_EXT_headless_surface") == 0) { has_headless = true; }
+                if (std::strcmp(iavail[i].extensionName, "VK_EXT_debug_utils") == 0) { has_dbg = true; }
             }
-            surface_ok = has_surf && has_plat;
+            if (has_surf)
+            {
+                inst_exts[n_inst_exts++] = "VK_KHR_surface";
+                surface_ok               = true;
+                if (!config.headless && has_plat)
+                {
+                    inst_exts[n_inst_exts++] = platform_surface;
+                    m_platform_surface_ext   = true; // a REAL window is presentable (the original `windowed` meaning)
+                }
+                if (has_headless)
+                {
+                    inst_exts[n_inst_exts++] = "VK_EXT_headless_surface";
+                    m_headless_surface       = true;
+                }
+            }
+            // RET-4: debug_utils enabled EXPLICITLY with validation (ValidationCapture's messenger rides it — the
+            // layer resolving the entry points anyway is an accident, never a contract)
+            if (config.enable_validation && has_dbg) { inst_exts[n_inst_exts++] = "VK_EXT_debug_utils"; }
         }
-        if (surface_ok)
+        if (n_inst_exts > 0U)
         {
-            ici.enabledExtensionCount   = 2;
+            ici.enabledExtensionCount   = n_inst_exts;
             ici.ppEnabledExtensionNames = inst_exts;
         }
+        m_surface_ext = surface_ok;
         if (vkCreateInstance(&ici, nullptr, &m_instance) != VK_SUCCESS) { return; }
 
         std::uint32_t    npd = 16;
@@ -384,8 +415,12 @@ private:
             }
         }
 
-        // C2-a: render-capable iff surface (instance) + swapchain (device) + a graphics queue all present.
-        m_windowed = surface_ok && has_swapchain && m_graphics_family != UINT32_MAX;
+        // C2-a: render-capable iff a REAL platform window surface + swapchain + a graphics queue all present. (RET-2
+        // split the meanings: `m_windowed` keeps its original real-window semantics; `m_present_capable` is the wider
+        // "can drive a swapchain at all" — a headless context presenting to a HEADLESS surface qualifies for the
+        // latter, never the former.)
+        m_windowed        = m_platform_surface_ext && has_swapchain && m_graphics_family != UINT32_MAX;
+        m_present_capable = surface_ok && has_swapchain && m_graphics_family != UINT32_MAX;
 
         if (m_fragment_shading_rate) // B1-e: the attachment shading-rate-image texel size (device-reported)
         {
@@ -667,7 +702,9 @@ private:
         if (m_coopvec) { devexts[ndevext++] = "VK_NV_cooperative_vector"; } // C6: per-invocation MLP inference
         if (m_dgc) { devexts[ndevext++] = "VK_NV_device_generated_commands"; devexts[ndevext++] = "VK_NV_device_generated_commands_compute"; } // C5
         if (m_shader_object) { devexts[ndevext++] = VK_EXT_SHADER_OBJECT_EXTENSION_NAME; }
-        if (m_windowed) { devexts[ndevext++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME; }
+        // RET-2: swapchain enablement follows AVAILABILITY (given the instance enabled VK_KHR_surface) — a headless
+        // context presents to a headless surface, a windowed one to a window; one extension, both paths.
+        if (m_surface_ext && has_swapchain) { devexts[ndevext++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME; }
         if (m_fragment_shading_rate) { devexts[ndevext++] = VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME; }
         if (m_conservative_raster)
         {
@@ -723,6 +760,10 @@ private:
     bool             m_int64           = false;
     bool             m_shader_object   = false;
     bool             m_windowed        = false;
+    bool             m_surface_ext          = false; // RET-2: VK_KHR_surface enabled on the instance
+    bool             m_platform_surface_ext = false; // RET-2: the platform (win32/xcb) surface enabled — real windows
+    bool             m_headless_surface     = false; // RET-2: VK_EXT_headless_surface enabled — windowless swapchains
+    bool             m_present_capable      = false; // RET-2: surface + swapchain + graphics queue — any present path
     bool             m_fragment_shading_rate = false; // B1-e: VK_KHR_fragment_shading_rate enabled
     VkExtent2D       m_vrs_tile_size{};               // B1-e: attachment shading-rate-image texel size
     bool             m_conservative_raster   = false; // B1-f: conservative raster + EDS3 conservative mode enabled

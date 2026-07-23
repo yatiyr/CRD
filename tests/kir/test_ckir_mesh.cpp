@@ -424,7 +424,8 @@ TEST_CASE("ckir marching cubes: extract a sphere mesh (vertices on-surface, area
             {
                 for (int cx2 = 0; cx2 < 3; ++cx2)
                 {
-                    if (crd::math::abs(out[ob + static_cast<crd::usize>(k * 6 + cx2)] - hv[k][cx2]) > 1.0e-4) { ++mismatch; }
+                    if (crd::math::abs(static_cast<double>(out[ob + static_cast<crd::usize>(k * 6 + cx2)]) -
+                                       static_cast<double>(hv[k][cx2])) > 1.0e-4) { ++mismatch; }
                 }
             }
         }

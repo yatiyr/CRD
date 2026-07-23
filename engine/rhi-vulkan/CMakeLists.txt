@@ -1,3 +1,5 @@
+# ⛔ FROZEN (ADR-0105, 2026-07-23): crd-rhi-vulkan is RETIRING — the D-007 RET band absorbs its capabilities into
+# crd-gpu-context and DELETES this module at RET-8. NO new features, NO new consumers, NO new wiring. Ever.
 if(WIN32 AND NOT DEFINED ENV{VULKAN_SDK})
     file(GLOB _crd_vulkan_sdk_dirs LIST_DIRECTORIES true "C:/VulkanSDK/*")
     list(SORT _crd_vulkan_sdk_dirs COMPARE NATURAL ORDER ASCENDING)

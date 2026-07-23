@@ -396,7 +396,7 @@ struct HairFilterConfig
     double sigma_par    = 4.0;     // ALONG the strand: large ⇒ bridges gaps, reconnecting a broken strand
     double sigma_perp   = 1.0;     // ACROSS the strand: small ⇒ neighbouring strands stay distinct
     double sigma_color  = 0.9;     // colour similarity (paper: 0.9)
-    double depth_reject = 1.45e-3; // hard depth cut (paper's threshold) — never blend across a silhouette
+    double depth_reject = 1.45e-3; // crd-lint-allow-untagged-physical: dimensionless threshold on the depth metric (the ckir_svgf precedent) — hard depth cut (paper's threshold), never blend across a silhouette
 };
 
 // Buffers: b0 colour (F32, 3/px) · b1 screen-space tangent (F32, 2/px, unit) · b2 depth (F32, 1/px)
@@ -535,7 +535,7 @@ struct StrandLodConfig
     int    max_points         = 127;   // C_max (the paper's cap)
     int    layer_points       = 5;     // C_layers — a HARD lower bound: never fewer control points than bundle layers
     double lambda             = 8.0;   // LOD sensitivity; tuned per hairstyle / strand count
-    double screen_height      = 1080.0; // R_y — the AABB is normalised by the vertical resolution
+    double screen_height      = 1080.0; // crd-lint-allow-untagged-physical: a PIXEL COUNT (vertical resolution R_y — the AABB normaliser), not an SI quantity
 };
 
 // Buffers: b0 in (F32, 5/bundle = [aabb_min_x, aabb_min_y, aabb_max_x, aabb_max_y, delta])

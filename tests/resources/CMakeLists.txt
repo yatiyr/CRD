@@ -1,3 +1,4 @@
+# GEO-3 stage 2: + test_png / test_tga_bmp / test_jpeg (the owned LDR codec family gates)
 crd_collect_sources(TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_executable(crd-resources-tests ${TEST_SOURCES})
@@ -14,7 +15,6 @@ target_link_libraries(crd-resources-tests PRIVATE
     crd-shader               # reflection: ShaderResource / crd::shader::Stage
     crd-gpu-context          # ADR-0103: ShaderStage
     crd-gpu-context-vulkan   # ADR-0103: GLSL→SPIR-V round-trip (was crd-shader::compile_glsl)
-    crd-renderer
     Catch2::Catch2WithMain
 )
 

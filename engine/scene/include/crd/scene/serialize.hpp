@@ -26,7 +26,9 @@ namespace crd::scene
 // not change a built-in's FourCC — that would invalidate every saved
 // SCEN. New built-ins get new unique FourCCs.
 
-inline constexpr crd::u32 make_serialize_fourcc(char a, char b, char c, char d) noexcept
+// NOLINTBEGIN(readability-identifier-naming) — the kFourCC_* table names mirror the ON-DISK chunk mnemonics
+// ('XFRM', 'RELS', 'OBEK', …); the repo-wide FourCC convention (crdr.hpp) deliberately keeps the mnemonic casing.
+constexpr crd::u32 make_serialize_fourcc(char a, char b, char c, char d) noexcept
 {
     return static_cast<crd::u32>(static_cast<unsigned char>(a))
          | (static_cast<crd::u32>(static_cast<unsigned char>(b)) << 8U)
@@ -36,6 +38,10 @@ inline constexpr crd::u32 make_serialize_fourcc(char a, char b, char c, char d) 
 
 // Built-in component FourCCs (Phase 3.0 v1k+).
 inline constexpr crd::u32 kFourCC_Transform = make_serialize_fourcc('X', 'F', 'R', 'M');
+// GEO-3 stage 3 (appended, D-007 row 68): the render components an imported scene decomposes into.
+inline constexpr crd::u32 kFourCC_MeshRenderer = make_serialize_fourcc('M', 'R', 'N', 'D');
+inline constexpr crd::u32 kFourCC_SceneCamera  = make_serialize_fourcc('C', 'A', 'M', 'R');
+inline constexpr crd::u32 kFourCC_SceneLight   = make_serialize_fourcc('L', 'G', 'H', 'T');
 
 // Built-in relation FourCCs (Phase 3.0 v1k+).
 inline constexpr crd::u32 kFourCC_RelChildOf     = make_serialize_fourcc('R', 'C', 'h', 'O');
@@ -128,7 +134,7 @@ inline constexpr crd::u32 kFourCC_ObekOLNK = make_serialize_fourcc('O', 'L', 'N'
 // Per-component payload chunk FourCC inside an OBEK container — uses the
 // 'D000'-'D0FF' range to be unambiguous from SCEN's 'C000'-'C0FF'. Same
 // SoA layout (record_count + indices[] + (pad) + payloads[]).
-[[nodiscard]] inline constexpr crd::u32 make_obek_component_chunk_fourcc(crd::u32 file_local_id) noexcept
+[[nodiscard]] constexpr crd::u32 make_obek_component_chunk_fourcc(crd::u32 file_local_id) noexcept
 {
     auto hex = [](crd::u32 nibble) constexpr -> char
     {
@@ -145,7 +151,7 @@ inline constexpr crd::u32 kFourCC_ObekOLNK = make_serialize_fourcc('O', 'L', 'N'
 //   id=0   → 'C000'
 //   id=15  → 'C00F'
 //   id=255 → 'C0FF'
-[[nodiscard]] inline constexpr crd::u32 make_scene_component_chunk_fourcc(crd::u32 file_local_id) noexcept
+[[nodiscard]] constexpr crd::u32 make_scene_component_chunk_fourcc(crd::u32 file_local_id) noexcept
 {
     auto hex = [](crd::u32 nibble) constexpr -> char
     {
@@ -156,5 +162,6 @@ inline constexpr crd::u32 kFourCC_ObekOLNK = make_serialize_fourcc('O', 'L', 'N'
     const char d0 = hex(file_local_id & 0xFU);
     return make_serialize_fourcc('C', d2, d1, d0);
 }
+// NOLINTEND(readability-identifier-naming)
 
 } // namespace crd::scene

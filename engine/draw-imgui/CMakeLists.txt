@@ -3,12 +3,9 @@ crd_collect_sources(HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 add_library(crd-draw-imgui STATIC ${SOURCES} ${HEADERS})
 
-target_include_directories(crd-draw-imgui
-    PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/include"
-    SYSTEM PRIVATE
-        "${imgui_SOURCE_DIR}"
-)
+# CI-1 (2026-07-23): SYSTEM must lead its own call — mid-list it becomes a literal "SYSTEM" include dir.
+target_include_directories(crd-draw-imgui PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_include_directories(crd-draw-imgui SYSTEM PRIVATE "${imgui_SOURCE_DIR}")
 
 # Peer-companion module (Phase 3.1 v1a-draw d4): depends on crd-draw +
 # crd-imgui. Lives outside crd-draw so headless / DAW builds that don't

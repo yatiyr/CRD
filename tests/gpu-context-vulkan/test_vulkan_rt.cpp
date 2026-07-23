@@ -63,8 +63,8 @@ TEST_CASE("D-007 RT-1: inline rayQuery on Vulkan (GPU BLAS/TLAS build + trace) =
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
 
-    constexpr crd::u32 kNTris = 1U;
-    constexpr crd::u32 kNRays = 4U;
+    constexpr crd::u32 num_tris = 1U;
+    constexpr crd::u32 num_rays = 4U;
     const int          local  = 64;
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
@@ -79,7 +79,7 @@ TEST_CASE("D-007 RT-1: inline rayQuery on Vulkan (GPU BLAS/TLAS build + trace) =
 
     // The triangle (z=2) — GPU wants raw float3 verts; the CPU oracle wants [triCount, v0.xyz, v1.xyz, v2.xyz].
     const float verts[9] = {0.0F, 0.0F, 2.0F, 1.0F, 0.0F, 2.0F, 0.0F, 1.0F, 2.0F};
-    const float rays[kNRays][6] = {
+    const float rays[num_rays][6] = {
         {0.2F, 0.2F, 0.0F, 0.0F, 0.0F, 1.0F},  // hit at t=2
         {0.2F, 0.2F, 0.0F, 0.0F, 0.0F, -1.0F}, // miss
         {5.0F, 5.0F, 0.0F, 0.0F, 0.0F, 1.0F},  // miss (outside)
@@ -89,32 +89,32 @@ TEST_CASE("D-007 RT-1: inline rayQuery on Vulkan (GPU BLAS/TLAS build + trace) =
     // ── CPU oracle (the reference) ──
     crd::containers::Array<crd::f64> geo(&alloc);
     geo.resize(10U, 0.0);
-    geo[0] = static_cast<crd::f64>(kNTris);
+    geo[0] = static_cast<crd::f64>(num_tris);
     for (int i = 0; i < 9; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
     crd::containers::Array<crd::f64> rays64(&alloc);
-    rays64.resize(static_cast<crd::usize>(kNRays) * 6U, 0.0);
-    for (crd::u32 r = 0; r < kNRays; ++r)
+    rays64.resize(static_cast<crd::usize>(num_rays) * 6U, 0.0);
+    for (crd::u32 r = 0; r < num_rays; ++r)
     {
         for (int c = 0; c < 6; ++c) { rays64[static_cast<crd::usize>(r) * 6U + static_cast<crd::usize>(c)] = static_cast<crd::f64>(rays[r][c]); }
     }
     crd::containers::Array<crd::f64> ref(&alloc);
-    ref.resize(kNRays, 0.0);
-    kir::KernelBuffer bufs[3] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {rays64.data(), static_cast<int>(rays64.size()), 0, 1}, {ref.data(), static_cast<int>(kNRays), 0, 2}};
+    ref.resize(num_rays, 0.0);
+    kir::KernelBuffer bufs[3] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {rays64.data(), static_cast<int>(rays64.size()), 0, 1}, {ref.data(), static_cast<int>(num_rays), 0, 2}};
     kir::eval_cpu_kernel(g, e, bufs, 3, static_cast<crd::u32>(local), &alloc, 1U);
 
     // ── GPU: build the AS + trace ──
-    auto scene = rt.build_scene(verts, kNTris);
+    auto scene = rt.build_scene(verts, num_tris);
     REQUIRE(scene != nullptr);
-    float gpu_t[kNRays] = {0.0F, 0.0F, 0.0F, 0.0F};
+    float gpu_t[num_rays] = {0.0F, 0.0F, 0.0F, 0.0F};
     gpu::VulkanRayTracingContext::Binding bind[2] = {
-        {&rays[0][0], nullptr, static_cast<crd::u64>(kNRays) * 6U * sizeof(float), 1U}, // rays in at binding 1
-        {nullptr, gpu_t, static_cast<crd::u64>(kNRays) * sizeof(float), 2U},            // distances out at binding 2
+        {&rays[0][0], nullptr, static_cast<crd::u64>(num_rays) * 6U * sizeof(float), 1U}, // rays in at binding 1
+        {nullptr, gpu_t, static_cast<crd::u64>(num_rays) * sizeof(float), 2U},            // distances out at binding 2
     };
-    const crd::u32 groups = (kNRays + static_cast<crd::u32>(local) - 1U) / static_cast<crd::u32>(local);
+    const crd::u32 groups = (num_rays + static_cast<crd::u32>(local) - 1U) / static_cast<crd::u32>(local);
     REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()),
                               crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 2), groups));
 
-    for (crd::u32 r = 0; r < kNRays; ++r)
+    for (crd::u32 r = 0; r < num_rays; ++r)
     {
         INFO("ray " << r << ": GPU t=" << gpu_t[r] << "  CPU ref=" << ref[r]);
         const bool cpu_hit = ref[r] < 1.0e29;
@@ -154,9 +154,9 @@ TEST_CASE("D-007 RT-2: RT hard shadows on Vulkan (per-point shadow ray) == CPU r
 
     // occluder: one triangle at y=2 over the origin (blocks the light for points near x=z=0).
     const float verts[9] = {-1.0F, 2.0F, -1.0F, 1.0F, 2.0F, -1.0F, 0.0F, 2.0F, 1.5F};
-    constexpr crd::u32 kN = 64U; // 8x8 grid of ground points
+    constexpr crd::u32 num_pts = 64U; // 8x8 grid of ground points
     crd::containers::Array<float> pos(&alloc);
-    pos.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
+    pos.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
     for (crd::u32 j = 0; j < 8U; ++j)
     {
         for (crd::u32 i = 0; i < 8U; ++i)
@@ -174,29 +174,29 @@ TEST_CASE("D-007 RT-2: RT hard shadows on Vulkan (per-point shadow ray) == CPU r
     geo[0] = 1.0;
     for (int i = 0; i < 9; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
     crd::containers::Array<crd::f64> pos64(&alloc);
-    pos64.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
+    pos64.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
     for (crd::usize i = 0; i < pos.size(); ++i) { pos64[i] = static_cast<crd::f64>(pos[i]); }
     crd::containers::Array<crd::f64> refv(&alloc);
-    refv.resize(kN, 0.0);
-    kir::KernelBuffer bufs[3] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {pos64.data(), static_cast<int>(pos64.size()), 0, 1}, {refv.data(), static_cast<int>(kN), 0, 2}};
-    kir::eval_cpu_kernel(g, e, bufs, 3, scfg.local_size, &alloc, (kN + scfg.local_size - 1U) / scfg.local_size);
+    refv.resize(num_pts, 0.0);
+    kir::KernelBuffer bufs[3] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {pos64.data(), static_cast<int>(pos64.size()), 0, 1}, {refv.data(), static_cast<int>(num_pts), 0, 2}};
+    kir::eval_cpu_kernel(g, e, bufs, 3, scfg.local_size, &alloc, (num_pts + scfg.local_size - 1U) / scfg.local_size);
 
     // ── GPU ──
     auto scene = rt.build_scene(verts, 1U);
     REQUIRE(scene != nullptr);
     crd::containers::Array<float> gpu_v(&alloc);
-    gpu_v.resize(kN, 0.0F);
+    gpu_v.resize(num_pts, 0.0F);
     gpu::VulkanRayTracingContext::Binding bind[2] = {
-        {pos.data(), nullptr, static_cast<crd::u64>(kN) * 3U * sizeof(float), 1U},
-        {nullptr, gpu_v.data(), static_cast<crd::u64>(kN) * sizeof(float), 2U},
+        {pos.data(), nullptr, static_cast<crd::u64>(num_pts) * 3U * sizeof(float), 1U},
+        {nullptr, gpu_v.data(), static_cast<crd::u64>(num_pts) * sizeof(float), 2U},
     };
     REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()),
-                              crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 2), (kN + scfg.local_size - 1U) / scfg.local_size));
+                              crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 2), (num_pts + scfg.local_size - 1U) / scfg.local_size));
 
     int lit = 0;
     int shadowed = 0;
     int mism = 0;
-    for (crd::u32 p = 0; p < kN; ++p)
+    for (crd::u32 p = 0; p < num_pts; ++p)
     {
         if (crd::math::abs(static_cast<double>(gpu_v[p]) - refv[p]) > 1.0e-6) { ++mism; }
         if (refv[p] > 0.5) { ++lit; } else { ++shadowed; }
@@ -239,12 +239,12 @@ TEST_CASE("D-007 RT-2: RT ambient occlusion on Vulkan (hemisphere batch trace) =
     // occluder: a quad (2 triangles) at y=2 over x,z ∈ [-2,2].
     const float verts[18] = {-2.0F, 2.0F, -2.0F, 2.0F, 2.0F, -2.0F, 2.0F, 2.0F, 2.0F,
                              -2.0F, 2.0F, -2.0F, 2.0F, 2.0F, 2.0F, -2.0F, 2.0F, 2.0F};
-    constexpr crd::u32 kNTri = 2U;
-    constexpr crd::u32 kN    = 64U;
+    constexpr crd::u32 num_tri = 2U;
+    constexpr crd::u32 num_pts    = 64U;
     crd::containers::Array<float> pos(&alloc);
     crd::containers::Array<float> nrm(&alloc);
-    pos.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
-    nrm.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
+    pos.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
+    nrm.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
     for (crd::u32 j = 0; j < 8U; ++j)
     {
         for (crd::u32 i = 0; i < 8U; ++i)
@@ -259,38 +259,38 @@ TEST_CASE("D-007 RT-2: RT ambient occlusion on Vulkan (hemisphere batch trace) =
 
     // ── CPU oracle ──
     crd::containers::Array<crd::f64> geo(&alloc);
-    geo.resize(1U + static_cast<crd::usize>(kNTri) * 9U, 0.0);
-    geo[0] = static_cast<crd::f64>(kNTri);
+    geo.resize(1U + static_cast<crd::usize>(num_tri) * 9U, 0.0);
+    geo[0] = static_cast<crd::f64>(num_tri);
     for (int i = 0; i < 18; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
     crd::containers::Array<crd::f64> pos64(&alloc);
     crd::containers::Array<crd::f64> nrm64(&alloc);
-    pos64.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
-    nrm64.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
+    pos64.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
+    nrm64.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
     for (crd::usize i = 0; i < pos.size(); ++i) { pos64[i] = static_cast<crd::f64>(pos[i]); nrm64[i] = static_cast<crd::f64>(nrm[i]); }
     crd::containers::Array<crd::f64> refv(&alloc);
-    refv.resize(kN, 0.0);
-    kir::KernelBuffer bufs[4] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {pos64.data(), static_cast<int>(pos64.size()), 0, 1}, {nrm64.data(), static_cast<int>(nrm64.size()), 0, 2}, {refv.data(), static_cast<int>(kN), 0, 3}};
-    kir::eval_cpu_kernel(g, e, bufs, 4, acfg.local_size, &alloc, (kN + acfg.local_size - 1U) / acfg.local_size);
+    refv.resize(num_pts, 0.0);
+    kir::KernelBuffer bufs[4] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {pos64.data(), static_cast<int>(pos64.size()), 0, 1}, {nrm64.data(), static_cast<int>(nrm64.size()), 0, 2}, {refv.data(), static_cast<int>(num_pts), 0, 3}};
+    kir::eval_cpu_kernel(g, e, bufs, 4, acfg.local_size, &alloc, (num_pts + acfg.local_size - 1U) / acfg.local_size);
 
     // ── GPU ──
-    auto scene = rt.build_scene(verts, kNTri);
+    auto scene = rt.build_scene(verts, num_tri);
     REQUIRE(scene != nullptr);
     crd::containers::Array<float> gpu_ao(&alloc);
-    gpu_ao.resize(kN, 0.0F);
+    gpu_ao.resize(num_pts, 0.0F);
     gpu::VulkanRayTracingContext::Binding bind[3] = {
-        {pos.data(), nullptr, static_cast<crd::u64>(kN) * 3U * sizeof(float), 1U},
-        {nrm.data(), nullptr, static_cast<crd::u64>(kN) * 3U * sizeof(float), 2U},
-        {nullptr, gpu_ao.data(), static_cast<crd::u64>(kN) * sizeof(float), 3U},
+        {pos.data(), nullptr, static_cast<crd::u64>(num_pts) * 3U * sizeof(float), 1U},
+        {nrm.data(), nullptr, static_cast<crd::u64>(num_pts) * 3U * sizeof(float), 2U},
+        {nullptr, gpu_ao.data(), static_cast<crd::u64>(num_pts) * sizeof(float), 3U},
     };
     REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()),
-                              crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 3), (kN + acfg.local_size - 1U) / acfg.local_size));
+                              crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 3), (num_pts + acfg.local_size - 1U) / acfg.local_size));
 
     double worst   = 0.0;
     double sum_gpu = 0.0;
     double sum_ref = 0.0;
     double ao_min  = 1.0;
     double ao_max  = 0.0;
-    for (crd::u32 p = 0; p < kN; ++p)
+    for (crd::u32 p = 0; p < num_pts; ++p)
     {
         const double d = crd::math::abs(static_cast<double>(gpu_ao[p]) - refv[p]);
         if (d > worst) { worst = d; }
@@ -299,9 +299,9 @@ TEST_CASE("D-007 RT-2: RT ambient occlusion on Vulkan (hemisphere batch trace) =
         if (refv[p] < ao_min) { ao_min = refv[p]; }
         if (refv[p] > ao_max) { ao_max = refv[p]; }
     }
-    INFO("RTAO: worst |GPU-ref|=" << worst << "  mean GPU=" << sum_gpu / kN << " ref=" << sum_ref / kN << "  AO range=[" << ao_min << ", " << ao_max << "]");
+    INFO("RTAO: worst |GPU-ref|=" << worst << "  mean GPU=" << sum_gpu / num_pts << " ref=" << sum_ref / num_pts << "  AO range=[" << ao_min << ", " << ao_max << "]");
     CHECK(worst < 0.12);                                    // per-point AO matches (deterministic sampling; ≤~3/32 grazing-edge ray flips)
-    CHECK(crd::math::abs(sum_gpu - sum_ref) / kN < 0.02);   // ...and the mean is tight (edge noise averages out)
+    CHECK(crd::math::abs(sum_gpu - sum_ref) / num_pts < 0.02);   // ...and the mean is tight (edge noise averages out)
     // physics: a quad at y=2 over x,z∈[-2,2] subtends ~45° from a point below ⇒ a cosine-weighted hemisphere hits it ~50% of
     // the time ⇒ the darkest AO is ~0.5; far-corner points are fully open (~1.0).
     CHECK(ao_min < 0.65);                                   // real occlusion under the quad
@@ -345,12 +345,12 @@ TEST_CASE("D-007 RT-2: RT reflections on Vulkan (reflected ray + primId shade) =
     const float verts[18] = {-2.0F, 3.0F, -2.0F, 2.0F, 3.0F, -2.0F, 2.0F, 3.0F, 2.0F,
                              -2.0F, 3.0F, -2.0F, 2.0F, 3.0F, 2.0F, -2.0F, 3.0F, 2.0F};
     const float tri_n[6] = {0.0F, 1.0F, 0.0F, 0.0F, 1.0F, 0.0F}; // per-triangle flat normal (up)
-    constexpr crd::u32 kNTri = 2U;
-    constexpr crd::u32 kN    = 64U;
+    constexpr crd::u32 num_tri = 2U;
+    constexpr crd::u32 num_pts    = 64U;
     crd::containers::Array<float> pos(&alloc);
     crd::containers::Array<float> nrm(&alloc);
-    pos.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
-    nrm.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
+    pos.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
+    nrm.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
     for (crd::u32 j = 0; j < 8U; ++j)
     {
         for (crd::u32 i = 0; i < 8U; ++i)
@@ -364,43 +364,45 @@ TEST_CASE("D-007 RT-2: RT reflections on Vulkan (reflected ray + primId shade) =
 
     // ── CPU oracle ──
     crd::containers::Array<crd::f64> geo(&alloc);
-    geo.resize(1U + static_cast<crd::usize>(kNTri) * 9U, 0.0);
-    geo[0] = static_cast<crd::f64>(kNTri);
+    geo.resize(1U + static_cast<crd::usize>(num_tri) * 9U, 0.0);
+    geo[0] = static_cast<crd::f64>(num_tri);
     for (int i = 0; i < 18; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
-    crd::containers::Array<crd::f64> pos64(&alloc), nrm64(&alloc), tn64(&alloc);
-    pos64.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
-    nrm64.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
+    crd::containers::Array<crd::f64> pos64(&alloc);
+    crd::containers::Array<crd::f64> nrm64(&alloc);
+    crd::containers::Array<crd::f64> tn64(&alloc);
+    pos64.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
+    nrm64.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
     tn64.resize(6U, 0.0);
     for (crd::usize i = 0; i < pos.size(); ++i) { pos64[i] = static_cast<crd::f64>(pos[i]); nrm64[i] = static_cast<crd::f64>(nrm[i]); }
     for (int i = 0; i < 6; ++i) { tn64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(tri_n[i]); }
     crd::containers::Array<crd::f64> refc(&alloc);
-    refc.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
+    refc.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
     kir::KernelBuffer bufs[5] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {pos64.data(), static_cast<int>(pos64.size()), 0, 1}, {nrm64.data(), static_cast<int>(nrm64.size()), 0, 2}, {tn64.data(), static_cast<int>(tn64.size()), 0, 3}, {refc.data(), static_cast<int>(refc.size()), 0, 4}};
-    kir::eval_cpu_kernel(g, e, bufs, 5, rcfg.local_size, &alloc, (kN + rcfg.local_size - 1U) / rcfg.local_size);
+    kir::eval_cpu_kernel(g, e, bufs, 5, rcfg.local_size, &alloc, (num_pts + rcfg.local_size - 1U) / rcfg.local_size);
 
     // ── GPU ──
-    auto scene = rt.build_scene(verts, kNTri);
+    auto scene = rt.build_scene(verts, num_tri);
     REQUIRE(scene != nullptr);
     crd::containers::Array<float> gpu_c(&alloc);
-    gpu_c.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
+    gpu_c.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
     gpu::VulkanRayTracingContext::Binding bind[4] = {
-        {pos.data(), nullptr, static_cast<crd::u64>(kN) * 3U * sizeof(float), 1U},
-        {nrm.data(), nullptr, static_cast<crd::u64>(kN) * 3U * sizeof(float), 2U},
+        {pos.data(), nullptr, static_cast<crd::u64>(num_pts) * 3U * sizeof(float), 1U},
+        {nrm.data(), nullptr, static_cast<crd::u64>(num_pts) * 3U * sizeof(float), 2U},
         {tri_n, nullptr, 6U * sizeof(float), 3U},
-        {nullptr, gpu_c.data(), static_cast<crd::u64>(kN) * 3U * sizeof(float), 4U},
+        {nullptr, gpu_c.data(), static_cast<crd::u64>(num_pts) * 3U * sizeof(float), 4U},
     };
     REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()),
-                              crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 4), (kN + rcfg.local_size - 1U) / rcfg.local_size));
+                              crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 4), (num_pts + rcfg.local_size - 1U) / rcfg.local_size));
 
     double worst   = 0.0;
     int    hit_col = 0;
     int    sky_col = 0;
-    for (crd::u32 p = 0; p < kN * 3U; ++p)
+    for (crd::u32 p = 0; p < num_pts * 3U; ++p)
     {
         const double d = crd::math::abs(static_cast<double>(gpu_c[p]) - refc[p]);
         if (d > worst) { worst = d; }
     }
-    for (crd::u32 p = 0; p < kN; ++p) // classify by the blue channel: sky (~0.8) vs shaded ceiling (~0.2)
+    for (crd::u32 p = 0; p < num_pts; ++p) // classify by the blue channel: sky (~0.8) vs shaded ceiling (~0.2)
     {
         if (refc[p * 3U + 2U] > 0.6) { ++sky_col; } else { ++hit_col; }
     }
@@ -447,12 +449,12 @@ TEST_CASE("D-007 RT-2: path-tracing megakernel on Vulkan (multi-bounce diffuse G
     const float verts[18] = {-6.0F, 1.0F, -6.0F, 0.0F, 1.0F, -6.0F, 0.0F, 1.0F, 6.0F,
                              -6.0F, 1.0F, -6.0F, 0.0F, 1.0F, 6.0F, -6.0F, 1.0F, 6.0F};
     const float tri_n[6] = {0.0F, -1.0F, 0.0F, 0.0F, -1.0F, 0.0F};
-    constexpr crd::u32 kNTri = 2U;
-    constexpr crd::u32 kN    = 64U;
+    constexpr crd::u32 num_tri = 2U;
+    constexpr crd::u32 num_pts    = 64U;
     crd::containers::Array<float> ppos(&alloc);
     crd::containers::Array<float> pnrm(&alloc);
-    ppos.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
-    pnrm.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
+    ppos.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
+    pnrm.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
     for (crd::u32 j = 0; j < 8U; ++j)
     {
         for (crd::u32 i = 0; i < 8U; ++i)
@@ -466,53 +468,55 @@ TEST_CASE("D-007 RT-2: path-tracing megakernel on Vulkan (multi-bounce diffuse G
 
     // ── CPU oracle ──
     crd::containers::Array<crd::f64> geo(&alloc);
-    geo.resize(1U + static_cast<crd::usize>(kNTri) * 9U, 0.0);
-    geo[0] = static_cast<crd::f64>(kNTri);
+    geo.resize(1U + static_cast<crd::usize>(num_tri) * 9U, 0.0);
+    geo[0] = static_cast<crd::f64>(num_tri);
     for (int i = 0; i < 18; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
-    crd::containers::Array<crd::f64> pos64(&alloc), nrm64(&alloc), tn64(&alloc);
-    pos64.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
-    nrm64.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
+    crd::containers::Array<crd::f64> pos64(&alloc);
+    crd::containers::Array<crd::f64> nrm64(&alloc);
+    crd::containers::Array<crd::f64> tn64(&alloc);
+    pos64.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
+    nrm64.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
     tn64.resize(6U, 0.0);
     for (crd::usize i = 0; i < ppos.size(); ++i) { pos64[i] = static_cast<crd::f64>(ppos[i]); nrm64[i] = static_cast<crd::f64>(pnrm[i]); }
     for (int i = 0; i < 6; ++i) { tn64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(tri_n[i]); }
     crd::containers::Array<crd::f64> refc(&alloc);
-    refc.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
+    refc.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
     kir::KernelBuffer bufs[5] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {pos64.data(), static_cast<int>(pos64.size()), 0, 1}, {nrm64.data(), static_cast<int>(nrm64.size()), 0, 2}, {tn64.data(), static_cast<int>(tn64.size()), 0, 3}, {refc.data(), static_cast<int>(refc.size()), 0, 4}};
-    kir::eval_cpu_kernel(g, e, bufs, 5, pcfg.local_size, &alloc, (kN + pcfg.local_size - 1U) / pcfg.local_size);
+    kir::eval_cpu_kernel(g, e, bufs, 5, pcfg.local_size, &alloc, (num_pts + pcfg.local_size - 1U) / pcfg.local_size);
 
     // ── GPU ──
-    auto scene = rt.build_scene(verts, kNTri);
+    auto scene = rt.build_scene(verts, num_tri);
     REQUIRE(scene != nullptr);
     crd::containers::Array<float> gpu_c(&alloc);
-    gpu_c.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
+    gpu_c.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
     gpu::VulkanRayTracingContext::Binding bind[4] = {
-        {ppos.data(), nullptr, static_cast<crd::u64>(kN) * 3U * sizeof(float), 1U},
-        {pnrm.data(), nullptr, static_cast<crd::u64>(kN) * 3U * sizeof(float), 2U},
+        {ppos.data(), nullptr, static_cast<crd::u64>(num_pts) * 3U * sizeof(float), 1U},
+        {pnrm.data(), nullptr, static_cast<crd::u64>(num_pts) * 3U * sizeof(float), 2U},
         {tri_n, nullptr, 6U * sizeof(float), 3U},
-        {nullptr, gpu_c.data(), static_cast<crd::u64>(kN) * 3U * sizeof(float), 4U},
+        {nullptr, gpu_c.data(), static_cast<crd::u64>(num_pts) * 3U * sizeof(float), 4U},
     };
     REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()),
-                              crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 4), (kN + pcfg.local_size - 1U) / pcfg.local_size));
+                              crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 4), (num_pts + pcfg.local_size - 1U) / pcfg.local_size));
 
     double worst = 0.0;
     double sumd  = 0.0;
     double lmin  = 10.0;
     double lmax  = 0.0;
-    for (crd::u32 p = 0; p < kN * 3U; ++p)
+    for (crd::u32 p = 0; p < num_pts * 3U; ++p)
     {
         const double d = crd::math::abs(static_cast<double>(gpu_c[p]) - refc[p]);
         if (d > worst) { worst = d; }
         sumd += d;
     }
-    for (crd::u32 p = 0; p < kN; ++p) // luminance of the ref radiance, to check GI spatial variation
+    for (crd::u32 p = 0; p < num_pts; ++p) // luminance of the ref radiance, to check GI spatial variation
     {
         const double lum = 0.3 * refc[p * 3U] + 0.6 * refc[p * 3U + 1U] + 0.1 * refc[p * 3U + 2U];
         if (lum < lmin) { lmin = lum; }
         if (lum > lmax) { lmax = lum; }
     }
-    INFO("pathtrace: worst |GPU-ref|=" << worst << "  mean|Δ|=" << sumd / (kN * 3U) << "  radiance lum range=[" << lmin << ", " << lmax << "]");
+    INFO("pathtrace: worst |GPU-ref|=" << worst << "  mean|Δ|=" << sumd / (num_pts * 3U) << "  radiance lum range=[" << lmin << ", " << lmax << "]");
     CHECK(worst < 0.06);              // GPU path radiance == CPU path-tracer oracle (transcendental ULP + rare grazing flips)
-    CHECK(sumd / (kN * 3U) < 0.004);  // ...the bulk matches tightly
+    CHECK(sumd / (num_pts * 3U) < 0.004);  // ...the bulk matches tightly
     CHECK(lmax - lmin > 0.15);        // real GI: points under the ceiling are darker than open points (multi-bounce transport)
 }
 
@@ -563,11 +567,12 @@ TEST_CASE("D-007 RT-4: NEE+MIS area-light path tracer on Vulkan (soft shadows) =
         -1.5F, 3.0F, -1.5F, 1.5F, 3.0F, -1.5F, 1.5F, 3.0F, 1.5F,   // light tri 2
         -1.5F, 3.0F, -1.5F, 1.5F, 3.0F, 1.5F, -1.5F, 3.0F, 1.5F};  // light tri 3
     const float tri_n[12] = {0.0F, 1.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, -1.0F, 0.0F, 0.0F, -1.0F, 0.0F};
-    constexpr crd::u32 kNTri = 4U;
-    constexpr crd::u32 kN    = 64U;
-    crd::containers::Array<float> ppos(&alloc), pnrm(&alloc);
-    ppos.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
-    pnrm.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
+    constexpr crd::u32 num_tri = 4U;
+    constexpr crd::u32 num_pts    = 64U;
+    crd::containers::Array<float> ppos(&alloc);
+    crd::containers::Array<float> pnrm(&alloc);
+    ppos.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
+    pnrm.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
     for (crd::u32 j = 0; j < 8U; ++j) // 8×8 floor grid over [-3,3], normals up
     {
         for (crd::u32 i = 0; i < 8U; ++i)
@@ -581,52 +586,55 @@ TEST_CASE("D-007 RT-4: NEE+MIS area-light path tracer on Vulkan (soft shadows) =
 
     // ── CPU oracle ──
     crd::containers::Array<crd::f64> geo(&alloc);
-    geo.resize(1U + static_cast<crd::usize>(kNTri) * 9U, 0.0);
-    geo[0] = static_cast<crd::f64>(kNTri);
+    geo.resize(1U + static_cast<crd::usize>(num_tri) * 9U, 0.0);
+    geo[0] = static_cast<crd::f64>(num_tri);
     for (int i = 0; i < 36; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
-    crd::containers::Array<crd::f64> pos64(&alloc), nrm64(&alloc), tn64(&alloc), refc(&alloc);
-    pos64.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
-    nrm64.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
+    crd::containers::Array<crd::f64> pos64(&alloc);
+    crd::containers::Array<crd::f64> nrm64(&alloc);
+    crd::containers::Array<crd::f64> tn64(&alloc);
+    crd::containers::Array<crd::f64> refc(&alloc);
+    pos64.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
+    nrm64.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
     tn64.resize(12U, 0.0);
-    refc.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
+    refc.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
     for (crd::usize i = 0; i < ppos.size(); ++i) { pos64[i] = static_cast<crd::f64>(ppos[i]); nrm64[i] = static_cast<crd::f64>(pnrm[i]); }
     for (int i = 0; i < 12; ++i) { tn64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(tri_n[i]); }
     kir::KernelBuffer bufs[5] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {pos64.data(), static_cast<int>(pos64.size()), 0, 1}, {nrm64.data(), static_cast<int>(nrm64.size()), 0, 2}, {tn64.data(), static_cast<int>(tn64.size()), 0, 3}, {refc.data(), static_cast<int>(refc.size()), 0, 4}};
-    kir::eval_cpu_kernel(g, e, bufs, 5, pcfg.local_size, &alloc, (kN + pcfg.local_size - 1U) / pcfg.local_size);
+    kir::eval_cpu_kernel(g, e, bufs, 5, pcfg.local_size, &alloc, (num_pts + pcfg.local_size - 1U) / pcfg.local_size);
 
     // ── GPU ──
-    auto scene = rt.build_scene(verts, kNTri);
+    auto scene = rt.build_scene(verts, num_tri);
     REQUIRE(scene != nullptr);
     crd::containers::Array<float> gpu_c(&alloc);
-    gpu_c.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
+    gpu_c.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
     gpu::VulkanRayTracingContext::Binding bind[4] = {
-        {ppos.data(), nullptr, static_cast<crd::u64>(kN) * 3U * sizeof(float), 1U},
-        {pnrm.data(), nullptr, static_cast<crd::u64>(kN) * 3U * sizeof(float), 2U},
+        {ppos.data(), nullptr, static_cast<crd::u64>(num_pts) * 3U * sizeof(float), 1U},
+        {pnrm.data(), nullptr, static_cast<crd::u64>(num_pts) * 3U * sizeof(float), 2U},
         {tri_n, nullptr, 12U * sizeof(float), 3U},
-        {nullptr, gpu_c.data(), static_cast<crd::u64>(kN) * 3U * sizeof(float), 4U},
+        {nullptr, gpu_c.data(), static_cast<crd::u64>(num_pts) * 3U * sizeof(float), 4U},
     };
     REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()),
-                              crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 4), (kN + pcfg.local_size - 1U) / pcfg.local_size));
+                              crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 4), (num_pts + pcfg.local_size - 1U) / pcfg.local_size));
 
     double worst = 0.0;
     double sumd  = 0.0;
     double lmin  = 1.0e30;
     double lmax  = 0.0;
-    for (crd::u32 p = 0; p < kN * 3U; ++p)
+    for (crd::u32 p = 0; p < num_pts * 3U; ++p)
     {
         const double d = crd::math::abs(static_cast<double>(gpu_c[p]) - refc[p]);
         if (d > worst) { worst = d; }
         sumd += d;
     }
-    for (crd::u32 p = 0; p < kN; ++p)
+    for (crd::u32 p = 0; p < num_pts; ++p)
     {
         const double v = refc[p * 3U];
         if (v < lmin) { lmin = v; }
         if (v > lmax) { lmax = v; }
     }
-    INFO("nee/mis: worst |GPU-ref|=" << worst << "  mean|Δ|=" << sumd / (kN * 3U) << "  radiance range=[" << lmin << ", " << lmax << "]");
+    INFO("nee/mis: worst |GPU-ref|=" << worst << "  mean|Δ|=" << sumd / (num_pts * 3U) << "  radiance range=[" << lmin << ", " << lmax << "]");
     CHECK(worst < 0.05);             // GPU MIS radiance == CPU oracle (transcendental ULP + rare grazing shadow-ray flips)
-    CHECK(sumd / (kN * 3U) < 0.003); // ...the bulk matches tightly
+    CHECK(sumd / (num_pts * 3U) < 0.003); // ...the bulk matches tightly
     CHECK(lmin >= 0.0);              // radiance is non-negative everywhere (no MIS-weight sign error)
     CHECK(lmax - lmin > 0.10);       // a REAL soft shadow: floor under the occluder is measurably darker than the lit floor
 }
@@ -670,11 +678,12 @@ TEST_CASE("D-007 RT-5: ReSTIR DI RIS reservoir on Vulkan (soft shadows) == CPU r
     const float verts[36] = {
         -0.5F, 2.0F, -0.5F, 0.5F, 2.0F, -0.5F, 0.5F, 2.0F, 0.5F, -0.5F, 2.0F, -0.5F, 0.5F, 2.0F, 0.5F, -0.5F, 2.0F, 0.5F,
         -1.5F, 3.0F, -1.5F, 1.5F, 3.0F, -1.5F, 1.5F, 3.0F, 1.5F, -1.5F, 3.0F, -1.5F, 1.5F, 3.0F, 1.5F, -1.5F, 3.0F, 1.5F};
-    constexpr crd::u32 kNTri = 4U;
-    constexpr crd::u32 kN    = 64U;
-    crd::containers::Array<float> ppos(&alloc), pnrm(&alloc);
-    ppos.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
-    pnrm.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
+    constexpr crd::u32 num_tri = 4U;
+    constexpr crd::u32 num_pts    = 64U;
+    crd::containers::Array<float> ppos(&alloc);
+    crd::containers::Array<float> pnrm(&alloc);
+    ppos.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
+    pnrm.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
     for (crd::u32 j = 0; j < 8U; ++j)
     {
         for (crd::u32 i = 0; i < 8U; ++i)
@@ -688,49 +697,51 @@ TEST_CASE("D-007 RT-5: ReSTIR DI RIS reservoir on Vulkan (soft shadows) == CPU r
 
     // ── CPU oracle ──
     crd::containers::Array<crd::f64> geo(&alloc);
-    geo.resize(1U + static_cast<crd::usize>(kNTri) * 9U, 0.0);
-    geo[0] = static_cast<crd::f64>(kNTri);
+    geo.resize(1U + static_cast<crd::usize>(num_tri) * 9U, 0.0);
+    geo[0] = static_cast<crd::f64>(num_tri);
     for (int i = 0; i < 36; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
-    crd::containers::Array<crd::f64> pos64(&alloc), nrm64(&alloc), refc(&alloc);
-    pos64.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
-    nrm64.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
-    refc.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
+    crd::containers::Array<crd::f64> pos64(&alloc);
+    crd::containers::Array<crd::f64> nrm64(&alloc);
+    crd::containers::Array<crd::f64> refc(&alloc);
+    pos64.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
+    nrm64.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
+    refc.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
     for (crd::usize i = 0; i < ppos.size(); ++i) { pos64[i] = static_cast<crd::f64>(ppos[i]); nrm64[i] = static_cast<crd::f64>(pnrm[i]); }
     kir::KernelBuffer bufs[4] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {pos64.data(), static_cast<int>(pos64.size()), 0, 1}, {nrm64.data(), static_cast<int>(nrm64.size()), 0, 2}, {refc.data(), static_cast<int>(refc.size()), 0, 3}};
-    kir::eval_cpu_kernel(g, e, bufs, 4, rcfg.local_size, &alloc, (kN + rcfg.local_size - 1U) / rcfg.local_size);
+    kir::eval_cpu_kernel(g, e, bufs, 4, rcfg.local_size, &alloc, (num_pts + rcfg.local_size - 1U) / rcfg.local_size);
 
     // ── GPU ──
-    auto scene = rt.build_scene(verts, kNTri);
+    auto scene = rt.build_scene(verts, num_tri);
     REQUIRE(scene != nullptr);
     crd::containers::Array<float> gpu_c(&alloc);
-    gpu_c.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
+    gpu_c.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
     gpu::VulkanRayTracingContext::Binding bind[3] = {
-        {ppos.data(), nullptr, static_cast<crd::u64>(kN) * 3U * sizeof(float), 1U},
-        {pnrm.data(), nullptr, static_cast<crd::u64>(kN) * 3U * sizeof(float), 2U},
-        {nullptr, gpu_c.data(), static_cast<crd::u64>(kN) * 3U * sizeof(float), 3U},
+        {ppos.data(), nullptr, static_cast<crd::u64>(num_pts) * 3U * sizeof(float), 1U},
+        {pnrm.data(), nullptr, static_cast<crd::u64>(num_pts) * 3U * sizeof(float), 2U},
+        {nullptr, gpu_c.data(), static_cast<crd::u64>(num_pts) * 3U * sizeof(float), 3U},
     };
     REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()),
-                              crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 3), (kN + rcfg.local_size - 1U) / rcfg.local_size));
+                              crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 3), (num_pts + rcfg.local_size - 1U) / rcfg.local_size));
 
     double worst = 0.0;
     double sumd  = 0.0;
     double lmin  = 1.0e30;
     double lmax  = 0.0;
-    for (crd::u32 p = 0; p < kN * 3U; ++p)
+    for (crd::u32 p = 0; p < num_pts * 3U; ++p)
     {
         const double d = crd::math::abs(static_cast<double>(gpu_c[p]) - refc[p]);
         if (d > worst) { worst = d; }
         sumd += d;
     }
-    for (crd::u32 p = 0; p < kN; ++p)
+    for (crd::u32 p = 0; p < num_pts; ++p)
     {
         const double v = refc[p * 3U];
         if (v < lmin) { lmin = v; }
         if (v > lmax) { lmax = v; }
     }
-    INFO("restir-di: worst |GPU-ref|=" << worst << "  mean|Δ|=" << sumd / (kN * 3U) << "  radiance range=[" << lmin << ", " << lmax << "]");
+    INFO("restir-di: worst |GPU-ref|=" << worst << "  mean|Δ|=" << sumd / (num_pts * 3U) << "  radiance range=[" << lmin << ", " << lmax << "]");
     CHECK(worst < 0.05);             // GPU ReSTIR radiance == CPU reservoir oracle (deterministic WRS; rare grazing shadow flips)
-    CHECK(sumd / (kN * 3U) < 0.004); // ...the bulk matches tightly
+    CHECK(sumd / (num_pts * 3U) < 0.004); // ...the bulk matches tightly
     CHECK(lmin >= 0.0);              // non-negative everywhere (no reservoir-weight sign error)
     CHECK(lmax - lmin > 0.10);       // a REAL soft shadow from the reservoir's visibility ray
 }
@@ -753,23 +764,26 @@ TEST_CASE("D-007 RT-5b: ReSTIR DI temporal reuse on Vulkan (unbiased + variance 
     REQUIRE(rt.valid());
 
     crd::memory::TlsfAllocator alloc(64U << 20U);
-    constexpr crd::u32 kW = 16U, kH = 16U, kN = kW * kH; // 256 pixels = 4×64 (exact workgroup cover, no bounds guard needed)
+    constexpr crd::u32 img_w = 16U; // 256 pixels = 4×64 (exact workgroup cover, no bounds guard needed)
+    constexpr crd::u32 img_h = 16U;
+    constexpr crd::u32 num_pts = img_w * img_h;
 
     // scene: JUST the area light (no occluder) — a fully-visible light so V=1 everywhere and the estimator variance is pure
     // area-sampling noise. That isolates what TEMPORAL reuse fixes (accumulating effective samples ⇒ crushing sampling noise);
     // the shadow-boundary variance an occluder adds is the SPATIAL-reuse story, exercised in the spatiotemporal test.
     const float verts[18] = {-1.5F, 3.0F, -1.5F, 1.5F, 3.0F, -1.5F, 1.5F, 3.0F, 1.5F,
                              -1.5F, 3.0F, -1.5F, 1.5F, 3.0F, 1.5F, -1.5F, 3.0F, 1.5F};
-    crd::containers::Array<float> ppos(&alloc), pnrm(&alloc);
-    ppos.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
-    pnrm.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
-    for (crd::u32 j = 0; j < kH; ++j)
+    crd::containers::Array<float> ppos(&alloc);
+    crd::containers::Array<float> pnrm(&alloc);
+    ppos.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
+    pnrm.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
+    for (crd::u32 j = 0; j < img_h; ++j)
     {
-        for (crd::u32 i = 0; i < kW; ++i)
+        for (crd::u32 i = 0; i < img_w; ++i)
         {
-            const crd::u32 p = j * kW + i;
-            ppos[p * 3U + 0U] = -3.0F + 6.0F / static_cast<float>(kW - 1U) * static_cast<float>(i);
-            ppos[p * 3U + 2U] = -3.0F + 6.0F / static_cast<float>(kH - 1U) * static_cast<float>(j);
+            const crd::u32 p = j * img_w + i;
+            ppos[p * 3U + 0U] = -3.0F + 6.0F / static_cast<float>(img_w - 1U) * static_cast<float>(i);
+            ppos[p * 3U + 2U] = -3.0F + 6.0F / static_cast<float>(img_h - 1U) * static_cast<float>(j);
             pnrm[p * 3U + 1U] = 1.0F;
         }
     }
@@ -790,89 +804,94 @@ TEST_CASE("D-007 RT-5b: ReSTIR DI temporal reuse on Vulkan (unbiased + variance 
         return crd::math::sqrt(s / static_cast<double>(a.size()));
     };
     using B = gpu::VulkanRayTracingContext::Binding;
-    const crd::u64 posBytes = static_cast<crd::u64>(kN) * 3U * sizeof(float);
-    const crd::u64 resBytes = static_cast<crd::u64>(kN) * static_cast<crd::u64>(kir::rt::kRestirReservoirStride) * sizeof(float);
+    const crd::u64 pos_bytes = static_cast<crd::u64>(num_pts) * 3U * sizeof(float);
+    const crd::u64 res_bytes = static_cast<crd::u64>(num_pts) * static_cast<crd::u64>(kir::rt::kRestirReservoirStride) * sizeof(float);
 
     // ── converged REFERENCE: single-pass ReSTIR DI, 256 frames of M=16 (we proved this estimator unbiased vs NEE) ──
     crd::containers::Array<float> ref(&alloc);
-    ref.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
+    ref.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
     {
         kir::rt::RestirDiConfig rc;
         rc.frames = 256U; rc.candidates = 16U; rc.local_size = 64U;
         kir::KGraph g(&alloc);
         const kir::KEntry e = kir::rt::build_restir_di_kernel(g, rc);
         const auto spv = compile(e, g, "ref");
-        B bind[3] = {{ppos.data(), nullptr, posBytes, 1U}, {pnrm.data(), nullptr, posBytes, 2U}, {nullptr, ref.data(), posBytes, 3U}};
+        B bind[3] = {{ppos.data(), nullptr, pos_bytes, 1U}, {pnrm.data(), nullptr, pos_bytes, 2U}, {nullptr, ref.data(), pos_bytes, 3U}};
         REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()),
-                                  crd::containers::ConstSpan<B>(bind, 3), kN / 64U));
+                                  crd::containers::ConstSpan<B>(bind, 3), num_pts / 64U));
     }
 
     // ── single-pass BASELINE (no reuse): 1 frame of M=2 — the noisy per-frame image temporal reuse must beat ──
     crd::containers::Array<float> single(&alloc);
-    single.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
+    single.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
     {
         kir::rt::RestirDiConfig rc;
         rc.frames = 1U; rc.candidates = 2U; rc.local_size = 64U;
         kir::KGraph g(&alloc);
         const kir::KEntry e = kir::rt::build_restir_di_kernel(g, rc);
         const auto spv = compile(e, g, "single");
-        B bind[3] = {{ppos.data(), nullptr, posBytes, 1U}, {pnrm.data(), nullptr, posBytes, 2U}, {nullptr, single.data(), posBytes, 3U}};
+        B bind[3] = {{ppos.data(), nullptr, pos_bytes, 1U}, {pnrm.data(), nullptr, pos_bytes, 2U}, {nullptr, single.data(), pos_bytes, 3U}};
         REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()),
-                                  crd::containers::ConstSpan<B>(bind, 3), kN / 64U));
+                                  crd::containers::ConstSpan<B>(bind, 3), num_pts / 64U));
     }
 
     // ── TEMPORAL ping-pong: build the temporal + shade kernels once, dispatch F frames feeding rprev←rcur each frame ──
     kir::rt::RestirStConfig sc;
-    sc.width = kW; sc.height = kH; sc.m_initial = 2U; sc.local_size = 64U;
-    kir::KGraph gt(&alloc), gs(&alloc);
+    sc.width = img_w; sc.height = img_h; sc.m_initial = 2U; sc.local_size = 64U;
+    kir::KGraph gt(&alloc);
+    kir::KGraph gs(&alloc);
     const kir::KEntry et = kir::rt::build_restir_temporal_kernel(gt, sc);
     const kir::KEntry es = kir::rt::build_restir_shade_kernel(gs, sc);
     const auto tspv = compile(et, gt, "temporal");
     const auto sspv = compile(es, gs, "shade");
 
-    crd::containers::Array<float> rprev(&alloc), rcur(&alloc), rad(&alloc), accum(&alloc), last(&alloc);
-    rprev.resize(static_cast<crd::usize>(kN) * kir::rt::kRestirReservoirStride, 0.0F); // frame 0 history = empty (M=0)
+    crd::containers::Array<float> rprev(&alloc);
+    crd::containers::Array<float> rcur(&alloc);
+    crd::containers::Array<float> rad(&alloc);
+    crd::containers::Array<float> accum(&alloc);
+    crd::containers::Array<float> last(&alloc);
+    rprev.resize(static_cast<crd::usize>(num_pts) * kir::rt::kRestirReservoirStride, 0.0F); // frame 0 history = empty (M=0)
     rcur.resize(rprev.size(), 0.0F);
-    rad.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
+    rad.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
     accum.resize(rad.size(), 0.0F);
     last.resize(rad.size(), 0.0F);
-    constexpr crd::u32 kF = 48U;
-    for (crd::u32 f = 0; f < kF; ++f)
+    constexpr crd::u32 n_frames = 48U;
+    for (crd::u32 f = 0; f < n_frames; ++f)
     {
         crd::u32 frame = f;
-        B tb[5] = {{ppos.data(), nullptr, posBytes, 1U}, {pnrm.data(), nullptr, posBytes, 2U},
-                   {rprev.data(), nullptr, resBytes, 3U}, {nullptr, rcur.data(), resBytes, 4U},
+        B tb[5] = {{ppos.data(), nullptr, pos_bytes, 1U}, {pnrm.data(), nullptr, pos_bytes, 2U},
+                   {rprev.data(), nullptr, res_bytes, 3U}, {nullptr, rcur.data(), res_bytes, 4U},
                    {&frame, nullptr, sizeof(crd::u32), 5U}};
         REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(tspv.spirv.data(), tspv.spirv.size()),
-                                  crd::containers::ConstSpan<B>(tb, 5), kN / 64U));
-        B sb[4] = {{ppos.data(), nullptr, posBytes, 1U}, {pnrm.data(), nullptr, posBytes, 2U},
-                   {rcur.data(), nullptr, resBytes, 3U}, {nullptr, rad.data(), posBytes, 4U}};
+                                  crd::containers::ConstSpan<B>(tb, 5), num_pts / 64U));
+        B sb[4] = {{ppos.data(), nullptr, pos_bytes, 1U}, {pnrm.data(), nullptr, pos_bytes, 2U},
+                   {rcur.data(), nullptr, res_bytes, 3U}, {nullptr, rad.data(), pos_bytes, 4U}};
         REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(sspv.spirv.data(), sspv.spirv.size()),
-                                  crd::containers::ConstSpan<B>(sb, 4), kN / 64U));
+                                  crd::containers::ConstSpan<B>(sb, 4), num_pts / 64U));
         for (crd::usize i = 0; i < rad.size(); ++i) { accum[i] += rad[i]; }
         for (crd::usize i = 0; i < rprev.size(); ++i) { rprev[i] = rcur[i]; } // temporal feedback
-        if (f == kF - 1U) { for (crd::usize i = 0; i < rad.size(); ++i) { last[i] = rad[i]; } }
+        if (f == n_frames - 1U) { for (crd::usize i = 0; i < rad.size(); ++i) { last[i] = rad[i]; } }
     }
     crd::containers::Array<float> mean(&alloc);
     mean.resize(rad.size(), 0.0F);
-    for (crd::usize i = 0; i < mean.size(); ++i) { mean[i] = accum[i] / static_cast<float>(kF); }
+    for (crd::usize i = 0; i < mean.size(); ++i) { mean[i] = accum[i] / static_cast<float>(n_frames); }
 
-    const auto spatialMean = [&](const crd::containers::Array<float>& a) {
+    const auto spatial_mean = [&](const crd::containers::Array<float>& a) {
         double s = 0.0;
         for (crd::usize i = 0; i < a.size(); ++i) { s += static_cast<double>(a[i]); }
         return s / static_cast<double>(a.size());
     };
-    const double refMean   = spatialMean(ref);
-    const double tMean     = spatialMean(mean); // frame-averaged temporal image, spatially averaged
-    const double errLast   = rms(last, ref);    // per-pixel noise of a single warmed-up frame (1-spp — inherently noisy)
-    const double errSingle = rms(single, ref);  // per-pixel noise of single-pass RIS at the same M
-    INFO("temporal ReSTIR: refMean=" << refMean << "  tMean=" << tMean << "  rms(warm-ref)=" << errLast << "  rms(single-ref)=" << errSingle);
+    const double ref_mean   = spatial_mean(ref);
+    const double t_mean     = spatial_mean(mean); // frame-averaged temporal image, spatially averaged
+    const double err_last   = rms(last, ref);    // per-pixel noise of a single warmed-up frame (1-spp — inherently noisy)
+    const double err_single = rms(single, ref);  // per-pixel noise of single-pass RIS at the same M
+    INFO("temporal ReSTIR: ref_mean=" << ref_mean << "  t_mean=" << t_mean << "  rms(warm-ref)=" << err_last << "  rms(single-ref)=" << err_single);
     // UNBIASED: the spatial mean (bias shows as a systematic offset; per-pixel Monte-Carlo noise cancels in the spatial average).
-    CHECK(refMean > 0.05);                        // the reference actually has lit direct illumination
-    CHECK(crd::math::abs(tMean - refMean) / refMean < 0.03);
+    CHECK(ref_mean > 0.05);                        // the reference actually has lit direct illumination
+    CHECK(crd::math::abs(t_mean - ref_mean) / ref_mean < 0.03);
     // VARIANCE REDUCTION: a warmed-up temporal frame is markedly less noisy than single-pass RIS at the SAME per-frame budget —
     // the whole point of ReSTIR (the residual noise is what the denoiser then cleans up).
-    CHECK(errLast < errSingle * 0.6);
+    CHECK(err_last < err_single * 0.6);
 }
 
 // D-007 RT-5c: FULL SPATIOTEMPORAL ReSTIR DI on Vulkan — the complete 3-pass pipeline (temporal-combine → spatial-neighbour
@@ -893,22 +912,25 @@ TEST_CASE("D-007 RT-5c: full spatiotemporal ReSTIR DI on Vulkan (soft shadow, un
     REQUIRE(rt.valid());
 
     crd::memory::TlsfAllocator alloc(80U << 20U);
-    constexpr crd::u32 kW = 16U, kH = 16U, kN = kW * kH;
+    constexpr crd::u32 img_w = 16U;
+    constexpr crd::u32 img_h = 16U;
+    constexpr crd::u32 num_pts = img_w * img_h;
 
     // occluder (prims 0-1, 1×1 at y=2) + area light (prims 2-3, 3×3 at y=3).
     const float verts[36] = {
         -0.5F, 2.0F, -0.5F, 0.5F, 2.0F, -0.5F, 0.5F, 2.0F, 0.5F, -0.5F, 2.0F, -0.5F, 0.5F, 2.0F, 0.5F, -0.5F, 2.0F, 0.5F,
         -1.5F, 3.0F, -1.5F, 1.5F, 3.0F, -1.5F, 1.5F, 3.0F, 1.5F, -1.5F, 3.0F, -1.5F, 1.5F, 3.0F, 1.5F, -1.5F, 3.0F, 1.5F};
-    crd::containers::Array<float> ppos(&alloc), pnrm(&alloc);
-    ppos.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
-    pnrm.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
-    for (crd::u32 j = 0; j < kH; ++j)
+    crd::containers::Array<float> ppos(&alloc);
+    crd::containers::Array<float> pnrm(&alloc);
+    ppos.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
+    pnrm.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
+    for (crd::u32 j = 0; j < img_h; ++j)
     {
-        for (crd::u32 i = 0; i < kW; ++i)
+        for (crd::u32 i = 0; i < img_w; ++i)
         {
-            const crd::u32 p = j * kW + i;
-            ppos[p * 3U + 0U] = -3.0F + 6.0F / static_cast<float>(kW - 1U) * static_cast<float>(i);
-            ppos[p * 3U + 2U] = -3.0F + 6.0F / static_cast<float>(kH - 1U) * static_cast<float>(j);
+            const crd::u32 p = j * img_w + i;
+            ppos[p * 3U + 0U] = -3.0F + 6.0F / static_cast<float>(img_w - 1U) * static_cast<float>(i);
+            ppos[p * 3U + 2U] = -3.0F + 6.0F / static_cast<float>(img_h - 1U) * static_cast<float>(j);
             pnrm[p * 3U + 1U] = 1.0F;
         }
     }
@@ -928,19 +950,20 @@ TEST_CASE("D-007 RT-5c: full spatiotemporal ReSTIR DI on Vulkan (soft shadow, un
         for (crd::usize i = 0; i < a.size(); ++i) { const double d = static_cast<double>(a[i]) - static_cast<double>(b[i]); s += d * d; }
         return crd::math::sqrt(s / static_cast<double>(a.size()));
     };
-    const auto spatialMean = [&](const crd::containers::Array<float>& a) {
+    const auto spatial_mean = [&](const crd::containers::Array<float>& a) {
         double s = 0.0;
         for (crd::usize i = 0; i < a.size(); ++i) { s += static_cast<double>(a[i]); }
         return s / static_cast<double>(a.size());
     };
     using B = gpu::VulkanRayTracingContext::Binding;
-    const crd::u64 posBytes = static_cast<crd::u64>(kN) * 3U * sizeof(float);
-    const crd::u64 resBytes = static_cast<crd::u64>(kN) * static_cast<crd::u64>(kir::rt::kRestirReservoirStride) * sizeof(float);
+    const crd::u64 pos_bytes = static_cast<crd::u64>(num_pts) * 3U * sizeof(float);
+    const crd::u64 res_bytes = static_cast<crd::u64>(num_pts) * static_cast<crd::u64>(kir::rt::kRestirReservoirStride) * sizeof(float);
 
     // converged reference (single-pass ReSTIR DI, 256×M16) + noisy single-pass baseline (1×M2), both WITH the occluder's shadow.
-    crd::containers::Array<float> ref(&alloc), single(&alloc);
-    ref.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
-    single.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
+    crd::containers::Array<float> ref(&alloc);
+    crd::containers::Array<float> single(&alloc);
+    ref.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
+    single.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
     for (int pass = 0; pass < 2; ++pass)
     {
         kir::rt::RestirDiConfig rc;
@@ -949,15 +972,17 @@ TEST_CASE("D-007 RT-5c: full spatiotemporal ReSTIR DI on Vulkan (soft shadow, un
         const kir::KEntry e = kir::rt::build_restir_di_kernel(g, rc);
         const auto spv = compile(e, g, pass == 0 ? "ref" : "single");
         auto& dst = pass == 0 ? ref : single;
-        B bind[3] = {{ppos.data(), nullptr, posBytes, 1U}, {pnrm.data(), nullptr, posBytes, 2U}, {nullptr, dst.data(), posBytes, 3U}};
+        B bind[3] = {{ppos.data(), nullptr, pos_bytes, 1U}, {pnrm.data(), nullptr, pos_bytes, 2U}, {nullptr, dst.data(), pos_bytes, 3U}};
         REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()),
-                                  crd::containers::ConstSpan<B>(bind, 3), kN / 64U));
+                                  crd::containers::ConstSpan<B>(bind, 3), num_pts / 64U));
     }
 
     // build the 3 spatiotemporal passes once.
     kir::rt::RestirStConfig sc;
-    sc.width = kW; sc.height = kH; sc.m_initial = 2U; sc.spatial_k = 5U; sc.spatial_radius = 3.0F; sc.local_size = 64U;
-    kir::KGraph gt(&alloc), gsp(&alloc), gsh(&alloc);
+    sc.width = img_w; sc.height = img_h; sc.m_initial = 2U; sc.spatial_k = 5U; sc.spatial_radius = 3.0F; sc.local_size = 64U;
+    kir::KGraph gt(&alloc);
+    kir::KGraph gsp(&alloc);
+    kir::KGraph gsh(&alloc);
     const kir::KEntry et  = kir::rt::build_restir_temporal_kernel(gt, sc);
     const kir::KEntry esp = kir::rt::build_restir_spatial_kernel(gsp, sc);
     const kir::KEntry esh = kir::rt::build_restir_shade_kernel(gsh, sc);
@@ -965,45 +990,50 @@ TEST_CASE("D-007 RT-5c: full spatiotemporal ReSTIR DI on Vulkan (soft shadow, un
     const auto pspv = compile(esp, gsp, "st_spatial");
     const auto sspv = compile(esh, gsh, "st_shade");
 
-    crd::containers::Array<float> rprev(&alloc), rtmp(&alloc), rspa(&alloc), rad(&alloc), accum(&alloc), last(&alloc);
-    rprev.resize(static_cast<crd::usize>(kN) * kir::rt::kRestirReservoirStride, 0.0F);
+    crd::containers::Array<float> rprev(&alloc);
+    crd::containers::Array<float> rtmp(&alloc);
+    crd::containers::Array<float> rspa(&alloc);
+    crd::containers::Array<float> rad(&alloc);
+    crd::containers::Array<float> accum(&alloc);
+    crd::containers::Array<float> last(&alloc);
+    rprev.resize(static_cast<crd::usize>(num_pts) * kir::rt::kRestirReservoirStride, 0.0F);
     rtmp.resize(rprev.size(), 0.0F);
     rspa.resize(rprev.size(), 0.0F);
-    rad.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
+    rad.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
     accum.resize(rad.size(), 0.0F);
     last.resize(rad.size(), 0.0F);
-    constexpr crd::u32 kF = 48U;
-    for (crd::u32 f = 0; f < kF; ++f)
+    constexpr crd::u32 n_frames = 48U;
+    for (crd::u32 f = 0; f < n_frames; ++f)
     {
         crd::u32 frame = f;
-        B tb[5] = {{ppos.data(), nullptr, posBytes, 1U}, {pnrm.data(), nullptr, posBytes, 2U}, {rprev.data(), nullptr, resBytes, 3U}, {nullptr, rtmp.data(), resBytes, 4U}, {&frame, nullptr, sizeof(crd::u32), 5U}};
-        REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(tspv.spirv.data(), tspv.spirv.size()), crd::containers::ConstSpan<B>(tb, 5), kN / 64U));
-        B pb[5] = {{ppos.data(), nullptr, posBytes, 1U}, {pnrm.data(), nullptr, posBytes, 2U}, {rtmp.data(), nullptr, resBytes, 3U}, {nullptr, rspa.data(), resBytes, 4U}, {&frame, nullptr, sizeof(crd::u32), 5U}};
-        REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(pspv.spirv.data(), pspv.spirv.size()), crd::containers::ConstSpan<B>(pb, 5), kN / 64U));
-        B sb[4] = {{ppos.data(), nullptr, posBytes, 1U}, {pnrm.data(), nullptr, posBytes, 2U}, {rspa.data(), nullptr, resBytes, 3U}, {nullptr, rad.data(), posBytes, 4U}};
-        REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(sspv.spirv.data(), sspv.spirv.size()), crd::containers::ConstSpan<B>(sb, 4), kN / 64U));
+        B tb[5] = {{ppos.data(), nullptr, pos_bytes, 1U}, {pnrm.data(), nullptr, pos_bytes, 2U}, {rprev.data(), nullptr, res_bytes, 3U}, {nullptr, rtmp.data(), res_bytes, 4U}, {&frame, nullptr, sizeof(crd::u32), 5U}};
+        REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(tspv.spirv.data(), tspv.spirv.size()), crd::containers::ConstSpan<B>(tb, 5), num_pts / 64U));
+        B pb[5] = {{ppos.data(), nullptr, pos_bytes, 1U}, {pnrm.data(), nullptr, pos_bytes, 2U}, {rtmp.data(), nullptr, res_bytes, 3U}, {nullptr, rspa.data(), res_bytes, 4U}, {&frame, nullptr, sizeof(crd::u32), 5U}};
+        REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(pspv.spirv.data(), pspv.spirv.size()), crd::containers::ConstSpan<B>(pb, 5), num_pts / 64U));
+        B sb[4] = {{ppos.data(), nullptr, pos_bytes, 1U}, {pnrm.data(), nullptr, pos_bytes, 2U}, {rspa.data(), nullptr, res_bytes, 3U}, {nullptr, rad.data(), pos_bytes, 4U}};
+        REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(sspv.spirv.data(), sspv.spirv.size()), crd::containers::ConstSpan<B>(sb, 4), num_pts / 64U));
         for (crd::usize i = 0; i < rad.size(); ++i) { accum[i] += rad[i]; }
         // Feed back the PRE-spatial (temporal) reservoir. Feeding the post-spatial reservoir back would compound spatially-borrowed
         // samples across frames and DARKEN the estimate (the classic ReSTIR bias that only GRIS / pairwise-MIS weights fix); the
         // clean-temporal-history choice keeps the pipeline provably unbiased. Spatial reuse then acts as a per-frame refinement.
         for (crd::usize i = 0; i < rprev.size(); ++i) { rprev[i] = rtmp[i]; }
-        if (f == kF - 1U) { for (crd::usize i = 0; i < rad.size(); ++i) { last[i] = rad[i]; } }
+        if (f == n_frames - 1U) { for (crd::usize i = 0; i < rad.size(); ++i) { last[i] = rad[i]; } }
     }
     crd::containers::Array<float> mean(&alloc);
     mean.resize(rad.size(), 0.0F);
-    for (crd::usize i = 0; i < mean.size(); ++i) { mean[i] = accum[i] / static_cast<float>(kF); }
+    for (crd::usize i = 0; i < mean.size(); ++i) { mean[i] = accum[i] / static_cast<float>(n_frames); }
 
-    const double refMean   = spatialMean(ref);
-    const double stMean    = spatialMean(mean);
-    const double errLast   = rms(last, ref);
-    const double errSingle = rms(single, ref);
-    INFO("spatiotemporal ReSTIR: refMean=" << refMean << "  stMean=" << stMean << "  rms(warm-ref)=" << errLast << "  rms(single-ref)=" << errSingle);
-    CHECK(refMean > 0.05);
-    CHECK(crd::math::abs(stMean - refMean) / refMean < 0.04);  // UNBIASED — the spatial Z-normalisation keeps the estimator unbiased
+    const double ref_mean   = spatial_mean(ref);
+    const double st_mean    = spatial_mean(mean);
+    const double err_last   = rms(last, ref);
+    const double err_single = rms(single, ref);
+    INFO("spatiotemporal ReSTIR: ref_mean=" << ref_mean << "  st_mean=" << st_mean << "  rms(warm-ref)=" << err_last << "  rms(single-ref)=" << err_single);
+    CHECK(ref_mean > 0.05);
+    CHECK(crd::math::abs(st_mean - ref_mean) / ref_mean < 0.04);  // UNBIASED — the spatial Z-normalisation keeps the estimator unbiased
     // Spatiotemporal beats single-pass RIS even across the shadow edge. The margin is bounded by the hard-shadow penumbra's
     // irreducible 1-spp visibility variance (binary V per pixel) — the residual a denoiser then resolves; the noise-dominated
     // (fully-visible) win is the 5.8× shown in RT-5b.
-    CHECK(errLast < errSingle * 0.85);
+    CHECK(err_last < err_single * 0.85);
 }
 
 // D-007 RT-6: MULTI-INSTANCE TLAS on Vulkan — one BLAS instanced at 3 translations, so the hardware applies each instance's 3×4
@@ -1031,9 +1061,9 @@ TEST_CASE("D-007 RT-6: multi-instance TLAS on Vulkan (per-instance transforms) =
     const float transforms[36]  = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0,   // identity
                                    1, 0, 0, 2, 0, 1, 0, 0, 0, 0, 1, 0,   // +2 x
                                    1, 0, 0, 4, 0, 1, 0, 0, 0, 0, 1, 0};  // +4 x
-    constexpr crd::u32 kN = 64U;
+    constexpr crd::u32 num_pts = 64U;
     crd::containers::Array<float> rays(&alloc);
-    rays.resize(static_cast<crd::usize>(kN) * 6U, 0.0F);
+    rays.resize(static_cast<crd::usize>(num_pts) * 6U, 0.0F);
     const float rd[4][6] = {{0.2F, 0.2F, 0.0F, 0.0F, 0.0F, 1.0F},   // → instance 0 (t=2)
                             {2.2F, 0.2F, 0.0F, 0.0F, 0.0F, 1.0F},   // → instance 1 (t=2)
                             {4.2F, 0.2F, 0.0F, 0.0F, 0.0F, 1.0F},   // → instance 2 (t=2)
@@ -1041,7 +1071,9 @@ TEST_CASE("D-007 RT-6: multi-instance TLAS on Vulkan (per-instance transforms) =
     for (int r = 0; r < 4; ++r) { for (int c = 0; c < 6; ++c) { rays[static_cast<crd::usize>(r) * 6U + c] = rd[r][c]; } }
 
     // ── CPU oracle: the 3 instances pre-baked to world space (translate each local triangle) ──
-    crd::containers::Array<crd::f64> geo(&alloc), rays64(&alloc), oref(&alloc);
+    crd::containers::Array<crd::f64> geo(&alloc);
+    crd::containers::Array<crd::f64> rays64(&alloc);
+    crd::containers::Array<crd::f64> oref(&alloc);
     geo.resize(1U + 3U * 9U, 0.0);
     geo[0] = 3.0;
     for (int n = 0; n < 3; ++n)
@@ -1056,7 +1088,7 @@ TEST_CASE("D-007 RT-6: multi-instance TLAS on Vulkan (per-instance transforms) =
     }
     rays64.resize(rays.size(), 0.0);
     for (crd::usize i = 0; i < rays.size(); ++i) { rays64[i] = static_cast<crd::f64>(rays[i]); }
-    oref.resize(kN, 0.0);
+    oref.resize(num_pts, 0.0);
     kir::KernelBuffer bufs[3] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {rays64.data(), static_cast<int>(rays64.size()), 0, 1}, {oref.data(), static_cast<int>(oref.size()), 0, 2}};
     kir::eval_cpu_kernel(g, e, bufs, 3, 64U, &alloc, 1U);
 
@@ -1068,13 +1100,13 @@ TEST_CASE("D-007 RT-6: multi-instance TLAS on Vulkan (per-instance transforms) =
     const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "rt_inst", &alloc);
     REQUIRE(spv.ok);
     crd::containers::Array<float> got(&alloc);
-    got.resize(kN, 0.0F);
-    gpu::VulkanRayTracingContext::Binding bind[2] = {{rays.data(), nullptr, rays.size() * sizeof(float), 1U}, {nullptr, got.data(), static_cast<crd::u64>(kN) * sizeof(float), 2U}};
+    got.resize(num_pts, 0.0F);
+    gpu::VulkanRayTracingContext::Binding bind[2] = {{rays.data(), nullptr, rays.size() * sizeof(float), 1U}, {nullptr, got.data(), static_cast<crd::u64>(num_pts) * sizeof(float), 2U}};
     REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 2), 1U));
 
     INFO("instanced t=[" << got[0] << ", " << got[1] << ", " << got[2] << ", " << got[3] << "]");
     for (int r = 0; r < 3; ++r) { CHECK(crd::math::abs(static_cast<double>(got[r]) - 2.0) < 1.0e-4); } // each instance hit at t=2
-    CHECK(got[3] > 1.0e29);                                                                             // the gap ⇒ miss
+    CHECK(got[3] > 1.0e29F);                                                                             // the gap ⇒ miss
     for (int r = 0; r < 4; ++r) { CHECK(crd::math::abs(static_cast<double>(got[r]) - oref[r]) < 1.0e-4); } // GPU == oracle
 }
 
@@ -1095,16 +1127,17 @@ TEST_CASE("D-007 RT-7: many-lights uniform-selection NEE on Vulkan == sum of per
     REQUIRE(rt.valid());
 
     crd::memory::TlsfAllocator alloc(32U << 20U);
-    constexpr crd::u32 kN = 64U;
+    constexpr crd::u32 num_pts = 64U;
     const float lights[4 * 15] = {
         -3.0F, 3.0F, -3.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, -1.0F, 0.0F, 6.0F, 6.0F, 6.0F,
          2.0F, 4.0F, -2.0F, 1.5F, 0.0F, 0.0F, 0.0F, 0.0F, 1.5F, 0.0F, -1.0F, 0.0F, 4.0F, 4.0F, 4.0F,
         -2.0F, 3.5F,  2.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 2.0F, 0.0F, -1.0F, 0.0F, 5.0F, 5.0F, 5.0F,
          2.5F, 5.0F,  2.5F, 2.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, -1.0F, 0.0F, 3.0F, 3.0F, 3.0F};
     const float dumb[9] = {-1.0F, -10.0F, -1.0F, 1.0F, -10.0F, -1.0F, 0.0F, -10.0F, 1.0F};
-    crd::containers::Array<float> ppos(&alloc), pnrm(&alloc);
-    ppos.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
-    pnrm.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
+    crd::containers::Array<float> ppos(&alloc);
+    crd::containers::Array<float> pnrm(&alloc);
+    ppos.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
+    pnrm.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
     for (crd::u32 j = 0; j < 8U; ++j)
     {
         for (crd::u32 i = 0; i < 8U; ++i)
@@ -1118,10 +1151,10 @@ TEST_CASE("D-007 RT-7: many-lights uniform-selection NEE on Vulkan == sum of per
     auto scene = rt.build_scene(dumb, 1U);
     REQUIRE(scene != nullptr);
     using B = gpu::VulkanRayTracingContext::Binding;
-    const crd::u64 posBytes = static_cast<crd::u64>(kN) * 3U * sizeof(float);
+    const crd::u64 pos_bytes = static_cast<crd::u64>(num_pts) * 3U * sizeof(float);
 
     crd::containers::Array<float> img(&alloc);
-    img.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
+    img.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
     // run the many-lights kernel with `nl` of the lights (buffer `lp`); fill `img`, return the spatial-mean channel-0 radiance.
     const auto run = [&](const float* lp, crd::u32 nl, crd::u32 spp, bool power) {
         kir::rt::ManyLightConfig mc;
@@ -1132,30 +1165,33 @@ TEST_CASE("D-007 RT-7: many-lights uniform-selection NEE on Vulkan == sum of per
         REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
         const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "ml", &alloc);
         REQUIRE(spv.ok);
-        B bind[4] = {{ppos.data(), nullptr, posBytes, 1U}, {pnrm.data(), nullptr, posBytes, 2U}, {lp, nullptr, static_cast<crd::u64>(nl) * 15U * sizeof(float), 3U}, {nullptr, img.data(), posBytes, 4U}};
-        REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), crd::containers::ConstSpan<B>(bind, 4), kN / 64U));
+        B bind[4] = {{ppos.data(), nullptr, pos_bytes, 1U}, {pnrm.data(), nullptr, pos_bytes, 2U}, {lp, nullptr, static_cast<crd::u64>(nl) * 15U * sizeof(float), 3U}, {nullptr, img.data(), pos_bytes, 4U}};
+        REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), crd::containers::ConstSpan<B>(bind, 4), num_pts / 64U));
         double mean = 0.0;
-        for (crd::u32 p = 0; p < kN; ++p) { mean += static_cast<double>(img[p * 3U]); }
-        return mean / static_cast<double>(kN);
+        for (crd::u32 p = 0; p < num_pts; ++p) { mean += static_cast<double>(img[p * 3U]); }
+        return mean / static_cast<double>(num_pts);
     };
-    crd::containers::Array<float> refImg(&alloc), uniImg(&alloc), powImg(&alloc);
-    refImg.resize(img.size(), 0.0F); uniImg.resize(img.size(), 0.0F); powImg.resize(img.size(), 0.0F);
-    const auto rmsv = [&](const crd::containers::Array<float>& a) { double s = 0.0; for (crd::usize i = 0; i < a.size(); ++i) { const double d = static_cast<double>(a[i]) - static_cast<double>(refImg[i]); s += d * d; } return crd::math::sqrt(s / static_cast<double>(a.size())); };
+    crd::containers::Array<float> ref_img(&alloc);
+    crd::containers::Array<float> uni_img(&alloc);
+    crd::containers::Array<float> pow_img(&alloc);
+    ref_img.resize(img.size(), 0.0F); uni_img.resize(img.size(), 0.0F); pow_img.resize(img.size(), 0.0F);
+    const auto rmsv = [&](const crd::containers::Array<float>& a) { double s = 0.0; for (crd::usize i = 0; i < a.size(); ++i) { const double d = static_cast<double>(a[i]) - static_cast<double>(ref_img[i]); s += d * d; } return crd::math::sqrt(s / static_cast<double>(a.size())); };
 
-    double sumPer = 0.0;
-    for (crd::u32 l = 0; l < 4U; ++l) { sumPer += run(&lights[l * 15U], 1U, 2048U, false); }
+    double sum_per = 0.0;
+    for (crd::u32 l = 0; l < 4U; ++l) { sum_per += run(&lights[l * 15U], 1U, 2048U, false); }
     const double all = run(lights, 4U, 8192U, false);
-    for (crd::usize i = 0; i < img.size(); ++i) { refImg[i] = img[i]; }   // converged reference (uniform, 8192 spp)
-    const double allPow = run(lights, 4U, 8192U, true);
+    for (crd::usize i = 0; i < img.size(); ++i) { ref_img[i] = img[i]; }   // converged reference (uniform, 8192 spp)
+    const double all_pow = run(lights, 4U, 8192U, true);
     // low-spp images for the variance comparison (equal budget):
-    run(lights, 4U, 64U, false); for (crd::usize i = 0; i < img.size(); ++i) { uniImg[i] = img[i]; }
-    run(lights, 4U, 64U, true);  for (crd::usize i = 0; i < img.size(); ++i) { powImg[i] = img[i]; }
-    const double eUni = rmsv(uniImg), ePow = rmsv(powImg);
-    INFO("many-lights: Σ per-light=" << sumPer << "  uniform=" << all << "  power=" << allPow << "  rms64 uniform=" << eUni << " power=" << ePow);
-    CHECK(sumPer > 0.05);
-    CHECK(crd::math::abs(all - sumPer) / sumPer < 0.03);    // uniform selection unbiased ⇒ == the true multi-light sum
-    CHECK(crd::math::abs(allPow - sumPer) / sumPer < 0.03); // POWER selection is ALSO unbiased (correct CDF + pdf)
-    CHECK(ePow < eUni);                                     // power sampling has LOWER variance (importance-samples brighter lights)
+    run(lights, 4U, 64U, false); for (crd::usize i = 0; i < img.size(); ++i) { uni_img[i] = img[i]; }
+    run(lights, 4U, 64U, true);  for (crd::usize i = 0; i < img.size(); ++i) { pow_img[i] = img[i]; }
+    const double e_uni = rmsv(uni_img);
+    const double e_pow = rmsv(pow_img);
+    INFO("many-lights: Σ per-light=" << sum_per << "  uniform=" << all << "  power=" << all_pow << "  rms64 uniform=" << e_uni << " power=" << e_pow);
+    CHECK(sum_per > 0.05);
+    CHECK(crd::math::abs(all - sum_per) / sum_per < 0.03);    // uniform selection unbiased ⇒ == the true multi-light sum
+    CHECK(crd::math::abs(all_pow - sum_per) / sum_per < 0.03); // POWER selection is ALSO unbiased (correct CDF + pdf)
+    CHECK(e_pow < e_uni);                                     // power sampling has LOWER variance (importance-samples brighter lights)
 }
 
 // D-007 IB-1: FULL PRODUCTION PATH TRACER on Vulkan — many-lights NEE+MIS + emissive-triangle hits + Russian roulette + GI.
@@ -1175,19 +1211,21 @@ TEST_CASE("D-007 IB-1: full path tracer on Vulkan (many-lights+emissive+RR+GI, u
     REQUIRE(rt.valid());
 
     crd::memory::TlsfAllocator alloc(48U << 20U);
-    constexpr crd::u32 kN = 64U, kNTri = 6U;
+    constexpr crd::u32 num_pts = 64U;
+    constexpr crd::u32 num_tri = 6U;
     // prims 0-1 ceiling (y=6, big), prims 2-3 light0 (y=3), prims 4-5 light1 (y=3).
-    const float verts[kNTri * 9] = {
+    const float verts[num_tri * 9] = {
         -4,6,-4,  4,6,-4,  4,6,4,      -4,6,-4,  4,6,4,  -4,6,4,       // ceiling
         -2.5F,3,-0.5F, -1.5F,3,-0.5F, -1.5F,3,0.5F,  -2.5F,3,-0.5F, -1.5F,3,0.5F, -2.5F,3,0.5F, // light0
          1.5F,3,-0.5F,  2.5F,3,-0.5F,  2.5F,3,0.5F,   1.5F,3,-0.5F,  2.5F,3,0.5F,  1.5F,3,0.5F}; // light1
-    const float tri_n[kNTri * 3] = {0,-1,0, 0,-1,0, 0,-1,0, 0,-1,0, 0,-1,0, 0,-1,0};
+    const float tri_n[num_tri * 3] = {0,-1,0, 0,-1,0, 0,-1,0, 0,-1,0, 0,-1,0, 0,-1,0};
     const float lights[2 * 15] = {
         -2.5F, 3.0F, -0.5F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, -1.0F, 0.0F, 8.0F, 8.0F, 8.0F,
          1.5F, 3.0F, -0.5F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, -1.0F, 0.0F, 6.0F, 6.0F, 6.0F};
-    crd::containers::Array<float> ppos(&alloc), pnrm(&alloc);
-    ppos.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
-    pnrm.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
+    crd::containers::Array<float> ppos(&alloc);
+    crd::containers::Array<float> pnrm(&alloc);
+    ppos.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
+    pnrm.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
     for (crd::u32 j = 0; j < 8U; ++j)
     {
         for (crd::u32 i = 0; i < 8U; ++i)
@@ -1198,25 +1236,25 @@ TEST_CASE("D-007 IB-1: full path tracer on Vulkan (many-lights+emissive+RR+GI, u
             pnrm[p * 3U + 1U] = 1.0F;
         }
     }
-    auto scene = rt.build_scene(verts, kNTri);
+    auto scene = rt.build_scene(verts, num_tri);
     REQUIRE(scene != nullptr);
     using B = gpu::VulkanRayTracingContext::Binding;
-    const crd::u64 pb = static_cast<crd::u64>(kN) * 3U * sizeof(float);
+    const crd::u64 pb = static_cast<crd::u64>(num_pts) * 3U * sizeof(float);
 
     const auto run = [&](crd::u32 spp, crd::u32 rr_start, crd::containers::Array<float>& outc) {
         kir::rt::PathTraceFullConfig pc;
         pc.samples = spp; pc.bounces = 4U; pc.rr_start = rr_start;
         pc.albedo[0] = 0.6F; pc.albedo[1] = 0.6F; pc.albedo[2] = 0.6F;
-        pc.ntri = kNTri; pc.nlights = 2U; pc.light_prim0 = 2U; pc.local_size = 64U;
+        pc.ntri = num_tri; pc.nlights = 2U; pc.light_prim0 = 2U; pc.local_size = 64U;
         kir::KGraph g(&alloc);
         const kir::KEntry e = kir::rt::build_pathtrace_full_kernel(g, pc);
         kir::GlslKernel kern(&alloc);
         REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
         const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "ptfull", &alloc);
         REQUIRE(spv.ok);
-        outc.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
-        B bind[5] = {{ppos.data(), nullptr, pb, 1U}, {pnrm.data(), nullptr, pb, 2U}, {tri_n, nullptr, kNTri * 3U * sizeof(float), 3U}, {lights, nullptr, 2U * 15U * sizeof(float), 4U}, {nullptr, outc.data(), pb, 5U}};
-        REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), crd::containers::ConstSpan<B>(bind, 5), kN / 64U));
+        outc.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
+        B bind[5] = {{ppos.data(), nullptr, pb, 1U}, {pnrm.data(), nullptr, pb, 2U}, {tri_n, nullptr, num_tri * 3U * sizeof(float), 3U}, {lights, nullptr, 2U * 15U * sizeof(float), 4U}, {nullptr, outc.data(), pb, 5U}};
+        REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), crd::containers::ConstSpan<B>(bind, 5), num_pts / 64U));
         return e;
     };
     const auto smean = [&](const crd::containers::Array<float>& a) { double s = 0.0; for (crd::usize i = 0; i < a.size(); ++i) { s += static_cast<double>(a[i]); } return s / static_cast<double>(a.size()); };
@@ -1226,35 +1264,42 @@ TEST_CASE("D-007 IB-1: full path tracer on Vulkan (many-lights+emissive+RR+GI, u
     const kir::KEntry e16 = run(16U, 1U, gpu16);
     {
         kir::rt::PathTraceFullConfig pc; pc.samples = 16U; pc.bounces = 4U; pc.rr_start = 1U;
-        pc.albedo[0] = 0.6F; pc.albedo[1] = 0.6F; pc.albedo[2] = 0.6F; pc.ntri = kNTri; pc.nlights = 2U; pc.light_prim0 = 2U; pc.local_size = 64U;
+        pc.albedo[0] = 0.6F; pc.albedo[1] = 0.6F; pc.albedo[2] = 0.6F; pc.ntri = num_tri; pc.nlights = 2U; pc.light_prim0 = 2U; pc.local_size = 64U;
         kir::KGraph g(&alloc);
         const kir::KEntry e = kir::rt::build_pathtrace_full_kernel(g, pc);
-        crd::containers::Array<crd::f64> geo(&alloc), pos64(&alloc), nrm64(&alloc), tn64(&alloc), lt64(&alloc), refc(&alloc);
-        geo.resize(1U + static_cast<crd::usize>(kNTri) * 9U, 0.0);
-        geo[0] = static_cast<crd::f64>(kNTri);
-        for (crd::u32 i = 0; i < kNTri * 9U; ++i) { geo[i + 1U] = static_cast<crd::f64>(verts[i]); }
-        pos64.resize(ppos.size(), 0.0); nrm64.resize(pnrm.size(), 0.0); tn64.resize(kNTri * 3U, 0.0); lt64.resize(2U * 15U, 0.0); refc.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
+        crd::containers::Array<crd::f64> geo(&alloc);
+        crd::containers::Array<crd::f64> pos64(&alloc);
+        crd::containers::Array<crd::f64> nrm64(&alloc);
+        crd::containers::Array<crd::f64> tn64(&alloc);
+        crd::containers::Array<crd::f64> lt64(&alloc);
+        crd::containers::Array<crd::f64> refc(&alloc);
+        geo.resize(1U + static_cast<crd::usize>(num_tri) * 9U, 0.0);
+        geo[0] = static_cast<crd::f64>(num_tri);
+        for (crd::u32 i = 0; i < num_tri * 9U; ++i) { geo[i + 1U] = static_cast<crd::f64>(verts[i]); }
+        pos64.resize(ppos.size(), 0.0); nrm64.resize(pnrm.size(), 0.0); tn64.resize(num_tri * 3U, 0.0); lt64.resize(2U * 15U, 0.0); refc.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
         for (crd::usize i = 0; i < ppos.size(); ++i) { pos64[i] = static_cast<crd::f64>(ppos[i]); nrm64[i] = static_cast<crd::f64>(pnrm[i]); }
-        for (crd::u32 i = 0; i < kNTri * 3U; ++i) { tn64[i] = static_cast<crd::f64>(tri_n[i]); }
+        for (crd::u32 i = 0; i < num_tri * 3U; ++i) { tn64[i] = static_cast<crd::f64>(tri_n[i]); }
         for (crd::u32 i = 0; i < 2U * 15U; ++i) { lt64[i] = static_cast<crd::f64>(lights[i]); }
         kir::KernelBuffer bufs[6] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {pos64.data(), static_cast<int>(pos64.size()), 0, 1}, {nrm64.data(), static_cast<int>(nrm64.size()), 0, 2}, {tn64.data(), static_cast<int>(tn64.size()), 0, 3}, {lt64.data(), static_cast<int>(lt64.size()), 0, 4}, {refc.data(), static_cast<int>(refc.size()), 0, 5}};
         kir::eval_cpu_kernel(g, e, bufs, 6, 64U, &alloc, 1U);
         double worst = 0.0;
-        for (crd::u32 p = 0; p < kN * 3U; ++p) { worst = crd::math::max(worst, crd::math::abs(static_cast<double>(gpu16[p]) - refc[p])); }
+        for (crd::u32 p = 0; p < num_pts * 3U; ++p) { worst = crd::math::max(worst, crd::math::abs(static_cast<double>(gpu16[p]) - refc[p])); }
         INFO("full-pt GPU==oracle worst=" << worst);
         CHECK(worst < 0.05); // GPU == CPU oracle (deterministic, incl. the RR hash decisions + emissive MIS)
     }
 
     // ── Russian roulette unbiasedness: RR-on mean == RR-off mean ──
-    crd::containers::Array<float> rrOn(&alloc), rrOff(&alloc);
-    run(256U, 1U, rrOn);    // RR active from bounce 1
-    run(256U, 99U, rrOff);  // RR never fires (reference)
-    const double mOn = smean(rrOn), mOff = smean(rrOff);
+    crd::containers::Array<float> rr_on(&alloc);
+    crd::containers::Array<float> rr_off(&alloc);
+    run(256U, 1U, rr_on);    // RR active from bounce 1
+    run(256U, 99U, rr_off);  // RR never fires (reference)
+    const double m_on = smean(rr_on);
+    const double m_off = smean(rr_off);
     double mxv = 0.0; crd::u32 mxi = 0;
-    for (crd::u32 i = 0; i < rrOff.size(); ++i) { if (static_cast<double>(rrOff[i]) > mxv) { mxv = static_cast<double>(rrOff[i]); mxi = i; } }
-    INFO("full-pt  RR-on mean=" << mOn << "  RR-off mean=" << mOff << "  max=" << mxv << " @elem " << mxi << "  pt0=[" << rrOff[0] << "," << rrOff[1] << "," << rrOff[2] << "]");
-    CHECK(mOff > 0.05);                                  // the lights illuminate the floor (emissive + many-lights direct)
-    CHECK(crd::math::abs(mOn - mOff) / mOff < 0.04);     // Russian roulette is UNBIASED (survivors ÷p keep the mean)
+    for (crd::u32 i = 0; i < rr_off.size(); ++i) { if (static_cast<double>(rr_off[i]) > mxv) { mxv = static_cast<double>(rr_off[i]); mxi = i; } }
+    INFO("full-pt  RR-on mean=" << m_on << "  RR-off mean=" << m_off << "  max=" << mxv << " @elem " << mxi << "  pt0=[" << rr_off[0] << "," << rr_off[1] << "," << rr_off[2] << "]");
+    CHECK(m_off > 0.05);                                  // the lights illuminate the floor (emissive + many-lights direct)
+    CHECK(crd::math::abs(m_on - m_off) / m_off < 0.04);     // Russian roulette is UNBIASED (survivors ÷p keep the mean)
     (void)e16;
 }
 
@@ -1276,34 +1321,38 @@ TEST_CASE("D-007 IB-2: ReSTIR GI temporal reuse on Vulkan (indirect, unbiased + 
     REQUIRE(rt.valid());
 
     crd::memory::TlsfAllocator alloc(48U << 20U);
-    constexpr crd::u32 kW = 16U, kH = 16U, kN = kW * kH;
+    constexpr crd::u32 img_w = 16U;
+    constexpr crd::u32 img_h = 16U;
+    constexpr crd::u32 num_pts = img_w * img_h;
     // AS = the ceiling ONLY (a 10×10 quad at y=4, normal down). The light is analytic (in the light buffer, not the AS), at y=3
     // facing UP ⇒ it lights the ceiling but not the floor. Floor up-rays hit the ceiling ⇒ pure 1-bounce indirect.
     const float verts[18] = {-5,4,-5,  5,4,-5,  5,4,5,   -5,4,-5,  5,4,5,  -5,4,5};
     const float tri_n[6]  = {0,-1,0, 0,-1,0};
     const float light[15] = {-2.0F, 3.0F, -2.0F, 4.0F, 0.0F, 0.0F, 0.0F, 0.0F, 4.0F, 0.0F, 1.0F, 0.0F, 10.0F, 10.0F, 10.0F};
-    crd::containers::Array<float> ppos(&alloc), pnrm(&alloc);
-    ppos.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
-    pnrm.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
-    for (crd::u32 j = 0; j < kH; ++j)
+    crd::containers::Array<float> ppos(&alloc);
+    crd::containers::Array<float> pnrm(&alloc);
+    ppos.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
+    pnrm.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
+    for (crd::u32 j = 0; j < img_h; ++j)
     {
-        for (crd::u32 i = 0; i < kW; ++i)
+        for (crd::u32 i = 0; i < img_w; ++i)
         {
-            const crd::u32 p = j * kW + i;
-            ppos[p * 3U + 0U] = -3.0F + 6.0F / static_cast<float>(kW - 1U) * static_cast<float>(i);
-            ppos[p * 3U + 2U] = -3.0F + 6.0F / static_cast<float>(kH - 1U) * static_cast<float>(j);
+            const crd::u32 p = j * img_w + i;
+            ppos[p * 3U + 0U] = -3.0F + 6.0F / static_cast<float>(img_w - 1U) * static_cast<float>(i);
+            ppos[p * 3U + 2U] = -3.0F + 6.0F / static_cast<float>(img_h - 1U) * static_cast<float>(j);
             pnrm[p * 3U + 1U] = 1.0F;
         }
     }
     auto scene = rt.build_scene(verts, 2U);
     REQUIRE(scene != nullptr);
     using B = gpu::VulkanRayTracingContext::Binding;
-    const crd::u64 pb = static_cast<crd::u64>(kN) * 3U * sizeof(float);
-    const crd::u64 rbytes = static_cast<crd::u64>(kN) * kir::rt::kRestirGiStride * sizeof(float);
+    const crd::u64 pb = static_cast<crd::u64>(num_pts) * 3U * sizeof(float);
+    const crd::u64 rbytes = static_cast<crd::u64>(num_pts) * kir::rt::kRestirGiStride * sizeof(float);
 
     kir::rt::RestirGiConfig sc;
-    sc.width = kW; sc.height = kH; sc.ntri = 2U; sc.nlights = 1U; sc.local_size = 64U;
-    kir::KGraph gt(&alloc), gsh(&alloc);
+    sc.width = img_w; sc.height = img_h; sc.ntri = 2U; sc.nlights = 1U; sc.local_size = 64U;
+    kir::KGraph gt(&alloc);
+    kir::KGraph gsh(&alloc);
     const kir::KEntry et = kir::rt::build_restir_gi_temporal_kernel(gt, sc);
     const kir::KEntry es = kir::rt::build_restir_gi_shade_kernel(gsh, sc);
     const auto tcomp = [&](const kir::KEntry& e, kir::KGraph& g, const char* tag) {
@@ -1315,39 +1364,46 @@ TEST_CASE("D-007 IB-2: ReSTIR GI temporal reuse on Vulkan (indirect, unbiased + 
     const auto tspv = tcomp(et, gt, "gi_t");
     const auto sspv = tcomp(es, gsh, "gi_s");
 
-    crd::containers::Array<float> rprev(&alloc), rcur(&alloc), rad(&alloc), accRef(&alloc), accR(&alloc), warm(&alloc), single(&alloc);
-    rprev.resize(static_cast<crd::usize>(kN) * kir::rt::kRestirGiStride, 0.0F);
-    rcur.resize(rprev.size(), 0.0F); rad.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
-    accRef.resize(rad.size(), 0.0F); accR.resize(rad.size(), 0.0F); warm.resize(rad.size(), 0.0F); single.resize(rad.size(), 0.0F);
+    crd::containers::Array<float> rprev(&alloc);
+    crd::containers::Array<float> rcur(&alloc);
+    crd::containers::Array<float> rad(&alloc);
+    crd::containers::Array<float> acc_ref(&alloc);
+    crd::containers::Array<float> acc_r(&alloc);
+    crd::containers::Array<float> warm(&alloc);
+    crd::containers::Array<float> single(&alloc);
+    rprev.resize(static_cast<crd::usize>(num_pts) * kir::rt::kRestirGiStride, 0.0F);
+    rcur.resize(rprev.size(), 0.0F); rad.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
+    acc_ref.resize(rad.size(), 0.0F); acc_r.resize(rad.size(), 0.0F); warm.resize(rad.size(), 0.0F); single.resize(rad.size(), 0.0F);
 
-    const auto frameStep = [&](crd::u32 f, bool feedback, crd::containers::Array<float>& outRad) {
+    const auto frame_step = [&](crd::u32 f, bool feedback, crd::containers::Array<float>& outRad) {
         crd::u32 frame = f;
         B tb[8] = {{ppos.data(), nullptr, pb, 1U}, {pnrm.data(), nullptr, pb, 2U}, {tri_n, nullptr, 6U * sizeof(float), 3U}, {light, nullptr, 15U * sizeof(float), 4U}, {rprev.data(), nullptr, rbytes, 5U}, {nullptr, rcur.data(), rbytes, 6U}, {&frame, nullptr, sizeof(crd::u32), 7U}};
-        REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(tspv.spirv.data(), tspv.spirv.size()), crd::containers::ConstSpan<B>(tb, 7), kN / 64U));
+        REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(tspv.spirv.data(), tspv.spirv.size()), crd::containers::ConstSpan<B>(tb, 7), num_pts / 64U));
         B sb[4] = {{ppos.data(), nullptr, pb, 1U}, {pnrm.data(), nullptr, pb, 2U}, {rcur.data(), nullptr, rbytes, 3U}, {nullptr, outRad.data(), pb, 4U}};
-        REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(sspv.spirv.data(), sspv.spirv.size()), crd::containers::ConstSpan<B>(sb, 4), kN / 64U));
+        REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(sspv.spirv.data(), sspv.spirv.size()), crd::containers::ConstSpan<B>(sb, 4), num_pts / 64U));
         if (feedback) { for (crd::usize i = 0; i < rprev.size(); ++i) { rprev[i] = rcur[i]; } }
     };
     // reference: NO reuse (rprev stays 0) averaged over many frames.
-    constexpr crd::u32 kRef = 96U;
-    for (crd::u32 f = 0; f < kRef; ++f) { frameStep(f, false, rad); for (crd::usize i = 0; i < rad.size(); ++i) { accRef[i] += rad[i]; } if (f == 0) { for (crd::usize i = 0; i < rad.size(); ++i) { single[i] = rad[i]; } } }
+    constexpr crd::u32 k_ref = 96U;
+    for (crd::u32 f = 0; f < k_ref; ++f) { frame_step(f, false, rad); for (crd::usize i = 0; i < rad.size(); ++i) { acc_ref[i] += rad[i]; } if (f == 0) { for (crd::usize i = 0; i < rad.size(); ++i) { single[i] = rad[i]; } } }
     // ReSTIR GI: temporal reuse.
     for (crd::usize i = 0; i < rprev.size(); ++i) { rprev[i] = 0.0F; }
-    constexpr crd::u32 kF = 64U;
-    for (crd::u32 f = 0; f < kF; ++f) { frameStep(f, true, rad); for (crd::usize i = 0; i < rad.size(); ++i) { accR[i] += rad[i]; } if (f == kF - 1U) { for (crd::usize i = 0; i < rad.size(); ++i) { warm[i] = rad[i]; } } }
+    constexpr crd::u32 n_frames = 64U;
+    for (crd::u32 f = 0; f < n_frames; ++f) { frame_step(f, true, rad); for (crd::usize i = 0; i < rad.size(); ++i) { acc_r[i] += rad[i]; } if (f == n_frames - 1U) { for (crd::usize i = 0; i < rad.size(); ++i) { warm[i] = rad[i]; } } }
 
     const auto smean = [&](const crd::containers::Array<float>& a, double sc2) { double s = 0.0; for (crd::usize i = 0; i < a.size(); ++i) { s += static_cast<double>(a[i]); } return s / static_cast<double>(a.size()) * sc2; };
     const auto rms = [&](const crd::containers::Array<float>& a, const crd::containers::Array<float>& b, double sca) { double s = 0.0; for (crd::usize i = 0; i < a.size(); ++i) { const double d = static_cast<double>(a[i]) * sca - static_cast<double>(b[i]); s += d * d; } return crd::math::sqrt(s / static_cast<double>(a.size())); };
-    const double refMean = smean(accRef, 1.0 / kRef);
-    const double rMean   = smean(accR, 1.0 / kF);
+    const double ref_mean = smean(acc_ref, 1.0 / k_ref);
+    const double r_mean   = smean(acc_r, 1.0 / n_frames);
     // ref image (per-pixel) for rms:
-    crd::containers::Array<float> refImg(&alloc); refImg.resize(rad.size(), 0.0F);
-    for (crd::usize i = 0; i < refImg.size(); ++i) { refImg[i] = accRef[i] / static_cast<float>(kRef); }
-    const double errWarm = rms(warm, refImg, 1.0), errSingle = rms(single, refImg, 1.0);
-    INFO("ReSTIR GI  refMean=" << refMean << "  reuseMean=" << rMean << "  rms(warm)=" << errWarm << "  rms(single)=" << errSingle);
-    CHECK(refMean > 0.01);                                 // the floor receives indirect light (pure GI, no direct)
-    CHECK(crd::math::abs(rMean - refMean) / refMean < 0.05); // UNBIASED: temporal reuse converges to the brute-force indirect
-    CHECK(errWarm < errSingle * 0.8);                      // VARIANCE REDUCTION vs the no-reuse single-sample estimate
+    crd::containers::Array<float> ref_img(&alloc); ref_img.resize(rad.size(), 0.0F);
+    for (crd::usize i = 0; i < ref_img.size(); ++i) { ref_img[i] = acc_ref[i] / static_cast<float>(k_ref); }
+    const double err_warm = rms(warm, ref_img, 1.0);
+    const double err_single = rms(single, ref_img, 1.0);
+    INFO("ReSTIR GI  ref_mean=" << ref_mean << "  reuseMean=" << r_mean << "  rms(warm)=" << err_warm << "  rms(single)=" << err_single);
+    CHECK(ref_mean > 0.01);                                 // the floor receives indirect light (pure GI, no direct)
+    CHECK(crd::math::abs(r_mean - ref_mean) / ref_mean < 0.05); // UNBIASED: temporal reuse converges to the brute-force indirect
+    CHECK(err_warm < err_single * 0.8);                      // VARIANCE REDUCTION vs the no-reuse single-sample estimate
 }
 
 // D-007 IB-2b: FULL ReSTIR GI SPATIOTEMPORAL on Vulkan — temporal → spatial (with the Jacobian reconnection) → shade. Same pure-
@@ -1364,62 +1420,75 @@ TEST_CASE("D-007 IB-2b: ReSTIR GI spatiotemporal on Vulkan (Jacobian reconnectio
     REQUIRE(rt.valid());
 
     crd::memory::TlsfAllocator alloc(48U << 20U);
-    constexpr crd::u32 kW = 16U, kH = 16U, kN = kW * kH;
+    constexpr crd::u32 img_w = 16U;
+    constexpr crd::u32 img_h = 16U;
+    constexpr crd::u32 num_pts = img_w * img_h;
     const float verts[18] = {-5,4,-5, 5,4,-5, 5,4,5, -5,4,-5, 5,4,5, -5,4,5};
     const float tri_n[6]  = {0,-1,0, 0,-1,0};
     const float light[15] = {-2.0F, 3.0F, -2.0F, 4.0F, 0.0F, 0.0F, 0.0F, 0.0F, 4.0F, 0.0F, 1.0F, 0.0F, 10.0F, 10.0F, 10.0F};
-    crd::containers::Array<float> ppos(&alloc), pnrm(&alloc);
-    ppos.resize(static_cast<crd::usize>(kN) * 3U, 0.0F); pnrm.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
-    for (crd::u32 j = 0; j < kH; ++j) { for (crd::u32 i = 0; i < kW; ++i) { const crd::u32 p = j * kW + i; ppos[p * 3U + 0U] = -3.0F + 6.0F / static_cast<float>(kW - 1U) * static_cast<float>(i); ppos[p * 3U + 2U] = -3.0F + 6.0F / static_cast<float>(kH - 1U) * static_cast<float>(j); pnrm[p * 3U + 1U] = 1.0F; } }
+    crd::containers::Array<float> ppos(&alloc);
+    crd::containers::Array<float> pnrm(&alloc);
+    ppos.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F); pnrm.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
+    for (crd::u32 j = 0; j < img_h; ++j) { for (crd::u32 i = 0; i < img_w; ++i) { const crd::u32 p = j * img_w + i; ppos[p * 3U + 0U] = -3.0F + 6.0F / static_cast<float>(img_w - 1U) * static_cast<float>(i); ppos[p * 3U + 2U] = -3.0F + 6.0F / static_cast<float>(img_h - 1U) * static_cast<float>(j); pnrm[p * 3U + 1U] = 1.0F; } }
     auto scene = rt.build_scene(verts, 2U);
     REQUIRE(scene != nullptr);
     using B = gpu::VulkanRayTracingContext::Binding;
-    const crd::u64 pb = static_cast<crd::u64>(kN) * 3U * sizeof(float);
-    const crd::u64 rbytes = static_cast<crd::u64>(kN) * kir::rt::kRestirGiStride * sizeof(float);
+    const crd::u64 pb = static_cast<crd::u64>(num_pts) * 3U * sizeof(float);
+    const crd::u64 rbytes = static_cast<crd::u64>(num_pts) * kir::rt::kRestirGiStride * sizeof(float);
 
-    kir::rt::RestirGiConfig sc; sc.width = kW; sc.height = kH; sc.ntri = 2U; sc.nlights = 1U; sc.spatial_k = 5U; sc.spatial_radius = 3.0F; sc.local_size = 64U;
-    kir::KGraph gt(&alloc), gsp(&alloc), gsh(&alloc);
+    kir::rt::RestirGiConfig sc; sc.width = img_w; sc.height = img_h; sc.ntri = 2U; sc.nlights = 1U; sc.spatial_k = 5U; sc.spatial_radius = 3.0F; sc.local_size = 64U;
+    kir::KGraph gt(&alloc);
+    kir::KGraph gsp(&alloc);
+    kir::KGraph gsh(&alloc);
     const kir::KEntry et = kir::rt::build_restir_gi_temporal_kernel(gt, sc);
     const kir::KEntry ep = kir::rt::build_restir_gi_spatial_kernel(gsp, sc);
     const kir::KEntry es = kir::rt::build_restir_gi_shade_kernel(gsh, sc);
     const auto comp = [&](const kir::KEntry& e, kir::KGraph& g, const char* t) { kir::GlslKernel kern(&alloc); REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern)); auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), t, &alloc); INFO(spv.error_message.c_str()); REQUIRE(spv.ok); return spv; };
-    const auto tspv = comp(et, gt, "gt"), pspv = comp(ep, gsp, "gp"), sspv = comp(es, gsh, "gs");
+    const auto tspv = comp(et, gt, "gt");
+    const auto pspv = comp(ep, gsp, "gp");
+    const auto sspv = comp(es, gsh, "gs");
 
-    crd::containers::Array<float> rprev(&alloc), rtmp(&alloc), rspa(&alloc), rad(&alloc), accRef(&alloc), accST(&alloc);
-    rprev.resize(static_cast<crd::usize>(kN) * kir::rt::kRestirGiStride, 0.0F); rtmp.resize(rprev.size(), 0.0F); rspa.resize(rprev.size(), 0.0F);
-    rad.resize(static_cast<crd::usize>(kN) * 3U, 0.0F); accRef.resize(rad.size(), 0.0F); accST.resize(rad.size(), 0.0F);
+    crd::containers::Array<float> rprev(&alloc);
+    crd::containers::Array<float> rtmp(&alloc);
+    crd::containers::Array<float> rspa(&alloc);
+    crd::containers::Array<float> rad(&alloc);
+    crd::containers::Array<float> acc_ref(&alloc);
+    crd::containers::Array<float> acc_st(&alloc);
+    rprev.resize(static_cast<crd::usize>(num_pts) * kir::rt::kRestirGiStride, 0.0F); rtmp.resize(rprev.size(), 0.0F); rspa.resize(rprev.size(), 0.0F);
+    rad.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F); acc_ref.resize(rad.size(), 0.0F); acc_st.resize(rad.size(), 0.0F);
     const auto smean = [&](const crd::containers::Array<float>& a, double s2) { double s = 0.0; for (crd::usize i = 0; i < a.size(); ++i) { s += static_cast<double>(a[i]); } return s / static_cast<double>(a.size()) * s2; };
 
     // reference: temporal-only, NO feedback, averaged (brute-force indirect).
-    constexpr crd::u32 kRef = 96U;
-    for (crd::u32 f = 0; f < kRef; ++f)
+    constexpr crd::u32 k_ref = 96U;
+    for (crd::u32 f = 0; f < k_ref; ++f)
     {
         crd::u32 frame = f;
         B tb[7] = {{ppos.data(), nullptr, pb, 1U}, {pnrm.data(), nullptr, pb, 2U}, {tri_n, nullptr, 6U * sizeof(float), 3U}, {light, nullptr, 15U * sizeof(float), 4U}, {rprev.data(), nullptr, rbytes, 5U}, {nullptr, rtmp.data(), rbytes, 6U}, {&frame, nullptr, sizeof(crd::u32), 7U}};
-        REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(tspv.spirv.data(), tspv.spirv.size()), crd::containers::ConstSpan<B>(tb, 7), kN / 64U));
+        REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(tspv.spirv.data(), tspv.spirv.size()), crd::containers::ConstSpan<B>(tb, 7), num_pts / 64U));
         B sb[4] = {{ppos.data(), nullptr, pb, 1U}, {pnrm.data(), nullptr, pb, 2U}, {rtmp.data(), nullptr, rbytes, 3U}, {nullptr, rad.data(), pb, 4U}};
-        REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(sspv.spirv.data(), sspv.spirv.size()), crd::containers::ConstSpan<B>(sb, 4), kN / 64U));
-        for (crd::usize i = 0; i < rad.size(); ++i) { accRef[i] += rad[i]; }
+        REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(sspv.spirv.data(), sspv.spirv.size()), crd::containers::ConstSpan<B>(sb, 4), num_pts / 64U));
+        for (crd::usize i = 0; i < rad.size(); ++i) { acc_ref[i] += rad[i]; }
     }
     // spatiotemporal: temporal → spatial(Jacobian) → shade, feed back the pre-spatial reservoir.
     for (crd::usize i = 0; i < rprev.size(); ++i) { rprev[i] = 0.0F; }
-    constexpr crd::u32 kF = 64U;
-    for (crd::u32 f = 0; f < kF; ++f)
+    constexpr crd::u32 n_frames = 64U;
+    for (crd::u32 f = 0; f < n_frames; ++f)
     {
         crd::u32 frame = f;
         B tb[7] = {{ppos.data(), nullptr, pb, 1U}, {pnrm.data(), nullptr, pb, 2U}, {tri_n, nullptr, 6U * sizeof(float), 3U}, {light, nullptr, 15U * sizeof(float), 4U}, {rprev.data(), nullptr, rbytes, 5U}, {nullptr, rtmp.data(), rbytes, 6U}, {&frame, nullptr, sizeof(crd::u32), 7U}};
-        REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(tspv.spirv.data(), tspv.spirv.size()), crd::containers::ConstSpan<B>(tb, 7), kN / 64U));
+        REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(tspv.spirv.data(), tspv.spirv.size()), crd::containers::ConstSpan<B>(tb, 7), num_pts / 64U));
         B pbnd[5] = {{ppos.data(), nullptr, pb, 1U}, {pnrm.data(), nullptr, pb, 2U}, {rtmp.data(), nullptr, rbytes, 3U}, {nullptr, rspa.data(), rbytes, 4U}, {&frame, nullptr, sizeof(crd::u32), 5U}};
-        REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(pspv.spirv.data(), pspv.spirv.size()), crd::containers::ConstSpan<B>(pbnd, 5), kN / 64U));
+        REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(pspv.spirv.data(), pspv.spirv.size()), crd::containers::ConstSpan<B>(pbnd, 5), num_pts / 64U));
         B sb[4] = {{ppos.data(), nullptr, pb, 1U}, {pnrm.data(), nullptr, pb, 2U}, {rspa.data(), nullptr, rbytes, 3U}, {nullptr, rad.data(), pb, 4U}};
-        REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(sspv.spirv.data(), sspv.spirv.size()), crd::containers::ConstSpan<B>(sb, 4), kN / 64U));
-        for (crd::usize i = 0; i < rad.size(); ++i) { accST[i] += rad[i]; }
+        REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(sspv.spirv.data(), sspv.spirv.size()), crd::containers::ConstSpan<B>(sb, 4), num_pts / 64U));
+        for (crd::usize i = 0; i < rad.size(); ++i) { acc_st[i] += rad[i]; }
         for (crd::usize i = 0; i < rprev.size(); ++i) { rprev[i] = rtmp[i]; }
     }
-    const double refMean = smean(accRef, 1.0 / kRef), stMean = smean(accST, 1.0 / kF);
-    INFO("ReSTIR GI spatiotemporal  refMean=" << refMean << "  stMean=" << stMean);
-    CHECK(refMean > 0.01);
-    CHECK(crd::math::abs(stMean - refMean) / refMean < 0.06); // Jacobian spatial reconnection keeps the GI estimator unbiased
+    const double ref_mean = smean(acc_ref, 1.0 / k_ref);
+    const double st_mean = smean(acc_st, 1.0 / n_frames);
+    INFO("ReSTIR GI spatiotemporal  ref_mean=" << ref_mean << "  st_mean=" << st_mean);
+    CHECK(ref_mean > 0.01);
+    CHECK(crd::math::abs(st_mean - ref_mean) / ref_mean < 0.06); // Jacobian spatial reconnection keeps the GI estimator unbiased
 }
 
 // D-007 FA-1: OPACITY MICROMAPS on Vulkan (VK_EXT_opacity_micromap) — a real vendor RT frontier feature RUN on the RTX 4070. The
@@ -1452,10 +1521,11 @@ TEST_CASE("D-007 FA-1: opacity micromap on Vulkan (alpha-tested traversal)", "[g
     auto scene = rt.build_scene_omm(verts, 2U, omm_bits, 2U);
     REQUIRE(scene != nullptr);
 
-    constexpr crd::u32 kN = 64U;
-    crd::containers::Array<float> rays(&alloc), got(&alloc);
-    rays.resize(static_cast<crd::usize>(kN) * 6U, 0.0F);
-    got.resize(kN, 0.0F);
+    constexpr crd::u32 num_pts = 64U;
+    crd::containers::Array<float> rays(&alloc);
+    crd::containers::Array<float> got(&alloc);
+    rays.resize(static_cast<crd::usize>(num_pts) * 6U, 0.0F);
+    got.resize(num_pts, 0.0F);
     crd::u32 interior = 0;
     for (crd::u32 j = 0; j < 8U; ++j) // 8×8 grid over the triangle footprint, rays +z
     {
@@ -1469,20 +1539,21 @@ TEST_CASE("D-007 FA-1: opacity micromap on Vulkan (alpha-tested traversal)", "[g
             if (x + y < 1.9F) { ++interior; }
         }
     }
-    gpu::VulkanRayTracingContext::Binding bind[2] = {{rays.data(), nullptr, rays.size() * sizeof(float), 1U}, {nullptr, got.data(), static_cast<crd::u64>(kN) * sizeof(float), 2U}};
+    gpu::VulkanRayTracingContext::Binding bind[2] = {{rays.data(), nullptr, rays.size() * sizeof(float), 1U}, {nullptr, got.data(), static_cast<crd::u64>(num_pts) * sizeof(float), 2U}};
     REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 2), 1U));
 
-    crd::u32 frontHits = 0, backHits = 0;
-    for (crd::u32 p = 0; p < kN; ++p)
+    crd::u32 front_hits = 0;
+    crd::u32 back_hits = 0;
+    for (crd::u32 p = 0; p < num_pts; ++p)
     {
         const double t = static_cast<double>(got[p]);
-        if (t > 0.9 && t < 1.1) { ++frontHits; }
-        else if (t > 1.9 && t < 2.1) { ++backHits; }
+        if (t > 0.9 && t < 1.1) { ++front_hits; }
+        else if (t > 1.9 && t < 2.1) { ++back_hits; }
     }
-    INFO("OMM: interior rays=" << interior << "  front(opaque)=" << frontHits << "  back(passed-through)=" << backHits);
-    CHECK(frontHits > 3);                       // some rays hit the OPAQUE micro-triangles (front)
-    CHECK(backHits > 3);                        // some rays PASSED THROUGH the transparent micro-triangles to the back
-    CHECK(frontHits + backHits >= interior - 2); // every interior ray resolved to front or back (nothing lost)
+    INFO("OMM: interior rays=" << interior << "  front(opaque)=" << front_hits << "  back(passed-through)=" << back_hits);
+    CHECK(front_hits > 3);                       // some rays hit the OPAQUE micro-triangles (front)
+    CHECK(back_hits > 3);                        // some rays PASSED THROUGH the transparent micro-triangles to the back
+    CHECK(front_hits + back_hits >= interior - 2); // every interior ray resolved to front or back (nothing lost)
 }
 
 // D-007 FA-2: RAY-TRACING PIPELINE + SER on Vulkan (VK_KHR_ray_tracing_pipeline + VK_NV_ray_tracing_invocation_reorder) — the
@@ -1531,20 +1602,21 @@ TEST_CASE("D-007 FA-2: RT pipeline + SER on Vulkan == CPU reference", "[gpu-cont
     const float verts[9] = {0.0F, 0.0F, 2.0F, 1.0F, 0.0F, 2.0F, 0.0F, 1.0F, 2.0F};
     auto scene = rt.build_scene(verts, 1U);
     REQUIRE(scene != nullptr);
-    constexpr crd::u32 kN = 4U;
-    const float rd[kN][6] = {{0.2F,0.2F,0,0,0,1}, {0.2F,0.2F,0,0,0,-1}, {5,5,0,0,0,1}, {0.1F,0.1F,1,0,0,1}};
-    crd::containers::Array<float> rays(&alloc), got(&alloc);
-    rays.resize(static_cast<crd::usize>(kN) * 6U, 0.0F); got.resize(kN, 0.0F);
-    for (crd::u32 i = 0; i < kN; ++i) { for (int c = 0; c < 6; ++c) { rays[i * 6U + c] = rd[i][c]; } }
-    gpu::VulkanRayTracingContext::Binding bind[2] = {{rays.data(), nullptr, rays.size() * sizeof(float), 1U}, {nullptr, got.data(), static_cast<crd::u64>(kN) * sizeof(float), 2U}};
+    constexpr crd::u32 num_pts = 4U;
+    const float rd[num_pts][6] = {{0.2F,0.2F,0,0,0,1}, {0.2F,0.2F,0,0,0,-1}, {5,5,0,0,0,1}, {0.1F,0.1F,1,0,0,1}};
+    crd::containers::Array<float> rays(&alloc);
+    crd::containers::Array<float> got(&alloc);
+    rays.resize(static_cast<crd::usize>(num_pts) * 6U, 0.0F); got.resize(num_pts, 0.0F);
+    for (crd::u32 i = 0; i < num_pts; ++i) { for (int c = 0; c < 6; ++c) { rays[i * 6U + c] = rd[i][c]; } }
+    gpu::VulkanRayTracingContext::Binding bind[2] = {{rays.data(), nullptr, rays.size() * sizeof(float), 1U}, {nullptr, got.data(), static_cast<crd::u64>(num_pts) * sizeof(float), 2U}};
     REQUIRE(rt.trace_rays_pipeline(*scene, crd::containers::ConstSpan<crd::u8>(rg.spirv.data(), rg.spirv.size()),
                                    crd::containers::ConstSpan<crd::u8>(ms.spirv.data(), ms.spirv.size()),
                                    crd::containers::ConstSpan<crd::u8>(ch.spirv.data(), ch.spirv.size()),
-                                   crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 2), kN, 1U));
+                                   crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 2), num_pts, 1U));
     INFO("RT pipeline" << (ser ? " (SER)" : "") << " t=[" << got[0] << ", " << got[1] << ", " << got[2] << ", " << got[3] << "]");
     CHECK(crd::math::abs(static_cast<double>(got[0]) - 2.0) < 1.0e-4); // closest-hit t=2 via the pipeline
-    CHECK(got[1] > 1.0e29);                                            // miss shader ⇒ 1e30
-    CHECK(got[2] > 1.0e29);                                            // miss
+    CHECK(got[1] > 1.0e29F);                                            // miss shader ⇒ 1e30
+    CHECK(got[2] > 1.0e29F);                                            // miss
     CHECK(crd::math::abs(static_cast<double>(got[3]) - 1.0) < 1.0e-4); // t=1
 }
 
@@ -1574,18 +1646,19 @@ TEST_CASE("D-007 FA-3: cluster acceleration structure on Vulkan == CPU reference
     auto scene = rt.build_scene_clusters(verts, 1U);
     REQUIRE(scene != nullptr);
 
-    constexpr crd::u32 kN = 64U;
-    crd::containers::Array<float> rays(&alloc), got(&alloc);
-    rays.resize(static_cast<crd::usize>(kN) * 6U, 0.0F); got.resize(kN, 0.0F);
+    constexpr crd::u32 num_pts = 64U;
+    crd::containers::Array<float> rays(&alloc);
+    crd::containers::Array<float> got(&alloc);
+    rays.resize(static_cast<crd::usize>(num_pts) * 6U, 0.0F); got.resize(num_pts, 0.0F);
     const float rd[4][6] = {{0.2F,0.2F,0,0,0,1}, {0.2F,0.2F,0,0,0,-1}, {5,5,0,0,0,1}, {0.1F,0.1F,1,0,0,1}};
     for (int r = 0; r < 4; ++r) { for (int c = 0; c < 6; ++c) { rays[static_cast<crd::usize>(r) * 6U + c] = rd[r][c]; } }
-    gpu::VulkanRayTracingContext::Binding bind[2] = {{rays.data(), nullptr, rays.size() * sizeof(float), 1U}, {nullptr, got.data(), static_cast<crd::u64>(kN) * sizeof(float), 2U}};
+    gpu::VulkanRayTracingContext::Binding bind[2] = {{rays.data(), nullptr, rays.size() * sizeof(float), 1U}, {nullptr, got.data(), static_cast<crd::u64>(num_pts) * sizeof(float), 2U}};
     REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 2), 1U));
 
     INFO("cluster-AS t=[" << got[0] << ", " << got[1] << ", " << got[2] << ", " << got[3] << "]");
     CHECK(crd::math::abs(static_cast<double>(got[0]) - 2.0) < 1.0e-4); // cluster BLAS traverses like a normal BLAS
-    CHECK(got[1] > 1.0e29);
-    CHECK(got[2] > 1.0e29);
+    CHECK(got[1] > 1.0e29F);
+    CHECK(got[2] > 1.0e29F);
     CHECK(crd::math::abs(static_cast<double>(got[3]) - 1.0) < 1.0e-4);
 }
 
@@ -1633,23 +1706,23 @@ TEST_CASE("B18-f: procedural curve BLAS builds on Vulkan", "[gpu-context][vulkan
     REQUIRE(rt.valid());
 
     // a small groom: 4 strands x 8 segments, each tapering root-to-tip
-    constexpr crd::u32 kStrands = 4;
-    constexpr crd::u32 kSegs    = 8;
-    float              segs[kStrands * kSegs * 8];
-    for (crd::u32 s = 0; s < kStrands; ++s)
+    constexpr crd::u32 k_strands = 4;
+    constexpr crd::u32 k_segs    = 8;
+    float              segs[k_strands * k_segs * 8];
+    for (crd::u32 s = 0; s < k_strands; ++s)
     {
-        for (crd::u32 j = 0; j < kSegs; ++j)
+        for (crd::u32 j = 0; j < k_segs; ++j)
         {
-            const float t0 = static_cast<float>(j) / static_cast<float>(kSegs);
-            const float t1 = static_cast<float>(j + 1U) / static_cast<float>(kSegs);
-            float*      g  = segs + (s * kSegs + j) * 8U;
+            const float t0 = static_cast<float>(j) / static_cast<float>(k_segs);
+            const float t1 = static_cast<float>(j + 1U) / static_cast<float>(k_segs);
+            float*      g  = segs + (s * k_segs + j) * 8U;
             g[0] = static_cast<float>(s) * 0.3F; g[1] = t0 * 2.0F; g[2] = 0.0F; g[3] = 0.05F * (1.0F - t0) + 0.01F;
             g[4] = static_cast<float>(s) * 0.3F; g[5] = t1 * 2.0F; g[6] = 0.0F; g[7] = 0.05F * (1.0F - t1) + 0.01F;
         }
     }
-    auto scene = rt.build_scene_curves(segs, kStrands * kSegs);
+    auto scene = rt.build_scene_curves(segs, k_strands * k_segs);
     std::printf("[Vulkan B18-f] curve BLAS over %u swept segments: %s   (native LSS on this adapter: %s)\n",
-                kStrands * kSegs, scene != nullptr ? "built" : "FAILED",
+                k_strands * k_segs, scene != nullptr ? "built" : "FAILED",
                 rt.capabilities().has(gpu::RtFeature::LinearSweptSpheres) ? "yes" : "no - using procedural AABBs");
     REQUIRE(scene != nullptr);
     // Degenerate input must be REJECTED rather than producing an empty-but-valid AS that silently renders nothing.
@@ -1699,22 +1772,22 @@ TEST_CASE("B18-f: CKIR TraceRayCurves runs on Vulkan hardware traversal == CPU o
     const auto uz = [](int v) { return static_cast<crd::usize>(v); };
 
     // ── a small groom: strands of tapering segments, spread so most rays hit something ──
-    constexpr int kStr  = 6;
-    constexpr int kSeg  = 6;
-    constexpr int nseg  = kStr * kSeg;
+    constexpr int k_str  = 6;
+    constexpr int k_seg  = 6;
+    constexpr int nseg  = k_str * k_seg;
     constexpr int nray  = 256;
     crd::containers::Array<float>  segf(&alloc);
     crd::containers::Array<double> segd(&alloc);
     segf.resize(uz(nseg * 8), 0.0F);
     segd.resize(uz(nseg * 8), 0.0);
-    for (int s = 0; s < kStr; ++s)
+    for (int s = 0; s < k_str; ++s)
     {
         const float x = -1.0F + 0.4F * static_cast<float>(s);
-        for (int j = 0; j < kSeg; ++j)
+        for (int j = 0; j < k_seg; ++j)
         {
-            const float t0 = static_cast<float>(j) / static_cast<float>(kSeg);
-            const float t1 = static_cast<float>(j + 1) / static_cast<float>(kSeg);
-            float*      q  = segf.data() + uz((s * kSeg + j) * 8);
+            const float t0 = static_cast<float>(j) / static_cast<float>(k_seg);
+            const float t1 = static_cast<float>(j + 1) / static_cast<float>(k_seg);
+            float*      q  = segf.data() + uz((s * k_seg + j) * 8);
             q[0] = x; q[1] = -0.5F + 2.0F * t0; q[2] = 0.15F * static_cast<float>(s % 3);
             q[3] = 0.09F * (1.0F - t0) + 0.02F;
             q[4] = x; q[5] = -0.5F + 2.0F * t1; q[6] = 0.15F * static_cast<float>(s % 3);
@@ -1774,11 +1847,11 @@ TEST_CASE("B18-f: CKIR TraceRayCurves runs on Vulkan hardware traversal == CPU o
     crd::containers::Array<double> as_stub(&alloc);
     ref.resize(uz(nray * 2), 0.0);
     as_stub.resize(1U, 0.0);
-    kir::KernelBuffer ob_[4] = {{as_stub.data(), 1, 0, 0},
+    kir::KernelBuffer obufs[4] = {{as_stub.data(), 1, 0, 0},
                                 {segd.data(), nseg * 8, 0, 1},
                                 {rayd.data(), nray * 6, 0, 2},
                                 {ref.data(), nray * 2, 0, 3}};
-    kir::eval_cpu_kernel(g, e, ob_, 4, e.local_size[0], &alloc, static_cast<crd::u32>(nray / 64));
+    kir::eval_cpu_kernel(g, e, obufs, 4, e.local_size[0], &alloc, static_cast<crd::u32>(nray / 64));
 
     // ── then the device ──
     kir::GlslKernel kern(&alloc);
@@ -1807,7 +1880,7 @@ TEST_CASE("B18-f: CKIR TraceRayCurves runs on Vulkan hardware traversal == CPU o
                               crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bindings, 3),
                               static_cast<crd::u32>(nray / 64)));
 
-    constexpr double kTmax = 50.0; // a MISS returns tmax, so classify against it, not a fixed sentinel
+    constexpr double k_tmax = 50.0; // a MISS returns tmax, so classify against it, not a fixed sentinel
     int    hits = 0;
     int    disagree = 0;
     int    cpu_only = 0; // oracle hit, device missed  => AABB too small / commit rejected
@@ -1815,8 +1888,8 @@ TEST_CASE("B18-f: CKIR TraceRayCurves runs on Vulkan hardware traversal == CPU o
     double worst = 0.0;
     for (int i = 0; i < nray; ++i)
     {
-        const bool ch = ref[uz(i * 2)] < kTmax - 0.5;
-        const bool gh = static_cast<double>(outf[uz(i * 2)]) < kTmax - 0.5;
+        const bool ch = ref[uz(i * 2)] < k_tmax - 0.5;
+        const bool gh = static_cast<double>(outf[uz(i * 2)]) < k_tmax - 0.5;
         if (ch != gh)
         {
             ++disagree;
@@ -1867,11 +1940,15 @@ TEST_CASE("D-007 P2: CKIR-authored RT pipeline (+ SER hint) on Vulkan == CPU ref
     const bool ser = rt.capabilities().has(gpu::RtFeature::ShaderReorder);
 
     crd::memory::TlsfAllocator alloc(16U << 20U);
-    kir::KGraph grg(&alloc), gch(&alloc), gms(&alloc);
+    kir::KGraph grg(&alloc);
+    kir::KGraph gch(&alloc);
+    kir::KGraph gms(&alloc);
     const kir::KEntry erg = kir::rt::build_rt_pipeline_raygen(grg, ser); // request the SER reorder hint iff the adapter has SER
     const kir::KEntry ech = kir::rt::build_rt_pipeline_closesthit(gch);
     const kir::KEntry ems = kir::rt::build_rt_pipeline_miss(gms);
-    kir::GlslKernel krg(&alloc), kch(&alloc), kms(&alloc);
+    kir::GlslKernel krg(&alloc);
+    kir::GlslKernel kch(&alloc);
+    kir::GlslKernel kms(&alloc);
     REQUIRE(kir::emit_rt_stage_glsl(grg, erg, &alloc, krg, ser));
     REQUIRE(kir::emit_rt_stage_glsl(gch, ech, &alloc, kch, false));
     REQUIRE(kir::emit_rt_stage_glsl(gms, ems, &alloc, kms, false));
@@ -1885,20 +1962,21 @@ TEST_CASE("D-007 P2: CKIR-authored RT pipeline (+ SER hint) on Vulkan == CPU ref
     const float verts[9] = {0.0F, 0.0F, 2.0F, 1.0F, 0.0F, 2.0F, 0.0F, 1.0F, 2.0F};
     auto scene = rt.build_scene(verts, 1U);
     REQUIRE(scene != nullptr);
-    constexpr crd::u32 kN = 4U;
-    const float rd[kN][6] = {{0.2F,0.2F,0,0,0,1}, {0.2F,0.2F,0,0,0,-1}, {5,5,0,0,0,1}, {0.1F,0.1F,1,0,0,1}};
-    crd::containers::Array<float> rays(&alloc), got(&alloc);
-    rays.resize(static_cast<crd::usize>(kN) * 6U, 0.0F); got.resize(kN, 0.0F);
-    for (crd::u32 i = 0; i < kN; ++i) { for (int c = 0; c < 6; ++c) { rays[i * 6U + c] = rd[i][c]; } }
-    gpu::VulkanRayTracingContext::Binding bind[2] = {{rays.data(), nullptr, rays.size() * sizeof(float), 1U}, {nullptr, got.data(), static_cast<crd::u64>(kN) * sizeof(float), 2U}};
+    constexpr crd::u32 num_pts = 4U;
+    const float rd[num_pts][6] = {{0.2F,0.2F,0,0,0,1}, {0.2F,0.2F,0,0,0,-1}, {5,5,0,0,0,1}, {0.1F,0.1F,1,0,0,1}};
+    crd::containers::Array<float> rays(&alloc);
+    crd::containers::Array<float> got(&alloc);
+    rays.resize(static_cast<crd::usize>(num_pts) * 6U, 0.0F); got.resize(num_pts, 0.0F);
+    for (crd::u32 i = 0; i < num_pts; ++i) { for (int c = 0; c < 6; ++c) { rays[i * 6U + c] = rd[i][c]; } }
+    gpu::VulkanRayTracingContext::Binding bind[2] = {{rays.data(), nullptr, rays.size() * sizeof(float), 1U}, {nullptr, got.data(), static_cast<crd::u64>(num_pts) * sizeof(float), 2U}};
     REQUIRE(rt.trace_rays_pipeline(*scene, crd::containers::ConstSpan<crd::u8>(crg.spirv.data(), crg.spirv.size()),
                                    crd::containers::ConstSpan<crd::u8>(cms.spirv.data(), cms.spirv.size()),
                                    crd::containers::ConstSpan<crd::u8>(cch.spirv.data(), cch.spirv.size()),
-                                   crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 2), kN, 1U));
+                                   crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 2), num_pts, 1U));
     INFO("CKIR RT pipeline" << (ser ? " (SER)" : "") << " t=[" << got[0] << ", " << got[1] << ", " << got[2] << ", " << got[3] << "]");
     CHECK(crd::math::abs(static_cast<double>(got[0]) - 2.0) < 1.0e-4);
-    CHECK(got[1] > 1.0e29);
-    CHECK(got[2] > 1.0e29);
+    CHECK(got[1] > 1.0e29F);
+    CHECK(got[2] > 1.0e29F);
     CHECK(crd::math::abs(static_cast<double>(got[3]) - 1.0) < 1.0e-4);
 }
 
@@ -1931,7 +2009,10 @@ TEST_CASE("D-007 P4: portable OMM + CKIR any-hit alpha fallback on Vulkan", "[gp
     const float identity[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
     auto scene = rt.build_scene_instanced(verts, 1U, identity, 1U, /*opaque=*/false);
     REQUIRE(scene != nullptr);
-    kir::KGraph grg(&alloc), gch(&alloc), gms(&alloc), gah(&alloc);
+    kir::KGraph grg(&alloc);
+    kir::KGraph gch(&alloc);
+    kir::KGraph gms(&alloc);
+    kir::KGraph gah(&alloc);
     const kir::KEntry erg = kir::rt::build_rt_pipeline_raygen(grg, false);
     const kir::KEntry ech = kir::rt::build_rt_pipeline_closesthit(gch);
     const kir::KEntry ems = kir::rt::build_rt_pipeline_miss(gms);
@@ -1945,21 +2026,23 @@ TEST_CASE("D-007 P4: portable OMM + CKIR any-hit alpha fallback on Vulkan", "[gp
     const auto cms = comp(gpu::ShaderStage::Miss, gms, ems);
     const auto cah = comp(gpu::ShaderStage::AnyHit, gah, eah);
 
-    constexpr crd::u32 kN = 64U;
-    crd::containers::Array<float> rays(&alloc), got(&alloc);
-    rays.resize(static_cast<crd::usize>(kN) * 6U, 0.0F); got.resize(kN, 0.0F);
+    constexpr crd::u32 num_pts = 64U;
+    crd::containers::Array<float> rays(&alloc);
+    crd::containers::Array<float> got(&alloc);
+    rays.resize(static_cast<crd::usize>(num_pts) * 6U, 0.0F); got.resize(num_pts, 0.0F);
     crd::u32 interior = 0;
     for (crd::u32 j = 0; j < 8U; ++j) { for (crd::u32 i = 0; i < 8U; ++i) {
         const crd::u32 p = j * 8U + i; const float x = 0.15F + 1.7F / 7.0F * static_cast<float>(i); const float y = 0.15F + 1.7F / 7.0F * static_cast<float>(j);
         rays[p * 6U + 0U] = x; rays[p * 6U + 1U] = y; rays[p * 6U + 5U] = 1.0F; if (x + y < 1.9F) { ++interior; } } }
-    gpu::VulkanRayTracingContext::Binding bind[2] = {{rays.data(), nullptr, rays.size() * sizeof(float), 1U}, {nullptr, got.data(), static_cast<crd::u64>(kN) * sizeof(float), 2U}};
+    gpu::VulkanRayTracingContext::Binding bind[2] = {{rays.data(), nullptr, rays.size() * sizeof(float), 1U}, {nullptr, got.data(), static_cast<crd::u64>(num_pts) * sizeof(float), 2U}};
     REQUIRE(rt.trace_rays_pipeline(*scene, crd::containers::ConstSpan<crd::u8>(crg.spirv.data(), crg.spirv.size()),
                                    crd::containers::ConstSpan<crd::u8>(cms.spirv.data(), cms.spirv.size()),
                                    crd::containers::ConstSpan<crd::u8>(cch.spirv.data(), cch.spirv.size()),
-                                   crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 2), kN, 1U,
+                                   crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 2), num_pts, 1U,
                                    crd::containers::ConstSpan<crd::u8>(cah.spirv.data(), cah.spirv.size())));
-    crd::u32 hit = 0, pass = 0;
-    for (crd::u32 p = 0; p < kN; ++p) { if (static_cast<double>(got[p]) > 0.9 && static_cast<double>(got[p]) < 1.1) { ++hit; } else if (static_cast<double>(got[p]) > 1.0e29) { ++pass; } }
+    crd::u32 hit = 0;
+    crd::u32 pass = 0;
+    for (crd::u32 p = 0; p < num_pts; ++p) { if (static_cast<double>(got[p]) > 0.9 && static_cast<double>(got[p]) < 1.1) { ++hit; } else if (static_cast<double>(got[p]) > 1.0e29) { ++pass; } }
     INFO("any-hit alpha: interior=" << interior << " hit(u+v>=0.5)=" << hit << " passed-through(u+v<0.5)=" << pass);
     CHECK(hit > 3);   // the opaque half (u+v>=0.5) hits
     CHECK(pass > 3);  // the transparent half (u+v<0.5) PASSES THROUGH — the any-hit alpha fallback works
@@ -1992,15 +2075,16 @@ TEST_CASE("D-007 P5: portable scalable scene-build (cluster or standard-BLAS fal
         bool fell = false;
         auto scene = rt.build_scene_scalable(verts, 1U, /*prefer_clusters=*/mode == 0, &fell);
         REQUIRE(scene != nullptr);
-        constexpr crd::u32 kN = 64U;
-        crd::containers::Array<float> rays(&alloc), got(&alloc);
-        rays.resize(static_cast<crd::usize>(kN) * 6U, 0.0F); got.resize(kN, 0.0F);
+        constexpr crd::u32 num_pts = 64U;
+        crd::containers::Array<float> rays(&alloc);
+        crd::containers::Array<float> got(&alloc);
+        rays.resize(static_cast<crd::usize>(num_pts) * 6U, 0.0F); got.resize(num_pts, 0.0F);
         for (int r = 0; r < 4; ++r) { for (int c = 0; c < 6; ++c) { rays[static_cast<crd::usize>(r) * 6U + c] = rd[r][c]; } }
-        gpu::VulkanRayTracingContext::Binding bind[2] = {{rays.data(), nullptr, rays.size() * sizeof(float), 1U}, {nullptr, got.data(), static_cast<crd::u64>(kN) * sizeof(float), 2U}};
+        gpu::VulkanRayTracingContext::Binding bind[2] = {{rays.data(), nullptr, rays.size() * sizeof(float), 1U}, {nullptr, got.data(), static_cast<crd::u64>(num_pts) * sizeof(float), 2U}};
         REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 2), 1U));
         INFO("scalable mode=" << mode << " fell_back=" << fell << " t=[" << got[0] << ", " << got[1] << ", " << got[2] << ", " << got[3] << "]");
         CHECK(crd::math::abs(static_cast<double>(got[0]) - 2.0) < 1.0e-4); // both cluster + std BLAS give identical hits
-        CHECK(got[1] > 1.0e29); CHECK(got[2] > 1.0e29);
+        CHECK(got[1] > 1.0e29F); CHECK(got[2] > 1.0e29F);
         CHECK(crd::math::abs(static_cast<double>(got[3]) - 1.0) < 1.0e-4);
     }
 }

@@ -9,6 +9,7 @@ target_link_libraries(crd-renderer-tests PRIVATE
     crd-rhi-vulkan
     crd-shader
     crd-shader-vulkan
+    crd-gpu-context-vulkan # RET-3: test_shader_material_loaders moved here (legacy-loader coverage dies with the module at RET-8)
     crd-renderer
     Catch2::Catch2WithMain
 )

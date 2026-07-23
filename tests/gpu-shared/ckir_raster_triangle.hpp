@@ -1165,6 +1165,31 @@ inline void build_textured_vs(crd::kir::KGraph& g, crd::kir::KEntry& ve)
     ve.out[0]   = {uv, 0, kir::Interp::Smooth};
 }
 
+// GEO-3 CLOSE (stage 4): fetch mip-1 texel (0,0) of a COOKED sRGB chain (texelFetch — deterministic, no filtering/LOD
+// ambiguity; sRGB decode applies on the image read regardless of sampler) and modulate by the AUTHORED base_color —
+// proving both the verbatim mip upload (the cooked linear-space 188, never a device-re-derived 127) AND that material
+// parameters reached the shader. Texture at set 0 / binding 1, sampler at set 0 / binding 2 (draw_textured's layout).
+inline void build_geo3_material_fetch_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe, crd::f32 cr, crd::f32 cg,
+                                         crd::f32 cb)
+{
+    namespace kir = crd::kir;
+    const auto sh    = kir::make_shape({1});
+    const int  tex   = g.texture(0, 1);
+    const int  samp  = g.sampler(0, 2);
+    const int  zero  = g.constant(0.0, sh, kir::DType::I32);
+    const int  coord = g.vec2(zero, zero);
+    const int  lod1  = g.constant(1.0, sh, kir::DType::I32);
+    const int  texel = g.tex_fetch(tex, samp, coord, lod1);
+    const int  bc    = g.vec4(g.constant(static_cast<crd::f64>(cr), sh, kir::DType::F32),
+                              g.constant(static_cast<crd::f64>(cg), sh, kir::DType::F32),
+                              g.constant(static_cast<crd::f64>(cb), sh, kir::DType::F32),
+                              g.constant(1.0, sh, kir::DType::F32));
+    const int  outc  = g.binary(kir::KOp::Mul, texel, bc);
+    fe.stage  = kir::KStage::Fragment;
+    fe.n_out  = 1;
+    fe.out[0] = {outc, 0};
+}
+
 // B2: a fragment shader that samples a 2D texture at the interpolated UV and writes the sampled colour. Texture at set 0 /
 // binding 1, sampler at set 0 / binding 2 (matching draw_textured's descriptors). The biting observable: with a left-red /
 // right-green texture, screen-left reads red and screen-right reads green — proving the sample runs AND UV.x drives it.

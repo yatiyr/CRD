@@ -1,8 +1,9 @@
 // smoke_hesap_tensor — v14-a headless smoke + THE LINK-ISOLATION GATE
 // (ADR-0096 §1): this executable links ONLY crd-hesap-tensor's public closure
-// (core/containers/memory/math) — deliberately NOT crd-hesap-stats (Philox is
-// include-only) nor hesap-dense/sparse. If a future edit link-drags any of
-// them into the substrate, THIS TARGET FAILS TO LINK — that is the test.
+// (core/containers/memory/math/jobs + platform — io.hpp's fs seam, declared at
+// CI-1 2026-07-23) — deliberately NOT crd-hesap-stats (Philox is include-only)
+// nor hesap-dense/sparse. If a future edit link-drags any of them into the
+// substrate, THIS TARGET FAILS TO LINK — that is the test.
 #include <crd/hesap/tensor/dtypes.hpp>
 #include <crd/hesap/tensor/tensor.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>

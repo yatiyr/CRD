@@ -1,6 +1,10 @@
 # ADR-0042 — Texture cooked format + GPU upload strategy
 
-**Status:** Accepted  
+**Status:** Accepted — PARTIALLY SUPERSEDED by ADR-0105 (2026-07-23, RET band). The TXTR artifact format + the
+CPU-only-loader posture SURVIVE (now with RGBA8UnormSrgb=3 and linear-space-filtered mips, GEO-3 2b). The
+`GpuTextureUploader`/rhi upload half is RETIRED: the upload path is `IRasterContext::create_texture_from_mips`
+(gpu-context, both backends — cooked chains verbatim + hardware sRGB). The TextureResource type re-homes GPU-free per
+RET-3.  
 **Phase:** 2.7 v1a  
 **Tags:** `[resources]` `[renderer]` `[cooker]`
 

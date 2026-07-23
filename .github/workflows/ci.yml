@@ -51,14 +51,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\VulkanSDK
-          key: vulkan-sdk-1.3.290.0-windows
+          key: vulkan-sdk-1.4.341.1-windows
 
       - name: Install Vulkan SDK
         if: steps.vulkan-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           Invoke-WebRequest `
-            -Uri "https://sdk.lunarg.com/sdk/download/1.3.290.0/windows/VulkanSDK-1.3.290.0-Installer.exe" `
+            -Uri "https://sdk.lunarg.com/sdk/download/1.4.341.1/windows/vulkansdk-windows-X64-1.4.341.1.exe" `
             -OutFile VulkanSDK.exe
           Start-Process -FilePath ".\VulkanSDK.exe" `
             -ArgumentList "--accept-licenses --default-answer --confirm-command install" `
@@ -67,8 +67,8 @@ jobs:
       - name: Set Vulkan environment
         shell: pwsh
         run: |
-          "VULKAN_SDK=C:\VulkanSDK\1.3.290.0" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "C:\VulkanSDK\1.3.290.0\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "VULKAN_SDK=C:\VulkanSDK\1.4.341.1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "C:\VulkanSDK\1.4.341.1\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
@@ -132,14 +132,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\VulkanSDK
-          key: vulkan-sdk-1.3.290.0-windows
+          key: vulkan-sdk-1.4.341.1-windows
 
       - name: Install Vulkan SDK
         if: steps.vulkan-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           Invoke-WebRequest `
-            -Uri "https://sdk.lunarg.com/sdk/download/1.3.290.0/windows/VulkanSDK-1.3.290.0-Installer.exe" `
+            -Uri "https://sdk.lunarg.com/sdk/download/1.4.341.1/windows/vulkansdk-windows-X64-1.4.341.1.exe" `
             -OutFile VulkanSDK.exe
           Start-Process -FilePath ".\VulkanSDK.exe" `
             -ArgumentList "--accept-licenses --default-answer --confirm-command install" `
@@ -148,8 +148,8 @@ jobs:
       - name: Set Vulkan environment
         shell: pwsh
         run: |
-          "VULKAN_SDK=C:\VulkanSDK\1.3.290.0" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "C:\VulkanSDK\1.3.290.0\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "VULKAN_SDK=C:\VulkanSDK\1.4.341.1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "C:\VulkanSDK\1.4.341.1\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Configure
         # CI relaxed mode for clang-tidy: warnings are still reported but not
@@ -216,14 +216,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\VulkanSDK
-          key: vulkan-sdk-1.3.290.0-windows
+          key: vulkan-sdk-1.4.341.1-windows
 
       - name: Install Vulkan SDK
         if: steps.vulkan-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           Invoke-WebRequest `
-            -Uri "https://sdk.lunarg.com/sdk/download/1.3.290.0/windows/VulkanSDK-1.3.290.0-Installer.exe" `
+            -Uri "https://sdk.lunarg.com/sdk/download/1.4.341.1/windows/vulkansdk-windows-X64-1.4.341.1.exe" `
             -OutFile VulkanSDK.exe
           Start-Process -FilePath ".\VulkanSDK.exe" `
             -ArgumentList "--accept-licenses --default-answer --confirm-command install" `
@@ -232,8 +232,8 @@ jobs:
       - name: Set Vulkan environment
         shell: pwsh
         run: |
-          "VULKAN_SDK=C:\VulkanSDK\1.3.290.0" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "C:\VulkanSDK\1.3.290.0\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "VULKAN_SDK=C:\VulkanSDK\1.4.341.1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "C:\VulkanSDK\1.4.341.1\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Configure
         run: cmake --preset win-clang-cl
@@ -280,15 +280,25 @@ jobs:
         run: |
           mkdir -p /tmp/vulkan-sdk/Source/SPIRV-Reflect/include/spirv/unified1
           curl -fsSL \
-            https://raw.githubusercontent.com/KhronosGroup/SPIRV-Reflect/vulkan-sdk-1.3.290.0/spirv_reflect.h \
+            https://raw.githubusercontent.com/KhronosGroup/SPIRV-Reflect/vulkan-sdk-1.4.341.0/spirv_reflect.h \
             -o /tmp/vulkan-sdk/Source/SPIRV-Reflect/spirv_reflect.h
           curl -fsSL \
-            https://raw.githubusercontent.com/KhronosGroup/SPIRV-Reflect/vulkan-sdk-1.3.290.0/spirv_reflect.c \
+            https://raw.githubusercontent.com/KhronosGroup/SPIRV-Reflect/vulkan-sdk-1.4.341.0/spirv_reflect.c \
             -o /tmp/vulkan-sdk/Source/SPIRV-Reflect/spirv_reflect.c
           curl -fsSL \
-            https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/vulkan-sdk-1.3.290.0/include/spirv/unified1/spirv.h \
+            https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/vulkan-sdk-1.4.341.0/include/spirv/unified1/spirv.h \
             -o /tmp/vulkan-sdk/Source/SPIRV-Reflect/include/spirv/unified1/spirv.h
           echo "VULKAN_SDK=/tmp/vulkan-sdk" >> $GITHUB_ENV
+
+      # apt's libvulkan-dev ships ~1.3.275 headers — too old for the NV extensions the engine drives
+      # (VK_NV_cluster_acceleration_structure / cooperative_vector / cooperative_matrix2 / linear_swept_spheres).
+      # Compile against current Khronos Vulkan-Headers (pinned to the same SDK tag as Windows); the runtime
+      # loader (libvulkan.so) still comes from apt — headers-newer-than-loader is the supported direction.
+      - name: Fetch current Vulkan headers
+        run: |
+          git clone --depth 1 --branch vulkan-sdk-1.4.341.0 \
+            https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/vulkan-headers
+          cp -r /tmp/vulkan-headers/include /tmp/vulkan-sdk/
 
       - name: Cache CPM downloads
         uses: actions/cache@v4
@@ -338,14 +348,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\VulkanSDK
-          key: vulkan-sdk-1.3.290.0-windows
+          key: vulkan-sdk-1.4.341.1-windows
 
       - name: Install Vulkan SDK
         if: steps.vulkan-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           Invoke-WebRequest `
-            -Uri "https://sdk.lunarg.com/sdk/download/1.3.290.0/windows/VulkanSDK-1.3.290.0-Installer.exe" `
+            -Uri "https://sdk.lunarg.com/sdk/download/1.4.341.1/windows/vulkansdk-windows-X64-1.4.341.1.exe" `
             -OutFile VulkanSDK.exe
           Start-Process -FilePath ".\VulkanSDK.exe" `
             -ArgumentList "--accept-licenses --default-answer --confirm-command install" `
@@ -354,8 +364,8 @@ jobs:
       - name: Set Vulkan environment
         shell: pwsh
         run: |
-          "VULKAN_SDK=C:\VulkanSDK\1.3.290.0" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "C:\VulkanSDK\1.3.290.0\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "VULKAN_SDK=C:\VulkanSDK\1.4.341.1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "C:\VulkanSDK\1.4.341.1\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Configure
         run: cmake --preset win-shipping
@@ -423,14 +433,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\VulkanSDK
-          key: vulkan-sdk-1.3.290.0-windows
+          key: vulkan-sdk-1.4.341.1-windows
 
       - name: Install Vulkan SDK
         if: steps.vulkan-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           Invoke-WebRequest `
-            -Uri "https://sdk.lunarg.com/sdk/download/1.3.290.0/windows/VulkanSDK-1.3.290.0-Installer.exe" `
+            -Uri "https://sdk.lunarg.com/sdk/download/1.4.341.1/windows/vulkansdk-windows-X64-1.4.341.1.exe" `
             -OutFile VulkanSDK.exe
           Start-Process -FilePath ".\VulkanSDK.exe" `
             -ArgumentList "--accept-licenses --default-answer --confirm-command install" `
@@ -439,8 +449,8 @@ jobs:
       - name: Set Vulkan environment
         shell: pwsh
         run: |
-          "VULKAN_SDK=C:\VulkanSDK\1.3.290.0" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "C:\VulkanSDK\1.3.290.0\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "VULKAN_SDK=C:\VulkanSDK\1.4.341.1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "C:\VulkanSDK\1.4.341.1\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Configure
         run: cmake --preset win-clang-cl-shipping
@@ -485,15 +495,25 @@ jobs:
         run: |
           mkdir -p /tmp/vulkan-sdk/Source/SPIRV-Reflect/include/spirv/unified1
           curl -fsSL \
-            https://raw.githubusercontent.com/KhronosGroup/SPIRV-Reflect/vulkan-sdk-1.3.290.0/spirv_reflect.h \
+            https://raw.githubusercontent.com/KhronosGroup/SPIRV-Reflect/vulkan-sdk-1.4.341.0/spirv_reflect.h \
             -o /tmp/vulkan-sdk/Source/SPIRV-Reflect/spirv_reflect.h
           curl -fsSL \
-            https://raw.githubusercontent.com/KhronosGroup/SPIRV-Reflect/vulkan-sdk-1.3.290.0/spirv_reflect.c \
+            https://raw.githubusercontent.com/KhronosGroup/SPIRV-Reflect/vulkan-sdk-1.4.341.0/spirv_reflect.c \
             -o /tmp/vulkan-sdk/Source/SPIRV-Reflect/spirv_reflect.c
           curl -fsSL \
-            https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/vulkan-sdk-1.3.290.0/include/spirv/unified1/spirv.h \
+            https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/vulkan-sdk-1.4.341.0/include/spirv/unified1/spirv.h \
             -o /tmp/vulkan-sdk/Source/SPIRV-Reflect/include/spirv/unified1/spirv.h
           echo "VULKAN_SDK=/tmp/vulkan-sdk" >> $GITHUB_ENV
+
+      # apt's libvulkan-dev ships ~1.3.275 headers — too old for the NV extensions the engine drives
+      # (VK_NV_cluster_acceleration_structure / cooperative_vector / cooperative_matrix2 / linear_swept_spheres).
+      # Compile against current Khronos Vulkan-Headers (pinned to the same SDK tag as Windows); the runtime
+      # loader (libvulkan.so) still comes from apt — headers-newer-than-loader is the supported direction.
+      - name: Fetch current Vulkan headers
+        run: |
+          git clone --depth 1 --branch vulkan-sdk-1.4.341.0 \
+            https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/vulkan-headers
+          cp -r /tmp/vulkan-headers/include /tmp/vulkan-sdk/
 
       - name: Cache CPM downloads
         uses: actions/cache@v4

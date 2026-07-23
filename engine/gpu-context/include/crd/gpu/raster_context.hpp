@@ -118,6 +118,58 @@ public:
 };
 
 // The raster dispatch surface. Kernel-source-agnostic like `IComputeContext` (ADR-0100): it renders compiled programs.
+// RET-2 (ADR-0105): the present-mode request. Fifo (vsync) is universally available; Mailbox/Immediate fall back to
+// Fifo when the surface doesn't offer them (never a creation failure over a pacing preference).
+enum class PresentMode : crd::u8
+{
+    Fifo = 0,
+    Mailbox,
+    Immediate,
+};
+
+// RET-2 (ADR-0105): a swapchain the ONE graphics layer presents through — the capability that retires crd-rhi's
+// present path. The design is a pure SINK: the app renders into a NORMAL color target through the unchanged draw
+// paths, and `present(target)` blits that canvas into the acquired backbuffer (direct-to-backbuffer rendering arrives
+// with the frame graph, post-RET). Two surface kinds behind one interface: a real window (native handle) and a
+// HEADLESS surface (VK_EXT_headless_surface) — the full acquire/present/resize machinery, gate-testable with no
+// window system at all.
+class IPresentSurface
+{
+public:
+    IPresentSurface()                                  = default;
+    virtual ~IPresentSurface()                         = default;
+    IPresentSurface(const IPresentSurface&)            = delete;
+    IPresentSurface& operator=(const IPresentSurface&) = delete;
+    IPresentSurface(IPresentSurface&&)                 = delete;
+    IPresentSurface& operator=(IPresentSurface&&)      = delete;
+
+    [[nodiscard]] virtual bool     valid() const noexcept = 0;
+    [[nodiscard]] virtual crd::u32 width() const noexcept = 0;
+    [[nodiscard]] virtual crd::u32 height() const noexcept = 0;
+
+    // Blit `target`'s contents (a color target of MATCHING size that has been drawn at least once) into the next
+    // backbuffer and present it. Returns false on a size mismatch or an out-of-date swapchain — call resize().
+    [[nodiscard]] virtual bool present(class IRasterTarget& target) = 0;
+
+    // RET-5: present with an OVERLAY composited onto the backbuffer AFTER the canvas blit (ImGui/debug HUDs — the
+    // scene canvas stays clean; overlays live at the present seam). `overlay` receives the backend's frame command
+    // buffer as an opaque pointer (Vulkan: VkCommandBuffer) inside an active render pass targeting the backbuffer —
+    // backend-aware layers (crd-imgui's gpu backend) record into it. Returns false when overlays are unsupported on
+    // this surface (never silently dropped).
+    using OverlayFn = void (*)(void* backend_cmd, void* user);
+    [[nodiscard]] virtual bool present(class IRasterTarget& target, OverlayFn overlay, void* user)
+    {
+        if (overlay == nullptr) { return present(target); }
+        (void)user;
+        return false; // a surface that cannot composite overlays says so — honesty over a silent plain present
+    }
+
+    // Recreate the swapchain at the new size (window resized / out-of-date). Returns false when the device refuses.
+    [[nodiscard]] virtual bool resize(crd::u32 width, crd::u32 height) = 0;
+
+    [[nodiscard]] virtual crd::u64 frame_count() const noexcept = 0; // frames successfully presented
+};
+
 class IRasterContext
 {
 public:
@@ -365,6 +417,40 @@ public:
     // host-readable after. Default (no float-target / blend-equation support) ⇒ no-op. Appended at END (vtable-stable).
     virtual void draw_wboit(IRasterTarget& /*target*/, IRasterProgram& /*transparent*/, IRasterProgram& /*composite*/,
                             ClearColor /*background*/, crd::u32 /*vertex_count*/) {}
+
+    // --- GEO-1: CPU upload into a storage buffer (VERTEX PULLING — the bindless vertex-feeding path) ---------------------
+    //
+    // Copy `size_bytes` from `data` into `storage` at `byte_offset` (a staged transfer; blocks until visible to shaders).
+    // The GEO-1 draw gate uploads a COOKED MeshResource vertex stream and the VS fetches it by `VertexIndex` through
+    // `storage_load` (set 0 / binding 0 — the same buffer `draw_storage` binds, now visible to the VERTEX stage too).
+    // Returns false when out of range / unsupported. Appended at END (vtable-stable).
+    [[nodiscard]] virtual bool upload_storage(IStorageBuffer& /*storage*/, crd::u32 /*byte_offset*/,
+                                              const void* /*data*/, crd::u32 /*size_bytes*/) { return false; }
+
+    // GEO-3 stage 4 / RET-3 (ADR-0105): create a sampled 2D texture from a COOKED mip chain. `mips[i]` points at
+    // level-i RGBA8 pixels (dimensions halving from width×height down to 1×1, `mip_count` levels — the TXTR artifact
+    // layout, ADR-0042). The chain uploads VERBATIM — never re-derived on device (the cook filters sRGB content in
+    // LINEAR space; a device-side box blit would re-introduce the mip-darkening bug this pipeline eliminates).
+    // `srgb` selects an sRGB image format ⇒ hardware decode-on-sample (TexSample AND TexelFetch both decode).
+    // Returns nullptr on invalid input / unsupported. Appended at END (vtable-stable).
+    [[nodiscard]] virtual std::unique_ptr<class ITexture>
+    create_texture_from_mips(crd::u32 /*width*/, crd::u32 /*height*/, crd::u32 /*mip_count*/,
+                             const void* const* /*mips*/, bool /*srgb*/) { return nullptr; }
+
+    // RET-2 (ADR-0105): create a present surface. `native_window` = the platform window handle (HWND on Windows);
+    // nullptr requests a HEADLESS surface (VK_EXT_headless_surface — the full swapchain machinery with no window,
+    // the gate-testable path). Returns nullptr when the context lacks the present capability (see
+    // VulkanGpuContext::present_capable / headless_surface). Appended at END (vtable-stable).
+    [[nodiscard]] virtual std::unique_ptr<IPresentSurface>
+    create_present_surface(void* /*native_window*/, crd::u32 /*width*/, crd::u32 /*height*/, PresentMode /*mode*/)
+    {
+        return nullptr;
+    }
+
+    // RET-4 pt 5: copy `storage`'s CURRENT device contents into its host-visible readback so `read_u32` reflects
+    // them WITHOUT a draw — `upload_storage`'s twin (compute results, defrag verification, tooling reads).
+    // Returns false when unsupported. Appended at END (vtable-stable).
+    [[nodiscard]] virtual bool download_storage(IStorageBuffer& /*storage*/) { return false; }
 };
 
 // B5: an opaque deferred G-buffer (see `create_gbuffer_target`). `read_pixel(attachment, x, y)` is valid after a draw.

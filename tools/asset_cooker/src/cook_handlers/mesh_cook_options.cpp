@@ -100,6 +100,23 @@ MeshCookOptions parse_mesh_cook_options(crd::containers::StringView meta_text) n
                              "defaulting to 1.0\n");
             }
         }
+        else if (sv_starts_with(line, crd::containers::StringView("smooth_angle_deg"))) // GEO-2: normal-generation crease
+        {
+            crd::containers::StringView rhs = line.substr(crd::containers::StringView("smooth_angle_deg").size());
+            rhs = trim_left(rhs);
+            if (rhs.empty() || rhs.front() != '=') { continue; }
+            rhs = trim_left(rhs.substr(1));
+            const crd::f32 v = parse_float_literal(rhs);
+            if (v >= 0.0F && v <= 180.0F && std::isfinite(v))
+            {
+                out.smooth_angle_deg = v;
+            }
+            else
+            {
+                std::fprintf(stderr, "mesh_cook: ignoring out-of-range smooth_angle_deg (want 0..180); keeping %g\n",
+                             static_cast<double>(out.smooth_angle_deg));
+            }
+        }
     }
 
     return out;

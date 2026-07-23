@@ -89,7 +89,7 @@ struct RtHairSwatchConfig
     double plane_y             = 0.0;
     double ground_albedo[3]    = {0.34, 0.34, 0.35};
     int    ground_shadow_steps = 5;
-    double fibre_depth  = 2.0; // optical path of one crossing, in sigma_a units (about a diameter)
+    double fibre_depth  = 2.0; // crd-lint-allow-untagged-physical: dimensionless OPTICAL DEPTH (path of one crossing in sigma_a units, about a diameter)
     int    segments    = 1;     // for the miss-index clamp
     int    local_size  = 64;
     // ── DIAGNOSTIC AOV. 0 = beauty. 1 = h probe: R accumulates |h| ONLY on hits, G counts the hits, B is unused, and
@@ -176,8 +176,8 @@ struct RtHairSwatchConfig
     //   fibres. The throughput here carries exactly that: it is multiplied by the fibre's own coloured response at
     //   every bounce, so pale hair keeps bouncing and dark hair dies after one, which is precisely the difference
     //   between the two in life.
-    constexpr double kFar = 1.0e4;
-    constexpr double kTau = 6.28318530717958647692;
+    constexpr double far_clip = 1.0e4;
+    constexpr double tau = 6.28318530717958647692;
 
     V3  po = ro;
     V3  pd = rd;
@@ -192,8 +192,8 @@ struct RtHairSwatchConfig
         const int    nshadow = bounce == 0 ? cfg.shadow_steps : cfg.shadow_steps_indirect;
         const crd::u32 bseed = static_cast<crd::u32>(bounce) * 0x9E3779B1U + 0x7F4A7C15U;
 
-        const auto hit = g.trace_ray_curves(as, seg_b, po.x, po.y, po.z, pd.x, pd.y, pd.z, ks(cfg.ray_tmin), ks(kFar));
-        const int  miss = g.binary(KOp::CmpGe, hit.t, ks(kFar - 1.0));
+        const auto hit = g.trace_ray_curves(as, seg_b, po.x, po.y, po.z, pd.x, pd.y, pd.z, ks(cfg.ray_tmin), ks(far_clip));
+        const int  miss = g.binary(KOp::CmpGe, hit.t, ks(far_clip - 1.0));
         if (bounce == 0) { miss0 = miss; }
 
         // ── the ENVIRONMENT the escaped ray gathers. Without one, indirect rays leave and collect nothing, and GI
@@ -262,8 +262,8 @@ struct RtHairSwatchConfig
         //     continuity matters and the sensitivity is mild; h needs consistency with the intersector instead.
         const V3  seg_v = sub3(g, pb, pa);
         const int sgl   = mx(hd::safe_sqrt(g, dot3(g, seg_v, seg_v)), ks(1.0e-20));
-        const int sgi_  = hd::dv(g, ks(1.0), sgl);
-        const V3  sdir{hd::mul(g, seg_v.x, sgi_), hd::mul(g, seg_v.y, sgi_), hd::mul(g, seg_v.z, sgi_)};
+        const int sg_inv  = hd::dv(g, ks(1.0), sgl);
+        const V3  sdir{hd::mul(g, seg_v.x, sg_inv), hd::mul(g, seg_v.y, sg_inv), hd::mul(g, seg_v.z, sg_inv)};
         const V3  gcr{hd::sub(g, hd::mul(g, sdir.y, wo.z), hd::mul(g, sdir.z, wo.y)),
                      hd::sub(g, hd::mul(g, sdir.z, wo.x), hd::mul(g, sdir.x, wo.z)),
                      hd::sub(g, hd::mul(g, sdir.x, wo.y), hd::mul(g, sdir.y, wo.x))};
@@ -291,8 +291,8 @@ struct RtHairSwatchConfig
         const V3  wop{hd::sub(g, wo.x, hd::mul(g, tang.x, wot)), hd::sub(g, wo.y, hd::mul(g, tang.y, wot)),
                      hd::sub(g, wo.z, hd::mul(g, tang.z, wot))};
         const int pl  = mx(hd::safe_sqrt(g, dot3(g, wop, wop)), ks(1.0e-20));
-        const int pi_ = hd::dv(g, ks(1.0), pl);
-        const V3  fy{hd::mul(g, wop.x, pi_), hd::mul(g, wop.y, pi_), hd::mul(g, wop.z, pi_)};
+        const int pl_inv = hd::dv(g, ks(1.0), pl);
+        const V3  fy{hd::mul(g, wop.x, pl_inv), hd::mul(g, wop.y, pl_inv), hd::mul(g, wop.z, pl_inv)};
         const V3  fz{hd::sub(g, hd::mul(g, tang.y, fy.z), hd::mul(g, tang.z, fy.y)),
                     hd::sub(g, hd::mul(g, tang.z, fy.x), hd::mul(g, tang.x, fy.z)),
                     hd::sub(g, hd::mul(g, tang.x, fy.y), hd::mul(g, tang.y, fy.x))};
@@ -323,22 +323,22 @@ struct RtHairSwatchConfig
                        hd::add(g, hp.z, hd::mul(g, nrm.z, off))};
 
         // ── NEXT-EVENT ESTIMATION ────────────────────────────────────────────────────────────────────────────────
-        for (int L = 0; L < cfg.nlights; ++L)
+        for (int li = 0; li < cfg.nlights; ++li)
         {
-            const int lu1 = hash01(g.binary(KOp::BitXor, umul(tid, cu(0x27D4EB2FU + static_cast<crd::u32>(L) * 0x1000193U)),
+            const int lu1 = hash01(g.binary(KOp::BitXor, umul(tid, cu(0x27D4EB2FU + static_cast<crd::u32>(li) * 0x1000193U)),
                                             uadd(sbase, cu(0x165667B1U + bseed))));
-            const int lu2 = hash01(g.binary(KOp::BitXor, umul(tid, cu(0x9E3779B1U + static_cast<crd::u32>(L) * 0x85EBCA6BU)),
+            const int lu2 = hash01(g.binary(KOp::BitXor, umul(tid, cu(0x9E3779B1U + static_cast<crd::u32>(li) * 0x85EBCA6BU)),
                                             uadd(sbase, cu(0x27220A95U + bseed))));
-            const int lrr = hd::mul(g, ks(cfg.light_radius[L]), hd::safe_sqrt(g, lu1));
-            const int lph = hd::mul(g, ks(kTau), lu2);
+            const int lrr = hd::mul(g, ks(cfg.light_radius[li]), hd::safe_sqrt(g, lu1));
+            const int lph = hd::mul(g, ks(tau), lu2);
             const int loc = hd::mul(g, lrr, g.unary(KOp::Cos, lph));
             const int los = hd::mul(g, lrr, g.unary(KOp::Sin, lph));
-            const V3  lraw{hd::add(g, hd::add(g, ks(cfg.light_dir[L][0]), hd::mul(g, ks(cfg.light_t[L][0]), loc)), hd::mul(g, ks(cfg.light_b[L][0]), los)),
-                           hd::add(g, hd::add(g, ks(cfg.light_dir[L][1]), hd::mul(g, ks(cfg.light_t[L][1]), loc)), hd::mul(g, ks(cfg.light_b[L][1]), los)),
-                           hd::add(g, hd::add(g, ks(cfg.light_dir[L][2]), hd::mul(g, ks(cfg.light_t[L][2]), loc)), hd::mul(g, ks(cfg.light_b[L][2]), los))};
+            const V3  lraw{hd::add(g, hd::add(g, ks(cfg.light_dir[li][0]), hd::mul(g, ks(cfg.light_t[li][0]), loc)), hd::mul(g, ks(cfg.light_b[li][0]), los)),
+                           hd::add(g, hd::add(g, ks(cfg.light_dir[li][1]), hd::mul(g, ks(cfg.light_t[li][1]), loc)), hd::mul(g, ks(cfg.light_b[li][1]), los)),
+                           hd::add(g, hd::add(g, ks(cfg.light_dir[li][2]), hd::mul(g, ks(cfg.light_t[li][2]), loc)), hd::mul(g, ks(cfg.light_b[li][2]), los))};
             const int ll  = mx(hd::safe_sqrt(g, dot3(g, lraw, lraw)), ks(1.0e-20));
-            const int li  = hd::dv(g, ks(1.0), ll);
-            const V3  wi{hd::mul(g, lraw.x, li), hd::mul(g, lraw.y, li), hd::mul(g, lraw.z, li)};
+            const int ll_inv  = hd::dv(g, ks(1.0), ll);
+            const V3  wi{hd::mul(g, lraw.x, ll_inv), hd::mul(g, lraw.y, ll_inv), hd::mul(g, lraw.z, ll_inv)};
 
             // march the shadow ray THROUGH fibres, accumulating per-channel transmittance. A binary shadow is wrong
             // for hair: a fibre is a filter, not an occluder, and because σₐ is spectral the surviving light is
@@ -347,8 +347,8 @@ struct RtHairSwatchConfig
             V3  so = sorg;
             for (int step = 0; step < nshadow; ++step)
             {
-                const auto sh  = g.trace_ray_curves(as, seg_b, so.x, so.y, so.z, wi.x, wi.y, wi.z, ks(cfg.shadow_tmin), ks(kFar));
-                const int  occ = g.binary(KOp::CmpLt, sh.t, ks(kFar - 1.0));
+                const auto sh  = g.trace_ray_curves(as, seg_b, so.x, so.y, so.z, wi.x, wi.y, wi.z, ks(cfg.shadow_tmin), ks(far_clip));
+                const int  occ = g.binary(KOp::CmpLt, sh.t, ks(far_clip - 1.0));
                 for (int c = 0; c < 3; ++c)
                 {
                     const double tfib = crd::math::exp(-cfg.sigma_a[c] * cfg.fibre_depth);
@@ -371,7 +371,7 @@ struct RtHairSwatchConfig
                                                            ks(cfg.sigma_a[c]), ks(cfg.beta_m), ks(cfg.beta_n),
                                                            ks(cfg.alpha_deg));
                 // L_o = ∫ f·L_i·cosθi dω — the cosine is part of the fibre's measure, not decoration.
-                const int d = hd::mul(g, hd::mul(g, hd::mul(g, f, cos_ti), ks(cfg.light_col[L][c])), trc[c]);
+                const int d = hd::mul(g, hd::mul(g, hd::mul(g, f, cos_ti), ks(cfg.light_col[li][c])), trc[c]);
                 radc[c] = hd::add(g, radc[c], g.select(miss, ks(0.0), hd::mul(g, thr[c], d)));
             }
         }
@@ -384,7 +384,7 @@ struct RtHairSwatchConfig
             // uniform on the sphere: z = 1 − 2u₁, and the weight below carries the 4π that makes it unbiased.
             const int bz  = hd::sub(g, ks(1.0), hd::mul(g, ks(2.0), bu1));
             const int brr = hd::safe_sqrt(g, hd::sub(g, ks(1.0), hd::sq(g, bz)));
-            const int bph = hd::mul(g, ks(kTau), bu2);
+            const int bph = hd::mul(g, ks(tau), bu2);
             const V3  nd{hd::mul(g, brr, g.unary(KOp::Cos, bph)), hd::mul(g, brr, g.unary(KOp::Sin, bph)), bz};
 
             const int nsin = dot3(g, nd, tang);
@@ -397,7 +397,7 @@ struct RtHairSwatchConfig
                                                            ks(cfg.alpha_deg));
                 // weight = f·cosθ / pdf, pdf = 1/4π. A miss retires the path by zeroing the throughput — the
                 // branchless equivalent of breaking out of the loop.
-                const int wgt = hd::mul(g, hd::mul(g, f, ncos), ks(2.0 * kTau));
+                const int wgt = hd::mul(g, hd::mul(g, f, ncos), ks(2.0 * tau));
                 thr[c] = g.select(miss, ks(0.0), hd::mul(g, thr[c], g.binary(KOp::Min, wgt, ks(cfg.throughput_clamp))));
                 g.stmt_materialize(thr[c]);
             }
@@ -422,20 +422,20 @@ struct RtHairSwatchConfig
         const int dy   = g.select(g.binary(KOp::CmpLt, g.unary(KOp::Abs, rd.y), ks(1.0e-6)), ks(-1.0e-6), rd.y);
         const int pt   = hd::dv(g, hd::sub(g, ks(cfg.plane_y), ro.y), dy);
         const int phit = g.binary(KOp::BitAnd, g.binary(KOp::CmpGt, pt, ks(1.0e-3)),
-                                  g.binary(KOp::CmpLt, pt, ks(kFar - 1.0)));
+                                  g.binary(KOp::CmpLt, pt, ks(far_clip - 1.0)));
         const V3  pp{hd::add(g, ro.x, hd::mul(g, pt, rd.x)), ks(cfg.plane_y + 1.0e-4),
                     hd::add(g, ro.z, hd::mul(g, pt, rd.z))};
         int acc[3] = {ks(0.0), ks(0.0), ks(0.0)};
-        for (int L = 0; L < cfg.nlights; ++L)
+        for (int li = 0; li < cfg.nlights; ++li)
         {
-            const V3  wl{ks(cfg.light_dir[L][0]), ks(cfg.light_dir[L][1]), ks(cfg.light_dir[L][2])};
+            const V3  wl{ks(cfg.light_dir[li][0]), ks(cfg.light_dir[li][1]), ks(cfg.light_dir[li][2])};
             const int ndl = g.binary(KOp::Max, wl.y, ks(0.0));
             int       ptr[3] = {ks(1.0), ks(1.0), ks(1.0)};
             V3        so = pp;
             for (int step = 0; step < cfg.ground_shadow_steps; ++step)
             {
-                const auto sh  = g.trace_ray_curves(as, seg_b, so.x, so.y, so.z, wl.x, wl.y, wl.z, ks(cfg.shadow_tmin), ks(kFar));
-                const int  occ = g.binary(KOp::CmpLt, sh.t, ks(kFar - 1.0));
+                const auto sh  = g.trace_ray_curves(as, seg_b, so.x, so.y, so.z, wl.x, wl.y, wl.z, ks(cfg.shadow_tmin), ks(far_clip));
+                const int  occ = g.binary(KOp::CmpLt, sh.t, ks(far_clip - 1.0));
                 for (int c = 0; c < 3; ++c)
                 {
                     const double tfib = crd::math::exp(-cfg.sigma_a[c] * cfg.fibre_depth);
@@ -450,7 +450,7 @@ struct RtHairSwatchConfig
             }
             for (int c = 0; c < 3; ++c)
             {
-                acc[c] = hd::add(g, acc[c], hd::mul(g, hd::mul(g, hd::mul(g, ndl, ks(cfg.light_col[L][c])), ptr[c]),
+                acc[c] = hd::add(g, acc[c], hd::mul(g, hd::mul(g, hd::mul(g, ndl, ks(cfg.light_col[li][c])), ptr[c]),
                                                     ks(cfg.ground_albedo[c] * 0.3183098861837907)));
             }
         }

@@ -56,6 +56,7 @@ enum class Format : crd::u16
     R32Sfloat,  // 32-bit float (vertex attr scalar widths / weights)
     D24UnormS8Uint,
     D32Sfloat,
+    R8G8B8A8Srgb, // sRGB-encoded color textures (GEO-3: hardware decode on sample) — appended, never reorder
 };
 
 enum class PresentMode : crd::u8

@@ -756,6 +756,9 @@ TEST_CASE("Vulkan async-compute cross-queue semaphore first-light", "[rhi][vulka
     auto gpu = make_adopted_gpu();
     auto& device = gpu.device;
     REQUIRE(device != nullptr);
+    // The cross-queue submit is exactly where family-mismatch VUIDs live — this test must stay
+    // validation-SILENT, not merely correct (the 00074 print-and-pass regression trap).
+    crd::rhi::ValidationCapture capture(*device);
 
     // Report hardware path for the test log — both paths must pass.
     const bool dedicated = device->has_dedicated_compute_queue();
@@ -844,8 +847,12 @@ TEST_CASE("Vulkan async-compute cross-queue semaphore first-light", "[rhi][vulka
     p2_set->update_buffer(0, *buf_a, 0, buffer_bytes);
     p2_set->update_buffer(1, *buf_b, 0, buffer_bytes);
 
-    auto cmd1 = device->create_command_buffer();
+    // cmd1 is SUBMITTED on compute_queue() — it must come from the matching-family pool (D139
+    // create_command_buffer_for_queue; a graphics-pool buffer on a dedicated compute family fires
+    // VUID-vkQueueSubmit-pCommandBuffers-00074). cmd2 goes to the graphics queue → the default pool.
+    auto cmd1 = device->create_command_buffer_for_queue(device->compute_queue());
     auto cmd2 = device->create_command_buffer();
+    REQUIRE(cmd1 != nullptr);
     auto sem  = device->create_semaphore();
     auto fence_pass1 = device->create_fence();
     auto fence_pass2 = device->create_fence();
@@ -897,6 +904,8 @@ TEST_CASE("Vulkan async-compute cross-queue semaphore first-light", "[rhi][vulka
         CHECK(mapped[i] == 2U * (i + base_offset));
     }
     buf_b->unmap();
+    CHECK(capture.error_count() == 0U); // family-matched pools on BOTH queues — 00074 stays dead
+    CHECK(capture.warning_count() == 0U);
     device->wait_idle();
 }
 

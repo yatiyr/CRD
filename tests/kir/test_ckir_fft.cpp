@@ -650,7 +650,7 @@ TEST_CASE("B-cmp: CKIR radix-2 FFT of a unit impulse is all-ones (bit-exact: twi
     run_fft(n, xr, xi, outr, outi);
 
     int bad = 0;
-    for (int k = 0; k < n; ++k) { if (outr[k] != 1.0F || outi[k] != 0.0F) { ++bad; } }
+    for (int k = 0; k < n; ++k) { if (outr[k] != 1.0 || outi[k] != 0.0) { ++bad; } }
     CHECK(bad == 0);
 }
 

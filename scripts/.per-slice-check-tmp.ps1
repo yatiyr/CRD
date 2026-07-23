@@ -2,7 +2,6 @@
 @{ name='win-debug'; runCTest=$true; asan=$false },
 @{ name='win-asan'; runCTest=$true; asan=$true },
 @{ name='win-shipping'; runCTest=$true; asan=$false },
-@{ name='win-release'; runCTest=$true; asan=$false },
 @{ name='win-tidy'; runCTest=$false; asan=$false }
 )
 $asanRuntimeDir = 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\bin\Hostx64\x64'

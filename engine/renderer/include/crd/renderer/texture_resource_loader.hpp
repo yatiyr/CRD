@@ -1,15 +1,10 @@
 #pragma once
 
-namespace crd::resources
-{
-class ResourceManager;
-}
+// ⛔ COMPAT SHIM (RET-3, ADR-0105): the TXTR loader RE-HOMED to crd-resources. See texture_resource.hpp.
+
+#include <crd/resources/texture_resource.hpp>
 
 namespace crd::renderer
 {
-
-// Register the TXTR loader with the given ResourceManager.
-// Call once during startup, before any texture loads.
-void register_texture_loader(crd::resources::ResourceManager* rm);
-
+using crd::resources::register_texture_loader;
 } // namespace crd::renderer

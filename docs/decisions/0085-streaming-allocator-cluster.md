@@ -1,7 +1,10 @@
 # ADR-0085 — Virtual-memory + streaming allocator cluster
 
 **Date:** 2026-05-27
-**Status:** Accepted
+**Status:** Accepted — the GPU-side (rhi-vulkan) half is SUPERSEDED-IN-PLACE by ADR-0105 (2026-07-23, RET band): the
+suballocation/relocation/defrag CONTRACTS survive but re-home in crd-gpu-context (RET-4 absorbs them + PORTS the
+S6/S7 test suites; parity is the RET-8 deletion precondition). CPU-side virtual-memory/streaming allocators are
+unaffected.
 **Tags:** [memory] [platform] [rhi] [streaming] [resources]
 
 ## Context

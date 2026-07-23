@@ -19,6 +19,7 @@
 
 #include <ckir_raster_triangle.hpp> // B3-e: the SHARED, backend-neutral CKIR triangle (identical on Vulkan + DX12)
 #include <ckir_oit_test.hpp>        // B17: the SHARED order-independent-transparency shaders + CPU oracle (WBOIT/...)
+#include <win32_test_window.hpp>    // RET-2: the isolated real-window helper for the present gate
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -43,6 +44,50 @@ inline int count_equal_even_pairs(g::IRasterTarget& t, crd::u32 dim)
     return n;
 }
 } // namespace
+
+// ═══ RET-2 (D-007 row 90, ADR-0105): DX12 PRESENTS — the DXGI mirror of the Vulkan sink design ═════════════════════════
+TEST_CASE("RET-2: DX12 gpu-context PRESENTS -- acquire/copy/present/resize through a DXGI swapchain",
+          "[dx12][raster][gpu][ret]")
+{
+    auto ctx = g::create_dx12_raster_context();
+    if (ctx == nullptr || !ctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+
+    void* hwnd = crd::gputest::create_test_window(256U, 256U);
+    if (hwnd == nullptr) { WARN("no platform window available; skipping"); return; }
+
+    auto surface = ctx->create_present_surface(hwnd, 256U, 256U, g::PresentMode::Fifo);
+    REQUIRE(surface != nullptr);
+    CHECK(surface->valid());
+    CHECK(surface->width() == 256U);
+    CHECK(surface->height() == 256U);
+
+    // the canvas: the normal offscreen clear path (post-draw state COMMON — exactly what present() consumes)
+    auto target = ctx->create_color_target(256U, 256U);
+    REQUIRE(target != nullptr);
+    for (int frame = 0; frame < 3; ++frame)
+    {
+        ctx->clear(*target, g::ClearColor{1.0F, 0.0F, 0.0F, 1.0F});
+        CHECK(surface->present(*target));
+        crd::gputest::pump_test_window();
+    }
+    CHECK(surface->frame_count() == 3U);
+
+    // a mismatched canvas is REFUSED (never a stretched half-frame)
+    auto small = ctx->create_color_target(128U, 128U);
+    REQUIRE(small != nullptr);
+    ctx->clear(*small, g::ClearColor{0.0F, 1.0F, 0.0F, 1.0F});
+    CHECK(!surface->present(*small));
+
+    // resize exercises ResizeBuffers; the matching canvas presents again
+    REQUIRE(surface->resize(256U, 256U));
+    ctx->clear(*target, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F});
+    CHECK(surface->present(*target));
+    CHECK(surface->frame_count() == 4U);
+
+    WARN("[ret2-present dx12] 4 frames presented through a DXGI swapchain (win32 window, 256x256)");
+    surface.reset(); // the surface dies BEFORE its window
+    crd::gputest::destroy_test_window(hwnd);
+}
 
 TEST_CASE("D-007 C4-a: D3D12 IRasterContext clears an offscreen target and reads it back", "[dx12][raster][gpu]")
 {
@@ -350,7 +395,7 @@ TEST_CASE("D-007 B4: DX12 MESH-shader DispatchMesh renders a triangle (CKIR mesh
 // D-007 B4: the DX12 TASK / AMPLIFICATION path — a CKIR Task entry lowers to as_6_5 amplification HLSL → DXIL, an AS+MS+PS
 // stream PSO, and DispatchMesh from the AS launches N mesh workgroups (GPU-driven amplification) + a payload the mesh reads.
 // ONE task workgroup ⇒ N triangles coloured by the payload. Proves amplification + the task→mesh payload channel on DX12.
-TEST_CASE("D-007 B4: DX12 TASK amplification — 1 task workgroup emits N mesh triangles + payload",
+TEST_CASE("D-007 B4: DX12 TASK amplification -- 1 task workgroup emits N mesh triangles + payload",
           "[dx12][raster][gpu][ir][mesh][task]")
 {
     namespace kir = crd::kir;
@@ -402,7 +447,7 @@ TEST_CASE("D-007 B4: DX12 TASK amplification — 1 task workgroup emits N mesh t
 
 // D-007 B4: the MULTI-FIELD task→mesh payload on DX12 — a task passes a 3-uint payload (v0,v1,v2), each read by the mesh via
 // KBuiltin::TaskPayload{,1,2} and coloured into R/G/B. Proves the DX12 groupshared MeshPayload struct carries all three fields.
-TEST_CASE("D-007 B4: DX12 TASK multi-field payload — a 3-uint payload flows task->mesh",
+TEST_CASE("D-007 B4: DX12 TASK multi-field payload -- a 3-uint payload flows task->mesh",
           "[dx12][raster][gpu][ir][mesh][task]")
 {
     namespace kir = crd::kir;
@@ -453,7 +498,7 @@ TEST_CASE("D-007 B4: DX12 TASK multi-field payload — a 3-uint payload flows ta
 // D-007 B4: GPU-DRIVEN INDIRECT MESHLET DISPATCH on DX12. A compute CULL pass tests 8 meshlets (5 visible) and writes the
 // survivor count into an INDIRECT-dispatch args buffer; ExecuteIndirect with a DISPATCH_MESH command signature then launches
 // EXACTLY that many mesh workgroups — the count decided on the GPU. Only the 5 survivors render; the 3 culled never dispatch.
-TEST_CASE("D-007 B4: DX12 GPU-driven indirect meshlet dispatch — a compute cull writes the dispatch count",
+TEST_CASE("D-007 B4: DX12 GPU-driven indirect meshlet dispatch -- a compute cull writes the dispatch count",
           "[dx12][raster][gpu][mesh][indirect]")
 {
     namespace kir = crd::kir;
@@ -589,7 +634,7 @@ TEST_CASE("D-007 B4: per-primitive VRS from a MESH shader coarsens shading (DX12
 // sets 8x8 tess factors, the domain reads TessPatchPosition (the emitter's bilerp) + EXPANDS the quad x1.3 (a per-vertex domain
 // transform), the FS paints it red. Tessellation is core D3D12 (no feature gate). Proves the tessellator ran end to end: a pixel
 // between the base edge (0.6) and the expanded edge (0.78) is red ONLY because the domain shader displaced the generated vertices.
-TEST_CASE("D-007 B4-tess: DX12 tessellation — a VS->HS->DS->PS quad subdivides + displaces",
+TEST_CASE("D-007 B4-tess: DX12 tessellation -- a VS->HS->DS->PS quad subdivides + displaces",
           "[dx12][raster][gpu][ir][tess]")
 {
     namespace kir = crd::kir;

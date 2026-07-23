@@ -1,18 +1,38 @@
-#include "sandbox_layer.hpp"
+// sandbox/main.cpp — RET-5 pt 2 (ADR-0105): THE SANDBOX FLIP. The live Cerid window runs END TO END on the ONE
+// graphics layer: a windowed VulkanGpuContext + IRasterContext + the RET-2 present surface (canvas blit + overlay
+// composition) + the RET-5 ImGuiGpuBackend (render) + ImGui_ImplGlfw (platform input) + the perf-ui ProfilerPanel.
+// No crd-rhi, no crd-renderer, no rhi swapchain, no rhi ImGuiLayer — the retiring stack is OUT of the sandbox.
+//
+// The old SandboxLayer/geometry/curves showcases (built on the frozen ForwardRenderPath) left the build with this
+// flip; their content returns through the RET-6 draw port onto gpu-context. The canvas scene today is a CKIR-drawn
+// triangle — the point of THIS slice is the shell: window → context → canvas → blit → ImGui overlay → present.
+//
+// CLI contract (the full-sweep smoke depends on it — preserved exactly):
+//   --headless                    — exit after 1 frame; minimal boot smoke
+//   --smoke-test [duration_secs]  — run the loop N seconds (default 3.0), FAIL (exit 2) if nothing presented.
 
 #include <crd/app/app.hpp>
-#include <crd/config/config.hpp>
-#include <crd/imgui/imgui.hpp>
+#include <crd/gpu/context.hpp>
+#include <crd/gpu/raster_context.hpp>
+#include <crd/gpu/vulkan_context.hpp>
+#include <crd/gpu/vulkan_raster_context.hpp>
+#include <crd/imgui/imgui_gpu_backend.hpp>
 #include <crd/jobs/jobs.hpp>
+#include <crd/kir/ckir.hpp>
 #include <crd/log/log.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/perf/perf.hpp>
-#include <crd/gpu/context.hpp>           // D-008 C2-c2: the ONE device — a VulkanGpuContext rhi-vulkan adopts
-#include <crd/gpu/vulkan_context.hpp>
 #include <crd/perf/ui/ui.hpp>
-#include <crd/platform/filesystem.hpp>
-#include <crd/rhi/vulkan_backend.hpp>
-#include <crd/rhi/vulkan_profiler_backend.hpp>
+
+#include <backends/imgui_impl_glfw.h>
+#include <imgui.h>
+
+#ifdef _WIN32
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3.h>
+#include <GLFW/glfw3native.h>
+#endif
 
 #include <chrono>
 #include <cstdio>
@@ -22,39 +42,71 @@
 
 CRD_DEFINE_LOG_CHANNEL(g_log_sandbox, "Sandbox", crd::log::LogLevel::Trace)
 
-namespace fs = crd::platform::fs;
+namespace
+{
+
+// The canvas scene: a CKIR clip-space triangle (VertexIndex → position, warm constant color). Deliberately minimal —
+// the shell is the slice; the real showcases return via the RET-6 draw port.
+void build_sandbox_vs(crd::kir::KGraph& g, crd::kir::KEntry& ve)
+{
+    namespace kir  = crd::kir;
+    const auto sh  = kir::make_shape({1});
+    const int  vid = g.builtin(kir::KBuiltin::VertexIndex);
+    const int  k0  = g.constant(0.0, sh, kir::DType::I32);
+    const int  k1  = g.constant(1.0, sh, kir::DType::I32);
+    const int  eq0 = g.binary(kir::KOp::CmpEq, vid, k0);
+    const int  eq1 = g.binary(kir::KOp::CmpEq, vid, k1);
+    const int  a   = g.constant(-0.8, sh, kir::DType::F32);
+    const int  b   = g.constant(0.8, sh, kir::DType::F32);
+    const int  c   = g.constant(0.0, sh, kir::DType::F32);
+    const int  x   = g.select(eq0, a, g.select(eq1, b, c));
+    const int  y   = g.select(eq0, b, g.select(eq1, b, a));
+    ve.stage    = crd::kir::KStage::Vertex;
+    ve.position = g.vec4(x, y, c, g.constant(1.0, sh, kir::DType::F32));
+    ve.n_out    = 0;
+}
+
+void build_sandbox_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
+{
+    namespace kir = crd::kir;
+    const auto sh = kir::make_shape({1});
+    const int  r  = g.constant(0.93, sh, kir::DType::F32);
+    const int  gr = g.constant(0.42, sh, kir::DType::F32);
+    const int  b  = g.constant(0.18, sh, kir::DType::F32);
+    fe.stage      = kir::KStage::Fragment;
+    fe.n_out      = 1;
+    fe.out[0]     = {g.vec4(r, gr, b, g.constant(1.0, sh, kir::DType::F32)), 0};
+}
+
+[[nodiscard]] void* native_window_of(crd::app::Application& app)
+{
+#ifdef _WIN32
+    return glfwGetWin32Window(static_cast<GLFWwindow*>(app.window().native_handle()));
+#else
+    (void)app;
+    return nullptr; // the Linux platform surface rides the RET-8 cross-platform sweep
+#endif
+}
+
+} // namespace
 
 int main(int argc, char** argv)
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0); // unbuffered so log lines survive a crash
 
-    // CLI flags:
-    //   --headless                    — exit after 1 frame; minimal boot smoke
-    //   --smoke-test [duration_secs]  — run main loop for N seconds (default 3.0)
-    //                                   then exit cleanly. Used by
-    //                                   scripts/full-sweep.ps1 to verify each
-    //                                   per-config sandbox boots + renders +
-    //                                   shuts down without crashing. Catches
-    //                                   Vulkan validation, resource init
-    //                                   order, profile/preset apply-cycle
-    //                                   bugs the unit tests don't.
-    bool      headless          = false;
-    bool      smoke_test        = false;
-    crd::f64  smoke_duration_s  = 3.0;
+    bool     headless         = false;
+    bool     smoke_test       = false;
+    crd::f64 smoke_duration_s = 3.0;
     for (int i = 1; i < argc; ++i)
     {
-        if (std::strcmp(argv[i], "--headless") == 0)
-        {
-            headless = true;
-        }
+        if (std::strcmp(argv[i], "--headless") == 0) { headless = true; }
         else if (std::strcmp(argv[i], "--smoke-test") == 0)
         {
             smoke_test = true;
-            // Optional duration argument: --smoke-test 5
             if (i + 1 < argc)
             {
-                char*           end = nullptr;
-                const crd::f64  v   = std::strtod(argv[i + 1], &end);
+                char*          end = nullptr;
+                const crd::f64 v   = std::strtod(argv[i + 1], &end);
                 if (end != argv[i + 1] && v > 0.0)
                 {
                     smoke_duration_s = v;
@@ -70,7 +122,7 @@ int main(int argc, char** argv)
     crd::log::add_sink(std::make_unique<crd::log::ConsoleSink>());
 
     crd::app::ApplicationDesc app_desc;
-    app_desc.window.title = crd::containers::String("Cerid Sandbox");
+    app_desc.window.title = crd::containers::String("Cerid Sandbox — gpu-context (ADR-0105)");
     app_desc.window.size  = {1280, 720};
 
     crd::app::Application app(app_desc);
@@ -81,148 +133,124 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    // D-008 C2-c2: ONE device. The gpu-context owns the VkInstance/VkDevice (windowed = surface + swapchain + a graphics
-    // queue, still async-compute-capable); rhi-vulkan ADOPTS it, so the renderer, compute (IComputeContext), and raster
-    // (IRasterContext) all share the single device. `gpu_context` is declared FIRST so it OUTLIVES `device` (it owns the
-    // handles the adopted Device borrows).
+    // THE ONE GRAPHICS LAYER: windowed context → raster context → present surface. Nothing rhi anywhere.
     crd::gpu::GpuContextConfig gpu_cfg;
     gpu_cfg.backend           = crd::gpu::GpuBackend::Vulkan;
     gpu_cfg.headless          = false;
-    gpu_cfg.enable_validation = !headless;
+    gpu_cfg.enable_validation = !headless; // dev + smoke runs validated (the sweep smoke exists to catch validation bugs)
     auto gpu_context          = crd::gpu::create_vulkan_gpu_context(gpu_cfg);
-    auto device = gpu_context != nullptr ? crd::rhi::create_vulkan_device_adopting(*gpu_context) : nullptr;
-
-    std::unique_ptr<crd::rhi::Swapchain> swapchain;
-    if (device != nullptr)
+    auto* vk = gpu_context != nullptr ? static_cast<crd::gpu::VulkanGpuContext*>(gpu_context.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
     {
-        swapchain = device->create_swapchain({
-            .native_window_handle = app.window().native_handle(),
-            .extent               = {1280, 720},
-            .color_format         = crd::rhi::Format::B8G8R8A8Unorm,
-            .present_mode         = crd::rhi::PresentMode::Fifo,
-            .image_count          = 2,
-        });
+        CRD_LOG_ERROR(g_log_sandbox, "GPU bootstrap failed — no graphics-capable Vulkan device / shader objects");
+        crd::log::shutdown();
+        return 1;
     }
-
-    if (device == nullptr || swapchain == nullptr)
+    auto raster = crd::gpu::create_vulkan_raster_context(*vk);
+    if (raster == nullptr || !vk->present_capable())
     {
-        CRD_LOG_ERROR(g_log_sandbox, "GPU bootstrap failed — Vulkan context/device or swapchain unavailable");
-        crd::log::flush();
+        CRD_LOG_ERROR(g_log_sandbox, "Raster context / present capability unavailable");
+        crd::log::shutdown();
+        return 1;
+    }
+    const auto fb    = app.window().framebuffer_size();
+    crd::u32   win_w = fb.width > 0 ? static_cast<crd::u32>(fb.width) : 1280U;
+    crd::u32   win_h = fb.height > 0 ? static_cast<crd::u32>(fb.height) : 720U;
+    auto     surface = raster->create_present_surface(native_window_of(app), win_w, win_h, crd::gpu::PresentMode::Fifo);
+    if (surface == nullptr)
+    {
+        CRD_LOG_ERROR(g_log_sandbox, "Present surface creation failed");
         crd::log::shutdown();
         return 1;
     }
 
-    constexpr crd::u32 frames_in_flight = 2;
-    crd::containers::Array<std::unique_ptr<crd::rhi::CommandBuffer>> cmds;
-    for (crd::u32 i = 0; i < frames_in_flight; ++i)
+    // the CKIR canvas scene
+    crd::memory::TlsfAllocator kir_alloc(8U << 20U);
+    crd::kir::KGraph           vg(&kir_alloc);
+    crd::kir::KEntry           ve;
+    build_sandbox_vs(vg, ve);
+    crd::kir::KGraph fg(&kir_alloc);
+    crd::kir::KEntry fe;
+    build_sandbox_fs(fg, fe);
+    auto vs      = vk->create_program(vg, ve);
+    auto fs      = vk->create_program(fg, fe);
+    auto program = (vs != nullptr && fs != nullptr) ? raster->create_raster_program(*vs, *fs) : nullptr;
+    auto canvas  = raster->create_color_target(surface->width(), surface->height());
+    if (program == nullptr || canvas == nullptr)
     {
-        cmds.push_back(device->create_command_buffer());
+        CRD_LOG_ERROR(g_log_sandbox, "CKIR canvas bootstrap failed");
+        crd::log::shutdown();
+        return 1;
     }
 
-    // Load ImGui config (use defaults if file is absent).
-    crd::config::Config imgui_config;
-    const auto config_path = fs::executable_dir() / "configs" / "imgui_layer.toml";
-    if (!imgui_config.load_from_file(config_path))
+    // ImGui: the GLFW platform half + the gpu-context render half (RET-5), composited at the present seam
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::StyleColorsDark();
+    ImGui_ImplGlfw_InitForVulkan(static_cast<GLFWwindow*>(app.window().native_handle()), true);
+    auto imgui_backend = std::make_unique<crd::imgui::ImGuiGpuBackend>(*vk, *surface);
+    if (!imgui_backend->valid())
     {
-        CRD_LOG_WARN(g_log_sandbox, "imgui_layer.toml not found — using defaults");
+        CRD_LOG_ERROR(g_log_sandbox, "ImGui gpu backend init failed");
+        crd::log::shutdown();
+        return 1;
     }
 
-    // SandboxLayer now owns the ForwardRenderPath and shader compilation.
-    auto* sandbox_layer = [&]() -> crd::sandbox::SandboxLayer*
-    {
-        auto layer = std::make_unique<crd::sandbox::SandboxLayer>(app, *device, *swapchain);
-        auto* ptr  = layer.get();
-        app.push_layer(std::move(layer));
-        return ptr;
-    }();
-
-    // crd-perf bring-up. Order matters: init the substrate first so the
-    // jobs adapter sees the gate when jobs::init runs; install allocator
-    // tracking + Vulkan GPU backend before any work that wants to be
-    // measured. Teardown is the mirror at the end of main().
+    // perf substrate + the ProfilerPanel overlay. (The rhi GPU-profiler backend died with the flip; the gpu-context
+    // profiler backend arrives with the RET-7 sweep — CPU spans + allocator tracking are live today.)
     crd::perf::init({});
     [[maybe_unused]] const auto perf_alloc_idx =
         crd::perf::register_allocator("default (malloc)", crd::memory::default_allocator());
-    auto perf_gpu = crd::rhi::create_vulkan_profiler_backend(*device);
-    crd::perf::set_gpu_backend(perf_gpu.get());
     crd::perf::install_jobs_adapter();
-
-    // Minimal layer that drives ProfilerPanel rendering. Sits between the
-    // SandboxLayer (regular layer) and the ImGui overlay so its on_render
-    // runs inside the ImGui frame the overlay set up. Owns the panel.
-    struct ProfilerPanelLayer final : crd::app::Layer
-    {
-        ProfilerPanelLayer() : crd::app::Layer("ProfilerPanel") {}
-        crd::perf::ui::ProfilerPanel panel;
-        void on_render() override { panel.draw(); }
-    };
-
-    {
-        auto layer = std::make_unique<ProfilerPanelLayer>();
-        app.push_overlay(std::move(layer));
-    }
-
-    auto* imgui = [&]() -> crd::imgui::ImGuiLayer*
-    {
-        auto layer = std::make_unique<crd::imgui::ImGuiLayer>(app, *device, *swapchain, imgui_config);
-        auto* ptr  = layer.get();
-        app.push_overlay(std::move(layer));
-        return ptr;
-    }();
-
-    CRD_LOG_INFO(g_log_sandbox, "Sandbox started (headless={} smoke_test={} smoke_duration_s={})", headless, smoke_test,
-                 smoke_duration_s);
+    crd::perf::ui::ProfilerPanel profiler_panel;
 
     crd::jobs::init(app_desc.jobs_config);
+    CRD_LOG_INFO(g_log_sandbox, "Sandbox on gpu-context (headless={} smoke_test={} duration={}s)", headless, smoke_test,
+                 smoke_duration_s);
 
-    crd::u32 frame = 0;
-    crd::u32 frames_with_present = 0;
-    const auto smoke_start_time  = std::chrono::steady_clock::now();
+    crd::u32   frame               = 0;
+    crd::u32   frames_with_present = 0;
+    const auto smoke_start_time    = std::chrono::steady_clock::now();
     while (app.is_running())
     {
-        if (!app.tick())
+        if (!app.tick()) { break; }
+
+        // window resize → recreate the swapchain + a matching canvas
+        const auto     cur   = app.window().framebuffer_size();
+        const crd::u32 cur_w = cur.width > 0 ? static_cast<crd::u32>(cur.width) : 0U;
+        const crd::u32 cur_h = cur.height > 0 ? static_cast<crd::u32>(cur.height) : 0U;
+        if ((cur_w != win_w || cur_h != win_h) && cur_w > 0U && cur_h > 0U)
         {
-            break;
+            win_w = cur_w;
+            win_h = cur_h;
+            if (surface->resize(win_w, win_h))
+            {
+                canvas = raster->create_color_target(surface->width(), surface->height());
+                if (canvas == nullptr) { break; }
+            }
         }
 
-        if (!swapchain->acquire_next_image())
+        raster->draw(*canvas, *program, crd::gpu::ClearColor{0.09F, 0.10F, 0.13F, 1.0F}, 3U);
+
+        imgui_backend->new_frame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
         {
-            continue; // swapchain out-of-date or minimized — on_event will resize before next acquire
+            ImGui::Begin("Cerid Sandbox");
+            ImGui::Text("gpu-context end to end (ADR-0105)");
+            ImGui::Text("frame %u  |  %ux%u", frame, surface->width(), surface->height());
+            ImGui::TextUnformatted("scene: CKIR canvas -> blit -> ImGui overlay -> present");
+            ImGui::End();
+            profiler_panel.draw();
         }
+        ImGui::Render();
 
-        auto& cmd = *cmds[frame % frames_in_flight];
-        cmd.begin();
-
-        // 3D scene: ForwardRenderPath → blit to swapchain (leaves it in ColorWrite).
-        sandbox_layer->render_scene(cmd, swapchain->current_image(), frame);
-
-        // ImGui renders on top of the 3D output.
-        cmd.begin_rendering({
-            .extent           = {swapchain->desc().extent.width, swapchain->desc().extent.height},
-            .color_attachment = {.image     = &swapchain->current_image(),
-                                 .load_op   = crd::rhi::LoadOp::Load,
-                                 .store_op  = crd::rhi::StoreOp::Store,
-                                 .clear_color = {}},
-        });
-        imgui->render(cmd);
-        cmd.end_rendering();
-
-        cmd.transition_image(swapchain->current_image(),
-                             crd::rhi::ImageAccess::ColorWrite, crd::rhi::ImageAccess::Present);
-        cmd.end();
-
-        if (device->graphics_queue().submit(cmd, *swapchain))
+        if (surface->present(*canvas, &crd::imgui::ImGuiGpuBackend::overlay_thunk, imgui_backend.get()))
         {
-            device->graphics_queue().present(*swapchain);
             ++frames_with_present;
         }
 
-        // Resolve any GPU spans that retired since last call + advance the
-        // profiler's frame counter. Order: resolve BEFORE frame_mark so the
-        // resolved samples land in this frame's history slot.
-        crd::perf::resolve_gpu_frames();
         crd::perf::frame_mark();
-
         ++frame;
 
         if (headless && frame >= 1)
@@ -230,60 +258,43 @@ int main(int argc, char** argv)
             CRD_LOG_INFO(g_log_sandbox, "Headless: exiting after {} frame(s)", frame);
             app.close();
         }
-
         if (smoke_test)
         {
-            const auto    now      = std::chrono::steady_clock::now();
+            const auto     now     = std::chrono::steady_clock::now();
             const crd::f64 elapsed = std::chrono::duration<crd::f64>(now - smoke_start_time).count();
             if (elapsed >= smoke_duration_s)
             {
                 if (frames_with_present == 0)
                 {
-                    // Boot succeeded but never presented — likely a swapchain
-                    // acquire failure loop. Treat as smoke-test failure so
-                    // the sweep notices.
                     CRD_LOG_ERROR(g_log_sandbox, "Smoke-test: 0 frames presented in {:.2f}s — failure", elapsed);
                     crd::log::flush();
                     crd::log::shutdown();
                     return 2;
                 }
-                CRD_LOG_INFO(g_log_sandbox,
-                             "Smoke-test: PASS — {} frames presented over {:.2f}s ({:.1f} fps avg)",
+                CRD_LOG_INFO(g_log_sandbox, "Smoke-test: PASS — {} frames presented over {:.2f}s ({:.1f} fps avg)",
                              frames_with_present, elapsed,
                              static_cast<crd::f64>(frames_with_present) / elapsed);
                 app.close();
             }
         }
-
-        if (app.window().input().state().was_key_pressed(crd::platform::Key::Escape))
-        {
-            app.close();
-        }
+        if (app.window().input().state().was_key_pressed(crd::platform::Key::Escape)) { app.close(); }
     }
 
-    // Shutdown order matters:
-    //   1. device->wait_idle() — drain in-flight GPU work before any GPU
-    //      resource held by a layer is freed.
-    //   2. detach_all_layers()  — runs each layer's destructor, which
-    //      MUST `wait_ready()` every ResourceHandle it still holds
-    //      (claims + reaps the per-load Counter so the CounterPool
-    //      drops to zero acquired entries). After detach, the
-    //      ResourceManager is destroyed with no in-flight loads.
-    //   3. jobs::shutdown()     — final drain of the job system; the
-    //      CounterPool's shutdown assert (m_acquired == 0) only holds
-    //      because step 2 reaped all per-load Counters first.
-    device->wait_idle();
-    app.detach_all_layers();
+    // Teardown order: ImGui backend (drains the device) → GLFW platform half → context → present surface →
+    // canvas/program (before the raster context) → raster → gpu context. jobs/perf mirror their bring-up.
     crd::jobs::shutdown();
-
-    // crd-perf teardown mirrors the bring-up order. Uninstall the jobs
-    // adapter before perf::shutdown so the scheduler can't fire a
-    // callback into a torn-down profiler. Clear the GPU backend pointer
-    // before destroying it.
     crd::perf::uninstall_jobs_adapter();
-    crd::perf::set_gpu_backend(nullptr);
-    perf_gpu.reset();
     crd::perf::shutdown();
+    imgui_backend.reset();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
+    surface.reset();
+    canvas.reset();
+    program.reset();
+    vs.reset();
+    fs.reset();
+    raster.reset();
+    gpu_context.reset();
 
     crd::log::flush();
     crd::log::shutdown();

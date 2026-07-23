@@ -4,8 +4,8 @@
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <new>
 #include <crd/platform/filesystem.hpp>
-#include <crd/renderer/mesh_resource.hpp>
-#include <crd/renderer/mesh_resource_loader.hpp>
+#include <crd/resources/mesh_resource.hpp>
+#include <crd/resources/mesh_resource.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/load_state.hpp>
 #include <crd/resources/resource_handle.hpp>
@@ -195,13 +195,13 @@ TEST_CASE("MeshResource loads from CRDR artifact", "[resources][mesh][loader]")
     const fs::Path pack_path = write_mesh_pack(arts);
 
     ResourceManager rm(&s_mesh_alloc);
-    crd::renderer::register_mesh_loader(&rm);
+    crd::resources::register_mesh_loader(&rm);
     REQUIRE(rm.mount_manifest(pack_path.generic()).is_valid());
 
-    auto handle = rm.load_sync<crd::renderer::MeshResource>(mesh_id);
+    auto handle = rm.load_sync<crd::resources::MeshResource>(mesh_id);
     CHECK(handle.is_ready());
 
-    const crd::renderer::MeshResource* mesh = handle.get();
+    const crd::resources::MeshResource* mesh = handle.get();
     REQUIRE(mesh != nullptr);
     CHECK(mesh->primitives.size() == 1U);
     CHECK(mesh->primitives[0].vertex_count == 3U);
@@ -228,13 +228,13 @@ TEST_CASE("MeshResource multi-primitive has correct counts", "[resources][mesh][
     const fs::Path pack_path = write_mesh_pack(arts);
 
     ResourceManager rm(&s_mesh_alloc);
-    crd::renderer::register_mesh_loader(&rm);
+    crd::resources::register_mesh_loader(&rm);
     REQUIRE(rm.mount_manifest(pack_path.generic()).is_valid());
 
-    auto handle = rm.load_sync<crd::renderer::MeshResource>(mesh_id);
+    auto handle = rm.load_sync<crd::resources::MeshResource>(mesh_id);
     REQUIRE(handle.is_ready());
 
-    const crd::renderer::MeshResource* mesh = handle.get();
+    const crd::resources::MeshResource* mesh = handle.get();
     REQUIRE(mesh != nullptr);
     CHECK(mesh->primitives.size() == 3U);
     for (crd::u32 pi = 0U; pi < 3U; ++pi)
@@ -286,10 +286,10 @@ TEST_CASE("MeshResource fails when VERT chunk is absent", "[resources][mesh][mis
     const fs::Path pack_path = write_mesh_pack(arts);
 
     ResourceManager rm(&s_mesh_alloc);
-    crd::renderer::register_mesh_loader(&rm);
+    crd::resources::register_mesh_loader(&rm);
     REQUIRE(rm.mount_manifest(pack_path.generic()).is_valid());
 
-    auto handle = rm.load_sync<crd::renderer::MeshResource>(mesh_id);
+    auto handle = rm.load_sync<crd::resources::MeshResource>(mesh_id);
     CHECK(handle.state() == LoadState::Failed);
 
     (void)fs::remove_file(pack_path);
@@ -436,13 +436,13 @@ TEST_CASE("MeshResource cooked from GLB round-trip", "[resources][mesh][cook]")
     const fs::Path pack_path = write_mesh_pack(arts);
 
     ResourceManager rm(&s_mesh_alloc);
-    crd::renderer::register_mesh_loader(&rm);
+    crd::resources::register_mesh_loader(&rm);
     REQUIRE(rm.mount_manifest(pack_path.generic()).is_valid());
 
-    auto handle = rm.load_sync<crd::renderer::MeshResource>(mesh_id);
+    auto handle = rm.load_sync<crd::resources::MeshResource>(mesh_id);
     REQUIRE(handle.is_ready());
 
-    const crd::renderer::MeshResource* mesh = handle.get();
+    const crd::resources::MeshResource* mesh = handle.get();
     REQUIRE(mesh != nullptr);
     CHECK(mesh->primitives.size() == 1U);
     CHECK(mesh->primitives[0].vertex_count == 3U);
@@ -457,4 +457,88 @@ TEST_CASE("MeshResource cooked from GLB round-trip", "[resources][mesh][cook]")
     CHECK(px == 0.0F);
 
     (void)fs::remove_file(pack_path);
+}
+
+// ── GEO-1: the RM-mounted IMPORT → COOK → LOAD end-to-end ──────────────────────────────────────────────────────────────
+// A millimetre-authored STL cooks through the REAL wave1 handler (crd-asset-io parse → validate → 48-byte interleave with
+// `.meta position_scale`), the artifact is packed + MOUNTED, and `load_sync<MeshResource>` delivers the scaled geometry —
+// the full resource-system path an imported file takes in production.
+
+namespace crd::cooker
+{
+void register_wave1_mesh_handler(); // mesh_wave1.cpp (crd-cooker)
+} // namespace crd::cooker
+
+TEST_CASE("GEO-1: an imported STL cooks, packs, mounts, and LOADS via ResourceManager", "[resources][mesh][geo]")
+{
+    // 1. the source STL (one triangle, 1000 mm legs) + its .meta (uuid + mm→m position_scale)
+    crd::containers::Array<crd::u8> stl(&s_mesh_alloc);
+    {
+        const auto pushf = [&](float v) {
+            crd::u8 raw[4];
+            std::memcpy(raw, &v, 4);
+            for (crd::u8 x : raw) { stl.push_back(x); }
+        };
+        for (int i = 0; i < 80; ++i) { stl.push_back(0); }
+        const crd::u32 count = 1;
+        crd::u8        raw[4];
+        std::memcpy(raw, &count, 4);
+        for (crd::u8 x : raw) { stl.push_back(x); }
+        const float tri[12] = {0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1000.0F, 0.0F, 0.0F, 0.0F, 1000.0F, 0.0F};
+        for (float v : tri) { pushf(v); }
+        stl.push_back(0);
+        stl.push_back(0);
+    }
+    const char* src_path  = "cerid_geo1_rm.stl";
+    const char* meta_path = "cerid_geo1_rm.stl.meta";
+    REQUIRE(fs::write_file_binary(fs::Path(crd::containers::StringView(src_path)), crd::containers::as_const_span(stl)));
+    REQUIRE(fs::write_file_text(fs::Path(crd::containers::StringView(meta_path)),
+                                crd::containers::StringView("[cook]\nposition_scale = 0.001\n")));
+
+    // 2. cook through the REAL wave1 handler
+    static bool s_wave1_registered = false;
+    if (!s_wave1_registered)
+    {
+        crd::cooker::register_wave1_mesh_handler();
+        s_wave1_registered = true;
+    }
+    crd::cooker::CookHandlerFn handler = crd::cooker::find_cook_handler(crd::containers::StringView(".stl"));
+    REQUIRE(handler != nullptr);
+    const ResourceId         mesh_id = ResourceId::mint_random();
+    crd::cooker::CookContext cctx;
+    cctx.source_path = crd::containers::StringView(src_path);
+    cctx.meta_path   = crd::containers::StringView(meta_path);
+    cctx.id          = mesh_id;
+    cctx.allocator   = &s_mesh_alloc;
+    crd::cooker::CookResult cooked = handler(cctx);
+    REQUIRE(cooked.ok);
+
+    // 3. pack + MOUNT + load_sync — the production path
+    crd::containers::Array<MeshArt> arts(&s_mesh_alloc);
+    arts.push_back(MeshArt{mesh_id, kFourCC_MESH, std::move(cooked.cooked_bytes), "imported.stl"});
+    const fs::Path pack_path = write_mesh_pack(arts);
+
+    ResourceManager rm(&s_mesh_alloc);
+    crd::resources::register_mesh_loader(&rm);
+    REQUIRE(rm.mount_manifest(pack_path.generic()).is_valid());
+    auto handle = rm.load_sync<crd::resources::MeshResource>(mesh_id);
+    CHECK(handle.is_ready());
+    const crd::resources::MeshResource* mesh = handle.get();
+    REQUIRE(mesh != nullptr);
+
+    // 4. the loaded resource IS the imported triangle, in SI metres
+    REQUIRE(mesh->primitives.size() == 1U);
+    CHECK(mesh->primitives[0].vertex_count == 3U);
+    CHECK(mesh->primitives[0].index_count == 3U);
+    REQUIRE(mesh->vertices.size() == 3U * 48U);
+    float v1x = 0.0F;
+    std::memcpy(&v1x, mesh->vertices.data() + 48U, 4U); // second vertex: 1000 mm → 1 m
+    CHECK(v1x == 1.0F);
+    float n0z = 0.0F;
+    std::memcpy(&n0z, mesh->vertices.data() + 20U, 4U); // first vertex normal.z
+    CHECK(n0z == 1.0F);
+
+    (void)fs::remove_file(pack_path);
+    (void)fs::remove_file(fs::Path(crd::containers::StringView(src_path)));
+    (void)fs::remove_file(fs::Path(crd::containers::StringView(meta_path)));
 }

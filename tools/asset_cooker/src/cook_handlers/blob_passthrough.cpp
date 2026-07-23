@@ -48,6 +48,7 @@ void register_glsl_handler();
 void register_material_handler();
 void register_texture_handler();
 void register_mesh_handler();
+void register_wave1_mesh_handler(); // GEO-1: .stl/.obj/.ply via crd-asset-io (our own parsers)
 void register_preset_handler();
 void register_profile_handler();
 void register_obek_handler();
@@ -58,6 +59,7 @@ void register_builtin_handlers()
     register_glsl_handler();
     register_material_handler();
     register_texture_handler();
+    register_wave1_mesh_handler(); // GEO-3: BEFORE the legacy cgltf handler — first-wins gives .glb/.gltf to OUR parser
     register_mesh_handler();
     register_preset_handler();
     register_profile_handler();

@@ -9,6 +9,7 @@ add_executable(crd-gpu-context-dx12-tests
     test_dx12_gsplat.cpp
     test_dx12_raster.cpp
     test_dx12_rt.cpp
+    ../gpu-shared/win32_test_window.cpp # RET-2: the isolated <windows.h> TU — a REAL window for the present gates
 )
 
 target_link_libraries(crd-gpu-context-dx12-tests PRIVATE

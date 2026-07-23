@@ -2,7 +2,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/hash_map.hpp>
-#include <crd/renderer/mesh_resource.hpp>
+#include <crd/resources/mesh_resource.hpp>
 
 #include <algorithm>
 #include <crd/math/cmath.hpp>
@@ -46,16 +46,16 @@ crd::u32 vcount(const crd::containers::Array<crd::u8>& buf)
     return static_cast<crd::u32>(buf.size() / sizeof(V));
 }
 
-crd::renderer::MeshResource make_mesh(crd::memory::IAllocator* a)
+crd::resources::MeshResource make_mesh(crd::memory::IAllocator* a)
 {
-    crd::renderer::MeshResource m(a);
+    crd::resources::MeshResource m(a);
     return m;
 }
 
-void finalize(crd::renderer::MeshResource& m)
+void finalize(crd::resources::MeshResource& m)
 {
-    crd::renderer::MeshPrimitive prim;
-    prim.vertex_count       = static_cast<crd::u32>(m.vertices.size() / crd::renderer::kMeshVertexStride);
+    crd::resources::MeshPrimitive prim;
+    prim.vertex_count       = static_cast<crd::u32>(m.vertices.size() / crd::resources::kMeshVertexStride);
     prim.index_count        = static_cast<crd::u32>(m.indices.size() / 4U);
     prim.vertex_byte_offset = 0U;
     prim.index_byte_offset  = 0U;
@@ -68,7 +68,7 @@ void finalize(crd::renderer::MeshResource& m)
 // Plane  (xz-plane, normal +Y)
 // Grid of quads subdivided into CCW triangles (winding verified: i0,i2,i1 + i1,i2,i3).
 // ---------------------------------------------------------------------------
-crd::renderer::MeshResource make_plane(
+crd::resources::MeshResource make_plane(
     crd::memory::IAllocator* a, float width, float depth, crd::u32 divs_x, crd::u32 divs_z)
 {
     auto m = make_mesh(a);
@@ -130,7 +130,7 @@ crd::renderer::MeshResource make_plane(
 // Each face has its own vertices so normals/tangents are face-constant.
 // All faces use CCW winding when viewed from outside.
 // ---------------------------------------------------------------------------
-crd::renderer::MeshResource make_box(
+crd::resources::MeshResource make_box(
     crd::memory::IAllocator* a, float width, float height, float depth)
 {
     auto m = make_mesh(a);
@@ -235,7 +235,7 @@ crd::renderer::MeshResource make_box(
 // CCW from outside: for each quad, winding is (i0,i1,i2)+(i2,i1,i3)
 // where i1=+lat, i2=+lon neighbor.
 // ---------------------------------------------------------------------------
-crd::renderer::MeshResource make_sphere(
+crd::resources::MeshResource make_sphere(
     crd::memory::IAllocator* a, float radius, crd::u32 lat_bands, crd::u32 lon_bands)
 {
     auto m = make_mesh(a);
@@ -299,7 +299,7 @@ crd::renderer::MeshResource make_sphere(
 // Icosphere  (icosahedron + midpoint subdivision)
 // Uses temporary position-only storage during subdivision, then converts.
 // ---------------------------------------------------------------------------
-crd::renderer::MeshResource make_icosphere(
+crd::resources::MeshResource make_icosphere(
     crd::memory::IAllocator* a, float radius, crd::u32 subdivisions)
 {
     // Build icosahedron vertices (unit sphere, 12 verts, 20 faces).
@@ -442,7 +442,7 @@ crd::renderer::MeshResource make_icosphere(
 // Cylinder  (side + top cap + bottom cap)
 // Side CCW from outside: Tri1=(bot[j],top[j],bot[j+1]); Tri2=(top[j],top[j+1],bot[j+1])
 // ---------------------------------------------------------------------------
-crd::renderer::MeshResource make_cylinder(
+crd::resources::MeshResource make_cylinder(
     crd::memory::IAllocator* a, float radius, float height, crd::u32 segs)
 {
     auto m = make_mesh(a);
@@ -560,7 +560,7 @@ crd::renderer::MeshResource make_cylinder(
 // ---------------------------------------------------------------------------
 // Cone  (side + bottom cap, apex at +Y)
 // ---------------------------------------------------------------------------
-crd::renderer::MeshResource make_cone(
+crd::resources::MeshResource make_cone(
     crd::memory::IAllocator* a, float radius, float height, crd::u32 segs)
 {
     auto m = make_mesh(a);
@@ -648,7 +648,7 @@ crd::renderer::MeshResource make_cone(
 // ---------------------------------------------------------------------------
 // Capsule  (cylinder body + hemispherical top/bottom caps)
 // ---------------------------------------------------------------------------
-crd::renderer::MeshResource make_capsule(
+crd::resources::MeshResource make_capsule(
     crd::memory::IAllocator* a, float radius, float height, crd::u32 segs, crd::u32 rings)
 {
     auto m = make_mesh(a);
@@ -734,7 +734,7 @@ crd::renderer::MeshResource make_capsule(
 // Torus  (major_r = tube center distance, minor_r = tube radius)
 // CCW from outside: same winding as UV sphere quads.
 // ---------------------------------------------------------------------------
-crd::renderer::MeshResource make_torus(
+crd::resources::MeshResource make_torus(
     crd::memory::IAllocator* a, float major_r, float minor_r, crd::u32 maj_segs, crd::u32 min_segs)
 {
     auto m = make_mesh(a);

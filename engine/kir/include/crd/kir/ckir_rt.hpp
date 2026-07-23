@@ -187,7 +187,7 @@ namespace detail
 struct RtaoConfig
 {
     crd::u32 samples    = 32U;  // hemisphere rays per point (== TAA frames when 1/frame)
-    float    radius     = 3.0F; // occlusion falloff radius (hits beyond it don't darken)
+    float    radius     = 3.0F; // crd-lint-allow-untagged-physical: SCENE-unit falloff radius (CKIR fixture scenes carry no unit system) — hits beyond it don't darken
     crd::u32 local_size = 64U;
 };
 
@@ -312,39 +312,49 @@ struct RtReflectConfig
     const int  tid  = add(mul(g.builtin(k::KBuiltin::WorkgroupIndex), cu(cfg.local_size)), g.builtin(k::KBuiltin::LocalInvocationIndex));
     const int  b3   = mul(tid, cu(3U));
     const auto lp   = [&](int buf, int base, crd::u32 c) { return g.buffer_load(buf, add(base, cu(c))); };
-    const int  px = lp(pos, b3, 0U), py = lp(pos, b3, 1U), pz = lp(pos, b3, 2U);
-    const int  nx = lp(nrm, b3, 0U), ny = lp(nrm, b3, 1U), nz = lp(nrm, b3, 2U);
+    const int px = lp(pos, b3, 0U);
+    const int py = lp(pos, b3, 1U);
+    const int pz = lp(pos, b3, 2U);
+    const int nx = lp(nrm, b3, 0U);
+    const int ny = lp(nrm, b3, 1U);
+    const int nz = lp(nrm, b3, 2U);
 
     // reflect the (constant) view direction about N: R = V − 2(V·N)N.
-    const int vx = cf(static_cast<double>(cfg.view[0])), vy = cf(static_cast<double>(cfg.view[1])), vz = cf(static_cast<double>(cfg.view[2]));
+    const int vx = cf(static_cast<double>(cfg.view[0]));
+    const int vy = cf(static_cast<double>(cfg.view[1]));
+    const int vz = cf(static_cast<double>(cfg.view[2]));
     const int vdn = add(add(mul(vx, nx), mul(vy, ny)), mul(vz, nz));
     const int rx  = sub(vx, mul(mul(cf(2.0), vdn), nx));
     const int ry  = sub(vy, mul(mul(cf(2.0), vdn), ny));
     const int rz  = sub(vz, mul(mul(cf(2.0), vdn), nz));
-    const int ox = add(px, mul(cf(1.0e-3), nx)), oy = add(py, mul(cf(1.0e-3), ny)), oz = add(pz, mul(cf(1.0e-3), nz));
+    const int ox = add(px, mul(cf(1.0e-3), nx));
+    const int oy = add(py, mul(cf(1.0e-3), ny));
+    const int oz = add(pz, mul(cf(1.0e-3), nz));
 
     const k::KGraph::RtHit hit = g.trace_ray_hit(as, ox, oy, oz, rx, ry, rz, cf(1.0e-3), cf(1.0e30));
     const int miss = g.binary(k::KOp::CmpEq, hit.prim, cu(0xFFFFFFFFU));
 
     // environment gradient on a miss (sky by the reflected-ray elevation R.y).
     const int sy   = sat(add(mul(ry, cf(0.5)), cf(0.5)));
-    const int skyR = mix(cf(0.55), cf(0.15), sy);
-    const int skyG = mix(cf(0.70), cf(0.35), sy);
-    const int skyB = mix(cf(0.95), cf(0.80), sy);
+    const int sky_r = mix(cf(0.55), cf(0.15), sy);
+    const int sky_g = mix(cf(0.70), cf(0.35), sy);
+    const int sky_b = mix(cf(0.95), cf(0.80), sy);
 
     // hit shading: fetch the hit triangle's flat normal (clamp the index so a miss's fetch is in-bounds), Lambert-shade it.
     const int cprim = mn(hit.prim, cu(cfg.ntri > 0U ? cfg.ntri - 1U : 0U));
     const int tb    = mul(cprim, cu(3U));
-    const int tnx = lp(tn, tb, 0U), tny = lp(tn, tb, 1U), tnz = lp(tn, tb, 2U);
+    const int tnx = lp(tn, tb, 0U);
+    const int tny = lp(tn, tb, 1U);
+    const int tnz = lp(tn, tb, 2U);
     const int ndl = mx(add(add(mul(tnx, cf(static_cast<double>(cfg.light[0]))), mul(tny, cf(static_cast<double>(cfg.light[1])))), mul(tnz, cf(static_cast<double>(cfg.light[2])))), cf(0.0));
     const int shade = add(cf(0.2), mul(cf(0.8), ndl)); // ambient + diffuse
-    const int hitR = mul(cf(static_cast<double>(cfg.albedo[0])), shade);
-    const int hitG = mul(cf(static_cast<double>(cfg.albedo[1])), shade);
-    const int hitB = mul(cf(static_cast<double>(cfg.albedo[2])), shade);
+    const int hit_r = mul(cf(static_cast<double>(cfg.albedo[0])), shade);
+    const int hit_g = mul(cf(static_cast<double>(cfg.albedo[1])), shade);
+    const int hit_b = mul(cf(static_cast<double>(cfg.albedo[2])), shade);
 
-    g.stmt_buffer_store(out, add(b3, cu(0U)), g.select(miss, skyR, hitR));
-    g.stmt_buffer_store(out, add(b3, cu(1U)), g.select(miss, skyG, hitG));
-    g.stmt_buffer_store(out, add(b3, cu(2U)), g.select(miss, skyB, hitB));
+    g.stmt_buffer_store(out, add(b3, cu(0U)), g.select(miss, sky_r, hit_r));
+    g.stmt_buffer_store(out, add(b3, cu(1U)), g.select(miss, sky_g, hit_g));
+    g.stmt_buffer_store(out, add(b3, cu(2U)), g.select(miss, sky_b, hit_b));
 
     k::KEntry e;
     e.stage             = k::KStage::Compute;
@@ -397,8 +407,12 @@ struct PathTraceConfig
     const int  tid  = uadd(umul(g.builtin(k::KBuiltin::WorkgroupIndex), cu(cfg.local_size)), g.builtin(k::KBuiltin::LocalInvocationIndex));
     const int  b3   = umul(tid, cu(3U));
     const auto lp   = [&](int buf, int base, crd::u32 c) { return g.buffer_load(buf, uadd(base, cu(c))); };
-    const int  pnx = lp(nrm, b3, 0U), pny = lp(nrm, b3, 1U), pnz = lp(nrm, b3, 2U); // surface normal
-    const int  ppx = lp(pos, b3, 0U), ppy = lp(pos, b3, 1U), ppz = lp(pos, b3, 2U); // surface point
+    const int pnx = lp(nrm, b3, 0U); // surface normal
+    const int pny = lp(nrm, b3, 1U);
+    const int pnz = lp(nrm, b3, 2U);
+    const int ppx = lp(pos, b3, 0U); // surface point
+    const int ppy = lp(pos, b3, 1U);
+    const int ppz = lp(pos, b3, 2U);
 
     // orthonormal tangent frame around a normal (Duff 2017) → fills t[3], b[3].
     const auto frame = [&](int nx, int ny, int nz, int t[3], int b[3]) {
@@ -438,18 +452,26 @@ struct PathTraceConfig
     const int s     = g.kernel_loop_var(floop);
 
     // the first scatter direction: a cosine sample from the SURFACE point (gather indirect light).
-    int surfT[3];
-    int surfB[3];
-    frame(pnx, pny, pnz, surfT, surfB);
+    int surf_t[3];
+    int surf_b[3];
+    frame(pnx, pny, pnz, surf_t, surf_b);
     int u1 = -1;
     int u2 = -1;
     hash2(s, 0U, u1, u2);
     int dir[3];
-    cosine_dir(u1, u2, pnx, pny, pnz, surfT, surfB, dir);
-    int ox = add(ppx, mul(cf(1.0e-3), pnx)), oy = add(ppy, mul(cf(1.0e-3), pny)), oz = add(ppz, mul(cf(1.0e-3), pnz));
-    int dx = dir[0], dy = dir[1], dz = dir[2];
-    int trR = cf(1.0), trG = cf(1.0), trB = cf(1.0); // throughput
-    int radR = cf(0.0), radG = cf(0.0), radB = cf(0.0);
+    cosine_dir(u1, u2, pnx, pny, pnz, surf_t, surf_b, dir);
+    int ox = add(ppx, mul(cf(1.0e-3), pnx));
+    int oy = add(ppy, mul(cf(1.0e-3), pny));
+    int oz = add(ppz, mul(cf(1.0e-3), pnz));
+    int dx = dir[0];
+    int dy = dir[1];
+    int dz = dir[2];
+    int tr_r = cf(1.0); // throughput
+    int tr_g = cf(1.0);
+    int tr_b = cf(1.0);
+    int rad_r = cf(0.0);
+    int rad_g = cf(0.0);
+    int rad_b = cf(0.0);
 
     for (crd::u32 bnc = 0; bnc < cfg.bounces; ++bnc)
     {
@@ -457,17 +479,21 @@ struct PathTraceConfig
         const int              miss = g.binary(k::KOp::CmpEq, hit.prim, cu(0xFFFFFFFFU));
         int                    sc[3];
         sky(dy, sc);
-        radR = add(radR, g.select(miss, mul(trR, sc[0]), cf(0.0))); // escaped ⇒ gather sky
-        radG = add(radG, g.select(miss, mul(trG, sc[1]), cf(0.0)));
-        radB = add(radB, g.select(miss, mul(trB, sc[2]), cf(0.0)));
+        rad_r = add(rad_r, g.select(miss, mul(tr_r, sc[0]), cf(0.0))); // escaped ⇒ gather sky
+        rad_g = add(rad_g, g.select(miss, mul(tr_g, sc[1]), cf(0.0)));
+        rad_b = add(rad_b, g.select(miss, mul(tr_b, sc[2]), cf(0.0)));
         // hit: fetch the hit triangle's flat normal + point, cosine-scatter, attenuate by albedo.
         const int cprim = mn(hit.prim, cu(cfg.ntri > 0U ? cfg.ntri - 1U : 0U));
         const int tb    = umul(cprim, cu(3U));
-        const int hnx = lp(tn, tb, 0U), hny = lp(tn, tb, 1U), hnz = lp(tn, tb, 2U);
-        const int hpx = add(ox, mul(hit.t, dx)), hpy = add(oy, mul(hit.t, dy)), hpz = add(oz, mul(hit.t, dz));
-        trR = g.select(miss, cf(0.0), mul(trR, cf(static_cast<double>(cfg.albedo[0])))); // dead on miss, else ×albedo
-        trG = g.select(miss, cf(0.0), mul(trG, cf(static_cast<double>(cfg.albedo[1]))));
-        trB = g.select(miss, cf(0.0), mul(trB, cf(static_cast<double>(cfg.albedo[2]))));
+        const int hnx = lp(tn, tb, 0U);
+        const int hny = lp(tn, tb, 1U);
+        const int hnz = lp(tn, tb, 2U);
+        const int hpx = add(ox, mul(hit.t, dx));
+        const int hpy = add(oy, mul(hit.t, dy));
+        const int hpz = add(oz, mul(hit.t, dz));
+        tr_r = g.select(miss, cf(0.0), mul(tr_r, cf(static_cast<double>(cfg.albedo[0])))); // dead on miss, else ×albedo
+        tr_g = g.select(miss, cf(0.0), mul(tr_g, cf(static_cast<double>(cfg.albedo[1]))));
+        tr_b = g.select(miss, cf(0.0), mul(tr_b, cf(static_cast<double>(cfg.albedo[2]))));
         if (bnc + 1U < cfg.bounces) // resample the next bounce direction (skip after the last)
         {
             int ht[3];
@@ -480,9 +506,9 @@ struct PathTraceConfig
         }
     }
 
-    g.stmt_buffer_store(out, uadd(b3, cu(0U)), add(g.buffer_load(out, uadd(b3, cu(0U))), radR)); // accumulate this path
-    g.stmt_buffer_store(out, uadd(b3, cu(1U)), add(g.buffer_load(out, uadd(b3, cu(1U))), radG));
-    g.stmt_buffer_store(out, uadd(b3, cu(2U)), add(g.buffer_load(out, uadd(b3, cu(2U))), radB));
+    g.stmt_buffer_store(out, uadd(b3, cu(0U)), add(g.buffer_load(out, uadd(b3, cu(0U))), rad_r)); // accumulate this path
+    g.stmt_buffer_store(out, uadd(b3, cu(1U)), add(g.buffer_load(out, uadd(b3, cu(1U))), rad_g));
+    g.stmt_buffer_store(out, uadd(b3, cu(2U)), add(g.buffer_load(out, uadd(b3, cu(2U))), rad_b));
     g.stmt_for_end(floop);
 
     const int inv = cf(1.0 / static_cast<double>(cfg.samples));
@@ -500,7 +526,7 @@ struct PathTraceConfig
 
 // The light-sampling strategy the NEE path tracer emits. MIS is the shipping mode; Nee/Bsdf are the single-strategy references
 // that let a test prove MIS is UNBIASED — all three must converge to the same mean (Veach's classic MIS validation).
-enum class PtStrategy : crd::u32
+enum class PtStrategy : crd::u8
 {
     Mis  = 0U, // multiple importance sampling (power heuristic) — low variance, the gold-standard estimator
     Nee  = 1U, // light sampling only (next-event estimation) — great for small/bright lights, bad for near-specular
@@ -553,17 +579,27 @@ struct PathTraceNeeConfig
     const auto     pw2  = [&](int x) { return mul(x, x); };
     const auto     misw = [&](int pa, int pb) { return dvv(pw2(pa), mx(add(pw2(pa), pw2(pb)), cf(1.0e-20))); }; // power heuristic β=2
 
-    constexpr double kPi    = 3.14159265358979323846;
-    constexpr double kInvPi = 1.0 / kPi;
-    const double p0x = cfg.light_p0[0], p0y = cfg.light_p0[1], p0z = cfg.light_p0[2];
-    const double eux = cfg.light_eu[0], euy = cfg.light_eu[1], euz = cfg.light_eu[2];
-    const double evx = cfg.light_ev[0], evy = cfg.light_ev[1], evz = cfg.light_ev[2];
-    const double nlx = cfg.light_nl[0], nly = cfg.light_nl[1], nlz = cfg.light_nl[2];
-    const double crx = euy * evz - euz * evy, cry = euz * evx - eux * evz, crz = eux * evy - euy * evx;
+    constexpr double pi    = 3.14159265358979323846;
+    constexpr double inv_pi = 1.0 / pi;
+    const double p0x = cfg.light_p0[0];
+    const double p0y = cfg.light_p0[1];
+    const double p0z = cfg.light_p0[2];
+    const double eux = cfg.light_eu[0];
+    const double euy = cfg.light_eu[1];
+    const double euz = cfg.light_eu[2];
+    const double evx = cfg.light_ev[0];
+    const double evy = cfg.light_ev[1];
+    const double evz = cfg.light_ev[2];
+    const double nlx = cfg.light_nl[0];
+    const double nly = cfg.light_nl[1];
+    const double nlz = cfg.light_nl[2];
+    const double crx = euy * evz - euz * evy;
+    const double cry = euz * evx - eux * evz;
+    const double crz = eux * evy - euy * evx;
     const double area = crd::math::sqrt(crx * crx + cry * cry + crz * crz); // |eu × ev|
-    const double aLe0 = static_cast<double>(cfg.albedo[0]) * static_cast<double>(cfg.light_le[0]) * kInvPi; // Lambert BRDF ×Le, folded
-    const double aLe1 = static_cast<double>(cfg.albedo[1]) * static_cast<double>(cfg.light_le[1]) * kInvPi;
-    const double aLe2 = static_cast<double>(cfg.albedo[2]) * static_cast<double>(cfg.light_le[2]) * kInvPi;
+    const double a_le0 = static_cast<double>(cfg.albedo[0]) * static_cast<double>(cfg.light_le[0]) * inv_pi; // Lambert BRDF ×Le, folded
+    const double a_le1 = static_cast<double>(cfg.albedo[1]) * static_cast<double>(cfg.light_le[1]) * inv_pi;
+    const double a_le2 = static_cast<double>(cfg.albedo[2]) * static_cast<double>(cfg.light_le[2]) * inv_pi;
 
     const int as  = g.accel_struct_decl(0, 0);
     const int pos = g.buffer_decl(k::DType::F32, 0, 1, false);
@@ -575,8 +611,12 @@ struct PathTraceNeeConfig
     const int  tid  = uadd(umul(g.builtin(k::KBuiltin::WorkgroupIndex), cu(cfg.local_size)), g.builtin(k::KBuiltin::LocalInvocationIndex));
     const int  b3   = umul(tid, cu(3U));
     const auto lp   = [&](int buf, int base, crd::u32 c) { return g.buffer_load(buf, uadd(base, cu(c))); };
-    const int  pnx = lp(nrm, b3, 0U), pny = lp(nrm, b3, 1U), pnz = lp(nrm, b3, 2U);
-    const int  ppx = lp(pos, b3, 0U), ppy = lp(pos, b3, 1U), ppz = lp(pos, b3, 2U);
+    const int pnx = lp(nrm, b3, 0U);
+    const int pny = lp(nrm, b3, 1U);
+    const int pnz = lp(nrm, b3, 2U);
+    const int ppx = lp(pos, b3, 0U);
+    const int ppy = lp(pos, b3, 1U);
+    const int ppz = lp(pos, b3, 2U);
 
     const auto frame = [&](int nx, int ny, int nz, int t[3], int b[3]) {
         const int sg = g.select(g.binary(k::KOp::CmpGe, nz, cf(0.0)), cf(1.0), cf(-1.0));
@@ -588,7 +628,7 @@ struct PathTraceNeeConfig
     // cosine-weighted hemisphere direction (local z = N) → fills d[3]; also returns the sampled cosine (= pdf·π) for MIS.
     const auto cosine_dir = [&](int u1, int u2, int nx, int ny, int nz, const int t[3], const int b[3], int d[3]) {
         const int rr  = g.unary(k::KOp::Sqrt, u1);
-        const int phi = mul(cf(2.0 * kPi), u2);
+        const int phi = mul(cf(2.0 * pi), u2);
         const int lx  = mul(rr, g.unary(k::KOp::Cos, phi));
         const int ly  = mul(rr, g.unary(k::KOp::Sin, phi));
         const int lz  = g.unary(k::KOp::Sqrt, mx(sub(cf(1.0), u1), cf(0.0)));
@@ -609,55 +649,69 @@ struct PathTraceNeeConfig
 
     const int floop = g.stmt_for_begin(cu(cfg.samples));
     const int s     = g.kernel_loop_var(floop);
-    int radR = cf(0.0), radG = cf(0.0), radB = cf(0.0);
+    int rad_r = cf(0.0);
+    int rad_g = cf(0.0);
+    int rad_b = cf(0.0);
 
-    // NEXT-EVENT ESTIMATION at a shading vertex (Px,N,throughput) — sample the area light, shadow-ray it, add the MIS-weighted
-    // direct contribution into radR/G/B. Called with throughput 0 for masked (miss/light) hits, so it self-nullifies.
-    const auto nee = [&](int Px, int Py, int Pz, int Nx, int Ny, int Nz, int tR, int tG, int tB, crd::u32 salt) {
+    // NEXT-EVENT ESTIMATION at a shading vertex (p_x,N,throughput) — sample the area light, shadow-ray it, add the MIS-weighted
+    // direct contribution into rad_r/G/B. Called with throughput 0 for masked (miss/light) hits, so it self-nullifies.
+    const auto nee = [&](int p_x, int p_y, int p_z, int n_x, int n_y, int n_z, int tR, int tG, int tB, crd::u32 salt) {
         int su1 = -1;
         int su2 = -1;
         hashsalt(s, salt, su1, su2);
-        const int Qx = add(add(cf(p0x), mul(su1, cf(eux))), mul(su2, cf(evx))); // uniform point on the light quad
-        const int Qy = add(add(cf(p0y), mul(su1, cf(euy))), mul(su2, cf(evy)));
-        const int Qz = add(add(cf(p0z), mul(su1, cf(euz))), mul(su2, cf(evz)));
-        const int dxl = sub(Qx, Px), dyl = sub(Qy, Py), dzl = sub(Qz, Pz);
+        const int q_x = add(add(cf(p0x), mul(su1, cf(eux))), mul(su2, cf(evx))); // uniform point on the light quad
+        const int q_y = add(add(cf(p0y), mul(su1, cf(euy))), mul(su2, cf(evy)));
+        const int q_z = add(add(cf(p0z), mul(su1, cf(euz))), mul(su2, cf(evz)));
+        const int dxl = sub(q_x, p_x);
+        const int dyl = sub(q_y, p_y);
+        const int dzl = sub(q_z, p_z);
         const int dist2 = mx(dot3(dxl, dyl, dzl, dxl, dyl, dzl), cf(1.0e-12));
         const int dist  = g.unary(k::KOp::Sqrt, dist2);
         const int invd  = dvv(cf(1.0), dist);
-        const int wix = mul(dxl, invd), wiy = mul(dyl, invd), wiz = mul(dzl, invd);
-        const int cos_s = dot3(Nx, Ny, Nz, wix, wiy, wiz);                 // surface-side cosine
+        const int wix = mul(dxl, invd);
+        const int wiy = mul(dyl, invd);
+        const int wiz = mul(dzl, invd);
+        const int cos_s = dot3(n_x, n_y, n_z, wix, wiy, wiz);                 // surface-side cosine
         const int cos_l = neg(dot3(cf(nlx), cf(nly), cf(nlz), wix, wiy, wiz)); // light-side cosine (front-facing ⇒ >0)
         // shadow ray from P (offset off N) toward the light, stopping just short of it so the light itself is not an occluder.
-        const int sox = add(Px, mul(cf(1.0e-3), Nx)), soy = add(Py, mul(cf(1.0e-3), Ny)), soz = add(Pz, mul(cf(1.0e-3), Nz));
+        const int sox = add(p_x, mul(cf(1.0e-3), n_x));
+        const int soy = add(p_y, mul(cf(1.0e-3), n_y));
+        const int soz = add(p_z, mul(cf(1.0e-3), n_z));
         const int tmxs = mul(dist, cf(1.0 - 1.0e-3));
         const int st   = g.trace_ray_closest(as, sox, soy, soz, wix, wiy, wiz, cf(1.0e-3), tmxs);
         const int vis  = g.select(g.binary(k::KOp::CmpLt, st, tmxs), cf(0.0), cf(1.0));
-        const int pdfL = dvv(dist2, mx(mul(cf(area), cos_l), cf(1.0e-8)));  // light pdf in solid angle
-        const int pdfB = mul(cos_s, cf(kInvPi));                            // the cosine-BSDF pdf toward the light
-        const int w    = (cfg.strategy == PtStrategy::Mis) ? misw(pdfL, pdfB) : cf(1.0);
+        const int pdf_l = dvv(dist2, mx(mul(cf(area), cos_l), cf(1.0e-8)));  // light pdf in solid angle
+        const int pdf_b = mul(cos_s, cf(inv_pi));                            // the cosine-BSDF pdf toward the light
+        const int w    = (cfg.strategy == PtStrategy::Mis) ? misw(pdf_l, pdf_b) : cf(1.0);
         const int gate = mul(mul(gt0(cos_s), gt0(cos_l)), vis);            // both cosines positive AND unoccluded
         const int geom = dvv(mul(mul(cos_s, cos_l), cf(area)), dist2);      // cosθ_s·cosθ_l·A / d²  (light-area → solid-angle)
         const int sc   = mul(mul(w, geom), gate);
-        radR = add(radR, mul(mul(tR, cf(aLe0)), sc));
-        radG = add(radG, mul(mul(tG, cf(aLe1)), sc));
-        radB = add(radB, mul(mul(tB, cf(aLe2)), sc));
+        rad_r = add(rad_r, mul(mul(tR, cf(a_le0)), sc));
+        rad_g = add(rad_g, mul(mul(tG, cf(a_le1)), sc));
+        rad_b = add(rad_b, mul(mul(tB, cf(a_le2)), sc));
     };
 
     // ── direct lighting at the primary (G-buffer) vertex ──
     if (cfg.strategy != PtStrategy::Bsdf) { nee(ppx, ppy, ppz, pnx, pny, pnz, cf(1.0), cf(1.0), cf(1.0), 1000U); }
 
     // ── scatter the primary ray (cosine BSDF) ──
-    int surfT[3];
-    int surfB[3];
-    frame(pnx, pny, pnz, surfT, surfB);
+    int surf_t[3];
+    int surf_b[3];
+    frame(pnx, pny, pnz, surf_t, surf_b);
     int u1 = -1;
     int u2 = -1;
     hashsalt(s, 0U, u1, u2);
     int dir[3];
-    int pdfDir = mul(cosine_dir(u1, u2, pnx, pny, pnz, surfT, surfB, dir), cf(kInvPi)); // pdf of THIS ray (for BSDF-strategy MIS)
-    int ox = add(ppx, mul(cf(1.0e-3), pnx)), oy = add(ppy, mul(cf(1.0e-3), pny)), oz = add(ppz, mul(cf(1.0e-3), pnz));
-    int dx = dir[0], dy = dir[1], dz = dir[2];
-    int trR = cf(static_cast<double>(cfg.albedo[0])), trG = cf(static_cast<double>(cfg.albedo[1])), trB = cf(static_cast<double>(cfg.albedo[2]));
+    int pdf_dir = mul(cosine_dir(u1, u2, pnx, pny, pnz, surf_t, surf_b, dir), cf(inv_pi)); // pdf of THIS ray (for BSDF-strategy MIS)
+    int ox = add(ppx, mul(cf(1.0e-3), pnx));
+    int oy = add(ppy, mul(cf(1.0e-3), pny));
+    int oz = add(ppz, mul(cf(1.0e-3), pnz));
+    int dx = dir[0];
+    int dy = dir[1];
+    int dz = dir[2];
+    int tr_r = cf(static_cast<double>(cfg.albedo[0]));
+    int tr_g = cf(static_cast<double>(cfg.albedo[1]));
+    int tr_b = cf(static_cast<double>(cfg.albedo[2]));
 
     for (crd::u32 bnc = 0; bnc < cfg.bounces; ++bnc)
     {
@@ -674,22 +728,26 @@ struct PathTraceNeeConfig
         if (cfg.strategy != PtStrategy::Nee)
         {
             const int cosl = neg(dot3(cf(nlx), cf(nly), cf(nlz), dx, dy, dz));
-            const int pdfL = dvv(mul(tc, tc), mx(mul(cf(area), cosl), cf(1.0e-8)));
-            const int wb   = (cfg.strategy == PtStrategy::Mis) ? misw(pdfDir, pdfL) : cf(1.0);
+            const int pdf_l = dvv(mul(tc, tc), mx(mul(cf(area), cosl), cf(1.0e-8)));
+            const int wb   = (cfg.strategy == PtStrategy::Mis) ? misw(pdf_dir, pdf_l) : cf(1.0);
             const int emit = mul(islight, gt0(cosl));
-            radR = add(radR, mul(mul(mul(trR, cf(static_cast<double>(cfg.light_le[0]))), wb), emit));
-            radG = add(radG, mul(mul(mul(trG, cf(static_cast<double>(cfg.light_le[1]))), wb), emit));
-            radB = add(radB, mul(mul(mul(trB, cf(static_cast<double>(cfg.light_le[2]))), wb), emit));
+            rad_r = add(rad_r, mul(mul(mul(tr_r, cf(static_cast<double>(cfg.light_le[0]))), wb), emit));
+            rad_g = add(rad_g, mul(mul(mul(tr_g, cf(static_cast<double>(cfg.light_le[1]))), wb), emit));
+            rad_b = add(rad_b, mul(mul(mul(tr_b, cf(static_cast<double>(cfg.light_le[2]))), wb), emit));
         }
 
         // ── hit a diffuse surface: reconstruct the vertex, do NEE there, then scatter ──
         const int cprim = mn(hit.prim, cu(cfg.ntri > 0U ? cfg.ntri - 1U : 0U));
         const int tb    = umul(cprim, cu(3U));
-        const int hnx = lp(tn, tb, 0U), hny = lp(tn, tb, 1U), hnz = lp(tn, tb, 2U);
-        const int hpx = add(ox, mul(tc, dx)), hpy = add(oy, mul(tc, dy)), hpz = add(oz, mul(tc, dz));
+        const int hnx = lp(tn, tb, 0U);
+        const int hny = lp(tn, tb, 1U);
+        const int hnz = lp(tn, tb, 2U);
+        const int hpx = add(ox, mul(tc, dx));
+        const int hpy = add(oy, mul(tc, dy));
+        const int hpz = add(oz, mul(tc, dz));
         if (cfg.strategy != PtStrategy::Bsdf)
         {
-            nee(hpx, hpy, hpz, hnx, hny, hnz, mul(trR, hitsurf), mul(trG, hitsurf), mul(trB, hitsurf), 1001U + bnc);
+            nee(hpx, hpy, hpz, hnx, hny, hnz, mul(tr_r, hitsurf), mul(tr_g, hitsurf), mul(tr_b, hitsurf), 1001U + bnc);
         }
         if (bnc + 1U < cfg.bounces)
         {
@@ -697,18 +755,18 @@ struct PathTraceNeeConfig
             int hb[3];
             frame(hnx, hny, hnz, ht, hb);
             hashsalt(s, bnc + 1U, u1, u2);
-            pdfDir = mul(cosine_dir(u1, u2, hnx, hny, hnz, ht, hb, dir), cf(kInvPi));
-            trR = mul(trR, mul(cf(static_cast<double>(cfg.albedo[0])), hitsurf)); // ×albedo, and die unless we hit a surface
-            trG = mul(trG, mul(cf(static_cast<double>(cfg.albedo[1])), hitsurf));
-            trB = mul(trB, mul(cf(static_cast<double>(cfg.albedo[2])), hitsurf));
+            pdf_dir = mul(cosine_dir(u1, u2, hnx, hny, hnz, ht, hb, dir), cf(inv_pi));
+            tr_r = mul(tr_r, mul(cf(static_cast<double>(cfg.albedo[0])), hitsurf)); // ×albedo, and die unless we hit a surface
+            tr_g = mul(tr_g, mul(cf(static_cast<double>(cfg.albedo[1])), hitsurf));
+            tr_b = mul(tr_b, mul(cf(static_cast<double>(cfg.albedo[2])), hitsurf));
             ox = add(hpx, mul(cf(1.0e-3), hnx)); oy = add(hpy, mul(cf(1.0e-3), hny)); oz = add(hpz, mul(cf(1.0e-3), hnz));
             dx = dir[0]; dy = dir[1]; dz = dir[2];
         }
     }
 
-    g.stmt_buffer_store(out, uadd(b3, cu(0U)), add(g.buffer_load(out, uadd(b3, cu(0U))), radR));
-    g.stmt_buffer_store(out, uadd(b3, cu(1U)), add(g.buffer_load(out, uadd(b3, cu(1U))), radG));
-    g.stmt_buffer_store(out, uadd(b3, cu(2U)), add(g.buffer_load(out, uadd(b3, cu(2U))), radB));
+    g.stmt_buffer_store(out, uadd(b3, cu(0U)), add(g.buffer_load(out, uadd(b3, cu(0U))), rad_r));
+    g.stmt_buffer_store(out, uadd(b3, cu(1U)), add(g.buffer_load(out, uadd(b3, cu(1U))), rad_g));
+    g.stmt_buffer_store(out, uadd(b3, cu(2U)), add(g.buffer_load(out, uadd(b3, cu(2U))), rad_b));
     g.stmt_for_end(floop);
 
     const int inv = cf(1.0 / static_cast<double>(cfg.samples));
@@ -737,6 +795,10 @@ struct RestirDiConfig
     crd::u32 local_size  = 64U;
 };
 
+// NOLINTBEGIN(readability-identifier-naming) — from here to the end of the namespace, the RIS/ReSTIR estimator kernels
+// deliberately mirror the papers' symbols (Talbot RIS: wᵢ, W; Bitterli ReSTIR: M, p̂ (ph*), G, V; Ouyang ReSTIR GI: J, Lo)
+// so the math can be audited against the papers term by term. Renaming W→w_res etc. would break that mapping for zero
+// clarity gain — the same justification class as the kFourCC on-disk-mnemonic NOLINTs (serialize.hpp precedent).
 // ReSTIR DI — RESAMPLED IMPORTANCE SAMPLING with a per-pixel reservoir (Bitterli et al. 2020), the frontier real-time
 // many-light estimator. NEE draws ONE light sample per pixel from a cheap source pdf; ReSTIR streams M candidates into a
 // WEIGHTED-RESERVOIR-SAMPLING reservoir whose target p̂ = the UNSHADOWED contribution (f·Le·G), keeps the single best survivor,
@@ -763,16 +825,26 @@ struct RestirDiConfig
     const auto     dot3 = [&](int ax, int ay, int az, int bx, int by, int bz) { return add(add(mul(ax, bx), mul(ay, by)), mul(az, bz)); };
     const auto     clamp0 = [&](int x) { return mx(x, cf(0.0)); };
 
-    constexpr double kInvPi = 1.0 / 3.14159265358979323846;
-    const double p0x = cfg.light_p0[0], p0y = cfg.light_p0[1], p0z = cfg.light_p0[2];
-    const double eux = cfg.light_eu[0], euy = cfg.light_eu[1], euz = cfg.light_eu[2];
-    const double evx = cfg.light_ev[0], evy = cfg.light_ev[1], evz = cfg.light_ev[2];
-    const double nlx = cfg.light_nl[0], nly = cfg.light_nl[1], nlz = cfg.light_nl[2];
-    const double crx = euy * evz - euz * evy, cry = euz * evx - eux * evz, crz = eux * evy - euy * evx;
+    constexpr double inv_pi = 1.0 / 3.14159265358979323846;
+    const double p0x = cfg.light_p0[0];
+    const double p0y = cfg.light_p0[1];
+    const double p0z = cfg.light_p0[2];
+    const double eux = cfg.light_eu[0];
+    const double euy = cfg.light_eu[1];
+    const double euz = cfg.light_eu[2];
+    const double evx = cfg.light_ev[0];
+    const double evy = cfg.light_ev[1];
+    const double evz = cfg.light_ev[2];
+    const double nlx = cfg.light_nl[0];
+    const double nly = cfg.light_nl[1];
+    const double nlz = cfg.light_nl[2];
+    const double crx = euy * evz - euz * evy;
+    const double cry = euz * evx - eux * evz;
+    const double crz = eux * evy - euy * evx;
     const double area = crd::math::sqrt(crx * crx + cry * cry + crz * crz);
-    const double a0Le0 = static_cast<double>(cfg.albedo[0]) * static_cast<double>(cfg.light_le[0]) * kInvPi; // per-channel integrand coeff
-    const double a1Le1 = static_cast<double>(cfg.albedo[1]) * static_cast<double>(cfg.light_le[1]) * kInvPi;
-    const double a2Le2 = static_cast<double>(cfg.albedo[2]) * static_cast<double>(cfg.light_le[2]) * kInvPi;
+    const double a0Le0 = static_cast<double>(cfg.albedo[0]) * static_cast<double>(cfg.light_le[0]) * inv_pi; // per-channel integrand coeff
+    const double a1Le1 = static_cast<double>(cfg.albedo[1]) * static_cast<double>(cfg.light_le[1]) * inv_pi;
+    const double a2Le2 = static_cast<double>(cfg.albedo[2]) * static_cast<double>(cfg.light_le[2]) * inv_pi;
     const double clum  = 0.2126 * a0Le0 + 0.7152 * a1Le1 + 0.0722 * a2Le2;                                   // luminance coeff for p̂
 
     const int as  = g.accel_struct_decl(0, 0);
@@ -784,8 +856,12 @@ struct RestirDiConfig
     const int  tid  = uadd(umul(g.builtin(k::KBuiltin::WorkgroupIndex), cu(cfg.local_size)), g.builtin(k::KBuiltin::LocalInvocationIndex));
     const int  b3   = umul(tid, cu(3U));
     const auto lp   = [&](int buf, int base, crd::u32 c) { return g.buffer_load(buf, uadd(base, cu(c))); };
-    const int  Nx = lp(nrm, b3, 0U), Ny = lp(nrm, b3, 1U), Nz = lp(nrm, b3, 2U);
-    const int  Px = lp(pos, b3, 0U), Py = lp(pos, b3, 1U), Pz = lp(pos, b3, 2U);
+    const int n_x = lp(nrm, b3, 0U);
+    const int n_y = lp(nrm, b3, 1U);
+    const int n_z = lp(nrm, b3, 2U);
+    const int p_x = lp(pos, b3, 0U);
+    const int p_y = lp(pos, b3, 1U);
+    const int p_z = lp(pos, b3, 2U);
 
     g.stmt_buffer_store(out, uadd(b3, cu(0U)), cf(0.0));
     g.stmt_buffer_store(out, uadd(b3, cu(1U)), cf(0.0));
@@ -796,20 +872,24 @@ struct RestirDiConfig
 
     // ── RIS reservoir over M candidate light samples (streaming WRS, reservoir threaded as SSA) ──
     int wsum = cf(0.0);
-    int cQx  = cf(p0x), cQy = cf(p0y), cQz = cf(p0z); // chosen sample point on the light
-    int cPh  = cf(0.0);                               // chosen sample's target p̂
+    int cqx  = cf(p0x); // chosen sample point on the light
+    int cqy = cf(p0y);
+    int cqz = cf(p0z);
+    int cph  = cf(0.0);                               // chosen sample's target p̂
     for (crd::u32 i = 0; i < cfg.candidates; ++i)
     {
         const int seed = uadd(umul(fr, cu(0x9E3779B9U)), cu(i * 0x2545F491U + 1U));
         const int u1   = detail::rt_hash01(g, uxor(umul(tid, cu(0x632BE5ABU)), seed));
         const int u2   = detail::rt_hash01(g, uxor(umul(tid, cu(0x85157AF5U)), umul(seed, cu(0xC2B2AE35U))));
-        const int Qx = add(add(cf(p0x), mul(u1, cf(eux))), mul(u2, cf(evx)));
-        const int Qy = add(add(cf(p0y), mul(u1, cf(euy))), mul(u2, cf(evy)));
-        const int Qz = add(add(cf(p0z), mul(u1, cf(euz))), mul(u2, cf(evz)));
-        const int dxl = sub(Qx, Px), dyl = sub(Qy, Py), dzl = sub(Qz, Pz);
+        const int q_x = add(add(cf(p0x), mul(u1, cf(eux))), mul(u2, cf(evx)));
+        const int q_y = add(add(cf(p0y), mul(u1, cf(euy))), mul(u2, cf(evy)));
+        const int q_z = add(add(cf(p0z), mul(u1, cf(euz))), mul(u2, cf(evz)));
+        const int dxl = sub(q_x, p_x);
+        const int dyl = sub(q_y, p_y);
+        const int dzl = sub(q_z, p_z);
         const int d2  = mx(dot3(dxl, dyl, dzl, dxl, dyl, dzl), cf(1.0e-12));
         const int invd = dvv(cf(1.0), g.unary(k::KOp::Sqrt, d2));
-        const int cs  = clamp0(mul(dot3(Nx, Ny, Nz, dxl, dyl, dzl), invd));           // cosθ_s (wi = d/|d|)
+        const int cs  = clamp0(mul(dot3(n_x, n_y, n_z, dxl, dyl, dzl), invd));           // cosθ_s (wi = d/|d|)
         const int cl  = clamp0(neg(mul(dot3(cf(nlx), cf(nly), cf(nlz), dxl, dyl, dzl), invd))); // cosθ_l
         const int G   = dvv(mul(cs, cl), d2);                                          // area-measure geometry
         const int ph  = mul(cf(clum), G);                                              // target p̂ = lum(f·Le)·G
@@ -817,23 +897,29 @@ struct RestirDiConfig
         wsum = add(wsum, wi);
         const int xi   = detail::rt_hash01(g, uxor(umul(tid, cu(0x27D4EB2FU)), umul(seed, cu(0x165667B1U))));
         const int repl = g.select(g.binary(k::KOp::CmpLt, mul(xi, wsum), wi), cf(1.0), cf(0.0)); // xi < wi/wsum
-        cQx = add(mul(repl, Qx), mul(sub(cf(1.0), repl), cQx));                         // WRS replace (mask-blend, all finite)
-        cQy = add(mul(repl, Qy), mul(sub(cf(1.0), repl), cQy));
-        cQz = add(mul(repl, Qz), mul(sub(cf(1.0), repl), cQz));
-        cPh = add(mul(repl, ph), mul(sub(cf(1.0), repl), cPh));
+        cqx = add(mul(repl, q_x), mul(sub(cf(1.0), repl), cqx));                         // WRS replace (mask-blend, all finite)
+        cqy = add(mul(repl, q_y), mul(sub(cf(1.0), repl), cqy));
+        cqz = add(mul(repl, q_z), mul(sub(cf(1.0), repl), cqz));
+        cph = add(mul(repl, ph), mul(sub(cf(1.0), repl), cph));
     }
 
     // ── survivor: W, one visibility ray, shade ──
-    const int W = dvv(wsum, mul(cf(static_cast<double>(cfg.candidates)), mx(cPh, cf(1.0e-12)))); // unbiased contribution weight
-    const int dcx = sub(cQx, Px), dcy = sub(cQy, Py), dcz = sub(cQz, Pz);
+    const int W = dvv(wsum, mul(cf(static_cast<double>(cfg.candidates)), mx(cph, cf(1.0e-12)))); // unbiased contribution weight
+    const int dcx = sub(cqx, p_x);
+    const int dcy = sub(cqy, p_y);
+    const int dcz = sub(cqz, p_z);
     const int dc2 = mx(dot3(dcx, dcy, dcz, dcx, dcy, dcz), cf(1.0e-12));
     const int dist = g.unary(k::KOp::Sqrt, dc2);
     const int invc = dvv(cf(1.0), dist);
-    const int wix = mul(dcx, invc), wiy = mul(dcy, invc), wiz = mul(dcz, invc);
-    const int cs2 = clamp0(dot3(Nx, Ny, Nz, wix, wiy, wiz));
+    const int wix = mul(dcx, invc);
+    const int wiy = mul(dcy, invc);
+    const int wiz = mul(dcz, invc);
+    const int cs2 = clamp0(dot3(n_x, n_y, n_z, wix, wiy, wiz));
     const int cl2 = clamp0(neg(dot3(cf(nlx), cf(nly), cf(nlz), wix, wiy, wiz)));
     const int Gc  = dvv(mul(cs2, cl2), dc2);
-    const int sox = add(Px, mul(cf(1.0e-3), Nx)), soy = add(Py, mul(cf(1.0e-3), Ny)), soz = add(Pz, mul(cf(1.0e-3), Nz));
+    const int sox = add(p_x, mul(cf(1.0e-3), n_x));
+    const int soy = add(p_y, mul(cf(1.0e-3), n_y));
+    const int soz = add(p_z, mul(cf(1.0e-3), n_z));
     const int tmxs = mul(dist, cf(1.0 - 1.0e-3));
     const int st   = g.trace_ray_closest(as, sox, soy, soz, wix, wiy, wiz, cf(1.0e-3), tmxs);
     const int V    = g.select(g.binary(k::KOp::CmpLt, st, tmxs), cf(0.0), cf(1.0)); // occluded ⇒ 0
@@ -890,8 +976,10 @@ struct ManyLightConfig
     const auto     clamp0 = [&](int x) { return mx(x, cf(0.0)); };
     const auto     dot3 = [&](int ax, int ay, int az, int bx, int by, int bz) { return add(add(mul(ax, bx), mul(ay, by)), mul(az, bz)); };
 
-    constexpr double kInvPi = 1.0 / 3.14159265358979323846;
-    const double a0 = static_cast<double>(cfg.albedo[0]) * kInvPi, a1 = static_cast<double>(cfg.albedo[1]) * kInvPi, a2 = static_cast<double>(cfg.albedo[2]) * kInvPi;
+    constexpr double inv_pi = 1.0 / 3.14159265358979323846;
+    const double a0 = static_cast<double>(cfg.albedo[0]) * inv_pi;
+    const double a1 = static_cast<double>(cfg.albedo[1]) * inv_pi;
+    const double a2 = static_cast<double>(cfg.albedo[2]) * inv_pi;
 
     const int as   = g.accel_struct_decl(0, 0);
     const int pos  = g.buffer_decl(k::DType::F32, 0, 1, false);
@@ -903,8 +991,12 @@ struct ManyLightConfig
     const int  tid  = uadd(umul(g.builtin(k::KBuiltin::WorkgroupIndex), cu(cfg.local_size)), g.builtin(k::KBuiltin::LocalInvocationIndex));
     const int  b3   = umul(tid, cu(3U));
     const auto lp   = [&](int buf, int base, crd::u32 c) { return g.buffer_load(buf, uadd(base, cu(c))); };
-    const int  Nx = lp(nrm, b3, 0U), Ny = lp(nrm, b3, 1U), Nz = lp(nrm, b3, 2U);
-    const int  Px = lp(pos, b3, 0U), Py = lp(pos, b3, 1U), Pz = lp(pos, b3, 2U);
+    const int n_x = lp(nrm, b3, 0U);
+    const int n_y = lp(nrm, b3, 1U);
+    const int n_z = lp(nrm, b3, 2U);
+    const int p_x = lp(pos, b3, 0U);
+    const int p_y = lp(pos, b3, 1U);
+    const int p_z = lp(pos, b3, 2U);
 
     g.stmt_buffer_store(out, uadd(b3, cu(0U)), cf(0.0));
     g.stmt_buffer_store(out, uadd(b3, cu(1U)), cf(0.0));
@@ -913,14 +1005,22 @@ struct ManyLightConfig
     const int floop = g.stmt_for_begin(cu(cfg.samples));
     const int s     = g.kernel_loop_var(floop);
     const int seed  = uadd(umul(s, cu(0x9E3779B9U)), cu(1U));
-    const int ul  = detail::rt_hash01(g, uxor(umul(tid, cu(0x2C1B3C6DU)), seed));
+    const int ulight  = detail::rt_hash01(g, uxor(umul(tid, cu(0x2C1B3C6DU)), seed));
     // per-light POWER = luminance(Le)·area — the importance weight for power sampling.
     const auto light_power = [&](crd::u32 i) {
         const int base = cu(i * 15U);
-        const int le0 = lp(lts, base, 12U), le1 = lp(lts, base, 13U), le2 = lp(lts, base, 14U);
-        const int eu0 = lp(lts, base, 3U), eu1 = lp(lts, base, 4U), eu2 = lp(lts, base, 5U);
-        const int ev0 = lp(lts, base, 6U), ev1 = lp(lts, base, 7U), ev2 = lp(lts, base, 8U);
-        const int cx = sub(mul(eu1, ev2), mul(eu2, ev1)), cy = sub(mul(eu2, ev0), mul(eu0, ev2)), cz = sub(mul(eu0, ev1), mul(eu1, ev0));
+        const int le0 = lp(lts, base, 12U);
+        const int le1 = lp(lts, base, 13U);
+        const int le2 = lp(lts, base, 14U);
+        const int eu0 = lp(lts, base, 3U);
+        const int eu1 = lp(lts, base, 4U);
+        const int eu2 = lp(lts, base, 5U);
+        const int ev0 = lp(lts, base, 6U);
+        const int ev1 = lp(lts, base, 7U);
+        const int ev2 = lp(lts, base, 8U);
+        const int cx = sub(mul(eu1, ev2), mul(eu2, ev1));
+        const int cy = sub(mul(eu2, ev0), mul(eu0, ev2));
+        const int cz = sub(mul(eu0, ev1), mul(eu1, ev0));
         const int ar = g.unary(k::KOp::Sqrt, mx(dot3(cx, cy, cz, cx, cy, cz), cf(1.0e-20)));
         return mul(add(add(mul(cf(0.2126), le0), mul(cf(0.7152), le1)), mul(cf(0.0722), le2)), ar);
     };
@@ -930,53 +1030,73 @@ struct ManyLightConfig
     {
         total = cf(0.0);
         for (crd::u32 i = 0; i < cfg.nlights; ++i) { total = add(total, light_power(i)); }
-        const int u = mul(ul, total); // scan the CDF: pick the first light whose cumulative power crosses u
-        int acc = cf(0.0), selF = cf(0.0), found = cf(0.0);
+        const int u = mul(ulight, total); // scan the CDF: pick the first light whose cumulative power crosses u
+        int acc = cf(0.0);
+        int sel_f = cf(0.0);
+        int found = cf(0.0);
         for (crd::u32 i = 0; i < cfg.nlights; ++i)
         {
             const int nacc = add(acc, light_power(i));
             const int cond = mul(g.select(g.binary(k::KOp::CmpLt, u, nacc), cf(1.0), cf(0.0)), sub(cf(1.0), found));
-            selF  = add(mul(cond, cf(static_cast<double>(i))), mul(sub(cf(1.0), cond), selF));
+            sel_f  = add(mul(cond, cf(static_cast<double>(i))), mul(sub(cf(1.0), cond), sel_f));
             found = mx(found, cond);
             acc   = nacc;
         }
-        li = mn(g.cast(selF, k::DType::U32), cu(cfg.nlights > 0U ? cfg.nlights - 1U : 0U));
+        li = mn(g.cast(sel_f, k::DType::U32), cu(cfg.nlights > 0U ? cfg.nlights - 1U : 0U));
     }
     else // uniform: l = ⌊u·N⌋
     {
-        li = mn(g.cast(g.unary(k::KOp::Floor, mul(ul, cf(static_cast<double>(cfg.nlights)))), k::DType::U32), cu(cfg.nlights > 0U ? cfg.nlights - 1U : 0U));
+        li = mn(g.cast(g.unary(k::KOp::Floor, mul(ulight, cf(static_cast<double>(cfg.nlights)))), k::DType::U32), cu(cfg.nlights > 0U ? cfg.nlights - 1U : 0U));
     }
     const int lb  = umul(li, cu(15U));
-    const int p0x = lp(lts, lb, 0U), p0y = lp(lts, lb, 1U), p0z = lp(lts, lb, 2U);
-    const int eux = lp(lts, lb, 3U), euy = lp(lts, lb, 4U), euz = lp(lts, lb, 5U);
-    const int evx = lp(lts, lb, 6U), evy = lp(lts, lb, 7U), evz = lp(lts, lb, 8U);
-    const int nlx = lp(lts, lb, 9U), nly = lp(lts, lb, 10U), nlz = lp(lts, lb, 11U);
-    const int lex = lp(lts, lb, 12U), ley = lp(lts, lb, 13U), lez = lp(lts, lb, 14U);
+    const int p0x = lp(lts, lb, 0U);
+    const int p0y = lp(lts, lb, 1U);
+    const int p0z = lp(lts, lb, 2U);
+    const int eux = lp(lts, lb, 3U);
+    const int euy = lp(lts, lb, 4U);
+    const int euz = lp(lts, lb, 5U);
+    const int evx = lp(lts, lb, 6U);
+    const int evy = lp(lts, lb, 7U);
+    const int evz = lp(lts, lb, 8U);
+    const int nlx = lp(lts, lb, 9U);
+    const int nly = lp(lts, lb, 10U);
+    const int nlz = lp(lts, lb, 11U);
+    const int lex = lp(lts, lb, 12U);
+    const int ley = lp(lts, lb, 13U);
+    const int lez = lp(lts, lb, 14U);
     // area = |eu × ev|.
-    const int crx = sub(mul(euy, evz), mul(euz, evy)), cry = sub(mul(euz, evx), mul(eux, evz)), crz = sub(mul(eux, evy), mul(euy, evx));
+    const int crx = sub(mul(euy, evz), mul(euz, evy));
+    const int cry = sub(mul(euz, evx), mul(eux, evz));
+    const int crz = sub(mul(eux, evy), mul(euy, evx));
     const int area = g.unary(k::KOp::Sqrt, mx(dot3(crx, cry, crz, crx, cry, crz), cf(1.0e-20)));
     // sample a point on the light.
     const int u1 = detail::rt_hash01(g, uxor(umul(tid, cu(0x632BE5ABU)), umul(seed, cu(0x9E3779B1U))));
     const int u2 = detail::rt_hash01(g, uxor(umul(tid, cu(0x85157AF5U)), umul(seed, cu(0xC2B2AE35U))));
-    const int Qx = add(add(p0x, mul(u1, eux)), mul(u2, evx));
-    const int Qy = add(add(p0y, mul(u1, euy)), mul(u2, evy));
-    const int Qz = add(add(p0z, mul(u1, euz)), mul(u2, evz));
-    const int dx = sub(Qx, Px), dy = sub(Qy, Py), dz = sub(Qz, Pz);
+    const int q_x = add(add(p0x, mul(u1, eux)), mul(u2, evx));
+    const int q_y = add(add(p0y, mul(u1, euy)), mul(u2, evy));
+    const int q_z = add(add(p0z, mul(u1, euz)), mul(u2, evz));
+    const int dx = sub(q_x, p_x);
+    const int dy = sub(q_y, p_y);
+    const int dz = sub(q_z, p_z);
     const int d2 = mx(dot3(dx, dy, dz, dx, dy, dz), cf(1.0e-12));
     const int dist = g.unary(k::KOp::Sqrt, d2);
     const int invd = dvv(cf(1.0), dist);
-    const int wix = mul(dx, invd), wiy = mul(dy, invd), wiz = mul(dz, invd);
-    const int cs = clamp0(dot3(Nx, Ny, Nz, wix, wiy, wiz));
+    const int wix = mul(dx, invd);
+    const int wiy = mul(dy, invd);
+    const int wiz = mul(dz, invd);
+    const int cs = clamp0(dot3(n_x, n_y, n_z, wix, wiy, wiz));
     const int cl = clamp0(neg(dot3(nlx, nly, nlz, wix, wiy, wiz)));
     // shadow ray (offset off N, stop just short of the light).
-    const int sox = add(Px, mul(cf(1.0e-3), Nx)), soy = add(Py, mul(cf(1.0e-3), Ny)), soz = add(Pz, mul(cf(1.0e-3), Nz));
+    const int sox = add(p_x, mul(cf(1.0e-3), n_x));
+    const int soy = add(p_y, mul(cf(1.0e-3), n_y));
+    const int soz = add(p_z, mul(cf(1.0e-3), n_z));
     const int tmxs = mul(dist, cf(1.0 - 1.0e-3));
     const int st   = g.trace_ray_closest(as, sox, soy, soz, wix, wiy, wiz, cf(1.0e-3), tmxs);
     const int V    = g.select(g.binary(k::KOp::CmpLt, st, tmxs), cf(0.0), cf(1.0));
     // estimator: f·Le·G·V / pdf, G = cos_s·cos_l/d². UNIFORM pdf=(1/N)(1/area) ⇒ ×N·area; POWER pdf=(power_l/total)(1/area) ⇒
     // ×total·area/power_l = ×total/lum(Le_l) (the area cancels).
-    const int lumSel = add(add(mul(cf(0.2126), lex), mul(cf(0.7152), ley)), mul(cf(0.0722), lez));
-    const int wscale = cfg.power_sampling ? dvv(total, mx(lumSel, cf(1.0e-8))) : mul(cf(static_cast<double>(cfg.nlights)), area);
+    const int lum_sel = add(add(mul(cf(0.2126), lex), mul(cf(0.7152), ley)), mul(cf(0.0722), lez));
+    const int wscale = cfg.power_sampling ? dvv(total, mx(lum_sel, cf(1.0e-8))) : mul(cf(static_cast<double>(cfg.nlights)), area);
     const int wgt = mul(mul(dvv(mul(cs, cl), d2), V), wscale);
     g.stmt_buffer_store(out, uadd(b3, cu(0U)), add(lp(out, b3, 0U), mul(mul(cf(a0), lex), wgt)));
     g.stmt_buffer_store(out, uadd(b3, cu(1U)), add(lp(out, b3, 1U), mul(mul(cf(a1), ley), wgt)));
@@ -1031,15 +1151,16 @@ struct PathTraceFullConfig
     const auto     umul = [&](int a, int b) { return g.binary(k::KOp::Mul, a, b); };
     const auto     uxor = [&](int a, int b) { return g.binary(k::KOp::BitXor, a, b); };
     const auto     gt0  = [&](int x) { return g.select(g.binary(k::KOp::CmpGt, x, cf(0.0)), cf(1.0), cf(0.0)); };
-    const auto     clamp0 = [&](int x) { return mx(x, cf(0.0)); };
     const auto     dot3 = [&](int ax, int ay, int az, int bx, int by, int bz) { return add(add(mul(ax, bx), mul(ay, by)), mul(az, bz)); };
     const auto     pw2  = [&](int x) { return mul(x, x); };
     const auto     misw = [&](int pa, int pb) { return dvv(pw2(pa), mx(add(pw2(pa), pw2(pb)), cf(1.0e-20))); };
 
-    constexpr double kPi    = 3.14159265358979323846;
-    constexpr double kInvPi = 1.0 / kPi;
-    const double invN = 1.0 / static_cast<double>(cfg.nlights > 0U ? cfg.nlights : 1U);
-    const double a0 = static_cast<double>(cfg.albedo[0]), a1 = static_cast<double>(cfg.albedo[1]), a2 = static_cast<double>(cfg.albedo[2]);
+    constexpr double pi    = 3.14159265358979323846;
+    constexpr double inv_pi = 1.0 / pi;
+    const double inv_n = 1.0 / static_cast<double>(cfg.nlights > 0U ? cfg.nlights : 1U);
+    const double a0 = static_cast<double>(cfg.albedo[0]);
+    const double a1 = static_cast<double>(cfg.albedo[1]);
+    const double a2 = static_cast<double>(cfg.albedo[2]);
 
     const int as   = g.accel_struct_decl(0, 0);
     const int pos  = g.buffer_decl(k::DType::F32, 0, 1, false);
@@ -1052,8 +1173,12 @@ struct PathTraceFullConfig
     const int  tid  = uadd(umul(g.builtin(k::KBuiltin::WorkgroupIndex), cu(cfg.local_size)), g.builtin(k::KBuiltin::LocalInvocationIndex));
     const int  b3   = umul(tid, cu(3U));
     const auto lp   = [&](int buf, int base, crd::u32 c) { return g.buffer_load(buf, uadd(base, cu(c))); };
-    const int  pnx = lp(nrm, b3, 0U), pny = lp(nrm, b3, 1U), pnz = lp(nrm, b3, 2U);
-    const int  ppx = lp(pos, b3, 0U), ppy = lp(pos, b3, 1U), ppz = lp(pos, b3, 2U);
+    const int pnx = lp(nrm, b3, 0U);
+    const int pny = lp(nrm, b3, 1U);
+    const int pnz = lp(nrm, b3, 2U);
+    const int ppx = lp(pos, b3, 0U);
+    const int ppy = lp(pos, b3, 1U);
+    const int ppz = lp(pos, b3, 2U);
 
     const auto frame = [&](int nx, int ny, int nz, int t[3], int b[3]) {
         const int sg = g.select(g.binary(k::KOp::CmpGe, nz, cf(0.0)), cf(1.0), cf(-1.0));
@@ -1064,7 +1189,7 @@ struct PathTraceFullConfig
     };
     const auto cosine_dir = [&](int u1, int u2, int nx, int ny, int nz, const int t[3], const int b[3], int d[3]) {
         const int rr  = g.unary(k::KOp::Sqrt, u1);
-        const int phi = mul(cf(2.0 * kPi), u2);
+        const int phi = mul(cf(2.0 * pi), u2);
         const int lx  = mul(rr, g.unary(k::KOp::Cos, phi));
         const int ly  = mul(rr, g.unary(k::KOp::Sin, phi));
         const int lz  = g.unary(k::KOp::Sqrt, mx(sub(cf(1.0), u1), cf(0.0)));
@@ -1089,55 +1214,84 @@ struct PathTraceFullConfig
 
     const int floop = g.stmt_for_begin(cu(cfg.samples));
     const int s     = g.kernel_loop_var(floop);
-    int radR = cf(0.0), radG = cf(0.0), radB = cf(0.0);
+    int rad_r = cf(0.0);
+    int rad_g = cf(0.0);
+    int rad_b = cf(0.0);
 
     // MANY-LIGHTS NEE with MIS at a shading vertex — pick a light uniformly, sample it, shadow-ray it, add the MIS-weighted direct.
-    const auto nee = [&](int Px, int Py, int Pz, int Nx, int Ny, int Nz, int tR, int tG, int tB, crd::u32 salt) {
-        const int ul = hash1(s, salt);
-        const int li = mn(g.cast(g.unary(k::KOp::Floor, mul(ul, cf(static_cast<double>(cfg.nlights)))), k::DType::U32), cu(cfg.nlights > 0U ? cfg.nlights - 1U : 0U));
+    const auto nee = [&](int p_x, int p_y, int p_z, int n_x, int n_y, int n_z, int tR, int tG, int tB, crd::u32 salt) {
+        const int ulight = hash1(s, salt);
+        const int li = mn(g.cast(g.unary(k::KOp::Floor, mul(ulight, cf(static_cast<double>(cfg.nlights)))), k::DType::U32), cu(cfg.nlights > 0U ? cfg.nlights - 1U : 0U));
         const int lb = umul(li, cu(15U));
-        const int p0x = lp(lts, lb, 0U), p0y = lp(lts, lb, 1U), p0z = lp(lts, lb, 2U);
-        const int eux = lp(lts, lb, 3U), euy = lp(lts, lb, 4U), euz = lp(lts, lb, 5U);
-        const int evx = lp(lts, lb, 6U), evy = lp(lts, lb, 7U), evz = lp(lts, lb, 8U);
-        const int nlx = lp(lts, lb, 9U), nly = lp(lts, lb, 10U), nlz = lp(lts, lb, 11U);
-        const int lex = lp(lts, lb, 12U), ley = lp(lts, lb, 13U), lez = lp(lts, lb, 14U);
-        const int crx = sub(mul(euy, evz), mul(euz, evy)), cry = sub(mul(euz, evx), mul(eux, evz)), crz = sub(mul(eux, evy), mul(euy, evx));
+        const int p0x = lp(lts, lb, 0U);
+        const int p0y = lp(lts, lb, 1U);
+        const int p0z = lp(lts, lb, 2U);
+        const int eux = lp(lts, lb, 3U);
+        const int euy = lp(lts, lb, 4U);
+        const int euz = lp(lts, lb, 5U);
+        const int evx = lp(lts, lb, 6U);
+        const int evy = lp(lts, lb, 7U);
+        const int evz = lp(lts, lb, 8U);
+        const int nlx = lp(lts, lb, 9U);
+        const int nly = lp(lts, lb, 10U);
+        const int nlz = lp(lts, lb, 11U);
+        const int lex = lp(lts, lb, 12U);
+        const int ley = lp(lts, lb, 13U);
+        const int lez = lp(lts, lb, 14U);
+        const int crx = sub(mul(euy, evz), mul(euz, evy));
+        const int cry = sub(mul(euz, evx), mul(eux, evz));
+        const int crz = sub(mul(eux, evy), mul(euy, evx));
         const int area = g.unary(k::KOp::Sqrt, mx(dot3(crx, cry, crz, crx, cry, crz), cf(1.0e-20)));
-        int su1 = -1, su2 = -1; hashsalt(s, salt + 777U, su1, su2);
-        const int Qx = add(add(p0x, mul(su1, eux)), mul(su2, evx));
-        const int Qy = add(add(p0y, mul(su1, euy)), mul(su2, evy));
-        const int Qz = add(add(p0z, mul(su1, euz)), mul(su2, evz));
-        const int dx = sub(Qx, Px), dy = sub(Qy, Py), dz = sub(Qz, Pz);
+        int su1 = -1;
+        int su2 = -1; hashsalt(s, salt + 777U, su1, su2);
+        const int q_x = add(add(p0x, mul(su1, eux)), mul(su2, evx));
+        const int q_y = add(add(p0y, mul(su1, euy)), mul(su2, evy));
+        const int q_z = add(add(p0z, mul(su1, euz)), mul(su2, evz));
+        const int dx = sub(q_x, p_x);
+        const int dy = sub(q_y, p_y);
+        const int dz = sub(q_z, p_z);
         const int d2 = mx(dot3(dx, dy, dz, dx, dy, dz), cf(1.0e-12));
         const int dist = g.unary(k::KOp::Sqrt, d2);
         const int invd = dvv(cf(1.0), dist);
-        const int wix = mul(dx, invd), wiy = mul(dy, invd), wiz = mul(dz, invd);
-        const int cs = dot3(Nx, Ny, Nz, wix, wiy, wiz);
+        const int wix = mul(dx, invd);
+        const int wiy = mul(dy, invd);
+        const int wiz = mul(dz, invd);
+        const int cs = dot3(n_x, n_y, n_z, wix, wiy, wiz);
         const int cl = neg(dot3(nlx, nly, nlz, wix, wiy, wiz));
-        const int sox = add(Px, mul(cf(1.0e-3), Nx)), soy = add(Py, mul(cf(1.0e-3), Ny)), soz = add(Pz, mul(cf(1.0e-3), Nz));
+        const int sox = add(p_x, mul(cf(1.0e-3), n_x));
+        const int soy = add(p_y, mul(cf(1.0e-3), n_y));
+        const int soz = add(p_z, mul(cf(1.0e-3), n_z));
         const int tmxs = mul(dist, cf(1.0 - 1.0e-3));
         const int st   = g.trace_ray_closest(as, sox, soy, soz, wix, wiy, wiz, cf(1.0e-3), tmxs);
         const int vis  = g.select(g.binary(k::KOp::CmpLt, st, tmxs), cf(0.0), cf(1.0));
-        const int pdfL = mul(cf(invN), dvv(d2, mx(mul(area, cl), cf(1.0e-8)))); // (1/N)·d²/(area·cosθ_l)
-        const int pdfB = mul(cs, cf(kInvPi));
-        const int w    = misw(pdfL, pdfB);
+        const int pdf_l = mul(cf(inv_n), dvv(d2, mx(mul(area, cl), cf(1.0e-8)))); // (1/N)·d²/(area·cosθ_l)
+        const int pdf_b = mul(cs, cf(inv_pi));
+        const int w    = misw(pdf_l, pdf_b);
         const int gate = mul(mul(gt0(cs), gt0(cl)), vis);
-        const int sc   = mul(mul(mul(w, dvv(mul(cs, cl), d2)), mul(area, cf(static_cast<double>(cfg.nlights)))), mul(gate, cf(kInvPi)));
-        radR = add(radR, mul(mul(mul(tR, cf(a0)), lex), sc));
-        radG = add(radG, mul(mul(mul(tG, cf(a1)), ley), sc));
-        radB = add(radB, mul(mul(mul(tB, cf(a2)), lez), sc));
+        const int sc   = mul(mul(mul(w, dvv(mul(cs, cl), d2)), mul(area, cf(static_cast<double>(cfg.nlights)))), mul(gate, cf(inv_pi)));
+        rad_r = add(rad_r, mul(mul(mul(tR, cf(a0)), lex), sc));
+        rad_g = add(rad_g, mul(mul(mul(tG, cf(a1)), ley), sc));
+        rad_b = add(rad_b, mul(mul(mul(tB, cf(a2)), lez), sc));
     };
 
     // ── direct lighting at the primary vertex + set up the primary BSDF ray ──
     nee(ppx, ppy, ppz, pnx, pny, pnz, cf(1.0), cf(1.0), cf(1.0), 100U);
-    int surfT[3], surfB[3];
-    frame(pnx, pny, pnz, surfT, surfB);
-    int u1 = -1, u2 = -1; hashsalt(s, 0U, u1, u2);
+    int surf_t[3];
+    int surf_b[3];
+    frame(pnx, pny, pnz, surf_t, surf_b);
+    int u1 = -1;
+    int u2 = -1; hashsalt(s, 0U, u1, u2);
     int dir[3];
-    int pdfDir = mul(cosine_dir(u1, u2, pnx, pny, pnz, surfT, surfB, dir), cf(kInvPi));
-    int ox = add(ppx, mul(cf(1.0e-3), pnx)), oy = add(ppy, mul(cf(1.0e-3), pny)), oz = add(ppz, mul(cf(1.0e-3), pnz));
-    int dx = dir[0], dy = dir[1], dz = dir[2];
-    int trR = cf(a0), trG = cf(a1), trB = cf(a2);
+    int pdf_dir = mul(cosine_dir(u1, u2, pnx, pny, pnz, surf_t, surf_b, dir), cf(inv_pi));
+    int ox = add(ppx, mul(cf(1.0e-3), pnx));
+    int oy = add(ppy, mul(cf(1.0e-3), pny));
+    int oz = add(ppz, mul(cf(1.0e-3), pnz));
+    int dx = dir[0];
+    int dy = dir[1];
+    int dz = dir[2];
+    int tr_r = cf(a0);
+    int tr_g = cf(a1);
+    int tr_b = cf(a2);
 
     for (crd::u32 bnc = 0; bnc < cfg.bounces; ++bnc)
     {
@@ -1153,51 +1307,66 @@ struct PathTraceFullConfig
         // ── EMISSIVE HIT (MIS): the BSDF ray landed on light lidx ⇒ add its Le weighted against the light-sampling pdf ──
         const int lidx = g.binary(k::KOp::Div, sub(mn(hit.prim, cu(cfg.light_prim0 + 2U * cfg.nlights - 1U)), cu(cfg.light_prim0)), cu(2U));
         const int elb  = umul(lidx, cu(15U));
-        const int elex = lp(lts, elb, 12U), eley = lp(lts, elb, 13U), elez = lp(lts, elb, 14U);
-        const int enlx = lp(lts, elb, 9U), enly = lp(lts, elb, 10U), enlz = lp(lts, elb, 11U);
-        const int eeux = lp(lts, elb, 3U), eeuy = lp(lts, elb, 4U), eeuz = lp(lts, elb, 5U);
-        const int eevx = lp(lts, elb, 6U), eevy = lp(lts, elb, 7U), eevz = lp(lts, elb, 8U);
-        const int ecrx = sub(mul(eeuy, eevz), mul(eeuz, eevy)), ecry = sub(mul(eeuz, eevx), mul(eeux, eevz)), ecrz = sub(mul(eeux, eevy), mul(eeuy, eevx));
+        const int elex = lp(lts, elb, 12U);
+        const int eley = lp(lts, elb, 13U);
+        const int elez = lp(lts, elb, 14U);
+        const int enlx = lp(lts, elb, 9U);
+        const int enly = lp(lts, elb, 10U);
+        const int enlz = lp(lts, elb, 11U);
+        const int eeux = lp(lts, elb, 3U);
+        const int eeuy = lp(lts, elb, 4U);
+        const int eeuz = lp(lts, elb, 5U);
+        const int eevx = lp(lts, elb, 6U);
+        const int eevy = lp(lts, elb, 7U);
+        const int eevz = lp(lts, elb, 8U);
+        const int ecrx = sub(mul(eeuy, eevz), mul(eeuz, eevy));
+        const int ecry = sub(mul(eeuz, eevx), mul(eeux, eevz));
+        const int ecrz = sub(mul(eeux, eevy), mul(eeuy, eevx));
         const int earea = g.unary(k::KOp::Sqrt, mx(dot3(ecrx, ecry, ecrz, ecrx, ecry, ecrz), cf(1.0e-20)));
         const int ecl   = neg(dot3(enlx, enly, enlz, dx, dy, dz)); // cosθ_l along the ray
-        const int epdfL = mul(cf(invN), dvv(mul(tc, tc), mx(mul(earea, ecl), cf(1.0e-8))));
-        const int ewb   = misw(pdfDir, epdfL);
+        const int epdfL = mul(cf(inv_n), dvv(mul(tc, tc), mx(mul(earea, ecl), cf(1.0e-8))));
+        const int ewb   = misw(pdf_dir, epdfL);
         const int eemit = mul(islight, gt0(ecl));
-        radR = add(radR, mul(mul(mul(trR, elex), ewb), eemit));
-        radG = add(radG, mul(mul(mul(trG, eley), ewb), eemit));
-        radB = add(radB, mul(mul(mul(trB, elez), ewb), eemit));
+        rad_r = add(rad_r, mul(mul(mul(tr_r, elex), ewb), eemit));
+        rad_g = add(rad_g, mul(mul(mul(tr_g, eley), ewb), eemit));
+        rad_b = add(rad_b, mul(mul(mul(tr_b, elez), ewb), eemit));
 
         // ── hit a diffuse surface: NEE there, then scatter (with Russian roulette past rr_start) ──
         const int cprim = mn(hit.prim, cu(cfg.ntri > 0U ? cfg.ntri - 1U : 0U));
         const int tb    = umul(cprim, cu(3U));
-        const int hnx = lp(tn, tb, 0U), hny = lp(tn, tb, 1U), hnz = lp(tn, tb, 2U);
-        const int hpx = add(ox, mul(tc, dx)), hpy = add(oy, mul(tc, dy)), hpz = add(oz, mul(tc, dz));
-        nee(hpx, hpy, hpz, hnx, hny, hnz, mul(trR, hitsurf), mul(trG, hitsurf), mul(trB, hitsurf), 200U + bnc);
+        const int hnx = lp(tn, tb, 0U);
+        const int hny = lp(tn, tb, 1U);
+        const int hnz = lp(tn, tb, 2U);
+        const int hpx = add(ox, mul(tc, dx));
+        const int hpy = add(oy, mul(tc, dy));
+        const int hpz = add(oz, mul(tc, dz));
+        nee(hpx, hpy, hpz, hnx, hny, hnz, mul(tr_r, hitsurf), mul(tr_g, hitsurf), mul(tr_b, hitsurf), 200U + bnc);
 
         if (bnc + 1U < cfg.bounces)
         {
-            int ht[3], hb[3];
+            int ht[3];
+            int hb[3];
             frame(hnx, hny, hnz, ht, hb);
             hashsalt(s, bnc + 1U, u1, u2);
-            pdfDir = mul(cosine_dir(u1, u2, hnx, hny, hnz, ht, hb, dir), cf(kInvPi));
-            trR = mul(trR, mul(cf(a0), hitsurf)); // ×albedo, die unless we hit a surface
-            trG = mul(trG, mul(cf(a1), hitsurf));
-            trB = mul(trB, mul(cf(a2), hitsurf));
+            pdf_dir = mul(cosine_dir(u1, u2, hnx, hny, hnz, ht, hb, dir), cf(inv_pi));
+            tr_r = mul(tr_r, mul(cf(a0), hitsurf)); // ×albedo, die unless we hit a surface
+            tr_g = mul(tr_g, mul(cf(a1), hitsurf));
+            tr_b = mul(tr_b, mul(cf(a2), hitsurf));
             if (bnc + 1U >= cfg.rr_start) // RUSSIAN ROULETTE: survive with prob p=clamp(max throughput,·); survivors ÷p (unbiased)
             {
-                const int plum = mn(mx(mx(mx(trR, trG), trB), cf(0.05)), cf(1.0));
+                const int plum = mn(mx(mx(mx(tr_r, tr_g), tr_b), cf(0.05)), cf(1.0));
                 const int surv = g.select(g.binary(k::KOp::CmpLt, hash1(s, 900U + bnc), plum), cf(1.0), cf(0.0));
                 const int boost = mul(surv, dvv(cf(1.0), plum)); // survive → 1/p, else → 0
-                trR = mul(trR, boost); trG = mul(trG, boost); trB = mul(trB, boost);
+                tr_r = mul(tr_r, boost); tr_g = mul(tr_g, boost); tr_b = mul(tr_b, boost);
             }
             ox = add(hpx, mul(cf(1.0e-3), hnx)); oy = add(hpy, mul(cf(1.0e-3), hny)); oz = add(hpz, mul(cf(1.0e-3), hnz));
             dx = dir[0]; dy = dir[1]; dz = dir[2];
         }
     }
 
-    g.stmt_buffer_store(out, uadd(b3, cu(0U)), add(lp(out, b3, 0U), radR));
-    g.stmt_buffer_store(out, uadd(b3, cu(1U)), add(lp(out, b3, 1U), radG));
-    g.stmt_buffer_store(out, uadd(b3, cu(2U)), add(lp(out, b3, 2U), radB));
+    g.stmt_buffer_store(out, uadd(b3, cu(0U)), add(lp(out, b3, 0U), rad_r));
+    g.stmt_buffer_store(out, uadd(b3, cu(1U)), add(lp(out, b3, 1U), rad_g));
+    g.stmt_buffer_store(out, uadd(b3, cu(2U)), add(lp(out, b3, 2U), rad_b));
     g.stmt_for_end(floop);
 
     const int inv = cf(1.0 / static_cast<double>(cfg.samples));
@@ -1220,7 +1389,7 @@ struct PathTraceFullConfig
 // reservoir merges another via the generalised combine: the other's sample is re-weighted under THIS pixel's target p̂, so the
 // same op serves temporal (same p̂) and spatial (different p̂) reuse. Pipeline = 3 passes (temporal → spatial → shade), each a
 // separate dispatch (spatial needs every pixel's temporal reservoir finalised first — a cross-thread barrier). The reservoir is
-// 6 floats/pixel: [Qx,Qy,Qz, W, M, reserved]. Static scene ⇒ temporal reprojection is the identity (same pixel index).
+// 6 floats/pixel: [q_x,q_y,q_z, W, M, reserved]. Static scene ⇒ temporal reprojection is the identity (same pixel index).
 constexpr crd::u32 kRestirReservoirStride = 6U;
 
 struct RestirStConfig
@@ -1229,7 +1398,7 @@ struct RestirStConfig
     crd::u32 height = 16U;
     crd::u32 m_initial      = 4U;    // fresh RIS candidates generated per pixel per frame (reuse supplies the rest)
     crd::u32 spatial_k      = 4U;    // spatial neighbours merged per pixel
-    float    spatial_radius = 3.0F;  // neighbour gather radius (pixels)
+    float    spatial_radius = 3.0F;  // crd-lint-allow-untagged-physical: a PIXEL-space gather radius (screen-grid neighbours), not an SI length
     float    temporal_m_cap = 20.0F; // clamp the previous reservoir's M to cap·m_initial (bounds temporal staleness bias)
     float    albedo[3]  = {0.6F, 0.6F, 0.6F};
     float    light_p0[3] = {-1.5F, 3.0F, -1.5F};
@@ -1247,7 +1416,10 @@ namespace detail
 struct RestirMath
 {
     crd::kir::KGraph& g;
-    double clum, nlx, nly, nlz;
+    double clum;
+    double nlx;
+    double nly;
+    double nlz;
     crd::kir::Shape sh1 = crd::kir::make_shape({1});
     int cf(double v) { return g.constant(v, sh1, crd::kir::DType::F32); }
     int cu(crd::u32 v) { return g.constant(static_cast<double>(v), sh1, crd::kir::DType::U32); }
@@ -1290,13 +1462,15 @@ struct RestirMath
         d[2] = add(add(mul(lx, t[2]), mul(ly, b[2])), mul(lz, nz));
         return lz;
     }
-    // p̂(Q) at shading point (Px,Py,Pz) with normal (Nx,Ny,Nz).
-    int phat(int Px, int Py, int Pz, int Nx, int Ny, int Nz, int Qx, int Qy, int Qz)
+    // p̂(Q) at shading point (p_x,p_y,p_z) with normal (n_x,n_y,n_z).
+    int phat(int p_x, int p_y, int p_z, int n_x, int n_y, int n_z, int q_x, int q_y, int q_z)
     {
-        const int dx = sub(Qx, Px), dy = sub(Qy, Py), dz = sub(Qz, Pz);
+        const int dx = sub(q_x, p_x);
+        const int dy = sub(q_y, p_y);
+        const int dz = sub(q_z, p_z);
         const int d2 = mx(dot3(dx, dy, dz, dx, dy, dz), cf(1.0e-12));
         const int invd = dvv(cf(1.0), g.unary(crd::kir::KOp::Sqrt, d2));
-        const int cs = clamp0(mul(dot3(Nx, Ny, Nz, dx, dy, dz), invd));
+        const int cs = clamp0(mul(dot3(n_x, n_y, n_z, dx, dy, dz), invd));
         const int cl = clamp0(neg(mul(dot3(cf(nlx), cf(nly), cf(nlz), dx, dy, dz), invd)));
         return mul(cf(clum), dvv(mul(cs, cl), d2));
     }
@@ -1309,13 +1483,21 @@ struct RestirMath
 [[nodiscard]] inline crd::kir::KEntry build_restir_temporal_kernel(crd::kir::KGraph& g, const RestirStConfig& cfg)
 {
     namespace k = crd::kir;
-    constexpr double kInvPi = 1.0 / 3.14159265358979323846;
-    const double p0x = cfg.light_p0[0], p0y = cfg.light_p0[1], p0z = cfg.light_p0[2];
-    const double eux = cfg.light_eu[0], euy = cfg.light_eu[1], euz = cfg.light_eu[2];
-    const double evx = cfg.light_ev[0], evy = cfg.light_ev[1], evz = cfg.light_ev[2];
-    const double crx = euy * evz - euz * evy, cry = euz * evx - eux * evz, crz = eux * evy - euy * evx;
+    constexpr double inv_pi = 1.0 / 3.14159265358979323846;
+    const double p0x = cfg.light_p0[0];
+    const double p0y = cfg.light_p0[1];
+    const double p0z = cfg.light_p0[2];
+    const double eux = cfg.light_eu[0];
+    const double euy = cfg.light_eu[1];
+    const double euz = cfg.light_eu[2];
+    const double evx = cfg.light_ev[0];
+    const double evy = cfg.light_ev[1];
+    const double evz = cfg.light_ev[2];
+    const double crx = euy * evz - euz * evy;
+    const double cry = euz * evx - eux * evz;
+    const double crz = eux * evy - euy * evx;
     const double area = crd::math::sqrt(crx * crx + cry * cry + crz * crz);
-    const double clum = kInvPi * (0.2126 * static_cast<double>(cfg.albedo[0]) * static_cast<double>(cfg.light_le[0])
+    const double clum = inv_pi * (0.2126 * static_cast<double>(cfg.albedo[0]) * static_cast<double>(cfg.light_le[0])
                                 + 0.7152 * static_cast<double>(cfg.albedo[1]) * static_cast<double>(cfg.light_le[1])
                                 + 0.0722 * static_cast<double>(cfg.albedo[2]) * static_cast<double>(cfg.light_le[2]));
     detail::RestirMath m{g, clum, cfg.light_nl[0], cfg.light_nl[1], cfg.light_nl[2]};
@@ -1331,45 +1513,56 @@ struct RestirMath
     const int  b3   = m.mul(tid, m.cu(3U));
     const int  rb   = m.mul(tid, m.cu(kRestirReservoirStride));
     const auto lp   = [&](int buf, int base, crd::u32 c) { return g.buffer_load(buf, m.add(base, m.cu(c))); };
-    const int  Px = lp(pos, b3, 0U), Py = lp(pos, b3, 1U), Pz = lp(pos, b3, 2U);
-    const int  Nx = lp(nrm, b3, 0U), Ny = lp(nrm, b3, 1U), Nz = lp(nrm, b3, 2U);
+    const int p_x = lp(pos, b3, 0U);
+    const int p_y = lp(pos, b3, 1U);
+    const int p_z = lp(pos, b3, 2U);
+    const int n_x = lp(nrm, b3, 0U);
+    const int n_y = lp(nrm, b3, 1U);
+    const int n_z = lp(nrm, b3, 2U);
     const int  frame = g.buffer_load(fbuf, m.cu(0U));
 
     // ── fresh RIS reservoir over m_initial candidates ──
     int wsum = m.cf(0.0);
-    int cQx = m.cf(p0x), cQy = m.cf(p0y), cQz = m.cf(p0z), cPh = m.cf(0.0);
+    int cqx = m.cf(p0x);
+    int cqy = m.cf(p0y);
+    int cqz = m.cf(p0z);
+    int cph = m.cf(0.0);
     for (crd::u32 i = 0; i < cfg.m_initial; ++i)
     {
         const int seed = m.add(m.mul(frame, m.cu(0x9E3779B9U)), m.add(m.mul(tid, m.cu(0x85EBCA77U)), m.cu(i * 0x2545F491U + 1U)));
         const int u1   = detail::rt_hash01(g, m.g.binary(k::KOp::BitXor, m.mul(tid, m.cu(0x632BE5ABU)), seed));
         const int u2   = detail::rt_hash01(g, m.g.binary(k::KOp::BitXor, m.mul(tid, m.cu(0x85157AF5U)), m.mul(seed, m.cu(0xC2B2AE35U))));
-        const int Qx = m.add(m.add(m.cf(p0x), m.mul(u1, m.cf(eux))), m.mul(u2, m.cf(evx)));
-        const int Qy = m.add(m.add(m.cf(p0y), m.mul(u1, m.cf(euy))), m.mul(u2, m.cf(evy)));
-        const int Qz = m.add(m.add(m.cf(p0z), m.mul(u1, m.cf(euz))), m.mul(u2, m.cf(evz)));
-        const int ph = m.phat(Px, Py, Pz, Nx, Ny, Nz, Qx, Qy, Qz);
+        const int q_x = m.add(m.add(m.cf(p0x), m.mul(u1, m.cf(eux))), m.mul(u2, m.cf(evx)));
+        const int q_y = m.add(m.add(m.cf(p0y), m.mul(u1, m.cf(euy))), m.mul(u2, m.cf(evy)));
+        const int q_z = m.add(m.add(m.cf(p0z), m.mul(u1, m.cf(euz))), m.mul(u2, m.cf(evz)));
+        const int ph = m.phat(p_x, p_y, p_z, n_x, n_y, n_z, q_x, q_y, q_z);
         const int w  = m.mul(ph, m.cf(area)); // p̂ / (1/area)
         wsum = m.add(wsum, w);
         const int xi   = detail::rt_hash01(g, m.g.binary(k::KOp::BitXor, m.mul(tid, m.cu(0x27D4EB2FU)), m.mul(seed, m.cu(0x165667B1U))));
         const int repl = g.select(g.binary(k::KOp::CmpLt, m.mul(xi, wsum), w), m.cf(1.0), m.cf(0.0));
-        cQx = m.blend(repl, Qx, cQx); cQy = m.blend(repl, Qy, cQy); cQz = m.blend(repl, Qz, cQz);
-        cPh = m.blend(repl, ph, cPh);
+        cqx = m.blend(repl, q_x, cqx); cqy = m.blend(repl, q_y, cqy); cqz = m.blend(repl, q_z, cqz);
+        cph = m.blend(repl, ph, cph);
     }
-    const int Wnew = m.dvv(wsum, m.mul(m.cf(static_cast<double>(cfg.m_initial)), m.mx(cPh, m.cf(1.0e-12))));
+    const int Wnew = m.dvv(wsum, m.mul(m.cf(static_cast<double>(cfg.m_initial)), m.mx(cph, m.cf(1.0e-12))));
     const int Mnew = m.cf(static_cast<double>(cfg.m_initial));
 
     // ── temporal combine with the previous frame's reservoir at this pixel ──
-    const int pQx = lp(rprev, rb, 0U), pQy = lp(rprev, rb, 1U), pQz = lp(rprev, rb, 2U);
+    const int pqx = lp(rprev, rb, 0U);
+    const int pqy = lp(rprev, rb, 1U);
+    const int pqz = lp(rprev, rb, 2U);
     const int pW  = lp(rprev, rb, 3U);
-    const int pM  = m.mn(lp(rprev, rb, 4U), m.cf(cfg.temporal_m_cap * static_cast<double>(cfg.m_initial))); // staleness cap
-    const int phP = m.phat(Px, Py, Pz, Nx, Ny, Nz, pQx, pQy, pQz);                                          // prev sample's p̂ here
-    const int wA  = m.mul(m.mul(cPh, Wnew), Mnew);   // = wsum (this pixel's fresh contribution)
+    const int pM  = m.mn(lp(rprev, rb, 4U), m.cf(static_cast<double>(cfg.temporal_m_cap) * static_cast<double>(cfg.m_initial))); // staleness cap
+    const int phP = m.phat(p_x, p_y, p_z, n_x, n_y, n_z, pqx, pqy, pqz);                                          // prev sample's p̂ here
+    const int wA  = m.mul(m.mul(cph, Wnew), Mnew);   // = wsum (this pixel's fresh contribution)
     const int wB  = m.mul(m.mul(phP, pW), pM);       // the reprojected temporal contribution
     const int ws2 = m.add(wA, wB);
     const int M2  = m.add(Mnew, pM);
     const int xi2 = detail::rt_hash01(g, m.g.binary(k::KOp::BitXor, m.mul(tid, m.cu(0x9E3779B1U)), m.mul(frame, m.cu(0x7FEB352DU))));
     const int pick = g.select(g.binary(k::KOp::CmpLt, m.mul(xi2, ws2), wB), m.cf(1.0), m.cf(0.0)); // keep prev with prob wB/ws2
-    const int oQx = m.blend(pick, pQx, cQx), oQy = m.blend(pick, pQy, cQy), oQz = m.blend(pick, pQz, cQz);
-    const int phO = m.blend(pick, phP, cPh);
+    const int oQx = m.blend(pick, pqx, cqx);
+    const int oQy = m.blend(pick, pqy, cqy);
+    const int oQz = m.blend(pick, pqz, cqz);
+    const int phO = m.blend(pick, phP, cph);
     const int Wout = m.dvv(ws2, m.mul(M2, m.mx(phO, m.cf(1.0e-12)))); // same-pixel merge ⇒ both domains valid ⇒ unbiased = biased
 
     g.stmt_buffer_store(rout, m.add(rb, m.cu(0U)), oQx);
@@ -1396,8 +1589,8 @@ struct RestirMath
 [[nodiscard]] inline crd::kir::KEntry build_restir_spatial_kernel(crd::kir::KGraph& g, const RestirStConfig& cfg)
 {
     namespace k = crd::kir;
-    constexpr double kInvPi = 1.0 / 3.14159265358979323846;
-    const double clum = kInvPi * (0.2126 * static_cast<double>(cfg.albedo[0]) * static_cast<double>(cfg.light_le[0])
+    constexpr double inv_pi = 1.0 / 3.14159265358979323846;
+    const double clum = inv_pi * (0.2126 * static_cast<double>(cfg.albedo[0]) * static_cast<double>(cfg.light_le[0])
                                 + 0.7152 * static_cast<double>(cfg.albedo[1]) * static_cast<double>(cfg.light_le[1])
                                 + 0.0722 * static_cast<double>(cfg.albedo[2]) * static_cast<double>(cfg.light_le[2]));
     detail::RestirMath m{g, clum, cfg.light_nl[0], cfg.light_nl[1], cfg.light_nl[2]};
@@ -1413,19 +1606,29 @@ struct RestirMath
     const int  b3   = m.mul(tid, m.cu(3U));
     const int  rb   = m.mul(tid, m.cu(kRestirReservoirStride));
     const auto lp   = [&](int buf, int base, crd::u32 c) { return g.buffer_load(buf, m.add(base, m.cu(c))); };
-    const int  Px = lp(pos, b3, 0U), Py = lp(pos, b3, 1U), Pz = lp(pos, b3, 2U);
-    const int  Nx = lp(nrm, b3, 0U), Ny = lp(nrm, b3, 1U), Nz = lp(nrm, b3, 2U);
+    const int p_x = lp(pos, b3, 0U);
+    const int p_y = lp(pos, b3, 1U);
+    const int p_z = lp(pos, b3, 2U);
+    const int n_x = lp(nrm, b3, 0U);
+    const int n_y = lp(nrm, b3, 1U);
+    const int n_z = lp(nrm, b3, 2U);
     const int  frame = g.buffer_load(fbuf, m.cu(0U));
     const int  sx = m.g.binary(k::KOp::Mod, tid, m.cu(cfg.width)); // pixel column
     const int  sy = m.g.binary(k::KOp::Div, tid, m.cu(cfg.width)); // pixel row
-    const int  sxf = m.castf(sx), syf = m.castf(sy);
+    const int sxf = m.castf(sx);
+    const int syf = m.castf(sy);
 
     // self reservoir
-    const int sQx = lp(rin, rb, 0U), sQy = lp(rin, rb, 1U), sQz = lp(rin, rb, 2U);
-    const int sW  = lp(rin, rb, 3U), sM = lp(rin, rb, 4U);
-    int wsum = m.mul(m.mul(m.phat(Px, Py, Pz, Nx, Ny, Nz, sQx, sQy, sQz), sW), sM);
+    const int sQx = lp(rin, rb, 0U);
+    const int sQy = lp(rin, rb, 1U);
+    const int sQz = lp(rin, rb, 2U);
+    const int sW  = lp(rin, rb, 3U);
+    const int sM = lp(rin, rb, 4U);
+    int wsum = m.mul(m.mul(m.phat(p_x, p_y, p_z, n_x, n_y, n_z, sQx, sQy, sQz), sW), sM);
     int M    = sM;
-    int oQx = sQx, oQy = sQy, oQz = sQz;
+    int oQx = sQx;
+    int oQy = sQy;
+    int oQz = sQz;
 
     // neighbour offset (disk sample) reproduced identically in both passes from the same seed.
     const auto nbr_index = [&](crd::u32 j) {
@@ -1444,9 +1647,12 @@ struct RestirMath
     {
         const int nbr = nbr_index(j);
         const int nrb = m.mul(nbr, m.cu(kRestirReservoirStride));
-        const int bQx = lp(rin, nrb, 0U), bQy = lp(rin, nrb, 1U), bQz = lp(rin, nrb, 2U);
-        const int bW  = lp(rin, nrb, 3U), bM = lp(rin, nrb, 4U);
-        const int phB = m.phat(Px, Py, Pz, Nx, Ny, Nz, bQx, bQy, bQz); // neighbour's sample at SELF
+        const int bQx = lp(rin, nrb, 0U);
+        const int bQy = lp(rin, nrb, 1U);
+        const int bQz = lp(rin, nrb, 2U);
+        const int bW  = lp(rin, nrb, 3U);
+        const int bM = lp(rin, nrb, 4U);
+        const int phB = m.phat(p_x, p_y, p_z, n_x, n_y, n_z, bQx, bQy, bQz); // neighbour's sample at SELF
         const int wB  = m.mul(m.mul(phB, bW), bM);
         wsum = m.add(wsum, wB);
         M    = m.add(M, bM);
@@ -1456,15 +1662,19 @@ struct RestirMath
     }
 
     // ── pass B: UNBIASED normalisation — Z = ΣMᵢ over reservoirs whose domain contains the chosen sample oQ ──
-    const int phOself = m.phat(Px, Py, Pz, Nx, Ny, Nz, oQx, oQy, oQz);
+    const int phOself = m.phat(p_x, p_y, p_z, n_x, n_y, n_z, oQx, oQy, oQz);
     int Z = m.mul(m.gt0(phOself), sM); // self contributes its M iff oQ is in the self domain
     for (crd::u32 j = 0; j < cfg.spatial_k; ++j)
     {
         const int nbr = nbr_index(j);            // same seed ⇒ same neighbour as pass A
         const int nrb = m.mul(nbr, m.cu(kRestirReservoirStride));
         const int nb3 = m.mul(nbr, m.cu(3U));
-        const int nPx = lp(pos, nb3, 0U), nPy = lp(pos, nb3, 1U), nPz = lp(pos, nb3, 2U);
-        const int nNx = lp(nrm, nb3, 0U), nNy = lp(nrm, nb3, 1U), nNz = lp(nrm, nb3, 2U);
+        const int nPx = lp(pos, nb3, 0U);
+        const int nPy = lp(pos, nb3, 1U);
+        const int nPz = lp(pos, nb3, 2U);
+        const int nNx = lp(nrm, nb3, 0U);
+        const int nNy = lp(nrm, nb3, 1U);
+        const int nNz = lp(nrm, nb3, 2U);
         const int bM  = lp(rin, nrb, 4U);
         const int phNb = m.phat(nPx, nPy, nPz, nNx, nNy, nNz, oQx, oQy, oQz); // is oQ in neighbour j's domain?
         Z = m.add(Z, m.mul(m.gt0(phNb), bM));
@@ -1491,10 +1701,10 @@ struct RestirMath
 [[nodiscard]] inline crd::kir::KEntry build_restir_shade_kernel(crd::kir::KGraph& g, const RestirStConfig& cfg)
 {
     namespace k = crd::kir;
-    constexpr double kInvPi = 1.0 / 3.14159265358979323846;
-    const double a0Le0 = static_cast<double>(cfg.albedo[0]) * static_cast<double>(cfg.light_le[0]) * kInvPi;
-    const double a1Le1 = static_cast<double>(cfg.albedo[1]) * static_cast<double>(cfg.light_le[1]) * kInvPi;
-    const double a2Le2 = static_cast<double>(cfg.albedo[2]) * static_cast<double>(cfg.light_le[2]) * kInvPi;
+    constexpr double inv_pi = 1.0 / 3.14159265358979323846;
+    const double a0Le0 = static_cast<double>(cfg.albedo[0]) * static_cast<double>(cfg.light_le[0]) * inv_pi;
+    const double a1Le1 = static_cast<double>(cfg.albedo[1]) * static_cast<double>(cfg.light_le[1]) * inv_pi;
+    const double a2Le2 = static_cast<double>(cfg.albedo[2]) * static_cast<double>(cfg.light_le[2]) * inv_pi;
     detail::RestirMath m{g, 0.0, cfg.light_nl[0], cfg.light_nl[1], cfg.light_nl[2]};
 
     const int as   = g.accel_struct_decl(0, 0);
@@ -1508,20 +1718,32 @@ struct RestirMath
     const int  b3   = m.mul(tid, m.cu(3U));
     const int  rb   = m.mul(tid, m.cu(kRestirReservoirStride));
     const auto lp   = [&](int buf, int base, crd::u32 c) { return g.buffer_load(buf, m.add(base, m.cu(c))); };
-    const int  Px = lp(pos, b3, 0U), Py = lp(pos, b3, 1U), Pz = lp(pos, b3, 2U);
-    const int  Nx = lp(nrm, b3, 0U), Ny = lp(nrm, b3, 1U), Nz = lp(nrm, b3, 2U);
-    const int  Qx = lp(rin, rb, 0U), Qy = lp(rin, rb, 1U), Qz = lp(rin, rb, 2U);
+    const int p_x = lp(pos, b3, 0U);
+    const int p_y = lp(pos, b3, 1U);
+    const int p_z = lp(pos, b3, 2U);
+    const int n_x = lp(nrm, b3, 0U);
+    const int n_y = lp(nrm, b3, 1U);
+    const int n_z = lp(nrm, b3, 2U);
+    const int q_x = lp(rin, rb, 0U);
+    const int q_y = lp(rin, rb, 1U);
+    const int q_z = lp(rin, rb, 2U);
     const int  W  = lp(rin, rb, 3U);
 
-    const int dcx = m.sub(Qx, Px), dcy = m.sub(Qy, Py), dcz = m.sub(Qz, Pz);
+    const int dcx = m.sub(q_x, p_x);
+    const int dcy = m.sub(q_y, p_y);
+    const int dcz = m.sub(q_z, p_z);
     const int dc2 = m.mx(m.dot3(dcx, dcy, dcz, dcx, dcy, dcz), m.cf(1.0e-12));
     const int dist = g.unary(k::KOp::Sqrt, dc2);
     const int invc = m.dvv(m.cf(1.0), dist);
-    const int wix = m.mul(dcx, invc), wiy = m.mul(dcy, invc), wiz = m.mul(dcz, invc);
-    const int cs  = m.clamp0(m.dot3(Nx, Ny, Nz, wix, wiy, wiz));
+    const int wix = m.mul(dcx, invc);
+    const int wiy = m.mul(dcy, invc);
+    const int wiz = m.mul(dcz, invc);
+    const int cs  = m.clamp0(m.dot3(n_x, n_y, n_z, wix, wiy, wiz));
     const int cl  = m.clamp0(m.neg(m.dot3(m.cf(cfg.light_nl[0]), m.cf(cfg.light_nl[1]), m.cf(cfg.light_nl[2]), wix, wiy, wiz)));
     const int Gc  = m.dvv(m.mul(cs, cl), dc2);
-    const int sox = m.add(Px, m.mul(m.cf(1.0e-3), Nx)), soy = m.add(Py, m.mul(m.cf(1.0e-3), Ny)), soz = m.add(Pz, m.mul(m.cf(1.0e-3), Nz));
+    const int sox = m.add(p_x, m.mul(m.cf(1.0e-3), n_x));
+    const int soy = m.add(p_y, m.mul(m.cf(1.0e-3), n_y));
+    const int soz = m.add(p_z, m.mul(m.cf(1.0e-3), n_z));
     const int tmxs = m.mul(dist, m.cf(1.0 - 1.0e-3));
     const int st   = g.trace_ray_closest(as, sox, soy, soz, wix, wiy, wiz, m.cf(1.0e-3), tmxs);
     const int V    = g.select(g.binary(k::KOp::CmpLt, st, tmxs), m.cf(0.0), m.cf(1.0));
@@ -1552,7 +1774,7 @@ struct RestirGiConfig
     crd::u32 width  = 16U;
     crd::u32 height = 16U;
     crd::u32 spatial_k      = 4U;
-    float    spatial_radius = 3.0F;
+    float    spatial_radius = 3.0F; // crd-lint-allow-untagged-physical: a PIXEL-space gather radius (screen-grid neighbours), not an SI length
     float    temporal_m_cap = 20.0F;
     float    albedo[3]  = {0.6F, 0.6F, 0.6F};
     crd::u32 ntri        = 4U;  // scene tris (clamps the hit flat-normal fetch)
@@ -1565,30 +1787,50 @@ namespace detail
 // GI helpers on top of RestirMath: the light-NEE that estimates Lo at a sample point, and the reservoir field accessors.
 struct GiMath : RestirMath
 {
-    // one-light-sample DIRECT lighting at (Px,N) using the light buffer `lts` and shadow-ray tracing against `as`. Returns the
+    // one-light-sample DIRECT lighting at (p_x,N) using the light buffer `lts` and shadow-ray tracing against `as`. Returns the
     // outgoing (diffuse) radiance per channel into Lo[3]. albedo/π · Le · G · V · N · area, uniform light pick.
-    void nee_direct(int lts, int as, int Px, int Py, int Pz, int Nx, int Ny, int Nz, int u_pick, int su1, int su2,
+    void nee_direct(int lts, int as, int p_x, int p_y, int p_z, int n_x, int n_y, int n_z, int u_pick, int su1, int su2,
                     crd::u32 nlights, double a0, double a1, double a2, int Lo[3])
     {
         const int li = mn(g.cast(g.unary(crd::kir::KOp::Floor, mul(u_pick, cf(static_cast<double>(nlights)))), crd::kir::DType::U32), cu(nlights > 0U ? nlights - 1U : 0U));
         const int lb = mul(li, cu(15U));
         const auto ld = [&](crd::u32 c) { return g.buffer_load(lts, add(lb, cu(c))); };
-        const int p0x = ld(0U), p0y = ld(1U), p0z = ld(2U), eux = ld(3U), euy = ld(4U), euz = ld(5U);
-        const int evx = ld(6U), evy = ld(7U), evz = ld(8U), lnx = ld(9U), lny = ld(10U), lnz = ld(11U);
-        const int lex = ld(12U), ley = ld(13U), lez = ld(14U);
-        const int crx = sub(mul(euy, evz), mul(euz, evy)), cry = sub(mul(euz, evx), mul(eux, evz)), crz = sub(mul(eux, evy), mul(euy, evx));
+        const int p0x = ld(0U);
+        const int p0y = ld(1U);
+        const int p0z = ld(2U);
+        const int eux = ld(3U);
+        const int euy = ld(4U);
+        const int euz = ld(5U);
+        const int evx = ld(6U);
+        const int evy = ld(7U);
+        const int evz = ld(8U);
+        const int lnx = ld(9U);
+        const int lny = ld(10U);
+        const int lnz = ld(11U);
+        const int lex = ld(12U);
+        const int ley = ld(13U);
+        const int lez = ld(14U);
+        const int crx = sub(mul(euy, evz), mul(euz, evy));
+        const int cry = sub(mul(euz, evx), mul(eux, evz));
+        const int crz = sub(mul(eux, evy), mul(euy, evx));
         const int area = g.unary(crd::kir::KOp::Sqrt, mx(dot3(crx, cry, crz, crx, cry, crz), cf(1.0e-20)));
-        const int Qx = add(add(p0x, mul(su1, eux)), mul(su2, evx));
-        const int Qy = add(add(p0y, mul(su1, euy)), mul(su2, evy));
-        const int Qz = add(add(p0z, mul(su1, euz)), mul(su2, evz));
-        const int dx = sub(Qx, Px), dy = sub(Qy, Py), dz = sub(Qz, Pz);
+        const int q_x = add(add(p0x, mul(su1, eux)), mul(su2, evx));
+        const int q_y = add(add(p0y, mul(su1, euy)), mul(su2, evy));
+        const int q_z = add(add(p0z, mul(su1, euz)), mul(su2, evz));
+        const int dx = sub(q_x, p_x);
+        const int dy = sub(q_y, p_y);
+        const int dz = sub(q_z, p_z);
         const int d2 = mx(dot3(dx, dy, dz, dx, dy, dz), cf(1.0e-12));
         const int dist = g.unary(crd::kir::KOp::Sqrt, d2);
         const int invd = dvv(cf(1.0), dist);
-        const int wix = mul(dx, invd), wiy = mul(dy, invd), wiz = mul(dz, invd);
-        const int cs = clamp0(dot3(Nx, Ny, Nz, wix, wiy, wiz));
+        const int wix = mul(dx, invd);
+        const int wiy = mul(dy, invd);
+        const int wiz = mul(dz, invd);
+        const int cs = clamp0(dot3(n_x, n_y, n_z, wix, wiy, wiz));
         const int cl = clamp0(neg(dot3(lnx, lny, lnz, wix, wiy, wiz)));
-        const int sox = add(Px, mul(cf(1.0e-3), Nx)), soy = add(Py, mul(cf(1.0e-3), Ny)), soz = add(Pz, mul(cf(1.0e-3), Nz));
+        const int sox = add(p_x, mul(cf(1.0e-3), n_x));
+        const int soy = add(p_y, mul(cf(1.0e-3), n_y));
+        const int soz = add(p_z, mul(cf(1.0e-3), n_z));
         const int tmxs = mul(dist, cf(1.0 - 1.0e-3));
         const int st   = g.trace_ray_closest(as, sox, soy, soz, wix, wiy, wiz, cf(1.0e-3), tmxs);
         const int vis  = g.select(g.binary(crd::kir::KOp::CmpLt, st, tmxs), cf(0.0), cf(1.0));
@@ -1608,8 +1850,12 @@ struct GiMath : RestirMath
 [[nodiscard]] inline crd::kir::KEntry build_restir_gi_temporal_kernel(crd::kir::KGraph& g, const RestirGiConfig& cfg)
 {
     namespace k = crd::kir;
-    const double a0 = static_cast<double>(cfg.albedo[0]), a1 = static_cast<double>(cfg.albedo[1]), a2 = static_cast<double>(cfg.albedo[2]);
-    const double clum0 = 0.2126, clum1 = 0.7152, clum2 = 0.0722;
+    const double a0 = static_cast<double>(cfg.albedo[0]);
+    const double a1 = static_cast<double>(cfg.albedo[1]);
+    const double a2 = static_cast<double>(cfg.albedo[2]);
+    const double clum0 = 0.2126;
+    const double clum1 = 0.7152;
+    const double clum2 = 0.0722;
     detail::GiMath m{g, 0.0, 0.0, 0.0, 0.0};
 
     const int as   = g.accel_struct_decl(0, 0);
@@ -1626,25 +1872,38 @@ struct GiMath : RestirMath
     const int  b3   = m.mul(tid, m.cu(3U));
     const int  rb   = m.mul(tid, m.cu(kRestirGiStride));
     const auto lp   = [&](int buf, int base, crd::u32 c) { return g.buffer_load(buf, m.add(base, m.cu(c))); };
-    const int  Nx = lp(nrm, b3, 0U), Ny = lp(nrm, b3, 1U), Nz = lp(nrm, b3, 2U);
-    const int  Px = lp(pos, b3, 0U), Py = lp(pos, b3, 1U), Pz = lp(pos, b3, 2U);
+    const int n_x = lp(nrm, b3, 0U);
+    const int n_y = lp(nrm, b3, 1U);
+    const int n_z = lp(nrm, b3, 2U);
+    const int p_x = lp(pos, b3, 0U);
+    const int p_y = lp(pos, b3, 1U);
+    const int p_z = lp(pos, b3, 2U);
     const int  frame = g.buffer_load(fbuf, m.cu(0U));
 
     // cosine sample a bounce direction from (xv,N).
-    int T[3], Bt[3]; m.frameb(Nx, Ny, Nz, T, Bt);
+    int tang[3];
+    int btang[3];
+    m.frameb(n_x, n_y, n_z, tang, btang);
     const int seed = m.add(m.mul(frame, m.cu(0x9E3779B9U)), m.mul(tid, m.cu(0x85EBCA77U)));
     const int u1 = detail::rt_hash01(g, m.g.binary(k::KOp::BitXor, m.mul(tid, m.cu(0x632BE5ABU)), seed));
     const int u2 = detail::rt_hash01(g, m.g.binary(k::KOp::BitXor, m.mul(tid, m.cu(0x85157AF5U)), m.mul(seed, m.cu(0xC2B2AE35U))));
-    int dir[3]; const int cosv = m.cosine_dirb(u1, u2, Nx, Ny, Nz, T, Bt, dir);
-    const int ox = m.add(Px, m.mul(m.cf(1.0e-3), Nx)), oy = m.add(Py, m.mul(m.cf(1.0e-3), Ny)), oz = m.add(Pz, m.mul(m.cf(1.0e-3), Nz));
+    int dir[3];
+    const int cosv = m.cosine_dirb(u1, u2, n_x, n_y, n_z, tang, btang, dir);
+    const int ox = m.add(p_x, m.mul(m.cf(1.0e-3), n_x));
+    const int oy = m.add(p_y, m.mul(m.cf(1.0e-3), n_y));
+    const int oz = m.add(p_z, m.mul(m.cf(1.0e-3), n_z));
     const k::KGraph::RtHit hit = g.trace_ray_hit(as, ox, oy, oz, dir[0], dir[1], dir[2], m.cf(1.0e-3), m.cf(1.0e30));
     const int miss = g.binary(k::KOp::CmpEq, hit.prim, m.cu(0xFFFFFFFFU));
     const int hitm = g.select(miss, m.cf(0.0), m.cf(1.0));
     const int tc   = m.mn(hit.t, m.cf(1.0e5));
-    const int xsx = m.add(ox, m.mul(tc, dir[0])), xsy = m.add(oy, m.mul(tc, dir[1])), xsz = m.add(oz, m.mul(tc, dir[2]));
+    const int xsx = m.add(ox, m.mul(tc, dir[0]));
+    const int xsy = m.add(oy, m.mul(tc, dir[1]));
+    const int xsz = m.add(oz, m.mul(tc, dir[2]));
     const int cprim = m.mn(hit.prim, m.cu(cfg.ntri > 0U ? cfg.ntri - 1U : 0U));
     const int tb = m.mul(cprim, m.cu(3U));
-    const int nsx = lp(tn, tb, 0U), nsy = lp(tn, tb, 1U), nsz = lp(tn, tb, 2U);
+    const int nsx = lp(tn, tb, 0U);
+    const int nsy = lp(tn, tb, 1U);
+    const int nsz = lp(tn, tb, 2U);
     // Lo(xs) via one-light NEE (zeroed on a miss).
     const int up  = detail::rt_hash01(g, m.g.binary(k::KOp::BitXor, m.mul(tid, m.cu(0x2C1B3C6DU)), m.mul(seed, m.cu(0x9E3779B1U))));
     const int lu1 = detail::rt_hash01(g, m.g.binary(k::KOp::BitXor, m.mul(tid, m.cu(0x27D4EB2FU)), m.mul(seed, m.cu(0x165667B1U))));
@@ -1657,15 +1916,23 @@ struct GiMath : RestirMath
     const int phInit = m.mul(m.add(m.add(m.mul(m.cf(clum0), Lo[0]), m.mul(m.cf(clum1), Lo[1])), m.mul(m.cf(clum2), Lo[2])), cvg);
 
     // temporal combine with the previous frame's reservoir at this pixel (same xv).
-    const int pxs0 = lp(rprev, rb, 0U), pxs1 = lp(rprev, rb, 1U), pxs2 = lp(rprev, rb, 2U);
-    const int pns0 = lp(rprev, rb, 3U), pns1 = lp(rprev, rb, 4U), pns2 = lp(rprev, rb, 5U);
-    const int pLo0 = lp(rprev, rb, 6U), pLo1 = lp(rprev, rb, 7U), pLo2 = lp(rprev, rb, 8U);
+    const int pxs0 = lp(rprev, rb, 0U);
+    const int pxs1 = lp(rprev, rb, 1U);
+    const int pxs2 = lp(rprev, rb, 2U);
+    const int pns0 = lp(rprev, rb, 3U);
+    const int pns1 = lp(rprev, rb, 4U);
+    const int pns2 = lp(rprev, rb, 5U);
+    const int pLo0 = lp(rprev, rb, 6U);
+    const int pLo1 = lp(rprev, rb, 7U);
+    const int pLo2 = lp(rprev, rb, 8U);
     const int pW = lp(rprev, rb, 9U);
     const int pM = m.mn(lp(rprev, rb, 10U), m.cf(cfg.temporal_m_cap));
     // prev sample's cosθ_v at this xv:
-    const int pdx = m.sub(pxs0, Px), pdy = m.sub(pxs1, Py), pdz = m.sub(pxs2, Pz);
+    const int pdx = m.sub(pxs0, p_x);
+    const int pdy = m.sub(pxs1, p_y);
+    const int pdz = m.sub(pxs2, p_z);
     const int pil = m.dvv(m.cf(1.0), g.unary(k::KOp::Sqrt, m.mx(m.dot3(pdx, pdy, pdz, pdx, pdy, pdz), m.cf(1.0e-12))));
-    const int pcv = m.clamp0(m.mul(m.dot3(Nx, Ny, Nz, pdx, pdy, pdz), pil));
+    const int pcv = m.clamp0(m.mul(m.dot3(n_x, n_y, n_z, pdx, pdy, pdz), pil));
     const int phPrev = m.mul(m.add(m.add(m.mul(m.cf(clum0), pLo0), m.mul(m.cf(clum1), pLo1)), m.mul(m.cf(clum2), pLo2)), pcv);
     const int wA = m.mul(m.mul(phInit, Winit), m.cf(1.0));   // self M=1
     const int wB = m.mul(m.mul(phPrev, pW), pM);
@@ -1673,9 +1940,15 @@ struct GiMath : RestirMath
     const int M2 = m.add(m.cf(1.0), pM);
     const int xi = detail::rt_hash01(g, m.g.binary(k::KOp::BitXor, m.mul(tid, m.cu(0x9E3779B1U)), m.mul(frame, m.cu(0x7FEB352DU))));
     const int pick = g.select(g.binary(k::KOp::CmpLt, m.mul(xi, ws), wB), m.cf(1.0), m.cf(0.0)); // keep prev with prob wB/ws
-    const int oX0 = m.blend(pick, pxs0, xsx), oX1 = m.blend(pick, pxs1, xsy), oX2 = m.blend(pick, pxs2, xsz);
-    const int oN0 = m.blend(pick, pns0, nsx), oN1 = m.blend(pick, pns1, nsy), oN2 = m.blend(pick, pns2, nsz);
-    const int oL0 = m.blend(pick, pLo0, Lo[0]), oL1 = m.blend(pick, pLo1, Lo[1]), oL2 = m.blend(pick, pLo2, Lo[2]);
+    const int oX0 = m.blend(pick, pxs0, xsx);
+    const int oX1 = m.blend(pick, pxs1, xsy);
+    const int oX2 = m.blend(pick, pxs2, xsz);
+    const int oN0 = m.blend(pick, pns0, nsx);
+    const int oN1 = m.blend(pick, pns1, nsy);
+    const int oN2 = m.blend(pick, pns2, nsz);
+    const int oL0 = m.blend(pick, pLo0, Lo[0]);
+    const int oL1 = m.blend(pick, pLo1, Lo[1]);
+    const int oL2 = m.blend(pick, pLo2, Lo[2]);
     const int phO = m.blend(pick, phPrev, phInit);
     const int Wout = m.dvv(ws, m.mul(M2, m.mx(phO, m.cf(1.0e-12))));
 
@@ -1696,7 +1969,9 @@ struct GiMath : RestirMath
 [[nodiscard]] inline crd::kir::KEntry build_restir_gi_spatial_kernel(crd::kir::KGraph& g, const RestirGiConfig& cfg)
 {
     namespace k = crd::kir;
-    const double clum0 = 0.2126, clum1 = 0.7152, clum2 = 0.0722;
+    const double clum0 = 0.2126;
+    const double clum1 = 0.7152;
+    const double clum2 = 0.0722;
     detail::GiMath m{g, 0.0, 0.0, 0.0, 0.0};
 
     const int pos  = g.buffer_decl(k::DType::F32, 0, 1, false);
@@ -1710,18 +1985,26 @@ struct GiMath : RestirMath
     const int  b3   = m.mul(tid, m.cu(3U));
     const int  rb   = m.mul(tid, m.cu(kRestirGiStride));
     const auto lp   = [&](int buf, int base, crd::u32 c) { return g.buffer_load(buf, m.add(base, m.cu(c))); };
-    const int  Nx = lp(nrm, b3, 0U), Ny = lp(nrm, b3, 1U), Nz = lp(nrm, b3, 2U);
-    const int  Px = lp(pos, b3, 0U), Py = lp(pos, b3, 1U), Pz = lp(pos, b3, 2U);
+    const int n_x = lp(nrm, b3, 0U);
+    const int n_y = lp(nrm, b3, 1U);
+    const int n_z = lp(nrm, b3, 2U);
+    const int p_x = lp(pos, b3, 0U);
+    const int p_y = lp(pos, b3, 1U);
+    const int p_z = lp(pos, b3, 2U);
     const int  frame = g.buffer_load(fbuf, m.cu(0U));
-    const int  sx = m.g.binary(k::KOp::Mod, tid, m.cu(cfg.width)), sy = m.g.binary(k::KOp::Div, tid, m.cu(cfg.width));
-    const int  sxf = m.castf(sx), syf = m.castf(sy);
+    const int sx = m.g.binary(k::KOp::Mod, tid, m.cu(cfg.width));
+    const int sy = m.g.binary(k::KOp::Div, tid, m.cu(cfg.width));
+    const int sxf = m.castf(sx);
+    const int syf = m.castf(sy);
 
-    // luminance·cosθ_v target of a stored sample (xs,Lo) seen from (Px,N); also returns cos_v, cos_s (via out params) for reuse.
+    // luminance·cosθ_v target of a stored sample (xs,Lo) seen from (p_x,N); also returns cos_v, cos_s (via out params) for reuse.
     const auto phat_gi = [&](int xs0, int xs1, int xs2, int ns0, int ns1, int ns2, int Lo0, int Lo1, int Lo2, int& cvOut, int& csOut, int& d2Out) {
-        const int dx = m.sub(xs0, Px), dy = m.sub(xs1, Py), dz = m.sub(xs2, Pz);
+        const int dx = m.sub(xs0, p_x);
+        const int dy = m.sub(xs1, p_y);
+        const int dz = m.sub(xs2, p_z);
         const int d2 = m.mx(m.dot3(dx, dy, dz, dx, dy, dz), m.cf(1.0e-12));
         const int il = m.dvv(m.cf(1.0), g.unary(k::KOp::Sqrt, d2));
-        cvOut = m.clamp0(m.mul(m.dot3(Nx, Ny, Nz, dx, dy, dz), il));
+        cvOut = m.clamp0(m.mul(m.dot3(n_x, n_y, n_z, dx, dy, dz), il));
         csOut = m.clamp0(m.neg(m.mul(m.dot3(ns0, ns1, ns2, dx, dy, dz), il)));
         d2Out = d2;
         const int lum = m.add(m.add(m.mul(m.cf(clum0), Lo0), m.mul(m.cf(clum1), Lo1)), m.mul(m.cf(clum2), Lo2));
@@ -1729,15 +2012,33 @@ struct GiMath : RestirMath
     };
 
     // self reservoir.
-    const int sX0 = lp(rin, rb, 0U), sX1 = lp(rin, rb, 1U), sX2 = lp(rin, rb, 2U);
-    const int sN0 = lp(rin, rb, 3U), sN1 = lp(rin, rb, 4U), sN2 = lp(rin, rb, 5U);
-    const int sL0 = lp(rin, rb, 6U), sL1 = lp(rin, rb, 7U), sL2 = lp(rin, rb, 8U);
-    const int sW = lp(rin, rb, 9U), sM = lp(rin, rb, 10U);
-    int cvS = -1, csS = -1, d2S = -1;
+    const int sX0 = lp(rin, rb, 0U);
+    const int sX1 = lp(rin, rb, 1U);
+    const int sX2 = lp(rin, rb, 2U);
+    const int sN0 = lp(rin, rb, 3U);
+    const int sN1 = lp(rin, rb, 4U);
+    const int sN2 = lp(rin, rb, 5U);
+    const int sL0 = lp(rin, rb, 6U);
+    const int sL1 = lp(rin, rb, 7U);
+    const int sL2 = lp(rin, rb, 8U);
+    const int sW = lp(rin, rb, 9U);
+    const int sM = lp(rin, rb, 10U);
+    int cvS = -1;
+    int csS = -1;
+    int d2S = -1;
     const int phS = phat_gi(sX0, sX1, sX2, sN0, sN1, sN2, sL0, sL1, sL2, cvS, csS, d2S);
     int wsum = m.mul(m.mul(phS, sW), sM);
     int M    = sM;
-    int oX0 = sX0, oX1 = sX1, oX2 = sX2, oN0 = sN0, oN1 = sN1, oN2 = sN2, oL0 = sL0, oL1 = sL1, oL2 = sL2, phO = phS;
+    int oX0 = sX0;
+    int oX1 = sX1;
+    int oX2 = sX2;
+    int oN0 = sN0;
+    int oN1 = sN1;
+    int oN2 = sN2;
+    int oL0 = sL0;
+    int oL1 = sL1;
+    int oL2 = sL2;
+    int phO = phS;
 
     for (crd::u32 j = 0; j < cfg.spatial_k; ++j)
     {
@@ -1751,16 +2052,29 @@ struct GiMath : RestirMath
         const int nbr = m.add(m.mul(m.castu(nyf), m.cu(cfg.width)), m.castu(nxf));
         const int nrb = m.mul(nbr, m.cu(kRestirGiStride));
         const int nb3 = m.mul(nbr, m.cu(3U));
-        const int qX0 = lp(rin, nrb, 0U), qX1 = lp(rin, nrb, 1U), qX2 = lp(rin, nrb, 2U);
-        const int qN0 = lp(rin, nrb, 3U), qN1 = lp(rin, nrb, 4U), qN2 = lp(rin, nrb, 5U);
-        const int qL0 = lp(rin, nrb, 6U), qL1 = lp(rin, nrb, 7U), qL2 = lp(rin, nrb, 8U);
-        const int qW = lp(rin, nrb, 9U), qM = lp(rin, nrb, 10U);
+        const int qX0 = lp(rin, nrb, 0U);
+        const int qX1 = lp(rin, nrb, 1U);
+        const int qX2 = lp(rin, nrb, 2U);
+        const int qN0 = lp(rin, nrb, 3U);
+        const int qN1 = lp(rin, nrb, 4U);
+        const int qN2 = lp(rin, nrb, 5U);
+        const int qL0 = lp(rin, nrb, 6U);
+        const int qL1 = lp(rin, nrb, 7U);
+        const int qL2 = lp(rin, nrb, 8U);
+        const int qW = lp(rin, nrb, 9U);
+        const int qM = lp(rin, nrb, 10U);
         // reconnect the neighbour's sample xs_q to THIS xv:
-        int cvN = -1, csN = -1, d2N = -1;
+        int cvN = -1;
+        int csN = -1;
+        int d2N = -1;
         const int phN = phat_gi(qX0, qX1, qX2, qN0, qN1, qN2, qL0, qL1, qL2, cvN, csN, d2N);
         // neighbour's ORIGINAL geometry from its own xv_q:
-        const int qvx = lp(pos, nb3, 0U), qvy = lp(pos, nb3, 1U), qvz = lp(pos, nb3, 2U);
-        const int odx = m.sub(qX0, qvx), ody = m.sub(qX1, qvy), odz = m.sub(qX2, qvz);
+        const int qvx = lp(pos, nb3, 0U);
+        const int qvy = lp(pos, nb3, 1U);
+        const int qvz = lp(pos, nb3, 2U);
+        const int odx = m.sub(qX0, qvx);
+        const int ody = m.sub(qX1, qvy);
+        const int odz = m.sub(qX2, qvz);
         const int od2 = m.mx(m.dot3(odx, ody, odz, odx, ody, odz), m.cf(1.0e-12));
         const int oil = m.dvv(m.cf(1.0), g.unary(k::KOp::Sqrt, od2));
         const int csO = m.clamp0(m.neg(m.mul(m.dot3(qN0, qN1, qN2, odx, ody, odz), oil)));
@@ -1809,14 +2123,24 @@ struct GiMath : RestirMath
     const int  b3   = m.mul(tid, m.cu(3U));
     const int  rb   = m.mul(tid, m.cu(kRestirGiStride));
     const auto lp   = [&](int buf, int base, crd::u32 c) { return g.buffer_load(buf, m.add(base, m.cu(c))); };
-    const int  Nx = lp(nrm, b3, 0U), Ny = lp(nrm, b3, 1U), Nz = lp(nrm, b3, 2U);
-    const int  Px = lp(pos, b3, 0U), Py = lp(pos, b3, 1U), Pz = lp(pos, b3, 2U);
-    const int  xs0 = lp(rin, rb, 0U), xs1 = lp(rin, rb, 1U), xs2 = lp(rin, rb, 2U);
-    const int  Lo0 = lp(rin, rb, 6U), Lo1 = lp(rin, rb, 7U), Lo2 = lp(rin, rb, 8U);
+    const int n_x = lp(nrm, b3, 0U);
+    const int n_y = lp(nrm, b3, 1U);
+    const int n_z = lp(nrm, b3, 2U);
+    const int p_x = lp(pos, b3, 0U);
+    const int p_y = lp(pos, b3, 1U);
+    const int p_z = lp(pos, b3, 2U);
+    const int xs0 = lp(rin, rb, 0U);
+    const int xs1 = lp(rin, rb, 1U);
+    const int xs2 = lp(rin, rb, 2U);
+    const int Lo0 = lp(rin, rb, 6U);
+    const int Lo1 = lp(rin, rb, 7U);
+    const int Lo2 = lp(rin, rb, 8U);
     const int  W   = lp(rin, rb, 9U);
-    const int  dx = m.sub(xs0, Px), dy = m.sub(xs1, Py), dz = m.sub(xs2, Pz);
+    const int dx = m.sub(xs0, p_x);
+    const int dy = m.sub(xs1, p_y);
+    const int dz = m.sub(xs2, p_z);
     const int  il = m.dvv(m.cf(1.0), g.unary(k::KOp::Sqrt, m.mx(m.dot3(dx, dy, dz, dx, dy, dz), m.cf(1.0e-12))));
-    const int  cv = m.clamp0(m.mul(m.dot3(Nx, Ny, Nz, dx, dy, dz), il));
+    const int  cv = m.clamp0(m.mul(m.dot3(n_x, n_y, n_z, dx, dy, dz), il));
     const int  sh = m.mul(m.mul(cv, W), m.cf(1.0));
     g.stmt_buffer_store(out, m.add(b3, m.cu(0U)), m.mul(m.mul(m.cf(a0), Lo0), sh));
     g.stmt_buffer_store(out, m.add(b3, m.cu(1U)), m.mul(m.mul(m.cf(a1), Lo1), sh));
@@ -1826,5 +2150,7 @@ struct GiMath : RestirMath
     e.stage = k::KStage::Compute; e.local_size[0] = cfg.local_size; e.kernel_body_begin = mark; e.kernel_body_count = g.stmt_count() - mark;
     return e;
 }
+
+// NOLINTEND(readability-identifier-naming)
 
 } // namespace crd::kir::rt

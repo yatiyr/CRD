@@ -25,6 +25,10 @@ namespace crd::cooker
 struct MeshCookOptions
 {
     crd::f32 position_scale = 1.0F;
+    // GEO-2 (appended): the crease angle for normal GENERATION (applies when the source carries no normals — wave1
+    // conditioning). Degrees: 0 = faceted, 180 = smooth-everything; 30 is the production default (every DCC's
+    // auto-smooth). `.meta` key: `[cook] smooth_angle_deg = 45`.
+    crd::f32 smooth_angle_deg = 30.0F;
 };
 
 // Parses the [cook] section of a .meta file body. Returns defaults when

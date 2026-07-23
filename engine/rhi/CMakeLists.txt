@@ -1,3 +1,5 @@
+# ⛔ FROZEN (ADR-0105, 2026-07-23): crd-rhi is RETIRING — the D-007 RET band absorbs its capabilities into
+# crd-gpu-context and DELETES this module at RET-8. NO new features, NO new consumers, NO new wiring. Ever.
 crd_collect_sources(SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src")
 crd_collect_sources(HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include")
 

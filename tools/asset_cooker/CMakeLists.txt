@@ -24,10 +24,11 @@ target_link_libraries(crd-cooker
         crd-scene
         crd-preset
         crd-profile
+        crd-asset-io             # GEO-1: our own STL/OBJ/PLY parsers (mesh_wave1 handler)
     PRIVATE
-        stb
-        cgltf
-        mikktspace
+        # stb RETIRED (GEO-3 stage 2b): texture.cpp now decodes via OUR ldr_decode (engine/resources).
+        cgltf       # legacy glTF cook path only (first-wins registry retired it; deletion pending GEO-3 close)
+        mikktspace  # GEO-2's comparison ORACLE (tests) + the legacy mesh.cpp path
 )
 
 # v1l: scene cooker uses toml++ (same dep used by crd-config).

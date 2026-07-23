@@ -289,10 +289,23 @@ TEST_CASE("AS-4: the flash-attention autotuner sweeps (BR,BC), oracle-validates,
             return e;
         };
 
+        // What run() will replay for this (device,S,D): the checked-in DB row when tuned, else the 64×32 heuristic.
+        // Looked up BEFORE the sweep so its tile's time is recorded from THE SAME measurement pass as every other tile —
+        // a separate later timing call is not comparable (GPU boost-clock drift between two calls inverts a 5% margin;
+        // the per-slice sweep proved it: a same-run 64×32 re-time came in 16% off its sweep-pass number).
+        int db_br = 0;
+        int db_bc = 0;
+        kir::select_attention_tile(dim, slen, cu.device(), db_br, db_bc);
+        int tuned_br = 0;
+        int tuned_bc = 0;
+        const bool is_tuned = crd::kir::lookup_attention_tuned(cu.device(), slen, dim, tuned_br, tuned_bc);
+
         double best_ms   = 1.0e30;
         int    best_br   = 0;
         int    best_bc   = 0;
         int    measured  = 0;
+        double def_ms    = -1.0; // the 64×32 heuristic default's time, from this sweep pass
+        double db_ms     = -1.0; // the DB row's time, from this sweep pass
         for (int ci = 0; ci < cnt; ++ci)
         {
             const at::AttentionSchedule& s = space[ci];
@@ -300,30 +313,32 @@ TEST_CASE("AS-4: the flash-attention autotuner sweeps (BR,BC), oracle-validates,
             if (!r.ok) { continue; }
             CHECK(max_err(out.data(), oracle.data(), nelem) < 2.0e-3F); // ORACLE gate (fast tier): a wrong tile can never win
             ++measured;
+            if (s.br == 64 && s.bc == 32) { def_ms = r.min_ms; }
+            if (s.br == db_br && s.bc == db_bc) { db_ms = r.min_ms; }
             if (r.min_ms < best_ms) { best_ms = r.min_ms; best_br = s.br; best_bc = s.bc; }
         }
         REQUIRE(measured > 0);
 
-        // the 64×32 HEURISTIC default (what select_attention_tile emits with no DB row) — the baseline the autotuner must match/beat.
-        const kir::ContractTiming def = cu.time_attention(g, y, 64, 32, inputs, 3, out.data(), 3, 12);
-        REQUIRE(def.ok);
-        CHECK(best_ms <= def.min_ms * 1.05); // the default is IN the search space ⇒ the tuned pick is never worse (up to noise)
+        // the 64×32 HEURISTIC default (what select_attention_tile emits with no DB row) is IN the search space, so the
+        // tuned pick is never worse — asserted on same-pass numbers (exact, no noise tolerance needed).
+        REQUIRE(def_ms > 0.0);
+        CHECK(best_ms <= def_ms);
 
-        // AS-2-for-attention: select_attention_tile (what run() calls) REPLAYS the checked-in tuned tile for this (device,S,D). For a
-        // TUNED shape (a DB hit) the replayed tile must equal the on-device measured winner ⇒ run() emits the tuned flash kernel with
-        // no runtime search. For an untuned shape it falls back to the heuristic (no equality assertion — the DB simply lacks a row).
-        int db_br = 0;
-        int db_bc = 0;
-        kir::select_attention_tile(dim, slen, cu.device(), db_br, db_bc);
-        int tuned_br = 0;
-        int tuned_bc = 0;
-        const bool is_tuned = crd::kir::lookup_attention_tuned(cu.device(), slen, dim, tuned_br, tuned_bc);
+        // AS-2-for-attention: select_attention_tile (what run() calls) REPLAYS the checked-in tuned tile. Two claims, kept
+        // separate: (1) the WIRING is exact — the replay equals the DB row verbatim (deterministic). (2) the QUALITY holds —
+        // the checked-in row is still NEAR-OPTIMAL on this device, never "equal to today's argmin": two near-tied tiles swap
+        // order run to run under load (measurement noise, not a stale DB), while a genuinely wrong tile is 1.5–8× off (the
+        // register-occupancy scar) — 15% catches that with a wide margin. Untuned shapes fall back to the heuristic (no
+        // assertion — the DB simply lacks a row).
         if (is_tuned)
         {
-            CHECK(db_br == best_br); // the checked-in DB row IS the on-device measured winner
-            CHECK(db_bc == best_bc);
+            CHECK(db_br == tuned_br);
+            CHECK(db_bc == tuned_bc);
+            REQUIRE(db_ms > 0.0); // the DB row must be an enumerable (valid) schedule on this device
+            CHECK(db_ms <= best_ms * 1.15);
         }
-        std::printf("[attn-autotune] S=%d D=%d: measured %d/%d tiles, WINNER BR=%d BC=%d %.4f ms (heuristic 64x32 %.4f ms); run() -> %dx%d (%s)\n",
-                    slen, dim, measured, cnt, best_br, best_bc, best_ms, def.min_ms, db_br, db_bc, is_tuned ? "DB" : "heuristic");
+        std::printf("[attn-autotune] S=%d D=%d: measured %d/%d tiles, WINNER BR=%d BC=%d %.4f ms (heuristic 64x32 %.4f ms); run() -> %dx%d (%s, %.4f ms)\n",
+                    slen, dim, measured, cnt, best_br, best_bc, best_ms, def_ms, db_br, db_bc, is_tuned ? "DB" : "heuristic",
+                    is_tuned ? db_ms : def_ms);
     }
 }

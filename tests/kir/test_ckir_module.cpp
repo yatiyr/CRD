@@ -337,7 +337,7 @@ TEST_CASE("generics/modules: GM-4 generics over int/uint element types, u32 wrap
 // a consumer names `ffn` without seeing its internals. This pins: (1) the linked composite equals the hand-composed graph bit-for-
 // bit; (2) as a first-class call-node, `ffn` is ONE serializable named call whose lowering EXPANDS through the linkage into the
 // full linear+gelu subgraph (0 Call nodes remain), oracle-correct.
-TEST_CASE("generics/modules: GM-5 separate compilation — a composite fn LINKS others by name, lowers through the linkage", "[kir][module]")
+TEST_CASE("generics/modules: GM-5 separate compilation -- a composite fn LINKS others by name, lowers through the linkage", "[kir][module]")
 {
     crd::memory::TlsfAllocator alloc(16U << 20U);
     kir::KModule               mod(&alloc);
@@ -410,7 +410,7 @@ TEST_CASE("generics/modules: GM-5 separate compilation — a composite fn LINKS 
 // hand-computed math (the primitives are correct, not just self-consistent); the pre-norm transformer_block (self-attention + FFN
 // with two residuals, 9-arg, LINKING layernorm/attention/linear/gelu by name) is verified oracle-correct + right-shaped. This is
 // the payoff: CKIR authors a real transformer block from named, type-checked, reusable pieces — no new KOps, all backends emit it.
-TEST_CASE("generics/modules: GM-6 production neural blocks — layernorm, softmax, attention, a composed transformer block", "[kir][module]")
+TEST_CASE("generics/modules: GM-6 production neural blocks -- layernorm, softmax, attention, a composed transformer block", "[kir][module]")
 {
     crd::memory::TlsfAllocator alloc(32U << 20U);
     kir::KModule               mod(&alloc);

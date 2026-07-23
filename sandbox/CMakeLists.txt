@@ -1,46 +1,30 @@
+# RET-5 pt 2 (ADR-0105): THE SANDBOX FLIP. The sandbox runs END TO END on the ONE graphics layer (gpu-context):
+# windowed VulkanGpuContext → IRasterContext → present surface → ImGuiGpuBackend overlay. The frozen-stack scene
+# layers (sandbox_layer / geometry_showcase / curves_showcase — built on crd-renderer's ForwardRenderPath) left the
+# BUILD, not the tree: their content returns through the RET-6 draw port onto gpu-context.
 add_executable(crd-sandbox
     src/main.cpp
-    src/sandbox_layer.cpp
-    src/geometry_showcase.cpp  # v1j-b: geometry-viz showcase scene
-    src/curves_showcase.cpp    # v10e: curves showcase scene
 )
 
-target_include_directories(crd-sandbox PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/src"
-    SYSTEM "${imgui_SOURCE_DIR}"
-)
+# CI-1 (2026-07-23): SYSTEM must lead its own call — mid-list it becomes a literal "SYSTEM" include dir.
+target_include_directories(crd-sandbox PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+# RET-5: imgui.h + backends/imgui_impl_glfw.h (the platform-input half)
+target_include_directories(crd-sandbox SYSTEM PRIVATE "${imgui_SOURCE_DIR}")
 
 target_link_libraries(crd-sandbox PRIVATE
     crd-app
-    crd-config
-    crd-draw
-    crd-draw-imgui
-    crd-imgui
-    crd-gpu-context          # D-008 C2-c2: the ONE device (VulkanGpuContext) rhi-vulkan adopts
+    crd-imgui                # RET-5: ImGuiGpuBackend (render) + the vendored ImGui_ImplGlfw (input)
+    crd-gpu-context          # ADR-0105: the ONE graphics layer
     crd-gpu-context-vulkan
+    crd-kir                  # the CKIR canvas scene (KGraph → create_program)
+    crd-jobs
     crd-log
-    crd-math
     crd-memory
-    crd-meshgen
     crd-perf       # D-003 v0h: profiler substrate
     crd-perf-ui    # D-003 v0h: profiler ImGui frontend (ProfilerPanel)
-    crd-preset
-    crd-profile
-    crd-renderer
-    crd-resources
-    crd-rhi
-    crd-rhi-vulkan
-    crd-scene
-    crd-shader
-    crd-shader-vulkan        # D-008 C2-e: injected GLSL->SPIR-V compiler for the Effect Runtime
-    crd-eylem
-    crd-eylem-rigid3d
-    crd-eylem-viz
-    # v1j-b: geometry-viz substrate + its transitive geometry-* deps.
-    crd-geometry-primitives
-    crd-geometry-bvh
-    crd-geometry-curves        # v10e: curves substrate for CurvesShowcase
-    crd-geometry-viz
+    glfw                     # RET-5: glfwGetWin32Window — the native HWND for create_present_surface
+    # ⛔ crd-rhi / crd-rhi-vulkan / crd-renderer / crd-draw / crd-scene / crd-shader* — RETIRED from the sandbox
+    #    (ADR-0105). crd-imgui still links the frozen rhi half transitively until RET-7 kills ImGuiLayer.
 )
 target_compile_definitions(crd-sandbox PRIVATE CRD_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 crd_enable_default_pch(crd-sandbox)

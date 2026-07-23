@@ -2,7 +2,10 @@
 id: ADR-0036
 title: crd-resources module placement + loader-registry pattern
 date: 2026-05-03
-status: Accepted
+status: Accepted — PARTIALLY SUPERSEDED by ADR-0105 (2026-07-23, RET band). The loader-registry pattern and the
+  crd-resources placement SURVIVE unchanged; every clause that names crd-rhi as the GPU boundary ("crd-resources must
+  not depend on crd-rhi") re-reads with crd-gpu-context as the graphics layer — loaders stay GPU-free, uploads go
+  through gpu-context (RET-3).
 tags: [resources, arch]
 ---
 

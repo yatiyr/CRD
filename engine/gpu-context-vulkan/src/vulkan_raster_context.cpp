@@ -4,9 +4,12 @@
 
 #include <crd/gpu/vulkan_raster_context.hpp>
 
+#include <crd/gpu/vulkan_gpu_allocator.hpp> // RET-4 pt 2: the ADR-0085 S6 suballocation core, absorbed
+
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
+#include <cstring> // std::memcpy — MSVC provides it transitively, GCC does not
 
 namespace crd::gpu
 {
@@ -89,15 +92,46 @@ inline constexpr crd::u32 kBindlessMax = 8U; // B2-d: bindless texture-array cap
 struct ImageBundle
 {
     VkImage        image = VK_NULL_HANDLE;
-    VkDeviceMemory mem   = VK_NULL_HANDLE;
+    VkDeviceMemory mem   = VK_NULL_HANDLE; // legacy direct allocation; UNUSED when `owner` is set (alloc owns memory)
     VkImageView    view  = VK_NULL_HANDLE;
+    // RET-4 pt 2: when suballocated, the bundle carries its allocation + owner (resources must die before the
+    // allocator — the standard device-before-resources rule, one level down; the allocator tombstones defensively).
+    VulkanGpuAllocator* owner = nullptr;
+    GpuAllocation       alloc{};
+    // RET-4 pt 5 (S7 image relocation): the creation parameters, retained so a defrag pass can RECREATE the image
+    // at a new suballocation (recreate + copy + swap — the bundle is self-describing).
+    VkFormat              format     = VK_FORMAT_UNDEFINED;
+    crd::u32              width      = 0;
+    crd::u32              height     = 0;
+    crd::u32              mip_levels = 1;
+    VkSampleCountFlagBits samples    = VK_SAMPLE_COUNT_1_BIT;
+    VkImageUsageFlags     usage      = 0;
+    VkImageAspectFlags    aspect     = 0;
 };
 
 inline void destroy_image_bundle(VkDevice d, const ImageBundle& b) noexcept
 {
     if (b.view != VK_NULL_HANDLE) { vkDestroyImageView(d, b.view, nullptr); }
     if (b.image != VK_NULL_HANDLE) { vkDestroyImage(d, b.image, nullptr); }
-    if (b.mem != VK_NULL_HANDLE) { vkFreeMemory(d, b.mem, nullptr); }
+    if (b.owner != nullptr) { b.owner->free(b.alloc); }
+    else if (b.mem != VK_NULL_HANDLE) { vkFreeMemory(d, b.mem, nullptr); }
+}
+
+// RET-4 pt 4: the BUFFER twin of ImageBundle — a VkBuffer + its POOLED allocation (the S6 suballocator). `mapped`
+// is this allocation's bytes (block-base + offset; blocks map ONCE — nobody ever vkUnmapMemory's a pooled buffer).
+// The bundle owns its cleanup, so holders and staging sites stay one-liner `destroy_buffer_bundle` calls.
+struct BufferBundle
+{
+    VkBuffer            buffer = VK_NULL_HANDLE;
+    void*               mapped = nullptr;
+    VulkanGpuAllocator* owner  = nullptr;
+    GpuAllocation       alloc{};
+};
+
+inline void destroy_buffer_bundle(VkDevice d, const BufferBundle& b) noexcept
+{
+    if (b.buffer != VK_NULL_HANDLE) { vkDestroyBuffer(d, b.buffer, nullptr); }
+    if (b.owner != nullptr) { b.owner->free(b.alloc); }
 }
 
 // B1-d: the backend-neutral DepthCompare → VkCompareOp (the enum orders match, but map explicitly, not by cast).
@@ -173,21 +207,18 @@ class VulkanRasterTarget final : public IRasterTarget
 {
 public:
     VulkanRasterTarget(VkDevice device, const ImageBundle& color, const ImageBundle& resolve, const ImageBundle& depth,
-                       VkBuffer readback, VkDeviceMemory readback_mem, void* mapped, crd::u32 samples, crd::u32 w,
-                       crd::u32 h) noexcept
+                       const BufferBundle& readback, crd::u32 samples, crd::u32 w, crd::u32 h) noexcept
         : m_device(device), m_color(color), m_resolve(resolve), m_depth(depth), m_readback(readback),
-          m_readback_mem(readback_mem), m_mapped(mapped), m_samples(samples), m_w(w), m_h(h)
+          m_samples(samples), m_w(w), m_h(h)
     {
     }
     ~VulkanRasterTarget() override
     {
-        if (m_readback_mem != VK_NULL_HANDLE) { vkUnmapMemory(m_device, m_readback_mem); }
         destroy_image_bundle(m_device, m_color);
         destroy_image_bundle(m_device, m_resolve);
         destroy_image_bundle(m_device, m_depth);
         destroy_image_bundle(m_device, m_vrs);
-        if (m_readback != VK_NULL_HANDLE) { vkDestroyBuffer(m_device, m_readback, nullptr); }
-        if (m_readback_mem != VK_NULL_HANDLE) { vkFreeMemory(m_device, m_readback_mem, nullptr); }
+        destroy_buffer_bundle(m_device, m_readback);
     }
     VulkanRasterTarget(const VulkanRasterTarget&)            = delete;
     VulkanRasterTarget& operator=(const VulkanRasterTarget&) = delete;
@@ -198,8 +229,8 @@ public:
     [[nodiscard]] crd::u32 height() const noexcept override { return m_h; }
     [[nodiscard]] crd::u32 read_pixel(crd::u32 x, crd::u32 y) const noexcept override
     {
-        if (m_mapped == nullptr || x >= m_w || y >= m_h) { return 0U; }
-        const auto*      bytes  = static_cast<const crd::u8*>(m_mapped);
+        if (m_readback.mapped == nullptr || x >= m_w || y >= m_h) { return 0U; }
+        const auto*      bytes  = static_cast<const crd::u8*>(m_readback.mapped);
         const crd::usize offset = (static_cast<crd::usize>(y) * m_w + x) * 4U;
         crd::u32         px     = 0U;
         for (int i = 0; i < 4; ++i) { px |= static_cast<crd::u32>(bytes[offset + static_cast<crd::usize>(i)]) << (8 * i); }
@@ -208,7 +239,7 @@ public:
 
     [[nodiscard]] VkImage     image() const noexcept { return m_color.image; }  // the colour attachment (MSAA if samples>1)
     [[nodiscard]] VkImageView view() const noexcept { return m_color.view; }
-    [[nodiscard]] VkBuffer    readback() const noexcept { return m_readback; }
+    [[nodiscard]] VkBuffer    readback() const noexcept { return m_readback.buffer; }
     [[nodiscard]] crd::u32    samples() const noexcept { return m_samples; }
     [[nodiscard]] bool        multisampled() const noexcept { return m_samples > 1U; }
     [[nodiscard]] VkImage     resolve_image() const noexcept { return m_resolve.image; } // single-sample resolve (MSAA only)
@@ -224,17 +255,375 @@ public:
     void                      set_vrs(const ImageBundle& b) noexcept { m_vrs = b; } // owned after this; freed in the dtor
 
 private:
-    VkDevice       m_device       = VK_NULL_HANDLE;
-    ImageBundle    m_color{};
-    ImageBundle    m_resolve{}; // empty for a single-sample target
-    ImageBundle    m_depth{};   // B1-d: empty unless created via create_color_depth_target
-    ImageBundle    m_vrs{};     // B1-e: empty unless created via create_color_vrs_target (R8_UINT per-tile rate image)
-    VkBuffer       m_readback     = VK_NULL_HANDLE;
-    VkDeviceMemory m_readback_mem = VK_NULL_HANDLE;
-    void*          m_mapped       = nullptr;
-    crd::u32       m_samples      = 1U;
-    crd::u32       m_w            = 0;
-    crd::u32       m_h            = 0;
+    VkDevice     m_device = VK_NULL_HANDLE;
+    ImageBundle  m_color{};
+    ImageBundle  m_resolve{}; // empty for a single-sample target
+    ImageBundle  m_depth{};   // B1-d: empty unless created via create_color_depth_target
+    ImageBundle  m_vrs{};     // B1-e: empty unless created via create_color_vrs_target (R8_UINT per-tile rate image)
+    BufferBundle m_readback{}; // pooled host-visible readback (RET-4 pt 4)
+    crd::u32     m_samples = 1U;
+    crd::u32     m_w       = 0;
+    crd::u32     m_h       = 0;
+};
+
+// ── RET-2 (ADR-0105): the present surface — the swapchain seam of the ONE graphics layer ──────────────────────────────
+// A pure SINK over the unchanged draw machinery: the app renders into a normal color target and `present(target)`
+// blits it into the acquired backbuffer (the target's post-draw layout is TRANSFER_SRC_OPTIMAL — the readback copy is
+// every draw's final op — so the blit needs no source barrier). Fully serialized per frame (acquire → blit submit →
+// present → fence wait), matching the context's synchronous submission style; the frame graph takes over pacing later.
+
+#if CRD_OS_WINDOWS
+// NOLINTNEXTLINE(readability-identifier-naming) — the Win32 ABI name, declared to keep <windows.h> out of this TU
+extern "C" __declspec(dllimport) void* __stdcall GetModuleHandleW(const wchar_t* module_name);
+#endif
+
+class VulkanPresentSurface final : public IPresentSurface
+{
+public:
+    VulkanPresentSurface(VulkanGpuContext& ctx, void* native_window, crd::u32 w, crd::u32 h, PresentMode mode) noexcept
+        : m_instance(ctx.vk_instance()), m_physical(ctx.vk_physical_device()), m_device(ctx.vk_device()),
+          m_queue(ctx.graphics_queue()), m_family(ctx.graphics_family()), m_mode(mode)
+    {
+        if (native_window != nullptr)
+        {
+#if CRD_OS_WINDOWS
+            // vkCreateWin32SurfaceKHR through the loader — the create-info mirrored locally so this TU stays free of
+            // <windows.h> (hinstance = the process module; hwnd = the caller's window)
+            struct Win32SurfaceCreateInfo
+            {
+                // NOLINTNEXTLINE(readability-identifier-naming) — mirrors the Vulkan ABI struct field name exactly
+                VkStructureType sType;
+                const void*     next;
+                VkFlags         flags;
+                void*           hinstance;
+                void*           hwnd;
+            };
+            using CreateWin32Fn = VkResult(VKAPI_PTR*)(VkInstance, const Win32SurfaceCreateInfo*,
+                                                       const VkAllocationCallbacks*, VkSurfaceKHR*);
+            auto create_fn =
+                reinterpret_cast<CreateWin32Fn>(vkGetInstanceProcAddr(m_instance, "vkCreateWin32SurfaceKHR"));
+            if (create_fn == nullptr) { return; }
+            Win32SurfaceCreateInfo sci{};
+            sci.sType     = static_cast<VkStructureType>(1000009000); // WIN32_SURFACE_CREATE_INFO_KHR
+            sci.hinstance = GetModuleHandleW(nullptr);
+            sci.hwnd      = native_window;
+            if (create_fn(m_instance, &sci, nullptr, &m_surface) != VK_SUCCESS) { return; }
+#else
+            return; // real-window surfaces: Windows today; the Linux platform surface lands with the RET linux sweep
+#endif
+        }
+        else // the HEADLESS surface — the full swapchain machinery, no window system (VK_EXT_headless_surface)
+        {
+            using CreateHeadlessFn = VkResult(VKAPI_PTR*)(VkInstance, const VkHeadlessSurfaceCreateInfoEXT*,
+                                                          const VkAllocationCallbacks*, VkSurfaceKHR*);
+            auto create_fn =
+                reinterpret_cast<CreateHeadlessFn>(vkGetInstanceProcAddr(m_instance, "vkCreateHeadlessSurfaceEXT"));
+            if (create_fn == nullptr) { return; }
+            VkHeadlessSurfaceCreateInfoEXT sci{};
+            sci.sType = VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT;
+            if (create_fn(m_instance, &sci, nullptr, &m_surface) != VK_SUCCESS) { return; }
+        }
+
+        VkBool32 supported = VK_FALSE;
+        if (vkGetPhysicalDeviceSurfaceSupportKHR(m_physical, m_family, m_surface, &supported) != VK_SUCCESS
+            || supported != VK_TRUE)
+        {
+            return;
+        }
+
+        VkCommandPoolCreateInfo pci{};
+        pci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        pci.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        pci.queueFamilyIndex = m_family;
+        if (vkCreateCommandPool(m_device, &pci, nullptr, &m_pool) != VK_SUCCESS) { return; }
+        VkCommandBufferAllocateInfo cai{};
+        cai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cai.commandPool        = m_pool;
+        cai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cai.commandBufferCount = 1;
+        if (vkAllocateCommandBuffers(m_device, &cai, &m_cmd) != VK_SUCCESS) { return; }
+        VkSemaphoreCreateInfo sci2{};
+        sci2.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        VkFenceCreateInfo fci{};
+        fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        if (vkCreateSemaphore(m_device, &sci2, nullptr, &m_sem_acquire) != VK_SUCCESS
+            || vkCreateSemaphore(m_device, &sci2, nullptr, &m_sem_present) != VK_SUCCESS
+            || vkCreateFence(m_device, &fci, nullptr, &m_fence) != VK_SUCCESS)
+        {
+            return;
+        }
+        m_valid = create_swapchain(w, h);
+    }
+
+    ~VulkanPresentSurface() override
+    {
+        if (m_device != VK_NULL_HANDLE) { vkDeviceWaitIdle(m_device); }
+        destroy_backbuffer_views();
+        if (m_swapchain != VK_NULL_HANDLE) { vkDestroySwapchainKHR(m_device, m_swapchain, nullptr); }
+        if (m_sem_acquire != VK_NULL_HANDLE) { vkDestroySemaphore(m_device, m_sem_acquire, nullptr); }
+        if (m_sem_present != VK_NULL_HANDLE) { vkDestroySemaphore(m_device, m_sem_present, nullptr); }
+        if (m_fence != VK_NULL_HANDLE) { vkDestroyFence(m_device, m_fence, nullptr); }
+        if (m_pool != VK_NULL_HANDLE) { vkDestroyCommandPool(m_device, m_pool, nullptr); }
+        if (m_surface != VK_NULL_HANDLE) { vkDestroySurfaceKHR(m_instance, m_surface, nullptr); }
+    }
+    VulkanPresentSurface(const VulkanPresentSurface&)            = delete;
+    VulkanPresentSurface& operator=(const VulkanPresentSurface&) = delete;
+    VulkanPresentSurface(VulkanPresentSurface&&)                 = delete;
+    VulkanPresentSurface& operator=(VulkanPresentSurface&&)      = delete;
+
+    [[nodiscard]] bool     valid() const noexcept override { return m_valid; }
+    [[nodiscard]] crd::u32 width() const noexcept override { return m_w; }
+    [[nodiscard]] crd::u32 height() const noexcept override { return m_h; }
+    [[nodiscard]] crd::u64 frame_count() const noexcept override { return m_frames; }
+    [[nodiscard]] crd::u32 image_count() const noexcept { return m_n_images; }   // RET-5: ImGui init needs these
+    [[nodiscard]] VkFormat color_format() const noexcept { return m_format; }
+
+    [[nodiscard]] bool present(IRasterTarget& target) override { return present(target, nullptr, nullptr); }
+
+    [[nodiscard]] bool present(IRasterTarget& target, OverlayFn overlay, void* user) override
+    {
+        if (!m_valid) { return false; }
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        if (t.width() != m_w || t.height() != m_h) { return false; }
+
+        crd::u32       idx = 0;
+        const VkResult ar =
+            vkAcquireNextImageKHR(m_device, m_swapchain, UINT64_MAX, m_sem_acquire, VK_NULL_HANDLE, &idx);
+        if (ar != VK_SUCCESS && ar != VK_SUBOPTIMAL_KHR) { return false; } // OUT_OF_DATE ⇒ the caller resizes
+
+        VkCommandBufferBeginInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        if (vkBeginCommandBuffer(m_cmd, &bi) != VK_SUCCESS) { return false; }
+
+        VkImageMemoryBarrier b{};
+        b.sType                       = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.srcQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
+        b.image                       = m_images[idx];
+        b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        b.subresourceRange.levelCount = 1U;
+        b.subresourceRange.layerCount = 1U;
+        b.oldLayout                   = VK_IMAGE_LAYOUT_UNDEFINED; // the backbuffer's prior contents are discardable
+        b.newLayout                   = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.dstAccessMask               = VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(m_cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                             nullptr, 1U, &b);
+
+        VkImageBlit blit{};
+        blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        blit.srcSubresource.layerCount = 1U;
+        blit.srcOffsets[1]             = {static_cast<crd::i32>(m_w), static_cast<crd::i32>(m_h), 1};
+        blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        blit.dstSubresource.layerCount = 1U;
+        blit.dstOffsets[1]             = {static_cast<crd::i32>(m_w), static_cast<crd::i32>(m_h), 1};
+        vkCmdBlitImage(m_cmd, t.src_image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, m_images[idx],
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1U, &blit, VK_FILTER_NEAREST);
+
+        if (overlay != nullptr) // RET-5: composite the overlay ONTO the blitted backbuffer (dynamic rendering, LOAD)
+        {
+            // the swapchain image needs a VIEW for rendering — created lazily per image, cached, freed on resize
+            if (m_views[idx] == VK_NULL_HANDLE)
+            {
+                VkImageViewCreateInfo vci{};
+                vci.sType                       = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+                vci.image                       = m_images[idx];
+                vci.viewType                    = VK_IMAGE_VIEW_TYPE_2D;
+                vci.format                      = m_format;
+                vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                vci.subresourceRange.levelCount = 1U;
+                vci.subresourceRange.layerCount = 1U;
+                if (vkCreateImageView(m_device, &vci, nullptr, &m_views[idx]) != VK_SUCCESS) { return false; }
+            }
+            b.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b.newLayout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            vkCmdPipelineBarrier(m_cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1U, &b);
+            VkRenderingAttachmentInfo att{};
+            att.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            att.imageView   = m_views[idx];
+            att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            att.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD; // the blitted scene stays; the overlay composites on top
+            att.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+            VkRenderingInfo ri{};
+            ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+            ri.renderArea.extent    = {m_w, m_h};
+            ri.layerCount           = 1U;
+            ri.colorAttachmentCount = 1U;
+            ri.pColorAttachments    = &att;
+            vkCmdBeginRendering(m_cmd, &ri);
+            overlay(static_cast<void*>(m_cmd), user); // the backend-aware layer records (ImGui draw data etc.)
+            vkCmdEndRendering(m_cmd);
+            b.oldLayout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            b.newLayout     = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            b.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            b.dstAccessMask = 0;
+            vkCmdPipelineBarrier(m_cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                 VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1U, &b);
+        }
+        else
+        {
+            b.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b.newLayout     = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b.dstAccessMask = 0;
+            vkCmdPipelineBarrier(m_cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0,
+                                 nullptr, 0, nullptr, 1U, &b);
+        }
+        if (vkEndCommandBuffer(m_cmd) != VK_SUCCESS) { return false; }
+
+        const VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        VkSubmitInfo               si{};
+        si.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.waitSemaphoreCount   = 1;
+        si.pWaitSemaphores      = &m_sem_acquire;
+        si.pWaitDstStageMask    = &wait_stage;
+        si.commandBufferCount   = 1;
+        si.pCommandBuffers      = &m_cmd;
+        si.signalSemaphoreCount = 1;
+        si.pSignalSemaphores    = &m_sem_present;
+        if (vkQueueSubmit(m_queue, 1, &si, m_fence) != VK_SUCCESS) { return false; }
+
+        VkPresentInfoKHR pi{};
+        pi.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        pi.waitSemaphoreCount = 1;
+        pi.pWaitSemaphores    = &m_sem_present;
+        pi.swapchainCount     = 1;
+        pi.pSwapchains        = &m_swapchain;
+        pi.pImageIndices      = &idx;
+        const VkResult pr     = vkQueuePresentKHR(m_queue, &pi);
+
+        (void)vkWaitForFences(m_device, 1, &m_fence, VK_TRUE, UINT64_MAX); // full per-frame serialization (v1 pacing)
+        (void)vkResetFences(m_device, 1, &m_fence);
+        if (pr != VK_SUCCESS && pr != VK_SUBOPTIMAL_KHR) { return false; }
+        ++m_frames;
+        return true;
+    }
+
+    [[nodiscard]] bool resize(crd::u32 width, crd::u32 height) override
+    {
+        if (m_surface == VK_NULL_HANDLE) { return false; }
+        vkDeviceWaitIdle(m_device);
+        m_valid = create_swapchain(width, height);
+        return m_valid;
+    }
+
+private:
+    [[nodiscard]] bool create_swapchain(crd::u32 w, crd::u32 h)
+    {
+        VkSurfaceCapabilitiesKHR caps{};
+        if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(m_physical, m_surface, &caps) != VK_SUCCESS) { return false; }
+        // a real window reports its extent; a headless surface reports 0xFFFFFFFF (caller-defined) — clamp the request
+        VkExtent2D extent = caps.currentExtent;
+        if (extent.width == 0xFFFFFFFFU)
+        {
+            const auto clamp_extent = [](crd::u32 v, crd::u32 lo, crd::u32 hi) {
+                if (v < lo) { return lo; }
+                if (v > hi) { return hi; }
+                return v;
+            };
+            extent.width  = clamp_extent(w, caps.minImageExtent.width, caps.maxImageExtent.width);
+            extent.height = clamp_extent(h, caps.minImageExtent.height, caps.maxImageExtent.height);
+        }
+
+        crd::u32 nfmt = 0;
+        vkGetPhysicalDeviceSurfaceFormatsKHR(m_physical, m_surface, &nfmt, nullptr);
+        if (nfmt == 0U || nfmt > 64U) { nfmt = nfmt > 64U ? 64U : nfmt; }
+        VkSurfaceFormatKHR fmts[64];
+        vkGetPhysicalDeviceSurfaceFormatsKHR(m_physical, m_surface, &nfmt, fmts);
+        if (nfmt == 0U) { return false; }
+        VkSurfaceFormatKHR chosen = fmts[0];
+        for (crd::u32 i = 0; i < nfmt; ++i) // prefer an 8-bit RGBA/BGRA UNORM backbuffer (the blit handles swizzle)
+        {
+            if (fmts[i].format == VK_FORMAT_R8G8B8A8_UNORM || fmts[i].format == VK_FORMAT_B8G8R8A8_UNORM)
+            {
+                chosen = fmts[i];
+                break;
+            }
+        }
+
+        VkPresentModeKHR want = VK_PRESENT_MODE_FIFO_KHR; // always available per spec
+        if (m_mode == PresentMode::Mailbox) { want = VK_PRESENT_MODE_MAILBOX_KHR; }
+        if (m_mode == PresentMode::Immediate) { want = VK_PRESENT_MODE_IMMEDIATE_KHR; }
+        if (want != VK_PRESENT_MODE_FIFO_KHR)
+        {
+            crd::u32         npm = 0;
+            VkPresentModeKHR pms[16];
+            vkGetPhysicalDeviceSurfacePresentModesKHR(m_physical, m_surface, &npm, nullptr);
+            npm = npm > 16U ? 16U : npm;
+            vkGetPhysicalDeviceSurfacePresentModesKHR(m_physical, m_surface, &npm, pms);
+            bool offered = false;
+            for (crd::u32 i = 0; i < npm; ++i) { offered = offered || pms[i] == want; }
+            if (!offered) { want = VK_PRESENT_MODE_FIFO_KHR; } // a pacing preference never fails creation
+        }
+
+        crd::u32 count = caps.minImageCount + 1U;
+        if (caps.maxImageCount > 0U && count > caps.maxImageCount) { count = caps.maxImageCount; }
+
+        VkSwapchainCreateInfoKHR sci{};
+        sci.sType            = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+        sci.surface          = m_surface;
+        sci.minImageCount    = count;
+        sci.imageFormat      = chosen.format;
+        sci.imageColorSpace  = chosen.colorSpace;
+        sci.imageExtent      = extent;
+        sci.imageArrayLayers = 1;
+        sci.imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        sci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        sci.preTransform     = caps.currentTransform;
+        sci.compositeAlpha   = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+        sci.presentMode      = want;
+        sci.clipped          = VK_TRUE;
+        sci.oldSwapchain     = m_swapchain;
+        VkSwapchainKHR next  = VK_NULL_HANDLE;
+        if (vkCreateSwapchainKHR(m_device, &sci, nullptr, &next) != VK_SUCCESS) { return false; }
+        if (m_swapchain != VK_NULL_HANDLE) { vkDestroySwapchainKHR(m_device, m_swapchain, nullptr); }
+        m_swapchain = next;
+
+        destroy_backbuffer_views(); // stale views die with the old swapchain's images (resize/recreate)
+        m_n_images = 16U;
+        if (vkGetSwapchainImagesKHR(m_device, m_swapchain, &m_n_images, m_images) != VK_SUCCESS) { return false; }
+        m_format = chosen.format; // RET-5: overlay rendering + ImGui pipeline creation key on this
+        m_w      = extent.width;
+        m_h      = extent.height;
+        return true;
+    }
+
+    void destroy_backbuffer_views() noexcept
+    {
+        for (crd::u32 i = 0; i < 16U; ++i)
+        {
+            if (m_views[i] != VK_NULL_HANDLE)
+            {
+                vkDestroyImageView(m_device, m_views[i], nullptr);
+                m_views[i] = VK_NULL_HANDLE;
+            }
+        }
+    }
+
+    VkInstance       m_instance    = VK_NULL_HANDLE;
+    VkPhysicalDevice m_physical    = VK_NULL_HANDLE;
+    VkDevice         m_device      = VK_NULL_HANDLE;
+    VkQueue          m_queue       = VK_NULL_HANDLE;
+    crd::u32         m_family      = 0;
+    PresentMode      m_mode        = PresentMode::Fifo;
+    VkSurfaceKHR     m_surface     = VK_NULL_HANDLE;
+    VkSwapchainKHR   m_swapchain   = VK_NULL_HANDLE;
+    VkImage          m_images[16]  = {};
+    VkImageView      m_views[16]   = {}; // RET-5: lazy per-backbuffer views for overlay rendering
+    VkFormat         m_format      = VK_FORMAT_UNDEFINED;
+    crd::u32         m_n_images    = 0;
+    VkCommandPool    m_pool        = VK_NULL_HANDLE;
+    VkCommandBuffer  m_cmd         = VK_NULL_HANDLE;
+    VkSemaphore      m_sem_acquire = VK_NULL_HANDLE;
+    VkSemaphore      m_sem_present = VK_NULL_HANDLE;
+    VkFence          m_fence       = VK_NULL_HANDLE;
+    crd::u32         m_w           = 0;
+    crd::u32         m_h           = 0;
+    crd::u64         m_frames      = 0;
+    bool             m_valid       = false;
 };
 
 // A linked VS+FS as two `VkShaderEXT` + an (empty, for the trivial shaders) pipeline layout. Built once, drawn many.
@@ -290,19 +679,27 @@ private:
 class VulkanStorageBuffer final : public IStorageBuffer
 {
 public:
-    VulkanStorageBuffer(VkDevice device, VkBuffer buf, VkDeviceMemory buf_mem, VkBuffer readback,
-                        VkDeviceMemory readback_mem, void* mapped, crd::u32 size_bytes) noexcept
-        : m_device(device), m_buf(buf), m_buf_mem(buf_mem), m_readback(readback), m_readback_mem(readback_mem),
-          m_mapped(mapped), m_size(size_bytes)
+    VulkanStorageBuffer(VkDevice device, const BufferBundle& buf, const BufferBundle& readback,
+                        crd::u32 size_bytes) noexcept
+        : m_device(device), m_buf(buf), m_readback(readback), m_size(size_bytes)
     {
     }
     ~VulkanStorageBuffer() override
     {
-        if (m_readback_mem != VK_NULL_HANDLE) { vkUnmapMemory(m_device, m_readback_mem); }
-        if (m_buf != VK_NULL_HANDLE) { vkDestroyBuffer(m_device, m_buf, nullptr); }
-        if (m_readback != VK_NULL_HANDLE) { vkDestroyBuffer(m_device, m_readback, nullptr); }
-        if (m_buf_mem != VK_NULL_HANDLE) { vkFreeMemory(m_device, m_buf_mem, nullptr); }
-        if (m_readback_mem != VK_NULL_HANDLE) { vkFreeMemory(m_device, m_readback_mem, nullptr); }
+        if (m_registry != nullptr) // RET-4 pt 5: leave the live-storage registry (defrag never sees a dead buffer)
+        {
+            for (crd::usize i = 0; i < m_registry->size(); ++i)
+            {
+                if ((*m_registry)[i] == this)
+                {
+                    (*m_registry)[i] = (*m_registry)[m_registry->size() - 1U];
+                    m_registry->pop_back();
+                    break;
+                }
+            }
+        }
+        destroy_buffer_bundle(m_device, m_buf);
+        destroy_buffer_bundle(m_device, m_readback);
     }
     VulkanStorageBuffer(const VulkanStorageBuffer&)            = delete;
     VulkanStorageBuffer& operator=(const VulkanStorageBuffer&) = delete;
@@ -312,23 +709,30 @@ public:
     [[nodiscard]] crd::u32 size_bytes() const noexcept override { return m_size; }
     [[nodiscard]] crd::u32 read_u32(crd::u32 index) const noexcept override
     {
-        if (m_mapped == nullptr || (index + 1U) * 4U > m_size) { return 0U; }
-        crd::u32 v = 0U;
-        const auto* bytes = static_cast<const crd::u8*>(m_mapped) + static_cast<crd::usize>(index) * 4U;
+        if (m_readback.mapped == nullptr || (index + 1U) * 4U > m_size) { return 0U; }
+        crd::u32    v     = 0U;
+        const auto* bytes = static_cast<const crd::u8*>(m_readback.mapped) + static_cast<crd::usize>(index) * 4U;
         for (int i = 0; i < 4; ++i) { v |= static_cast<crd::u32>(bytes[i]) << (8 * i); }
         return v;
     }
-    [[nodiscard]] VkBuffer buf() const noexcept { return m_buf; }
-    [[nodiscard]] VkBuffer readback() const noexcept { return m_readback; }
+    [[nodiscard]] VkBuffer buf() const noexcept { return m_buf.buffer; }
+    [[nodiscard]] VkBuffer readback() const noexcept { return m_readback.buffer; }
+
+    // RET-4 pt 5 (S7 relocation): install the freshly-copied device bundle and destroy the old one. The context's
+    // defrag pass calls this AFTER the copy submit completed (idle-gated) — nothing in flight references the old.
+    void swap_device_bundle(const BufferBundle& moved) noexcept
+    {
+        destroy_buffer_bundle(m_device, m_buf);
+        m_buf = moved;
+    }
+    void set_registry(crd::containers::Array<VulkanStorageBuffer*>* registry) noexcept { m_registry = registry; }
 
 private:
-    VkDevice       m_device       = VK_NULL_HANDLE;
-    VkBuffer       m_buf          = VK_NULL_HANDLE;
-    VkDeviceMemory m_buf_mem      = VK_NULL_HANDLE;
-    VkBuffer       m_readback     = VK_NULL_HANDLE;
-    VkDeviceMemory m_readback_mem = VK_NULL_HANDLE;
-    void*          m_mapped       = nullptr;
-    crd::u32       m_size         = 0;
+    VkDevice                                    m_device = VK_NULL_HANDLE;
+    BufferBundle                                m_buf{};
+    BufferBundle                                m_readback{};
+    crd::u32                                    m_size     = 0;
+    crd::containers::Array<VulkanStorageBuffer*>* m_registry = nullptr; // the context's live-storage list (S7 defrag)
 };
 
 // B2: a sampled texture — a device-local image+view (owned) sampled through the context's default sampler in draw_textured.
@@ -339,21 +743,47 @@ public:
         : m_device(device), m_img(img), m_w(w), m_h(h)
     {
     }
-    ~VulkanTexture() override { destroy_image_bundle(m_device, m_img); }
+    ~VulkanTexture() override
+    {
+        if (m_registry != nullptr) // RET-4 pt 5: leave the live-texture registry (defrag never sees a dead texture)
+        {
+            for (crd::usize i = 0; i < m_registry->size(); ++i)
+            {
+                if ((*m_registry)[i] == this)
+                {
+                    (*m_registry)[i] = (*m_registry)[m_registry->size() - 1U];
+                    m_registry->pop_back();
+                    break;
+                }
+            }
+        }
+        destroy_image_bundle(m_device, m_img);
+    }
     VulkanTexture(const VulkanTexture&)            = delete;
     VulkanTexture& operator=(const VulkanTexture&) = delete;
     VulkanTexture(VulkanTexture&&)                 = delete;
     VulkanTexture& operator=(VulkanTexture&&)      = delete;
 
-    [[nodiscard]] crd::u32    width() const noexcept override { return m_w; }
-    [[nodiscard]] crd::u32    height() const noexcept override { return m_h; }
-    [[nodiscard]] VkImageView view() const noexcept { return m_img.view; }
+    [[nodiscard]] crd::u32           width() const noexcept override { return m_w; }
+    [[nodiscard]] crd::u32           height() const noexcept override { return m_h; }
+    [[nodiscard]] VkImageView        view() const noexcept { return m_img.view; }
+    [[nodiscard]] const ImageBundle& bundle() const noexcept { return m_img; } // RET-4 pt 5: self-describing
+
+    // RET-4 pt 5 (S7 image relocation): install the freshly-copied bundle, destroy the old. Called by the defrag
+    // pass AFTER the copy submit completed; views are read per-draw, so nothing stale survives a swap between draws.
+    void swap_bundle(const ImageBundle& moved) noexcept
+    {
+        destroy_image_bundle(m_device, m_img);
+        m_img = moved;
+    }
+    void set_registry(crd::containers::Array<VulkanTexture*>* registry) noexcept { m_registry = registry; }
 
 private:
-    VkDevice    m_device = VK_NULL_HANDLE;
-    ImageBundle m_img{};
-    crd::u32    m_w = 0;
-    crd::u32    m_h = 0;
+    VkDevice                               m_device = VK_NULL_HANDLE;
+    ImageBundle                            m_img{};
+    crd::u32                               m_w = 0;
+    crd::u32                               m_h = 0;
+    crd::containers::Array<VulkanTexture*>* m_registry = nullptr; // the context's live-texture list (S7 defrag)
 };
 
 inline constexpr crd::u32 kMaxGBuffer = 8U; // B5: max deferred G-buffer colour attachments
@@ -363,19 +793,21 @@ inline constexpr crd::u32 kMaxGBuffer = 8U; // B5: max deferred G-buffer colour 
 class VulkanGBufferTarget final : public IGBufferTarget
 {
 public:
-    VulkanGBufferTarget(VkDevice device, crd::u32 n, const ImageBundle* imgs, const VkBuffer* bufs,
-                        const VkDeviceMemory* mems, void* const* mapped, crd::u32 w, crd::u32 h) noexcept
+    VulkanGBufferTarget(VkDevice device, crd::u32 n, const ImageBundle* imgs, const BufferBundle* readbacks,
+                        crd::u32 w, crd::u32 h) noexcept
         : m_device(device), m_n(n), m_w(w), m_h(h)
     {
-        for (crd::u32 i = 0; i < n; ++i) { m_img[i] = imgs[i]; m_buf[i] = bufs[i]; m_mem[i] = mems[i]; m_mapped[i] = mapped[i]; }
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            m_img[i] = imgs[i];
+            m_rb[i]  = readbacks[i];
+        }
     }
     ~VulkanGBufferTarget() override
     {
         for (crd::u32 i = 0; i < m_n; ++i)
         {
-            if (m_mapped[i] != nullptr) { vkUnmapMemory(m_device, m_mem[i]); }
-            if (m_buf[i] != VK_NULL_HANDLE) { vkDestroyBuffer(m_device, m_buf[i], nullptr); }
-            if (m_mem[i] != VK_NULL_HANDLE) { vkFreeMemory(m_device, m_mem[i], nullptr); }
+            destroy_buffer_bundle(m_device, m_rb[i]);
             destroy_image_bundle(m_device, m_img[i]);
         }
     }
@@ -389,8 +821,8 @@ public:
     [[nodiscard]] crd::u32 attachment_count() const noexcept override { return m_n; }
     [[nodiscard]] crd::u32 read_pixel(crd::u32 attachment, crd::u32 x, crd::u32 y) const noexcept override
     {
-        if (attachment >= m_n || m_mapped[attachment] == nullptr || x >= m_w || y >= m_h) { return 0U; }
-        const auto*      bytes  = static_cast<const crd::u8*>(m_mapped[attachment]);
+        if (attachment >= m_n || m_rb[attachment].mapped == nullptr || x >= m_w || y >= m_h) { return 0U; }
+        const auto*      bytes  = static_cast<const crd::u8*>(m_rb[attachment].mapped);
         const crd::usize offset = (static_cast<crd::usize>(y) * m_w + x) * 4U;
         crd::u32         px     = 0U;
         for (int i = 0; i < 4; ++i) { px |= static_cast<crd::u32>(bytes[offset + static_cast<crd::usize>(i)]) << (8 * i); }
@@ -398,25 +830,28 @@ public:
     }
     [[nodiscard]] VkImageView view(crd::u32 i) const noexcept { return m_img[i].view; }
     [[nodiscard]] VkImage     image(crd::u32 i) const noexcept { return m_img[i].image; }
-    [[nodiscard]] VkBuffer    readback(crd::u32 i) const noexcept { return m_buf[i]; }
+    [[nodiscard]] VkBuffer    readback(crd::u32 i) const noexcept { return m_rb[i].buffer; }
 
 private:
-    VkDevice       m_device = VK_NULL_HANDLE;
-    crd::u32       m_n      = 0;
-    ImageBundle    m_img[kMaxGBuffer]{};
-    VkBuffer       m_buf[kMaxGBuffer]{};
-    VkDeviceMemory m_mem[kMaxGBuffer]{};
-    void*          m_mapped[kMaxGBuffer]{};
-    crd::u32       m_w = 0;
-    crd::u32       m_h = 0;
+    VkDevice     m_device = VK_NULL_HANDLE;
+    crd::u32     m_n      = 0;
+    ImageBundle  m_img[kMaxGBuffer]{};
+    BufferBundle m_rb[kMaxGBuffer]{}; // pooled host-visible readbacks (RET-4 pt 4)
+    crd::u32     m_w = 0;
+    crd::u32     m_h = 0;
 };
 
 class VulkanRasterContext final : public IRasterContext
 {
 public:
+    [[nodiscard]] crd::u32 gpu_block_count() const noexcept { return m_gpu_alloc->block_count(); } // RET-4 diagnostic
+    crd::u32               gpu_compact() noexcept { return m_gpu_alloc->compact(); }               // RET-4 S7 verb
+
     VulkanRasterContext(VulkanGpuContext& ctx, VkCommandPool pool, const ShaderObjectApi& api) noexcept
         : m_ctx(&ctx), m_device(ctx.vk_device()), m_queue(ctx.graphics_queue()), m_pool(pool), m_api(api)
     {
+        // RET-4 pt 2 (ADR-0085 S6 absorbed): pooled device-memory suballocation for every image bundle
+        m_gpu_alloc = std::make_unique<VulkanGpuAllocator>(ctx.vk_physical_device(), m_device);
         if (ctx.fragment_shading_rate()) // B1-e: the VRS dynamic-state setter (extension fn ⇒ vkGetDeviceProcAddr)
         {
             m_set_vrs = reinterpret_cast<PFN_vkCmdSetFragmentShadingRateKHR>(
@@ -441,7 +876,7 @@ public:
         const VkShaderStageFlags vs_fs = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
                                          | (m_ctx->mesh_shader() ? static_cast<VkShaderStageFlags>(VK_SHADER_STAGE_MESH_BIT_EXT) : 0U);
         VkDescriptorSetLayoutBinding slb[4]{};
-        slb[0].binding = 0U; slb[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; slb[0].descriptorCount = 1U;            slb[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        slb[0].binding = 0U; slb[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; slb[0].descriptorCount = 1U;            slb[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT; // GEO-1: + VERTEX for vertex pulling
         slb[1].binding = 1U; slb[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;  slb[1].descriptorCount = 1U;            slb[1].stageFlags = vs_fs;
         slb[2].binding = 2U; slb[2].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;        slb[2].descriptorCount = 1U;            slb[2].stageFlags = vs_fs;
         slb[3].binding = 3U; slb[3].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;  slb[3].descriptorCount = kBindlessMax; slb[3].stageFlags = vs_fs;
@@ -562,32 +997,180 @@ public:
     [[nodiscard]] std::unique_ptr<IStorageBuffer> create_storage_buffer(crd::u32 size_bytes) override
     {
         if (size_bytes == 0U) { return nullptr; }
-        VkBuffer       buf     = VK_NULL_HANDLE;
-        VkDeviceMemory buf_mem = VK_NULL_HANDLE;
+        BufferBundle buf;
         if (!make_buffer(size_bytes,
                          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT
                              | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, buf, buf_mem, nullptr))
+                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, buf))
         {
             return nullptr;
         }
-        VkBuffer       rb     = VK_NULL_HANDLE;
-        VkDeviceMemory rb_mem = VK_NULL_HANDLE;
-        void*          mapped = nullptr;
+        BufferBundle rb;
         if (!make_buffer(size_bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, rb, rb_mem, &mapped))
+                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, rb))
         {
-            vkDestroyBuffer(m_device, buf, nullptr);
-            vkFreeMemory(m_device, buf_mem, nullptr);
+            destroy_buffer_bundle(m_device, buf);
             return nullptr;
         }
         VkCommandBuffer cmd = begin_cmd(); // zero-initialise the SSBO
         if (cmd != VK_NULL_HANDLE)
         {
-            vkCmdFillBuffer(cmd, buf, 0, size_bytes, 0U);
+            vkCmdFillBuffer(cmd, buf.buffer, 0, size_bytes, 0U);
             end_and_wait(cmd);
         }
-        return std::make_unique<VulkanStorageBuffer>(m_device, buf, buf_mem, rb, rb_mem, mapped, size_bytes);
+        auto sb = std::make_unique<VulkanStorageBuffer>(m_device, buf, rb, size_bytes);
+        sb->set_registry(&m_live_storage); // RET-4 pt 5: the S7 defrag pass walks the live set
+        m_live_storage.push_back(sb.get());
+        return sb;
+    }
+
+    // RET-4 pt 5: copy the SSBO's CURRENT device contents into its host-visible readback, so `read_u32` reflects
+    // them WITHOUT a draw (upload_storage's twin — compute/defrag verification reads ride this).
+    [[nodiscard]] bool download_storage(IStorageBuffer& storage) override
+    {
+        auto&           sb  = static_cast<VulkanStorageBuffer&>(storage);
+        VkCommandBuffer cmd = begin_cmd();
+        if (cmd == VK_NULL_HANDLE) { return false; }
+        VkBufferCopy region{};
+        region.size = sb.size_bytes();
+        vkCmdCopyBuffer(cmd, sb.buf(), sb.readback(), 1U, &region);
+        end_and_wait(cmd); // queue idle + coherent readback ⇒ the bytes are visible to read_u32 on return
+        return true;
+    }
+
+    // RET-4 pt 5 (ADR-0085 S7 relocation, absorbed): move every live resource's DEVICE allocation to a fresh
+    // suballocation (recreate + GPU copy + swap inside the bundle) — the fragmentation-healing primitive. Idle-gated
+    // by construction (every submit here is end_and_wait; nothing external is in flight between draws — gpu-context's
+    // per-draw descriptor model caches nothing, so between-draw relocation is structurally safe). Returns relocations.
+    [[nodiscard]] crd::u32 defragment_resources()
+    {
+        crd::u32 relocations = 0;
+        for (crd::usize i = 0; i < m_live_storage.size(); ++i) // ── storage buffers ───────────────────────────────
+        {
+            VulkanStorageBuffer* sb = m_live_storage[i];
+            BufferBundle         moved;
+            if (!make_buffer(sb->size_bytes(),
+                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT
+                                 | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, moved))
+            {
+                continue; // no room to relocate this one — the pass degrades gracefully, never destructively
+            }
+            VkCommandBuffer cmd = begin_cmd();
+            if (cmd == VK_NULL_HANDLE)
+            {
+                destroy_buffer_bundle(m_device, moved);
+                continue;
+            }
+            VkBufferCopy region{};
+            region.size = sb->size_bytes();
+            vkCmdCopyBuffer(cmd, sb->buf(), moved.buffer, 1U, &region);
+            end_and_wait(cmd);             // the copy completed — the old allocation has no readers left
+            sb->swap_device_bundle(moved); // destroys the old bundle, installs the relocated one
+            ++relocations;
+        }
+        for (crd::usize i = 0; i < m_live_textures.size(); ++i) // ── sampled textures (self-describing bundles) ────
+        {
+            VulkanTexture&     tex = *m_live_textures[i];
+            const ImageBundle& old = tex.bundle();
+            // only SELF-DESCRIBING single-layer 2D bundles relocate (cube/3D/array textures retain no layer info —
+            // their relocation lands with the streaming-residency work that needs it); the guard is the format field
+            if (old.format == VK_FORMAT_UNDEFINED) { continue; }
+            // the copy needs TRANSFER on both sides; a texture without TRANSFER_SRC cannot be read back — skip
+            if ((old.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) == 0U) { continue; }
+            ImageBundle moved{};
+            if (!create_image_bundle(old.width, old.height, old.samples, old.format, old.aspect, old.usage, moved,
+                                     old.mip_levels))
+            {
+                continue;
+            }
+            VkCommandBuffer cmd = begin_cmd();
+            if (cmd == VK_NULL_HANDLE)
+            {
+                destroy_image_bundle(m_device, moved);
+                continue;
+            }
+            const auto full_barrier = [&](VkImage image, VkImageLayout from, VkImageLayout to, VkAccessFlags sa,
+                                          VkAccessFlags da) {
+                VkImageMemoryBarrier b{};
+                b.sType                       = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                b.oldLayout                   = from;
+                b.newLayout                   = to;
+                b.srcQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
+                b.dstQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
+                b.image                       = image;
+                b.subresourceRange.aspectMask = old.aspect;
+                b.subresourceRange.levelCount = old.mip_levels;
+                b.subresourceRange.layerCount = 1U;
+                b.srcAccessMask               = sa;
+                b.dstAccessMask               = da;
+                // ALL_COMMANDS both sides: every access mask is legal, and this single-shot pass is idle-gated —
+                // precision buys nothing here (the narrow-stage version tripped dstAccess SHADER_READ under TRANSFER)
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0,
+                                     nullptr, 0, nullptr, 1U, &b);
+            };
+            // post-create textures live in SHADER_READ_ONLY (every upload path ends there)
+            full_barrier(old.image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                         VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+            full_barrier(moved.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+                         VK_ACCESS_TRANSFER_WRITE_BIT);
+            VkImageCopy regions[16] = {};
+            crd::u32    mw          = old.width;
+            crd::u32    mh          = old.height;
+            for (crd::u32 lvl = 0; lvl < old.mip_levels && lvl < 16U; ++lvl)
+            {
+                regions[lvl].srcSubresource.aspectMask = old.aspect;
+                regions[lvl].srcSubresource.mipLevel   = lvl;
+                regions[lvl].srcSubresource.layerCount = 1U;
+                regions[lvl].dstSubresource            = regions[lvl].srcSubresource;
+                regions[lvl].extent                    = {mw, mh, 1U};
+                mw                                     = mw > 1U ? mw / 2U : 1U;
+                mh                                     = mh > 1U ? mh / 2U : 1U;
+            }
+            vkCmdCopyImage(cmd, old.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, moved.image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, old.mip_levels, regions);
+            full_barrier(moved.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                         VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+            end_and_wait(cmd);     // the copy completed — the old image has no readers left
+            tex.swap_bundle(moved); // destroys the old bundle, installs the relocated one (views read per-draw)
+            ++relocations;
+        }
+        return relocations;
+    }
+
+    // GEO-1: staged CPU→SSBO upload (vertex pulling — a cooked vertex stream the VS fetches by VertexIndex). A transient
+    // host-visible staging buffer + vkCmdCopyBuffer; end_and_wait (queue idle) makes the bytes visible before any draw.
+    [[nodiscard]] bool upload_storage(IStorageBuffer& storage, crd::u32 byte_offset, const void* data,
+                                      crd::u32 size_bytes) override
+    {
+        auto& sb = static_cast<VulkanStorageBuffer&>(storage);
+        if (data == nullptr || size_bytes == 0U) { return false; }
+        if (static_cast<crd::u64>(byte_offset) + size_bytes > sb.size_bytes()) { return false; }
+
+        BufferBundle stg;
+        if (!make_buffer(size_bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stg)
+            || stg.mapped == nullptr)
+        {
+            destroy_buffer_bundle(m_device, stg);
+            return false;
+        }
+        std::memcpy(stg.mapped, data, size_bytes);
+
+        bool            ok  = false;
+        VkCommandBuffer cmd = begin_cmd();
+        if (cmd != VK_NULL_HANDLE)
+        {
+            VkBufferCopy region{};
+            region.srcOffset = 0;
+            region.dstOffset = byte_offset;
+            region.size      = size_bytes;
+            vkCmdCopyBuffer(cmd, stg.buffer, sb.buf(), 1U, &region);
+            end_and_wait(cmd); // queue idle ⇒ transfer complete + visible before any subsequent draw submission
+            ok = true;
+        }
+        destroy_buffer_bundle(m_device, stg);
+        return ok;
     }
 
     void clear(IRasterTarget& target, ClearColor color) override
@@ -1446,21 +2029,17 @@ public:
             return nullptr;
         }
         // Upload the pixels through a host-visible staging buffer (device-local sampled images are not host-mappable).
-        const VkDeviceSize bytes   = static_cast<VkDeviceSize>(width) * height * 4U;
-        VkBuffer           staging = VK_NULL_HANDLE;
-        VkDeviceMemory     smem    = VK_NULL_HANDLE;
-        void*              mapped  = nullptr;
+        const VkDeviceSize bytes = static_cast<VkDeviceSize>(width) * height * 4U;
+        BufferBundle       staging;
         if (!make_buffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, staging, smem,
-                         &mapped)
-            || mapped == nullptr)
+                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, staging)
+            || staging.mapped == nullptr)
         {
             destroy_image_bundle(m_device, img);
-            if (staging != VK_NULL_HANDLE) { vkDestroyBuffer(m_device, staging, nullptr); }
-            if (smem != VK_NULL_HANDLE) { vkFreeMemory(m_device, smem, nullptr); }
+            destroy_buffer_bundle(m_device, staging);
             return nullptr;
         }
-        std::memcpy(mapped, rgba, static_cast<size_t>(bytes));
+        std::memcpy(staging.mapped, rgba, static_cast<size_t>(bytes));
 
         VkCommandBuffer cmd = begin_cmd();
         if (cmd != VK_NULL_HANDLE)
@@ -1471,15 +2050,17 @@ public:
             region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             region.imageSubresource.layerCount = 1U;
             region.imageExtent                 = {width, height, 1U};
-            vkCmdCopyBufferToImage(cmd, staging, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1U, &region);
+            vkCmdCopyBufferToImage(cmd, staging.buffer, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1U, &region);
             transition(cmd, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                        VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
             end_and_wait(cmd);
         }
-        vkDestroyBuffer(m_device, staging, nullptr);
-        vkFreeMemory(m_device, smem, nullptr);
-        return std::make_unique<VulkanTexture>(m_device, img, width, height);
+        destroy_buffer_bundle(m_device, staging);
+        auto tex = std::make_unique<VulkanTexture>(m_device, img, width, height);
+        tex->set_registry(&m_live_textures); // RET-4 pt 5: the S7 image-defrag pass walks the live set
+        m_live_textures.push_back(tex.get());
+        return tex;
     }
 
     // B16: a mip-mapped RGBA8 texture — upload level 0, then vkCmdBlitImage down the pyramid (box/linear filter). The default
@@ -1497,20 +2078,17 @@ public:
         {
             return nullptr;
         }
-        const VkDeviceSize bytes   = static_cast<VkDeviceSize>(width) * height * 4U;
-        VkBuffer           staging = VK_NULL_HANDLE;
-        VkDeviceMemory     smem    = VK_NULL_HANDLE;
-        void*              mapped  = nullptr;
+        const VkDeviceSize bytes = static_cast<VkDeviceSize>(width) * height * 4U;
+        BufferBundle       staging;
         if (!make_buffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, staging, smem, &mapped)
-            || mapped == nullptr)
+                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, staging)
+            || staging.mapped == nullptr)
         {
             destroy_image_bundle(m_device, img);
-            if (staging != VK_NULL_HANDLE) { vkDestroyBuffer(m_device, staging, nullptr); }
-            if (smem != VK_NULL_HANDLE) { vkFreeMemory(m_device, smem, nullptr); }
+            destroy_buffer_bundle(m_device, staging);
             return nullptr;
         }
-        std::memcpy(mapped, rgba, static_cast<size_t>(bytes));
+        std::memcpy(staging.mapped, rgba, static_cast<size_t>(bytes));
 
         const auto mbar = [&](VkCommandBuffer c, VkImageLayout from, VkImageLayout to, VkAccessFlags sa, VkAccessFlags da,
                               VkPipelineStageFlags ss, VkPipelineStageFlags ds, crd::u32 level, crd::u32 count) {
@@ -1539,7 +2117,7 @@ public:
             region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             region.imageSubresource.layerCount = 1U;
             region.imageExtent                 = {width, height, 1U};
-            vkCmdCopyBufferToImage(cmd, staging, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1U, &region);
+            vkCmdCopyBufferToImage(cmd, staging.buffer, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1U, &region);
 
             crd::i32 mw = static_cast<crd::i32>(width);
             crd::i32 mh = static_cast<crd::i32>(height);
@@ -1572,9 +2150,116 @@ public:
                  VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, mips - 1U, 1U);
             end_and_wait(cmd);
         }
-        vkDestroyBuffer(m_device, staging, nullptr);
-        vkFreeMemory(m_device, smem, nullptr);
-        return std::make_unique<VulkanTexture>(m_device, img, width, height);
+        destroy_buffer_bundle(m_device, staging);
+        auto tex = std::make_unique<VulkanTexture>(m_device, img, width, height);
+        tex->set_registry(&m_live_textures); // RET-4 pt 5: the S7 image-defrag pass walks the live set
+        m_live_textures.push_back(tex.get());
+        return tex;
+    }
+
+    // GEO-3 stage 4 / RET-3: the cooked chain uploads VERBATIM (one copy region per level, no blits — the cook's
+    // linear-space-filtered mips are authoritative); `srgb` picks the sRGB format so sampling hardware-decodes.
+    [[nodiscard]] std::unique_ptr<ITexture> create_texture_from_mips(crd::u32 width, crd::u32 height, crd::u32 mip_count,
+                                                                    const void* const* mips, bool srgb) override
+    {
+        if (width == 0U || height == 0U || mip_count == 0U || mip_count > 16U || mips == nullptr) { return nullptr; }
+        for (crd::u32 i = 0; i < mip_count; ++i)
+        {
+            if (mips[i] == nullptr) { return nullptr; }
+        }
+        const VkFormat fmt = srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+        ImageBundle    img{};
+        if (!create_image_bundle(width, height, VK_SAMPLE_COUNT_1_BIT, fmt, VK_IMAGE_ASPECT_COLOR_BIT,
+                                 VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, img, mip_count))
+        {
+            return nullptr;
+        }
+
+        // one staging buffer holding every level back to back
+        VkDeviceSize total = 0;
+        {
+            crd::u32 mw = width;
+            crd::u32 mh = height;
+            for (crd::u32 i = 0; i < mip_count; ++i)
+            {
+                total += static_cast<VkDeviceSize>(mw) * mh * 4U;
+                mw = mw > 1U ? mw / 2U : 1U;
+                mh = mh > 1U ? mh / 2U : 1U;
+            }
+        }
+        BufferBundle staging;
+        if (!make_buffer(total, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, staging)
+            || staging.mapped == nullptr)
+        {
+            destroy_image_bundle(m_device, img);
+            destroy_buffer_bundle(m_device, staging);
+            return nullptr;
+        }
+
+        VkBufferImageCopy regions[16] = {};
+        {
+            crd::u8*     dst = static_cast<crd::u8*>(staging.mapped);
+            VkDeviceSize off = 0;
+            crd::u32     mw  = width;
+            crd::u32     mh  = height;
+            for (crd::u32 i = 0; i < mip_count; ++i)
+            {
+                const VkDeviceSize bytes = static_cast<VkDeviceSize>(mw) * mh * 4U;
+                std::memcpy(dst + off, mips[i], static_cast<size_t>(bytes));
+                regions[i].bufferOffset                = off;
+                regions[i].imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                regions[i].imageSubresource.mipLevel   = i;
+                regions[i].imageSubresource.layerCount = 1U;
+                regions[i].imageExtent                 = {mw, mh, 1U};
+                off += bytes;
+                mw = mw > 1U ? mw / 2U : 1U;
+                mh = mh > 1U ? mh / 2U : 1U;
+            }
+        }
+
+        VkCommandBuffer cmd = begin_cmd();
+        if (cmd != VK_NULL_HANDLE)
+        {
+            VkImageMemoryBarrier b{};
+            b.sType                       = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.oldLayout                   = VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout                   = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b.srcQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
+            b.image                       = img.image;
+            b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            b.subresourceRange.levelCount = mip_count;
+            b.subresourceRange.layerCount = 1U;
+            b.dstAccessMask               = VK_ACCESS_TRANSFER_WRITE_BIT;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                                 nullptr, 1U, &b);
+            vkCmdCopyBufferToImage(cmd, staging.buffer, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mip_count,
+                                   regions);
+            b.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
+                                 0, nullptr, 1U, &b);
+            end_and_wait(cmd);
+        }
+        destroy_buffer_bundle(m_device, staging);
+        auto tex = std::make_unique<VulkanTexture>(m_device, img, width, height);
+        tex->set_registry(&m_live_textures); // RET-4 pt 5: the S7 image-defrag pass walks the live set
+        m_live_textures.push_back(tex.get());
+        return tex;
+    }
+
+    // RET-2 (ADR-0105): the present seam — a real window (HWND) or a HEADLESS surface (nullptr) behind one interface.
+    [[nodiscard]] std::unique_ptr<IPresentSurface> create_present_surface(void* native_window, crd::u32 width,
+                                                                          crd::u32 height, PresentMode mode) override
+    {
+        if (!m_ctx->present_capable()) { return nullptr; }
+        if (native_window == nullptr && !m_ctx->headless_surface()) { return nullptr; }
+        auto surface = std::make_unique<VulkanPresentSurface>(*m_ctx, native_window, width, height, mode);
+        if (!surface->valid()) { return nullptr; }
+        return surface;
     }
 
     [[nodiscard]] std::unique_ptr<ITexture> create_texture_dim(TextureKind kind, crd::u32 width, crd::u32 height,
@@ -1638,20 +2323,17 @@ public:
             return nullptr;
         }
 
-        const VkDeviceSize bytes   = static_cast<VkDeviceSize>(width) * height * depth * layers * 4U;
-        VkBuffer           staging = VK_NULL_HANDLE;
-        VkDeviceMemory     smem    = VK_NULL_HANDLE;
-        void*              mapped  = nullptr;
+        const VkDeviceSize bytes = static_cast<VkDeviceSize>(width) * height * depth * layers * 4U;
+        BufferBundle       staging;
         if (!make_buffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, staging, smem, &mapped)
-            || mapped == nullptr)
+                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, staging)
+            || staging.mapped == nullptr)
         {
             destroy_image_bundle(m_device, img);
-            if (staging != VK_NULL_HANDLE) { vkDestroyBuffer(m_device, staging, nullptr); }
-            if (smem != VK_NULL_HANDLE) { vkFreeMemory(m_device, smem, nullptr); }
+            destroy_buffer_bundle(m_device, staging);
             return nullptr;
         }
-        std::memcpy(mapped, rgba, static_cast<size_t>(bytes));
+        std::memcpy(staging.mapped, rgba, static_cast<size_t>(bytes));
 
         VkCommandBuffer cmd = begin_cmd();
         if (cmd != VK_NULL_HANDLE)
@@ -1663,15 +2345,17 @@ public:
             region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             region.imageSubresource.layerCount = layers; // one copy covers every array layer (layer-major buffer)
             region.imageExtent                 = {width, height, depth};
-            vkCmdCopyBufferToImage(cmd, staging, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1U, &region);
+            vkCmdCopyBufferToImage(cmd, staging.buffer, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1U, &region);
             transition_layers(cmd, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                               VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                               VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, layers);
             end_and_wait(cmd);
         }
-        vkDestroyBuffer(m_device, staging, nullptr);
-        vkFreeMemory(m_device, smem, nullptr);
-        return std::make_unique<VulkanTexture>(m_device, img, width, height);
+        destroy_buffer_bundle(m_device, staging);
+        auto tex = std::make_unique<VulkanTexture>(m_device, img, width, height);
+        tex->set_registry(&m_live_textures); // RET-4 pt 5: the S7 image-defrag pass walks the live set
+        m_live_textures.push_back(tex.get());
+        return tex;
     }
 
     void draw_textured(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, ITexture& texture,
@@ -1692,20 +2376,17 @@ public:
         {
             return nullptr;
         }
-        const VkDeviceSize bytes   = static_cast<VkDeviceSize>(width) * height * 4U; // one float per texel
-        VkBuffer           staging = VK_NULL_HANDLE;
-        VkDeviceMemory     smem    = VK_NULL_HANDLE;
-        void*              mapped  = nullptr;
+        const VkDeviceSize bytes = static_cast<VkDeviceSize>(width) * height * 4U; // one float per texel
+        BufferBundle       staging;
         if (!make_buffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, staging, smem, &mapped)
-            || mapped == nullptr)
+                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, staging)
+            || staging.mapped == nullptr)
         {
             destroy_image_bundle(m_device, img);
-            if (staging != VK_NULL_HANDLE) { vkDestroyBuffer(m_device, staging, nullptr); }
-            if (smem != VK_NULL_HANDLE) { vkFreeMemory(m_device, smem, nullptr); }
+            destroy_buffer_bundle(m_device, staging);
             return nullptr;
         }
-        std::memcpy(mapped, depth, static_cast<size_t>(bytes));
+        std::memcpy(staging.mapped, depth, static_cast<size_t>(bytes));
 
         VkCommandBuffer cmd = begin_cmd();
         if (cmd != VK_NULL_HANDLE)
@@ -1716,15 +2397,17 @@ public:
             region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
             region.imageSubresource.layerCount = 1U;
             region.imageExtent                 = {width, height, 1U};
-            vkCmdCopyBufferToImage(cmd, staging, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1U, &region);
+            vkCmdCopyBufferToImage(cmd, staging.buffer, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1U, &region);
             depth_barrier(cmd, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                           VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
             end_and_wait(cmd);
         }
-        vkDestroyBuffer(m_device, staging, nullptr);
-        vkFreeMemory(m_device, smem, nullptr);
-        return std::make_unique<VulkanTexture>(m_device, img, width, height);
+        destroy_buffer_bundle(m_device, staging);
+        auto tex = std::make_unique<VulkanTexture>(m_device, img, width, height);
+        tex->set_registry(&m_live_textures); // RET-4 pt 5: the S7 image-defrag pass walks the live set
+        m_live_textures.push_back(tex.get());
+        return tex;
     }
 
     void draw_shadow(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, ITexture& depth,
@@ -1841,28 +2524,25 @@ public:
                                                                         crd::u32 attachments) override
     {
         if (width == 0U || height == 0U || attachments < 2U || attachments > kMaxGBuffer) { return nullptr; }
-        ImageBundle    imgs[kMaxGBuffer]{};
-        VkBuffer       bufs[kMaxGBuffer]{};
-        VkDeviceMemory mems[kMaxGBuffer]{};
-        void*          mapped[kMaxGBuffer]{};
+        ImageBundle  imgs[kMaxGBuffer]{};
+        BufferBundle readbacks[kMaxGBuffer]{};
         for (crd::u32 i = 0; i < attachments; ++i)
         {
             if (!create_image_bundle(width, height, VK_SAMPLE_COUNT_1_BIT, kColorFormat, VK_IMAGE_ASPECT_COLOR_BIT,
                                      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, imgs[i])
-                || !create_readback(width, height, bufs[i], mems[i], mapped[i]))
+                || !create_readback(width, height, readbacks[i]))
             {
                 destroy_image_bundle(m_device, imgs[i]);
+                destroy_buffer_bundle(m_device, readbacks[i]);
                 for (crd::u32 j = 0; j < i; ++j) // roll back the attachments already created
                 {
-                    if (mapped[j] != nullptr) { vkUnmapMemory(m_device, mems[j]); }
-                    vkDestroyBuffer(m_device, bufs[j], nullptr);
-                    vkFreeMemory(m_device, mems[j], nullptr);
+                    destroy_buffer_bundle(m_device, readbacks[j]);
                     destroy_image_bundle(m_device, imgs[j]);
                 }
                 return nullptr;
             }
         }
-        return std::make_unique<VulkanGBufferTarget>(m_device, attachments, imgs, bufs, mems, mapped, width, height);
+        return std::make_unique<VulkanGBufferTarget>(m_device, attachments, imgs, readbacks, width, height);
     }
 
     void draw_gbuffer(IGBufferTarget& target, IRasterProgram& program, ClearColor clear_color,
@@ -2228,6 +2908,17 @@ private:
     void set_draw_state(VkCommandBuffer cmd, crd::u32 w, crd::u32 h, crd::u32 samples, bool depth_test,
                         VkCompareOp depth_op, crd::u32 color_attachments = 1U, bool mesh_draw = false) const
     {
+        // RET-4 (caught by the ported ValidationCapture — a latent error in EVERY draw): when the device enables
+        // `tessellationShader` (B4-tess), vkCmdDraw requires the tess stages to be PROVIDED to vkCmdBindShadersEXT —
+        // VK_NULL_HANDLE for non-tessellation draws. Bound here (before every per-draw shader bind) so a tess draw's
+        // later real tcs/tes bind simply overrides the nulls.
+        if (m_ctx->tessellation())
+        {
+            const VkShaderStageFlagBits tess_stages[2] = {VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT,
+                                                          VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT};
+            const VkShaderEXT           tess_null[2]   = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+            m_api.bind(cmd, 2U, tess_stages, tess_null);
+        }
         VkSampleCountFlagBits sc = VK_SAMPLE_COUNT_1_BIT;
         (void)sample_bit(samples, sc);
         const VkViewport vp{0.0F, 0.0F, static_cast<float>(w), static_cast<float>(h), 0.0F, 1.0F};
@@ -2319,19 +3010,29 @@ private:
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         if (vkCreateImage(m_device, &ici, nullptr, &out.image) != VK_SUCCESS) { out = {}; return false; }
 
+        // RET-4 pt 2: image memory comes from the ABSORBED S6 suballocator (pooled blocks, dedicated ≥16 MiB) —
+        // never a per-image vkAllocateMemory (maxMemoryAllocationCount is a real ceiling the old path burned).
+        (void)pd;
         VkMemoryRequirements ir{};
         vkGetImageMemoryRequirements(m_device, out.image, &ir);
-        VkMemoryAllocateInfo iai{};
-        iai.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        iai.allocationSize  = ir.size;
-        iai.memoryTypeIndex = find_memory_type(pd, ir.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        if (iai.memoryTypeIndex == UINT32_MAX || vkAllocateMemory(m_device, &iai, nullptr, &out.mem) != VK_SUCCESS)
+        GpuAllocation alloc;
+        if (!m_gpu_alloc->allocate(ir, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, /*linear=*/false, /*map=*/false, alloc)
+            || vkBindImageMemory(m_device, out.image, alloc.memory, alloc.offset) != VK_SUCCESS)
         {
+            if (alloc.valid()) { m_gpu_alloc->free(alloc); }
             destroy_image_bundle(m_device, out);
             out = {};
             return false;
         }
-        vkBindImageMemory(m_device, out.image, out.mem, 0);
+        out.owner      = m_gpu_alloc.get();
+        out.alloc      = alloc;
+        out.format     = format; // RET-4 pt 5: self-describing bundle (image relocation recreates from these)
+        out.width      = w;
+        out.height     = h;
+        out.mip_levels = mip_levels;
+        out.samples    = samples;
+        out.usage      = usage;
+        out.aspect     = aspect;
 
         VkImageViewCreateInfo vci{};
         vci.sType                       = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -2339,7 +3040,9 @@ private:
         vci.viewType                    = VK_IMAGE_VIEW_TYPE_2D;
         vci.format                      = format;
         vci.subresourceRange.aspectMask = aspect;
-        vci.subresourceRange.levelCount = 1U;
+        // the view exposes EVERY level the image has — a 1-level view over a mipped image silently zeroes any
+        // texelFetch/sample beyond the base (the GEO-3 close gate caught exactly that)
+        vci.subresourceRange.levelCount = mip_levels;
         vci.subresourceRange.layerCount = 1U;
         if (vkCreateImageView(m_device, &vci, nullptr, &out.view) != VK_SUCCESS)
         {
@@ -2352,68 +3055,42 @@ private:
 
     // Create + map the host-visible readback buffer (single-sample RGBA8, w*h*4 bytes).
     // B1-f: create a buffer + memory of `usage`/`props`; maps it when `mapped != nullptr`. Cleans up fully on failure.
-    [[nodiscard]] bool make_buffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags props, VkBuffer& buf,
-                                   VkDeviceMemory& mem, void** mapped) const
+    // RET-4 pt 4: EVERY buffer pools through the S6 suballocator (linear pools, separate from optimal images).
+    // Host-visible requests come back MAPPED (block-base + offset — pooled memory is never per-buffer unmapped).
+    [[nodiscard]] bool make_buffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags props,
+                                   BufferBundle& out) const
     {
-        const VkPhysicalDevice pd = m_ctx->vk_physical_device();
-        VkBufferCreateInfo     bci{};
+        out = {};
+        VkBufferCreateInfo bci{};
         bci.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         bci.size        = size;
         bci.usage       = usage;
         bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        if (vkCreateBuffer(m_device, &bci, nullptr, &buf) != VK_SUCCESS) { buf = VK_NULL_HANDLE; return false; }
+        if (vkCreateBuffer(m_device, &bci, nullptr, &out.buffer) != VK_SUCCESS) { out = {}; return false; }
         VkMemoryRequirements mr{};
-        vkGetBufferMemoryRequirements(m_device, buf, &mr);
-        VkMemoryAllocateInfo mai{};
-        mai.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        mai.allocationSize  = mr.size;
-        mai.memoryTypeIndex = find_memory_type(pd, mr.memoryTypeBits, props);
-        if (mai.memoryTypeIndex == UINT32_MAX || vkAllocateMemory(m_device, &mai, nullptr, &mem) != VK_SUCCESS
-            || vkBindBufferMemory(m_device, buf, mem, 0) != VK_SUCCESS)
+        vkGetBufferMemoryRequirements(m_device, out.buffer, &mr);
+        const bool    want_map = (props & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0U;
+        GpuAllocation alloc;
+        if (!m_gpu_alloc->allocate(mr, props, /*linear=*/true, want_map, alloc)
+            || vkBindBufferMemory(m_device, out.buffer, alloc.memory, alloc.offset) != VK_SUCCESS)
         {
-            if (mem != VK_NULL_HANDLE) { vkFreeMemory(m_device, mem, nullptr); }
-            vkDestroyBuffer(m_device, buf, nullptr);
-            buf = VK_NULL_HANDLE;
-            mem = VK_NULL_HANDLE;
+            if (alloc.valid()) { m_gpu_alloc->free(alloc); }
+            vkDestroyBuffer(m_device, out.buffer, nullptr);
+            out = {};
             return false;
         }
-        if (mapped != nullptr && vkMapMemory(m_device, mem, 0, size, 0, mapped) != VK_SUCCESS) { *mapped = nullptr; }
+        out.mapped = alloc.mapped;
+        out.owner  = m_gpu_alloc.get();
+        out.alloc  = alloc;
         return true;
     }
 
-    [[nodiscard]] bool create_readback(crd::u32 w, crd::u32 h, VkBuffer& buf, VkDeviceMemory& mem, void*& mapped) const
+    [[nodiscard]] bool create_readback(crd::u32 w, crd::u32 h, BufferBundle& out) const
     {
-        const VkPhysicalDevice pd    = m_ctx->vk_physical_device();
-        const VkDeviceSize     bytes = static_cast<VkDeviceSize>(w) * h * 4U;
-        VkBufferCreateInfo     bci{};
-        bci.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bci.size        = bytes;
-        bci.usage       = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-        bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        if (vkCreateBuffer(m_device, &bci, nullptr, &buf) != VK_SUCCESS)
-        {
-            buf = VK_NULL_HANDLE;
-            return false;
-        }
-        VkMemoryRequirements br{};
-        vkGetBufferMemoryRequirements(m_device, buf, &br);
-        VkMemoryAllocateInfo bai{};
-        bai.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        bai.allocationSize  = br.size;
-        bai.memoryTypeIndex = find_memory_type(
-            pd, br.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        if (bai.memoryTypeIndex == UINT32_MAX || vkAllocateMemory(m_device, &bai, nullptr, &mem) != VK_SUCCESS
-            || vkBindBufferMemory(m_device, buf, mem, 0) != VK_SUCCESS
-            || vkMapMemory(m_device, mem, 0, bytes, 0, &mapped) != VK_SUCCESS)
-        {
-            if (mem != VK_NULL_HANDLE) { vkFreeMemory(m_device, mem, nullptr); }
-            vkDestroyBuffer(m_device, buf, nullptr);
-            buf    = VK_NULL_HANDLE;
-            mem    = VK_NULL_HANDLE;
-            mapped = nullptr;
-            return false;
-        }
-        return true;
+        const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * 4U;
+        return make_buffer(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, out)
+            && out.mapped != nullptr;
     }
 
     // Build a colour target at `samples` sample count (+ a B1-d D32 depth buffer when `with_depth`). samples==1 → a plain
@@ -2433,7 +3110,7 @@ private:
         // `color_fmt` is normally RGBA8; the B4-vis-4 visibility buffer passes VK_FORMAT_R32_UINT (read_pixel returns the id).
         ImageBundle color{};
         const VkImageUsageFlags color_usage =
-            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | (ms ? 0U : VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | (ms ? 0U : static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_SRC_BIT));
         if (!create_image_bundle(width, height, sc, color_fmt, VK_IMAGE_ASPECT_COLOR_BIT, color_usage, color))
         {
             return nullptr;
@@ -2460,18 +3137,15 @@ private:
             return nullptr;
         }
 
-        VkBuffer       buf    = VK_NULL_HANDLE;
-        VkDeviceMemory mem    = VK_NULL_HANDLE;
-        void*          mapped = nullptr;
-        if (!create_readback(width, height, buf, mem, mapped))
+        BufferBundle readback;
+        if (!create_readback(width, height, readback))
         {
             destroy_image_bundle(m_device, color);
             destroy_image_bundle(m_device, resolve);
             destroy_image_bundle(m_device, depth);
             return nullptr;
         }
-        return std::make_unique<VulkanRasterTarget>(m_device, color, resolve, depth, buf, mem, mapped, samples, width,
-                                                    height);
+        return std::make_unique<VulkanRasterTarget>(m_device, color, resolve, depth, readback, samples, width, height);
     }
 
     [[nodiscard]] VkCommandBuffer begin_cmd()
@@ -2526,6 +3200,9 @@ private:
     VkQueue                              m_queue   = VK_NULL_HANDLE;
     VkCommandPool                        m_pool    = VK_NULL_HANDLE;
     ShaderObjectApi                      m_api{};
+    // RET-4 pt 2: the absorbed S6 suballocator — every image bundle's memory pools here (mutable: allocation is an
+    // implementation detail of logically-const creation helpers; the allocator is internally serialized).
+    mutable std::unique_ptr<VulkanGpuAllocator> m_gpu_alloc;
     PFN_vkCmdSetFragmentShadingRateKHR   m_set_vrs          = nullptr; // B1-e: null unless VRS is enabled
     PFN_vkCmdSetConservativeRasterizationModeEXT m_set_conservative = nullptr; // B1-f: null unless conservative raster on
     PFN_vkCmdSetExtraPrimitiveOverestimationSizeEXT m_set_overest_size = nullptr; // B1-f: companion overestimate dyn-state
@@ -2533,9 +3210,37 @@ private:
     VkDescriptorPool                     m_desc_pool          = VK_NULL_HANDLE; // pool for draw_storage / draw_textured sets
     VkSampler                            m_default_sampler    = VK_NULL_HANDLE; // B2: the default bilinear/repeat sampler
     VkSampler                            m_cmp_sampler        = VK_NULL_HANDLE; // B2-b: comparison sampler (shadow)
+    // RET-4 pt 5: the live-resource registries the S7 defrag pass walks (resources leave them in their dtors).
+    crd::containers::Array<VulkanStorageBuffer*> m_live_storage{crd::memory::default_allocator()};
+    crd::containers::Array<VulkanTexture*>       m_live_textures{crd::memory::default_allocator()};
 };
 
 } // namespace
+
+crd::u32 vulkan_raster_block_count(const IRasterContext& raster) noexcept
+{
+    return static_cast<const VulkanRasterContext&>(raster).gpu_block_count();
+}
+
+crd::u32 vulkan_raster_compact(IRasterContext& raster) noexcept
+{
+    return static_cast<VulkanRasterContext&>(raster).gpu_compact();
+}
+
+crd::u32 vulkan_raster_defragment(IRasterContext& raster) noexcept
+{
+    return static_cast<VulkanRasterContext&>(raster).defragment_resources();
+}
+
+crd::u32 vulkan_present_image_count(const IPresentSurface& surface) noexcept
+{
+    return static_cast<const VulkanPresentSurface&>(surface).image_count();
+}
+
+crd::u32 vulkan_present_color_format_raw(const IPresentSurface& surface) noexcept
+{
+    return static_cast<crd::u32>(static_cast<const VulkanPresentSurface&>(surface).color_format());
+}
 
 std::unique_ptr<IRasterContext> create_vulkan_raster_context(VulkanGpuContext& ctx, crd::memory::IAllocator* /*alloc*/)
 {

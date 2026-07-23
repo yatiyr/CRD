@@ -3,9 +3,15 @@
 # (ADR-0096 lean-consumer). GUARDED on the prebuilt existing ⇒ skipped where absent. ADR-0098.
 
 set(_wgpu_dir "${CMAKE_SOURCE_DIR}/external/wgpu-native")
-set(_wgpu_lib "${_wgpu_dir}/lib/wgpu_native.dll.lib")
+# CI-1 (2026-07-23): the link library is PLATFORM-SPECIFIC — the vendored prebuilt is Windows-only today, and the
+# old unconditional .dll.lib path made Linux build the module and then fail linking a Windows import library.
+if(WIN32)
+    set(_wgpu_lib "${_wgpu_dir}/lib/wgpu_native.dll.lib")
+else()
+    set(_wgpu_lib "${_wgpu_dir}/lib/libwgpu_native.so")
+endif()
 if(NOT EXISTS "${_wgpu_dir}/include/webgpu/webgpu.h" OR NOT EXISTS "${_wgpu_lib}")
-    message(STATUS "crd-kir-webgpu: wgpu-native prebuilt not found at ${_wgpu_dir} -- skipping the WebGPU backend.")
+    message(STATUS "crd-kir-webgpu: wgpu-native prebuilt for this platform not found at ${_wgpu_dir} -- skipping the WebGPU backend.")
     return()
 endif()
 

@@ -50,6 +50,8 @@ inline constexpr crd::usize kGemmNr = 8;
 // read GemmTraits<T>::MR/NR so the packed layout matches the microkernel per type.
 // BIT-IDENTICAL across tile shapes: every C[i][j] is still Σ_p a[i][p]·b[p][j] in p-order
 // — only the register tiling changes, never the math ⇒ zero blast radius on values.
+// NOLINTBEGIN(readability-identifier-naming) — MR/NR are THE BLIS register-blocking dimension names (Goto/Van de Geijn;
+// every GEMM paper and BLIS itself); the packing/tiling code is audited against that literature term by term.
 template <typename T> struct GemmTraits
 {
     static constexpr crd::usize MR = 8;
@@ -60,6 +62,7 @@ template <> struct GemmTraits<crd::f64>
     static constexpr crd::usize MR = 6;
     static constexpr crd::usize NR = 8;
 };
+// NOLINTEND(readability-identifier-naming)
 
 // Scalar microkernel — works for any T and any MR×NR tile. Loads C, accumulates K, stores.
 // `lda` is the A row stride (== k for the standard packed Ac layout; the packed-TRSM panel
@@ -277,6 +280,7 @@ inline void gemm_microkernel_avx2_f32(crd::usize k,
 // operation sequence (mul then add — two roundings — or a single add for
 // alpha==1), so the results are bit-identical; ~96 memory ops per tile call
 // disappear. Partial edge tiles keep the micro+merge path.
+#if CRD_SIMD_HAS_AVX2 // the fused kernels are AVX2-only (Vec4d/Vec8f + prefetch); the dispatcher's guarded branches fall back
 template <bool Alpha1>
 inline void gemm_microkernel_avx2_f64_fused(crd::usize k, const crd::f64* a_packed, const crd::f64* b_packed,
                                             crd::f64* c, crd::usize ldc, crd::f64 alpha) noexcept
@@ -289,8 +293,18 @@ inline void gemm_microkernel_avx2_f64_fused(crd::usize k, const crd::f64* a_pack
         gemm_prefetch_t0(c + i * ldc);
         gemm_prefetch_t0(c + i * ldc + 4);
     }
-    simd::Vec4d c00(0.0), c01(0.0), c10(0.0), c11(0.0), c20(0.0), c21(0.0);
-    simd::Vec4d c30(0.0), c31(0.0), c40(0.0), c41(0.0), c50(0.0), c51(0.0);
+    simd::Vec4d c00(0.0);
+    simd::Vec4d c01(0.0);
+    simd::Vec4d c10(0.0);
+    simd::Vec4d c11(0.0);
+    simd::Vec4d c20(0.0);
+    simd::Vec4d c21(0.0);
+    simd::Vec4d c30(0.0);
+    simd::Vec4d c31(0.0);
+    simd::Vec4d c40(0.0);
+    simd::Vec4d c41(0.0);
+    simd::Vec4d c50(0.0);
+    simd::Vec4d c51(0.0);
     for (crd::usize p = 0; p < k; ++p)
     {
         const simd::Vec4d b0 = simd::Vec4d::load(b_packed + p * 8 + 0);
@@ -347,7 +361,14 @@ inline void gemm_microkernel_avx2_f32_fused(crd::usize k, const crd::f32* a_pack
     {
         gemm_prefetch_t0(c + i * ldc);
     }
-    simd::Vec8f c0(0.0F), c1(0.0F), c2(0.0F), c3(0.0F), c4(0.0F), c5(0.0F), c6(0.0F), c7(0.0F);
+    simd::Vec8f c0(0.0F);
+    simd::Vec8f c1(0.0F);
+    simd::Vec8f c2(0.0F);
+    simd::Vec8f c3(0.0F);
+    simd::Vec8f c4(0.0F);
+    simd::Vec8f c5(0.0F);
+    simd::Vec8f c6(0.0F);
+    simd::Vec8f c7(0.0F);
     for (crd::usize p = 0; p < k; ++p)
     {
         const simd::Vec8f bp = simd::Vec8f::load(b_packed + p * kGemmNr);
@@ -382,6 +403,7 @@ inline void gemm_microkernel_avx2_f32_fused(crd::usize k, const crd::f32* a_pack
     merge(c + 6 * ldc, c6);
     merge(c + 7 * ldc, c7);
 }
+#endif // CRD_SIMD_HAS_AVX2 (fused kernels)
 
 // lda overload: A row stride decoupled from k (the packed-TRSM resident-panel walk reads a K-slice
 // of a wider row-major panel). Same math, same p-order — lda==k is the standard packed-Ac case.

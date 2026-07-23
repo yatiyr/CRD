@@ -11,12 +11,11 @@ crd_collect_sources(HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 add_library(crd-perf-ui STATIC ${SOURCES} ${HEADERS})
 
-target_include_directories(crd-perf-ui
-    PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/include"
-    SYSTEM PRIVATE
-        "${imgui_SOURCE_DIR}"
-        "${imgui_SOURCE_DIR}/backends"
+# CI-1 (2026-07-23): SYSTEM must lead its own call — mid-list it becomes a literal "SYSTEM" include dir.
+target_include_directories(crd-perf-ui PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_include_directories(crd-perf-ui SYSTEM PRIVATE
+    "${imgui_SOURCE_DIR}"
+    "${imgui_SOURCE_DIR}/backends"
 )
 
 target_link_libraries(crd-perf-ui

@@ -782,7 +782,7 @@ TEST_CASE("B19-a4: full GPU tile binning + block render on Vulkan == brute rende
     }
     ri->unmap(); rbr->unmap();
     std::printf("[B19-a4 GPU] full on-device bin: %d splats, T=%d over %d tiles; mean lum %.4f; worst |block - brute| = %.3e\n",
-                n, total, n_tiles, lum / static_cast<float>(imw * imh * 3), worst);
+                n, total, n_tiles, static_cast<double>(lum / static_cast<float>(imw * imh * 3)), static_cast<double>(worst));
     CHECK(lum > 0.0F);        // the block render actually drew something
     CHECK(worst == 0.0F);     // GPU block render == GPU brute render, splat-for-splat (bit-exact f32)
 }
@@ -945,7 +945,7 @@ TEST_CASE("B19-c: 2DGS surfel project + ray-surfel render on Vulkan == CPU oracl
     }
     for (int p = 0; p < imw * imh; ++p) { lum += img[uz(p) * 8U + 0U] + img[uz(p) * 8U + 1U] + img[uz(p) * 8U + 2U]; }
     std::printf("[B19-c GPU] 2DGS %d surfels %dx%d: mean lum %.4f; worst |GPU render - oracle| = %.3e (prep %.3e)\n",
-                ns, imw, imh, lum / static_cast<float>(imw * imh * 3), worst, worst_prep);
+                ns, imw, imh, static_cast<double>(lum / static_cast<float>(imw * imh * 3)), static_cast<double>(worst), static_cast<double>(worst_prep));
     CHECK(lum > 0.0F);
     CHECK(worst < 2.0e-3F); // GPU ray-surfel render (colour + depth + normal) == oracle
 }
@@ -1029,7 +1029,7 @@ TEST_CASE("B19-c2: TSDF fusion on Vulkan == CPU oracle (signed ramp on a voxel g
         if (dw > worst) { worst = dw; }
         if (wsum[uz(i)] > 0.5F) { ++observed; }
     }
-    std::printf("[B19-c2 GPU] TSDF %dx%dx%d: %d observed voxels; worst |GPU - oracle| = %.3e\n", nx, ny, nz, observed, worst);
+    std::printf("[B19-c2 GPU] TSDF %dx%dx%d: %d observed voxels; worst |GPU - oracle| = %.3e\n", nx, ny, nz, observed, static_cast<double>(worst));
     CHECK(observed > 0);       // the grid saw the surface
     CHECK(worst < 1.0e-4F);    // GPU TSDF == oracle
 }
@@ -1187,7 +1187,7 @@ TEST_CASE("B19-c2b: marching cubes on Vulkan == CPU oracle (sphere mesh)", "[gpu
         if (d > worst) { worst = d; }
     }
     rb->unmap();
-    std::printf("[B19-c2b GPU] marching cubes: %d triangles; worst |GPU mesh - oracle| = %.3e\n", total, worst);
+    std::printf("[B19-c2b GPU] marching cubes: %d triangles; worst |GPU mesh - oracle| = %.3e\n", total, static_cast<double>(worst));
     CHECK(worst < 1.0e-4F); // GPU marching cubes == oracle, vertex for vertex
 }
 
@@ -1286,7 +1286,7 @@ TEST_CASE("B19-e: relightable 2DGS render on Vulkan == CPU oracle", "[gpu-contex
     float worst = 0.0F; float lum = 0.0F;
     for (int q = 0; q < imw * imh * 4; ++q) { const float d = crd::math::abs(img[uz(q)] - static_cast<float>(imgref[uz(q)])); if (d > worst) { worst = d; } }
     for (int p = 0; p < imw * imh; ++p) { lum += img[uz(p) * 4U + 0U] + img[uz(p) * 4U + 1U] + img[uz(p) * 4U + 2U]; }
-    std::printf("[B19-e GPU] relightable 2DGS %d surfels %dx%d: mean lum %.4f; worst |GPU - oracle| = %.3e\n", ns, imw, imh, lum / static_cast<float>(imw * imh * 3), worst);
+    std::printf("[B19-e GPU] relightable 2DGS %d surfels %dx%d: mean lum %.4f; worst |GPU - oracle| = %.3e\n", ns, imw, imh, static_cast<double>(lum / static_cast<float>(imw * imh * 3)), static_cast<double>(worst));
     CHECK(lum > 0.0F);
     CHECK(worst < 2.0e-3F); // GPU PBR relight == oracle
 }
@@ -1377,7 +1377,7 @@ TEST_CASE("B19 StopThePop: per-pixel resort render on Vulkan == CPU oracle", "[g
     float worst = 0.0F; float lum = 0.0F;
     for (int q = 0; q < imw * imh * 4; ++q) { const float d = crd::math::abs(img[uz(q)] - static_cast<float>(imgref[uz(q)])); if (d > worst) { worst = d; } }
     for (int p = 0; p < imw * imh; ++p) { lum += img[uz(p) * 4U + 0U] + img[uz(p) * 4U + 1U] + img[uz(p) * 4U + 2U]; }
-    std::printf("[B19 StopThePop GPU] resort %d surfels %dx%d: mean lum %.4f; worst |GPU - oracle| = %.3e\n", ns, imw, imh, lum / static_cast<float>(imw * imh * 3), worst);
+    std::printf("[B19 StopThePop GPU] resort %d surfels %dx%d: mean lum %.4f; worst |GPU - oracle| = %.3e\n", ns, imw, imh, static_cast<double>(lum / static_cast<float>(imw * imh * 3)), static_cast<double>(worst));
     CHECK(lum > 0.0F);
     CHECK(worst < 2.0e-3F); // GPU per-pixel resort == oracle
 }
@@ -1456,7 +1456,7 @@ TEST_CASE("B19-d: quantise/dequantise codec on Vulkan == CPU oracle", "[gpu-cont
 
     float worst = 0.0F;
     for (int i = 0; i < n * natt; ++i) { const float d = crd::math::abs(recon[uz(i)] - static_cast<float>(rref[uz(i)])); if (d > worst) { worst = d; } }
-    std::printf("[B19-d GPU] %d-bit codec on Vulkan: worst |GPU - oracle| = %.3e\n", bits, worst);
+    std::printf("[B19-d GPU] %d-bit codec on Vulkan: worst |GPU - oracle| = %.3e\n", bits, static_cast<double>(worst));
     CHECK(worst < 1.0e-4F); // GPU codec == oracle
 }
 
@@ -1519,7 +1519,7 @@ TEST_CASE("B19-f: differentiable forward + backward on Vulkan == CPU oracle", "[
     float wf = 0.0F; float wg = 0.0F;
     for (int i = 0; i < np; ++i) { const float d = crd::math::abs(img[uz(i)] - static_cast<float>(imgref[uz(i)])); if (d > wf) { wf = d; } }
     for (int k = 0; k < 5; ++k) { const float d = crd::math::abs(grad[uz(k)] - static_cast<float>(gref[uz(k)])); const float rel = d / (crd::math::abs(static_cast<float>(gref[uz(k)])) + 1.0e-4F); if (rel > wg) { wg = rel; } }
-    std::printf("[B19-f GPU] diff forward+backward on Vulkan: worst |fwd - oracle| = %.3e, worst grad rel = %.3e\n", wf, wg);
+    std::printf("[B19-f GPU] diff forward+backward on Vulkan: worst |fwd - oracle| = %.3e, worst grad rel = %.3e\n", static_cast<double>(wf), static_cast<double>(wg));
     CHECK(wf < 1.0e-4F);   // GPU forward == oracle
     CHECK(wg < 1.0e-3F);   // GPU gradient == oracle
 }

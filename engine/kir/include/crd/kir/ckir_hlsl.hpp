@@ -776,6 +776,9 @@ inline bool emit_value_stmt_hlsl(const KGraph& g, int i, crd::containers::String
     case KOp::Neg: s.append("-"); ta(nd.a); break;
     case KOp::Recip: s.append("(1.0 / "); ta(nd.a); s.append(")"); break;
     case KOp::Abs: s.append("abs("); ta(nd.a); s.append(")"); break;
+    // GEO-1 (the compute-emitter-lag scar, 5th occurrence): the bit reinterprets — needed by the vertex-pulling VS
+    case KOp::FloatBitsToInt: s.append("asint("); ta(nd.a); s.append(")"); break;
+    case KOp::IntBitsToFloat: s.append("asfloat("); ta(nd.a); s.append(")"); break;
     case KOp::DFdx: s.append("ddx("); ta(nd.a); s.append(")"); break;    // B1 fragment derivative ∂/∂x
     case KOp::DFdy: s.append("ddy("); ta(nd.a); s.append(")"); break;    // B1 fragment derivative ∂/∂y
     case KOp::Fwidth: s.append("fwidth("); ta(nd.a); s.append(")"); break; // B1 |ddx|+|ddy|
@@ -1043,19 +1046,18 @@ inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::I
         for (int f = 0; f < fc; ++f) { s.append("  "); s.append(htype(g.struct_field(sid, f))); s.append(" u"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append("_f"); app_uint(s, static_cast<crd::u32>(f)); s.append(";\n"); }
         s.append("};\n");
     }
-    bool fs_uses_storage = false; // B1-f: does the FS read/write the storage buffer (a StorageLoad or a storage write)?
-    if (!is_vertex)
+    // B1-f (FS) + GEO-1 (VS vertex pulling): does this stage touch the storage buffer? FS may read+write (+ROV); a
+    // VERTEX stage may READ (StorageLoad by SV_VertexID — the bindless vertex-feeding path). Writes stay FS-only.
+    bool fs_uses_storage = false;
+    if (!is_vertex && entry.storage_write_index >= 0) { fs_uses_storage = true; }
+    for (int i = 0; !fs_uses_storage && i < n; ++i)
     {
-        if (entry.storage_write_index >= 0) { fs_uses_storage = true; }
-        for (int i = 0; !fs_uses_storage && i < n; ++i)
-        {
-            if (reach[static_cast<crd::usize>(i)] && g.node(i).op == KOp::StorageLoad) { fs_uses_storage = true; }
-        }
+        if (reach[static_cast<crd::usize>(i)] && g.node(i).op == KOp::StorageLoad) { fs_uses_storage = true; }
     }
-    if (fs_uses_storage) // B1-f: the FS storage buffer at u0 / set 0-binding 0 (matches draw_storage's root UAV / descriptor).
-    {                    // ROV (RasterizerOrdered) when interlock — DXIL serialises overlapping-pixel access automatically.
+    if (fs_uses_storage) // B1-f: the storage buffer at u0 / set 0-binding 0 (matches draw_storage's root UAV / descriptor).
+    {                    // ROV (RasterizerOrdered) when FS interlock — DXIL serialises overlapping-pixel access automatically.
         s.append("[[vk::binding(0, 0)]] ");
-        s.append(entry.interlock ? "RasterizerOrderedStructuredBuffer<uint>" : "RWStructuredBuffer<uint>");
+        s.append((!is_vertex && entry.interlock) ? "RasterizerOrderedStructuredBuffer<uint>" : "RWStructuredBuffer<uint>");
         s.append(" sbuf : register(u0);\n");
     }
     for (int i = 0; i < n; ++i) // B2: separable texture (register(tB, spaceS)) + sampler (register(sB, spaceS)) declarations

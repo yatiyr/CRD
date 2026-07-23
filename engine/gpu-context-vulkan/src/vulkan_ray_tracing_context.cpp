@@ -343,7 +343,8 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_instanced(const fl
     VkAccelerationStructureGeometryKHR tri_geom{};
     tri_geom.sType        = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
     tri_geom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-    tri_geom.flags        = opaque ? VK_GEOMETRY_OPAQUE_BIT_KHR : 0U; // non-opaque ⇒ any-hit shaders run (P4 alpha fallback)
+    tri_geom.flags = opaque ? static_cast<VkGeometryFlagsKHR>(VK_GEOMETRY_OPAQUE_BIT_KHR)
+                            : VkGeometryFlagsKHR{0U}; // non-opaque ⇒ any-hit shaders run (P4 alpha fallback)
     tri_geom.geometry.triangles.sType                   = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
     tri_geom.geometry.triangles.vertexFormat            = VK_FORMAT_R32G32B32_SFLOAT;
     tri_geom.geometry.triangles.vertexData.deviceAddress = vbuf.address;
@@ -368,7 +369,7 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_instanced(const fl
             for (int c = 0; c < 4; ++c) { inst.transform.matrix[r][c] = transforms[static_cast<crd::usize>(n) * 12U + static_cast<crd::usize>(r) * 4U + static_cast<crd::usize>(c)]; }
         }
         inst.mask                           = 0xFFU;
-        inst.instanceCustomIndex            = n; // surfaces as gl_InstanceCustomIndexEXT / InstanceID() for per-instance data
+        inst.instanceCustomIndex = n & 0xFFFFFFU; // 24-bit field — surfaces as gl_InstanceCustomIndexEXT / InstanceID() for per-instance data
         inst.accelerationStructureReference = blas_addr;
         insts[n]                            = inst;
     }
@@ -627,8 +628,8 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_clusters(const flo
     auto* ci = static_cast<VkClusterAccelerationStructureBuildTriangleClusterInfoNV*>(cl_info.mapped);
     *ci = VkClusterAccelerationStructureBuildTriangleClusterInfoNV{};
     ci->clusterID                = 0;
-    ci->triangleCount            = ntris;
-    ci->vertexCount              = nverts;
+    ci->triangleCount            = ntris & 0x1FFU;  // 9-bit fields (NV cluster caps: ≤512 tris / ≤256 verts per cluster —
+    ci->vertexCount              = nverts & 0x1FFU; //  the builder chunks below both, so the masks are value-preserving)
     ci->indexType                = VK_CLUSTER_ACCELERATION_STRUCTURE_INDEX_FORMAT_32BIT_NV;
     ci->baseGeometryIndexAndGeometryFlags.geometryIndex = 0;
     ci->baseGeometryIndexAndGeometryFlags.geometryFlags = VK_CLUSTER_ACCELERATION_STRUCTURE_GEOMETRY_OPAQUE_BIT_NV; // auto-commit under RayFlagsNone

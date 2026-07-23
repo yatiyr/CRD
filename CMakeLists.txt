@@ -538,6 +538,7 @@ add_subdirectory(engine/geometry-decomposition)
 add_subdirectory(engine/geometry-bvh-gpu)
 add_subdirectory(engine/geometry-shader-helpers)
 add_subdirectory(engine/geometry-curves)
+add_subdirectory(engine/asset-io)  # GEO-1 (D-007 row 66): OUR OWN external-format parsers (STL/OBJ/PLY/glTF/3MF) -> ImportedAsset seam -> decompose/cook
 add_subdirectory(engine/hesap)
 add_subdirectory(engine/hesap-special)  # v12; special functions + orthogonal polynomials (leaf; substrate for stats/quadrature/dsp); ADR-0094
 add_subdirectory(engine/hesap-dense)

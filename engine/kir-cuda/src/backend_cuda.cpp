@@ -491,7 +491,7 @@ ContractTiming KirBackendCuda::time_contract_schedule(const KGraph& g, int outpu
                 cuEventRecord(ev1, impl.stream);
                 if (cuEventSynchronize(ev1) != CUDA_SUCCESS || lr != CUDA_SUCCESS) { break; }
                 float ms = 0.0F;
-                if (cuEventElapsedTime(&ms, ev0, ev1) == CUDA_SUCCESS) { any = true; if (ms < best) { best = static_cast<double>(ms); } }
+                if (cuEventElapsedTime(&ms, ev0, ev1) == CUDA_SUCCESS) { any = true; if (static_cast<double>(ms) < best) { best = static_cast<double>(ms); } }
             }
             if (any)
             {
@@ -586,7 +586,7 @@ ContractTiming KirBackendCuda::time_fused_contract(const KGraph& g, int output, 
                 cuEventRecord(ev1, impl.stream);
                 if (cuEventSynchronize(ev1) != CUDA_SUCCESS || lr != CUDA_SUCCESS) { break; }
                 float ms = 0.0F;
-                if (cuEventElapsedTime(&ms, ev0, ev1) == CUDA_SUCCESS) { any = true; if (ms < best) { best = static_cast<double>(ms); } }
+                if (cuEventElapsedTime(&ms, ev0, ev1) == CUDA_SUCCESS) { any = true; if (static_cast<double>(ms) < best) { best = static_cast<double>(ms); } }
             }
             if (any)
             {
@@ -673,7 +673,7 @@ ContractTiming KirBackendCuda::time_attention(const KGraph& g, int output, int b
                 cuEventRecord(ev1, impl.stream);
                 if (cuEventSynchronize(ev1) != CUDA_SUCCESS || lr != CUDA_SUCCESS) { break; }
                 float ms = 0.0F;
-                if (cuEventElapsedTime(&ms, ev0, ev1) == CUDA_SUCCESS) { any = true; if (ms < best) { best = static_cast<double>(ms); } }
+                if (cuEventElapsedTime(&ms, ev0, ev1) == CUDA_SUCCESS) { any = true; if (static_cast<double>(ms) < best) { best = static_cast<double>(ms); } }
             }
             if (any)
             {

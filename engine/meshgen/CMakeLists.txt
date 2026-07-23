@@ -13,7 +13,7 @@ target_link_libraries(crd-meshgen
         crd-core
         crd-math
         crd-memory
-        crd-renderer
+        crd-resources
 )
 
 target_compile_features(crd-meshgen PUBLIC cxx_std_20)

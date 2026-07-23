@@ -1,6 +1,10 @@
 # ADR-0080 — `crd-rhi-compute` substrate
 
-**Status:** **Accepted 2026-05-17** (Phase 3.1.7.6 v0-close). Originally Proposed 2026-05-17 at v0a opening; locked at v0-close per the established ADR-at-slice-time pattern (ADR-0078 / ADR-0079 precedents). The base text below preserves the original Proposed-state framing; revisions discovered during v0a-v0e implementation are folded into the §"Amendments at v0-close" section at the bottom.
+**Status:** SUPERSEDED by ADR-0103/0104/0105 (final strike 2026-07-23, RET band). The compute substrate this ADR
+built on crd-rhi was re-founded on crd-gpu-context + CKIR (ADR-0103: gpu-context owns every GPU program); the
+async-compute queue semantics (D9 pointer-identity, dedicated-family detection) SURVIVE in gpu-context (already
+implemented — `compute_queue()` on the context) and RET-4 ports the remaining test coverage. crd-rhi-compute's
+API dies with crd-rhi at RET-8. Original text preserved below. **Accepted 2026-05-17** (Phase 3.1.7.6 v0-close). Originally Proposed 2026-05-17 at v0a opening; locked at v0-close per the established ADR-at-slice-time pattern (ADR-0078 / ADR-0079 precedents). The base text below preserves the original Proposed-state framing; revisions discovered during v0a-v0e implementation are folded into the §"Amendments at v0-close" section at the bottom.
 
 **Context.** Phase 3.1.7 v9 (geometry GPU + shader-helpers) requires GPU compute pipelines, storage-buffer descriptor bindings, compute dispatch, atomics, and compute↔graphics synchronization. The current `crd-rhi` + `crd-rhi-vulkan` is graphics-only — no `IComputePipeline`, no `IStorageBuffer`, no dispatch path. Shipping v9 on phantom infrastructure was rejected during the v9 eliteness audit 2026-05-17 (see Phase 3.1.7 v8-close session log + the choose-Option-B turn). Phase 3.1.7.6 carves out a prerequisite sub-phase to ship the missing substrate, mirroring how 3.1.7.5 `crd-units` was carved out as a substrate-prerequisite sub-phase.
 

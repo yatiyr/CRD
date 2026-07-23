@@ -407,7 +407,11 @@ TEST_CASE("B-cmp profile: emit the FFT kernels as CUDA for the ncu harness", "[.
     crd::memory::TlsfAllocator alloc(64U << 20U);
     const auto                 dump = [](const char* path, const kir::GlslKernel& k) {
         FILE* f = nullptr;
-        REQUIRE(fopen_s(&f, path, "wb") == 0);
+#ifdef _MSC_VER
+        if (fopen_s(&f, path, "wb") != 0) { f = nullptr; } // MSVC: the deprecated fopen errors under /WX
+#else
+        f = std::fopen(path, "wb"); // fopen_s is MSVC-only (the hair_render.hpp idiom)
+#endif
         REQUIRE(f != nullptr);
         fwrite(k.source.c_str(), 1, k.source.size(), f);
         fclose(f);
@@ -524,4 +528,45 @@ TEST_CASE("D-007 D1: IR-as-crdr round-trips (serialize->deserialize == byte-iden
     const crd::u8 junk[8] = {1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U};
     CHECK_FALSE(kir::deserialize_graph(crd::containers::ConstSpan<crd::u8>(junk, 8U), gb, eb));
     CHECK_FALSE(kir::deserialize_graph(crd::containers::ConstSpan<crd::u8>(blob.data(), 6U), gb, eb)); // truncated header
+}
+
+// GEO-1: the VERTEX-PULLING VS (storage_load by VertexIndex + IntBitsToFloat reinterpret) must validate + EMIT on both
+// raster emitters — the raster-emitter COMPLETENESS gate for the vertex-feeding path (the compute-emitter-lag scar's 5th
+// occurrence was IntBitsToFloat missing from emit_value_stmt: create_program returned nullptr SILENTLY).
+TEST_CASE("GEO-1: the vertex-pulling VS validates + emits (GLSL + HLSL, readonly SSBO in the VERTEX stage)", "[kir][emit][geo]")
+{
+    namespace kir = crd::kir;
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+
+    kir::KGraph g(&alloc);
+    kir::KEntry ve;
+    {
+        const auto sh     = kir::make_shape({1});
+        const int  vid    = g.builtin(kir::KBuiltin::VertexIndex);
+        const int  stride = g.constant(12.0, sh, kir::DType::I32);
+        const int  base   = g.binary(kir::KOp::Mul, vid, stride);
+        const auto fetch  = [&](int w) {
+            const int off = g.constant(static_cast<crd::f64>(w), sh, kir::DType::I32);
+            const int idx = g.binary(kir::KOp::Add, base, off);
+            return g.int_bits_to_float(g.cast(g.storage_load(idx), kir::DType::I32)); // the TYPED reinterpret (F32)
+        };
+        const int pos = g.vec4(fetch(0), fetch(1), fetch(2), g.constant(1.0, sh, kir::DType::F32));
+        ve.stage      = kir::KStage::Vertex;
+        ve.position   = pos;
+        ve.n_out      = 0;
+    }
+
+    REQUIRE(kir::entry_valid(g, ve)); // the VERTEX stage may READ the storage buffer (writes stay FS-only)
+
+    kir::GlslKernel gk(&alloc);
+    REQUIRE(kir::emit_stage_glsl(g, ve, &alloc, gk));
+    std::printf("=== GEO-1 vertex-pull VS (GLSL) ===\n%s\n", gk.source.c_str());
+    CHECK(std::strstr(gk.source.c_str(), "readonly buffer StorageBuf") != nullptr); // the VS decl is READONLY
+    CHECK(std::strstr(gk.source.c_str(), "intBitsToFloat(") != nullptr);
+    CHECK(std::strstr(gk.source.c_str(), "gl_VertexIndex") != nullptr);
+
+    kir::GlslKernel hk(&alloc);
+    REQUIRE(kir::emit_stage_hlsl(g, ve, &alloc, hk));
+    CHECK(std::strstr(hk.source.c_str(), "RWStructuredBuffer<uint>") != nullptr); // u0, VS-visible root (DX12)
+    CHECK(std::strstr(hk.source.c_str(), "asfloat(") != nullptr);
 }

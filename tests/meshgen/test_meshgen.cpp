@@ -3,7 +3,7 @@
 
 #include <crd/meshgen/meshgen.hpp>
 #include <crd/memory/allocator.hpp>
-#include <crd/renderer/mesh_resource.hpp>
+#include <crd/resources/mesh_resource.hpp>
 
 #include <cmath>
 
@@ -16,21 +16,21 @@ crd::memory::IAllocator* alloc()
 }
 
 // Verify basic invariants that all generated meshes must satisfy.
-void check_mesh_invariants(const crd::renderer::MeshResource& mesh)
+void check_mesh_invariants(const crd::resources::MeshResource& mesh)
 {
     REQUIRE(mesh.primitives.size() == 1U);
     const auto& prim = mesh.primitives[0];
     REQUIRE(prim.vertex_count > 0U);
     REQUIRE(prim.index_count > 0U);
     REQUIRE(prim.index_count % 3U == 0U); // must be triangles
-    REQUIRE(mesh.vertices.size() == static_cast<std::size_t>(prim.vertex_count) * crd::renderer::kMeshVertexStride);
+    REQUIRE(mesh.vertices.size() == static_cast<std::size_t>(prim.vertex_count) * crd::resources::kMeshVertexStride);
     REQUIRE(mesh.indices.size()  == static_cast<std::size_t>(prim.index_count)  * 4U);
 
     // Normals must be unit length
     const crd::u8* vdata = mesh.vertices.data();
     for (crd::u32 vi = 0; vi < prim.vertex_count; ++vi)
     {
-        const float* nrm = reinterpret_cast<const float*>(vdata + vi * crd::renderer::kMeshVertexStride + 12U);
+        const float* nrm = reinterpret_cast<const float*>(vdata + vi * crd::resources::kMeshVertexStride + 12U);
         const float len2 = nrm[0]*nrm[0] + nrm[1]*nrm[1] + nrm[2]*nrm[2];
         CHECK(len2 == Catch::Approx(1.0F).epsilon(0.01F));
     }
@@ -38,7 +38,7 @@ void check_mesh_invariants(const crd::renderer::MeshResource& mesh)
     // Tangent w must be +1 or -1
     for (crd::u32 vi = 0; vi < prim.vertex_count; ++vi)
     {
-        const float* tan = reinterpret_cast<const float*>(vdata + vi * crd::renderer::kMeshVertexStride + 32U);
+        const float* tan = reinterpret_cast<const float*>(vdata + vi * crd::resources::kMeshVertexStride + 32U);
         const float w = tan[3];
         CHECK((w == Catch::Approx(1.0F).epsilon(0.01F) || w == Catch::Approx(-1.0F).epsilon(0.01F)));
     }
@@ -94,8 +94,8 @@ TEST_CASE("make_sphere: normal equals position normalized", "[meshgen][sphere]")
     const crd::u8* vdata = m.vertices.data();
     for (crd::u32 vi = 0; vi < m.primitives[0].vertex_count; ++vi)
     {
-        const float* pos = reinterpret_cast<const float*>(vdata + vi * crd::renderer::kMeshVertexStride);
-        const float* nrm = reinterpret_cast<const float*>(vdata + vi * crd::renderer::kMeshVertexStride + 12U);
+        const float* pos = reinterpret_cast<const float*>(vdata + vi * crd::resources::kMeshVertexStride);
+        const float* nrm = reinterpret_cast<const float*>(vdata + vi * crd::resources::kMeshVertexStride + 12U);
         const float len = std::sqrt(pos[0]*pos[0] + pos[1]*pos[1] + pos[2]*pos[2]);
         CHECK(len == Catch::Approx(2.0F).epsilon(0.01F));
         CHECK(nrm[0] == Catch::Approx(pos[0] / len).epsilon(0.01F));
@@ -112,7 +112,7 @@ TEST_CASE("make_icosphere: default params", "[meshgen][icosphere]")
     const crd::u8* vdata = m.vertices.data();
     for (crd::u32 vi = 0; vi < m.primitives[0].vertex_count; ++vi)
     {
-        const float* pos = reinterpret_cast<const float*>(vdata + vi * crd::renderer::kMeshVertexStride);
+        const float* pos = reinterpret_cast<const float*>(vdata + vi * crd::resources::kMeshVertexStride);
         const float len = std::sqrt(pos[0]*pos[0] + pos[1]*pos[1] + pos[2]*pos[2]);
         CHECK(len == Catch::Approx(1.0F).epsilon(0.01F));
     }

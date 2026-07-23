@@ -1281,7 +1281,7 @@ TEST_CASE("D-007 B17-c: stochastic transparency on DX12 (deterministic-hash cove
 // D-007 B17-b: MOMENT-BASED OIT (MBOIT, Münstermann 2018) on DX12 — the SAME CKIR compute kernels the Vulkan test runs
 // (absorbance-weighted 4-power-moment generation + the Peters-Klein Hamburger reconstruction, from the shared deferred store).
 // 4 power moments resolve 2 depth masses EXACTLY ⇒ MBOIT is bit-exact at 2-layer complexity, beating WBOIT; DX12 == Vulkan.
-TEST_CASE("D-007 B17-b: moment-based OIT (MBOIT) on DX12 (4-power-moment reconstruction — exact depth ordering, beats WBOIT)",
+TEST_CASE("D-007 B17-b: moment-based OIT (MBOIT) on DX12 (4-power-moment reconstruction -- exact depth ordering, beats WBOIT)",
           "[dx12][compute][gpu][oit][kernel]")
 {
     namespace kir = crd::kir;
@@ -1350,7 +1350,7 @@ TEST_CASE("D-007 B17-b: moment-based OIT (MBOIT) on DX12 (4-power-moment reconst
 // D-007 B17-b (extension): 6-POWER-MOMENT MBOIT on DX12 — the hero tier lifted to 3-mass depth complexity (larger 4x4 Hankel
 // Cholesky + cubic root-solve + Gauss-Radau form factor). Same CKIR kernel as Vulkan; 6 moments resolve 3 depth masses, so
 // MBOIT lands ~1 LSB from exact and DECISIVELY beats WBOIT (18 LSB) at 3 layers. DX12 == Vulkan.
-TEST_CASE("D-007 B17-b: 6-moment MBOIT on DX12 (larger Cholesky + cubic — 3 masses, beats WBOIT)",
+TEST_CASE("D-007 B17-b: 6-moment MBOIT on DX12 (larger Cholesky + cubic -- 3 masses, beats WBOIT)",
           "[dx12][compute][gpu][oit][kernel]")
 {
     namespace kir = crd::kir;
