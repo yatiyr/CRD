@@ -309,8 +309,11 @@
 > OOB closed) + 2 dead fields deleted + 1 unused lambda capture; MSVC re-verified (3,488+109,310 asserts green).
 > CI run from the pre-RET-6 push still grinding (clang-tidy's first-ever full run); its clang-cl failure PREEMPTED
 > locally; its sse2 failure being preempted (local sse2 build+ctest sweep in flight); logs unlock at completion.
-> **▶ NEXT: sse2 sweep verdict → push (commit proposal ready) → CI verifies → GEO-4 (the scene render path on the
-> clean stack) → GEO-5..7 → OFF band. The showcases' submit_overlay wiring rides the scene work.**
+> **[✅ sse2 sweep GREEN — 5,211/5,211]:** the full win-debug-sse2 build + ctest passes on the clean tree — the
+> exact CI job that failed on the old commit is preempted. CERTIFIED: win-debug 5,214 · win-debug-sse2 5,211 ·
+> linux-gcc-shipping (WSL) · clang-cl — every toolchain CI exercises.
+> **▶ NEXT: push (commit proposal delivered) → CI verifies → GEO-4 (the scene render path on the clean stack) →
+> GEO-5..7 → OFF band. The showcases' submit_overlay wiring rides the scene work.**
 > Denoising (OIDN-class AOV CNN) is a FINISHING filter, never in the reference path (the offline mode IS the ground truth
 > that certifies real-time).
 > **[✅ conv-via-FFT / fast-FMA closed 2026-07-23]:** conv-via-FFT already shipped (crushes 4/5); the fast-FMA experiment was the
