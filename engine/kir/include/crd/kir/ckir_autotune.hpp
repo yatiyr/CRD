@@ -73,12 +73,12 @@ struct ScheduleResources
     if (m < s.bm || n < s.bn || (m % s.bm) != 0 || (n % s.bn) != 0 || (k % s.bk) != 0) { return false; }
     // float4 vectorized global loads: A along K (BK%4), B along N (BN%4)
     if ((s.bk % 4) != 0 || (s.bn % 4) != 0) { return false; }
-    // the smem-load stride pattern must tile evenly (STRIDEA = NT·4/BK divides BM; STRIDEB = NT/(BN/4) divides BK)
-    const int strideA = (r.threads * 4) / static_cast<crd::u32>(s.bk);
-    if (strideA == 0 || ((r.threads * 4) % static_cast<crd::u32>(s.bk)) != 0 || (s.bm % strideA) != 0) { return false; }
+    // the smem-load stride pattern must tile evenly (stride_a = NT·4/BK divides BM; stride_b = NT/(BN/4) divides BK)
+    const int stride_a = static_cast<int>((r.threads * 4U) / static_cast<crd::u32>(s.bk));
+    if (stride_a == 0 || ((r.threads * 4U) % static_cast<crd::u32>(s.bk)) != 0 || (s.bm % stride_a) != 0) { return false; }
     if ((r.threads % (static_cast<crd::u32>(s.bn) / 4U)) != 0) { return false; }
-    const int strideB = static_cast<int>(r.threads / (static_cast<crd::u32>(s.bn) / 4U));
-    if (strideB == 0 || (s.bk % strideB) != 0) { return false; }
+    const int stride_b = static_cast<int>(r.threads / (static_cast<crd::u32>(s.bn) / 4U));
+    if (stride_b == 0 || (s.bk % stride_b) != 0) { return false; }
     // device ceilings
     if (r.threads < 32U || r.threads > lim.max_threads) { return false; }
     if (r.smem > lim.smem_bytes) { return false; }
@@ -169,6 +169,7 @@ struct DeviceSpec
     double regs_per_sm    = 65536.0;       // register file per SM — the limiter fat register tiles hit FIRST
     double max_blocks_sm  = 24.0;          // resident-block cap
     double hide_warps     = 12.0;          // resident warps/SM needed to hide FMA+load latency (the occupancy target)
+    double num_sms        = 66.0;          // SM count (RTX 4070 Ti SUPER) — the reduce cost model's block-saturation target
 };
 
 // Predicted kernel time (ms) for a WarpTiled Contract schedule on `spec`. Roofline: max(compute-bound, memory-bound), the compute
@@ -256,6 +257,143 @@ struct DeviceSpec
         out_idx[t]     = best_i;
     }
     return m;
+}
+
+// ═══ AS-4 OP-GENERALITY: the REDUCE schedule space ══════════════════════════════════════════════════════════════════════════
+// The auto-scheduler — proven on Contract (a rich compute-bound tile hierarchy) — GENERALIZES to a STRUCTURALLY DIFFERENT op: a
+// device-wide REDUCTION (memory-bound, a fan-in tree, no reuse). `build_reduce` is a 2-pass tree reduce parameterized by
+// (threads/block, per_thread serial unroll); nblocks = n / (threads·per_thread). The space is small vs the Contract's, but the
+// winning (threads, per_thread) still varies by N (L2-resident vs DRAM-bound) and by device, so it is a REAL tuning problem the
+// autotuner solves the SAME way: enumerate valid schedules → measure on-device → oracle-validate (a fixed-order reduction is
+// bit-exact on the CPU oracle) → cache. This proves the framework is a general kernel auto-scheduler, not a GEMM special case.
+struct ReduceSchedule
+{
+    int threads    = 0; // threads per workgroup (power of two) — the tree width
+    int per_thread = 0; // serial elements each thread pre-reduces in pass 0 (the block-strided coalesced unroll)
+};
+
+// Blocks in pass 0 for an N-element reduction: nblocks = N / (threads·per_thread). 0 if the per-block span does not divide N.
+[[nodiscard]] inline int reduce_nblocks(int n, const ReduceSchedule& s) noexcept
+{
+    const int span = s.threads * s.per_thread;
+    if (span <= 0 || (n % span) != 0) { return 0; }
+    return n / span;
+}
+
+// Valid iff: threads is a power of two in [32, max_threads]; per_thread ≥ 1; the per-block span divides N; and nblocks is a
+// positive MULTIPLE of threads — so the SINGLE final pass reduces the nblocks partials with per_thread_final = nblocks/threads ≥ 1
+// (build_reduce's constraint). A schedule that violates one either miscomputes or fails to launch, so the search never emits it.
+[[nodiscard]] inline bool reduce_schedule_valid(int n, const ReduceSchedule& s, const DeviceLimits& lim) noexcept
+{
+    if (s.threads < 32 || s.threads > static_cast<int>(lim.max_threads) || s.per_thread < 1) { return false; }
+    if ((s.threads & (s.threads - 1)) != 0) { return false; } // power of two
+    const int nb = reduce_nblocks(n, s);
+    if (nb <= 0) { return false; }
+    return (nb % s.threads) == 0; // final pass: reduce nb partials with `threads` threads, per_thread_final ≥ 1
+}
+
+// Enumerate every valid reduce schedule for an N-element reduction into `out` (≤ `cap`), returning the count. Deterministic nested
+// sweep (threads × per_thread), so a capped run drops the same tail every time. The Naive (single-block) reduce is the fallback,
+// not a candidate.
+[[nodiscard]] inline int enumerate_reduce_schedules(int n, const DeviceLimits& lim, ReduceSchedule* out, int cap)
+{
+    static constexpr int kThreads[]   = {64, 128, 256, 512, 1024};
+    static constexpr int kPerThread[] = {1, 2, 4, 8, 16, 32, 64};
+    int count = 0;
+    for (int threads : kThreads)
+    {
+        for (int pt : kPerThread)
+        {
+            const ReduceSchedule s{threads, pt};
+            if (!reduce_schedule_valid(n, s, lim)) { continue; }
+            if (count < cap) { out[count] = s; }
+            ++count;
+        }
+    }
+    return count < cap ? count : cap;
+}
+
+// Predicted reduce time (ms) on `spec` — a roofline for a MEMORY-BOUND op. Traffic ≈ pass-0 reads N + writes nblocks, pass-1 reads
+// nblocks (the +1 scalar is nil) ⇒ 4·(N + 2·nblocks) bytes. The lever is OCCUPANCY: DRAM saturates only once pass-0 launches
+// enough blocks to fill every SM (≈ 2 resident blocks/SM); too few blocks (large per_thread) leaves bandwidth on the table, so the
+// effective BW scales by min(1, nblocks / (2·num_sms)). Ranks the space so the search measures only the top few. Rank matters, not
+// the absolute ms.
+[[nodiscard]] inline double predict_reduce_ms(int n, const ReduceSchedule& s, const DeviceSpec& spec)
+{
+    const int nb = reduce_nblocks(n, s);
+    if (nb <= 0) { return 1.0e30; }
+    const double bytes   = 4.0 * (static_cast<double>(n) + 2.0 * static_cast<double>(nb));
+    const double target  = 2.0 * spec.num_sms; // resident-block target to saturate DRAM
+    double       util    = static_cast<double>(nb) / target;
+    if (util > 1.0) { util = 1.0; }
+    if (util < 0.05) { util = 0.05; } // a badly under-utilized launch is ranked last, not infinite
+    return bytes / (spec.bw_gbps * 1.0e6 * util);
+}
+
+// Select the top-`kk` reduce schedules of `cand[0..n)` by predicted time (ascending) into `out_idx`. Same shape as the Contract's
+// rank_top_k_cost — so a caller measures only the best few candidates. Deterministic on ties (lower index wins).
+[[nodiscard]] inline int rank_reduce_top_k_cost(const ReduceSchedule* cand, int n, int nelem, const DeviceSpec& spec, int* out_idx, int kk)
+{
+    const int m = kk < n ? kk : n;
+    bool      used[256] = {};
+    const int lim       = n < 256 ? n : 256;
+    for (int t = 0; t < m; ++t)
+    {
+        int    best_i = -1;
+        double best_ms = 1.0e300;
+        for (int i = 0; i < lim; ++i)
+        {
+            if (used[i]) { continue; }
+            const double ms = predict_reduce_ms(nelem, cand[i], spec);
+            if (ms < best_ms) { best_ms = ms; best_i = i; }
+        }
+        if (best_i < 0) { return t; }
+        used[best_i] = true;
+        out_idx[t]   = best_i;
+    }
+    return m;
+}
+
+// ═══ AS-4 FLASH-ATTENTION schedule space (BR × BC) ══════════════════════════════════════════════════════════════════════════
+// The flash kernel tiles queries into BR-row blocks (grid = ceil(S/BR) × BR threads) and streams keys/values in BC-column tiles
+// through shared. (BR,BC) trade OCCUPANCY (smaller BR ⇒ more blocks to fill the SMs) against per-block K/V reuse + resource
+// pressure (a per-thread s[BC] register array; the tiles cost 2·BC·D shared floats). The best (BR,BC) varies by S and head dim, so
+// `time_attention` MEASURES the space on-device + oracle-validates each (a FAST tier, ULP-tolerant). The space is small ⇒ measure
+// all valid (no cost-model pruning needed).
+struct AttentionSchedule
+{
+    int br = 0; // query-tile height = block threads (power of two)
+    int bc = 0; // key/value-tile width streamed through shared per iteration
+};
+
+// Valid iff BR is a power of two in [32, max_threads], BC ≥ 8, and the K/V tiles fit static shared (2·BC·D·4 ≤ 48 KB). Register
+// pressure (q[D]+acc[D]+s[BC]) is NOT a validity gate — nvcc spills to local, so a fat config still RUNS; the measurement (not the
+// enumerator) rejects it by being slow.
+[[nodiscard]] inline bool attention_schedule_valid(int dim, const AttentionSchedule& s, const DeviceLimits& lim) noexcept
+{
+    if (dim <= 0 || s.br < 32 || s.br > static_cast<int>(lim.max_threads) || s.bc < 8) { return false; }
+    if ((s.br & (s.br - 1)) != 0) { return false; }                             // BR power of two
+    return static_cast<crd::i64>(s.bc) * dim * 2 * 4 <= 48 * 1024;              // static shared cap
+}
+
+// Enumerate every valid flash-attention (BR,BC) schedule for a head dim into `out` (≤ `cap`), returning the count. Deterministic
+// nested sweep. The fixed default (BR=64, BC=32) is a member for any D whose tiles fit shared.
+[[nodiscard]] inline int enumerate_attention_schedules(int dim, const DeviceLimits& lim, AttentionSchedule* out, int cap)
+{
+    static constexpr int kBR[] = {32, 64, 128, 256};
+    static constexpr int kBC[] = {8, 16, 32, 64, 128};
+    int count = 0;
+    for (int br : kBR)
+    {
+        for (int bc : kBC)
+        {
+            const AttentionSchedule s{br, bc};
+            if (!attention_schedule_valid(dim, s, lim)) { continue; }
+            if (count < cap) { out[count] = s; }
+            ++count;
+        }
+    }
+    return count < cap ? count : cap;
 }
 
 } // namespace crd::kir::autotune

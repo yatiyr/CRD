@@ -9,6 +9,7 @@ add_executable(crd-kir-tests
     test_ckir_backend.cpp
     test_ckir_tile.cpp
     test_ckir_autotune.cpp
+    test_ckir_module.cpp
     test_ckir_msl.cpp
     test_ckir_bitops.cpp
     test_ckir_nodes.cpp

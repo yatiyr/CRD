@@ -226,7 +226,19 @@ enum class KOp : crd::u8
     QuadBroadcast,          // a (value), b (quad lane 0..3) → a's value from that quad lane, to all 4
     QuadSwapX,              // horizontal swap: lane ↔ lane^1
     QuadSwapY,              // vertical swap: lane ↔ lane^2
-    QuadSwapDiagonal        // diagonal swap: lane ↔ lane^3
+    QuadSwapDiagonal,       // diagonal swap: lane ↔ lane^3
+    // GENERICS/MODULES (GM-3): a FIRST-CLASS call to a module function (`KFn`). `iidx` = the function id, args in the ext pool,
+    // `shape`/`type` = the (monomorphized) output computed by the function's shape rule. A PRE-LOWERING construct — `KModule::
+    // lower_calls` INLINES each Call into its body before optimize/emit (the emitters/oracle never see Call). Appended at END
+    // (cook/serialization stability). This is what makes a module-authored graph SERIALIZABLE as named calls — the node-editor
+    // node type + separate-compilation seam.
+    Call,
+    // AS-4 FUSION (attention): a FIRST-CLASS scaled-dot-product ATTENTION intrinsic — O = softmax(Q·Kᵀ·scale)·V, a=Q b=K c=V all
+    // [S,D], cval=scale, shape/type = Q's ([S,D]). A FUSED macro-op (like Contract is a fused matmul), so the CUDA backend can emit
+    // ONE tiled online-softmax (flash) kernel that never materializes the S×S scores to DRAM — the structural moat the unfused
+    // 3-kernel path (which round-trips S² through DRAM) cannot cross. The CPU oracle computes the naive reference; flash is a FAST
+    // tier (online softmax reassociates ⇒ ULP-tolerant vs the oracle, not bit-exact). Appended at END (cook/serialization stability).
+    Attention
 };
 
 // B1: fragment derivatives are the only ops that read NEIGHBOURING invocations (the 2×2 pixel quad), so they are legal
@@ -1490,6 +1502,37 @@ public:
         n.n_ext = static_cast<crd::u16>(n_elems);
         return push(n);
     }
+    // GM-3: a FIRST-CLASS call to module function `fn_id` — args in the ext pool, output `shape`/`dt` from the function's shape
+    // rule (monomorphized). A pre-lowering node; `KModule::lower_calls` inlines it into its body before optimize/emit.
+    [[nodiscard]] int call_node(int fn_id, const int* args, int n_args, const Shape& shape, DType dt)
+    {
+        KNode n;
+        n.op    = KOp::Call;
+        n.type  = KType::make_scalar(dt);
+        n.shape = shape;
+        n.iidx  = fn_id;
+        n.ext   = push_ext(args, n_args);
+        n.n_ext = static_cast<crd::u16>(n_args);
+        return push(n);
+    }
+    // GM-3: rewrite every reference to node `from` → `to` (operands a/b/c/d + the ext pool). Splices a Call node's inlined body
+    // output in place of the Call; the caller updates any roots separately. (optimize() then DCEs the now-dead Call node.)
+    void redirect(int from, int to)
+    {
+        for (crd::usize i = 0; i < m_nodes.size(); ++i)
+        {
+            KNode& g = m_nodes[i];
+            if (g.a == from) { g.a = to; }
+            if (g.b == from) { g.b = to; }
+            if (g.c == from) { g.c = to; }
+            if (g.d == from) { g.d = to; }
+            for (int k = 0; k < static_cast<int>(g.n_ext); ++k)
+            {
+                const crd::usize e = static_cast<crd::usize>(g.ext) + static_cast<crd::usize>(k);
+                if (m_ext[e] == from) { m_ext[e] = to; }
+            }
+        }
+    }
     [[nodiscard]] int field_get(int s, int field_idx)
     {
         KNode n;
@@ -1556,6 +1599,20 @@ public:
         const Shape& sa = t(a).shape;
         n.shape = sa;
         n.shape.dims[sa.rank - 1] = t(b).shape.dims[t(b).shape.rank - 1]; // N
+        return push(n);
+    }
+    // AS-4 FUSION: scaled-dot-product ATTENTION intrinsic O = softmax(q·kᵀ·scale)·v — q,k,v all [S,D]; output = q's shape [S,D].
+    // A fused macro-op: the CUDA backend emits ONE flash (tiled online-softmax) kernel; the CPU oracle computes the naive reference.
+    [[nodiscard]] int attention(int q, int k, int v, crd::f64 scale)
+    {
+        KNode n;
+        n.op    = KOp::Attention;
+        n.type  = KType::make_scalar(t(q).dtype());
+        n.shape = t(q).shape; // [S, D]
+        n.a     = q;
+        n.b     = k;
+        n.c     = v;
+        n.cval  = scale;
         return push(n);
     }
     // row-gather along axis 0: data[R, trailing...], idx[M] (integer values, f32-encoded) -> out[M, trailing...] where
@@ -1722,6 +1779,8 @@ public:
             if (is_spec_const(g)) { continue; }
             if (g.op == KOp::Const) { isc[static_cast<crd::usize>(i)] = 1; cval[static_cast<crd::usize>(i)] = g.cval; continue; }
             if (g.op == KOp::Input || g.op == KOp::Iota || g.op == KOp::Contract || g.op == KOp::For || g.op == KOp::LoopIndex || g.op == KOp::LoopAcc) { continue; }
+            if (g.op == KOp::Call) { continue; } // GM-3: a pre-lowering module call is OPAQUE — never fold it (lower_calls inlines it first; a stray 0-arg Call must not fold)
+            if (g.op == KOp::Attention) { continue; } // AS-4: the fused attention intrinsic is OPAQUE (a whole-tensor op) — never const-fold it
             if (is_resource_leaf(g.op)) { continue; } // buffer/shared/texture/sampler/AS/payload decls NAME storage — never fold
             if (is_stage_leaf(g.op)) { continue; } // B3 leaves have no operands — a SCALAR one (Builtin::VertexIndex, a
                                                   // scalar StageIn) would otherwise const-fold into a compile-time value
@@ -1792,6 +1851,33 @@ public:
         m_ext   = static_cast<crd::containers::Array<crd::i32>&&>(nx);
         for (int r = 0; r < n_roots; ++r) { roots[r] = newid[static_cast<crd::usize>(roots[r])]; }
         CRD_ASSERT(operands_valid());
+    }
+
+    // AS-5 (ADR-0098 §4): a BIT-EXACT equality-saturation SUPEROPTIMIZER. optimize() is GREEDY — its CSE (`node_equal`) matches
+    // operands POSITIONALLY, so `a*b` and `b*a` never collapse (a phase-ordering blind spot). This CANONICALIZES commutative ops
+    // (Add/Mul → the smaller-operand-id first) so commutatively-equal subexpressions become STRUCTURALLY identical, then runs the
+    // full const-fold/CSE/DCE — ITERATED to a fixpoint (rewrite-until-stable = equality saturation). ONLY BIT-EXACT rules:
+    // commutativity + CSE + const-fold. Reassociation/distributivity CHANGE float rounding, so they are excluded — for a
+    // bit-exact compiler that is the WHOLE safe superopt space (the aggressive structural rewrites belong to the fast/ULP tier,
+    // where they trade exactness for speed). Semantics-preserving bit-exactly; the op count never grows.
+    void superoptimize(int* roots, int n_roots)
+    {
+        int prev = size() + 1;
+        for (int iter = 0; iter < 8 && size() < prev; ++iter)
+        {
+            prev = size();
+            for (int i = 0; i < size(); ++i) // canonicalize commutative operands (smaller child id first) ⇒ a*b and b*a coincide
+            {
+                KNode& g = m_nodes[static_cast<crd::usize>(i)];
+                if ((g.op == KOp::Add || g.op == KOp::Mul) && g.a >= 0 && g.b >= 0 && g.a > g.b)
+                {
+                    const int tmp = g.a;
+                    g.a           = g.b;
+                    g.b           = tmp;
+                }
+            }
+            optimize(roots, n_roots); // fold + CSE (now collapses the canonicalized commutative duplicates) + DCE
+        }
     }
 
 private:

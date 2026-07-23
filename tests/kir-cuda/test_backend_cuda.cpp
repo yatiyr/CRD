@@ -12,6 +12,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>
+#include <cstdio>
+
 namespace kir = crd::kir;
 
 namespace
@@ -607,5 +610,58 @@ TEST_CASE("v17 B0 fan-out: CUDA bvec3 (any/all) + Light-struct SROA vs the CPU o
         REQUIRE(be.run(g, out, inputs, 3, gout));
         REQUIRE(cpu.run(g, out, inputs, 3, rout));
         for (int i = 0; i < bn * 3; ++i) { CHECK(gout[i] == rout[i]); } // bit-exact
+    }
+}
+
+// AS-4 FUSION: the KOp::Attention intrinsic dispatches to the FUSED flash kernel on CUDA — one tiled online-softmax pass, the S×S
+// scores never materialized to DRAM. FAST tier (online softmax reassociates), so it validates ULP-TOLERANT against the naive CPU
+// oracle (KirBackendCpu → eval_cpu's Attention case). Correctness across a range of S (some not multiples of the tile ⇒ the ncols
+// guard exercised).
+TEST_CASE("AS-4: CUDA FLASH attention == the naive oracle (fast tier, ULP-tolerant)", "[kir][cuda][gpu][attention]")
+{
+    crd::memory::TlsfAllocator alloc(256U << 20U);
+    kir::KirBackendCuda        cu(&alloc);
+    if (!cu.valid()) { WARN("no CUDA device available; skipping"); return; }
+    kir::KirBackendCpu cpu(&alloc);
+
+    constexpr int dim   = 64;
+    const double  scale = 1.0 / 8.0; // 1/sqrt(64)
+    const int     slens[3] = {256, 512, 300}; // 300 is NOT a multiple of the 64/32 tile ⇒ tests the S-remainder guards
+    for (int si = 0; si < 3; ++si)
+    {
+        const int   slen = slens[si];
+        kir::KGraph g(&alloc);
+        const int   q = g.input(kir::make_shape({slen, dim}), kir::DType::F32);
+        const int   k = g.input(kir::make_shape({slen, dim}), kir::DType::F32);
+        const int   v = g.input(kir::make_shape({slen, dim}), kir::DType::F32);
+        const int   y = g.attention(q, k, v, scale);
+        CHECK(g.node(y).op == kir::KOp::Attention);
+        CHECK(g.node(y).shape == kir::make_shape({slen, dim}));
+
+        crd::containers::Array<float> qv(&alloc);
+        crd::containers::Array<float> kv(&alloc);
+        crd::containers::Array<float> vv(&alloc);
+        crd::containers::Array<float> gpu(&alloc);
+        crd::containers::Array<float> oracle(&alloc);
+        const crd::usize nelem = static_cast<crd::usize>(slen) * static_cast<crd::usize>(dim);
+        qv.resize(nelem, 0.0F);
+        kv.resize(nelem, 0.0F);
+        vv.resize(nelem, 0.0F);
+        gpu.resize(nelem, 0.0F);
+        oracle.resize(nelem, 0.0F);
+        for (int i = 0; i < slen * dim; ++i)
+        {
+            qv[static_cast<crd::usize>(i)] = 0.02F * static_cast<float>((i * 7) % 37) - 0.35F;
+            kv[static_cast<crd::usize>(i)] = 0.02F * static_cast<float>((i * 11) % 41) - 0.40F;
+            vv[static_cast<crd::usize>(i)] = 0.02F * static_cast<float>((i * 5) % 31) - 0.30F;
+        }
+        const float* inputs[] = {qv.data(), kv.data(), vv.data()};
+        REQUIRE(cu.run(g, y, inputs, 3, gpu.data()));    // the FUSED flash kernel
+        REQUIRE(cpu.run(g, y, inputs, 3, oracle.data())); // the naive f32 oracle
+
+        float maxerr = 0.0F;
+        for (int i = 0; i < slen * dim; ++i) { maxerr = fmaxf(maxerr, fabsf(gpu[static_cast<crd::usize>(i)] - oracle[static_cast<crd::usize>(i)])); }
+        CHECK(maxerr < 2.0e-3F); // FAST tier: online softmax reassociates ⇒ ULP-tolerant, not bit-exact
+        std::printf("[cuda][attention] flash S=%d D=%d vs naive oracle: max abs err %.2e (fast tier)\n", slen, dim, static_cast<double>(maxerr));
     }
 }

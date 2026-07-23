@@ -280,6 +280,39 @@ inline void eval_cpu(const KGraph& g, const crd::f64* const* inputs, crd::memory
                 }
             }
         }
+        else if (n.op == KOp::Attention)
+        {
+            // NAIVE reference attention O = softmax(Q·Kᵀ·scale)·V (Q,K,V all [S,D]) — the gold the FUSED flash kernel matches to
+            // tolerance. Row-by-row: scores → row max → exp/Σexp → ·V. Every elementary op rounds to the node dtype (the oracle
+            // doctrine), so an f32 attention graph is certified at f32 and the flash kernel (a FAST tier) validates ULP-tolerant.
+            const KNode&    qn    = g.node(n.a);
+            const crd::f64* q     = buf + off[static_cast<crd::usize>(n.a)];
+            const crd::f64* kk    = buf + off[static_cast<crd::usize>(n.b)];
+            const crd::f64* vv    = buf + off[static_cast<crd::usize>(n.c)];
+            const crd::i64  slen  = qn.shape.dims[qn.shape.rank - 2];
+            const crd::i64  dim   = qn.shape.dims[qn.shape.rank - 1];
+            const crd::f64  scale = n.cval;
+            auto*           sc    = static_cast<crd::f64*>(scratch->allocate(sizeof(crd::f64) * static_cast<crd::usize>(slen), alignof(crd::f64)));
+            for (crd::i64 qi = 0; qi < slen; ++qi)
+            {
+                crd::f64 mx = -1.0e300;
+                for (crd::i64 kj = 0; kj < slen; ++kj)
+                {
+                    crd::f64 acc = 0.0;
+                    for (crd::i64 dd = 0; dd < dim; ++dd) { acc = round_dtype(acc + round_dtype(q[qi * dim + dd] * kk[kj * dim + dd], n.dtype()), n.dtype()); }
+                    sc[kj] = round_dtype(acc * scale, n.dtype());
+                    if (sc[kj] > mx) { mx = sc[kj]; }
+                }
+                crd::f64 sum = 0.0;
+                for (crd::i64 kj = 0; kj < slen; ++kj) { sc[kj] = round_dtype(crd::math::exp(sc[kj] - mx), n.dtype()); sum = round_dtype(sum + sc[kj], n.dtype()); }
+                for (crd::i64 dd = 0; dd < dim; ++dd)
+                {
+                    crd::f64 acc = 0.0;
+                    for (crd::i64 kj = 0; kj < slen; ++kj) { acc = round_dtype(acc + round_dtype(sc[kj] * vv[kj * dim + dd], n.dtype()), n.dtype()); }
+                    dst[qi * dim + dd] = round_dtype(acc / sum, n.dtype());
+                }
+            }
+        }
         else if (n.op == KOp::Gather)
         {
             const KNode&    dn      = g.node(n.a);

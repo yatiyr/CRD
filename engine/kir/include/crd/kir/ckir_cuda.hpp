@@ -737,6 +737,68 @@ inline bool emit_reduce_fast_cuda(const KGraph& g, int output, GlslKernel& out)
     return true;
 }
 
+// AS-4: pick a flash-attention tile (BR = query-tile height, BC = key-tile width) for (device, S, D). FIRST the checked-in tuned DB
+// (AS-2: the `time_attention` sweep's per-(device,S,D) winner, replayed with no runtime search); ELSE the shared-fitting heuristic —
+// BR=64 (a warp-pair block) + BC=32, halving BC until the static shared 2·BC·D·4 fits 48 KB (so large head dims still emit).
+inline void select_attention_tile(int dim, int slen, const char* device, int& br, int& bc) noexcept
+{
+    if (lookup_attention_tuned(device, slen, dim, br, bc)) { return; } // DB replay overrides the heuristic
+    br = 64;
+    bc = 32;
+    while (bc > 4 && static_cast<crd::i64>(bc) * dim * 2 * 4 > 48 * 1024) { bc /= 2; }
+}
+
+// AS-4 FUSION: emit a FLASH-attention kernel for a KOp::Attention node — O = softmax(Q·Kᵀ·scale)·V. ONE kernel, one block per
+// `br`-row query tile, streaming `bc`-column K/V tiles through SHARED with an ONLINE softmax (running max m, running sum l, rescaled
+// output accumulator) ⇒ the S×S scores NEVER touch DRAM (the structural moat the unfused 3-kernel path pays). D (head dim) comes
+// from the shape; (br,bc) are the AUTOTUNED tile baked in as constants. Grid = ceil(S/br) blocks × br threads; static shared =
+// 2·bc·D floats (rejected if > 48 KB). Q,K,V are Input leaves [S,D]; O = [S,D]. FAST tier: the online softmax reassociates the row
+// reduction ⇒ ULP-tolerant vs the CPU oracle, not bit-exact. Kernel arg order: ckir(Q, K, V, O, S, scale).
+inline bool emit_attention_flash_cuda(const KGraph& g, int output, int br, int bc, GlslKernel& out)
+{
+    const KNode& an = g.node(output);
+    if (an.op != KOp::Attention) { return false; }
+    if (g.node(an.a).op != KOp::Input || g.node(an.b).op != KOp::Input || g.node(an.c).op != KOp::Input) { return false; }
+    const Shape& qs = g.node(an.a).shape;
+    if (qs.rank != 2 || br <= 0 || bc <= 0) { return false; }
+    const int dim = static_cast<int>(qs.dims[1]);
+    if (dim <= 0) { return false; }
+    if (static_cast<crd::i64>(bc) * dim * 2 * 4 > 48 * 1024) { return false; } // static shared cap
+    out.n_inputs      = 3;
+    out.input_iidx[0] = g.node(an.a).iidx;
+    out.input_iidx[1] = g.node(an.b).iidx;
+    out.input_iidx[2] = g.node(an.c).iidx;
+    crd::containers::String& s = out.source;
+    s.clear();
+    s.append("extern \"C\" __global__ void ckir(const float* Q, const float* K, const float* V, float* O, unsigned S, float scale) {\n");
+    s.append("  __shared__ float Ks["); glsl_detail::app_uint(s, bc * dim); s.append("];\n");
+    s.append("  __shared__ float Vs["); glsl_detail::app_uint(s, bc * dim); s.append("];\n");
+    s.append("  const unsigned qi = blockIdx.x * "); glsl_detail::app_uint(s, br); s.append("u + threadIdx.x;\n");
+    s.append("  const unsigned t = threadIdx.x;\n");
+    s.append("  float q["); glsl_detail::app_uint(s, dim); s.append("]; float acc["); glsl_detail::app_uint(s, dim); s.append("];\n");
+    s.append("  if (qi < S) { for (int d = 0; d < "); glsl_detail::app_uint(s, dim); s.append("; ++d) q[d] = Q[qi*"); glsl_detail::app_uint(s, dim); s.append(" + d]; }\n");
+    s.append("  for (int d = 0; d < "); glsl_detail::app_uint(s, dim); s.append("; ++d) acc[d] = 0.0f;\n");
+    s.append("  float m = -3.0e38f, l = 0.0f;\n");
+    s.append("  for (unsigned kt = 0; kt < S; kt += "); glsl_detail::app_uint(s, bc); s.append("u) {\n");
+    s.append("    for (unsigned idx = t; idx < "); glsl_detail::app_uint(s, bc * dim); s.append("u; idx += "); glsl_detail::app_uint(s, br); s.append("u) {\n");
+    s.append("      unsigned r = idx / "); glsl_detail::app_uint(s, dim); s.append("u, c = idx % "); glsl_detail::app_uint(s, dim); s.append("u; unsigned kg = kt + r;\n");
+    s.append("      Ks[idx] = kg < S ? K[kg*"); glsl_detail::app_uint(s, dim); s.append(" + c] : 0.0f;\n");
+    s.append("      Vs[idx] = kg < S ? V[kg*"); glsl_detail::app_uint(s, dim); s.append(" + c] : 0.0f;\n");
+    s.append("    }\n    __syncthreads();\n");
+    s.append("    if (qi < S) {\n");
+    s.append("      float sc["); glsl_detail::app_uint(s, bc); s.append("]; float tmax = -3.0e38f;\n");
+    s.append("      unsigned ncols = (kt + "); glsl_detail::app_uint(s, bc); s.append("u <= S) ? "); glsl_detail::app_uint(s, bc); s.append("u : (S - kt);\n");
+    s.append("      for (unsigned j = 0; j < ncols; ++j) { float dot = 0.0f; for (int d = 0; d < "); glsl_detail::app_uint(s, dim); s.append("; ++d) dot += q[d]*Ks[j*"); glsl_detail::app_uint(s, dim); s.append(" + d]; sc[j] = dot*scale; tmax = fmaxf(tmax, sc[j]); }\n");
+    s.append("      float mnew = fmaxf(m, tmax); float corr = expf(m - mnew); float ltile = 0.0f;\n");
+    s.append("      for (unsigned j = 0; j < ncols; ++j) { sc[j] = expf(sc[j] - mnew); ltile += sc[j]; }\n");
+    s.append("      l = l*corr + ltile;\n");
+    s.append("      for (int d = 0; d < "); glsl_detail::app_uint(s, dim); s.append("; ++d) acc[d] *= corr;\n");
+    s.append("      for (unsigned j = 0; j < ncols; ++j) { for (int d = 0; d < "); glsl_detail::app_uint(s, dim); s.append("; ++d) acc[d] += sc[j]*Vs[j*"); glsl_detail::app_uint(s, dim); s.append(" + d]; }\n");
+    s.append("      m = mnew;\n    }\n    __syncthreads();\n  }\n");
+    s.append("  if (qi < S) { for (int d = 0; d < "); glsl_detail::app_uint(s, dim); s.append("; ++d) O[qi*"); glsl_detail::app_uint(s, dim); s.append(" + d] = acc[d] / l; }\n}\n");
+    return true;
+}
+
 // Emit a GATHER kernel — out[m, ...] = data[idx[m], ...] (row-gather along axis 0). Data + idx are Input leaves; idx
 // holds f32-encoded integer indices (exact for indices < 2^24). One thread per output element. ADR-0098.
 inline bool emit_gather_cuda(const KGraph& g, int output, GlslKernel& out)

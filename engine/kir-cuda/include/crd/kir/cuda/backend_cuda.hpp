@@ -33,6 +33,8 @@ public:
 
     [[nodiscard]] const char* name() const noexcept override { return "cuda"; }
     [[nodiscard]] bool        valid() const noexcept; // false if no CUDA device / driver
+    // AS-6a: the GPU arch (e.g. "sm_89") — the tuning DB's device key, so the CUDA backend replays ITS device's tuned schedules.
+    [[nodiscard]] const char* device() const noexcept;
 
     [[nodiscard]] bool run(const KGraph& g, int output, const float* const* inputs, int n_inputs, float* out) override;
 
@@ -48,6 +50,13 @@ public:
     // auto-tuned schedule (select_schedule). GPU-event-timed min-of-iters; writes `out`. `ok=false` if `output` isn't fusable.
     [[nodiscard]] ContractTiming time_fused_contract(const KGraph& g, int output, const float* const* inputs, int n_inputs,
                                                      float* out, int warmup, int iters);
+
+    // AS-4 (flash-attention autotuner inner loop): compile the FUSED flash kernel for the KOp::Attention node at `output` with the
+    // EXPLICIT (br,bc) tile, upload Q/K/V once, launch warmup+iters GPU-event-timed, write the result to `out` for the oracle.
+    // Returns the min-of-iters kernel time; `ok=false` if the schedule doesn't emit/compile/launch. The search sweeps (br,bc) and
+    // keeps the fastest that the oracle certifies (a FAST tier — online softmax reassociates ⇒ ULP-tolerant). Reuses ContractTiming.
+    [[nodiscard]] ContractTiming time_attention(const KGraph& g, int output, int br, int bc, const float* const* inputs,
+                                                int n_inputs, float* out, int warmup, int iters);
 
 private:
     struct Impl;

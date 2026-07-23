@@ -664,7 +664,11 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
             {
                 spec_declared[id] = true;
                 s.append("layout(constant_id = "); app_uint(s, static_cast<int>(id)); s.append(") const ");
-                s.append(nd.dtype() == DType::Bool ? "bool" : (dt_is_uint(nd.dtype()) ? "uint" : (dt_is_int(nd.dtype()) ? "int" : "float")));
+                const char* spec_ctype = "float";
+                if (nd.dtype() == DType::Bool) { spec_ctype = "bool"; }
+                else if (dt_is_uint(nd.dtype())) { spec_ctype = "uint"; }
+                else if (dt_is_int(nd.dtype())) { spec_ctype = "int"; }
+                s.append(spec_ctype);
                 s.append(" _spec"); app_uint(s, static_cast<int>(id)); s.append(" = ");
                 if (nd.dtype() == DType::Bool) { s.append(nd.cval != 0.0 ? "true" : "false"); }
                 else if (dt_is_uint(nd.dtype()) || dt_is_int(nd.dtype())) { app_int_const(s, nd.cval, nd.dtype()); }
@@ -1302,7 +1306,11 @@ inline bool emit_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory::I
             if (id >= 256U || spec_declared[id]) { continue; }
             spec_declared[id] = true;
             s.append("layout(constant_id = "); app_uint(s, static_cast<crd::u32>(id)); s.append(") const ");
-            s.append(nd.dtype() == DType::Bool ? "bool" : (dt_is_uint(nd.dtype()) ? "uint" : (dt_is_int(nd.dtype()) ? "int" : "float")));
+            const char* spec_ctype = "float";
+            if (nd.dtype() == DType::Bool) { spec_ctype = "bool"; }
+            else if (dt_is_uint(nd.dtype())) { spec_ctype = "uint"; }
+            else if (dt_is_int(nd.dtype())) { spec_ctype = "int"; }
+            s.append(spec_ctype);
             s.append(" _spec"); app_uint(s, static_cast<crd::u32>(id)); s.append(" = ");
             if (nd.dtype() == DType::Bool) { s.append(nd.cval != 0.0 ? "true" : "false"); }
             else if (dt_is_uint(nd.dtype()) || dt_is_int(nd.dtype())) { app_int_const(s, nd.cval, nd.dtype()); }
@@ -2039,6 +2047,85 @@ inline bool emit_contract_tiled_glsl(const KGraph& g, int output, GlslKernel& ou
         for (int j = 0; j < 4; ++j)
         {
             s.append("  C[(arow + "); s.append(d[i]); s.append("u) * N + (acol + "); s.append(d[j]); s.append("u)] = a"); s.append(d[i]); s.append(d[j]); s.append(";\n");
+        }
+    }
+    s.append("}\n");
+    return true;
+}
+
+// AS-6b (ADR-0098 §4): the PARAMETERIZED GLSL tiled GEMM — the Vulkan/SPIR-V analogue of `emit_contract_tiled_cuda`, so the
+// autotuner drives the Vulkan backend too. Block tile BT×BT, K-depth BK, TM×TM register microtile per thread, NT=(BT/TM)²
+// threads. PLAIN-float accumulate (shaderc's performance opt fuses FMA — the fast tier, ULP-tolerant, not bit-exact). The GLSL
+// schedule is a subset of `TileSchedule`: BT=bm(=bn), BK=bk, TM=tm(=tn). Constraints: BT%TM==0, NT≤1024, M%BT==N%BT==0, K%BK==0,
+// 2·BT·BK·4 ≤ smem. Cooperative shared load: As[row·BK+k] (BT·BK floats) + Bs[k·BT+col] (BK·BT). The autotuner enumerates
+// (BT,BK,TM), Vulkan-times each, the oracle certifies, and the winner is the Vulkan device's DB entry (AS-6a device key).
+inline bool emit_contract_tiled_glsl_sched(const KGraph& g, int output, int bt, int bk, int tm, GlslKernel& out)
+{
+    using namespace glsl_detail;
+    const KNode& c = g.node(output);
+    if (c.op != KOp::Contract || g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input) { return false; }
+    if (bt <= 0 || bk <= 0 || tm <= 0 || (bt % tm) != 0) { return false; }
+    const int tpr = bt / tm;      // threads per tile-row/col
+    const int nt  = tpr * tpr;    // NT = (BT/TM)^2
+    if (nt < 1 || nt > 1024) { return false; }
+    out.n_inputs      = 2;
+    out.input_iidx[0] = g.node(c.a).iidx;
+    out.input_iidx[1] = g.node(c.b).iidx;
+    crd::containers::String& s = out.source;
+    s.clear();
+    const auto n = [&](int v) { app_uint(s, static_cast<crd::u32>(v)); }; // append an int
+    s.append("#version 450\n");
+    s.append("layout(local_size_x = "); n(nt); s.append(") in;\n");
+    s.append("layout(std430, binding = 0) readonly buffer BA { float A[]; };\n");
+    s.append("layout(std430, binding = 1) readonly buffer BB { float Bm[]; };\n");
+    s.append("layout(std430, binding = 2) writeonly buffer BC { float C[]; };\n");
+    s.append("layout(push_constant) uniform PC { uint M; uint K; uint N; uint nbatch; };\n");
+    s.append("shared float As["); n(bt * bk); s.append("];\n");
+    s.append("shared float Bs["); n(bk * bt); s.append("];\n");
+    s.append("void main() {\n");
+    s.append("  uint nbc = N / "); n(bt); s.append("u; uint bid = gl_WorkGroupID.x;\n");
+    s.append("  uint blockRow = (bid / nbc) * "); n(bt); s.append("u; uint blockCol = (bid % nbc) * "); n(bt); s.append("u;\n");
+    s.append("  uint tid = gl_LocalInvocationID.x; uint tr = tid / "); n(tpr); s.append("u; uint tc = tid % "); n(tpr); s.append("u;\n");
+    s.append("  uint arow = blockRow + tr * "); n(tm); s.append("u; uint acol = blockCol + tc * "); n(tm); s.append("u;\n");
+    for (int i = 0; i < tm; ++i) // TM×TM scalar accumulators (register-resident)
+    {
+        s.append("  float ");
+        for (int j = 0; j < tm; ++j) { s.append("a"); n(i); n(j); s.append(" = 0.0"); if (j < tm - 1) { s.append(", "); } }
+        s.append(";\n");
+    }
+    s.append("  for (uint k0 = 0u; k0 < K; k0 += "); n(bk); s.append("u) {\n");
+    s.append("    for (uint t = tid; t < "); n(bt * bk); s.append("u; t += "); n(nt);
+    s.append("u) { uint r = t / "); n(bk); s.append("u; uint cc = t % "); n(bk); s.append("u; As[t] = A[(blockRow + r) * K + (k0 + cc)]; }\n");
+    s.append("    for (uint t = tid; t < "); n(bk * bt); s.append("u; t += "); n(nt);
+    s.append("u) { uint r = t / "); n(bt); s.append("u; uint cc = t % "); n(bt); s.append("u; Bs[t] = Bm[(k0 + r) * N + (blockCol + cc)]; }\n");
+    s.append("    barrier();\n");
+    s.append("    for (uint kk = 0u; kk < "); n(bk); s.append("u; ++kk) {\n");
+    s.append("      ");
+    for (int i = 0; i < tm; ++i)
+    {
+        s.append("float ar"); n(i); s.append(" = As[(tr * "); n(tm); s.append("u + "); n(i); s.append("u) * "); n(bk); s.append("u + kk]; ");
+    }
+    s.append("\n      ");
+    for (int j = 0; j < tm; ++j)
+    {
+        s.append("float br"); n(j); s.append(" = Bs[kk * "); n(bt); s.append("u + tc * "); n(tm); s.append("u + "); n(j); s.append("u]; ");
+    }
+    s.append("\n");
+    for (int i = 0; i < tm; ++i)
+    {
+        s.append("      ");
+        for (int j = 0; j < tm; ++j)
+        {
+            s.append("a"); n(i); n(j); s.append(" = a"); n(i); n(j); s.append(" + ar"); n(i); s.append(" * br"); n(j); s.append("; ");
+        }
+        s.append("\n");
+    }
+    s.append("    }\n    barrier();\n  }\n");
+    for (int i = 0; i < tm; ++i)
+    {
+        for (int j = 0; j < tm; ++j)
+        {
+            s.append("  C[(arow + "); n(i); s.append("u) * N + (acol + "); n(j); s.append("u)] = a"); n(i); n(j); s.append(";\n");
         }
     }
     s.append("}\n");

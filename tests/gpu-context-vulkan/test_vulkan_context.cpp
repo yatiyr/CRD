@@ -11,6 +11,7 @@
 #include <crd/kir/ckir_fft.hpp>    // B-cmp Phase 1: build_fft1d_radix2 (the CKIR FFT authoring layer)
 #include <crd/kir/ckir_ocean.hpp>  // B16-a: the FFT-ocean kernels (spectrum/evolve/assemble)
 #include <crd/kir/ckir_reduce.hpp> // B-cmp: build_reduce (the CKIR device-wide reduction)
+#include <crd/kir/ckir_autotune.hpp> // AS-4: enumerate_reduce_schedules — the auto-scheduler generalized to the reduction
 #include <crd/kir/ckir_scan.hpp>   // B-cmp: build_scan (the CKIR device-wide prefix sum)
 #include <crd/kir/ckir_sort.hpp>   // B-cmp: build_sort_* (the CKIR stable LSD radix sort)
 #include <crd/kir/ckir_mlp.hpp>    // v17 NRC: build_mlp_fwd_fp32 (the portable+bit-exact fused-MLP forward)
@@ -10092,6 +10093,133 @@ TEST_CASE("B-cmp: CKIR device reduction -- GPU benchmark vs CUB DeviceReduce", "
     }
 }
 
+// AS-4 OP-GENERALITY (the auto-scheduler beyond Contract): the SAME enumerate → cost-rank → MEASURE → oracle-validate → pick-best
+// loop that tunes the GEMM, applied to a device-wide REDUCTION. `enumerate_reduce_schedules` yields the valid (threads, per_thread)
+// space; the cost model ranks it; we MEASURE the top-K on the real GPU (each build_reduce'd, emitted, dispatched, GPU-timed), a
+// reduction of all-ones ORACLE-VALIDATES each (sum must == N), and the fastest wins — proving the winner beats the hand-tuned
+// (256,8) default and reaches CUB's bandwidth. This is what makes AS a GENERAL kernel auto-scheduler, not a GEMM special case.
+// Hidden ([.reduce-autotune]) — a measured board.
+TEST_CASE("AS-4: the auto-scheduler TUNES the reduction on-device -- enumerate/measure/validate vs CUB", "[.reduce-autotune]")
+{
+    namespace kir = crd::kir;
+    namespace cg  = crd::gpu;
+    namespace at  = crd::kir::autotune;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    crd::memory::TlsfAllocator alloc(64U << 20U);
+    using cg::compute_usage::storage;
+    using cg::compute_usage::transfer_dst;
+    using cg::compute_usage::transfer_src;
+
+    const int    n         = 1 << 24;   // 64 MB ⇒ spills the 48 MB L2 ⇒ DRAM-bound (CUB ~602 GB/s here)
+    const double cub_dram_gbps = 602.6; // CUB DeviceReduce gold on this GPU (bench/gpu-compute/cub_reduce_bench)
+
+    // the input (all 1.0 ⇒ sum == N, exact in f32) — created ONCE, shared across every candidate schedule.
+    auto d_in = compute.create_buffer(static_cast<crd::u64>(n) * sizeof(float), storage | transfer_dst | transfer_src, cg::ComputeMemory::GpuOnly);
+    {
+        auto  stg = compute.create_buffer(static_cast<crd::u64>(n) * sizeof(float), transfer_src, cg::ComputeMemory::CpuToGpu);
+        auto* p   = static_cast<float*>(stg->map());
+        for (int i = 0; i < n; ++i) { p[i] = 1.0F; }
+        stg->unmap();
+        auto& rec = compute.begin();
+        rec.copy(*stg, *d_in, 0U, 0U, static_cast<crd::u64>(n) * sizeof(float));
+        compute.submit_and_wait();
+    }
+
+    // measure ONE reduce schedule: build_reduce(threads, nblocks) → emit → compile → dispatch (min-of-25) → readback the scalar.
+    // returns the best GPU ms, and writes the reduced sum to `sum_out`. ms = 1e30 if the schedule fails to build/emit/compile.
+    auto measure = [&](int threads, int nblocks, float& sum_out) -> double {
+        kir::KGraph  g0(&alloc);
+        kir::KGraph  g1(&alloc);
+        kir::KGraph* graphs[2] = {&g0, &g1};
+        const kir::ReducePlan plan = kir::build_reduce(graphs, n, kir::KOp::Add, threads, nblocks);
+        kir::GlslKernel kb(&alloc);
+        kir::GlslKernel kf(&alloc);
+        if (!kir::emit_compute_kernel_glsl(*plan.block_graph, plan.block, &alloc, kb)) { return 1e30; }
+        if (!kir::emit_compute_kernel_glsl(*plan.final_graph, plan.final_pass, &alloc, kf)) { return 1e30; }
+        const auto sb = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kb.source), "ra_b", &alloc);
+        const auto sf = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kf.source), "ra_f", &alloc);
+        if (!sb.ok || !sf.ok) { return 1e30; }
+        auto pb = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(sb.spirv.data(), sb.spirv.size()), 2, 0U);
+        auto pf = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(sf.spirv.data(), sf.spirv.size()), 2, 0U);
+        if (pb == nullptr || pf == nullptr) { return 1e30; }
+        auto d_part = compute.create_buffer(static_cast<crd::u64>(nblocks) * sizeof(float), storage | transfer_dst | transfer_src, cg::ComputeMemory::GpuOnly);
+        auto d_out  = compute.create_buffer(sizeof(float), storage | transfer_dst | transfer_src, cg::ComputeMemory::GpuOnly);
+        auto record = [&]() {
+            auto&              rec  = compute.begin();
+            cg::ComputeBuffer* b0[2] = {d_in.get(), d_part.get()};
+            rec.dispatch(*pb, crd::containers::ConstSpan<cg::ComputeBuffer*>(b0, 2), nullptr, 0U, static_cast<crd::u32>(nblocks), 1U, 1U);
+            rec.barrier(*d_part, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead);
+            cg::ComputeBuffer* b1[2] = {d_part.get(), d_out.get()};
+            rec.dispatch(*pf, crd::containers::ConstSpan<cg::ComputeBuffer*>(b1, 2), nullptr, 0U, 1U, 1U, 1U);
+            compute.submit_and_wait();
+        };
+        for (int w = 0; w < 5; ++w) { record(); }
+        double best = 1e30;
+        for (int r = 0; r < 25; ++r) { record(); const double ms = compute.last_gpu_ms(); if (ms > 0.0 && ms < best) { best = ms; } }
+        auto rb = compute.create_buffer(sizeof(float), transfer_dst, cg::ComputeMemory::GpuToCpu);
+        {
+            auto& rec = compute.begin();
+            rec.barrier(*d_out, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::TransferSrc);
+            rec.copy(*d_out, *rb, 0U, 0U, sizeof(float));
+            compute.submit_and_wait();
+        }
+        sum_out = *static_cast<const float*>(rb->map());
+        rb->unmap();
+        return best;
+    };
+
+    // 1. ENUMERATE + cost-rank the reduce schedule space, then MEASURE the top-K on-device.
+    const at::DeviceLimits lim;
+    const at::DeviceSpec   spec;
+    at::ReduceSchedule     space[64];
+    const int              cnt = at::enumerate_reduce_schedules(n, lim, space, 64);
+    REQUIRE(cnt > 0);
+    int       topk[10];
+    const int nk = at::rank_reduce_top_k_cost(space, cnt, n, spec, topk, 10);
+
+    double best_ms = 1e30;
+    int    best_threads = 0;
+    int    best_pt      = 0;
+    int    measured     = 0;
+    for (int t = 0; t < nk; ++t)
+    {
+        const at::ReduceSchedule& s  = space[topk[t]];
+        const int                 nb = at::reduce_nblocks(n, s);
+        float                     sum = 0.0F;
+        const double              ms = measure(s.threads, nb, sum);
+        if (ms > 1e29) { continue; }
+        CHECK(sum == static_cast<float>(n)); // ORACLE: every candidate must compute the correct reduction (else it can't win)
+        ++measured;
+        const double gbps = static_cast<double>(n) * sizeof(float) / (ms * 1.0e6);
+        WARN("[reduce-autotune] cand threads=" << s.threads << " pt=" << s.per_thread << " nblocks=" << nb << " -> " << ms << " ms (" << gbps << " GB/s)");
+        if (ms < best_ms) { best_ms = ms; best_threads = s.threads; best_pt = s.per_thread; }
+    }
+    REQUIRE(measured > 0);
+
+    // 2. the hand-tuned (256,8) DEFAULT as the baseline the autotuner must match or beat.
+    float        ht_sum = 0.0F;
+    const double ht_ms  = measure(256, at::reduce_nblocks(n, at::ReduceSchedule{256, 8}), ht_sum);
+    CHECK(ht_sum == static_cast<float>(n));
+
+    const double best_gbps = static_cast<double>(n) * sizeof(float) / (best_ms * 1.0e6);
+    const double ht_gbps   = static_cast<double>(n) * sizeof(float) / (ht_ms * 1.0e6);
+    WARN("[reduce-autotune] N=" << n << " (DRAM-bound) measured " << measured << "/" << nk << " top-K; WINNER threads=" << best_threads
+                                << " pt=" << best_pt << " -> " << best_ms << " ms (" << best_gbps << " GB/s, " << (100.0 * best_gbps / 672.0)
+                                << "% of peak) | hand-tuned 256x8 " << ht_gbps << " GB/s | CUB " << cub_dram_gbps << " GB/s | autotuned/CUB = "
+                                << (best_gbps / cub_dram_gbps) << "x");
+    // the auto-scheduler's winner is at least as fast as the hand-tuned default (that default is IN the search space, so the tuned
+    // pick can never be worse up to measurement noise) and reaches CUB-class DRAM bandwidth.
+    CHECK(best_ms <= ht_ms * 1.05);
+    CHECK(best_gbps > 0.80 * cub_dram_gbps); // at least parity-class with CUB at the DRAM wall
+}
+
 // B-cmp: the CKIR device-wide SCAN (ckir_scan.hpp) dispatches bit-exact on Vulkan vs the CPU oracle — the 3-pass plan
 // (block scan → scan blocksums → add offsets). Inclusive + exclusive; small-int input ⇒ prefix sums are exact in f32.
 TEST_CASE("B-cmp: CKIR device SCAN DISPATCHES on Vulkan == CPU oracle bit-exact", "[gpu-context][vulkan][gpu][kernel][scan]")
@@ -12062,4 +12190,137 @@ TEST_CASE("D-007 D12: spec constants -- one cooked bundle, many pipelines via Vk
     CHECK(std::memcmp(ck.crdr.data(), ck2.crdr.data(), ck.crdr.size()) == 0);
     std::printf("[d12] one cooked bundle (%u B SPIR-V) served scale 2.0 / 3.5 / 0.25 + default(1.0) via VkSpecializationInfo "
                 "(zero recook)\n", ck.spirv_bytes);
+}
+
+// D-007 AS-6b (ADR-0098 §4): AUTOTUNE THE VULKAN/SPIR-V GEMM. `emit_contract_tiled_glsl_sched` is the parameterized GLSL GEMM
+// (block BT×BT, K-depth BK, TM×TM register microtile), so the autotuner drives Vulkan exactly like CUDA: enumerate (BT,BK,TM),
+// compile GLSL→SPIR-V, dispatch + `last_gpu_ms`-time, oracle-validate each, keep the fastest CORRECT. Proves the auto-scheduler
+// is a CROSS-BACKEND compiler property (the Vulkan device gets its own tuned schedule; AS-6a device-keys the DB).
+namespace
+{
+float as6_av(int i, int k) { return static_cast<float>((i * 7 + k) % 13) * 0.01F - 0.06F; }
+float as6_bv(int k, int j) { return static_cast<float>((k * 5 + j) % 11) * 0.008F - 0.04F; }
+bool  as6_correct(const float* cbuf, int mm, int nn, int kk)
+{
+    float maxrel = 0.0F;
+    for (int s = 0; s < 512; ++s)
+    {
+        const int i   = (s * 977) % mm;
+        const int j   = (s * 1471) % nn;
+        double    acc = 0.0;
+        for (int k = 0; k < kk; ++k) { acc += static_cast<double>(as6_av(i, k)) * static_cast<double>(as6_bv(k, j)); }
+        const float ref = static_cast<float>(acc);
+        const float got = cbuf[static_cast<crd::usize>(i) * nn + j];
+        const float rel = (got - ref) / (1.0F + (ref < 0.0F ? -ref : ref));
+        const float ar  = rel < 0.0F ? -rel : rel;
+        if (ar > maxrel) { maxrel = ar; }
+    }
+    return maxrel < 3e-3F;
+}
+} // namespace
+
+TEST_CASE("D-007 AS-6b: autotune the Vulkan/SPIR-V GEMM -- parameterized GLSL schedule + last_gpu_ms search, oracle-gated",
+          "[gpu-context][vulkan][gpu][autotune]")
+{
+    namespace cg = crd::gpu;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    crd::memory::TlsfAllocator alloc(128U << 20U);
+    using cg::compute_usage::storage;
+    using cg::compute_usage::transfer_dst;
+    using cg::compute_usage::transfer_src;
+
+    constexpr int   mm = 512;
+    constexpr int   nn = 512;
+    constexpr int   kk = 512;
+    crd::kir::KGraph g(&alloc);
+    const int        a = g.input(crd::kir::make_shape({mm, kk}), crd::kir::DType::F32);
+    const int        b = g.input(crd::kir::make_shape({kk, nn}), crd::kir::DType::F32);
+    const int        c = g.contract(a, b);
+
+    crd::containers::Array<float> h_a(&alloc);
+    crd::containers::Array<float> h_b(&alloc);
+    crd::containers::Array<float> h_c(&alloc);
+    h_a.resize(static_cast<crd::usize>(mm) * kk);
+    h_b.resize(static_cast<crd::usize>(kk) * nn);
+    h_c.resize(static_cast<crd::usize>(mm) * nn);
+    for (int i = 0; i < mm; ++i) { for (int k = 0; k < kk; ++k) { h_a[static_cast<crd::usize>(i) * kk + k] = as6_av(i, k); } }
+    for (int k = 0; k < kk; ++k) { for (int j = 0; j < nn; ++j) { h_b[static_cast<crd::usize>(k) * nn + j] = as6_bv(k, j); } }
+
+    auto d_a = compute.create_buffer(static_cast<crd::u64>(mm) * kk * 4U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
+    auto d_b = compute.create_buffer(static_cast<crd::u64>(kk) * nn * 4U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
+    auto d_c = compute.create_buffer(static_cast<crd::u64>(mm) * nn * 4U, storage | transfer_src, cg::ComputeMemory::GpuOnly);
+    const auto upload = [&](cg::ComputeBuffer& dst, const void* src, crd::u64 nb) {
+        auto        stg = compute.create_buffer(nb, transfer_src, cg::ComputeMemory::CpuToGpu);
+        auto*       p   = static_cast<crd::u8*>(stg->map());
+        const auto* ss  = static_cast<const crd::u8*>(src);
+        for (crd::u64 i = 0; i < nb; ++i) { p[i] = ss[i]; }
+        stg->unmap();
+        auto& rc = compute.begin();
+        rc.copy(*stg, dst, 0U, 0U, nb);
+        compute.submit_and_wait();
+    };
+    upload(*d_a, h_a.data(), static_cast<crd::u64>(mm) * kk * 4U);
+    upload(*d_b, h_b.data(), static_cast<crd::u64>(kk) * nn * 4U);
+
+    struct Cand { int bt; int bk; int tm; };
+    const Cand     cands[] = {{64, 8, 4}, {64, 16, 4}, {128, 8, 8}, {128, 16, 8}, {64, 8, 8}, {32, 8, 4}, {128, 8, 4}};
+    const crd::u32 pc[4]   = {static_cast<crd::u32>(mm), static_cast<crd::u32>(kk), static_cast<crd::u32>(nn), 1U};
+    double         best_ms = 1.0e30;
+    Cand           best{0, 0, 0};
+    int            measured = 0;
+    int            correct  = 0;
+    auto           rb       = compute.create_buffer(static_cast<crd::u64>(mm) * nn * 4U, transfer_dst, cg::ComputeMemory::GpuToCpu);
+    for (const Cand& cd : cands)
+    {
+        if ((mm % cd.bt) != 0 || (nn % cd.bt) != 0 || (kk % cd.bk) != 0) { continue; }
+        crd::kir::GlslKernel kern(&alloc);
+        if (!crd::kir::emit_contract_tiled_glsl_sched(g, c, cd.bt, cd.bk, cd.tm, kern)) { continue; }
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "gemm", &alloc, true);
+        if (!spv.ok) { continue; }
+        auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 3, 16U);
+        if (pipe == nullptr) { continue; }
+        const crd::u32     gx      = static_cast<crd::u32>((mm / cd.bt) * (nn / cd.bt));
+        cg::ComputeBuffer* binds[3] = {d_a.get(), d_b.get(), d_c.get()};
+        for (int w = 0; w < 2; ++w)
+        {
+            auto& r = compute.begin();
+            r.dispatch(*pipe, crd::containers::ConstSpan<cg::ComputeBuffer*>(binds, 3), pc, 16U, gx, 1U, 1U);
+            compute.submit_and_wait();
+        }
+        double mn = 1.0e30;
+        for (int it = 0; it < 8; ++it)
+        {
+            auto& r = compute.begin();
+            r.dispatch(*pipe, crd::containers::ConstSpan<cg::ComputeBuffer*>(binds, 3), pc, 16U, gx, 1U, 1U);
+            r.barrier(*d_c, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::TransferSrc);
+            compute.submit_and_wait();
+            const double ms = compute.last_gpu_ms();
+            if (ms > 0.0 && ms < mn) { mn = ms; }
+        }
+        {
+            auto& r = compute.begin();
+            r.copy(*d_c, *rb, 0U, 0U, static_cast<crd::u64>(mm) * nn * 4U);
+            compute.submit_and_wait();
+        }
+        const auto* cptr = static_cast<const float*>(rb->map());
+        for (crd::usize i = 0; i < h_c.size(); ++i) { h_c[i] = cptr[i]; }
+        rb->unmap();
+        ++measured;
+        if (!as6_correct(h_c.data(), mm, nn, kk)) { continue; }
+        ++correct;
+        if (mn < best_ms) { best_ms = mn; best = cd; }
+    }
+    REQUIRE(best.bt > 0);
+    CHECK(correct == measured); // every emittable GLSL schedule computes correctly
+    const double gflops = 2.0 * static_cast<double>(mm) * nn * kk / (best_ms * 1.0e6);
+    std::printf("[AS-6b] Vulkan GEMM %dx%dx%d: autotuned BT%d BK%d TM%d -> %.3f ms (%.0f GFLOP/s) from %d/%d correct GLSL schedules\n",
+                mm, nn, kk, best.bt, best.bk, best.tm, best_ms, gflops, correct, measured);
+    CHECK(gflops > 200.0); // the tiled+autotuned Vulkan GEMM is real (a naive one-thread-per-output kernel is ~tens of GFLOP/s)
 }

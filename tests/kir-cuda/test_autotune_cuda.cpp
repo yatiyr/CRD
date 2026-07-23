@@ -9,6 +9,7 @@
 
 #include <crd/kir/ckir.hpp>
 #include <crd/kir/ckir_autotune.hpp>
+#include <crd/kir/ckir_cuda.hpp> // AS-2-for-attention: select_attention_tile (the DB-replay tile selector)
 #include <crd/kir/ckir_tile.hpp>
 #include <crd/kir/cuda/autotune_cuda.hpp> // AS-4: autotune_contract (the packaged search) for the rectangular generalization test
 #include <crd/kir/cuda/backend_cuda.hpp>
@@ -232,4 +233,97 @@ TEST_CASE("AS-4: the autotuner is SHAPE-GENERAL -- rectangular MLP GEMM tunes co
     const double gflops = 2.0 * 2048.0 * 512.0 * 1024.0 / (r.ms * 1.0e6);
     std::printf("[AS-4 gen] rectangular 2048x512x1024: autotuned %.3f ms (%.0f GFLOP/s), %d/%d correct, %.1fx naive; DB replays WarpTiled\n",
                 r.ms, gflops, r.correct, r.measured, r.naive_ms / r.ms);
+}
+
+// AS-4: the FLASH-ATTENTION autotuner over (BR,BC). Same enumerate → MEASURE-on-device → oracle-validate → pick-best loop as the
+// GEMM, now tuning the flash kernel's query/key tile. Each candidate is time_attention'd (GPU-event-timed) and gated against the
+// NAIVE CPU attention (`cpu.run` → eval_cpu, the ground truth — attention is 2·S²·D, feasible on CPU); a FAST tier ⇒ ULP-tolerant.
+// The autotuner's pick is at least as fast as the fixed 64×32 default (here it finds BR=128×BC=32 — the wider query block beats the
+// hard-coded BR=64 at both S) — so flash attention is now a SCHEDULED kernel, not a hard-coded tile.
+TEST_CASE("AS-4: the flash-attention autotuner sweeps (BR,BC), oracle-validates, picks the fastest", "[kir][cuda][gpu][autotune][attention]")
+{
+    crd::memory::TlsfAllocator alloc(512U << 20U);
+    kir::KirBackendCuda        cu(&alloc);
+    if (!cu.valid()) { WARN("no CUDA device available; skipping"); return; }
+    kir::KirBackendCpu cpu(&alloc);
+
+    constexpr int dim      = 64;
+    const double  scale    = 1.0 / 8.0;
+    const int     slens[4] = {512, 1024, 2048, 4096};
+    for (int si = 0; si < 4; ++si)
+    {
+        const int   slen = slens[si];
+        kir::KGraph g(&alloc);
+        const int   q = g.input(kir::make_shape({slen, dim}), kir::DType::F32);
+        const int   k = g.input(kir::make_shape({slen, dim}), kir::DType::F32);
+        const int   v = g.input(kir::make_shape({slen, dim}), kir::DType::F32);
+        const int   y = g.attention(q, k, v, scale);
+
+        const crd::usize              nelem = static_cast<crd::usize>(slen) * static_cast<crd::usize>(dim);
+        crd::containers::Array<float> qv(&alloc);
+        crd::containers::Array<float> kv(&alloc);
+        crd::containers::Array<float> vv(&alloc);
+        crd::containers::Array<float> oracle(&alloc);
+        crd::containers::Array<float> out(&alloc);
+        qv.resize(nelem);
+        kv.resize(nelem);
+        vv.resize(nelem);
+        oracle.resize(nelem);
+        out.resize(nelem);
+        for (crd::usize i = 0; i < nelem; ++i)
+        {
+            qv[i] = 0.02F * static_cast<float>((i * 7U) % 37U) - 0.35F;
+            kv[i] = 0.02F * static_cast<float>((i * 11U) % 41U) - 0.40F;
+            vv[i] = 0.02F * static_cast<float>((i * 5U) % 31U) - 0.30F;
+        }
+        const float* inputs[] = {qv.data(), kv.data(), vv.data()};
+        REQUIRE(cpu.run(g, y, inputs, 3, oracle.data())); // the naive ground-truth reference
+
+        at::DeviceLimits      lim;
+        at::AttentionSchedule space[64];
+        const int             cnt = at::enumerate_attention_schedules(dim, lim, space, 64);
+        REQUIRE(cnt > 0);
+        const auto max_err = [](const float* aa, const float* bb, crd::usize n) {
+            float e = 0.0F;
+            for (crd::usize i = 0; i < n; ++i) { const float d = aa[i] > bb[i] ? aa[i] - bb[i] : bb[i] - aa[i]; if (d > e) { e = d; } }
+            return e;
+        };
+
+        double best_ms   = 1.0e30;
+        int    best_br   = 0;
+        int    best_bc   = 0;
+        int    measured  = 0;
+        for (int ci = 0; ci < cnt; ++ci)
+        {
+            const at::AttentionSchedule& s = space[ci];
+            const kir::ContractTiming    r = cu.time_attention(g, y, s.br, s.bc, inputs, 3, out.data(), 3, 12);
+            if (!r.ok) { continue; }
+            CHECK(max_err(out.data(), oracle.data(), nelem) < 2.0e-3F); // ORACLE gate (fast tier): a wrong tile can never win
+            ++measured;
+            if (r.min_ms < best_ms) { best_ms = r.min_ms; best_br = s.br; best_bc = s.bc; }
+        }
+        REQUIRE(measured > 0);
+
+        // the 64×32 HEURISTIC default (what select_attention_tile emits with no DB row) — the baseline the autotuner must match/beat.
+        const kir::ContractTiming def = cu.time_attention(g, y, 64, 32, inputs, 3, out.data(), 3, 12);
+        REQUIRE(def.ok);
+        CHECK(best_ms <= def.min_ms * 1.05); // the default is IN the search space ⇒ the tuned pick is never worse (up to noise)
+
+        // AS-2-for-attention: select_attention_tile (what run() calls) REPLAYS the checked-in tuned tile for this (device,S,D). For a
+        // TUNED shape (a DB hit) the replayed tile must equal the on-device measured winner ⇒ run() emits the tuned flash kernel with
+        // no runtime search. For an untuned shape it falls back to the heuristic (no equality assertion — the DB simply lacks a row).
+        int db_br = 0;
+        int db_bc = 0;
+        kir::select_attention_tile(dim, slen, cu.device(), db_br, db_bc);
+        int tuned_br = 0;
+        int tuned_bc = 0;
+        const bool is_tuned = crd::kir::lookup_attention_tuned(cu.device(), slen, dim, tuned_br, tuned_bc);
+        if (is_tuned)
+        {
+            CHECK(db_br == best_br); // the checked-in DB row IS the on-device measured winner
+            CHECK(db_bc == best_bc);
+        }
+        std::printf("[attn-autotune] S=%d D=%d: measured %d/%d tiles, WINNER BR=%d BC=%d %.4f ms (heuristic 64x32 %.4f ms); run() -> %dx%d (%s)\n",
+                    slen, dim, measured, cnt, best_br, best_bc, best_ms, def.min_ms, db_br, db_bc, is_tuned ? "DB" : "heuristic");
+    }
 }

@@ -7,7 +7,20 @@
 
 ## Current focus — Phase 3.1.6 **v17 GPU compute (CKIR)** — on the **GPU-program-system detour** (D-007+D-008 MERGED)
 
-> **▶▶ ACTIVE (2026-07-19, cont.): RAY-TRACING DETOUR — C3 `IRayTracingContext` + B9 CKIR RT, built TOGETHER (user-directed,
+> **▶▶▶ ACTIVE (2026-07-23): the OFFLINE RENDERER (D-007 OFF band, rows 46-54) — user-directed "beautiful offline renderer,
+> Blender-class, all domains (CAD/CAM/science/aerospace/games/film/VFX)."** Kicked off with the master research survey
+> `docs/research/2026-07-23-offline-renderer-frontier.md` (the OFF-band frontier: newest 2024-2026 SIGGRAPH/TOG advances mapped
+> onto the planned pillars + Cerid sequencing). ⭐ KEY DECISION from the research: **offline = a WAVEFRONT CONVERGENCE MODE over
+> the EXISTING ReSTIR PT/GI (RT-5/7), not a new renderer** — GRIS (Lin 2022) gives ReSTIR an unbiased offline convergence
+> guarantee, so we reuse everything (row 122's design). Sequence by convergence-leverage: OFF-1 (mode seam, wavefront, adaptive)
+> → OFF-4 path guiding PROMOTED (ReSTIR PG / neural NASG / wavefront-friendly, the biggest convergence multiplier) → OFF-6/7
+> spectral + volumetrics/SSS → OFF-2/3/5 (ReSTIR-BDPT for caustics / MLT tail) → OFF-8/9 (adaptive+firefly / deep-EXR·cryptomatte·LPE).
+> **▶ NEXT: per-pillar deep-dive research docs (OFF-1 orchestrator, OFF-4 guiding), then OFF-1 implementation.** Denoising (OIDN-class
+> AOV CNN) is a FINISHING filter, never in the reference path (the offline mode IS the ground truth that certifies real-time).
+> **[✅ conv-via-FFT / fast-FMA closed 2026-07-23]:** conv-via-FFT already shipped (crushes 4/5); the fast-FMA experiment was the
+> wrong lever (memory-bound loss, 0%) and was REVERTED. D-007 auto-scheduler + generics/modules + flash-attention all stand.
+
+> **▶▶ (2026-07-19, cont.): RAY-TRACING DETOUR — C3 `IRayTracingContext` + B9 CKIR RT, built TOGETHER (user-directed,
 > a deliberate re-sequence ahead of B18/B19).** Frontier + engine research DONE (see the RT research; the C3↔B9 pairing + full
 > scaffolding — 14-stage KStage incl. RT, RT builtins, per-stage create_program dispatch — already exist per D-007 rows 28/29).
 > Gold scope = the planned C3/B9 rows + 2026 frontier (inline rayQuery · RT pipeline+SBT · SER · OMM · cluster-AS/mega-geometry ·
@@ -559,8 +572,82 @@
 > + the offline **`kir_autotune` CLI** (`tools/kir-autotune`, `autotune_contract`) regenerates it from GPU measurements (512/1024/2048³ →
 > 128×128×8, up to 9886 GFLOP/s, 8.4× naive). **AS-3**: `predict_contract_ms` roofline×occupancy cost model — ⛔ MUST include the
 > register-file limiter ([[feedback_gpu_cost_model_must_include_register_occupancy]]) — top-6 of 1516 BEATS the hand optimum (0.957×), 253× fewer
-> compiles. Gates GREEN: kir [autotune] + CUDA 81377/15, tidy-clean. **▶ AS-4 (broaden ops + beat cuBLAS/cuFFT/cuDNN boards) · AS-5
-> (e-graph superopt) · AS-6 (cross-backend/device) NEXT; then generics/modules; node editor after crd-hesap.**
+> compiles. **AS-4** cuBLAS boards: raw GEMM parity (beats Sgemm on 1024³, 1.04×) after the FMA-tier fix
+> ([[feedback_fast_tier_must_enable_fma_bitexact_flags_cripple_gemm]]); **FUSED GEMM+bias+SiLU CRUSHES cuBLAS 2.40–2.88× on memory-bound MLP**
+> (the moat cuBLAS can't fuse); shape-general (rectangular). **AS-6** cross-backend: **AS-6a** device-keyed DB (per-GPU replay,
+> `select_schedule(g,node,"sm_89")`); **AS-6b** parameterized GLSL GEMM (`emit_contract_tiled_glsl_sched`) → autotunes VULKAN/SPIR-V
+> too (512³ → BT64·BK16·TM4 6341 GFLOP/s, winner DIFFERS from CUDA's ⇒ per-backend tuning). Gates GREEN: kir [autotune] 37/5, CUDA
+> 81389/17, Vulkan AS-6b 4/1, tidy-clean; boards `docs/bench/2026-07-22-as4-*`; lesson 16. **AS-5** `KGraph::superoptimize()`:
+> equality-saturation (canonicalize commutative ops → fold/CSE/DCE to a fixpoint) beats greedy optimize() on `(a*b+c)*(b*a+c)` (9→7
+> nodes, bit-exact) — the commutative CSE positional matching misses; ⭐ for a BIT-EXACT compiler that's the WHOLE safe superopt
+> space (reassoc/distributivity change rounding → fast/ULP-tier only). **The auto-scheduler is a cross-backend + cross-device,
+> vendor-crushing, superoptimizing compiler property — AS-1/2/3/4(GEMM)/5/6 ALL DONE.**
+> **[✅ AS-4 OP-GENERALITY — the auto-scheduler beyond Contract 2026-07-23 — detour row 58]:** the SAME enumerate→cost-rank→measure→
+> oracle-validate→pick-best loop now tunes a device-wide REDUCTION (`enumerate_reduce_schedules`/`predict_reduce_ms`/
+> `rank_reduce_top_k_cost` in `ckir_autotune.hpp`, backend-free + unit-tested: 33 valid (threads, per_thread) schedules for N=2²⁴,
+> hand-tuned 256×8 a member, cost model ranks saturating>starved). Measured board (`[.reduce-autotune]` Vulkan,
+> `docs/bench/2026-07-23-as4-ckir-reduce-autotune.md`): top-10 dispatched+GPU-timed+ORACLE-VALIDATED (all sum==N), **autotuned WINNER
+> 128×64 → 636.7 GB/s (94.7% of 672 peak) BEATS hand-tuned default (631.9) AND CUB DeviceReduce (602.6) = 1.057×** at matched
+> bit-exact accuracy ⇒ AS is a GENERAL kernel auto-scheduler, not a Contract special case. HONEST: reduce margin is inherently small
+> (memory-bound; the value is op-generality). Gates: kir [autotune] 193/7, tidy-clean.
+> **[✅ AS-4 FLASH-ATTENTION FUSION 2026-07-23 — detour row 58]:** a first-class `KOp::Attention` intrinsic (O=softmax(Q·Kᵀ·scale)·V,
+> builder `g.attention(q,k,v,scale)`) that the CUDA backend FUSES into ONE tiled online-softmax (flash) kernel (`emit_attention_flash_cuda`
+> + `select_attention_tile` in `ckir_cuda.hpp`; `run()` dispatches KOp::Attention). CPU oracle = naive reference (`eval_cpu`); FAST tier
+> (online softmax reassociates ⇒ ULP-tolerant). The S×S scores NEVER hit DRAM — the moat the unfused 3-kernel path can't cross.
+> Gate GREEN: intrinsic oracle == GM-6 expanded attention to 1e-12; the flash kernel (cu.run) == naive oracle to 3e-9 (S=256/512/300);
+> crush GROWS with S — flash vs unfused **2.02× @ S=2048, 3.93× @ S=4096** (D=64, both ~1e-8 vs double ref; small S loses ⇒
+> schedulable). Boards `docs/bench/2026-07-23-as4-flash-attention-fusion.md` (+ prototype `bench/gpu-compute/flash_attention_bench.cu`).
+> CUDA suite 81404/18, [attention] kir+cuda green, tidy-clean.
+> **[✅ AS-4 FLASH (BR,BC) AUTOTUNER 2026-07-23]:** the flash tile is now SCHEDULED — `enumerate_attention_schedules` (backend-free,
+> unit-tested: 16 tiles D=64, 64×32 a member, shared-fit gated) + `KirBackendCuda::time_attention` (GPU-event-timed) run the same
+> enumerate→measure→oracle-validate→pick-best loop; the search finds **BR=128×BC=32 beats the hard-coded BR=64** at S=1024 (1.018×)
+> + S=4096 (1.040×), all 16 tiles oracle-correct (fast tier, gated vs the naive CPU attention). **AS-2-for-attention WIRED: winners
+> checked in (`ckir_attention_db.inc` {device,S,D,BR,BC}; sm_89/D=64/S∈{512,1024,2048,4096}→128×32) + `lookup_attention_tuned`;
+> `select_attention_tile(dim,S,device,…)` consults the DB first (heuristic 64×32 on a miss) ⇒ run() emits the TUNED flash kernel with
+> no runtime search (the select_schedule/lookup_tuned pattern); flash-vs-oracle S=512 DB-tuned still 3.1e-9.** CUDA suite 81496/19,
+> kir [autotune] 257/9, tidy-clean.
+> **[✅ CONV-via-FFT status + FMA hypothesis REJECTED 2026-07-23]:** conv-via-FFT fusion is ALREADY SHIPPED (`build_fft{1,2}d_convolution*`
+> in ckir_fft.hpp; board 2026-07-13-gpu-fft-cufft-gold.md) — crushes cuFFT 4/5 regimes (1-D 1.99×, 2-D 256² 2.90×, batched 1.16×,
+> R2C 1.14×); the one loss (2-D single-image 1024² 0.40×) is MEMORY-bound (4 transpose passes, 88 MB vs cuFFT 56 MB), the board
+> already names the lever (transpose-on-write fusion, a fresh-context-scale FFT rewrite). ⛔ Added a fast/ULP compute tier
+> (`emit_compute_kernel_glsl(…, fast_fma)` strips `precise` ⇒ driver FMA), ULP-correct, but **0% on the conv** ⇒ FMA is the WRONG
+> lever (memory-bound, not ALU) — **REVERTED** (no unproven mode in the emitter); recorded so no one re-tries FMA. Attention DB now
+> D∈{32,64} (D=128 spills; other GPUs env-blocked). **▶ conv-via-FFT BANKED as-is (already crushes 4/5). NEXT: the offline renderer.**
+> **[✅ GM-1 GENERICS + MODULES foundation 2026-07-22 — detour row 61]:** `ckir_module.hpp` — `KModule` = a registry of named
+> GENERIC graph functions (`KFn`), generic over element dtype (monomorphized from the args) + shape (free, ops infer it);
+> `KModule::call(g,name,args)` instantiates one, TYPE-CHECKED at the boundary (arity + uniform dtype → -1, never a wrong graph). A
+> first `stdlib` (silu/softplus/gelu). Gate GREEN (kir): instantiate per dtype+shape, boundary type-checks, library fns COMPOSE
+> (dup instantiations CSE'd via superoptimize), oracle-correct, tidy-clean. **GM-2:** multi-arg generics + `linear` (GEMM+bias) in
+> the stdlib ⇒ a REAL MLP LAYER `gelu(linear(x,W,b))` authored ENTIRELY from named module fns, oracle-correct (its GEMM is
+> autotuner-scheduled) — 31 assertions. ⛔ scar [[feedback_ckir_1d_broadcast_aligns_first_axis_bias_needs_reshape]] (1-D broadcast
+> is per-ROW; bias needs reshape [N]→[1,N]). **CKIR is now a composable, type-polymorphic authoring layer (Slang-class) that
+> authors real neural layers — the 2nd world-class gap after the auto-scheduler, now built.**
+> **[✅ GM-3 first-class call-node 2026-07-23 — detour row 62]:** `KOp::Call` (enum END, cook-stable) = a graph node that HOLDS a
+> named module call (fn id in `iidx`, args in the ext pool, output shape from the function's `KFnShapeRule` — `linear_shape` gives
+> [M,K]·[K,N]→[M,N], activations shape-preserving — computed WITHOUT building the body). `KModule::call_node` builds one (same
+> boundary checks as `call`); `KModule::lower_calls(g,roots)` INLINES each Call via its `body` + `KGraph::redirect(from,to)` (Calls
+> resolve in id order ⇒ `gelu(linear)` works), then optimize()/superoptimize() DCEs the dead Calls; emitters+oracle never see a Call
+> (`optimize()` treats a stray Call as opaque). This is the SERIALIZATION + node-editor-node-type seam (a module graph stays named
+> calls, not a flattened blob). Gate GREEN (kir): `gelu(linear(x,W,b))` via call_node → 2 real Call nodes shaped by rule, lowered +
+> optimized to the directly-inlined graph BIT-FOR-BIT, oracle-correct — 45 [module] assertions, tidy-clean.
+> **[✅ GM-4 int/uint generics 2026-07-23 — detour row 63]:** a dtype-generic numeric group (`register_numerics`: `muladd`, `clamp`)
+> — the SAME body monomorphizes F64/F32/I32/U32; on a 32-bit int the Mul/Add WRAP mod 2^32 as the GPU does (oracle
+> `apply_binary_typed`, [[feedback_ckir_oracle_u32_arithmetic_must_wrap_mod32]]). Gate GREEN (kir): u32 100000²+7 WRAPS→1410065415,
+> i32 50000² signed-wraps NEGATIVE, graph structure dtype-INVARIANT, clamp int-generic, GM-3 call-node carries u32 through lowering —
+> 74 [module] assertions.
+> **[✅ GM-5 separate compilation / linkage 2026-07-23 — detour row 64]:** `ffn=gelu∘linear` authored as a module fn that CALLS
+> "linear"+"gelu" by NAME (late binding via `&m` in `KFn::user`), not hand-inlined ⇒ callees independently compilable, consumer names
+> `ffn` blind to internals. `register_stdlib` wires activations+numerics+ffn (7 fns). Gate GREEN (kir): `ffn` == the hand-composed
+> graph BIT-FOR-BIT; as a call-node it is ONE serializable call that lowers/EXPANDS through the linkage to 0 Calls — 85 [module]
+> assertions, full kir binary GREEN (all cases), tidy-clean.
+> **[✅ GM-6 production neural blocks 2026-07-23 — detour row 65]:** `register_neural` — `layernorm`, `softmax`, `attention`
+> (=softmax(q·kᵀ/√d)·v, LINKS softmax), and the payoff `transformer_block` = pre-norm self-attn + FFN + 2 residuals (9-arg composite
+> LINKING layernorm/attention/linear/gelu). NO new KOps — pure composition of existing ops ⇒ all 5 backends emit + oracle certifies.
+> Gate GREEN (kir): layernorm/softmax/attention vs HAND math (correct, not just self-consistent); the 9-arg transformer_block (11 fns)
+> is [S,N]→[S,N] and matches the hand-composed sequence BIT-FOR-BIT — 115 [module] assertions (7 cases), full kir binary 52575/243, tidy-clean.
+> **GM COMPLETE (pre-node-editor): CKIR is a composable, type-polymorphic, dtype-generic authoring language with named + serializable
+> + LINKABLE functions that expresses PRODUCTION neural nets (a real transformer block) — Slang-class.** **▶ REMAINING:
+> AS-4 vendor boards (FFT/reduce/conv, need nvcc/cuFFT baselines) · node-editor FRONTEND after crd-hesap.**
 > **▶ ALSO PENDING: OFF-* offline path tracer (detour rows 46-54). CKIR = a FULL shipping pipeline (IR-as-crdr → cook → variants →
 > zero-compile load + pipeline cache → hot-reload → parallel cook + async warmup + spec constants → auto-scheduler). Closed this arc:
 > B4·B-cmp·B16·C6·B10·B11·C5·D1–D12 + native math + real PTX + AS-1/2/3.)**

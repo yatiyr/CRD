@@ -145,6 +145,7 @@ KirBackendCuda::~KirBackendCuda()
 }
 
 bool KirBackendCuda::valid() const noexcept { return m_impl->ok; }
+const char* KirBackendCuda::device() const noexcept { return m_impl->arch; } // AS-6a: "sm_89" etc. — the DB device key
 
 bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs, int n_inputs, float* out)
 {
@@ -164,6 +165,9 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
     bool       tiled = false;                  // WarpTiled Contract schedule chosen (2D grid, M,N,K arg order)
     bool       fused = false;                  // GEMM+epilogue fusion chosen (extra bias params, epilogue in the store)
     bool       fast_fma = false;               // the WarpTiled fast tier (fma=true) ⇒ compile with FMA fusion (AS-4 perf)
+    bool       attention = false;              // AS-4: KOp::Attention → the fused flash kernel (Q,K,V,O,S,scale args)
+    float      attn_scale = 0.0F;              // the attention scale (1/√d) — a float kernel arg
+    crd::u32   attn_bx = 0;                    // flash block size = the query-tile height BR
     crd::u32   tgx = 0;
     crd::u32   tgy = 0;
     crd::u32   tbx = 0;
@@ -173,7 +177,7 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
     const FuseInfo fuse = detect_fuse(g, output, impl.alloc);
     if (fuse.ok)
     {
-        const TileSchedule sch = select_schedule(g, fuse.contract);
+        const TileSchedule sch = select_schedule(g, fuse.contract, impl.arch);
         if (sch.kind == Sched::WarpTiled && emit_contract_tiled_fused_cuda(g, output, fuse.contract, sch, fuse, impl.alloc, kern) && kern.n_inputs == n_inputs)
         {
             const KNode& cn = g.node(fuse.contract);
@@ -212,7 +216,7 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
         out_bytes   = static_cast<crd::u64>(d0) * d2 * d3 * sizeof(float);
         groups      = (d0 * d2 * d3 + 255U) / 256U;
         // Graph→Tile lowering: the v17-e warp-tiled schedule when its shape constraints hold; else naive (bit-exact).
-        const TileSchedule sch = select_schedule(g, output);
+        const TileSchedule sch = select_schedule(g, output, impl.arch);
         if (sch.kind == Sched::WarpTiled && emit_contract_tiled_cuda(g, output, sch, kern) && kern.n_inputs == n_inputs)
         {
             tiled    = true;
@@ -280,6 +284,25 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
         out_bytes              = numel * sizeof(float);          // scan KEEPS the shape
         groups                 = fast ? d0 : (d0 + 255U) / 256U; // T2: 1 block/row
     }
+    // AS-4 FUSION: a KOp::Attention node → the FUSED flash kernel (one tiled online-softmax pass, no S×S in DRAM). The (BR,BC) tile
+    // is auto-selected for the head dim; grid = ceil(S/BR) blocks × BR threads. Q,K,V,O are all [S,D].
+    else if (outn.op == KOp::Attention)
+    {
+        const KNode&   qn   = g.node(outn.a);
+        const crd::u32 slen = static_cast<crd::u32>(qn.shape.dims[qn.shape.rank - 2]);
+        const int      dim  = static_cast<int>(qn.shape.dims[qn.shape.rank - 1]);
+        int            br   = 0;
+        int            bc   = 0;
+        select_attention_tile(dim, static_cast<int>(slen), impl.arch, br, bc); // DB-tuned (BR,BC) for (arch,S,D), else heuristic
+        if (!emit_attention_flash_cuda(g, output, br, bc, kern) || kern.n_inputs != n_inputs) { return false; }
+        for (int i = 0; i < 3; ++i) { in_bytes[i] = static_cast<crd::u64>(slen) * static_cast<crd::u32>(dim) * sizeof(float); }
+        out_bytes  = static_cast<crd::u64>(slen) * static_cast<crd::u32>(dim) * sizeof(float);
+        attention  = true;
+        attn_scale = static_cast<float>(outn.cval);
+        d0         = slen;
+        attn_bx    = static_cast<crd::u32>(br);
+        groups     = (slen + static_cast<crd::u32>(br) - 1U) / static_cast<crd::u32>(br); // ceil(S/BR) blocks
+    }
     // B0 fan-out: a graph carrying vec/mat/bool/struct VALUES routes to the SCALARIZING emitter (interleaved I/O:
     // `comps` floats per element). CUDA has no native vector arithmetic, so each value becomes `comps` scalar temps.
     else if (graph_uses_vec(g, output, impl.alloc))
@@ -339,7 +362,16 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
     if (!alloc_ok) { return false; }
     void* params[kMaxIn + 8];
     int   np = 0;
-    if (fused) // fused ckir(A, Bm, C, bias0.., M, N, K)
+    if (attention) // ckir(Q, K, V, O, S, scale)
+    {
+        params[np++] = &impl.pool_in[0];
+        params[np++] = &impl.pool_in[1];
+        params[np++] = &impl.pool_in[2];
+        params[np++] = &impl.pool_out;
+        params[np++] = &d0;         // S
+        params[np++] = &attn_scale; // scale (float)
+    }
+    else if (fused) // fused ckir(A, Bm, C, bias0.., M, N, K)
     {
         params[np++] = &impl.pool_in[0];
         params[np++] = &impl.pool_in[1];
@@ -360,9 +392,11 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
             else if (is_reduce(outn.op) || outn.op == KOp::Gather || outn.op == KOp::ScanSum) { params[np++] = &d1; } // these three take just the row size
         }
     }
-    const crd::u32 gx = tiled ? tgx : groups;
-    const crd::u32 gy = tiled ? tgy : 1U;
-    const crd::u32 bx = tiled ? tbx : 256U;
+    crd::u32 gx = groups;
+    crd::u32 gy = 1U;
+    crd::u32 bx = 256U;
+    if (attention) { bx = attn_bx; }        // flash: ceil(S/BR) blocks × BR threads
+    else if (tiled) { gx = tgx; gy = tgy; bx = tbx; } // WarpTiled Contract: 2-D grid
     return launch_and_readback(impl.stream, fn, gx, gy, bx, params, impl.pool_in, in_bytes, n_inputs, kern.input_iidx, inputs, impl.pool_out, out_bytes, out);
 }
 
@@ -487,7 +521,7 @@ ContractTiming KirBackendCuda::time_fused_contract(const KGraph& g, int output, 
     if (!impl.ok || n_inputs < 2 || n_inputs > kMaxIn || iters <= 0) { return t; }
     const FuseInfo fuse = detect_fuse(g, output, impl.alloc);
     if (!fuse.ok) { return t; }
-    const TileSchedule sch = select_schedule(g, fuse.contract);
+    const TileSchedule sch = select_schedule(g, fuse.contract, impl.arch);
     if (sch.kind != Sched::WarpTiled) { return t; }
     GlslKernel kern(impl.alloc);
     if (!emit_contract_tiled_fused_cuda(g, output, fuse.contract, sch, fuse, impl.alloc, kern) || kern.n_inputs != n_inputs) { return t; }
@@ -566,6 +600,95 @@ ContractTiming KirBackendCuda::time_fused_contract(const KGraph& g, int output, 
     }
     for (int i = 0; i < n_inputs; ++i) { if (d_in[i] != 0) { cuMemFree(d_in[i]); } }
     if (d_out != 0) { cuMemFree(d_out); }
+    cuModuleUnload(mod);
+    return t;
+}
+
+// AS-4: measure ONE flash-attention (br,bc) schedule for a KOp::Attention node — self-contained (local module + buffers, freed
+// here) so the autotuner sweeps candidates without touching run()'s persistent cache. GPU-event-timed min-of-iters (upload/readback
+// outside the timed region); `out` gets the last launch for the oracle. Mirrors time_contract_schedule.
+ContractTiming KirBackendCuda::time_attention(const KGraph& g, int output, int br, int bc, const float* const* inputs,
+                                              int n_inputs, float* out, int warmup, int iters)
+{
+    ContractTiming t;
+    auto&          impl = *m_impl;
+    if (!impl.ok || n_inputs != 3 || iters <= 0) { return t; }
+    const KNode& an = g.node(output);
+    if (an.op != KOp::Attention) { return t; }
+    const KNode& qn = g.node(an.a);
+    if (qn.shape.rank != 2) { return t; }
+    const crd::u32 slen  = static_cast<crd::u32>(qn.shape.dims[0]);
+    const crd::u32 dim   = static_cast<crd::u32>(qn.shape.dims[1]);
+    const float    scale = static_cast<float>(an.cval);
+
+    GlslKernel kern(impl.alloc);
+    if (!emit_attention_flash_cuda(g, output, br, bc, kern) || kern.n_inputs != n_inputs) { return t; }
+
+    crd::containers::Array<char> cubin(impl.alloc);
+    if (!compile_cubin(kern.source.c_str(), impl.arch, cubin, true)) { return t; } // fast tier: FMA on
+    CUmodule mod = nullptr;
+    if (cuModuleLoadData(&mod, cubin.data()) != CUDA_SUCCESS) { return t; }
+    CUfunction fn = nullptr;
+    if (cuModuleGetFunction(&fn, mod, "ckir") != CUDA_SUCCESS) { cuModuleUnload(mod); return t; }
+
+    const crd::u64 bytes = static_cast<crd::u64>(slen) * dim * sizeof(float);
+    CUdeviceptr    d_q   = 0;
+    CUdeviceptr    d_k   = 0;
+    CUdeviceptr    d_v   = 0;
+    CUdeviceptr    d_o   = 0;
+    bool           mok   = cuMemAlloc(&d_q, bytes) == CUDA_SUCCESS && cuMemAlloc(&d_k, bytes) == CUDA_SUCCESS
+                       && cuMemAlloc(&d_v, bytes) == CUDA_SUCCESS && cuMemAlloc(&d_o, bytes) == CUDA_SUCCESS;
+    if (mok)
+    {
+        mok = cuMemcpyHtoD(d_q, inputs[kern.input_iidx[0]], bytes) == CUDA_SUCCESS
+           && cuMemcpyHtoD(d_k, inputs[kern.input_iidx[1]], bytes) == CUDA_SUCCESS
+           && cuMemcpyHtoD(d_v, inputs[kern.input_iidx[2]], bytes) == CUDA_SUCCESS;
+    }
+    if (mok)
+    {
+        void*    params[6];
+        int      np  = 0;
+        crd::u32 ps  = slen;
+        float    psc = scale;
+        params[np++] = &d_q;
+        params[np++] = &d_k;
+        params[np++] = &d_v;
+        params[np++] = &d_o;
+        params[np++] = &ps;
+        params[np++] = &psc; // ckir(Q,K,V,O,S,scale)
+        const crd::u32 gx = (slen + static_cast<crd::u32>(br) - 1U) / static_cast<crd::u32>(br);
+        const crd::u32 bx = static_cast<crd::u32>(br);
+        for (int w = 0; w < warmup; ++w) { cuLaunchKernel(fn, gx, 1U, 1U, bx, 1U, 1U, 0U, impl.stream, params, nullptr); }
+        cuStreamSynchronize(impl.stream);
+        CUevent ev0 = nullptr;
+        CUevent ev1 = nullptr;
+        if (cuEventCreate(&ev0, CU_EVENT_DEFAULT) == CUDA_SUCCESS && cuEventCreate(&ev1, CU_EVENT_DEFAULT) == CUDA_SUCCESS)
+        {
+            double best = 1.0e30;
+            bool   any  = false;
+            for (int it = 0; it < iters; ++it)
+            {
+                cuEventRecord(ev0, impl.stream);
+                const CUresult lr = cuLaunchKernel(fn, gx, 1U, 1U, bx, 1U, 1U, 0U, impl.stream, params, nullptr);
+                cuEventRecord(ev1, impl.stream);
+                if (cuEventSynchronize(ev1) != CUDA_SUCCESS || lr != CUDA_SUCCESS) { break; }
+                float ms = 0.0F;
+                if (cuEventElapsedTime(&ms, ev0, ev1) == CUDA_SUCCESS) { any = true; if (ms < best) { best = static_cast<double>(ms); } }
+            }
+            if (any)
+            {
+                cuMemcpyDtoH(out, d_o, bytes); // readback for the oracle
+                t.ok     = true;
+                t.min_ms = best;
+            }
+            cuEventDestroy(ev0);
+            cuEventDestroy(ev1);
+        }
+    }
+    if (d_q != 0) { cuMemFree(d_q); }
+    if (d_k != 0) { cuMemFree(d_k); }
+    if (d_v != 0) { cuMemFree(d_v); }
+    if (d_o != 0) { cuMemFree(d_o); }
     cuModuleUnload(mod);
     return t;
 }

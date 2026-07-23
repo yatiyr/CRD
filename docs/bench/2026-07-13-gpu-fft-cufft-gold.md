@@ -143,6 +143,16 @@ It is a substantial FFT-kernel rewrite (fresh-context-scale per the campaign's b
 profiled lever with a proven target (cuFFT reaches 0.0473 ms; it is achievable). Also open: R2C/C2R half-spectrum economy
 (halves the real-image work), batched-image throughput board, VkFFT 2-D peer, larger N via four-step.
 
+**2026-07-23 — the FMA hypothesis, TESTED and REJECTED (the lever is memory, not ALU).** Added a fast/ULP tier to the compute
+emitter (`emit_compute_kernel_glsl(…, fast_fma=true)` drops every `precise` qualifier ⇒ SPIR-V `NoContraction` removed ⇒ the
+driver is free to contract mul+add → FMA), emitted the 2-D conv pipeline in fast mode, ULP-validated (impulse filter still
+recovers the input) — measured in `[.fft2dconv-bench]` (both tiers side-by-side). Result: **fast/precise speedup = 1.004× at
+1024² (and 1.005× at 256²) — i.e. ZERO.** This CONFIRMS the profile above: the 1024² conv is memory/transpose-bound, not
+ALU-bound, so FMA (an ALU lever) cannot move it. The one true lever remains **transpose-on-write fusion** (a memory-traffic
+reduction), not FMA. The fast/ULP experiment was **REVERTED** (it achieved nothing here and the emitter should not carry an
+unproven mode) — recorded so no one re-tries FMA on this memory-bound loss. The one independent keeper from that pass: an unrelated
+tidy cleanup (a nested-ternary → if/else in the spec-constant emit, `ckir_glsl.hpp`).
+
 ### Phase 3 continued — the ncu-driven kernel campaign (same day, "we don't stop until we crush")
 
 Nsight Compute on BOTH sides (cold-L2, locked base clocks — `bench/gpu-fft/cufft_1024_profilee.cu` + our CUDA-emitted
