@@ -1,10 +1,10 @@
 #include <crd/cooker/cook_handler.hpp>
+#include <crd/cooker/cook_io.hpp>
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/containers/string_view.hpp>
 #include <crd/memory/allocators/malloc_allocator.hpp>
-#include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/resource_id.hpp>
 
@@ -17,8 +17,6 @@ static constexpr crd::u8 kPassDepthPrepass = 0U;
 static constexpr crd::u8 kPassForward   = 2U;
 
 #include <cstring>
-
-namespace fs = crd::platform::fs;
 
 namespace crd::cooker
 {
@@ -89,11 +87,13 @@ CookResult material_handler(const CookContext& ctx)
 {
     CookResult result(ctx.allocator);
 
-    crd::containers::String text(ctx.allocator);
-    if (!fs::read_file_text(fs::Path(ctx.source_path), text))
+    crd::containers::Array<crd::u8> src_bytes(ctx.allocator);
+    if (!ctx.io->read_source(src_bytes))
     {
         return result;
     }
+    crd::containers::String text(ctx.allocator);
+    text.append(reinterpret_cast<const char*>(src_bytes.data()), src_bytes.size());
 
     // ── Parse .mat.toml ────────────────────────────────────────────────────
     // Supported keys:
@@ -238,7 +238,7 @@ CookResult material_handler(const CookContext& ctx)
 
 void register_material_handler()
 {
-    register_cook_handler(".mat.toml", material_handler);
+    register_cook_handler(".mat.toml", material_handler, kMaterialHandlerVersion);
 }
 
 } // namespace crd::cooker

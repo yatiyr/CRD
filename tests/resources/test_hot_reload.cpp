@@ -1,4 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
+#include <crd/cooker/cook_command.hpp>
+#include <crd/cooker/cook_handler.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/memory/allocators/thread_safe_allocator.hpp>
 #include <new>
@@ -9,6 +11,7 @@
 #include <crd/resources/resource_manager.hpp>
 
 #include <cstring>
+#include <string_view>
 
 using namespace crd::resources;
 
@@ -264,6 +267,74 @@ TEST_CASE("Hot-reload: subscribe_reload callback fires", "[resources][hot_reload
 
     (void)rm.poll_hot_reload(0U); // drain deferred frees
     (void)crd::platform::fs::remove_file(path);
+}
+
+TEST_CASE("GEO-6: hot-reload rides the subscription seam -- touch source -> incremental recook -> subscriber "
+          "sees the NEW bytes",
+          "[resources][hot_reload][geo6]")
+{
+    // the full loop the editor lives on: cook a root with the REAL processor, mount its PACK, subscribe; touch ONE
+    // source; the incremental recook rewrites only that product; the existing reload seam swaps the payload and
+    // fires the subscriber — GEO-6 adds ZERO new runtime machinery, the cheap recook IS the contribution.
+    namespace fs = crd::platform::fs;
+    crd::cooker::register_builtin_handlers();
+
+    const auto  run_id = ResourceId::mint_random().to_string(&s_hr_alloc);
+    crd::containers::String root_name("hr_geo6_", &s_hr_alloc);
+    root_name.append(run_id);
+    const fs::Path root(crd::containers::StringView(root_name.data(), root_name.size()));
+    REQUIRE(fs::create_directories(root));
+    const fs::Path pack_path = root / "pack.crdr";
+
+    const crd::u8 v1[] = {1, 2, 3};
+    REQUIRE(fs::write_file_binary(root / "v.bin", crd::containers::ConstSpan<crd::u8>(v1, sizeof(v1))));
+    REQUIRE(crd::cooker::cmd_cook(root.generic().data(), pack_path.generic().data()) == 0);
+
+    // the artifact id the processor minted into the sidecar
+    ResourceId blob_id;
+    {
+        crd::containers::String meta_text(&s_hr_alloc);
+        REQUIRE(fs::read_file_text(root / "v.bin.meta", meta_text));
+        const std::string_view sv(meta_text.data(), meta_text.size());
+        const auto             q = sv.find("uuid = \"");
+        REQUIRE(q != std::string_view::npos);
+        blob_id = ResourceId::parse(sv.substr(q + 8U, 36U));
+        REQUIRE(!blob_id.is_null());
+    }
+
+    ResourceManager rm(&s_hr_alloc);
+    rm.register_loader(std::make_unique<HRBlobLoader>());
+    const MountId mid = rm.mount_manifest(pack_path.generic());
+    REQUIRE(mid.is_valid());
+
+    auto handle = rm.load_sync<HRBlobResource>(blob_id);
+    REQUIRE(handle.state() == LoadState::Ready);
+    REQUIRE(handle.get()->bytes.size() == 3U);
+    CHECK(handle.get()->bytes[0] == 1U);
+
+    struct CallbackState
+    {
+        crd::u32 fired = 0U;
+    } cb_state;
+    (void)rm.subscribe_reload(
+        blob_id,
+        [](ResourceId /*id*/, crd::u32 /*gen*/, void* user) { ++static_cast<CallbackState*>(user)->fired; },
+        &cb_state);
+
+    // touch the SOURCE and recook incrementally (only v.bin's job runs — the GEO-6 precision path)
+    const crd::u8 v2[] = {9, 9, 9, 9};
+    REQUIRE(fs::write_file_binary(root / "v.bin", crd::containers::ConstSpan<crd::u8>(v2, sizeof(v2))));
+    REQUIRE(crd::cooker::cmd_cook(root.generic().data(), pack_path.generic().data()) == 0);
+
+    const crd::usize swapped = rm.reload_mount_now(mid);
+    CHECK(swapped == 1U);
+    CHECK(cb_state.fired == 1U);
+    CHECK(handle.generation() == 1U);
+    REQUIRE(handle.get()->bytes.size() == 4U); // the subscriber-visible payload IS the recooked artifact
+    CHECK(handle.get()->bytes[0] == 9U);
+
+    (void)rm.poll_hot_reload(0U); // drain deferred frees
+    (void)fs::remove_all(root);
 }
 
 TEST_CASE("Hot-reload: unsubscribe prevents callback", "[resources][hot_reload]")

@@ -2019,6 +2019,72 @@ public:
         end_and_wait(cmd);
     }
 
+    // GEO-7: the scene-geometry draw — draw_storage's descriptor seam + draw_depth's clear-colour+depth pass (depth
+    // write ON). No per-draw SSBO readback (scene buffers are consumed by the GPU, downloaded on demand via
+    // download_storage); the colour readback keeps the RET-2 post-draw TRANSFER_SRC contract overlays rely on.
+    void draw_storage_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, float clear_depth,
+                            DepthCompare compare, IStorageBuffer& storage, crd::u32 vertex_count) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        auto& s = static_cast<VulkanStorageBuffer&>(storage);
+        if (!m_api.valid() || !p.valid() || m_desc_pool == VK_NULL_HANDLE || !t.has_depth()) { return; }
+
+        // the storage descriptor at set 0 / binding 0 (the draw_storage seam — VERTEX+FRAGMENT visible)
+        vkResetDescriptorPool(m_device, m_desc_pool, 0);
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool     = m_desc_pool;
+        dsai.descriptorSetCount = 1U;
+        dsai.pSetLayouts        = &m_storage_set_layout;
+        VkDescriptorSet dset = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return; }
+        VkDescriptorBufferInfo dbi{s.buf(), 0, VK_WHOLE_SIZE};
+        VkWriteDescriptorSet   wr{};
+        wr.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wr.dstSet          = dset;
+        wr.dstBinding      = 0U;
+        wr.descriptorCount = 1U;
+        wr.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        wr.pBufferInfo     = &dbi;
+        vkUpdateDescriptorSets(m_device, 1U, &wr, 0U, nullptr);
+
+        VkCommandBuffer cmd = begin_cmd();
+        if (cmd == VK_NULL_HANDLE) { return; }
+
+        transition(cmd, t.image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
+                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        transition_depth(cmd, t.depth_image());
+
+        VkRenderingAttachmentInfo att = colour_clear_attachment(t.view(), clear_color);
+
+        VkRenderingAttachmentInfo dep{};
+        dep.sType                         = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        dep.imageView                     = t.depth_view();
+        dep.imageLayout                   = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        dep.loadOp                        = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        dep.storeOp                       = VK_ATTACHMENT_STORE_OP_STORE; // overlays test against the scene's depth
+        dep.clearValue.depthStencil.depth = clear_depth;
+
+        VkRenderingInfo ri{};
+        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent    = {t.width(), t.height()};
+        ri.layerCount           = 1U;
+        ri.colorAttachmentCount = 1U;
+        ri.pColorAttachments    = &att;
+        ri.pDepthAttachment     = &dep;
+        vkCmdBeginRendering(cmd, &ri);
+
+        set_draw_state(cmd, t.width(), t.height(), 1U, true, to_vk_compare(compare));
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        bind_and_draw(cmd, p, vertex_count);
+        vkCmdEndRendering(cmd);
+
+        copy_colour_to_readback(cmd, t);
+        end_and_wait(cmd);
+    }
+
     // RET-6 (ADR-0105): the OVERLAY draw — see IRasterContext::draw_overlay. Composites onto the target's EXISTING
     // contents (color loadOp=LOAD; the target's post-draw layout is TRANSFER_SRC — the RET-2 contract — so the
     // preserving transition is TRANSFER_SRC → COLOR_ATTACHMENT, never UNDEFINED, which would discard). Standard alpha

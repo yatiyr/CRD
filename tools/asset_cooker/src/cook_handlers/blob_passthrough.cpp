@@ -1,12 +1,10 @@
 #include <crd/cooker/cook_handler.hpp>
+#include <crd/cooker/cook_io.hpp>
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/memory/allocators/malloc_allocator.hpp>
-#include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
-
-namespace fs = crd::platform::fs;
 
 namespace crd::cooker
 {
@@ -21,7 +19,7 @@ CookResult blob_passthrough_handler(const CookContext& ctx)
     CookResult result(ctx.allocator);
 
     crd::containers::Array<crd::u8> src_bytes(ctx.allocator);
-    if (!fs::read_file_binary(fs::Path(ctx.source_path), src_bytes))
+    if (!ctx.io->read_source(src_bytes))
     {
         return result; // ok = false
     }
@@ -47,7 +45,6 @@ CookResult blob_passthrough_handler(const CookContext& ctx)
 void register_glsl_handler();
 void register_material_handler();
 void register_texture_handler();
-void register_mesh_handler();
 void register_wave1_mesh_handler(); // GEO-1: .stl/.obj/.ply via crd-asset-io (our own parsers)
 void register_preset_handler();
 void register_profile_handler();
@@ -55,12 +52,11 @@ void register_obek_handler();
 
 void register_builtin_handlers()
 {
-    register_cook_handler(".bin", blob_passthrough_handler);
+    register_cook_handler(".bin", blob_passthrough_handler, kBlobHandlerVersion);
     register_glsl_handler();
     register_material_handler();
     register_texture_handler();
-    register_wave1_mesh_handler(); // GEO-3: BEFORE the legacy cgltf handler — first-wins gives .glb/.gltf to OUR parser
-    register_mesh_handler();
+    register_wave1_mesh_handler(); // GEO-1..5: OUR parsers own every mesh format (the legacy cgltf path is DELETED)
     register_preset_handler();
     register_profile_handler();
     register_obek_handler();

@@ -5,11 +5,25 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <crd/assetio/threemf.hpp>
 #include <crd/cooker/cook_handler.hpp>
+#include <crd/cooker/cook_io.hpp>
 #include <crd/memory/allocators/malloc_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
+#include <crd/resources/loader.hpp>
 #include <crd/resources/resource_id.hpp>
+#include <crd/resources/zip_archive.hpp>
+#include <crd/scene/relation.hpp>
+#include <crd/scene/render_components.hpp>
+#include <crd/scene/scene_resource.hpp>
+#include <crd/scene/serialize.hpp>
+#include <crd/scene/system.hpp>
+#include <crd/scene/transform.hpp>
+#include <crd/scene/transform_propagation.hpp>
+#include <crd/scene/world.hpp>
+
+#include <memory>
 
 #include <cmath>
 #include <cstring>
@@ -101,6 +115,8 @@ TEST_CASE("cooker: wave1 STL cooks to a MESH CRDR -- interleave exact, position_
     ctx.meta_path   = crd::containers::StringView(meta_path);
     ctx.id          = crd::resources::ResourceId::mint_random();
     ctx.allocator   = &g_alloc;
+    crd::cooker::CookIO ctx_io(ctx.source_path, ctx.meta_path, &g_alloc); // GEO-6: the only road to bytes
+    ctx.io          = &ctx_io;
 
     const crd::cooker::CookResult result = wave1()(ctx);
     REQUIRE(result.ok);
@@ -158,6 +174,8 @@ TEST_CASE("cooker: wave1 multi-object OBJ -- sidecar-.meta extra artifacts with 
     ctx.source_path = crd::containers::StringView(src_path);
     ctx.id          = crd::resources::ResourceId::mint_random();
     ctx.allocator   = &g_alloc;
+    crd::cooker::CookIO ctx_io(ctx.source_path, ctx.meta_path, &g_alloc); // GEO-6: the only road to bytes
+    ctx.io          = &ctx_io;
 
     const crd::cooker::CookResult first = wave1()(ctx);
     REQUIRE(first.ok);
@@ -241,6 +259,8 @@ TEST_CASE("cooker: wave1 GLB cooks via OUR glTF parser -- authored tangents PRES
     ctx.source_path = crd::containers::StringView(src_path);
     ctx.id          = crd::resources::ResourceId::mint_random();
     ctx.allocator   = &g_alloc;
+    crd::cooker::CookIO ctx_io(ctx.source_path, ctx.meta_path, &g_alloc); // GEO-6: the only road to bytes
+    ctx.io          = &ctx_io;
     const crd::cooker::CookResult result = wave1()(ctx); // OUR handler owns .glb now (first-wins over cgltf)
     REQUIRE(result.ok);
 
@@ -261,6 +281,117 @@ TEST_CASE("cooker: wave1 GLB cooks via OUR glTF parser -- authored tangents PRES
     (void)fs::remove_file(fs::Path(crd::containers::StringView(src_path)));
 }
 
+TEST_CASE("cooker: wave1 3MF cooks through OUR ZIP + XML + parser -- MESH artifact + SCEN from the build item",
+          "[cooker][wave1][threemf]")
+{
+    // GEO-5 pt 3: the full self-hosted loop on disk — OUR writer emits the model part (watertight-gated), OUR ZIP
+    // wraps the three OPC parts into a real .3mf file, and the wave1 handler discovers the model part via _rels/.rels,
+    // parses it, and cooks the SAME 48-byte MESH artifact + a SCEN extra from the build item.
+    crd::containers::Array<crd::u8> verts(&g_alloc);
+    crd::containers::Array<crd::u8> idx(&g_alloc);
+    const crd::f32 tetra[4][3] = {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+    for (const auto& v : tetra)
+    {
+        const crd::f32 rec[12] = {v[0], v[1], v[2], 0, 0, 1, 0, 0, 1, 0, 0, 1};
+        for (crd::f32 f : rec) { push_f32(verts, f); }
+    }
+    const crd::u32 faces[12] = {0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3};
+    for (crd::u32 i : faces) { push_u32(idx, i); }
+
+    crd::containers::String model_xml(&g_alloc);
+    REQUIRE(crd::assetio::threemf_write_model_xml(crd::containers::as_const_span(verts),
+                                                  crd::containers::as_const_span(idx), "tetra", &g_alloc, model_xml));
+
+    crd::resources::ZipWriter zw(&g_alloc);
+    const auto part = [](const char* s) {
+        return crd::containers::ConstSpan<crd::u8>(reinterpret_cast<const crd::u8*>(s), std::strlen(s));
+    };
+    REQUIRE(zw.add(crd::assetio::k3mfContentTypes, part(crd::assetio::threemf_content_types_xml())));
+    REQUIRE(zw.add(crd::assetio::k3mfRels, part(crd::assetio::threemf_rels_xml())));
+    REQUIRE(zw.add(crd::assetio::k3mfModelPart,
+                   crd::containers::ConstSpan<crd::u8>(reinterpret_cast<const crd::u8*>(model_xml.c_str()),
+                                                       model_xml.size())));
+    const auto archive = zw.finish();
+    REQUIRE(archive.size() > 0U);
+
+    const char* src_path  = "cerid_wave1_tetra.3mf";
+    const char* scen_meta = "cerid_wave1_tetra.3mf.scen.meta";
+    REQUIRE(fs::write_file_binary(fs::Path(crd::containers::StringView(src_path)),
+                                  crd::containers::as_const_span(archive)));
+
+    crd::cooker::CookContext ctx;
+    ctx.source_path = crd::containers::StringView(src_path);
+    ctx.id          = crd::resources::ResourceId::mint_random();
+    ctx.allocator   = &g_alloc;
+    crd::cooker::CookIO ctx_io(ctx.source_path, ctx.meta_path, &g_alloc); // GEO-6: the only road to bytes
+    ctx.io          = &ctx_io;
+
+    (void)wave1(); // ensure registration, then dispatch by the REAL extension
+    const crd::cooker::CookHandlerFn handler = crd::cooker::find_cook_handler(crd::containers::StringView(".3mf"));
+    REQUIRE(handler != nullptr);
+    const crd::cooker::CookResult result = handler(ctx);
+    REQUIRE(result.ok);
+    CHECK(result.type_fourcc == crd::resources::kFourCC_MESH);
+
+    crd::resources::CrdrFile file(&g_alloc);
+    REQUIRE(crd::resources::crdr_read(crd::containers::as_const_span(result.cooked_bytes), file, &g_alloc)
+            == crd::resources::CrdrError::Ok);
+    const crd::resources::CrdrChunk* vert = crd::resources::crdr_find_chunk(file, crd::resources::kFourCC_VERT);
+    const crd::resources::CrdrChunk* indx = crd::resources::crdr_find_chunk(file, crd::resources::kFourCC_INDX);
+    REQUIRE(vert != nullptr);
+    REQUIRE(indx != nullptr);
+    // the conditioning chain FACETS the tetra: no source normals -> generate at the default 30 deg smooth angle, and
+    // every tetra dihedral (~70.5 deg) is a hard edge -> per-face splits, 4 faces x 3 = 12 vertices (geometry intact)
+    REQUIRE(vert->payload.size() == 12U * 48U);
+    REQUIRE(indx->payload.size() == 12U * 4U);
+    crd::f32 max_x = 0.0F;
+    crd::f32 max_z = 0.0F;
+    for (crd::usize vi = 0; vi < 12U; ++vi)
+    {
+        const crd::u8* rec = vert->payload.data() + vi * 48U;
+        const crd::f32 x   = read_f32(rec + 0);
+        const crd::f32 z   = read_f32(rec + 8);
+        if (x > max_x) { max_x = x; }
+        if (z > max_z) { max_z = z; }
+    }
+    CHECK(max_x == 1.0F); // metres in, metres out — the writer's unit="meter" round-trips at scale 1
+    CHECK(max_z == 1.0F);
+
+    // the build item decomposed into a SCEN extra artifact (the glTF scene seam, format-agnostic) — and the scene
+    // INSTANTIATES with the drawable wired to the cooked MESH by ResourceId (the source_mesh fan-out contract)
+    const crd::cooker::ExtraArtifact* scen = nullptr;
+    for (crd::usize i = 0; i < result.extra_artifacts.size(); ++i)
+    {
+        if (result.extra_artifacts[i].type_fourcc == crd::scene::kFourCC_SCEN) { scen = &result.extra_artifacts[i]; }
+    }
+    REQUIRE(scen != nullptr);
+    crd::scene::SceneLoader     loader;
+    crd::resources::LoadContext lctx;
+    lctx.id        = scen->id;
+    lctx.bytes     = crd::containers::as_const_span(scen->cooked_bytes);
+    lctx.manager   = nullptr;
+    lctx.allocator = &g_alloc;
+    void* payload  = loader.load(lctx);
+    REQUIRE(payload != nullptr);
+    auto* res = static_cast<crd::scene::SceneResource*>(payload);
+
+    crd::scene::World world{&g_alloc};
+    world.register_component<crd::scene::Transform>(crd::scene::transform_serialize_trait());
+    world.register_component<crd::scene::TransformDirtyFlag>(crd::scene::StorageHint::SparseSet);
+    world.register_builtin_relations();
+    world.register_system(std::make_unique<crd::scene::TransformPropagation>());
+    crd::scene::register_render_components(world);
+    const crd::scene::SceneInstantiation inst = world.instantiate_scene(*res);
+    REQUIRE(inst.entities.size() == 1U); // one build item -> one root entity
+    const auto* mr = world.get_component<crd::scene::MeshRenderer>(inst.entities[0]);
+    REQUIRE(mr != nullptr);
+    CHECK(mr->mesh == ctx.id);          // the drawable references the cooked MESH artifact
+    CHECK(mr->material.is_null());      // the writer emits no materials — honestly unbound
+
+    (void)fs::remove_file(fs::Path(crd::containers::StringView(src_path)));
+    (void)fs::remove_file(fs::Path(crd::containers::StringView(scen_meta)));
+}
+
 TEST_CASE("cooker: wave1 PLY point cloud fails honestly (no triangle geometry)", "[cooker][wave1]")
 {
     const char* ply_text = "ply\nformat ascii 1.0\nelement vertex 2\n"
@@ -273,6 +404,8 @@ TEST_CASE("cooker: wave1 PLY point cloud fails honestly (no triangle geometry)",
     ctx.source_path = crd::containers::StringView(src_path);
     ctx.id          = crd::resources::ResourceId::mint_random();
     ctx.allocator   = &g_alloc;
+    crd::cooker::CookIO ctx_io(ctx.source_path, ctx.meta_path, &g_alloc); // GEO-6: the only road to bytes
+    ctx.io          = &ctx_io;
 
     const crd::cooker::CookResult result = wave1()(ctx);
     CHECK_FALSE(result.ok); // a mesh cook of a point cloud must FAIL loudly, not emit an empty artifact

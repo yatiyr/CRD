@@ -452,6 +452,19 @@ public:
     // Returns false when unsupported. Appended at END (vtable-stable).
     [[nodiscard]] virtual bool download_storage(IStorageBuffer& /*storage*/) { return false; }
 
+    // GEO-7 (D-007 row 72): the SCENE-GEOMETRY draw — `draw_storage`'s vertex-pulling seam WITH a real depth pass:
+    // clear colour to `clear` and depth to `clear_depth`, then draw `vertex_count` vertices with the depth test at
+    // `compare` (depth WRITE on — this is the scene pass overlays later test against). `storage` binds at set 0 /
+    // binding 0, VERTEX+FRAGMENT visible (the GEO-1 pulling path: the VS fetches indices/vertices/instances by
+    // `VertexIndex`). Target must come from `create_color_depth_target`. Default (backends without the override)
+    // falls back to the DEPTHLESS draw_storage — the draw_bindless_depth precedent. Appended at END (vtable-stable).
+    virtual void draw_storage_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
+                                    float /*clear_depth*/, DepthCompare /*compare*/, IStorageBuffer& storage,
+                                    crd::u32 vertex_count)
+    {
+        draw_storage(target, program, clear, storage, vertex_count);
+    }
+
     // RET-6 (ADR-0105): the OVERLAY draw — compose instanced primitives ONTO an existing target: color loadOp=LOAD
     // (the previous contents STAY — never cleared), standard alpha blending (srcAlpha · 1−srcAlpha), and a READ-ONLY
     // depth test at `compare` when the target carries a depth buffer (depth writes are never enabled; on a depthless

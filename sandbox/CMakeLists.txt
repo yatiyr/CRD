@@ -18,14 +18,17 @@ target_link_libraries(crd-sandbox PRIVATE
     crd-gpu-context          # ADR-0105: the ONE graphics layer
     crd-gpu-context-vulkan
     crd-kir                  # the CKIR canvas scene (KGraph → create_program)
+    crd-scene                # GEO-7: the ADR-0050 World the imported scene instantiates into
+    crd-scene-render         # GEO-7: chunk-grain extract/cull/submit through gpu-context
+    crd-resources            # GEO-7: the mounted demo PACK (mesh + PBRM loaders)
+    crd-geometry-spatial     # GEO-7: OctreeBuildOptions for the SpatialBVHIndex configure
     crd-jobs
     crd-log
     crd-memory
     crd-perf       # D-003 v0h: profiler substrate
     crd-perf-ui    # D-003 v0h: profiler ImGui frontend (ProfilerPanel)
     glfw                     # RET-5: glfwGetWin32Window — the native HWND for create_present_surface
-    # ⛔ crd-rhi / crd-rhi-vulkan / crd-renderer / crd-draw / crd-scene / crd-shader* — RETIRED from the sandbox
-    #    (ADR-0105). crd-imgui still links the frozen rhi half transitively until RET-7 kills ImGuiLayer.
+    # ⛔ crd-rhi / crd-rhi-vulkan / crd-renderer / crd-shader* — RETIRED (ADR-0105; deleted at RET-8).
 )
 target_compile_definitions(crd-sandbox PRIVATE CRD_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 crd_enable_default_pch(crd-sandbox)

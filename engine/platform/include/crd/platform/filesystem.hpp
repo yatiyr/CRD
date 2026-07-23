@@ -54,6 +54,9 @@ private:
 
 [[nodiscard]] bool create_directories(const Path& path) noexcept;
 [[nodiscard]] bool remove_file(const Path& path) noexcept;
+// Rename/move `from` to `to`, REPLACING an existing destination (POSIX rename semantics on all platforms).
+// Same-volume renames are atomic — the write-temp → rename publish primitive.
+[[nodiscard]] bool rename_file(const Path& from, const Path& to) noexcept;
 [[nodiscard]] bool remove_all(const Path& path) noexcept;
 void list_directory(const Path& path, containers::Array<Path>& out) noexcept;
 } // namespace crd::platform::fs

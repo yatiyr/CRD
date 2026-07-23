@@ -1,5 +1,20 @@
+// cook_command.cpp — GEO-6 (D-007 row 71): the dependency-graph ASSET PROCESSOR (the Bevy-v2/O3DE consensus).
+//
+// Per source job: the cook database records the input edges CookIO saw last run (source · .meta · auxiliary files
+// · id-stability sidecars, each with its content hash) and every product. The incremental decision re-hashes
+// EXACTLY those edges — on a full match the handler NEVER RUNS and the cached artifacts serve (the ninja depfile
+// model: new inputs can only appear if an old input changed, which forces the recook that discovers them).
+// Undeclared dependencies are structurally impossible: handlers have no road to bytes except CookIO, so every
+// byte a cook consumed IS an edge.
+//
+// Crash safety: `begin <src>` journals durably before a job's artifacts are written, `commit <src>` after; a
+// killed run leaves a dangling begin and that source recooks unconditionally next run (its cache is distrusted).
+// Artifacts, the database, and the PACK all publish via write-temp → rename — no consumer ever sees a torn file.
+
 #include <crd/cooker/cook_command.hpp>
+#include <crd/cooker/cook_db.hpp>
 #include <crd/cooker/cook_handler.hpp>
+#include <crd/cooker/cook_io.hpp>
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
@@ -14,8 +29,8 @@
 #include <cstring>
 
 namespace fs = crd::platform::fs;
-using crd::resources::ResourceId;
 using crd::resources::ManifestEntry;
+using crd::resources::ResourceId;
 
 namespace crd::cooker
 {
@@ -27,36 +42,16 @@ namespace
 crd::memory::MallocAllocator g_cook_alloc;
 // NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
-// ── FNV-1a 64-bit hash ─────────────────────────────────────────────────────
-
-constexpr crd::u64 kFnvOffset64 = 14695981039346656037ULL;
-constexpr crd::u64 kFnvPrime64  = 1099511628211ULL;
-
-crd::u64 fnv1a64(const crd::u8* data, crd::usize size) noexcept
-{
-    crd::u64 hash = kFnvOffset64;
-    for (crd::usize i = 0U; i < size; ++i)
-    {
-        hash ^= static_cast<crd::u64>(data[i]);
-        hash *= kFnvPrime64;
-    }
-    return hash;
-}
-
 // ── Path helpers ───────────────────────────────────────────────────────────
 
 crd::containers::StringView path_extension(const fs::Path& p)
 {
     const crd::containers::StringView sv    = p.generic();
     const auto                        slash = sv.rfind('/');
-    const crd::usize                  fname_start =
-        (slash != crd::containers::StringView::npos) ? slash + 1U : 0U;
+    const crd::usize fname_start = (slash != crd::containers::StringView::npos) ? slash + 1U : 0U;
     const crd::containers::StringView fname = sv.substr(fname_start);
     const auto                        dot   = fname.find('.');
-    if (dot == crd::containers::StringView::npos)
-    {
-        return {};
-    }
+    if (dot == crd::containers::StringView::npos) { return {}; }
     return sv.substr(fname_start + dot);
 }
 
@@ -64,97 +59,71 @@ crd::containers::StringView path_filename(const fs::Path& p)
 {
     const crd::containers::StringView sv    = p.generic();
     const auto                        slash = sv.rfind('/');
-    if (slash == crd::containers::StringView::npos)
-    {
-        return sv;
-    }
+    if (slash == crd::containers::StringView::npos) { return sv; }
     return sv.substr(slash + 1U);
 }
 
-// ── Meta file (.meta sidecar) ─────────────────────────────────────────────
-//
-// Format written by this tool:
-//   [id]
-//   uuid = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+// strip the root prefix (+ leading '/') — the database speaks ROOT-RELATIVE paths
+crd::containers::StringView root_relative(crd::containers::StringView path, crd::containers::StringView root)
+{
+    if (path.starts_with(root))
+    {
+        path = path.substr(root.size());
+        if (!path.empty() && path.front() == '/') { path = path.substr(1U); }
+    }
+    return path;
+}
+
+// ── Meta file (.meta sidecar, the [id] section — the PROCESSOR owns main-asset identity) ──────────────────────
 
 bool meta_read(const fs::Path& meta_path, ResourceId& out_id)
 {
     crd::containers::String text(&g_cook_alloc);
-    if (!fs::read_file_text(meta_path, text))
-    {
-        return false;
-    }
+    if (!fs::read_file_text(meta_path, text)) { return false; }
     const std::string_view sv(text.data(), text.size());
     const std::string_view key = "uuid = \"";
-    auto pos = sv.find(key);
-    if (pos == std::string_view::npos)
-    {
-        return false;
-    }
+    auto                   pos = sv.find(key);
+    if (pos == std::string_view::npos) { return false; }
     pos += key.size();
     const auto end = sv.find('"', pos);
-    if (end == std::string_view::npos)
-    {
-        return false;
-    }
+    if (end == std::string_view::npos) { return false; }
     out_id = ResourceId::parse(sv.substr(pos, end - pos));
     return !out_id.is_null();
 }
 
 bool meta_write(const fs::Path& meta_path, const ResourceId& id)
 {
-    const auto id_str = id.to_string(&g_cook_alloc);
+    const auto              id_str = id.to_string(&g_cook_alloc);
     crd::containers::String content(&g_cook_alloc);
     content.append("[id]\n");
     content.append("uuid = \"");
     content.append(id_str.c_str());
     content.append("\"\n");
-    return fs::write_file_text(
-        meta_path, crd::containers::StringView(content.data(), content.size()));
+    return fs::write_file_text(meta_path, crd::containers::StringView(content.data(), content.size()));
 }
 
-// ── Cook cache ─────────────────────────────────────────────────────────────
+// ── Cook cache paths ───────────────────────────────────────────────────────
 
-fs::Path cache_dir(const fs::Path& root)
-{
-    return root / ".cook_cache";
-}
-
-fs::Path cache_key_path(const fs::Path& root, const ResourceId& id)
-{
-    const auto id_str = id.to_string(&g_cook_alloc);
-    crd::containers::String name(&g_cook_alloc);
-    name.append(id_str.c_str());
-    name.append(".key");
-    return cache_dir(root) / crd::containers::StringView(name.data(), name.size());
-}
+fs::Path cache_dir(const fs::Path& root) { return root / ".cook_cache"; }
 
 fs::Path cache_artifact_path(const fs::Path& root, const ResourceId& id)
 {
-    const auto id_str = id.to_string(&g_cook_alloc);
+    const auto              id_str = id.to_string(&g_cook_alloc);
     crd::containers::String name(&g_cook_alloc);
     name.append(id_str.c_str());
     name.append(".crdr");
     return cache_dir(root) / crd::containers::StringView(name.data(), name.size());
 }
 
-bool cache_read_key(const fs::Path& key_path, crd::u64& out_key)
+// write-temp → rename: an artifact file is either absent, the old version, or the new version — never torn
+bool write_file_atomic(const fs::Path& path, crd::containers::ConstSpan<crd::u8> bytes)
 {
-    crd::containers::Array<crd::u8> bytes(&g_cook_alloc);
-    if (!fs::read_file_binary(key_path, bytes) || bytes.size() != sizeof(crd::u64))
-    {
-        return false;
-    }
-    std::memcpy(&out_key, bytes.data(), sizeof(crd::u64));
-    return true;
-}
-
-bool cache_write_key(const fs::Path& key_path, crd::u64 cook_key)
-{
-    crd::u8 buf[sizeof(crd::u64)];
-    std::memcpy(buf, &cook_key, sizeof(crd::u64));
-    return fs::write_file_binary(
-        key_path, crd::containers::ConstSpan<crd::u8>(buf, sizeof(buf)));
+    crd::containers::String tmp(&g_cook_alloc);
+    tmp.append(path.generic().data(), path.generic().size());
+    tmp.append(".tmp");
+    const fs::Path tmp_path(crd::containers::StringView(tmp.data(), tmp.size()));
+    if (!fs::write_file_binary(tmp_path, bytes)) { return false; }
+    return fs::rename_file(tmp_path, path);
 }
 
 // ── Recursive directory scan ───────────────────────────────────────────────
@@ -166,25 +135,52 @@ void scan_recursive(const fs::Path& dir, crd::containers::Array<fs::Path>& out)
 
     for (crd::usize i = 0U; i < entries.size(); ++i)
     {
-        const fs::Path&                  entry = entries[i];
+        const fs::Path&                   entry = entries[i];
         const crd::containers::StringView name  = path_filename(entry);
 
         if (fs::is_directory(entry))
         {
-            if (name != ".cook_cache")
-            {
-                scan_recursive(entry, out);
-            }
+            if (name != ".cook_cache") { scan_recursive(entry, out); }
         }
         else if (fs::is_file(entry) && !name.ends_with(".meta"))
         {
-            // Filter on filename suffix, not path_extension(): the latter uses
-            // first-dot semantics (so `BoomBox.glb.meta` returns `.glb.meta`),
-            // which would let .meta sidecars leak back into the next scan and
-            // grow `.meta.meta.meta...` chains across runs.
+            // Filter on filename suffix, not path_extension(): the latter uses first-dot semantics (so
+            // `BoomBox.glb.meta` returns `.glb.meta`), which would let .meta sidecars leak back into the next
+            // scan and grow `.meta.meta.meta...` chains across runs.
             out.push_back(entry);
         }
     }
+}
+
+// ── The incremental decision: do the recorded edges still hold? ────────────
+
+[[nodiscard]] bool inputs_unchanged(const DbJob& rec, const fs::Path& root)
+{
+    for (crd::usize i = 0; i < rec.inputs.size(); ++i)
+    {
+        const DbInput& input = rec.inputs[i];
+        const fs::Path abs   = root / crd::containers::StringView(input.path.data(), input.path.size());
+        crd::containers::Array<crd::u8> bytes(&g_cook_alloc);
+        const bool                      exists_now = fs::read_file_binary(abs, bytes);
+        if (exists_now != input.existed) { return false; } // appearance/disappearance IS a change
+        if (exists_now && cook_hash64(crd::containers::as_const_span(bytes)) != input.content_hash)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+// every product's cached artifact present AND hash-intact (a torn cache file must force a recook, not ship)
+[[nodiscard]] bool products_intact(const DbJob& rec, const fs::Path& root)
+{
+    for (crd::usize p = 0; p < rec.products.size(); ++p)
+    {
+        crd::containers::Array<crd::u8> bytes(&g_cook_alloc);
+        if (!fs::read_file_binary(cache_artifact_path(root, rec.products[p].id), bytes)) { return false; }
+        if (cook_hash64(crd::containers::as_const_span(bytes)) != rec.products[p].artifact_hash) { return false; }
+    }
+    return true;
 }
 
 // ── Log entry ──────────────────────────────────────────────────────────────
@@ -218,14 +214,14 @@ int cmd_cook(const char* root_cstr, const char* out_cstr)
         return 1;
     }
 
+    CookDb db(&g_cook_alloc);
+    db.load(root);
+
     // Recursive scan, sorted for determinism.
     crd::containers::Array<fs::Path> source_files(&g_cook_alloc);
     scan_recursive(root, source_files);
     std::sort(source_files.begin(), source_files.end(),
-              [](const fs::Path& a, const fs::Path& b)
-              {
-                  return a.generic() < b.generic();
-              });
+              [](const fs::Path& a, const fs::Path& b) { return a.generic() < b.generic(); });
 
     struct ArtifactInfo
     {
@@ -233,34 +229,20 @@ int cmd_cook(const char* root_cstr, const char* out_cstr)
         crd::containers::String         rel_path;
         crd::u32                        type_fourcc;
         crd::containers::Array<crd::u8> bytes;
-        bool                            from_cache;
     };
 
-    crd::containers::Array<ArtifactInfo> artifacts(&g_cook_alloc);
-    crd::containers::Array<LogEntry>     log_entries(&g_cook_alloc);
-    artifacts.reserve(source_files.size());
-    log_entries.reserve(source_files.size());
+    crd::containers::Array<ArtifactInfo>            artifacts(&g_cook_alloc);
+    crd::containers::Array<LogEntry>                log_entries(&g_cook_alloc);
+    crd::containers::Array<crd::containers::String> live_sources(&g_cook_alloc);
 
     const crd::containers::StringView root_sv = root.generic();
 
     for (const fs::Path& src : source_files)
     {
-        const crd::containers::StringView ext = path_extension(src);
+        const crd::containers::StringView ext    = path_extension(src);
+        const crd::containers::StringView rel_sv = root_relative(src.generic(), root_sv);
 
-        // Derive relative path (strip root prefix + leading slash).
-        crd::containers::StringView rel_sv = src.generic();
-        if (rel_sv.starts_with(root_sv))
-        {
-            rel_sv = rel_sv.substr(root_sv.size());
-            if (!rel_sv.empty() && rel_sv.front() == '/')
-            {
-                rel_sv = rel_sv.substr(1U);
-            }
-        }
-
-        // Look up the handler BEFORE touching the .meta sidecar. Files without
-        // a registered handler (LICENSES.md, .gitignore, generator scripts) are
-        // not assets and must not pollute the source tree with stale sidecars.
+        // Handler lookup BEFORE touching the .meta sidecar: non-assets must not grow stale sidecars.
         const CookHandlerFn handler = find_cook_handler(ext);
         if (handler == nullptr)
         {
@@ -271,21 +253,22 @@ int cmd_cook(const char* root_cstr, const char* out_cstr)
             log_entries.push_back(std::move(le));
             continue;
         }
+        const crd::u32 handler_version = find_cook_handler_version(ext);
 
-        // Resolve .meta sidecar (cookable files only).
+        live_sources.push_back(crd::containers::String(rel_sv.data(), rel_sv.size(), &g_cook_alloc));
+
+        // Resolve the main-asset id (the processor owns identity; the .meta is ALSO a recorded input below).
         crd::containers::String meta_str(&g_cook_alloc);
         meta_str.append(src.generic().data(), src.generic().size());
         meta_str.append(".meta");
-        const fs::Path meta_path(
-            crd::containers::StringView(meta_str.data(), meta_str.size()));
+        const fs::Path meta_path(crd::containers::StringView(meta_str.data(), meta_str.size()));
 
         ResourceId asset_id;
         if (fs::is_file(meta_path))
         {
             if (!meta_read(meta_path, asset_id))
             {
-                std::fprintf(stderr, "cook: malformed .meta for %s, regenerating\n",
-                             src.generic().data());
+                std::fprintf(stderr, "cook: malformed .meta for %s, regenerating\n", src.generic().data());
                 asset_id = ResourceId::mint_random();
                 (void)meta_write(meta_path, asset_id);
             }
@@ -295,195 +278,172 @@ int cmd_cook(const char* root_cstr, const char* out_cstr)
             asset_id = ResourceId::mint_random();
             if (!meta_write(meta_path, asset_id))
             {
-                std::fprintf(stderr, "cook: failed to write .meta for %s\n",
-                             src.generic().data());
+                std::fprintf(stderr, "cook: failed to write .meta for %s\n", src.generic().data());
                 return 1;
             }
         }
 
-        const auto id_str = asset_id.to_string(&g_cook_alloc);
-
-        // Read source bytes for hash.
-        crd::containers::Array<crd::u8> src_bytes(&g_cook_alloc);
-        if (!fs::read_file_binary(src, src_bytes))
+        // ── the incremental decision: skip WITHOUT running the handler ────────────────────────────────────────
+        const DbJob* rec = db.find_job(rel_sv);
+        if (rec != nullptr && !db.is_distrusted(rel_sv) && rec->handler_version == handler_version
+            && rec->products.size() > 0U && inputs_unchanged(*rec, root) && products_intact(*rec, root))
         {
-            std::fprintf(stderr, "cook: failed to read: %s\n", src.generic().data());
+            for (crd::usize p = 0; p < rec->products.size(); ++p)
+            {
+                const DbProduct& prod = rec->products[p];
+                ArtifactInfo     info{ResourceId{}, crd::containers::String(&g_cook_alloc), 0U,
+                                      crd::containers::Array<crd::u8>(&g_cook_alloc)};
+                info.id          = prod.id;
+                info.rel_path    = crd::containers::String(prod.name.data(), prod.name.size(), &g_cook_alloc);
+                info.type_fourcc = prod.type_fourcc;
+                if (!fs::read_file_binary(cache_artifact_path(root, prod.id), info.bytes))
+                {
+                    std::fprintf(stderr, "cook: cache read failed for %s\n", prod.name.c_str());
+                    return 1;
+                }
+                artifacts.push_back(std::move(info));
+
+                LogEntry le;
+                le.rel_path = crd::containers::String(prod.name.data(), prod.name.size(), &g_cook_alloc);
+                le.uuid     = crd::containers::String(prod.id.to_string(&g_cook_alloc).c_str(), &g_cook_alloc);
+                le.status   = "skipped";
+                log_entries.push_back(std::move(le));
+            }
+            continue;
+        }
+
+        // ── cook: journal begin → run through CookIO → publish artifacts → record → commit ────────────────────
+        if (!db.journal_begin(root, rel_sv))
+        {
+            std::fprintf(stderr, "cook: journal write failed\n");
             return 1;
         }
-        const crd::u64 source_hash = fnv1a64(src_bytes.data(), src_bytes.size());
 
-        const fs::Path key_file      = cache_key_path(root, asset_id);
-        const fs::Path artifact_file = cache_artifact_path(root, asset_id);
+        CookIO io(src.generic(), crd::containers::StringView(meta_str.data(), meta_str.size()), &g_cook_alloc,
+                  root_sv);
+        {
+            // force-record the source and .meta edges — their content governs the cook key even for handlers
+            // that never look at them (the artifact embeds the .meta's uuid)
+            crd::containers::Array<crd::u8> tmp_bytes(&g_cook_alloc);
+            (void)io.read_source(tmp_bytes);
+            crd::containers::String tmp_text(&g_cook_alloc);
+            (void)io.read_meta(tmp_text);
+        }
 
-        crd::u64 cached_key = 0;
-        const bool has_cached_key = cache_read_key(key_file, cached_key);
-
-        bool                            from_cache = false;
-        crd::containers::Array<crd::u8> artifact_bytes(&g_cook_alloc);
-
-        // Always run the handler to get handler_version for cook_key computation.
-        // If the computed cook_key matches the cached key, we use the cached artifact.
         CookContext ctx;
         ctx.source_path = src.generic();
-        ctx.meta_path   = meta_path.generic();
+        ctx.meta_path   = crd::containers::StringView(meta_str.data(), meta_str.size());
         ctx.id          = asset_id;
         ctx.allocator   = &g_cook_alloc;
+        ctx.io          = &io;
 
         CookResult result = handler(ctx);
         if (!result.ok)
         {
             std::fprintf(stderr, "cook: handler failed for %s\n", src.generic().data());
-            return 1;
+            return 1; // the dangling `begin` distrusts this source next run
         }
 
-        const crd::u64 cook_key =
-            source_hash ^ static_cast<crd::u64>(result.handler_version);
-
-        if (has_cached_key && cook_key == cached_key && fs::is_file(artifact_file))
+        DbJob job(&g_cook_alloc);
+        job.source          = crd::containers::String(rel_sv.data(), rel_sv.size(), &g_cook_alloc);
+        job.handler_version = handler_version;
+        for (crd::usize i = 0; i < io.inputs().size(); ++i)
         {
-            // Cache hit: reuse cached artifact.
-            if (fs::read_file_binary(artifact_file, artifact_bytes))
+            const CookInput& edge = io.inputs()[i];
+            DbInput          input(&g_cook_alloc);
+            const crd::containers::StringView in_rel =
+                root_relative(crd::containers::StringView(edge.path.data(), edge.path.size()), root_sv);
+            input.path         = crd::containers::String(in_rel.data(), in_rel.size(), &g_cook_alloc);
+            input.content_hash = edge.content_hash;
+            input.existed      = edge.existed;
+            job.inputs.push_back(std::move(input));
+        }
+        for (crd::usize d = 0; d < result.dependencies.size(); ++d)
+        {
+            job.runtime_deps.push_back(result.dependencies[d]);
+        }
+
+        // products: main first, then extras in handler order — the PACK preserves this order
+        const auto publish = [&](const ResourceId& id, crd::containers::Array<crd::u8>&& bytes,
+                                 crd::containers::StringView display_name) -> bool {
+            if (!write_file_atomic(cache_artifact_path(root, id), crd::containers::as_const_span(bytes)))
             {
-                from_cache = true;
+                std::fprintf(stderr, "cook: failed to write artifact cache for %.*s\n",
+                             static_cast<int>(display_name.size()), display_name.data());
+                return false;
             }
-        }
-
-        if (!from_cache)
-        {
-            artifact_bytes = std::move(result.cooked_bytes);
-            (void)cache_write_key(key_file, cook_key);
-            if (!fs::write_file_binary(artifact_file,
-                    crd::containers::as_const_span(artifact_bytes)))
+            crd::resources::CrdrFile crdr_file(&g_cook_alloc);
+            if (crd::resources::crdr_read(crd::containers::as_const_span(bytes), crdr_file, &g_cook_alloc)
+                != crd::resources::CrdrError::Ok)
             {
-                std::fprintf(stderr, "cook: failed to write artifact cache: %s\n",
-                             artifact_file.generic().data());
-                return 1;
+                std::fprintf(stderr, "cook: artifact parse failed for %.*s\n",
+                             static_cast<int>(display_name.size()), display_name.data());
+                return false;
             }
-        }
 
-        // Parse artifact to get type_fourcc.
-        crd::resources::CrdrFile crdr_file(&g_cook_alloc);
-        const crd::resources::CrdrError parse_err =
-            crd::resources::crdr_read(
-                crd::containers::as_const_span(artifact_bytes), crdr_file, &g_cook_alloc);
-        if (parse_err != crd::resources::CrdrError::Ok)
-        {
-            std::fprintf(stderr, "cook: artifact parse failed for %s\n",
-                         src.generic().data());
-            return 1;
-        }
+            DbProduct prod(&g_cook_alloc);
+            prod.id            = id;
+            prod.type_fourcc   = crdr_file.type_fourcc;
+            prod.name          = crd::containers::String(display_name.data(), display_name.size(), &g_cook_alloc);
+            prod.artifact_hash = cook_hash64(crd::containers::as_const_span(bytes));
+            job.products.push_back(std::move(prod));
 
-        ArtifactInfo info;
-        info.id          = asset_id;
-        info.rel_path    = crd::containers::String(rel_sv.data(), rel_sv.size(), &g_cook_alloc);
-        info.type_fourcc = crdr_file.type_fourcc;
-        info.bytes       = std::move(artifact_bytes);
-        info.from_cache  = from_cache;
-        artifacts.push_back(std::move(info));
+            ArtifactInfo info{ResourceId{}, crd::containers::String(&g_cook_alloc), 0U,
+                              crd::containers::Array<crd::u8>(&g_cook_alloc)};
+            info.id          = id;
+            info.rel_path    = crd::containers::String(display_name.data(), display_name.size(), &g_cook_alloc);
+            info.type_fourcc = crdr_file.type_fourcc;
+            info.bytes       = std::move(bytes);
+            artifacts.push_back(std::move(info));
 
-        {
             LogEntry le;
-            le.rel_path = crd::containers::String(rel_sv.data(), rel_sv.size(), &g_cook_alloc);
-            le.uuid     = crd::containers::String(id_str.c_str(), &g_cook_alloc);
-            le.status   = from_cache ? "skipped" : "cooked";
+            le.rel_path = crd::containers::String(display_name.data(), display_name.size(), &g_cook_alloc);
+            le.uuid     = crd::containers::String(id.to_string(&g_cook_alloc).c_str(), &g_cook_alloc);
+            le.status   = "cooked";
             log_entries.push_back(std::move(le));
-        }
+            return true;
+        };
 
-        // Process any extra artifacts produced by multi-output handlers (e.g. glTF meshes).
-        for (crd::usize ei = 0U; ei < result.extra_artifacts.size(); ++ei)
+        if (!publish(asset_id, std::move(result.cooked_bytes), rel_sv)) { return 1; }
+        for (crd::usize ei = 0; ei < result.extra_artifacts.size(); ++ei)
         {
-            crd::cooker::ExtraArtifact& extra = result.extra_artifacts[ei];
-
-            const fs::Path extra_key_file      = cache_key_path(root, extra.id);
-            const fs::Path extra_artifact_file = cache_artifact_path(root, extra.id);
-
-            crd::u64 extra_cached_key = 0;
-            const bool has_extra_cached_key = cache_read_key(extra_key_file, extra_cached_key);
-
-            bool                            extra_from_cache = false;
-            crd::containers::Array<crd::u8> extra_bytes(&g_cook_alloc);
-
-            if (has_extra_cached_key && cook_key == extra_cached_key
-                && fs::is_file(extra_artifact_file))
+            ExtraArtifact& extra = result.extra_artifacts[ei];
+            if (!publish(extra.id, std::move(extra.cooked_bytes),
+                         crd::containers::StringView(extra.name.data(), extra.name.size())))
             {
-                if (fs::read_file_binary(extra_artifact_file, extra_bytes))
-                {
-                    extra_from_cache = true;
-                }
-            }
-
-            if (!extra_from_cache)
-            {
-                extra_bytes = std::move(extra.cooked_bytes);
-                (void)cache_write_key(extra_key_file, cook_key);
-                if (!fs::write_file_binary(extra_artifact_file,
-                        crd::containers::as_const_span(extra_bytes)))
-                {
-                    std::fprintf(stderr, "cook: failed to write extra artifact cache for %s\n",
-                                 extra.name.c_str());
-                    return 1;
-                }
-            }
-
-            crd::resources::CrdrFile extra_crdr(&g_cook_alloc);
-            const crd::resources::CrdrError extra_err =
-                crd::resources::crdr_read(
-                    crd::containers::as_const_span(extra_bytes), extra_crdr, &g_cook_alloc);
-            if (extra_err != crd::resources::CrdrError::Ok)
-            {
-                std::fprintf(stderr, "cook: extra artifact parse failed for %s\n",
-                             extra.name.c_str());
                 return 1;
             }
+        }
 
-            const auto extra_id_str = extra.id.to_string(&g_cook_alloc);
-
-            ArtifactInfo einfo;
-            einfo.id          = extra.id;
-            einfo.rel_path    = std::move(extra.name);
-            einfo.type_fourcc = extra_crdr.type_fourcc;
-            einfo.bytes       = std::move(extra_bytes);
-            einfo.from_cache  = extra_from_cache;
-            artifacts.push_back(std::move(einfo));
-
-            {
-                LogEntry le;
-                le.rel_path = crd::containers::String(
-                    artifacts.back().rel_path.data(),
-                    artifacts.back().rel_path.size(),
-                    &g_cook_alloc);
-                le.uuid   = crd::containers::String(extra_id_str.c_str(), &g_cook_alloc);
-                le.status = extra_from_cache ? "skipped" : "cooked";
-                log_entries.push_back(std::move(le));
-            }
+        db.upsert_job(std::move(job));
+        if (!db.journal_commit(root, rel_sv))
+        {
+            std::fprintf(stderr, "cook: journal write failed\n");
+            return 1;
         }
     }
 
-    // Assemble PACK.
-    //
-    // pack_id is derived from the root path so the PACK container UUID is
-    // deterministic across runs (required for byte-identical second-run check).
-    const ResourceId pack_id = ResourceId::from_content(
-        crd::containers::ConstSpan<crd::u8>(
-            reinterpret_cast<const crd::u8*>(root_sv.data()), root_sv.size()));
+    (void)db.prune_missing(live_sources);
 
-    // Build string pool.
+    // ── Assemble PACK ──────────────────────────────────────────────────────
+    //
+    // pack_id derives from the root path — deterministic across runs (the byte-identical gate).
+    const ResourceId pack_id = ResourceId::from_content(crd::containers::ConstSpan<crd::u8>(
+        reinterpret_cast<const crd::u8*>(root_sv.data()), root_sv.size()));
+
     crd::containers::Array<crd::u8>  strp(&g_cook_alloc);
     crd::containers::Array<crd::u32> strp_offsets(&g_cook_alloc);
     strp_offsets.reserve(artifacts.size());
     for (const ArtifactInfo& info : artifacts)
     {
         strp_offsets.push_back(static_cast<crd::u32>(strp.size()));
-        const char*     rp      = info.rel_path.data();
-        const crd::usize rp_size = info.rel_path.size();
-        for (crd::usize j = 0U; j < rp_size; ++j)
+        for (crd::usize j = 0U; j < info.rel_path.size(); ++j)
         {
-            strp.push_back(static_cast<crd::u8>(rp[j]));
+            strp.push_back(static_cast<crd::u8>(info.rel_path.data()[j]));
         }
         strp.push_back(static_cast<crd::u8>('\0'));
     }
 
-    // Build manifest entries with placeholder offsets.
     crd::containers::Array<ManifestEntry> entries(&g_cook_alloc);
     entries.reserve(artifacts.size());
     for (crd::usize i = 0U; i < artifacts.size(); ++i)
@@ -498,16 +458,12 @@ int cmd_cook(const char* root_cstr, const char* out_cstr)
         entries.push_back(e);
     }
 
-    // Pass 1: measure CRDR container size with dummy offsets.
+    // Pass 1: measure container size with dummy offsets; pass 2: final offsets.
     {
         crd::resources::CrdrWriter w1(&g_cook_alloc, pack_id, crd::resources::kFourCC_PACK);
-        manifest_write(
-            w1,
-            crd::containers::as_const_span(entries),
-            crd::containers::as_const_span(strp));
+        manifest_write(w1, crd::containers::as_const_span(entries), crd::containers::as_const_span(strp));
         const crd::containers::Array<crd::u8> crdr_pass1 = w1.finish();
 
-        // Compute real blob_offsets.
         crd::usize blob_pos = crdr_pass1.size();
         for (crd::usize i = 0U; i < artifacts.size(); ++i)
         {
@@ -516,30 +472,30 @@ int cmd_cook(const char* root_cstr, const char* out_cstr)
         }
     }
 
-    // Pass 2: build final CRDR with correct offsets.
     crd::resources::CrdrWriter w2(&g_cook_alloc, pack_id, crd::resources::kFourCC_PACK);
-    manifest_write(
-        w2,
-        crd::containers::as_const_span(entries),
-        crd::containers::as_const_span(strp));
+    manifest_write(w2, crd::containers::as_const_span(entries), crd::containers::as_const_span(strp));
     crd::containers::Array<crd::u8> pack_bytes = w2.finish();
 
     for (const ArtifactInfo& info : artifacts)
     {
-        for (crd::u8 byte : info.bytes)
-        {
-            pack_bytes.push_back(byte);
-        }
+        for (crd::u8 byte : info.bytes) { pack_bytes.push_back(byte); }
     }
 
-    if (!fs::write_file_binary(out_path, crd::containers::as_const_span(pack_bytes)))
+    if (!write_file_atomic(out_path, crd::containers::as_const_span(pack_bytes)))
     {
         std::fprintf(stderr, "cook: failed to write pack: %s\n", out_cstr);
         return 1;
     }
 
+    // the run is complete: publish the database atomically (this also resets the journal)
+    if (!db.save(root))
+    {
+        std::fprintf(stderr, "cook: failed to write cook database\n");
+        return 1;
+    }
+
     // Write cook.log.toml adjacent to out_path.
-    const crd::containers::StringView out_sv    = out_path.generic();
+    const crd::containers::StringView out_sv     = out_path.generic();
     const auto                        out_slash  = out_sv.rfind('/');
     const crd::containers::StringView log_dir_sv = (out_slash != crd::containers::StringView::npos)
                                                        ? out_sv.substr(0U, out_slash + 1U)
@@ -547,8 +503,7 @@ int cmd_cook(const char* root_cstr, const char* out_cstr)
     crd::containers::String log_path_str(&g_cook_alloc);
     log_path_str.append(log_dir_sv.data(), log_dir_sv.size());
     log_path_str.append("cook.log.toml");
-    const fs::Path log_path(
-        crd::containers::StringView(log_path_str.data(), log_path_str.size()));
+    const fs::Path log_path(crd::containers::StringView(log_path_str.data(), log_path_str.size()));
 
     crd::containers::String log(&g_cook_alloc);
     log.append("[cook]\n");

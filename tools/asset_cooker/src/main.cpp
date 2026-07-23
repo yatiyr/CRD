@@ -1,6 +1,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/cooker/cook_command.hpp>
+#include <crd/cooker/cook_db.hpp>
 #include <crd/cooker/cook_handler.hpp>
 #include <crd/memory/allocators/malloc_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
@@ -130,6 +131,82 @@ static int cmd_manifest_dump(const char* pack_path)
     return 0;
 }
 
+// ── graph / why sub-commands (GEO-6: the queryable dependency graph) ──────
+
+static int cmd_graph(const char* root_cstr)
+{
+    const crd::platform::fs::Path root(root_cstr);
+    crd::cooker::CookDb           db(&g_alloc);
+    db.load(root);
+
+    if (db.jobs().size() == 0U)
+    {
+        std::printf("graph: no cook database under %s (run `cook` first)\n", root_cstr);
+        return 1;
+    }
+    for (crd::usize j = 0; j < db.jobs().size(); ++j)
+    {
+        const crd::cooker::DbJob& job = db.jobs()[j];
+        std::printf("job %s (handler v%u)\n", job.source.c_str(), job.handler_version);
+        for (crd::usize i = 0; i < job.inputs.size(); ++i)
+        {
+            const crd::cooker::DbInput& in = job.inputs[i];
+            std::printf("  <- %s %s(%016llx)\n", in.path.c_str(), in.existed ? "" : "[ABSENT] ",
+                        static_cast<unsigned long long>(in.content_hash));
+        }
+        for (crd::usize p = 0; p < job.products.size(); ++p)
+        {
+            const crd::cooker::DbProduct& prod = job.products[p];
+            char type_str[5];
+            crd::resources::fourcc_to_str(prod.type_fourcc, type_str);
+            const auto id_str = prod.id.to_string(&g_alloc);
+            std::printf("  -> %s  type=%s  uuid=%s\n", prod.name.c_str(), type_str, id_str.c_str());
+        }
+        for (crd::usize d = 0; d < job.runtime_deps.size(); ++d)
+        {
+            const auto id_str = job.runtime_deps[d].to_string(&g_alloc);
+            std::printf("  ~> runtime dep %s\n", id_str.c_str());
+        }
+    }
+    return 0;
+}
+
+static int cmd_why(const char* root_cstr, const char* what)
+{
+    const crd::platform::fs::Path root(root_cstr);
+    crd::cooker::CookDb           db(&g_alloc);
+    db.load(root);
+
+    // uuid? → the producing job
+    const crd::resources::ResourceId id = crd::resources::ResourceId::parse(what);
+    if (!id.is_null())
+    {
+        const crd::cooker::DbJob* producer = db.find_producer(id);
+        if (producer == nullptr)
+        {
+            std::printf("why: no job produced %s\n", what);
+            return 1;
+        }
+        std::printf("%s is produced by job %s\n", what, producer->source.c_str());
+        return 0;
+    }
+
+    // otherwise: a root-relative path → every job consuming it (the reverse edge)
+    crd::containers::Array<const crd::cooker::DbJob*> consumers(&g_alloc);
+    db.jobs_consuming(crd::containers::StringView(what), consumers);
+    if (consumers.size() == 0U)
+    {
+        std::printf("why: nothing consumes %s\n", what);
+        return 1;
+    }
+    std::printf("%s is an input of %zu job(s):\n", what, consumers.size());
+    for (crd::usize i = 0; i < consumers.size(); ++i)
+    {
+        std::printf("  %s\n", consumers[i]->source.c_str());
+    }
+    return 0;
+}
+
 // ── Entry point ────────────────────────────────────────────────────────────
 
 static void print_usage(const char* argv0)
@@ -138,8 +215,10 @@ static void print_usage(const char* argv0)
         "Cerid asset cooker\n"
         "Usage:\n"
         "  %s manifest_dump <pack.crdr>                 Print all entries in a PACK file\n"
-        "  %s cook --root <src_dir> --out <pack.crdr>   Cook source assets into a pack\n",
-        argv0, argv0);
+        "  %s cook --root <src_dir> --out <pack.crdr>   Cook source assets into a pack\n"
+        "  %s graph --root <src_dir>                    Dump the dependency graph (source -> inputs -> products)\n"
+        "  %s why --root <src_dir> <path|uuid>          Reverse query: who consumes a file / who produced a uuid\n",
+        argv0, argv0, argv0, argv0);
 }
 
 int main(int argc, char* argv[])
@@ -186,6 +265,42 @@ int main(int argc, char* argv[])
         }
         crd::cooker::register_builtin_handlers();
         return crd::cooker::cmd_cook(root_arg, out_arg);
+    }
+
+    if (std::strcmp(subcmd, "graph") == 0)
+    {
+        const char* root_arg = nullptr;
+        for (int i = 2; i < argc - 1; ++i)
+        {
+            if (std::strcmp(argv[i], "--root") == 0) { root_arg = argv[i + 1]; }
+        }
+        if (root_arg == nullptr)
+        {
+            std::fprintf(stderr, "Usage: %s graph --root <src_dir>\n", argv[0]);
+            return 1;
+        }
+        return cmd_graph(root_arg);
+    }
+
+    if (std::strcmp(subcmd, "why") == 0)
+    {
+        const char* root_arg = nullptr;
+        const char* what     = nullptr;
+        for (int i = 2; i < argc; ++i)
+        {
+            if (std::strcmp(argv[i], "--root") == 0 && i + 1 < argc)
+            {
+                root_arg = argv[i + 1];
+                ++i;
+            }
+            else { what = argv[i]; }
+        }
+        if (root_arg == nullptr || what == nullptr)
+        {
+            std::fprintf(stderr, "Usage: %s why --root <src_dir> <path|uuid>\n", argv[0]);
+            return 1;
+        }
+        return cmd_why(root_arg, what);
     }
 
     std::fprintf(stderr, "asset_cooker: unknown sub-command '%s'\n", subcmd);

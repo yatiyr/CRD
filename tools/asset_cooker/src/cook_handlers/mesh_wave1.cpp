@@ -1,4 +1,5 @@
-// mesh_wave1.cpp — GEO-1 (D-007 row 66): the Wave-1 OWN-PARSER mesh cook handler (.stl / .obj / .ply).
+// mesh_wave1.cpp — GEO-1 (D-007 row 66): the Wave-1 OWN-PARSER mesh cook handler (.stl / .obj / .ply, GEO-3 adds
+// .glb / .gltf, GEO-5 adds .3mf).
 //
 // crd-asset-io parses (OUR parsers, zero 3rd-party) → the crd-geometry VALIDATE hook (validate_triangle_mesh) → the
 // 48-byte interleave (position × .meta position_scale into SI metres, ADR-0078) → the SAME MESH CRDR artifact layout the
@@ -18,8 +19,12 @@
 #include <crd/assetio/obj.hpp>
 #include <crd/assetio/ply.hpp>
 #include <crd/assetio/stl.hpp>
+#include <crd/assetio/threemf.hpp>
+#include <crd/assetio/xml.hpp>
+#include <crd/resources/zip_archive.hpp>
 
 #include <crd/cooker/cook_handler.hpp>
+#include <crd/cooker/cook_io.hpp>
 #include <crd/cooker/mesh_cook_options.hpp>
 #include <crd/cooker/texture_cook.hpp>
 
@@ -43,7 +48,6 @@
 #include <crd/containers/string_view.hpp>
 #include <crd/geometry/mesh/mesh_validate.hpp>
 #include <crd/memory/allocators/malloc_allocator.hpp>
-#include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/resource_id.hpp>
 
@@ -52,48 +56,15 @@
 #include <cstring>
 #include <string_view>
 
-namespace fs = crd::platform::fs;
-
 namespace crd::cooker
 {
 
 namespace
 {
 
-constexpr crd::u32 kWave1HandlerVersion = 1U;
+// v2 (GEO-6): reads flow through CookIO — sidecar ids via stable_id, external inputs recorded as edges
+constexpr crd::u32 kWave1HandlerVersion = 2U;
 constexpr crd::u32 kWave1VertexStride   = 48U; // float3 pos + float3 norm + float2 uv + float4 tan (ADR-0043)
-
-// NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
-crd::memory::MallocAllocator g_wave1_alloc;
-// NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
-
-// ── sidecar .meta helpers (the glTF handler's id-stability pattern, mirrored) ───────────────────────────────────────────
-
-bool wave1_meta_read(const fs::Path& meta_path, crd::resources::ResourceId& out_id)
-{
-    crd::containers::String text(&g_wave1_alloc);
-    if (!fs::read_file_text(meta_path, text)) { return false; }
-    const std::string_view sv(text.data(), text.size());
-    const std::string_view key = "uuid = \"";
-    auto                   pos = sv.find(key);
-    if (pos == std::string_view::npos) { return false; }
-    pos += key.size();
-    const auto end = sv.find('"', pos);
-    if (end == std::string_view::npos) { return false; }
-    out_id = crd::resources::ResourceId::parse(sv.substr(pos, end - pos));
-    return !out_id.is_null();
-}
-
-bool wave1_meta_write(const fs::Path& meta_path, const crd::resources::ResourceId& id)
-{
-    const auto              id_str = id.to_string(&g_wave1_alloc);
-    crd::containers::String content(&g_wave1_alloc);
-    content.append("[id]\n");
-    content.append("uuid = \"");
-    content.append(id_str.c_str());
-    content.append("\"\n");
-    return fs::write_file_text(meta_path, crd::containers::StringView(content.data(), content.size()));
-}
 
 crd::containers::String sanitize_name(const char* name, crd::memory::IAllocator* alloc, const char* fallback = "mesh")
 {
@@ -121,6 +92,7 @@ enum class Wave1Format : crd::u8
     Ply,
     Glb,  // GEO-3: OUR glTF parser (replaces the cgltf path — first-wins registration)
     Gltf,
+    ThreeMf, // GEO-5 pt 3: 3MF (OPC/ZIP package; the cooker bridges package discovery to the model-part parser)
     Unknown,
 };
 
@@ -145,7 +117,52 @@ enum class Wave1Format : crd::u8
     if (ends_with_icase(path, ".ply")) { return Wave1Format::Ply; }
     if (ends_with_icase(path, ".glb")) { return Wave1Format::Glb; }
     if (ends_with_icase(path, ".gltf")) { return Wave1Format::Gltf; }
+    if (ends_with_icase(path, ".3mf")) { return Wave1Format::ThreeMf; }
     return Wave1Format::Unknown;
+}
+
+// ── GEO-5 pt 3: the 3MF OPC bridge (the cooker owns package discovery; the parser takes the model part's bytes) ────────
+//
+// `_rels/.rels` names the 3D Model start part (the OPC root relationship — Type suffix "/3dmodel"); a missing or
+// unhelpful rels part falls back to the canonical "3D/3dmodel.model" name every mainstream producer emits.
+[[nodiscard]] bool extract_3mf_model_part(crd::containers::ConstSpan<crd::u8> zip_bytes, crd::memory::IAllocator* alloc,
+                                          crd::containers::Array<crd::u8>& out_model)
+{
+    crd::resources::ZipReader zip(alloc);
+    if (zip.open(zip_bytes) != crd::resources::ZipError::Ok) { return false; }
+
+    crd::containers::String part_name(alloc);
+    const crd::i64          rels_index = zip.find(crd::assetio::k3mfRels);
+    if (rels_index >= 0)
+    {
+        crd::containers::Array<crd::u8> rels_bytes(alloc);
+        if (zip.extract(static_cast<crd::usize>(rels_index), rels_bytes) == crd::resources::ZipError::Ok)
+        {
+            crd::assetio::XmlDoc rels(alloc);
+            if (rels.parse(crd::containers::as_const_span(rels_bytes)) == crd::assetio::XmlError::Ok)
+            {
+                for (crd::i32 rel = rels.child(rels.root(), "Relationship"); rel != crd::assetio::kXmlInvalid;
+                     rel = rels.sibling(rel, "Relationship"))
+                {
+                    const char* type   = rels.attr(rel, "Type");
+                    const char* target = rels.attr(rel, "Target");
+                    if (type == nullptr || target == nullptr) { continue; }
+                    if (!ends_with_icase(crd::containers::StringView(type, std::strlen(type)), "/3dmodel"))
+                    {
+                        continue;
+                    }
+                    if (target[0] == '/') { ++target; } // OPC part names are package-absolute; ZIP names are not
+                    part_name.append(target);
+                    break;
+                }
+            }
+        }
+    }
+    if (part_name.size() == 0U) { part_name.append(crd::assetio::k3mfModelPart); }
+
+    const crd::i64 model_index = zip.find(part_name.c_str());
+    if (model_index < 0) { return false; }
+    return zip.extract(static_cast<crd::usize>(model_index), out_model) == crd::resources::ZipError::Ok;
 }
 
 // ── the artifact build: ImportedMesh → validate → interleave → MESH CRDR ───────────────────────────────────────────────
@@ -296,29 +313,6 @@ void classify_image_usage(const crd::assetio::ImportedAsset& asset, crd::contain
     }
 }
 
-// external uri → sibling path under the source's directory; absolute paths and ".." escapes are refused (a cook must
-// never read outside its source tree)
-[[nodiscard]] bool resolve_image_uri(crd::containers::StringView source_path, const crd::containers::String& uri,
-                                     crd::containers::String& out_path)
-{
-    if (uri.size() == 0U) { return false; }
-    if (uri.c_str()[0] == '/' || uri.c_str()[0] == '\\') { return false; }
-    for (crd::usize i = 0; i < uri.size(); ++i)
-    {
-        if (uri.c_str()[i] == ':') { return false; } // drive letters / schemes
-        if (uri.c_str()[i] == '.' && i + 1U < uri.size() && uri.c_str()[i + 1U] == '.') { return false; }
-    }
-    crd::usize dir_end = 0;
-    for (crd::usize i = 0; i < source_path.size(); ++i)
-    {
-        if (source_path[i] == '/' || source_path[i] == '\\') { dir_end = i + 1U; }
-    }
-    out_path.clear();
-    out_path.append(source_path.data(), dir_end);
-    out_path.append(uri.c_str());
-    return true;
-}
-
 void cook_gltf_images(const CookContext& ctx, const crd::assetio::ImportedAsset& asset, CookResult& result,
                       crd::containers::Array<crd::resources::ResourceId>& image_ids)
 {
@@ -344,15 +338,14 @@ void cook_gltf_images(const CookContext& ctx, const crd::assetio::ImportedAsset&
                          ii, img.name.c_str(), options.srgb ? "sRGB" : "linear");
         }
 
-        // bytes: embedded, or an external uri resolved as a sibling file
+        // bytes: embedded, or an external uri read through CookIO (sibling-resolved, escape-refused, RECORDED —
+        // touching the referenced image recooks this source)
         crd::containers::ConstSpan<crd::u8> encoded;
         crd::containers::Array<crd::u8>     file_bytes(ctx.allocator);
         if (img.bytes.size() > 0U) { encoded = crd::containers::as_const_span(img.bytes); }
         else
         {
-            crd::containers::String path(ctx.allocator);
-            if (!resolve_image_uri(ctx.source_path, img.uri, path)
-                || !fs::read_file_binary(fs::Path(crd::containers::StringView(path.data(), path.size())), file_bytes))
+            if (!ctx.io->read_input(crd::containers::StringView(img.uri.data(), img.uri.size()), file_bytes))
             {
                 std::fprintf(stderr, "mesh_wave1: image %zu uri '%s' unresolvable — SKIPPED (texture missing)\n", ii,
                              img.uri.c_str());
@@ -370,37 +363,22 @@ void cook_gltf_images(const CookContext& ctx, const crd::assetio::ImportedAsset&
             continue;
         }
 
-        // stable id: sidecar "<source>.tex.<idx>_<name>.meta" (index-keyed — names may be empty or collide)
+        // stable id: sidecar "<source>.tex.<idx>_<name>.meta" (index-keyed — names may be empty or collide),
+        // minted-or-replayed by CookIO::stable_id (recorded as a dependency edge)
         char idx_buf[16];
         std::snprintf(idx_buf, sizeof(idx_buf), "%zu", ii);
         const crd::containers::String safe_name = sanitize_name(img.name.c_str(), ctx.allocator, "img");
-        crd::containers::String       meta_path_str(ctx.source_path.data(), ctx.source_path.size(), ctx.allocator);
-        meta_path_str.append(".tex.");
-        meta_path_str.append(idx_buf);
-        meta_path_str.append("_");
-        meta_path_str.append(safe_name.c_str());
-        meta_path_str.append(".meta");
-        const fs::Path meta_path(crd::containers::StringView(meta_path_str.data(), meta_path_str.size()));
+        crd::containers::String       suffix(ctx.allocator);
+        suffix.append(".tex.");
+        suffix.append(idx_buf);
+        suffix.append("_");
+        suffix.append(safe_name.c_str());
 
         crd::resources::ResourceId tex_id;
-        if (fs::is_file(meta_path))
+        if (!ctx.io->stable_id(crd::containers::StringView(suffix.data(), suffix.size()), tex_id))
         {
-            if (!wave1_meta_read(meta_path, tex_id))
-            {
-                std::fprintf(stderr, "mesh_wave1: malformed sidecar .meta '%s', regenerating\n", meta_path_str.c_str());
-                tex_id = crd::resources::ResourceId::mint_random();
-                (void)wave1_meta_write(meta_path, tex_id);
-            }
-        }
-        else
-        {
-            tex_id = crd::resources::ResourceId::mint_random();
-            if (!wave1_meta_write(meta_path, tex_id))
-            {
-                std::fprintf(stderr, "mesh_wave1: cannot write sidecar .meta '%s' — image SKIPPED\n",
-                             meta_path_str.c_str());
-                continue;
-            }
+            std::fprintf(stderr, "mesh_wave1: cannot persist sidecar id '%s' — image SKIPPED\n", suffix.c_str());
+            continue;
         }
 
         auto cooked = cook_texture_rgba(decoded, options, tex_id, ctx.allocator);
@@ -468,33 +446,17 @@ void cook_gltf_materials(const CookContext& ctx, const crd::assetio::ImportedAss
         char idx_buf[16];
         std::snprintf(idx_buf, sizeof(idx_buf), "%zu", mi);
         const crd::containers::String safe_name = sanitize_name(mat.name.c_str(), ctx.allocator, "mtl");
-        crd::containers::String       meta_path_str(ctx.source_path.data(), ctx.source_path.size(), ctx.allocator);
-        meta_path_str.append(".mtl.");
-        meta_path_str.append(idx_buf);
-        meta_path_str.append("_");
-        meta_path_str.append(safe_name.c_str());
-        meta_path_str.append(".meta");
-        const fs::Path meta_path(crd::containers::StringView(meta_path_str.data(), meta_path_str.size()));
+        crd::containers::String       suffix(ctx.allocator);
+        suffix.append(".mtl.");
+        suffix.append(idx_buf);
+        suffix.append("_");
+        suffix.append(safe_name.c_str());
 
         crd::resources::ResourceId mat_id;
-        if (fs::is_file(meta_path))
+        if (!ctx.io->stable_id(crd::containers::StringView(suffix.data(), suffix.size()), mat_id))
         {
-            if (!wave1_meta_read(meta_path, mat_id))
-            {
-                std::fprintf(stderr, "mesh_wave1: malformed sidecar .meta '%s', regenerating\n", meta_path_str.c_str());
-                mat_id = crd::resources::ResourceId::mint_random();
-                (void)wave1_meta_write(meta_path, mat_id);
-            }
-        }
-        else
-        {
-            mat_id = crd::resources::ResourceId::mint_random();
-            if (!wave1_meta_write(meta_path, mat_id))
-            {
-                std::fprintf(stderr, "mesh_wave1: cannot write sidecar .meta '%s' — material SKIPPED\n",
-                             meta_path_str.c_str());
-                continue;
-            }
+            std::fprintf(stderr, "mesh_wave1: cannot persist sidecar id '%s' — material SKIPPED\n", suffix.c_str());
+            continue;
         }
 
         auto cooked = crd::resources::pbrm_build(params, textures, mat_id, ctx.allocator);
@@ -530,16 +492,7 @@ void cook_gltf_materials(const CookContext& ctx, const crd::assetio::ImportedAss
 // a fresh sidecar-stable id (the mesh/texture pattern) for the scene artifact
 [[nodiscard]] bool scene_sidecar_id(const CookContext& ctx, crd::resources::ResourceId& out_id)
 {
-    crd::containers::String meta_path_str(ctx.source_path.data(), ctx.source_path.size(), ctx.allocator);
-    meta_path_str.append(".scen.meta");
-    const fs::Path meta_path(crd::containers::StringView(meta_path_str.data(), meta_path_str.size()));
-    if (fs::is_file(meta_path))
-    {
-        if (wave1_meta_read(meta_path, out_id)) { return true; }
-        std::fprintf(stderr, "mesh_wave1: malformed sidecar .meta '%s', regenerating\n", meta_path_str.c_str());
-    }
-    out_id = crd::resources::ResourceId::mint_random();
-    return wave1_meta_write(meta_path, out_id);
+    return ctx.io->stable_id(".scen", out_id);
 }
 
 void cook_gltf_scene(const CookContext& ctx, const crd::assetio::ImportedAsset& asset,
@@ -682,14 +635,11 @@ CookResult wave1_handler(const CookContext& ctx)
     if (fmt == Wave1Format::Unknown) { return result; }
 
     crd::containers::Array<crd::u8> bytes(ctx.allocator);
+    if (!ctx.io->read_source(bytes))
     {
-        const fs::Path src_path(ctx.source_path);
-        if (!fs::read_file_binary(src_path, bytes))
-        {
-            std::fprintf(stderr, "mesh_wave1: cannot read %.*s\n", static_cast<int>(ctx.source_path.size()),
-                         ctx.source_path.data());
-            return result;
-        }
+        std::fprintf(stderr, "mesh_wave1: cannot read %.*s\n", static_cast<int>(ctx.source_path.size()),
+                     ctx.source_path.data());
+        return result;
     }
 
     // OUR parser (crd-asset-io) fills the ImportedAsset seam. (OBJ: materials resolve at GEO-3/4 — geometry cooks now;
@@ -701,24 +651,41 @@ CookResult wave1_handler(const CookContext& ctx)
     else if (fmt == Wave1Format::Obj) { st = crd::assetio::parse_obj(span, ctx.allocator, asset); }
     else if (fmt == Wave1Format::Ply) { st = crd::assetio::parse_ply(span, ctx.allocator, asset); }
     else if (fmt == Wave1Format::Glb) { st = crd::assetio::parse_glb(span, ctx.allocator, asset); }
-    else // .gltf: data-URI buffers resolve internally; an external .bin falls back to the sibling "<stem>.bin" (the
-    {    // uri-named general case rides GEO-6's declared source dependencies)
+    else if (fmt == Wave1Format::ThreeMf) // the package is unzipped HERE; the parser sees only the model part
+    {
+        crd::containers::Array<crd::u8> model_bytes(ctx.allocator);
+        if (extract_3mf_model_part(span, ctx.allocator, model_bytes))
+        {
+            st = crd::assetio::parse_3mf_model(crd::containers::as_const_span(model_bytes), ctx.allocator, asset);
+        }
+    }
+    else // .gltf: data-URI buffers resolve internally; an external .bin resolves by its REPORTED uri (the GEO-6
+    {    // uri-general case), read through CookIO — the .bin is a RECORDED dependency edge
         st = crd::assetio::parse_gltf(span, crd::containers::ConstSpan<crd::u8>{}, ctx.allocator, asset);
         if (st == crd::assetio::ImportStatus::Malformed)
         {
-            crd::containers::String bin_path(ctx.source_path.data(), ctx.source_path.size(), ctx.allocator);
-            if (bin_path.size() > 5U)
+            // the parser reports the buffer's percent-decoded uri; fall back to the sibling "<stem>.bin" for
+            // uri-less legacy exports
+            crd::containers::String bin_rel(asset.buffer_uri.data(), asset.buffer_uri.size(), ctx.allocator);
+            if (bin_rel.size() == 0U)
             {
-                // "<name>.gltf" → "<name>.bin"
-                crd::containers::String stem(bin_path.c_str(), bin_path.size() - 5U, ctx.allocator);
-                stem.append(".bin");
-                crd::containers::Array<crd::u8> bin_bytes(ctx.allocator);
-                if (fs::read_file_binary(fs::Path(crd::containers::StringView(stem.data(), stem.size())), bin_bytes))
+                const crd::containers::StringView sp    = ctx.source_path;
+                const auto                        slash = sp.rfind('/');
+                const crd::containers::StringView fname =
+                    (slash != crd::containers::StringView::npos) ? sp.substr(slash + 1U) : sp;
+                if (fname.size() > 5U)
                 {
-                    asset = crd::assetio::ImportedAsset(ctx.allocator); // reset any partial state
-                    st    = crd::assetio::parse_gltf(span, crd::containers::as_const_span(bin_bytes), ctx.allocator,
-                                                     asset);
+                    bin_rel.append(fname.data(), fname.size() - 5U);
+                    bin_rel.append(".bin");
                 }
+            }
+            crd::containers::Array<crd::u8> bin_bytes(ctx.allocator);
+            if (bin_rel.size() > 0U
+                && ctx.io->read_input(crd::containers::StringView(bin_rel.data(), bin_rel.size()), bin_bytes))
+            {
+                asset = crd::assetio::ImportedAsset(ctx.allocator); // reset any partial state
+                st    = crd::assetio::parse_gltf(span, crd::containers::as_const_span(bin_bytes), ctx.allocator,
+                                                 asset);
             }
         }
     }
@@ -734,13 +701,11 @@ CookResult wave1_handler(const CookContext& ctx)
                      static_cast<int>(ctx.source_path.size()), ctx.source_path.data());
     }
 
-    // .meta [cook] options (position_scale — the SI-unit boundary, ADR-0078)
+    // .meta [cook] options (position_scale — the SI-unit boundary, ADR-0078); a recorded input edge
     MeshCookOptions cook_options{};
-    if (!ctx.meta_path.empty())
     {
-        const fs::Path          meta_path(ctx.meta_path);
         crd::containers::String meta_text(ctx.allocator);
-        if (fs::read_file_text(meta_path, meta_text))
+        if (ctx.io->read_meta(meta_text))
         {
             cook_options = parse_mesh_cook_options(crd::containers::StringView(meta_text.data(), meta_text.size()));
         }
@@ -785,31 +750,16 @@ CookResult wave1_handler(const CookContext& ctx)
         if (mesh.triangle_count() == 0U) { continue; }
 
         const crd::containers::String safe_name = sanitize_name(mesh.name.c_str(), ctx.allocator);
-        crd::containers::String       meta_path_str(ctx.source_path.data(), ctx.source_path.size(), ctx.allocator);
-        meta_path_str.append(".mesh.");
-        meta_path_str.append(safe_name.c_str());
-        meta_path_str.append(".meta");
-        const fs::Path meta_path(crd::containers::StringView(meta_path_str.data(), meta_path_str.size()));
+        crd::containers::String       suffix(ctx.allocator);
+        suffix.append(".mesh.");
+        suffix.append(safe_name.c_str());
 
         crd::resources::ResourceId extra_id;
-        if (fs::is_file(meta_path))
+        if (!ctx.io->stable_id(crd::containers::StringView(suffix.data(), suffix.size()), extra_id))
         {
-            if (!wave1_meta_read(meta_path, extra_id))
-            {
-                std::fprintf(stderr, "mesh_wave1: malformed sidecar .meta '%s', regenerating\n", meta_path_str.c_str());
-                extra_id = crd::resources::ResourceId::mint_random();
-                (void)wave1_meta_write(meta_path, extra_id);
-            }
-        }
-        else
-        {
-            extra_id = crd::resources::ResourceId::mint_random();
-            if (!wave1_meta_write(meta_path, extra_id))
-            {
-                std::fprintf(stderr, "mesh_wave1: cannot write sidecar .meta '%s'\n", meta_path_str.c_str());
-                result.ok = false;
-                return result;
-            }
+            std::fprintf(stderr, "mesh_wave1: cannot persist sidecar id '%s'\n", suffix.c_str());
+            result.ok = false;
+            return result;
         }
 
         auto artifact = build_wave1_artifact(mesh, extra_id, ctx.allocator, cook_options);
@@ -829,9 +779,10 @@ CookResult wave1_handler(const CookContext& ctx)
         mesh_ids[mi] = extra_id;
     }
 
-    // GEO-3 stages 2b + 3 + 4: the glTF decompose — images → TXTR artifacts, materials → authored PBRM artifacts
-    // (slots wired to the cooked textures), the node graph → a SCEN artifact (drawables wired to meshes + materials)
-    if (fmt == Wave1Format::Glb || fmt == Wave1Format::Gltf)
+    // GEO-3 stages 2b + 3 + 4: the decompose — images → TXTR artifacts, materials → authored PBRM artifacts (slots
+    // wired to the cooked textures), the node graph → a SCEN artifact (drawables wired to meshes + materials).
+    // 3MF rides the SAME seam: basematerials → PBRM, build items → SCEN (core 3MF has no images — the stage no-ops).
+    if (fmt == Wave1Format::Glb || fmt == Wave1Format::Gltf || fmt == Wave1Format::ThreeMf)
     {
         crd::containers::Array<crd::resources::ResourceId> image_ids(ctx.allocator);
         crd::containers::Array<crd::resources::ResourceId> material_ids(ctx.allocator);
@@ -847,13 +798,14 @@ CookResult wave1_handler(const CookContext& ctx)
 
 void register_wave1_mesh_handler()
 {
-    register_cook_handler(".stl", wave1_handler);
-    register_cook_handler(".obj", wave1_handler);
-    register_cook_handler(".ply", wave1_handler);
-    // GEO-3: OUR glTF parser takes .glb/.gltf (registered BEFORE the legacy cgltf handler in the bootstrap — the
-    // registry is first-wins — so the 3rd-party path is retired without deleting it mid-transition).
-    register_cook_handler(".glb", wave1_handler);
-    register_cook_handler(".gltf", wave1_handler);
+    register_cook_handler(".stl", wave1_handler, kWave1HandlerVersion);
+    register_cook_handler(".obj", wave1_handler, kWave1HandlerVersion);
+    register_cook_handler(".ply", wave1_handler, kWave1HandlerVersion);
+    // GEO-3: OUR glTF parser owns .glb/.gltf (the legacy cgltf handler is DELETED — GEO-6 honored the disposition)
+    register_cook_handler(".glb", wave1_handler, kWave1HandlerVersion);
+    register_cook_handler(".gltf", wave1_handler, kWave1HandlerVersion);
+    // GEO-5 pt 3: 3MF — the manufacturing pillar (OUR ZIP + OUR XML + OUR model parser; zero 3rd-party)
+    register_cook_handler(".3mf", wave1_handler, kWave1HandlerVersion);
 }
 
 } // namespace crd::cooker

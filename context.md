@@ -312,8 +312,63 @@
 > **[✅ sse2 sweep GREEN — 5,211/5,211]:** the full win-debug-sse2 build + ctest passes on the clean tree — the
 > exact CI job that failed on the old commit is preempted. CERTIFIED: win-debug 5,214 · win-debug-sse2 5,211 ·
 > linux-gcc-shipping (WSL) · clang-cl — every toolchain CI exercises.
-> **▶ NEXT: push (commit proposal delivered) → CI verifies → GEO-4 (the scene render path on the clean stack) →
-> GEO-5..7 → OFF band. The showcases' submit_overlay wiring rides the scene work.**
+> **[🔄 GEO-4 pt 1 — the EXPORT seam + glTF writer, round-trip-gated]:** json_write.hpp (the RFC-8259 emit half;
+> %.9g f32-exact numbers, NaN/Inf assert) + gltf_export (ExportAsset = the import discipline reversed: callers fill
+> from loaded resources; 48-byte streams → de-interleaved accessors + min/max; KHR ior/transmission/emissive_strength;
+> GLB container; structural refusal). Gate first-run green: export → OUR importer → geometry BYTE-exact (−0.0
+> survives), materials + hierarchy value-exact, 3 refusals — 38 asserts, 4 files tidy-clean.
+> **[✅ GEO-4 pt 2 — the OWNED PNG ENCODER + texture embed]:** png_encode (filter-None over our zlib_deflate +
+> png_crc32; the MED-2 floor; caps mirror the decoder) + ExportImage carries PRE-encoded PNG (asset-io never links
+> the codec — layering held) + full material texture-ref surface + images/textures/bufferViews. Gate: 4-distinct-
+> texel image → our encoder → GLB → our importer → our decoder BYTE-exact; slots survive. 66 asserts, 5 files tidy.
+> **[✅ GEO-4 pt 3 — the FULL round-trip PROVEN]:** GLB → real wave1 cook → native MESH stream + PBRM params →
+> crd-geometry NATIVE EDIT (generate_normals @ 0 rad — the fold splits, provably real) → export → re-import:
+> material params BIT-exact through the whole cook pipeline, geometry BYTE-exact vs the edited stream. 46 asserts;
+> cooker 266/25; tidy-clean. öbek N× → rides GEO-7's instantiation; `ceridc export` → GEO-11's surface (recorded).
+> **[✅ GEO-5 pt 1 — OUR XML PARSER]:** xml.hpp/.cpp (crd-asset-io) — the OPC/3MF subset: flat DOM (json.hpp
+> design), entities + numeric refs (surrogate-rejecting), prefix-verbatim names, depth-capped, NO partial DOM on
+> failure, kXmlInvalid-safe accessors. Gate first-run green: a trimmed 3MF core model walks exactly + 10 failure
+> classes — 33 asserts, 3 files tidy-clean.
+> **[✅ GEO-5 pt 2 — the OWNED ZIP container (crd-resources)]:** EOCD back-scan → central dir → extraction with the
+> LOCAL header's lengths (the classic bug avoided), stored+deflate via inflate_raw, CRC+size REFUSAL on mismatch;
+> writer deflate-when-shrinks + fixed-zero stamps = DETERMINISTIC (memcmp-proven). 51 asserts green; 3 files tidy.
+> (GEO-4 row marker fixed to ✅ — user caught the stale 🔄.)
+> **[✅ GEO-5 pt 3 — 3MF import + export, GEO-5 CLOSED]:** threemf.hpp/.cpp — units→SI, displaycolor sRGB→linear,
+> the SHARED decompose_matrix_trs (hoisted from gltf.cpp), requiredextensions/beam-lattice ⇒ Unsupported BY NAME,
+> slicestack dropped-with-warning; export REFUSES non-watertight (validate_triangle_mesh, red on the holed tetra);
+> cooker `.3mf` route (ZIP → .rels discovery → parse → SCEN with the drawable). **ZIP64 READ landed** (lib3mf writes
+> it unconditionally — a real-world wall, solved). **Certified: lib3mf 2.5.0 STRICT load 0-warning + manifold;
+> PrusaSlicer 2.9.6 re-SLICES our export to 4,064 lines of G-code; two real third-party fixtures checked in
+> (tests/asset-io/data/: lib3mf_box.3mf + prusaslicer_tetra.3mf) as permanent import gates.** Also fixed: GEO-4
+> roundtrip harness cooked under a NULL ctx.id (drawable skipped). Boards: [threemf] 76/6 · [zip] 61 · cooker
+> 288/26 · asset-io 586/45 · resources 13,581/105; 12 files tidy-clean.
+> **[✅ GEO-6 — the dependency-graph ASSET PROCESSOR, full contract in one slice]:** `CookIO` = the ⛔ structural
+> seam (handlers have NO road to bytes except it; every read RECORDED incl. absences + id sidecars; 24 direct-fs
+> sites removed across all 8 handlers; glTF buffer_uri general case landed); `CookDb` = the persistent QUERYABLE
+> graph (cookdb.toml, forward+reverse queries, `graph`/`why` CLI verbs); cmd_cook rewritten to TRUE incremental
+> (skip re-hashes exactly the recorded edges + registry-declared handler versions — the handler NEVER runs on a
+> hit; artifact-hash integrity); durable begin/commit journal + tmp→rename everywhere (new fs::rename_file);
+> hot-reload rides the EXISTING subscription seam (gated end-to-end); legacy cgltf mesh.cpp DELETED (cgltf +
+> mikktspace off crd-cooker). Gates first-run green: precision recook (touching the gltf's external .bin recooks
+> the gltf job — the O3DE staleness, killed), all-skip byte-identical, incremental-vs-scratch memcmp, .meta-touch,
+> kill-resume identical, torn-cache refusal, graph queries. ⭐ 7 latent noexcept-terminate paths in platform fs
+> fixed (tidy onion). Boards: resources 13,679/110 · cooker 288/26 · asset-io 586/45 · platform 199/47 · GPU
+> [geo] 56/2; 30 files tidy-clean.
+> **[✅ GEO-7 — scene ↔ ECS ↔ renderer, chunk-grain end to end; THE SANDBOX IS ALIVE]:** ChunkView got its
+> promised SoA table (+ per-component chunk versions; unfiltered queries forward it intact); öbek batch
+> transforms APPLIED (one asset → N placed instances); NEW `engine/scene-render` (`SceneRenderer`): chunk-grain
+> extract with a structure signature → incremental syncs re-extract/re-upload ONLY version-moved chunk runs
+> (the partial-re-upload gate, byte-exact); cull = Gribb–Hartmann planes + SpatialBVHIndex broad phase (the
+> crd-geometry octree, both paths agree); submit = ONE vertex-pulling instanced `draw_storage_depth` per mesh
+> group (NEW IRasterContext API, Vulkan + DX12 both, DX12 occlusion-gated) with CKIR VS/FS (N·L + authored PBRM
+> colour); MeshResource.local_bounds loader-computed. THE 10K GATE green on-device (validation ON): one draw,
+> lit readback, camera-away culls to zero, partial upload holds. Sandbox: GEO-6-cooked Khronos pack → 10k mixed
+> Duck/BoomBox/BoxTextured instances, travelling-wave partial re-uploads live, grid overlay depth-tests the real
+> scene — ~100 fps, ~5.2k drawn after culling, clean exit. CookIO boundary corrected (root-relative lexical
+> normalization; `../` inside the tree = recorded edges). Boards: scene 35,206/280 · scene-render 58/5 ·
+> resources 13,679/110 · cooker 288/26 · asset-io 586/45; 21 files tidy-clean.
+> **▶ NEXT: GEO-8 (Skeleton/AnimClip resources on hesap-interp — ONE curve engine) → OFF band. (Push + CI
+> verify still pending on the RET+GEO-4..7 arc.)**
 > Denoising (OIDN-class AOV CNN) is a FINISHING filter, never in the reference path (the offline mode IS the ground truth
 > that certifies real-time).
 > **[✅ conv-via-FFT / fast-FMA closed 2026-07-23]:** conv-via-FFT already shipped (crushes 4/5); the fast-FMA experiment was the

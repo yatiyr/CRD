@@ -10,13 +10,11 @@
 #include <crd/containers/string.hpp>
 #include <crd/containers/string_view.hpp>
 #include <crd/cooker/cook_handler.hpp>
+#include <crd/cooker/cook_io.hpp>
 #include <crd/cooker/obek_cooker.hpp>
-#include <crd/platform/filesystem.hpp>
 
 #include <cstdio>
 #include <cstring>
-
-namespace fs = crd::platform::fs;
 
 namespace crd::cooker
 {
@@ -26,76 +24,40 @@ namespace
 
 constexpr crd::u32 kObekHandlerVersion = 1U;
 
-// FNV-1a 64 over a byte range. Same constants as cook_command.cpp's
-// helper; duplicated here to keep this file self-contained without
-// pulling cook_command.hpp into the handler surface.
-crd::u64 fnv1a64(const crd::u8* data, crd::usize size) noexcept
-{
-    constexpr crd::u64 fnv_offset64 = 14695981039346656037ULL;
-    constexpr crd::u64 fnv_prime64  = 1099511628211ULL;
-
-    crd::u64 hash = fnv_offset64;
-    for (crd::usize i = 0U; i < size; ++i)
-    {
-        hash ^= static_cast<crd::u64>(data[i]);
-        hash *= fnv_prime64;
-    }
-    return hash;
-}
-
-// File resolver — reads sibling .obek.toml files from disk. Used for
-// `extends` / nested `obek =` references inside the cooker. We pass
-// the source-dir as user_data so the resolver can build absolute
-// paths from relative TOML strings.
-struct ResolverUd
-{
-    fs::Path source_dir;
-};
-
+// File resolver — satisfies `extends` / nested `obek =` sibling references THROUGH CookIO, so every referenced
+// .obek.toml is a RECORDED dependency edge (touch a base obek → the derived one recooks).
 bool obek_file_resolver(crd::containers::StringView path,
                         crd::memory::IAllocator*    alloc,
                         crd::containers::String&    out_text,
                         void*                       ud_void)
 {
-    auto* ud = static_cast<ResolverUd*>(ud_void);
-    if (ud == nullptr) return false;
+    auto* io = static_cast<CookIO*>(ud_void);
+    if (io == nullptr) { return false; }
 
-    crd::containers::String full(alloc);
-    full.append(ud->source_dir.generic().data(), ud->source_dir.generic().size());
-    full.append("/");
-    full.append(path.data(), path.size());
-    const fs::Path full_path(crd::containers::StringView{full.data(), full.size()});
-    return fs::read_file_text(full_path, out_text);
+    crd::containers::Array<crd::u8> bytes(alloc);
+    if (!io->read_input(path, bytes)) { return false; }
+    out_text.clear();
+    out_text.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    return true;
 }
 
 CookResult obek_handler(const CookContext& ctx)
 {
     CookResult result(ctx.allocator);
 
-    crd::containers::String text(ctx.allocator);
-    if (!fs::read_file_text(fs::Path(ctx.source_path), text))
+    crd::containers::Array<crd::u8> src_bytes(ctx.allocator);
+    if (!ctx.io->read_source(src_bytes))
         return result;
-
-    // Resolve source directory so the file resolver can satisfy
-    // sibling references.
-    fs::Path source_dir;
-    {
-        const auto sp    = ctx.source_path;
-        const auto slash = sp.rfind('/');
-        if (slash != crd::containers::StringView::npos)
-            source_dir = fs::Path(sp.substr(0U, slash));
-    }
-
-    ResolverUd ud{};
-    ud.source_dir = source_dir;
+    crd::containers::String text(ctx.allocator);
+    text.append(reinterpret_cast<const char*>(src_bytes.data()), src_bytes.size());
 
     crd::cooker::ObekCookContext octx{};
     octx.id              = ctx.id;
     octx.allocator       = ctx.allocator;
-    octx.obek_root_id    = fnv1a64(reinterpret_cast<const crd::u8*>(ctx.source_path.data()),
-                                   ctx.source_path.size());
+    octx.obek_root_id    = cook_hash64(crd::containers::ConstSpan<crd::u8>(
+        reinterpret_cast<const crd::u8*>(ctx.source_path.data()), ctx.source_path.size()));
     octx.file_resolver   = obek_file_resolver;
-    octx.file_resolver_ud = &ud;
+    octx.file_resolver_ud = ctx.io;
 
     crd::containers::Array<CookError> errors(ctx.allocator);
     auto bytes = crd::cooker::obek_cooker_inline(
@@ -137,7 +99,7 @@ CookResult obek_handler(const CookContext& ctx)
 
 void register_obek_handler()
 {
-    register_cook_handler(".obek.toml", obek_handler);
+    register_cook_handler(".obek.toml", obek_handler, kObekHandlerVersion);
 }
 
 } // namespace crd::cooker

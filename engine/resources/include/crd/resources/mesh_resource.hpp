@@ -45,6 +45,14 @@ struct MeshResource
     crd::containers::Array<crd::u8>       indices;  // u32 index buffer
     crd::containers::Array<MeshPrimitive> primitives;
 
+    // GEO-7 (appended): the mesh's LOCAL-space AABB, computed by the loader in one pass over the position stream
+    // (bytes 0-11 of every 48-byte record) — the culling substrate. Raw floats deliberately: crd-resources stays
+    // math-module-free; consumers (crd-scene-render) build their AABB3 from these at the seam. min > max (the
+    // default) = no vertices / not computed.
+    crd::f32 bounds_min[3] = {1.0F, 1.0F, 1.0F};
+    crd::f32 bounds_max[3] = {-1.0F, -1.0F, -1.0F};
+    [[nodiscard]] bool has_bounds() const noexcept { return bounds_min[0] <= bounds_max[0]; }
+
     explicit MeshResource(crd::memory::IAllocator* a) : vertices(a), indices(a), primitives(a) {}
 
     MeshResource(const MeshResource&)            = delete;

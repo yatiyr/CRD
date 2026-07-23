@@ -8,6 +8,79 @@
 
 namespace crd::assetio
 {
+
+// GEO-5: promoted OUT of the anonymous namespace — the 3MF parser reuses the SAME decompose (one TRS
+// extraction for every bundle format; drift between importers would be a silent scene-corruption class).
+// column-major 4×4 → TRS. Scale = column norms (negative-determinant folds into scale.x); rotation via the
+// max-trace-branch quaternion extraction on the normalized 3×3. Zero-norm columns warn upstream (identity rotation).
+[[nodiscard]] bool decompose_matrix_trs(const crd::f64 m[16], crd::math::Vec3<crd::f32>& t,
+                                        crd::math::Vec4<crd::f32>& q, crd::math::Vec3<crd::f32>& s)
+{
+    t = {static_cast<crd::f32>(m[12]), static_cast<crd::f32>(m[13]), static_cast<crd::f32>(m[14])};
+    crd::f64 c[3][3]; // c[j] = column j's xyz
+    for (int j = 0; j < 3; ++j)
+    {
+        for (int i = 0; i < 3; ++i) { c[j][i] = m[(4 * j) + i]; }
+    }
+    crd::f64 sl[3];
+    for (int j = 0; j < 3; ++j) { sl[j] = std::sqrt((c[j][0] * c[j][0]) + (c[j][1] * c[j][1]) + (c[j][2] * c[j][2])); }
+    if (sl[0] <= 0.0 || sl[1] <= 0.0 || sl[2] <= 0.0)
+    {
+        s = {static_cast<crd::f32>(sl[0]), static_cast<crd::f32>(sl[1]), static_cast<crd::f32>(sl[2])};
+        q = {0.0F, 0.0F, 0.0F, 1.0F};
+        return false; // degenerate — caller warns, keeps going
+    }
+    const crd::f64 det = (c[0][0] * ((c[1][1] * c[2][2]) - (c[1][2] * c[2][1])))
+                       - (c[1][0] * ((c[0][1] * c[2][2]) - (c[0][2] * c[2][1])))
+                       + (c[2][0] * ((c[0][1] * c[1][2]) - (c[0][2] * c[1][1])));
+    if (det < 0.0) { sl[0] = -sl[0]; } // fold the reflection into scale.x (the standard convention)
+    s = {static_cast<crd::f32>(sl[0]), static_cast<crd::f32>(sl[1]), static_cast<crd::f32>(sl[2])};
+    crd::f64 r[3][3]; // r[i][j] = row i, col j of the pure rotation
+    for (int j = 0; j < 3; ++j)
+    {
+        for (int i = 0; i < 3; ++i) { r[i][j] = c[j][i] / sl[j]; }
+    }
+    const crd::f64 tr = r[0][0] + r[1][1] + r[2][2];
+    crd::f64       qx = 0.0;
+    crd::f64       qy = 0.0;
+    crd::f64       qz = 0.0;
+    crd::f64       qw = 1.0;
+    if (tr > 0.0)
+    {
+        const crd::f64 big = std::sqrt(tr + 1.0) * 2.0;
+        qw               = 0.25 * big;
+        qx               = (r[2][1] - r[1][2]) / big;
+        qy               = (r[0][2] - r[2][0]) / big;
+        qz               = (r[1][0] - r[0][1]) / big;
+    }
+    else if (r[0][0] > r[1][1] && r[0][0] > r[2][2])
+    {
+        const crd::f64 big = std::sqrt(1.0 + r[0][0] - r[1][1] - r[2][2]) * 2.0;
+        qw               = (r[2][1] - r[1][2]) / big;
+        qx               = 0.25 * big;
+        qy               = (r[0][1] + r[1][0]) / big;
+        qz               = (r[0][2] + r[2][0]) / big;
+    }
+    else if (r[1][1] > r[2][2])
+    {
+        const crd::f64 big = std::sqrt(1.0 + r[1][1] - r[0][0] - r[2][2]) * 2.0;
+        qw               = (r[0][2] - r[2][0]) / big;
+        qx               = (r[0][1] + r[1][0]) / big;
+        qy               = 0.25 * big;
+        qz               = (r[1][2] + r[2][1]) / big;
+    }
+    else
+    {
+        const crd::f64 big = std::sqrt(1.0 + r[2][2] - r[0][0] - r[1][1]) * 2.0;
+        qw               = (r[1][0] - r[0][1]) / big;
+        qx               = (r[0][2] + r[2][0]) / big;
+        qy               = (r[1][2] + r[2][1]) / big;
+        qz               = 0.25 * big;
+    }
+    q = {static_cast<crd::f32>(qx), static_cast<crd::f32>(qy), static_cast<crd::f32>(qz), static_cast<crd::f32>(qw)};
+    return true;
+}
+
 namespace
 {
 
@@ -555,75 +628,6 @@ void parse_materials(const GltfCtx& g, ImportedAsset& out)
 
 // ── the scene graph (GEO-3 stage 3: nodes + cameras + lights + the default scene's roots) ──────────────────────────────
 
-// column-major 4×4 → TRS. Scale = column norms (negative-determinant folds into scale.x); rotation via the
-// max-trace-branch quaternion extraction on the normalized 3×3. Zero-norm columns warn upstream (identity rotation).
-[[nodiscard]] bool decompose_matrix_trs(const crd::f64 m[16], crd::math::Vec3<crd::f32>& t,
-                                        crd::math::Vec4<crd::f32>& q, crd::math::Vec3<crd::f32>& s)
-{
-    t = {static_cast<crd::f32>(m[12]), static_cast<crd::f32>(m[13]), static_cast<crd::f32>(m[14])};
-    crd::f64 c[3][3]; // c[j] = column j's xyz
-    for (int j = 0; j < 3; ++j)
-    {
-        for (int i = 0; i < 3; ++i) { c[j][i] = m[(4 * j) + i]; }
-    }
-    crd::f64 sl[3];
-    for (int j = 0; j < 3; ++j) { sl[j] = std::sqrt((c[j][0] * c[j][0]) + (c[j][1] * c[j][1]) + (c[j][2] * c[j][2])); }
-    if (sl[0] <= 0.0 || sl[1] <= 0.0 || sl[2] <= 0.0)
-    {
-        s = {static_cast<crd::f32>(sl[0]), static_cast<crd::f32>(sl[1]), static_cast<crd::f32>(sl[2])};
-        q = {0.0F, 0.0F, 0.0F, 1.0F};
-        return false; // degenerate — caller warns, keeps going
-    }
-    const crd::f64 det = (c[0][0] * ((c[1][1] * c[2][2]) - (c[1][2] * c[2][1])))
-                       - (c[1][0] * ((c[0][1] * c[2][2]) - (c[0][2] * c[2][1])))
-                       + (c[2][0] * ((c[0][1] * c[1][2]) - (c[0][2] * c[1][1])));
-    if (det < 0.0) { sl[0] = -sl[0]; } // fold the reflection into scale.x (the standard convention)
-    s = {static_cast<crd::f32>(sl[0]), static_cast<crd::f32>(sl[1]), static_cast<crd::f32>(sl[2])};
-    crd::f64 r[3][3]; // r[i][j] = row i, col j of the pure rotation
-    for (int j = 0; j < 3; ++j)
-    {
-        for (int i = 0; i < 3; ++i) { r[i][j] = c[j][i] / sl[j]; }
-    }
-    const crd::f64 tr = r[0][0] + r[1][1] + r[2][2];
-    crd::f64       qx = 0.0;
-    crd::f64       qy = 0.0;
-    crd::f64       qz = 0.0;
-    crd::f64       qw = 1.0;
-    if (tr > 0.0)
-    {
-        const crd::f64 big = std::sqrt(tr + 1.0) * 2.0;
-        qw               = 0.25 * big;
-        qx               = (r[2][1] - r[1][2]) / big;
-        qy               = (r[0][2] - r[2][0]) / big;
-        qz               = (r[1][0] - r[0][1]) / big;
-    }
-    else if (r[0][0] > r[1][1] && r[0][0] > r[2][2])
-    {
-        const crd::f64 big = std::sqrt(1.0 + r[0][0] - r[1][1] - r[2][2]) * 2.0;
-        qw               = (r[2][1] - r[1][2]) / big;
-        qx               = 0.25 * big;
-        qy               = (r[0][1] + r[1][0]) / big;
-        qz               = (r[0][2] + r[2][0]) / big;
-    }
-    else if (r[1][1] > r[2][2])
-    {
-        const crd::f64 big = std::sqrt(1.0 + r[1][1] - r[0][0] - r[2][2]) * 2.0;
-        qw               = (r[0][2] - r[2][0]) / big;
-        qx               = (r[0][1] + r[1][0]) / big;
-        qy               = 0.25 * big;
-        qz               = (r[1][2] + r[2][1]) / big;
-    }
-    else
-    {
-        const crd::f64 big = std::sqrt(1.0 + r[2][2] - r[0][0] - r[1][1]) * 2.0;
-        qw               = (r[1][0] - r[0][1]) / big;
-        qx               = (r[0][2] + r[2][0]) / big;
-        qy               = (r[1][2] + r[2][1]) / big;
-        qz               = 0.25 * big;
-    }
-    q = {static_cast<crd::f32>(qx), static_cast<crd::f32>(qy), static_cast<crd::f32>(qz), static_cast<crd::f32>(qw)};
-    return true;
-}
 
 void parse_cameras(const GltfCtx& g, ImportedAsset& out)
 {
@@ -860,9 +864,17 @@ void parse_lights(const GltfCtx& g, ImportedAsset& out)
                     return ImportStatus::Malformed;
                 }
             }
-            else if (bin.size() == 0U)
+            else
             {
-                return ImportStatus::Malformed; // an external .bin the caller did not supply
+                // a plain-file uri: REPORT it (percent-decoded) so the caller can resolve the ACTUAL reference —
+                // the GEO-6 uri-general case (the cook reads it through the declared-input seam, stem fallback dies)
+                const js::JsonNode& un = doc.nodes[uri];
+                out.buffer_uri.clear();
+                percent_decode_append(doc.strings.data() + un.str_off, un.str_len, out.buffer_uri);
+                if (bin.size() == 0U)
+                {
+                    return ImportStatus::Malformed; // an external .bin the caller did not supply
+                }
             }
         }
     }

@@ -54,6 +54,29 @@ void* MeshResourceLoader::load(const LoadContext& ctx)
     mesh->indices.resize(indx_chunk->payload.size());
     std::memcpy(mesh->indices.data(), indx_chunk->payload.data(), indx_chunk->payload.size());
 
+    // GEO-7: the local AABB in ONE pass over the position stream (bytes 0-11 of each 48-byte record) — the
+    // culling substrate every consumer would otherwise recompute
+    const crd::usize vcount = mesh->vertices.size() / kMeshVertexStride;
+    if (vcount > 0U)
+    {
+        crd::f32 mn[3] = {0, 0, 0};
+        crd::f32 mx[3] = {0, 0, 0};
+        std::memcpy(mn, mesh->vertices.data(), 12U);
+        std::memcpy(mx, mesh->vertices.data(), 12U);
+        for (crd::usize v = 1; v < vcount; ++v)
+        {
+            crd::f32 pos[3];
+            std::memcpy(pos, mesh->vertices.data() + v * kMeshVertexStride, 12U);
+            for (int c = 0; c < 3; ++c)
+            {
+                mn[c] = pos[c] < mn[c] ? pos[c] : mn[c];
+                mx[c] = pos[c] > mx[c] ? pos[c] : mx[c];
+            }
+        }
+        std::memcpy(mesh->bounds_min, mn, 12U);
+        std::memcpy(mesh->bounds_max, mx, 12U);
+    }
+
     const crd::u8* p = prim_chunk->payload.data() + kPrimHeaderSize;
     for (crd::u32 pi = 0U; pi < prim_count; ++pi, p += kPrimEntrySize)
     {

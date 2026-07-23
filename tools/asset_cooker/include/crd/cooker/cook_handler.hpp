@@ -10,12 +10,17 @@
 namespace crd::cooker
 {
 
+class CookIO; // the GEO-6 declared-input seam (cook_io.hpp)
+
 struct CookContext
 {
     crd::containers::StringView source_path;
     crd::containers::StringView meta_path;
     crd::resources::ResourceId  id;
     crd::memory::IAllocator*    allocator = nullptr;
+    // GEO-6 (⛔ design rule): the ONLY road to bytes — every read a handler performs goes through `io` and is
+    // RECORDED as a dependency edge. Handlers never touch the filesystem directly.
+    CookIO*                     io        = nullptr;
 };
 
 // One additional artifact produced by a multi-output handler.
@@ -56,8 +61,13 @@ struct CookResult
 
 using CookHandlerFn = CookResult (*)(const CookContext&);
 
-void              register_cook_handler(crd::containers::StringView ext, CookHandlerFn fn);
+// GEO-6: `version` is declared AT REGISTRATION (one source of truth with the handler's own constant) so the
+// processor can decide a cache hit WITHOUT running the handler — the true incremental skip. Bump it whenever the
+// handler's output format or logic changes; every product of that handler recooks.
+void              register_cook_handler(crd::containers::StringView ext, CookHandlerFn fn, crd::u32 version = 0U);
 [[nodiscard]] CookHandlerFn find_cook_handler(crd::containers::StringView ext) noexcept;
+// the registered version for an extension (0 when unregistered)
+[[nodiscard]] crd::u32 find_cook_handler_version(crd::containers::StringView ext) noexcept;
 void              register_builtin_handlers();
 
 } // namespace crd::cooker

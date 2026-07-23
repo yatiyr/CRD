@@ -1,10 +1,10 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <crd/cooker/cook_handler.hpp>
+#include <crd/cooker/cook_io.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <new>
 #include <crd/platform/filesystem.hpp>
-#include <crd/resources/mesh_resource.hpp>
 #include <crd/resources/mesh_resource.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/load_state.hpp>
@@ -418,6 +418,8 @@ TEST_CASE("MeshResource cooked from GLB round-trip", "[resources][mesh][cook]")
     cook_ctx.source_path = crd::containers::StringView(glb_name.data(), glb_name.size());
     cook_ctx.id          = mesh_id;
     cook_ctx.allocator   = &s_mesh_alloc;
+    crd::cooker::CookIO cook_io(cook_ctx.source_path, cook_ctx.meta_path, &s_mesh_alloc); // GEO-6 seam
+    cook_ctx.io          = &cook_io;
 
     crd::cooker::CookResult cook_result = fn(cook_ctx);
     REQUIRE(cook_result.ok);
@@ -510,6 +512,8 @@ TEST_CASE("GEO-1: an imported STL cooks, packs, mounts, and LOADS via ResourceMa
     cctx.meta_path   = crd::containers::StringView(meta_path);
     cctx.id          = mesh_id;
     cctx.allocator   = &s_mesh_alloc;
+    crd::cooker::CookIO cctx_io(cctx.source_path, cctx.meta_path, &s_mesh_alloc); // GEO-6 seam
+    cctx.io          = &cctx_io;
     crd::cooker::CookResult cooked = handler(cctx);
     REQUIRE(cooked.ok);
 

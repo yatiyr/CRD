@@ -533,6 +533,16 @@ void SparseSetStorage::for_each_chunk(ComponentMask required, ChunkVisitor fn, v
         view.entity_count = pool.count;
         view.present_mask = ComponentMask{};
         view.present_mask.set(c);
+        // GEO-7: the SoA table — the pool's dense array IS the component array, EXCEPT when CoW sharing is live
+        // (shared slots' bytes live in the shared pool, not `dense`) — those pools yield an empty table and
+        // consumers fall back to per-entity access.
+        if (pool.shared_pool == nullptr)
+        {
+            view.component_count       = 1;
+            view.component_ids[0]      = c;
+            view.component_arrays[0]   = pool.dense;
+            view.component_versions[0] = pool.version;
+        }
         fn(view, user_data);
     };
 

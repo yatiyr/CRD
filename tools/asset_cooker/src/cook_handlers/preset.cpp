@@ -26,7 +26,7 @@
 #include <crd/containers/string.hpp>
 #include <crd/containers/string_view.hpp>
 #include <crd/cooker/cook_handler.hpp>
-#include <crd/platform/filesystem.hpp>
+#include <crd/cooker/cook_io.hpp>
 #include <crd/preset/camera_preset.hpp>
 #include <crd/preset/preset_artifact_builder.hpp>
 #include <crd/preset/quality_preset.hpp>
@@ -38,7 +38,6 @@
 #include <string>
 #include <string_view>
 
-namespace fs = crd::platform::fs;
 
 namespace crd::cooker
 {
@@ -153,9 +152,11 @@ CookResult preset_handler(const CookContext& ctx)
 {
     CookResult result(ctx.allocator);
 
-    crd::containers::String text(ctx.allocator);
-    if (!fs::read_file_text(fs::Path(ctx.source_path), text))
+    crd::containers::Array<crd::u8> src_bytes(ctx.allocator);
+    if (!ctx.io->read_source(src_bytes))
         return result;
+    crd::containers::String text(ctx.allocator);
+    text.append(reinterpret_cast<const char*>(src_bytes.data()), src_bytes.size());
 
     const auto parsed = toml::parse(std::string_view{text.data(), text.size()});
     if (!parsed)
@@ -217,7 +218,7 @@ CookResult preset_handler(const CookContext& ctx)
 
 void register_preset_handler()
 {
-    register_cook_handler(".preset.toml", preset_handler);
+    register_cook_handler(".preset.toml", preset_handler, kPresetHandlerVersion);
 }
 
 } // namespace crd::cooker

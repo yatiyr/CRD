@@ -453,6 +453,15 @@ void ArchetypeChunkStorage::for_each_chunk(ComponentMask required, ChunkVisitor 
             view.entities = chunk.entity_id_array(arch->layout);
             view.entity_count = hdr->entity_count;
             view.present_mask = arch->mask;
+            // GEO-7: the SoA table — one pointer + version per layout component, direct chunk-array access
+            const crd::u32 k = arch->layout.component_count();
+            view.component_count = k <= kMaxChunkViewComponents ? k : kMaxChunkViewComponents;
+            for (crd::u32 li = 0; li < view.component_count; ++li)
+            {
+                view.component_ids[li]      = arch->layout.components_sorted[li];
+                view.component_arrays[li]   = chunk.component_array(arch->layout, li);
+                view.component_versions[li] = hdr->version_counter[li];
+            }
             fn(view, user_data);
         }
     }

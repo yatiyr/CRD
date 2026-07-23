@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <crd/cooker/cook_handler.hpp>
+#include <crd/cooker/cook_io.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <new>
 #include <crd/platform/filesystem.hpp>
@@ -319,6 +320,8 @@ TEST_CASE("TextureResource cooked from TGA round-trip", "[resources][texture][co
     cook_ctx.source_path = crd::containers::StringView(tga_name.data(), tga_name.size());
     cook_ctx.id          = txtr_id;
     cook_ctx.allocator   = &s_alloc;
+    crd::cooker::CookIO cook_io(cook_ctx.source_path, cook_ctx.meta_path, &s_alloc); // GEO-6 seam
+    cook_ctx.io          = &cook_io;
 
     crd::cooker::CookResult cook_result = fn(cook_ctx);
     REQUIRE(cook_result.ok);

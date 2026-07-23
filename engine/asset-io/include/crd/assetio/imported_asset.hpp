@@ -31,6 +31,7 @@ enum class ImportStatus : crd::u8
     Truncated,     // the structure is right but the bytes end early (a partial download / corrupt file)
     Malformed,     // the structure is violated mid-stream (bad token, index out of range, count mismatch)
     NonFiniteData, // a position/normal contains NaN/Inf — geometry poison, never let it into the pipeline
+    Unsupported,   // GEO-5 (appended): the file DEMANDS a capability we cannot honor (3MF requiredextensions)
 };
 
 [[nodiscard]] constexpr const char* import_status_name(ImportStatus s) noexcept
@@ -42,6 +43,7 @@ enum class ImportStatus : crd::u8
     case ImportStatus::Truncated: return "Truncated";
     case ImportStatus::Malformed: return "Malformed";
     case ImportStatus::NonFiniteData: return "NonFiniteData";
+    case ImportStatus::Unsupported: return "Unsupported";
     default: return "?";
     }
 }
@@ -231,9 +233,13 @@ struct ImportedAsset
     crd::containers::Array<crd::u32>       roots; // node indices of the default scene
     crd::containers::Array<ImportedCamera> cameras;
     crd::containers::Array<ImportedLight>  lights;
+    // GEO-6 (appended): the .gltf external buffer's PLAIN-FILE uri (percent-decoded), reported even on the
+    // Malformed missing-bin return — the cook resolves the ACTUAL reference through its declared-input seam
+    // instead of guessing a "<stem>.bin" sibling. Empty when the buffer is embedded or absent.
+    crd::containers::String buffer_uri;
 
     explicit ImportedAsset(crd::memory::IAllocator* a)
-        : meshes(a), materials(a), images(a), nodes(a), roots(a), cameras(a), lights(a)
+        : meshes(a), materials(a), images(a), nodes(a), roots(a), cameras(a), lights(a), buffer_uri(a)
     {
     }
 

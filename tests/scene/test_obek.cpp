@@ -900,6 +900,68 @@ TEST_CASE("BatchInstanceTag is added when registered on the target World", "[obe
     unload_obek(res);
 }
 
+TEST_CASE("GEO-7: instantiate_obek_batch APPLIES per-slot transforms to root entities", "[obek][batch][geo7]")
+{
+    World source;
+    setup_world(source);
+    EntityId src_e = source.spawn();
+    source.add_component<Transform>(src_e, Transform{});
+
+    auto  bytes = build_obek(source);
+    auto* res   = load_obek(bytes);
+    REQUIRE(res != nullptr);
+
+    World target;
+    setup_world(target);
+
+    // one asset -> N PLACED instances: the reserved transforms path delivered (D-007 row 72)
+    Transform slots[3];
+    for (crd::u32 i = 0; i < 3U; ++i)
+    {
+        slots[i].translation = crd::math::from_raw_vec<crd::units::dim::Length>(
+            crd::math::Vec3f{static_cast<crd::f32>(i + 1U) * 10.0F, 0.0F, 0.0F});
+    }
+    auto batch = target.instantiate_obek_batch(*res, 3U, EntityId::null(), {},
+                                               crd::containers::ConstSpan<Transform>(slots, 3U));
+    CHECK(batch.value != 0U);
+    REQUIRE(target.entity_count() == 3U);
+
+    // every root landed at its slot's translation AND is queued for propagation (dirty-marked)
+    bool saw[3] = {false, false, false};
+    for (EntityId e : target)
+    {
+        const auto* t = target.get_component<Transform>(e);
+        REQUIRE(t != nullptr);
+        const crd::f32 x = crd::math::to_raw_vec(t->translation).x;
+        for (crd::u32 i = 0; i < 3U; ++i)
+        {
+            if (x == static_cast<crd::f32>(i + 1U) * 10.0F) { saw[i] = true; }
+        }
+        CHECK(target.has_component<crd::scene::TransformDirtyFlag>(e));
+    }
+    CHECK(saw[0]);
+    CHECK(saw[1]);
+    CHECK(saw[2]);
+
+    // fewer transforms than slots: the tail spawns unplaced (source-authored transform = identity)
+    World target2;
+    setup_world(target2);
+    (void)target2.instantiate_obek_batch(*res, 3U, EntityId::null(), {},
+                                         crd::containers::ConstSpan<Transform>(slots, 1U));
+    crd::u32 at_ten  = 0;
+    crd::u32 at_zero = 0;
+    for (EntityId e : target2)
+    {
+        const crd::f32 x = crd::math::to_raw_vec(target2.get_component<Transform>(e)->translation).x;
+        if (x == 10.0F) { ++at_ten; }
+        if (x == 0.0F) { ++at_zero; }
+    }
+    CHECK(at_ten == 1U);
+    CHECK(at_zero == 2U);
+
+    unload_obek(res);
+}
+
 TEST_CASE("instantiate_obek_batch returns unique handles per call", "[obek][batch][handle]")
 {
     World source;

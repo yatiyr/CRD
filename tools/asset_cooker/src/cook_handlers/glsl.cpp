@@ -1,14 +1,12 @@
 #include <crd/cooker/cook_handler.hpp>
+#include <crd/cooker/cook_io.hpp>
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/containers/string_view.hpp>
 #include <crd/gpu/vulkan_shader_compile.hpp> // ADR-0103: GLSL→SPIR-V owned by the Vulkan backend, not crd-shader
 #include <crd/memory/allocators/malloc_allocator.hpp>
-#include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
-
-namespace fs = crd::platform::fs;
 
 namespace crd::cooker
 {
@@ -48,11 +46,13 @@ CookResult glsl_handler(const CookContext& ctx)
 {
     CookResult result(ctx.allocator);
 
-    crd::containers::String source_text(ctx.allocator);
-    if (!fs::read_file_text(fs::Path(ctx.source_path), source_text))
+    crd::containers::Array<crd::u8> src_bytes(ctx.allocator);
+    if (!ctx.io->read_source(src_bytes))
     {
         return result; // ok = false
     }
+    crd::containers::String source_text(ctx.allocator);
+    source_text.append(reinterpret_cast<const char*>(src_bytes.data()), src_bytes.size());
 
     const crd::gpu::ShaderStage stage = stage_from_path(ctx.source_path);
 
@@ -90,9 +90,9 @@ CookResult glsl_handler(const CookContext& ctx)
 
 void register_glsl_handler()
 {
-    register_cook_handler(".vert.glsl", glsl_handler);
-    register_cook_handler(".frag.glsl", glsl_handler);
-    register_cook_handler(".comp.glsl", glsl_handler);
+    register_cook_handler(".vert.glsl", glsl_handler, kGlslHandlerVersion);
+    register_cook_handler(".frag.glsl", glsl_handler, kGlslHandlerVersion);
+    register_cook_handler(".comp.glsl", glsl_handler, kGlslHandlerVersion);
 }
 
 } // namespace crd::cooker

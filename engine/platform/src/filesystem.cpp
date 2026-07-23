@@ -25,22 +25,30 @@ namespace stdfs = std::filesystem;
 #if CRD_OS_WINDOWS
 [[nodiscard]] std::wstring utf8_to_wide(containers::StringView sv) noexcept
 {
-    if (sv.empty())
+    try
     {
-        return {};
+        if (sv.empty())
+        {
+            return {};
+        }
+        const int needed = MultiByteToWideChar(CP_UTF8, 0, sv.data(), static_cast<int>(sv.size()), nullptr, 0);
+        if (needed <= 0)
+        {
+            return {};
+        }
+        std::wstring out(static_cast<crd::usize>(needed), L'\0');
+        const int written =
+            MultiByteToWideChar(CP_UTF8, 0, sv.data(), static_cast<int>(sv.size()), out.data(), needed);
+        if (written != needed)
+        {
+            return {};
+        }
+        return out;
     }
-    const int needed = MultiByteToWideChar(CP_UTF8, 0, sv.data(), static_cast<int>(sv.size()), nullptr, 0);
-    if (needed <= 0)
+    catch (...)
     {
-        return {};
+        return {}; // allocation failure under noexcept: an empty path, never std::terminate
     }
-    std::wstring out(static_cast<crd::usize>(needed), L'\0');
-    const int written = MultiByteToWideChar(CP_UTF8, 0, sv.data(), static_cast<int>(sv.size()), out.data(), needed);
-    if (written != needed)
-    {
-        return {};
-    }
-    return out;
 }
 
 [[nodiscard]] containers::String wide_to_utf8(const std::wstring& ws) noexcept
@@ -162,18 +170,27 @@ void Path::normalize_in_place(containers::String& s)
 
 Path current_working_dir() noexcept
 {
-    std::error_code ec;
-    const stdfs::path cwd = stdfs::current_path(ec);
-    if (ec)
+    try
     {
-        CRD_LOG_ERROR(g_log_platform, "current_path() failed: {}", ec.message());
-        return Path{};
+        std::error_code ec;
+        const stdfs::path cwd = stdfs::current_path(ec);
+        if (ec)
+        {
+            CRD_LOG_ERROR(g_log_platform, "current_path() failed: {}", ec.message());
+            return Path{};
+        }
+        return from_native_path(cwd);
     }
-    return from_native_path(cwd);
+    catch (...)
+    {
+        return Path{}; // allocation failure under noexcept: an empty path, never std::terminate
+    }
 }
 
 Path executable_dir() noexcept
 {
+    try
+    {
 #if CRD_OS_WINDOWS
     std::wstring buffer(512, L'\0');
     for (;;)
@@ -223,6 +240,11 @@ Path executable_dir() noexcept
         buffer.resize(buffer.size() * 2); // truncated — grow and retry
     }
 #endif
+    }
+    catch (...)
+    {
+        return Path{}; // allocation failure under noexcept: an empty path, never std::terminate
+    }
 }
 
 Path user_config_dir(containers::StringView app_name) noexcept
@@ -303,111 +325,160 @@ i64 last_modified_unix_seconds(const Path& path) noexcept
 
 bool read_file_text(const Path& path, containers::String& out) noexcept
 {
-    std::ifstream in(to_native_path(path), std::ios::binary | std::ios::ate);
-    if (!in)
+    // stream/path machinery can throw (allocation, ios failure) — under noexcept that is std::terminate; an I/O
+    // failure must be a FALSE return, never a process kill (same contract as the write side)
+    try
     {
-        return false;
-    }
-    const std::streamsize size = in.tellg();
-    if (size < 0)
-    {
-        return false;
-    }
-    out.resize(static_cast<crd::usize>(size));
-    in.seekg(0, std::ios::beg);
-    if (size > 0)
-    {
-        in.read(out.data(), size);
+        std::ifstream in(to_native_path(path), std::ios::binary | std::ios::ate);
         if (!in)
         {
-            out.clear();
             return false;
         }
+        const std::streamsize size = in.tellg();
+        if (size < 0)
+        {
+            return false;
+        }
+        out.resize(static_cast<crd::usize>(size));
+        in.seekg(0, std::ios::beg);
+        if (size > 0)
+        {
+            in.read(out.data(), size);
+            if (!in)
+            {
+                out.clear();
+                return false;
+            }
+        }
+        return true;
     }
-    return true;
+    catch (...)
+    {
+        out.clear();
+        return false;
+    }
 }
 
 bool read_file_binary(const Path& path, containers::Array<u8>& out) noexcept
 {
-    std::ifstream in(to_native_path(path), std::ios::binary | std::ios::ate);
-    if (!in)
+    try
     {
-        return false;
-    }
-    const std::streamsize size = in.tellg();
-    if (size < 0)
-    {
-        return false;
-    }
-    out.resize(static_cast<crd::usize>(size));
-    in.seekg(0, std::ios::beg);
-    if (size > 0)
-    {
-        in.read(reinterpret_cast<char*>(out.data()), size);
+        std::ifstream in(to_native_path(path), std::ios::binary | std::ios::ate);
         if (!in)
         {
-            out.clear();
             return false;
         }
+        const std::streamsize size = in.tellg();
+        if (size < 0)
+        {
+            return false;
+        }
+        out.resize(static_cast<crd::usize>(size));
+        in.seekg(0, std::ios::beg);
+        if (size > 0)
+        {
+            in.read(reinterpret_cast<char*>(out.data()), size);
+            if (!in)
+            {
+                out.clear();
+                return false;
+            }
+        }
+        return true;
     }
-    return true;
+    catch (...)
+    {
+        out.clear();
+        return false;
+    }
 }
 
 bool read_file_range(const Path& path, crd::u64 offset, crd::u64 size, containers::Array<u8>& out) noexcept
 {
-    std::ifstream in(to_native_path(path), std::ios::binary);
-    if (!in)
+    try
     {
-        return false;
-    }
-    in.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
-    if (!in)
-    {
-        return false;
-    }
-    out.resize(static_cast<crd::usize>(size));
-    if (size > 0)
-    {
-        in.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(size));
+        std::ifstream in(to_native_path(path), std::ios::binary);
         if (!in)
         {
-            out.clear();
             return false;
         }
+        in.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+        if (!in)
+        {
+            return false;
+        }
+        out.resize(static_cast<crd::usize>(size));
+        if (size > 0)
+        {
+            in.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(size));
+            if (!in)
+            {
+                out.clear();
+                return false;
+            }
+        }
+        return true;
     }
-    return true;
+    catch (...)
+    {
+        out.clear();
+        return false;
+    }
 }
 
 bool write_file_text(const Path& path, containers::StringView contents) noexcept
 {
-    std::ofstream out(to_native_path(path), std::ios::binary | std::ios::trunc);
-    if (!out)
+    // the stream/path machinery can throw (allocation, ios failure) — under noexcept that is std::terminate;
+    // a filesystem failure must be a FALSE return, never a process kill
+    try
+    {
+        std::ofstream out(to_native_path(path), std::ios::binary | std::ios::trunc);
+        if (!out)
+        {
+            return false;
+        }
+        out.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+        return static_cast<bool>(out);
+    }
+    catch (...)
     {
         return false;
     }
-    out.write(contents.data(), static_cast<std::streamsize>(contents.size()));
-    return static_cast<bool>(out);
 }
 
 bool write_file_binary(const Path& path, containers::ConstSpan<u8> contents) noexcept
 {
-    std::ofstream out(to_native_path(path), std::ios::binary | std::ios::trunc);
-    if (!out)
+    try
+    {
+        std::ofstream out(to_native_path(path), std::ios::binary | std::ios::trunc);
+        if (!out)
+        {
+            return false;
+        }
+        if (!contents.empty())
+        {
+            out.write(reinterpret_cast<const char*>(contents.data()), static_cast<std::streamsize>(contents.size()));
+        }
+        return static_cast<bool>(out);
+    }
+    catch (...)
     {
         return false;
     }
-    if (!contents.empty())
-    {
-        out.write(reinterpret_cast<const char*>(contents.data()), static_cast<std::streamsize>(contents.size()));
-    }
-    return static_cast<bool>(out);
 }
 
 bool create_directories(const Path& path) noexcept
 {
-    std::error_code ec;
-    const bool ok = stdfs::create_directories(to_native_path(path), ec);
-    return !ec && (ok || is_directory(path));
+    try
+    {
+        std::error_code ec;
+        const bool ok = stdfs::create_directories(to_native_path(path), ec);
+        return !ec && (ok || is_directory(path));
+    }
+    catch (...)
+    {
+        return false;
+    }
 }
 
 bool remove_file(const Path& path) noexcept
@@ -415,6 +486,15 @@ bool remove_file(const Path& path) noexcept
     std::error_code ec;
     const bool ok = stdfs::remove(to_native_path(path), ec);
     return !ec && ok;
+}
+
+bool rename_file(const Path& from, const Path& to) noexcept
+{
+    // replaces an existing destination on both platforms (POSIX rename semantics; std::filesystem guarantees the
+    // overwrite) — the atomic-publish primitive the GEO-6 cook database/artifact writes lean on
+    std::error_code ec;
+    stdfs::rename(to_native_path(from), to_native_path(to), ec);
+    return !ec;
 }
 
 bool remove_all(const Path& path) noexcept
@@ -426,19 +506,28 @@ bool remove_all(const Path& path) noexcept
 
 void list_directory(const Path& path, containers::Array<Path>& out) noexcept
 {
-    std::error_code ec;
-    const auto native = to_native_path(path);
-    if (!stdfs::exists(native, ec) || ec)
+    // range-for advances via the THROWING operator++ (the error_code ctor only covers construction) — a directory
+    // that mutates mid-walk must yield a partial listing, never std::terminate
+    try
     {
-        return;
-    }
-    for (const auto& entry : stdfs::directory_iterator(native, ec))
-    {
-        if (ec)
+        std::error_code ec;
+        const auto native = to_native_path(path);
+        if (!stdfs::exists(native, ec) || ec)
         {
             return;
         }
-        out.push_back(from_native_path(entry.path()));
+        for (const auto& entry : stdfs::directory_iterator(native, ec))
+        {
+            if (ec)
+            {
+                return;
+            }
+            out.push_back(from_native_path(entry.path()));
+        }
+    }
+    catch (...)
+    {
+        out.clear(); // consistent failure contract with the read_* family: empty output, never std::terminate
     }
 }
 } // namespace crd::platform::fs

@@ -177,6 +177,19 @@ void chunk_filter_visitor(const ChunkView& view, void* user_data)
 {
     auto* ctx = static_cast<VisitContext*>(user_data);
 
+    // GEO-7 fast path: a query with NO per-entity filters forwards the backend's view UNTOUCHED — the SoA
+    // component-pointer table + chunk version counters survive to the visitor (the chunk-grain render path).
+    // A filtered query compacts the entity list, which breaks 1:1 slot correspondence with the chunk arrays,
+    // so the filtered view legitimately carries an EMPTY table (consumers fall back to per-entity access).
+    const bool unfiltered = ctx->archetype_forbidden.popcount() == 0U && ctx->sparse_forbidden.popcount() == 0U
+                            && ctx->relation_count == 0U && ctx->change_filter_count == 0U
+                            && ctx->skip_pending_count == 0U && ctx->predicate_count == 0U;
+    if (unfiltered)
+    {
+        ctx->user_visitor(view, ctx->user_data);
+        return;
+    }
+
     ctx->scratch->clear();
     for (crd::u32 i = 0; i < view.entity_count; ++i)
     {

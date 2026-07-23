@@ -24,11 +24,10 @@ target_link_libraries(crd-cooker
         crd-scene
         crd-preset
         crd-profile
-        crd-asset-io             # GEO-1: our own STL/OBJ/PLY parsers (mesh_wave1 handler)
-    PRIVATE
-        # stb RETIRED (GEO-3 stage 2b): texture.cpp now decodes via OUR ldr_decode (engine/resources).
-        cgltf       # legacy glTF cook path only (first-wins registry retired it; deletion pending GEO-3 close)
-        mikktspace  # GEO-2's comparison ORACLE (tests) + the legacy mesh.cpp path
+        crd-asset-io             # GEO-1..5: our own STL/OBJ/PLY/glTF/3MF parsers (mesh_wave1 handler)
+        # stb RETIRED (GEO-3 stage 2b): texture.cpp decodes via OUR ldr_decode. cgltf + mikktspace RETIRED
+        # (GEO-6: the legacy mesh.cpp DELETED — our parsers own every format; mikktspace lives on ONLY as the
+        # test-side oracle, linked by the test targets themselves).
 )
 
 # v1l: scene cooker uses toml++ (same dep used by crd-config).
@@ -42,13 +41,6 @@ else()
 endif()
 
 target_compile_features(crd-cooker PUBLIC cxx_std_20)
-
-# mesh.cpp #includes mikktspace.c directly; that third-party tangent-space code
-# does several `x << 32` on 32-bit ints (benign hash mixing) which trips UBSan's
-# shift-exponent check on the linux-gcc-asan config. Disable only the shift check
-# for this one TU (no-op when UBSan isn't active; not applicable to MSVC).
-set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/src/cook_handlers/mesh.cpp" PROPERTIES
-    COMPILE_OPTIONS "$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fno-sanitize=shift>")
 
 crd_enable_default_pch(crd-cooker)
 

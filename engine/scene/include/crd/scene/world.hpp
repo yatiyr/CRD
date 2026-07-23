@@ -360,15 +360,17 @@ public:
     //   2. If `BatchInstanceTag` is registered on this World, every spawned
     //      entity for slot i is tagged with `BatchInstanceTag{batch, i}`.
     //
-    // The transforms[] argument is reserved at v1m5b — the caller passes
-    // a transform per slot today, but the path that applies them to root
-    // entities lands when the renderer's instanced-draw path ships in
-    // Phase 3.5+. Pass an empty span if you don't have transforms yet.
+    // GEO-7 (D-007 row 72) delivers the reserved transforms path: `transforms[slot]` is the slot's LOCAL TRS,
+    // UPSERTED onto every ROOT entity of that slot's instance (source-roots — reparented to `parent` when given)
+    // and the subtree marked dirty, so one propagation pass places the whole batch (one asset → N placed
+    // instances — the renderer's instanced-draw feed). Fewer transforms than slots: the tail spawns unplaced
+    // (source-authored transforms). Empty span = the v1m5b behavior, unchanged.
     //
     // Each call returns a unique `ObekBatchHandle`. v1m5b uses a monotonic
     // per-World counter; no persistence concerns.
     [[nodiscard]] ObekBatchHandle instantiate_obek_batch(const ObekResource& res, crd::u32 count,
-                                                         EntityId parent = EntityId::null(), BatchHints hints = {});
+                                                         EntityId parent = EntityId::null(), BatchHints hints = {},
+                                                         crd::containers::ConstSpan<Transform> transforms = {});
 
     // ---- Transform writer API (Phase 3.0 v1j, ADR-0054) ----------------
     //
@@ -538,6 +540,9 @@ public:
 
     using RelationVisitorFn = void (*)(EntityId entity, crd::u32 depth, void* user_data);
 
+    // The visitor is tunnelled by ADDRESS through a stateless fn-ptr + user-data (never invoked as a forwarded
+    // value); forwarding would dangle the Ctx pointer — hence the suppression.
+    // NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward)
     template <typename Tag, typename Visitor> void traverse_relation(EntityId root, Visitor&& visitor) const
     {
         const ComponentId id = m_components.id_of<Relation<Tag>>();
@@ -663,7 +668,8 @@ public:
             return 0.0;
         }
         const crd::f64 a = m_fixed_accumulator / fixed_dt;
-        return (a < 0.0) ? 0.0 : (a > 1.0 ? 1.0 : a);
+        if (a < 0.0) { return 0.0; }
+        return a > 1.0 ? 1.0 : a;
     }
 
     // ---- Schedule + Commands (Phase 3.0 v1h, ADR-0052 §3-§5) -----------

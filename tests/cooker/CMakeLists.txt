@@ -3,6 +3,7 @@ add_executable(crd-cooker-tests
     test_mesh_wave1.cpp
     test_texture_cook.cpp
     test_scene_decompose.cpp
+    test_gltf_roundtrip.cpp # GEO-4 pt 3: import -> cook -> native edit -> export -> re-import
 )
 
 target_link_libraries(crd-cooker-tests PRIVATE

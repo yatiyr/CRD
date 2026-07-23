@@ -2146,6 +2146,64 @@ public:
         submit_and_wait();
     }
 
+    // GEO-7: the scene-geometry draw — draw_storage's UAV seam + draw_depth's cleared colour+depth pass (depth
+    // write ON). No per-draw SSBO readback (scene buffers are GPU-consumed; download_storage on demand).
+    void draw_storage_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear, float clear_depth,
+                            DepthCompare compare, IStorageBuffer& storage, crd::u32 vertex_count) override
+    {
+        if (!m_ok || m_uav_heap == nullptr) { return; }
+        auto& t = static_cast<Dx12RasterTarget&>(target);
+        auto& p = static_cast<Dx12RasterProgram&>(program);
+        auto& s = static_cast<Dx12StorageBuffer&>(storage);
+        if (!t.has_depth()) { return; } // needs a create_color_depth_target target
+        ID3D12PipelineState* pso = p.pso_for(1U, kDepthFormat, to_d3d12_compare(compare), false);
+        if (!p.valid() || pso == nullptr) { return; }
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
+        uav.Format                     = DXGI_FORMAT_UNKNOWN;
+        uav.ViewDimension              = D3D12_UAV_DIMENSION_BUFFER;
+        uav.Buffer.FirstElement        = 0;
+        uav.Buffer.NumElements         = s.num_elements();
+        uav.Buffer.StructureByteStride = 4;
+        m_device->CreateUnorderedAccessView(s.buf(), nullptr, &uav, m_uav_heap->GetCPUDescriptorHandleForHeapStart());
+
+        m_cmd_alloc->Reset();
+        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+
+        transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
+        const D3D12_CPU_DESCRIPTOR_HANDLE dsv = t.dsv();
+        m_list->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+        const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
+        m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
+        m_list->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, clear_depth, 0, 0, nullptr);
+
+        const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
+        const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
+        m_list->RSSetViewports(1, &vp);
+        m_list->RSSetScissorRects(1, &sc);
+        m_list->SetGraphicsRootSignature(p.root());
+        ID3D12DescriptorHeap* heaps[] = {m_uav_heap.Get()};
+        m_list->SetDescriptorHeaps(1, heaps);
+        m_list->SetGraphicsRootDescriptorTable(0, m_uav_heap->GetGPUDescriptorHandleForHeapStart());
+        m_list->SetPipelineState(pso);
+        m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        m_list->DrawInstanced(vertex_count, 1, 0, 0);
+
+        transition(t.tex(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        D3D12_TEXTURE_COPY_LOCATION dst{};
+        dst.pResource       = t.readback();
+        dst.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        dst.PlacedFootprint = t.footprint();
+        D3D12_TEXTURE_COPY_LOCATION src{};
+        src.pResource        = t.tex();
+        src.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        src.SubresourceIndex = 0;
+        m_list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+        transition(t.tex(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
+        submit_and_wait();
+    }
+
     [[nodiscard]] std::unique_ptr<ITexture> create_texture(crd::u32 width, crd::u32 height, const void* rgba) override
     {
         if (!m_ok || width == 0U || height == 0U || rgba == nullptr) { return nullptr; }

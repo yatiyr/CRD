@@ -52,6 +52,7 @@
 #include <ckir_raster_triangle.hpp> // B3-e: the SHARED, backend-neutral CKIR triangle (identical on Vulkan + DX12)
 #include <ckir_vertex_pull.hpp>     // GEO-1: the vertex-pulling VS (cooked MeshResource stream fetched by VertexIndex)
 #include <crd/cooker/cook_handler.hpp> // GEO-1: the wave1 (.stl/.obj/.ply) cook handler — the import→cook→draw gate
+#include <crd/cooker/cook_io.hpp>      // GEO-6: the declared-input seam every cook reads through
 #include <crd/resources/crdr.hpp>      // GEO-1: crdr_read (the cooked MESH artifact readback)
 #include <crd/resources/deflate.hpp>          // GEO-3 close: OUR zlib deflate (the in-test PNG fixture)
 #include <crd/resources/png_image.hpp>        // GEO-3 close: OUR crc32 (the in-test PNG fixture)
@@ -12422,6 +12423,8 @@ TEST_CASE("GEO-1: an IMPORTED STL cooks, uploads, and DRAWS via vertex pulling (
     cctx.meta_path   = crd::containers::StringView(meta_path);
     cctx.id          = crd::resources::ResourceId::mint_random();
     cctx.allocator   = &alloc;
+    crd::cooker::CookIO cctx_io(cctx.source_path, cctx.meta_path, &alloc); // GEO-6: the only road to bytes
+    cctx.io          = &cctx_io;
     const crd::cooker::CookResult cooked = handler(cctx);
     REQUIRE(cooked.ok);
 
@@ -12619,6 +12622,8 @@ TEST_CASE("GEO-3 CLOSE: a textured glTF decomposes (MESH+TXTR+PBRM+SCEN) and REN
     cctx.source_path = crd::containers::StringView(src_path);
     cctx.id          = crd::resources::ResourceId::mint_random();
     cctx.allocator   = &alloc;
+    crd::cooker::CookIO cctx_io(cctx.source_path, cctx.meta_path, &alloc); // GEO-6: the only road to bytes
+    cctx.io          = &cctx_io;
     const crd::cooker::CookResult cooked = handler(cctx);
     REQUIRE(cooked.ok);
     REQUIRE(cooked.extra_artifacts.size() == 3U); // TXTR + PBRM + SCEN — every resource type, natively decomposed

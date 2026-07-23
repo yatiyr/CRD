@@ -8,20 +8,53 @@ namespace crd::scene
 {
 // One chunk of components handed to a query visitor.
 //
-// v1b declares the type only. The actual layout (per-component SoA pointer
-// table, entity-id array, version counters) is populated by the storage
-// backends when they ship in v1c (ArchetypeChunkStorage) and v1d
-// (SparseSetStorage). Visitors that target a single backend may downcast
-// for backend-specific optimisations; the abstract view here is what the
-// query DSL (v1g) walks generically.
+// GEO-7 (D-007 row 72) delivers the SoA surface v1b promised: backends populate the per-component pointer table +
+// per-component chunk version counters, so chunk-grain systems (transform extract, culling, draw submission) walk
+// component arrays DIRECTLY — never per-entity handle chasing. The archetype backend fills the table from its
+// ChunkLayout; the sparse backend fills a single-entry table from the pool's dense array (except CoW-shared pools,
+// whose dense bytes are not authoritative — those yield an empty table and consumers fall back per-entity).
+inline constexpr crd::u32 kMaxChunkViewComponents = 32; // == kMaxComponentsPerArchetype (archetype_chunk.hpp)
+
 struct ChunkView
 {
     const EntityId* entities = nullptr;
     crd::u32 entity_count = 0;
     ComponentMask present_mask{};
 
-    // v1b reserves only the abstract interface — backends populate
-    // per-component pointer tables in their respective slices.
+    // ── the SoA table (GEO-7) ────────────────────────────────────────────────────────────────────────────────
+    // Parallel arrays, layout order. `component_versions[i]` is the chunk-grain change counter for that array
+    // (bumped on declared writes — the ChangeDetect signal at chunk grain; the partial-re-upload driver).
+    crd::u32    component_count = 0;
+    ComponentId component_ids[kMaxChunkViewComponents]{};
+    void*       component_arrays[kMaxChunkViewComponents]{};
+    crd::u64    component_versions[kMaxChunkViewComponents]{};
+
+    // The SoA array for component `c`, or nullptr when the backend did not surface one (CoW-shared sparse pool,
+    // or `c` absent). O(component_count) linear scan — tables are 2..8 entries in practice.
+    [[nodiscard]] void* array_of(ComponentId c) const noexcept
+    {
+        for (crd::u32 i = 0; i < component_count; ++i)
+        {
+            if (component_ids[i] == c) { return component_arrays[i]; }
+        }
+        return nullptr;
+    }
+
+    // The chunk-grain version counter for component `c` (0 when absent from the table).
+    [[nodiscard]] crd::u64 version_of(ComponentId c) const noexcept
+    {
+        for (crd::u32 i = 0; i < component_count; ++i)
+        {
+            if (component_ids[i] == c) { return component_versions[i]; }
+        }
+        return 0;
+    }
+
+    // Typed convenience over `array_of`.
+    template <typename T> [[nodiscard]] T* array(ComponentId c) const noexcept
+    {
+        return static_cast<T*>(array_of(c));
+    }
 };
 
 using ChunkVisitor = void (*)(const ChunkView& chunk, void* user_data);

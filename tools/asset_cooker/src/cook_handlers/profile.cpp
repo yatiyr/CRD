@@ -31,7 +31,7 @@
 #include <crd/containers/string.hpp>
 #include <crd/containers/string_view.hpp>
 #include <crd/cooker/cook_handler.hpp>
-#include <crd/platform/filesystem.hpp>
+#include <crd/cooker/cook_io.hpp>
 #include <crd/profile/profile_artifact_builder.hpp>
 #include <crd/profile/profile_predicate.hpp>
 #include <crd/profile/profile_resource.hpp>
@@ -44,8 +44,6 @@
 #include <string>
 #include <string_view>
 
-namespace fs = crd::platform::fs;
-
 namespace crd::cooker
 {
 
@@ -54,24 +52,19 @@ namespace
 
 constexpr crd::u32 kProfileHandlerVersion = 1U;
 
-// Resolve `bundle_entry_path` (relative to the profile .toml's directory)
-// to a ResourceId via the corresponding `.meta` sidecar. Returns null
-// id on failure; the caller emits a diagnostic.
-[[nodiscard]] crd::resources::ResourceId resolve_meta_uuid(
-    const fs::Path& source_dir, std::string_view rel,
-    crd::memory::IAllocator* alloc)
+// Resolve `bundle_entry_path` (relative to the profile .toml's directory) to a ResourceId via the corresponding
+// `.meta` sidecar — read through CookIO, so the referenced preset's identity is a RECORDED dependency edge (a
+// re-minted preset id recooks this profile). Returns null id on failure; the caller emits a diagnostic.
+[[nodiscard]] crd::resources::ResourceId resolve_meta_uuid(const CookContext& ctx, std::string_view rel)
 {
-    crd::containers::String full(alloc);
-    full.append(source_dir.generic().data(), source_dir.generic().size());
-    full.append("/");
-    full.append(rel.data(), rel.size());
-    full.append(".meta");
-    const fs::Path meta_path(crd::containers::StringView{full.data(), full.size()});
+    crd::containers::String meta_rel(ctx.allocator);
+    meta_rel.append(rel.data(), rel.size());
+    meta_rel.append(".meta");
 
-    crd::containers::String text(alloc);
-    if (!fs::read_file_text(meta_path, text))
+    crd::containers::Array<crd::u8> bytes(ctx.allocator);
+    if (!ctx.io->read_input(crd::containers::StringView(meta_rel.data(), meta_rel.size()), bytes))
         return {};
-    const std::string_view sv(text.data(), text.size());
+    const std::string_view sv(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     const std::string_view key = "uuid = \"";
     const auto pos = sv.find(key);
     if (pos == std::string_view::npos)
@@ -112,9 +105,11 @@ CookResult profile_handler(const CookContext& ctx)
 {
     CookResult result(ctx.allocator);
 
-    crd::containers::String text(ctx.allocator);
-    if (!fs::read_file_text(fs::Path(ctx.source_path), text))
+    crd::containers::Array<crd::u8> src_bytes(ctx.allocator);
+    if (!ctx.io->read_source(src_bytes))
         return result;
+    crd::containers::String text(ctx.allocator);
+    text.append(reinterpret_cast<const char*>(src_bytes.data()), src_bytes.size());
 
     const auto parsed = toml::parse(std::string_view{text.data(), text.size()});
     if (!parsed)
@@ -122,17 +117,6 @@ CookResult profile_handler(const CookContext& ctx)
         std::fprintf(stderr, "profile cook: TOML parse error in %.*s\n",
                      static_cast<int>(ctx.source_path.size()), ctx.source_path.data());
         return result;
-    }
-
-    // Resolve the source directory (everything before the last '/').
-    fs::Path source_dir;
-    {
-        const auto sp = ctx.source_path;
-        const auto slash = sp.rfind('/');
-        if (slash != crd::containers::StringView::npos)
-        {
-            source_dir = fs::Path(sp.substr(0U, slash));
-        }
     }
 
     crd::profile::ProfileArtifactBuilder b{ctx.allocator, /*schema_version=*/1U, ctx.id};
@@ -222,8 +206,7 @@ CookResult profile_handler(const CookContext& ctx)
                     std::fprintf(stderr, "profile cook: bundle entries must be strings\n");
                     return result;
                 }
-                const crd::resources::ResourceId id =
-                    resolve_meta_uuid(source_dir, *s, ctx.allocator);
+                const crd::resources::ResourceId id = resolve_meta_uuid(ctx, *s);
                 if (id.is_null())
                 {
                     std::fprintf(stderr,
@@ -258,7 +241,7 @@ CookResult profile_handler(const CookContext& ctx)
 
 void register_profile_handler()
 {
-    register_cook_handler(".profile.toml", profile_handler);
+    register_cook_handler(".profile.toml", profile_handler, kProfileHandlerVersion);
 }
 
 } // namespace crd::cooker

@@ -3,18 +3,16 @@
 // the texture_cook.hpp contract) → the shared mip/encode core (sRGB filtered in LINEAR space) → TXTR CRDR (ADR-0042).
 
 #include <crd/cooker/cook_handler.hpp>
+#include <crd/cooker/cook_io.hpp>
 #include <crd/cooker/texture_cook.hpp>
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
-#include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/ldr_image.hpp>
 
 #include <cstdio>
-
-namespace fs = crd::platform::fs;
 
 namespace crd::cooker
 {
@@ -29,7 +27,7 @@ CookResult texture_handler(const CookContext& ctx)
     CookResult result(ctx.allocator);
 
     crd::containers::Array<crd::u8> src_bytes(ctx.allocator);
-    if (!fs::read_file_binary(fs::Path(ctx.source_path), src_bytes)) { return result; }
+    if (!ctx.io->read_source(src_bytes)) { return result; }
 
     crd::resources::LdrImage image(ctx.allocator);
     const crd::resources::LdrError err =
@@ -42,10 +40,9 @@ CookResult texture_handler(const CookContext& ctx)
     }
 
     TextureCookOptions options; // default: sRGB color (the standalone .png/.jpg reality); .meta opts out for data
-    if (!ctx.meta_path.empty())
     {
         crd::containers::String meta_text(ctx.allocator);
-        if (fs::read_file_text(fs::Path(ctx.meta_path), meta_text))
+        if (ctx.io->read_meta(meta_text))
         {
             options = parse_texture_cook_options(crd::containers::StringView(meta_text.data(), meta_text.size()));
         }
@@ -65,11 +62,11 @@ CookResult texture_handler(const CookContext& ctx)
 
 void register_texture_handler()
 {
-    register_cook_handler(".png", texture_handler);
-    register_cook_handler(".jpg", texture_handler);
-    register_cook_handler(".jpeg", texture_handler);
-    register_cook_handler(".tga", texture_handler);
-    register_cook_handler(".bmp", texture_handler);
+    register_cook_handler(".png", texture_handler, kTextureHandlerVersion);
+    register_cook_handler(".jpg", texture_handler, kTextureHandlerVersion);
+    register_cook_handler(".jpeg", texture_handler, kTextureHandlerVersion);
+    register_cook_handler(".tga", texture_handler, kTextureHandlerVersion);
+    register_cook_handler(".bmp", texture_handler, kTextureHandlerVersion);
 }
 
 } // namespace crd::cooker

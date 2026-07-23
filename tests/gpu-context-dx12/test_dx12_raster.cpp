@@ -2931,3 +2931,84 @@ TEST_CASE("D-007 B8-d: IR area light SPECULAR (LTC LUT Minv reconstruction) rend
         CHECK(any);
     }
 }
+
+// ── GEO-7 (D-007 row 72): draw_storage_depth — the scene-geometry draw (storage pulling + a REAL depth pass) ────────
+//
+// Two clip-space triangles pulled from the storage buffer, NEAR first (reverse-Z: larger z), FAR second. A depthless
+// draw would leave the last-drawn (far) colour at the centre; with the depth test at GreaterEqual the near triangle
+// must occlude — proving depth clear + test + write all live on the storage-pull path.
+namespace
+{
+inline void build_pull_depth_vs(crd::kir::KGraph& g, crd::kir::KEntry& ve)
+{
+    namespace kir = crd::kir;
+    const auto sh = kir::make_shape({1});
+    const auto ku = [&](crd::u32 v) { return g.constant(static_cast<double>(v), sh, kir::DType::U32); };
+    const int  vid  = g.cast(g.builtin(kir::KBuiltin::VertexIndex), kir::DType::U32);
+    const int  base = g.binary(kir::KOp::Mul, vid, ku(4U));
+    const auto ldf  = [&](int idx) { return g.int_bits_to_float(g.cast(g.storage_load(idx), kir::DType::I32)); };
+    const int  x    = ldf(base);
+    const int  y    = ldf(g.binary(kir::KOp::Add, base, ku(1U)));
+    const int  z    = ldf(g.binary(kir::KOp::Add, base, ku(2U)));
+    const int  c    = ldf(g.binary(kir::KOp::Add, base, ku(3U)));
+    ve.stage    = kir::KStage::Vertex;
+    ve.position = g.vec4(x, y, z, g.constant(1.0, sh, kir::DType::F32));
+    ve.n_out    = 1;
+    ve.out[0]   = {c, 0, kir::Interp::Flat};
+}
+
+inline void build_pull_depth_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
+{
+    namespace kir = crd::kir;
+    const auto sh = kir::make_shape({1});
+    const int  c  = g.stage_in(kir::KType::make_scalar(kir::DType::F32), 0, kir::Interp::Flat);
+    const int  k1 = g.constant(1.0, sh, kir::DType::F32);
+    fe.stage  = kir::KStage::Fragment;
+    fe.n_out  = 1;
+    fe.out[0] = {g.vec4(c, g.binary(kir::KOp::Sub, k1, c), g.constant(0.0, sh, kir::DType::F32), k1), 0};
+}
+} // namespace
+
+TEST_CASE("GEO-7: draw_storage_depth — near occludes far on the storage-pull path (DX12)", "[dx12][raster][gpu][ir]")
+{
+    namespace kir = crd::kir;
+    auto        gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    auto raster = g::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+
+    kir::KGraph vg(&alloc);
+    kir::KEntry ve;
+    build_pull_depth_vs(vg, ve);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    build_pull_depth_fs(fg, fe);
+    auto vs = gctx->create_program(vg, ve);
+    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    auto fs = gctx->create_program(fg, fe);
+    REQUIRE(fs != nullptr);
+    auto program = raster->create_raster_program(*vs, *fs);
+    REQUIRE(program != nullptr);
+
+    constexpr crd::u32 dim    = 64U;
+    auto               target = raster->create_color_depth_target(dim, dim);
+    auto               storage = raster->create_storage_buffer(6U * 4U * 4U);
+    REQUIRE(target != nullptr);
+    REQUIRE(storage != nullptr);
+
+    // NEAR (z=0.8, c=1 → red) FIRST, FAR (z=0.3, c=0 → green) SECOND — draw order alone would show green
+    const crd::f32 verts[24] = {-3.0F, -1.0F, 0.8F, 1.0F, 3.0F, -1.0F, 0.8F, 1.0F, 0.0F, 3.0F, 0.8F, 1.0F,
+                                -3.0F, -1.0F, 0.3F, 0.0F, 3.0F, -1.0F, 0.3F, 0.0F, 0.0F, 3.0F, 0.3F, 0.0F};
+    REQUIRE(raster->upload_storage(*storage, 0U, verts, sizeof(verts)));
+
+    raster->draw_storage_depth(*target, *program, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 0.0F,
+                               g::DepthCompare::GreaterEqual, *storage, 6U);
+
+    const crd::u32 centre = target->read_pixel(dim / 2U, dim / 2U);
+    const crd::u32 rr     = centre & 0xFFU;
+    const crd::u32 gg     = (centre >> 8U) & 0xFFU;
+    WARN("[storage-depth dx12] centre r=" << rr << " g=" << gg);
+    CHECK(rr > 200U); // the NEAR triangle survived the far one drawn after it — the depth test is REAL
+    CHECK(gg < 50U);
+}

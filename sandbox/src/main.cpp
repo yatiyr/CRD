@@ -1,18 +1,17 @@
-// sandbox/main.cpp — RET-5 pt 2 (ADR-0105): THE SANDBOX FLIP. The live Cerid window runs END TO END on the ONE
-// graphics layer: a windowed VulkanGpuContext + IRasterContext + the RET-2 present surface (canvas blit + overlay
-// composition) + the RET-5 ImGuiGpuBackend (render) + ImGui_ImplGlfw (platform input) + the perf-ui ProfilerPanel.
-// No crd-rhi, no crd-renderer, no rhi swapchain, no rhi ImGuiLayer — the retiring stack is OUT of the sandbox.
-//
-// The old SandboxLayer/geometry/curves showcases (built on the frozen ForwardRenderPath) left the build with this
-// flip; their content returns through the RET-6 draw port onto gpu-context. The canvas scene today is a CKIR-drawn
-// triangle — the point of THIS slice is the shell: window → context → canvas → blit → ImGui overlay → present.
+// sandbox/main.cpp — GEO-7 (D-007 row 72) on the RET-5 shell: the live Cerid window runs END TO END on the ONE
+// graphics layer, and the scene is now REAL — the build-time cook (the GEO-6 incremental processor over
+// assets/source's Khronos samples) mounts as a PACK, 10,000 instances of the cooked meshes instantiate into the
+// ADR-0050 World (öbek-batch-shaped placement), and every frame the chunk-grain SceneRenderer extracts, culls
+// (SpatialBVHIndex + frustum planes), partially re-uploads exactly the moved chunks, and draws ONE vertex-pulling
+// instanced pass per mesh through gpu-context. The RET-6 grid/shape overlay composites over the scene WITH a real
+// depth test now; ImGui + the profiler ride the present seam.
 //
 // CLI contract (the full-sweep smoke depends on it — preserved exactly):
 //   --headless                    — exit after 1 frame; minimal boot smoke
 //   --smoke-test [duration_secs]  — run the loop N seconds (default 3.0), FAIL (exit 2) if nothing presented.
 
 #include <crd/app/app.hpp>
-#include <crd/draw/overlay_pass.hpp> // RET-6 pt 4: the debug-draw scene through gpu-context (grid + shapes)
+#include <crd/draw/overlay_pass.hpp>
 #include <crd/draw/render_buffer.hpp>
 #include <crd/draw/renderer.hpp>
 #include <crd/draw/shapes.hpp>
@@ -28,6 +27,16 @@
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/perf/perf.hpp>
 #include <crd/perf/ui/ui.hpp>
+#include <crd/platform/filesystem.hpp>
+#include <crd/resources/crdr.hpp>
+#include <crd/resources/mesh_resource.hpp>
+#include <crd/resources/openpbr_material.hpp>
+#include <crd/resources/resource_manager.hpp>
+#include <crd/scene/render_components.hpp>
+#include <crd/scene/spatial_bvh_index.hpp>
+#include <crd/scene/transform.hpp>
+#include <crd/scene/world.hpp>
+#include <crd/scenerender/scene_renderer.hpp>
 
 #include <backends/imgui_impl_glfw.h>
 #include <imgui.h>
@@ -49,39 +58,6 @@ CRD_DEFINE_LOG_CHANNEL(g_log_sandbox, "Sandbox", crd::log::LogLevel::Trace)
 namespace
 {
 
-// The canvas scene: a CKIR clip-space triangle (VertexIndex → position, warm constant color). Deliberately minimal —
-// the shell is the slice; the real showcases return via the RET-6 draw port.
-void build_sandbox_vs(crd::kir::KGraph& g, crd::kir::KEntry& ve)
-{
-    namespace kir  = crd::kir;
-    const auto sh  = kir::make_shape({1});
-    const int  vid = g.builtin(kir::KBuiltin::VertexIndex);
-    const int  k0  = g.constant(0.0, sh, kir::DType::I32);
-    const int  k1  = g.constant(1.0, sh, kir::DType::I32);
-    const int  eq0 = g.binary(kir::KOp::CmpEq, vid, k0);
-    const int  eq1 = g.binary(kir::KOp::CmpEq, vid, k1);
-    const int  a   = g.constant(-0.8, sh, kir::DType::F32);
-    const int  b   = g.constant(0.8, sh, kir::DType::F32);
-    const int  c   = g.constant(0.0, sh, kir::DType::F32);
-    const int  x   = g.select(eq0, a, g.select(eq1, b, c));
-    const int  y   = g.select(eq0, b, g.select(eq1, b, a));
-    ve.stage    = crd::kir::KStage::Vertex;
-    ve.position = g.vec4(x, y, c, g.constant(1.0, sh, kir::DType::F32));
-    ve.n_out    = 0;
-}
-
-void build_sandbox_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
-{
-    namespace kir = crd::kir;
-    const auto sh = kir::make_shape({1});
-    const int  r  = g.constant(0.93, sh, kir::DType::F32);
-    const int  gr = g.constant(0.42, sh, kir::DType::F32);
-    const int  b  = g.constant(0.18, sh, kir::DType::F32);
-    fe.stage      = kir::KStage::Fragment;
-    fe.n_out      = 1;
-    fe.out[0]     = {g.vec4(r, gr, b, g.constant(1.0, sh, kir::DType::F32)), 0};
-}
-
 [[nodiscard]] void* native_window_of(crd::app::Application& app)
 {
 #ifdef _WIN32
@@ -91,6 +67,42 @@ void build_sandbox_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
     return nullptr; // the Linux platform surface rides the RET-8 cross-platform sweep
 #endif
 }
+
+// every MESH artifact id in the mounted pack (read straight from the PACK manifest)
+void collect_pack_meshes(const crd::platform::fs::Path& pack_path, crd::memory::IAllocator* alloc,
+                         crd::containers::Array<crd::resources::ResourceId>& out)
+{
+    crd::containers::Array<crd::u8> bytes(alloc);
+    if (!crd::platform::fs::read_file_binary(pack_path, bytes)) { return; }
+    crd::resources::CrdrFile file(alloc);
+    if (crd::resources::crdr_read(crd::containers::as_const_span(bytes), file, alloc)
+        != crd::resources::CrdrError::Ok)
+    {
+        return;
+    }
+    const crd::resources::CrdrChunk* mfst = crd::resources::crdr_find_chunk(file, crd::resources::kFourCC_MFST);
+    if (mfst == nullptr) { return; }
+    crd::containers::Array<crd::resources::ManifestEntry> entries(alloc);
+    if (!crd::resources::manifest_read_entries(mfst->payload, entries, alloc)) { return; }
+    for (const auto& e : entries)
+    {
+        if (e.type_fourcc == crd::resources::kFourCC_MESH) { out.push_back(e.id); }
+    }
+}
+
+// world-AABB extractor for the spatial index: Transform (the watched trigger) + a fixed generous half-extent
+// (instances are normalized to ~unit size at spawn)
+struct SceneExtractor final : crd::scene::IAabbExtractor
+{
+    [[nodiscard]] crd::geometry::primitives::AABB3<crd::f32>
+    extract(crd::scene::EntityId, crd::scene::ComponentId, const void* data) const override
+    {
+        const auto*            t = static_cast<const crd::scene::Transform*>(data);
+        const crd::math::Vec3f p = crd::math::to_raw_vec(t->translation);
+        constexpr crd::f32     h = 1.5F;
+        return {{p.x - h, p.y - h, p.z - h}, {p.x + h, p.y + h, p.z + h}};
+    }
+};
 
 } // namespace
 
@@ -126,7 +138,7 @@ int main(int argc, char** argv)
     crd::log::add_sink(std::make_unique<crd::log::ConsoleSink>());
 
     crd::app::ApplicationDesc app_desc;
-    app_desc.window.title = crd::containers::String("Cerid Sandbox — gpu-context (ADR-0105)");
+    app_desc.window.title = crd::containers::String("Cerid Sandbox — 10k instances on gpu-context (GEO-7)");
     app_desc.window.size  = {1280, 720};
 
     crd::app::Application app(app_desc);
@@ -141,7 +153,7 @@ int main(int argc, char** argv)
     crd::gpu::GpuContextConfig gpu_cfg;
     gpu_cfg.backend           = crd::gpu::GpuBackend::Vulkan;
     gpu_cfg.headless          = false;
-    gpu_cfg.enable_validation = !headless; // dev + smoke runs validated (the sweep smoke exists to catch validation bugs)
+    gpu_cfg.enable_validation = !headless;
     auto gpu_context          = crd::gpu::create_vulkan_gpu_context(gpu_cfg);
     auto* vk = gpu_context != nullptr ? static_cast<crd::gpu::VulkanGpuContext*>(gpu_context.get()) : nullptr;
     if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
@@ -168,21 +180,96 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    // the CKIR canvas scene
-    crd::memory::TlsfAllocator kir_alloc(8U << 20U);
-    crd::kir::KGraph           vg(&kir_alloc);
-    crd::kir::KEntry           ve;
-    build_sandbox_vs(vg, ve);
-    crd::kir::KGraph fg(&kir_alloc);
-    crd::kir::KEntry fe;
-    build_sandbox_fs(fg, fe);
-    auto vs      = vk->create_program(vg, ve);
-    auto fs      = vk->create_program(fg, fe);
-    auto program = (vs != nullptr && fs != nullptr) ? raster->create_raster_program(*vs, *fs) : nullptr;
-    auto canvas  = raster->create_color_target(surface->width(), surface->height());
-    if (program == nullptr || canvas == nullptr)
+    // ── the GEO-7 scene: the build-time-cooked PACK → World → SceneRenderer ─────────────────────────────────────
+    crd::memory::TlsfAllocator scene_alloc(256U << 20U);
+
+    crd::resources::ResourceManager rm(&scene_alloc);
+    crd::resources::register_mesh_loader(&rm, nullptr);
+    crd::resources::register_openpbr_material_loader(&rm, nullptr);
+    const crd::platform::fs::Path pack_path = crd::platform::fs::executable_dir()
+                                              / crd::containers::StringView(CRD_DEMO_ASSETS_REL_PACK);
+    crd::containers::Array<crd::resources::ResourceId> pack_meshes(&scene_alloc);
+    if (rm.mount_manifest(pack_path.generic()).is_valid())
     {
-        CRD_LOG_ERROR(g_log_sandbox, "CKIR canvas bootstrap failed");
+        collect_pack_meshes(pack_path, &scene_alloc, pack_meshes);
+    }
+    CRD_LOG_INFO(g_log_sandbox, "Demo pack: {} mesh artifact(s)", pack_meshes.size());
+
+    crd::scene::World world{&scene_alloc};
+    world.register_component<crd::scene::Transform>(crd::scene::transform_serialize_trait(),
+                                                    crd::scene::SpatialBVH{});
+    crd::scene::register_render_components(world);
+    auto*          bvh = world.find_index<crd::scene::SpatialBVHIndex>();
+    SceneExtractor extractor;
+    if (bvh != nullptr)
+    {
+        bvh->configure(&extractor,
+                       crd::geometry::spatial::OctreeBuildOptions<crd::f32>{
+                           crd::geometry::primitives::AABB3<crd::f32>{{-140, -30, -140}, {140, 30, 140}}, 2.0F, 16U,
+                           10U});
+    }
+
+    // 10,000 instances on a 100×100 grid, meshes cycled, each normalized to ~1.5 units from its cooked bounds,
+    // each carrying its own AUTHORED material (the PRIM chunk's material id — GEO-3 stage 4's wiring, live)
+    constexpr crd::u32 side = 100U;
+    struct Cell
+    {
+        crd::scene::EntityId entity;
+        crd::f32             x, z, scale;
+    };
+    crd::containers::Array<Cell> cells(&scene_alloc);
+    if (pack_meshes.size() > 0U)
+    {
+        for (crd::u32 gz = 0; gz < side; ++gz)
+        {
+            for (crd::u32 gx = 0; gx < side; ++gx)
+            {
+                const crd::resources::ResourceId mesh_id =
+                    pack_meshes[(static_cast<crd::usize>(gz) * side + gx) % pack_meshes.size()];
+                auto handle = rm.load_sync<crd::resources::MeshResource>(mesh_id);
+                if (handle.state() != crd::resources::LoadState::Ready || handle.get() == nullptr) { continue; }
+                const auto* mesh = handle.get();
+
+                crd::f32 scale = 1.0F;
+                if (mesh->has_bounds())
+                {
+                    const crd::f32 ex = mesh->bounds_max[0] - mesh->bounds_min[0];
+                    const crd::f32 ey = mesh->bounds_max[1] - mesh->bounds_min[1];
+                    const crd::f32 ez = mesh->bounds_max[2] - mesh->bounds_min[2];
+                    crd::f32       m  = ex > ey ? ex : ey;
+                    m                 = m > ez ? m : ez;
+                    if (m > 1.0e-6F) { scale = 1.5F / m; }
+                }
+                crd::resources::ResourceId material{};
+                if (mesh->primitives.size() > 0U) { material = mesh->primitives[0].material_id; }
+
+                const crd::f32 x = (static_cast<crd::f32>(gx) - 49.5F) * 2.0F;
+                const crd::f32 z = (static_cast<crd::f32>(gz) - 49.5F) * 2.0F;
+
+                const crd::scene::EntityId e = world.spawn();
+                crd::scene::Transform      t;
+                t.translation = crd::math::from_raw_vec<crd::units::dim::Length>(crd::math::Vec3f{x, 0.0F, z});
+                t.scale       = {scale, scale, scale};
+                t.world = crd::math::from_trs(crd::math::Vec3f{x, 0.0F, z}, crd::math::Quatf::identity(), t.scale);
+                world.add_component(e, t);
+                world.add_component(e, crd::scene::MeshRenderer{mesh_id, material});
+                cells.push_back(Cell{e, x, z, scale});
+            }
+        }
+    }
+    CRD_LOG_INFO(g_log_sandbox, "Scene: {} instances instantiated", cells.size());
+
+    auto scene_renderer_ptr = std::make_unique<crd::scenerender::SceneRenderer>(&scene_alloc);
+    auto& scene_renderer    = *scene_renderer_ptr;
+    const bool scene_ready = scene_renderer.init(*raster, rm) && scene_renderer.init_programs(*vk)
+                             && cells.size() > 0U;
+    if (!scene_ready) { CRD_LOG_WARN(g_log_sandbox, "Scene renderer unavailable — falling back to overlay-only"); }
+
+    // the canvas now carries DEPTH — the scene pass writes it; the overlay depth-tests against it
+    auto canvas = raster->create_color_depth_target(surface->width(), surface->height());
+    if (canvas == nullptr)
+    {
+        CRD_LOG_ERROR(g_log_sandbox, "Canvas creation failed");
         crd::log::shutdown();
         return 1;
     }
@@ -200,27 +287,12 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    // RET-6 pt 4: the debug-draw scene on the ONE layer — the CKIR draw suite compiled at init, the demo content a
-    // RenderBuffer of shapes composed over the canvas by submit_overlay each frame (the editor-grid look returns).
+    // RET-6 pt 4: the debug-draw overlay (axis triad + the infinite grid) composes over the scene
     const bool draw_ready = crd::draw::init(*vk, *raster);
     if (!draw_ready) { CRD_LOG_WARN(g_log_sandbox, "crd-draw init failed -- continuing without the draw overlay"); }
     crd::draw::RenderBuffer draw_buf(crd::memory::default_allocator());
-    if (draw_ready)
-    {
-        crd::draw::axis_triad_to(draw_buf, crd::math::Mat4f::identity(), 1.5F, 3.0F);
-        crd::draw::sphere_wire_to(draw_buf, {2.5F, 1.0F, 0.0F}, 1.0F, crd::draw::kCyan);
-        crd::math::Mat4f box_world = crd::math::Mat4f::identity();
-        box_world.c3               = {-2.5F, 0.75F, 0.5F, 1.0F};
-        crd::draw::box_wire_to(draw_buf, box_world, {0.75F, 0.75F, 0.75F}, crd::draw::kOrange, 2.0F);
-        crd::draw::capsule_wire_to(draw_buf, {0.0F, 0.5F, -2.5F}, {0.0F, 2.0F, -2.5F}, 0.5F, crd::draw::kMagenta);
-        crd::math::Mat4f slab_world = crd::math::Mat4f::identity();
-        slab_world.c3               = {0.0F, 0.25F, 2.5F, 1.0F};
-        crd::draw::box_solid_to(draw_buf, slab_world, {1.0F, 0.25F, 0.6F},
-                                crd::draw::Color{255, 200, 40, 90}); // translucent amber slab (alpha blending live)
-    }
+    if (draw_ready) { crd::draw::axis_triad_to(draw_buf, crd::math::Mat4f::identity(), 2.0F, 3.0F); }
 
-    // perf substrate + the ProfilerPanel overlay. (The rhi GPU-profiler backend died with the flip; the gpu-context
-    // profiler backend arrives with the RET-7 sweep — CPU spans + allocator tracking are live today.)
     crd::perf::init({});
     [[maybe_unused]] const auto perf_alloc_idx =
         crd::perf::register_allocator("default (malloc)", crd::memory::default_allocator());
@@ -233,12 +305,13 @@ int main(int argc, char** argv)
 
     crd::u32   frame               = 0;
     crd::u32   frames_with_present = 0;
+    crd::scenerender::SyncStats   last_sync{};
+    crd::scenerender::RenderStats last_draw{};
     const auto smoke_start_time    = std::chrono::steady_clock::now();
     while (app.is_running())
     {
         if (!app.tick()) { break; }
 
-        // window resize → recreate the swapchain + a matching canvas
         const auto     cur   = app.window().framebuffer_size();
         const crd::u32 cur_w = cur.width > 0 ? static_cast<crd::u32>(cur.width) : 0U;
         const crd::u32 cur_h = cur.height > 0 ? static_cast<crd::u32>(cur.height) : 0U;
@@ -248,32 +321,63 @@ int main(int argc, char** argv)
             win_h = cur_h;
             if (surface->resize(win_w, win_h))
             {
-                canvas = raster->create_color_target(surface->width(), surface->height());
+                canvas = raster->create_color_depth_target(surface->width(), surface->height());
                 if (canvas == nullptr) { break; }
             }
         }
 
-        raster->draw(*canvas, *program, crd::gpu::ClearColor{0.09F, 0.10F, 0.13F, 1.0F}, 3U);
+        const crd::f64 tsec =
+            std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - smoke_start_time).count();
 
-        // the debug-draw scene: a slow orbit camera + the infinite grid + the shape set, composed over the canvas
+        // a travelling wave: ONE grid row per frame bobs (the chunk-grain partial re-upload, live every frame)
+        if (scene_ready && cells.size() == side * side)
+        {
+            const crd::u32 row = frame % side;
+            for (crd::u32 gx = 0; gx < side; ++gx)
+            {
+                Cell&          cell = cells[static_cast<crd::usize>(row) * side + gx];
+                const crd::f32 y =
+                    1.2F * crd::math::sin(static_cast<crd::f32>(tsec) * 2.0F + cell.x * 0.35F + cell.z * 0.21F);
+                crd::scene::Transform t;
+                t.translation = crd::math::from_raw_vec<crd::units::dim::Length>(
+                    crd::math::Vec3f{cell.x, y, cell.z});
+                t.scale = {cell.scale, cell.scale, cell.scale};
+                t.world = crd::math::from_trs(crd::math::Vec3f{cell.x, y, cell.z}, crd::math::Quatf::identity(),
+                                              t.scale);
+                world.add_component(cell.entity, t);
+            }
+        }
+
+        // the orbit camera over the field
+        const float            orbit = static_cast<float>(tsec * 0.12);
+        const crd::math::Vec3f eye{crd::math::sin(orbit) * 55.0F, 32.0F, crd::math::cos(orbit) * 55.0F};
+        const crd::math::Mat4f view =
+            crd::math::look_at(eye, crd::math::Vec3f{0.0F, 0.0F, 0.0F}, crd::math::Vec3f{0.0F, 1.0F, 0.0F});
+        const float aspect =
+            static_cast<float>(surface->width()) / static_cast<float>(surface->height() > 0U ? surface->height() : 1U);
+        const crd::math::Mat4f proj = crd::math::perspective_reverse_z(1.0472F, aspect, 0.1F);
+        const crd::math::Mat4f vp   = proj * view;
+
+        if (scene_ready)
+        {
+            last_sync = scene_renderer.sync(world);
+            last_draw = scene_renderer.render(*canvas, vp, crd::math::Vec3f{0.35F, 1.0F, 0.25F},
+                                              crd::gpu::ClearColor{0.09F, 0.10F, 0.13F, 1.0F}, bvh);
+            if (last_draw.draws == 0U) // everything culled (or nothing loadable): still present a cleared frame
+            {
+                raster->clear(*canvas, crd::gpu::ClearColor{0.09F, 0.10F, 0.13F, 1.0F});
+            }
+        }
+        else { raster->clear(*canvas, crd::gpu::ClearColor{0.09F, 0.10F, 0.13F, 1.0F}); }
+
         if (draw_ready)
         {
-            const crd::f64 tsec =
-                std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - smoke_start_time).count();
-            const float            orbit = static_cast<float>(tsec * 0.25);
-            const crd::math::Vec3f eye{crd::math::sin(orbit) * 7.0F, 3.5F, crd::math::cos(orbit) * 7.0F};
-            const crd::math::Mat4f view = crd::math::look_at(eye, crd::math::Vec3f{0.0F, 0.75F, 0.0F},
-                                                             crd::math::Vec3f{0.0F, 1.0F, 0.0F});
-            const float            aspect =
-                static_cast<float>(surface->width()) / static_cast<float>(surface->height() > 0U ? surface->height() : 1U);
-            const crd::math::Mat4f proj = crd::math::perspective_reverse_z(1.0472F, aspect, 0.1F); // 60 deg fov
-
             crd::draw::OverlayPassConfig ocfg;
-            ocfg.view_proj   = proj * view;
-            ocfg.viewport_px = {static_cast<crd::f32>(surface->width()), static_cast<crd::f32>(surface->height())};
-            ocfg.time_s      = static_cast<crd::f32>(tsec);
-            ocfg.depth_test  = crd::gpu::DepthCompare::GreaterEqual; // reverse-Z (ignored on the depthless canvas today)
-            ocfg.grid.enabled    = true;
+            ocfg.view_proj    = vp;
+            ocfg.viewport_px  = {static_cast<crd::f32>(surface->width()), static_cast<crd::f32>(surface->height())};
+            ocfg.time_s       = static_cast<crd::f32>(tsec);
+            ocfg.depth_test   = crd::gpu::DepthCompare::GreaterEqual; // the canvas HAS depth now — the grid occludes
+            ocfg.grid.enabled = true;
             ocfg.grid.camera_pos = eye;
             ocfg.grid.apply_theme();
             if (!crd::draw::submit_overlay(*canvas, draw_buf, ocfg))
@@ -286,10 +390,15 @@ int main(int argc, char** argv)
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
         {
-            ImGui::Begin("Cerid Sandbox");
-            ImGui::Text("gpu-context end to end (ADR-0105)");
+            ImGui::Begin("Cerid Sandbox — GEO-7");
             ImGui::Text("frame %u  |  %ux%u", frame, surface->width(), surface->height());
-            ImGui::TextUnformatted("scene: CKIR canvas -> draw overlay (grid+shapes) -> blit -> ImGui -> present");
+            ImGui::Text("instances: %u drawn / %u culled / %u total", last_draw.drawn_instances,
+                        last_draw.culled_instances, last_sync.total_instances);
+            ImGui::Text("draws: %u (one per mesh group; %u groups)", last_draw.draws, last_sync.groups);
+            ImGui::Text("sync upload: %llu B (%u dirty chunk runs)%s",
+                        static_cast<unsigned long long>(last_sync.uploaded_bytes), last_sync.dirty_runs,
+                        last_sync.structural_rebuild ? " [rebuild]" : "");
+            ImGui::TextUnformatted("import -> cook (GEO-6) -> mount -> instantiate -> chunk-grain cull+draw");
             ImGui::End();
             profiler_panel.draw();
         }
@@ -321,9 +430,11 @@ int main(int argc, char** argv)
                     crd::log::shutdown();
                     return 2;
                 }
-                CRD_LOG_INFO(g_log_sandbox, "Smoke-test: PASS — {} frames presented over {:.2f}s ({:.1f} fps avg)",
+                CRD_LOG_INFO(g_log_sandbox,
+                             "Smoke-test: PASS — {} frames presented over {:.2f}s ({:.1f} fps avg); "
+                             "{} instances drawn last frame",
                              frames_with_present, elapsed,
-                             static_cast<crd::f64>(frames_with_present) / elapsed);
+                             static_cast<crd::f64>(frames_with_present) / elapsed, last_draw.drawn_instances);
                 app.close();
             }
         }
@@ -335,15 +446,13 @@ int main(int argc, char** argv)
     crd::jobs::shutdown();
     crd::perf::uninstall_jobs_adapter();
     crd::perf::shutdown();
-    crd::draw::shutdown(); // the draw renderer's GPU objects die before the raster context
+    crd::draw::shutdown();
     imgui_backend.reset();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
+    scene_renderer_ptr.reset(); // the scene's GPU buffers/programs die BEFORE the raster context and device
     surface.reset();
     canvas.reset();
-    program.reset();
-    vs.reset();
-    fs.reset();
     raster.reset();
     gpu_context.reset();
 

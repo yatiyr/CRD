@@ -994,7 +994,8 @@ ObekInstantiation World::instantiate_obek(const ObekResource& res,
 // ---- v1m5b — batch instantiation (ADR-0058 pillar 15a) ----------------
 
 ObekBatchHandle World::instantiate_obek_batch(const ObekResource& res, crd::u32 count,
-                                              EntityId parent, BatchHints hints)
+                                              EntityId parent, BatchHints hints,
+                                              crd::containers::ConstSpan<Transform> transforms)
 {
     (void)hints; // reserved for Phase 3.5+ renderer integration
 
@@ -1030,10 +1031,20 @@ ObekBatchHandle World::instantiate_obek_batch(const ObekResource& res, crd::u32 
                 backend_for(tag_cid).insert(e, tag_cid, &tag);
             }
         }
-        // Note: `transforms` is reserved at v1m5b — the slot's transform
-        // is not applied here. Phase 3.5+ wires the renderer-instanced
-        // path that consumes transforms; for v1m5b callers can apply them
-        // manually via `set_world` post-spawn if needed.
+        // GEO-7: place the slot — UPSERT the slot's local TRS onto this instance's ROOT entities (source-roots:
+        // ChildOf target is `parent`, or none). add_component fires on_update through the storage event sink, so
+        // a configured SpatialBVHIndex refreshes; the dirty mark queues one propagation pass for the whole batch.
+        if (slot < transforms.size())
+        {
+            for (EntityId e : inst.entities)
+            {
+                const EntityId p = get_relation_target<relations::ChildOf>(e);
+                const bool     is_root = p.is_null() || p == parent;
+                if (!is_root) { continue; }
+                add_component(e, transforms[static_cast<crd::usize>(slot)]);
+                mark_transform_subtree_dirty(e);
+            }
+        }
     }
     return batch;
 }

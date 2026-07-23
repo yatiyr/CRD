@@ -6,6 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <crd/cooker/cook_handler.hpp>
+#include <crd/cooker/cook_io.hpp>
 #include <crd/cooker/texture_cook.hpp>
 #include <crd/memory/allocators/malloc_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
@@ -291,6 +292,8 @@ TEST_CASE("texture handler: .tga end-to-end via ldr_decode -- stb retired", "[co
     ctx.source_path = crd::containers::StringView(src_path);
     ctx.id          = crd::resources::ResourceId::mint_random();
     ctx.allocator   = &g_alloc;
+    crd::cooker::CookIO ctx_io(ctx.source_path, ctx.meta_path, &g_alloc); // GEO-6: the only road to bytes
+    ctx.io          = &ctx_io;
 
     { // no .meta → the sRGB-color default; the full chain TGA bytes → OUR decoder → linear-filtered mips
         const crd::cooker::CookResult result = handler(ctx);
@@ -304,9 +307,11 @@ TEST_CASE("texture handler: .tga end-to-end via ldr_decode -- stb retired", "[co
         CHECK(v.mip1[0] == 188U); // the linear-space filter reached the standalone path
         CHECK(v.mip1[3] == 128U);
     }
-    { // .meta srgb=false flips the SAME source to linear data
+    { // .meta srgb=false flips the SAME source to linear data (a fresh CookIO — every cook gets its own seam)
         write_text(meta_path, "[id]\nuuid = \"00112233445566778899aabbccddeeff\"\n[cook]\nsrgb = false\n");
         ctx.meta_path = crd::containers::StringView(meta_path);
+        crd::cooker::CookIO meta_io(ctx.source_path, ctx.meta_path, &g_alloc);
+        ctx.io = &meta_io;
         const crd::cooker::CookResult result = handler(ctx);
         REQUIRE(result.ok);
         crd::resources::CrdrFile file(&g_alloc);
@@ -333,6 +338,8 @@ TEST_CASE("texture handler: a hand-built PNG decodes through OUR inflate", "[coo
     ctx.source_path = crd::containers::StringView(src_path);
     ctx.id          = crd::resources::ResourceId::mint_random();
     ctx.allocator   = &g_alloc;
+    crd::cooker::CookIO ctx_io(ctx.source_path, ctx.meta_path, &g_alloc); // GEO-6: the only road to bytes
+    ctx.io          = &ctx_io;
 
     const crd::cooker::CookResult result = handler(ctx);
     REQUIRE(result.ok);
@@ -412,6 +419,8 @@ TEST_CASE("wave1 glTF: embedded images DECOMPOSE into TXTR extras -- slot-derive
     ctx.source_path = crd::containers::StringView(src_path);
     ctx.id          = crd::resources::ResourceId::mint_random();
     ctx.allocator   = &g_alloc;
+    crd::cooker::CookIO ctx_io(ctx.source_path, ctx.meta_path, &g_alloc); // GEO-6: the only road to bytes
+    ctx.io          = &ctx_io;
 
     const crd::cooker::CookResult result = handler(ctx);
     REQUIRE(result.ok);

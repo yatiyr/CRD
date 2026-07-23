@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <crd/cooker/cook_handler.hpp>
+#include <crd/cooker/cook_io.hpp>
 #include <crd/math/mat.hpp>
 #include <crd/memory/allocators/malloc_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
@@ -137,6 +138,8 @@ TEST_CASE("cooker: glTF scene DECOMPOSES into a SCEN artifact -- SI transforms, 
     ctx.meta_path   = crd::containers::StringView(meta_path);
     ctx.id          = crd::resources::ResourceId::mint_random();
     ctx.allocator   = &g_alloc;
+    crd::cooker::CookIO ctx_io(ctx.source_path, ctx.meta_path, &g_alloc); // GEO-6: the only road to bytes
+    ctx.io          = &ctx_io;
 
     const crd::cooker::CookResult result = handler(ctx);
     REQUIRE(result.ok);
