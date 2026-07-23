@@ -9,8 +9,7 @@
 #include <crd/log/log.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
-#include <crd/renderer/texture_resource.hpp>
-#include <crd/renderer/texture_resource_loader.hpp>
+#include <crd/resources/texture_resource.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/resource_handle.hpp>
 #include <crd/resources/resource_id.hpp>
@@ -137,7 +136,7 @@ int main()
     const fs::Path   pack_path  = write_pack(txtr_id, crdr_bytes);
 
     ResourceManager rm(&g_alloc);
-    crd::renderer::register_texture_loader(&rm);
+    crd::resources::register_texture_loader(&rm);
 
     const MountId mid = rm.mount_manifest(pack_path.generic());
     if (!mid.is_valid())
@@ -147,7 +146,7 @@ int main()
         return 1;
     }
 
-    auto handle = rm.load_sync<crd::renderer::TextureResource>(txtr_id);
+    auto handle = rm.load_sync<crd::resources::TextureResource>(txtr_id);
     if (!handle.is_ready())
     {
         std::fprintf(stderr, "smoke_texture: load_sync failed (state=%d)\n",
@@ -156,7 +155,7 @@ int main()
         return 1;
     }
 
-    const crd::renderer::TextureResource* tex = handle.get();
+    const crd::resources::TextureResource* tex = handle.get();
     if (tex == nullptr)
     {
         std::fprintf(stderr, "smoke_texture: payload is null\n");
@@ -218,7 +217,7 @@ int main()
         return 1;
     }
 
-    if (tex->format != crd::renderer::TextureFormat::RGBA8Unorm)
+    if (tex->format != crd::resources::TextureFormat::RGBA8Unorm)
     {
         std::fprintf(stderr, "smoke_texture: format != RGBA8Unorm\n");
         (void)fs::remove_file(pack_path);

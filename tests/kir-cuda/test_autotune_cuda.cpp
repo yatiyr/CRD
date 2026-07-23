@@ -328,14 +328,15 @@ TEST_CASE("AS-4: the flash-attention autotuner sweeps (BR,BC), oracle-validates,
         // separate: (1) the WIRING is exact — the replay equals the DB row verbatim (deterministic). (2) the QUALITY holds —
         // the checked-in row is still NEAR-OPTIMAL on this device, never "equal to today's argmin": two near-tied tiles swap
         // order run to run under load (measurement noise, not a stale DB), while a genuinely wrong tile is 1.5–8× off (the
-        // register-occupancy scar) — 15% catches that with a wide margin. Untuned shapes fall back to the heuristic (no
-        // assertion — the DB simply lacks a row).
+        // register-occupancy scar). Margin CALIBRATED from data: near-tied tiles measured 1.177 apart SAME-PASS under
+        // full-suite GPU load (2026-07-23) — 1.30 clears that swing while still catching the ≥1.5 wrong-tile class.
+        // Untuned shapes fall back to the heuristic (no assertion — the DB simply lacks a row).
         if (is_tuned)
         {
             CHECK(db_br == tuned_br);
             CHECK(db_bc == tuned_bc);
             REQUIRE(db_ms > 0.0); // the DB row must be an enumerable (valid) schedule on this device
-            CHECK(db_ms <= best_ms * 1.15);
+            CHECK(db_ms <= best_ms * 1.30);
         }
         std::printf("[attn-autotune] S=%d D=%d: measured %d/%d tiles, WINNER BR=%d BC=%d %.4f ms (heuristic 64x32 %.4f ms); run() -> %dx%d (%s, %.4f ms)\n",
                     slen, dim, measured, cnt, best_br, best_bc, best_ms, def_ms, db_br, db_bc, is_tuned ? "DB" : "heuristic",

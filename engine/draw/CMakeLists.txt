@@ -15,16 +15,17 @@ target_include_directories(crd-draw
 #   integrate with the ECS World/ISystem/SchedulePhase machinery; new
 #   one-way edge per CLAUDE.md dep graph review). d2 ImGui-projected text
 #   adds crd-imgui later.
+# RET-6 (ADR-0105): crd-draw runs on the ONE graphics layer. crd-rhi / crd-renderer / crd-shader / crd-resources
+# are GONE — the CKIR draw-shader suite replaced the cooked-GLSL pack, and gpu-context replaced the rhi renderer.
 target_link_libraries(crd-draw
     PUBLIC
         crd-core
         crd-memory
         crd-containers
         crd-math
-        crd-rhi
-        crd-renderer
-        crd-shader
-        crd-resources
+        crd-kir                # the CKIR draw-shader suite (ckir_draw.hpp) — the ONE IR
+        crd-gpu-context        # IRasterContext / draw_overlay — the ONE graphics layer
+        crd-gpu-context-vulkan # VulkanGpuContext::create_program (the ADR-0103 currency)
         crd-scene
     PRIVATE
         crd-log
@@ -33,40 +34,6 @@ target_link_libraries(crd-draw
 target_compile_features(crd-draw PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-draw)
 
-# ── draw shader pack ──────────────────────────────────────────────────────
-# Cooks engine/draw/shaders/*.glsl into a single CRDR pack
-# `<bin>/assets/cooked/draw_shaders.crdr`. Consumers (sandbox, smoke tests,
-# eventually the application's main asset cooker run) mount it at startup
-# via `crd::draw::init(rm, pack_path)`. ADR-0066 §10.
-#
-# The pack lives next to consumer executables. For shipping builds the
-# application's own asset cooker step would consume engine/draw/shaders
-# directly + bake into the application's pack — no separate runtime mount
-# needed. d0 ships the standalone-pack flavour as the default.
-
-set(DRAW_SHADERS_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
-set(DRAW_SHADERS_OUT_DIR "${CMAKE_BINARY_DIR}/assets/cooked")
-set(DRAW_SHADERS_PACK    "${DRAW_SHADERS_OUT_DIR}/draw_shaders.crdr")
-
-file(GLOB DRAW_SHADER_SOURCES CONFIGURE_DEPENDS
-    "${DRAW_SHADERS_SRC_DIR}/*.vert.glsl"
-    "${DRAW_SHADERS_SRC_DIR}/*.frag.glsl"
-    "${DRAW_SHADERS_SRC_DIR}/*.comp.glsl"
-)
-
-add_custom_command(
-    OUTPUT  "${DRAW_SHADERS_PACK}"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${DRAW_SHADERS_OUT_DIR}"
-    COMMAND $<TARGET_FILE:asset_cooker> cook --root "${DRAW_SHADERS_SRC_DIR}" --out "${DRAW_SHADERS_PACK}"
-    DEPENDS asset_cooker ${DRAW_SHADER_SOURCES}
-    COMMENT "Cooking crd-draw shaders -> ${DRAW_SHADERS_PACK}"
-    VERBATIM
-)
-
-add_custom_target(crd-draw-shaders DEPENDS "${DRAW_SHADERS_PACK}")
-add_dependencies(crd-draw crd-draw-shaders)
-
-# Expose pack path to consumers via a compile definition.
-target_compile_definitions(crd-draw PUBLIC
-    CRD_DRAW_SHADERS_PACK_PATH="${DRAW_SHADERS_PACK}"
-)
+# RET-6 (ADR-0105): the cooked-GLSL shader pack is RETIRED — the draw shaders are CKIR graphs (ckir_draw.hpp)
+# compiled at init through the ONE graphics layer. The GLSL sources in shaders/ stay in-tree as the porting
+# reference the ckir gate names, and die with the RET-8 sweep.

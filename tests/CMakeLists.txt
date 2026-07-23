@@ -65,10 +65,8 @@ add_subdirectory(platform)
 add_subdirectory(app)
 add_subdirectory(config)
 add_subdirectory(imgui)
-add_subdirectory(renderer)
-add_subdirectory(shader)
-add_subdirectory(rhi)
-add_subdirectory(rhi_vulkan)
+# RET-8 (ADR-0105): tests/{renderer,shader,rhi,rhi_vulkan} DELETED with their modules — the parity audit
+# (D-007 rows 89-96) records every assertion's green gpu-context home.
 add_subdirectory(jobs)
 add_subdirectory(stress)
 add_subdirectory(resources)

@@ -53,16 +53,17 @@ set_target_properties(crd-imgui-vendor PROPERTIES
 )
 
 # Cerid imgui wrapper — our own sources only; vendor objects folded in.
+# RET-7 (ADR-0105): the rhi ImGuiLayer is DELETED — the gpu-context ImGuiGpuBackend (RET-5) is the render half;
+# platform input (ImGui_ImplGlfw) layers in the application. crd-imgui is rhi-FREE.
 set(CRDI_GUI_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/include/crd/imgui/imgui.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/crd/imgui/imgui_layer.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/crd/imgui/imgui_gpu_backend.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/include/crd/imgui/log_channel.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/include/crd/imgui/settings.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/include/crd/imgui/unit_preferences_inspector.hpp  # v0d-6
 )
 
 add_library(crd-imgui STATIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/imgui_layer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/imgui_gpu_backend.cpp # RET-5: the render backend on gpu-context (ADR-0105)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/log_channel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/settings.cpp
@@ -80,10 +81,7 @@ target_include_directories(crd-imgui SYSTEM PRIVATE
 
 target_link_libraries(crd-imgui
     PUBLIC
-        crd-app
-        crd-config
-        crd-rhi                # ⛔ FROZEN half (ImGuiLayer) — dies with the sandbox flip completion (RET-7)
-        crd-rhi-vulkan         # ⛔ FROZEN half
+        crd-config             # settings.toml load/save
         crd-gpu-context        # RET-5: ImGuiGpuBackend — the render backend on the ONE graphics layer
         crd-gpu-context-vulkan # RET-5
         crd-platform

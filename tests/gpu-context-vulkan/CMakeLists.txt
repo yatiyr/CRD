@@ -23,11 +23,13 @@ target_link_libraries(crd-gpu-context-vulkan-tests PRIVATE
     crd-jobs                 # D-007 D10: the fiber scheduler for the parallel-cook test (jobs::init/shutdown)
     crd-cooker               # GEO-1: the wave1 (.stl/.obj/.ply) asset cook handler (the import→cook→draw gate)
     crd-imgui                # RET-5: ImGuiGpuBackend under test (the overlay-present gate)
+    crd-draw                 # RET-6: the CKIR draw suite + the GPU half under test (rhi-free since pt 3)
     Catch2::Catch2WithMain
 )
 
 # B3-e: the shared, backend-neutral CKIR raster triangle (the identical graph the DX12 suite draws).
 target_include_directories(crd-gpu-context-vulkan-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../gpu-shared")
+# (RET-6 pt 3 made crd-draw CLEAN — it links below now; the include-path-only guard died with its rhi links.)
 # RET-5: Dear ImGui headers for the overlay-present gate (same SYSTEM-private exposure crd-imgui's consumers use).
 target_include_directories(crd-gpu-context-vulkan-tests SYSTEM PRIVATE "${imgui_SOURCE_DIR}")
 

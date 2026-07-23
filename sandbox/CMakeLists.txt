@@ -13,6 +13,7 @@ target_include_directories(crd-sandbox SYSTEM PRIVATE "${imgui_SOURCE_DIR}")
 
 target_link_libraries(crd-sandbox PRIVATE
     crd-app
+    crd-draw                 # RET-6 pt 4: the debug-draw scene (grid + shapes) on gpu-context — rhi-free since pt 3
     crd-imgui                # RET-5: ImGuiGpuBackend (render) + the vendored ImGui_ImplGlfw (input)
     crd-gpu-context          # ADR-0105: the ONE graphics layer
     crd-gpu-context-vulkan
@@ -67,25 +68,8 @@ add_custom_command(
 add_custom_target(cook-demo-assets DEPENDS "${DEMO_ASSETS_PACK}")
 add_dependencies(crd-sandbox cook-demo-assets)
 
-# Copy the crd-draw shader pack next to the sandbox executable (same
-# layout as demo_assets so the runtime resolves both via executable_dir()).
-# Pack is produced by the `crd-draw-shaders` target in engine/draw/CMakeLists.txt.
-set(SANDBOX_DRAW_PACK_OUT "${CMAKE_CURRENT_BINARY_DIR}/assets/cooked/draw_shaders.crdr")
-add_custom_command(
-    OUTPUT  "${SANDBOX_DRAW_PACK_OUT}"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${DEMO_ASSETS_OUT_DIR}"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${CMAKE_BINARY_DIR}/assets/cooked/draw_shaders.crdr" "${SANDBOX_DRAW_PACK_OUT}"
-    DEPENDS crd-draw-shaders "${CMAKE_BINARY_DIR}/assets/cooked/draw_shaders.crdr"
-    COMMENT "Copying crd-draw shader pack -> ${SANDBOX_DRAW_PACK_OUT}"
-    VERBATIM
-)
-add_custom_target(sandbox-draw-pack DEPENDS "${SANDBOX_DRAW_PACK_OUT}")
-add_dependencies(crd-sandbox sandbox-draw-pack)
-
-target_compile_definitions(crd-sandbox PRIVATE
-    CRD_DRAW_SHADERS_REL_PACK="assets/cooked/draw_shaders.crdr"
-)
+# RET-6 (ADR-0105): the crd-draw cooked-GLSL shader pack is RETIRED — draw shaders are CKIR graphs compiled at
+# init; nothing to cook or copy.
 
 # Sandbox computes the pack path at runtime as `executable_dir() / kDemoAssetsRelPack`.
 # The relative form is exposed as a compile definition so the C++ side stays
@@ -94,16 +78,4 @@ target_compile_definitions(crd-sandbox PRIVATE
     CRD_DEMO_ASSETS_REL_PACK="assets/cooked/demo_assets.crdr"
 )
 
-# Copy imgui config so the sandbox can find it at runtime.
-set(SANDBOX_IMGUI_CONFIG "${CMAKE_SOURCE_DIR}/runtime/configs/imgui_layer.toml")
-set(SANDBOX_IMGUI_CONFIG_OUT "${CMAKE_CURRENT_BINARY_DIR}/configs/imgui_layer.toml")
-
-add_custom_command(
-    OUTPUT  "${SANDBOX_IMGUI_CONFIG_OUT}"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/configs"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${SANDBOX_IMGUI_CONFIG}" "${SANDBOX_IMGUI_CONFIG_OUT}"
-    DEPENDS "${SANDBOX_IMGUI_CONFIG}"
-    VERBATIM
-)
-add_custom_target(sandbox_imgui_config DEPENDS "${SANDBOX_IMGUI_CONFIG_OUT}")
-add_dependencies(crd-sandbox sandbox_imgui_config)
+# RET-8: the rhi ImGuiLayer's config (imgui_layer.toml) died with it — nothing to copy.

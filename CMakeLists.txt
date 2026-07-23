@@ -559,14 +559,12 @@ add_subdirectory(engine/app)
 add_subdirectory(engine/config)
 add_subdirectory(engine/imgui)
 add_subdirectory(engine/perf-ui)  # D-003 v0g -- ImGui frontend for crd-perf; needs crd-imgui above
-add_subdirectory(engine/renderer)
+# RET-8 (ADR-0105, 2026-07-23): crd-rhi · crd-rhi-vulkan · crd-renderer · crd-shader · crd-shader-vulkan are
+# DELETED — gpu-context IS the graphics layer. Their capabilities were absorbed across RET-2..7 (present ·
+# resources · allocator/capture · ImGui · draw · consumers); the parity audit lives in D-007 rows 89-96.
 add_subdirectory(engine/meshgen)
-add_subdirectory(engine/shader)
-add_subdirectory(engine/rhi)
-add_subdirectory(engine/rhi-vulkan)
 add_subdirectory(engine/gpu-context)          # ADR-0099 v17-i-a: backend-agnostic GPU context foundation
 add_subdirectory(engine/gpu-context-vulkan)   # ADR-0099 v17-i-a: headless Vulkan compute context
-add_subdirectory(engine/shader-vulkan)        # ADR-0103 D-008 C2-e: crd-shader <-> gpu-context-vulkan compiler bridge
 add_subdirectory(engine/gpu-context-dx12)     # ADR-0100 v17-i: second IComputeContext backend (D3D12); Windows-only
 add_subdirectory(engine/jobs)
 add_subdirectory(engine/hesap-sched)  # depends on crd-jobs above + crd-hesap (declared earlier)
@@ -574,7 +572,7 @@ add_subdirectory(engine/hesap-direct)  # v5; sparse DIRECT factorization (depend
 add_subdirectory(engine/hesap-eigen)  # v6; sparse EIGENVALUE, matrix-free (Rayleigh-Ritz via hesap-dense; shift-invert via hesap-direct)
 add_subdirectory(engine/hesap-autodiff)  # v15/16; AUTODIFF — forward Dual/Jet + reverse tape; Dual migrated from opt (v15-a); ADR-0097
 add_subdirectory(engine/kir)  # v17; CERID KERNEL IR (CKIR) — the GPU compute compiler substrate (IR -> tile -> 6 backends); ADR-0098
-add_subdirectory(engine/kir-vulkan)  # v17-b; CKIR Vulkan backend (KirBackend over rhi-compute + shader); ADR-0098
+add_subdirectory(engine/kir-vulkan)  # v17-b; CKIR Vulkan backend (KirBackend over gpu-context); ADR-0098
 add_subdirectory(engine/kir-cuda)  # v17-c; CKIR CUDA backend (KirBackend over the CUDA driver + NVRTC); guarded on CUDAToolkit; ADR-0098
 add_subdirectory(engine/kir-dx12)  # v17-d; CKIR DirectX 12 backend (KirBackend over D3D12 + dxc); Windows-only; ADR-0098
 add_subdirectory(engine/kir-webgpu)  # v17-d; CKIR WebGPU backend (KirBackend over wgpu-native); browser/everywhere; guarded on the prebuilt; ADR-0098

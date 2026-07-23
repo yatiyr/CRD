@@ -1,29 +1,27 @@
 #pragma once
 
-// crd-draw -- overlay-pass helper (Phase 3.1 v1a-draw d0c, ADR-0066 sec 9).
+// crd-draw — overlay submission (RET-6, ADR-0105: re-founded on gpu-context; the frame-graph pass — ADR-0066 §9 —
+// retired with the rhi renderer).
 //
-// `add_draw_overlay_pass` registers a frame-graph pass that consumes a
-// scene color attachment (write, alpha-blended) and an optional scene
-// depth attachment (read), then renders every line in the supplied
-// `RenderBuffer` as an anti-aliased screen-space quad.
+// `submit_overlay` composes the contents of a `RenderBuffer` ONTO an existing raster target through the
+// `IRasterContext::draw_overlay` seam: color loadOp=LOAD (the scene stays), standard alpha blending, and a
+// READ-ONLY depth test per primitive DepthMode when the target carries a depth buffer. Call it AFTER the scene has
+// drawn into `target` — the overlay goes last, exactly where the frame-graph pass used to sit.
 //
-// Call from inside your IRenderPath::build() AFTER all your scene-render
-// passes have been declared. The overlay pass goes last so it composes on
-// top of the rendered scene.
+// The draw order preserves the rhi original's compose-on-top semantics bit for bit: the grid first (under
+// everything), then triangles, then lines — each in Test → Always → GreaterDimmed variant order, with XRay
+// primitives emitted TWICE (full color under Test: the visible portion; alpha-dimmed under GreaterDimmed: the
+// occluded portion). Per ADR-0066 §19.1.
 //
-// Pre-conditions:
-//   - `crd::draw::init(rm, device, ...)` has been called once at startup.
-//   - `is_initialised()` returns true. (If not, the function is a no-op
-//     so consumers can wire it unconditionally during development.)
-//
-// d0c renders LINES only. Triangles + points + glyphs land in d1+.
+// Pre-conditions: `crd::draw::init(ctx, raster, ...)` once at startup; uninitialised or overlay-disabled calls
+// no-op (return true) so consumers wire it unconditionally.
 
 #include <crd/core/types.hpp>
 #include <crd/draw/theme.hpp>
 #include <crd/draw/types.hpp>
+#include <crd/gpu/raster_context.hpp>
 #include <crd/math/mat.hpp>
 #include <crd/math/vec.hpp>
-#include <crd/renderer/frame_graph.hpp>
 
 namespace crd::draw
 {
@@ -31,52 +29,42 @@ class RenderBuffer;
 
 struct OverlayPassConfig
 {
-    // Camera matrices used by the vertex shader to project endpoints.
-    // Pass `ctx.camera.projection * ctx.camera.view` from your IRenderPath.
+    // Camera matrices used by the vertex shader to project endpoints: pass `projection * view`.
     crd::math::Mat4f view_proj{};
 
-    // Viewport pixel dimensions. Used by the screen-space quad expansion
-    // to compute pixel-perfect line widths regardless of camera distance.
-    // Match the size of the scene_color attachment.
+    // Viewport pixel dimensions — the screen-space quad expansion computes pixel-perfect line widths from these.
+    // Match the target's size.
     crd::math::Vec2f viewport_px{1.0F, 1.0F};
 
-    // Frame-in-flight index (0..frames_in_flight-1). Selects which slot
-    // of the per-frame instance buffer ring to write to. Typically
-    // `ctx.frame_index % frames_in_flight`.
-    crd::u32 frame_in_flight_index = 0;
-
-    // Category-mask bitfield. Bit N enables Category::N. Default = all on.
-    // Set to 0 to render nothing (the pass still runs, but every primitive
-    // is degenerate'd off-screen by the vertex shader).
+    // Category-mask bitfield. Bit N enables Category::N. Default = all on. 0 renders nothing (the vertex shader
+    // degenerates every primitive off-screen).
     crd::u32 category_mask = 0xFFFFFFFFU;
 
-    // Wall-clock seconds for lifetime fade. Pass an accumulating timer.
-    // Used by the fragment shader's lifetime decay (d2+; ignored in d0c).
+    // Wall-clock seconds for lifetime fade (d2+).
     crd::f32 time_s = 0.0F;
 
-    // d2-grid: infinite faded floor grid (Blender / Unity-editor style).
-    // Renders before all primitives so lines/triangles compose on top.
-    // When `grid.enabled = false` the grid pipeline is skipped entirely.
-    //
-    // d2-theme: defaults are the engine baseline; call `apply_theme()` to
-    // pull cell sizes + colors from the active `DrawTheme`.
+    // RET-6: the DepthMode::Test comparison under THIS scene's depth convention (standard-Z scenes: LessEqual —
+    // visible when closer). GreaterDimmed uses the complement automatically; Always ignores depth. Only consulted
+    // when `target` carries a depth buffer.
+    crd::gpu::DepthCompare depth_test = crd::gpu::DepthCompare::LessEqual;
+
+    // d2-grid: infinite faded floor grid (Blender / Unity-editor style). Renders before all primitives.
+    // d2-theme: defaults are the engine baseline; call `apply_theme()` to pull sizes + colors from the DrawTheme.
     struct GridConfig
     {
         bool             enabled         = false;
         crd::math::Vec3f camera_pos      {0.0F, 0.0F, 0.0F}; // world-space camera xyz
         crd::f32         plane_y         = 0.0F;             // world-space Y of the grid plane
         crd::f32         primary_cell    = 1.0F;             // primary grid cell size (m)
-        crd::f32         secondary_cell  = 0.25F;             // secondary cell size (m); set <= 0 to skip
+        crd::f32         secondary_cell  = 0.25F;            // secondary cell size (m); set <= 0 to skip
         crd::u32         primary_color   = 0xFFC8C8C8U;      // packed RGBA8 (default light grey)
         crd::u32         secondary_color = 0x80808080U;      // packed RGBA8 (default mid grey, half alpha)
         crd::u32         axis_x_color    = 0xFF5233FFU;      // packed RGBA8 (Blender X = 255,51,82, line at z=0)
         crd::u32         axis_z_color    = 0xFFFF9028U;      // packed RGBA8 (Blender Z = 40,144,255, line at x=0)
         crd::f32         fade_distance   = 50.0F;            // alpha = 0 at this XZ distance
 
-        // Pull cell sizes + grid colors + axis colors from the active theme.
-        // Leaves `enabled`, `camera_pos` and `plane_y` untouched (those are
-        // per-frame / per-scene rather than themable). Returns *this so it
-        // can be chained.
+        // Pull cell sizes + grid colors + axis colors from the active theme. Leaves `enabled`, `camera_pos` and
+        // `plane_y` untouched (per-frame / per-scene, not themable). Returns *this for chaining.
         GridConfig& apply_theme(const DrawTheme& theme = current_theme()) noexcept
         {
             primary_cell    = theme.grid_primary_cell;
@@ -92,13 +80,9 @@ struct OverlayPassConfig
     GridConfig grid{};
 };
 
-// Add the overlay pass. The pass `name` becomes the frame-graph pass name
-// (handy for capture-tool labelling).
-void add_draw_overlay_pass(crd::renderer::FrameGraph&  fg,
-                           crd::renderer::ImageHandle  scene_color,
-                           crd::renderer::ImageHandle  scene_depth,
-                           const RenderBuffer&         buffer,
-                           const OverlayPassConfig&    config,
-                           const char*                 name = "draw-overlay");
+// Compose `buffer` (+ the grid, when enabled) over `target`'s existing contents. Returns false only on a REAL
+// failure (an upload or draw refused); uninitialised / disabled / empty submissions are successful no-ops.
+[[nodiscard]] bool submit_overlay(crd::gpu::IRasterTarget& target, const RenderBuffer& buffer,
+                                  const OverlayPassConfig& config);
 
 } // namespace crd::draw

@@ -1,267 +1,187 @@
-// crd-draw -- add_draw_overlay_pass impl (Phase 3.1 v1a-draw d0c, ADR-0066 sec 9).
-//
-// Frame-graph pass that composes the contents of a `RenderBuffer` over an
-// imported scene_color attachment, with optional depth integration via
-// scene_depth (read-only). Lines are rendered as instanced screen-space
-// quads using the `line_aa` shader pair created by `crd::draw::init`.
+// crd-draw — submit_overlay impl (RET-6, ADR-0105): the RenderBuffer → gpu-context composition. The frame-graph pass
+// died with the rhi renderer; THIS packs the 32-word header + per-bin instances into the ONE u32 draw buffer and
+// chains `draw_overlay` calls — grid first, then triangles, then lines, each bin in Test → Always → GreaterDimmed
+// order with XRay's dimmed double-emit (ADR-0066 §19.1 semantics, preserved bit for bit).
 
 #include <crd/draw/overlay_pass.hpp>
 
+#include <crd/draw/ckir_draw.hpp>
 #include <crd/draw/detail/gpu_types.hpp>
 #include <crd/draw/render_buffer.hpp>
 #include <crd/draw/renderer.hpp>
 #include <crd/log/log.hpp>
-#include <crd/rhi/buffer.hpp>
-#include <crd/rhi/command_buffer.hpp>
-#include <crd/rhi/image.hpp>
-#include <crd/rhi/pipeline.hpp>
 
-#include <cstring>
+#include <bit>
 
 CRD_DEFINE_LOG_CHANNEL(g_log_overlay, "DrawOverlay", crd::log::LogLevel::Info)
 
 namespace crd::draw
 {
-void add_draw_overlay_pass(crd::renderer::FrameGraph&  fg,
-                           crd::renderer::ImageHandle  scene_color,
-                           crd::renderer::ImageHandle  scene_depth,
-                           const RenderBuffer&         buffer,
-                           const OverlayPassConfig&    config,
-                           const char*                 name)
+namespace
 {
-    // Early-out (no-op) if the renderer wasn't initialised. Lets consumers
-    // wire add_draw_overlay_pass unconditionally during development without
-    // crashing on a missing init() call.
-    //
-    // d4: also early-out when the master overlay enable is off (profile-
-    // gated zero-CPU path per ADR-0066 §19.6). Single bool check; the pass
-    // is never registered with the FrameGraph in this case.
-    if (!is_initialised() || !is_overlay_enabled())
+[[nodiscard]] crd::u32 fbits(crd::f32 f) noexcept { return std::bit_cast<crd::u32>(f); }
+
+// GreaterDimmed tests where the scene OCCLUDES the primitive — the exact complement of the Test comparison.
+[[nodiscard]] crd::gpu::DepthCompare complement(crd::gpu::DepthCompare c) noexcept
+{
+    using DC = crd::gpu::DepthCompare;
+    switch (c)
     {
-        return;
+    case DC::Less: return DC::GreaterEqual;
+    case DC::LessEqual: return DC::Greater;
+    case DC::Greater: return DC::LessEqual;
+    case DC::GreaterEqual: return DC::Less;
+    case DC::Equal: return DC::NotEqual;
+    case DC::NotEqual: return DC::Equal;
+    case DC::Never: return DC::Always;
+    case DC::Always: return DC::Never;
+    }
+    return DC::Always;
+}
+
+// XRay's occluded emission: alpha multiplied by ~0.3 (77/256 — the rhi original's exact factor).
+[[nodiscard]] crd::u32 dim_color(crd::u32 packed) noexcept
+{
+    const crd::u32 a        = (packed >> 24U) & 0xFFU;
+    const crd::u32 dimmed_a = (a * 77U) >> 8U;
+    return (packed & 0x00FF'FFFFU) | (dimmed_a << 24U);
+}
+
+constexpr crd::u32 kVariantTest          = 0U;
+constexpr crd::u32 kVariantAlways        = 1U;
+constexpr crd::u32 kVariantGreaterDimmed = 2U;
+constexpr crd::u32 kVariantCount         = 3U;
+
+[[nodiscard]] crd::u32 variant_of(DepthMode m) noexcept
+{
+    switch (m)
+    {
+    case DepthMode::Test: return kVariantTest;
+    case DepthMode::Always: return kVariantAlways;
+    case DepthMode::XRay: return kVariantTest; // primary emission; the dimmed second is added explicitly
+    }
+    return kVariantAlways;
+}
+
+// Pack the 32-word header (the ckir_draw.hpp contract) into the scratch's first words.
+void pack_header(crd::containers::Array<crd::u32>& w, const OverlayPassConfig& cfg)
+{
+    w.clear();
+    const crd::math::Vec4f* cols = &cfg.view_proj.c0;
+    for (crd::u32 c = 0; c < 4U; ++c)
+    {
+        w.push_back(fbits(cols[c].x));
+        w.push_back(fbits(cols[c].y));
+        w.push_back(fbits(cols[c].z));
+        w.push_back(fbits(cols[c].w));
+    }
+    w.push_back(fbits(cfg.viewport_px.x));      // [16]
+    w.push_back(fbits(cfg.viewport_px.y));      // [17]
+    w.push_back(cfg.category_mask);             // [18]
+    w.push_back(fbits(cfg.time_s));             // [19]
+    w.push_back(fbits(cfg.grid.camera_pos.x));  // [20]
+    w.push_back(fbits(cfg.grid.camera_pos.y));  // [21]
+    w.push_back(fbits(cfg.grid.camera_pos.z));  // [22]
+    w.push_back(fbits(cfg.grid.plane_y));       // [23]
+    w.push_back(cfg.grid.primary_color);        // [24]
+    w.push_back(cfg.grid.secondary_color);      // [25]
+    w.push_back(fbits(cfg.grid.primary_cell));  // [26]
+    w.push_back(fbits(cfg.grid.secondary_cell)); // [27]
+    w.push_back(fbits(cfg.grid.fade_distance)); // [28]
+    w.push_back(cfg.grid.axis_x_color);         // [29]
+    w.push_back(cfg.grid.axis_z_color);         // [30]
+    w.push_back(0U);                            // [31] reserved
+}
+} // namespace
+
+bool submit_overlay(crd::gpu::IRasterTarget& target, const RenderBuffer& buffer, const OverlayPassConfig& config)
+{
+    if (!is_initialised() || !is_overlay_enabled()) { return true; } // wire-unconditionally contract — a quiet no-op
+    auto& s = detail::renderer_state();
+
+    const auto lines     = buffer.lines();
+    const auto triangles = buffer.triangles();
+    if (lines.size() == 0U && triangles.size() == 0U && !config.grid.enabled) { return true; }
+
+    // ONE header upload serves every draw in this submission (the instance region re-uploads per bin batch).
+    pack_header(s.scratch, config);
+    if (!s.raster->upload_storage(*s.storage, 0U, s.scratch.data(), ckir::kHeaderWords * 4U))
+    {
+        CRD_LOG_ERROR(g_log_overlay, "draw-buffer header upload refused -- skipping overlay");
+        return false;
     }
 
-    auto builder = fg.add_pass(name);
+    bool ok = true;
 
-    // We compose ON TOP of scene_color (alpha-blend), so the access mode is
-    // ColorWrite. Depth is read for Depth_Test mode primitives (the line
-    // pipeline has depth_write=false; we never modify depth ourselves).
-    builder.write(scene_color, crd::rhi::ImageAccess::ColorWrite);
-    if (scene_depth.is_valid())
+    // ── the grid: under everything (the rhi original drew it first) ──────────────────────────────────────────────
+    if (config.grid.enabled)
     {
-        builder.read(scene_depth, crd::rhi::ImageAccess::DepthRead);
+        ok = s.raster->draw_overlay(target, *s.grid_prog, *s.storage, crd::gpu::DepthCompare::Always, 6U) && ok;
     }
 
-    // Capture the buffer + config by value into the lambda. The buffer is
-    // the consumer's responsibility to keep alive across the frame; we
-    // store a const-pointer to it here. Same for the FrameContext-derived
-    // config. Both are read-only from inside the execute callback.
-    const auto* buf_ptr = &buffer;
+    // ── bin by (primitive, variant); XRay lands in BOTH Test (full color) and GreaterDimmed (dimmed) ─────────────
+    const crd::gpu::DepthCompare compare_of[kVariantCount] = {config.depth_test, crd::gpu::DepthCompare::Always,
+                                                              complement(config.depth_test)};
 
-    builder.set_execute(
-        [buf_ptr, config, scene_color, scene_depth](crd::renderer::FrameResources& res,
-                                                     crd::rhi::CommandBuffer&       cmd)
+    // Triangles, then lines — each variant in compose-on-top order. Instances pack into the scratch tail and
+    // upload at the instance region (word 32); batches over the configured cap keep unbounded counts rendering.
+    const auto draw_bins = [&](bool is_tri) {
+        const crd::u32 words_per = is_tri ? ckir::kTriInstanceWords : ckir::kLineInstanceWords;
+        const crd::u32 cap       = is_tri ? s.config.max_triangles_per_frame : s.config.max_lines_per_frame;
+        const crd::u32 verts_per = is_tri ? 3U : 6U;
+        auto&          prog      = is_tri ? *s.tri_prog : *s.line_prog;
+        const crd::usize count   = is_tri ? triangles.size() : lines.size();
+
+        for (crd::u32 v = 0; v < kVariantCount; ++v)
         {
-            auto& s = detail::renderer_state();
-
-            const auto lines     = buf_ptr->lines();
-            const auto triangles = buf_ptr->triangles();
-            const crd::usize line_count = lines.size();
-            const crd::usize tri_count  = triangles.size();
-
-            // Resolve attachments.
-            auto* color_img = res.get(scene_color);
-            auto* depth_img = scene_depth.is_valid() ? res.get(scene_depth) : nullptr;
-            if (color_img == nullptr)
-            {
-                CRD_LOG_ERROR(g_log_overlay, "scene_color image is null -- skipping overlay");
-                return;
-            }
-
-            // Begin overlay rendering -- load existing color (composite over),
-            // store result; depth load+read-only (we don't modify depth).
-            crd::rhi::RenderingDepthAttachmentInfo depth_att{};
-            const crd::rhi::RenderingDepthAttachmentInfo* depth_att_ptr = nullptr;
-            if (depth_img != nullptr)
-            {
-                depth_att.image    = depth_img;
-                depth_att.load_op  = crd::rhi::LoadOp::Load;
-                depth_att.store_op = crd::rhi::StoreOp::Store;
-                depth_att_ptr      = &depth_att;
-            }
-
-            const crd::rhi::Extent2D extent{
-                static_cast<crd::u32>(config.viewport_px.x),
-                static_cast<crd::u32>(config.viewport_px.y),
+            const bool dim = (v == kVariantGreaterDimmed);
+            s.scratch.clear();
+            crd::u32 in_batch = 0U;
+            const auto flush  = [&]() {
+                if (in_batch == 0U) { return; }
+                if (!s.raster->upload_storage(*s.storage, ckir::kHeaderWords * 4U, s.scratch.data(),
+                                              static_cast<crd::u32>(s.scratch.size() * 4U))
+                    || !s.raster->draw_overlay(target, prog, *s.storage, compare_of[v], in_batch * verts_per))
+                {
+                    ok = false;
+                }
+                s.scratch.clear();
+                in_batch = 0U;
             };
-            cmd.begin_rendering({extent,
-                                 {color_img, crd::rhi::LoadOp::Load, crd::rhi::StoreOp::Store, {}},
-                                 depth_att_ptr});
-            cmd.set_viewport(extent);
-            cmd.set_scissor({0, 0, extent.width, extent.height});
-
-            // Push constants are shared by all pipelines (single 128-byte
-            // layout per ADR-0066 sec 19.1).
-            detail::DrawPushConstants pc{};
-            pc.view_proj       = config.view_proj;
-            pc.viewport_px     = config.viewport_px;
-            pc.category_mask   = config.category_mask;
-            pc.time_s          = config.time_s;
-            pc.camera_pos      = config.grid.camera_pos;
-            pc.primary_color   = config.grid.primary_color;
-            pc.secondary_color = config.grid.secondary_color;
-            pc.plane_y         = config.grid.plane_y;
-            pc.primary_cell    = config.grid.primary_cell;
-            pc.secondary_cell  = config.grid.secondary_cell;
-            pc.fade_distance   = config.grid.fade_distance;
-            pc.axis_x_color    = config.grid.axis_x_color;
-            pc.axis_z_color    = config.grid.axis_z_color;
-
-            const crd::u32 slot = config.frame_in_flight_index % s.config.frames_in_flight;
-
-            // -- d2-grid: infinite floor grid (renders first, under everything) --
-            if (config.grid.enabled && s.grid_pipeline)
+            for (crd::usize i = 0; i < count; ++i)
             {
-                cmd.bind_pipeline(*s.grid_pipeline);
-                cmd.push_constants(*s.pipeline_layout,
-                                   crd::rhi::ShaderStage::Vertex | crd::rhi::ShaderStage::Fragment,
-                                   0, static_cast<crd::u32>(sizeof(pc)), &pc);
-                // 2 triangles (6 vertices) emitted by gl_VertexIndex; no vertex buffer.
-                cmd.draw_instanced(6, 1, 0, 0);
-            }
-
-            // d2-depth: bin primitives by DepthMode into 3 buckets, draw
-            // each via the corresponding pipeline. XRay primitives appear
-            // in TWO buckets simultaneously: full-color into Test (visible
-            // portion shows) and dimmed-color into GreaterDimmed (occluded
-            // portion shows). Per ADR-0066 sec 19.1.
-            constexpr crd::u32 variant_test          = 0;
-            constexpr crd::u32 variant_always        = 1;
-            constexpr crd::u32 variant_greater_dimmed = 2;
-            constexpr crd::u32 variant_count         = 3;
-
-            // Pre-bin per (primitive_kind, variant). Use indices into the
-            // source spans + a paired "is_dimmed" flag so XRay's two emissions
-            // stay distinguishable when packing GPU instance data.
-            crd::containers::Array<crd::u32> tri_bins[variant_count];
-            crd::containers::Array<crd::u32> line_bins[variant_count];
-
-            auto variant_of = [](DepthMode m) noexcept -> crd::u32 {
-                switch (m)
+                const auto      m       = is_tri ? triangles[i].flags.depth() : lines[i].flags.depth();
+                const bool      in_this = variant_of(m) == v || (m == DepthMode::XRay && v == kVariantGreaterDimmed);
+                if (!in_this) { continue; }
+                if (is_tri)
                 {
-                    case DepthMode::Test:   return variant_test;
-                    case DepthMode::Always: return variant_always;
-                    case DepthMode::XRay:   return variant_test; // primary; second emission added explicitly
+                    const auto& t = triangles[i];
+                    s.scratch.push_back(fbits(t.a.x)); s.scratch.push_back(fbits(t.a.y)); s.scratch.push_back(fbits(t.a.z));
+                    s.scratch.push_back(fbits(t.b.x)); s.scratch.push_back(fbits(t.b.y)); s.scratch.push_back(fbits(t.b.z));
+                    s.scratch.push_back(fbits(t.c.x)); s.scratch.push_back(fbits(t.c.y)); s.scratch.push_back(fbits(t.c.z));
+                    s.scratch.push_back(dim ? dim_color(t.color) : t.color);
+                    s.scratch.push_back(t.flags.raw);
                 }
-                return variant_always;
-            };
-
-            for (crd::usize i = 0; i < tri_count; ++i)
-            {
-                const auto m = triangles[i].flags.depth();
-                tri_bins[variant_of(m)].push_back(static_cast<crd::u32>(i));
-                if (m == DepthMode::XRay)
+                else
                 {
-                    tri_bins[variant_greater_dimmed].push_back(static_cast<crd::u32>(i));
+                    const auto& l = lines[i];
+                    s.scratch.push_back(fbits(l.a.x)); s.scratch.push_back(fbits(l.a.y)); s.scratch.push_back(fbits(l.a.z));
+                    s.scratch.push_back(fbits(l.b.x)); s.scratch.push_back(fbits(l.b.y)); s.scratch.push_back(fbits(l.b.z));
+                    s.scratch.push_back(dim ? dim_color(l.color) : l.color);
+                    s.scratch.push_back(l.flags.raw);
+                    s.scratch.push_back(fbits(l.width));
                 }
+                ++in_batch;
+                if (in_batch == cap) { flush(); }
             }
-            for (crd::usize i = 0; i < line_count; ++i)
-            {
-                const auto m = lines[i].flags.depth();
-                line_bins[variant_of(m)].push_back(static_cast<crd::u32>(i));
-                if (m == DepthMode::XRay)
-                {
-                    line_bins[variant_greater_dimmed].push_back(static_cast<crd::u32>(i));
-                }
-            }
+            flush();
+        }
+        (void)words_per;
+    };
+    draw_bins(true);  // solid triangles
+    draw_bins(false); // AA lines on top
 
-            // -- Solid triangles per variant -- compose-on-top order:
-            //    Test (depth-tested visible) -> Always (everywhere) ->
-            //    GreaterDimmed (XRay occluded). Within each variant, the
-            //    multi-batch loop from d2-overflow handles unbounded counts.
-            constexpr crd::u32 variant_order[variant_count] = {
-                variant_test, variant_always, variant_greater_dimmed};
-
-            auto dim_color = [](crd::u32 packed) noexcept -> crd::u32 {
-                // Multiply alpha by ~0.3 for the GreaterDimmed variant (XRay).
-                const crd::u32 a = (packed >> 24) & 0xFFU;
-                const crd::u32 dimmed_a = (a * 77U) >> 8; // 77/256 ≈ 0.30
-                return (packed & 0x00FF'FFFFU) | (dimmed_a << 24);
-            };
-
-            for (const crd::u32 v : variant_order)
-            {
-                const auto& bin = tri_bins[v];
-                if (bin.empty()) continue;
-                auto* tri_buf            = s.triangle_instance_buffers[slot].get();
-                const crd::u32 batch_cap = s.config.max_triangles_per_frame;
-                cmd.bind_pipeline(*s.triangle_pipelines[v]);
-                cmd.push_constants(*s.pipeline_layout,
-                                   crd::rhi::ShaderStage::Vertex | crd::rhi::ShaderStage::Fragment,
-                                   0, static_cast<crd::u32>(sizeof(pc)), &pc);
-                cmd.bind_vertex_buffer(*tri_buf, 0);
-
-                const crd::usize n = bin.size();
-                const bool dim_alpha = (v == variant_greater_dimmed);
-                for (crd::usize off = 0; off < n; off += batch_cap)
-                {
-                    const crd::usize batch_n = (n - off > batch_cap) ? batch_cap : (n - off);
-                    if (void* mapped = tri_buf->map())
-                    {
-                        auto* gpu = static_cast<detail::TriangleInstanceGpu*>(mapped);
-                        for (crd::usize i = 0; i < batch_n; ++i)
-                        {
-                            const auto& t = triangles[bin[off + i]];
-                            gpu[i].v0           = t.a;
-                            gpu[i].v1           = t.b;
-                            gpu[i].v2           = t.c;
-                            gpu[i].color_packed = dim_alpha ? dim_color(t.color) : t.color;
-                            gpu[i].flags_raw    = t.flags.raw;
-                        }
-                        tri_buf->unmap();
-                        cmd.draw_instanced(3, static_cast<crd::u32>(batch_n), 0, 0);
-                    }
-                }
-            }
-
-            // -- Lines per variant (same compose-on-top order) --
-            for (const crd::u32 v : variant_order)
-            {
-                const auto& bin = line_bins[v];
-                if (bin.empty()) continue;
-                auto* line_buf           = s.line_instance_buffers[slot].get();
-                const crd::u32 batch_cap = s.config.max_lines_per_frame;
-                cmd.bind_pipeline(*s.line_pipelines[v]);
-                cmd.push_constants(*s.pipeline_layout,
-                                   crd::rhi::ShaderStage::Vertex | crd::rhi::ShaderStage::Fragment,
-                                   0, static_cast<crd::u32>(sizeof(pc)), &pc);
-                cmd.bind_vertex_buffer(*line_buf, 0);
-
-                const crd::usize n = bin.size();
-                const bool dim_alpha = (v == variant_greater_dimmed);
-                for (crd::usize off = 0; off < n; off += batch_cap)
-                {
-                    const crd::usize batch_n = (n - off > batch_cap) ? batch_cap : (n - off);
-                    if (void* mapped = line_buf->map())
-                    {
-                        auto* gpu = static_cast<detail::LineInstanceGpu*>(mapped);
-                        for (crd::usize i = 0; i < batch_n; ++i)
-                        {
-                            const auto& l = lines[bin[off + i]];
-                            gpu[i].start        = l.a;
-                            gpu[i].end          = l.b;
-                            gpu[i].color_packed = dim_alpha ? dim_color(l.color) : l.color;
-                            gpu[i].flags_raw    = l.flags.raw;
-                            gpu[i].width        = l.width;
-                        }
-                        line_buf->unmap();
-                        cmd.draw_instanced(6, static_cast<crd::u32>(batch_n), 0, 0);
-                    }
-                }
-            }
-
-            cmd.end_rendering();
-        });
+    return ok;
 }
 
 } // namespace crd::draw

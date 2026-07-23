@@ -76,36 +76,11 @@ target_link_libraries(smoke_config PRIVATE
 )
 crd_enable_default_pch(smoke_config)
 
-add_executable(smoke_shader
-    examples/smoke_shader.cpp
-)
-
-target_link_libraries(smoke_shader PRIVATE
-    crd-core
-    crd-log
-    crd-platform
-    crd-shader
-    crd-shader-vulkan   # D-008 C2-e: injected GLSL->SPIR-V compiler
-)
-target_compile_definitions(smoke_shader PRIVATE CRD_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-crd_enable_default_pch(smoke_shader)
-
-add_executable(smoke_renderer
-    examples/smoke_renderer.cpp
-)
-
-target_link_libraries(smoke_renderer PRIVATE
-    crd-core
-    crd-log
-    crd-platform
-    crd-rhi
-    crd-rhi-vulkan
-    crd-shader
-    crd-shader-vulkan   # D-008 C2-e: injected GLSL->SPIR-V compiler
-    crd-renderer
-)
-target_compile_definitions(smoke_renderer PRIVATE CRD_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-crd_enable_default_pch(smoke_renderer)
+# RET-7 (ADR-0105): the retiring-stack smokes are DELETED -- smoke_shader / smoke_renderer /
+# smoke_imgui_overlay / smoke_rhi_api / smoke_resources_render / smoke_material /
+# smoke_rhi_vulkan_bootstrap / smoke_asset_import / smoke_depth_prepass. Their living coverage:
+# the sandbox smoke (boot+render+present on gpu-context), the GEO-3 import->cook->RENDER gates,
+# the RET-5 ImGui gates, and the D1-D12 deploy suites. The modules' own tests die at RET-8.
 
 add_executable(smoke_frame_clock
     examples/smoke_frame_clock.cpp
@@ -162,57 +137,6 @@ target_link_libraries(smoke_app PRIVATE
     crd-app
 )
 crd_enable_default_pch(smoke_app)
-
-add_executable(smoke_imgui_overlay
-    examples/smoke_imgui_overlay.cpp
-)
-
-add_dependencies(smoke_imgui_overlay smoke_rhi_vulkan_shaders)
-
-set(SMOKE_IMGUI_CONFIGS
-    "${CMAKE_SOURCE_DIR}/runtime/configs/imgui_layer.toml"
-)
-
-set(SMOKE_IMGUI_CONFIG_OUTPUTS)
-foreach(config_file IN LISTS SMOKE_IMGUI_CONFIGS)
-    get_filename_component(config_name "${config_file}" NAME)
-    set(config_copy "${CMAKE_CURRENT_BINARY_DIR}/configs/${config_name}")
-    add_custom_command(
-        OUTPUT "${config_copy}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/configs"
-        COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${config_file}" "${config_copy}"
-        DEPENDS "${config_file}"
-        VERBATIM
-    )
-    list(APPEND SMOKE_IMGUI_CONFIG_OUTPUTS "${config_copy}")
-endforeach()
-
-add_custom_target(smoke_imgui_configs DEPENDS ${SMOKE_IMGUI_CONFIG_OUTPUTS})
-add_dependencies(smoke_imgui_overlay smoke_imgui_configs)
-
-target_link_libraries(smoke_imgui_overlay PRIVATE
-    crd-core
-    crd-log
-    crd-app
-    crd-config
-    crd-imgui
-    crd-rhi
-    crd-rhi-vulkan
-    crd-gpu-context          # D-008 C2-f: adopt a device from a gpu-context
-    crd-gpu-context-vulkan
-)
-crd_enable_default_pch(smoke_imgui_overlay)
-
-add_executable(smoke_rhi_api
-    examples/smoke_rhi_api.cpp
-)
-
-target_link_libraries(smoke_rhi_api PRIVATE
-    crd-core
-    crd-log
-    crd-rhi
-)
-crd_enable_default_pch(smoke_rhi_api)
 
 add_executable(smoke_jobs
     examples/smoke_jobs.cpp
@@ -282,24 +206,6 @@ target_link_libraries(smoke_resources_stream PRIVATE
 )
 crd_enable_default_pch(smoke_resources_stream)
 
-add_executable(smoke_resources_render
-    examples/smoke_resources_render.cpp
-)
-
-target_link_libraries(smoke_resources_render PRIVATE
-    crd-core
-    crd-log
-    crd-memory
-    crd-containers
-    crd-platform
-    crd-resources
-    crd-shader
-    crd-gpu-context          # D-008: crd::gpu::ShaderStage
-    crd-gpu-context-vulkan   # D-008: crd::gpu::compile_glsl_to_spirv
-    crd-renderer
-)
-crd_enable_default_pch(smoke_resources_render)
-
 add_executable(smoke_texture
     examples/smoke_texture.cpp
 )
@@ -311,7 +217,6 @@ target_link_libraries(smoke_texture PRIVATE
     crd-containers
     crd-platform
     crd-resources
-    crd-renderer
 )
 crd_enable_default_pch(smoke_texture)
 
@@ -325,24 +230,8 @@ target_link_libraries(smoke_mesh PRIVATE
     crd-containers
     crd-platform
     crd-resources
-    crd-renderer
 )
 crd_enable_default_pch(smoke_mesh)
-
-add_executable(smoke_material
-    examples/smoke_material.cpp
-)
-
-target_link_libraries(smoke_material PRIVATE
-    crd-core
-    crd-memory
-    crd-containers
-    crd-platform
-    crd-resources
-    crd-renderer
-    crd-shader
-)
-crd_enable_default_pch(smoke_material)
 
 add_executable(smoke_meshgen
     examples/smoke_meshgen.cpp
@@ -352,66 +241,10 @@ target_link_libraries(smoke_meshgen PRIVATE
     crd-core
     crd-memory
     crd-containers
-    crd-renderer
+    crd-resources
     crd-meshgen
 )
 crd_enable_default_pch(smoke_meshgen)
-
-add_executable(smoke_rhi_vulkan_bootstrap
-    examples/smoke_rhi_vulkan_bootstrap.cpp
-)
-
-set(SMOKE_RHI_VULKAN_SHADERS
-    "${CMAKE_SOURCE_DIR}/runtime/examples/shaders/triangle.vert"
-    "${CMAKE_SOURCE_DIR}/runtime/examples/shaders/triangle.frag"
-)
-crd_compile_glsl(SMOKE_RHI_VULKAN_SPV "${CMAKE_CURRENT_BINARY_DIR}/shaders" ${SMOKE_RHI_VULKAN_SHADERS})
-
-add_custom_target(smoke_rhi_vulkan_shaders DEPENDS ${SMOKE_RHI_VULKAN_SPV})
-add_dependencies(smoke_rhi_vulkan_bootstrap smoke_rhi_vulkan_shaders)
-
-target_link_libraries(smoke_rhi_vulkan_bootstrap PRIVATE
-    crd-core
-    crd-log
-    crd-platform
-    crd-rhi
-    crd-rhi-vulkan
-    crd-gpu-context          # D-008 C2-f: adopt a device from a gpu-context
-    crd-gpu-context-vulkan
-)
-crd_enable_default_pch(smoke_rhi_vulkan_bootstrap)
-
-add_executable(smoke_asset_import
-    examples/smoke_asset_import.cpp
-)
-
-target_link_libraries(smoke_asset_import PRIVATE
-    crd-core
-    crd-log
-    crd-memory
-    crd-rhi
-    crd-rhi-vulkan
-    crd-gpu-context          # D-008 C2-f: adopt a device from a gpu-context
-    crd-gpu-context-vulkan
-    crd-renderer
-)
-crd_enable_default_pch(smoke_asset_import)
-
-add_executable(smoke_depth_prepass
-    examples/smoke_depth_prepass.cpp
-)
-
-target_link_libraries(smoke_depth_prepass PRIVATE
-    crd-core
-    crd-log
-    crd-memory
-    crd-rhi
-    crd-rhi-vulkan
-    crd-gpu-context          # D-008 C2-f: adopt a device from a gpu-context
-    crd-gpu-context-vulkan
-    crd-renderer
-)
-crd_enable_default_pch(smoke_depth_prepass)
 
 add_executable(smoke_hesap_substrate
     examples/smoke_hesap_substrate.cpp

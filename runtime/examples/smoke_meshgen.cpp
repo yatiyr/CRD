@@ -1,13 +1,13 @@
 #include <crd/meshgen/meshgen.hpp>
 
 #include <crd/memory/allocator.hpp>
-#include <crd/renderer/mesh_resource.hpp>
+#include <crd/resources/mesh_resource.hpp>
 
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 
-static bool check_mesh(const crd::renderer::MeshResource& mesh, const char* name)
+static bool check_mesh(const crd::resources::MeshResource& mesh, const char* name)
 {
     if (mesh.primitives.size() != 1U)
     {
@@ -25,7 +25,7 @@ static bool check_mesh(const crd::renderer::MeshResource& mesh, const char* name
         std::fprintf(stderr, "FAIL [%s]: index_count == 0\n", name);
         return false;
     }
-    if (mesh.vertices.size() != static_cast<std::size_t>(prim.vertex_count) * crd::renderer::kMeshVertexStride)
+    if (mesh.vertices.size() != static_cast<std::size_t>(prim.vertex_count) * crd::resources::kMeshVertexStride)
     {
         std::fprintf(stderr, "FAIL [%s]: vertex buffer size mismatch\n", name);
         return false;
@@ -39,7 +39,7 @@ static bool check_mesh(const crd::renderer::MeshResource& mesh, const char* name
     const crd::u8* vdata = mesh.vertices.data();
     for (crd::u32 vi = 0; vi < prim.vertex_count; ++vi)
     {
-        const float* nrm = reinterpret_cast<const float*>(vdata + vi * crd::renderer::kMeshVertexStride + 12U);
+        const float* nrm = reinterpret_cast<const float*>(vdata + vi * crd::resources::kMeshVertexStride + 12U);
         const float len2 = nrm[0]*nrm[0] + nrm[1]*nrm[1] + nrm[2]*nrm[2];
         if (std::abs(len2 - 1.0F) > 0.01F)
         {

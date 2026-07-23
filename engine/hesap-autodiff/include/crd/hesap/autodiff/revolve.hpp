@@ -32,7 +32,7 @@ class RevolvePlan
 public:
     // tables: cost[(T+1)*(S+1)], arg[(T+1)*(S+1)] (caller-owned). Fills them for all len≤T, s≤S.
     RevolvePlan(int t_max, int snaps, crd::i64* cost, int* arg) noexcept
-        : m_cost(cost), m_arg(arg), m_tmax(t_max), m_snaps(snaps)
+        : m_cost(cost), m_arg(arg), m_snaps(snaps) // t_max shaped the tables at build time; never needed after
     {
         const int stride = snaps + 1;
         for (int len = 0; len <= t_max; ++len)
@@ -73,7 +73,6 @@ public:
 private:
     crd::i64* m_cost;
     int*      m_arg;
-    int       m_tmax;
     int       m_snaps;
 };
 

@@ -2,8 +2,7 @@
 #include <crd/core/types.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
-#include <crd/renderer/mesh_resource.hpp>
-#include <crd/renderer/mesh_resource_loader.hpp>
+#include <crd/resources/mesh_resource.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/resource_id.hpp>
 #include <crd/resources/resource_manager.hpp>
@@ -130,13 +129,13 @@ int main()
     // ── Load ───────────────────────────────────────────────────────────────
 
     ResourceManager rm(&alloc);
-    crd::renderer::register_mesh_loader(&rm);
+    crd::resources::register_mesh_loader(&rm);
     CRD_VERIFY(rm.mount_manifest(pack_path.generic()).is_valid());
 
-    auto handle = rm.load_sync<crd::renderer::MeshResource>(mesh_id);
+    auto handle = rm.load_sync<crd::resources::MeshResource>(mesh_id);
     CRD_VERIFY(handle.is_ready());
 
-    const crd::renderer::MeshResource* mesh = handle.get();
+    const crd::resources::MeshResource* mesh = handle.get();
     CRD_VERIFY(mesh != nullptr);
     CRD_VERIFY(mesh->primitives.size() == num_prims);
     CRD_VERIFY(mesh->primitives[0].vertex_count == vc);

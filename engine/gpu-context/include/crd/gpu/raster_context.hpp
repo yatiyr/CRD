@@ -451,6 +451,19 @@ public:
     // them WITHOUT a draw — `upload_storage`'s twin (compute results, defrag verification, tooling reads).
     // Returns false when unsupported. Appended at END (vtable-stable).
     [[nodiscard]] virtual bool download_storage(IStorageBuffer& /*storage*/) { return false; }
+
+    // RET-6 (ADR-0105): the OVERLAY draw — compose instanced primitives ONTO an existing target: color loadOp=LOAD
+    // (the previous contents STAY — never cleared), standard alpha blending (srcAlpha · 1−srcAlpha), and a READ-ONLY
+    // depth test at `compare` when the target carries a depth buffer (depth writes are never enabled; on a depthless
+    // target `compare` is ignored). `storage` binds at set 0 / binding 0, VERTEX+FRAGMENT visible — the VS pulls
+    // per-instance records by `VertexIndex` (the GEO-1 vertex-pulling seam), which is what lets ONE program + dynamic
+    // state replace the retiring rhi renderer's six PSOs. The target must have been drawn at least once (its contents
+    // are what the overlay composites over). Multiple overlay draws CHAIN — each composites over the last, the
+    // debug-draw variant order (Test → Always → GreaterDimmed). Returns false when refused (invalid target/program,
+    // an MSAA target, or a backend without the capability) — refusal over a silent wrong draw. Appended at END.
+    [[nodiscard]] virtual bool draw_overlay(IRasterTarget& /*target*/, IRasterProgram& /*program*/,
+                                            IStorageBuffer& /*storage*/, DepthCompare /*compare*/,
+                                            crd::u32 /*vertex_count*/) { return false; }
 };
 
 // B5: an opaque deferred G-buffer (see `create_gbuffer_target`). `read_pixel(attachment, x, y)` is valid after a draw.

@@ -7,6 +7,10 @@
 #include <crd/gpu/vulkan_raster_context.hpp>
 #include <crd/gpu/vulkan_shader_compile.hpp>
 
+#include <crd/draw/ckir_draw.hpp>    // RET-6: the crd-draw CKIR shader suite (the overlay-draw seam gate)
+#include <crd/draw/overlay_pass.hpp> // RET-6 pt 3: submit_overlay (the GPU half under test)
+#include <crd/draw/render_buffer.hpp>
+#include <crd/draw/renderer.hpp>
 #include <crd/kir/ckir.hpp>      // C1-c: create_program(KGraph, KEntry) — the IR on-ramp
 #include <crd/kir/ckir_fft.hpp>    // B-cmp Phase 1: build_fft1d_radix2 (the CKIR FFT authoring layer)
 #include <crd/kir/ckir_ocean.hpp>  // B16-a: the FFT-ocean kernels (spectrum/evolve/assemble)
@@ -13064,4 +13068,207 @@ TEST_CASE("RET-5: ImGui composites through the gpu-context overlay present (Vulk
     CHECK(capture.warning_count() == 0U);
     surface.reset(); // the surface dies BEFORE its window
     crd::gputest::destroy_test_window(native);
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// RET-6 (ADR-0105): the OVERLAY DRAW -- crd-draw's CKIR line shader composites ONTO an existing scene through the NEW
+// draw_overlay seam: color loadOp=LOAD (the scene STAYS -- never cleared), standard alpha blending, vertex-pulled
+// instances from the u32 draw buffer (storage_load + intBitsToFloat recovery -- the GEO-1 idiom). The gate proves all
+// three composition properties by pixel: ON the line = the line's white; OFF the line inside the scene's triangle =
+// still red (the LOAD proof); outside both = the clear blue (untouched). Validation-SILENT by counter.
+TEST_CASE("RET-6: draw_overlay composites the CKIR line shader over an existing scene (Vulkan)",
+          "[gpu-context][vulkan][gpu][raster][ret]")
+{
+    namespace kir = crd::kir;
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    gpu::GpuContextConfig      cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto ctx              = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->shader_object()) { WARN("no VK_EXT_shader_object; skipping"); return; }
+    crd::gpu::ValidationCapture capture(*vk);
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    // 1. the SCENE: the standard CKIR triangle (red) into a 64x64 target
+    kir::KGraph vg(&alloc);
+    kir::KEntry ve;
+    crd::gputest::build_triangle_vs(vg, ve);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_triangle_fs(fg, fe);
+    auto vs = ctx->create_program(vg, ve);
+    auto fs = ctx->create_program(fg, fe);
+    REQUIRE(vs != nullptr);
+    REQUIRE(fs != nullptr);
+    auto scene = raster->create_raster_program(*vs, *fs);
+    REQUIRE(scene != nullptr);
+    constexpr crd::u32 dim    = 64U;
+    auto               target = raster->create_color_target(dim, dim);
+    REQUIRE(target != nullptr);
+    raster->draw(*target, *scene, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 3U);
+
+    // 2. the OVERLAY program: the crd-draw line_aa CKIR port (vertex-pulled, header-driven)
+    kir::KGraph lvg(&alloc);
+    kir::KEntry lve;
+    crd::draw::ckir::build_line_vs(lvg, lve);
+    kir::KGraph lfg(&alloc);
+    kir::KEntry lfe;
+    crd::draw::ckir::build_line_fs(lfg, lfe);
+    auto lvs = ctx->create_program(lvg, lve);
+    auto lfs = ctx->create_program(lfg, lfe);
+    REQUIRE(lvs != nullptr); // the u32 storage pull + intBitsToFloat lowers through the VERTEX stage
+    REQUIRE(lfs != nullptr);
+    auto line = raster->create_raster_program(*lvs, *lfs);
+    REQUIRE(line != nullptr);
+
+    // 3. the DRAW BUFFER: the 32-word header (identity view_proj, 64x64 viewport, all categories on) + ONE white
+    //    horizontal line through NDC y=0 (pixel row 32), width 8 px
+    crd::containers::Array<crd::u32> words(&alloc);
+    const auto fbits = [](float f) { crd::u32 u = 0; std::memcpy(&u, &f, 4U); return u; };
+    for (crd::u32 c = 0; c < 4U; ++c)
+    {
+        for (crd::u32 rr = 0; rr < 4U; ++rr) { words.push_back(fbits(c == rr ? 1.0F : 0.0F)); } // identity, column-major
+    }
+    words.push_back(fbits(64.0F));      // [16] viewport_px.x
+    words.push_back(fbits(64.0F));      // [17] viewport_px.y
+    words.push_back(0xFFFFFFFFU);       // [18] category_mask -- all on
+    words.push_back(fbits(0.0F));       // [19] time_s
+    while (words.size() < 32U) { words.push_back(0U); } // grid words unused by the line shaders
+    const float line_inst[9] = {-2.0F, 0.0F, 0.0F, 2.0F, 0.0F, 0.0F, 0.0F, 0.0F, 8.0F};
+    for (crd::u32 wi = 0; wi < 9U; ++wi)
+    {
+        if (wi == 6U) { words.push_back(0xFFFFFFFFU); }      // color: opaque white
+        else if (wi == 7U) { words.push_back(0U); }          // flags: category 0, Depth::Always
+        else { words.push_back(fbits(line_inst[wi])); }
+    }
+    auto storage = raster->create_storage_buffer(static_cast<crd::u32>(words.size() * 4U));
+    REQUIRE(storage != nullptr);
+    REQUIRE(raster->upload_storage(*storage, 0U, words.data(), static_cast<crd::u32>(words.size() * 4U)));
+
+    // 4. COMPOSITE: 6 vertices = 1 line instance, no depth (Always)
+    REQUIRE(raster->draw_overlay(*target, *line, *storage, gpu::DepthCompare::Always, 6U));
+
+    // 5. the pixel gate
+    const crd::u32 on_line  = target->read_pixel(32U, 32U); // the line's core -- white over the red triangle
+    const crd::u32 off_line = target->read_pixel(32U, 48U); // inside the triangle, 16 px below the line -- still red
+    const crd::u32 corner   = target->read_pixel(2U, 2U);   // outside everything -- the clear blue survives the LOAD
+    const auto     rch      = [](crd::u32 p) { return p & 0xFFU; };
+    const auto     gch      = [](crd::u32 p) { return (p >> 8U) & 0xFFU; };
+    const auto     bch      = [](crd::u32 p) { return (p >> 16U) & 0xFFU; };
+    WARN("[ret6-overlay vulkan] on=(" << rch(on_line) << "," << gch(on_line) << "," << bch(on_line) << ") off=("
+                                      << rch(off_line) << "," << gch(off_line) << "," << bch(off_line) << ") corner=("
+                                      << rch(corner) << "," << gch(corner) << "," << bch(corner) << ")");
+    CHECK(rch(on_line) > 200U);  // white line: all channels high
+    CHECK(gch(on_line) > 200U);
+    CHECK(bch(on_line) > 200U);
+    CHECK(rch(off_line) > 200U); // the scene's red SURVIVED the overlay (loadOp=LOAD, not clear)
+    CHECK(gch(off_line) < 50U);
+    CHECK(rch(corner) < 50U);    // untouched clear blue
+    CHECK(bch(corner) > 200U);
+
+    if (capture.error_or_warning_count() > 0U) // diagnose on failure: the FIRST few captured messages, verbatim
+    {
+        const auto msgs  = capture.messages();
+        crd::u32   shown = 0;
+        for (crd::usize mi = 0; mi < msgs.size() && shown < 4U; ++mi)
+        {
+            if (msgs[mi].severity == crd::gpu::ValidationSeverity::Info) { continue; }
+            WARN("[ret6 capture] id=" << msgs[mi].message_id_number << " " << msgs[mi].message_text.c_str());
+            ++shown;
+        }
+    }
+    CHECK(capture.error_count() == 0U); // the whole overlay lifecycle is validation-SILENT
+    CHECK(capture.warning_count() == 0U);
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// RET-6 pt 3: the crd-draw GPU HALF on gpu-context -- init compiles the CKIR suite through create_program (no
+// ResourceManager, no cooked-GLSL pack, no pipelines), submit_overlay packs the RenderBuffer into the u32 draw buffer
+// and composes it over the scene through the draw_overlay chain. The same pixel triple as the seam gate -- on-line
+// white / off-line red (LOAD) / corner blue -- now through the FULL crd-draw path, validation-SILENT, clean shutdown.
+TEST_CASE("RET-6: crd-draw init + submit_overlay compose a RenderBuffer over the scene (Vulkan)",
+          "[gpu-context][vulkan][gpu][raster][ret]")
+{
+    namespace kir = crd::kir;
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    gpu::GpuContextConfig      cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto ctx              = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->shader_object()) { WARN("no VK_EXT_shader_object; skipping"); return; }
+    crd::gpu::ValidationCapture capture(*vk);
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    // the scene: the CKIR triangle (red) over a blue clear
+    kir::KGraph vg(&alloc);
+    kir::KEntry ve;
+    crd::gputest::build_triangle_vs(vg, ve);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_triangle_fs(fg, fe);
+    auto vs = ctx->create_program(vg, ve);
+    auto fs = ctx->create_program(fg, fe);
+    REQUIRE(vs != nullptr);
+    REQUIRE(fs != nullptr);
+    auto scene = raster->create_raster_program(*vs, *fs);
+    REQUIRE(scene != nullptr);
+    constexpr crd::u32 dim    = 64U;
+    auto               target = raster->create_color_target(dim, dim);
+    REQUIRE(target != nullptr);
+    raster->draw(*target, *scene, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 3U);
+
+    // the crd-draw GPU half: CKIR programs + the draw buffer, no pack, no resources
+    REQUIRE(crd::draw::init(*vk, *raster));
+    REQUIRE(crd::draw::is_initialised());
+
+    crd::draw::RenderBuffer buf(crd::memory::default_allocator());
+    crd::draw::DebugLine    line;
+    line.a     = {-2.0F, 0.0F, 0.0F};
+    line.b     = {2.0F, 0.0F, 0.0F};
+    line.color = 0xFFFFFFFFU; // opaque white
+    line.width = 8.0F;
+    buf.add_line(line);
+
+    crd::draw::OverlayPassConfig ocfg;
+    ocfg.view_proj   = crd::math::Mat4f{1.0F}; // identity: world == NDC
+    ocfg.viewport_px = {static_cast<crd::f32>(dim), static_cast<crd::f32>(dim)};
+    REQUIRE(crd::draw::submit_overlay(*target, buf, ocfg));
+
+    const crd::u32 on_line  = target->read_pixel(32U, 32U);
+    const crd::u32 off_line = target->read_pixel(32U, 48U);
+    const crd::u32 corner   = target->read_pixel(2U, 2U);
+    WARN("[ret6-drawhalf vulkan] on=(" << (on_line & 0xFFU) << "," << ((on_line >> 8U) & 0xFFU) << ","
+                                       << ((on_line >> 16U) & 0xFFU) << ") off_r=" << (off_line & 0xFFU)
+                                       << " corner_b=" << ((corner >> 16U) & 0xFFU));
+    CHECK((on_line & 0xFFU) > 200U);            // white line core
+    CHECK(((on_line >> 8U) & 0xFFU) > 200U);
+    CHECK(((on_line >> 16U) & 0xFFU) > 200U);
+    CHECK((off_line & 0xFFU) > 200U);           // the scene's red survived
+    CHECK(((off_line >> 8U) & 0xFFU) < 50U);
+    CHECK(((corner >> 16U) & 0xFFU) > 200U);    // untouched clear blue
+
+    crd::draw::shutdown();
+    CHECK_FALSE(crd::draw::is_initialised());
+
+    if (capture.error_or_warning_count() > 0U)
+    {
+        const auto msgs  = capture.messages();
+        crd::u32   shown = 0;
+        for (crd::usize mi = 0; mi < msgs.size() && shown < 4U; ++mi)
+        {
+            if (msgs[mi].severity == crd::gpu::ValidationSeverity::Info) { continue; }
+            WARN("[ret6-drawhalf capture] id=" << msgs[mi].message_id_number << " " << msgs[mi].message_text.c_str());
+            ++shown;
+        }
+    }
+    CHECK(capture.error_count() == 0U);
+    CHECK(capture.warning_count() == 0U);
 }

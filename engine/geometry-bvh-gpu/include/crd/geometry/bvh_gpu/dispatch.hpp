@@ -15,7 +15,7 @@
 // the per-dispatch overhead is just the buffer upload + recording.
 //
 // Test pattern (per `feedback_v9_gpu_sanity_harness`):
-//   1. wrap setup in `crd::rhi::ValidationCapture` → assert 0 errors.
+//   1. wrap setup in `crd::gpu::ValidationCapture` → assert 0 errors.
 //   2. compute CPU oracle via `compute_morton_codes_cpu`.
 //   3. dispatch GPU via `MortonGpuPipeline::dispatch_morton_codes`.
 //   4. `bit_compare` GPU output vs CPU oracle (must be byte-identical).
@@ -106,7 +106,7 @@ public:
     // (a free function in the .cpp shared between sync + async paths)
     // can reach the cached pipeline state; the definition lives in
     // the .cpp so this does NOT expose any internals. Same pattern as
-    // `crd::rhi::ValidationCapture::Impl`.
+    // `crd::gpu::ValidationCapture`.
     struct Impl;
 
 private:

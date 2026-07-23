@@ -1,6 +1,8 @@
 # ADR-0105 — Retire crd-rhi + crd-renderer: crd-gpu-context IS the graphics layer
 
-**Status:** Accepted (2026-07-23)
+**Status:** Accepted (2026-07-23) — **EXECUTED (2026-07-23): RET-1..8 complete.** crd-rhi · crd-rhi-vulkan ·
+crd-renderer · crd-shader · crd-shader-vulkan + their test suites are DELETED; the coverage-parity audit signed off
+(D-007 rows 89–96); the sandbox + every consumer runs entirely on gpu-context. ONE device, ONE facade, ONE IR.
 **Phase:** D-007 (RET band)
 **Tags:** `[gpu-context]` `[rhi]` `[renderer]` `[architecture]`
 

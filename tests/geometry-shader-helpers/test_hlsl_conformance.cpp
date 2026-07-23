@@ -29,19 +29,12 @@
 #include <crd/geometry/shader_helpers/hlsl_emitter.hpp>
 #include <crd/math/vec.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
-#include <crd/rhi/buffer.hpp>
-#include <crd/rhi/command_buffer.hpp>
-#include <crd/rhi/compute_pipeline.hpp>
-#include <crd/rhi/descriptor.hpp>
-#include <crd/rhi/device.hpp>
-#include <crd/rhi/fence.hpp>
-#include <crd/rhi/pipeline.hpp>
-#include <crd/rhi/queue.hpp>
+#include <crd/gpu/compute.hpp>                   // RET-7 (ADR-0105): the portable dispatch surface
+#include <crd/gpu/vulkan_compute_context.hpp>    // RET-7: create_pipeline_from_spirv + the recorder
+#include <crd/gpu/vulkan_validation_capture.hpp> // RET-7: the gpu-context capture
 #include <crd/gpu/vulkan_shader_compile.hpp>
 #include <crd/gpu/program.hpp> // D-008 C2-d4: opaque IGpuProgram via create_program
 #include <crd/gpu/vulkan_context.hpp> // D-008 C2-f: create_vulkan_gpu_context (the ONE VkDevice owner rhi adopts)
-#include <crd/rhi/vulkan_backend.hpp>
-#include <crd/rhi/vulkan_validation_capture.hpp>
 
 #include <algorithm>
 #include <cstdio>
@@ -245,15 +238,16 @@ TEST_CASE("v9e-c HLSL ULP conformance: dxc-emitted SPIR-V matches evaluate() on 
         }
     }
 
-    // D-008 C2-f: adopt a device from a gpu-context (rhi no longer creates a VkDevice). ctx outlives device + capture.
+    // RET-7 (ADR-0105): the dispatch runs on the ONE graphics layer -- IComputeContext, no rhi device.
     crd::gpu::GpuContextConfig gpu_cfg;
     gpu_cfg.headless          = true;
     gpu_cfg.enable_validation = true;
     auto gpu_ctx = crd::gpu::create_vulkan_gpu_context(gpu_cfg);
     REQUIRE(gpu_ctx != nullptr);
-    auto device = crd::rhi::create_vulkan_device_adopting(*gpu_ctx);
-    REQUIRE(device != nullptr);
-    crd::rhi::ValidationCapture capture(*device);
+    auto* vk = static_cast<crd::gpu::VulkanGpuContext*>(gpu_ctx.get());
+    crd::gpu::ValidationCapture    capture(*vk);
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
 
     constexpr float k_origin = -0.6F;
     constexpr float span   = 1.2F;
@@ -268,23 +262,13 @@ TEST_CASE("v9e-c HLSL ULP conformance: dxc-emitted SPIR-V matches evaluate() on 
 
     const crd::u64 out_bytes = static_cast<crd::u64>(kSampleCount) * sizeof(float);
 
-    auto out_gpu = device->create_buffer(
-        {out_bytes,
-         crd::rhi::enum_bits(crd::rhi::BufferUsage::Storage) |
-             crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferSrc),
-         crd::rhi::MemoryUsage::GpuOnly});
-    auto out_readback = device->create_buffer(
-        {out_bytes, crd::rhi::enum_bits(crd::rhi::BufferUsage::TransferDst),
-         crd::rhi::MemoryUsage::GpuToCpu});
-    REQUIRE(out_gpu     != nullptr);
+    auto out_gpu = compute.create_buffer(out_bytes,
+                                         crd::gpu::compute_usage::storage | crd::gpu::compute_usage::transfer_src,
+                                         crd::gpu::ComputeMemory::GpuOnly);
+    auto out_readback =
+        compute.create_buffer(out_bytes, crd::gpu::compute_usage::transfer_dst, crd::gpu::ComputeMemory::GpuToCpu);
+    REQUIRE(out_gpu != nullptr);
     REQUIRE(out_readback != nullptr);
-
-    crd::rhi::DescriptorAllocatorDesc alloc_desc{};
-    alloc_desc.frames_in_flight              = 2;
-    alloc_desc.max_sets_per_frame            = 2;
-    alloc_desc.max_storage_buffers_per_frame = 4;
-    auto desc_alloc = device->create_descriptor_allocator(alloc_desc);
-    REQUIRE(desc_alloc != nullptr);
 
     for (crd::usize mi = 0U; mi < kManifestCount; ++mi)
     {
@@ -306,62 +290,20 @@ TEST_CASE("v9e-c HLSL ULP conformance: dxc-emitted SPIR-V matches evaluate() on 
         }
         REQUIRE(compiled.ok);
 
-        auto shader = device->create_program(
-            crd::rhi::ShaderStage::Compute,
-            crd::containers::ConstSpan<crd::u8>(compiled.spirv.data(), compiled.spirv.size()));
-        REQUIRE(shader != nullptr);
-
-        crd::rhi::DescriptorBinding binding{};
-        binding.binding = 0;
-        binding.type    = crd::rhi::DescriptorType::StorageBuffer;
-        binding.count   = 1;
-        binding.stages  = crd::rhi::ShaderStage::Compute;
-        crd::rhi::DescriptorSetLayoutDesc set_layout_desc{};
-        set_layout_desc.bindings = crd::containers::ConstSpan<crd::rhi::DescriptorBinding>(&binding, 1);
-        auto set_layout = device->create_descriptor_set_layout(set_layout_desc);
-        REQUIRE(set_layout != nullptr);
-
-        const crd::rhi::DescriptorSetLayout* layouts[] = {set_layout.get()};
-        crd::rhi::PushConstantRange pc_range{};
-        pc_range.stages = crd::rhi::ShaderStage::Compute;
-        pc_range.offset = 0U;
-        pc_range.size   = sizeof(PushConstants);
-        crd::rhi::PipelineLayoutDesc layout_desc{};
-        layout_desc.set_layouts = crd::containers::ConstSpan<const crd::rhi::DescriptorSetLayout*>(layouts, 1);
-        layout_desc.push_constant_ranges = crd::containers::ConstSpan<crd::rhi::PushConstantRange>(&pc_range, 1);
-        auto pipeline_layout = device->create_pipeline_layout(layout_desc);
-        REQUIRE(pipeline_layout != nullptr);
-
-        crd::rhi::ComputePipelineDesc cpd{};
-        cpd.compute_program  = shader.get();
-        cpd.pipeline_layout = pipeline_layout.get();
-        auto pipeline = device->create_compute_pipeline(cpd);
+        // The portable dispatch: pipeline (1 storage binding + the push block) -> dispatch -> barrier -> readback.
+        auto pipeline = compute.create_pipeline_from_spirv(
+            crd::containers::ConstSpan<crd::u8>(compiled.spirv.data(), compiled.spirv.size()), 1U,
+            static_cast<crd::u32>(sizeof(PushConstants)));
         REQUIRE(pipeline != nullptr);
 
-        desc_alloc->begin_frame(0U);
-        auto ds = desc_alloc->allocate(*set_layout);
-        REQUIRE(ds != nullptr);
-        ds->update_buffer(0U, *out_gpu, 0U, out_bytes);
-
-        auto cmd   = device->create_command_buffer();
-        auto fence = device->create_fence();
-        REQUIRE(cmd   != nullptr);
-        REQUIRE(fence != nullptr);
-        cmd->begin();
-        cmd->bind_compute_pipeline(*pipeline);
-        crd::rhi::DescriptorSet* sets[] = {ds.get()};
-        cmd->bind_compute_descriptor_sets(*pipeline_layout, 0U,
-            crd::containers::ConstSpan<crd::rhi::DescriptorSet*>(sets, 1));
-        cmd->push_constants(*pipeline_layout, crd::rhi::ShaderStage::Compute,
-                            0U, sizeof(pc), &pc);
-        const crd::u32 groups = (kGridResolution + 3U) / 4U;
-        cmd->dispatch(groups, groups, groups);
-        cmd->buffer_barrier(*out_gpu, crd::rhi::BufferAccess::ComputeShaderWrite,
-                                       crd::rhi::BufferAccess::TransferSrc);
-        cmd->copy_buffer(*out_gpu, *out_readback, 0U, 0U, out_bytes);
-        cmd->end();
-        device->graphics_queue().submit(*cmd, *fence);
-        fence->wait();
+        auto&                    rec     = compute.begin();
+        crd::gpu::ComputeBuffer* binds[] = {out_gpu.get()};
+        const crd::u32           groups  = (kGridResolution + 3U) / 4U; // numthreads(4,4,4)
+        rec.dispatch(*pipeline, crd::containers::ConstSpan<crd::gpu::ComputeBuffer*>(binds, 1), &pc,
+                     static_cast<crd::u32>(sizeof(pc)), groups, groups, groups);
+        rec.barrier(*out_gpu, crd::gpu::ComputeAccess::ShaderWrite, crd::gpu::ComputeAccess::TransferSrc);
+        rec.copy(*out_gpu, *out_readback, 0U, 0U, out_bytes);
+        compute.submit_and_wait();
 
         // Build CPU reference at every grid point.
         crd::containers::Array<float> cpu_ref(&alloc);
@@ -407,5 +349,7 @@ TEST_CASE("v9e-c HLSL ULP conformance: dxc-emitted SPIR-V matches evaluate() on 
 
     CHECK(capture.error_count()   == 0U);
     CHECK(capture.warning_count() == 0U);
-    device->wait_idle();
+    // RET-7: validation-SILENT by counter.
+    CHECK(capture.error_count() == 0U);
+    CHECK(capture.warning_count() == 0U);
 }

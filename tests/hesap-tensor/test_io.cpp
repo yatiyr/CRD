@@ -505,8 +505,8 @@ TEST_CASE("io: safetensors adversaries return clean statuses", "[v14l][io][safet
         const crd::u8 lying[9] = {0xFFU, 0xFFU, 0xFFU, 0xFFU, 0, 0, 0, 0, '{'};
         REQUIRE(f.parse({lying, 9U}) == TensorStatus::BadInput);
     }
-    const auto build = [&alloc](const char* header, const char* buffer, crd::usize buf_len,
-                                crd::containers::Array<crd::u8>& out)
+    const auto build = [](const char* header, const char* buffer, crd::usize buf_len,
+                          crd::containers::Array<crd::u8>& out)
     {
         const crd::usize hlen = std::strlen(header);
         out.clear();

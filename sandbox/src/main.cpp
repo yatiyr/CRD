@@ -12,6 +12,10 @@
 //   --smoke-test [duration_secs]  — run the loop N seconds (default 3.0), FAIL (exit 2) if nothing presented.
 
 #include <crd/app/app.hpp>
+#include <crd/draw/overlay_pass.hpp> // RET-6 pt 4: the debug-draw scene through gpu-context (grid + shapes)
+#include <crd/draw/render_buffer.hpp>
+#include <crd/draw/renderer.hpp>
+#include <crd/draw/shapes.hpp>
 #include <crd/gpu/context.hpp>
 #include <crd/gpu/raster_context.hpp>
 #include <crd/gpu/vulkan_context.hpp>
@@ -196,6 +200,25 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    // RET-6 pt 4: the debug-draw scene on the ONE layer — the CKIR draw suite compiled at init, the demo content a
+    // RenderBuffer of shapes composed over the canvas by submit_overlay each frame (the editor-grid look returns).
+    const bool draw_ready = crd::draw::init(*vk, *raster);
+    if (!draw_ready) { CRD_LOG_WARN(g_log_sandbox, "crd-draw init failed -- continuing without the draw overlay"); }
+    crd::draw::RenderBuffer draw_buf(crd::memory::default_allocator());
+    if (draw_ready)
+    {
+        crd::draw::axis_triad_to(draw_buf, crd::math::Mat4f::identity(), 1.5F, 3.0F);
+        crd::draw::sphere_wire_to(draw_buf, {2.5F, 1.0F, 0.0F}, 1.0F, crd::draw::kCyan);
+        crd::math::Mat4f box_world = crd::math::Mat4f::identity();
+        box_world.c3               = {-2.5F, 0.75F, 0.5F, 1.0F};
+        crd::draw::box_wire_to(draw_buf, box_world, {0.75F, 0.75F, 0.75F}, crd::draw::kOrange, 2.0F);
+        crd::draw::capsule_wire_to(draw_buf, {0.0F, 0.5F, -2.5F}, {0.0F, 2.0F, -2.5F}, 0.5F, crd::draw::kMagenta);
+        crd::math::Mat4f slab_world = crd::math::Mat4f::identity();
+        slab_world.c3               = {0.0F, 0.25F, 2.5F, 1.0F};
+        crd::draw::box_solid_to(draw_buf, slab_world, {1.0F, 0.25F, 0.6F},
+                                crd::draw::Color{255, 200, 40, 90}); // translucent amber slab (alpha blending live)
+    }
+
     // perf substrate + the ProfilerPanel overlay. (The rhi GPU-profiler backend died with the flip; the gpu-context
     // profiler backend arrives with the RET-7 sweep — CPU spans + allocator tracking are live today.)
     crd::perf::init({});
@@ -232,6 +255,33 @@ int main(int argc, char** argv)
 
         raster->draw(*canvas, *program, crd::gpu::ClearColor{0.09F, 0.10F, 0.13F, 1.0F}, 3U);
 
+        // the debug-draw scene: a slow orbit camera + the infinite grid + the shape set, composed over the canvas
+        if (draw_ready)
+        {
+            const crd::f64 tsec =
+                std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - smoke_start_time).count();
+            const float            orbit = static_cast<float>(tsec * 0.25);
+            const crd::math::Vec3f eye{crd::math::sin(orbit) * 7.0F, 3.5F, crd::math::cos(orbit) * 7.0F};
+            const crd::math::Mat4f view = crd::math::look_at(eye, crd::math::Vec3f{0.0F, 0.75F, 0.0F},
+                                                             crd::math::Vec3f{0.0F, 1.0F, 0.0F});
+            const float            aspect =
+                static_cast<float>(surface->width()) / static_cast<float>(surface->height() > 0U ? surface->height() : 1U);
+            const crd::math::Mat4f proj = crd::math::perspective_reverse_z(1.0472F, aspect, 0.1F); // 60 deg fov
+
+            crd::draw::OverlayPassConfig ocfg;
+            ocfg.view_proj   = proj * view;
+            ocfg.viewport_px = {static_cast<crd::f32>(surface->width()), static_cast<crd::f32>(surface->height())};
+            ocfg.time_s      = static_cast<crd::f32>(tsec);
+            ocfg.depth_test  = crd::gpu::DepthCompare::GreaterEqual; // reverse-Z (ignored on the depthless canvas today)
+            ocfg.grid.enabled    = true;
+            ocfg.grid.camera_pos = eye;
+            ocfg.grid.apply_theme();
+            if (!crd::draw::submit_overlay(*canvas, draw_buf, ocfg))
+            {
+                CRD_LOG_WARN(g_log_sandbox, "draw overlay submission refused");
+            }
+        }
+
         imgui_backend->new_frame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
@@ -239,7 +289,7 @@ int main(int argc, char** argv)
             ImGui::Begin("Cerid Sandbox");
             ImGui::Text("gpu-context end to end (ADR-0105)");
             ImGui::Text("frame %u  |  %ux%u", frame, surface->width(), surface->height());
-            ImGui::TextUnformatted("scene: CKIR canvas -> blit -> ImGui overlay -> present");
+            ImGui::TextUnformatted("scene: CKIR canvas -> draw overlay (grid+shapes) -> blit -> ImGui -> present");
             ImGui::End();
             profiler_panel.draw();
         }
@@ -285,6 +335,7 @@ int main(int argc, char** argv)
     crd::jobs::shutdown();
     crd::perf::uninstall_jobs_adapter();
     crd::perf::shutdown();
+    crd::draw::shutdown(); // the draw renderer's GPU objects die before the raster context
     imgui_backend.reset();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();

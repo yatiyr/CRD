@@ -10,6 +10,7 @@
 // adjoint TANGENT is exactly ∇²f·v, the VALUE part is ∇f — one forward build + one backward, exact, deterministic.
 // Same forward-over-reverse math as hvp.hpp, one node per vector op instead of one per scalar op. ADR-0097.
 
+#include <crd/core/assert.hpp> // CRD_ASSERT — the VTape overflow guard
 #include <crd/core/types.hpp>
 #include <crd/math/cmath.hpp>
 #include <crd/memory/allocator.hpp>
@@ -50,7 +51,7 @@ class VTape
 {
 public:
     VTape(crd::memory::IAllocator* alloc, int n, int max_nodes) noexcept
-        : m_alloc(alloc), m_n(n), m_cap(max_nodes)
+        : m_n(n), m_cap(max_nodes) // the allocator OWNS the arenas (never stored — the tape frees nothing)
     {
         m_node = static_cast<VNode*>(alloc->allocate(sizeof(VNode) * static_cast<crd::usize>(max_nodes)));
         // one contiguous scratch pool of 6 half-vectors per node (val/tan/adjv/adjt + the stored partial pv/pt)
@@ -63,7 +64,8 @@ public:
 
     [[nodiscard]] crd::u32 make(VOp op, int len)
     {
-        const crd::u32 id  = m_count++;
+        CRD_ASSERT(m_count < static_cast<crd::u32>(m_cap) && "VTape overflow: raise max_nodes"); // clang-cl found m_cap
+        const crd::u32 id  = m_count++;                                                          // unused == this guard MISSING
         VNode&         nd  = m_node[id];
         crd::f64*      base = m_pool + static_cast<crd::usize>(id) * 6 * static_cast<crd::usize>(m_n);
         nd.val  = base;
@@ -79,7 +81,6 @@ public:
     void reset() noexcept { m_count = 0; }
 
 private:
-    crd::memory::IAllocator* m_alloc;
     VNode*                   m_node  = nullptr;
     crd::f64*                m_pool  = nullptr;
     int                      m_n     = 0;

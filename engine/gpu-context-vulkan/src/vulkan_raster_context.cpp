@@ -2019,6 +2019,94 @@ public:
         end_and_wait(cmd);
     }
 
+    // RET-6 (ADR-0105): the OVERLAY draw — see IRasterContext::draw_overlay. Composites onto the target's EXISTING
+    // contents (color loadOp=LOAD; the target's post-draw layout is TRANSFER_SRC — the RET-2 contract — so the
+    // preserving transition is TRANSFER_SRC → COLOR_ATTACHMENT, never UNDEFINED, which would discard). Standard alpha
+    // blending over set_draw_state's blend-off baseline; a READ-ONLY depth test when the target carries depth (write
+    // explicitly disabled — the overlay never modifies the scene's depth, so chained overlay draws all test against
+    // the same scene). Single-sample targets only (the overlay canvas contract).
+    [[nodiscard]] bool draw_overlay(IRasterTarget& target, IRasterProgram& program, IStorageBuffer& storage,
+                                    DepthCompare compare, crd::u32 vertex_count) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        auto& s = static_cast<VulkanStorageBuffer&>(storage);
+        if (!m_api.valid() || !p.valid() || m_desc_pool == VK_NULL_HANDLE || t.samples() != 1U || vertex_count == 0U)
+        {
+            return false;
+        }
+
+        // the storage descriptor at set 0 / binding 0 (the draw_storage seam — VERTEX+FRAGMENT visible)
+        vkResetDescriptorPool(m_device, m_desc_pool, 0);
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool     = m_desc_pool;
+        dsai.descriptorSetCount = 1U;
+        dsai.pSetLayouts        = &m_storage_set_layout;
+        VkDescriptorSet dset = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return false; }
+        VkDescriptorBufferInfo dbi{s.buf(), 0, VK_WHOLE_SIZE};
+        VkWriteDescriptorSet   wr{};
+        wr.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wr.dstSet          = dset;
+        wr.dstBinding      = 0U;
+        wr.descriptorCount = 1U;
+        wr.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        wr.pBufferInfo     = &dbi;
+        vkUpdateDescriptorSets(m_device, 1U, &wr, 0U, nullptr);
+
+        VkCommandBuffer cmd = begin_cmd();
+        if (cmd == VK_NULL_HANDLE) { return false; }
+
+        // preserve the existing contents: post-draw the colour sits in TRANSFER_SRC (readback copied from it)
+        transition(cmd, t.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                   VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+
+        VkRenderingAttachmentInfo att{};
+        att.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att.imageView   = t.view();
+        att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        att.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD; // the scene stays — the overlay composites on top
+        att.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+
+        const bool                depth_on = t.has_depth() && compare != DepthCompare::Always;
+        VkRenderingAttachmentInfo dep{};
+        if (depth_on)
+        {
+            dep.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            dep.imageView   = t.depth_view();
+            dep.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            dep.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;  // the scene's depth is the test source
+            dep.storeOp     = VK_ATTACHMENT_STORE_OP_STORE; // preserved — chained overlay draws re-test against it
+        }
+
+        VkRenderingInfo ri{};
+        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent    = {t.width(), t.height()};
+        ri.layerCount           = 1U;
+        ri.colorAttachmentCount = 1U;
+        ri.pColorAttachments    = &att;
+        ri.pDepthAttachment     = depth_on ? &dep : nullptr;
+        vkCmdBeginRendering(cmd, &ri);
+
+        set_draw_state(cmd, t.width(), t.height(), 1U, depth_on, to_vk_compare(compare));
+        vkCmdSetDepthWriteEnable(cmd, VK_FALSE); // the overlay READS the scene's depth, never writes it
+        const VkBool32 blend_on[1] = {VK_TRUE};  // standard alpha over set_draw_state's blend-off baseline
+        m_api.set_color_blend_enable(cmd, 0U, 1U, blend_on);
+        VkColorBlendEquationEXT eq[1]{};
+        eq[0] = {VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD,
+                 VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD};
+        m_api.set_color_blend_equation(cmd, 0U, 1U, eq);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        bind_and_draw(cmd, p, vertex_count);
+        vkCmdEndRendering(cmd);
+
+        copy_colour_to_readback(cmd, t); // read_pixel stays valid + the layout returns to TRANSFER_SRC for chaining
+        end_and_wait(cmd);
+        return true;
+    }
+
     [[nodiscard]] std::unique_ptr<ITexture> create_texture(crd::u32 width, crd::u32 height, const void* rgba) override
     {
         if (width == 0U || height == 0U || rgba == nullptr) { return nullptr; }

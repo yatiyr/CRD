@@ -10,10 +10,8 @@ target_link_libraries(crd-geometry-shader-helpers-tests PRIVATE
     crd-platform
     crd-geometry-primitives
     crd-geometry-shader-helpers
-    crd-rhi
-    crd-rhi-vulkan          # ULP-conformance test dispatches the emitted GLSL on GPU
-    crd-gpu-context         # ADR-0103: ShaderStage
-    crd-gpu-context-vulkan  # ADR-0103: GLSL/HLSL → SPIR-V (was crd-shader::compile_glsl/hlsl)
+    crd-gpu-context         # ADR-0103: ShaderStage + IComputeContext (RET-7: the ULP dispatch runs HERE, rhi is gone)
+    crd-gpu-context-vulkan  # ADR-0103: GLSL/HLSL → SPIR-V + VulkanComputeContext
     crd-test-helpers        # ulp_compare + ValidationCapture
     Catch2::Catch2WithMain
 )

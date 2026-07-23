@@ -20,10 +20,9 @@ add_executable(crd-sandbox-showcase-tests
     "${CMAKE_SOURCE_DIR}/sandbox/src/curves_showcase.cpp" # v10e: curves showcase
 )
 
-target_include_directories(crd-sandbox-showcase-tests PRIVATE
-    "${CMAKE_SOURCE_DIR}/sandbox/src"
-    SYSTEM "${imgui_SOURCE_DIR}" # geometry_showcase.cpp's ImGui calls
-)
+# CI-1 (2026-07-23): SYSTEM must lead its own call — mid-list it becomes a literal "SYSTEM" include dir.
+target_include_directories(crd-sandbox-showcase-tests PRIVATE "${CMAKE_SOURCE_DIR}/sandbox/src")
+target_include_directories(crd-sandbox-showcase-tests SYSTEM PRIVATE "${imgui_SOURCE_DIR}") # geometry_showcase.cpp's ImGui calls
 
 target_link_libraries(crd-sandbox-showcase-tests PRIVATE
     crd-core

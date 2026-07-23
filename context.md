@@ -270,9 +270,47 @@
 > (verified not-real-UB). Windows re-certified after every fix (2,841 asserts across touched suites; all files
 > tidy-clean; test_vulkan_rt latent debt paid ~40 renames + 45 splits). User-directed flow: sweep stopped at
 > win-debug-GREEN (5342/5342) → WSL green → PUSH; asan/shipping/tidy configs deferred to CI by explicit call.
-> **▶ NEXT: RET-6 draw port (crd-draw → IRasterContext/CKIR; geometry-viz/eylem-viz/draw-imgui follow; sandbox scene
-> content returns) → RET-7 consumer sweep (kills ImGuiLayer + the rhi links; GPU profiler backend port; bvh-gpu Morton
-> → IComputeContext bit-exact) → RET-8 DELETE rhi+rhi-vulkan+renderer. Then GEO-4..7 → OFF.**
+> **[🔄 RET-6 pts 1+2 — the CKIR draw suite + draw_overlay, pixel-proven]:** ckir_draw.hpp (line_aa/triangle_solid/
+> infinite_grid VS+FS as KGraph builders; attributes + push constants → ONE u32 storage buffer, 32-word header +
+> packed instances, intBitsToFloat recovery — the GEO-1 idiom; a redundant KOp::Bitcast drafted then KILLED on
+> finding the existing FloatBitsToInt pair) + IRasterContext::draw_overlay (loadOp=LOAD preserving transition,
+> alpha blend, read-only per-draw DepthCompare — 1 program + dynamic state replaces rhi's 6 PSOs). Gates: IR 38
+> asserts (GLSL+HLSL, both raster stages) · device 20 asserts (line over triangle: on=(255,255,255) off=(255,0,0)
+> corner=(0,0,255), validation-SILENT) · [ret] 213/6 · 5 files tidy-clean.
+> **[✅ RET-6 pt 3 — crd-draw is rhi-FREE]:** renderer/overlay_pass/gpu_types rewritten on gpu-context —
+> init(ctx,raster) compiles the CKIR suite (no RM, no cooked pack — cook target deleted); submit_overlay packs
+> header+bins into the u32 buffer and chains draw_overlay (grid→tris→lines, Test→Always→GreaterDimmed, XRay
+> 77/256 dim, batching; depth variants = per-draw DepthCompare + computed complement). Links: rhi/renderer/
+> shader/resources GONE. Gates: device gate through the FULL path (same pixel triple, validation-silent),
+> [ret] 230/7 · draw 205/16 · viz consumers BUILD UNCHANGED (suites 51/32+14/5) · 6 files tidy-clean.
+> **[✅ RET-6 pt 4 — the sandbox scene RETURNS; RET-6 CLOSED]:** main.cpp: draw::init at boot → demo RenderBuffer
+> (triad/sphere/box/capsule wires + a translucent slab = live alpha blend) → orbit camera (look_at +
+> perspective_reverse_z, depth_test=GreaterEqual reverse-Z) + themed infinite grid → submit_overlay between scene
+> draw and present. Smoke 620 frames @154.9 fps validation-ON clean; headless 0; tidy-clean. (~8 sync submits/frame
+> — batching is frame-graph-era work, recorded.)
+> **[✅ RET-7 — the ZERO-LINKS GATE PASSES; the retiring stack has NO consumers outside itself]:** ImGuiLayer
+> DELETED (crd-imgui rhi-free, consumers rebuild unchanged) · 9 retiring smokes DELETED with named living coverage
+> + 3 re-pointed to crd::resources (all run green) · ULP-conformance dispatch ×2 ported to the IComputeContext
+> recorder (~60 rhi lines → 14; 660/21 green, capture-by-counter) · bvh-gpu was ALREADY on IComputeContext (2 stale
+> comments fixed) · crd-shader resolved (consumers = own tests only) · GPU profiler = grounded disposition (sync
+> draws ⇒ CPU≈GPU spans; the timestamp backend rides the frame graph's async seam). Full build green · sandbox
+> 175.3 fps · 7 files tidy-clean.
+> **[✅ RET-8 — THE OLD WORLD IS GONE; the RET BAND IS COMPLETE]:** parity audit signed off (151+4809+192 mapped
+> assertions → named green gpu-context homes, rows 89-95) · engine/{rhi,rhi-vulkan,renderer,shader,shader-vulkan}
+> + their tests + sandbox_layer + the draw GLSL sources DELETED · showcases RESTORED (an over-deletion the build
+> caught — they're living RenderBuffer emitters; sandbox wiring = recorded scene-content work) · 2 stale links +
+> 1 more mid-list SYSTEM bug fixed · root CMake carries the retirement banner. Full build GREEN on the clean tree ·
+> grep returns only the retirement's own comments · sandbox 175.8 fps validated. **ONE device, ONE facade, ONE IR.**
+> **[✅ the clean-tree certification, 3 toolchains]:** full win-debug ctest 5,214 → 2 failures BOTH resolved
+> (simd-emission = my bare-ctest env, green under vcvars · flash-attention margin RECALIBRATED from load data
+> 1.15→1.30 — near-tied tiles swing 1.177 SAME-PASS under full-suite load; memory updated) · WSL linux-gcc-shipping
+> GREEN post-deletion · **clang-cl (the third personality, LLVM 20.1.8 local) GREEN post-fixes**: clang-only
+> -Wunused-private-field found VTape::m_cap unused == a MISSING overflow guard (now a CRD_ASSERT — a real latent
+> OOB closed) + 2 dead fields deleted + 1 unused lambda capture; MSVC re-verified (3,488+109,310 asserts green).
+> CI run from the pre-RET-6 push still grinding (clang-tidy's first-ever full run); its clang-cl failure PREEMPTED
+> locally; its sse2 failure being preempted (local sse2 build+ctest sweep in flight); logs unlock at completion.
+> **▶ NEXT: sse2 sweep verdict → push (commit proposal ready) → CI verifies → GEO-4 (the scene render path on the
+> clean stack) → GEO-5..7 → OFF band. The showcases' submit_overlay wiring rides the scene work.**
 > Denoising (OIDN-class AOV CNN) is a FINISHING filter, never in the reference path (the offline mode IS the ground truth
 > that certifies real-time).
 > **[✅ conv-via-FFT / fast-FMA closed 2026-07-23]:** conv-via-FFT already shipped (crushes 4/5); the fast-FMA experiment was the
