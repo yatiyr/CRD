@@ -597,6 +597,8 @@ add_subdirectory(engine/profile)
 add_subdirectory(engine/eylem)
 add_subdirectory(engine/eylem-rigid3d)
 add_subdirectory(engine/anim)          # GEO-8 (D-007 row 73): SKEL/ANIM resources + glTF-exact clip sampling on the hesap-interp curve engine
+add_subdirectory(engine/timeline)      # GEO-9 (D-007 row 74): the TIMELINE resource — OTIO-shaped, RATIONAL time, deterministic eval, EXR-sequence render
+add_subdirectory(engine/audio)         # GEO-10 (D-007 row 75): the DAW substrate — own WAV/AIFF/FLAC, audio-graph resource, MIDI 2.0, realtime
 add_subdirectory(engine/draw)
 add_subdirectory(engine/scene-render)  # GEO-7 (D-007 row 72): scene <-> ECS <-> renderer integration on gpu-context (chunk-grain extract/cull/submit)
 add_subdirectory(engine/draw-imgui)
@@ -608,6 +610,7 @@ add_subdirectory(engine/geometry-viz)
 # ----- Tools ----------------------------------------------------------------
 
 add_subdirectory(tools/asset_cooker)
+add_subdirectory(tools/ceridc)         # GEO-11 (D-007 row 76): the agent surface — CLI verbs + MCP stdio server
 add_subdirectory(tools/shader-cook)  # D-007 D2: the offline shader-cook CLI (.kgph -> .crdr); ADR-0104
 add_subdirectory(tools/kir-autotune) # ADR-0098 §4 AS-2b: the offline auto-scheduler CLI (GEMM schedule search -> tuning DB)
 

@@ -38,6 +38,10 @@
 #include <crd/scene/transform.hpp>
 #include <crd/scene/world.hpp>
 #include <crd/scenerender/scene_renderer.hpp>
+#include <crd/hesap/interp/keyframe.hpp>
+#include <crd/time/rational_time.hpp>
+#include <crd/timeline/timeline_eval.hpp>
+#include <crd/timeline/timeline_resource.hpp>
 
 #include <backends/imgui_impl_glfw.h>
 #include <imgui.h>
@@ -58,6 +62,39 @@ CRD_DEFINE_LOG_CHANNEL(g_log_sandbox, "Sandbox", crd::log::LogLevel::Trace)
 
 namespace
 {
+
+// GEO-9: the CAMERA SHOT timeline — a 20 s looping automation pair (crane height + orbit radius, CubicHermite
+// with zero tangents = eased dips) built as a real TimelineResource and sampled per frame in RATIONAL time.
+// The wall clock quantizes onto a 24000 ticks/s grid at the query EDGE; keys live at 24 fps — the cross-rate
+// exact segment selection is the GEO-9 evaluator doing its actual job, live.
+[[nodiscard]] crd::timeline::TimelineResource build_camera_timeline(crd::memory::IAllocator* alloc)
+{
+    crd::timeline::TimelineResource tl(alloc);
+    tl.name_off = tl.intern("sandbox-shot");
+
+    const auto add_curve = [&](const char* target, crd::f32 a, crd::f32 b) {
+        crd::timeline::AutomationRec rec;
+        rec.target_off = tl.intern(target);
+        rec.rate       = crd::time::kRate24;
+        rec.interp     = static_cast<crd::u8>(crd::hesap::interp::KeyInterp::CubicHermite);
+        rec.key_count  = 3;
+        rec.ticks_off  = static_cast<crd::u32>(tl.auto_ticks.size());
+        rec.values_off = static_cast<crd::u32>(tl.auto_values.size());
+        const crd::i64 ticks[3] = {0, 240, 480}; // 0 s · 10 s · 20 s at 24 fps
+        const crd::f32 vals[3]  = {a, b, a};     // out and back — the loop boundary is C1-continuous
+        for (crd::i64 t : ticks) { tl.auto_ticks.push_back(t); }
+        for (crd::f32 v : vals) // [in_tangent · value · out_tangent] triples, zero tangents = ease in/out
+        {
+            tl.auto_values.push_back(0.0F);
+            tl.auto_values.push_back(v);
+            tl.auto_values.push_back(0.0F);
+        }
+        tl.automation.push_back(rec);
+    };
+    add_curve("camera.height", 32.0F, 7.0F); // crane down for the close pass over the fox ring
+    add_curve("camera.radius", 55.0F, 26.0F);
+    return tl;
+}
 
 [[nodiscard]] void* native_window_of(crd::app::Application& app)
 {
@@ -204,6 +241,9 @@ int main(int argc, char** argv)
 
     // ── the GEO-7 scene: the build-time-cooked PACK → World → SceneRenderer ─────────────────────────────────────
     crd::memory::TlsfAllocator scene_alloc(256U << 20U);
+
+    // GEO-9: the camera-shot timeline (automation-driven crane move, sampled per frame in rational time)
+    const crd::timeline::TimelineResource camera_timeline = build_camera_timeline(&scene_alloc);
 
     crd::resources::ResourceManager rm(&scene_alloc);
     crd::resources::register_mesh_loader(&rm, nullptr);
@@ -509,9 +549,18 @@ int main(int argc, char** argv)
             }
         }
 
-        // the orbit camera over the field
+        // the orbit camera over the field — height + radius DRIVEN BY THE GEO-9 TIMELINE (a real
+        // TimelineResource sampled in rational time; the 20 s shot loops)
+        const crd::i64 shot_ticks =
+            static_cast<crd::i64>(tsec * 24000.0) % (20LL * 24000LL); // wall clock → the fine rational grid
+        const crd::time::RationalTime shot_t{shot_ticks, crd::time::make_rate(24000, 1)};
+        crd::f32                      cam_height = 32.0F;
+        crd::f32                      cam_radius = 55.0F;
+        (void)crd::timeline::automation_value(camera_timeline, 0, shot_t, cam_height);
+        (void)crd::timeline::automation_value(camera_timeline, 1, shot_t, cam_radius);
         const float            orbit = static_cast<float>(tsec * 0.12);
-        const crd::math::Vec3f eye{crd::math::sin(orbit) * 55.0F, 32.0F, crd::math::cos(orbit) * 55.0F};
+        const crd::math::Vec3f eye{crd::math::sin(orbit) * cam_radius, cam_height,
+                                   crd::math::cos(orbit) * cam_radius};
         const crd::math::Mat4f view =
             crd::math::look_at(eye, crd::math::Vec3f{0.0F, 0.0F, 0.0F}, crd::math::Vec3f{0.0F, 1.0F, 0.0F});
         const float aspect =
@@ -556,6 +605,9 @@ int main(int argc, char** argv)
             ImGui::Text("instances: %u drawn / %u culled / %u total", last_draw.drawn_instances,
                         last_draw.culled_instances, last_sync.total_instances);
             ImGui::Text("draws: %u (one per mesh group; %u groups)", last_draw.draws, last_sync.groups);
+            ImGui::Text("shot: %.2fs / 20s  height %.1f  radius %.1f (GEO-9 timeline automation)",
+                        static_cast<double>(shot_ticks) / 24000.0, static_cast<double>(cam_height),
+                        static_cast<double>(cam_radius));
             ImGui::Text("sync upload: %llu B (%u dirty chunk runs)%s",
                         static_cast<unsigned long long>(last_sync.uploaded_bytes), last_sync.dirty_runs,
                         last_sync.structural_rebuild ? " [rebuild]" : "");

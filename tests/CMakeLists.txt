@@ -74,6 +74,9 @@ add_subdirectory(meshgen)
 add_subdirectory(scene)
 add_subdirectory(scene-render)  # GEO-7 (D-007 row 72): chunk-grain extract/cull/submit gates
 add_subdirectory(anim)          # GEO-8 (D-007 row 73): SKEL/ANIM resources + THE FOX bit-stable resample gate
+add_subdirectory(timeline)      # GEO-9 (D-007 row 74): TIML resource + deterministic eval + THE EXR RENDER GATE
+add_subdirectory(audio)         # GEO-10 (D-007 row 75): codecs bit-exact + graph render + MIDI + realtime
+add_subdirectory(ceridc)        # GEO-11 (D-007 row 76): THE AGENT GATE — the full scenario through MCP alone
 add_subdirectory(scene_cooker)
 add_subdirectory(cooker)
 add_subdirectory(preset)

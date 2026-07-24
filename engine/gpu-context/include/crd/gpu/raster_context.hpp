@@ -11,6 +11,7 @@
 // dynamic state + `vkCmdDraw`); the interface is shaped for it (append-only, vtable-stable).
 
 #include <crd/core/types.hpp>
+#include <crd/gpu/frame_graph.hpp> // REN-1: IFrameGraph (create_frame_graph's return — the default body needs it complete)
 
 #include <memory>
 
@@ -476,6 +477,12 @@ public:
     {
         draw_storage_depth(target, program, ClearColor{}, 0.0F, compare, storage, vertex_count);
     }
+
+    // REN-1 (D-007 row 98): create a FRAME GRAPH bound to this context — the async single-submission surface
+    // that replaces the synchronous submit+wait+readback-per-draw substrate (see frame_graph.hpp). Passes
+    // record via THIS context in frame-recording mode. Returns nullptr on a backend that lacks it (DX12 until
+    // its port). Appended at END (vtable-stable).
+    [[nodiscard]] virtual std::unique_ptr<IFrameGraph> create_frame_graph() { return nullptr; }
 
     // RET-6 (ADR-0105): the OVERLAY draw — compose instanced primitives ONTO an existing target: color loadOp=LOAD
     // (the previous contents STAY — never cleared), standard alpha blending (srcAlpha · 1−srcAlpha), and a READ-ONLY

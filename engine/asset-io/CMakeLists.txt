@@ -23,6 +23,7 @@ target_link_libraries(crd-asset-io
         crd-memory
         crd-math
         crd-units
+        crd-time
         crd-geometry-primitives
         crd-geometry-bvh
         crd-geometry-mesh

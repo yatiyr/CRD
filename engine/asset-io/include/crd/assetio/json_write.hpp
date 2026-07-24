@@ -44,6 +44,7 @@ public:
     void value_string(crd::containers::StringView s) { comma(); append_escaped_sv(s); }
     void value_string(const char* s) { comma(); append_escaped(s); }
     void value_bool(bool b) { comma(); m_out.append(b ? "true" : "false"); }
+    void value_null() { comma(); m_out.append("null"); }
     void value_u64(crd::u64 v)
     {
         comma();
@@ -68,12 +69,24 @@ public:
         m_out.append(b);
     }
 
+    // f64 carrying a TRUE f64 payload (OTIO rational times): %.17g round-trips every finite f64 exactly.
+    void value_f64_exact(crd::f64 v)
+    {
+        CRD_ASSERT(std::isfinite(v) && "JSON cannot represent NaN/Inf — sanitize before export");
+        comma();
+        char b[32];
+        std::snprintf(b, sizeof(b), "%.17g", v);
+        m_out.append(b);
+    }
+    void kv_f64_exact(const char* k, crd::f64 v) { key(k); value_f64_exact(v); }
+
     // key + value conveniences (the exporter's bread and butter)
     void kv(const char* k, const char* s) { key(k); value_string(s); }
     void kv(const char* k, crd::containers::StringView s) { key(k); value_string(s); }
     void kv(const char* k, bool b) { key(k); value_bool(b); }
     void kv(const char* k, crd::u64 v) { key(k); value_u64(v); }
     void kv(const char* k, crd::u32 v) { key(k); value_u64(v); }
+    void kv(const char* k, crd::i64 v) { key(k); value_i64(v); }
     void kv(const char* k, crd::f64 v) { key(k); value_f64(v); }
 
 private:

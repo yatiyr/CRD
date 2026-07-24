@@ -919,11 +919,16 @@ produces nothing useful. Target: Phase 3.2.
 Intentionally deferred. These require the render path to be working end-to-end
 before they pay off. Implement in order of demonstrated need, not in anticipation.
 
-- **Transient image aliasing in the frame graph** — `FrameGraph::execute` currently
+- ~~**Transient image aliasing in the frame graph** — `FrameGraph::execute` currently
   creates transient images fresh each frame and destroys them on `reset()`. A proper
   aliasing pass would reuse GPU heap pages across mutually-exclusive transients,
   reducing VRAM by the sum of the largest non-overlapping resource sets. Prerequisite:
-  lifetime analysis pass in `FrameGraph::build()`.
+  lifetime analysis pass in `FrameGraph::build()`.~~ **RESOLVED 2026-07-24 by REN-1**
+  (D-007 row 98): the new `VulkanFrameGraph` (on gpu-context, replacing the retired rhi
+  `FrameGraph`) runs the lifetime-analysis pass in `build()` and does GREEDY interval-
+  coloring aliasing — disjoint-lifetime transients share one `VkDeviceMemory` slot via
+  `VK_IMAGE_CREATE_ALIAS_BIT`; `transient_memory_bytes() < transient_logical_bytes()`
+  proves it, gated in `test_vulkan_frame_graph.cpp`. (DX12 placed-resource aliasing = REN-1 pt-2.)
 
 - **HDR render target** — `ForwardRenderPath` uses `B8G8R8A8Unorm` (LDR). Switch to
   `R16G16B16A16Sfloat` (scene linear HDR) and add a tone-map pass before the swapchain

@@ -49,6 +49,8 @@ void register_wave1_mesh_handler(); // GEO-1: .stl/.obj/.ply via crd-asset-io (o
 void register_preset_handler();
 void register_profile_handler();
 void register_obek_handler();
+void register_otio_timeline_handler(); // GEO-9: .otio → 'TIML' (the editorial timeline resource)
+void register_audio_handlers();        // GEO-10: .wav/.aiff/.flac → 'ABUF' · .mid → 'MIDI'
 
 void register_builtin_handlers()
 {
@@ -60,6 +62,8 @@ void register_builtin_handlers()
     register_preset_handler();
     register_profile_handler();
     register_obek_handler();
+    register_otio_timeline_handler(); // GEO-9
+    register_audio_handlers();        // GEO-10
 }
 
 } // namespace crd::cooker

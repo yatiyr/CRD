@@ -389,8 +389,143 @@
 > groups compose through the frame's real depth), Vulkan + DX12 both, DX12 device gate (near-wins-through-loaded-
 > depth + prior-pixels-survive); renderer: first group clears, the rest load. LESSON: a smoke test that cannot
 > see pixels is not a visual gate — eyes (or readback asserts on MULTI-group scenes) are.
-> **▶ NEXT: GEO-9 (the TIMELINE/SEQUENCE resource — OTIO-shaped, rational time, .otio interchange) → GEO-10
-> (crd-audio) → GEO-11 (agent surface) → OFF band. (Push + CI verify pending on the RET+GEO-4..8 arc.)**
+> **[✅ GEO-9 2026-07-24 — the TIMELINE resource: rational time to the tick, `.otio` oracle-proven, deterministic
+> EXR render, automation live]:** `crd/time/rational_time` (EXACT editorial time: 128-bit cross-rate math, every
+> f64 imports exactly via SMPTE-snap/CF/binary-fraction, drop-frame timecode gated by an EXHAUSTIVE 2.59M-frame
+> broadcast day — suite 5,179,006/66) · NEW `crd-timeline` 'TIML' (tracks/clips/transitions/markers/time-effects/
+> AUTOMATION on the ONE curve engine with rational-exact segment picks; ONE validator both ends; byte-identical
+> rebuilds) · deterministic eval (transitions overlay the cut, weights sum to 1, media handles, warps exact) ·
+> THE RENDER GATE (2 takes + dissolve + audio + automated camera param → 96-frame EXR sequence BIT-EXACT,
+> re-render byte-identical) · the `.otio` edge (Clip.1/.2, all reference kinds, refusals NAMED, export a fixed
+> point) with **the REFERENCE-NLE ORACLE both directions (OpenTimelineIO 0.18.1: their fixture → our importer
+> hermetic; our export → their lib clean)** · the `.otio` cook handler (trim resolution; GEO-6 determinism) ·
+> the sandbox camera timeline-DRIVEN (20 s crane shot, cross-rate sampling live). Suites: timeline 348/6 ·
+> asset-io 856/49 · cooker 313/28; anim/scene-render/hesap-interp zero regression; 21 files tidy-clean.
+> **[✅ GEO-10 2026-07-24 — crd-audio, the DAW substrate]:** OUR OWN WAV/AIFF/FLAC codecs into `AudioPcm`
+> (FLAC = full mandatory decoder + compliant encoder, own MD5, LPC via hesap-dsp aryule; **ffmpeg 8.0.1
+> reference oracle BOTH directions — decodes our FLAC bit-identical, our decoder reads its encode + MD5**);
+> 'ABUF' buffer + 'AGRF' audio-graph-as-resource (Source/Gain/Biquad/Mix/Send + automation on the ONE curve
+> engine, ONE validator); THE 4-TRACK GATE (offline render bit-stable, automation verified by superposition,
+> master encodes); 'MIDI' MIDI-2.0-native (32-bit velocities, exact tick→rational tempo map); the realtime
+> layer (own SPSC ring, 32-voice mixer, WASAPI device — **THE SOAK: 486,720 frames / 10 s, xruns==0**); cook
+> edge .wav/.aiff/.flac→ABUF · .mid→MIDI. Suites: audio 100,744/13 · cooker 313/28; 22 files tidy-clean.
+> **[✅ GEO-11 2026-07-24 — THE AGENT SURFACE — GEO BAND CLOSED]:** `crd-ceridc` verb library (import·cook·
+> query·instantiate·sequence·render·export → JSON reports) over TWO transports — a CLI + an **MCP JSON-RPC 2.0
+> stdio server** (same verbs as tools); ⛔ TRANSACTIONAL edits (instantiate validates fully before any write,
+> dry_run, atomic reject). **THE AGENT GATE (53 asserts): an agent through MCP ALONE imports→cooks→queries→
+> composes a scene (malformed rejects atomically, dry-run writes nothing, real edit lands SCEN)→sequences a
+> 2-shot timeline (.otio twin exact)→renders 24 EXR frames→exports — zero GUI**; a second smoke drives the real
+> `ceridc mcp` binary over stdio pipes. Suites: ceridc 53/2; 4 files tidy-clean. ADR-0081 is REAL.
+> **[✅ 2026-07-24 — the DEFERRED-ITEMS LEDGER written to the roadmap + the REN and PLG bands OPENED (user-directed).]**
+> Every gap the B/GEO/RET/GEO-9/10/11 bands deferred now has a NAMED home in D-007:
+> **① the REN band (rows 98-121) — the RENDER PIPELINE + the INTERACTIVE FRONTIER on gpu-context**, expanded
+> 2026-07-24 (user: "fully frontier and world class") into TWO halves.
+> **REN·A (98-106) — the 3D pipeline**, closing the device-plumbing gaps the CKIR shader math was always ahead
+> of: REN-1 the FRAME GRAPH (async submission — the fix for the synchronous submit+wait+readback-per-draw
+> substrate that caps the sandbox at ~60 fps) · REN-2 RTT + sampled textures in the forward pass · REN-3
+> shadow/CSM/lighting device passes · REN-4 GPU-driven culling · REN-5 VSM page tables · REN-6 morph targets +
+> GPU DQS · REN-7 the GEO-9 real-scene render binding (MediaKind::Resource) · REN-8 the GPU profiler backend +
+> direct-to-backbuffer present + overlay batching (RET-2/6/7's deferrals) · REN-9 the visual frontier
+> (sky/clouds/ocean) restored on the frame graph (absorbs the orphaned ocean/cloud tasks).
+> **REN·B (rows 113-129, REN-10..26) — the INTERACTIVE FRONTIER, FULLY EXPANDED 2026-07-24** (user round 2:
+> "we must be able to make ANY program with this engine and we must do them beautifully" — editor with
+> game-engine + Blender + Cascadeur + DAW + CAD/CAM abilities, hesap-MATLAB, every future Cerid app).
+> Research: `docs/research/2026-07-24-ui-frontier-ren-band.md`. THE ARCHITECTURE (4 decisions user-locked
+> interactively): **① UI IS ECS ENTITIES in a DEDICATED UI WORLD per window** (same crd-scene machinery —
+> change detection IS invalidation, öbek IS layout persistence, command buffers ARE undo, the agent layer
+> composes UI like scenes; widget-granularity, never glyph-granularity); **② crd-reflect — the RNA-class
+> PROPERTY SYSTEM is the centerpiece** (every property inspectable/bindable/animatable/undoable/agent-drivable
+> — Blender's actual superpower, generalized, units-typed); **③ COMPUTE-FIRST vector graphics (Vello-class)
+> authored in CKIR compute, CPU-oracle-gated**; **④ THREE authoring surfaces** (C++ builder + UI-as-data +
+> reactive bindings — no DSL, ADR-0081). The slices: REN-10 ECS audit + UI-World substrate (ordered children ·
+> observers · runtime components · cross-World refs) → REN-11 crd-reflect → REN-12 crd-font (own OpenType +
+> variable fonts) → REN-13 MSDF gamma-correct glyphs → REN-14 the HarfBuzz-class shaper (month-class, laddered
+> Latin→bidi→Arabic→Indic) → REN-15 crd-vector (compute-first path rendering, month-class, AS-autotuned) →
+> REN-16 the batched CKIR paint system + custom-material escape hatch → REN-17 crd-ui substrate = WIDGET
+> ENTITIES + layout/input systems (mints the ADR superseding 0023) → REN-18 the widget library + IME/DPI/
+> accessibility → REN-19 theming + UI animation (the ONE curve engine's 4th consumer) → REN-20 UI-as-data +
+> reactive bindings + UNDO → REN-21 multi-viewport docking → REN-22 multi-window + tear-off/reattach →
+> REN-23 the NODE EDITOR (KGraph/CKIR + AGRF live) → REN-24 the SEQUENCER + CURVE EDITOR (one time-tool
+> substrate; edits the SAME curves that drive anim/timeline/audio/UI) → REN-25 the FILE BROWSER + DATA GRID
+> (cooked thumbnails; the hesap 1M-row variable inspector) → REN-26 the EDITOR SHELL capstone (the sandbox
+> becomes a Blender-class shell — editor/DAW/hesap-MATLAB/CAD are ASSEMBLIES of this substrate, not new
+> engineering) → REN-27 the GAME-PRODUCT proof (row 130; user Q "what about game UI?" → THE SAME crd-ui:
+> WorldAnchor screen-space anchoring to scene entities · diegetic RTT UI with input re-projection ·
+> CROSS-WORLD reactive bindings (HUD ← gameplay component) · the 2D-SCENE render path — sprites/tilemaps/
+> parallax on the REN-15/16 machinery through a world-space 2D camera; physics partner = eylem v2 rigid-2D;
+> 2D game worlds are SCENE Worlds, never UI) → REN-28 LOCALIZATION from day one (row 131; user: "no rewiring
+> again and again"): string CATALOGS as cooked resources (widgets reference keys — hardcoded literals lint),
+> locale hot-swap, CLDR plurals + number/date + crd-units UnitPreferences formatting, THE RTL GUARANTEE
+> (REN-17's layout engine is start/end-only — an RTL locale mirrors the whole shell by one flag), pseudoloc
+> as a dev tool; plus the ALL-LANGUAGES text amendments — REN-14 gains font FALLBACK CHAINS + CJK breaking +
+> vertical text, REN-12 gains COLOR/emoji fonts (COLR/CPAL).
+> **[✅ 2026-07-24 the FINAL GAP-HUNT (user: "find the last gaps, then implementations on my command")]:**
+> 3 gaps CLOSED as rows 132-134 — **REN-29 POST-PROCESSING + HDR + COLOR MANAGEMENT** (REN·A scope, after
+> REN-3: exposure/bloom/AgX-tonemap/grading/TAA + upscaling seam + HDR10/scRGB swapchains + linear UI
+> compositing + B17 OIT wiring — "cinematic" was impossible without it) · **REN-30 PICKING + SELECTION**
+> (ID-buffer pass + BVH raycast cross-validated, selection as undoable reflected state, outlines, box-select,
+> the gizmo/inspector handshake) · **REN-31 CONSOLE + CODE EDITOR** (terminal-grid + ANSI + 1M-line scrollback
+> + the hesap REPL surface; code editor with syntax-highlight seam; toolbar/status/progress completions);
+> 2 contract holes AMENDED — REN-18 gains the KEYMAP system (commands + rebindable per-context shortcuts +
+> chords, öbek-persisted), REN-24 gains the NLE PREVIEW/monitor panel. NAMED NON-REN homes (honest
+> exclusions): particles/decals/VFX → a future VFX band (eylem + frame graph) · anim state machines/blend
+> trees/IK (Cascadeur-class runtime) → a future ANIM band (authored in the REN-23 node editor) · platform
+> consoles/mobile → Phase 6 · OS accessibility bridge + Linux present → the cross-platform sweep.
+> **[✅ 2026-07-24 the INTERACTION-MODEL pass (user: "dragging, dropping, hovering, clicking — fully
+> perfect")]:** REN-17's input routing expanded to the FULL POINTER STATE MACHINE (timestamped raw queue ·
+> hover enter/leave pairs · click-vs-drag SLOP · double/triple-click · modifier chords · precision wheel ·
+> per-widget cursors · POINTER LOCK/cursor-wrap for infinite drags · modal focus trapping+restore · scroll
+> chaining/into-view · the SYNTHETIC-INPUT seam agents+tests share); REN-18 gains the FULL DnD model (typed
+> reflect payloads · ghosts · drop indicators · spring-loaded targets · auto-scroll · Esc-cancel · OS file
+> drag-in/out) + the CLIPBOARD (OS-integrated, custom typed formats); REN-19 gains STATE-driven styling
+> (hover/pressed/focused/disabled/selected with animated transitions); NEW **REN-32 (row 135) — the COMPLETE
+> INTERACTION MODEL**: pen/tablet PRESSURE+tilt (the Cascadeur/DAW essential) · touch gestures with
+> arbitration · **Blender-class MODAL OPERATORS** (drag = a PREVIEW TRANSACTION on the command buffers:
+> numeric entry mid-drag, snap/precision modifiers, Esc = bit-exact rollback, release = ONE undo step) ·
+> custom window chrome · **the interaction TEST HARNESS** (synthetic-input record/replay on the deterministic
+> clock — hover/click/drag semantics regression-gated in CI).
+> **[✅ 2026-07-24 the FINAL LOOK (user: "everything perfect — FULL CRUSHING PERFORMANCE, millions of things,
+> any style via CKIR, cross-platform + web")]:** REN-1 gains MULTI-QUEUE async-compute scheduling; REN-3 gains
+> CLUSTERED light culling (thousands of lights — the ADR-0102 D7 deferral lands); **REN-4 EXPANDED to the full
+> GPU-DRIVEN pipeline** (two-phase HiZ occlusion · the MESHLET/mesh-shader path with Nanite-class named as the
+> future crush · GPU LOD · multi-draw-indirect · **THE CRUSH GATE: ≥1M independently-transformed instances @
+> 60 fps 1440p on sm_89**, honest board at close); NEW **REN-33 the SCALE frontier** (BINDLESS descriptor
+> indexing + the VISIBILITY-BUFFER path — raster {cluster,tri} ids, resolve CKIR materials in compute; raster
+> decoupled from material cost; forward+ stays the transparency path); NEW **REN-34 STYLE FREEDOM** (NPR/toon/
+> outline×3/hatching + the material-MODEL seam — OpenPBR is the default not the ceiling; one scene, three
+> complete looks, zero engine changes, node-editor-authored); NEW **REN-35 CROSS-PLATFORM BACKENDS** (⭐ CKIR
+> already emits WGSL + MSL — the shader half is DONE: the WebGPU backend (Dawn-native CI + browser/WASM first
+> light) with DECLARED capability tiers, Metal = the named macOS home awaiting hardware, Linux surface/present
+> completes on the VM). OS drag-in/out + OS clipboard confirmed present (REN-18). Research doc §6 records the
+> grounding. **THE REN BAND IS FINAL: 35 slices (rows 98-138) — REN·A the image (1-9, 29, 30, 33, 34) ·
+> REN·B the interface (10-28, 31, 32) · REN-35 the platforms capstone. ▶ AWAITING the user's implementation
+> command — REN-1 (the frame graph) first.** crd-imgui stays the debug overlay; crd-ui is the product UI.
+> **② the PLG band (rows 107-112) — AUDIO PLATFORM + PLUGIN HOSTING**: PLG-1 the Linux audio backend (doable on
+> the user's VM — GEO-10's honest-close blocker) · PLG-2 the plugin-host SUBSTRATE / basework (the engine's job:
+> `IAudioPlugin`, params/automation, the realtime-safe process contract, plugin-as-resource, state save/restore,
+> a passthrough reference plugin) · PLG-3 CLAP · PLG-4 VST3 (Kontakt + the user's hundreds) · PLG-5 VST2 · PLG-6
+> management + the graph node + agent verbs. PLG-1/2 near-term (engine substrate); PLG-3..6 = the DAW-project
+> phase. **③ lossy audio (MP3/Opus/Vorbis) + video/image codecs were ALREADY homed** in the MED band (MED-6/7
+> audio, MED-1..11 image+video) — no new slice, cross-referenced.
+> **▶ NEXT (sequencing locked 2026-07-24): the REN band → the MED band → then the OFF offline renderer. The OFF
+> path is a wavefront COMPUTE mode and does NOT depend on the raster frame graph, so REN and OFF are independent;
+> REN comes first by user direction. PLG is the parallel DAW-substrate track (PLG-1/2 opportunistic). REN-1 (the
+> frame graph) is the highest-leverage next slice — it unblocks REN-8's present/profiler and the real-time frame
+> budget. (Push + CI verify pending on the whole RET+GEO arc.)**
+> **[◧ REN-1 LANDED 2026-07-24 — the FRAME GRAPH, Vulkan-complete + gated; DX12 batching = pt-2. Session log
+> `docs/sessions/2026-07-24-ren1-frame-graph.md`.]** New backend-neutral `engine/gpu-context/include/crd/gpu/frame_graph.hpp`
+> (`FgImage`/`FgBuffer` struct handles · `IFrameGraph` import/create-transient/add_pass/build/execute/reset · `IFramePassBuilder`
+> reads/writes/read_writes/execute/present · `IFrameContext`). ⭐ THE INSIGHT: the graph is a RECORDING MODE of the raster
+> context — `draw_storage_depth`/`_load`/`draw_overlay` branch to record into ONE shared VkCommandBuffer + a frame descriptor
+> pool (256 sets, reset ONCE per execute; the per-draw `vkResetDescriptorPool` was the blocker to back-to-back recording), so
+> ZERO new draw vocabulary. `build()` = lifetime analysis + GREEDY interval-coloring TRANSIENT ALIASING (disjoint lifetimes
+> share one `VkDeviceMemory` via `VK_IMAGE_CREATE_ALIAS_BIT`; physical<logical proves it). `execute()` inserts cross-pass +
+> intra-pass barriers, ONE `vkQueueSubmit`+fence. **Gate GREEN** (`test_vulkan_frame_graph.cpp`, 33 asserts): one-submission,
+> readback BIT-IDENTICAL to sync, validation-SILENT (0/0), 2 equal disjoint transients → 1 slot, orphan no-write → `build()`
+> fails. **SceneRenderer MIGRATED** through `create_frame_graph()` — the 10k field composes N groups in one submission (GEO-7
+> gate GREEN, 58 asserts); **sandbox 65.2 fps (up from ~58)**. DX12 renders correctly via the synchronous fallback (raster
+> suite 993 GREEN); the DX12 one-submission batching (per-draw descriptor-heap ring + placed-resource aliasing + D3D12
+> barriers) is REN-1 pt-2 (RET Vulkan-first precedent). Memory `[[project_frame_graph_is_a_recording_mode_of_raster_context]]`.
 > Denoising (OIDN-class AOV CNN) is a FINISHING filter, never in the reference path (the offline mode IS the ground truth
 > that certifies real-time).
 > **[✅ conv-via-FFT / fast-FMA closed 2026-07-23]:** conv-via-FFT already shipped (crushes 4/5); the fast-FMA experiment was the

@@ -6,6 +6,7 @@ add_executable(crd-time-tests
     test_deterministic_clock.cpp
     test_deadline.cpp
     test_gpu_timestamp.cpp
+    test_rational_time.cpp
 )
 
 target_link_libraries(crd-time-tests PRIVATE

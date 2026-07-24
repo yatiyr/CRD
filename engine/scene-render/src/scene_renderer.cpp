@@ -283,6 +283,10 @@ struct SceneRenderer::Impl
     // entity → (group << 32 | slot) — the BVH candidate → instance bridge, rebuilt with the structure
     crd::containers::HashMap<crd::scene::EntityId, crd::u64> entity_slot;
 
+    // REN-1: the persistent frame graph (created lazily, reset per frame) — the whole scene's groups compose in
+    // ONE submission. Null on a backend without it (DX12 until its port) ⇒ the synchronous per-draw fallback.
+    std::unique_ptr<crd::gpu::IFrameGraph> frame_graph;
+
     explicit Impl(crd::memory::IAllocator* a)
         : alloc(a), skeleton_cache(a), clip_cache(a), pose_scratch(a), world_scratch(a), palette_scratch(a),
           palette_staging(a), group_of_mesh(a), material_color(a), entity_slot(a)
@@ -790,6 +794,43 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
     return stats;
 }
 
+// REN-1: one culled group's draw (the frame graph records the whole list in ONE submission).
+namespace
+{
+struct SceneDraw
+{
+    crd::gpu::IRasterProgram* program = nullptr;
+    crd::gpu::IStorageBuffer* buffer  = nullptr;
+    crd::u32                  vertex_count = 0;
+};
+struct SceneDrawState
+{
+    crd::gpu::IRasterTarget*                target = nullptr;
+    crd::gpu::ClearColor                    clear{};
+    const crd::containers::Array<SceneDraw>* draws = nullptr;
+};
+// the scene pass's recording callback: the FIRST group clears colour+depth, every later group LOADs and
+// composes through the frame's real depth (the GEO-8 multi-group contract, now in ONE submission).
+void record_scene_groups(crd::gpu::IFrameContext& ctx, void* user)
+{
+    const auto* s = static_cast<const SceneDrawState*>(user);
+    for (crd::usize i = 0; i < s->draws->size(); ++i)
+    {
+        const SceneDraw& d = (*s->draws)[i];
+        if (i == 0U)
+        {
+            ctx.raster().draw_storage_depth(*s->target, *d.program, s->clear, 0.0F,
+                                            crd::gpu::DepthCompare::GreaterEqual, *d.buffer, d.vertex_count);
+        }
+        else
+        {
+            ctx.raster().draw_storage_depth_load(*s->target, *d.program, crd::gpu::DepthCompare::GreaterEqual,
+                                                 *d.buffer, d.vertex_count);
+        }
+    }
+}
+} // namespace
+
 RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::math::Mat4f& view_proj,
                                   const crd::math::Vec3f& light_dir, crd::gpu::ClearColor clear,
                                   const crd::scene::SpatialBVHIndex* bvh)
@@ -800,7 +841,7 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
 
     crd::math::Vec4f planes[6];
     frustum_planes(view_proj, planes);
-    bool first_draw = true; // the frame's first group CLEARS; every later group LOADs and depth-composes
+    crd::containers::Array<SceneDraw> draw_list(impl.alloc); // the frame's culled groups → one submission
 
     // broad phase: a configured BVH prunes to the frustum's AABB; otherwise every slot is a candidate
     const bool use_bvh = bvh != nullptr && bvh->is_configured();
@@ -857,19 +898,48 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
 
         crd::gpu::IRasterProgram* program =
             group.skinned && impl.program_skinned != nullptr ? impl.program_skinned.get() : impl.program.get();
-        if (first_draw)
-        {
-            impl.raster->draw_storage_depth(target, *program, clear, 0.0F, crd::gpu::DepthCompare::GreaterEqual,
-                                            *group.buffer, visible_count * group.index_count);
-            first_draw = false;
-        }
-        else // subsequent groups COMPOSE through the frame's depth — never wipe the groups before them
-        {
-            impl.raster->draw_storage_depth_load(target, *program, crd::gpu::DepthCompare::GreaterEqual,
-                                                 *group.buffer, visible_count * group.index_count);
-        }
+        SceneDraw d;
+        d.program      = program;
+        d.buffer       = group.buffer.get();
+        d.vertex_count = visible_count * group.index_count;
+        draw_list.push_back(d);
         ++stats.draws;
         stats.drawn_instances += visible_count;
+    }
+
+    if (draw_list.size() == 0U) { return stats; }
+
+    // REN-1: compose all N culled groups in ONE submission through the frame graph (the async single-submission
+    // surface). The per-frame header/visible uploads already ran (synchronous transfers, complete before this).
+    if (impl.frame_graph == nullptr) { impl.frame_graph = impl.raster->create_frame_graph(); }
+    if (impl.frame_graph != nullptr)
+    {
+        crd::gpu::IFrameGraph& fg = *impl.frame_graph;
+        fg.reset();
+        const crd::gpu::FgImage img = fg.import_target(target);
+        crd::gpu::IFramePassBuilder& scene = fg.add_pass("scene");
+        scene.writes(img);
+        for (crd::usize i = 0; i < draw_list.size(); ++i) { scene.reads(fg.import_storage(*draw_list[i].buffer)); }
+        SceneDrawState state{&target, clear, &draw_list};
+        scene.execute(&record_scene_groups, &state);
+        if (fg.build()) { fg.execute(); }
+    }
+    else // synchronous fallback (DX12 until its frame-graph port): the GEO-8 first-clears-rest-load loop
+    {
+        for (crd::usize i = 0; i < draw_list.size(); ++i)
+        {
+            const SceneDraw& d = draw_list[i];
+            if (i == 0U)
+            {
+                impl.raster->draw_storage_depth(target, *d.program, clear, 0.0F, crd::gpu::DepthCompare::GreaterEqual,
+                                                *d.buffer, d.vertex_count);
+            }
+            else
+            {
+                impl.raster->draw_storage_depth_load(target, *d.program, crd::gpu::DepthCompare::GreaterEqual,
+                                                     *d.buffer, d.vertex_count);
+            }
+        }
     }
     return stats;
 }

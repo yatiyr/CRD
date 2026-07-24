@@ -19,6 +19,7 @@ target_link_libraries(crd-sandbox PRIVATE
     crd-gpu-context-vulkan
     crd-kir                  # the CKIR canvas scene (KGraph → create_program)
     crd-anim                 # GEO-8: SKEL/ANIM loaders (the animated ring)
+    crd-timeline             # GEO-9: the camera-shot timeline (rational-time automation drives the crane move)
     crd-scene                # GEO-7: the ADR-0050 World the imported scene instantiates into
     crd-scene-render         # GEO-7: chunk-grain extract/cull/submit through gpu-context
     crd-resources            # GEO-7: the mounted demo PACK (mesh + PBRM loaders)

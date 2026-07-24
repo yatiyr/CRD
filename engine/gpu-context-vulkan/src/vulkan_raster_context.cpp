@@ -4,6 +4,7 @@
 
 #include <crd/gpu/vulkan_raster_context.hpp>
 
+#include <crd/gpu/frame_graph.hpp>          // REN-1: the frame-graph interface this TU implements
 #include <crd/gpu/vulkan_gpu_allocator.hpp> // RET-4 pt 2: the ADR-0085 S6 suballocation core, absorbed
 
 #include <vulkan/vulkan.h>
@@ -2030,6 +2031,8 @@ public:
         auto& s = static_cast<VulkanStorageBuffer&>(storage);
         if (!m_api.valid() || !p.valid() || m_desc_pool == VK_NULL_HANDLE || !t.has_depth()) { return; }
 
+        if (frame_recording()) { record_scene(t, p, s, true, clear_color, clear_depth, compare, vertex_count); return; }
+
         // the storage descriptor at set 0 / binding 0 (the draw_storage seam — VERTEX+FRAGMENT visible)
         vkResetDescriptorPool(m_device, m_desc_pool, 0);
         VkDescriptorSetAllocateInfo dsai{};
@@ -2095,6 +2098,8 @@ public:
         auto& p = static_cast<VulkanRasterProgram&>(program);
         auto& s = static_cast<VulkanStorageBuffer&>(storage);
         if (!m_api.valid() || !p.valid() || m_desc_pool == VK_NULL_HANDLE || !t.has_depth()) { return; }
+
+        if (frame_recording()) { record_scene(t, p, s, false, ClearColor{}, 0.0F, compare, vertex_count); return; }
 
         vkResetDescriptorPool(m_device, m_desc_pool, 0);
         VkDescriptorSetAllocateInfo dsai{};
@@ -2171,6 +2176,8 @@ public:
             return false;
         }
 
+        if (frame_recording()) { return record_overlay(t, p, s, compare, vertex_count); }
+
         // the storage descriptor at set 0 / binding 0 (the draw_storage seam — VERTEX+FRAGMENT visible)
         vkResetDescriptorPool(m_device, m_desc_pool, 0);
         VkDescriptorSetAllocateInfo dsai{};
@@ -2239,6 +2246,154 @@ public:
 
         copy_colour_to_readback(cmd, t); // read_pixel stays valid + the layout returns to TRANSFER_SRC for chaining
         end_and_wait(cmd);
+        return true;
+    }
+
+    // ── REN-1: frame-graph RECORDING-MODE bodies (called by the branched public draws while a graph executes) ─────
+
+    // Allocate + write a storage-buffer descriptor set from the FRAME pool (reset once/frame by the graph — no
+    // per-draw reset, so N draws coexist in one command buffer).
+    [[nodiscard]] VkDescriptorSet frame_alloc_storage_set(VulkanStorageBuffer& s)
+    {
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool     = m_frame_rec.pool;
+        dsai.descriptorSetCount = 1U;
+        dsai.pSetLayouts        = &m_storage_set_layout;
+        VkDescriptorSet dset = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return VK_NULL_HANDLE; }
+        VkDescriptorBufferInfo dbi{s.buf(), 0, VK_WHOLE_SIZE};
+        VkWriteDescriptorSet   wr{};
+        wr.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wr.dstSet          = dset;
+        wr.dstBinding      = 0U;
+        wr.descriptorCount = 1U;
+        wr.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        wr.pBufferInfo     = &dbi;
+        vkUpdateDescriptorSets(m_device, 1U, &wr, 0U, nullptr);
+        return dset;
+    }
+
+    // Before drawing to `t` AGAIN within the current pass, order this draw after the prior group's colour+depth
+    // writes (a self-barrier — the intra-pass analog of the graph's cross-pass barriers). The FIRST draw of a
+    // pass skips it (the graph already transitioned the target into COLOR/DEPTH_ATTACHMENT before the pass).
+    void frame_self_barrier_if_needed(VulkanRasterTarget& t)
+    {
+        if (m_frame_rec.pass_last == t.image())
+        {
+            transition(m_frame_rec.cmd, t.image(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                       VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT,
+                       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+            if (t.has_depth())
+            {
+                VkImageMemoryBarrier db{};
+                db.sType                       = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                db.oldLayout                   = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+                db.newLayout                   = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+                db.srcQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
+                db.dstQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
+                db.image                       = t.depth_image();
+                db.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+                db.subresourceRange.levelCount = 1U;
+                db.subresourceRange.layerCount = 1U;
+                db.srcAccessMask               = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                db.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                vkCmdPipelineBarrier(m_frame_rec.cmd,
+                                     VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                                     VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                                     0, 0, nullptr, 0, nullptr, 1U, &db);
+            }
+        }
+        m_frame_rec.pass_last = t.image();
+    }
+
+    // The frame-mode body of draw_storage_depth (clear=true) / draw_storage_depth_load (clear=false): one
+    // begin/end-rendering block into the shared cmd, no per-draw transition/readback.
+    void record_scene(VulkanRasterTarget& t, VulkanRasterProgram& p, VulkanStorageBuffer& s, bool clear,
+                      ClearColor clear_color, float clear_depth, DepthCompare compare, crd::u32 vertex_count)
+    {
+        VkCommandBuffer cmd  = m_frame_rec.cmd;
+        VkDescriptorSet dset = frame_alloc_storage_set(s);
+        if (dset == VK_NULL_HANDLE) { return; }
+        frame_self_barrier_if_needed(t);
+
+        VkRenderingAttachmentInfo att{};
+        att.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att.imageView   = t.view();
+        att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        att.loadOp      = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+        att.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+        if (clear) { att.clearValue.color = {{clear_color.r, clear_color.g, clear_color.b, clear_color.a}}; }
+
+        VkRenderingAttachmentInfo dep{};
+        dep.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        dep.imageView   = t.depth_view();
+        dep.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        dep.loadOp      = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+        dep.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+        if (clear) { dep.clearValue.depthStencil.depth = clear_depth; }
+
+        VkRenderingInfo ri{};
+        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent    = {t.width(), t.height()};
+        ri.layerCount           = 1U;
+        ri.colorAttachmentCount = 1U;
+        ri.pColorAttachments    = &att;
+        ri.pDepthAttachment     = &dep;
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t.width(), t.height(), 1U, true, to_vk_compare(compare));
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        bind_and_draw(cmd, p, vertex_count);
+        vkCmdEndRendering(cmd);
+    }
+
+    // The frame-mode body of draw_overlay: LOAD + alpha-blend + read-only depth, into the shared cmd.
+    [[nodiscard]] bool record_overlay(VulkanRasterTarget& t, VulkanRasterProgram& p, VulkanStorageBuffer& s,
+                                      DepthCompare compare, crd::u32 vertex_count)
+    {
+        VkCommandBuffer cmd  = m_frame_rec.cmd;
+        VkDescriptorSet dset = frame_alloc_storage_set(s);
+        if (dset == VK_NULL_HANDLE) { return false; }
+        frame_self_barrier_if_needed(t);
+
+        VkRenderingAttachmentInfo att{};
+        att.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att.imageView   = t.view();
+        att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        att.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
+        att.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+
+        const bool                depth_on = t.has_depth() && compare != DepthCompare::Always;
+        VkRenderingAttachmentInfo dep{};
+        if (depth_on)
+        {
+            dep.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            dep.imageView   = t.depth_view();
+            dep.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            dep.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
+            dep.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+        }
+
+        VkRenderingInfo ri{};
+        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent    = {t.width(), t.height()};
+        ri.layerCount           = 1U;
+        ri.colorAttachmentCount = 1U;
+        ri.pColorAttachments    = &att;
+        ri.pDepthAttachment     = depth_on ? &dep : nullptr;
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t.width(), t.height(), 1U, depth_on, to_vk_compare(compare));
+        vkCmdSetDepthWriteEnable(cmd, VK_FALSE);
+        const VkBool32 blend_on[1] = {VK_TRUE};
+        m_api.set_color_blend_enable(cmd, 0U, 1U, blend_on);
+        VkColorBlendEquationEXT eq[1]{};
+        eq[0] = {VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD,
+                 VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD};
+        m_api.set_color_blend_equation(cmd, 0U, 1U, eq);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        bind_and_draw(cmd, p, vertex_count);
+        vkCmdEndRendering(cmd);
         return true;
     }
 
@@ -3433,10 +3588,676 @@ private:
     VkDescriptorPool                     m_desc_pool          = VK_NULL_HANDLE; // pool for draw_storage / draw_textured sets
     VkSampler                            m_default_sampler    = VK_NULL_HANDLE; // B2: the default bilinear/repeat sampler
     VkSampler                            m_cmp_sampler        = VK_NULL_HANDLE; // B2-b: comparison sampler (shadow)
+
+    // REN-1: frame-graph RECORDING MODE. When `cmd` is non-null a frame graph is executing: the public draw_*
+    // methods RECORD into this shared command buffer + frame descriptor pool (no per-draw submit/readback).
+    struct FrameRec
+    {
+        VkCommandBuffer  cmd         = VK_NULL_HANDLE; // the frame's one command buffer (owned by the graph)
+        VkDescriptorPool pool        = VK_NULL_HANDLE; // the graph's per-frame descriptor pool (reset once/frame)
+        VkImage          pass_last   = VK_NULL_HANDLE; // last target drawn in the CURRENT pass (self-barrier key)
+    };
+    FrameRec m_frame_rec{};
+
+public:
+    // REN-1: the frame graph brackets a frame's recording with these (defined in the anon namespace's
+    // VulkanFrameGraph). While recording, draw_storage_depth / _load / draw_overlay record into `cmd`.
+    void frame_rec_begin(VkCommandBuffer cmd, VkDescriptorPool pool) noexcept
+    {
+        m_frame_rec.cmd = cmd;
+        m_frame_rec.pool = pool;
+        m_frame_rec.pass_last = VK_NULL_HANDLE;
+    }
+    void frame_rec_new_pass() noexcept { m_frame_rec.pass_last = VK_NULL_HANDLE; } // clear the self-barrier key
+    void frame_rec_end() noexcept { m_frame_rec = FrameRec{}; }
+    [[nodiscard]] bool frame_recording() const noexcept { return m_frame_rec.cmd != VK_NULL_HANDLE; }
+
+    // REN-1: the graph's end-of-frame readback (COLOR_ATTACHMENT → TRANSFER_SRC + copy) so read_pixel stays
+    // bit-identical to the sync path. `t` must be in COLOR_ATTACHMENT (the last frame-mode draw left it there).
+    void frame_readback(VkCommandBuffer cmd, IRasterTarget& target)
+    {
+        copy_colour_to_readback(cmd, static_cast<VulkanRasterTarget&>(target));
+    }
+
+    // REN-1: the frame graph (defined out-of-line after VulkanFrameGraph, which needs this class complete).
+    [[nodiscard]] std::unique_ptr<IFrameGraph> create_frame_graph() override;
+    // expose the shared internals the graph needs to record its own barriers / present / readback
+    [[nodiscard]] VkDevice          frame_vk_device() const noexcept { return m_device; }
+    [[nodiscard]] VkQueue           frame_vk_queue() const noexcept { return m_queue; }
+    [[nodiscard]] VulkanGpuContext& frame_ctx() const noexcept { return *m_ctx; }
+
+private:
     // RET-4 pt 5: the live-resource registries the S7 defrag pass walks (resources leave them in their dtors).
     crd::containers::Array<VulkanStorageBuffer*> m_live_storage{crd::memory::default_allocator()};
     crd::containers::Array<VulkanTexture*>       m_live_textures{crd::memory::default_allocator()};
 };
+
+// ── REN-1 (D-007 row 98): the FRAME GRAPH ─────────────────────────────────────────────────────────────────────────
+// Records a frame's passes into ONE command buffer (replacing the synchronous submit+wait-per-draw substrate) with
+// automatic cross-pass barriers, plus graph-owned TRANSIENT resources whose backing memory is ALIASED when their
+// lifetimes are disjoint. Passes record via the raster context in frame-recording mode (see VulkanRasterContext's
+// record_*). REN-1 executes passes in DECLARATION ORDER (a valid topological order by the API contract — a pass is
+// declared after its producers); the declared read/write DAG drives the barrier schedule + transient lifetimes.
+
+// A minimal drawable-less adapter over a transient image (REN-1: transients are aliased + tracked; making them
+// first-class DRAWN attachments through the public draw API is REN-2's RTT job).
+class VulkanTransientTarget final : public IRasterTarget
+{
+public:
+    VulkanTransientTarget(crd::u32 w, crd::u32 h) noexcept : m_w(w), m_h(h) {}
+    [[nodiscard]] crd::u32 width() const noexcept override { return m_w; }
+    [[nodiscard]] crd::u32 height() const noexcept override { return m_h; }
+    [[nodiscard]] crd::u32 read_pixel(crd::u32, crd::u32) const noexcept override { return 0U; } // device-local, not host-read
+private:
+    crd::u32 m_w = 0;
+    crd::u32 m_h = 0;
+};
+
+class VulkanFrameGraph final : public IFrameGraph, public IFrameContext
+{
+public:
+    explicit VulkanFrameGraph(VulkanRasterContext& rc) : m_rc(&rc), m_device(rc.frame_vk_device()), m_queue(rc.frame_vk_queue())
+    {
+        vkGetPhysicalDeviceMemoryProperties(rc.frame_ctx().vk_physical_device(), &m_mem_props);
+
+        VkCommandPoolCreateInfo pci{};
+        pci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        pci.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        pci.queueFamilyIndex = rc.frame_ctx().graphics_family();
+        vkCreateCommandPool(m_device, &pci, nullptr, &m_pool);
+        VkCommandBufferAllocateInfo cbai{};
+        cbai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cbai.commandPool        = m_pool;
+        cbai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cbai.commandBufferCount = 1U;
+        vkAllocateCommandBuffers(m_device, &cbai, &m_cmd);
+        VkFenceCreateInfo fci{};
+        fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        vkCreateFence(m_device, &fci, nullptr, &m_fence);
+
+        // a large per-frame descriptor pool the passes allocate storage sets from (reset once per execute). The
+        // shared set-0 layout carries storage(0) + sampled image(1) + sampler(2) + a bindless array(3), so the
+        // pool must supply all four types (else vkAllocateDescriptorSets validation-warns) — sized ×kFrameSets.
+        VkDescriptorPoolSize dps[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kFrameSets},
+                                       {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kFrameSets * (kBindlessMax + 1U)},
+                                       {VK_DESCRIPTOR_TYPE_SAMPLER, kFrameSets}};
+        VkDescriptorPoolCreateInfo dpci{};
+        dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        dpci.maxSets       = kFrameSets;
+        dpci.poolSizeCount = 3U;
+        dpci.pPoolSizes    = dps;
+        vkCreateDescriptorPool(m_device, &dpci, nullptr, &m_frame_desc_pool);
+    }
+    ~VulkanFrameGraph() override
+    {
+        free_transients();
+        if (m_frame_desc_pool != VK_NULL_HANDLE) { vkDestroyDescriptorPool(m_device, m_frame_desc_pool, nullptr); }
+        if (m_fence != VK_NULL_HANDLE) { vkDestroyFence(m_device, m_fence, nullptr); }
+        if (m_pool != VK_NULL_HANDLE) { vkDestroyCommandPool(m_device, m_pool, nullptr); }
+    }
+    VulkanFrameGraph(const VulkanFrameGraph&)            = delete;
+    VulkanFrameGraph& operator=(const VulkanFrameGraph&) = delete;
+    VulkanFrameGraph(VulkanFrameGraph&&)                 = delete;
+    VulkanFrameGraph& operator=(VulkanFrameGraph&&)      = delete;
+
+    // ── IFrameContext ──
+    [[nodiscard]] IRasterContext& raster() noexcept override { return *m_rc; }
+    [[nodiscard]] IRasterTarget*  image(FgImage h) noexcept override
+    {
+        if (!h.valid() || h.id > m_images.size()) { return nullptr; }
+        return m_images[h.id - 1U].target;
+    }
+    [[nodiscard]] ITexture* texture(FgImage /*h*/) noexcept override { return nullptr; } // REN-2: sampled transients
+    [[nodiscard]] IStorageBuffer* buffer(FgBuffer h) noexcept override
+    {
+        if (!h.valid() || h.id > m_buffers.size()) { return nullptr; }
+        return m_buffers[h.id - 1U].buffer;
+    }
+
+    // ── IFrameGraph ──
+    [[nodiscard]] FgImage import_target(IRasterTarget& target) override
+    {
+        for (crd::usize i = 0; i < m_images.size(); ++i)
+        {
+            if (m_images[i].target == &target) { return FgImage{static_cast<crd::u32>(i + 1U)}; }
+        }
+        ImageNode n{};
+        n.target    = &target;
+        n.transient = false;
+        m_images.push_back(n);
+        return FgImage{static_cast<crd::u32>(m_images.size())};
+    }
+    [[nodiscard]] FgBuffer import_storage(IStorageBuffer& buffer) override
+    {
+        for (crd::usize i = 0; i < m_buffers.size(); ++i)
+        {
+            if (m_buffers[i].buffer == &buffer) { return FgBuffer{static_cast<crd::u32>(i + 1U)}; }
+        }
+        BufferNode n{};
+        n.buffer    = &buffer;
+        n.transient = false;
+        m_buffers.push_back(n);
+        return FgBuffer{static_cast<crd::u32>(m_buffers.size())};
+    }
+
+    [[nodiscard]] FgImage create_transient_image(const FgImageDesc& desc) override
+    {
+        if (desc.width == 0U || desc.height == 0U) { return FgImage{0U}; }
+        ImageNode n{};
+        n.transient = true;
+        n.desc      = desc;
+        VkImageUsageFlags usage = 0;
+        VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        VkFormat fmt = to_vk_format(desc.format, usage, aspect);
+        if (desc.sampled) { usage |= VK_IMAGE_USAGE_SAMPLED_BIT; }
+        if (desc.storage) { usage |= VK_IMAGE_USAGE_STORAGE_BIT; }
+
+        VkImageCreateInfo ici{};
+        ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ici.flags         = VK_IMAGE_CREATE_ALIAS_BIT; // graph aliases this image's memory with a disjoint-lifetime peer
+        ici.imageType     = VK_IMAGE_TYPE_2D;
+        ici.format        = fmt;
+        ici.extent        = {desc.width, desc.height, 1U};
+        ici.mipLevels     = 1U;
+        ici.arrayLayers   = 1U;
+        ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+        ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        ici.usage         = usage;
+        ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+        ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (vkCreateImage(m_device, &ici, nullptr, &n.image) != VK_SUCCESS) { return FgImage{0U}; }
+        vkGetImageMemoryRequirements(m_device, n.image, &n.mem_req);
+        n.aspect = aspect;
+        n.fmt    = fmt;
+        n.target = nullptr; // adapter created after aliasing binds memory (in build)
+        m_images.push_back(n);
+        return FgImage{static_cast<crd::u32>(m_images.size())};
+    }
+    [[nodiscard]] FgBuffer create_transient_buffer(crd::u32 size_bytes) override
+    {
+        if (size_bytes == 0U) { return FgBuffer{0U}; }
+        BufferNode n{};
+        n.transient = true;
+        n.size      = size_bytes;
+        VkBufferCreateInfo bci{};
+        bci.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bci.size        = size_bytes;
+        bci.usage       = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        if (vkCreateBuffer(m_device, &bci, nullptr, &n.vkbuf) != VK_SUCCESS) { return FgBuffer{0U}; }
+        vkGetBufferMemoryRequirements(m_device, n.vkbuf, &n.mem_req);
+        m_buffers.push_back(n);
+        return FgBuffer{static_cast<crd::u32>(m_buffers.size())};
+    }
+
+    [[nodiscard]] IFramePassBuilder& add_pass(const char* name, FgPassKind kind) override
+    {
+        Pass p{};
+        p.name = name;
+        p.kind = kind;
+        m_passes.push_back(p);
+        m_builder.bind(this, m_passes.size() - 1U);
+        return m_builder;
+    }
+
+    [[nodiscard]] bool build() override;
+    void               execute() override;
+    void               reset() override
+    {
+        free_transients();
+        m_images.clear();
+        m_buffers.clear();
+        m_passes.clear();
+        m_barrier_count = 0U;
+    }
+
+    [[nodiscard]] crd::u32 last_barrier_count() const noexcept override { return m_barrier_count; }
+    [[nodiscard]] crd::u32 last_submit_count() const noexcept override { return m_submit_count; }
+    [[nodiscard]] crd::u32 transient_memory_bytes() const noexcept override { return m_physical_bytes; }
+    [[nodiscard]] crd::u32 transient_logical_bytes() const noexcept override { return m_logical_bytes; }
+
+private:
+    // one physical memory slot (one VkDeviceMemory) reusable across disjoint-lifetime transients
+    struct Slot
+    {
+        VkDeviceMemory memory      = VK_NULL_HANDLE;
+        VkDeviceSize   size        = 0;
+        crd::i32       free_after  = -1; // the last pass index whose transient occupied this slot (-1 = free)
+        crd::u32       type_bits   = 0xFFFFFFFFU;
+    };
+    struct ImageNode
+    {
+        IRasterTarget* target    = nullptr; // imported: the real target; transient: the adapter (set in build)
+        bool           transient = false;
+        FgImageDesc    desc{};
+        VkImage        image     = VK_NULL_HANDLE; // transient only
+        VkImageView    view      = VK_NULL_HANDLE; // transient only
+        VkFormat       fmt       = VK_FORMAT_UNDEFINED;
+        VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        VkMemoryRequirements mem_req{};
+        crd::i32       first_pass = -1;
+        crd::i32       last_pass  = -1;
+        crd::i32       slot       = -1;
+        bool           has_write  = false;
+        VkImageLayout  layout       = VK_IMAGE_LAYOUT_UNDEFINED;
+        VkImageLayout  depth_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    };
+    struct BufferNode
+    {
+        IStorageBuffer* buffer    = nullptr;
+        bool            transient = false;
+        crd::u32        size      = 0;
+        VkBuffer        vkbuf     = VK_NULL_HANDLE; // transient only
+        VkMemoryRequirements mem_req{};
+        crd::i32        first_pass = -1;
+        crd::i32        last_pass  = -1;
+        crd::i32        slot       = -1;
+        bool            has_write  = false;
+    };
+    struct Access
+    {
+        crd::u32 handle = 0; // 1-based image/buffer id
+        FgAccess access = FgAccess::Read;
+    };
+    struct Pass
+    {
+        const char*      name = nullptr;
+        FgPassKind       kind = FgPassKind::Raster;
+        crd::containers::Array<Access> img_access{crd::memory::default_allocator()};
+        crd::containers::Array<Access> buf_access{crd::memory::default_allocator()};
+        FgExecuteFn      fn    = nullptr;
+        void*            user  = nullptr;
+        IPresentSurface* present = nullptr;
+    };
+
+    // a fluent builder that rebinds to the current pass (one instance reused — add_pass returns it)
+    class Builder final : public IFramePassBuilder
+    {
+    public:
+        void bind(VulkanFrameGraph* g, crd::usize pass) noexcept { m_g = g; m_pass = pass; }
+        IFramePassBuilder& reads(FgImage h) override { add_img(h, FgAccess::Read); return *this; }
+        IFramePassBuilder& reads(FgBuffer h) override { add_buf(h, FgAccess::Read); return *this; }
+        IFramePassBuilder& writes(FgImage h) override { add_img(h, FgAccess::Write); return *this; }
+        IFramePassBuilder& writes(FgBuffer h) override { add_buf(h, FgAccess::Write); return *this; }
+        IFramePassBuilder& read_writes(FgImage h) override { add_img(h, FgAccess::ReadWrite); return *this; }
+        IFramePassBuilder& read_writes(FgBuffer h) override { add_buf(h, FgAccess::ReadWrite); return *this; }
+        IFramePassBuilder& execute(FgExecuteFn fn, void* user) override
+        {
+            m_g->m_passes[m_pass].fn = fn;
+            m_g->m_passes[m_pass].user = user;
+            return *this;
+        }
+        IFramePassBuilder& present(IPresentSurface& surface) override
+        {
+            m_g->m_passes[m_pass].present = &surface;
+            return *this;
+        }
+    private:
+        void add_img(FgImage h, FgAccess a) { m_g->m_passes[m_pass].img_access.push_back({h.id, a}); }
+        void add_buf(FgBuffer h, FgAccess a) { m_g->m_passes[m_pass].buf_access.push_back({h.id, a}); }
+        VulkanFrameGraph* m_g = nullptr;
+        crd::usize        m_pass = 0;
+    };
+
+    [[nodiscard]] crd::u32 find_memory_type(crd::u32 type_bits, VkMemoryPropertyFlags props) const noexcept
+    {
+        for (crd::u32 i = 0; i < m_mem_props.memoryTypeCount; ++i)
+        {
+            if ((type_bits & (1U << i)) != 0U && (m_mem_props.memoryTypes[i].propertyFlags & props) == props) { return i; }
+        }
+        return 0xFFFFFFFFU;
+    }
+
+    static VkFormat to_vk_format(FgImageFormat f, VkImageUsageFlags& usage, VkImageAspectFlags& aspect) noexcept
+    {
+        switch (f)
+        {
+        case FgImageFormat::RGBA8Unorm: usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R8G8B8A8_UNORM;
+        case FgImageFormat::RGBA8Srgb:  usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R8G8B8A8_SRGB;
+        case FgImageFormat::RGBA16F:    usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R16G16B16A16_SFLOAT;
+        case FgImageFormat::R16F:       usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R16_SFLOAT;
+        case FgImageFormat::R32F:       usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R32_SFLOAT;
+        case FgImageFormat::R32Uint:    usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R32_UINT;
+        case FgImageFormat::D32Float:
+        default:                        usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT; aspect = VK_IMAGE_ASPECT_DEPTH_BIT; return VK_FORMAT_D32_SFLOAT;
+        }
+    }
+
+    void free_transients() noexcept
+    {
+        for (ImageNode& n : m_images)
+        {
+            if (n.transient)
+            {
+                if (n.view != VK_NULL_HANDLE) { vkDestroyImageView(m_device, n.view, nullptr); n.view = VK_NULL_HANDLE; }
+                if (n.image != VK_NULL_HANDLE) { vkDestroyImage(m_device, n.image, nullptr); n.image = VK_NULL_HANDLE; }
+                delete static_cast<VulkanTransientTarget*>(n.target);
+                n.target = nullptr;
+            }
+        }
+        for (BufferNode& n : m_buffers)
+        {
+            if (n.transient && n.vkbuf != VK_NULL_HANDLE) { vkDestroyBuffer(m_device, n.vkbuf, nullptr); n.vkbuf = VK_NULL_HANDLE; }
+        }
+        for (Slot& s : m_slots) { if (s.memory != VK_NULL_HANDLE) { vkFreeMemory(m_device, s.memory, nullptr); } }
+        m_slots.clear();
+        m_physical_bytes = 0U;
+        m_logical_bytes  = 0U;
+    }
+
+    static constexpr crd::u32 kFrameSets = 256U;
+
+    VulkanRasterContext* m_rc     = nullptr;
+    VkDevice             m_device = VK_NULL_HANDLE;
+    VkQueue              m_queue  = VK_NULL_HANDLE;
+    VkCommandPool        m_pool   = VK_NULL_HANDLE;
+    VkCommandBuffer      m_cmd    = VK_NULL_HANDLE;
+    VkFence              m_fence  = VK_NULL_HANDLE;
+    VkDescriptorPool     m_frame_desc_pool = VK_NULL_HANDLE;
+    VkPhysicalDeviceMemoryProperties m_mem_props{};
+
+    crd::containers::Array<ImageNode>  m_images{crd::memory::default_allocator()};
+    crd::containers::Array<BufferNode> m_buffers{crd::memory::default_allocator()};
+    crd::containers::Array<Pass>       m_passes{crd::memory::default_allocator()};
+    crd::containers::Array<Slot>       m_slots{crd::memory::default_allocator()};
+    Builder m_builder{};
+
+    crd::u32 m_barrier_count  = 0U;
+    crd::u32 m_submit_count   = 0U;
+    crd::u32 m_physical_bytes = 0U;
+    crd::u32 m_logical_bytes  = 0U;
+};
+
+// A minimal IStorageBuffer adapter over a transient buffer (REN-1: aliased + tracked; the drawn/compute-written
+// path is REN-4's — a transient buffer is device-local, so read_u32 is 0).
+class VulkanTransientBuffer final : public IStorageBuffer
+{
+public:
+    explicit VulkanTransientBuffer(crd::u32 size) noexcept : m_size(size) {}
+    [[nodiscard]] crd::u32 size_bytes() const noexcept override { return m_size; }
+    [[nodiscard]] crd::u32 read_u32(crd::u32) const noexcept override { return 0U; }
+private:
+    crd::u32 m_size = 0;
+};
+
+bool VulkanFrameGraph::build()
+{
+    m_barrier_count = 0U;
+    m_submit_count  = 0U;
+
+    // 1) every pass access must reference an existing resource
+    for (const Pass& p : m_passes)
+    {
+        for (const Access& a : p.img_access) { if (a.handle == 0U || a.handle > m_images.size()) { return false; } }
+        for (const Access& a : p.buf_access) { if (a.handle == 0U || a.handle > m_buffers.size()) { return false; } }
+    }
+
+    // 2) transient LIFETIME analysis — [first pass touching .. last pass touching] + whether any pass writes it
+    for (ImageNode& n : m_images) { n.first_pass = -1; n.last_pass = -1; n.has_write = false; n.slot = -1; }
+    for (BufferNode& n : m_buffers) { n.first_pass = -1; n.last_pass = -1; n.has_write = false; n.slot = -1; }
+    for (crd::usize pi = 0; pi < m_passes.size(); ++pi)
+    {
+        for (const Access& a : m_passes[pi].img_access)
+        {
+            ImageNode& n = m_images[a.handle - 1U];
+            if (n.first_pass < 0) { n.first_pass = static_cast<crd::i32>(pi); }
+            n.last_pass = static_cast<crd::i32>(pi);
+            if (a.access != FgAccess::Read) { n.has_write = true; }
+        }
+        for (const Access& a : m_passes[pi].buf_access)
+        {
+            BufferNode& n = m_buffers[a.handle - 1U];
+            if (n.first_pass < 0) { n.first_pass = static_cast<crd::i32>(pi); }
+            n.last_pass = static_cast<crd::i32>(pi);
+            if (a.access != FgAccess::Read) { n.has_write = true; }
+        }
+    }
+    for (const ImageNode& n : m_images) { if (n.transient && !n.has_write) { return false; } } // a transient no pass writes
+    for (const BufferNode& n : m_buffers) { if (n.transient && !n.has_write) { return false; } }
+
+    // 3) ALIASING — greedy interval assignment: process transients in first_pass order; reuse a slot whose last
+    //    occupant's lifetime ended before this one begins (disjoint ⇒ shared memory). Images then buffers (each a
+    //    memory class); physical = Σ slot sizes (post-aliasing), logical = Σ transient sizes (no aliasing).
+    m_physical_bytes = 0U;
+    m_logical_bytes  = 0U;
+
+    // -- images --
+    crd::containers::Array<crd::u32> order{crd::memory::default_allocator()};
+    for (crd::u32 i = 0; i < m_images.size(); ++i)
+    {
+        if (m_images[i].transient) { order.push_back(i); }
+    }
+    for (crd::usize a = 1; a < order.size(); ++a) // insertion sort by first_pass (small N)
+    {
+        const crd::u32 v = order[a];
+        crd::usize     b = a;
+        while (b > 0 && m_images[order[b - 1]].first_pass > m_images[v].first_pass) { order[b] = order[b - 1]; --b; }
+        order[b] = v;
+    }
+    for (crd::u32 idx : order)
+    {
+        ImageNode& n = m_images[idx];
+        m_logical_bytes += static_cast<crd::u32>(n.mem_req.size);
+        crd::i32 chosen = -1;
+        for (crd::u32 si = 0; si < m_slots.size(); ++si)
+        {
+            Slot& s = m_slots[si];
+            if (s.free_after < n.first_pass && (s.type_bits & n.mem_req.memoryTypeBits) != 0U)
+            {
+                chosen = static_cast<crd::i32>(si);
+                break;
+            }
+        }
+        if (chosen < 0)
+        {
+            Slot s{};
+            s.type_bits = n.mem_req.memoryTypeBits;
+            m_slots.push_back(s);
+            chosen = static_cast<crd::i32>(m_slots.size() - 1U);
+        }
+        Slot& s      = m_slots[static_cast<crd::u32>(chosen)];
+        s.free_after = n.last_pass;
+        s.type_bits &= n.mem_req.memoryTypeBits;
+        if (n.mem_req.size > s.size) { s.size = n.mem_req.size; }
+        n.slot = chosen;
+    }
+
+    // -- allocate each image slot's memory + bind + view --
+    for (Slot& s : m_slots)
+    {
+        const crd::u32 mt = find_memory_type(s.type_bits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (mt == 0xFFFFFFFFU) { return false; }
+        VkMemoryAllocateInfo mai{};
+        mai.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        mai.allocationSize  = s.size;
+        mai.memoryTypeIndex = mt;
+        if (vkAllocateMemory(m_device, &mai, nullptr, &s.memory) != VK_SUCCESS) { return false; }
+        m_physical_bytes += static_cast<crd::u32>(s.size);
+    }
+    for (ImageNode& n : m_images)
+    {
+        if (!n.transient || n.slot < 0) { continue; }
+        if (vkBindImageMemory(m_device, n.image, m_slots[static_cast<crd::u32>(n.slot)].memory, 0) != VK_SUCCESS) { return false; }
+        VkImageViewCreateInfo vci{};
+        vci.sType                       = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vci.image                       = n.image;
+        vci.viewType                    = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format                      = n.fmt;
+        vci.subresourceRange.aspectMask = n.aspect;
+        vci.subresourceRange.levelCount = 1U;
+        vci.subresourceRange.layerCount = 1U;
+        vkCreateImageView(m_device, &vci, nullptr, &n.view);
+        n.target = new VulkanTransientTarget(n.desc.width, n.desc.height);
+    }
+
+    // -- buffers (their own slots, appended after the image slots) --
+    const crd::u32 img_slot_end = static_cast<crd::u32>(m_slots.size());
+    crd::containers::Array<crd::u32> border{crd::memory::default_allocator()};
+    for (crd::u32 i = 0; i < m_buffers.size(); ++i)
+    {
+        if (m_buffers[i].transient) { border.push_back(i); }
+    }
+    for (crd::usize a = 1; a < border.size(); ++a)
+    {
+        const crd::u32 v = border[a];
+        crd::usize     b = a;
+        while (b > 0 && m_buffers[border[b - 1]].first_pass > m_buffers[v].first_pass) { border[b] = border[b - 1]; --b; }
+        border[b] = v;
+    }
+    for (crd::u32 idx : border)
+    {
+        BufferNode& n = m_buffers[idx];
+        m_logical_bytes += static_cast<crd::u32>(n.mem_req.size);
+        crd::i32 chosen = -1;
+        for (crd::u32 si = img_slot_end; si < m_slots.size(); ++si)
+        {
+            Slot& s = m_slots[si];
+            if (s.free_after < n.first_pass && (s.type_bits & n.mem_req.memoryTypeBits) != 0U) { chosen = static_cast<crd::i32>(si); break; }
+        }
+        if (chosen < 0)
+        {
+            Slot s{};
+            s.type_bits = n.mem_req.memoryTypeBits;
+            const crd::u32 mt = find_memory_type(s.type_bits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            if (mt == 0xFFFFFFFFU) { return false; }
+            s.size = n.mem_req.size;
+            VkMemoryAllocateInfo mai{};
+            mai.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            mai.allocationSize  = s.size;
+            mai.memoryTypeIndex = mt;
+            if (vkAllocateMemory(m_device, &mai, nullptr, &s.memory) != VK_SUCCESS) { return false; }
+            m_slots.push_back(s);
+            chosen = static_cast<crd::i32>(m_slots.size() - 1U);
+            m_physical_bytes += static_cast<crd::u32>(s.size);
+        }
+        Slot& s      = m_slots[static_cast<crd::u32>(chosen)];
+        s.free_after = n.last_pass;
+        n.slot       = chosen;
+        vkBindBufferMemory(m_device, n.vkbuf, s.memory, 0);
+        n.buffer = new VulkanTransientBuffer(n.size);
+    }
+
+    return true;
+}
+
+// map a tracked layout to its (access, stage) for a barrier's SOURCE side
+void layout_src(VkImageLayout layout, VkAccessFlags& access, VkPipelineStageFlags& stage) noexcept
+{
+    switch (layout)
+    {
+    case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+        access = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT; stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT; break;
+    case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+        access = VK_ACCESS_TRANSFER_READ_BIT; stage = VK_PIPELINE_STAGE_TRANSFER_BIT; break;
+    case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL:
+        access = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        stage  = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT; break;
+    default: access = 0; stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT; break; // UNDEFINED
+    }
+}
+
+void VulkanFrameGraph::execute()
+{
+    m_submit_count = 0U;
+    vkResetDescriptorPool(m_device, m_frame_desc_pool, 0);
+    vkResetCommandBuffer(m_cmd, 0);
+    VkCommandBufferBeginInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(m_cmd, &bi);
+
+    m_rc->frame_rec_begin(m_cmd, m_frame_desc_pool);
+    for (ImageNode& n : m_images) { n.layout = VK_IMAGE_LAYOUT_UNDEFINED; n.depth_layout = VK_IMAGE_LAYOUT_UNDEFINED; }
+
+    const auto img_barrier = [this](VkImage image, VkImageAspectFlags aspect, VkImageLayout from, VkImageLayout to,
+                                    VkAccessFlags dst_access, VkPipelineStageFlags dst_stage) {
+        VkAccessFlags        src_access = 0;
+        VkPipelineStageFlags src_stage  = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        layout_src(from, src_access, src_stage);
+        VkImageMemoryBarrier b{};
+        b.sType                       = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.oldLayout                   = from;
+        b.newLayout                   = to;
+        b.srcQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
+        b.image                       = image;
+        b.subresourceRange.aspectMask = aspect;
+        b.subresourceRange.levelCount = 1U;
+        b.subresourceRange.layerCount = 1U;
+        b.srcAccessMask               = src_access;
+        b.dstAccessMask               = dst_access;
+        vkCmdPipelineBarrier(m_cmd, src_stage, dst_stage, 0, 0, nullptr, 0, nullptr, 1U, &b);
+        ++m_barrier_count;
+    };
+
+    for (Pass& p : m_passes)
+    {
+        m_rc->frame_rec_new_pass();
+        // barriers for imported render targets this pass writes / read-writes (transients aren't drawn in REN-1)
+        for (const Access& a : p.img_access)
+        {
+            ImageNode& n = m_images[a.handle - 1U];
+            if (n.transient || n.target == nullptr) { continue; }
+            auto& t = static_cast<VulkanRasterTarget&>(*n.target);
+            const bool writes = (a.access != FgAccess::Read);
+            if (p.present != nullptr) { continue; } // present-pass reads → the final readback loop transitions
+            if (writes)
+            {
+                if (n.layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                {
+                    img_barrier(t.image(), VK_IMAGE_ASPECT_COLOR_BIT, n.layout, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT,
+                                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+                    n.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                }
+                else // already an attachment (a prior pass wrote it): a WRITE→READ|WRITE cross-pass ordering barrier
+                {
+                    img_barrier(t.image(), VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT,
+                                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+                }
+                if (t.has_depth())
+                {
+                    const VkImageLayout dfrom = n.depth_layout;
+                    img_barrier(t.depth_image(), VK_IMAGE_ASPECT_DEPTH_BIT, dfrom, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                                VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                                VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT);
+                    n.depth_layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+                }
+            }
+        }
+        if (p.fn != nullptr) { p.fn(*this, p.user); }
+    }
+
+    // final readback: every imported target left in COLOR_ATTACHMENT → TRANSFER_SRC + copy to its readback (so
+    // read_pixel is bit-identical to the sync path). The direct-to-backbuffer present is REN-8.
+    for (ImageNode& n : m_images)
+    {
+        if (!n.transient && n.target != nullptr && n.layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+        {
+            m_rc->frame_readback(m_cmd, *n.target);
+            n.layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            ++m_barrier_count; // copy_colour_to_readback inserts a COLOR→TRANSFER_SRC barrier
+        }
+    }
+
+    m_rc->frame_rec_end();
+    vkEndCommandBuffer(m_cmd);
+    VkSubmitInfo si{};
+    si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1U;
+    si.pCommandBuffers    = &m_cmd;
+    vkResetFences(m_device, 1U, &m_fence);
+    vkQueueSubmit(m_queue, 1U, &si, m_fence);
+    vkWaitForFences(m_device, 1U, &m_fence, VK_TRUE, ~0ULL);
+    m_submit_count = 1U;
+}
+
+std::unique_ptr<IFrameGraph> VulkanRasterContext::create_frame_graph()
+{
+    return std::make_unique<VulkanFrameGraph>(*this);
+}
 
 } // namespace
 
