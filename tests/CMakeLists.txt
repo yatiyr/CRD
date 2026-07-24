@@ -73,6 +73,7 @@ add_subdirectory(resources)
 add_subdirectory(meshgen)
 add_subdirectory(scene)
 add_subdirectory(scene-render)  # GEO-7 (D-007 row 72): chunk-grain extract/cull/submit gates
+add_subdirectory(anim)          # GEO-8 (D-007 row 73): SKEL/ANIM resources + THE FOX bit-stable resample gate
 add_subdirectory(scene_cooker)
 add_subdirectory(cooker)
 add_subdirectory(preset)

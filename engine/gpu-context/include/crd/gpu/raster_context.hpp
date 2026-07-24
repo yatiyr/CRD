@@ -465,6 +465,18 @@ public:
         draw_storage(target, program, clear, storage, vertex_count);
     }
 
+    // GEO-8 showcase fix: the CONTINUING scene-geometry draw — draw_storage_depth WITHOUT the clear: colour and
+    // depth both loadOp=LOAD, depth test at `compare` with WRITE ON, so a multi-group scene composes correctly
+    // (group N occludes/is occluded by groups 0..N-1 through the REAL depth buffer). The frame's FIRST scene draw
+    // uses draw_storage_depth (the clear); every subsequent group uses this. Target must have been drawn at least
+    // once this frame. Default (backends without the override) falls back to the CLEARING variant — last-drawn
+    // wins, visibly wrong but never silently absent. Appended at END (vtable-stable).
+    virtual void draw_storage_depth_load(IRasterTarget& target, IRasterProgram& program, DepthCompare compare,
+                                         IStorageBuffer& storage, crd::u32 vertex_count)
+    {
+        draw_storage_depth(target, program, ClearColor{}, 0.0F, compare, storage, vertex_count);
+    }
+
     // RET-6 (ADR-0105): the OVERLAY draw — compose instanced primitives ONTO an existing target: color loadOp=LOAD
     // (the previous contents STAY — never cleared), standard alpha blending (srcAlpha · 1−srcAlpha), and a READ-ONLY
     // depth test at `compare` when the target carries a depth buffer (depth writes are never enabled; on a depthless

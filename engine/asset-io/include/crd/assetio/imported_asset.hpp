@@ -66,8 +66,23 @@ struct ImportedMesh
     // one glTF mesh fans out into one ImportedMesh per primitive; nodes reference the LIBRARY index). -1 = the
     // source has no mesh library (STL/OBJ/PLY).
     crd::i32 source_mesh = -1;
+    // GEO-8 (appended): the per-vertex SKIN attributes (glTF JOINTS_0/WEIGHTS_0) — 4 joint indices + 4 weights
+    // per vertex, or empty. Joint indices are SKIN-LOCAL (into ImportedSkin::joints); weights as authored
+    // (normalized-sum warned at cook, never silently renormalized). A skinned mesh is FULLY AUTHORED — the
+    // conditioning chain (weld/normals/tangents) must never touch it (welding would desync the joint mapping).
+    crd::containers::Array<crd::u16> joints0;  // 4 per vertex
+    crd::containers::Array<crd::f32> weights0; // 4 per vertex
 
-    explicit ImportedMesh(crd::memory::IAllocator* a) : name(a), positions(a), normals(a), uv0(a), indices(a), tangent(a) {}
+    [[nodiscard]] bool has_skin() const noexcept
+    {
+        return joints0.size() == positions.size() * 4U && weights0.size() == positions.size() * 4U
+               && positions.size() > 0U;
+    }
+
+    explicit ImportedMesh(crd::memory::IAllocator* a)
+        : name(a), positions(a), normals(a), uv0(a), indices(a), tangent(a), joints0(a), weights0(a)
+    {
+    }
 
     ImportedMesh(const ImportedMesh&)            = delete;
     ImportedMesh& operator=(const ImportedMesh&) = delete;
@@ -169,6 +184,8 @@ struct ImportedNode
     crd::i32                  camera = -1;
     crd::i32                  light  = -1;
     crd::containers::Array<crd::u32> children; // node indices
+    // GEO-8 (appended): the skin this node's mesh deforms with (index into ImportedAsset::skins, -1 = unskinned)
+    crd::i32 skin = -1;
 
     explicit ImportedNode(crd::memory::IAllocator* a) : name(a), children(a) {}
 
@@ -218,6 +235,59 @@ struct ImportedLight
     ImportedLight& operator=(ImportedLight&&)      = default;
 };
 
+// GEO-8 (appended): a SKIN as authored — the joint set (source-node indices), per-joint inverse bind matrices
+// (column-major 16 floats each), and the optional skeleton-root node. Joint order is the SOURCE's order; the
+// cook re-orders topologically (parents-before-children) so runtime pose composition is a single forward pass.
+struct ImportedSkin
+{
+    crd::containers::String          name;
+    crd::containers::Array<crd::i32> joints;        // node indices, source order
+    crd::containers::Array<crd::f32> inverse_binds; // 16 per joint, column-major; identity when unauthored
+    crd::i32                         skeleton_root = -1; // node index, -1 = none declared
+
+    explicit ImportedSkin(crd::memory::IAllocator* a) : name(a), joints(a), inverse_binds(a) {}
+
+    ImportedSkin(const ImportedSkin&)            = delete;
+    ImportedSkin& operator=(const ImportedSkin&) = delete;
+    ImportedSkin(ImportedSkin&&)                 = default;
+    ImportedSkin& operator=(ImportedSkin&&)      = default;
+};
+
+// GEO-8 (appended): one animation channel — a keyframe track targeting one node's T/R/S (or morph weights).
+// Interpolation per glTF sampler semantics; CubicHermite values are the [in_tangent, value, out_tangent]
+// triples (the raw CUBICSPLINE layout — the hesap-interp keyframe engine consumes it verbatim).
+struct ImportedAnimChannel
+{
+    crd::i32 node       = -1; // target node index
+    crd::u8  path       = 0;  // 0 translation · 1 rotation · 2 scale · 3 weights
+    crd::u8  interp     = 1;  // 0 step · 1 linear · 2 cubic (KeyInterp byte values)
+    crd::u32 components = 3;  // 3 for T/S, 4 for R, N for weights
+    crd::containers::Array<crd::f32> times;  // strictly increasing, seconds
+    crd::containers::Array<crd::f32> values; // times.size() × components × (interp==cubic ? 3 : 1)
+
+    explicit ImportedAnimChannel(crd::memory::IAllocator* a) : times(a), values(a) {}
+
+    ImportedAnimChannel(const ImportedAnimChannel&)            = delete;
+    ImportedAnimChannel& operator=(const ImportedAnimChannel&) = delete;
+    ImportedAnimChannel(ImportedAnimChannel&&)                 = default;
+    ImportedAnimChannel& operator=(ImportedAnimChannel&&)      = default;
+};
+
+// GEO-8 (appended): one animation clip as authored — named, with its channel set; duration = max channel end.
+struct ImportedAnimation
+{
+    crd::containers::String                  name;
+    crd::containers::Array<ImportedAnimChannel> channels;
+    crd::f32                                 duration = 0.0F;
+
+    explicit ImportedAnimation(crd::memory::IAllocator* a) : name(a), channels(a) {}
+
+    ImportedAnimation(const ImportedAnimation&)            = delete;
+    ImportedAnimation& operator=(const ImportedAnimation&) = delete;
+    ImportedAnimation(ImportedAnimation&&)                 = default;
+    ImportedAnimation& operator=(ImportedAnimation&&)      = default;
+};
+
 // The parse product: meshes + materials + a warning tally. Scenes/lights/cameras/skins join at GEO-3 (glTF) — appended
 // fields, never reordered (the append-only stability rule).
 struct ImportedAsset
@@ -237,9 +307,13 @@ struct ImportedAsset
     // Malformed missing-bin return — the cook resolves the ACTUAL reference through its declared-input seam
     // instead of guessing a "<stem>.bin" sibling. Empty when the buffer is embedded or absent.
     crd::containers::String buffer_uri;
+    // GEO-8 (appended): skins + animations (glTF skins[]/animations[] — the SkeletonResource/AnimClipResource feed)
+    crd::containers::Array<ImportedSkin>      skins;
+    crd::containers::Array<ImportedAnimation> animations;
 
     explicit ImportedAsset(crd::memory::IAllocator* a)
-        : meshes(a), materials(a), images(a), nodes(a), roots(a), cameras(a), lights(a), buffer_uri(a)
+        : meshes(a), materials(a), images(a), nodes(a), roots(a), cameras(a), lights(a), buffer_uri(a), skins(a),
+          animations(a)
     {
     }
 

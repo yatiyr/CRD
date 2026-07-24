@@ -10,6 +10,7 @@
 //   --headless                    — exit after 1 frame; minimal boot smoke
 //   --smoke-test [duration_secs]  — run the loop N seconds (default 3.0), FAIL (exit 2) if nothing presented.
 
+#include <crd/anim/anim_resources.hpp>
 #include <crd/app/app.hpp>
 #include <crd/draw/overlay_pass.hpp>
 #include <crd/draw/render_buffer.hpp>
@@ -68,9 +69,13 @@ namespace
 #endif
 }
 
-// every MESH artifact id in the mounted pack (read straight from the PACK manifest)
-void collect_pack_meshes(const crd::platform::fs::Path& pack_path, crd::memory::IAllocator* alloc,
-                         crd::containers::Array<crd::resources::ResourceId>& out)
+// every MESH / SKEL / ANIM artifact id in the mounted pack (read straight from the PACK manifest), with each
+// mesh's manifest DEBUG NAME (the source rel path — the showcase sorts formats by it)
+void collect_pack_artifacts(const crd::platform::fs::Path& pack_path, crd::memory::IAllocator* alloc,
+                            crd::containers::Array<crd::resources::ResourceId>& out_meshes,
+                            crd::containers::Array<crd::containers::String>&    out_mesh_names,
+                            crd::containers::Array<crd::resources::ResourceId>& out_skeletons,
+                            crd::containers::Array<crd::resources::ResourceId>& out_clips)
 {
     crd::containers::Array<crd::u8> bytes(alloc);
     if (!crd::platform::fs::read_file_binary(pack_path, bytes)) { return; }
@@ -81,13 +86,30 @@ void collect_pack_meshes(const crd::platform::fs::Path& pack_path, crd::memory::
         return;
     }
     const crd::resources::CrdrChunk* mfst = crd::resources::crdr_find_chunk(file, crd::resources::kFourCC_MFST);
+    const crd::resources::CrdrChunk* strp = crd::resources::crdr_find_chunk(file, crd::resources::kFourCC_STRP);
     if (mfst == nullptr) { return; }
     crd::containers::Array<crd::resources::ManifestEntry> entries(alloc);
     if (!crd::resources::manifest_read_entries(mfst->payload, entries, alloc)) { return; }
     for (const auto& e : entries)
     {
-        if (e.type_fourcc == crd::resources::kFourCC_MESH) { out.push_back(e.id); }
+        if (e.type_fourcc == crd::resources::kFourCC_MESH)
+        {
+            out_meshes.push_back(e.id);
+            crd::containers::String name(alloc);
+            if (strp != nullptr && e.name_strp_idx < strp->payload.size())
+            {
+                name.append(reinterpret_cast<const char*>(strp->payload.data()) + e.name_strp_idx);
+            }
+            out_mesh_names.push_back(static_cast<crd::containers::String&&>(name));
+        }
+        if (e.type_fourcc == crd::anim::kFourCC_SKEL) { out_skeletons.push_back(e.id); }
+        if (e.type_fourcc == crd::anim::kFourCC_ANIM) { out_clips.push_back(e.id); }
     }
+}
+
+[[nodiscard]] bool name_contains(const crd::containers::String& name, const char* needle)
+{
+    return std::strstr(name.c_str(), needle) != nullptr;
 }
 
 // world-AABB extractor for the spatial index: Transform (the watched trigger) + a fixed generous half-extent
@@ -186,14 +208,19 @@ int main(int argc, char** argv)
     crd::resources::ResourceManager rm(&scene_alloc);
     crd::resources::register_mesh_loader(&rm, nullptr);
     crd::resources::register_openpbr_material_loader(&rm, nullptr);
+    crd::anim::register_anim_loaders(&rm, nullptr); // GEO-8: SKEL + ANIM
     const crd::platform::fs::Path pack_path = crd::platform::fs::executable_dir()
                                               / crd::containers::StringView(CRD_DEMO_ASSETS_REL_PACK);
     crd::containers::Array<crd::resources::ResourceId> pack_meshes(&scene_alloc);
+    crd::containers::Array<crd::containers::String>    pack_mesh_names(&scene_alloc);
+    crd::containers::Array<crd::resources::ResourceId> pack_skeletons(&scene_alloc);
+    crd::containers::Array<crd::resources::ResourceId> pack_clips(&scene_alloc);
     if (rm.mount_manifest(pack_path.generic()).is_valid())
     {
-        collect_pack_meshes(pack_path, &scene_alloc, pack_meshes);
+        collect_pack_artifacts(pack_path, &scene_alloc, pack_meshes, pack_mesh_names, pack_skeletons, pack_clips);
     }
-    CRD_LOG_INFO(g_log_sandbox, "Demo pack: {} mesh artifact(s)", pack_meshes.size());
+    CRD_LOG_INFO(g_log_sandbox, "Demo pack: {} mesh / {} skeleton / {} clip artifact(s)", pack_meshes.size(),
+                 pack_skeletons.size(), pack_clips.size());
 
     crd::scene::World world{&scene_alloc};
     world.register_component<crd::scene::Transform>(crd::scene::transform_serialize_trait(),
@@ -218,14 +245,31 @@ int main(int argc, char** argv)
         crd::f32             x, z, scale;
     };
     crd::containers::Array<Cell> cells(&scene_alloc);
-    if (pack_meshes.size() > 0U)
+    // split the pack's meshes three ways: SKINNED → the animated ring; STL/OBJ/PLY/3MF imports → the GEO
+    // MONUMENTS (the multi-format showcase); the rest (glTF) → the 10k grid
+    crd::containers::Array<crd::resources::ResourceId> static_meshes(&scene_alloc);
+    crd::containers::Array<crd::resources::ResourceId> skinned_meshes(&scene_alloc);
+    crd::containers::Array<crd::resources::ResourceId> monument_meshes(&scene_alloc);
+    for (crd::usize mi = 0; mi < pack_meshes.size(); ++mi)
+    {
+        auto handle = rm.load_sync<crd::resources::MeshResource>(pack_meshes[mi]);
+        if (handle.state() != crd::resources::LoadState::Ready || handle.get() == nullptr) { continue; }
+        if (handle.get()->has_skin()) { skinned_meshes.push_back(pack_meshes[mi]); }
+        else if (name_contains(pack_mesh_names[mi], ".stl") || name_contains(pack_mesh_names[mi], ".obj")
+                 || name_contains(pack_mesh_names[mi], ".ply") || name_contains(pack_mesh_names[mi], ".3mf"))
+        {
+            monument_meshes.push_back(pack_meshes[mi]);
+        }
+        else { static_meshes.push_back(pack_meshes[mi]); }
+    }
+    if (pack_meshes.size() > 0U && static_meshes.size() > 0U)
     {
         for (crd::u32 gz = 0; gz < side; ++gz)
         {
             for (crd::u32 gx = 0; gx < side; ++gx)
             {
                 const crd::resources::ResourceId mesh_id =
-                    pack_meshes[(static_cast<crd::usize>(gz) * side + gx) % pack_meshes.size()];
+                    static_meshes[(static_cast<crd::usize>(gz) * side + gx) % static_meshes.size()];
                 auto handle = rm.load_sync<crd::resources::MeshResource>(mesh_id);
                 if (handle.state() != crd::resources::LoadState::Ready || handle.get() == nullptr) { continue; }
                 const auto* mesh = handle.get();
@@ -257,7 +301,86 @@ int main(int argc, char** argv)
             }
         }
     }
-    CRD_LOG_INFO(g_log_sandbox, "Scene: {} instances instantiated", cells.size());
+    // GEO-8: the animated ring — skinned characters (the Fox) circle the origin, clips cycled, phases staggered
+    crd::containers::Array<crd::scene::EntityId> animated(&scene_alloc);
+    if (skinned_meshes.size() > 0U && pack_skeletons.size() > 0U)
+    {
+        constexpr crd::u32 ring_count = 24U;
+        auto handle = rm.load_sync<crd::resources::MeshResource>(skinned_meshes[0]);
+        const auto* mesh = handle.get();
+        crd::f32    scale = 1.0F;
+        if (mesh != nullptr && mesh->has_bounds())
+        {
+            const crd::f32 ex = mesh->bounds_max[0] - mesh->bounds_min[0];
+            const crd::f32 ey = mesh->bounds_max[1] - mesh->bounds_min[1];
+            const crd::f32 ez = mesh->bounds_max[2] - mesh->bounds_min[2];
+            crd::f32       mx = ex > ey ? ex : ey;
+            mx                = mx > ez ? mx : ez;
+            if (mx > 1.0e-6F) { scale = 2.5F / mx; }
+        }
+        crd::resources::ResourceId material{};
+        if (mesh != nullptr && mesh->primitives.size() > 0U) { material = mesh->primitives[0].material_id; }
+        for (crd::u32 i = 0; i < ring_count; ++i)
+        {
+            const crd::f32 ang = static_cast<crd::f32>(i) * (6.2831853F / static_cast<crd::f32>(ring_count));
+            const crd::f32 x   = crd::math::cos(ang) * 9.0F;
+            const crd::f32 z   = crd::math::sin(ang) * 9.0F;
+            const crd::scene::EntityId e = world.spawn();
+            crd::scene::Transform      t;
+            t.translation = crd::math::from_raw_vec<crd::units::dim::Length>(crd::math::Vec3f{x, 0.0F, z});
+            t.rotation    = crd::math::from_axis_angle(crd::math::Vec3f{0, 1, 0}, -ang);
+            t.scale       = {scale, scale, scale};
+            t.world       = crd::math::from_trs(crd::math::Vec3f{x, 0.0F, z}, t.rotation, t.scale);
+            world.add_component(e, t);
+            world.add_component(e, crd::scene::MeshRenderer{skinned_meshes[0], material});
+            crd::scene::SkeletonAnimator animator;
+            animator.skeleton = pack_skeletons[0];
+            if (pack_clips.size() > 0U) { animator.clip = pack_clips[i % pack_clips.size()]; }
+            animator.time = static_cast<crd::f32>(i) * 0.17F; // staggered phases
+            world.add_component(e, animator);
+            animated.push_back(e);
+        }
+    }
+    // the GEO MONUMENTS: every non-glTF import (STL icosahedron · OBJ torus with GENERATED normals · the teal
+    // 3MF box whose displaycolor travelled sRGB→linear→PBRM→PRIM→this frame) — large, slowly spinning
+    struct Monument
+    {
+        crd::scene::EntityId entity;
+        crd::f32             x, z, scale;
+    };
+    crd::containers::Array<Monument> monuments(&scene_alloc);
+    for (crd::usize mi = 0; mi < monument_meshes.size(); ++mi)
+    {
+        auto handle = rm.load_sync<crd::resources::MeshResource>(monument_meshes[mi]);
+        const auto* mesh = handle.get();
+        if (mesh == nullptr) { continue; }
+        crd::f32 scale = 1.0F;
+        if (mesh->has_bounds())
+        {
+            const crd::f32 ex = mesh->bounds_max[0] - mesh->bounds_min[0];
+            const crd::f32 ey = mesh->bounds_max[1] - mesh->bounds_min[1];
+            const crd::f32 ez = mesh->bounds_max[2] - mesh->bounds_min[2];
+            crd::f32       mx = ex > ey ? ex : ey;
+            mx                = mx > ez ? mx : ez;
+            if (mx > 1.0e-6F) { scale = 5.0F / mx; }
+        }
+        crd::resources::ResourceId material{};
+        if (mesh->primitives.size() > 0U) { material = mesh->primitives[0].material_id; }
+        const crd::f32 ang = static_cast<crd::f32>(mi) * (6.2831853F / static_cast<crd::f32>(monument_meshes.size()))
+                             + 0.5F;
+        const crd::f32 x = crd::math::cos(ang) * 17.0F;
+        const crd::f32 z = crd::math::sin(ang) * 17.0F;
+        const crd::scene::EntityId e = world.spawn();
+        crd::scene::Transform      t;
+        t.translation = crd::math::from_raw_vec<crd::units::dim::Length>(crd::math::Vec3f{x, 3.0F, z});
+        t.scale       = {scale, scale, scale};
+        t.world       = crd::math::from_trs(crd::math::Vec3f{x, 3.0F, z}, crd::math::Quatf::identity(), t.scale);
+        world.add_component(e, t);
+        world.add_component(e, crd::scene::MeshRenderer{monument_meshes[mi], material});
+        monuments.push_back(Monument{e, x, z, scale});
+    }
+    CRD_LOG_INFO(g_log_sandbox, "Scene: {} static + {} animated + {} monuments", cells.size(), animated.size(),
+                 monuments.size());
 
     auto scene_renderer_ptr = std::make_unique<crd::scenerender::SceneRenderer>(&scene_alloc);
     auto& scene_renderer    = *scene_renderer_ptr;
@@ -291,7 +414,19 @@ int main(int argc, char** argv)
     const bool draw_ready = crd::draw::init(*vk, *raster);
     if (!draw_ready) { CRD_LOG_WARN(g_log_sandbox, "crd-draw init failed -- continuing without the draw overlay"); }
     crd::draw::RenderBuffer draw_buf(crd::memory::default_allocator());
-    if (draw_ready) { crd::draw::axis_triad_to(draw_buf, crd::math::Mat4f::identity(), 2.0F, 3.0F); }
+    if (draw_ready) // the RET-6 debug-draw suite over the real scene depth (wire shapes + the translucent slab)
+    {
+        crd::draw::axis_triad_to(draw_buf, crd::math::Mat4f::identity(), 2.0F, 3.0F);
+        crd::draw::sphere_wire_to(draw_buf, {13.0F, 1.5F, 0.0F}, 1.5F, crd::draw::kCyan);
+        crd::math::Mat4f box_world = crd::math::Mat4f::identity();
+        box_world.c3               = {-13.0F, 1.0F, 0.5F, 1.0F};
+        crd::draw::box_wire_to(draw_buf, box_world, {1.0F, 1.0F, 1.0F}, crd::draw::kOrange, 2.0F);
+        crd::draw::capsule_wire_to(draw_buf, {0.0F, 0.7F, -13.0F}, {0.0F, 2.6F, -13.0F}, 0.7F, crd::draw::kMagenta);
+        crd::math::Mat4f slab_world = crd::math::Mat4f::identity();
+        slab_world.c3               = {0.0F, 0.35F, 13.0F, 1.0F};
+        crd::draw::box_solid_to(draw_buf, slab_world, {1.4F, 0.35F, 0.85F},
+                                crd::draw::Color{255, 200, 40, 90}); // translucent amber — alpha blending live
+    }
 
     crd::perf::init({});
     [[maybe_unused]] const auto perf_alloc_idx =
@@ -328,6 +463,32 @@ int main(int argc, char** argv)
 
         const crd::f64 tsec =
             std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - smoke_start_time).count();
+
+        // GEO-8: advance the animated ring's playheads (declared writes — palettes re-sample each sync)
+        {
+            static crd::f64 s_last = 0.0;
+            const crd::f32  dt     = static_cast<crd::f32>(tsec - s_last);
+            s_last                 = tsec;
+            for (const crd::scene::EntityId e : animated)
+            {
+                if (auto* a = world.get_component_mut<crd::scene::SkeletonAnimator>(e); a != nullptr)
+                {
+                    a->time += dt * a->speed;
+                }
+            }
+        }
+
+        // the monuments spin slowly (transform upserts → live BVH refresh + chunk-grain partial re-upload)
+        for (const auto& mon : monuments)
+        {
+            crd::scene::Transform t;
+            t.translation = crd::math::from_raw_vec<crd::units::dim::Length>(
+                crd::math::Vec3f{mon.x, 3.0F, mon.z});
+            t.rotation = crd::math::from_axis_angle(crd::math::Vec3f{0, 1, 0}, static_cast<crd::f32>(tsec) * 0.6F);
+            t.scale    = {mon.scale, mon.scale, mon.scale};
+            t.world    = crd::math::from_trs(crd::math::Vec3f{mon.x, 3.0F, mon.z}, t.rotation, t.scale);
+            world.add_component(mon.entity, t);
+        }
 
         // a travelling wave: ONE grid row per frame bobs (the chunk-grain partial re-upload, live every frame)
         if (scene_ready && cells.size() == side * side)

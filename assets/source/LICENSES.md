@@ -11,11 +11,13 @@ repository does not change those terms.
 | `BoxTextured.glb` | Khronos Group glTF Sample Assets (Cesium contribution) | CC-BY 4.0 (with trademark limitations) | © Cesium / Khronos                   |
 | `Duck.glb`        | Khronos Group glTF Sample Assets (Sony contribution)   | SCEA Shared Source License 1.0         | © Sony Computer Entertainment Inc.   |
 | `BoomBox.glb`     | Khronos Group glTF Sample Assets (UX3D contribution)   | CC0 1.0 Universal (Public Domain)      | © UX3D / Khronos                     |
+| `Fox.glb`         | Khronos Group glTF Sample Assets (PixelMannen/tomkranis) | CC0 model + CC-BY 4.0 rig/animation  | model by PixelMannen; rig/anim by @tomkranis |
 
 Original sources:
 - https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/BoxTextured
 - https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/Duck
 - https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/BoomBox
+- https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/Fox
 
 License texts:
 - CC-BY 4.0:  https://creativecommons.org/licenses/by/4.0/

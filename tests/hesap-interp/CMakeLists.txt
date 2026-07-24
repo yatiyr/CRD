@@ -1,4 +1,5 @@
 add_executable(crd-hesap-interp-tests
+    test_keyframe.cpp # GEO-8: the ONE curve engine (anim + timeline + audio) — glTF-exact keyframe semantics
     test_piecewise.cpp
     test_cubic_spline.cpp
     test_akima_bary.cpp

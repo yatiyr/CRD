@@ -596,6 +596,7 @@ add_subdirectory(engine/preset)
 add_subdirectory(engine/profile)
 add_subdirectory(engine/eylem)
 add_subdirectory(engine/eylem-rigid3d)
+add_subdirectory(engine/anim)          # GEO-8 (D-007 row 73): SKEL/ANIM resources + glTF-exact clip sampling on the hesap-interp curve engine
 add_subdirectory(engine/draw)
 add_subdirectory(engine/scene-render)  # GEO-7 (D-007 row 72): scene <-> ECS <-> renderer integration on gpu-context (chunk-grain extract/cull/submit)
 add_subdirectory(engine/draw-imgui)

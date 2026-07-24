@@ -3,6 +3,7 @@
 
 #include <crd/scenerender/scene_renderer.hpp>
 
+#include <crd/anim/pose.hpp>
 #include <crd/geometry/primitives/transform.hpp>
 #include <crd/gpu/context.hpp>
 #include <crd/kir/ckir.hpp>
@@ -110,6 +111,99 @@ void build_scene_vs(crd::kir::KGraph& g, crd::kir::KEntry& ve)
     ve.out[1]   = {g.vec4(cr, cg, cb, ca), 1, kir::Interp::Flat};
 }
 
+// GEO-8 skinned VS: the same pull path, but the vertex ALSO pulls its packed skin record (header [25] = skin
+// stream offset, 6 words/vertex: joints as two u16-pairs + 4 weights) and blends FOUR palette matrices from the
+// per-instance palette section (header [26] = palette offset, [27] = joint count) — B8-j's LBS formulation:
+// blending the transformed positions is affine-equivalent to blending the matrices.
+void build_scene_vs_skinned(crd::kir::KGraph& g, crd::kir::KEntry& ve)
+{
+    namespace kir = crd::kir;
+    Gx c(g);
+
+    const int vid  = g.cast(g.builtin(kir::KBuiltin::VertexIndex), kir::DType::U32);
+    const int idxc = c.hdru(0U);
+    const int ii   = c.dvd(vid, idxc);
+    const int li   = c.sub(vid, c.mul(ii, idxc));
+
+    const int vidx  = c.loadu(c.add(c.hdru(2U), li));
+    const int vbase = c.add(c.hdru(3U), c.mul(vidx, c.ku(kVertexWords)));
+    const int px    = c.loadf(c.add(vbase, c.ku(0U)));
+    const int py    = c.loadf(c.add(vbase, c.ku(1U)));
+    const int pz    = c.loadf(c.add(vbase, c.ku(2U)));
+    const int nx    = c.loadf(c.add(vbase, c.ku(3U)));
+    const int ny    = c.loadf(c.add(vbase, c.ku(4U)));
+    const int nz    = c.loadf(c.add(vbase, c.ku(5U)));
+
+    const int slot  = c.loadu(c.add(c.hdru(5U), ii));
+    const int ibase = c.add(c.hdru(4U), c.mul(slot, c.ku(kInstanceWords)));
+
+    // the skin record
+    const int sbase = c.add(c.hdru(25U), c.mul(vidx, c.ku(6U)));
+    const int jw0   = c.loadu(sbase);
+    const int jw1   = c.loadu(c.add(sbase, c.ku(1U)));
+    const int mask  = c.ku(0xFFFFU);
+    int       joints[4];
+    joints[0] = g.binary(kir::KOp::BitAnd, jw0, mask);
+    joints[1] = g.binary(kir::KOp::Shr, jw0, c.ku(16U));
+    joints[2] = g.binary(kir::KOp::BitAnd, jw1, mask);
+    joints[3] = g.binary(kir::KOp::Shr, jw1, c.ku(16U));
+    int weights[4];
+    for (crd::u32 k = 0; k < 4U; ++k) { weights[k] = c.loadf(c.add(sbase, c.ku(2U + k))); }
+
+    // the per-instance palette: pbase = palette_off + slot·joint_count·16
+    const int pbase = c.add(c.hdru(26U), c.mul(slot, c.mul(c.hdru(27U), c.ku(16U))));
+
+    // LBS: Σ wk · (Mk · [p,1]) for position, Σ wk · (Mk · [n,0]) for the normal (B8-j)
+    int sx = c.kf(0.0);
+    int sy = c.kf(0.0);
+    int sz = c.kf(0.0);
+    int snx = c.kf(0.0);
+    int sny = c.kf(0.0);
+    int snz = c.kf(0.0);
+    for (crd::u32 k = 0; k < 4U; ++k)
+    {
+        const int mb = c.add(pbase, c.mul(joints[k], c.ku(16U)));
+        int       m[16];
+        for (crd::u32 e = 0; e < 16U; ++e) { m[e] = c.loadf(c.add(mb, c.ku(e))); }
+        const int tx = c.add(c.add(c.mul(m[0], px), c.mul(m[4], py)), c.add(c.mul(m[8], pz), m[12]));
+        const int ty = c.add(c.add(c.mul(m[1], px), c.mul(m[5], py)), c.add(c.mul(m[9], pz), m[13]));
+        const int tz = c.add(c.add(c.mul(m[2], px), c.mul(m[6], py)), c.add(c.mul(m[10], pz), m[14]));
+        sx           = c.add(sx, c.mul(tx, weights[k]));
+        sy           = c.add(sy, c.mul(ty, weights[k]));
+        sz           = c.add(sz, c.mul(tz, weights[k]));
+        const int tnx = c.add(c.add(c.mul(m[0], nx), c.mul(m[4], ny)), c.mul(m[8], nz));
+        const int tny = c.add(c.add(c.mul(m[1], nx), c.mul(m[5], ny)), c.mul(m[9], nz));
+        const int tnz = c.add(c.add(c.mul(m[2], nx), c.mul(m[6], ny)), c.mul(m[10], nz));
+        snx           = c.add(snx, c.mul(tnx, weights[k]));
+        sny           = c.add(sny, c.mul(tny, weights[k]));
+        snz           = c.add(snz, c.mul(tnz, weights[k]));
+    }
+
+    // then the instance's world matrix (the entity transform on top of the skinned model-space result)
+    int m[16];
+    for (crd::u32 e = 0; e < 16U; ++e) { m[e] = c.loadf(c.add(ibase, c.ku(e))); }
+    const int wx  = c.add(c.add(c.mul(m[0], sx), c.mul(m[4], sy)), c.add(c.mul(m[8], sz), m[12]));
+    const int wy  = c.add(c.add(c.mul(m[1], sx), c.mul(m[5], sy)), c.add(c.mul(m[9], sz), m[13]));
+    const int wz  = c.add(c.add(c.mul(m[2], sx), c.mul(m[6], sy)), c.add(c.mul(m[10], sz), m[14]));
+    const int nwx = c.add(c.add(c.mul(m[0], snx), c.mul(m[4], sny)), c.mul(m[8], snz));
+    const int nwy = c.add(c.add(c.mul(m[1], snx), c.mul(m[5], sny)), c.mul(m[9], snz));
+    const int nwz = c.add(c.add(c.mul(m[2], snx), c.mul(m[6], sny)), c.mul(m[10], snz));
+
+    int clip[4];
+    c.mul_view_proj(wx, wy, wz, clip);
+
+    const int cr = c.loadf(c.add(ibase, c.ku(16U)));
+    const int cg = c.loadf(c.add(ibase, c.ku(17U)));
+    const int cb = c.loadf(c.add(ibase, c.ku(18U)));
+    const int ca = c.loadf(c.add(ibase, c.ku(19U)));
+
+    ve.stage    = kir::KStage::Vertex;
+    ve.position = g.vec4(clip[0], clip[1], clip[2], clip[3]);
+    ve.n_out    = 2;
+    ve.out[0]   = {g.vec3(nwx, nwy, nwz), 0, kir::Interp::Smooth};
+    ve.out[1]   = {g.vec4(cr, cg, cb, ca), 1, kir::Interp::Flat};
+}
+
 // FS: N·L + ambient with the instance colour (light dir from header words 22..24; both renormalized).
 void build_scene_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
 {
@@ -168,6 +262,17 @@ struct SceneRenderer::Impl
     std::unique_ptr<crd::gpu::IGpuProgram>    vs;
     std::unique_ptr<crd::gpu::IGpuProgram>    fs;
     std::unique_ptr<crd::gpu::IRasterProgram> program;
+    // GEO-8: the skinned program pair + the skeleton/clip handle caches + palette scratch
+    std::unique_ptr<crd::gpu::IGpuProgram>    vs_skinned;
+    std::unique_ptr<crd::gpu::IRasterProgram> program_skinned;
+    crd::containers::HashMap<crd::resources::ResourceId, crd::resources::ResourceHandle<crd::anim::SkeletonResource>>
+        skeleton_cache{nullptr};
+    crd::containers::HashMap<crd::resources::ResourceId, crd::resources::ResourceHandle<crd::anim::AnimClipResource>>
+        clip_cache{nullptr};
+    crd::containers::Array<crd::anim::JointPose>  pose_scratch{nullptr};
+    crd::containers::Array<crd::math::Mat4f>      world_scratch{nullptr};
+    crd::containers::Array<crd::math::Mat4f>      palette_scratch{nullptr};
+    crd::containers::Array<crd::f32>              palette_staging{nullptr};
 
     crd::u64 structure_sig = 0;
     bool     has_structure = false;
@@ -178,7 +283,11 @@ struct SceneRenderer::Impl
     // entity → (group << 32 | slot) — the BVH candidate → instance bridge, rebuilt with the structure
     crd::containers::HashMap<crd::scene::EntityId, crd::u64> entity_slot;
 
-    explicit Impl(crd::memory::IAllocator* a) : alloc(a), group_of_mesh(a), material_color(a), entity_slot(a) {}
+    explicit Impl(crd::memory::IAllocator* a)
+        : alloc(a), skeleton_cache(a), clip_cache(a), pose_scratch(a), world_scratch(a), palette_scratch(a),
+          palette_staging(a), group_of_mesh(a), material_color(a), entity_slot(a)
+    {
+    }
 
     [[nodiscard]] crd::math::Vec4f resolve_color(const crd::resources::ResourceId& material)
     {
@@ -225,6 +334,15 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
     m_impl->fs = ctx.create_program(fg, fe);
     if (m_impl->vs == nullptr || m_impl->fs == nullptr) { return false; }
     m_impl->program = m_impl->raster->create_raster_program(*m_impl->vs, *m_impl->fs);
+
+    crd::kir::KGraph svg(m_impl->alloc);
+    crd::kir::KEntry sve;
+    build_scene_vs_skinned(svg, sve);
+    m_impl->vs_skinned = ctx.create_program(svg, sve);
+    if (m_impl->vs_skinned != nullptr)
+    {
+        m_impl->program_skinned = m_impl->raster->create_raster_program(*m_impl->vs_skinned, *m_impl->fs);
+    }
     return m_impl->program != nullptr;
 }
 
@@ -239,6 +357,7 @@ struct ExtractCtx
     crd::containers::Array<MeshGroup>* groups = nullptr;
     crd::scene::ComponentId   transform_id{};
     crd::scene::ComponentId   renderer_id{};
+    crd::scene::ComponentId   animator_id{}; // GEO-8
     SyncStats*                stats = nullptr;
 
     // pass 1 outputs
@@ -333,6 +452,9 @@ void pass_rebuild(const crd::scene::ChunkView& view, void* ud)
         group.instances.push_back(InstanceGpu{});
         group.slot_entity.push_back(view.entities[i]);
         group.world_bounds.push_back({});
+        group.slot_skeleton.push_back({});
+        group.slot_clip.push_back({});
+        group.slot_time.push_back(0.0F);
         write_slot(group, slot, transforms[i], ctx.impl->resolve_color(renderers[i].material));
         ctx.impl->entity_slot.insert(view.entities[i],
                                      (static_cast<crd::u64>(gi) << 32U) | static_cast<crd::u64>(slot));
@@ -410,6 +532,28 @@ void pass_update(const crd::scene::ChunkView& view, void* ud)
     }
 }
 
+// GEO-8: the animator pass — every sync, over the SKINNED chunks only (Transform+MeshRenderer+SkeletonAnimator):
+// mirror the animator state into the groups' slot arrays (palettes re-sample from these each frame)
+void pass_animators(const crd::scene::ChunkView& view, void* ud)
+{
+    auto& ctx = *static_cast<ExtractCtx*>(ud);
+    const auto* renderers = view.array<const crd::scene::MeshRenderer>(ctx.renderer_id);
+    const auto* animators = view.array<const crd::scene::SkeletonAnimator>(ctx.animator_id);
+    if (renderers == nullptr || animators == nullptr) { return; }
+    for (crd::u32 i = 0; i < view.entity_count; ++i)
+    {
+        const crd::u64* packed = ctx.impl->entity_slot.find(view.entities[i]);
+        if (packed == nullptr) { continue; }
+        const auto gi   = static_cast<crd::u32>(*packed >> 32U);
+        const auto slot = static_cast<crd::u32>(*packed & 0xFFFFFFFFU);
+        MeshGroup& group = (*ctx.groups)[gi];
+        if (slot >= group.slot_skeleton.size()) { continue; }
+        group.slot_skeleton[slot] = animators[i].skeleton;
+        group.slot_clip[slot]     = animators[i].clip;
+        group.slot_time[slot]     = animators[i].time * animators[i].speed;
+    }
+}
+
 } // namespace
 
 SyncStats SceneRenderer::sync(crd::scene::World& world)
@@ -423,6 +567,7 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
     ctx.groups       = &m_groups;
     ctx.transform_id = world.component_id<crd::scene::Transform>();
     ctx.renderer_id  = world.component_id<crd::scene::MeshRenderer>();
+    ctx.animator_id  = world.component_id<crd::scene::SkeletonAnimator>();
     ctx.stats        = &stats;
 
     // pass 1: the structure signature
@@ -441,6 +586,9 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
             group.slot_entity.clear();
             group.world_bounds.clear();
             group.runs.clear();
+            group.slot_skeleton.clear();
+            group.slot_clip.clear();
+            group.slot_time.clear();
         }
         impl.entity_slot.clear();
         auto q = world.query<crd::scene::Transform, crd::scene::MeshRenderer>();
@@ -454,6 +602,12 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
         q.for_each_chunk(&pass_update, &ctx);
     }
 
+    // GEO-8: mirror the animator state (skinned chunks only — the third required component narrows the walk)
+    {
+        auto q = world.query<crd::scene::Transform, crd::scene::MeshRenderer, crd::scene::SkeletonAnimator>();
+        q.for_each_chunk(&pass_animators, &ctx);
+    }
+
     // ── GPU: (re)create buffers + upload geometry once + instance payloads by dirty grain ──────────────────────
     for (MeshGroup& group : m_groups)
     {
@@ -463,13 +617,36 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
 
         const crd::resources::MeshResource* mesh = group.mesh.get();
         const auto vertex_words = static_cast<crd::u32>(mesh->vertices.size() / 4U);
+        const auto vcount       = static_cast<crd::u32>(mesh->vertices.size() / 48U);
         const crd::u32 needed_capacity = count;
+
+        // GEO-8: a skinned group's JOINT COUNT comes from the first slot's skeleton (uniform per mesh in practice)
+        if (mesh->has_skin() && group.joint_count == 0U)
+        {
+            for (crd::usize s = 0; s < group.slot_skeleton.size(); ++s)
+            {
+                if (group.slot_skeleton[s].is_null()) { continue; }
+                auto handle = impl.rm->load_sync<crd::anim::SkeletonResource>(group.slot_skeleton[s]);
+                if (handle.state() == crd::resources::LoadState::Ready && handle.get() != nullptr)
+                {
+                    group.joint_count = handle.get()->joint_count();
+                    group.skinned     = true;
+                    group.buffer.reset(); // relayout with the skin + palette sections
+                    break;
+                }
+            }
+        }
+
         if (group.buffer == nullptr || group.capacity < needed_capacity)
         {
             group.indices_off   = kHeaderWords;
             group.vertices_off  = group.indices_off + group.index_count;
-            group.instances_off = group.vertices_off + vertex_words;
-            group.visible_off   = group.instances_off + needed_capacity * kInstanceWords;
+            group.skin_off      = group.vertices_off + vertex_words;
+            const crd::u32 skin_words = group.skinned ? vcount * 6U : 0U;
+            group.instances_off = group.skin_off + skin_words;
+            group.palette_off   = group.instances_off + needed_capacity * kInstanceWords;
+            const crd::u32 palette_words = group.skinned ? needed_capacity * group.joint_count * 16U : 0U;
+            group.visible_off   = group.palette_off + palette_words;
             const crd::u32 total_words = group.visible_off + needed_capacity;
             group.buffer             = impl.raster->create_storage_buffer(total_words * 4U);
             group.capacity           = needed_capacity;
@@ -485,6 +662,23 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
                                                   static_cast<crd::u32>(mesh->indices.size()));
                 (void)impl.raster->upload_storage(*group.buffer, group.vertices_off * 4U, mesh->vertices.data(),
                                                   static_cast<crd::u32>(mesh->vertices.size()));
+                if (group.skinned) // the packed skin stream: 2 words of u16-pair joints + 4 weight words
+                {
+                    crd::containers::Array<crd::u32> packed(impl.alloc);
+                    packed.resize(static_cast<crd::usize>(vcount) * 6U);
+                    for (crd::u32 v = 0; v < vcount; ++v)
+                    {
+                        const crd::u16* j = mesh->skin_joints.data() + static_cast<crd::usize>(v) * 4U;
+                        const crd::f32* w = mesh->skin_weights.data() + static_cast<crd::usize>(v) * 4U;
+                        packed[static_cast<crd::usize>(v) * 6U + 0U] =
+                            static_cast<crd::u32>(j[0]) | (static_cast<crd::u32>(j[1]) << 16U);
+                        packed[static_cast<crd::usize>(v) * 6U + 1U] =
+                            static_cast<crd::u32>(j[2]) | (static_cast<crd::u32>(j[3]) << 16U);
+                        std::memcpy(packed.data() + static_cast<crd::usize>(v) * 6U + 2U, w, 16U);
+                    }
+                    (void)impl.raster->upload_storage(*group.buffer, group.skin_off * 4U, packed.data(),
+                                                      static_cast<crd::u32>(packed.size() * 4U));
+                }
                 group.geometry_uploaded = true;
             }
             // a fresh buffer / a rebuilt table needs the FULL instance payload regardless of per-run dirt
@@ -508,6 +702,90 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
         }
     }
 
+    // ── GEO-8: the skinned palettes — sample every skinned instance's clip, upload the palette section.
+    // Animation is ALWAYS dirty by definition: this is per-frame data, deliberately outside the partial-upload
+    // accounting the static gate measures.
+    for (MeshGroup& group : m_groups)
+    {
+        if (!group.skinned || group.buffer == nullptr || group.instances.size() == 0U) { continue; }
+        const crd::u32 jc    = group.joint_count;
+        const auto     count = static_cast<crd::u32>(group.instances.size());
+        impl.palette_staging.resize(static_cast<crd::usize>(count) * jc * 16U);
+        impl.pose_scratch.resize(jc);
+        impl.world_scratch.resize(jc);
+        impl.palette_scratch.resize(jc);
+
+        for (crd::u32 slot = 0; slot < count; ++slot)
+        {
+            crd::f32* dst = impl.palette_staging.data() + static_cast<crd::usize>(slot) * jc * 16U;
+            const crd::anim::SkeletonResource* skel = nullptr;
+            if (!group.slot_skeleton[slot].is_null())
+            {
+                auto* cached = impl.skeleton_cache.find(group.slot_skeleton[slot]);
+                if (cached == nullptr)
+                {
+                    impl.skeleton_cache.insert(
+                        group.slot_skeleton[slot],
+                        impl.rm->load_sync<crd::anim::SkeletonResource>(group.slot_skeleton[slot]));
+                    cached = impl.skeleton_cache.find(group.slot_skeleton[slot]);
+                }
+                if (cached != nullptr && cached->get() != nullptr && cached->get()->joint_count() == jc)
+                {
+                    skel = cached->get();
+                }
+            }
+            if (skel == nullptr) // no skeleton → identity palette (bind pose renders)
+            {
+                for (crd::u32 j = 0; j < jc; ++j)
+                {
+                    for (crd::u32 c = 0; c < 16U; ++c)
+                    {
+                        dst[j * 16U + c] = (c % 5U) == 0U ? 1.0F : 0.0F;
+                    }
+                }
+                continue;
+            }
+
+            const crd::anim::AnimClipResource* clip = nullptr;
+            if (!group.slot_clip[slot].is_null())
+            {
+                auto* ccached = impl.clip_cache.find(group.slot_clip[slot]);
+                if (ccached == nullptr)
+                {
+                    impl.clip_cache.insert(group.slot_clip[slot],
+                                           impl.rm->load_sync<crd::anim::AnimClipResource>(group.slot_clip[slot]));
+                    ccached = impl.clip_cache.find(group.slot_clip[slot]);
+                }
+                if (ccached != nullptr) { clip = ccached->get(); }
+            }
+
+            if (clip != nullptr && clip->duration > 0.0F)
+            {
+                const crd::f32 t = group.slot_time[slot] - clip->duration
+                                       * static_cast<crd::f32>(static_cast<crd::i64>(group.slot_time[slot]
+                                                                                     / clip->duration));
+                crd::anim::sample_clip(*clip, *skel, t, {impl.pose_scratch.data(), impl.pose_scratch.size()});
+            }
+            else // no clip: the rest pose
+            {
+                for (crd::u32 j = 0; j < jc; ++j)
+                {
+                    const crd::f32* r                 = skel->rest.data() + static_cast<crd::usize>(j) * crd::anim::kRestFloats;
+                    impl.pose_scratch[j].translation = {r[0], r[1], r[2]};
+                    impl.pose_scratch[j].rotation    = {r[3], r[4], r[5], r[6]};
+                    impl.pose_scratch[j].scale       = {r[7], r[8], r[9]};
+                }
+            }
+            crd::anim::compute_pose_matrices(*skel, {impl.pose_scratch.data(), impl.pose_scratch.size()},
+                                             {impl.world_scratch.data(), impl.world_scratch.size()});
+            crd::anim::compute_skin_palette(*skel, {impl.world_scratch.data(), impl.world_scratch.size()},
+                                            {impl.palette_scratch.data(), impl.palette_scratch.size()});
+            std::memcpy(dst, impl.palette_scratch.data(), static_cast<crd::usize>(jc) * 64U);
+        }
+        (void)impl.raster->upload_storage(*group.buffer, group.palette_off * 4U, impl.palette_staging.data(),
+                                          static_cast<crd::u32>(impl.palette_staging.size() * 4U));
+    }
+
     stats.groups = static_cast<crd::u32>(m_groups.size());
     return stats;
 }
@@ -522,6 +800,7 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
 
     crd::math::Vec4f planes[6];
     frustum_planes(view_proj, planes);
+    bool first_draw = true; // the frame's first group CLEARS; every later group LOADs and depth-composes
 
     // broad phase: a configured BVH prunes to the frustum's AABB; otherwise every slot is a candidate
     const bool use_bvh = bvh != nullptr && bvh->is_configured();
@@ -568,13 +847,27 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         header[5] = group.visible_off;
         std::memcpy(&header[6], &view_proj, 16U * 4U);
         std::memcpy(&header[22], &light_dir, 3U * 4U);
+        header[25] = group.skin_off;    // GEO-8: the skinned VS's extra sections
+        header[26] = group.palette_off;
+        header[27] = group.joint_count;
         (void)impl.raster->upload_storage(*group.buffer, 0U, header, sizeof(header));
         (void)impl.raster->upload_storage(*group.buffer, group.visible_off * 4U, group.visible.data(),
                                           visible_count * 4U);
         stats.uploaded_bytes += sizeof(header) + static_cast<crd::u64>(visible_count) * 4U;
 
-        impl.raster->draw_storage_depth(target, *impl.program, clear, 0.0F, crd::gpu::DepthCompare::GreaterEqual,
-                                        *group.buffer, visible_count * group.index_count);
+        crd::gpu::IRasterProgram* program =
+            group.skinned && impl.program_skinned != nullptr ? impl.program_skinned.get() : impl.program.get();
+        if (first_draw)
+        {
+            impl.raster->draw_storage_depth(target, *program, clear, 0.0F, crd::gpu::DepthCompare::GreaterEqual,
+                                            *group.buffer, visible_count * group.index_count);
+            first_draw = false;
+        }
+        else // subsequent groups COMPOSE through the frame's depth — never wipe the groups before them
+        {
+            impl.raster->draw_storage_depth_load(target, *program, crd::gpu::DepthCompare::GreaterEqual,
+                                                 *group.buffer, visible_count * group.index_count);
+        }
         ++stats.draws;
         stats.drawn_instances += visible_count;
     }

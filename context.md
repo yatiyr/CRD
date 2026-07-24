@@ -367,8 +367,30 @@
 > scene — ~100 fps, ~5.2k drawn after culling, clean exit. CookIO boundary corrected (root-relative lexical
 > normalization; `../` inside the tree = recorded edges). Boards: scene 35,206/280 · scene-render 58/5 ·
 > resources 13,679/110 · cooker 288/26 · asset-io 586/45; 21 files tidy-clean.
-> **▶ NEXT: GEO-8 (Skeleton/AnimClip resources on hesap-interp — ONE curve engine) → OFF band. (Push + CI
-> verify still pending on the RET+GEO-4..7 arc.)**
+> **[✅ GEO-8 — ANIMATION RESOURCES: gold for ANY skeleton, the ONE curve engine, a live skinned character]:**
+> `hesap-interp/keyframe.hpp` = the shared curve engine (glTF-exact Step/Linear/CubicHermite, bit-exact keys,
+> scipy-parity Hermite; GEO-9/10 consume it next); glTF skins/animations/JOINTS/WEIGHTS parse; NEW `crd-anim`:
+> SKEL (topological-order-as-format, no humanoid assumptions) + ANIM resources, spec-exact sampling (SLERP
+> linear rotation, componentwise-Hermite+normalize cubic), pose/palette composition, DQS conversion + B8-j CPU
+> oracle; cook decomposes skins→SKEL, animations→ANIM, SKNV vertex stream (joints remapped, conditioning
+> skipped, SI-scaled); SkeletonAnimator component + chunk-grain animator mirror + the skinned CKIR VS (B8-j LBS,
+> 4-bone palette blend from the group buffer). THE FOX GATE: the real Khronos character cooks→loads→resamples
+> BIT-STABLE at 100+ keys vs raw glTF; bind-pose palette == identity; sandbox: 24 skinned Foxes (3 clips cycled)
+> animate around the 10k field, ~77 fps, validation ON, clean exit. Suites: anim 1,559/5 · keyframe 29/4 +
+> all prior suites zero-regression; 19 files tidy-clean. Deferred w/ homes: morph rendering (renderer band),
+> GPU DQS variant (B8-l), node-track animation (GEO-9).
+> **[✅ GEO-8 addendum — the SHOWCASE + a USER-CAUGHT multi-group defect fixed]:** sandbox now shows the full
+> band: 3 spinning MONUMENTS (STL icosahedron · OBJ torus with GENERATED normals · the teal 3MF box) + the RET-6
+> shape suite restored; PRIM entries now STAMP the authored material id (the GEO-3/4 placeholder paid — images/
+> materials cook before meshes; wave1 v3); demo sources icosahedron.stl/torus.obj/demo_box.3mf added; sandbox
+> CMake globs stl/obj/ply/3mf. ⛔ THE DEFECT (user-caught live: "I can't see the monuments"): draw_storage_depth
+> CLEARS per call ⇒ multi-group scenes only showed the LAST group — since GEO-7, invisible to the single-group
+> GPU gate and the pixel-blind smoke. FIX: NEW `draw_storage_depth_load` (colour+depth LOAD, depth test+WRITE —
+> groups compose through the frame's real depth), Vulkan + DX12 both, DX12 device gate (near-wins-through-loaded-
+> depth + prior-pixels-survive); renderer: first group clears, the rest load. LESSON: a smoke test that cannot
+> see pixels is not a visual gate — eyes (or readback asserts on MULTI-group scenes) are.
+> **▶ NEXT: GEO-9 (the TIMELINE/SEQUENCE resource — OTIO-shaped, rational time, .otio interchange) → GEO-10
+> (crd-audio) → GEO-11 (agent surface) → OFF band. (Push + CI verify pending on the RET+GEO-4..8 arc.)**
 > Denoising (OIDN-class AOV CNN) is a FINISHING filter, never in the reference path (the offline mode IS the ground truth
 > that certifies real-time).
 > **[✅ conv-via-FFT / fast-FMA closed 2026-07-23]:** conv-via-FFT already shipped (crushes 4/5); the fast-FMA experiment was the

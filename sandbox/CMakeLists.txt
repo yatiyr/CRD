@@ -18,6 +18,7 @@ target_link_libraries(crd-sandbox PRIVATE
     crd-gpu-context          # ADR-0105: the ONE graphics layer
     crd-gpu-context-vulkan
     crd-kir                  # the CKIR canvas scene (KGraph → create_program)
+    crd-anim                 # GEO-8: SKEL/ANIM loaders (the animated ring)
     crd-scene                # GEO-7: the ADR-0050 World the imported scene instantiates into
     crd-scene-render         # GEO-7: chunk-grain extract/cull/submit through gpu-context
     crd-resources            # GEO-7: the mounted demo PACK (mesh + PBRM loaders)
@@ -49,6 +50,10 @@ set(DEMO_ASSETS_PACK    "${DEMO_ASSETS_OUT_DIR}/demo_assets.crdr")
 file(GLOB_RECURSE DEMO_ASSETS_SOURCES CONFIGURE_DEPENDS
     "${DEMO_ASSETS_SRC_DIR}/*.glb"
     "${DEMO_ASSETS_SRC_DIR}/*.gltf"
+    "${DEMO_ASSETS_SRC_DIR}/*.stl"
+    "${DEMO_ASSETS_SRC_DIR}/*.obj"
+    "${DEMO_ASSETS_SRC_DIR}/*.ply"
+    "${DEMO_ASSETS_SRC_DIR}/*.3mf"
     "${DEMO_ASSETS_SRC_DIR}/*.png"
     "${DEMO_ASSETS_SRC_DIR}/*.jpg"
     "${DEMO_ASSETS_SRC_DIR}/*.jpeg"

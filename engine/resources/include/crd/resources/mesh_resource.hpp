@@ -53,6 +53,16 @@ struct MeshResource
     crd::f32 bounds_max[3] = {-1.0F, -1.0F, -1.0F};
     [[nodiscard]] bool has_bounds() const noexcept { return bounds_min[0] <= bounds_max[0]; }
 
+    // GEO-8 (appended): the optional SKIN vertex stream ('SKNV' chunk — 4×u16 joints + 4×f32 weights per vertex,
+    // 24 bytes). Joint indices are TOPOLOGICAL skeleton indices (the cook remapped them); empty = unskinned.
+    crd::containers::Array<crd::u16> skin_joints;  // 4 per vertex
+    crd::containers::Array<crd::f32> skin_weights; // 4 per vertex
+    [[nodiscard]] bool has_skin() const noexcept
+    {
+        const crd::usize vc = vertices.size() / kMeshVertexStride;
+        return vc > 0U && skin_joints.size() == vc * 4U && skin_weights.size() == vc * 4U;
+    }
+
     explicit MeshResource(crd::memory::IAllocator* a) : vertices(a), indices(a), primitives(a) {}
 
     MeshResource(const MeshResource&)            = delete;

@@ -13,6 +13,7 @@
 // contract already forbids it). Degenerate/zero-area triangles → warn + cook (repair is GEO-2 conditioning). Boundary
 // edges are NOT reported — STL soup + open scans make them the norm pre-weld, not a defect.
 
+#include <crd/anim/anim_resources.hpp>
 #include <crd/assetio/condition.hpp>
 #include <crd/assetio/gltf.hpp>
 #include <crd/assetio/imported_asset.hpp>
@@ -62,8 +63,9 @@ namespace crd::cooker
 namespace
 {
 
-// v2 (GEO-6): reads flow through CookIO — sidecar ids via stable_id, external inputs recorded as edges
-constexpr crd::u32 kWave1HandlerVersion = 2U;
+// v3 (GEO-8 showcase): PRIM entries now CARRY the authored material id (the "GEO-3/4 wires it" placeholder paid
+// off — consumers reading the MESH artifact alone see its material). v2 (GEO-6): reads flow through CookIO.
+constexpr crd::u32 kWave1HandlerVersion = 3U;
 constexpr crd::u32 kWave1VertexStride   = 48U; // float3 pos + float3 norm + float2 uv + float4 tan (ADR-0043)
 
 crd::containers::String sanitize_name(const char* name, crd::memory::IAllocator* alloc, const char* fallback = "mesh")
@@ -169,7 +171,8 @@ enum class Wave1Format : crd::u8
 
 crd::containers::Array<crd::u8> build_wave1_artifact(crd::assetio::ImportedMesh& mesh,
                                                      const crd::resources::ResourceId& id,
-                                                     crd::memory::IAllocator* alloc, const MeshCookOptions& options)
+                                                     crd::memory::IAllocator* alloc, const MeshCookOptions& options,
+                                                     const crd::resources::ResourceId& material_id = {})
 {
     crd::containers::Array<crd::u8> empty(alloc);
     if (mesh.positions.size() == 0U || mesh.indices.size() == 0U) { return empty; }
@@ -179,7 +182,8 @@ crd::containers::Array<crd::u8> build_wave1_artifact(crd::assetio::ImportedMesh&
     // compatible tangents when UVs exist (with mirror-seam splitting). All bit-stable under face reordering.
     // GEO-3 rule: FULLY-AUTHORED meshes (glTF with TANGENT) pass through UNTOUCHED — authored data is never regenerated
     // (welding drops derived tangents, so an authored frame must skip the whole conditioning chain).
-    if (mesh.tangent.size() != mesh.positions.size())
+    // GEO-8 rule: SKINNED meshes are fully authored BY DEFINITION — welding would desync the per-vertex joint mapping.
+    if (mesh.tangent.size() != mesh.positions.size() && !mesh.has_skin())
     {
         (void)crd::assetio::weld_exact(mesh, alloc);
         if (!mesh.has_normals())
@@ -260,7 +264,8 @@ crd::containers::Array<crd::u8> build_wave1_artifact(crd::assetio::ImportedMesh&
     indx_buf.resize(static_cast<crd::usize>(ic) * 4U);
     std::memcpy(indx_buf.data(), mesh.indices.data(), indx_buf.size());
 
-    // PRIM: u32 count + one 32-byte entry (vertex_count, index_count, vbo=0, ibo=0, material null — GEO-3/4 wires it)
+    // PRIM: u32 count + one 32-byte entry (vertex_count, index_count, offsets, then the AUTHORED material id —
+    // consumers reading the MESH artifact alone get its material binding)
     crd::containers::Array<crd::u8> prim_buf(alloc);
     prim_buf.resize(4U + 32U);
     const crd::u32 prim_count = 1U;
@@ -269,11 +274,25 @@ crd::containers::Array<crd::u8> build_wave1_artifact(crd::assetio::ImportedMesh&
     std::memset(entry, 0, 32U);
     std::memcpy(entry + 0, &vc, 4U);
     std::memcpy(entry + 4, &ic, 4U);
+    std::memcpy(entry + 16, &material_id.hi, 8U);
+    std::memcpy(entry + 24, &material_id.lo, 8U);
 
     crd::resources::CrdrWriter writer(alloc, id, crd::resources::kFourCC_MESH);
     writer.add_chunk(crd::resources::kFourCC_VERT, crd::containers::as_const_span(vert_buf));
     writer.add_chunk(crd::resources::kFourCC_INDX, crd::containers::as_const_span(indx_buf));
     writer.add_chunk(crd::resources::kFourCC_PRIM, crd::containers::as_const_span(prim_buf));
+    if (mesh.has_skin()) // GEO-8: the SKIN vertex stream (joints already remapped to topological order)
+    {
+        crd::containers::Array<crd::u8> skin_buf(alloc);
+        skin_buf.resize(static_cast<crd::usize>(vc) * 24U);
+        crd::u8* sp = skin_buf.data();
+        for (crd::u32 vi = 0U; vi < vc; ++vi, sp += 24U)
+        {
+            std::memcpy(sp, mesh.joints0.data() + static_cast<crd::usize>(vi) * 4U, 8U);
+            std::memcpy(sp + 8U, mesh.weights0.data() + static_cast<crd::usize>(vi) * 4U, 16U);
+        }
+        writer.add_chunk(crd::resources::kFourCC_SKNV, crd::containers::as_const_span(skin_buf));
+    }
     return writer.finish();
 }
 
@@ -478,6 +497,259 @@ void cook_gltf_materials(const CookContext& ctx, const crd::assetio::ImportedAss
     }
 }
 
+// ── GEO-8: the SKELETON + ANIMATION decompose (skins/animations → SKEL/ANIM artifacts, never stored as glTF) ────────────
+//
+// The cook pins the runtime's topological contract HERE: joints re-order parents-before-children (a joint's
+// skeleton-parent = its nearest ANCESTOR NODE that is also a joint), per-vertex joint indices remap to the new
+// order, inverse binds/rest translations/clip translation tracks all take the SAME `.meta position_scale` the
+// vertices took (SI everywhere, ADR-0078). Channels targeting non-joint nodes warn-and-skip (their home is the
+// GEO-9 timeline's node-track consumer); a cyclic or foreign joint graph refuses the skin, never a garbage rig.
+
+struct SkinCookInfo
+{
+    crd::resources::ResourceId       skeleton_id;
+    crd::containers::Array<crd::u32> new_of_old;  // skin-local old index → topological index
+    crd::containers::Array<crd::i32> joint_nodes; // topological index → source node index
+    bool                             valid = false;
+
+    explicit SkinCookInfo(crd::memory::IAllocator* a) : new_of_old(a), joint_nodes(a) {}
+    SkinCookInfo(SkinCookInfo&&)            = default;
+    SkinCookInfo& operator=(SkinCookInfo&&) = default;
+};
+
+void cook_gltf_skeletons(const CookContext& ctx, crd::assetio::ImportedAsset& asset, crd::f32 position_scale,
+                         CookResult& result, crd::containers::Array<SkinCookInfo>& out_skins)
+{
+    if (asset.skins.size() == 0U) { return; }
+
+    // node → parent (from the children arrays; -1 = root)
+    crd::containers::Array<crd::i32> node_parent(ctx.allocator);
+    node_parent.resize(asset.nodes.size());
+    for (crd::usize i = 0; i < node_parent.size(); ++i) { node_parent[i] = -1; }
+    for (crd::usize i = 0; i < asset.nodes.size(); ++i)
+    {
+        for (crd::usize c = 0; c < asset.nodes[i].children.size(); ++c)
+        {
+            node_parent[asset.nodes[i].children[c]] = static_cast<crd::i32>(i);
+        }
+    }
+
+    for (crd::usize si = 0; si < asset.skins.size(); ++si)
+    {
+        const crd::assetio::ImportedSkin& skin = asset.skins[si];
+        SkinCookInfo                      info(ctx.allocator);
+        const crd::u32                    nj = static_cast<crd::u32>(skin.joints.size());
+
+        // skin-local index of each joint node
+        crd::containers::HashMap<crd::i32, crd::u32> local_of_node(ctx.allocator);
+        for (crd::u32 j = 0; j < nj; ++j) { local_of_node.insert(skin.joints[j], j); }
+
+        // each joint's skeleton-parent (skin-local): the nearest ancestor node that is also a joint
+        crd::containers::Array<crd::i32> parent_local(ctx.allocator);
+        parent_local.resize(nj);
+        for (crd::u32 j = 0; j < nj; ++j)
+        {
+            crd::i32 p       = node_parent[static_cast<crd::usize>(skin.joints[j])];
+            parent_local[j]  = -1;
+            while (p >= 0)
+            {
+                if (const crd::u32* pl = local_of_node.find(p); pl != nullptr)
+                {
+                    parent_local[j] = static_cast<crd::i32>(*pl);
+                    break;
+                }
+                p = node_parent[static_cast<crd::usize>(p)];
+            }
+        }
+
+        // topological order (Kahn-style; nj is small — O(n²) is honest and simple)
+        info.new_of_old.resize(nj);
+        for (crd::u32 j = 0; j < nj; ++j) { info.new_of_old[j] = 0xFFFFFFFFU; }
+        crd::containers::Array<crd::u32> old_of_new(ctx.allocator);
+        while (old_of_new.size() < nj)
+        {
+            const crd::usize before = old_of_new.size();
+            for (crd::u32 j = 0; j < nj; ++j)
+            {
+                if (info.new_of_old[j] != 0xFFFFFFFFU) { continue; }
+                const crd::i32 p = parent_local[j];
+                if (p < 0 || info.new_of_old[static_cast<crd::u32>(p)] != 0xFFFFFFFFU)
+                {
+                    info.new_of_old[j] = static_cast<crd::u32>(old_of_new.size());
+                    old_of_new.push_back(j);
+                }
+            }
+            if (old_of_new.size() == before) { break; } // a cycle — refuse below
+        }
+        if (old_of_new.size() != nj)
+        {
+            std::fprintf(stderr, "mesh_wave1: skin %zu has a cyclic joint graph — SKIPPED\n", si);
+            out_skins.push_back(std::move(info)); // invalid placeholder keeps indices aligned
+            continue;
+        }
+
+        // the SkeletonResource in topological order (translations + inverse-bind translations × position_scale)
+        crd::anim::SkeletonResource skel(ctx.allocator);
+        for (crd::u32 n = 0; n < nj; ++n)
+        {
+            const crd::u32 old  = old_of_new[n];
+            const crd::i32 pl   = parent_local[old];
+            skel.parents.push_back(pl < 0 ? -1 : static_cast<crd::i32>(info.new_of_old[static_cast<crd::u32>(pl)]));
+            const crd::assetio::ImportedNode& jn = asset.nodes[static_cast<crd::usize>(skin.joints[old])];
+            const crd::f32 rest[10] = {jn.translation.x * position_scale, jn.translation.y * position_scale,
+                                       jn.translation.z * position_scale, jn.rotation.x,      jn.rotation.y,
+                                       jn.rotation.z,                      jn.rotation.w,      jn.scale.x,
+                                       jn.scale.y,                         jn.scale.z};
+            for (crd::f32 v : rest) { skel.rest.push_back(v); }
+            for (crd::u32 c = 0; c < 16U; ++c)
+            {
+                crd::f32 v = skin.inverse_binds[static_cast<crd::usize>(old) * 16U + c];
+                if (c >= 12U && c <= 14U) { v *= position_scale; } // the translation column takes the SI scale
+                skel.inverse_binds.push_back(v);
+            }
+            skel.name_offsets.push_back(static_cast<crd::u32>(skel.name_pool.size()));
+            for (const char* s = jn.name.c_str(); *s != '\0'; ++s) { skel.name_pool.push_back(*s); }
+            skel.name_pool.push_back('\0');
+            info.joint_nodes.push_back(skin.joints[old]);
+        }
+
+        char idx_buf[16];
+        std::snprintf(idx_buf, sizeof(idx_buf), "%zu", si);
+        crd::containers::String suffix(ctx.allocator);
+        suffix.append(".skel.");
+        suffix.append(idx_buf);
+        crd::resources::ResourceId skel_id;
+        if (!ctx.io->stable_id(crd::containers::StringView(suffix.data(), suffix.size()), skel_id))
+        {
+            std::fprintf(stderr, "mesh_wave1: cannot persist sidecar id '%s' — skin SKIPPED\n", suffix.c_str());
+            out_skins.push_back(std::move(info));
+            continue;
+        }
+        auto cooked = crd::anim::skeleton_build(skel, skel_id, ctx.allocator);
+        if (cooked.empty())
+        {
+            std::fprintf(stderr, "mesh_wave1: skeleton %zu build failed — SKIPPED\n", si);
+            out_skins.push_back(std::move(info));
+            continue;
+        }
+        ExtraArtifact extra(ctx.allocator);
+        extra.id           = skel_id;
+        extra.type_fourcc  = crd::anim::kFourCC_SKEL;
+        extra.cooked_bytes = static_cast<crd::containers::Array<crd::u8>&&>(cooked);
+        extra.name.append(ctx.source_path.data(), ctx.source_path.size());
+        extra.name.append("#skel_");
+        extra.name.append(idx_buf);
+        result.extra_artifacts.push_back(static_cast<ExtraArtifact&&>(extra));
+
+        info.skeleton_id = skel_id;
+        info.valid       = true;
+        out_skins.push_back(std::move(info));
+    }
+
+    // remap every skinned mesh's per-vertex joints to the topological order (nodes name the skin; the meshes of
+    // a skinned node all deform with that skin)
+    for (crd::usize ni = 0; ni < asset.nodes.size(); ++ni)
+    {
+        const crd::assetio::ImportedNode& node = asset.nodes[ni];
+        if (node.skin < 0 || node.mesh < 0) { continue; }
+        const SkinCookInfo& info = out_skins[static_cast<crd::usize>(node.skin)];
+        if (!info.valid) { continue; }
+        for (crd::usize mi = 0; mi < asset.meshes.size(); ++mi)
+        {
+            crd::assetio::ImportedMesh& mesh = asset.meshes[mi];
+            if (mesh.source_mesh != node.mesh || !mesh.has_skin()) { continue; }
+            for (crd::usize k = 0; k < mesh.joints0.size(); ++k)
+            {
+                const crd::u16 old = mesh.joints0[k];
+                mesh.joints0[k] = old < info.new_of_old.size() ? static_cast<crd::u16>(info.new_of_old[old]) : 0U;
+            }
+        }
+    }
+}
+
+void cook_gltf_animations(const CookContext& ctx, const crd::assetio::ImportedAsset& asset,
+                          const crd::containers::Array<SkinCookInfo>& skins, crd::f32 position_scale,
+                          CookResult& result, crd::containers::Array<crd::resources::ResourceId>& out_clips)
+{
+    if (asset.animations.size() == 0U || skins.size() == 0U) { return; }
+
+    // node → (topological joint index) across skins — the first valid skin containing the node wins
+    crd::containers::HashMap<crd::i32, crd::u32> joint_of_node(ctx.allocator);
+    for (const SkinCookInfo& info : skins)
+    {
+        if (!info.valid) { continue; }
+        for (crd::usize n = 0; n < info.joint_nodes.size(); ++n)
+        {
+            if (joint_of_node.find(info.joint_nodes[n]) == nullptr)
+            {
+                joint_of_node.insert(info.joint_nodes[n], static_cast<crd::u32>(n));
+            }
+        }
+    }
+
+    for (crd::usize ai = 0; ai < asset.animations.size(); ++ai)
+    {
+        const crd::assetio::ImportedAnimation& anim = asset.animations[ai];
+        crd::anim::AnimClipResource            clip(ctx.allocator);
+        clip.duration = anim.duration;
+
+        for (const crd::assetio::ImportedAnimChannel& ch : anim.channels)
+        {
+            const crd::u32* joint = joint_of_node.find(ch.node);
+            if (joint == nullptr || ch.path > 2U)
+            {
+                continue; // non-joint / weights channels: the GEO-9 node-track + morph consumers own these
+            }
+            crd::anim::AnimTrack track;
+            track.target     = *joint;
+            track.channel    = ch.path; // 0 T · 1 R · 2 S — the AnimChannel byte values match
+            track.interp     = ch.interp;
+            track.components = static_cast<crd::u16>(ch.components);
+            track.key_count  = static_cast<crd::u32>(ch.times.size());
+            track.times_off  = static_cast<crd::u32>(clip.data.size());
+            for (crd::usize k = 0; k < ch.times.size(); ++k) { clip.data.push_back(ch.times[k]); }
+            track.values_off = static_cast<crd::u32>(clip.data.size());
+            const bool scale_values = ch.path == 0U; // translation tracks take the SI position scale
+            for (crd::usize k = 0; k < ch.values.size(); ++k)
+            {
+                clip.data.push_back(scale_values ? ch.values[k] * position_scale : ch.values[k]);
+            }
+            clip.tracks.push_back(track);
+        }
+        if (clip.tracks.size() == 0U) { continue; }
+
+        char idx_buf[16];
+        std::snprintf(idx_buf, sizeof(idx_buf), "%zu", ai);
+        const crd::containers::String safe_name = sanitize_name(anim.name.c_str(), ctx.allocator, "clip");
+        crd::containers::String       suffix(ctx.allocator);
+        suffix.append(".anim.");
+        suffix.append(idx_buf);
+        suffix.append("_");
+        suffix.append(safe_name.c_str());
+        crd::resources::ResourceId clip_id;
+        if (!ctx.io->stable_id(crd::containers::StringView(suffix.data(), suffix.size()), clip_id))
+        {
+            std::fprintf(stderr, "mesh_wave1: cannot persist sidecar id '%s' — clip SKIPPED\n", suffix.c_str());
+            continue;
+        }
+        auto cooked = crd::anim::anim_clip_build(clip, clip_id, ctx.allocator);
+        if (cooked.empty())
+        {
+            std::fprintf(stderr, "mesh_wave1: animation %zu ('%s') build failed — SKIPPED\n", ai, anim.name.c_str());
+            continue;
+        }
+        ExtraArtifact extra(ctx.allocator);
+        extra.id           = clip_id;
+        extra.type_fourcc  = crd::anim::kFourCC_ANIM;
+        extra.cooked_bytes = static_cast<crd::containers::Array<crd::u8>&&>(cooked);
+        extra.name.append(ctx.source_path.data(), ctx.source_path.size());
+        extra.name.append("#anim_");
+        extra.name.append(safe_name.c_str());
+        result.extra_artifacts.push_back(static_cast<ExtraArtifact&&>(extra));
+        out_clips.push_back(clip_id);
+    }
+}
+
 // ── GEO-3 stage 3: the glTF SCENE decompose (nodes → a World → the SCEN artifact) ──────────────────────────────────────
 //
 // The decompose philosophy made real for scenes: the glTF node graph BUILDS a real ECS World (Transform + ChildOf +
@@ -498,7 +770,8 @@ void cook_gltf_materials(const CookContext& ctx, const crd::assetio::ImportedAss
 void cook_gltf_scene(const CookContext& ctx, const crd::assetio::ImportedAsset& asset,
                      const crd::containers::Array<crd::resources::ResourceId>& mesh_ids,
                      const crd::containers::Array<crd::resources::ResourceId>& material_ids, crd::f32 position_scale,
-                     CookResult& result)
+                     const crd::containers::Array<SkinCookInfo>&               skins,
+                     const crd::containers::Array<crd::resources::ResourceId>& clips, CookResult& result)
 {
     if (asset.nodes.size() == 0U) { return; }
 
@@ -548,6 +821,15 @@ void cook_gltf_scene(const CookContext& ctx, const crd::assetio::ImportedAsset& 
             sl.inner_cone_rad = light.inner_cone;
             sl.outer_cone_rad = light.outer_cone;
             world.add_component(e, sl);
+        }
+        // GEO-8: a skinned node drives its meshes through the cooked skeleton (+ the first clip by default)
+        if (node.skin >= 0 && static_cast<crd::usize>(node.skin) < skins.size()
+            && skins[static_cast<crd::usize>(node.skin)].valid)
+        {
+            crd::scene::SkeletonAnimator animator;
+            animator.skeleton = skins[static_cast<crd::usize>(node.skin)].skeleton_id;
+            if (clips.size() > 0U) { animator.clip = clips[0]; }
+            world.add_component(e, animator);
         }
         node_entities.push_back(e);
     }
@@ -711,6 +993,30 @@ CookResult wave1_handler(const CookContext& ctx)
         }
     }
 
+    // GEO-8: the SKELETON/ANIMATION decompose runs BEFORE mesh cooking — the topological joint remap mutates the
+    // per-vertex joint indices the SKNV chunk then serializes
+    crd::containers::Array<SkinCookInfo>               skin_infos(ctx.allocator);
+    crd::containers::Array<crd::resources::ResourceId> clip_ids(ctx.allocator);
+    if (fmt == Wave1Format::Glb || fmt == Wave1Format::Gltf)
+    {
+        cook_gltf_skeletons(ctx, asset, cook_options.position_scale, result, skin_infos);
+        cook_gltf_animations(ctx, asset, skin_infos, cook_options.position_scale, result, clip_ids);
+    }
+
+    // images + materials ALSO cook before meshes now: the PRIM entry stamps each mesh's AUTHORED material id
+    crd::containers::Array<crd::resources::ResourceId> image_ids(ctx.allocator);
+    crd::containers::Array<crd::resources::ResourceId> material_ids(ctx.allocator);
+    const bool decompose = fmt == Wave1Format::Glb || fmt == Wave1Format::Gltf || fmt == Wave1Format::ThreeMf;
+    if (decompose)
+    {
+        cook_gltf_images(ctx, asset, result, image_ids);
+        cook_gltf_materials(ctx, asset, image_ids, result, material_ids);
+    }
+    const auto material_of = [&](const crd::assetio::ImportedMesh& m) -> crd::resources::ResourceId {
+        if (m.material < 0 || static_cast<crd::usize>(m.material) >= material_ids.size()) { return {}; }
+        return material_ids[static_cast<crd::usize>(m.material)];
+    };
+
     // first mesh WITH triangles → the main artifact (ctx.id); the rest → sidecar-.meta extra artifacts (stable ids)
     crd::i32 main_index = -1;
     for (crd::usize mi = 0; mi < asset.meshes.size(); ++mi)
@@ -735,7 +1041,7 @@ CookResult wave1_handler(const CookContext& ctx)
 
     {
         auto artifact = build_wave1_artifact(asset.meshes[static_cast<crd::usize>(main_index)], ctx.id, ctx.allocator,
-                                             cook_options);
+                                             cook_options, material_of(asset.meshes[static_cast<crd::usize>(main_index)]));
         if (artifact.empty()) { return result; }
         result.cooked_bytes    = std::move(artifact);
         result.type_fourcc     = crd::resources::kFourCC_MESH;
@@ -762,7 +1068,7 @@ CookResult wave1_handler(const CookContext& ctx)
             return result;
         }
 
-        auto artifact = build_wave1_artifact(mesh, extra_id, ctx.allocator, cook_options);
+        auto artifact = build_wave1_artifact(mesh, extra_id, ctx.allocator, cook_options, material_of(mesh));
         if (artifact.empty())
         {
             result.ok = false;
@@ -779,16 +1085,12 @@ CookResult wave1_handler(const CookContext& ctx)
         mesh_ids[mi] = extra_id;
     }
 
-    // GEO-3 stages 2b + 3 + 4: the decompose — images → TXTR artifacts, materials → authored PBRM artifacts (slots
-    // wired to the cooked textures), the node graph → a SCEN artifact (drawables wired to meshes + materials).
-    // 3MF rides the SAME seam: basematerials → PBRM, build items → SCEN (core 3MF has no images — the stage no-ops).
-    if (fmt == Wave1Format::Glb || fmt == Wave1Format::Gltf || fmt == Wave1Format::ThreeMf)
+    // GEO-3 stage 3: the node graph → a SCEN artifact (drawables wired to the cooked meshes + materials; images
+    // and materials cooked up front so PRIM entries could stamp their bindings)
+    if (decompose)
     {
-        crd::containers::Array<crd::resources::ResourceId> image_ids(ctx.allocator);
-        crd::containers::Array<crd::resources::ResourceId> material_ids(ctx.allocator);
-        cook_gltf_images(ctx, asset, result, image_ids);
-        cook_gltf_materials(ctx, asset, image_ids, result, material_ids);
-        cook_gltf_scene(ctx, asset, mesh_ids, material_ids, cook_options.position_scale, result);
+        cook_gltf_scene(ctx, asset, mesh_ids, material_ids, cook_options.position_scale, skin_infos, clip_ids,
+                        result);
     }
 
     return result;

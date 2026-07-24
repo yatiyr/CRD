@@ -47,6 +47,8 @@ constexpr crd::u32 make_fourcc(char a, char b, char c, char d) noexcept
 }
 
 // Registered FourCCs
+// NOLINTBEGIN(readability-identifier-naming) — the repo-wide kFourCC_<MNEMONIC> convention: the suffix IS the
+// four-character code, verbatim; renaming to lower_case would break the 1:1 readability with the on-disk tag.
 inline constexpr crd::u32 kFourCC_CRDR = make_fourcc('C', 'R', 'D', 'R'); // magic
 inline constexpr crd::u32 kFourCC_PACK = make_fourcc('P', 'A', 'C', 'K');
 inline constexpr crd::u32 kFourCC_BLOB = make_fourcc('B', 'L', 'O', 'B');
@@ -97,6 +99,8 @@ inline constexpr crd::u32 kFourCC_MESH = make_fourcc('M', 'E', 'S', 'H');
 inline constexpr crd::u32 kFourCC_VERT = make_fourcc('V', 'E', 'R', 'T');
 inline constexpr crd::u32 kFourCC_INDX = make_fourcc('I', 'N', 'D', 'X');
 inline constexpr crd::u32 kFourCC_PRIM = make_fourcc('P', 'R', 'I', 'M');
+// GEO-8 (appended): the optional SKIN vertex stream — 4×u16 topological joint indices + 4×f32 weights (24 B/vertex)
+inline constexpr crd::u32 kFourCC_SKNV = make_fourcc('S', 'K', 'N', 'V');
 
 // Phase 2.7 v1c — material artifact FourCCs (ADR-0048)
 inline constexpr crd::u32 kFourCC_INFO = make_fourcc('I', 'N', 'F', 'O'); // domain + version + flags
@@ -105,6 +109,7 @@ inline constexpr crd::u32 kFourCC_DFLT = make_fourcc('D', 'F', 'L', 'T'); // def
 inline constexpr crd::u32 kFourCC_PASS = make_fourcc('P', 'A', 'S', 'S'); // pass-keyed shader pairs
 inline constexpr crd::u32 kFourCC_PSOS = make_fourcc('P', 'S', 'O', 'S'); // per-pass PSO state
 inline constexpr crd::u32 kFourCC_OPTS = make_fourcc('O', 'P', 'T', 'S'); // shader option decls
+// NOLINTEND(readability-identifier-naming)
 
 // Convert a fourcc back to a 4-char printable string (for logging).
 // Result is null-terminated; stored in caller-provided buf[5].

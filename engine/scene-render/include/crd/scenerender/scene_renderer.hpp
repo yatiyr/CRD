@@ -100,8 +100,21 @@ struct MeshGroup
     crd::u32 capacity = 0;           // instance slots the buffer holds
     bool     geometry_uploaded = false;
 
+    // GEO-8: the SKINNED path — groups whose mesh carries the SKNV stream draw through the skinned program:
+    // a packed skin stream (6 words/vertex: 2×(u16 pair) joints + 4 weights, uploaded once) and a per-instance
+    // BONE PALETTE section (joint_count 4×4 matrices per slot, re-sampled + re-uploaded every frame — animation
+    // is always dirty by definition). Per-slot animator state mirrors the ECS component at extract time.
+    bool     skinned      = false;
+    crd::u32 joint_count  = 0;
+    crd::u32 skin_off     = 0; // word offset of the packed skin stream
+    crd::u32 palette_off  = 0; // word offset of the palette section
+    crd::containers::Array<crd::resources::ResourceId> slot_skeleton; // per slot (null = static instance)
+    crd::containers::Array<crd::resources::ResourceId> slot_clip;
+    crd::containers::Array<crd::f32>                    slot_time;
+
     explicit MeshGroup(crd::memory::IAllocator* a)
-        : instances(a), slot_entity(a), world_bounds(a), runs(a), visible(a)
+        : instances(a), slot_entity(a), world_bounds(a), runs(a), visible(a), slot_skeleton(a), slot_clip(a),
+          slot_time(a)
     {
     }
     MeshGroup(MeshGroup&&) noexcept            = default;

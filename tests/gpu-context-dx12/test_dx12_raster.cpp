@@ -3011,4 +3011,15 @@ TEST_CASE("GEO-7: draw_storage_depth — near occludes far on the storage-pull p
     WARN("[storage-depth dx12] centre r=" << rr << " g=" << gg);
     CHECK(rr > 200U); // the NEAR triangle survived the far one drawn after it — the depth test is REAL
     CHECK(gg < 50U);
+
+    // the LOAD variant (multi-group composition): a SECOND draw of a SMALL centre triangle NEARER than red
+    // (z=0.9, c=0 → green). It must WIN the centre through the frame's loaded depth (0.9 ≥ 0.8) while the rest
+    // of the frame — red everywhere the big triangles covered — SURVIVES untouched: it composes, never wipes.
+    const crd::f32 near_tri[12] = {-0.2F, -0.2F, 0.9F, 0.0F, 0.2F, -0.2F, 0.9F, 0.0F, 0.0F, 0.2F, 0.9F, 0.0F};
+    REQUIRE(raster->upload_storage(*storage, 0U, near_tri, sizeof(near_tri)));
+    raster->draw_storage_depth_load(*target, *program, g::DepthCompare::GreaterEqual, *storage, 3U);
+    const crd::u32 centre2 = target->read_pixel(dim / 2U, dim / 2U);
+    const crd::u32 away2   = target->read_pixel(4U, dim / 2U); // covered by the FIRST pass only
+    CHECK(((centre2 >> 8U) & 0xFFU) > 200U); // the near green triangle won the loaded depth at the centre
+    CHECK((away2 & 0xFFU) > 200U);           // the first pass's red SURVIVED the load draw — nothing cleared
 }

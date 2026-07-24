@@ -599,6 +599,28 @@ void parse_materials(const GltfCtx& g, ImportedAsset& out)
                                                                      scratch[v * 4U + 2U], scratch[v * 4U + 3U]});
                 }
             }
+            // GEO-8: the skin attributes — BOTH present or neither (a lone half is Malformed, never a guess)
+            const crd::u32 j_j0 = js::find(d, j_attr, "JOINTS_0");
+            const crd::u32 j_w0 = js::find(d, j_attr, "WEIGHTS_0");
+            if ((j_j0 != js::kInvalid) != (j_w0 != js::kInvalid)) { return ImportStatus::Malformed; }
+            if (j_j0 != js::kInvalid)
+            {
+                crd::u32 jc = 0;
+                st          = read_accessor_f32(g, js::as_i64(d, j_j0, 0), 4, scratch, jc);
+                if (st != ImportStatus::Ok) { return st; }
+                if (jc != vc) { return ImportStatus::Malformed; }
+                for (crd::u32 v = 0; v < vc * 4U; ++v)
+                {
+                    const crd::f32 jf = scratch[v]; // u8/u16 joint indices are exact in f32
+                    if (jf < 0.0F || jf > 65535.0F) { return ImportStatus::Malformed; }
+                    mesh.joints0.push_back(static_cast<crd::u16>(jf));
+                }
+                crd::u32 wc = 0;
+                st          = read_accessor_f32(g, js::as_i64(d, j_w0, 0), 4, scratch, wc);
+                if (st != ImportStatus::Ok) { return st; }
+                if (wc != vc) { return ImportStatus::Malformed; }
+                for (crd::u32 v = 0; v < vc * 4U; ++v) { mesh.weights0.push_back(scratch[v]); }
+            }
             const crd::u32 j_idx = js::find(d, jp, "indices");
             if (j_idx != js::kInvalid)
             {
@@ -622,6 +644,143 @@ void parse_materials(const GltfCtx& g, ImportedAsset& out)
             if (!mesh.is_consistent()) { return ImportStatus::Malformed; }
             out.meshes.push_back(static_cast<ImportedMesh&&>(mesh));
         }
+    }
+    return ImportStatus::Ok;
+}
+
+// ── GEO-8: skins + animations (the SkeletonResource / AnimClipResource feed) ───────────────────────────────────────────
+
+[[nodiscard]] ImportStatus parse_skins(const GltfCtx& g, ImportedAsset& out)
+{
+    const js::JsonDoc& d       = *g.doc;
+    const crd::u32     j_skins = js::find(d, g.root, "skins");
+    const crd::u32     n       = js::count_of(d, j_skins);
+    const crd::i64     n_nodes = static_cast<crd::i64>(js::count_of(d, js::find(d, g.root, "nodes")));
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        const crd::u32 jsk = js::at(d, j_skins, i);
+        ImportedSkin   skin(g.alloc);
+        char           nm[128];
+        (void)js::str_value(d, js::find(d, jsk, "name"), nm, sizeof(nm));
+        skin.name.append(nm);
+
+        const crd::u32 j_joints = js::find(d, jsk, "joints");
+        const crd::u32 nj       = js::count_of(d, j_joints);
+        if (nj == 0U) { return ImportStatus::Malformed; } // spec: joints is required, non-empty
+        for (crd::u32 k = 0; k < nj; ++k)
+        {
+            const crd::i64 node = js::as_i64(d, js::at(d, j_joints, k), -1);
+            if (node < 0 || node >= n_nodes) { return ImportStatus::Malformed; }
+            skin.joints.push_back(static_cast<crd::i32>(node));
+        }
+        skin.skeleton_root = static_cast<crd::i32>(js::as_i64(d, js::find(d, jsk, "skeleton"), -1));
+        if (skin.skeleton_root >= n_nodes) { return ImportStatus::Malformed; }
+
+        const crd::u32 j_ibm = js::find(d, jsk, "inverseBindMatrices");
+        if (j_ibm != js::kInvalid)
+        {
+            crd::containers::Array<crd::f32> scratch(g.alloc);
+            crd::u32                         mc = 0;
+            const ImportStatus st = read_accessor_f32(g, js::as_i64(d, j_ibm, 0), 16, scratch, mc);
+            if (st != ImportStatus::Ok) { return st; }
+            if (mc != nj) { return ImportStatus::Malformed; }
+            for (crd::usize v = 0; v < scratch.size(); ++v) { skin.inverse_binds.push_back(scratch[v]); }
+        }
+        else // spec: absent ⇒ identity inverse binds
+        {
+            for (crd::u32 k = 0; k < nj; ++k)
+            {
+                for (crd::u32 c = 0; c < 16U; ++c)
+                {
+                    skin.inverse_binds.push_back((c % 5U) == 0U ? 1.0F : 0.0F); // column-major identity
+                }
+            }
+        }
+        out.skins.push_back(static_cast<ImportedSkin&&>(skin));
+    }
+    return ImportStatus::Ok;
+}
+
+[[nodiscard]] ImportStatus parse_animations(const GltfCtx& g, ImportedAsset& out)
+{
+    const js::JsonDoc& d       = *g.doc;
+    const crd::u32     j_anims = js::find(d, g.root, "animations");
+    const crd::u32     n       = js::count_of(d, j_anims);
+    const crd::i64     n_nodes = static_cast<crd::i64>(js::count_of(d, js::find(d, g.root, "nodes")));
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        const crd::u32    ja = js::at(d, j_anims, i);
+        ImportedAnimation anim(g.alloc);
+        char              nm[128];
+        (void)js::str_value(d, js::find(d, ja, "name"), nm, sizeof(nm));
+        anim.name.append(nm);
+
+        const crd::u32 j_samplers = js::find(d, ja, "samplers");
+        const crd::u32 j_channels = js::find(d, ja, "channels");
+        const crd::u32 ns         = js::count_of(d, j_samplers);
+        const crd::u32 nc         = js::count_of(d, j_channels);
+        for (crd::u32 c = 0; c < nc; ++c)
+        {
+            const crd::u32 jc      = js::at(d, j_channels, c);
+            const crd::i64 sampler = js::as_i64(d, js::find(d, jc, "sampler"), -1);
+            if (sampler < 0 || sampler >= static_cast<crd::i64>(ns)) { return ImportStatus::Malformed; }
+            const crd::u32 jt   = js::find(d, jc, "target");
+            const crd::i64 node = js::as_i64(d, js::find(d, jt, "node"), -1);
+            if (node >= n_nodes) { return ImportStatus::Malformed; }
+            if (node < 0) { ++out.warning_count; continue; } // extension-targeted channel — spec allows, we skip
+
+            ImportedAnimChannel ch(g.alloc);
+            ch.node             = static_cast<crd::i32>(node);
+            const crd::u32 jpth = js::find(d, jt, "path");
+            if (js::str_value_eq(d, jpth, "translation")) { ch.path = 0; ch.components = 3; }
+            else if (js::str_value_eq(d, jpth, "rotation")) { ch.path = 1; ch.components = 4; }
+            else if (js::str_value_eq(d, jpth, "scale")) { ch.path = 2; ch.components = 3; }
+            else if (js::str_value_eq(d, jpth, "weights")) { ch.path = 3; ch.components = 0; } // derived below
+            else { return ImportStatus::Malformed; }
+
+            const crd::u32 jsmp = js::at(d, j_samplers, static_cast<crd::u32>(sampler));
+            const crd::u32 jint = js::find(d, jsmp, "interpolation");
+            ch.interp           = 1; // LINEAR is the spec default
+            if (jint != js::kInvalid)
+            {
+                if (js::str_value_eq(d, jint, "STEP")) { ch.interp = 0; }
+                else if (js::str_value_eq(d, jint, "LINEAR")) { ch.interp = 1; }
+                else if (js::str_value_eq(d, jint, "CUBICSPLINE")) { ch.interp = 2; }
+                else { return ImportStatus::Malformed; }
+            }
+
+            // times: strictly increasing seconds (the spec's requirement — the keyframe engine's contract)
+            crd::containers::Array<crd::f32> scratch(g.alloc);
+            crd::u32                         tcount = 0;
+            ImportStatus st = read_accessor_f32(g, js::as_i64(d, js::find(d, jsmp, "input"), -1), 1, scratch, tcount);
+            if (st != ImportStatus::Ok) { return st; }
+            if (tcount == 0U) { return ImportStatus::Malformed; }
+            for (crd::u32 k = 0; k < tcount; ++k)
+            {
+                if (k > 0U && !(scratch[k] > scratch[k - 1U])) { return ImportStatus::Malformed; }
+                ch.times.push_back(scratch[k]);
+            }
+            if (ch.times[tcount - 1U] > anim.duration) { anim.duration = ch.times[tcount - 1U]; }
+
+            // values: T/S = vec3 records, R = vec4, weights = a scalar stream (components derived from the count)
+            const crd::u32 vwant  = ch.path == 3 ? 1U : ch.components;
+            crd::u32       vcount = 0;
+            st = read_accessor_f32(g, js::as_i64(d, js::find(d, jsmp, "output"), -1), vwant, scratch, vcount);
+            if (st != ImportStatus::Ok) { return st; }
+            const crd::u32 span = ch.interp == 2 ? 3U : 1U; // CUBICSPLINE: [in, value, out] per key
+            if (ch.path == 3)
+            {
+                if (vcount == 0U || (vcount % (tcount * span)) != 0U) { return ImportStatus::Malformed; }
+                ch.components = vcount / (tcount * span);
+            }
+            else if (vcount != tcount * span) { return ImportStatus::Malformed; }
+            const crd::usize expect = static_cast<crd::usize>(tcount) * span * ch.components;
+            if (scratch.size() < expect) { return ImportStatus::Malformed; }
+            for (crd::usize v = 0; v < expect; ++v) { ch.values.push_back(scratch[v]); }
+
+            anim.channels.push_back(static_cast<ImportedAnimChannel&&>(ch));
+        }
+        out.animations.push_back(static_cast<ImportedAnimation&&>(anim));
     }
     return ImportStatus::Ok;
 }
@@ -754,6 +913,8 @@ void parse_lights(const GltfCtx& g, ImportedAsset& out)
 
         node.mesh   = static_cast<crd::i32>(js::as_i64(d, js::find(d, jn, "mesh"), -1));
         node.camera = static_cast<crd::i32>(js::as_i64(d, js::find(d, jn, "camera"), -1));
+        node.skin   = static_cast<crd::i32>(js::as_i64(d, js::find(d, jn, "skin"), -1)); // GEO-8
+        if (node.skin >= static_cast<crd::i32>(out.skins.size())) { return ImportStatus::Malformed; }
         const crd::u32 jext = js::find(d, jn, "extensions");
         const crd::u32 jkhr = js::find(d, jext, "KHR_lights_punctual");
         if (jkhr != js::kInvalid) { node.light = static_cast<crd::i32>(js::as_i64(d, js::find(d, jkhr, "light"), -1)); }
@@ -884,6 +1045,10 @@ void parse_lights(const GltfCtx& g, ImportedAsset& out)
     parse_materials(g, out);
     parse_cameras(g, out); // before nodes: node camera/light refs validate against the libraries
     parse_lights(g, out);
+    const ImportStatus sst = parse_skins(g, out); // GEO-8: before nodes — node.skin validates against the library
+    if (sst != ImportStatus::Ok) { return sst; }
+    const ImportStatus ast = parse_animations(g, out);
+    if (ast != ImportStatus::Ok) { return ast; }
     const ImportStatus nst = parse_nodes_and_scene(g, out);
     if (nst != ImportStatus::Ok) { return nst; }
     return parse_meshes(g, out);

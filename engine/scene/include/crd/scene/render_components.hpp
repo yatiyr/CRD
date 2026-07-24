@@ -63,6 +63,20 @@ struct SceneLight
 };
 static_assert(sizeof(SceneLight) == 32, "SceneLight layout pinned (SCEN v1 payload)");
 
+// GEO-8 (appended): the skinned-animation driver — which SKELETON deforms this entity's mesh, which CLIP plays,
+// and the playhead. The runtime advances `time` (chunk-grain) and the renderer samples/uploads the bone palette;
+// AI/tooling can freely retarget by swapping `clip` or writing `time` (scrubbing = just setting the float).
+struct SkeletonAnimator
+{
+    crd::resources::ResourceId skeleton{};
+    crd::resources::ResourceId clip{};
+    crd::f32                   time     = 0.0F;
+    crd::f32                   speed    = 1.0F;
+    crd::u32                   flags    = 1U; // bit 0: loop
+    crd::u32                   reserved = 0U; // explicit tail pad — deterministic serialized bytes
+};
+static_assert(sizeof(SkeletonAnimator) == 48, "SkeletonAnimator layout pinned (SCEN v1 payload)");
+
 // Register the render components (with their SCEN serialize traits) on a World. Both the cook-side temp World
 // and any runtime World that instantiates imported scenes call this — registrations must match bit-for-bit.
 inline void register_render_components(World& w)
@@ -70,6 +84,7 @@ inline void register_render_components(World& w)
     w.register_component<MeshRenderer>(default_serialize_trait<MeshRenderer>(kFourCC_MeshRenderer));
     w.register_component<SceneCamera>(default_serialize_trait<SceneCamera>(kFourCC_SceneCamera));
     w.register_component<SceneLight>(default_serialize_trait<SceneLight>(kFourCC_SceneLight));
+    w.register_component<SkeletonAnimator>(default_serialize_trait<SkeletonAnimator>(kFourCC_SkeletonAnimator));
 }
 
 } // namespace crd::scene

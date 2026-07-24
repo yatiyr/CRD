@@ -2085,6 +2085,75 @@ public:
         end_and_wait(cmd);
     }
 
+    // GEO-8: the CONTINUING scene draw — draw_storage_depth minus the clear: colour LOADs from the previous scene
+    // draw (whose post-draw layout is TRANSFER_SRC — the readback contract), depth LOADs and keeps WRITING (the
+    // depth image stays DEPTH_ATTACHMENT_OPTIMAL between draws; submits are serialized by end_and_wait).
+    void draw_storage_depth_load(IRasterTarget& target, IRasterProgram& program, DepthCompare compare,
+                                 IStorageBuffer& storage, crd::u32 vertex_count) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        auto& s = static_cast<VulkanStorageBuffer&>(storage);
+        if (!m_api.valid() || !p.valid() || m_desc_pool == VK_NULL_HANDLE || !t.has_depth()) { return; }
+
+        vkResetDescriptorPool(m_device, m_desc_pool, 0);
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool     = m_desc_pool;
+        dsai.descriptorSetCount = 1U;
+        dsai.pSetLayouts        = &m_storage_set_layout;
+        VkDescriptorSet dset = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return; }
+        VkDescriptorBufferInfo dbi{s.buf(), 0, VK_WHOLE_SIZE};
+        VkWriteDescriptorSet   wr{};
+        wr.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wr.dstSet          = dset;
+        wr.dstBinding      = 0U;
+        wr.descriptorCount = 1U;
+        wr.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        wr.pBufferInfo     = &dbi;
+        vkUpdateDescriptorSets(m_device, 1U, &wr, 0U, nullptr);
+
+        VkCommandBuffer cmd = begin_cmd();
+        if (cmd == VK_NULL_HANDLE) { return; }
+
+        // preserve the previous scene draw's colour: TRANSFER_SRC (post-readback) → COLOR_ATTACHMENT
+        transition(cmd, t.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                   VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+
+        VkRenderingAttachmentInfo att{};
+        att.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att.imageView   = t.view();
+        att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        att.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
+        att.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+
+        VkRenderingAttachmentInfo dep{};
+        dep.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        dep.imageView   = t.depth_view();
+        dep.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        dep.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;   // the frame's depth so far
+        dep.storeOp     = VK_ATTACHMENT_STORE_OP_STORE; // and this group's writes join it
+
+        VkRenderingInfo ri{};
+        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent    = {t.width(), t.height()};
+        ri.layerCount           = 1U;
+        ri.colorAttachmentCount = 1U;
+        ri.pColorAttachments    = &att;
+        ri.pDepthAttachment     = &dep;
+        vkCmdBeginRendering(cmd, &ri);
+
+        set_draw_state(cmd, t.width(), t.height(), 1U, true, to_vk_compare(compare));
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        bind_and_draw(cmd, p, vertex_count);
+        vkCmdEndRendering(cmd);
+
+        copy_colour_to_readback(cmd, t);
+        end_and_wait(cmd);
+    }
+
     // RET-6 (ADR-0105): the OVERLAY draw — see IRasterContext::draw_overlay. Composites onto the target's EXISTING
     // contents (color loadOp=LOAD; the target's post-draw layout is TRANSFER_SRC — the RET-2 contract — so the
     // preserving transition is TRANSFER_SRC → COLOR_ATTACHMENT, never UNDEFINED, which would discard). Standard alpha

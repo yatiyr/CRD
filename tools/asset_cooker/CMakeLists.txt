@@ -25,6 +25,7 @@ target_link_libraries(crd-cooker
         crd-preset
         crd-profile
         crd-asset-io             # GEO-1..5: our own STL/OBJ/PLY/glTF/3MF parsers (mesh_wave1 handler)
+        crd-anim                 # GEO-8: SKEL/ANIM builders (the skins/animations decompose)
         # stb RETIRED (GEO-3 stage 2b): texture.cpp decodes via OUR ldr_decode. cgltf + mikktspace RETIRED
         # (GEO-6: the legacy mesh.cpp DELETED — our parsers own every format; mikktspace lives on ONLY as the
         # test-side oracle, linked by the test targets themselves).

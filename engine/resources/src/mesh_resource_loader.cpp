@@ -20,6 +20,7 @@ namespace
 //   u32 index_byte_offset · u8[16] material_id (u64 hi LE + u64 lo LE; all-zero = no material)
 constexpr crd::u32 kPrimEntrySize  = 32U;
 constexpr crd::u32 kPrimHeaderSize = 4U;
+constexpr crd::u32 kSkinVertexSize = 24U; // GEO-8: 4×u16 joints + 4×f32 weights
 } // namespace
 
 crd::u32 MeshResourceLoader::type_fourcc() const noexcept { return kFourCC_MESH; }
@@ -75,6 +76,25 @@ void* MeshResourceLoader::load(const LoadContext& ctx)
         }
         std::memcpy(mesh->bounds_min, mn, 12U);
         std::memcpy(mesh->bounds_max, mx, 12U);
+    }
+
+    // GEO-8: the optional SKIN stream — refused (not silently dropped) when its vertex count mismatches
+    if (const CrdrChunk* skin_chunk = crdr_find_chunk(file, kFourCC_SKNV); skin_chunk != nullptr)
+    {
+        if (skin_chunk->payload.size() != vcount * kSkinVertexSize)
+        {
+            mesh->~MeshResource();
+            m_payload->deallocate(mesh);
+            return nullptr;
+        }
+        mesh->skin_joints.resize(vcount * 4U);
+        mesh->skin_weights.resize(vcount * 4U);
+        const crd::u8* sp = skin_chunk->payload.data();
+        for (crd::usize v = 0; v < vcount; ++v, sp += kSkinVertexSize)
+        {
+            std::memcpy(mesh->skin_joints.data() + v * 4U, sp, 8U);
+            std::memcpy(mesh->skin_weights.data() + v * 4U, sp + 8U, 16U);
+        }
     }
 
     const crd::u8* p = prim_chunk->payload.data() + kPrimHeaderSize;
