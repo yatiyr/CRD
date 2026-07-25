@@ -24,10 +24,10 @@ TEST_CASE("B18-a probe: hair BCSDF across the grazing limit", "[.][ckir][hair][p
     crd::memory::TlsfAllocator     alloc(96U << 20U, nullptr, "grazing");
     crd::containers::Array<double> hbuf(&alloc);
     crd::containers::Array<double> out(&alloc);
-    constexpr int kN = 64;
-    hbuf.resize(static_cast<crd::usize>(kN), 0.0);
-    out.resize(static_cast<crd::usize>(kN) * 4U, 0.0);
-    for (int i = 0; i < kN; ++i) { hbuf[static_cast<crd::usize>(i)] = static_cast<double>(i) / static_cast<double>(kN - 1); }
+    constexpr int k_n = 64;
+    hbuf.resize(static_cast<crd::usize>(k_n), 0.0);
+    out.resize(static_cast<crd::usize>(k_n) * 4U, 0.0);
+    for (int i = 0; i < k_n; ++i) { hbuf[static_cast<crd::usize>(i)] = static_cast<double>(i) / static_cast<double>(k_n - 1); }
 
     kir::KGraph      g(&alloc);
     const kir::Shape shu = kir::make_shape({1});
@@ -55,11 +55,11 @@ TEST_CASE("B18-a probe: hair BCSDF across the grazing limit", "[.][ckir][hair][p
     e.local_size[0]     = 64;
     e.kernel_body_begin = mark;
     e.kernel_body_count = g.stmt_count() - mark;
-    kir::KernelBuffer bb[2] = {{hbuf.data(), kN, 0, 0}, {out.data(), kN * 4, 0, 1}};
+    kir::KernelBuffer bb[2] = {{hbuf.data(), k_n, 0, 0}, {out.data(), k_n * 4, 0, 1}};
     kir::eval_cpu_kernel(g, e, bb, 2, 64U, &alloc, 1U);
 
     std::printf("     h        f(phi=0)     f(60deg)     f(120deg)    f(180deg)\n");
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
         const crd::usize o = static_cast<crd::usize>(i) * 4U;
         if (i < 48 && (i % 6) != 0) { continue; } // coarse below 0.75, every sample above

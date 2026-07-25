@@ -24,13 +24,23 @@ namespace
     {
         return {};
     }
-    std::wstring out(static_cast<crd::usize>(needed), L'\0');
-    const int written = MultiByteToWideChar(CP_UTF8, 0, sv.data(), static_cast<int>(sv.size()), out.data(), needed);
-    if (written != needed)
+    // The std::wstring allocation can throw bad_alloc, and this is `noexcept` — an escape would be
+    // std::terminate instead of a failed library open. An empty result is already this function's
+    // documented failure signal, so degrade to it. (bugprone-exception-escape.)
+    try
+    {
+        std::wstring out(static_cast<crd::usize>(needed), L'\0');
+        const int written = MultiByteToWideChar(CP_UTF8, 0, sv.data(), static_cast<int>(sv.size()), out.data(), needed);
+        if (written != needed)
+        {
+            return {};
+        }
+        return out;
+    }
+    catch (...)
     {
         return {};
     }
-    return out;
 }
 #endif
 } // namespace

@@ -9,12 +9,14 @@
 #include <crd/kir/ckir.hpp>
 #include <crd/resources/openpbr_material.hpp>
 #include <crd/resources/resource_manager.hpp>
+#include <crd/resources/texture_resource.hpp> // REN-2 Half B: the cooked base-color map the forward pass samples
 #include <crd/scene/query.hpp>
 #include <crd/scene/render_components.hpp>
 #include <crd/scene/spatial_bvh_index.hpp>
 #include <crd/scene/transform.hpp>
 #include <crd/scene/world.hpp>
 
+#include <chrono> // REN-8: CPU wall-clock of render(), to compare against the frame graph's GPU timestamps
 #include <cmath>
 #include <cstring>
 
@@ -233,6 +235,91 @@ void build_scene_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
                  0};
 }
 
+// REN-2 Half B: the TEXTURED scene VS — build_scene_vs + the vertex's uv0 (48-byte record words 6..7) emitted as a
+// 3rd varying (loc 2), so the FS can sample the material base-color map at the mesh UV.
+void build_scene_vs_textured(crd::kir::KGraph& g, crd::kir::KEntry& ve)
+{
+    namespace kir = crd::kir;
+    Gx c(g);
+
+    const int vid  = g.cast(g.builtin(kir::KBuiltin::VertexIndex), kir::DType::U32);
+    const int idxc = c.hdru(0U);
+    const int ii   = c.dvd(vid, idxc);
+    const int li   = c.sub(vid, c.mul(ii, idxc));
+
+    const int vidx  = c.loadu(c.add(c.hdru(2U), li));
+    const int vbase = c.add(c.hdru(3U), c.mul(vidx, c.ku(kVertexWords)));
+    const int px    = c.loadf(c.add(vbase, c.ku(0U)));
+    const int py    = c.loadf(c.add(vbase, c.ku(1U)));
+    const int pz    = c.loadf(c.add(vbase, c.ku(2U)));
+    const int nx    = c.loadf(c.add(vbase, c.ku(3U)));
+    const int ny    = c.loadf(c.add(vbase, c.ku(4U)));
+    const int nz    = c.loadf(c.add(vbase, c.ku(5U)));
+    const int u     = c.loadf(c.add(vbase, c.ku(6U))); // uv0 (bytes 24-31)
+    const int v     = c.loadf(c.add(vbase, c.ku(7U)));
+
+    const int slot  = c.loadu(c.add(c.hdru(5U), ii));
+    const int ibase = c.add(c.hdru(4U), c.mul(slot, c.ku(kInstanceWords)));
+    int       m[16];
+    for (crd::u32 k = 0; k < 16U; ++k) { m[k] = c.loadf(c.add(ibase, c.ku(k))); }
+
+    const int wx  = c.add(c.add(c.mul(m[0], px), c.mul(m[4], py)), c.add(c.mul(m[8], pz), m[12]));
+    const int wy  = c.add(c.add(c.mul(m[1], px), c.mul(m[5], py)), c.add(c.mul(m[9], pz), m[13]));
+    const int wz  = c.add(c.add(c.mul(m[2], px), c.mul(m[6], py)), c.add(c.mul(m[10], pz), m[14]));
+    const int nwx = c.add(c.add(c.mul(m[0], nx), c.mul(m[4], ny)), c.mul(m[8], nz));
+    const int nwy = c.add(c.add(c.mul(m[1], nx), c.mul(m[5], ny)), c.mul(m[9], nz));
+    const int nwz = c.add(c.add(c.mul(m[2], nx), c.mul(m[6], ny)), c.mul(m[10], nz));
+
+    int clip[4];
+    c.mul_view_proj(wx, wy, wz, clip);
+
+    const int cr = c.loadf(c.add(ibase, c.ku(16U)));
+    const int cg = c.loadf(c.add(ibase, c.ku(17U)));
+    const int cb = c.loadf(c.add(ibase, c.ku(18U)));
+    const int ca = c.loadf(c.add(ibase, c.ku(19U)));
+
+    ve.stage    = kir::KStage::Vertex;
+    ve.position = g.vec4(clip[0], clip[1], clip[2], clip[3]);
+    ve.n_out    = 3;
+    ve.out[0]   = {g.vec3(nwx, nwy, nwz), 0, kir::Interp::Smooth};
+    ve.out[1]   = {g.vec4(cr, cg, cb, ca), 1, kir::Interp::Flat};
+    ve.out[2]   = {g.vec2(u, v), 2, kir::Interp::Smooth};
+}
+
+// REN-2 Half B: the TEXTURED scene FS — samples the material base-color (albedo) map at UV (set 0/binding 1,
+// sampler binding 2) and modulates by the per-instance tint × N·L lighting.
+void build_scene_fs_textured(crd::kir::KGraph& g, crd::kir::KEntry& fe)
+{
+    namespace kir = crd::kir;
+    Gx c(g);
+
+    const int vn   = g.stage_in(kir::KType::vec(kir::DType::F32, 3), 0, kir::Interp::Smooth);
+    const int vc   = g.stage_in(kir::KType::vec(kir::DType::F32, 4), 1, kir::Interp::Flat);
+    const int uv   = g.stage_in(kir::KType::vec(kir::DType::F32, 2), 2, kir::Interp::Smooth);
+    const int tex  = g.texture(0, 1);
+    const int samp = g.sampler(0, 2);
+    const int alb  = g.tex_sample(tex, samp, uv); // vec4 base-color
+
+    const int nx = g.swizzle(vn, 0);
+    const int ny = g.swizzle(vn, 1);
+    const int nz = g.swizzle(vn, 2);
+    const int nl = c.mx(g.unary(kir::KOp::Sqrt, c.add(c.add(c.mul(nx, nx), c.mul(ny, ny)), c.mul(nz, nz))), c.kf(1.0e-6));
+    const int lx = c.hdrf(22U);
+    const int ly = c.hdrf(23U);
+    const int lz = c.hdrf(24U);
+    const int ll = c.mx(g.unary(kir::KOp::Sqrt, c.add(c.add(c.mul(lx, lx), c.mul(ly, ly)), c.mul(lz, lz))), c.kf(1.0e-6));
+    const int ndl  = c.mx(c.dvd(c.add(c.add(c.mul(nx, lx), c.mul(ny, ly)), c.mul(nz, lz)), c.mul(nl, ll)), c.kf(0.0));
+    const int lit  = c.add(c.kf(0.25), c.mul(c.kf(0.75), ndl));
+
+    // albedo · tint · lighting
+    const int r = c.mul(c.mul(g.swizzle(alb, 0), g.swizzle(vc, 0)), lit);
+    const int gg = c.mul(c.mul(g.swizzle(alb, 1), g.swizzle(vc, 1)), lit);
+    const int b = c.mul(c.mul(g.swizzle(alb, 2), g.swizzle(vc, 2)), lit);
+    fe.stage  = kir::KStage::Fragment;
+    fe.n_out  = 1;
+    fe.out[0] = {g.vec4(r, gg, b, g.swizzle(vc, 3)), 0};
+}
+
 // ── hashing / small helpers ────────────────────────────────────────────────────────────────────────────────────────
 
 constexpr crd::u64 kFnvOffset = 14695981039346656037ULL;
@@ -265,6 +352,11 @@ struct SceneRenderer::Impl
     // GEO-8: the skinned program pair + the skeleton/clip handle caches + palette scratch
     std::unique_ptr<crd::gpu::IGpuProgram>    vs_skinned;
     std::unique_ptr<crd::gpu::IRasterProgram> program_skinned;
+    // REN-2 Half B: the TEXTURED program (samples the material base-color map); the per-material GPU-texture cache
+    // is declared next to material_color below (ctor init order).
+    std::unique_ptr<crd::gpu::IGpuProgram>    vs_textured;
+    std::unique_ptr<crd::gpu::IGpuProgram>    fs_textured;
+    std::unique_ptr<crd::gpu::IRasterProgram> program_textured;
     crd::containers::HashMap<crd::resources::ResourceId, crd::resources::ResourceHandle<crd::anim::SkeletonResource>>
         skeleton_cache{nullptr};
     crd::containers::HashMap<crd::resources::ResourceId, crd::resources::ResourceHandle<crd::anim::AnimClipResource>>
@@ -280,16 +372,21 @@ struct SceneRenderer::Impl
     crd::containers::HashMap<crd::resources::ResourceId, crd::u32> group_of_mesh;
     // material colour cache (linear RGBA); resolved on rebuild
     crd::containers::HashMap<crd::resources::ResourceId, crd::math::Vec4f> material_color;
+    // REN-2 Half B: the per-material GPU base-color texture cache (owns the uploaded ITexture)
+    crd::containers::HashMap<crd::resources::ResourceId, std::unique_ptr<crd::gpu::ITexture>> material_texture{nullptr};
     // entity → (group << 32 | slot) — the BVH candidate → instance bridge, rebuilt with the structure
     crd::containers::HashMap<crd::scene::EntityId, crd::u64> entity_slot;
 
     // REN-1: the persistent frame graph (created lazily, reset per frame) — the whole scene's groups compose in
     // ONE submission. Null on a backend without it (DX12 until its port) ⇒ the synchronous per-draw fallback.
     std::unique_ptr<crd::gpu::IFrameGraph> frame_graph;
+    bool                                   readback = true; // REN-8: on by default so gates keep read_pixel
+    SceneRenderer::FramePassFn             overlay_fn   = nullptr; // the grid/gizmo/debug pass, in OUR graph
+    void*                                  overlay_user = nullptr;
 
     explicit Impl(crd::memory::IAllocator* a)
         : alloc(a), skeleton_cache(a), clip_cache(a), pose_scratch(a), world_scratch(a), palette_scratch(a),
-          palette_staging(a), group_of_mesh(a), material_color(a), entity_slot(a)
+          palette_staging(a), group_of_mesh(a), material_color(a), material_texture(a), entity_slot(a)
     {
     }
 
@@ -307,6 +404,38 @@ struct SceneRenderer::Impl
         material_color.insert(material, color);
         return color;
     }
+
+    // REN-2 Half B: resolve a material's base-color (albedo) map to a GPU texture — load the OpenPbrMaterial, follow
+    // its `textures.base_color` ResourceId to the cooked TextureResource, and upload its mip chain VERBATIM via
+    // create_texture_from_mips (the RET-3 seam). Cached per material; nullptr if the material has no base-color map
+    // (⇒ the flat-colour path). The cache OWNS the texture; the returned pointer is borrowed (stable for the cache's life).
+    [[nodiscard]] crd::gpu::ITexture* resolve_base_color_texture(const crd::resources::ResourceId& material)
+    {
+        if (material.is_null()) { return nullptr; }
+        if (auto* cached = material_texture.find(material)) { return cached->get(); }
+        std::unique_ptr<crd::gpu::ITexture> owned;
+        auto mh = rm->load_sync<crd::resources::OpenPbrMaterial>(material);
+        if (mh.state() == crd::resources::LoadState::Ready && mh.get() != nullptr)
+        {
+            const crd::resources::ResourceId& bc = mh.get()->textures.base_color;
+            if (!bc.is_null())
+            {
+                auto th = rm->load_sync<crd::resources::TextureResource>(bc);
+                if (th.state() == crd::resources::LoadState::Ready && th.get() != nullptr && th.get()->mip_count > 0U)
+                {
+                    const crd::resources::TextureResource& t = *th.get();
+                    crd::containers::Array<const void*>     mip_ptrs(alloc);
+                    for (crd::u32 i = 0; i < t.mip_count; ++i) { mip_ptrs.push_back(t.mips[i].pixels.data()); }
+                    const bool srgb = t.format == crd::resources::TextureFormat::RGBA8UnormSrgb;
+                    owned = raster->create_texture_from_mips(t.mips[0].width, t.mips[0].height, t.mip_count,
+                                                             mip_ptrs.data(), srgb);
+                }
+            }
+        }
+        crd::gpu::ITexture* result = owned.get();
+        material_texture.insert(material, std::move(owned));
+        return result;
+    }
 };
 
 SceneRenderer::SceneRenderer(crd::memory::IAllocator* alloc)
@@ -321,6 +450,21 @@ bool SceneRenderer::init(crd::gpu::IRasterContext& raster, crd::resources::Resou
     m_impl->raster = &raster;
     m_impl->rm     = &rm;
     return raster.valid();
+}
+
+void SceneRenderer::set_overlay_pass(FramePassFn fn, void* user) noexcept
+{
+    Impl& impl        = *m_impl;
+    impl.overlay_fn   = fn;
+    impl.overlay_user = user;
+}
+
+void SceneRenderer::set_readback_enabled(bool on) noexcept
+{
+    Impl& impl    = *m_impl;
+    impl.readback = on;
+    // the graph may not exist yet (it is created lazily on the first render) — `render()` re-applies the flag
+    if (impl.frame_graph != nullptr) { impl.frame_graph->set_readback_enabled(on); }
 }
 
 bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
@@ -346,6 +490,21 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
     if (m_impl->vs_skinned != nullptr)
     {
         m_impl->program_skinned = m_impl->raster->create_raster_program(*m_impl->vs_skinned, *m_impl->fs);
+    }
+
+    // REN-2 Half B: the TEXTURED program — a group whose material carries a base-color map draws through this
+    // (samples albedo at the mesh UV) instead of the flat program.
+    crd::kir::KGraph tvg(m_impl->alloc);
+    crd::kir::KEntry tve;
+    build_scene_vs_textured(tvg, tve);
+    crd::kir::KGraph tfg(m_impl->alloc);
+    crd::kir::KEntry tfe;
+    build_scene_fs_textured(tfg, tfe);
+    m_impl->vs_textured = ctx.create_program(tvg, tve);
+    m_impl->fs_textured = ctx.create_program(tfg, tfe);
+    if (m_impl->vs_textured != nullptr && m_impl->fs_textured != nullptr)
+    {
+        m_impl->program_textured = m_impl->raster->create_raster_program(*m_impl->vs_textured, *m_impl->fs_textured);
     }
     return m_impl->program != nullptr;
 }
@@ -459,6 +618,7 @@ void pass_rebuild(const crd::scene::ChunkView& view, void* ud)
         group.slot_skeleton.push_back({});
         group.slot_clip.push_back({});
         group.slot_time.push_back(0.0F);
+        if (group.material.is_null()) { group.material = renderers[i].material; } // REN-2 Half B: representative material
         write_slot(group, slot, transforms[i], ctx.impl->resolve_color(renderers[i].material));
         ctx.impl->entity_slot.insert(view.entities[i],
                                      (static_cast<crd::u64>(gi) << 32U) | static_cast<crd::u64>(slot));
@@ -799,8 +959,9 @@ namespace
 {
 struct SceneDraw
 {
-    crd::gpu::IRasterProgram* program = nullptr;
-    crd::gpu::IStorageBuffer* buffer  = nullptr;
+    crd::gpu::IRasterProgram* program    = nullptr;
+    crd::gpu::IStorageBuffer* buffer     = nullptr;
+    crd::gpu::ITexture*       base_color = nullptr; // REN-2 Half B: the material albedo map (null ⇒ the flat draw)
     crd::u32                  vertex_count = 0;
 };
 struct SceneDrawState
@@ -809,6 +970,20 @@ struct SceneDrawState
     crd::gpu::ClearColor                    clear{};
     const crd::containers::Array<SceneDraw>* draws = nullptr;
 };
+// REN-2 Half B: record ONE scene group — the first clears colour+depth, later groups LOAD; a group whose material
+// carries a base-color map draws through draw_storage_textured_depth (samples albedo), else the flat draw.
+void record_one_group(crd::gpu::IRasterContext& r, crd::gpu::IRasterTarget& t, const SceneDraw& d,
+                      crd::gpu::ClearColor clear, bool first)
+{
+    const auto cmp = crd::gpu::DepthCompare::GreaterEqual;
+    if (d.base_color != nullptr)
+    {
+        if (first) { r.draw_storage_textured_depth(t, *d.program, clear, 0.0F, cmp, *d.buffer, *d.base_color, d.vertex_count); }
+        else { r.draw_storage_textured_depth_load(t, *d.program, cmp, *d.buffer, *d.base_color, d.vertex_count); }
+    }
+    else if (first) { r.draw_storage_depth(t, *d.program, clear, 0.0F, cmp, *d.buffer, d.vertex_count); }
+    else { r.draw_storage_depth_load(t, *d.program, cmp, *d.buffer, d.vertex_count); }
+}
 // the scene pass's recording callback: the FIRST group clears colour+depth, every later group LOADs and
 // composes through the frame's real depth (the GEO-8 multi-group contract, now in ONE submission).
 void record_scene_groups(crd::gpu::IFrameContext& ctx, void* user)
@@ -816,17 +991,7 @@ void record_scene_groups(crd::gpu::IFrameContext& ctx, void* user)
     const auto* s = static_cast<const SceneDrawState*>(user);
     for (crd::usize i = 0; i < s->draws->size(); ++i)
     {
-        const SceneDraw& d = (*s->draws)[i];
-        if (i == 0U)
-        {
-            ctx.raster().draw_storage_depth(*s->target, *d.program, s->clear, 0.0F,
-                                            crd::gpu::DepthCompare::GreaterEqual, *d.buffer, d.vertex_count);
-        }
-        else
-        {
-            ctx.raster().draw_storage_depth_load(*s->target, *d.program, crd::gpu::DepthCompare::GreaterEqual,
-                                                 *d.buffer, d.vertex_count);
-        }
+        record_one_group(ctx.raster(), *s->target, (*s->draws)[i], s->clear, i == 0U);
     }
 }
 } // namespace
@@ -837,6 +1002,17 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
 {
     RenderStats stats;
     Impl&       impl = *m_impl;
+    // REN-8: wall-clock the WHOLE render call, including the frame graph's fence wait. render() has several
+    // early returns, so an RAII stamp is the only way to time it without a leak-prone exit in each branch.
+    struct CpuStamp
+    {
+        RenderStats*                                   s;
+        std::chrono::steady_clock::time_point          t0 = std::chrono::steady_clock::now();
+        ~CpuStamp()
+        {
+            s->cpu_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        }
+    } cpu_stamp{&stats};
     if (impl.program == nullptr) { return stats; }
 
     crd::math::Vec4f planes[6];
@@ -896,11 +1072,18 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
                                           visible_count * 4U);
         stats.uploaded_bytes += sizeof(header) + static_cast<crd::u64>(visible_count) * 4U;
 
-        crd::gpu::IRasterProgram* program =
-            group.skinned && impl.program_skinned != nullptr ? impl.program_skinned.get() : impl.program.get();
+        // REN-2 Half B: a group whose material carries a base-color map draws TEXTURED (samples albedo); else flat.
+        // (Groups batch by MESH; the group's representative material drives the map — correct for one-material meshes.
+        // Per-instance material textures are a bindless follow-up. Skinned takes precedence — no textured-skinned yet.)
+        crd::gpu::ITexture*       base_color = group.skinned ? nullptr : impl.resolve_base_color_texture(group.material);
+        crd::gpu::IRasterProgram* program    = impl.program.get();
+        if (group.skinned && impl.program_skinned != nullptr) { program = impl.program_skinned.get(); }
+        else if (base_color != nullptr && impl.program_textured != nullptr) { program = impl.program_textured.get(); }
+        else { base_color = nullptr; } // no textured program available ⇒ the flat path (drop the map)
         SceneDraw d;
         d.program      = program;
         d.buffer       = group.buffer.get();
+        d.base_color   = base_color;
         d.vertex_count = visible_count * group.index_count;
         draw_list.push_back(d);
         ++stats.draws;
@@ -915,6 +1098,7 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
     if (impl.frame_graph != nullptr)
     {
         crd::gpu::IFrameGraph& fg = *impl.frame_graph;
+        fg.set_readback_enabled(impl.readback); // re-applied per frame: the graph is created lazily
         fg.reset();
         const crd::gpu::FgImage img = fg.import_target(target);
         crd::gpu::IFramePassBuilder& scene = fg.add_pass("scene");
@@ -922,23 +1106,26 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         for (crd::usize i = 0; i < draw_list.size(); ++i) { scene.reads(fg.import_storage(*draw_list[i].buffer)); }
         SceneDrawState state{&target, clear, &draw_list};
         scene.execute(&record_scene_groups, &state);
-        if (fg.build()) { fg.execute(); }
+        // ⛔ HARD RULE: the overlay is a PASS in this graph, not a separate submission. `read_writes` (not
+        // `writes`) is what tells the graph it composites ON TOP of the scene — declaring it a plain write would
+        // let the scheduler believe the scene's output is dead and reorder or alias it away.
+        if (impl.overlay_fn != nullptr)
+        {
+            fg.add_pass("overlay").read_writes(img).execute(impl.overlay_fn, impl.overlay_user);
+        }
+        if (fg.build())
+        {
+            fg.execute();
+            // REN-8: what the DEVICE spent. Compared against `cpu_ms` below, the gap is the frame's stall.
+            stats.gpu_ms       = fg.gpu_ms_total();
+            stats.timed_passes = fg.pass_count();
+        }
     }
-    else // synchronous fallback (DX12 until its frame-graph port): the GEO-8 first-clears-rest-load loop
+    else // synchronous fallback (a backend without the frame graph): the GEO-8 first-clears-rest-load loop
     {
         for (crd::usize i = 0; i < draw_list.size(); ++i)
         {
-            const SceneDraw& d = draw_list[i];
-            if (i == 0U)
-            {
-                impl.raster->draw_storage_depth(target, *d.program, clear, 0.0F, crd::gpu::DepthCompare::GreaterEqual,
-                                                *d.buffer, d.vertex_count);
-            }
-            else
-            {
-                impl.raster->draw_storage_depth_load(target, *d.program, crd::gpu::DepthCompare::GreaterEqual,
-                                                     *d.buffer, d.vertex_count);
-            }
+            record_one_group(*impl.raster, target, draw_list[i], clear, i == 0U);
         }
     }
     return stats;

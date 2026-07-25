@@ -1206,6 +1206,39 @@ inline void build_sample_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
     fe.out[0] = {col, 0};
 }
 
+// REN-2 Half B: the TEXTURED scene material shader. VS vertex-pulls {x,y,z,u,v} (5 floats/vertex, the GEO-1 pull
+// seam) from the storage buffer by VertexIndex and emits position + UV; FS samples the material base-color (albedo)
+// map at UV (texture set 0/binding 1, sampler binding 2 — draw_storage_textured_depth's layout). Proves the forward
+// pass SAMPLES the material map instead of a flat colour.
+inline void build_pull_textured_vs(crd::kir::KGraph& g, crd::kir::KEntry& ve)
+{
+    namespace kir  = crd::kir;
+    const auto sh   = kir::make_shape({1});
+    const auto ku   = [&](crd::u32 v) { return g.constant(static_cast<double>(v), sh, kir::DType::U32); };
+    const int  vid  = g.cast(g.builtin(kir::KBuiltin::VertexIndex), kir::DType::U32);
+    const int  base = g.binary(kir::KOp::Mul, vid, ku(5U)); // 5 floats per vertex
+    const auto ldf  = [&](int idx) { return g.int_bits_to_float(g.cast(g.storage_load(idx), kir::DType::I32)); };
+    const int  x    = ldf(base);
+    const int  y    = ldf(g.binary(kir::KOp::Add, base, ku(1U)));
+    const int  z    = ldf(g.binary(kir::KOp::Add, base, ku(2U)));
+    const int  u    = ldf(g.binary(kir::KOp::Add, base, ku(3U)));
+    const int  v    = ldf(g.binary(kir::KOp::Add, base, ku(4U)));
+    ve.stage    = kir::KStage::Vertex;
+    ve.position = g.vec4(x, y, z, g.constant(1.0, sh, kir::DType::F32));
+    ve.n_out    = 1;
+    ve.out[0]   = {g.vec2(u, v), 0, kir::Interp::Smooth};
+}
+inline void build_pull_textured_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
+{
+    namespace kir  = crd::kir;
+    const int uv   = g.stage_in(kir::KType::vec(kir::DType::F32, 2), 0, kir::Interp::Smooth);
+    const int tex  = g.texture(0, 1);
+    const int samp = g.sampler(0, 2);
+    fe.stage  = kir::KStage::Fragment;
+    fe.n_out  = 1;
+    fe.out[0] = {g.tex_sample(tex, samp, uv), 0};
+}
+
 // B2-b helpers — each reads the UV interpolant (build_textured_vs) and exercises ONE sample-op on the left-red/right-green
 // texture (tex_0_1 + samp_0_2), writing a colour a readback can check. `dim_texels` = the texture edge (16) for coord math.
 
@@ -1283,6 +1316,27 @@ inline void build_gather_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
     fe.stage = kir::KStage::Fragment; fe.n_out = 1; fe.out[0] = {col, 0};
 }
 
+// REN-3.1 DEPTH-ONLY OCCLUDER FS: writes ONLY gl_FragDepth = `depth_value` and emits NO colour output at all
+// (`n_out = 0`) — the shape a shadow pass needs, since `draw_storage_depth_only` binds zero colour attachments.
+// Paired with `build_fullscreen_vs`, one full-screen triangle RENDERS a depth map ON THE DEVICE: the thing
+// `ckir_lighting.hpp:992` says we could not do (every shadow test before this UPLOADED its depth map via
+// `create_depth_texture`).
+//
+// A CONSTANT depth is deliberate: at 0.5 it reproduces exactly the map `fill_uniform_depth` uploads, so
+// `build_shadow_fs` (ref = uv.x, LessEqual ⇒ lit where uv.x ≤ 0.5) behaves identically on a RENDERED map as on an
+// UPLOADED one. That equivalence is the real claim of the gate. (A ramp of x/dim is useless here — it makes stored
+// depth equal the compare ref everywhere, so the comparison sits on the boundary across the whole image; the first
+// draft of this gate did exactly that and produced a uniform white.)
+inline void build_depth_only_const_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe, double depth_value)
+{
+    namespace kir = crd::kir;
+    const auto sh = kir::make_shape({1});
+
+    fe.stage      = kir::KStage::Fragment;
+    fe.n_out      = 0; // ⛔ no colour attachment is bound in a depth-only pass
+    fe.frag_depth = g.constant(depth_value, sh, kir::DType::F32);
+}
+
 // B2-b SHADOW (depth-compare) FS: samples a depth texture (shadow sampler) with `ref = uv.x`. With the depth = 0.5
 // everywhere and compareOp LESS_OR_EQUAL, the result is 1 where uv.x <= 0.5 (screen-left → white) and 0 where uv.x > 0.5
 // (screen-right → black). Proves the shadow path: comparison sampler + depth texture + KOp::SampleCmp, both backends.
@@ -1298,6 +1352,44 @@ inline void build_shadow_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
     const int  one  = g.constant(1.0, sh, kir::DType::F32);
     const int  col  = g.vec4(r, r, r, one);
     fe.stage = kir::KStage::Fragment; fe.n_out = 1; fe.out[0] = {col, 0};
+}
+
+// REN-3.2 CASCADE PROBE FS: samples a LAYERED depth atlas (`sampler2DArrayShadow`) at all four slices with ONE
+// shared compare ref, and packs the four comparison results so a single readback pins every slice.
+//   R = (c0·1 + c1·2 + c2·4 + c3·8) / 15  — a 4-bit code: ONE channel that uniquely identifies which slices passed
+//   G = c1, B = c3                        — two slices pinned individually, so a failure says WHICH one broke
+// The code channel is what makes this a real gate. If the per-layer attachment views were wrong (every cascade
+// pass landing on slice 0) or the SRV were a plain TEXTURE2D (every lookup returning slice 0), all four results
+// would be EQUAL and the code would read 0 or 15 — never an intermediate pattern. Exercises the arrayed-shadow
+// emitter path (`sampler2DArrayShadow` takes vec4(uv, layer, ref), not vec3) on both backends.
+inline void build_cascade_probe_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe, double ref_value)
+{
+    namespace kir = crd::kir;
+    const auto sh   = kir::make_shape({1});
+    const auto k    = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const int  uv   = g.stage_in(kir::KType::vec(kir::DType::F32, 2), 0, kir::Interp::Smooth);
+    const int  tex  = g.texture(0, 1, kir::DType::F32, kir::TexDim::Tex2D, /*arrayed=*/true, false, /*shadow=*/true);
+    const int  samp = g.sampler(0, 2, /*shadow=*/true);
+    const int  ref  = k(ref_value);
+    const int  u    = g.swizzle(uv, 0);
+    const int  v    = g.swizzle(uv, 1);
+
+    int c[4] = {0, 0, 0, 0};
+    for (crd::u32 l = 0; l < 4U; ++l)
+    {
+        // an arrayed shadow lookup's coordinate is (u, v, LAYER); the ref rides alongside it
+        c[l] = g.tex_sample_cmp(tex, samp, g.vec3(u, v, k(static_cast<double>(l))), ref);
+    }
+    const int code = g.binary(
+        kir::KOp::Mul,
+        g.binary(kir::KOp::Add,
+                 g.binary(kir::KOp::Add, c[0], g.binary(kir::KOp::Mul, c[1], k(2.0))),
+                 g.binary(kir::KOp::Add, g.binary(kir::KOp::Mul, c[2], k(4.0)),
+                          g.binary(kir::KOp::Mul, c[3], k(8.0)))),
+        k(1.0 / 15.0));
+    fe.stage  = kir::KStage::Fragment;
+    fe.n_out  = 1;
+    fe.out[0] = {g.vec4(code, c[1], c[3], k(1.0)), 0};
 }
 
 // B8-f SHADOW FOUNDATION: a receiver plane (world pos synthesized from FragCoord) projected into a shadow map via a light_vp,

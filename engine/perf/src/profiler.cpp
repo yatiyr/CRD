@@ -393,7 +393,16 @@ crd::u8 register_thread(const char* name) noexcept
     }
 
     detail::ThreadRing& ring = g_state->rings[idx];
-    ring.samples           = new Sample[g_state->per_thread_ring_slots]{};
+    // `new (std::nothrow)`, not plain `new`: this is a `noexcept` registration path, so a throwing
+    // bad_alloc here is std::terminate rather than a failed registration. A profiler that cannot get its
+    // ring must degrade to "this thread records nothing", never take the process down.
+    // (bugprone-unhandled-exception-at-new.)
+    ring.samples = new (std::nothrow) Sample[g_state->per_thread_ring_slots]{};
+    if (ring.samples == nullptr)
+    {
+        g_state->thread_count.fetch_sub(1U, std::memory_order_acq_rel);
+        return detail::kInvalidThread;
+    }
     ring.head.store(0U, std::memory_order_relaxed);
     ring.tail.store(0U, std::memory_order_relaxed);
     ring.dropped.store(0U, std::memory_order_relaxed);

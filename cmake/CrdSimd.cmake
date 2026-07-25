@@ -207,3 +207,14 @@ message(STATUS "[crd-simd] host SYSTEM_PROC  = ${CMAKE_SYSTEM_PROCESSOR}")
 # Persist resolution for downstream code that wants to query it.
 set(CRD_SIMD_LEVEL_RESOLVED "${_crd_simd_resolved}" CACHE INTERNAL
     "Resolved SIMD level for this build configuration")
+
+# The MSVC ISA flag this resolution actually applied (empty when none). Exported because clang-tidy DROPS
+# `/`-spelled flags that arrive through the compile command, so the win-tidy gate has to re-state the ISA
+# flag via `--extra-arg=` (see the CRD_ENABLE_CLANG_TIDY block in the root CMakeLists). Deriving it from the
+# same branch that adds the real flag is what keeps the two from drifting apart.
+set(_crd_simd_msvc_arch "")
+if(MSVC AND (_crd_simd_resolved STREQUAL "avx2" OR (_crd_simd_resolved STREQUAL "native" AND _crd_arch_x64)))
+    set(_crd_simd_msvc_arch "/arch:AVX2")
+endif()
+set(CRD_SIMD_MSVC_ARCH_FLAG "${_crd_simd_msvc_arch}" CACHE INTERNAL
+    "The MSVC /arch: flag this SIMD resolution applies (empty if none) — mirrored into the clang-tidy gate")

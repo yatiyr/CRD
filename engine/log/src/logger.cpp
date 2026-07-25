@@ -235,9 +235,22 @@ void add_sink(std::unique_ptr<ISink> sink) noexcept
     {
         return;
     }
-    LoggerState& st = state();
-    std::lock_guard<std::mutex> lock(st.sinks_mutex);
-    st.sinks.push_back(std::move(sink));
+    // The lock and the vector growth can both throw (system_error / bad_alloc), and this entry point is
+    // `noexcept` — an escape is std::terminate, not a logging hiccup. Logging is best-effort
+    // infrastructure: swallow, never propagate. (bugprone-exception-escape; the check only became visible
+    // once the tidy gate stopped dropping `/EHsc` — see the CRD_ENABLE_CLANG_TIDY block in CMakeLists.)
+    try
+    {
+        LoggerState&                st = state();
+        std::lock_guard<std::mutex> lock(st.sinks_mutex);
+        st.sinks.push_back(std::move(sink));
+    }
+    catch (...)
+    {
+        // A sink we could not install is a permanent loss of output — surface it through the same
+        // counter `dropped_count()` already reports, rather than vanishing.
+        state().dropped.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 
 void clear_sinks() noexcept
@@ -275,7 +288,14 @@ u64 dropped_count() noexcept
 
 namespace detail
 {
-void dispatch(LogLevel level, const Channel& ch, std::source_location loc, std::string_view message) noexcept
+namespace
+{
+// The body of `dispatch`, split out so the public entry point can be a `noexcept` WRAPPER. Every step below
+// can throw — the sink mutex, the std::string record copy, the async deque push — and `dispatch` is declared
+// `noexcept`, so an escape means std::terminate in the middle of someone else's error handling. Logging is
+// best-effort infrastructure; a failed log is a dropped log, never a crash. (bugprone-exception-escape — only
+// visible since the tidy gate stopped dropping `/EHsc`; see the CRD_ENABLE_CLANG_TIDY block in CMakeLists.)
+void dispatch_impl(LogLevel level, const Channel& ch, std::source_location loc, std::string_view message)
 {
     LoggerState& st = state();
 
@@ -337,6 +357,21 @@ void dispatch(LogLevel level, const Channel& ch, std::source_location loc, std::
         st.queue.push_back(std::move(q));
     }
     st.queue_cv.notify_one();
+}
+} // namespace
+
+void dispatch(LogLevel level, const Channel& ch, std::source_location loc, std::string_view message) noexcept
+{
+    try
+    {
+        dispatch_impl(level, ch, loc, message);
+    }
+    catch (...)
+    {
+        // A log we could not deliver is a DROPPED log — same accounting as async-queue overflow, so the
+        // existing `dropped_count()` telemetry reports it instead of the failure vanishing.
+        state().dropped.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 } // namespace detail
 } // namespace crd::log

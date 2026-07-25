@@ -1617,6 +1617,12 @@ public:
     // One radix-4 batched DIT butterfly over the contiguous batch axis, for BIT-REVERSED input. Two fused
     // radix-2 stages: inner pairs (o0,o1)&(o2,o3) with ws=W_{2q}^k, then outer (e0,f0)&(e1,f1) with
     // w0=W_{4q}^k / w1=W_{4q}^{k+q}. In place; twiddles carry isign (pre-conjugated for inverse).
+#if defined(_MSC_VER) && !defined(__clang__)
+    // MSVC LTCG else inlines this ~24-live-Vec codelet into the radix-4 driver, stacking onto the codelet mass
+    // there -> C1001 optimizer heap exhaustion (deterministically eliminated 2026-07-24; same fix as
+    // execute_ip4aos / batched_codelets_gen). The call is amortized over the batch loop -> perf-neutral.
+    __declspec(noinline)
+#endif
     static void batched_butterfly4(Complex<T>* d, crd::usize b, crd::usize o0, crd::usize o1, crd::usize o2,
                                    crd::usize o3, T wsr, T wsi, T w0r, T w0i, T w1r, T w1i) noexcept
     {
@@ -1669,6 +1675,11 @@ public:
     // pairs (0,1)(2,3)(4,5)(6,7); B) w0=W_{4q}^k on (0,2)(4,6), w1=W_{4q}^{k+q} on (1,3)(5,7); C) v0..v3=
     // W_{8q}^{k,k+q,k+2q,k+3q} on (0,4)(1,5)(2,6)(3,7). In place; twiddles carry isign. Vec4d over the batch +
     // scalar tail (the 8-pt waist = 16 ymm at peak ⇒ some spill to L1, cheap on the L2-resident block).
+#if defined(_MSC_VER) && !defined(__clang__)
+    // Same MSVC LTCG heap-exhaustion guard as batched_butterfly4: keep this radix-8 SIMD codelet out-of-line so
+    // the optimizer does not stack it onto the radix driver (C1001). Batch-amortized call -> perf-neutral.
+    __declspec(noinline)
+#endif
     static void batched_butterfly8(Complex<T>* d, crd::usize b, crd::usize o0, crd::usize o1, crd::usize o2,
                                    crd::usize o3, crd::usize o4, crd::usize o5, crd::usize o6, crd::usize o7, T wsr,
                                    T wsi, T w0r, T w0i, T w1r, T w1i, T v0r, T v0i, T v1r, T v1i, T v2r, T v2i, T v3r,

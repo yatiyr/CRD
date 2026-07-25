@@ -18,4 +18,6 @@ target_link_libraries(crd-kir-dx12-tests PRIVATE
 
 crd_enable_default_pch(crd-kir-dx12-tests)
 
-catch_discover_tests(crd-kir-dx12-tests DISCOVERY_MODE PRE_TEST)
+# Shares the crd_gpu_device RESOURCE_LOCK (see tests/gpu-context-vulkan): GPU-device tests serialize under
+# `ctest --parallel` to avoid cross-process driver/cook contention.
+catch_discover_tests(crd-kir-dx12-tests DISCOVERY_MODE PRE_TEST PROPERTIES RESOURCE_LOCK crd_gpu_device)

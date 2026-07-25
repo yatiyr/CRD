@@ -53,7 +53,17 @@ public:
         ++begin_span_calls;
         last_cmd_buffer = cmd_buffer;
         const auto idx  = static_cast<crd::u32>(spans.size());
-        spans.push_back({name, static_cast<crd::u32>(m_current_frame), idx});
+        // The interface declares these `noexcept`, so a vector reallocation throwing bad_alloc here would be
+        // std::terminate rather than a test failure. Swallow — the recorded call counts still tell the test
+        // what happened. (bugprone-exception-escape.)
+        try
+        {
+            spans.push_back({name, static_cast<crd::u32>(m_current_frame), idx});
+        }
+        catch (...)
+        {
+            record_failures.fetch_add(1U, std::memory_order_relaxed);
+        }
         return crd::perf::GpuSpanHandle{idx};
     }
 
@@ -62,7 +72,14 @@ public:
         ++end_span_calls;
         if (span.is_valid())
         {
-            ended_indices.push_back(span.value);
+            try // `noexcept` override — see begin_span. (bugprone-exception-escape.)
+            {
+                ended_indices.push_back(span.value);
+            }
+            catch (...)
+            {
+                record_failures.fetch_add(1U, std::memory_order_relaxed);
+            }
         }
     }
 
@@ -92,6 +109,7 @@ public:
     [[nodiscard]] crd::f64 ns_per_tick() const noexcept override { return 1.0; }
 
     std::atomic<crd::u32> begin_frame_calls{0U};
+    std::atomic<crd::u32> record_failures{0U}; // a `noexcept` override could not grow its vector
     std::atomic<crd::u32> begin_span_calls{0U};
     std::atomic<crd::u32> end_span_calls{0U};
     std::atomic<crd::u32> end_frame_calls{0U};

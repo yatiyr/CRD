@@ -83,6 +83,7 @@ struct ChunkRun
 struct MeshGroup
 {
     crd::resources::ResourceId                            mesh_id;
+    crd::resources::ResourceId                            material; // REN-2 Half B: representative material (drives the base-color map)
     crd::resources::ResourceHandle<crd::resources::MeshResource> mesh; // keeps the payload resident
     crd::u32                                              index_count = 0;
 
@@ -137,6 +138,13 @@ struct RenderStats
     crd::u32 drawn_instances  = 0;
     crd::u32 culled_instances = 0;
     crd::u64 uploaded_bytes   = 0; // per-frame header + visible-list bytes
+    // REN-8: what the DEVICE actually spent, from frame-graph timestamp queries, vs the CPU wall-clock of the
+    // whole render call. The GAP between them is the answer to "why is the sandbox 12 ms/frame when neither
+    // optimization nor unlocking vsync moves it" — a large gap means the frame is dominated by the
+    // submit-and-WAIT that REN-1 deliberately kept, not by rendering work.
+    double   gpu_ms           = 0.0; // first pass start → last pass end, one submission
+    double   cpu_ms           = 0.0; // wall-clock of render(), including the fence wait
+    crd::u32 timed_passes     = 0;
 };
 
 class SceneRenderer
@@ -155,6 +163,26 @@ public:
 
     // Compile the CKIR forward VS/FS + assemble the raster program. False when the backend cannot build them.
     [[nodiscard]] bool init_programs(crd::gpu::IGpuContext& ctx);
+
+    // REN-8: does the frame graph copy the rendered target back to host memory every frame? That copy exists
+    // only so `read_pixel` works, so a PRESENTING app should turn it off — it costs a full-target PCIe transfer
+    // per frame that nothing reads. Default true, because every readback-asserting gate depends on it and a
+    // silent default-off would turn those gates green-on-nothing.
+    void set_readback_enabled(bool on) noexcept;
+
+    // ⛔ HARD RULE (AGENTS.md): EVERY render pass goes through our own frame-graph machinery. An overlay — the
+    // infinite grid, gizmos, debug viz, editor chrome — is a RENDER PASS, so it belongs in the frame's graph as
+    // a pass, not as a separate `draw_*` sequence with its own submit.
+    //
+    // Registering it here makes it the second pass of the SAME graph, sharing the one command buffer and the one
+    // submission with the scene. Before this the sandbox's grid submitted independently and cost ~2.6 ms/frame —
+    // nearly twice what the entire 4 100-instance scene cost on the GPU (~1.5 ms) — because each `draw_overlay`
+    // outside a pass does its own submit+wait. Inside a pass the same call RECORDS instead (`frame_recording()`).
+    //
+    // The callback receives the frame context; `ctx.raster()` is in recording mode, so any existing draw helper
+    // (`crd::draw::submit_overlay`, …) works unchanged from inside it.
+    using FramePassFn = void (*)(crd::gpu::IFrameContext& ctx, void* user);
+    void set_overlay_pass(FramePassFn fn, void* user) noexcept;
 
     // Chunk-grain extract + change-driven upload. Call once per frame AFTER transform propagation (world.step).
     SyncStats sync(crd::scene::World& world);

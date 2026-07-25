@@ -17,7 +17,12 @@ Read these in order; they go from stable rules → live state → the task at ha
 4. **`docs/SANITY.md`** — engineering sanity doctrine + the living **Sanity Ledger**. Short. Claim one ledger item when you have slack.
 5. **`context.md`** (repo root) — live "where we are now": current focus, last shipped, next up, test counts.
 6. **`docs/ROADMAP.md`** — navigation hub: phase status, decision log (tagged), detour queue, glossary. A hub — don't read end-to-end; follow the link for your task.
-7. **The active phase doc** under `docs/phases/` — its name is in `context.md`.
+7. **The active phase doc** under `docs/phases/` — its name is in `context.md`. (If the active work is a
+   DETOUR, the detour file under `docs/detours/` is the equivalent — `context.md` names it.)
+8. **The slice's design spec** under `docs/design/`, if it has one — the slice's ROW links it by path, and
+   `docs/design/README.md` is the reverse lookup. **If you were told "read the slice and implement it", this
+   is the document you were sent to**: it carries the reuse audit (what already exists, so you don't rebuild
+   it), the sequenced increments, and the gate for each.
 
 Then, as your task needs, pull the relevant ADR(s), system overview(s), and research dossier(s) from the map below.
 
@@ -39,6 +44,7 @@ Then, as your task needs, pull the relevant ADR(s), system overview(s), and rese
 | System overviews | `docs/systems/` | One short overview per shipped module | `docs/systems/README.md` | mixed |
 | Module deep-dives | `docs/<module>/<MODULE>_FILE.md` | Long-form per major module (log, memory, containers) | — | append-only |
 | Phase plans | `docs/phases/` | One file per phase, detailed slices | ROADMAP status table | living (active) / append-only (closed) |
+| **Slice design specs** | `docs/design/` | **The implementation CONTRACT for one slice — the mandatory REUSE AUDIT (what already exists, so it is not rebuilt), the sequenced increments, the gate per increment, named risks + non-goals. Sits between the row and the session log. The slice's ROW links it by path; this index is the reverse lookup.** | `docs/design/README.md` | living until the slice closes |
 | Session logs | `docs/sessions/` | One per work session (`YYYY-MM-DD-slug.md`) | — | append-only |
 | Research dossiers | `docs/research/` | Deep research per topic | — | append-only |
 | **Recipes** | `docs/recipes/` | **Educative build-recipes — teach a studied technique end to end (parameters first, then physics, assembly, traps). Written whenever we study + build something (AGENTS.md rule).** | — | append-only |

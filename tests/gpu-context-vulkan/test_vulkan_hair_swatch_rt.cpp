@@ -94,9 +94,13 @@ void write_bmp(crd::memory::IAllocator& alloc, const char* path, int w, int h,
 // above the shadowed interior — so a linear clamp either blows the highlights to white or crushes the mass to black.
 [[nodiscard]] double tonemap(double x)
 {
-    const double a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+    const double a = 2.51;
+    const double b = 0.03;
+    const double c = 2.43;
+    const double d = 0.59;
+    const double e = 0.14;
     const double v = (x * (a * x + b)) / (x * (c * x + d) + e);
-    return v < 0.0 ? 0.0 : (v > 1.0 ? 1.0 : v);
+    return crd::math::clamp(v, 0.0, 1.0);
 }
 [[nodiscard]] double srgb(double x) { return x <= 0.0031308 ? 12.92 * x : 1.055 * crd::math::pow(x, 1.0 / 2.4) - 0.055; }
 
@@ -132,13 +136,13 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
 
-    constexpr int kW      = 1400;
-    constexpr int kH      = 1000;
-    constexpr int kDebugAov = 0; // 0 = beauty, 1 = the h probe
-    constexpr int kOnlyLook = 1; // wavy chestnut — mid-tone shows fibre structure that black hides
-    constexpr bool kPerfSweep = false;
-    constexpr bool kRealtime  = false; // render the real-time path (1 spp/frame + temporal accumulation)
-    constexpr int kPasses   = 32; // × spp per pass. Split so no single dispatch trips the Windows GPU watchdog.
+    constexpr int k_w      = 1400;
+    constexpr int k_h      = 1000;
+    constexpr int k_debug_aov = 0; // 0 = beauty, 1 = the h probe
+    constexpr int k_only_look = 1; // wavy chestnut — mid-tone shows fibre structure that black hides
+    constexpr bool k_perf_sweep = false;
+    constexpr bool k_realtime  = false; // render the real-time path (1 spp/frame + temporal accumulation)
+    constexpr int k_passes   = 32; // × spp per pass. Split so no single dispatch trips the Windows GPU watchdog.
 
     const Look looks[] = {
         // name              file                        eu     ph    curl  cfreq  wave  wfreq  frizz  clump  bm    bn
@@ -159,13 +163,13 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
     crd::containers::Array<float>  outf(&alloc);
     crd::containers::Array<double> img(&alloc);
     crd::containers::Array<double> acc(&alloc);
-    outf.resize(uz(kW * kH * 3), 0.0F);
-    img.resize(uz(kW * kH * 3), 0.0);
-    acc.resize(uz(kW * kH * 3), 0.0);
+    outf.resize(uz(k_w * k_h * 3), 0.0F);
+    img.resize(uz(k_w * k_h * 3), 0.0);
+    acc.resize(uz(k_w * k_h * 3), 0.0);
 
     for (const Look& lk : looks)
     {
-        if (&lk != &looks[kOnlyLook]) { continue; } // iterate on ONE look; the rest are a final-pass concern
+        if (&lk != &looks[k_only_look]) { continue; } // iterate on ONE look; the rest are a final-pass concern
         hs::SwatchConfig sw;
         sw.curl_amp    = lk.curl_amp;
         sw.curl_freq   = lk.curl_freq;
@@ -185,15 +189,17 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
         sw.segments        = static_cast<int>(40.0 > turns * 28.0 ? 40.0 : turns * 28.0);
         // strands PER LOCK carry the density now that the lock count is low; scale it down only where the curl
         // frequency has already inflated the segment count.
-        sw.per_clump        = sw.segments > 200 ? 1400 : (sw.segments > 90 ? 1900 : 2600);
+        if (sw.segments > 200) { sw.per_clump = 1400; }
+        else if (sw.segments > 90) { sw.per_clump = 1900; }
+        else { sw.per_clump = 2600; }
         const crd::u32 nseg = hs::build_swatch(sw, segs, tans, &alloc);
 
         auto scene = rt.build_scene_curves(segs.data(), nseg);
         REQUIRE(scene != nullptr);
 
         kir::hairrt::RtHairSwatchConfig cfg;
-        cfg.width    = kW;
-        cfg.height   = kH;
+        cfg.width    = k_w;
+        cfg.height   = k_h;
         cfg.spp      = 16;
         cfg.segments = static_cast<int>(nseg);
         cfg.beta_m   = lk.beta_m;
@@ -230,35 +236,35 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
 
         // KEY front-left-above · RIM behind (the TT/TRT transmission glow — the light that makes hair look like hair,
         // and the one a raster path with an opacity-map shadow renders least convincingly) · cool FILL.
-        const double L0[3] = {-0.52, 0.62, 0.58};
-        const double L1[3] = {0.18, 0.32, -0.93};
-        const double L2[3] = {0.72, -0.10, 0.68};
-        for (int k = 0; k < 3; ++k) { cfg.light_dir[0][k] = L0[k]; cfg.light_dir[1][k] = L1[k]; cfg.light_dir[2][k] = L2[k]; }
-        const double C0[3] = {4.20, 4.05, 3.85};
-        const double C1[3] = {5.10, 4.70, 4.15};
-        const double C2[3] = {0.70, 0.78, 0.98};
-        for (int k = 0; k < 3; ++k) { cfg.light_col[0][k] = C0[k]; cfg.light_col[1][k] = C1[k]; cfg.light_col[2][k] = C2[k]; }
+        const double l0[3] = {-0.52, 0.62, 0.58};
+        const double l1[3] = {0.18, 0.32, -0.93};
+        const double l2[3] = {0.72, -0.10, 0.68};
+        for (int k = 0; k < 3; ++k) { cfg.light_dir[0][k] = l0[k]; cfg.light_dir[1][k] = l1[k]; cfg.light_dir[2][k] = l2[k]; }
+        const double c0[3] = {4.20, 4.05, 3.85};
+        const double c1[3] = {5.10, 4.70, 4.15};
+        const double c2[3] = {0.70, 0.78, 0.98};
+        for (int k = 0; k < 3; ++k) { cfg.light_col[0][k] = c0[k]; cfg.light_col[1][k] = c1[k]; cfg.light_col[2][k] = c2[k]; }
         cfg.light_radius[0] = 0.045;
         cfg.light_radius[1] = 0.030;
         cfg.light_radius[2] = 0.150;
         // the jitter frame for each light's disc — any orthonormal pair perpendicular to the direction will do
-        for (int L = 0; L < 3; ++L)
+        for (int l = 0; l < 3; ++l)
         {
-            const double d[3] = {cfg.light_dir[L][0], cfg.light_dir[L][1], cfg.light_dir[L][2]};
+            const double d[3] = {cfg.light_dir[l][0], cfg.light_dir[l][1], cfg.light_dir[l][2]};
             const double up[3] = {crd::math::abs(d[1]) > 0.9 ? 1.0 : 0.0, crd::math::abs(d[1]) > 0.9 ? 0.0 : 1.0, 0.0};
             double       t[3]  = {up[1] * d[2] - up[2] * d[1], up[2] * d[0] - up[0] * d[2], up[0] * d[1] - up[1] * d[0]};
             const double tl = crd::math::sqrt(t[0] * t[0] + t[1] * t[1] + t[2] * t[2]);
             for (int k = 0; k < 3; ++k) { t[k] /= tl; }
             const double b[3] = {d[1] * t[2] - d[2] * t[1], d[2] * t[0] - d[0] * t[2], d[0] * t[1] - d[1] * t[0]};
-            for (int k = 0; k < 3; ++k) { cfg.light_t[L][k] = t[k]; cfg.light_b[L][k] = b[k]; }
+            for (int k = 0; k < 3; ++k) { cfg.light_t[l][k] = t[k]; cfg.light_b[l][k] = b[k]; }
         }
         cfg.shadow_tmin = 0.5 * sw.root_radius; // the normal offset does the clearing now, not this
         cfg.ray_tmin    = 0.5 * sw.root_radius;
         cfg.bounces     = 3;
-        cfg.debug_aov   = kDebugAov;
+        cfg.debug_aov   = k_debug_aov;
         cfg.ray_tmin    = 0.5 * sw.root_radius;
         cfg.bounces     = 3;
-        cfg.debug_aov   = kDebugAov; // clear the fibre this ray started on
+        cfg.debug_aov   = k_debug_aov; // clear the fibre this ray started on
 
         kir::KGraph       g(&alloc);
         const kir::KEntry e = kir::hairrt::build_rt_hair_swatch_kernel(g, cfg);
@@ -273,7 +279,7 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
         //    the whole image every call, so a single pass folds a large FIXED cost into the GPU work. Sweeping spp in
         //    single dispatches separates them: the SLOPE (Δtime / Δspp) is the pure per-sample GPU cost, the INTERCEPT
         //    is the fixed per-dispatch overhead a real renderer pays ONCE, not per pass.
-        if (kPerfSweep)
+        if (k_perf_sweep)
         {
             // Per-config GPU slope. For each (bounces, shadow_steps) config, time one dispatch at spp=8 and one at
             // spp=96; the SLOPE (t96−t8)/88 is the pure per-sample GPU cost, free of the ~3.35 s fixed per-dispatch
@@ -297,18 +303,19 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
                 gpu::VulkanRayTracingContext::Binding pb[4] = {};
                 pb[0].upload = segs.data(); pb[0].bytes = static_cast<crd::u64>(nseg) * 8U * sizeof(float); pb[0].binding = 1U;
                 pb[1].upload = &sf; pb[1].bytes = sizeof(float); pb[1].binding = 2U;
-                pb[2].readback = outf.data(); pb[2].bytes = static_cast<crd::u64>(kW) * kH * 3U * sizeof(float); pb[2].binding = 3U;
+                pb[2].readback = outf.data(); pb[2].bytes = static_cast<crd::u64>(k_w) * k_h * 3U * sizeof(float); pb[2].binding = 3U;
                 pb[3].upload = tans.data(); pb[3].bytes = static_cast<crd::u64>(nseg) * 6U * sizeof(float); pb[3].binding = 4U;
                 const auto ta = std::chrono::steady_clock::now();
                 REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(psv.spirv.data(), psv.spirv.size()),
                                           crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(pb, 4),
-                                          static_cast<crd::u32>((kW * kH + 63) / 64)));
+                                          static_cast<crd::u32>((k_w * k_h + 63) / 64)));
                 return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - ta).count();
             };
             std::printf("[lever] config                             ms/full-frame-sample  (1400x1000)\n");
             for (const Cfg& c : cfgs)
             {
-                kir::hairrt::RtHairSwatchConfig lo = cfg, hi = cfg;
+                kir::hairrt::RtHairSwatchConfig lo = cfg;
+                kir::hairrt::RtHairSwatchConfig hi = cfg;
                 lo.bounces = c.bounces; lo.shadow_steps = c.shadow; lo.ground_shadow_steps = c.shadow > 0 ? c.shadow : 0; lo.spp = 8;
                 hi = lo; hi.spp = 96;
                 const double slope = (timed(hi) - timed(lo)) / 88.0;
@@ -322,7 +329,7 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
         //    6.7× lever) at 1 spp PER FRAME, with TEMPORAL ACCUMULATION converging the noise across frames. This
         //    demonstrates both halves — the per-frame cost (measured) and that accumulation cleans a 1-spp frame — and
         //    saves frame-1 (what one real-time frame actually looks like) next to the accumulated result.
-        if (kRealtime)
+        if (k_realtime)
         {
             kir::hairrt::RtHairSwatchConfig rc = cfg;
             rc.bounces             = 1;   // the interior GI becomes the dual-scattering ambient below, not a ray path
@@ -338,22 +345,22 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
             const auto rsv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(rk.source), "rt_hair", &alloc);
             REQUIRE(rsv.ok);
 
-            const int kFrames = 96;
+            const int k_frames = 96;
             for (uz_t i = 0; i < acc.size(); ++i) { acc[i] = 0.0; }
             double frame_ms_sum = 0.0;
             double frame_ms_min = 1.0e30;
-            for (int fr = 0; fr < kFrames; ++fr)
+            for (int fr = 0; fr < k_frames; ++fr)
             {
                 const float seedf = static_cast<float>(fr + 1);
                 gpu::VulkanRayTracingContext::Binding rb[4] = {};
                 rb[0].upload = segs.data(); rb[0].bytes = static_cast<crd::u64>(nseg) * 8U * sizeof(float); rb[0].binding = 1U;
                 rb[1].upload = &seedf; rb[1].bytes = sizeof(float); rb[1].binding = 2U;
-                rb[2].readback = outf.data(); rb[2].bytes = static_cast<crd::u64>(kW) * kH * 3U * sizeof(float); rb[2].binding = 3U;
+                rb[2].readback = outf.data(); rb[2].bytes = static_cast<crd::u64>(k_w) * k_h * 3U * sizeof(float); rb[2].binding = 3U;
                 rb[3].upload = tans.data(); rb[3].bytes = static_cast<crd::u64>(nseg) * 6U * sizeof(float); rb[3].binding = 4U;
                 const auto fa = std::chrono::steady_clock::now();
                 REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(rsv.spirv.data(), rsv.spirv.size()),
                                           crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(rb, 4),
-                                          static_cast<crd::u32>((kW * kH + 63) / 64)));
+                                          static_cast<crd::u32>((k_w * k_h + 63) / 64)));
                 const double fms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - fa).count();
                 // ⚠ this per-frame time INCLUDES the ~3.35 s pipeline-rebuild + readback overhead of the one-shot
                 //   trace_dispatch — a harness artifact, NOT a rendering cost. Subtract the measured fixed cost to get
@@ -363,15 +370,15 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
                 if (fr == 0)
                 {
                     for (uz_t i = 0; i < img.size(); ++i) { img[i] = srgb(tonemap(static_cast<double>(outf[i]) * 4.0)); }
-                    write_bmp(alloc, "build/rt_1frame.bmp", kW, kH, img);
+                    write_bmp(alloc, "build/rt_1frame.bmp", k_w, k_h, img);
                 }
             }
-            const double invf = 4.0 / static_cast<double>(kFrames); // 4.0 = the same exposure the 1-frame used
+            const double invf = 4.0 / static_cast<double>(k_frames); // 4.0 = the same exposure the 1-frame used
             for (uz_t i = 0; i < img.size(); ++i) { img[i] = srgb(tonemap(acc[i] * invf)); }
-            write_bmp(alloc, "build/rt_accum.bmp", kW, kH, img);
+            write_bmp(alloc, "build/rt_accum.bmp", k_w, k_h, img);
             std::printf("[realtime] 1-bounce 2-step shadow, 1 spp/frame @ %dx%d: wall %.1f ms/frame (incl. ~3.35s "
                         "harness overhead) — the lever sweep's 29 ms/spp is the true GPU cost; %d frames accumulated\n",
-                        kW, kH, frame_ms_sum / (kFrames - 1), kFrames);
+                        k_w, k_h, frame_ms_sum / (k_frames - 1), k_frames);
             std::printf("[realtime]   => real GPU frame ~29 ms full-screen 1.4Mpix (34 fps); ~half-res or partial "
                         "coverage clears 60 fps. Wrote build/rt_1frame.bmp (one frame) + build/rt_accum.bmp (accumulated)\n");
             continue;
@@ -379,7 +386,7 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
 
         for (uz_t i = 0; i < acc.size(); ++i) { acc[i] = 0.0; }
         const auto t_start = std::chrono::steady_clock::now();
-        for (int p = 0; p < kPasses; ++p)
+        for (int p = 0; p < k_passes; ++p)
         {
             const float seedf = static_cast<float>(p + 1);
             gpu::VulkanRayTracingContext::Binding bind[4] = {};
@@ -390,28 +397,28 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
             bind[1].bytes   = sizeof(float);
             bind[1].binding = 2U;
             bind[2].readback = outf.data();
-            bind[2].bytes    = static_cast<crd::u64>(kW) * static_cast<crd::u64>(kH) * 3U * sizeof(float);
+            bind[2].bytes    = static_cast<crd::u64>(k_w) * static_cast<crd::u64>(k_h) * 3U * sizeof(float);
             bind[2].binding  = 3U;
             bind[3].upload   = tans.data();
             bind[3].bytes    = static_cast<crd::u64>(nseg) * 6U * sizeof(float);
             bind[3].binding  = 4U;
             REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()),
                                       crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 4),
-                                      static_cast<crd::u32>((kW * kH + 63) / 64)));
+                                      static_cast<crd::u32>((k_w * k_h + 63) / 64)));
             for (uz_t i = 0; i < acc.size(); ++i) { acc[i] += static_cast<double>(outf[i]); }
         }
 
         const auto   t_end   = std::chrono::steady_clock::now();
         const double sec     = std::chrono::duration<double>(t_end - t_start).count();
-        const int    totspp  = kPasses * cfg.spp;
+        const int    totspp  = k_passes * cfg.spp;
         // Wall-clock across every pass INCLUDING a full-image readback + host accumulate per pass — an upper bound on
         // GPU cost, not a clean device timing. Reported per sample-per-pixel so it scales to any spp / resolution.
         std::printf("[perf] %s: %.2fs for %d spp @ %dx%d (%d strands / %u seg)  =>  %.3f ms/frame-at-1spp, %.1f Mrays/s\n",
-                    lk.name, sec, totspp, kW, kH, sw.clumps() * sw.per_clump, nseg,
+                    lk.name, sec, totspp, k_w, k_h, sw.clumps() * sw.per_clump, nseg,
                     1000.0 * sec / static_cast<double>(totspp),
-                    static_cast<double>(kW) * kH * totspp / sec / 1.0e6);
+                    static_cast<double>(k_w) * k_h * totspp / sec / 1.0e6);
 
-        const double inv = 1.0 / static_cast<double>(kPasses * cfg.spp);
+        const double inv = 1.0 / static_cast<double>(k_passes * cfg.spp);
 
         // ── THE PROBE READ-OUT. R holds sum|h| over HITS ONLY and G the hit count, so R/G is the mean |h| a ray sees
         //    GIVEN that it hit a fibre — the quantity theory predicts, free of any coverage blend. Reported only over
@@ -424,7 +431,7 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
             for (uz_t i = 0; i < img.size(); i += 3U)
             {
                 const double hits = acc[i + 1U];
-                if (hits < 0.25 * static_cast<double>(kPasses * cfg.spp)) { continue; } // ≥25% coverage
+                if (hits < 0.25 * static_cast<double>(k_passes * cfg.spp)) { continue; } // ≥25% coverage
                 const double mh = acc[i] / hits;
                 int          b  = static_cast<int>(mh * 10.0);
                 if (b < 0) { b = 0; }
@@ -447,19 +454,21 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
         //    silhouette, and the one that opens up black blows blonde to flat paper. Every film shot is graded; grade
         //    each swatch to the same middle-grey key so what differs between them is the SCATTERING, not the printing.
         //    Keyed off the LOG-average of pixels that actually hit hair — the background would otherwise drag it down.
-        constexpr double kKey = 0.20;
+        constexpr double k_key = 0.20;
         double           logsum = 0.0;
         int              nhair  = 0;
         double           peak   = 0.0;
         for (uz_t i = 0; i < img.size(); i += 3U)
         {
-            const double r = acc[i] * inv, gq = acc[i + 1U] * inv, b = acc[i + 2U] * inv;
+            const double r = acc[i] * inv;
+            const double gq = acc[i + 1U] * inv;
+            const double b = acc[i + 2U] * inv;
             const double lum = 0.2126 * r + 0.7152 * gq + 0.0722 * b;
             if (lum > peak) { peak = lum; }
             if (lum > cfg.bg[1] * 1.5) { logsum += crd::math::log(lum + 1.0e-6); ++nhair; }
         }
         const double key   = nhair > 0 ? crd::math::exp(logsum / static_cast<double>(nhair)) : 1.0;
-        const double scale = kKey / (key > 1.0e-6 ? key : 1.0e-6);
+        const double scale = k_key / (key > 1.0e-6 ? key : 1.0e-6);
         double       mean  = 0.0;
         for (uz_t i = 0; i < img.size(); ++i)
         {
@@ -469,7 +478,7 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
         }
         mean /= static_cast<double>(img.size());
         std::printf("[swatch] %-16s %d strands / %u segments  %dx%d @ %d spp   peak=%.3f mean=%.4f -> %s\n", lk.name,
-                    sw.clumps() * sw.per_clump, nseg, kW, kH, kPasses * cfg.spp, peak, mean, lk.file);
-        write_bmp(alloc, lk.file, kW, kH, img);
+                    sw.clumps() * sw.per_clump, nseg, k_w, k_h, k_passes * cfg.spp, peak, mean, lk.file);
+        write_bmp(alloc, lk.file, k_w, k_h, img);
     }
 }

@@ -52,7 +52,7 @@ TEST_CASE("B9/RT-1a: CKIR inline rayQuery oracle == hand-computed ray-triangle h
 {
     crd::memory::TlsfAllocator alloc(16U << 20U);
     kir::KGraph                g(&alloc);
-    constexpr int              kNRays = 4;
+    constexpr int              k_n_rays = 4;
     const kir::KEntry          e      = build_trace_kernel(g, 64);
 
     // Scene: ONE triangle at z = 2 spanning (0,0)-(1,0)-(0,1). Geometry buffer layout the oracle reads:
@@ -66,23 +66,23 @@ TEST_CASE("B9/RT-1a: CKIR inline rayQuery oracle == hand-computed ray-triangle h
 
     // Rays: [origin.xyz, dir.xyz] each.
     crd::containers::Array<crd::f64> rays(&alloc);
-    rays.resize(static_cast<crd::usize>(kNRays) * 6U, 0.0);
-    const double ray_data[kNRays][6] = {
+    rays.resize(static_cast<crd::usize>(k_n_rays) * 6U, 0.0);
+    const double ray_data[k_n_rays][6] = {
         {0.2, 0.2, 0.0, 0.0, 0.0, 1.0},  // through the triangle interior, +z ⇒ hit at t = 2
         {0.2, 0.2, 0.0, 0.0, 0.0, -1.0}, // away from the triangle ⇒ miss
         {5.0, 5.0, 0.0, 0.0, 0.0, 1.0},  // parallel-ish but far outside the triangle ⇒ miss
         {0.1, 0.1, 1.0, 0.0, 0.0, 1.0},  // start closer (z=1), +z ⇒ hit at t = 1
     };
-    for (int r = 0; r < kNRays; ++r)
+    for (int r = 0; r < k_n_rays; ++r)
     {
         for (int c = 0; c < 6; ++c) { rays[static_cast<crd::usize>(r) * 6U + static_cast<crd::usize>(c)] = ray_data[r][c]; }
     }
     crd::containers::Array<crd::f64> out(&alloc);
-    out.resize(static_cast<crd::usize>(kNRays), 0.0);
+    out.resize(static_cast<crd::usize>(k_n_rays), 0.0);
 
     kir::KernelBuffer bufs[3] = {{geo.data(), static_cast<int>(geo.size()), 0, 0},
                                  {rays.data(), static_cast<int>(rays.size()), 0, 1},
-                                 {out.data(), kNRays, 0, 2}};
+                                 {out.data(), k_n_rays, 0, 2}};
     kir::eval_cpu_kernel(g, e, bufs, 3, 64U, &alloc, 1U);
 
     INFO("t = [" << out[0] << ", " << out[1] << ", " << out[2] << ", " << out[3] << "]");
@@ -136,12 +136,15 @@ double run_pt_strategy(crd::memory::TlsfAllocator& alloc, kir::rt::PtStrategy st
     const double tn_data[12] = {0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 0.0, -1.0, 0.0};
 
     // floor shading points: a 4×4 grid over [-2,2], normals up.
-    constexpr crd::u32 kN = 16U;
-    crd::containers::Array<crd::f64> pos(&alloc), nrm(&alloc), tn(&alloc), rad(&alloc);
-    pos.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
-    nrm.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
+    constexpr crd::u32 k_n = 16U;
+    crd::containers::Array<crd::f64> pos(&alloc);
+    crd::containers::Array<crd::f64> nrm(&alloc);
+    crd::containers::Array<crd::f64> tn(&alloc);
+    crd::containers::Array<crd::f64> rad(&alloc);
+    pos.resize(static_cast<crd::usize>(k_n) * 3U, 0.0);
+    nrm.resize(static_cast<crd::usize>(k_n) * 3U, 0.0);
     tn.resize(12U, 0.0);
-    rad.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
+    rad.resize(static_cast<crd::usize>(k_n) * 3U, 0.0);
     for (int i = 0; i < 12; ++i) { tn[static_cast<crd::usize>(i)] = tn_data[i]; }
     for (crd::u32 j = 0; j < 4U; ++j)
     {
@@ -157,8 +160,8 @@ double run_pt_strategy(crd::memory::TlsfAllocator& alloc, kir::rt::PtStrategy st
     kir::eval_cpu_kernel(g, e, bufs, 5, cfg.local_size, &alloc, 1U);
 
     double mean = 0.0;
-    for (crd::u32 p = 0; p < kN; ++p) { mean += rad[p * 3U]; } // channel 0 (grey scene ⇒ all channels equal)
-    return mean / static_cast<double>(kN);
+    for (crd::u32 p = 0; p < k_n; ++p) { mean += rad[p * 3U]; } // channel 0 (grey scene ⇒ all channels equal)
+    return mean / static_cast<double>(k_n);
 }
 
 // Run the ReSTIR DI kernel on the CPU oracle over the SAME occluder + area-light scene + floor points as run_pt_strategy, and
@@ -189,11 +192,13 @@ double run_restir(crd::memory::TlsfAllocator& alloc, crd::u32 frames, crd::u32 c
     {
         for (int c = 0; c < 9; ++c) { geo[1U + static_cast<crd::usize>(t) * 9U + static_cast<crd::usize>(c)] = tris[t][c]; }
     }
-    constexpr crd::u32 kN = 16U;
-    crd::containers::Array<crd::f64> pos(&alloc), nrm(&alloc), rad(&alloc);
-    pos.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
-    nrm.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
-    rad.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
+    constexpr crd::u32 k_n = 16U;
+    crd::containers::Array<crd::f64> pos(&alloc);
+    crd::containers::Array<crd::f64> nrm(&alloc);
+    crd::containers::Array<crd::f64> rad(&alloc);
+    pos.resize(static_cast<crd::usize>(k_n) * 3U, 0.0);
+    nrm.resize(static_cast<crd::usize>(k_n) * 3U, 0.0);
+    rad.resize(static_cast<crd::usize>(k_n) * 3U, 0.0);
     for (crd::u32 j = 0; j < 4U; ++j)
     {
         for (crd::u32 i = 0; i < 4U; ++i)
@@ -208,8 +213,8 @@ double run_restir(crd::memory::TlsfAllocator& alloc, crd::u32 frames, crd::u32 c
     kir::eval_cpu_kernel(g, e, bufs, 4, cfg.local_size, &alloc, 1U);
 
     double mean = 0.0;
-    for (crd::u32 p = 0; p < kN; ++p) { mean += rad[p * 3U]; }
-    return mean / static_cast<double>(kN);
+    for (crd::u32 p = 0; p < k_n; ++p) { mean += rad[p * 3U]; }
+    return mean / static_cast<double>(k_n);
 }
 } // namespace
 
@@ -266,12 +271,15 @@ double run_manylight(crd::memory::TlsfAllocator& alloc, const double* lights, cr
     const double dumb[9] = {-1.0, -10.0, -1.0, 1.0, -10.0, -1.0, 0.0, -10.0, 1.0};
     for (int i = 0; i < 9; ++i) { geo[static_cast<crd::usize>(i) + 1U] = dumb[i]; }
 
-    constexpr crd::u32 kN = 16U;
-    crd::containers::Array<crd::f64> pos(&alloc), nrm(&alloc), lbuf(&alloc), rad(&alloc);
-    pos.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
-    nrm.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
+    constexpr crd::u32 k_n = 16U;
+    crd::containers::Array<crd::f64> pos(&alloc);
+    crd::containers::Array<crd::f64> nrm(&alloc);
+    crd::containers::Array<crd::f64> lbuf(&alloc);
+    crd::containers::Array<crd::f64> rad(&alloc);
+    pos.resize(static_cast<crd::usize>(k_n) * 3U, 0.0);
+    nrm.resize(static_cast<crd::usize>(k_n) * 3U, 0.0);
     lbuf.resize(static_cast<crd::usize>(nlights) * 15U, 0.0);
-    rad.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
+    rad.resize(static_cast<crd::usize>(k_n) * 3U, 0.0);
     for (crd::u32 i = 0; i < nlights * 15U; ++i) { lbuf[i] = lights[i]; }
     for (crd::u32 j = 0; j < 4U; ++j)
     {
@@ -287,8 +295,8 @@ double run_manylight(crd::memory::TlsfAllocator& alloc, const double* lights, cr
     kir::eval_cpu_kernel(g, e, bufs, 5, cfg.local_size, &alloc, 1U);
 
     double mean = 0.0;
-    for (crd::u32 p = 0; p < kN; ++p) { mean += rad[p * 3U]; }
-    return mean / static_cast<double>(kN);
+    for (crd::u32 p = 0; p < k_n; ++p) { mean += rad[p * 3U]; }
+    return mean / static_cast<double>(k_n);
 }
 } // namespace
 

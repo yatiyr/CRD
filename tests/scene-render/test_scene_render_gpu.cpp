@@ -12,7 +12,9 @@
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/mesh_resource.hpp>
+#include <crd/resources/openpbr_material.hpp> // REN-2 Half B: the material with a base-color texture slot
 #include <crd/resources/resource_manager.hpp>
+#include <crd/resources/texture_resource.hpp>  // REN-2 Half B: the cooked base-color map
 #include <crd/scene/render_components.hpp>
 #include <crd/scene/spatial_bvh_index.hpp>
 #include <crd/scene/transform.hpp>
@@ -114,6 +116,91 @@ struct CubeExtractor final : scene::IAabbExtractor
         return {{p.x - 0.9F, p.y - 0.9F, p.z - 0.9F}, {p.x + 0.9F, p.y + 0.9F, p.z + 0.9F}};
     }
 };
+
+// ── REN-2 Half B fixtures ────────────────────────────────────────────────────────────────────────────────────────
+// A UV QUAD in the XY plane (z=0), facing +Z, UVs 0..1 across it. 48-byte record: pos(3) normal(3) uv(2) tangent(4).
+[[nodiscard]] containers::Array<u8> build_quad_mesh_crdr(const resources::ResourceId& id)
+{
+    auto*                 a = &galloc();
+    const f32             quad[4][12] = {{-0.9F, -0.9F, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1},
+                                         {0.9F, -0.9F, 0, 0, 0, 1, 1, 0, 1, 0, 0, 1},
+                                         {-0.9F, 0.9F, 0, 0, 0, 1, 0, 1, 1, 0, 0, 1},
+                                         {0.9F, 0.9F, 0, 0, 0, 1, 1, 1, 1, 0, 0, 1}};
+    containers::Array<u8> verts(a);
+    for (u32 cnr = 0; cnr < 4U; ++cnr)
+    {
+        const auto* b = reinterpret_cast<const u8*>(quad[cnr]);
+        for (u32 k = 0; k < 48U; ++k) { verts.push_back(b[k]); }
+    }
+    const u32             idx[6] = {0, 1, 2, 2, 1, 3};
+    containers::Array<u8> indices(a);
+    for (u32 v : idx)
+    {
+        const auto* b = reinterpret_cast<const u8*>(&v);
+        for (u32 k = 0; k < 4U; ++k) { indices.push_back(b[k]); }
+    }
+    containers::Array<u8> prim(a);
+    prim.resize(4U + 32U);
+    std::memset(prim.data(), 0, prim.size());
+    const u32 pc = 1U;
+    const u32 vc = 4U;
+    const u32 ic = 6U;
+    std::memcpy(prim.data(), &pc, 4U);
+    std::memcpy(prim.data() + 4U, &vc, 4U);
+    std::memcpy(prim.data() + 8U, &ic, 4U);
+    resources::CrdrWriter w(a, id, resources::kFourCC_MESH);
+    w.add_chunk(resources::kFourCC_VERT, containers::as_const_span(verts));
+    w.add_chunk(resources::kFourCC_INDX, containers::as_const_span(indices));
+    w.add_chunk(resources::kFourCC_PRIM, containers::as_const_span(prim));
+    return w.finish();
+}
+// A 2×1 base-color TXTR: texel 0 RED, texel 1 GREEN (RGBA8Unorm, one mip).
+[[nodiscard]] containers::Array<u8> build_rg_txtr_crdr(const resources::ResourceId& id)
+{
+    resources::CrdrWriter w(&galloc(), id, resources::kFourCC_TXTR);
+    const u32             bw = 2U;
+    const u32             bh = 1U;
+    const u32             mc = 1U;
+    u8                    head[16] = {};
+    std::memcpy(head + 0, &bw, 4U);
+    std::memcpy(head + 4, &bh, 4U);
+    std::memcpy(head + 8, &mc, 4U);
+    head[12] = 0U; // TextureFormat::RGBA8Unorm
+    w.add_chunk(resources::kFourCC_HEAD, containers::ConstSpan<u8>(head, 16U));
+    const u8 mip0[8] = {255U, 0U, 0U, 255U, 0U, 255U, 0U, 255U};
+    w.add_chunk(resources::make_mip_fourcc(0U), containers::ConstSpan<u8>(mip0, 8U));
+    return w.finish();
+}
+// Write a single-artifact pack (the write_mesh_pack shape, generalized over type/blob/name).
+void write_one_pack(const platform::fs::Path& path, const resources::ResourceId& id, u32 fourcc,
+                    const containers::Array<u8>& art, const char* name)
+{
+    auto*                 a = &galloc();
+    containers::Array<u8> pool(a);
+    for (const char* p = name;; ++p)
+    {
+        pool.push_back(static_cast<u8>(*p));
+        if (*p == '\0') { break; }
+    }
+    containers::Array<resources::ManifestEntry> entries(a);
+    resources::ManifestEntry                    e;
+    e.id          = id;
+    e.type_fourcc = fourcc;
+    e.blob_size   = static_cast<u64>(art.size());
+    entries.push_back(e);
+    const resources::ResourceId pack_id = resources::ResourceId::mint_random();
+    {
+        resources::CrdrWriter p1(a, pack_id, resources::kFourCC_PACK);
+        resources::manifest_write(p1, containers::as_const_span(entries), containers::as_const_span(pool));
+        auto b1                = p1.finish();
+        entries[0].blob_offset = static_cast<u64>(b1.size());
+    }
+    resources::CrdrWriter p2(a, pack_id, resources::kFourCC_PACK);
+    resources::manifest_write(p2, containers::as_const_span(entries), containers::as_const_span(pool));
+    auto pack = p2.finish();
+    for (u8 b : art) { pack.push_back(b); }
+    REQUIRE(platform::fs::write_file_binary(path, containers::as_const_span(pack)));
+}
 
 } // namespace
 
@@ -238,4 +325,95 @@ TEST_CASE("GEO-7 GATE: 10k instances -- chunk-grain sync + BVH/frustum cull + ON
     CHECK(s2.uploaded_bytes < static_cast<u64>(side * side) * sizeof(scenerender::InstanceGpu) / 4U);
 
     (void)platform::fs::remove_file(pack_path);
+}
+
+TEST_CASE("REN-2 Half B GATE: the SceneRenderer forward pass SAMPLES a material base-color map (Vulkan)",
+          "[scene-render][ren2][material][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    // cook + mount: a UV QUAD mesh, a 2x1 red/green base-color TXTR, an OpenPbrMaterial referencing the texture
+    memory::TlsfAllocator       a2(4U << 20U);
+    const resources::ResourceId mesh_id = resources::ResourceId::mint_random();
+    const resources::ResourceId tex_id  = resources::ResourceId::mint_random();
+    const resources::ResourceId mtl_id  = resources::ResourceId::mint_random();
+    const platform::fs::Path    mesh_path(containers::StringView("sr_ren2_mesh.crdr"));
+    const platform::fs::Path    tex_path(containers::StringView("sr_ren2_tex.crdr"));
+    const platform::fs::Path    mtl_path(containers::StringView("sr_ren2_mtl.crdr"));
+    write_one_pack(mesh_path, mesh_id, resources::kFourCC_MESH, build_quad_mesh_crdr(mesh_id), "quad");
+    write_one_pack(tex_path, tex_id, resources::kFourCC_TXTR, build_rg_txtr_crdr(tex_id), "rg");
+    resources::PbrmParams params;
+    params.base_color[0] = 1.0F;
+    params.base_color[1] = 1.0F;
+    params.base_color[2] = 1.0F;
+    params.base_alpha    = 1.0F;
+    resources::PbrmTextures textures;
+    textures.base_color = tex_id; // ← the base-color slot references the cooked TXTR
+    auto mtl_bytes      = resources::pbrm_build(params, textures, mtl_id, &a2);
+    write_one_pack(mtl_path, mtl_id, resources::kFourCC_PBRM, mtl_bytes, "mtl");
+
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    resources::register_texture_loader(&rm);
+    resources::register_openpbr_material_loader(&rm);
+    REQUIRE(rm.mount_manifest(mesh_path.generic()).is_valid());
+    REQUIRE(rm.mount_manifest(tex_path.generic()).is_valid());
+    REQUIRE(rm.mount_manifest(mtl_path.generic()).is_valid());
+
+    // the world: ONE textured quad, its MeshRenderer carrying the textured material
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait(), scene::SpatialBVH{});
+    scene::register_render_components(world);
+    const scene::EntityId e = world.spawn();
+    scene::Transform      t;
+    t.translation = math::from_raw_vec<units::dim::Length>(math::Vec3f{0.0F, 0.0F, 0.0F});
+    t.world       = math::from_trs(math::Vec3f{0, 0, 0}, math::Quatf::identity(), math::Vec3f{1, 1, 1});
+    world.add_component(e, t);
+    world.add_component(e, scene::MeshRenderer{mesh_id, mtl_id});
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    REQUIRE(renderer.init_programs(*vk));
+    const auto s1 = renderer.sync(world);
+    CHECK(s1.total_instances == 1U);
+    REQUIRE(renderer.mesh_groups().size() == 1U);
+
+    auto target = raster->create_color_depth_target(64U, 64U);
+    REQUIRE(target != nullptr);
+
+    // camera facing the +Z quad; a frontal light ⇒ N·L≈1 (fully lit, so the SAMPLED albedo shows through)
+    const math::Mat4f view = math::look_at(math::Vec3f{0.0F, 0.0F, 2.2F}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Vec3f light{0.0F, 0.0F, 1.0F};
+    const gpu::ClearColor clear{0.0F, 0.0F, 1.0F, 1.0F};
+    const auto            r = renderer.render(*target, proj * view, light, clear, nullptr);
+    CHECK(r.draws == 1U);
+    CHECK(r.drawn_instances == 1U);
+
+    // the quad fills the centre; UV.x spans 0..1 left→right, so screen-left samples the RED texel, right the GREEN.
+    const u32 left  = target->read_pixel(16U, 32U);
+    const u32 right = target->read_pixel(48U, 32U);
+    const u32 lr = left & 0xFFU;
+    const u32 lg = (left >> 8U) & 0xFFU;
+    const u32 rr = right & 0xFFU;
+    const u32 rg = (right >> 8U) & 0xFFU;
+    // the forward pass SAMPLED the base-color map: one side red-dominant, the other green-dominant (NOT the flat blue clear)
+    CHECK(((lr > 150U && lg < 100U) || (rr > 150U && rg < 100U))); // RED texel sampled somewhere
+    CHECK(((lg > 150U && lr < 100U) || (rg > 150U && rr < 100U))); // GREEN texel sampled somewhere
+    CHECK(lr != rr);                                                // left and right differ → UV.x drives the sample
+
+    (void)platform::fs::remove_file(mesh_path);
+    (void)platform::fs::remove_file(tex_path);
+    (void)platform::fs::remove_file(mtl_path);
 }

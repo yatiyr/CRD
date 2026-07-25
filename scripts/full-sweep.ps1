@@ -58,6 +58,22 @@ $ErrorActionPreference = 'Continue'
 $repoRoot = (Resolve-Path "$PSScriptRoot/..").Path
 $startTime = Get-Date
 
+# ---- COMMIT-HEADROOM REPORT ------------------------------------------------------------------------
+# The actual clamp is PER CONFIG and lives in the generated inner script (Set-CrdBuildJobs) -- see the
+# scar comment there. Here we only report the starting state so the log records what the sweep was up
+# against. Short version: if the host's COMMIT LIMIT is nearly consumed by resident desktop apps,
+# whichever build process asks for memory next dies with "LLVM ERROR: out of memory" / 0xC0000005 on a
+# random file, which looks exactly like an upstream toolchain bug and is not one.
+$os          = Get-CimInstance Win32_OperatingSystem
+$commitFree  = [math]::Round($os.FreeVirtualMemory / 1MB, 1)
+$commitLimit = [math]::Round($os.TotalVirtualMemorySize / 1MB, 1)
+Write-Host ("  Commit: {0} GB free of {1} GB limit" -f $commitFree, $commitLimit) -ForegroundColor DarkCyan
+if ($commitFree -lt 8.0)
+{
+    Write-Host '  ! COMMIT HEADROOM VERY LOW - configs will be clamped hard. Closing Visual Studio / clangd / a DAW' -ForegroundColor Red
+    Write-Host '    is the fastest way to make the sweep both fast AND crash-free.' -ForegroundColor Red
+}
+
 # Per-config sweep results: PASS / FAIL : <reason>
 $results = [ordered]@{}
 
@@ -79,8 +95,36 @@ $presets = @('win-debug','win-relwithdebinfo','win-release','win-asan','win-clan
 $buildOnly = @('win-tidy')
 $results = [ordered]@{}
 
+# ---- COMMIT-HEADROOM CLAMP, re-measured per config -------------------------------------------------
+# A build that outruns the host's COMMIT LIMIT does not fail cleanly: clang-tidy dies with
+# "LLVM ERROR: out of memory", or clang-tidy/cl.exe take a 0xC0000005 on a stack growth that cannot
+# commit -- on a DIFFERENT random file every run, which reads exactly like an upstream toolchain bug and
+# is not one (diagnosed 2026-07-25; see docs/SANITY.md). Budgets are MEASURED, not estimated: a clang-tidy
+# edge peaks ~0.20-0.30 GB, a /Od cl.exe ~0.36 GB, but an ⛔ LTCG **link.exe peaks 5.6 GB** -- LINKS are the
+# shipping/release constraint. win-shipping CRASHED cl.exe at -j5 (~14.5 GB free) and SUCCEEDED at -j3 while
+# bottoming out at 0.26 GB free commit, so the boundary is ~4 GB/edge effective on this desktop.
+$CRD_JOBS_CAP  = if ($env:CMAKE_BUILD_PARALLEL_LEVEL) { [int]$env:CMAKE_BUILD_PARALLEL_LEVEL } else { 0 }
+$CRD_PER_EDGE  = @{ 'win-debug' = 2.0; 'win-debug-scalar' = 2.0; 'win-debug-sse2' = 2.0; 'win-asan' = 2.5;
+                    'win-relwithdebinfo' = 3.0; 'win-release' = 4.0; 'win-shipping' = 4.0;
+                    'win-shipping-profile' = 4.0; 'win-clang-cl' = 2.0; 'win-clang-cl-shipping' = 4.0;
+                    'win-tidy' = 1.5 }
+function Set-CrdBuildJobs([string]$preset) {
+    if ($CRD_JOBS_CAP -le 0) { return }
+    $free = [math]::Round((Get-CimInstance Win32_OperatingSystem).FreeVirtualMemory / 1MB, 1)
+    $per  = if ($CRD_PER_EDGE.ContainsKey($preset)) { $CRD_PER_EDGE[$preset] } else { 2.5 }
+    $safe = [Math]::Max(1, [int][Math]::Floor(($free - 2.0) / $per))
+    $jobs = [Math]::Min($CRD_JOBS_CAP, $safe)
+    $env:CMAKE_BUILD_PARALLEL_LEVEL = "$jobs"
+    if ($jobs -lt $CRD_JOBS_CAP) {
+        Write-Host ("  ! commit headroom {0} GB @ {1} GB/edge -> ninja {2} -> {3} (a random clang-tidy/cl crash under low headroom is NOT a code defect)" -f $free, $per, $CRD_JOBS_CAP, $jobs) -ForegroundColor Yellow
+    } else {
+        Write-Host ("  commit headroom {0} GB @ {1} GB/edge -> ninja -j{2}" -f $free, $per, $jobs) -ForegroundColor DarkCyan
+    }
+}
+
 foreach ($p in $presets) {
     Write-Host "===== $p =====" -ForegroundColor Yellow
+    Set-CrdBuildJobs $p
     if ($USE_RECONFIGURE) {
         Write-Host "[full-sweep] Reconfiguring $p..."
         & cmake --preset $p
@@ -132,6 +176,7 @@ foreach ($p in $presets) {
 
 foreach ($p in $buildOnly) {
     Write-Host "===== $p (build-only) =====" -ForegroundColor Yellow
+    Set-CrdBuildJobs $p
     if ($USE_RECONFIGURE) {
         & cmake --preset $p
         if ($LASTEXITCODE -ne 0) { $results[$p] = "CONFIGURE-FAIL exit=$LASTEXITCODE"; continue }

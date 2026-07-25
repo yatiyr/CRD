@@ -39,6 +39,18 @@ Rules for AI agents working on Cerid. As binding as the engineering principles.
 - **Substrate work ships proactively; speculative paths defer.** Filed follow-ons with settled designs + cheap tests ship in-line when the harness is fresh. Follow-ons with unsettled design tradeoffs only a consumer can resolve defer until that consumer arrives. (Memory: `feedback_ship_at_consumer_template_from_day_one`.)
 - **Document paper-divergence explicitly.** When implementing a canonical algorithm with a different sub-step (D124 SAT-vs-Mamou-centroid, D129 voxel-fraction-vs-Hausdorff, D94 super-tet ordering), pin the divergence as a numbered Dxxx + rationale paragraph in the ADR amendment + system doc.
 - **Append new pure-virtuals at the END of an interface.** Inserting in the middle shifts vtable slots and silently dispatches to the wrong method in win-release LTCG. (Memory: `feedback_vtable_stability_append_at_end`. Case study: rhi-compute v0-close SEGV 2026-05-17.)
+- **⛔⛔ HARD RULE (user, 2026-07-25) — EVERY RENDER PASS GOES THROUGH OUR OWN MACHINERY.** *"Every render pass,
+  light pass or any other rendering machinery MUST GO THROUGH OUR OWN MACHINERY, PROGRAMMATICALLY OR LOADED FROM
+  ASSETS IT DOES NOT MATTER BUT IT MUST USE OUR OWN MACHINERY."* Concretely: a rendering step is a **pass in a
+  `FrameGraphDesc`** — either built with `FrameGraphBuilder` or loaded from a cooked `.frame.toml` — executed by
+  `execute_frame_graph`. It is NOT a bespoke sequence of `draw_*` calls hand-rolled in `scene_renderer.cpp`, a
+  sandbox, a tool, or a test. Shadow passes, CSM cascades, sky bakes, post chains, TAA resolve, editor overlays,
+  picking — all of them. **The two provenances are equal and interchangeable** (gated: TOML, cooked, and
+  programmatic descriptions render pixel-identically), so "I need it in C++" is never a reason to bypass the
+  system — build the description in C++ and run it through the same executor. If a step genuinely cannot be
+  expressed, that is a missing **`FramePassKind`** — add the kind with its own gate; never route around the
+  machinery. **Why:** the moment one renderer path lives outside the graph, authored graphs stop being able to
+  express the engine's own rendering, and the "anyone can author any rendering technique" contract is a lie.
 - **No dual code paths for "demo" vs "real" content.** When the sandbox uses the engine, it goes through the same surface a downstream consumer would. If a legacy path exists, the slice adding the new path replaces the legacy — does not run alongside it.
 - **Hook-based contracts > explicit-call APIs.** When a prior slice left a cleanup contract for a follow-up to pin (e.g. per-component drop callback), build the proper hook. Don't paper over with an explicit-call API the consumer remembers to invoke.
 - **Stub targets are not integration.** A consumer (e.g. `IPresetTarget`) must consume at least one real field that drives observable behaviour. "Display the value in ImGui" is observability, not integration.
@@ -92,6 +104,8 @@ docs/ROADMAP.md              master plan: phases, decision log, detour queue
 context.md                   live "where we are now" (project root)
 docs/PRINCIPLES.md           engineering principles + pinned cornerstones
 docs/phases/<phase>.md       one file per phase
+docs/design/<slice>-*.md     per-slice IMPLEMENTATION SPEC (reuse audit + increments + gates);
+                             the slice's ROW links it; index at docs/design/README.md
 docs/sessions/               one file per session (YYYY-MM-DD-<slug>.md)
 docs/systems/                one short overview per shipped module
 docs/decisions/<NNNN>-*.md   per-decision ADRs; index at decisions/README.md

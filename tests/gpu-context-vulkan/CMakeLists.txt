@@ -14,6 +14,7 @@ add_executable(crd-gpu-context-vulkan-tests
 )
 
 target_link_libraries(crd-gpu-context-vulkan-tests PRIVATE
+    crd-frame-cook   # REN-36.2: the cooked frame-graph asset + its runtime
     crd-core
     crd-containers
     crd-memory
@@ -36,4 +37,9 @@ target_include_directories(crd-gpu-context-vulkan-tests SYSTEM PRIVATE "${imgui_
 
 crd_enable_default_pch(crd-gpu-context-vulkan-tests)
 
-catch_discover_tests(crd-gpu-context-vulkan-tests)
+# GPU tests create a real Vulkan device + cook shaders (shaderc); running many concurrently under the sweep's
+# `ctest --parallel` causes device/driver contention + parallel-cook nondeterminism (content-hash dedup then sees
+# the wrong unique count). A shared RESOURCE_LOCK serializes every GPU-device test (across the vulkan + dx12
+# binaries) while non-GPU tests keep parallelizing. (REN-1 close 2026-07-24: the sweep flaked D3/D5/D10 cook +
+# AS-4 under --parallel though all pass standalone; this is the fix, not a code bug.)
+catch_discover_tests(crd-gpu-context-vulkan-tests PROPERTIES RESOURCE_LOCK crd_gpu_device)

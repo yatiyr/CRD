@@ -30,15 +30,15 @@ void hair_albedo(crd::memory::IAllocator& alloc, double theta_o, double sigma_a_
                  double alpha_deg, double eta_val, double out_a[3], double& min_f, double fur_kappa = 0.0,
                  double fur_sigma = 2.0, double fur_albedo = 0.9, double fur_g = 0.0, double fur_beta_s = 0.8)
 {
-    constexpr int kNh    = 8;
-    constexpr int kNt    = 32;
-    constexpr int kNp    = 64;
-    constexpr int kN     = kNh * kNt * kNp;
-    const double  dtheta = kPi / static_cast<double>(kNt);        // θᵢ span π
-    const double  dphi   = 2.0 * kPi / static_cast<double>(kNp);  // φᵢ span 2π
+    constexpr int k_nh    = 8;
+    constexpr int k_nt    = 32;
+    constexpr int k_np    = 64;
+    constexpr int k_n     = k_nh * k_nt * k_np;
+    const double  dtheta = kPi / static_cast<double>(k_nt);        // θᵢ span π
+    const double  dphi   = 2.0 * kPi / static_cast<double>(k_np);  // φᵢ span 2π
 
     kir::KGraph      g(&alloc);
-    const kir::Shape sh = kir::make_shape({kN});
+    const kir::Shape sh = kir::make_shape({k_n});
 
     const int in_theta = g.input(sh, kir::DType::F64);
     const int in_phi   = g.input(sh, kir::DType::F64);
@@ -48,19 +48,19 @@ void hair_albedo(crd::memory::IAllocator& alloc, double theta_o, double sigma_a_
     crd::containers::Array<double> phi(&alloc);
     crd::containers::Array<double> hh(&alloc);
     crd::containers::Array<double> cos2(&alloc); // cos²θᵢ per lane (the measure weight)
-    theta.resize(kN, 0.0);
-    phi.resize(kN, 0.0);
-    hh.resize(kN, 0.0);
-    cos2.resize(kN, 0.0);
+    theta.resize(k_n, 0.0);
+    phi.resize(k_n, 0.0);
+    hh.resize(k_n, 0.0);
+    cos2.resize(k_n, 0.0);
     int lane = 0;
-    for (int m = 0; m < kNh; ++m)
+    for (int m = 0; m < k_nh; ++m)
     {
-        const double hv = -1.0 + (static_cast<double>(m) + 0.5) * (2.0 / static_cast<double>(kNh));
-        for (int kt = 0; kt < kNt; ++kt)
+        const double hv = -1.0 + (static_cast<double>(m) + 0.5) * (2.0 / static_cast<double>(k_nh));
+        for (int kt = 0; kt < k_nt; ++kt)
         {
             const double th = -0.5 * kPi + (static_cast<double>(kt) + 0.5) * dtheta;
             const double ct = crd::math::cos(th);
-            for (int j = 0; j < kNp; ++j)
+            for (int j = 0; j < k_np; ++j)
             {
                 const double ph = -kPi + (static_cast<double>(j) + 0.5) * dphi;
                 theta[static_cast<crd::usize>(lane)] = th;
@@ -85,12 +85,12 @@ void hair_albedo(crd::memory::IAllocator& alloc, double theta_o, double sigma_a_
                                             fur_sigma, fur_albedo, fur_g, fur_beta_s);
 
     crd::containers::Array<double> o(&alloc);
-    o.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
+    o.resize(static_cast<crd::usize>(k_n) * 3U, 0.0);
     kir::eval_cpu(g, inp, &alloc, node, o.data());
 
     double acc[3] = {0.0, 0.0, 0.0};
     min_f         = 1.0e30;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
         const double w = cos2[static_cast<crd::usize>(i)];
         for (int c = 0; c < 3; ++c)
@@ -100,7 +100,7 @@ void hair_albedo(crd::memory::IAllocator& alloc, double theta_o, double sigma_a_
             if (fv < min_f) { min_f = fv; }
         }
     }
-    const double scale = dtheta * dphi / static_cast<double>(kNh);
+    const double scale = dtheta * dphi / static_cast<double>(k_nh);
     for (int c = 0; c < 3; ++c) { out_a[c] = acc[c] * scale; }
 }
 // ── B18-b Huang R lobe: an INDEPENDENT host reference. Builds the same Huang-frame geometry in plain C++ and integrates the GGX
@@ -108,7 +108,7 @@ void hair_albedo(crd::memory::IAllocator& alloc, double theta_o, double sigma_a_
 // a wrong atan(tan u) branch, or a bad integration bound cannot hide.
 double fresnel_dielectric_ref(double ci, double eta)
 {
-    ci                 = ci < 0.0 ? 0.0 : (ci > 1.0 ? 1.0 : ci);
+    ci                 = crd::math::clamp(ci, 0.0, 1.0);
     const double sin2t = (1.0 - ci * ci) / (eta * eta);
     if (sin2t >= 1.0) { return 1.0; }
     const double ct   = crd::math::sqrt(1.0 - sin2t);
@@ -123,9 +123,9 @@ double huang_albedo(crd::memory::IAllocator& alloc, double theta_o, double sigma
                     kir::hair::HairModel model = kir::hair::HairModel::HuangFull, bool include_r = true, double eta = 1.55,
                     bool include_tt = true, bool include_trt = true)
 {
-    constexpr int kNt = 32;
-    constexpr int kNp = 64;
-    constexpr int kN  = kNt * kNp;
+    constexpr int k_nt = 32;
+    constexpr int k_np = 64;
+    constexpr int k_n  = k_nt * k_np;
 
     kir::hair::HairKernelConfig hc;
     hc.model      = model;
@@ -141,16 +141,16 @@ double huang_albedo(crd::memory::IAllocator& alloc, double theta_o, double sigma
     crd::containers::Array<double> in(&alloc);
     crd::containers::Array<double> out(&alloc);
     crd::containers::Array<double> wt(&alloc);
-    in.resize(static_cast<crd::usize>(kN) * 6U, 0.0);
-    out.resize(kN, 0.0);
-    wt.resize(kN, 0.0);
-    const double dth = kPi / static_cast<double>(kNt);
-    const double dph = 2.0 * kPi / static_cast<double>(kNp);
+    in.resize(static_cast<crd::usize>(k_n) * 6U, 0.0);
+    out.resize(k_n, 0.0);
+    wt.resize(k_n, 0.0);
+    const double dth = kPi / static_cast<double>(k_nt);
+    const double dph = 2.0 * kPi / static_cast<double>(k_np);
     int          lane = 0;
-    for (int a = 0; a < kNt; ++a)
+    for (int a = 0; a < k_nt; ++a)
     {
         const double th = -0.5 * kPi + (static_cast<double>(a) + 0.5) * dth;
-        for (int b = 0; b < kNp; ++b)
+        for (int b = 0; b < k_np; ++b)
         {
             const double      ph = -kPi + (static_cast<double>(b) + 0.5) * dph;
             const crd::usize  o  = static_cast<crd::usize>(lane) * 6U;
@@ -164,12 +164,12 @@ double huang_albedo(crd::memory::IAllocator& alloc, double theta_o, double sigma
             ++lane;
         }
     }
-    kir::KernelBuffer bufs[2] = {{in.data(), kN * 6, 0, 0}, {out.data(), kN, 0, 1}};
-    kir::eval_cpu_kernel(g, e, bufs, 2, e.local_size[0], &alloc, static_cast<crd::u32>(kN / 64));
+    kir::KernelBuffer bufs[2] = {{in.data(), k_n * 6, 0, 0}, {out.data(), k_n, 0, 1}};
+    kir::eval_cpu_kernel(g, e, bufs, 2, e.local_size[0], &alloc, static_cast<crd::u32>(k_n / 64));
 
     double acc = 0.0;
     min_f      = 1.0e30;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
         const double f = out[static_cast<crd::usize>(i)];
         acc += f * wt[static_cast<crd::usize>(i)];
@@ -188,9 +188,15 @@ double huang_r_reference(double theta_o, double phi_o, double theta_i, double ph
     const double cti = crd::math::cos(theta_i);
     const double sti = crd::math::sin(theta_i);
     // Huang frame (y = fibre tangent), rotated so phi_o = 0
-    const double ox = 0.0, oy = sto, oz = cto;
-    const double ix = crd::math::sin(dphi) * cti, iy = sti, iz = crd::math::cos(dphi) * cti;
-    double       hx = ix + ox, hy = iy + oy, hz = iz + oz;
+    const double ox = 0.0;
+    const double oy = sto;
+    const double oz = cto;
+    const double ix = crd::math::sin(dphi) * cti;
+    const double iy = sti;
+    const double iz = crd::math::cos(dphi) * cti;
+    double       hx = ix + ox;
+    double       hy = iy + oy;
+    double       hz = iz + oz;
     double       hlen = crd::math::sqrt(hx * hx + hy * hy + hz * hz);
     if (hlen < 1.0e-6) { hlen = 1.0e-6; }
     const double cos_ho = (hx * ox + hy * oy + hz * oz) / hlen;
@@ -199,16 +205,16 @@ double huang_r_reference(double theta_o, double phi_o, double theta_i, double ph
     hz /= hlen;
     const double lo = (dphi > 0.0 ? dphi : 0.0) - 0.5 * kPi; // visible arc: omega_m . omega_i > 0 AND . omega_o > 0
     const double hi = (dphi < 0.0 ? dphi : 0.0) + 0.5 * kPi;
-    constexpr int kN  = 20000;
+    constexpr int k_n  = 20000;
     double        acc = 0.0;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
-        const double pm  = lo + (hi - lo) * ((static_cast<double>(i) + 0.5) / static_cast<double>(kN));
+        const double pm  = lo + (hi - lo) * ((static_cast<double>(i) + 0.5) / static_cast<double>(k_n));
         const double chm = hx * crd::math::sin(pm) + hz * crd::math::cos(pm); // omega_h . omega_m
         const double t   = 1.0 + (beta * beta - 1.0) * chm * chm;
         acc += (beta * beta) / (kPi * t * t);                                 // GGX NDF (Eq 41)
     }
-    acc *= (hi - lo) / static_cast<double>(kN);
+    acc *= (hi - lo) / static_cast<double>(k_n);
     const double acto = cto < 0.0 ? -cto : cto;
     const double acti = cti < 0.0 ? -cti : cti;
     const double aho  = cos_ho < 0.0 ? -cos_ho : cos_ho;
@@ -245,21 +251,21 @@ TEST_CASE("B18-a: hair BCSDF absorption lowers albedo (dark < white) and tints",
 {
     crd::memory::TlsfAllocator alloc(256U << 20U);
     double white[3];
-    double lowAbs[3];
-    double highAbs[3];
+    double low_abs[3];
+    double high_abs[3];
     double dark[3];
     double mn = 0.0;
     hair_albedo(alloc, 0.2, 0.0, 0.3, 0.3, 2.0, 1.55, white, mn);   // σₐ = 0  (white)
-    hair_albedo(alloc, 0.2, 0.2, 0.3, 0.3, 2.0, 1.55, lowAbs, mn);  // light absorption (a "red" channel)
-    hair_albedo(alloc, 0.2, 1.2, 0.3, 0.3, 2.0, 1.55, highAbs, mn); // heavy absorption (a "blue" channel)
+    hair_albedo(alloc, 0.2, 0.2, 0.3, 0.3, 2.0, 1.55, low_abs, mn);  // light absorption (a "red" channel)
+    hair_albedo(alloc, 0.2, 1.2, 0.3, 0.3, 2.0, 1.55, high_abs, mn); // heavy absorption (a "blue" channel)
     hair_albedo(alloc, 0.2, 4.0, 0.3, 0.3, 2.0, 1.55, dark, mn);    // near-black hair
-    INFO("albedo  white=" << white[0] << "  lowAbs=" << lowAbs[0] << "  highAbs=" << highAbs[0] << "  dark=" << dark[0]);
-    CHECK(lowAbs[0] < white[0]);   // any absorption removes energy
-    CHECK(highAbs[0] < lowAbs[0]); // strictly monotone in σₐ
-    CHECK(dark[0] < highAbs[0]);
+    INFO("albedo  white=" << white[0] << "  lowAbs=" << low_abs[0] << "  highAbs=" << high_abs[0] << "  dark=" << dark[0]);
+    CHECK(low_abs[0] < white[0]);   // any absorption removes energy
+    CHECK(high_abs[0] < low_abs[0]); // strictly monotone in σₐ
+    CHECK(dark[0] < high_abs[0]);
     CHECK(dark[0] > 0.0);          // ...but the R (surface-reflection) lobe is unabsorbed — hair is never a perfect black hole
     // colour: a fibre with less absorption in one channel than another keeps more energy there (lowAbs = "red" > highAbs = "blue")
-    CHECK(lowAbs[0] > highAbs[0]);
+    CHECK(low_abs[0] > high_abs[0]);
 }
 
 // B18-b: the FUR MEDULLA (Yan 2017 double-cylinder, analytic closed-form) conserves energy. A non-absorbing fur fibre (σₐ=0,
@@ -275,18 +281,18 @@ TEST_CASE("B18-b: fur medulla conserves energy and reduces to hair at kappa=0", 
         double hairv[3]; // pure hair (no fur args)
         double nomed[3]; // kappa=0 through the fur code path — must equal hair bit-for-bit
         double fur1[3];  // medulla, non-absorbing (α_m = 1)
-        double furA[3];  // medulla, absorbing (α_m = 0.5)
+        double fur_a[3];  // medulla, absorbing (α_m = 0.5)
         double mn = 0.0;
         hair_albedo(alloc, thetas[t], 0.0, 0.3, 0.3, 2.0, 1.55, hairv, mn);
         hair_albedo(alloc, thetas[t], 0.0, 0.3, 0.3, 2.0, 1.55, nomed, mn, 0.0, 2.0, 1.0, 0.0, 0.8);
         hair_albedo(alloc, thetas[t], 0.0, 0.3, 0.3, 2.0, 1.55, fur1, mn, 0.6, 3.0, 1.0, 0.2, 0.8);
-        hair_albedo(alloc, thetas[t], 0.0, 0.3, 0.3, 2.0, 1.55, furA, mn, 0.6, 3.0, 0.5, 0.2, 0.8);
+        hair_albedo(alloc, thetas[t], 0.0, 0.3, 0.3, 2.0, 1.55, fur_a, mn, 0.6, 3.0, 0.5, 0.2, 0.8);
         INFO("theta=" << thetas[t] << " hair=" << hairv[0] << " nomed=" << nomed[0] << " fur(a=1)=" << fur1[0]
-                      << " fur(a=.5)=" << furA[0] << " min_f=" << mn);
+                      << " fur(a=.5)=" << fur_a[0] << " min_f=" << mn);
         CHECK(crd::math::abs(nomed[0] - hairv[0]) < 1.0e-12); // κ=0 ⇒ identical to hair (host-guarded)
         CHECK(fur1[0] > 0.90);      // non-absorbing medulla still conserves energy (redistribution only)
         CHECK(fur1[0] < 1.08);
-        CHECK(furA[0] < fur1[0]);   // medulla absorption removes energy — strictly lower
+        CHECK(fur_a[0] < fur1[0]);   // medulla absorption removes energy — strictly lower
         CHECK(mn > -1.0e-9);        // the fur BCSDF is non-negative everywhere
     }
 }
@@ -297,12 +303,12 @@ TEST_CASE("B18-b: fur medulla conserves energy and reduces to hair at kappa=0", 
 TEST_CASE("B18-b: Huang analytic R lobe == numerical NDF quadrature", "[kir][hair][huang]")
 {
     crd::memory::TlsfAllocator alloc(64U << 20U);
-    constexpr int              kN = 96;
+    constexpr int              k_n = 96;
 
     for (double beta : {0.08, 0.3, 0.6}) // GGX roughness: paper's low-roughness regime through rough
     {
         kir::KGraph      g(&alloc);
-        const kir::Shape sh = kir::make_shape({kN});
+        const kir::Shape sh = kir::make_shape({k_n});
         const int in_sto = g.input(sh, kir::DType::F64);
         const int in_cto = g.input(sh, kir::DType::F64);
         const int in_pho = g.input(sh, kir::DType::F64);
@@ -312,12 +318,18 @@ TEST_CASE("B18-b: Huang analytic R lobe == numerical NDF quadrature", "[kir][hai
         const int node   = hair::huang_r_lobe_angles(g, in_sto, in_cto, in_pho, in_sti, in_cti, in_phi,
                                                      g.constant(1.55, sh, kir::DType::F64), beta);
 
-        crd::containers::Array<double> sto(&alloc), cto(&alloc), pho(&alloc), sti(&alloc), cti(&alloc), phi(&alloc), ref(&alloc);
-        sto.resize(kN, 0.0); cto.resize(kN, 0.0); pho.resize(kN, 0.0);
-        sti.resize(kN, 0.0); cti.resize(kN, 0.0); phi.resize(kN, 0.0); ref.resize(kN, 0.0);
+        crd::containers::Array<double> sto(&alloc);
+        crd::containers::Array<double> cto(&alloc);
+        crd::containers::Array<double> pho(&alloc);
+        crd::containers::Array<double> sti(&alloc);
+        crd::containers::Array<double> cti(&alloc);
+        crd::containers::Array<double> phi(&alloc);
+        crd::containers::Array<double> ref(&alloc);
+        sto.resize(k_n, 0.0); cto.resize(k_n, 0.0); pho.resize(k_n, 0.0);
+        sti.resize(k_n, 0.0); cti.resize(k_n, 0.0); phi.resize(k_n, 0.0); ref.resize(k_n, 0.0);
         crd::u32 s   = 4242U;
         auto     rnd = [&]() { s = s * 1664525U + 1013904223U; return static_cast<double>(s >> 8) / static_cast<double>(1U << 24); };
-        for (int i = 0; i < kN; ++i)
+        for (int i = 0; i < k_n; ++i)
         {
             const double th_o = (rnd() * 2.0 - 1.0) * 1.2; // elevation from the fibre's normal plane
             const double th_i = (rnd() * 2.0 - 1.0) * 1.2;
@@ -333,13 +345,13 @@ TEST_CASE("B18-b: Huang analytic R lobe == numerical NDF quadrature", "[kir][hai
         }
         const double* inp[6] = {sto.data(), cto.data(), pho.data(), sti.data(), cti.data(), phi.data()};
         crd::containers::Array<double> got(&alloc);
-        got.resize(kN, 0.0);
+        got.resize(k_n, 0.0);
         kir::eval_cpu(g, inp, &alloc, node, got.data());
 
         double maxrel = 0.0;
         double sum_a = 0.0;
         double sum_r = 0.0;
-        for (int i = 0; i < kN; ++i)
+        for (int i = 0; i < k_n; ++i)
         {
             const double a = got[static_cast<crd::usize>(i)];
             const double r = ref[static_cast<crd::usize>(i)];

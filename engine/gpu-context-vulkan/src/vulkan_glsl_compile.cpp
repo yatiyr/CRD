@@ -214,9 +214,13 @@ public:
         // cook compiles from several crd-jobs workers at once — a shared compiler races → access violation. Give each thread its
         // OWN compiler, initialized once (no hot-path regression — the single-thread path still inits exactly one) and released
         // when the thread exits via the thread_local holder's destructor (the singleton loader's m_api outlives every worker).
+        // NOT serialized behind a mutex: the parallel cook's dedup non-determinism was traced (2026-07-25) to
+        // `serialize_graph` hashing INDETERMINATE STRUCT PADDING, not to shaderc — see ckir_serialize.hpp. shaderc
+        // compiles concurrently from separate compiler objects by design, and D10 gates parallel == serial BYTE-IDENTICAL,
+        // so a lock here would only throw away the parallel cook's speedup for a symptom it never caused.
         const shaderc_compiler_t           comp = thread_compiler();
-        const shaderc_compilation_result_t res  = m_api.compile_into_spv(
-            comp, source.data(), source.size(), to_shaderc_kind(stage), name_str.c_str(), "main", opts);
+        const shaderc_compilation_result_t res =
+            m_api.compile_into_spv(comp, source.data(), source.size(), to_shaderc_kind(stage), name_str.c_str(), "main", opts);
 
         m_api.options_release(opts);
 

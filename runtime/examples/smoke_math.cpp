@@ -3,7 +3,11 @@
 
 #include <iostream>
 
-int main()
+namespace
+{
+// The real body. `main` below is a catch-all wrapper: an exception escaping main is std::terminate with no
+// diagnostic, and the iostream writes here can throw. Exit non-zero instead. (bugprone-exception-escape.)
+int run()
 {
     using namespace crd::math;
     using namespace crd::geometry::primitives;
@@ -45,4 +49,17 @@ int main()
     std::cout << "identity frustum intersects unit-ish bounds? " << frustum_hits_bounds << "\n";
     std::cout << "90 deg in radians = " << deg_to_rad(90.0F) << "\n";
     return 0;
+}
+} // namespace
+
+int main()
+{
+    try
+    {
+        return run();
+    }
+    catch (...)
+    {
+        return 1;
+    }
 }

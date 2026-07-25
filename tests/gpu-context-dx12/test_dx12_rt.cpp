@@ -53,9 +53,9 @@ TEST_CASE("D-007 RT-1 DX12: inline rayQuery closest-hit t == CPU reference", "[g
 
     // one triangle at z=2 spanning (0,0)-(1,0)-(0,1).
     const float verts[9] = {0.0F, 0.0F, 2.0F, 1.0F, 0.0F, 2.0F, 0.0F, 1.0F, 2.0F};
-    constexpr crd::u32 kN = 64U; // pad rays/out to the workgroup width so no thread reads/writes out of bounds
+    constexpr crd::u32 k_n = 64U; // pad rays/out to the workgroup width so no thread reads/writes out of bounds
     crd::containers::Array<float> rays(&alloc);
-    rays.resize(static_cast<crd::usize>(kN) * 6U, 0.0F);
+    rays.resize(static_cast<crd::usize>(k_n) * 6U, 0.0F);
     const float rd[4][6] = {{0.2F, 0.2F, 0.0F, 0.0F, 0.0F, 1.0F},   // interior +z ⇒ t=2
                             {0.2F, 0.2F, 0.0F, 0.0F, 0.0F, -1.0F},  // away ⇒ miss
                             {5.0F, 5.0F, 0.0F, 0.0F, 0.0F, 1.0F},   // outside ⇒ miss
@@ -63,13 +63,15 @@ TEST_CASE("D-007 RT-1 DX12: inline rayQuery closest-hit t == CPU reference", "[g
     for (int r = 0; r < 4; ++r) { for (int c = 0; c < 6; ++c) { rays[static_cast<crd::usize>(r) * 6U + c] = rd[r][c]; } }
 
     // ── CPU oracle ──
-    crd::containers::Array<crd::f64> geo(&alloc), rays64(&alloc), oref(&alloc);
+    crd::containers::Array<crd::f64> geo(&alloc);
+    crd::containers::Array<crd::f64> rays64(&alloc);
+    crd::containers::Array<crd::f64> oref(&alloc);
     geo.resize(10U, 0.0);
     geo[0] = 1.0;
     for (int i = 0; i < 9; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
     rays64.resize(rays.size(), 0.0);
     for (crd::usize i = 0; i < rays.size(); ++i) { rays64[i] = static_cast<crd::f64>(rays[i]); }
-    oref.resize(kN, 0.0);
+    oref.resize(k_n, 0.0);
     kir::KernelBuffer bufs[3] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {rays64.data(), static_cast<int>(rays64.size()), 0, 1}, {oref.data(), static_cast<int>(oref.size()), 0, 2}};
     kir::eval_cpu_kernel(g, e, bufs, 3, 64U, &alloc, 1U);
 
@@ -77,8 +79,8 @@ TEST_CASE("D-007 RT-1 DX12: inline rayQuery closest-hit t == CPU reference", "[g
     auto scene = rt.build_scene(verts, 1U);
     REQUIRE(scene != nullptr);
     crd::containers::Array<float> got(&alloc);
-    got.resize(kN, 0.0F);
-    B bind[2] = {{rays.data(), nullptr, rays.size() * sizeof(float), 1U}, {nullptr, got.data(), static_cast<crd::u64>(kN) * sizeof(float), 2U}};
+    got.resize(k_n, 0.0F);
+    B bind[2] = {{rays.data(), nullptr, rays.size() * sizeof(float), 1U}, {nullptr, got.data(), static_cast<crd::u64>(k_n) * sizeof(float), 2U}};
     REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(dxil.data(), dxil.size()), crd::containers::ConstSpan<B>(bind, 2), 1U));
 
     INFO("DX12 t=[" << got[0] << ", " << got[1] << ", " << got[2] << ", " << got[3] << "]");
@@ -105,10 +107,11 @@ TEST_CASE("D-007 RT-3 DX12: path-tracing megakernel == CPU reference", "[gpu-con
 
     const float verts[18] = {-6.0F, 1.0F, -6.0F, 0.0F, 1.0F, -6.0F, 0.0F, 1.0F, 6.0F, -6.0F, 1.0F, -6.0F, 0.0F, 1.0F, 6.0F, -6.0F, 1.0F, 6.0F};
     const float tri_n[6]  = {0.0F, -1.0F, 0.0F, 0.0F, -1.0F, 0.0F};
-    constexpr crd::u32 kN = 64U;
-    crd::containers::Array<float> ppos(&alloc), pnrm(&alloc);
-    ppos.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
-    pnrm.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
+    constexpr crd::u32 k_n = 64U;
+    crd::containers::Array<float> ppos(&alloc);
+    crd::containers::Array<float> pnrm(&alloc);
+    ppos.resize(static_cast<crd::usize>(k_n) * 3U, 0.0F);
+    pnrm.resize(static_cast<crd::usize>(k_n) * 3U, 0.0F);
     for (crd::u32 j = 0; j < 8U; ++j)
     {
         for (crd::u32 i = 0; i < 8U; ++i)
@@ -120,11 +123,15 @@ TEST_CASE("D-007 RT-3 DX12: path-tracing megakernel == CPU reference", "[gpu-con
         }
     }
     // oracle
-    crd::containers::Array<crd::f64> geo(&alloc), pos64(&alloc), nrm64(&alloc), tn64(&alloc), refc(&alloc);
+    crd::containers::Array<crd::f64> geo(&alloc);
+    crd::containers::Array<crd::f64> pos64(&alloc);
+    crd::containers::Array<crd::f64> nrm64(&alloc);
+    crd::containers::Array<crd::f64> tn64(&alloc);
+    crd::containers::Array<crd::f64> refc(&alloc);
     geo.resize(1U + 2U * 9U, 0.0);
     geo[0] = 2.0;
     for (int i = 0; i < 18; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
-    pos64.resize(ppos.size(), 0.0); nrm64.resize(pnrm.size(), 0.0); tn64.resize(6U, 0.0); refc.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
+    pos64.resize(ppos.size(), 0.0); nrm64.resize(pnrm.size(), 0.0); tn64.resize(6U, 0.0); refc.resize(static_cast<crd::usize>(k_n) * 3U, 0.0);
     for (crd::usize i = 0; i < ppos.size(); ++i) { pos64[i] = static_cast<crd::f64>(ppos[i]); nrm64[i] = static_cast<crd::f64>(pnrm[i]); }
     for (int i = 0; i < 6; ++i) { tn64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(tri_n[i]); }
     kir::KernelBuffer bufs[5] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {pos64.data(), static_cast<int>(pos64.size()), 0, 1}, {nrm64.data(), static_cast<int>(nrm64.size()), 0, 2}, {tn64.data(), static_cast<int>(tn64.size()), 0, 3}, {refc.data(), static_cast<int>(refc.size()), 0, 4}};
@@ -133,12 +140,12 @@ TEST_CASE("D-007 RT-3 DX12: path-tracing megakernel == CPU reference", "[gpu-con
     auto scene = rt.build_scene(verts, 2U);
     REQUIRE(scene != nullptr);
     crd::containers::Array<float> got(&alloc);
-    got.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
-    B bind[4] = {{ppos.data(), nullptr, static_cast<crd::u64>(kN) * 3U * sizeof(float), 1U}, {pnrm.data(), nullptr, static_cast<crd::u64>(kN) * 3U * sizeof(float), 2U}, {tri_n, nullptr, 6U * sizeof(float), 3U}, {nullptr, got.data(), static_cast<crd::u64>(kN) * 3U * sizeof(float), 4U}};
+    got.resize(static_cast<crd::usize>(k_n) * 3U, 0.0F);
+    B bind[4] = {{ppos.data(), nullptr, static_cast<crd::u64>(k_n) * 3U * sizeof(float), 1U}, {pnrm.data(), nullptr, static_cast<crd::u64>(k_n) * 3U * sizeof(float), 2U}, {tri_n, nullptr, 6U * sizeof(float), 3U}, {nullptr, got.data(), static_cast<crd::u64>(k_n) * 3U * sizeof(float), 4U}};
     REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(dxil.data(), dxil.size()), crd::containers::ConstSpan<B>(bind, 4), 1U));
 
     double worst = 0.0;
-    for (crd::u32 p = 0; p < kN * 3U; ++p) { worst = crd::math::max(worst, crd::math::abs(static_cast<double>(got[p]) - refc[p])); }
+    for (crd::u32 p = 0; p < k_n * 3U; ++p) { worst = crd::math::max(worst, crd::math::abs(static_cast<double>(got[p]) - refc[p])); }
     INFO("DX12 pathtrace worst |GPU-ref|=" << worst);
     CHECK(worst < 0.06); // DX12 path radiance == CPU oracle (transcendental ULP + rare grazing flips) — same bar as Vulkan
 }
@@ -165,10 +172,11 @@ TEST_CASE("D-007 RT-4 DX12: NEE+MIS area-light path tracer == CPU reference", "[
         -0.5F, 2.0F, -0.5F, 0.5F, 2.0F, -0.5F, 0.5F, 2.0F, 0.5F, -0.5F, 2.0F, -0.5F, 0.5F, 2.0F, 0.5F, -0.5F, 2.0F, 0.5F,
         -1.5F, 3.0F, -1.5F, 1.5F, 3.0F, -1.5F, 1.5F, 3.0F, 1.5F, -1.5F, 3.0F, -1.5F, 1.5F, 3.0F, 1.5F, -1.5F, 3.0F, 1.5F};
     const float tri_nf[12] = {0.0F, 1.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, -1.0F, 0.0F, 0.0F, -1.0F, 0.0F};
-    constexpr crd::u32 kN = 64U;
-    crd::containers::Array<float> ppos(&alloc), pnrm(&alloc);
-    ppos.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
-    pnrm.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
+    constexpr crd::u32 k_n = 64U;
+    crd::containers::Array<float> ppos(&alloc);
+    crd::containers::Array<float> pnrm(&alloc);
+    ppos.resize(static_cast<crd::usize>(k_n) * 3U, 0.0F);
+    pnrm.resize(static_cast<crd::usize>(k_n) * 3U, 0.0F);
     for (crd::u32 j = 0; j < 8U; ++j)
     {
         for (crd::u32 i = 0; i < 8U; ++i)
@@ -179,11 +187,15 @@ TEST_CASE("D-007 RT-4 DX12: NEE+MIS area-light path tracer == CPU reference", "[
             pnrm[p * 3U + 1U] = 1.0F;
         }
     }
-    crd::containers::Array<crd::f64> geo(&alloc), pos64(&alloc), nrm64(&alloc), tn64(&alloc), refc(&alloc);
+    crd::containers::Array<crd::f64> geo(&alloc);
+    crd::containers::Array<crd::f64> pos64(&alloc);
+    crd::containers::Array<crd::f64> nrm64(&alloc);
+    crd::containers::Array<crd::f64> tn64(&alloc);
+    crd::containers::Array<crd::f64> refc(&alloc);
     geo.resize(1U + 4U * 9U, 0.0);
     geo[0] = 4.0;
     for (int i = 0; i < 36; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
-    pos64.resize(ppos.size(), 0.0); nrm64.resize(pnrm.size(), 0.0); tn64.resize(12U, 0.0); refc.resize(static_cast<crd::usize>(kN) * 3U, 0.0);
+    pos64.resize(ppos.size(), 0.0); nrm64.resize(pnrm.size(), 0.0); tn64.resize(12U, 0.0); refc.resize(static_cast<crd::usize>(k_n) * 3U, 0.0);
     for (crd::usize i = 0; i < ppos.size(); ++i) { pos64[i] = static_cast<crd::f64>(ppos[i]); nrm64[i] = static_cast<crd::f64>(pnrm[i]); }
     for (int i = 0; i < 12; ++i) { tn64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(tri_nf[i]); }
     kir::KernelBuffer bufs[5] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {pos64.data(), static_cast<int>(pos64.size()), 0, 1}, {nrm64.data(), static_cast<int>(nrm64.size()), 0, 2}, {tn64.data(), static_cast<int>(tn64.size()), 0, 3}, {refc.data(), static_cast<int>(refc.size()), 0, 4}};
@@ -191,15 +203,15 @@ TEST_CASE("D-007 RT-4 DX12: NEE+MIS area-light path tracer == CPU reference", "[
     auto scene = rt.build_scene(verts, 4U);
     REQUIRE(scene != nullptr);
     crd::containers::Array<float> got(&alloc);
-    got.resize(static_cast<crd::usize>(kN) * 3U, 0.0F);
-    B bind[4] = {{ppos.data(), nullptr, static_cast<crd::u64>(kN) * 3U * sizeof(float), 1U}, {pnrm.data(), nullptr, static_cast<crd::u64>(kN) * 3U * sizeof(float), 2U}, {tri_nf, nullptr, 12U * sizeof(float), 3U}, {nullptr, got.data(), static_cast<crd::u64>(kN) * 3U * sizeof(float), 4U}};
+    got.resize(static_cast<crd::usize>(k_n) * 3U, 0.0F);
+    B bind[4] = {{ppos.data(), nullptr, static_cast<crd::u64>(k_n) * 3U * sizeof(float), 1U}, {pnrm.data(), nullptr, static_cast<crd::u64>(k_n) * 3U * sizeof(float), 2U}, {tri_nf, nullptr, 12U * sizeof(float), 3U}, {nullptr, got.data(), static_cast<crd::u64>(k_n) * 3U * sizeof(float), 4U}};
     REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(dxil.data(), dxil.size()), crd::containers::ConstSpan<B>(bind, 4), 1U));
 
     double worst = 0.0;
     double lmin  = 1.0e30;
     double lmax  = 0.0;
-    for (crd::u32 p = 0; p < kN * 3U; ++p) { worst = crd::math::max(worst, crd::math::abs(static_cast<double>(got[p]) - refc[p])); }
-    for (crd::u32 p = 0; p < kN; ++p) { lmin = crd::math::min(lmin, refc[p * 3U]); lmax = crd::math::max(lmax, refc[p * 3U]); }
+    for (crd::u32 p = 0; p < k_n * 3U; ++p) { worst = crd::math::max(worst, crd::math::abs(static_cast<double>(got[p]) - refc[p])); }
+    for (crd::u32 p = 0; p < k_n; ++p) { lmin = crd::math::min(lmin, refc[p * 3U]); lmax = crd::math::max(lmax, refc[p * 3U]); }
     INFO("DX12 nee/mis worst |GPU-ref|=" << worst << "  range=[" << lmin << ", " << lmax << "]");
     CHECK(worst < 0.05);        // DX12 MIS radiance == CPU oracle (same bar as Vulkan)
     CHECK(lmax - lmin > 0.10);  // a real soft shadow
@@ -221,13 +233,15 @@ TEST_CASE("D-007 RT-6 DX12: multi-instance TLAS (per-instance transforms) == CPU
     const float transforms[36] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0,
                                   1, 0, 0, 2, 0, 1, 0, 0, 0, 0, 1, 0,
                                   1, 0, 0, 4, 0, 1, 0, 0, 0, 0, 1, 0};
-    constexpr crd::u32 kN = 64U;
+    constexpr crd::u32 k_n = 64U;
     crd::containers::Array<float> rays(&alloc);
-    rays.resize(static_cast<crd::usize>(kN) * 6U, 0.0F);
+    rays.resize(static_cast<crd::usize>(k_n) * 6U, 0.0F);
     const float rd[4][6] = {{0.2F, 0.2F, 0.0F, 0.0F, 0.0F, 1.0F}, {2.2F, 0.2F, 0.0F, 0.0F, 0.0F, 1.0F}, {4.2F, 0.2F, 0.0F, 0.0F, 0.0F, 1.0F}, {6.2F, 0.2F, 0.0F, 0.0F, 0.0F, 1.0F}};
     for (int r = 0; r < 4; ++r) { for (int c = 0; c < 6; ++c) { rays[static_cast<crd::usize>(r) * 6U + c] = rd[r][c]; } }
 
-    crd::containers::Array<crd::f64> geo(&alloc), rays64(&alloc), oref(&alloc);
+    crd::containers::Array<crd::f64> geo(&alloc);
+    crd::containers::Array<crd::f64> rays64(&alloc);
+    crd::containers::Array<crd::f64> oref(&alloc);
     geo.resize(1U + 3U * 9U, 0.0);
     geo[0] = 3.0;
     for (int n = 0; n < 3; ++n)
@@ -242,15 +256,15 @@ TEST_CASE("D-007 RT-6 DX12: multi-instance TLAS (per-instance transforms) == CPU
     }
     rays64.resize(rays.size(), 0.0);
     for (crd::usize i = 0; i < rays.size(); ++i) { rays64[i] = static_cast<crd::f64>(rays[i]); }
-    oref.resize(kN, 0.0);
+    oref.resize(k_n, 0.0);
     kir::KernelBuffer bufs[3] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {rays64.data(), static_cast<int>(rays64.size()), 0, 1}, {oref.data(), static_cast<int>(oref.size()), 0, 2}};
     kir::eval_cpu_kernel(g, e, bufs, 3, 64U, &alloc, 1U);
 
     auto scene = rt.build_scene_instanced(verts, 1U, transforms, 3U);
     REQUIRE(scene != nullptr);
     crd::containers::Array<float> got(&alloc);
-    got.resize(kN, 0.0F);
-    B bind[2] = {{rays.data(), nullptr, rays.size() * sizeof(float), 1U}, {nullptr, got.data(), static_cast<crd::u64>(kN) * sizeof(float), 2U}};
+    got.resize(k_n, 0.0F);
+    B bind[2] = {{rays.data(), nullptr, rays.size() * sizeof(float), 1U}, {nullptr, got.data(), static_cast<crd::u64>(k_n) * sizeof(float), 2U}};
     REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(dxil.data(), dxil.size()), crd::containers::ConstSpan<B>(bind, 2), 1U));
 
     INFO("DX12 instanced t=[" << got[0] << ", " << got[1] << ", " << got[2] << ", " << got[3] << "]");
@@ -265,11 +279,15 @@ TEST_CASE("D-007 RT-6 DX12: multi-instance TLAS (per-instance transforms) == CPU
 TEST_CASE("D-007 P2 DX12: CKIR RT pipeline stages lower to valid DXR HLSL", "[gpu-context][dx12][rt]")
 {
     crd::memory::TlsfAllocator alloc(16U << 20U);
-    kir::KGraph grg(&alloc), gch(&alloc), gms(&alloc);
+    kir::KGraph grg(&alloc);
+    kir::KGraph gch(&alloc);
+    kir::KGraph gms(&alloc);
     const kir::KEntry erg = kir::rt::build_rt_pipeline_raygen(grg, /*use_ser=*/false);
     const kir::KEntry ech = kir::rt::build_rt_pipeline_closesthit(gch);
     const kir::KEntry ems = kir::rt::build_rt_pipeline_miss(gms);
-    kir::GlslKernel krg(&alloc), kch(&alloc), kms(&alloc);
+    kir::GlslKernel krg(&alloc);
+    kir::GlslKernel kch(&alloc);
+    kir::GlslKernel kms(&alloc);
     REQUIRE(kir::emit_rt_stage_hlsl(grg, erg, &alloc, krg, false));
     REQUIRE(kir::emit_rt_stage_hlsl(gch, ech, &alloc, kch, false));
     REQUIRE(kir::emit_rt_stage_hlsl(gms, ems, &alloc, kms, false));
@@ -302,22 +320,22 @@ TEST_CASE("D-007 B18-f DX12: CKIR TraceRayCurves on DXR procedural AABBs == CPU 
     const auto                 uz = [](int v) { return static_cast<crd::usize>(v); };
 
     // ── a small groom: strands of tapering segments, spread so most rays hit something ──
-    constexpr int kStr = 6;
-    constexpr int kSeg = 6;
-    constexpr int nseg = kStr * kSeg;
+    constexpr int k_str = 6;
+    constexpr int k_seg = 6;
+    constexpr int nseg = k_str * k_seg;
     constexpr int nray = 256;
     crd::containers::Array<float>  segf(&alloc);
     crd::containers::Array<double> segd(&alloc);
     segf.resize(uz(nseg * 8), 0.0F);
     segd.resize(uz(nseg * 8), 0.0);
-    for (int s = 0; s < kStr; ++s)
+    for (int s = 0; s < k_str; ++s)
     {
         const float x = -1.0F + 0.4F * static_cast<float>(s);
-        for (int j = 0; j < kSeg; ++j)
+        for (int j = 0; j < k_seg; ++j)
         {
-            const float t0 = static_cast<float>(j) / static_cast<float>(kSeg);
-            const float t1 = static_cast<float>(j + 1) / static_cast<float>(kSeg);
-            float*      q  = segf.data() + uz((s * kSeg + j) * 8);
+            const float t0 = static_cast<float>(j) / static_cast<float>(k_seg);
+            const float t1 = static_cast<float>(j + 1) / static_cast<float>(k_seg);
+            float*      q  = segf.data() + uz((s * k_seg + j) * 8);
             q[0] = x; q[1] = -0.5F + 2.0F * t0; q[2] = 0.15F * static_cast<float>(s % 3);
             q[3] = 0.09F * (1.0F - t0) + 0.02F;
             q[4] = x; q[5] = -0.5F + 2.0F * t1; q[6] = 0.15F * static_cast<float>(s % 3);
@@ -379,11 +397,11 @@ TEST_CASE("D-007 B18-f DX12: CKIR TraceRayCurves on DXR procedural AABBs == CPU 
     crd::containers::Array<double> as_stub(&alloc);
     ref.resize(uz(nray * 2), 0.0);
     as_stub.resize(1U, 0.0);
-    kir::KernelBuffer ob_[4] = {{as_stub.data(), 1, 0, 0},
+    kir::KernelBuffer oracle_bufs[4] = {{as_stub.data(), 1, 0, 0},
                                 {segd.data(), nseg * 8, 0, 1},
                                 {rayd.data(), nray * 6, 0, 2},
                                 {ref.data(), nray * 2, 0, 3}};
-    kir::eval_cpu_kernel(g, e, ob_, 4, e.local_size[0], &alloc, static_cast<crd::u32>(nray / 64));
+    kir::eval_cpu_kernel(g, e, oracle_bufs, 4, e.local_size[0], &alloc, static_cast<crd::u32>(nray / 64));
 
     // ── then the device ──
     const auto dxil = dxil_of(g, e, &alloc);
@@ -398,7 +416,7 @@ TEST_CASE("D-007 B18-f DX12: CKIR TraceRayCurves on DXR procedural AABBs == CPU 
     REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(dxil.data(), dxil.size()),
                               crd::containers::ConstSpan<B>(bind, 3), static_cast<crd::u32>(nray / 64)));
 
-    constexpr double kTmax = 50.0; // a MISS returns tmax, so classify against it, not a fixed sentinel
+    constexpr double k_tmax = 50.0; // a MISS returns tmax, so classify against it, not a fixed sentinel
     int    hits = 0;
     int    disagree = 0;
     int    cpu_only = 0; // oracle hit, device missed  => AABB too small / commit rejected
@@ -406,8 +424,8 @@ TEST_CASE("D-007 B18-f DX12: CKIR TraceRayCurves on DXR procedural AABBs == CPU 
     double worst = 0.0;
     for (int i = 0; i < nray; ++i)
     {
-        const bool ch = ref[uz(i * 2)] < kTmax - 0.5;
-        const bool gh = static_cast<double>(outf[uz(i * 2)]) < kTmax - 0.5;
+        const bool ch = ref[uz(i * 2)] < k_tmax - 0.5;
+        const bool gh = static_cast<double>(outf[uz(i * 2)]) < k_tmax - 0.5;
         if (ch != gh)
         {
             ++disagree;

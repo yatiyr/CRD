@@ -7,6 +7,78 @@
 
 ## Current focus — Phase 3.1.6 **v17 GPU compute (CKIR)** — on the **GPU-program-system detour** (D-007+D-008 MERGED)
 
+> ### ⏩ SESSION HANDOFF (2026-07-25) — READ THIS FIRST on re-entry
+> **The RENDERER band is under way. This session shipped REN-1 + REN-2; REN-3 is designed and next.**
+>
+> **DONE + CERTIFIED (win-debug full build+ctest PASS + all module gates green, both backends):**
+> - **REN-1** (frame graph, D-007 row 98) ✅ — Vulkan + DX12, one-submission batching, transient aliasing; bench
+>   `docs/bench/2026-07-24-ren1-frame-graph-batching.md` (VK 6.14× / DX12 38.76× at 64 draws). Gates: VK 33, DX12 35.
+> - **REN-2** (RTT transients + sampled material textures, row 99) ✅ — RTT color transients (render→sample), the
+>   textured forward draw (`draw_storage_textured_depth`), and the **live SceneRenderer material gate** (a cooked
+>   UV-quad + red/green base-color map → the forward pass samples albedo). Session log `docs/sessions/2026-07-25-ren2-rtt.md`,
+>   spec `docs/design/ren-2-rtt-and-material-textures.md`, memory `[[project_frame_graph_is_a_recording_mode_of_raster_context]]`.
+> - The whole "fix all sweep errors" pass earlier this session (em-dash guard, RESOURCE_LOCK on GPU tests, ceridc
+>   idempotency, FFT `noinline`) — all landed.
+> - **REN-3.1** (depth-RTT transients, row 100) ✅ both backends — `draw_storage_depth_only` (+ the `_load` variant
+>   the bench exposed), the DX12 three-format depth-SRV rule (resource `R32_TYPELESS` · DSV `D32_FLOAT` · SRV
+>   `R32_FLOAT`). Bench `docs/bench/2026-07-25-ren3-1-depth-prepass-cost.md`.
+> - **REN-36.1 + 36.2** (the AUTHORABLE FRAME GRAPH, row 139) ✅ — `.frame.toml` schema + cooker (19 named
+>   rejections incl. Kahn cycle detection), loader/executor, fallback reporting + the built-in error graph,
+>   programmatic `FrameGraphBuilder`, and the lossless TOML **emit** (editor round-trip: `parse→emit→parse→cook`
+>   is BYTE-IDENTICAL to `parse→cook`, gated for both hand-authored and programmatic provenance).
+> - **REN-3.2-a** (CSM depth-ARRAY atlas, row 100) ✅ both backends — `FgImageDesc.layers` + `image_layer`,
+>   per-slice attachment views + array sampling view (VK + DX12), DX12 `ALL_SUBRESOURCES` transition fix, and the
+>   `KOp::SampleCmp` **arrayed-shadow GLSL emitter fix** (`sampler2DArrayShadow` needs `vec4(uv, layer, ref)`).
+>   Gated by a 4-cascade 4-bit-code probe; Vulkan validation-silent. Detail + 3 scars: D-007 row 100.
+>
+> ⛔⛔ **HARD RULE (user, 2026-07-25) — EVERY render/light/any pass goes through OUR frame-graph machinery,**
+> **programmatically OR from an asset, never a hand-rolled `draw_*` sequence.** Recorded in AGENTS.md + memory
+> `[[feedback_every_render_pass_through_our_own_frame_graph_machinery]]`. A step that cannot be expressed is a
+> missing `FramePassKind` — add the kind with its own gate; never route around the system.
+>
+> **NEXT: REN-3** (row 100) — spec **v2** `docs/design/ren-3-lighting-shadow-pipeline.md`, rewritten 2026-07-25
+> after a ⭐ USER SCOPE DECISION: *"REN-3 needs to be visible in the sandbox to count as done — a fully correct
+> and frontier looking scene"* + *"full frontier TAA / full frontier anti aliasing system in REN-3"* +
+> *"atmosphere model to generate the environment procedurally."*
+> **The close gate is the SANDBOX**, not a readback test (readback still gates every increment). Honest starting
+> point: the SceneRenderer shades with a 12-line toy `0.25 + 0.75·N·L`, so NONE of the bit-exact B8 library is
+> reachable from a real scene. Seven increments: **3.1** depth-RTT transients (⛔ `draw_storage_depth_only` is a
+> REAL interface change — append at END, D135) → **3.2** CSM depth-array + texel-snap → **3.3** real BRDF +
+> normal/MR maps + bindless per-instance materials → **3.4** HDR + AgX + sRGB (**inseparable from 3.3** — a real
+> BRDF without a tonemap clips and REGRESSES the image) → **3.5** ⭐ procedural Hillaire sky baked as the frame
+> graph's FIRST compute passes, generating IBL from the same atmosphere (SH9 + cube-RTT prefilter) → **3.6** ⭐ the
+> full AA system: Halton jitter + motion vectors + ⛔ a **PERSISTENT PING-PONG HISTORY** (a NEW frame-graph
+> capability — transients exist to be aliased away; history must never be) + resolve + RCAS sharpen → **3.7**
+> set-frequency model + THE SANDBOX SCENE. **Moved out:** clustered light culling (a scale, not a looks, feature)
+> → its own row; temporal upscaling named as a non-goal.
+>
+> **✅ THE TWO "PRE-EXISTING FULL-SWEEP BLOCKERS" ARE CLOSED (2026-07-25) — and BOTH earlier diagnoses were WRONG.**
+> Session log: `docs/sessions/2026-07-25-ci-determinism-cook-hash-and-tidy-gate.md`. Four defects, all root-caused:
+> 1. **Cook dedup non-determinism = STRUCT PADDING IN THE CONTENT HASH**, not the emitter and not shaderc.
+>    `serialize_graph` blasted the POD pools raw, so `KNode`/`KStmt`/`KType`/`KEntry` padding — indeterminate for a
+>    default-initialized object — entered the hash (first divergence: `KNode+1`, the hole between `KOp op` and the
+>    2-aligned `KType type`). Fixed with a **canonical packed padding-free encoding** (format v2, also ABI-independent).
+>    SECOND instance: `reflect()`'s `ShaderReflection` is written RAW into the `REFL` chunk and its 3-byte hole after
+>    `stage` broke D10/D12 byte-identity (measured at cooked-file offset 1881..1883) — needs an explicit `memset`
+>    (`T r{}` is NOT enough under MSVC). Gate: `tests/kir/test_ckir_serialize_determinism.cpp`. **The glslang mutex is
+>    REMOVED** — it never was the cause and it serialized the parallel cook for nothing.
+> 2. **`build/win-shipping` had the `#deps 0` landmine LIVE** (English `msvc_deps_prefix` on this Turkish-locale host)
+>    ⇒ header edits never recompiled there. Wiped + reconfigured with standalone CMake; all other dirs audited clean.
+> 3. **The win-tidy "AVX-512 clang-tidy crash" is COMMIT EXHAUSTION**, not an LLVM matcher bug. The log's real message
+>    is `LLVM ERROR: out of memory` / `0xC000001D`; an edge peaks at 200–300 MB and the crashed files run 0/6 standalone
+>    via the exact build command, while the host sits at 83 GB of a 96 GB commit limit. The two speculative `.clang-tidy`
+>    disables are **REVERTED**; both sweep scripts gained a **commit-headroom preflight** that clamps `-BuildJobs`.
+> 4. **clang-tidy silently DROPS every `/`-spelled MSVC flag** (`/EHsc`, `/arch:AVX2`, `/D…`) that arrives through the
+>    compile command ⇒ the gate analysed a config we do not ship: exceptions apparently disabled (any `try` = hard
+>    error — the real `filesystem.cpp` failure) and `__AVX2__` UNDEFINED, so every AVX2 path was preprocessed out and
+>    NEVER ANALYSED. Fixed via `--extra-arg=` in the `CRD_ENABLE_CLANG_TIDY` block, ISA flag exported by CrdSimd.cmake
+>    so it cannot drift. This unmasked **120 accumulated findings** (the win-tidy build had been dying at edge ~18/1070,
+>    leaving the whole tail ungated) — **all 120 fixed**.
+>
+> **Verified (targeted, not the 18-config sweep):** win-asan + win-shipping `D3/D5/D6/D8/D10/D12` 8/8 green ×3 each
+> (cold cache); win-debug full build + 174/174 log|perf|kir; **win-tidy full build 0 findings / 0 crashes**.
+> **Nothing is committed — the user controls commits.**
+
 > **▶▶▶ ACTIVE (2026-07-23): the OFFLINE RENDERER (D-007 OFF band, rows 46-54) — user-directed "beautiful offline renderer,
 > Blender-class, all domains (CAD/CAM/science/aerospace/games/film/VFX)."** Kicked off with the master research survey
 > `docs/research/2026-07-23-offline-renderer-frontier.md` (the OFF-band frontier: newest 2024-2026 SIGGRAPH/TOG advances mapped
@@ -512,20 +584,53 @@
 > REN comes first by user direction. PLG is the parallel DAW-substrate track (PLG-1/2 opportunistic). REN-1 (the
 > frame graph) is the highest-leverage next slice — it unblocks REN-8's present/profiler and the real-time frame
 > budget. (Push + CI verify pending on the whole RET+GEO arc.)**
-> **[◧ REN-1 LANDED 2026-07-24 — the FRAME GRAPH, Vulkan-complete + gated; DX12 batching = pt-2. Session log
-> `docs/sessions/2026-07-24-ren1-frame-graph.md`.]** New backend-neutral `engine/gpu-context/include/crd/gpu/frame_graph.hpp`
+> **[✅✅ REN-1 CLOSED 2026-07-24 — the FRAME GRAPH, BOTH BACKENDS, no deferral (user: "full crushing performance, no
+> deferrals, full gold standard"). Session log `docs/sessions/2026-07-24-ren1-frame-graph.md`; bench
+> `docs/bench/2026-07-24-ren1-frame-graph-batching.md`.]** New backend-neutral `engine/gpu-context/include/crd/gpu/frame_graph.hpp`
 > (`FgImage`/`FgBuffer` struct handles · `IFrameGraph` import/create-transient/add_pass/build/execute/reset · `IFramePassBuilder`
 > reads/writes/read_writes/execute/present · `IFrameContext`). ⭐ THE INSIGHT: the graph is a RECORDING MODE of the raster
-> context — `draw_storage_depth`/`_load`/`draw_overlay` branch to record into ONE shared VkCommandBuffer + a frame descriptor
-> pool (256 sets, reset ONCE per execute; the per-draw `vkResetDescriptorPool` was the blocker to back-to-back recording), so
-> ZERO new draw vocabulary. `build()` = lifetime analysis + GREEDY interval-coloring TRANSIENT ALIASING (disjoint lifetimes
-> share one `VkDeviceMemory` via `VK_IMAGE_CREATE_ALIAS_BIT`; physical<logical proves it). `execute()` inserts cross-pass +
-> intra-pass barriers, ONE `vkQueueSubmit`+fence. **Gate GREEN** (`test_vulkan_frame_graph.cpp`, 33 asserts): one-submission,
-> readback BIT-IDENTICAL to sync, validation-SILENT (0/0), 2 equal disjoint transients → 1 slot, orphan no-write → `build()`
-> fails. **SceneRenderer MIGRATED** through `create_frame_graph()` — the 10k field composes N groups in one submission (GEO-7
-> gate GREEN, 58 asserts); **sandbox 65.2 fps (up from ~58)**. DX12 renders correctly via the synchronous fallback (raster
-> suite 993 GREEN); the DX12 one-submission batching (per-draw descriptor-heap ring + placed-resource aliasing + D3D12
-> barriers) is REN-1 pt-2 (RET Vulkan-first precedent). Memory `[[project_frame_graph_is_a_recording_mode_of_raster_context]]`.
+> context — `draw_storage_depth`/`_load`/`draw_overlay` branch to record into ONE shared command buffer + a frame descriptor
+> pool/heap (reset ONCE per execute; the per-draw descriptor-pool reset was the blocker to back-to-back recording), so ZERO new
+> draw vocabulary. `build()` = lifetime analysis + GREEDY interval-coloring TRANSIENT ALIASING (disjoint lifetimes share one
+> backing allocation; physical<logical proves it). `execute()` inserts cross-pass + intra-pass barriers, ONE submit+fence.
+> **VULKAN gate GREEN** (`test_vulkan_frame_graph.cpp`, 33 asserts): one-submission, readback BIT-IDENTICAL to sync,
+> validation-SILENT (0/0), 2 equal disjoint transients → 1 `VkDeviceMemory` slot, orphan → `build()` fails. **SceneRenderer
+> MIGRATED** — 10k field composes N groups in one submission (GEO-7 GREEN, 58 asserts); **sandbox 65.2 fps (was ~58)**.
+> **DX12 gate GREEN** (`test_dx12_frame_graph.cpp`, 35 asserts, full suite 1028): `Dx12FrameGraph` — recording mode on the
+> shared `ID3D12GraphicsCommandList` + a per-draw descriptor-heap RING (DX12's single storage-UAV slot is consumed at EXECUTE
+> time ⇒ each draw needs its own slot), placed-resource transient aliasing (`CreatePlacedResource` per slot), D3D12 barriers,
+> ONE `ExecuteCommandLists`. STRONGER ring proof: two DIFFERENT per-pass buffers (red field survives off-centre while green
+> tip wins centre). **BENCH — batching scales with draw count: Vulkan 2.5×→6.14×, DX12 1.22×→38.76× (N=1→64)** (DX12's heavier
+> per-submit cost ⇒ larger win, frame time near-flat in N). Memory `[[project_frame_graph_is_a_recording_mode_of_raster_context]]`.
+> **[◧ REN-2 HALF A LANDED 2026-07-25 — RTT TRANSIENTS, BOTH BACKENDS, no deferral. Session log
+> `docs/sessions/2026-07-25-ren2-rtt.md`; spec `docs/design/ren-2-rtt-and-material-textures.md`.]** The frame graph's
+> `sampled` transients are now first-class DRAWN-THROUGH: a pass renders into a transient, a LATER pass SAMPLES it as a
+> texture (render-to-texture). Reuses the proven `draw_wboit` RTT sequence (create `COLOR_ATTACHMENT|SAMPLED` → render →
+> barrier to `SHADER_READ_ONLY` → sample), generalized into the transient system. **Vulkan**: the transient is a BORROWED
+> `VulkanRasterTarget` + `VulkanTexture` over the graph-owned aliased image (`m_borrowed` ⇒ dtor frees nothing, no
+> double-free); new `record_offscreen` (color-only `draw_storage` branch) + `record_textured` (`draw_sampled` branch);
+> `execute()` inserts the `COLOR_ATTACHMENT→SHADER_READ_ONLY` RTT barrier; `texture(FgImage)` resolves it. **DX12**: the
+> mirror — a borrowed `Dx12RasterTarget` (own RTV heap) + `Dx12Texture` SRV over the placed resource (ComPtr refcounting,
+> no flag); the SRV binds in the per-draw frame-heap ring + sampler heap; `RENDER_TARGET→PIXEL_SHADER_RESOURCE` barrier.
+> **Gates GREEN** (`[ren2]`): pass 1 renders red-on-green into the transient, pass 2 full-screen-samples it → centre=RED,
+> corner=GREEN (faithful round-trip, not the compose clear), ONE submission; VK 14 asserts (suite 47, validation-silent),
+> DX12 13 asserts (suite 1041); 4 files tidy-clean.
+> **[◧ REN-2 HALF B — TEXTURED FORWARD DRAW device capability, BOTH BACKENDS 2026-07-25]** the forward pass now SAMPLES a
+> material texture: new `draw_storage_textured_depth`/`_load` (interface, appended-at-END) bind storage(0) + base-color
+> SRV(1) + sampler(2) in ONE set, so a vertex-pulled mesh samples its albedo map at the pulled UV, not a flat colour.
+> Vulkan `write_scene_textured` + `record_scene_textured`; DX12 mirror (storage UAV + SRV from the per-draw ring + sampler
+> heap); shared `build_pull_textured_vs`/`_fs`. **Gates GREEN** (`[ren2][material]`): a full-screen mesh over a 2×1
+> red/green base-color map → left=RED, right=GREEN (sampled, not the flat clear); VK 11 asserts (frame-graph+material suite
+> 75), DX12 10 (suite 1051); tidy. **[✅ SceneRenderer WIRING 2026-07-25]** the forward pass now SAMPLES material
+> textures: `build_scene_vs_textured`/`_fs_textured` (uv0 at 48B words 6-7, albedo·tint·N·L); `resolve_base_color_texture`
+> (OpenPbrMaterial→base_color→TextureResource→`create_texture_from_mips`, cached); `MeshGroup.material`; the draw loop
+> picks the textured program + `draw_storage_textured_depth` for textured groups (skinned unchanged; per-instance material
+> textures = a bindless follow-up). Compiles + tidy; **scene-render suite 58/5 GREEN (no regression — GEO-7 10k flat path
+> intact)**. **[✅✅ REN-2 CLOSED 2026-07-25 — LIVE SceneRenderer gate]** `test_scene_render_gpu.cpp` `[ren2][material]`:
+> a cooked UV-quad + 2×1 red/green base-color TXTR + `OpenPbrMaterial` (built inline, mounted, 3 loaders registered) →
+> the SceneRenderer resolves the map + draws textured → the quad shows SAMPLED albedo (left RED, right GREEN, UV-driven,
+> not the flat clear), draws==1; 17 asserts, scene-render suite 75/6 GREEN. **REN-2 = both halves, both backends, device +
+> SceneRenderer, all gated.**
 > Denoising (OIDN-class AOV CNN) is a FINISHING filter, never in the reference path (the offline mode IS the ground truth
 > that certifies real-time).
 > **[✅ conv-via-FFT / fast-FMA closed 2026-07-23]:** conv-via-FFT already shipped (crushes 4/5); the fast-FMA experiment was the

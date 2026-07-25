@@ -2969,7 +2969,7 @@ inline void build_pull_depth_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
 }
 } // namespace
 
-TEST_CASE("GEO-7: draw_storage_depth — near occludes far on the storage-pull path (DX12)", "[dx12][raster][gpu][ir]")
+TEST_CASE("GEO-7: draw_storage_depth -- near occludes far on the storage-pull path (DX12)", "[dx12][raster][gpu][ir]")
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();

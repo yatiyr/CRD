@@ -67,12 +67,18 @@ foreach ($f in $Files) {
   # back to synthesized flags rather than clang-tidy's bare default -- otherwise it would report UNGATED forever.
   $isSource = $path -match '\.(cpp|cc|cxx)$'
   $inDb     = $hasDb -and $isSource -and (Select-String -Path "$buildDir\compile_commands.json" -SimpleMatch -Quiet -Pattern ((Resolve-Path $path).Path -replace '\\','/'))
+  # SCAR (2026-07-25): clang-tidy DROPS `/`-spelled MSVC flags coming from the compile database, so `/EHsc`
+  # and `/arch:AVX2` never reach the TU -- exceptions look disabled (any `try` is a hard error) and `__AVX2__`
+  # is undefined, so AVX2-guarded code is preprocessed out and NEVER ANALYSED. `--extra-arg` is the one channel
+  # clang-tidy honors; restate them here so this gate sees the configuration we actually ship. (Same fix as the
+  # CRD_ENABLE_CLANG_TIDY block in the root CMakeLists -- keep the two in step.)
   if ($inDb) {
-    $raw = & $tidy $path --warnings-as-errors="*" --quiet -p $dbDir --extra-arg=-Wno-unused-command-line-argument 2>&1
+    $raw = & $tidy $path --warnings-as-errors="*" --quiet -p $dbDir `
+        --extra-arg=/EHsc --extra-arg=/arch:AVX2 --extra-arg=-Wno-unused-command-line-argument 2>&1
   }
   else {
     $raw = & $tidy $path --warnings-as-errors="*" --quiet -- `
-        -std=c++20 -xc++ -DCRD_DETERMINISTIC_FP=1 -DCRD_SIMD_TARGET=2 $inc 2>&1
+        -std=c++20 -xc++ -mavx2 -mfma -mf16c -DCRD_DETERMINISTIC_FP=1 -DCRD_SIMD_TARGET=2 $inc 2>&1
   }
 
   # (1) An unresolved include means the TU never parsed -> ZERO checks ran -> this file is UNGATED, not clean.

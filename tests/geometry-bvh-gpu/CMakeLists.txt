@@ -50,4 +50,6 @@ endif()
 
 crd_enable_default_pch(crd-geometry-bvh-gpu-tests)
 
-catch_discover_tests(crd-geometry-bvh-gpu-tests)
+# Shares the crd_gpu_device RESOURCE_LOCK (see tests/gpu-context-vulkan): GPU-device tests serialize under
+# `ctest --parallel` to avoid cross-process driver/cook contention.
+catch_discover_tests(crd-geometry-bvh-gpu-tests PROPERTIES RESOURCE_LOCK crd_gpu_device)

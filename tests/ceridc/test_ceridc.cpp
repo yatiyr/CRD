@@ -90,6 +90,21 @@ TEST_CASE("THE AGENT GATE: the full scenario through MCP alone", "[ceridc][agent
 {
     ensure_handlers();
 
+    // HYGIENE: the scenario asserts on file NON-existence at intermediate steps (e.g. a dry-run creates nothing),
+    // so it must start from a clean slate — outputs left by a PRIOR run would fail those negative checks (and the
+    // `create_directories` below). Remove every artifact this test can produce before running. (REN-1 close
+    // 2026-07-24: the sweep caught this non-idempotency — CHECK_FALSE(is_file("ceridc_gate.scen")) tripped on a
+    // stale file from the previous run.)
+    for (const char* out : {"ceridc_gate.scen", "ceridc_gate_bad.scen", "ceridc_gate.pack.crdr", "ceridc_gate.otio",
+                            "ceridc_gate_export.otio", "ceridc_gate.timl.crdr"})
+    {
+        (void)fs::remove_file(fs::Path(crd::containers::StringView(out)));
+    }
+    for (const char* dir : {"ceridc_gate_src", "ceridc_gate_frames"})
+    {
+        (void)fs::remove_all(fs::Path(crd::containers::StringView(dir)));
+    }
+
     // ── the handshake ─────────────────────────────────────────────────────────────────────────────────────────
     const auto init = rpc(R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}})");
     CHECK(response_has(init, "\"serverInfo\""));

@@ -248,6 +248,7 @@ namespace
 struct CapturedAssert
 {
     std::atomic<int> fire_count{0};
+    std::atomic<int> capture_alloc_failures{0}; // set when the handler could not store the strings
     std::string expression;
     std::string file;
     int line = 0;
@@ -267,10 +268,20 @@ CapturedAssert g_capture;
 
 void test_assert_handler(const char* expr, const char* file, int line, const char* msg) noexcept
 {
-    g_capture.expression = expr ? expr : "";
-    g_capture.file = file ? file : "";
+    // The string assignments allocate, and an assert handler is `noexcept` by contract — a throw here is
+    // std::terminate during someone else's failure path. Record what we can, swallow the rest.
+    // (bugprone-exception-escape.)
+    try
+    {
+        g_capture.expression = expr ? expr : "";
+        g_capture.file = file ? file : "";
+        g_capture.message = msg ? msg : "";
+    }
+    catch (...)
+    {
+        g_capture.capture_alloc_failures.fetch_add(1, std::memory_order_relaxed);
+    }
     g_capture.line = line;
-    g_capture.message = msg ? msg : "";
     g_capture.fire_count.fetch_add(1, std::memory_order_relaxed);
 }
 } // namespace

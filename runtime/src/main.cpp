@@ -6,7 +6,12 @@
 
 CRD_DEFINE_LOG_CHANNEL(g_log_runtime, "Runtime", crd::log::LogLevel::Trace)
 
-int main()
+namespace
+{
+// The real body. `main` below is a catch-all wrapper: an exception escaping main is std::terminate with
+// no diagnostic, and the sink construction / iostream writes here can all throw. Exit non-zero instead.
+// (bugprone-exception-escape.)
+int run()
 {
     const crd::u32 version_major = CRD_VERSION_MAJOR;
     const crd::u32 version_minor = CRD_VERSION_MINOR;
@@ -35,4 +40,17 @@ int main()
 
     std::cout << "(runtime exiting cleanly)\n";
     return 0;
+}
+} // namespace
+
+int main()
+{
+    try
+    {
+        return run();
+    }
+    catch (...)
+    {
+        return 1;
+    }
 }

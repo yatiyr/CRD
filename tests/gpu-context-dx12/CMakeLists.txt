@@ -6,6 +6,7 @@ endif()
 
 add_executable(crd-gpu-context-dx12-tests
     test_dx12_compute.cpp
+    test_dx12_frame_graph.cpp # REN-1 pt-2 (D-007 row 98): the DX12 frame graph — one submission + transient aliasing
     test_dx12_gsplat.cpp
     test_dx12_raster.cpp
     test_dx12_rt.cpp
@@ -13,6 +14,7 @@ add_executable(crd-gpu-context-dx12-tests
 )
 
 target_link_libraries(crd-gpu-context-dx12-tests PRIVATE
+    crd-frame-cook   # REN-36.2: the cooked frame-graph asset + its runtime
     crd-core
     crd-containers
     crd-memory
@@ -28,4 +30,6 @@ target_include_directories(crd-gpu-context-dx12-tests PRIVATE "${CMAKE_CURRENT_S
 
 crd_enable_default_pch(crd-gpu-context-dx12-tests)
 
-catch_discover_tests(crd-gpu-context-dx12-tests DISCOVERY_MODE PRE_TEST)
+# Shares the crd_gpu_device RESOURCE_LOCK with the Vulkan GPU tests (see that CMakeLists): GPU-device tests
+# serialize under `ctest --parallel` to avoid cross-process driver/cook contention, non-GPU tests still parallelize.
+catch_discover_tests(crd-gpu-context-dx12-tests DISCOVERY_MODE PRE_TEST PROPERTIES RESOURCE_LOCK crd_gpu_device)

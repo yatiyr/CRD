@@ -496,6 +496,63 @@ public:
     [[nodiscard]] virtual bool draw_overlay(IRasterTarget& /*target*/, IRasterProgram& /*program*/,
                                             IStorageBuffer& /*storage*/, DepthCompare /*compare*/,
                                             crd::u32 /*vertex_count*/) { return false; }
+
+    // REN-2 (D-007 row 99) Half B: the TEXTURED forward scene draw — draw_storage_depth PLUS a sampled material
+    // texture. `storage` binds at set 0 / binding 0 (the VS vertex-pulls position+UV by VertexIndex, the GEO-1 seam);
+    // `texture` binds at binding 1 + the default sampler at binding 2 (draw_textured's layout), so the FS samples the
+    // material's base-color (albedo) map at the pulled UV instead of a flat colour. Cleared colour+depth, depth test
+    // at `compare` with WRITE on (a multi-group scene composes through the real depth buffer, like draw_storage_depth).
+    // Records into the frame graph in recording mode. Default (backends without the override) DROPS the texture and
+    // falls back to draw_storage_depth — flat-coloured but never absent. Appended at END (vtable-stable).
+    virtual void draw_storage_textured_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
+                                             float /*clear_depth*/, DepthCompare compare, IStorageBuffer& storage,
+                                             class ITexture& /*texture*/, crd::u32 vertex_count)
+    {
+        draw_storage_depth(target, program, clear, 0.0F, compare, storage, vertex_count);
+    }
+
+    // The depth-LOAD companion (the CONTINUING textured scene draw — no clear; colour+depth persist), for group N>0.
+    virtual void draw_storage_textured_depth_load(IRasterTarget& target, IRasterProgram& program, DepthCompare compare,
+                                                  IStorageBuffer& storage, class ITexture& /*texture*/,
+                                                  crd::u32 vertex_count)
+    {
+        draw_storage_depth_load(target, program, compare, storage, vertex_count);
+    }
+
+    // ── REN-3.1 (D-007 row 100): the DEPTH-ONLY pass — the shadow-map substrate. ────────────────────────────────
+    // Renders `storage`-pulled geometry writing ONLY depth: no colour attachment is bound at all (Vulkan
+    // `vkCmdBeginRendering` with colorAttachmentCount = 0 + pDepthAttachment; DX12 `OMSetRenderTargets(0, nullptr,
+    // FALSE, &dsv)`). `target` supplies the depth attachment — for a shadow pass that is a frame-graph `D32Float`
+    // transient declared `sampled`, which a LATER pass then reads through the COMPARISON sampler (`shadow_factor`).
+    // This closes the gap `ckir_lighting.hpp` names: every shadow test until now bound a CPU-UPLOADED depth map
+    // (`create_depth_texture`), because the device could not RENDER one.
+    //
+    // Depth is CLEARED to `clear_depth` and written with compare `compare` (a shadow map is a plain depth render:
+    // clear to the far value, LessEqual/GreaterEqual per the projection's convention). Records into the frame graph
+    // in recording mode, exactly like `draw_storage_depth`.
+    //
+    // ⛔ APPENDED AT END (vtable-stable, D135): inserting a pure-virtual mid-interface shifts every later slot and
+    // silently dispatches to the wrong method under win-release LTCG. The default is a NO-OP rather than a colour
+    // fallback — a backend without a depth-only path must produce NO shadow map, not a wrong one that reads as a
+    // valid (all-lit) shadow term.
+    virtual void draw_storage_depth_only(IRasterTarget& /*target*/, IRasterProgram& /*program*/,
+                                         float /*clear_depth*/, DepthCompare /*compare*/,
+                                         IStorageBuffer& /*storage*/, crd::u32 /*vertex_count*/)
+    {
+    }
+
+    // The depth-LOAD companion — the CONTINUING depth-only draw (no clear; the map so far persists), for mesh N>0
+    // of a shadow pass. ⛔ WITHOUT THIS A MULTI-MESH SHADOW PASS IS BROKEN: every `draw_storage_depth_only` clears,
+    // so drawing a second occluder would WIPE the first one's depth and the shadow map would contain only the last
+    // mesh. Found by the REN-3.1 bench (the depth arm did N clears while the colour arm did 1 clear + N-1 loads,
+    // which showed up as depth-only being *slower* on DX12 — a measurement artefact that turned out to be pointing
+    // at a real missing API). Same clear/load split `draw_storage_depth` / `draw_storage_depth_load` already has.
+    // Appended at END (vtable-stable, D135).
+    virtual void draw_storage_depth_only_load(IRasterTarget& /*target*/, IRasterProgram& /*program*/,
+                                              DepthCompare /*compare*/, IStorageBuffer& /*storage*/,
+                                              crd::u32 /*vertex_count*/)
+    {
+    }
 };
 
 // B5: an opaque deferred G-buffer (see `create_gbuffer_target`). `read_pixel(attachment, x, y)` is valid after a draw.

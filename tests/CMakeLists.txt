@@ -41,6 +41,7 @@ add_subdirectory(hesap-special)
 add_subdirectory(hesap-quadrature)
 add_subdirectory(hesap-autodiff)
 add_subdirectory(kir)
+add_subdirectory(frame-cook)
 add_subdirectory(gpu-context-vulkan)  # ADR-0099 v17-i-a
 add_subdirectory(gpu-context-dx12)    # ADR-0100 v17-i: D3D12 IComputeContext backend
 add_subdirectory(kir-vulkan)

@@ -142,6 +142,43 @@ the point — the core gets to A++ by accretion, not by a heroic pass.
 
 ## Sanity Ledger (append-only; dated; one line each; *actions*, not philosophy)
 
+- 2026-07-25 — **A "content hash" that memcpys a POD hashes STACK HISTORY, not content — and the tool that was blamed
+  was innocent twice over (rules #1/#4/#5/#10).** The parallel-cook dedup failure (D3/D5/D6/D8/D10/D12 red on
+  win-asan/win-shipping, green on win-debug) had been handed over as "address-dependent ordering in the KIR→GLSL emitter",
+  with a glslang serialization mutex added on the theory that shaderc carried process-global state. Both wrong.
+  `serialize_graph` blasted the POD pools raw, so every INDETERMINATE PADDING byte of `KNode`/`KStmt`/`KType`/`KEntry`
+  entered the hash — the builders default-initialize (`KNode n;`), so the "content" hash was a function of whatever the
+  stack held. A purpose-built gate (build the same graph twice with `dirty_stack(0xAA)` / `dirty_stack(0x55)` between)
+  reproduced it in one run and named the byte: **offset 33 = `KNode+1`, the hole between `KOp op` and the 2-aligned
+  `KType type`.** win-debug was structurally blind because MSVC `/RTC1` 0xCC-fills locals *deterministically* (rule #4:
+  name what your diagnostic cannot see). Root fix = a canonical packed padding-free encoding (bonus: the artifact is now
+  ABI-independent). A SECOND instance in the same slice survived that fix — `reflect()`'s `ShaderReflection` is written
+  RAW into the `REFL` chunk, and diffing the two cooked cache files pinned the divergence at **file offsets 1881..1883**,
+  the 3-byte hole after `KStage stage`; note `T r{}` is NOT sufficient under MSVC (it runs the implicit default ctor and
+  leaves the holes), only an explicit `memset` is. The mutex was deleted once the root was found (rule #1). Rules: a POD
+  that becomes a hash or an artifact must be serialized FIELD BY FIELD; and when a bug appears only under ASan/parallel,
+  suspect *layout*, not *ordering*, before you blame a third-party compiler.
+
+- 2026-07-25 — **The "non-deterministic upstream clang-tidy crash" was the HOST running out of commit — and the tidy gate
+  had been analysing a configuration we do not ship (rules #2/#4/#6).** win-tidy died with a different check on a
+  different SIMD file every run; two checks had been disabled in `.clang-tidy` to dodge it, and the third instance was
+  written off as "not deterministically fixable". Reading the actual log ended it: the message is `LLVM ERROR: out of
+  memory` with `Exception Code: 0xC000001D` (LLVM's own abort), **not** the reported `0xC0000005`. Measurements: a
+  clang-tidy edge peaks at 200–300 MB; the crashed files run **0/5 standalone** and **0/6 through the exact
+  `__run_co_compile` command**; the host sat at **83 GB of a 96 GB commit limit** with Visual Studio (8.7 GB), clangd
+  (8.0 GB) and a DAW resident. `malloc_allocator.cpp` — a tiny file — crashing at `<eof>` is the clincher: ambient
+  pressure, not TU complexity (a failing heap request gives the OOM; a stack growth that cannot commit gives the AV).
+  Both disables reverted; both sweep scripts gained a commit-headroom preflight that measures free commit and clamps
+  `-BuildJobs`, so this can never again read as a code failure. **The bigger find underneath it:** clang-tidy silently
+  DROPS every `/`-spelled MSVC flag arriving via the compile command — proven with an `#error`-guarded probe through
+  the exact CMake path — so `/EHsc` and `/arch:AVX2` never reached the TU: exceptions looked disabled (any `try` = hard
+  error, the real `filesystem.cpp` failure, and `bugprone-exception-escape` could never fire) and `__AVX2__` was
+  UNDEFINED, meaning **every AVX2-guarded path was preprocessed out and never analysed** — rule #2's exact shape, a
+  green you cannot trust. Fixed via `--extra-arg=`, the ISA flag exported by the same CrdSimd branch that sets the real
+  one. Correcting it unmasked **120 findings** that had accumulated while the build died at edge ~18/1070; all fixed.
+  Rule: when a gate crashes at random, read its actual exit signature before theorising — and periodically prove the
+  gate sees the flags you think it does.
+
 - 2026-07-18 — **A green test binary is not a green slice — the close-out full ctest+shipping peeled a five-layer onion the
   binaries had hidden (rules #2/#10; B16 close).** Closing B16 = "just tidy + sweep" turned into: 12 non-ASCII TEST_CASE names
   (guard red + ctest-unselectable under CP1254), 3 `std::pow` in `ckir_ocean.hpp`, and a win-shipping-ONLY `C4789` — all

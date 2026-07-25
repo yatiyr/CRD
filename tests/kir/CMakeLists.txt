@@ -42,6 +42,7 @@ add_executable(crd-kir-tests
     test_ckir_hair_filter.cpp
     test_ckir_hair_lod.cpp
     test_ckir_emitter_completeness.cpp
+    test_ckir_serialize_determinism.cpp
     test_ckir_hair_render.cpp
     test_ckir_lss.cpp
     test_ckir_curve_rt.cpp

@@ -26,7 +26,7 @@ constexpr int kStrands = 64;
 
 constexpr double kPiG = crd::kir::hairgeom::kPi;
 
-[[nodiscard]] double sq_(double x) { return x * x; }
+[[nodiscard]] double sq(double x) { return x * x; }
 
 // A bundle: 4 stacked quad layers rising in +z, each shrinking slightly and drifting in +x — i.e. a tapered, leaning tuft.
 void make_bundle(crd::containers::Array<double>& lay)
@@ -50,14 +50,14 @@ void make_bundle(crd::containers::Array<double>& lay)
 }
 
 void gen_strands(crd::memory::IAllocator& alloc, const kir::hairgeom::StrandGenConfig& cfg,
-                 const crd::containers::Array<double>& lay, const crd::containers::Array<double>& uv,
+                 crd::containers::Array<double>& lay, crd::containers::Array<double>& uv,
                  crd::containers::Array<double>& out)
 {
     kir::KGraph       g(&alloc);
     const kir::KEntry e = kir::hairgeom::build_strand_gen_kernel(g, cfg);
     out.resize(static_cast<crd::usize>(kStrands) * static_cast<crd::usize>(cfg.points) * 6U, 0.0);
-    kir::KernelBuffer b[3] = {{const_cast<double*>(lay.data()), kLayers * 4 * 3, 0, 0},
-                              {const_cast<double*>(uv.data()), kStrands * 2, 0, 1},
+    kir::KernelBuffer b[3] = {{lay.data(), kLayers * 4 * 3, 0, 0},
+                              {uv.data(), kStrands * 2, 0, 1},
                               {out.data(), kStrands * cfg.points * 6, 0, 2}};
     kir::eval_cpu_kernel(g, e, b, 3, e.local_size[0], &alloc, static_cast<crd::u32>(kStrands / 64));
 }
@@ -70,7 +70,9 @@ void gen_strands(crd::memory::IAllocator& alloc, const kir::hairgeom::StrandGenC
 TEST_CASE("B18-d: hair-mesh strands interpolate the bundle corners and stay inside the cage", "[kir][hair][geom]")
 {
     crd::memory::TlsfAllocator     alloc(128U << 20U);
-    crd::containers::Array<double> lay(&alloc), uv(&alloc), out(&alloc);
+    crd::containers::Array<double> lay(&alloc);
+    crd::containers::Array<double> uv(&alloc);
+    crd::containers::Array<double> out(&alloc);
     make_bundle(lay);
 
     kir::hairgeom::StrandGenConfig cfg;
@@ -94,10 +96,10 @@ TEST_CASE("B18-d: hair-mesh strands interpolate the bundle corners and stay insi
     }
     gen_strands(alloc, cfg, lay, uv, out);
 
-    const auto P = [&](int strand, int j, int c) {
+    const auto p = [&](int strand, int j, int c) {
         return out[(static_cast<crd::usize>(strand) * kPoints + static_cast<crd::usize>(j)) * 6U + static_cast<crd::usize>(c)];
     };
-    const auto T = [&](int strand, int j, int c) {
+    const auto t = [&](int strand, int j, int c) {
         return out[(static_cast<crd::usize>(strand) * kPoints + static_cast<crd::usize>(j)) * 6U + 3U + static_cast<crd::usize>(c)];
     };
 
@@ -110,11 +112,11 @@ TEST_CASE("B18-d: hair-mesh strands interpolate the bundle corners and stay insi
         {
             const int        j = (lyr == 0) ? 0 : kPoints - 1;
             const crd::usize o = static_cast<crd::usize>(lyr * 4 + c) * 3U;
-            INFO("corner c=" << c << " layer=" << lyr << " strand=(" << P(c, j, 0) << "," << P(c, j, 1) << "," << P(c, j, 2)
+            INFO("corner c=" << c << " layer=" << lyr << " strand=(" << p(c, j, 0) << "," << p(c, j, 1) << "," << p(c, j, 2)
                              << ")  vertex=(" << lay[o] << "," << lay[o + 1U] << "," << lay[o + 2U] << ")");
-            CHECK(P(c, j, 0) == Catch::Approx(lay[o + 0U]).margin(1.0e-5));
-            CHECK(P(c, j, 1) == Catch::Approx(lay[o + 1U]).margin(1.0e-5));
-            CHECK(P(c, j, 2) == Catch::Approx(lay[o + 2U]).margin(1.0e-5));
+            CHECK(p(c, j, 0) == Catch::Approx(lay[o + 0U]).margin(1.0e-5));
+            CHECK(p(c, j, 1) == Catch::Approx(lay[o + 1U]).margin(1.0e-5));
+            CHECK(p(c, j, 2) == Catch::Approx(lay[o + 2U]).margin(1.0e-5));
         }
     }
 
@@ -124,21 +126,21 @@ TEST_CASE("B18-d: hair-mesh strands interpolate the bundle corners and stay insi
         double prev_z = -1.0e30;
         for (int j = 0; j < kPoints; ++j)
         {
-            const double tl = crd::math::sqrt(T(i, j, 0) * T(i, j, 0) + T(i, j, 1) * T(i, j, 1) + T(i, j, 2) * T(i, j, 2));
+            const double tl = crd::math::sqrt(t(i, j, 0) * t(i, j, 0) + t(i, j, 1) * t(i, j, 1) + t(i, j, 2) * t(i, j, 2));
             CHECK(tl == Catch::Approx(1.0).epsilon(1.0e-4)); // tangents are normalized — the BCSDF frame depends on it
-            CHECK(P(i, j, 2) >= prev_z - 1.0e-6);            // strands rise along the extrusion
-            prev_z = P(i, j, 2);
-            CHECK(crd::math::abs(P(i, j, 0)) < 2.2);          // stays within the authored cage (max |x| = 1 + drift 0.8)
-            CHECK(crd::math::abs(P(i, j, 1)) < 1.2);
+            CHECK(p(i, j, 2) >= prev_z - 1.0e-6);            // strands rise along the extrusion
+            prev_z = p(i, j, 2);
+            CHECK(crd::math::abs(p(i, j, 0)) < 2.2);          // stays within the authored cage (max |x| = 1 + drift 0.8)
+            CHECK(crd::math::abs(p(i, j, 1)) < 1.2);
         }
-        CHECK(P(i, kPoints - 1, 2) > P(i, 0, 2) + 1.0); // root → tip actually spans the bundle height
+        CHECK(p(i, kPoints - 1, 2) > p(i, 0, 2) + 1.0); // root → tip actually spans the bundle height
     }
 
     // distinct (u,v) must give distinct strands — a collapse here would mean the bilinear placement was dropped
     double maxsep = 0.0;
     for (int i = 4; i < kStrands; ++i)
     {
-        const double d = crd::math::abs(P(i, 0, 0) - P(4, 0, 0)) + crd::math::abs(P(i, 0, 1) - P(4, 0, 1));
+        const double d = crd::math::abs(p(i, 0, 0) - p(4, 0, 0)) + crd::math::abs(p(i, 0, 1) - p(4, 0, 1));
         if (d > maxsep) { maxsep = d; }
     }
     INFO("max root separation across random (u,v) = " << maxsep);
@@ -151,7 +153,11 @@ TEST_CASE("B18-d: hair-mesh strands interpolate the bundle corners and stay insi
 TEST_CASE("B18-d: strand styling perturbs without destroying the base curve", "[kir][hair][geom]")
 {
     crd::memory::TlsfAllocator     alloc(128U << 20U);
-    crd::containers::Array<double> lay(&alloc), uv(&alloc), base(&alloc), curled(&alloc), zero_amp(&alloc);
+    crd::containers::Array<double> lay(&alloc);
+    crd::containers::Array<double> uv(&alloc);
+    crd::containers::Array<double> base(&alloc);
+    crd::containers::Array<double> curled(&alloc);
+    crd::containers::Array<double> zero_amp(&alloc);
     make_bundle(lay);
     uv.resize(static_cast<crd::usize>(kStrands) * 2U, 0.0);
     for (int i = 0; i < kStrands; ++i)
@@ -175,7 +181,7 @@ TEST_CASE("B18-d: strand styling perturbs without destroying the base curve", "[
     cc.taper     = 0.0; // curl fades to a straight tip
     gen_strands(alloc, cc, lay, uv, curled);
 
-    const auto P = [](const crd::containers::Array<double>& a, int j, int c) {
+    const auto p = [](const crd::containers::Array<double>& a, int j, int c) {
         return a[static_cast<crd::usize>(j) * 6U + static_cast<crd::usize>(c)];
     };
     double maxdiff = 0.0;
@@ -184,11 +190,11 @@ TEST_CASE("B18-d: strand styling perturbs without destroying the base curve", "[
     {
         for (int c = 0; c < 3; ++c)
         {
-            maxdiff = crd::math::abs(P(zero_amp, j, c) - P(base, j, c)) > maxdiff
-                          ? crd::math::abs(P(zero_amp, j, c) - P(base, j, c)) : maxdiff;
+            maxdiff = crd::math::abs(p(zero_amp, j, c) - p(base, j, c)) > maxdiff
+                          ? crd::math::abs(p(zero_amp, j, c) - p(base, j, c)) : maxdiff;
         }
-        const double d = crd::math::sqrt(sq_(P(curled, j, 0) - P(base, j, 0)) + sq_(P(curled, j, 1) - P(base, j, 1))
-                                         + sq_(P(curled, j, 2) - P(base, j, 2)));
+        const double d = crd::math::sqrt(sq(p(curled, j, 0) - p(base, j, 0)) + sq(p(curled, j, 1) - p(base, j, 1))
+                                         + sq(p(curled, j, 2) - p(base, j, 2)));
         if (d > maxcurl) { maxcurl = d; }
     }
     INFO("zero-amplitude deviation = " << maxdiff << " (must be 0)  |  max curl displacement = " << maxcurl
@@ -197,8 +203,8 @@ TEST_CASE("B18-d: strand styling perturbs without destroying the base curve", "[
     CHECK(maxcurl > 0.02);            // (b) it actually displaces ...
     CHECK(maxcurl < 0.25);            //     ... by about the requested amount, not wildly
     // taper=0 ⇒ the curl must fade toward the tip: the last sample deviates less than a mid-strand one
-    const double tip = crd::math::abs(P(curled, kPoints - 1, 0) - P(base, kPoints - 1, 0));
-    const double mid = crd::math::abs(P(curled, kPoints / 2, 0) - P(base, kPoints / 2, 0));
+    const double tip = crd::math::abs(p(curled, kPoints - 1, 0) - p(base, kPoints - 1, 0));
+    const double mid = crd::math::abs(p(curled, kPoints / 2, 0) - p(base, kPoints / 2, 0));
     INFO("tip deviation " << tip << " vs mid " << mid);
     CHECK(tip <= mid + 1.0e-6);
 }
@@ -210,23 +216,26 @@ TEST_CASE("B18-d: strand styling perturbs without destroying the base curve", "[
 TEST_CASE("B18-d: the 64-bit strand G-buffer round-trips within budget and orders by depth", "[kir][hair][geom][gbuffer]")
 {
     crd::memory::TlsfAllocator     alloc(128U << 20U);
-    constexpr int                  kN = 64;
-    constexpr double               kFar = 1000.0;
-    crd::containers::Array<double> in(&alloc), out(&alloc);
-    in.resize(static_cast<crd::usize>(kN) * 8U, 0.0);
+    constexpr int                  k_n = 64;
+    constexpr double               k_far = 1000.0;
+    crd::containers::Array<double> in(&alloc);
+    crd::containers::Array<double> out(&alloc);
+    in.resize(static_cast<crd::usize>(k_n) * 8U, 0.0);
 
     crd::u32 s   = 24680U;
     auto     rnd = [&]() { s = s * 1664525U + 1013904223U; return static_cast<double>(s >> 8) / static_cast<double>(1U << 24); };
-    crd::containers::Array<double> tx(&alloc), ty(&alloc), tz(&alloc);
-    tx.resize(kN, 0.0); ty.resize(kN, 0.0); tz.resize(kN, 0.0);
-    for (int i = 0; i < kN; ++i)
+    crd::containers::Array<double> tx(&alloc);
+    crd::containers::Array<double> ty(&alloc);
+    crd::containers::Array<double> tz(&alloc);
+    tx.resize(k_n, 0.0); ty.resize(k_n, 0.0); tz.resize(k_n, 0.0);
+    for (int i = 0; i < k_n; ++i)
     {
         // random UNIT tangents covering the whole sphere (octahedral encoding must handle both hemispheres)
         const double z   = rnd() * 2.0 - 1.0;
         const double phi = rnd() * 2.0 * kPiG;
         const double r   = crd::math::sqrt(crd::math::abs(1.0 - z * z));
         const crd::usize o = static_cast<crd::usize>(i) * 8U;
-        in[o + 0U] = (static_cast<double>(i) + 0.5) / static_cast<double>(kN) * kFar; // strictly increasing depth
+        in[o + 0U] = (static_cast<double>(i) + 0.5) / static_cast<double>(k_n) * k_far; // strictly increasing depth
         in[o + 1U] = r * crd::math::cos(phi);
         in[o + 2U] = r * crd::math::sin(phi);
         in[o + 3U] = z;
@@ -240,39 +249,42 @@ TEST_CASE("B18-d: the 64-bit strand G-buffer round-trips within budget and order
     }
 
     kir::hairgeom::StrandGBufferConfig gc;
-    gc.far_plane = kFar;
+    gc.far_plane = k_far;
     kir::KGraph       g(&alloc);
     const kir::KEntry e = kir::hairgeom::build_strand_gbuffer_kernel(g, gc);
-    out.resize(static_cast<crd::usize>(kN) * 9U, 0.0);
-    kir::KernelBuffer b[2] = {{in.data(), kN * 8, 0, 0}, {out.data(), kN * 9, 0, 1}};
+    out.resize(static_cast<crd::usize>(k_n) * 9U, 0.0);
+    kir::KernelBuffer b[2] = {{in.data(), k_n * 8, 0, 0}, {out.data(), k_n * 9, 0, 1}};
     kir::eval_cpu_kernel(g, e, b, 2, e.local_size[0], &alloc, 1U);
 
-    const auto O = [&](int i, int c) { return out[static_cast<crd::usize>(i) * 9U + static_cast<crd::usize>(c)]; };
-    double worst_depth = 0.0, worst_ang = 0.0, worst_uvw = 0.0, worst_ao = 0.0;
+    const auto out_at = [&](int i, int c) { return out[static_cast<crd::usize>(i) * 9U + static_cast<crd::usize>(c)]; };
+    double worst_depth = 0.0;
+    double worst_ang = 0.0;
+    double worst_uvw = 0.0;
+    double worst_ao = 0.0;
     double prev_bits   = -1.0;
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < k_n; ++i)
     {
         const crd::usize o = static_cast<crd::usize>(i) * 8U;
-        worst_depth = crd::math::abs(O(i, 0) - in[o + 0U]) > worst_depth ? crd::math::abs(O(i, 0) - in[o + 0U]) : worst_depth;
+        worst_depth = crd::math::abs(out_at(i, 0) - in[o + 0U]) > worst_depth ? crd::math::abs(out_at(i, 0) - in[o + 0U]) : worst_depth;
         // tangent error as an ANGLE (what actually matters for shading), via the dot product of unit vectors
-        const double d   = O(i, 1) * tx[static_cast<crd::usize>(i)] + O(i, 2) * ty[static_cast<crd::usize>(i)]
-                         + O(i, 3) * tz[static_cast<crd::usize>(i)];
-        const double ang = crd::math::acos(d > 1.0 ? 1.0 : (d < -1.0 ? -1.0 : d));
+        const double d   = out_at(i, 1) * tx[static_cast<crd::usize>(i)] + out_at(i, 2) * ty[static_cast<crd::usize>(i)]
+                         + out_at(i, 3) * tz[static_cast<crd::usize>(i)];
+        const double ang = crd::math::acos(crd::math::clamp(d, -1.0, 1.0));
         if (ang > worst_ang) { worst_ang = ang; }
         for (int c = 0; c < 3; ++c)
         {
-            const double e2 = crd::math::abs(O(i, 4 + c) - in[o + 4U + static_cast<crd::usize>(c)]);
+            const double e2 = crd::math::abs(out_at(i, 4 + c) - in[o + 4U + static_cast<crd::usize>(c)]);
             if (e2 > worst_uvw) { worst_uvw = e2; }
         }
-        const double ea = crd::math::abs(O(i, 7) - in[o + 7U]);
+        const double ea = crd::math::abs(out_at(i, 7) - in[o + 7U]);
         if (ea > worst_ao) { worst_ao = ea; }
         // ⭐ depth bits must be strictly monotone — this is what makes an integer atomicMin a valid depth test
-        CHECK(O(i, 8) > prev_bits);
-        prev_bits = O(i, 8);
+        CHECK(out_at(i, 8) > prev_bits);
+        prev_bits = out_at(i, 8);
     }
-    INFO("round-trip: depth " << worst_depth << " (budget " << kFar / 16777216.0 << ")  tangent angle " << worst_ang
+    INFO("round-trip: depth " << worst_depth << " (budget " << k_far / 16777216.0 << ")  tangent angle " << worst_ang
                               << " rad  uvw " << worst_uvw << " (budget " << 0.5 / 63.0 << ")  ao " << worst_ao);
-    CHECK(worst_depth < kFar / 16777216.0 * 2.0); // 24-bit depth over the far plane
+    CHECK(worst_depth < k_far / 16777216.0 * 2.0); // 24-bit depth over the far plane
     CHECK(worst_ang < 0.02);                      // 16-bit octahedral tangent ⇒ ~1 degree worst case
     CHECK(worst_uvw <= 0.5 / 63.0 + 1.0e-6);      // 6 bits per styling coordinate
     CHECK(worst_ao <= 0.5 / 63.0 + 1.0e-6);       // 6-bit AO

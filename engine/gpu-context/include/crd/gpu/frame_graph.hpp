@@ -89,8 +89,22 @@ enum class FgImageFormat : crd::u8
     D32Float, // depth attachment
 };
 
+// The most array layers one transient may declare. A cap, and therefore stated rather than hidden: 4 CSM
+// cascades, 6 cube faces, 2 stereo views, 8 point-light faces-per-atlas all fit; `create_transient_image`
+// returns an INVALID handle above it (a checkable rejection, never a truncated allocation), and the asset
+// validator rejects it by name (`FrameCookError::LayersOutOfRange`) before it can ever reach a device.
+inline constexpr crd::u32 kFgMaxImageLayers = 16;
+
 // A transient image the graph creates + owns + aliases. `sampled` adds SAMPLED usage (a later pass reads it
 // as a texture via IFrameContext::texture); `storage` adds STORAGE usage (a compute pass writes it).
+//
+// REN-3.2: `layers > 1` makes it a 2D **ARRAY** — one image, N slices. A pass renders into ONE slice via
+// `IFrameContext::image_layer(handle, layer)`; a later pass samples the WHOLE array through `texture(handle)`
+// (a 2D-array view) and selects the slice in the shader. That is the CSM cascade atlas: N depth slices written
+// by N depth-only passes, then one lighting pass picking a cascade per pixel. Cube faces and stereo views are
+// the same shape. The graph tracks a layered image as ONE node, so its barriers cover every slice at once
+// (VK_REMAINING_ARRAY_LAYERS / a whole-resource DX12 transition) — conservative and always correct, and the
+// per-slice writes are already ordered by the declared DAG.
 struct FgImageDesc
 {
     crd::u32      width   = 0;
@@ -99,6 +113,7 @@ struct FgImageDesc
     crd::u32      samples = 1;
     bool          sampled = false;
     bool          storage = false;
+    crd::u32      layers  = 1; // REN-3.2: >1 ⇒ 2D array (CSM cascades / cube faces / stereo). Appended at END.
 };
 
 // The recording surface handed to a pass's execute callback. `raster()` is the raster context IN FRAME
@@ -119,6 +134,11 @@ public:
     [[nodiscard]] virtual IRasterTarget*  image(FgImage handle) noexcept    = 0;
     [[nodiscard]] virtual ITexture*       texture(FgImage handle) noexcept  = 0;
     [[nodiscard]] virtual IStorageBuffer* buffer(FgBuffer handle) noexcept  = 0;
+
+    // REN-3.2: resolve ONE slice of a layered transient as a render target — the per-cascade shadow write.
+    // `layer == 0` on a non-layered image is exactly `image(handle)`; out of range returns nullptr. Appended at
+    // the END of the vtable (the D135 scar: inserting mid-vtable mis-dispatches under win-release LTCG).
+    [[nodiscard]] virtual IRasterTarget* image_layer(FgImage handle, crd::u32 layer) noexcept = 0;
 };
 
 // A pass records via a C function + user pointer (the gpu-context callback idiom — no std::function heap
@@ -196,6 +216,34 @@ public:
     [[nodiscard]] virtual crd::u32 last_submit_count() const noexcept   = 0; // submits the last execute did (==1)
     [[nodiscard]] virtual crd::u32 transient_memory_bytes() const noexcept = 0; // physical bytes after aliasing
     [[nodiscard]] virtual crd::u32 transient_logical_bytes() const noexcept = 0; // bytes WITHOUT aliasing (≥ physical)
+
+    // ── REN-8: GPU TIMING. Appended at the END of the vtable (D135). ──
+    // Per-pass GPU cost, from device TIMESTAMP queries written around each pass in the frame's one command
+    // buffer and read back after the submit's fence. Valid only after `execute()`; zero before it.
+    //
+    // ⛔ Why this exists before any optimization: the sandbox costs ~12 ms/frame that neither full optimization
+    // (release ≈ debug) nor removing the vsync cap (immediate ≈ fifo) moves. Those two measurements ELIMINATE
+    // cpu-bound and vsync-bound, but they cannot say where the time goes — nothing in the engine could time a
+    // GPU pass. Optimizing before this lands would be guesswork, and the honest order is measure → attribute →
+    // fix. `gpu_ms_total()` vs the CPU wall-clock of `execute()` is the specific question: if the GPU is idle
+    // for most of the frame, the cost is the submit-and-WAIT that REN-1 deliberately kept, not the rendering.
+    //
+    // ⛔ Timestamps are only comparable WITHIN one submission (the SAME-PASS timing doctrine) — across submits
+    // the queue can idle between them and the delta measures wall-clock, not work.
+    [[nodiscard]] virtual crd::u32 pass_count() const noexcept { return 0; }        // passes the last execute ran
+    [[nodiscard]] virtual const char* pass_name(crd::u32 /*i*/) const noexcept { return nullptr; }
+    [[nodiscard]] virtual double pass_gpu_ms(crd::u32 /*i*/) const noexcept { return 0.0; } // one pass's GPU time
+    [[nodiscard]] virtual double gpu_ms_total() const noexcept { return 0.0; }      // first pass start → last end
+    [[nodiscard]] virtual bool   gpu_timing_available() const noexcept { return false; } // device supports it
+
+    // REN-8: does `execute()` copy every imported colour target back to host-visible memory at end of frame?
+    // ⛔ This copy exists ONLY so `read_pixel` stays bit-identical to the synchronous path — it is a TEST
+    // affordance. A presenting application never reads those pixels back, yet it paid for a full-target
+    // host copy every single frame: at 1280x720 RGBA8 that is ~3.7 MB over PCIe per frame, landing AFTER the
+    // last timed pass (so per-pass timestamps cannot see it) and stalling the fence wait that follows.
+    // Measured in the sandbox: 1.8 ms of actual pass work sat behind a 7.1 ms stall.
+    // Default TRUE so every existing gate keeps its readback semantics unchanged; a real-time consumer opts out.
+    virtual void set_readback_enabled(bool /*on*/) noexcept {}
 };
 
 } // namespace crd::gpu

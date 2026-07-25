@@ -424,7 +424,16 @@ inline bool emit_value_stmt(const KGraph& g, int i, crd::containers::String& s, 
     case KOp::TexSample:  s.append("texture(");     samp_expr(); s.append(", "); ta(nd.c); s.append(")"); break; // B2 implicit-LOD
     case KOp::SampleLod:  s.append("textureLod(");  samp_expr(); s.append(", "); ta(nd.c); s.append(", "); ta(nd.d); s.append(")"); break; // B2-b
     case KOp::SampleGrad: s.append("textureGrad("); samp_expr(); s.append(", "); ta(nd.c); s.append(", "); ta(nd.d); s.append(", "); ta(g.ext_operand(nd, 0)); s.append(")"); break; // B2-b (ddy in ext)
-    case KOp::SampleCmp:  s.append("texture(");     samp_expr(); s.append(", vec3("); ta(nd.c); s.append(", "); ta(nd.d); s.append("))"); break; // B2-b shadow: vec3(uv, ref) → float
+    // B2-b shadow: GLSL folds the compare REF into the coordinate vector, so its width tracks the sampler.
+    // ⛔ REN-3.2: `sampler2DShadow` takes vec3(uv, ref) but `sampler2DArrayShadow` takes vec4(uv, LAYER, ref) —
+    // hardcoding vec3 made every CSM cascade lookup a compile error (or worse, silently drop the ref). HLSL
+    // needs no equivalent: its `SampleCmp(samp, coord, ref)` keeps the ref a separate argument, so the coord
+    // operand passes through verbatim and the arrayness is carried by the Texture2DArray declaration alone.
+    case KOp::SampleCmp:
+        s.append("texture("); samp_expr();
+        s.append(g.node(nd.a).type.tex_arrayed() ? ", vec4(" : ", vec3(");
+        ta(nd.c); s.append(", "); ta(nd.d); s.append("))");
+        break;
     case KOp::TexelFetch: s.append("texelFetch(");  samp_expr(); s.append(", "); ta(nd.c); s.append(", "); ta(nd.d); s.append(")"); break; // B2-b integer fetch
     case KOp::TexGather:  s.append("textureGather("); samp_expr(); s.append(", "); ta(nd.c); s.append(", "); app_ilit(s, g.node(nd.d).cval); s.append(")"); break; // B2-b gather; comp is a compile-time literal
     case KOp::TexSize:    s.append("textureSize("); samp_expr(); s.append(", "); ta(nd.d); s.append(")"); break; // B2-b size query → ivecN

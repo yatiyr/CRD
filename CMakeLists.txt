@@ -494,9 +494,31 @@ endfunction()
 if(CRD_ENABLE_CLANG_TIDY)
     find_program(CLANG_TIDY_EXE NAMES clang-tidy)
     if(CLANG_TIDY_EXE)
+        # ⛔ SCAR (2026-07-25): clang-tidy SILENTLY DROPS every `/`-spelled MSVC flag that reaches it through
+        # the compile command (`cmake -E __run_co_compile --tidy=... -- cl.exe /EHsc /arch:AVX2 /DWIN32 ...`).
+        # Measured with a `#error`-guarded probe through that exact CMake path: `/EHsc`, `/arch:AVX2` and
+        # `/D<macro>` never reach the TU, while the SAME flags passed as `--extra-arg=` do. (CMake already
+        # spells `-I` and `-D<user macro>` with dashes, which is why most of the build looked fine.) Two
+        # silent consequences:
+        #   1. Exceptions look DISABLED, so any `try` is a hard `clang-diagnostic-error` — which is exactly
+        #      why `engine/platform/src/filesystem.cpp` (the std::filesystem noexcept wrappers) failed the
+        #      win-tidy build. A real, deterministic failure that sat hidden behind an unrelated crash.
+        #   2. `__AVX2__` is UNDEFINED, so every AVX2-guarded SIMD path is preprocessed out and NEVER
+        #      ANALYSED — the gate reads green on code it never looked at. Same disease as the
+        #      "tidy gate clean on unparsed files" scar (see scripts/tidy-files.ps1's header).
+        # Fix: re-state the analysis-relevant flags through `--extra-arg`, the one channel clang-tidy honors.
+        # The ISA flag comes from CRD_SIMD_MSVC_ARCH_FLAG — set by the same CrdSimd.cmake branch that adds the
+        # real compile option — so the two cannot drift apart.
+        set(_crd_tidy_extra_args "")
+        if(MSVC)
+            list(APPEND _crd_tidy_extra_args --extra-arg=/EHsc)
+            if(CRD_SIMD_MSVC_ARCH_FLAG)
+                list(APPEND _crd_tidy_extra_args --extra-arg=${CRD_SIMD_MSVC_ARCH_FLAG})
+            endif()
+        endif()
         if(CRD_CLANG_TIDY_WARNINGS_AS_ERRORS)
             # Local strict mode: .clang-tidy's `WarningsAsErrors: '*'` is honored.
-            set(CMAKE_CXX_CLANG_TIDY ${CLANG_TIDY_EXE})
+            set(CMAKE_CXX_CLANG_TIDY ${CLANG_TIDY_EXE} ${_crd_tidy_extra_args})
             message(STATUS "[crd] clang-tidy ENABLED (warnings-as-errors=ON; strict mode)")
         else()
             # CI relaxed mode: override `.clang-tidy` WarningsAsErrors via
@@ -508,7 +530,7 @@ if(CRD_ENABLE_CLANG_TIDY)
             # DoD via `scripts/per-slice-check.ps1 -Parallel` still gates on
             # the strict `win-tidy` preset, so violations are caught
             # pre-merge by the user's local gate.
-            set(CMAKE_CXX_CLANG_TIDY ${CLANG_TIDY_EXE} --warnings-as-errors=-*)
+            set(CMAKE_CXX_CLANG_TIDY ${CLANG_TIDY_EXE} ${_crd_tidy_extra_args} --warnings-as-errors=-*)
             message(STATUS "[crd] clang-tidy ENABLED (warnings-as-errors=OFF; CI relaxed mode — warnings reported but non-fatal)")
         endif()
     endif()
@@ -578,6 +600,8 @@ add_subdirectory(engine/kir-dx12)  # v17-d; CKIR DirectX 12 backend (KirBackend 
 add_subdirectory(engine/kir-webgpu)  # v17-d; CKIR WebGPU backend (KirBackend over wgpu-native); browser/everywhere; guarded on the prebuilt; ADR-0098
 add_subdirectory(engine/kir-hip)  # v17-d; CKIR HIP/ROCm backend (KirBackend over HIP + hiprtc); guarded on the HIP SDK; validated at Part C; ADR-0098
 add_subdirectory(engine/kir-metal)  # v17-d; CKIR Metal backend (KirBackend over Apple Metal, Objective-C++); APPLE-only; validated at Part C; ADR-0098
+add_subdirectory(engine/frame-cook)   # REN-36 (D-007 row 139): the AUTHORABLE FRAME GRAPH — render passes,
+                                      # pipelines and whole rendering architectures as cooked, API-agnostic assets
 add_subdirectory(engine/shader-cook)  # D-007 D2; OFFLINE shader cook — CKIR graph -> .crdr bundle (IR + reflection + per-backend blobs); ADR-0104
 add_subdirectory(engine/hesap-opt)  # v7; OPTIMISATION (unconstrained + constrained) over Objective<T>; ADR-0090 (now consumes hesap-autodiff)
 add_subdirectory(engine/hesap-stats)  # v12 cluster (created early as a v12-pull: Philox counter-RNG for v7-i)

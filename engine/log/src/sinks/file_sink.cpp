@@ -77,22 +77,37 @@ void FileSink::rotate_if_needed(u64 next_write_size) noexcept
 
     close_file();
 
-    // Shift: oldest gets removed, others shift up by one.
-    // file.log -> file.1.log -> file.2.log -> ...
-    const std::string oldest = rotated_path(m_path, m_max_files);
-    std::remove(oldest.c_str()); // ignore failure (may not exist)
-
-    for (u32 i = m_max_files; i > 1; --i)
+    // Every `rotated_path` below builds a std::string, so rotation can throw bad_alloc — and this is
+    // `noexcept`, which would make that std::terminate. A rotation we cannot perform must degrade to
+    // "keep writing to the current file", never to a crash. (bugprone-exception-escape; the check only
+    // became visible once the tidy gate stopped dropping `/EHsc` — see CMakeLists.)
+    try
     {
-        const std::string src = rotated_path(m_path, i - 1);
-        const std::string dst = rotated_path(m_path, i);
-        std::remove(dst.c_str());
-        std::rename(src.c_str(), dst.c_str()); // ok if src missing
-    }
+        // Shift: oldest gets removed, others shift up by one.
+        // file.log -> file.1.log -> file.2.log -> ...
+        const std::string oldest = rotated_path(m_path, m_max_files);
+        std::remove(oldest.c_str()); // ignore failure (may not exist)
 
-    const std::string first_rot = rotated_path(m_path, 1);
-    std::remove(first_rot.c_str());
-    std::rename(m_path.c_str(), first_rot.c_str());
+        for (u32 i = m_max_files; i > 1; --i)
+        {
+            const std::string src = rotated_path(m_path, i - 1);
+            const std::string dst = rotated_path(m_path, i);
+            std::remove(dst.c_str());
+            std::rename(src.c_str(), dst.c_str()); // ok if src missing
+        }
+
+        const std::string first_rot = rotated_path(m_path, 1);
+        std::remove(first_rot.c_str());
+        std::rename(m_path.c_str(), first_rot.c_str());
+    }
+    catch (...)
+    {
+        // Rotation is best-effort; the log STREAM is not. Reopen and keep writing to the current file
+        // rather than terminating -- the size cap is the only thing lost.
+        m_bytes_written = 0;
+        open_file();
+        return;
+    }
 
     m_bytes_written = 0;
     open_file();

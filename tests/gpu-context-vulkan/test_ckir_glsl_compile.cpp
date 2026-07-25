@@ -224,9 +224,10 @@ TEST_CASE("D-007 IB-2: ReSTIR GI passes lower to valid GLSL and HLSL", "[kir][gl
     for (int pass = 0; pass < 3; ++pass)
     {
         kir::KGraph g(&alloc);
-        const kir::KEntry e = pass == 0 ? kir::rt::build_restir_gi_temporal_kernel(g, cfg)
-                            : pass == 1 ? kir::rt::build_restir_gi_spatial_kernel(g, cfg)
-                                        : kir::rt::build_restir_gi_shade_kernel(g, cfg);
+        kir::KEntry e;
+        if (pass == 0) { e = kir::rt::build_restir_gi_temporal_kernel(g, cfg); }
+        else if (pass == 1) { e = kir::rt::build_restir_gi_spatial_kernel(g, cfg); }
+        else { e = kir::rt::build_restir_gi_shade_kernel(g, cfg); }
         kir::GlslKernel kg(&alloc);
         REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kg));
         INFO("pass=" << names[pass] << " GLSL:\n" << kg.source.c_str());
@@ -288,9 +289,10 @@ TEST_CASE("D-007 RT-5: spatiotemporal ReSTIR passes lower to valid GLSL and HLSL
     for (int pass = 0; pass < 3; ++pass)
     {
         kir::KGraph g(&alloc);
-        const kir::KEntry e = pass == 0 ? kir::rt::build_restir_temporal_kernel(g, cfg)
-                            : pass == 1 ? kir::rt::build_restir_spatial_kernel(g, cfg)
-                                        : kir::rt::build_restir_shade_kernel(g, cfg);
+        kir::KEntry e;
+        if (pass == 0) { e = kir::rt::build_restir_temporal_kernel(g, cfg); }
+        else if (pass == 1) { e = kir::rt::build_restir_spatial_kernel(g, cfg); }
+        else { e = kir::rt::build_restir_shade_kernel(g, cfg); }
         kir::GlslKernel kg(&alloc);
         REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kg));
         INFO("pass=" << names[pass] << " GLSL:\n" << kg.source.c_str());

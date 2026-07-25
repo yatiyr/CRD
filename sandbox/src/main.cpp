@@ -33,6 +33,7 @@
 #include <crd/resources/mesh_resource.hpp>
 #include <crd/resources/openpbr_material.hpp>
 #include <crd/resources/resource_manager.hpp>
+#include <crd/resources/texture_resource.hpp> // REN-2: the TXTR loader the material path needs
 #include <crd/scene/render_components.hpp>
 #include <crd/scene/spatial_bvh_index.hpp>
 #include <crd/scene/transform.hpp>
@@ -172,9 +173,25 @@ int main(int argc, char** argv)
     bool     headless         = false;
     bool     smoke_test       = false;
     crd::f64 smoke_duration_s = 3.0;
+    // Fifo (vsync) is the right DEFAULT — it is what a shipped app wants, and an uncapped loop burns the GPU for
+    // frames nobody sees. But it also makes the frame rate a property of the DISPLAY, not of the renderer, so a
+    // vsynced number can never answer "how fast is the renderer?". `--present immediate` removes the cap so the
+    // real cost is measurable; that is the only honest way to profile the frame.
+    crd::gpu::PresentMode present_mode   = crd::gpu::PresentMode::Fifo;
+    bool                  force_readback = false;
     for (int i = 1; i < argc; ++i)
     {
         if (std::strcmp(argv[i], "--headless") == 0) { headless = true; }
+        // REN-8: A/B the per-frame readback copy. Run-to-run fps varies by ~10 on this host, so a claim like
+        // "removing the readback made it faster" is only honest if BOTH arms are measured on the same build.
+        else if (std::strcmp(argv[i], "--readback") == 0) { force_readback = true; }
+        else if (std::strcmp(argv[i], "--present") == 0 && i + 1 < argc)
+        {
+            ++i;
+            if (std::strcmp(argv[i], "immediate") == 0)    { present_mode = crd::gpu::PresentMode::Immediate; }
+            else if (std::strcmp(argv[i], "mailbox") == 0) { present_mode = crd::gpu::PresentMode::Mailbox; }
+            else                                           { present_mode = crd::gpu::PresentMode::Fifo; }
+        }
         else if (std::strcmp(argv[i], "--smoke-test") == 0)
         {
             smoke_test = true;
@@ -231,7 +248,7 @@ int main(int argc, char** argv)
     const auto fb    = app.window().framebuffer_size();
     crd::u32   win_w = fb.width > 0 ? static_cast<crd::u32>(fb.width) : 1280U;
     crd::u32   win_h = fb.height > 0 ? static_cast<crd::u32>(fb.height) : 720U;
-    auto     surface = raster->create_present_surface(native_window_of(app), win_w, win_h, crd::gpu::PresentMode::Fifo);
+    auto     surface = raster->create_present_surface(native_window_of(app), win_w, win_h, present_mode);
     if (surface == nullptr)
     {
         CRD_LOG_ERROR(g_log_sandbox, "Present surface creation failed");
@@ -248,6 +265,11 @@ int main(int argc, char** argv)
     crd::resources::ResourceManager rm(&scene_alloc);
     crd::resources::register_mesh_loader(&rm, nullptr);
     crd::resources::register_openpbr_material_loader(&rm, nullptr);
+    // ⛔ REN-2: WITHOUT this the material loader resolves `textures.base_color` to a TXTR id that nothing can
+    // load — every material silently falls back to its flat colour and the sandbox shows NO sampled albedo at
+    // all, while the engine capability and its gate are both green. The engine having a feature and the app
+    // reaching it are two different facts; only the sandbox proves the second.
+    crd::resources::register_texture_loader(&rm, nullptr);
     crd::anim::register_anim_loaders(&rm, nullptr); // GEO-8: SKEL + ANIM
     const crd::platform::fs::Path pack_path = crd::platform::fs::executable_dir()
                                               / crd::containers::StringView(CRD_DEMO_ASSETS_REL_PACK);
@@ -481,7 +503,49 @@ int main(int argc, char** argv)
     crd::u32   frame               = 0;
     crd::u32   frames_with_present = 0;
     crd::scenerender::SyncStats   last_sync{};
+    // REN-8: the sandbox PRESENTS, it never reads pixels back — so skip the per-frame full-target host copy the
+    // frame graph does for `read_pixel`. Measured cost of leaving it on: a 7.1 ms stall behind 1.8 ms of passes.
+    scene_renderer.set_readback_enabled(force_readback);
+
+    // ⛔ HARD RULE: the grid goes through OUR frame graph. `record_overlay_pass` runs as a pass of the scene's
+    // graph, so `submit_overlay`'s `draw_overlay` calls hit the raster context's RECORDING path and land in the
+    // frame's one command buffer instead of each doing its own submit+wait.
+    struct OverlayCtx
+    {
+        crd::draw::RenderBuffer*     buf    = nullptr;
+        crd::gpu::IRasterTarget*     target = nullptr;
+        crd::draw::OverlayPassConfig cfg{};
+    } overlay_ctx{&draw_buf, canvas.get(), {}};
+    scene_renderer.set_overlay_pass(
+        [](crd::gpu::IFrameContext& ctx, void* user) {
+            auto* o = static_cast<OverlayCtx*>(user);
+            if (!crd::draw::submit_overlay(*o->target, *o->buf, o->cfg))
+            {
+                CRD_LOG_WARN(g_log_sandbox, "draw overlay submission refused");
+            }
+            (void)ctx; // the target is the same imported canvas; ctx.raster() is already in recording mode
+        },
+        &overlay_ctx);
+
     crd::scenerender::RenderStats last_draw{};
+    // REN-8: the frame's phase breakdown. `render` already reports its own gpu/cpu split; these cover the REST
+    // of the loop, which the first attribution showed to be ~64% of the frame and entirely unmeasured. Timing
+    // the whole loop and not just the renderer is the difference between "the GPU is fast" and "the frame is
+    // fast" — they turned out to be very different statements here.
+    struct PhaseMs
+    {
+        double sync = 0.0, render = 0.0, overlay = 0.0, imgui = 0.0, present = 0.0, total = 0.0;
+    } phase;
+    // ⛔ Report the MEAN over the run, not the last frame. A single trailing sample is noise — the first run of
+    // this instrumentation showed `sync` at 3.3 ms and 9.9 ms on two runs of the same build purely by which
+    // frame happened to be last, which is exactly the kind of number that sends optimization work in the wrong
+    // direction. Averages get compared; a lone sample gets believed.
+    PhaseMs  phase_sum;
+    crd::u64 phase_frames = 0;
+    const auto now_ms = [] { return std::chrono::steady_clock::now(); };
+    const auto ms_between = [](std::chrono::steady_clock::time_point a, std::chrono::steady_clock::time_point b) {
+        return std::chrono::duration<double, std::milli>(b - a).count();
+    };
     const auto smoke_start_time    = std::chrono::steady_clock::now();
     while (app.is_running())
     {
@@ -568,11 +632,15 @@ int main(int argc, char** argv)
         const crd::math::Mat4f proj = crd::math::perspective_reverse_z(1.0472F, aspect, 0.1F);
         const crd::math::Mat4f vp   = proj * view;
 
+        const auto t_frame_begin = now_ms();
         if (scene_ready)
         {
-            last_sync = scene_renderer.sync(world);
+            last_sync         = scene_renderer.sync(world);
+            const auto t_sync = now_ms();
+            phase.sync        = ms_between(t_frame_begin, t_sync);
             last_draw = scene_renderer.render(*canvas, vp, crd::math::Vec3f{0.35F, 1.0F, 0.25F},
                                               crd::gpu::ClearColor{0.09F, 0.10F, 0.13F, 1.0F}, bvh);
+            phase.render = ms_between(t_sync, now_ms());
             if (last_draw.draws == 0U) // everything culled (or nothing loadable): still present a cleared frame
             {
                 raster->clear(*canvas, crd::gpu::ClearColor{0.09F, 0.10F, 0.13F, 1.0F});
@@ -580,21 +648,24 @@ int main(int argc, char** argv)
         }
         else { raster->clear(*canvas, crd::gpu::ClearColor{0.09F, 0.10F, 0.13F, 1.0F}); }
 
+        // ⛔ HARD RULE: the infinite grid is a RENDER PASS, so it runs INSIDE the scene's frame graph (registered
+        // via set_overlay_pass, recorded into the same command buffer, one submission). Its config is refreshed
+        // here each frame; the recording itself happens when the graph executes the "overlay" pass above.
         if (draw_ready)
         {
-            crd::draw::OverlayPassConfig ocfg;
-            ocfg.view_proj    = vp;
-            ocfg.viewport_px  = {static_cast<crd::f32>(surface->width()), static_cast<crd::f32>(surface->height())};
-            ocfg.time_s       = static_cast<crd::f32>(tsec);
-            ocfg.depth_test   = crd::gpu::DepthCompare::GreaterEqual; // the canvas HAS depth now — the grid occludes
-            ocfg.grid.enabled = true;
-            ocfg.grid.camera_pos = eye;
-            ocfg.grid.apply_theme();
-            if (!crd::draw::submit_overlay(*canvas, draw_buf, ocfg))
-            {
-                CRD_LOG_WARN(g_log_sandbox, "draw overlay submission refused");
-            }
+            overlay_ctx.cfg.view_proj   = vp;
+            overlay_ctx.cfg.viewport_px = {static_cast<crd::f32>(surface->width()),
+                                           static_cast<crd::f32>(surface->height())};
+            overlay_ctx.cfg.time_s      = static_cast<crd::f32>(tsec);
+            overlay_ctx.cfg.depth_test  = crd::gpu::DepthCompare::GreaterEqual; // the canvas HAS depth: grid occludes
+            overlay_ctx.cfg.grid.enabled    = true;
+            overlay_ctx.cfg.grid.camera_pos = eye;
+            overlay_ctx.cfg.grid.apply_theme();
         }
+        const auto t_after_scene = now_ms();
+
+        const auto t_after_overlay = now_ms();
+        phase.overlay              = ms_between(t_after_scene, t_after_overlay);
 
         imgui_backend->new_frame();
         ImGui_ImplGlfw_NewFrame();
@@ -605,6 +676,15 @@ int main(int argc, char** argv)
             ImGui::Text("instances: %u drawn / %u culled / %u total", last_draw.drawn_instances,
                         last_draw.culled_instances, last_sync.total_instances);
             ImGui::Text("draws: %u (one per mesh group; %u groups)", last_draw.draws, last_sync.groups);
+            // REN-8: the frame's honest attribution. `gpu` is what the DEVICE spent (frame-graph timestamps);
+            // `cpu` is the wall-clock of the whole render call including the fence wait. A large `stall` means
+            // the frame is dominated by waiting, not by rendering — which is what the ~12 ms/frame turned out
+            // to be, and is why REN-8's async-across-frames + direct present is the fix rather than shader work.
+            ImGui::Text("gpu: %.3f ms (%u passes) | cpu: %.3f ms | stall: %.3f ms", last_draw.gpu_ms,
+                        last_draw.timed_passes, last_draw.cpu_ms,
+                        last_draw.cpu_ms > last_draw.gpu_ms ? last_draw.cpu_ms - last_draw.gpu_ms : 0.0);
+            ImGui::Text("phases: sync %.2f | render %.2f | overlay %.2f | imgui %.2f | present %.2f = %.2f ms",
+                        phase.sync, phase.render, phase.overlay, phase.imgui, phase.present, phase.total);
             ImGui::Text("shot: %.2fs / 20s  height %.1f  radius %.1f (GEO-9 timeline automation)",
                         static_cast<double>(shot_ticks) / 24000.0, static_cast<double>(cam_height),
                         static_cast<double>(cam_radius));
@@ -616,11 +696,22 @@ int main(int argc, char** argv)
             profiler_panel.draw();
         }
         ImGui::Render();
+        const auto t_after_imgui = now_ms();
+        phase.imgui              = ms_between(t_after_overlay, t_after_imgui);
 
         if (surface->present(*canvas, &crd::imgui::ImGuiGpuBackend::overlay_thunk, imgui_backend.get()))
         {
             ++frames_with_present;
         }
+        phase.present = ms_between(t_after_imgui, now_ms());
+        phase.total   = ms_between(t_frame_begin, now_ms());
+        phase_sum.sync += phase.sync;
+        phase_sum.render += phase.render;
+        phase_sum.overlay += phase.overlay;
+        phase_sum.imgui += phase.imgui;
+        phase_sum.present += phase.present;
+        phase_sum.total += phase.total;
+        ++phase_frames;
 
         crd::perf::frame_mark();
         ++frame;
@@ -648,6 +739,17 @@ int main(int argc, char** argv)
                              "{} instances drawn last frame",
                              frames_with_present, elapsed,
                              static_cast<crd::f64>(frames_with_present) / elapsed, last_draw.drawn_instances);
+        // REN-8: the smoke run prints the SAME attribution, so a headless/CI run reports where the frame went
+        // rather than only whether it presented.
+        CRD_LOG_INFO(g_log_sandbox, "REN-8 frame split: gpu {:.3f} ms ({} passes) | cpu {:.3f} ms | stall {:.3f} ms",
+                     last_draw.gpu_ms, last_draw.timed_passes, last_draw.cpu_ms,
+                     last_draw.cpu_ms > last_draw.gpu_ms ? last_draw.cpu_ms - last_draw.gpu_ms : 0.0);
+        const double pf = phase_frames > 0 ? static_cast<double>(phase_frames) : 1.0;
+        CRD_LOG_INFO(g_log_sandbox,
+                     "REN-8 phases (MEAN over {} frames): sync {:.3f} | render {:.3f} | overlay {:.3f} | "
+                     "imgui {:.3f} | present {:.3f} | loop total {:.3f} ms",
+                     phase_frames, phase_sum.sync / pf, phase_sum.render / pf, phase_sum.overlay / pf,
+                     phase_sum.imgui / pf, phase_sum.present / pf, phase_sum.total / pf);
                 app.close();
             }
         }

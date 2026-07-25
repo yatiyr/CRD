@@ -215,6 +215,7 @@ public:
     }
     ~VulkanRasterTarget() override
     {
+        if (m_borrowed) { return; } // REN-2: a frame-graph RTT transient — the ImageNode/slot owns the bundles
         destroy_image_bundle(m_device, m_color);
         destroy_image_bundle(m_device, m_resolve);
         destroy_image_bundle(m_device, m_depth);
@@ -254,6 +255,8 @@ public:
     [[nodiscard]] VkImage     vrs_image() const noexcept { return m_vrs.image; }
     [[nodiscard]] VkImageView vrs_view() const noexcept { return m_vrs.view; }
     void                      set_vrs(const ImageBundle& b) noexcept { m_vrs = b; } // owned after this; freed in the dtor
+    // REN-2: mark this a BORROWED view over frame-graph-owned bundles (a transient RTT target) — the dtor frees nothing.
+    void                      set_borrowed() noexcept { m_borrowed = true; }
 
 private:
     VkDevice     m_device = VK_NULL_HANDLE;
@@ -265,6 +268,7 @@ private:
     crd::u32     m_samples = 1U;
     crd::u32     m_w       = 0;
     crd::u32     m_h       = 0;
+    bool         m_borrowed = false; // REN-2: true ⇒ a frame-graph RTT transient view; the dtor frees nothing
 };
 
 // ── RET-2 (ADR-0105): the present surface — the swapchain seam of the ONE graphics layer ──────────────────────────────
@@ -746,6 +750,7 @@ public:
     }
     ~VulkanTexture() override
     {
+        if (m_borrowed) { return; } // REN-2: a frame-graph sampled transient — the ImageNode/slot owns the bundle
         if (m_registry != nullptr) // RET-4 pt 5: leave the live-texture registry (defrag never sees a dead texture)
         {
             for (crd::usize i = 0; i < m_registry->size(); ++i)
@@ -769,6 +774,7 @@ public:
     [[nodiscard]] crd::u32           height() const noexcept override { return m_h; }
     [[nodiscard]] VkImageView        view() const noexcept { return m_img.view; }
     [[nodiscard]] const ImageBundle& bundle() const noexcept { return m_img; } // RET-4 pt 5: self-describing
+    void                             set_borrowed() noexcept { m_borrowed = true; } // REN-2: view-only, dtor frees nothing
 
     // RET-4 pt 5 (S7 image relocation): install the freshly-copied bundle, destroy the old. Called by the defrag
     // pass AFTER the copy submit completed; views are read per-draw, so nothing stale survives a swap between draws.
@@ -785,6 +791,7 @@ private:
     crd::u32                               m_w = 0;
     crd::u32                               m_h = 0;
     crd::containers::Array<VulkanTexture*>* m_registry = nullptr; // the context's live-texture list (S7 defrag)
+    bool                                   m_borrowed = false; // REN-2: view over a frame-graph transient; dtor frees nothing
 };
 
 inline constexpr crd::u32 kMaxGBuffer = 8U; // B5: max deferred G-buffer colour attachments
@@ -1969,6 +1976,9 @@ public:
         auto& s = static_cast<VulkanStorageBuffer&>(storage);
         if (!m_api.valid() || !p.valid() || m_desc_pool == VK_NULL_HANDLE) { return; }
 
+        // REN-2: in frame-graph recording mode, a draw_storage into an RTT transient records color-only (no readback).
+        if (frame_recording()) { record_offscreen(t, p, s, clear_color, vertex_count); return; }
+
         // Allocate + point the storage descriptor (set 0, binding 0) at the buffer.
         vkResetDescriptorPool(m_device, m_desc_pool, 0);
         VkDescriptorSetAllocateInfo dsai{};
@@ -2159,6 +2169,125 @@ public:
         end_and_wait(cmd);
     }
 
+    // REN-3.1: the DEPTH-ONLY (shadow) pass — render storage-pulled geometry writing ONLY depth into `target`'s
+    // depth attachment, no colour attachment bound. For a frame-graph `D32Float`+`sampled` transient this PRODUCES a
+    // shadow map on the device, which a later pass samples through the comparison sampler. Frame-graph recording is
+    // the intended path; the standalone form exists so the capability is testable without a graph.
+    void draw_storage_depth_only(IRasterTarget& target, IRasterProgram& program, float clear_depth,
+                                 DepthCompare compare, IStorageBuffer& storage, crd::u32 vertex_count) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        auto& s = static_cast<VulkanStorageBuffer&>(storage);
+        if (!m_api.valid() || !p.valid() || m_desc_pool == VK_NULL_HANDLE || !t.has_depth()) { return; }
+        if (frame_recording()) { record_depth_only(t, p, s, true, clear_depth, compare, vertex_count); return; }
+
+        // Standalone: own descriptor pool + command buffer + layout transition (mirrors draw_storage_depth, minus
+        // every colour-attachment step).
+        vkResetDescriptorPool(m_device, m_desc_pool, 0);
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool     = m_desc_pool;
+        dsai.descriptorSetCount = 1U;
+        dsai.pSetLayouts        = &m_storage_set_layout;
+        VkDescriptorSet dset    = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return; }
+        VkDescriptorBufferInfo dbi{s.buf(), 0, VK_WHOLE_SIZE};
+        VkWriteDescriptorSet   wr{};
+        wr.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wr.dstSet          = dset;
+        wr.dstBinding      = 0U;
+        wr.descriptorCount = 1U;
+        wr.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        wr.pBufferInfo     = &dbi;
+        vkUpdateDescriptorSets(m_device, 1U, &wr, 0U, nullptr);
+
+        VkCommandBuffer cmd = begin_cmd();
+        if (cmd == VK_NULL_HANDLE) { return; }
+        transition_depth(cmd, t.depth_image());
+
+        VkRenderingAttachmentInfo dep{};
+        dep.sType                         = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        dep.imageView                     = t.depth_view();
+        dep.imageLayout                   = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        dep.loadOp                        = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        dep.storeOp                       = VK_ATTACHMENT_STORE_OP_STORE;
+        dep.clearValue.depthStencil.depth = clear_depth;
+
+        VkRenderingInfo ri{};
+        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent    = {t.width(), t.height()};
+        ri.layerCount           = 1U;
+        ri.colorAttachmentCount = 0U; // no colour attachment at all
+        ri.pColorAttachments    = nullptr;
+        ri.pDepthAttachment     = &dep;
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t.width(), t.height(), 1U, true, to_vk_compare(compare), 0U);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        bind_and_draw(cmd, p, vertex_count);
+        vkCmdEndRendering(cmd);
+        end_and_wait(cmd);
+    }
+
+    // REN-3.1: the CONTINUING depth-only draw — mesh N>0 of a shadow pass joins the SAME depth map (no clear).
+    void draw_storage_depth_only_load(IRasterTarget& target, IRasterProgram& program, DepthCompare compare,
+                                      IStorageBuffer& storage, crd::u32 vertex_count) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        auto& s = static_cast<VulkanStorageBuffer&>(storage);
+        if (!m_api.valid() || !p.valid() || m_desc_pool == VK_NULL_HANDLE || !t.has_depth()) { return; }
+        if (frame_recording()) { record_depth_only(t, p, s, false, 0.0F, compare, vertex_count); return; }
+        // standalone continuation is not meaningful (each standalone draw owns its own submit); the frame-graph
+        // recording path is the one a shadow pass uses.
+    }
+
+    // REN-2 Half B: the TEXTURED scene draw — draw_storage_depth + a sampled material (base-color) texture. Records
+    // into the frame graph (record_scene_textured); standalone, allocates a storage(0)+sampled(1)+sampler(2) set and
+    // renders through the depth tail.
+    void draw_storage_textured_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color,
+                                     float clear_depth, DepthCompare compare, IStorageBuffer& storage, ITexture& texture,
+                                     crd::u32 vertex_count) override
+    {
+        auto& t   = static_cast<VulkanRasterTarget&>(target);
+        auto& p   = static_cast<VulkanRasterProgram&>(program);
+        auto& s   = static_cast<VulkanStorageBuffer&>(storage);
+        auto& tex = static_cast<VulkanTexture&>(texture);
+        if (!m_api.valid() || !p.valid() || m_desc_pool == VK_NULL_HANDLE || !t.has_depth()) { return; }
+        if (frame_recording())
+        {
+            record_scene_textured(t, p, s, tex, true, clear_color, clear_depth, compare, vertex_count);
+            return;
+        }
+        vkResetDescriptorPool(m_device, m_desc_pool, 0);
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool     = m_desc_pool;
+        dsai.descriptorSetCount = 1U;
+        dsai.pSetLayouts        = &m_storage_set_layout;
+        VkDescriptorSet dset = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return; }
+        write_scene_textured(m_device, dset, s.buf(), tex.view(), m_default_sampler);
+        render_dset_depth(t, p, clear_color, clear_depth, compare, dset, vertex_count);
+    }
+    void draw_storage_textured_depth_load(IRasterTarget& target, IRasterProgram& program, DepthCompare compare,
+                                          IStorageBuffer& storage, ITexture& texture, crd::u32 vertex_count) override
+    {
+        auto& t   = static_cast<VulkanRasterTarget&>(target);
+        auto& p   = static_cast<VulkanRasterProgram&>(program);
+        auto& s   = static_cast<VulkanStorageBuffer&>(storage);
+        auto& tex = static_cast<VulkanTexture&>(texture);
+        if (!m_api.valid() || !p.valid() || !t.has_depth()) { return; }
+        if (frame_recording())
+        {
+            record_scene_textured(t, p, s, tex, false, ClearColor{}, 0.0F, compare, vertex_count);
+            return;
+        }
+        // standalone LOAD is used only through the frame graph in practice (the SceneRenderer path); a direct call
+        // clears (last-drawn wins) rather than silently dropping the texture.
+        draw_storage_textured_depth(target, program, ClearColor{}, 0.0F, compare, storage, texture, vertex_count);
+    }
+
     // RET-6 (ADR-0105): the OVERLAY draw — see IRasterContext::draw_overlay. Composites onto the target's EXISTING
     // contents (color loadOp=LOAD; the target's post-draw layout is TRANSFER_SRC — the RET-2 contract — so the
     // preserving transition is TRANSFER_SRC → COLOR_ATTACHMENT, never UNDEFINED, which would discard). Standard alpha
@@ -2334,6 +2463,158 @@ public:
         dep.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
         if (clear) { dep.clearValue.depthStencil.depth = clear_depth; }
 
+        VkRenderingInfo ri{};
+        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent    = {t.width(), t.height()};
+        ri.layerCount           = 1U;
+        ri.colorAttachmentCount = 1U;
+        ri.pColorAttachments    = &att;
+        ri.pDepthAttachment     = &dep;
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t.width(), t.height(), 1U, true, to_vk_compare(compare));
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        bind_and_draw(cmd, p, vertex_count);
+        vkCmdEndRendering(cmd);
+    }
+
+    // REN-2: allocate a frame descriptor set binding a SAMPLED image (binding 1) + sampler (binding 2) — the
+    // frame-pool analog of draw_sampled's set. Used by record_textured (RTT sample pass / material forward pass).
+    [[nodiscard]] VkDescriptorSet frame_alloc_sampled_set(VkImageView view, VkSampler sampler)
+    {
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool     = m_frame_rec.pool;
+        dsai.descriptorSetCount = 1U;
+        dsai.pSetLayouts        = &m_storage_set_layout;
+        VkDescriptorSet dset = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return VK_NULL_HANDLE; }
+        VkDescriptorImageInfo img_info{VK_NULL_HANDLE, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkDescriptorImageInfo samp_info{sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
+        VkWriteDescriptorSet  wr[2]{};
+        wr[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[0].dstSet = dset; wr[0].dstBinding = 1U; wr[0].descriptorCount = 1U; wr[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; wr[0].pImageInfo = &img_info;
+        wr[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[1].dstSet = dset; wr[1].dstBinding = 2U; wr[1].descriptorCount = 1U; wr[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;       wr[1].pImageInfo = &samp_info;
+        vkUpdateDescriptorSets(m_device, 2U, wr, 0U, nullptr);
+        return dset;
+    }
+
+    // REN-2: the frame-mode body of draw_storage — a COLOR-ONLY render into an RTT transient (no depth attachment,
+    // no readback), into the shared cmd. Pass 1 of render-to-texture; a later pass samples it via record_textured.
+    void record_offscreen(VulkanRasterTarget& t, VulkanRasterProgram& p, VulkanStorageBuffer& s, ClearColor clear_color,
+                          crd::u32 vertex_count)
+    {
+        VkCommandBuffer cmd  = m_frame_rec.cmd;
+        VkDescriptorSet dset = frame_alloc_storage_set(s);
+        if (dset == VK_NULL_HANDLE) { return; }
+        frame_self_barrier_if_needed(t);
+        VkRenderingAttachmentInfo att = colour_clear_attachment(t.view(), clear_color);
+        VkRenderingInfo           ri  = one_colour_rendering(t, att);
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t.width(), t.height(), 1U, false, VK_COMPARE_OP_ALWAYS);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        bind_and_draw(cmd, p, vertex_count);
+        vkCmdEndRendering(cmd);
+    }
+
+    // REN-3.1: the frame-mode body of draw_storage_depth_only — the SHADOW PASS. Renders storage-pulled geometry
+    // writing ONLY depth: `colorAttachmentCount = 0`, `pDepthAttachment` = the (transient) depth target. A later
+    // pass samples the result through the comparison sampler. This is the device capability that lets us RENDER a
+    // shadow map instead of uploading one from the CPU (`ckir_lighting.hpp:992`).
+    void record_depth_only(VulkanRasterTarget& t, VulkanRasterProgram& p, VulkanStorageBuffer& s, bool clear,
+                           float clear_depth, DepthCompare compare, crd::u32 vertex_count)
+    {
+        VkCommandBuffer cmd  = m_frame_rec.cmd;
+        VkDescriptorSet dset = frame_alloc_storage_set(s);
+        if (dset == VK_NULL_HANDLE) { return; }
+
+        VkRenderingAttachmentInfo dep{};
+        dep.sType                          = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        dep.imageView                      = t.depth_view();
+        dep.imageLayout                    = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        // clear ⇒ the FIRST mesh of the shadow pass; load ⇒ every later mesh joins the SAME map (without this a
+        // multi-mesh shadow pass would wipe itself, see draw_storage_depth_only_load).
+        dep.loadOp                         = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+        dep.storeOp                        = VK_ATTACHMENT_STORE_OP_STORE;
+        if (clear) { dep.clearValue.depthStencil.depth = clear_depth; }
+
+        VkRenderingInfo ri{};
+        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent    = {t.width(), t.height()};
+        ri.layerCount           = 1U;
+        ri.colorAttachmentCount = 0U;      // ⛔ the whole point: NO colour attachment is bound
+        ri.pColorAttachments    = nullptr;
+        ri.pDepthAttachment     = &dep;
+        vkCmdBeginRendering(cmd, &ri);
+        // samples = 1, depth_test on, and COLOR_ATTACHMENTS = 0 (the 6th arg) — the blend/colour-write state must
+        // agree with the zero colour attachments in VkRenderingInfo or the pipeline is invalid.
+        set_draw_state(cmd, t.width(), t.height(), 1U, true, to_vk_compare(compare), 0U);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        bind_and_draw(cmd, p, vertex_count);
+        vkCmdEndRendering(cmd);
+    }
+
+    // REN-2: the frame-mode body of draw_sampled — bind a SAMPLED image (an RTT transient or a material map) +
+    // sampler, COLOR-render into the target, into the shared cmd. Pass 2 of RTT / the material forward pass.
+    void record_textured(VulkanRasterTarget& t, VulkanRasterProgram& p, VkImageView view, VkSampler sampler,
+                         ClearColor clear_color, crd::u32 vertex_count)
+    {
+        VkCommandBuffer cmd  = m_frame_rec.cmd;
+        VkDescriptorSet dset = frame_alloc_sampled_set(view, sampler);
+        if (dset == VK_NULL_HANDLE) { return; }
+        frame_self_barrier_if_needed(t);
+        VkRenderingAttachmentInfo att = colour_clear_attachment(t.view(), clear_color);
+        VkRenderingInfo           ri  = one_colour_rendering(t, att);
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t.width(), t.height(), 1U, false, VK_COMPARE_OP_ALWAYS);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        bind_and_draw(cmd, p, vertex_count);
+        vkCmdEndRendering(cmd);
+    }
+
+    // REN-2 Half B: write a set with storage(0) + sampled-image(1) + sampler(2) — the TEXTURED scene draw's descriptors
+    // (the VS vertex-pulls position+UV from the buffer, the FS samples the material base-color map at UV).
+    static void write_scene_textured(VkDevice dev, VkDescriptorSet dset, VkBuffer buf, VkImageView view, VkSampler samp)
+    {
+        VkDescriptorBufferInfo dbi{buf, 0, VK_WHOLE_SIZE};
+        VkDescriptorImageInfo  img_info{VK_NULL_HANDLE, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkDescriptorImageInfo  samp_info{samp, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
+        VkWriteDescriptorSet   wr[3]{};
+        wr[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[0].dstSet = dset; wr[0].dstBinding = 0U; wr[0].descriptorCount = 1U; wr[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; wr[0].pBufferInfo = &dbi;
+        wr[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[1].dstSet = dset; wr[1].dstBinding = 1U; wr[1].descriptorCount = 1U; wr[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;  wr[1].pImageInfo  = &img_info;
+        wr[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[2].dstSet = dset; wr[2].dstBinding = 2U; wr[2].descriptorCount = 1U; wr[2].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;        wr[2].pImageInfo  = &samp_info;
+        vkUpdateDescriptorSets(dev, 3U, wr, 0U, nullptr);
+    }
+
+    // REN-2 Half B: the frame-mode body of draw_storage_textured_depth (clear) / _load (no clear) — a depth-tested
+    // scene draw that ALSO samples the material texture, into the shared cmd. The SceneRenderer's textured forward pass.
+    void record_scene_textured(VulkanRasterTarget& t, VulkanRasterProgram& p, VulkanStorageBuffer& s, VulkanTexture& tex,
+                               bool clear, ClearColor clear_color, float clear_depth, DepthCompare compare,
+                               crd::u32 vertex_count)
+    {
+        VkCommandBuffer             cmd = m_frame_rec.cmd;
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool     = m_frame_rec.pool;
+        dsai.descriptorSetCount = 1U;
+        dsai.pSetLayouts        = &m_storage_set_layout;
+        VkDescriptorSet dset = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return; }
+        write_scene_textured(m_device, dset, s.buf(), tex.view(), m_default_sampler);
+        frame_self_barrier_if_needed(t);
+
+        VkRenderingAttachmentInfo att{};
+        att.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att.imageView   = t.view();
+        att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        att.loadOp      = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+        att.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+        if (clear) { att.clearValue.color = {{clear_color.r, clear_color.g, clear_color.b, clear_color.a}}; }
+        VkRenderingAttachmentInfo dep{};
+        dep.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        dep.imageView   = t.depth_view();
+        dep.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        dep.loadOp      = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+        dep.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+        if (clear) { dep.clearValue.depthStencil.depth = clear_depth; }
         VkRenderingInfo ri{};
         ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
         ri.renderArea.extent    = {t.width(), t.height()};
@@ -3092,6 +3373,9 @@ private:
         auto& p = static_cast<VulkanRasterProgram&>(program);
         if (!m_api.valid() || !p.valid() || m_desc_pool == VK_NULL_HANDLE || view == VK_NULL_HANDLE) { return; }
 
+        // REN-2: in frame-graph recording mode, sampling records into the shared cmd (RTT compose / material forward).
+        if (frame_recording()) { record_textured(t, p, view, sampler, clear_color, vertex_count); return; }
+
         vkResetDescriptorPool(m_device, m_desc_pool, 0);
         VkDescriptorSetAllocateInfo dsai{};
         dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -3639,19 +3923,8 @@ private:
 // record_*). REN-1 executes passes in DECLARATION ORDER (a valid topological order by the API contract — a pass is
 // declared after its producers); the declared read/write DAG drives the barrier schedule + transient lifetimes.
 
-// A minimal drawable-less adapter over a transient image (REN-1: transients are aliased + tracked; making them
-// first-class DRAWN attachments through the public draw API is REN-2's RTT job).
-class VulkanTransientTarget final : public IRasterTarget
-{
-public:
-    VulkanTransientTarget(crd::u32 w, crd::u32 h) noexcept : m_w(w), m_h(h) {}
-    [[nodiscard]] crd::u32 width() const noexcept override { return m_w; }
-    [[nodiscard]] crd::u32 height() const noexcept override { return m_h; }
-    [[nodiscard]] crd::u32 read_pixel(crd::u32, crd::u32) const noexcept override { return 0U; } // device-local, not host-read
-private:
-    crd::u32 m_w = 0;
-    crd::u32 m_h = 0;
-};
+// REN-2: a transient used as a render target is a BORROWED VulkanRasterTarget over the graph-owned image+view (built
+// in VulkanFrameGraph::build); `sampled` transients also get a borrowed VulkanTexture. No dedicated adapter needed.
 
 class VulkanFrameGraph final : public IFrameGraph, public IFrameContext
 {
@@ -3670,10 +3943,15 @@ public:
         cbai.commandPool        = m_pool;
         cbai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         cbai.commandBufferCount = 1U;
-        vkAllocateCommandBuffers(m_device, &cbai, &m_cmd);
         VkFenceCreateInfo fci{};
         fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        vkCreateFence(m_device, &fci, nullptr, &m_fence);
+        for (crd::u32 s = 0; s < kFramesInFlight; ++s)
+        {
+            vkAllocateCommandBuffers(m_device, &cbai, &m_slots_if[s].cmd);
+            vkCreateFence(m_device, &fci, nullptr, &m_slots_if[s].fence);
+        }
+        m_cmd   = m_slots_if[0].cmd;
+        m_fence = m_slots_if[0].fence;
 
         // a large per-frame descriptor pool the passes allocate storage sets from (reset once per execute). The
         // shared set-0 layout carries storage(0) + sampled image(1) + sampler(2) + a bindless array(3), so the
@@ -3686,13 +3964,46 @@ public:
         dpci.maxSets       = kFrameSets;
         dpci.poolSizeCount = 3U;
         dpci.pPoolSizes    = dps;
-        vkCreateDescriptorPool(m_device, &dpci, nullptr, &m_frame_desc_pool);
+        for (crd::u32 s = 0; s < kFramesInFlight; ++s)
+        {
+            vkCreateDescriptorPool(m_device, &dpci, nullptr, &m_slots_if[s].pool);
+        }
+        m_frame_desc_pool = m_slots_if[0].pool;
+
+        // REN-8: the timestamp pool. `timestampPeriod == 0` means the device cannot timestamp at all — then
+        // `gpu_timing_available()` stays false and the frame renders exactly as before. Timing is never
+        // load-bearing: it must not be able to change what is drawn.
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(rc.frame_ctx().vk_physical_device(), &props);
+        m_ts_period = static_cast<double>(props.limits.timestampPeriod);
+        if (m_ts_period > 0.0)
+        {
+            VkQueryPoolCreateInfo qpci{};
+            qpci.sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+            qpci.queryType  = VK_QUERY_TYPE_TIMESTAMP;
+            qpci.queryCount = kMaxTimedPasses * 2U;
+            for (crd::u32 s = 0; s < kFramesInFlight; ++s)
+            {
+                if (vkCreateQueryPool(m_device, &qpci, nullptr, &m_slots_if[s].ts) != VK_SUCCESS)
+                {
+                    m_slots_if[s].ts = VK_NULL_HANDLE;
+                }
+            }
+            m_ts_pool = m_slots_if[0].ts;
+        }
     }
     ~VulkanFrameGraph() override
     {
+        // ⛔ never tear down a pool/fence, or free a transient, with work still in flight — drain EVERY slot
+        wait_all_slots();
         free_transients();
-        if (m_frame_desc_pool != VK_NULL_HANDLE) { vkDestroyDescriptorPool(m_device, m_frame_desc_pool, nullptr); }
-        if (m_fence != VK_NULL_HANDLE) { vkDestroyFence(m_device, m_fence, nullptr); }
+        for (crd::u32 s = 0; s < kFramesInFlight; ++s)
+        {
+            FrameSlot& fs = m_slots_if[s];
+            if (fs.ts != VK_NULL_HANDLE) { vkDestroyQueryPool(m_device, fs.ts, nullptr); }
+            if (fs.pool != VK_NULL_HANDLE) { vkDestroyDescriptorPool(m_device, fs.pool, nullptr); }
+            if (fs.fence != VK_NULL_HANDLE) { vkDestroyFence(m_device, fs.fence, nullptr); }
+        }
         if (m_pool != VK_NULL_HANDLE) { vkDestroyCommandPool(m_device, m_pool, nullptr); }
     }
     VulkanFrameGraph(const VulkanFrameGraph&)            = delete;
@@ -3707,11 +4018,25 @@ public:
         if (!h.valid() || h.id > m_images.size()) { return nullptr; }
         return m_images[h.id - 1U].target;
     }
-    [[nodiscard]] ITexture* texture(FgImage /*h*/) noexcept override { return nullptr; } // REN-2: sampled transients
+    [[nodiscard]] ITexture* texture(FgImage h) noexcept override // REN-2: a `sampled` transient resolves to its view
+    {
+        if (!h.valid() || h.id > m_images.size()) { return nullptr; }
+        return m_images[h.id - 1U].texture;
+    }
     [[nodiscard]] IStorageBuffer* buffer(FgBuffer h) noexcept override
     {
         if (!h.valid() || h.id > m_buffers.size()) { return nullptr; }
         return m_buffers[h.id - 1U].buffer;
+    }
+    // REN-3.2: one SLICE of a layered transient as a render target (the per-cascade shadow write). A non-layered
+    // image has no layer_targets, so layer 0 falls through to the single target — `image_layer(h,0)` is exactly
+    // `image(h)` there, which is what lets a for_each-expanded pass use ONE code path for both shapes.
+    [[nodiscard]] IRasterTarget* image_layer(FgImage h, crd::u32 layer) noexcept override
+    {
+        if (!h.valid() || h.id > m_images.size()) { return nullptr; }
+        ImageNode& n = m_images[h.id - 1U];
+        if (layer < n.layer_targets.size()) { return n.layer_targets[layer]; }
+        return layer == 0U ? n.target : nullptr;
     }
 
     // ── IFrameGraph ──
@@ -3743,6 +4068,10 @@ public:
     [[nodiscard]] FgImage create_transient_image(const FgImageDesc& desc) override
     {
         if (desc.width == 0U || desc.height == 0U) { return FgImage{0U}; }
+        // REN-3.2: reject a bad layer count by RETURN VALUE — an invalid handle build() then refuses — rather
+        // than clamping. A silently truncated cascade atlas renders a plausible-looking image with missing
+        // cascades, which is the worst class of graphics bug: it looks like art direction.
+        if (desc.layers == 0U || desc.layers > kFgMaxImageLayers) { return FgImage{0U}; }
         ImageNode n{};
         n.transient = true;
         n.desc      = desc;
@@ -3759,7 +4088,7 @@ public:
         ici.format        = fmt;
         ici.extent        = {desc.width, desc.height, 1U};
         ici.mipLevels     = 1U;
-        ici.arrayLayers   = 1U;
+        ici.arrayLayers   = desc.layers; // REN-3.2: >1 ⇒ the 2D-ARRAY cascade/cube/stereo atlas
         ici.samples       = VK_SAMPLE_COUNT_1_BIT;
         ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
         ici.usage         = usage;
@@ -3804,7 +4133,14 @@ public:
     void               execute() override;
     void               reset() override
     {
-        free_transients();
+        // ⛔ REN-8: RETIRE, do not destroy. The last submission may still be reading these images/memory; they
+        // are handed to that slot's retire list and freed when its fence signals. Destroying here (what this
+        // did before frames-in-flight) is a use-after-free that renders correctly almost every time.
+        if (m_last_slot >= 0 && m_slots_if[static_cast<crd::u32>(m_last_slot)].pending)
+        {
+            retire_transients_to(m_slots_if[static_cast<crd::u32>(m_last_slot)]);
+        }
+        else { free_transients(); } // nothing in flight — free immediately (keeps the peak footprint down)
         m_images.clear();
         m_buffers.clear();
         m_passes.clear();
@@ -3815,6 +4151,25 @@ public:
     [[nodiscard]] crd::u32 last_submit_count() const noexcept override { return m_submit_count; }
     [[nodiscard]] crd::u32 transient_memory_bytes() const noexcept override { return m_physical_bytes; }
     [[nodiscard]] crd::u32 transient_logical_bytes() const noexcept override { return m_logical_bytes; }
+
+    // ── REN-8: GPU timing ──
+    [[nodiscard]] crd::u32 pass_count() const noexcept override { return m_timed_passes; }
+    [[nodiscard]] const char* pass_name(crd::u32 i) const noexcept override
+    {
+        return i < m_timed_passes ? m_pass_names[i] : nullptr;
+    }
+    [[nodiscard]] double pass_gpu_ms(crd::u32 i) const noexcept override
+    {
+        return i < m_timed_passes ? m_pass_ms[i] : 0.0;
+    }
+    [[nodiscard]] double gpu_ms_total() const noexcept override { return m_gpu_ms_total; }
+    [[nodiscard]] bool   gpu_timing_available() const noexcept override { return m_ts_pool != VK_NULL_HANDLE; }
+    void                 set_readback_enabled(bool on) noexcept override { m_readback = on; }
+
+    // REN-8: the frames-in-flight machinery. The two that name FrameSlot are declared with it, below.
+    void wait_pending_submit() noexcept; // wait the CURRENT slot, then drain its retire list + timestamps
+    void wait_all_slots() noexcept;      // drain every slot (teardown / reset-to-idle)
+    void resolve_timestamps() noexcept;
 
 private:
     // one physical memory slot (one VkDeviceMemory) reusable across disjoint-lifetime transients
@@ -3827,11 +4182,17 @@ private:
     };
     struct ImageNode
     {
-        IRasterTarget* target    = nullptr; // imported: the real target; transient: the adapter (set in build)
+        IRasterTarget* target    = nullptr; // imported: the real target; transient: the borrowed target (set in build)
+        ITexture*      texture   = nullptr; // REN-2: transient + sampled ⇒ the borrowed sampled view (set in build)
         bool           transient = false;
         FgImageDesc    desc{};
         VkImage        image     = VK_NULL_HANDLE; // transient only
-        VkImageView    view      = VK_NULL_HANDLE; // transient only
+        VkImageView    view      = VK_NULL_HANDLE; // transient only; layers>1 ⇒ the whole-array SAMPLING view
+        // REN-3.2: layers>1 ⇒ one single-slice VIEW_TYPE_2D view + borrowed target per layer. Attachment views
+        // must be single-slice (a pass renders into ONE cascade), while the sampling view spans the array — so
+        // a layered transient carries BOTH, never one reinterpreted as the other.
+        crd::containers::Array<VkImageView>    layer_views{crd::memory::default_allocator()};
+        crd::containers::Array<IRasterTarget*> layer_targets{crd::memory::default_allocator()};
         VkFormat       fmt       = VK_FORMAT_UNDEFINED;
         VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT;
         VkMemoryRequirements mem_req{};
@@ -3929,10 +4290,22 @@ private:
         {
             if (n.transient)
             {
+                // REN-2: the wrappers are BORROWED (their dtors free nothing) — delete the wrapper objects, then the
+                // graph-owned view+image they viewed. Delete via the base (virtual dtor); the target is now a borrowed
+                // VulkanRasterTarget, the texture a borrowed VulkanTexture.
+                delete n.texture;
+                n.texture = nullptr;
+                // REN-3.2: on a layered transient `target` ALIASES layer_targets[0] — free the per-layer targets
+                // and null `target` FIRST, or the shared slice-0 wrapper is deleted twice.
+                for (IRasterTarget* lt : n.layer_targets) { delete lt; }
+                if (n.layer_targets.size() > 0) { n.target = nullptr; }
+                n.layer_targets.clear();
+                for (VkImageView lv : n.layer_views) { vkDestroyImageView(m_device, lv, nullptr); }
+                n.layer_views.clear();
+                delete n.target;
+                n.target = nullptr;
                 if (n.view != VK_NULL_HANDLE) { vkDestroyImageView(m_device, n.view, nullptr); n.view = VK_NULL_HANDLE; }
                 if (n.image != VK_NULL_HANDLE) { vkDestroyImage(m_device, n.image, nullptr); n.image = VK_NULL_HANDLE; }
-                delete static_cast<VulkanTransientTarget*>(n.target);
-                n.target = nullptr;
             }
         }
         for (BufferNode& n : m_buffers)
@@ -3946,11 +4319,56 @@ private:
     }
 
     static constexpr crd::u32 kFrameSets = 256U;
+    // REN-8: timing capacity. A frame with more passes than this still RENDERS correctly — the extra passes are
+    // simply not timed (`pass_count()` reports how many were), so timing can never change what is drawn.
+    static constexpr crd::u32 kMaxTimedPasses = 64U;
 
     VulkanRasterContext* m_rc     = nullptr;
     VkDevice             m_device = VK_NULL_HANDLE;
     VkQueue              m_queue  = VK_NULL_HANDLE;
     VkCommandPool        m_pool   = VK_NULL_HANDLE;
+    // ── REN-8: FRAMES IN FLIGHT. ────────────────────────────────────────────────────────────────────────────
+    // With ONE command buffer, frame N+1 cannot start recording until frame N's fence signals — deferring the
+    // wait bought one frame of overlap but the re-record still serialized on the GPU (measured: 1.49 ms of
+    // residual stall). A RING of per-frame resources removes that: frame N+1 records into its own buffer while
+    // the GPU is still consuming frame N's.
+    //
+    // ⛔ Everything a submission reads must be per-slot, or the ring is a data race: the command buffer, the
+    // fence, the descriptor pool the passes allocate sets from, and the timestamp pool. Sharing any one of them
+    // reintroduces the hazard silently — the frame still renders, just occasionally from the wrong data.
+    //
+    // ⛔ Transients are the subtle half. `reset()` used to DESTROY them immediately, which is a use-after-free
+    // once a previous frame can still be reading them. They now go to the submitting slot's RETIRE LIST and are
+    // destroyed only when that slot's fence signals. This is what makes the ring safe for any authored graph,
+    // including ones that own transients — the author never has to think about it.
+    static constexpr crd::u32 kFramesInFlight = 2U;
+    struct FrameSlot
+    {
+        VkCommandBuffer  cmd     = VK_NULL_HANDLE;
+        VkFence          fence   = VK_NULL_HANDLE;
+        VkDescriptorPool pool    = VK_NULL_HANDLE;
+        VkQueryPool      ts      = VK_NULL_HANDLE;
+        bool             pending = false;
+        crd::containers::Array<VkImage>        dead_images{crd::memory::default_allocator()};
+        crd::containers::Array<VkImageView>    dead_views{crd::memory::default_allocator()};
+        crd::containers::Array<VkBuffer>       dead_buffers{crd::memory::default_allocator()};
+        crd::containers::Array<VkDeviceMemory> dead_memory{crd::memory::default_allocator()};
+        crd::containers::Array<IRasterTarget*> dead_targets{crd::memory::default_allocator()};
+        crd::containers::Array<ITexture*>      dead_textures{crd::memory::default_allocator()};
+    };
+    FrameSlot m_slots_if[kFramesInFlight];
+    crd::u32  m_slot      = 0U;      // the slot the NEXT execute() records into
+    crd::i32  m_last_slot = -1;      // the slot that last submitted (owns the live transients)
+
+    // REN-1/REN-8: the DEPENDENCY-SORTED execution order (declaration indices). execute() walks THIS, never
+    // m_passes directly — that is what lets a pass be inserted anywhere and still run in the right place.
+    crd::containers::Array<crd::u32> m_order{crd::memory::default_allocator()};
+
+    void retire_transients_to(FrameSlot& slot) noexcept; // hand live transients to a slot's retire list
+    void drain_retired(FrameSlot& slot) noexcept;        // destroy what that slot retired (fence has signalled)
+
+    // The CURRENT slot's handles, refreshed at the top of execute(). Every recording path already reads these,
+    // so the ring needs no changes anywhere below this point.
     VkCommandBuffer      m_cmd    = VK_NULL_HANDLE;
     VkFence              m_fence  = VK_NULL_HANDLE;
     VkDescriptorPool     m_frame_desc_pool = VK_NULL_HANDLE;
@@ -3964,6 +4382,15 @@ private:
 
     crd::u32 m_barrier_count  = 0U;
     crd::u32 m_submit_count   = 0U;
+    // REN-8: device timestamp queries around each pass
+    VkQueryPool                             m_ts_pool   = VK_NULL_HANDLE;
+    double                                  m_ts_period = 1.0; // ns per tick
+    crd::containers::Array<const char*>      m_pass_names{crd::memory::default_allocator()};
+    double                                  m_pass_ms[kMaxTimedPasses]{};
+    crd::u32                                m_timed_passes = 0U;
+    double                                  m_gpu_ms_total = 0.0;
+    bool                                    m_readback     = true; // REN-8: opt-out; gates keep read_pixel
+    bool                                    m_pending_submit = false; // REN-8: a submit not yet waited on
     crd::u32 m_physical_bytes = 0U;
     crd::u32 m_logical_bytes  = 0U;
 };
@@ -3992,23 +4419,93 @@ bool VulkanFrameGraph::build()
         for (const Access& a : p.buf_access) { if (a.handle == 0U || a.handle > m_buffers.size()) { return false; } }
     }
 
+    // ── 1b) TOPOLOGICAL SORT — the frame graph's actual promise. ────────────────────────────────────────────
+    // Passes execute in DEPENDENCY order, not declaration order: for every resource, all its WRITERS run before
+    // all its READERS. That is what makes a graph composable — a pass can be added ANYWHERE (appended last, or
+    // inserted between two existing passes) and still land in the right place, because the ORDER IS DERIVED FROM
+    // THE DATA, not from when the author happened to declare it. Insert a depth pre-pass after the lighting pass
+    // that reads its depth, and the graph still runs the pre-pass first.
+    //
+    // ⛔ Until this existed, `execute()` walked `m_passes` in declaration order while the interface header
+    // promised a topo-sort and a CYCLE rejection. The docs were right and the code was not: a correctly-declared
+    // graph whose passes were added out of order rendered garbage, silently.
+    //
+    // Ties break on declaration index, so the order is DETERMINISTIC and a dependency-free graph keeps exactly
+    // the order the author wrote — no surprise reshuffling, and the same graph always schedules identically.
+    {
+        const crd::u32 np = static_cast<crd::u32>(m_passes.size());
+        m_order.clear();
+        crd::containers::Array<crd::u32> indeg(crd::memory::default_allocator());
+        crd::containers::Array<crd::u32> edges(crd::memory::default_allocator()); // flattened adjacency: np x np bits
+        indeg.resize(np, 0U);
+        edges.resize(static_cast<crd::usize>(np) * np, 0U);
+        const auto add_edge = [&](crd::u32 from, crd::u32 to) {
+            if (from == to) { return; }
+            crd::u32& e = edges[static_cast<crd::usize>(from) * np + to];
+            if (e == 0U) { e = 1U; ++indeg[to]; }
+        };
+        // writer -> reader for every resource, in BOTH directions of the handle space (images + buffers)
+        const auto link = [&](auto accessor) {
+            for (crd::u32 w = 0; w < np; ++w)
+            {
+                for (const Access& aw : accessor(m_passes[w]))
+                {
+                    if (aw.access == FgAccess::Read) { continue; }
+                    for (crd::u32 r = 0; r < np; ++r)
+                    {
+                        for (const Access& ar : accessor(m_passes[r]))
+                        {
+                            if (ar.handle != aw.handle) { continue; }
+                            // A pure reader must follow the writer. Two WRITERS of the same resource keep
+                            // declaration order (w < r) — that is the author's stated intent and the only
+                            // defensible tie-break; reordering two writes would silently change the result.
+                            if (ar.access == FgAccess::Read || w < r) { add_edge(w, r); }
+                        }
+                    }
+                }
+            }
+        };
+        link([](Pass& p) -> crd::containers::Array<Access>& { return p.img_access; });
+        link([](Pass& p) -> crd::containers::Array<Access>& { return p.buf_access; });
+
+        // Kahn, always taking the LOWEST ready index so the result is deterministic
+        for (crd::u32 done = 0; done < np; ++done)
+        {
+            crd::u32 pick = np;
+            for (crd::u32 i = 0; i < np; ++i)
+            {
+                if (indeg[i] == 0U) { pick = i; break; }
+            }
+            if (pick == np) { return false; } // ⛔ a dependency CYCLE — never a partial schedule
+            indeg[pick] = 0xFFFFFFFFU;        // consumed
+            m_order.push_back(pick);
+            for (crd::u32 t = 0; t < np; ++t)
+            {
+                if (edges[static_cast<crd::usize>(pick) * np + t] != 0U && indeg[t] != 0xFFFFFFFFU) { --indeg[t]; }
+            }
+        }
+    }
+
     // 2) transient LIFETIME analysis — [first pass touching .. last pass touching] + whether any pass writes it
+    // ⛔ Positions are indices into the SORTED order, not declaration indices: aliasing reuses memory between
+    // transients whose lifetimes are disjoint, and "disjoint" only means anything in EXECUTION order.
     for (ImageNode& n : m_images) { n.first_pass = -1; n.last_pass = -1; n.has_write = false; n.slot = -1; }
     for (BufferNode& n : m_buffers) { n.first_pass = -1; n.last_pass = -1; n.has_write = false; n.slot = -1; }
-    for (crd::usize pi = 0; pi < m_passes.size(); ++pi)
+    for (crd::usize oi = 0; oi < m_order.size(); ++oi)
     {
+        const crd::usize pi = m_order[oi];
         for (const Access& a : m_passes[pi].img_access)
         {
             ImageNode& n = m_images[a.handle - 1U];
-            if (n.first_pass < 0) { n.first_pass = static_cast<crd::i32>(pi); }
-            n.last_pass = static_cast<crd::i32>(pi);
+            if (n.first_pass < 0) { n.first_pass = static_cast<crd::i32>(oi); }
+            n.last_pass = static_cast<crd::i32>(oi);
             if (a.access != FgAccess::Read) { n.has_write = true; }
         }
         for (const Access& a : m_passes[pi].buf_access)
         {
             BufferNode& n = m_buffers[a.handle - 1U];
-            if (n.first_pass < 0) { n.first_pass = static_cast<crd::i32>(pi); }
-            n.last_pass = static_cast<crd::i32>(pi);
+            if (n.first_pass < 0) { n.first_pass = static_cast<crd::i32>(oi); }
+            n.last_pass = static_cast<crd::i32>(oi);
             if (a.access != FgAccess::Read) { n.has_write = true; }
         }
     }
@@ -4078,16 +4575,71 @@ bool VulkanFrameGraph::build()
     {
         if (!n.transient || n.slot < 0) { continue; }
         if (vkBindImageMemory(m_device, n.image, m_slots[static_cast<crd::u32>(n.slot)].memory, 0) != VK_SUCCESS) { return false; }
+        const bool is_depth  = (n.aspect & VK_IMAGE_ASPECT_DEPTH_BIT) != 0U;
+        const bool is_array  = n.desc.layers > 1U;
+
+        // REN-2: the transient is a BORROWED render target (drawn into by a raster pass) — a VulkanRasterTarget view
+        // over the graph-owned image+view (no memory, no readback; set_borrowed ⇒ its dtor frees nothing). If the
+        // transient is `sampled`, it is ALSO a borrowed sampled texture a later pass reads via texture() (RTT).
+        // REN-3.1: a DEPTH transient is a depth ATTACHMENT, not a colour one — hand the bundle to the target's
+        // DEPTH slot so `depth_view()` resolves it and `record_depth_only` can render into it with no colour
+        // attachment at all. (The colour path is unchanged: bundle → colour slot.)
+        const auto make_target = [&](VkImageView v) {
+            ImageBundle cb{};
+            cb.image  = n.image;
+            cb.view   = v;
+            auto* t = is_depth ? new VulkanRasterTarget(m_device, ImageBundle{}, ImageBundle{}, cb,
+                                                        BufferBundle{}, 1U, n.desc.width, n.desc.height)
+                               : new VulkanRasterTarget(m_device, cb, ImageBundle{}, ImageBundle{},
+                                                        BufferBundle{}, 1U, n.desc.width, n.desc.height);
+            t->set_borrowed();
+            return t;
+        };
+
+        // REN-3.2: the SAMPLING view spans every slice (VIEW_TYPE_2D_ARRAY when layered) — that is what a later
+        // pass binds to select a cascade in the shader. Attachment views are made separately, one slice each,
+        // because `vkCmdBeginRendering` renders into exactly the subresource its view names.
         VkImageViewCreateInfo vci{};
         vci.sType                       = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         vci.image                       = n.image;
-        vci.viewType                    = VK_IMAGE_VIEW_TYPE_2D;
+        vci.viewType                    = is_array ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
         vci.format                      = n.fmt;
         vci.subresourceRange.aspectMask = n.aspect;
         vci.subresourceRange.levelCount = 1U;
-        vci.subresourceRange.layerCount = 1U;
+        vci.subresourceRange.layerCount = n.desc.layers;
         vkCreateImageView(m_device, &vci, nullptr, &n.view);
-        n.target = new VulkanTransientTarget(n.desc.width, n.desc.height);
+
+        if (is_array)
+        {
+            for (crd::u32 l = 0; l < n.desc.layers; ++l)
+            {
+                VkImageViewCreateInfo lci     = vci;
+                lci.viewType                  = VK_IMAGE_VIEW_TYPE_2D;
+                lci.subresourceRange.baseArrayLayer = l;
+                lci.subresourceRange.layerCount     = 1U;
+                VkImageView lv = VK_NULL_HANDLE;
+                if (vkCreateImageView(m_device, &lci, nullptr, &lv) != VK_SUCCESS) { return false; }
+                n.layer_views.push_back(lv);
+                n.layer_targets.push_back(make_target(lv));
+            }
+            n.target = n.layer_targets[0]; // image() on a layered transient = slice 0 (never the array view)
+        }
+        else
+        {
+            n.target = make_target(n.view);
+        }
+        if (n.desc.sampled)
+        {
+            // The same image is ALSO a borrowed sampled view — the ARRAY view when layered. Vulkan needs no
+            // format gymnastics for depth: one VK_FORMAT_D32_SFLOAT image serves attachment + sampling via
+            // aspect + layout. (DX12 does; see the R32_TYPELESS dance in dx12_raster_context.cpp.)
+            ImageBundle sb{};
+            sb.image  = n.image;
+            sb.view   = n.view;
+            auto* tex = new VulkanTexture(m_device, sb, n.desc.width, n.desc.height);
+            tex->set_borrowed();
+            n.texture = tex;
+        }
     }
 
     // -- buffers (their own slots, appended after the image slots) --
@@ -4158,6 +4710,18 @@ void layout_src(VkImageLayout layout, VkAccessFlags& access, VkPipelineStageFlag
 
 void VulkanFrameGraph::execute()
 {
+    // ⛔ REN-8: the deferred wait lands HERE, before the descriptor pool and command buffer are reset — both are
+    // still being read by the previous frame's submission until its fence signals. This is the point where the
+    // CPU/GPU overlap is actually cashed in: by now the GPU has usually finished, so the wait costs ~nothing.
+    // REN-8: bind THIS frame's slot, then wait only on IT. With kFramesInFlight slots that fence is from
+    // `kFramesInFlight - 1` frames ago and has almost always signalled, so the wait costs ~nothing — that is the
+    // whole point of the ring versus a single buffer.
+    FrameSlot& fs     = m_slots_if[m_slot];
+    m_cmd             = fs.cmd;
+    m_fence           = fs.fence;
+    m_frame_desc_pool = fs.pool;
+    m_ts_pool         = fs.ts;
+    wait_pending_submit();
     m_submit_count = 0U;
     vkResetDescriptorPool(m_device, m_frame_desc_pool, 0);
     vkResetCommandBuffer(m_cmd, 0);
@@ -4168,6 +4732,16 @@ void VulkanFrameGraph::execute()
 
     m_rc->frame_rec_begin(m_cmd, m_frame_desc_pool);
     for (ImageNode& n : m_images) { n.layout = VK_IMAGE_LAYOUT_UNDEFINED; n.depth_layout = VK_IMAGE_LAYOUT_UNDEFINED; }
+
+    // REN-8: a timestamp pool MUST be reset on the device before it is written, or results are undefined.
+    // ⛔ Only the NAMES are cleared here. `m_timed_passes` / `m_gpu_ms_total` belong to `resolve_timestamps()`,
+    // which — on the deferred-wait path — ran moments ago at the top of this call and published the PREVIOUS
+    // frame's numbers. Zeroing them here wiped exactly those results, so the sandbox reported `0 passes` and
+    // `0.000 ms` while timing was in fact working. One-frame-late timings are the price of CPU/GPU overlap;
+    // no timings at all would just be a broken instrument.
+    m_pass_names.clear();
+    crd::u32 pass_index = 0U;
+    if (m_ts_pool != VK_NULL_HANDLE) { vkCmdResetQueryPool(m_cmd, m_ts_pool, 0U, kMaxTimedPasses * 2U); }
 
     const auto img_barrier = [this](VkImage image, VkImageAspectFlags aspect, VkImageLayout from, VkImageLayout to,
                                     VkAccessFlags dst_access, VkPipelineStageFlags dst_stage) {
@@ -4183,23 +4757,78 @@ void VulkanFrameGraph::execute()
         b.image                       = image;
         b.subresourceRange.aspectMask = aspect;
         b.subresourceRange.levelCount = 1U;
-        b.subresourceRange.layerCount = 1U;
+        // REN-3.2: a layered transient is ONE graph node, so its transitions cover EVERY slice. Per-slice
+        // layout tracking would need per-slice access in the DAG; whole-resource is conservative and always
+        // correct, and the per-cascade writes are already ordered by the declared dependencies.
+        b.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
         b.srcAccessMask               = src_access;
         b.dstAccessMask               = dst_access;
         vkCmdPipelineBarrier(m_cmd, src_stage, dst_stage, 0, 0, nullptr, 0, nullptr, 1U, &b);
         ++m_barrier_count;
     };
 
-    for (Pass& p : m_passes)
+    // ⛔ walk the DEPENDENCY-SORTED order from build(), not m_passes — see the topo-sort in build().
+    for (const crd::u32 pass_idx : m_order)
     {
+        Pass& p = m_passes[pass_idx];
         m_rc->frame_rec_new_pass();
         // barriers for imported render targets this pass writes / read-writes (transients aren't drawn in REN-1)
         for (const Access& a : p.img_access)
         {
             ImageNode& n = m_images[a.handle - 1U];
-            if (n.transient || n.target == nullptr) { continue; }
-            auto& t = static_cast<VulkanRasterTarget&>(*n.target);
+            if (n.target == nullptr) { continue; }
             const bool writes = (a.access != FgAccess::Read);
+            if (n.transient && (n.aspect & VK_IMAGE_ASPECT_DEPTH_BIT) != 0U)
+            {
+                // REN-3.1: a DEPTH RTT transient — a depth-only pass renders into it (DEPTH_ATTACHMENT_OPTIMAL),
+                // then a later pass SAMPLES it through the comparison sampler. Same shape as the colour RTT
+                // barrier below, with the depth aspect + the early/late-fragment-test stages.
+                // ⛔ ONE sampling layout, tracked in `depth_layout`: SHADER_READ_ONLY_OPTIMAL. It MUST equal the
+                // layout the sampled-image DESCRIPTOR declares (`frame_alloc_sampled_set` writes
+                // VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL). DEPTH_READ_ONLY_OPTIMAL is equally legal for sampling
+                // a depth image, but mixing the two is not — the first run of the REN-3.1 gate failed on exactly
+                // that (VUID-vkCmdDraw-imageLayout-00344), which is why the spec listed it as risk #2.
+                auto& dt = static_cast<VulkanRasterTarget&>(*n.target);
+                if (writes && n.depth_layout != VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
+                {
+                    img_barrier(dt.depth_image(), VK_IMAGE_ASPECT_DEPTH_BIT, n.depth_layout,
+                                VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                                VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+                                VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT);
+                    n.depth_layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+                }
+                else if (!writes && n.depth_layout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
+                {
+                    // the DEPTH RTT barrier: the shadow pass's depth writes complete → this pass samples it
+                    img_barrier(dt.depth_image(), VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_SHADER_READ_BIT,
+                                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                    n.depth_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                }
+                continue;
+            }
+            if (n.transient) // REN-2: an RTT transient — render into it (COLOR_ATTACHMENT), then a later pass SAMPLES it
+            {
+                auto& tt = static_cast<VulkanRasterTarget&>(*n.target);
+                if (writes && n.layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                {
+                    img_barrier(tt.image(), VK_IMAGE_ASPECT_COLOR_BIT, n.layout,
+                                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT,
+                                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+                    n.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                }
+                else if (!writes && n.layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                {
+                    // the RTT barrier: the render pass's writes complete → this pass samples it
+                    img_barrier(tt.image(), VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_SHADER_READ_BIT,
+                                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                    n.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                }
+                continue;
+            }
+            auto& t = static_cast<VulkanRasterTarget&>(*n.target);
             if (p.present != nullptr) { continue; } // present-pass reads → the final readback loop transitions
             if (writes)
             {
@@ -4227,14 +4856,26 @@ void VulkanFrameGraph::execute()
                 }
             }
         }
+        // REN-8: bracket THIS pass with device timestamps. BOTTOM_OF_PIPE for the end stamp means "after all
+        // prior work completed", which is what makes the [start,end] delta the pass's own GPU cost rather than
+        // a submission-relative wall-clock.
+        const bool stamp = m_ts_pool != VK_NULL_HANDLE && pass_index < kMaxTimedPasses;
+        if (stamp) { vkCmdWriteTimestamp(m_cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_ts_pool, pass_index * 2U); }
         if (p.fn != nullptr) { p.fn(*this, p.user); }
+        if (stamp)
+        {
+            vkCmdWriteTimestamp(m_cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_ts_pool, pass_index * 2U + 1U);
+            m_pass_names.push_back(p.name);
+        }
+        ++pass_index;
     }
 
     // final readback: every imported target left in COLOR_ATTACHMENT → TRANSFER_SRC + copy to its readback (so
     // read_pixel is bit-identical to the sync path). The direct-to-backbuffer present is REN-8.
     for (ImageNode& n : m_images)
     {
-        if (!n.transient && n.target != nullptr && n.layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+        if (m_readback && !n.transient && n.target != nullptr
+            && n.layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
         {
             m_rc->frame_readback(m_cmd, *n.target);
             n.layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
@@ -4250,8 +4891,135 @@ void VulkanFrameGraph::execute()
     si.pCommandBuffers    = &m_cmd;
     vkResetFences(m_device, 1U, &m_fence);
     vkQueueSubmit(m_queue, 1U, &si, m_fence);
-    vkWaitForFences(m_device, 1U, &m_fence, VK_TRUE, ~0ULL);
     m_submit_count = 1U;
+
+    // ⛔ REN-8: THE STALL. Waiting here blocks the CPU on the GPU every single frame — measured at ~4.9 ms of a
+    // ~12.5 ms sandbox frame, against only ~1.5 ms of actual pass work. The wait exists so `read_pixel` is valid
+    // the instant execute() returns, which is a TEST affordance, exactly like the readback copy.
+    //
+    // So: when readback is on, wait here (every gate keeps its exact semantics). When it is off, DEFER the wait
+    // to the top of the next execute()/reset(). The GPU then renders frame N while the CPU builds frame N+1 —
+    // one frame of overlap, which is the whole point of a submitted-once frame graph.
+    //
+    // ⛔ Deferring is only SAFE because every destructive operation is behind `wait_pending()`: reset() frees
+    // transients, the dtor tears down the pool, and execute() re-records the one command buffer. A deferred wait
+    // that skipped any of those would be a use-after-free on in-flight GPU work, not a speedup.
+    fs.pending       = true;
+    m_pending_submit = true;
+    m_last_slot      = static_cast<crd::i32>(m_slot);
+    if (m_readback)
+    {
+        wait_pending_submit(); // gates read pixels the instant execute() returns — unchanged semantics
+    }
+    else
+    {
+        m_slot = (m_slot + 1U) % kFramesInFlight; // advance ONLY when pipelining; the readback path stays in-place
+    }
+}
+
+// REN-8: block until the in-flight submission (if any) has completed, then resolve its timestamps. Called at the
+// top of execute()/reset() and from the dtor — every point where the graph is about to touch something the GPU
+// could still be reading.
+void VulkanFrameGraph::wait_pending_submit() noexcept
+{
+    FrameSlot& fs = m_slots_if[m_slot];
+    if (!fs.pending) { return; }
+    vkWaitForFences(m_device, 1U, &fs.fence, VK_TRUE, ~0ULL);
+    fs.pending       = false;
+    m_pending_submit = false;
+    drain_retired(fs);
+    resolve_timestamps();
+}
+
+void VulkanFrameGraph::wait_all_slots() noexcept
+{
+    for (crd::u32 s = 0; s < kFramesInFlight; ++s)
+    {
+        FrameSlot& fs = m_slots_if[s];
+        if (fs.pending)
+        {
+            vkWaitForFences(m_device, 1U, &fs.fence, VK_TRUE, ~0ULL);
+            fs.pending = false;
+        }
+        drain_retired(fs);
+    }
+    m_pending_submit = false;
+}
+
+// Hand the graph's CURRENTLY-LIVE transients to `slot`, which will destroy them once its fence signals. The node
+// arrays keep their handles nulled so a later free_transients() cannot double-free them.
+void VulkanFrameGraph::retire_transients_to(FrameSlot& slot) noexcept
+{
+    for (ImageNode& n : m_images)
+    {
+        if (!n.transient) { continue; }
+        if (n.texture != nullptr) { slot.dead_textures.push_back(n.texture); n.texture = nullptr; }
+        // a layered transient's `target` ALIASES layer_targets[0] — retire the per-slice ones and null `target`
+        // FIRST, exactly as free_transients() does, or the slice-0 wrapper is destroyed twice.
+        for (IRasterTarget* lt : n.layer_targets) { slot.dead_targets.push_back(lt); }
+        if (n.layer_targets.size() > 0) { n.target = nullptr; }
+        n.layer_targets.clear();
+        for (VkImageView lv : n.layer_views) { slot.dead_views.push_back(lv); }
+        n.layer_views.clear();
+        if (n.target != nullptr) { slot.dead_targets.push_back(n.target); n.target = nullptr; }
+        if (n.view != VK_NULL_HANDLE) { slot.dead_views.push_back(n.view); n.view = VK_NULL_HANDLE; }
+        if (n.image != VK_NULL_HANDLE) { slot.dead_images.push_back(n.image); n.image = VK_NULL_HANDLE; }
+    }
+    for (BufferNode& n : m_buffers)
+    {
+        if (n.transient && n.vkbuf != VK_NULL_HANDLE) { slot.dead_buffers.push_back(n.vkbuf); n.vkbuf = VK_NULL_HANDLE; }
+    }
+    for (Slot& s : m_slots) { if (s.memory != VK_NULL_HANDLE) { slot.dead_memory.push_back(s.memory); } }
+    m_slots.clear();
+    m_physical_bytes = 0U;
+    m_logical_bytes  = 0U;
+}
+
+// ⛔ ORDER MATTERS: views before their images, and the backing memory LAST — freeing a VkDeviceMemory that an
+// undestroyed VkImage is still bound to is undefined behaviour.
+void VulkanFrameGraph::drain_retired(FrameSlot& slot) noexcept
+{
+    for (ITexture* t : slot.dead_textures) { delete t; }
+    for (IRasterTarget* t : slot.dead_targets) { delete t; }
+    for (VkImageView v : slot.dead_views) { vkDestroyImageView(m_device, v, nullptr); }
+    for (VkImage i : slot.dead_images) { vkDestroyImage(m_device, i, nullptr); }
+    for (VkBuffer b : slot.dead_buffers) { vkDestroyBuffer(m_device, b, nullptr); }
+    for (VkDeviceMemory m : slot.dead_memory) { vkFreeMemory(m_device, m, nullptr); }
+    slot.dead_textures.clear();
+    slot.dead_targets.clear();
+    slot.dead_views.clear();
+    slot.dead_images.clear();
+    slot.dead_buffers.clear();
+    slot.dead_memory.clear();
+}
+
+void VulkanFrameGraph::resolve_timestamps() noexcept
+{
+    // REN-8: the fence has signalled, so every timestamp is resolvable. Ticks → ms via the device's
+    // timestampPeriod (ns/tick).
+    m_timed_passes = 0U;
+    if (m_ts_pool != VK_NULL_HANDLE && !m_pass_names.empty())
+    {
+        const crd::u32 n = static_cast<crd::u32>(m_pass_names.size());
+        crd::u64       raw[kMaxTimedPasses * 2U]{};
+        if (vkGetQueryPoolResults(m_device, m_ts_pool, 0U, n * 2U, sizeof(crd::u64) * n * 2U,
+                                  static_cast<void*>(raw), sizeof(crd::u64),
+                                  VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT)
+            == VK_SUCCESS)
+        {
+            const double ns_per_tick = m_ts_period;
+            for (crd::u32 i = 0; i < n; ++i)
+            {
+                const crd::u64 a = raw[i * 2U];
+                const crd::u64 b = raw[i * 2U + 1U];
+                m_pass_ms[i]     = b > a ? (static_cast<double>(b - a) * ns_per_tick) / 1.0e6 : 0.0;
+            }
+            m_gpu_ms_total = raw[n * 2U - 1U] > raw[0]
+                                 ? (static_cast<double>(raw[n * 2U - 1U] - raw[0]) * ns_per_tick) / 1.0e6
+                                 : 0.0;
+            m_timed_passes = n;
+        }
+    }
 }
 
 std::unique_ptr<IFrameGraph> VulkanRasterContext::create_frame_graph()
