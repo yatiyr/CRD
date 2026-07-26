@@ -75,7 +75,24 @@ enum class FgPassKind : crd::u8
     Raster = 0,
     Compute,
     Present,
+    // ⭐ REN-38-A6: a pass that MOVES pixels (copy / blit / resolve) rather than rendering them. Appended at the
+    // END of the enum (a renumbered kind silently reclassifies every serialized graph).
+    //
+    // ⛔ It is a distinct KIND rather than an ordinary raster pass because the barrier scheduler picks the
+    // layout from it: a transfer pass's writes go to TRANSFER_DST and its reads to TRANSFER_SRC, where a raster
+    // pass would have used COLOR_ATTACHMENT and SHADER_READ_ONLY. Recording a copy inside a pass declared Raster
+    // would hand `vkCmdCopyImage` an image in the wrong layout — undefined contents, not a validation error, on
+    // the backends that do not check.
+    Transfer,
 };
+
+// ⭐ REN-38-A14: which QUEUE a pass asks for.
+// ⛔ `Async` is a REQUEST, not a guarantee. A pass only reaches the compute queue when the adapter HAS a distinct
+// compute family AND the pass consumes nothing a graphics pass produces — otherwise honouring it would need a
+// queue-ownership transfer per resource, and getting that subtly wrong is a corruption bug that reproduces once a
+// week. When the graph declines, it SAYS SO through `last_async_submit_count()`: an unhonoured async request that
+// reported success would be a performance claim the hardware never delivered.
+enum class FgQueue : crd::u8 { Graphics = 0, Async };
 
 // The pixel format of a transient image.
 enum class FgImageFormat : crd::u8
@@ -170,6 +187,10 @@ public:
     // A Present pass: after its declared reads, blit `surface`'s target into the backbuffer + present — the
     // terminal node. Mutually exclusive with execute() on the same pass.
     virtual IFramePassBuilder& present(IPresentSurface& surface) = 0;
+
+    // REN-38-A14: ask for the async-compute queue. Ignored for a raster pass (the cooker rejects that shape) and
+    // for a pass the graph declines to move — see `last_async_pass_count()`.
+    virtual IFramePassBuilder& queue(FgQueue /*q*/) { return *this; }
 };
 
 // One frame's graph. import/create → add_pass(access + execute) → build → execute (ONE submission). Reusable
@@ -276,6 +297,26 @@ public:
     // every resize. Reported rather than inferred, because "is this the first frame" is not something a shader
     // can work out for itself.
     [[nodiscard]] virtual bool persistent_image_was_live(crd::u32 /*key*/) const noexcept { return false; }
+
+    // ── REN-38-A5: THE PRESENT PASS. Appended at the END of the vtable (D135). ──
+    // How many present passes actually handed a target to a surface during the last `execute()`.
+    //
+    // ⛔ This counter exists because `.present(surface)` was ACCEPTED AND THEN IGNORED: the builder stored the
+    // surface, the barrier scheduler read the field to skip a transition, and NOTHING EVER CALLED
+    // `IPresentSurface::present`. A graph declaring a present pass built, executed and reported one submission
+    // — the same silent shape `FramePassKind::Compute` had. A gate that only checked `build()` and
+    // `last_submit_count()` passed throughout.
+    //
+    // So the fact is COUNTED, and a present gate asserts on the count rather than on the absence of an error:
+    // "the frame presented" is a claim that must be checkable, not inferred from nothing having gone wrong.
+    [[nodiscard]] virtual crd::u32 last_present_count() const noexcept { return 0U; }
+
+    // ── ⭐ REN-38-A14: ASYNC COMPUTE. Appended at the END of the vtable (D135). ──
+    // How many passes the last `execute()` actually ran on the ASYNC COMPUTE QUEUE. 0 means everything ran on the
+    // graphics queue — either because nothing asked, or because the graph DECLINED (one queue family, or the pass
+    // consumes graphics output). ⛔ Counted rather than assumed, for the same reason `last_present_count` is: a
+    // declaration the device quietly ignored is a lie the frame cannot expose on its own.
+    [[nodiscard]] virtual crd::u32 last_async_pass_count() const noexcept { return 0U; }
 };
 
 } // namespace crd::gpu

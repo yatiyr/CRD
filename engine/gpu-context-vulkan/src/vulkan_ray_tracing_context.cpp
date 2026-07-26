@@ -999,4 +999,14 @@ bool VulkanRayTracingContext::trace_rays_pipeline(const RtScene& scene_base, crd
     return true;
 }
 
+
+// REN-38-A9: the ONE place outside this file that needs the native TLAS — the raster context, so an authored
+// ray-tracing pass can bind it inside the frame's command buffer. `dynamic_cast`, not a static one, because the
+// caller holds the PORTABLE handle: a scene from the other backend must FAIL, never be reinterpreted.
+crd::u64 vulkan_scene_tlas(const IAccelerationStructure& scene) noexcept
+{
+    const auto* s = dynamic_cast<const RtSceneImpl*>(&scene);
+    return s != nullptr ? reinterpret_cast<crd::u64>(s->tlas) : 0U;
+}
+
 } // namespace crd::gpu

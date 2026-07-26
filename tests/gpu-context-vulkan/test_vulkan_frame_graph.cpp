@@ -10,14 +10,18 @@
 #include <crd/gpu/raster_context.hpp>
 #include <crd/gpu/vulkan_context.hpp>
 #include <crd/gpu/vulkan_raster_context.hpp>
+#include <crd/gpu/vulkan_ray_tracing_context.hpp> // REN-38-A9: the host builds the scene the asset names
 #include <crd/gpu/vulkan_validation_capture.hpp>
 
 #include <crd/framecook/frame_asset.hpp>   // REN-36.2: the cooked frame-graph asset
 #include <crd/framecook/frame_runtime.hpp> // REN-36.2: executing it through IFrameGraph
 #include <crd/kir/ckir.hpp>
+#include <crd/kir/ckir_glsl.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
+#include <ckir_oit_test.hpp>        // REN-38-A12: the shared WBOIT accumulate + composite shaders
 #include <ckir_raster_triangle.hpp> // the shared CKIR triangle VS/FS
+#include <win32_test_window.hpp>    // REN-38-A5: a REAL window when the loader has no headless surface
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -1900,19 +1904,6 @@ TEST_CASE("REN-38-A3 GATE: a fullscreen pass binds ALL its declared reads, in or
     if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
     auto& raster = *rig.raster;
     if (!raster.supports_bindless()) { SKIP("device does not support bindless texture arrays"); }
-    // ⛔ BLOCKED ON 38-A1a (narrowed twice, and the narrowing IS the progress):
-    //   1. first failure was a SEGFAULT — `draw_bindless` had no frame path at all and its synchronous body calls
-    //      `vkResetDescriptorPool` on the GLOBAL pool, invalidating every set already bound in the frame. FIXED:
-    //      `record_bindless` + `frame_alloc_bindless_set` allocate from the FRAME pool instead.
-    //   2. second failure was `draw` (the writer passes) — also unrecordable (38-A1h). Worked around here by
-    //      using `draw_storage`, which records.
-    //   3. REMAINING: VUID-vkCmdDraw-None-08114 — `record_bindless` writes only bindings 2+3 of the shared
-    //      storage-set layout, leaving 0 (storage buffer) and 1 (sampled image) unwritten while the pipeline may
-    //      still access them. The synchronous path never hit this because it resets and rewrites the whole pool.
-    //      The fix is to write EVERY binding of the layout with a valid descriptor, as `write_scene_textured` does.
-    // Kept and SKIPping loudly so the suite reports the gap rather than swallowing it.
-    SKIP("REN-38-A1a: record_bindless must write every binding of the storage-set layout (VUID-08114)");
-
     memory::TlsfAllocator alloc(8U << 20U);
     // two offscreen "G-buffer" writers: a solid RED one and a solid GREEN one
     kir::KGraph fvg(&alloc);
@@ -1968,10 +1959,8 @@ TEST_CASE("REN-38-A3 GATE: a fullscreen pass binds ALL its declared reads, in or
     REQUIRE(gb1.valid());
     const g::FgImage fin = fgraph->import_target(*dst);
 
-    // ⛔ The writer passes use `draw_storage`, NOT `draw`. Plain `draw` is one of the verbs REN-38-A0 found has
-    // no frame-recording path (38-A1h) — calling it inside a pass falls through to the synchronous submit and
-    // segfaults. Using a verb that records keeps THIS gate about 38-A3 (N reads bound, in order) instead of
-    // silently re-testing someone else's blocker.
+    // The writer passes used `draw_storage` while plain `draw` had no recording path (38-A0's finding). 38-A1h
+    // added one, so they now use `draw` — which makes this gate cover A1h end to end as well as A3.
     struct Solid
     {
         g::FgImage         img{};
@@ -1987,8 +1976,7 @@ TEST_CASE("REN-38-A3 GATE: a fullscreen pass binds ALL its declared reads, in or
     };
     static const auto rec_solid = [](g::IFrameContext& ctx, void* user) {
         auto* s = static_cast<Solid*>(user);
-        ctx.raster().draw_storage(*ctx.image(s->img), *s->prog, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F},
-                                  *ctx.buffer(s->buf), 3U);
+        ctx.raster().draw(*ctx.image(s->img), *s->prog, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
     };
     static const auto rec_compose = [](g::IFrameContext& ctx, void* user) {
         auto*        s = static_cast<Compose*>(user);
@@ -2025,6 +2013,2366 @@ TEST_CASE("REN-38-A3 GATE: a fullscreen pass binds ALL its declared reads, in or
         {
             if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
             WARN("[ren38-a3 capture] " << msgs[i].message_text.c_str());
+        }
+    }
+    CHECK(capture.error_count() == 0U);
+}
+
+// ── REN-38-A2 GATE: an AUTHORED COMPUTE PASS actually dispatches, and a later pass reads what it wrote. ─────
+// ⛔⛔ `FramePassKind::Compute` was DECLARED BUT NOT IMPLEMENTED — the executor fell through to `break`, so an
+// authored compute pass VALIDATED, COOKED, RAN and did NOTHING. Every check was green and the frame was silently
+// wrong, which is the worst shape a defect takes in this system.
+//
+// This gate is built so that shape cannot come back:
+//   · the kernel WRITES a value the graph then READS BACK — if the dispatch does not run, the buffer keeps its
+//     uploaded sentinel and the readback shows it. "It compiled" and "it dispatched" are different assertions.
+//   · the value is COMPUTED (thread index x 7 + 1), not a constant, so a kernel that ran with the wrong grid or
+//     the wrong binding produces a different number rather than the same one.
+//   · a SECOND element proves the grid: element 3 must be 22, which only holds if at least 4 threads ran.
+TEST_CASE("REN-38-A2 GATE: an authored COMPUTE pass dispatches inside the frame graph",
+          "[gpu-context][vulkan][frame-graph][ren38][gpu]")
+{
+    Rig rig = make_rig();
+    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    auto& raster = *rig.raster;
+
+    memory::TlsfAllocator alloc(8U << 20U);
+
+    // The kernel: out[i] = i * 7 + 1, one thread per element, workgroup size 64.
+    kir::KGraph kg(&alloc);
+    kir::KEntry ke;
+    {
+        const auto sh   = kir::make_shape({1});
+        const int  buf  = kg.buffer_decl(kir::DType::U32, 0, 0, /*writable=*/true);
+        // `LocalInvocationIndex` is a flat U32 already — no swizzle, no cast, and one workgroup covers all 64
+        // elements, so the grid stays (1,1,1) and the gate does not also depend on multi-workgroup dispatch.
+        const int  gid  = kg.builtin(kir::KBuiltin::LocalInvocationIndex);
+        const int  k7   = kg.constant(7.0, sh, kir::DType::U32);
+        const int  k1   = kg.constant(1.0, sh, kir::DType::U32);
+        const int  val  = kg.binary(kir::KOp::Add, kg.binary(kir::KOp::Mul, gid, k7), k1);
+        const int  mark = kg.kernel_stmt_mark();
+        kg.stmt_buffer_store(buf, gid, val);
+        ke.stage             = kir::KStage::Compute;
+        ke.local_size[0]     = 64U;
+        ke.kernel_body_begin = mark;
+        ke.kernel_body_count = kg.stmt_count() - mark;
+    }
+    auto kernel = rig.vk->create_program(kg, ke);
+    if (kernel == nullptr) { SKIP("compute shader compile unavailable"); }
+
+    constexpr u32 kElems = 64U;
+    auto          out    = raster.create_storage_buffer(kElems * 4U);
+    REQUIRE(out != nullptr);
+    // ⛔ Seed with a SENTINEL. If the dispatch silently does not run, the readback shows these values — which is
+    // exactly what the old `break` did, and exactly what a "did it compile" test would have missed.
+    u32 seed[kElems];
+    for (u32 i = 0; i < kElems; ++i) { seed[i] = 0xDEADU; }
+    REQUIRE(raster.upload_storage(*out, 0U, static_cast<const void*>(seed), sizeof(seed)));
+
+    g::ValidationCapture capture(*rig.vk);
+    auto                 fgraph = raster.create_frame_graph();
+    REQUIRE(fgraph != nullptr);
+
+    const g::FgBuffer buf = fgraph->import_storage(*out);
+
+    struct Kern
+    {
+        g::IGpuProgram* prog = nullptr;
+        g::FgBuffer     buf{};
+    };
+    static const auto rec_kernel = [](g::IFrameContext& ctx, void* user) {
+        auto*              s  = static_cast<Kern*>(user);
+        g::IStorageBuffer* sb = ctx.buffer(s->buf);
+        if (sb == nullptr) { return; }
+        g::IStorageBuffer* bufs[1] = {sb};
+        ctx.raster().dispatch_kernel(*s->prog, 1U, 1U, 1U, static_cast<g::IStorageBuffer* const*>(bufs), 1U);
+    };
+
+    Kern k{kernel.get(), buf};
+    fgraph->add_pass("cull", g::FgPassKind::Compute).writes(buf).execute(+rec_kernel, &k);
+    REQUIRE(fgraph->build());
+    fgraph->execute();
+    CHECK(fgraph->last_submit_count() == 1U); // the compute pass is IN the frame, not a second submission
+
+    REQUIRE(raster.download_storage(*out)); // pull the DEVICE contents into the host-visible readback
+    UNSCOPED_INFO("kernel wrote [0]=" << out->read_u32(0U) << " [3]=" << out->read_u32(3U));
+    CHECK(out->read_u32(0U) == 1U);  // 0 * 7 + 1 — the dispatch RAN (the sentinel was 0xDEAD)
+    CHECK(out->read_u32(1U) == 8U);  // 1 * 7 + 1
+    CHECK(out->read_u32(3U) == 22U); // 3 * 7 + 1 — and enough threads ran, so the grid was right
+
+    if (capture.error_or_warning_count() > 0U)
+    {
+        const auto msgs = capture.messages();
+        for (usize i = 0; i < msgs.size(); ++i)
+        {
+            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            WARN("[ren38-a2 capture] " << msgs[i].message_text.c_str());
+        }
+    }
+    CHECK(capture.error_count() == 0U);
+}
+
+// ── REN-38-A4 GATE: a DEFERRED RENDERER, AUTHORED AS AN ASSET ONLY. ─────────────────────────────────────────
+// ⛔⛔ This is the headline gate of 38-A, and three separate rows had to land before it could exist at all:
+//   · 38-A1b — MRT recording: a pass binds N COLOUR ATTACHMENTS (it used to borrow the single-target path, so a
+//     G-buffer was silently one target);
+//   · 38-A3  — N sampled reads: a pass binds ALL its declared reads (it used to bind only the FIRST, so a
+//     lighting pass reading albedo+normal got albedo twice);
+//   · 38-A1a — bindless recording, which is how N textures reach one draw inside a frame.
+// Any one of them missing and a deferred renderer is not expressible, no matter what the asset says.
+//
+// The asset below is the whole renderer. The G-buffer pass writes RED to attachment 0 and GREEN to attachment 1;
+// the lighting pass declares BOTH as reads and composites tex[0].r into RED and tex[1].g into GREEN. ⭐ That
+// mapping is chosen so every failure mode is DISTINGUISHABLE:
+//   · MRT bound one target twice        -> both channels carry the same value
+//   · the second READ was dropped       -> green is 0
+//   · reads bound in the wrong order    -> red is 0
+// "Not black" would have passed under all three.
+namespace
+{
+constexpr const char* kDeferredGraph = R"(
+schema = 1
+name   = "crd://frame/deferred"
+
+[[resource]]
+name    = "gbuf_albedo"
+format  = "RGBA8Unorm"
+scale   = 1.0
+sampled = true
+
+[[resource]]
+name    = "gbuf_normal"
+format  = "RGBA8Unorm"
+scale   = 1.0
+sampled = true
+
+[[draw_list]]
+name = "visible_opaque"
+all  = ["MeshRenderer", "Transform"]
+
+[[pass]]
+name          = "gbuffer"
+kind          = "raster.mrt"
+draw_list     = "visible_opaque"
+writes        = ["gbuf_albedo", "gbuf_normal"]
+material_pass = "GBuffer"
+clear_color   = [0.0, 0.0, 0.0, 1.0]
+
+[[pass]]
+name   = "lighting"
+kind   = "raster.fullscreen"
+shader = "crd://shaders/deferred_lighting"
+reads  = ["gbuf_albedo", "gbuf_normal"]
+writes = ["@output"]
+)";
+
+// The host: the asset names things, this resolves them to live objects.
+class DeferredHost final : public framecook::IFrameGraphHost
+{
+public:
+    DeferredHost(g::IRasterTarget& out, g::IStorageBuffer& buf, g::IRasterProgram& gbuf, g::IRasterProgram& light)
+        : m_out(out), m_buf(buf), m_gbuf(gbuf), m_light(light)
+    {
+    }
+    [[nodiscard]] g::IRasterTarget* output() override { return &m_out; }
+    [[nodiscard]] g::IRasterProgram* program(containers::StringView) override { return &m_light; }
+    [[nodiscard]] bool draw_list(containers::StringView, framecook::DrawListBinding& out) override
+    {
+        out.items[0]  = framecook::DrawItem{&m_buf, &m_gbuf, 3U, nullptr};
+        out.resolved  = 1U;
+        return true;
+    }
+
+private:
+    g::IRasterTarget&  m_out;
+    g::IStorageBuffer& m_buf;
+    g::IRasterProgram& m_gbuf;
+    g::IRasterProgram& m_light;
+};
+} // namespace
+
+TEST_CASE("REN-38-A4 GATE: a DEFERRED renderer, authored as an asset only",
+          "[gpu-context][vulkan][frame-graph][ren38][gpu]")
+{
+    Rig rig = make_rig();
+    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    auto& raster = *rig.raster;
+    if (!raster.supports_bindless()) { SKIP("device does not support bindless texture arrays"); }
+
+    memory::TlsfAllocator alloc(16U << 20U);
+
+    // the G-buffer program: a fullscreen triangle writing TWO attachments
+    kir::KGraph gvg(&alloc);
+    kir::KEntry gve;
+    gputest::build_textured_vs(gvg, gve);
+    auto gvs = rig.vk->create_program(gvg, gve);
+    if (gvs == nullptr) { SKIP("shader compile unavailable"); }
+    kir::KGraph gfg(&alloc);
+    kir::KEntry gfe;
+    gputest::build_gbuffer_two_output_fs(gfg, gfe);
+    auto gfs       = rig.vk->create_program(gfg, gfe);
+    auto gbuf_prog = raster.create_raster_program(*gvs, *gfs);
+
+    // the lighting program: a fullscreen composite reading BOTH G-buffer targets
+    kir::KGraph lfg(&alloc);
+    kir::KEntry lfe;
+    gputest::build_two_texture_composite_fs(lfg, lfe);
+    auto lfs        = rig.vk->create_program(lfg, lfe);
+    auto light_prog = raster.create_raster_program(*gvs, *lfs);
+    REQUIRE(gbuf_prog != nullptr);
+    REQUIRE(light_prog != nullptr);
+
+    constexpr u32 dim   = 64U;
+    auto          dst   = raster.create_color_target(dim, dim);
+    auto          dummy = raster.create_storage_buffer(16U);
+    REQUIRE(dst != nullptr);
+    REQUIRE(dummy != nullptr);
+
+    framecook::FrameGraphDesc desc(&alloc);
+    containers::String        where(&alloc);
+    REQUIRE(framecook::parse_frame_toml(containers::StringView(kDeferredGraph), desc, &where)
+            == framecook::FrameCookError::Ok);
+
+    g::ValidationCapture capture(*rig.vk);
+    DeferredHost         host(*dst, *dummy, *gbuf_prog, *light_prog);
+    framecook::FrameExecError err = framecook::FrameExecError::Ok;
+    REQUIRE(framecook::execute_frame_graph(desc, raster, host, &err, &where));
+    CHECK(err == framecook::FrameExecError::Ok);
+
+    const u32 px = dst->read_pixel(dim / 2U, dim / 2U);
+    const u32 r  = px & 0xFFU;
+    const u32 gg = (px >> 8U) & 0xFFU;
+    UNSCOPED_INFO("deferred composite r=" << r << " g=" << gg);
+    CHECK(r > 180U);  // attachment 0 (albedo/RED) was written by MRT and read at slot 0
+    CHECK(gg > 180U); // attachment 1 (normal/GREEN) was written by MRT and read at slot 1
+
+    if (capture.error_or_warning_count() > 0U)
+    {
+        const auto msgs = capture.messages();
+        for (usize i = 0; i < msgs.size(); ++i)
+        {
+            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            WARN("[ren38-a4 capture] " << msgs[i].message_text.c_str());
+        }
+    }
+    CHECK(capture.error_count() == 0U);
+}
+
+// ── REN-38-A5 GATE: an AUTHORED PRESENT PASS actually puts the frame on a surface. ─────────────────────────────
+// ⛔⛔ `.present(surface)` was ACCEPTED AND THEN IGNORED, at BOTH levels at once:
+//   · the device graph's builder stored the surface, the barrier scheduler READ the field (to skip a transition),
+//     and nothing ever called `IPresentSurface::present`;
+//   · `FramePassKind::Present` fell through the executor's switch to `break`.
+// So a graph declaring a present pass parsed, validated, cooked, built, executed and reported ONE SUBMISSION and
+// NO ERROR — and no frame ever reached a window. Every check was green. That is the same silent shape the compute
+// pass had in 38-A2, in a place where the symptom ("the window is black") is easy to blame on the scene.
+//
+// ⭐ The claim "the frame presented" is therefore made COUNTABLE and asserted from two independent sides:
+//   · the GRAPH counts present passes that actually presented (`last_present_count`), and
+//   · the SURFACE counts frames it put up (`frame_count`), which the graph does not write.
+// A stub that returned true without presenting moves the first and not the second.
+namespace
+{
+constexpr const char* kPresentGraph = R"(
+schema = 1
+name   = "crd://frame/present"
+
+[[draw_list]]
+name = "visible"
+all  = ["MeshRenderer"]
+
+[[pass]]
+name        = "scene"
+kind        = "raster.geometry"
+draw_list   = "visible"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+
+[[pass]]
+name  = "to_screen"
+kind  = "present"
+reads = ["@output"]
+)";
+
+class PresentHost final : public framecook::IFrameGraphHost
+{
+public:
+    PresentHost(g::IRasterTarget& out, g::IStorageBuffer& buf, g::IRasterProgram& prog, g::IPresentSurface* surf)
+        : m_out(out), m_buf(buf), m_prog(prog), m_surf(surf)
+    {
+    }
+    [[nodiscard]] g::IRasterTarget* output() override { return &m_out; }
+    [[nodiscard]] g::IRasterProgram* program(containers::StringView) override { return &m_prog; }
+    [[nodiscard]] bool draw_list(containers::StringView, framecook::DrawListBinding& out) override
+    {
+        out.items[0] = framecook::DrawItem{&m_buf, &m_prog, 3U, nullptr};
+        out.resolved = 1U;
+        return true;
+    }
+    [[nodiscard]] g::IPresentSurface* present_surface() override { return m_surf; }
+
+private:
+    g::IRasterTarget&   m_out;
+    g::IStorageBuffer&  m_buf;
+    g::IRasterProgram&  m_prog;
+    g::IPresentSurface* m_surf = nullptr;
+};
+} // namespace
+
+// ── The COOK-TIME half. It needs no device at all, so it runs everywhere and can never be skipped away. ──
+// Each rule below rejects a graph that would otherwise build, execute, and put a wrong (or no) image on screen.
+TEST_CASE("REN-38-A5: a PRESENT pass's shape is settled at COOK time", "[frame-cook][ren38]")
+{
+    memory::TlsfAllocator alloc(1U << 20U);
+
+    const auto cook = [&](const char* toml) {
+        framecook::FrameGraphDesc desc(&alloc);
+        containers::String        where(&alloc);
+        const framecook::FrameCookError e =
+            framecook::parse_frame_toml(containers::StringView(toml), desc, &where);
+        if (e != framecook::FrameCookError::Ok) { return e; }
+        return framecook::validate_frame_graph(desc, &where);
+    };
+
+    // the well-formed one is accepted (so the rejections below are about the RULE, not about the fixture)
+    CHECK(cook(kPresentGraph) == framecook::FrameCookError::Ok);
+
+    // ⛔ ZERO reads: the executor would have to GUESS what to present. Two reads: it picks one and the author
+    // never learns which. Both are silent, so both are rejected here.
+    constexpr const char* kNoRead = R"(
+schema = 1
+name   = "crd://frame/bad-present-0"
+[[draw_list]]
+name = "visible"
+all  = ["MeshRenderer"]
+[[pass]]
+name      = "scene"
+kind      = "raster.geometry"
+draw_list = "visible"
+writes    = ["@output"]
+[[pass]]
+name = "to_screen"
+kind = "present"
+)";
+    CHECK(cook(kNoRead) == framecook::FrameCookError::PresentNeedsOneRead);
+
+    // ⛔ A present that WRITES would look like a producer to the dependency sort, so a later pass could be ordered
+    // after the frame was already on screen.
+    constexpr const char* kWrites = R"(
+schema = 1
+name   = "crd://frame/bad-present-w"
+[[resource]]
+name    = "scratch"
+format  = "RGBA8Unorm"
+scale   = 1.0
+sampled = true
+[[draw_list]]
+name = "visible"
+all  = ["MeshRenderer"]
+[[pass]]
+name      = "scene"
+kind      = "raster.geometry"
+draw_list = "visible"
+writes    = ["@output"]
+[[pass]]
+name   = "to_screen"
+kind   = "present"
+reads  = ["@output"]
+writes = ["scratch"]
+)";
+    CHECK(cook(kWrites) == framecook::FrameCookError::PresentWritesNothing);
+
+    // ⛔⛔ THE ONE THAT MATTERS AT RUN TIME. A transient's memory is ALIASED and retired the instant its last
+    // reader finishes — by the time the surface blits, another transient may legally own those bytes. The frame
+    // would present GARBAGE, intermittently, depending on the aliasing plan. Caught at cook time instead.
+    constexpr const char* kTransientSrc = R"(
+schema = 1
+name   = "crd://frame/bad-present-t"
+[[resource]]
+name    = "hdr"
+format  = "RGBA8Unorm"
+scale   = 1.0
+sampled = true
+[[draw_list]]
+name = "visible"
+all  = ["MeshRenderer"]
+[[pass]]
+name      = "scene"
+kind      = "raster.geometry"
+draw_list = "visible"
+writes    = ["hdr", "@output"]
+[[pass]]
+name  = "to_screen"
+kind  = "present"
+reads = ["hdr"]
+)";
+    CHECK(cook(kTransientSrc) == framecook::FrameCookError::PresentSourceInternal);
+}
+
+// ── The DEVICE half: the authored present pass reaches a real swapchain. ──
+TEST_CASE("REN-38-A5 GATE: an authored PRESENT pass hands the frame to a surface",
+          "[gpu-context][vulkan][frame-graph][ren38][gpu]")
+{
+    // ⛔ A WINDOWED context (`headless = false`), not `make_rig()`'s headless one. A headless INSTANCE omits
+    // VK_KHR_win32_surface, so `create_present_surface` with a real HWND returns null — which is how the first
+    // run of this gate failed. The present path can only be gated on the configuration that actually presents.
+    g::GpuContextConfig cfg;
+    cfg.backend           = g::GpuBackend::Vulkan;
+    cfg.headless          = false;
+    cfg.enable_validation = true;
+    auto ctx              = g::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { SKIP("no Vulkan device"); }
+    auto* vkc = static_cast<g::VulkanGpuContext*>(ctx.get());
+    if (!vkc->graphics_capable() || !vkc->shader_object()) { SKIP("no graphics/shader-object support"); }
+    auto rasterp = g::create_vulkan_raster_context(*vkc);
+    REQUIRE(rasterp != nullptr);
+    auto& raster = *rasterp;
+    if (!vkc->present_capable()) { SKIP("no present capability"); }
+
+    // ⛔ A HEADLESS surface when the loader offers one (VK_EXT_headless_surface), else a REAL Win32 window —
+    // the SAME two-way fallback RET-2's present gate uses. Taking only the headless path would have made this
+    // gate SKIP on every machine whose loader lacks the extension, including this one: the device claim would
+    // have gone unverified while the run still reported green. A gate that cannot run is not a gate.
+    void* native = nullptr;
+    if (!vkc->headless_surface())
+    {
+        native = crd::gputest::create_test_window(256U, 256U);
+        if (native == nullptr) { SKIP("no VK_EXT_headless_surface and no platform window"); }
+    }
+    constexpr u32 dim = 256U;
+    auto surface = raster.create_present_surface(native, dim, dim, g::PresentMode::Fifo);
+    REQUIRE(surface != nullptr);
+    REQUIRE(surface->valid());
+    REQUIRE(surface->width() == dim);
+    REQUIRE(surface->height() == dim);
+
+    memory::TlsfAllocator alloc(8U << 20U);
+    kir::KGraph           vg(&alloc);
+    kir::KEntry           ve;
+    gputest::build_triangle_vs(vg, ve);
+    auto vs = vkc->create_program(vg, ve);
+    if (vs == nullptr) { SKIP("shader compile unavailable"); }
+    kir::KGraph fg2(&alloc);
+    kir::KEntry fe;
+    gputest::build_triangle_fs(fg2, fe);
+    auto fs   = vkc->create_program(fg2, fe);
+    auto prog = raster.create_raster_program(*vs, *fs);
+    REQUIRE(prog != nullptr);
+
+    // ⛔ The canvas MUST match the surface: a present with a mismatched source is REFUSED (never a stretched
+    // half-frame), and a refused present is exactly the state this gate must not mistake for a success.
+    auto dst = raster.create_color_depth_target(dim, dim);
+    auto buf = raster.create_storage_buffer(64U);
+    REQUIRE(dst != nullptr);
+    REQUIRE(buf != nullptr);
+
+    framecook::FrameGraphDesc desc(&alloc);
+    containers::String        where(&alloc);
+    REQUIRE(framecook::parse_frame_toml(containers::StringView(kPresentGraph), desc, &where)
+            == framecook::FrameCookError::Ok);
+
+    g::ValidationCapture capture(*vkc);
+
+    // ── 1) NO SURFACE ⇒ a NAMED failure, never a quiet skip. ──
+    // ⛔ This is the assertion that would have caught the original defect from the asset side: before the row, a
+    // graph with a present pass and no surface anywhere ran to completion and reported success.
+    {
+        PresentHost               blind(*dst, *buf, *prog, nullptr);
+        framecook::FrameExecError err = framecook::FrameExecError::Ok;
+        containers::String        w2(&alloc);
+        CHECK(!framecook::execute_frame_graph(desc, raster, blind, &err, &w2));
+        CHECK(err == framecook::FrameExecError::NoPresentSurface);
+        CHECK(w2 == "to_screen"); // by PASS NAME — the author is told which pass, not merely that something failed
+    }
+
+    // ── 2) WITH a surface: the frame actually goes up, and the graph still submits ONCE. ──
+    PresentHost host(*dst, *buf, *prog, surface.get());
+    auto        fgraph = raster.create_frame_graph();
+    REQUIRE(fgraph != nullptr);
+    framecook::FrameRecorder rec(&alloc);
+    rec.begin_frame();
+    framecook::FrameExecError err = framecook::FrameExecError::Ok;
+    REQUIRE(rec.record(desc, *fgraph, raster, host, &err, &where));
+    CHECK(err == framecook::FrameExecError::Ok);
+    REQUIRE(fgraph->build());
+    fgraph->execute();
+
+    // ⭐ TWO INDEPENDENT WITNESSES. The graph counts present passes that presented; the surface counts frames it
+    // put up, and the graph does not write that counter. A `present()` that returned true without presenting
+    // moves the first and not the second — which is precisely the failure this row is about.
+    CHECK(fgraph->last_present_count() == 1U);
+    CHECK(surface->frame_count() == 1U);
+    // and the present is the SURFACE's own submission — the graph must not have split into two.
+    CHECK(fgraph->last_submit_count() == 1U);
+
+    // the presented canvas is the one the graph DREW: the triangle covers the centre, the clear owns the corner.
+    UNSCOPED_INFO("centre=" << (dst->read_pixel(dim / 2U, dim / 2U) & 0xFFFFFFU)
+                            << " corner=" << (dst->read_pixel(2U, 2U) & 0xFFFFFFU));
+    CHECK((dst->read_pixel(dim / 2U, dim / 2U) & 0xFFFFFFU) != 0U);
+    CHECK((dst->read_pixel(2U, 2U) & 0xFFFFFFU) == 0U);
+
+    // a SECOND frame through the same graph presents again — the counters are per-execute, not cumulative-once.
+    fgraph->reset();
+    rec.begin_frame();
+    REQUIRE(rec.record(desc, *fgraph, raster, host, &err, &where));
+    REQUIRE(fgraph->build());
+    fgraph->execute();
+    CHECK(fgraph->last_present_count() == 1U);
+    CHECK(surface->frame_count() == 2U);
+
+    if (capture.error_or_warning_count() > 0U)
+    {
+        const auto msgs = capture.messages();
+        for (usize i = 0; i < msgs.size(); ++i)
+        {
+            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            WARN("[ren38-a5 capture] " << msgs[i].message_text.c_str());
+        }
+    }
+    CHECK(capture.error_count() == 0U);
+    surface.reset(); // the surface dies BEFORE its window
+    if (native != nullptr) { crd::gputest::destroy_test_window(native); }
+}
+
+// ── REN-38-A6 GATE: CLEAR · COPY · BLIT · RESOLVE, authored as passes. ─────────────────────────────────────────
+// ⛔ Four utility nodes every real frame graph needs, and none of them could be expressed. The only way to move
+// pixels was a `raster.fullscreen` pass with a pass-through shader — paying for a rasterizer, a descriptor set and
+// a pipeline to do what the copy engine does for free — and an MSAA RESOLVE was not expressible AT ALL, because
+// copying a multisampled image is illegal rather than merely slow.
+//
+// ⭐ EACH VERB IS GATED BY A SIGNAL ONLY THAT VERB CAN PRODUCE:
+//   · clear — a target set to a colour NOTHING else in the graph writes;
+//   · copy  — a destination that ALREADY HELD A DIFFERENT COLOUR, so "the copy did nothing" and "the source was
+//             never written" are DIFFERENT observable outcomes (blue vs black) rather than one black frame;
+//   · blit  — structure that survives a round trip through a HALF-RESOLUTION image, which a 1:1 crop cannot fake;
+//   · resolve — an edge pixel strictly BETWEEN the two colours present, which only sample averaging produces.
+namespace
+{
+// clear → copy. The destination is pre-painted BLUE by its own clear pass, so a copy that silently does nothing
+// leaves BLUE, and a source that was never painted leaves BLACK. Three outcomes, three diagnoses.
+constexpr const char* kCopyGraph = R"(
+schema = 1
+name   = "crd://frame/a6-copy"
+
+[[resource]]
+name    = "stage"
+format  = "RGBA8Unorm"
+scale   = 1.0
+sampled = true
+
+[[pass]]
+name        = "paint_stage"
+kind        = "clear"
+writes      = ["stage"]
+clear_color = [1.0, 0.0, 0.0, 1.0]
+
+[[pass]]
+name        = "prime_output"
+kind        = "clear"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 1.0, 1.0]
+
+[[pass]]
+name   = "publish"
+kind   = "copy"
+reads  = ["stage"]
+writes = ["@output"]
+)";
+
+// draw → blit DOWN to half res → blit UP to the output. A 1:1 crop would put `src`'s top-left quarter — which is
+// pure clear — at the centre of the result, so "the centre is still triangle-coloured" is the rescale assertion.
+constexpr const char* kBlitGraph = R"(
+schema = 1
+name   = "crd://frame/a6-blit"
+
+[[resource]]
+name    = "hires"
+format  = "RGBA8Unorm"
+scale   = 1.0
+sampled = true
+
+[[resource]]
+name    = "half"
+format  = "RGBA8Unorm"
+scale   = 0.5
+sampled = true
+
+[[draw_list]]
+name = "visible"
+all  = ["MeshRenderer"]
+
+[[pass]]
+name        = "scene"
+kind        = "raster.geometry"
+draw_list   = "visible"
+writes      = ["hires"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+
+[[pass]]
+name   = "downsample"
+kind   = "blit"
+reads  = ["hires"]
+writes = ["half"]
+filter = "linear"
+
+[[pass]]
+name   = "upsample"
+kind   = "blit"
+reads  = ["half"]
+writes = ["@output"]
+filter = "linear"
+)";
+
+class UtilHost final : public framecook::IFrameGraphHost
+{
+public:
+    UtilHost(g::IRasterTarget& out, g::IStorageBuffer* buf, g::IRasterProgram* prog)
+        : m_out(out), m_buf(buf), m_prog(prog)
+    {
+    }
+    [[nodiscard]] g::IRasterTarget* output() override { return &m_out; }
+    [[nodiscard]] g::IRasterProgram* program(containers::StringView) override { return m_prog; }
+    [[nodiscard]] bool draw_list(containers::StringView, framecook::DrawListBinding& out) override
+    {
+        if (m_buf == nullptr || m_prog == nullptr) { return false; }
+        out.items[0] = framecook::DrawItem{m_buf, m_prog, 3U, nullptr};
+        out.resolved = 1U;
+        return true;
+    }
+
+private:
+    g::IRasterTarget&  m_out;
+    g::IStorageBuffer* m_buf  = nullptr;
+    g::IRasterProgram* m_prog = nullptr;
+};
+} // namespace
+
+// ── The COOK-TIME half: what a utility pass may say. No device, so it can never be skipped away. ──
+TEST_CASE("REN-38-A6: a UTILITY pass's shape is settled at COOK time", "[frame-cook][ren38]")
+{
+    memory::TlsfAllocator alloc(1U << 20U);
+    const auto            cook = [&](const char* toml) {
+        framecook::FrameGraphDesc desc(&alloc);
+        containers::String        where(&alloc);
+        const framecook::FrameCookError e = framecook::parse_frame_toml(containers::StringView(toml), desc, &where);
+        if (e != framecook::FrameCookError::Ok) { return e; }
+        return framecook::validate_frame_graph(desc, &where);
+    };
+
+    CHECK(cook(kCopyGraph) == framecook::FrameCookError::Ok);
+    CHECK(cook(kBlitGraph) == framecook::FrameCookError::Ok);
+
+    // ⛔ TWO sources for one copy: the executor would pick one and never say which. "Almost right" is the worst
+    // symptom to debug, so it is rejected before it can ship.
+    constexpr const char* kTwoSrc = R"(
+schema = 1
+name   = "crd://frame/a6-bad-2src"
+[[resource]]
+name    = "a"
+format  = "RGBA8Unorm"
+scale   = 1.0
+sampled = true
+[[resource]]
+name    = "b"
+format  = "RGBA8Unorm"
+scale   = 1.0
+sampled = true
+[[pass]]
+name        = "pa"
+kind        = "clear"
+writes      = ["a"]
+clear_color = [1.0, 0.0, 0.0, 1.0]
+[[pass]]
+name        = "pb"
+kind        = "clear"
+writes      = ["b"]
+clear_color = [0.0, 1.0, 0.0, 1.0]
+[[pass]]
+name   = "publish"
+kind   = "copy"
+reads  = ["a", "b"]
+writes = ["@output"]
+)";
+    CHECK(cook(kTwoSrc) == framecook::FrameCookError::TransferNeedsOneRead);
+
+    // A clear PRODUCES and consumes nothing. A declared read would order it after that resource's producer for
+    // no reason — and, worse, would read as intent to anyone maintaining the asset.
+    constexpr const char* kClearReads = R"(
+schema = 1
+name   = "crd://frame/a6-bad-clear"
+[[resource]]
+name    = "a"
+format  = "RGBA8Unorm"
+scale   = 1.0
+sampled = true
+[[pass]]
+name        = "pa"
+kind        = "clear"
+writes      = ["a"]
+clear_color = [1.0, 0.0, 0.0, 1.0]
+[[pass]]
+name        = "bad"
+kind        = "clear"
+reads       = ["a"]
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+)";
+    CHECK(cook(kClearReads) == framecook::FrameCookError::ClearReadsNothing);
+
+    // the filter is a CLOSED set — a typo must be a named rejection, not a silent fall back to linear
+    constexpr const char* kBadFilter = R"(
+schema = 1
+name   = "crd://frame/a6-bad-filter"
+[[resource]]
+name    = "a"
+format  = "RGBA8Unorm"
+scale   = 1.0
+sampled = true
+[[pass]]
+name        = "pa"
+kind        = "clear"
+writes      = ["a"]
+clear_color = [1.0, 0.0, 0.0, 1.0]
+[[pass]]
+name   = "b"
+kind   = "blit"
+reads  = ["a"]
+writes = ["@output"]
+filter = "bilinear"
+)";
+    CHECK(cook(kBadFilter) == framecook::FrameCookError::UnknownFilter);
+
+    // ⭐ and the new kinds SURVIVE A ROUND TRIP — emit → re-parse must reproduce the same graph, filter included,
+    // or a cooked pack silently degrades every blit to the default filter.
+    {
+        framecook::FrameGraphDesc a(&alloc);
+        containers::String        where(&alloc);
+        REQUIRE(framecook::parse_frame_toml(containers::StringView(kBlitGraph), a, &where)
+                == framecook::FrameCookError::Ok);
+        containers::String text = framecook::emit_frame_toml(a, &alloc);
+        framecook::FrameGraphDesc b(&alloc);
+        REQUIRE(framecook::parse_frame_toml(containers::StringView(text.c_str(), text.size()), b, &where)
+                == framecook::FrameCookError::Ok);
+        REQUIRE(b.passes.size() == a.passes.size());
+        for (usize i = 0; i < a.passes.size(); ++i)
+        {
+            CHECK(b.passes[i].kind == a.passes[i].kind);
+            CHECK(b.passes[i].filter == a.passes[i].filter);
+        }
+    }
+}
+
+// ── The DEVICE half: the four verbs actually move pixels, inside ONE submission. ──
+TEST_CASE("REN-38-A6 GATE: authored CLEAR / COPY / BLIT move pixels inside one frame",
+          "[gpu-context][vulkan][frame-graph][ren38][gpu]")
+{
+    Rig rig = make_rig();
+    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    auto& raster = *rig.raster;
+
+    memory::TlsfAllocator alloc(8U << 20U);
+    g::ValidationCapture  capture(*rig.vk);
+    constexpr u32         dim = 64U;
+
+    // ── 1) CLEAR + COPY. ──
+    {
+        auto dst = raster.create_color_target(dim, dim);
+        REQUIRE(dst != nullptr);
+        framecook::FrameGraphDesc desc(&alloc);
+        containers::String        where(&alloc);
+        REQUIRE(framecook::parse_frame_toml(containers::StringView(kCopyGraph), desc, &where)
+                == framecook::FrameCookError::Ok);
+        UtilHost                  host(*dst, nullptr, nullptr);
+        framecook::FrameExecError err = framecook::FrameExecError::Ok;
+        REQUIRE(framecook::execute_frame_graph(desc, raster, host, &err, &where));
+        CHECK(err == framecook::FrameExecError::Ok);
+
+        const u32 px = dst->read_pixel(dim / 2U, dim / 2U);
+        const u32 r  = px & 0xFFU;
+        const u32 b  = (px >> 16U) & 0xFFU;
+        UNSCOPED_INFO("copy result r=" << r << " b=" << b);
+        // ⭐ RED means the clear painted `stage` AND the copy published it. BLUE would mean the copy did nothing
+        // (the output kept its own clear); BLACK would mean the stage clear did nothing. Three distinct verdicts.
+        CHECK(r > 200U);
+        CHECK(b < 60U);
+    }
+
+    // ── 2) BLIT: structure survives a round trip through a HALF-RESOLUTION image. ──
+    {
+        kir::KGraph vg(&alloc);
+        kir::KEntry ve;
+        gputest::build_triangle_vs(vg, ve);
+        auto vs = rig.vk->create_program(vg, ve);
+        if (vs == nullptr) { SKIP("shader compile unavailable"); }
+        kir::KGraph fg2(&alloc);
+        kir::KEntry fe;
+        gputest::build_triangle_fs(fg2, fe);
+        auto fs   = rig.vk->create_program(fg2, fe);
+        auto prog = raster.create_raster_program(*vs, *fs);
+        REQUIRE(prog != nullptr);
+
+        auto dst = raster.create_color_target(dim, dim);
+        auto buf = raster.create_storage_buffer(64U);
+        REQUIRE(dst != nullptr);
+        REQUIRE(buf != nullptr);
+
+        framecook::FrameGraphDesc desc(&alloc);
+        containers::String        where(&alloc);
+        REQUIRE(framecook::parse_frame_toml(containers::StringView(kBlitGraph), desc, &where)
+                == framecook::FrameCookError::Ok);
+        UtilHost                  host(*dst, buf.get(), prog.get());
+        framecook::FrameExecError err = framecook::FrameExecError::Ok;
+        REQUIRE(framecook::execute_frame_graph(desc, raster, host, &err, &where));
+        CHECK(err == framecook::FrameExecError::Ok);
+
+        const u32 centre = dst->read_pixel(dim / 2U, dim / 2U) & 0xFFFFFFU;
+        const u32 corner = dst->read_pixel(1U, 1U) & 0xFFFFFFU;
+        UNSCOPED_INFO("blit centre=" << centre << " corner=" << corner);
+        // ⛔ A blit that CROPPED instead of rescaling would put `hires`'s top-left quarter — pure clear — at the
+        // centre, so the centre being triangle-coloured is the assertion that the rescale really happened. The
+        // corner staying clear rules out the opposite failure: a blit that stretched a covered region over all.
+        CHECK(centre != 0U);
+        CHECK(corner == 0U);
+    }
+
+    if (capture.error_or_warning_count() > 0U)
+    {
+        const auto msgs = capture.messages();
+        for (usize i = 0; i < msgs.size(); ++i)
+        {
+            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            WARN("[ren38-a6 capture] " << msgs[i].message_text.c_str());
+        }
+    }
+    CHECK(capture.error_count() == 0U);
+}
+
+// ── REN-38-A7 / A8 GATE: TESSELLATION and MESH+TASK shaders, authored as passes. ───────────────────────────────
+// ⛔ Both existed as DEVICE verbs (38-A1d, 38-A1c) and NEITHER was reachable from an asset — so the entire
+// geometry-AMPLIFICATION half of the hardware could only be driven by C++, which is exactly what the top rule
+// forbids: a technique is a `.frame.toml`, not a call site.
+//
+// ⛔⛔ AND A PASS KIND IS NOT JUST A SWITCH CASE. `draw_tess` and `draw_mesh` both CLEAR. That is correct for the
+// single-draw proofs they were written for and CATASTROPHIC for a pass that iterates a draw list: every draw
+// after the first wipes the ones before it, so a scene with three tessellated meshes renders exactly ONE — the
+// last — and looks entirely plausible. This is the multi-pass load-not-clear scar in its amplification form, and
+// it is why A7/A8 had to add `draw_tess_load` / `draw_mesh_load` to BOTH backends first.
+//
+// ⭐ The mesh gate is therefore built so that failure is VISIBLE AND SPECIFIC: draw 1 dispatches SIX meshlet
+// workgroups (six triangles tiled left-to-right); draw 2 dispatches ONE (the leftmost only). If the second draw
+// CLEARED, the six become one and the RIGHTMOST triangle vanishes — so the assertion is on a pixel only the FIRST
+// draw could have coloured. A "did anything render at all" check would have passed either way.
+namespace
+{
+constexpr const char* kTessGraph = R"(
+schema = 1
+name   = "crd://frame/a7-tess"
+
+[[pass]]
+name        = "displace"
+kind        = "raster.tess"
+shader      = "crd://shaders/tess_quad"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+params      = { patches = 1 }
+)";
+
+constexpr const char* kMeshGraph = R"(
+schema = 1
+name   = "crd://frame/a8-mesh"
+
+[[draw_list]]
+name = "meshlets"
+all  = ["MeshRenderer"]
+
+[[pass]]
+name        = "amplify"
+kind        = "raster.mesh"
+shader      = "crd://shaders/meshlet"
+draw_list   = "meshlets"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+)";
+
+// The host resolves ONE shader id to whichever program the technique needs — a tess program is a VS+TCS+TES+FS
+// and a mesh program is a TASK+MESH+FS, and WHICH stages a cooked program carries is a property of the PROGRAM,
+// not of the graph. That is why the asset names a shader and says nothing about stages.
+class AmplifyHost final : public framecook::IFrameGraphHost
+{
+public:
+    AmplifyHost(g::IRasterTarget& out, g::IRasterProgram* prog) : m_out(out), m_prog(prog) {}
+    [[nodiscard]] g::IRasterTarget* output() override { return &m_out; }
+    [[nodiscard]] g::IRasterProgram* program(containers::StringView) override { return m_prog; }
+    // TWO draws, with DIFFERENT dispatch counts. For an amplification pass a draw item's `vertex_count` IS the
+    // dispatch count — patches for tess, task/mesh workgroups for mesh.
+    [[nodiscard]] bool draw_list(containers::StringView, framecook::DrawListBinding& out) override
+    {
+        if (m_prog == nullptr) { return false; }
+        out.items[0] = framecook::DrawItem{nullptr, m_prog, 6U, nullptr}; // six meshlets, tiled left → right
+        out.items[1] = framecook::DrawItem{nullptr, m_prog, 1U, nullptr}; // one meshlet, leftmost only
+        out.resolved = 2U;
+        return true;
+    }
+
+private:
+    g::IRasterTarget&  m_out;
+    g::IRasterProgram* m_prog = nullptr;
+};
+} // namespace
+
+// ── The COOK-TIME half. No device, so it runs everywhere and can never be skipped away. ──
+TEST_CASE("REN-38-A7/A8: an AMPLIFICATION pass's shape is settled at COOK time", "[frame-cook][ren38]")
+{
+    memory::TlsfAllocator alloc(1U << 20U);
+    const auto            cook = [&](const char* toml) {
+        framecook::FrameGraphDesc desc(&alloc);
+        containers::String        where(&alloc);
+        const framecook::FrameCookError e = framecook::parse_frame_toml(containers::StringView(toml), desc, &where);
+        if (e != framecook::FrameCookError::Ok) { return e; }
+        return framecook::validate_frame_graph(desc, &where);
+    };
+
+    CHECK(cook(kTessGraph) == framecook::FrameCookError::Ok);
+    CHECK(cook(kMeshGraph) == framecook::FrameCookError::Ok);
+
+    // ⛔ NEITHER a draw list NOR a count: the runtime would dispatch ZERO patches — a black image, no error, and
+    // nothing in the asset to point at. Caught while the author is still holding the file.
+    constexpr const char* kNoCount = R"(
+schema = 1
+name   = "crd://frame/a7-bad"
+[[pass]]
+name   = "displace"
+kind   = "raster.tess"
+shader = "crd://shaders/tess_quad"
+writes = ["@output"]
+)";
+    CHECK(cook(kNoCount) == framecook::FrameCookError::AmplifyNeedsCount);
+
+    // an amplification pass with no PROGRAM is the same class of silence
+    constexpr const char* kNoShader = R"(
+schema = 1
+name   = "crd://frame/a8-bad"
+[[pass]]
+name   = "amplify"
+kind   = "raster.mesh"
+writes = ["@output"]
+params = { groups = 4 }
+)";
+    CHECK(cook(kNoShader) == framecook::FrameCookError::MissingShader);
+
+    // ⭐ and both kinds SURVIVE A ROUND TRIP — a cooked pack that lost `raster.mesh` would silently reclassify
+    // the pass as a plain geometry draw, which renders NOTHING (a mesh program has no vertex input).
+    {
+        framecook::FrameGraphDesc a(&alloc);
+        containers::String        where(&alloc);
+        REQUIRE(framecook::parse_frame_toml(containers::StringView(kMeshGraph), a, &where)
+                == framecook::FrameCookError::Ok);
+        containers::String        text = framecook::emit_frame_toml(a, &alloc);
+        framecook::FrameGraphDesc b(&alloc);
+        REQUIRE(framecook::parse_frame_toml(containers::StringView(text.c_str(), text.size()), b, &where)
+                == framecook::FrameCookError::Ok);
+        REQUIRE(b.passes.size() == 1U);
+        CHECK(b.passes[0].kind == framecook::FramePassKind::RasterMesh);
+    }
+}
+
+// ── The DEVICE half: both amplification kinds run from asset text, inside ONE submission. ──
+TEST_CASE("REN-38-A7/A8 GATE: authored TESSELLATION and MESH+TASK passes amplify geometry",
+          "[gpu-context][vulkan][frame-graph][ren38][gpu]")
+{
+    Rig rig = make_rig();
+    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    auto& raster = *rig.raster;
+
+    memory::TlsfAllocator alloc(16U << 20U);
+    g::ValidationCapture  capture(*rig.vk);
+    constexpr u32         dim = 64U;
+
+    // ── 38-A7: an authored `raster.tess` pass. ──
+    {
+        kir::KGraph vg(&alloc);
+        kir::KEntry ve;
+        gputest::build_tess_quad_vs(vg, ve);
+        kir::KGraph cg(&alloc);
+        kir::KEntry ce;
+        gputest::build_tess_hull(cg, ce);
+        kir::KGraph eg(&alloc);
+        kir::KEntry ee;
+        gputest::build_tess_domain(eg, ee);
+        kir::KGraph fg2(&alloc);
+        kir::KEntry fe;
+        gputest::build_triangle_fs(fg2, fe);
+        auto vs  = rig.vk->create_program(vg, ve);
+        auto tcs = rig.vk->create_program(cg, ce);
+        auto tes = rig.vk->create_program(eg, ee);
+        auto fs  = rig.vk->create_program(fg2, fe);
+        if (vs == nullptr || tcs == nullptr || tes == nullptr || fs == nullptr) { SKIP("shader compile unavailable"); }
+        auto prog = raster.create_tess_program(*vs, *tcs, *tes, *fs);
+        if (prog == nullptr) { SKIP("no tessellation support on this device"); }
+
+        auto dst = raster.create_color_target(dim, dim);
+        REQUIRE(dst != nullptr);
+        framecook::FrameGraphDesc desc(&alloc);
+        containers::String        where(&alloc);
+        REQUIRE(framecook::parse_frame_toml(containers::StringView(kTessGraph), desc, &where)
+                == framecook::FrameCookError::Ok);
+        AmplifyHost               host(*dst, prog.get());
+        framecook::FrameExecError err = framecook::FrameExecError::Ok;
+        REQUIRE(framecook::execute_frame_graph(desc, raster, host, &err, &where));
+        CHECK(err == framecook::FrameExecError::Ok);
+
+        // ⭐ The tessellator turned ONE 4-control-point patch into a filled quad. The CENTRE proves the patch was
+        // tessellated and shaded; the far CORNER proves it did not simply cover the whole target (the quad is
+        // ±0.6 in clip space, so the corners stay clear) — together they rule out "nothing ran" AND "the clear
+        // colour happens to look like a pass".
+        const u32 centre = dst->read_pixel(dim / 2U, dim / 2U) & 0xFFFFFFU;
+        const u32 corner = dst->read_pixel(1U, 1U) & 0xFFFFFFU;
+        UNSCOPED_INFO("tess centre=" << centre << " corner=" << corner);
+        CHECK(centre != 0U);
+        CHECK(corner == 0U);
+    }
+
+    // ── 38-A8: an authored `raster.mesh` pass over a TWO-ITEM draw list. ──
+    {
+        kir::KGraph mg(&alloc);
+        kir::KEntry me;
+        gputest::build_mesh_grid_tri(mg, me);
+        kir::KGraph fg2(&alloc);
+        kir::KEntry fe;
+        gputest::build_amplify_fs(fg2, fe);
+        auto ms = rig.vk->create_program(mg, me);
+        auto fs = rig.vk->create_program(fg2, fe);
+        if (ms == nullptr || fs == nullptr) { SKIP("mesh shader compile unavailable"); }
+        auto prog = raster.create_mesh_program(*ms, *fs);
+        if (prog == nullptr) { SKIP("no mesh-shader support on this device"); }
+
+        auto dst = raster.create_color_target(dim, dim);
+        REQUIRE(dst != nullptr);
+        framecook::FrameGraphDesc desc(&alloc);
+        containers::String        where(&alloc);
+        REQUIRE(framecook::parse_frame_toml(containers::StringView(kMeshGraph), desc, &where)
+                == framecook::FrameCookError::Ok);
+        AmplifyHost               host(*dst, prog.get());
+        framecook::FrameExecError err = framecook::FrameExecError::Ok;
+        REQUIRE(framecook::execute_frame_graph(desc, raster, host, &err, &where));
+        CHECK(err == framecook::FrameExecError::Ok);
+
+        // The mesh shader tiles one triangle per workgroup at clip x = -0.8 + wg·0.2, so with 6 workgroups the
+        // rightmost sits at x = +0.2 → pixel 38, and the leftmost at x = -0.8 → pixel 6.
+        const u32 leftmost  = dst->read_pixel(6U, dim / 2U) & 0xFFU;
+        const u32 rightmost = dst->read_pixel(38U, dim / 2U) & 0xFFU;
+        UNSCOPED_INFO("mesh leftmost=" << leftmost << " rightmost=" << rightmost);
+        // ⭐⭐ THE LOAD ASSERTION. The rightmost triangle exists ONLY because of draw 1 (six workgroups); draw 2
+        // dispatches one. If the second draw had cleared — which is exactly what `draw_mesh` does and why
+        // `draw_mesh_load` had to exist — this pixel would be black and the image would still look like a
+        // working mesh-shader pass.
+        CHECK(rightmost > 0U);
+        CHECK(leftmost > 0U); // and the second draw really did run
+    }
+
+    if (capture.error_or_warning_count() > 0U)
+    {
+        const auto msgs = capture.messages();
+        for (usize i = 0; i < msgs.size(); ++i)
+        {
+            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            WARN("[ren38-a78 capture] " << msgs[i].message_text.c_str());
+        }
+    }
+    CHECK(capture.error_count() == 0U);
+}
+
+// ── REN-38-A9 / A10 GATE: RAY TRACING and the GPU-DRIVEN LOOP, authored as passes. ─────────────────────────────
+// ⛔⛔ THE RAY-TRACING CONTEXTS ARE OFFLINE RIGS. Every verb on `VulkanRayTracingContext` /
+// `Dx12RayTracingContext` creates its own buffers, its own descriptor pool, its own pipeline, then SUBMITS AND
+// WAITS. That is right for an oracle comparison and impossible inside a frame — the universal port defect in its
+// most extreme form: the verb owns the whole submission, not merely the descriptor pool. So ray tracing existed
+// on this engine and was UNREACHABLE from a frame graph, which is where a shadow or AO pass actually lives.
+//
+// ⭐ What an authored `raytrace` pass calls instead is an INLINE RAY QUERY dispatch recorded into the frame's one
+// submission: the TLAS at binding 0, the pass's buffers at 1..N — the SAME convention `trace_dispatch` uses, so a
+// kernel written for the offline rig runs unchanged inside a frame.
+//
+// ⛔ AND A10 IS THE ONE THAT CLOSES THE LOOP. With `dispatch_kernel` the workgroup count is a parameter the CPU
+// had to know, so a cull pass could never actually decide how much work followed it. The gate below makes the
+// CPU's ignorance the assertion: the count is written BY A SHADER into a buffer, and the test checks which
+// workgroups ran.
+namespace
+{
+constexpr const char* kRtGraph = R"(
+schema = 1
+name   = "crd://frame/a9-rt"
+
+[[resource]]
+name = "scene_tlas"
+kind = "acceleration_structure"
+
+[[resource]]
+name = "rays"
+kind = "external_buffer"
+
+[[resource]]
+name = "hits"
+kind = "external_buffer"
+
+[[pass]]
+name   = "trace"
+kind   = "raytrace"
+kernel = "crd://kernels/trace"
+reads  = ["scene_tlas", "rays"]
+writes = ["hits"]
+params = { groups_x = 1 }
+
+[[pass]]
+name        = "blank"
+kind        = "clear"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+)";
+
+constexpr const char* kIndirectGraph = R"(
+schema = 1
+name   = "crd://frame/a10-indirect"
+
+[[resource]]
+name = "args"
+kind = "indirect_args"
+size_bytes = 16
+
+[[resource]]
+name = "marks"
+kind = "external_buffer"
+
+[[pass]]
+name   = "cull"
+kind   = "compute"
+kernel = "crd://kernels/cull"
+writes = ["args"]
+params = { groups_x = 1 }
+
+[[pass]]
+name   = "work"
+kind   = "compute.indirect"
+kernel = "crd://kernels/work"
+reads  = ["args"]
+writes = ["marks"]
+
+[[pass]]
+name        = "blank"
+kind        = "clear"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+)";
+
+// The host owns the World, so the host owns the acceleration structure and the scene buffers. The asset only
+// names them — exactly the `draw_list` arrangement, two resource kinds over.
+class RtHost final : public framecook::IFrameGraphHost
+{
+public:
+    RtHost(g::IRasterTarget& out) : m_out(out) {}
+    [[nodiscard]] g::IRasterTarget* output() override { return &m_out; }
+    [[nodiscard]] g::IRasterProgram* program(containers::StringView) override { return nullptr; }
+    [[nodiscard]] bool draw_list(containers::StringView, framecook::DrawListBinding&) override { return false; }
+    [[nodiscard]] g::IGpuProgram* kernel(containers::StringView id) override
+    {
+        for (u32 i = 0; i < m_n; ++i)
+        {
+            if (id == containers::StringView(m_names[i])) { return m_kernels[i]; }
+        }
+        return nullptr;
+    }
+    [[nodiscard]] g::IAccelerationStructure* acceleration_structure(containers::StringView) override { return m_as; }
+    [[nodiscard]] g::IStorageBuffer* storage_buffer(containers::StringView name) override
+    {
+        for (u32 i = 0; i < m_nb; ++i)
+        {
+            if (name == containers::StringView(m_bnames[i])) { return m_bufs[i]; }
+        }
+        return nullptr;
+    }
+    void add_kernel(const char* id, g::IGpuProgram* k) { m_names[m_n] = id; m_kernels[m_n] = k; ++m_n; }
+    void add_buffer(const char* id, g::IStorageBuffer* b) { m_bnames[m_nb] = id; m_bufs[m_nb] = b; ++m_nb; }
+    void set_accel(g::IAccelerationStructure* a) { m_as = a; }
+
+private:
+    g::IRasterTarget&          m_out;
+    const char*                m_names[4]{};
+    g::IGpuProgram*            m_kernels[4]{};
+    u32                        m_n = 0U;
+    const char*                m_bnames[4]{};
+    g::IStorageBuffer*         m_bufs[4]{};
+    u32                        m_nb = 0U;
+    g::IAccelerationStructure* m_as = nullptr;
+};
+} // namespace
+
+// ── The COOK-TIME half. No device, so it runs everywhere and can never be skipped away. ──
+TEST_CASE("REN-38-A9/A10: a RAY-TRACING and an INDIRECT pass's shape is settled at COOK time", "[frame-cook][ren38]")
+{
+    memory::TlsfAllocator alloc(1U << 20U);
+    const auto            cook = [&](const char* toml) {
+        framecook::FrameGraphDesc desc(&alloc);
+        containers::String        where(&alloc);
+        const framecook::FrameCookError e = framecook::parse_frame_toml(containers::StringView(toml), desc, &where);
+        if (e != framecook::FrameCookError::Ok) { return e; }
+        return framecook::validate_frame_graph(desc, &where);
+    };
+
+    CHECK(cook(kRtGraph) == framecook::FrameCookError::Ok);
+    CHECK(cook(kIndirectGraph) == framecook::FrameCookError::Ok);
+
+    // ⛔⛔ A raytrace pass with NO acceleration structure would traverse nothing and every ray would MISS — a
+    // black image indistinguishable from a scene with no geometry, which is the single hardest RT failure to
+    // attribute. Rejected while the author is still holding the file.
+    constexpr const char* kNoAccel = R"(
+schema = 1
+name   = "crd://frame/a9-bad"
+[[resource]]
+name = "hits"
+kind = "external_buffer"
+[[pass]]
+name   = "trace"
+kind   = "raytrace"
+kernel = "crd://kernels/trace"
+writes = ["hits"]
+[[pass]]
+name        = "blank"
+kind        = "clear"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+)";
+    CHECK(cook(kNoAccel) == framecook::FrameCookError::RayTraceNeedsAccel);
+
+    // ⛔ An indirect pass that reads an ORDINARY transient buffer: it is created without the INDIRECT usage flag,
+    // which cannot be added afterwards, so the device would simply refuse. Caught by KIND, here.
+    constexpr const char* kWrongArgs = R"(
+schema = 1
+name   = "crd://frame/a10-bad"
+[[resource]]
+name = "plain"
+kind = "transient_buffer"
+size_bytes = 16
+[[resource]]
+name = "marks"
+kind = "external_buffer"
+[[pass]]
+name   = "cull"
+kind   = "compute"
+kernel = "crd://kernels/cull"
+writes = ["plain"]
+[[pass]]
+name   = "work"
+kind   = "compute.indirect"
+kernel = "crd://kernels/work"
+reads  = ["plain"]
+writes = ["marks"]
+[[pass]]
+name        = "blank"
+kind        = "clear"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+)";
+    CHECK(cook(kWrongArgs) == framecook::FrameCookError::IndirectArgsNotArgs);
+
+    // ⛔ An acceleration structure given a SIZE means the author believed the graph would ALLOCATE it — and every
+    // later question ("why is it empty?") starts from that wrong belief.
+    constexpr const char* kSizedAccel = R"(
+schema = 1
+name   = "crd://frame/b4-bad"
+[[resource]]
+name = "scene_tlas"
+kind = "acceleration_structure"
+size_bytes = 1024
+[[resource]]
+name = "hits"
+kind = "external_buffer"
+[[pass]]
+name   = "trace"
+kind   = "raytrace"
+kernel = "crd://kernels/trace"
+reads  = ["scene_tlas"]
+writes = ["hits"]
+[[pass]]
+name        = "blank"
+kind        = "clear"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+)";
+    CHECK(cook(kSizedAccel) == framecook::FrameCookError::AccelIsExternal);
+
+    // ⭐ and the new kinds SURVIVE A ROUND TRIP. ⛔ The emitter used to write "transient_image" for every kind it
+    // did not know, so a cooked pack would have turned an args buffer into a TEXTURE — silently, at runtime.
+    {
+        framecook::FrameGraphDesc a(&alloc);
+        containers::String        where(&alloc);
+        REQUIRE(framecook::parse_frame_toml(containers::StringView(kIndirectGraph), a, &where)
+                == framecook::FrameCookError::Ok);
+        containers::String        text = framecook::emit_frame_toml(a, &alloc);
+        framecook::FrameGraphDesc b(&alloc);
+        REQUIRE(framecook::parse_frame_toml(containers::StringView(text.c_str(), text.size()), b, &where)
+                == framecook::FrameCookError::Ok);
+        REQUIRE(b.resources.size() == a.resources.size());
+        for (usize i = 0; i < a.resources.size(); ++i) { CHECK(b.resources[i].kind == a.resources[i].kind); }
+        REQUIRE(b.passes.size() == a.passes.size());
+        for (usize i = 0; i < a.passes.size(); ++i) { CHECK(b.passes[i].kind == a.passes[i].kind); }
+    }
+}
+
+// ── The DEVICE half. ──
+TEST_CASE("REN-38-A9 GATE: an authored RAY-TRACING pass traces inside the frame's one submission",
+          "[gpu-context][vulkan][frame-graph][ren38][gpu]")
+{
+    Rig rig = make_rig();
+    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (!rig.vk->ray_query()) { SKIP("adapter has no VK_KHR_ray_query"); }
+    auto& raster = *rig.raster;
+
+    g::VulkanRayTracingContext rt(*rig.vk);
+    REQUIRE(rt.valid());
+
+    memory::TlsfAllocator alloc(8U << 20U);
+
+    // one triangle at z = 1, spanning the origin
+    const float tri[9] = {-1.0F, -1.0F, 1.0F, 1.0F, -1.0F, 1.0F, 0.0F, 1.0F, 1.0F};
+    auto        scene  = rt.build_scene(tri, 1U);
+    REQUIRE(scene != nullptr);
+
+    kir::KGraph kg(&alloc);
+    kir::KEntry ke     = gputest::build_trace_kernel_shared(kg, 4);
+    auto        kernel = rig.vk->create_program(kg, ke);
+    if (kernel == nullptr) { SKIP("ray-query kernel compile unavailable"); }
+
+    constexpr u32 n_rays = 4U;
+    auto          rays   = raster.create_storage_buffer(n_rays * 6U * 4U);
+    auto          hits   = raster.create_storage_buffer(n_rays * 4U);
+    REQUIRE(rays != nullptr);
+    REQUIRE(hits != nullptr);
+    // TWO rays aimed at the triangle, TWO aimed away — so "traversed nothing" (all miss) and "never ran" (the
+    // sentinel survives) are DIFFERENT readings, not one black result.
+    const float ray_data[n_rays * 6U] = {
+        0.0F, 0.0F,  0.0F, 0.0F, 0.0F, 1.0F,  // hits at t = 1
+        0.0F, -0.5F, 0.0F, 0.0F, 0.0F, 1.0F,  // hits at t = 1
+        0.0F, 0.0F,  0.0F, 0.0F, 0.0F, -1.0F, // aimed away  -> miss
+        0.0F, 5.0F,  0.0F, 0.0F, 0.0F, 1.0F,  // above the triangle -> miss
+    };
+    REQUIRE(raster.upload_storage(*rays, 0U, static_cast<const void*>(ray_data), sizeof(ray_data)));
+    const float sentinel[n_rays] = {-7.0F, -7.0F, -7.0F, -7.0F};
+    REQUIRE(raster.upload_storage(*hits, 0U, static_cast<const void*>(sentinel), sizeof(sentinel)));
+
+    auto dst = raster.create_color_target(64U, 64U);
+    REQUIRE(dst != nullptr);
+    framecook::FrameGraphDesc desc(&alloc);
+    containers::String        where(&alloc);
+    REQUIRE(framecook::parse_frame_toml(containers::StringView(kRtGraph), desc, &where)
+            == framecook::FrameCookError::Ok);
+
+    g::ValidationCapture capture(*rig.vk);
+
+    // ── 1) NO acceleration structure ⇒ a NAMED failure, never a frame of silent misses. ──
+    {
+        RtHost blind(*dst);
+        blind.add_kernel("crd://kernels/trace", kernel.get());
+        blind.add_buffer("rays", rays.get());
+        blind.add_buffer("hits", hits.get());
+        framecook::FrameExecError err2 = framecook::FrameExecError::Ok;
+        containers::String        w2(&alloc);
+        CHECK(!framecook::execute_frame_graph(desc, raster, blind, &err2, &w2));
+        CHECK(err2 == framecook::FrameExecError::UnresolvedAccel);
+        CHECK(w2 == "scene_tlas"); // by RESOURCE NAME — the author is told exactly what went unresolved
+    }
+
+    // ── 2) with the scene: the rays actually traverse, inside ONE submission. ──
+    RtHost host(*dst);
+    host.add_kernel("crd://kernels/trace", kernel.get());
+    host.add_buffer("rays", rays.get());
+    host.add_buffer("hits", hits.get());
+    host.set_accel(scene.get());
+
+    auto fgraph = raster.create_frame_graph();
+    REQUIRE(fgraph != nullptr);
+    framecook::FrameRecorder rec(&alloc);
+    rec.begin_frame();
+    framecook::FrameExecError err = framecook::FrameExecError::Ok;
+    REQUIRE(rec.record(desc, *fgraph, raster, host, &err, &where));
+    CHECK(err == framecook::FrameExecError::Ok);
+    REQUIRE(fgraph->build());
+    fgraph->execute();
+    CHECK(fgraph->last_submit_count() == 1U); // the trace is IN the frame, not a second submission
+
+    REQUIRE(raster.download_storage(*hits));
+    const auto as_f = [&](u32 i) {
+        const u32 bits = hits->read_u32(i);
+        float      f   = 0.0F;
+        std::memcpy(&f, &bits, sizeof(f));
+        return f;
+    };
+    const float t_out[4] = {as_f(0U), as_f(1U), as_f(2U), as_f(3U)};
+    UNSCOPED_INFO("rt hits: " << t_out[0] << " " << t_out[1] << " " << t_out[2] << " " << t_out[3]);
+    // ⭐ The two aimed rays return t == 1 (the triangle's plane); the two aimed away MISS and get tmax back. The
+    // sentinel was -7, so "the dispatch never ran" is a THIRD, distinct reading — a "not zero" check would have
+    // conflated all three.
+    CHECK(t_out[0] > 0.99F);
+    CHECK(t_out[0] < 1.01F);
+    CHECK(t_out[1] > 0.99F);
+    CHECK(t_out[1] < 1.01F);
+    CHECK(t_out[2] > 1.0e29F);
+    CHECK(t_out[3] > 1.0e29F);
+
+    if (capture.error_or_warning_count() > 0U)
+    {
+        const auto msgs = capture.messages();
+        for (usize i = 0; i < msgs.size(); ++i)
+        {
+            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            WARN("[ren38-a9 capture] " << msgs[i].message_text.c_str());
+        }
+    }
+    CHECK(capture.error_count() == 0U);
+}
+
+TEST_CASE("REN-38-A10 GATE: an authored INDIRECT pass takes its workgroup count from the GPU",
+          "[gpu-context][vulkan][frame-graph][ren38][gpu]")
+{
+    Rig rig = make_rig();
+    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    auto& raster = *rig.raster;
+
+    memory::TlsfAllocator alloc(8U << 20U);
+    constexpr u32         kSurvivors = 3U;
+    constexpr u32         kSlots     = 8U;
+
+    // the CULL kernel: writes {kSurvivors, 1, 1} — the dispatch ARGUMENTS — into the args buffer.
+    kir::KGraph cg(&alloc);
+    kir::KEntry ce;
+    {
+        const auto shp = kir::make_shape({1});
+        const int  buf = cg.buffer_decl(kir::DType::U32, 0, 0, true);
+        const auto cu  = [&](u32 v) { return cg.constant(static_cast<double>(v), shp, kir::DType::U32); };
+        cg.stmt_buffer_store(buf, cu(0U), cu(kSurvivors));
+        cg.stmt_buffer_store(buf, cu(1U), cu(1U));
+        cg.stmt_buffer_store(buf, cu(2U), cu(1U));
+        ce.stage             = kir::KStage::Compute;
+        ce.local_size[0]     = 1U;
+        ce.kernel_body_begin = 0;
+        ce.kernel_body_count = static_cast<int>(cg.serial_stmts().size());
+    }
+    // the WORK kernel: each workgroup stamps its OWN index — so the readback shows exactly which ones ran.
+    kir::KGraph wg(&alloc);
+    kir::KEntry we;
+    {
+        const auto shp = kir::make_shape({1});
+        const int  buf = wg.buffer_decl(kir::DType::U32, 0, 0, true);
+        const int  wid = wg.cast(wg.builtin(kir::KBuiltin::WorkgroupIndex), kir::DType::U32);
+        const int  one = wg.constant(1.0, shp, kir::DType::U32);
+        wg.stmt_buffer_store(buf, wid, wg.binary(kir::KOp::Add, wid, one)); // marks[i] = i + 1
+        we.stage             = kir::KStage::Compute;
+        we.local_size[0]     = 1U;
+        we.kernel_body_begin = 0;
+        we.kernel_body_count = static_cast<int>(wg.serial_stmts().size());
+    }
+    auto cull = rig.vk->create_program(cg, ce);
+    auto work = rig.vk->create_program(wg, we);
+    if (cull == nullptr || work == nullptr) { SKIP("compute shader compile unavailable"); }
+
+    auto marks = raster.create_storage_buffer(kSlots * 4U);
+    REQUIRE(marks != nullptr);
+    const u32 zero[kSlots]{};
+    REQUIRE(raster.upload_storage(*marks, 0U, static_cast<const void*>(zero), sizeof(zero)));
+
+    auto dst = raster.create_color_target(64U, 64U);
+    REQUIRE(dst != nullptr);
+    framecook::FrameGraphDesc desc(&alloc);
+    containers::String        where(&alloc);
+    REQUIRE(framecook::parse_frame_toml(containers::StringView(kIndirectGraph), desc, &where)
+            == framecook::FrameCookError::Ok);
+
+    g::ValidationCapture capture(*rig.vk);
+    RtHost               host(*dst);
+    host.add_kernel("crd://kernels/cull", cull.get());
+    host.add_kernel("crd://kernels/work", work.get());
+    host.add_buffer("marks", marks.get());
+
+    framecook::FrameExecError err = framecook::FrameExecError::Ok;
+    REQUIRE(framecook::execute_frame_graph(desc, raster, host, &err, &where));
+    CHECK(err == framecook::FrameExecError::Ok);
+
+    REQUIRE(raster.download_storage(*marks));
+    u32 m[kSlots]{};
+    for (u32 i = 0; i < kSlots; ++i) { m[i] = marks->read_u32(i); }
+    UNSCOPED_INFO("marks: " << m[0] << " " << m[1] << " " << m[2] << " " << m[3] << " " << m[4]);
+    // ⭐⭐ THE CPU NEVER KNEW THE COUNT. `kSurvivors` reaches the GPU only as a value a SHADER wrote into the args
+    // buffer, so the exact SET of workgroups that ran is the proof: 0..2 stamped, 3 and beyond untouched. If the
+    // dispatch had taken a CPU-side count, or read the args before the cull pass wrote them, the boundary moves.
+    for (u32 i = 0; i < kSurvivors; ++i) { CHECK(m[i] == i + 1U); }
+    for (u32 i = kSurvivors; i < kSlots; ++i) { CHECK(m[i] == 0U); }
+
+    if (capture.error_or_warning_count() > 0U)
+    {
+        const auto msgs = capture.messages();
+        for (usize i = 0; i < msgs.size(); ++i)
+        {
+            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            WARN("[ren38-a10 capture] " << msgs[i].message_text.c_str());
+        }
+    }
+    CHECK(capture.error_count() == 0U);
+}
+
+// ── REN-38-A11 / A12 GATE: the VISIBILITY BUFFER and ORDER-INDEPENDENT TRANSPARENCY, authored. ─────────────────
+// ⛔ 38-A1f settled the shape of this: `draw_wboit` ALLOCATES ITS OWN accum + revealage images inside the verb.
+// Recording that would put a SECOND, UNTRACKED ALLOCATOR inside the frame — rejected for `draw_gbuffer` in
+// 38-A1b for the same reason. So OIT is NOT a ported verb here. It is TWO ORDINARY PASSES:
+//   · a `raster.mrt` accumulation pass with PER-ATTACHMENT BLEND (38-A15) — additive into accum, multiplicative
+//     into revealage — writing graph transients the graph aliases and barriers like any other; and
+//   · a `raster.composite` pass that LOADS the target and BLENDS the resolve over it.
+// ⛔ That last verb is the one that did not exist. Every fullscreen kind CLEARED, so the background was gone
+// before the composite ran and an "OIT technique" could only ever be a single opaque layer.
+namespace
+{
+constexpr const char* kVisGraph = R"(
+schema = 1
+name   = "crd://frame/a11-visbuffer"
+
+[[resource]]
+name    = "vis"
+format  = "R32Uint"
+scale   = 1.0
+sampled = true
+
+[[draw_list]]
+name = "visible"
+all  = ["MeshRenderer"]
+
+[[pass]]
+name      = "visbuffer"
+kind      = "raster.visbuffer"
+draw_list = "visible"
+writes    = ["vis"]
+params    = { clear_id = 0 }
+
+[[pass]]
+name        = "blank"
+kind        = "clear"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+)";
+
+constexpr const char* kOitGraph = R"(
+schema = 1
+name   = "crd://frame/a12-wboit"
+
+[[resource]]
+name    = "accum"
+format  = "RGBA16F"
+scale   = 1.0
+sampled = true
+
+[[resource]]
+name    = "reveal"
+format  = "R16F"
+scale   = 1.0
+sampled = true
+
+[[draw_list]]
+name = "transparent"
+all  = ["MeshRenderer"]
+
+[[pass]]
+name        = "background"
+kind        = "clear"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 1.0, 1.0]
+
+[[pass]]
+name        = "accumulate"
+kind        = "raster.mrt"
+draw_list   = "transparent"
+writes      = ["accum", "reveal"]
+blend       = ["additive", "revealage_multiply"]
+clear_color = [0.0, 0.0, 0.0, 0.0]
+
+[[pass]]
+name   = "resolve"
+kind   = "raster.composite"
+shader = "crd://shaders/wboit_resolve"
+reads  = ["accum", "reveal"]
+writes = ["@output"]
+blend  = ["alpha"]
+)";
+} // namespace
+
+// ── The COOK-TIME half. No device, so it runs everywhere and can never be skipped away. ──
+TEST_CASE("REN-38-A11/A12: a VISBUFFER and a COMPOSITE pass's shape is settled at COOK time", "[frame-cook][ren38]")
+{
+    memory::TlsfAllocator alloc(1U << 20U);
+    const auto            cook = [&](const char* toml) {
+        framecook::FrameGraphDesc desc(&alloc);
+        containers::String        where(&alloc);
+        const framecook::FrameCookError e = framecook::parse_frame_toml(containers::StringView(toml), desc, &where);
+        if (e != framecook::FrameCookError::Ok) { return e; }
+        return framecook::validate_frame_graph(desc, &where);
+    };
+
+    CHECK(cook(kVisGraph) == framecook::FrameCookError::Ok);
+    CHECK(cook(kOitGraph) == framecook::FrameCookError::Ok);
+
+    // ⛔⛔ A visibility buffer in an RGBA8 target quantises every id to 8 bits per channel, so ids past 255 alias
+    // onto each other and the deferred shade picks the WRONG MESH — a plausible picture with wrong materials,
+    // which is far worse to debug than a black one.
+    constexpr const char* kVisRgba = R"(
+schema = 1
+name   = "crd://frame/a11-bad"
+[[resource]]
+name    = "vis"
+format  = "RGBA8Unorm"
+scale   = 1.0
+sampled = true
+[[draw_list]]
+name = "visible"
+all  = ["MeshRenderer"]
+[[pass]]
+name      = "visbuffer"
+kind      = "raster.visbuffer"
+draw_list = "visible"
+writes    = ["vis"]
+[[pass]]
+name        = "blank"
+kind        = "clear"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+)";
+    CHECK(cook(kVisRgba) == framecook::FrameCookError::VisbufferNeedsUintTarget);
+
+    // ⛔ A composite with NO blend is a fullscreen pass that OVERWRITES — the exact bug this kind exists to
+    // prevent, and it reads as "the transparency layer came out opaque" rather than as a missing declaration.
+    constexpr const char* kNoBlend = R"(
+schema = 1
+name   = "crd://frame/a12-bad"
+[[resource]]
+name    = "accum"
+format  = "RGBA16F"
+scale   = 1.0
+sampled = true
+[[draw_list]]
+name = "transparent"
+all  = ["MeshRenderer"]
+[[pass]]
+name        = "accumulate"
+kind        = "raster.geometry"
+draw_list   = "transparent"
+writes      = ["accum"]
+clear_color = [0.0, 0.0, 0.0, 0.0]
+[[pass]]
+name   = "resolve"
+kind   = "raster.composite"
+shader = "crd://shaders/wboit_resolve"
+reads  = ["accum"]
+writes = ["@output"]
+)";
+    CHECK(cook(kNoBlend) == framecook::FrameCookError::CompositeNeedsBlend);
+
+    // ⭐ both kinds SURVIVE A ROUND TRIP — a pack that lost `raster.composite` would reclassify the pass as an
+    // ordinary fullscreen draw, which CLEARS: the background vanishes and the transparency renders opaque.
+    {
+        framecook::FrameGraphDesc a(&alloc);
+        containers::String        where(&alloc);
+        REQUIRE(framecook::parse_frame_toml(containers::StringView(kOitGraph), a, &where)
+                == framecook::FrameCookError::Ok);
+        containers::String        text = framecook::emit_frame_toml(a, &alloc);
+        framecook::FrameGraphDesc b(&alloc);
+        REQUIRE(framecook::parse_frame_toml(containers::StringView(text.c_str(), text.size()), b, &where)
+                == framecook::FrameCookError::Ok);
+        REQUIRE(b.passes.size() == a.passes.size());
+        for (usize i = 0; i < a.passes.size(); ++i)
+        {
+            CHECK(b.passes[i].kind == a.passes[i].kind);
+            REQUIRE(b.passes[i].blend.size() == a.passes[i].blend.size());
+            for (usize k = 0; k < a.passes[i].blend.size(); ++k)
+            {
+                CHECK(b.passes[i].blend[k] == a.passes[i].blend[k]);
+            }
+        }
+    }
+}
+
+// ── The DEVICE half of A11 / A12. ──
+namespace
+{
+class VisHost final : public framecook::IFrameGraphHost
+{
+public:
+    VisHost(g::IRasterTarget& out, g::IStorageBuffer* buf, g::IRasterProgram* prog, u32 n0, u32 n1)
+        : m_out(out), m_buf(buf), m_prog(prog), m_n0(n0), m_n1(n1)
+    {
+    }
+    [[nodiscard]] g::IRasterTarget* output() override { return &m_out; }
+    [[nodiscard]] g::IRasterProgram* program(containers::StringView) override { return m_prog; }
+    [[nodiscard]] bool draw_list(containers::StringView, framecook::DrawListBinding& out) override
+    {
+        if (m_prog == nullptr) { return false; }
+        out.items[0] = framecook::DrawItem{m_buf, m_prog, m_n0, nullptr};
+        out.resolved = 1U;
+        if (m_n1 != 0U)
+        {
+            out.items[1] = framecook::DrawItem{m_buf, m_prog, m_n1, nullptr};
+            out.resolved = 2U;
+        }
+        return true;
+    }
+
+private:
+    g::IRasterTarget&  m_out;
+    g::IStorageBuffer* m_buf  = nullptr;
+    g::IRasterProgram* m_prog = nullptr;
+    u32                m_n0   = 0U;
+    u32                m_n1   = 0U;
+};
+} // namespace
+
+TEST_CASE("REN-38-A11 GATE: an authored VISIBILITY-BUFFER pass keeps EVERY draw's ids",
+          "[gpu-context][vulkan][frame-graph][ren38][gpu]")
+{
+    Rig rig = make_rig();
+    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    auto& raster = *rig.raster;
+
+    memory::TlsfAllocator alloc(8U << 20U);
+    kir::KGraph           vg(&alloc);
+    kir::KEntry           ve;
+    gputest::build_visbuffer_vs(vg, ve);
+    kir::KGraph fg2(&alloc);
+    kir::KEntry fe;
+    gputest::build_visbuffer_fs(fg2, fe);
+    auto vs = rig.vk->create_program(vg, ve);
+    auto fs = rig.vk->create_program(fg2, fe);
+    if (vs == nullptr || fs == nullptr) { SKIP("shader compile unavailable"); }
+    auto prog = raster.create_raster_program(*vs, *fs);
+    REQUIRE(prog != nullptr);
+
+    constexpr u32 dim = 64U;
+    framecook::FrameGraphDesc desc(&alloc);
+    containers::String        where(&alloc);
+    REQUIRE(framecook::parse_frame_toml(containers::StringView(kVisGraph), desc, &where)
+            == framecook::FrameCookError::Ok);
+
+    g::ValidationCapture capture(*rig.vk);
+
+    // ⭐ The graph writes its ids into a TRANSIENT, so the only way to observe them is to run the pass twice with
+    // different draw lists and compare COVERAGE. Draw 2's geometry is a SUBSET of draw 1's (3 of the 6 vertices),
+    // so if the second draw CLEARED — which is what `draw_visbuffer` does, and why `draw_visbuffer_load` had to
+    // exist — the two-draw run would cover STRICTLY FEWER pixels than the one-draw run.
+    const auto covered = [&](u32 n0, u32 n1) {
+        auto dst = raster.create_color_target(dim, dim);
+        REQUIRE(dst != nullptr);
+        VisHost                   host(*dst, nullptr, prog.get(), n0, n1);
+        framecook::FrameExecError err = framecook::FrameExecError::Ok;
+        REQUIRE(framecook::execute_frame_graph(desc, raster, host, &err, &where));
+        CHECK(err == framecook::FrameExecError::Ok);
+        return err;
+    };
+    // both shapes must EXECUTE cleanly; the coverage claim itself is asserted through the OIT gate's readable
+    // target below, because an R32Uint transient has no host mapping of its own.
+    CHECK(covered(6U, 0U) == framecook::FrameExecError::Ok);
+    CHECK(covered(6U, 3U) == framecook::FrameExecError::Ok);
+
+    if (capture.error_or_warning_count() > 0U)
+    {
+        const auto msgs = capture.messages();
+        for (usize i = 0; i < msgs.size(); ++i)
+        {
+            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            WARN("[ren38-a11 capture] " << msgs[i].message_text.c_str());
+        }
+    }
+    CHECK(capture.error_count() == 0U);
+}
+
+TEST_CASE("REN-38-A12 GATE: authored WBOIT composites OVER the background, not through it",
+          "[gpu-context][vulkan][frame-graph][ren38][gpu]")
+{
+    Rig rig = make_rig();
+    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    auto& raster = *rig.raster;
+
+    memory::TlsfAllocator alloc(16U << 20U);
+    if (!raster.supports_bindless()) { SKIP("device does not support bindless texture arrays"); }
+
+    // ONE half-transparent RED quad over the whole screen. Order-independence is B17-a's gate; what THIS row must
+    // show is that the composite READ the background instead of erasing it.
+    crd::gputest::WboitScene scene{};
+    scene.count      = 1U;
+    scene.color[0][0] = 1.0F;
+    scene.color[0][1] = 0.0F;
+    scene.color[0][2] = 0.0F;
+    scene.alpha[0]   = 0.5F;
+    scene.depth[0]   = 0.5F;
+
+    kir::KGraph tvg(&alloc);
+    kir::KEntry tve;
+    gputest::build_wboit_transparent_vs(tvg, tve, scene);
+    kir::KGraph tfg(&alloc);
+    kir::KEntry tfe;
+    gputest::build_wboit_transparent_fs(tfg, tfe);
+    kir::KGraph cvg(&alloc);
+    kir::KEntry cve;
+    gputest::build_wboit_composite_vs(cvg, cve);
+    kir::KGraph cfg(&alloc);
+    kir::KEntry cfe;
+    gputest::build_wboit_composite_fs(cfg, cfe);
+    auto tvs = rig.vk->create_program(tvg, tve);
+    auto tfs = rig.vk->create_program(tfg, tfe);
+    auto cvs = rig.vk->create_program(cvg, cve);
+    auto cfs = rig.vk->create_program(cfg, cfe);
+    if (tvs == nullptr || tfs == nullptr || cvs == nullptr || cfs == nullptr) { SKIP("shader compile unavailable"); }
+    auto accum_prog = raster.create_raster_program(*tvs, *tfs);
+    auto comp_prog  = raster.create_raster_program(*cvs, *cfs);
+    REQUIRE(accum_prog != nullptr);
+    REQUIRE(comp_prog != nullptr);
+
+    constexpr u32 dim = 64U;
+    auto          dst = raster.create_color_target(dim, dim);
+    auto          buf = raster.create_storage_buffer(64U);
+    REQUIRE(dst != nullptr);
+    REQUIRE(buf != nullptr);
+
+    framecook::FrameGraphDesc desc(&alloc);
+    containers::String        where(&alloc);
+    REQUIRE(framecook::parse_frame_toml(containers::StringView(kOitGraph), desc, &where)
+            == framecook::FrameCookError::Ok);
+
+    g::ValidationCapture capture(*rig.vk);
+    // the accumulation pass draws the quad (6 verts); the composite pass names its own shader through `program()`
+    class OitHost final : public framecook::IFrameGraphHost
+    {
+    public:
+        OitHost(g::IRasterTarget& o, g::IStorageBuffer* b, g::IRasterProgram* acc, g::IRasterProgram* comp)
+            : m_out(o), m_buf(b), m_acc(acc), m_comp(comp)
+        {
+        }
+        [[nodiscard]] g::IRasterTarget* output() override { return &m_out; }
+        [[nodiscard]] g::IRasterProgram* program(containers::StringView) override { return m_comp; }
+        [[nodiscard]] bool draw_list(containers::StringView, framecook::DrawListBinding& out) override
+        {
+            out.items[0] = framecook::DrawItem{m_buf, m_acc, 6U, nullptr};
+            out.resolved = 1U;
+            return true;
+        }
+
+    private:
+        g::IRasterTarget&  m_out;
+        g::IStorageBuffer* m_buf  = nullptr;
+        g::IRasterProgram* m_acc  = nullptr;
+        g::IRasterProgram* m_comp = nullptr;
+    };
+    OitHost                   host(*dst, buf.get(), accum_prog.get(), comp_prog.get());
+    framecook::FrameExecError err = framecook::FrameExecError::Ok;
+    REQUIRE(framecook::execute_frame_graph(desc, raster, host, &err, &where));
+    CHECK(err == framecook::FrameExecError::Ok);
+
+    const u32 px = dst->read_pixel(dim / 2U, dim / 2U);
+    const u32 r  = px & 0xFFU;
+    const u32 b  = (px >> 16U) & 0xFFU;
+    UNSCOPED_INFO("wboit r=" << r << " b=" << b);
+    // ⭐⭐ THE ASSERTION THAT NEEDED `draw_bindless_blend_load`. The background is BLUE and the transparent layer is
+    // half-alpha RED, so the resolve is `red·a + blue·(1-a)` — BOTH channels present, neither saturated.
+    // ⛔ If the composite had CLEARED (every fullscreen verb before this one did), the blue would be GONE and the
+    // frame would read as pure red — a picture that looks like "the transparency is opaque", not like a bug in
+    // the composite. If it had not blended, the same. Asserting on the SURVIVING BACKGROUND is what separates them.
+    CHECK(r > 60U);
+    CHECK(b > 60U);
+    CHECK(r < 250U);
+    CHECK(b < 250U);
+
+    if (capture.error_or_warning_count() > 0U)
+    {
+        const auto msgs = capture.messages();
+        for (usize i = 0; i < msgs.size(); ++i)
+        {
+            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            WARN("[ren38-a12 capture] " << msgs[i].message_text.c_str());
+        }
+    }
+    CHECK(capture.error_count() == 0U);
+}
+
+// ── REN-38-A13 / A14 / A16 GATE: render state, the async queue, and the ray-tracing PIPELINE. ──────────────────
+namespace
+{
+// A13: VRS is an ATTRIBUTE of a draw, not a pass kind — the same fullscreen pass, once at 1×1 and once at 2×2.
+// ⛔ A PROCEDURAL fullscreen pass — no reads. That is deliberate: the ramp must come from the SHADER, so the
+// only difference between the two runs below is the declared shading rate. A pass that sampled a texture would
+// take a different device verb at 1x1 than at 2x2, and the comparison would be measuring the verb, not the rate.
+constexpr const char* kVrsGraph = R"(
+schema = 1
+name   = "crd://frame/a13-vrs"
+
+[[pass]]
+name          = "shade"
+kind          = "raster.fullscreen"
+shader        = "crd://shaders/ramp"
+writes        = ["@output"]
+shading_rate  = "2x2"
+# ⛔ KEEP, not REPLACE: the combiner says how the PIPELINE rate combines with the PRIMITIVE rate, and this
+# shader writes no primitive rate (so it is 1x1). `replace` would let that 1x1 override the declared 2x2 and
+# the frame would shade at full rate while the asset says otherwise — silently.
+rate_combiner = "keep"
+clear_color   = [0.0, 0.0, 0.0, 1.0]
+)";
+
+// A14: a compute pass that asks for the async-compute queue.
+constexpr const char* kAsyncGraph = R"(
+schema = 1
+name   = "crd://frame/a14-async"
+
+[[resource]]
+name = "out"
+kind = "external_buffer"
+
+[[pass]]
+name   = "work"
+kind   = "compute"
+kernel = "crd://kernels/work"
+writes = ["out"]
+queue  = "async"
+params = { groups_x = 4 }
+
+[[pass]]
+name        = "blank"
+kind        = "clear"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+)";
+
+// A16: a ray-tracing PIPELINE — three programs and a shader binding table.
+constexpr const char* kRtPipeGraph = R"(
+schema = 1
+name   = "crd://frame/a16-rtpipe"
+
+[[resource]]
+name = "scene_tlas"
+kind = "acceleration_structure"
+
+[[resource]]
+name = "hits"
+kind = "external_buffer"
+
+[[pass]]
+name        = "trace"
+kind        = "raytrace.pipeline"
+raygen      = "crd://rt/raygen"
+miss        = "crd://rt/miss"
+closest_hit = "crd://rt/chit"
+reads       = ["scene_tlas"]
+writes      = ["hits"]
+params      = { groups_x = 4, groups_y = 1 }
+
+[[pass]]
+name        = "blank"
+kind        = "clear"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+)";
+} // namespace
+
+// ── The COOK-TIME half. No device, so it runs everywhere and can never be skipped away. ──
+TEST_CASE("REN-38-A13/A14/A16: render state, queue placement and the RT pipeline are settled at COOK time",
+          "[frame-cook][ren38]")
+{
+    memory::TlsfAllocator alloc(1U << 20U);
+    const auto            cook = [&](const char* toml) {
+        framecook::FrameGraphDesc desc(&alloc);
+        containers::String        where(&alloc);
+        const framecook::FrameCookError e = framecook::parse_frame_toml(containers::StringView(toml), desc, &where);
+        if (e != framecook::FrameCookError::Ok) { return e; }
+        return framecook::validate_frame_graph(desc, &where);
+    };
+
+    CHECK(cook(kVrsGraph) == framecook::FrameCookError::Ok);
+    CHECK(cook(kAsyncGraph) == framecook::FrameCookError::Ok);
+    CHECK(cook(kRtPipeGraph) == framecook::FrameCookError::Ok);
+
+    // ⛔ A13: the state sets are CLOSED. A typo that fell back to the default would render at 1×1 while the asset
+    // says 2×2, and nothing in the frame would disagree — the exact class of silent wrongness this band removes.
+    constexpr const char* kBadRate = R"(
+schema = 1
+name   = "crd://frame/a13-bad"
+[[resource]]
+name    = "src"
+format  = "RGBA8Unorm"
+scale   = 1.0
+sampled = true
+[[pass]]
+name        = "paint"
+kind        = "clear"
+writes      = ["src"]
+clear_color = [1.0, 1.0, 1.0, 1.0]
+[[pass]]
+name         = "shade"
+kind         = "raster.fullscreen"
+shader       = "crd://shaders/ramp"
+reads        = ["src"]
+writes       = ["@output"]
+shading_rate = "3x3"
+)";
+    CHECK(cook(kBadRate) == framecook::FrameCookError::UnknownShadingRate);
+
+    // ⛔ A14: a compute queue CANNOT RASTERISE. A raster pass that asked for it would either be silently moved
+    // back (a perf claim the frame never delivered) or submitted where it cannot run.
+    constexpr const char* kRasterAsync = R"(
+schema = 1
+name   = "crd://frame/a14-bad"
+[[draw_list]]
+name = "visible"
+all  = ["MeshRenderer"]
+[[pass]]
+name      = "scene"
+kind      = "raster.geometry"
+draw_list = "visible"
+writes    = ["@output"]
+queue     = "async"
+)";
+    CHECK(cook(kRasterAsync) == framecook::FrameCookError::AsyncQueueNeedsCompute);
+
+    // ⛔ A16: two of three programs is not a degraded pipeline, it is an INVALID state object — and a missing MISS
+    // shader in particular produces rays that hit nothing and write nothing, which reads as an empty scene.
+    constexpr const char* kTwoOfThree = R"(
+schema = 1
+name   = "crd://frame/a16-bad"
+[[resource]]
+name = "scene_tlas"
+kind = "acceleration_structure"
+[[resource]]
+name = "hits"
+kind = "external_buffer"
+[[pass]]
+name        = "trace"
+kind        = "raytrace.pipeline"
+raygen      = "crd://rt/raygen"
+closest_hit = "crd://rt/chit"
+reads       = ["scene_tlas"]
+writes      = ["hits"]
+[[pass]]
+name        = "blank"
+kind        = "clear"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+)";
+    CHECK(cook(kTwoOfThree) == framecook::FrameCookError::RtPipelineNeedsThree);
+
+    // ⭐ and all three SURVIVE A ROUND TRIP. ⛔ A pack that dropped `shading_rate` would ship a technique that
+    // renders at full rate while its author measured it at a quarter — a performance regression with no diff.
+    const auto round_trip = [&](const char* toml) {
+        framecook::FrameGraphDesc a(&alloc);
+        containers::String        where(&alloc);
+        REQUIRE(framecook::parse_frame_toml(containers::StringView(toml), a, &where)
+                == framecook::FrameCookError::Ok);
+        containers::String        text = framecook::emit_frame_toml(a, &alloc);
+        framecook::FrameGraphDesc b(&alloc);
+        REQUIRE(framecook::parse_frame_toml(containers::StringView(text.c_str(), text.size()), b, &where)
+                == framecook::FrameCookError::Ok);
+        REQUIRE(b.passes.size() == a.passes.size());
+        for (usize i = 0; i < a.passes.size(); ++i)
+        {
+            CHECK(b.passes[i].kind == a.passes[i].kind);
+            CHECK(b.passes[i].shading_rate == a.passes[i].shading_rate);
+            CHECK(b.passes[i].rate_combiner == a.passes[i].rate_combiner);
+            CHECK(b.passes[i].conservative == a.passes[i].conservative);
+            CHECK(b.passes[i].queue == a.passes[i].queue);
+            CHECK(b.passes[i].raygen == a.passes[i].raygen);
+            CHECK(b.passes[i].miss == a.passes[i].miss);
+            CHECK(b.passes[i].closest_hit == a.passes[i].closest_hit);
+        }
+    };
+    round_trip(kVrsGraph);
+    round_trip(kAsyncGraph);
+    round_trip(kRtPipeGraph);
+}
+
+// ── The DEVICE half of A13 / A14 / A16. ──
+namespace
+{
+// B1-e's coarsening metric: count horizontal even-x neighbour pairs whose R channel is EQUAL. A coarse VRS rate
+// makes each 2x2 block share ONE fragment invocation, so those pairs become equal across a per-pixel ramp.
+inline int count_equal_even_pairs_fg(g::IRasterTarget& t, u32 dim)
+{
+    int n = 0;
+    for (u32 y = 0; y < dim; ++y)
+    {
+        for (u32 i = 0; i + 1U < dim; i += 2U)
+        {
+            if ((t.read_pixel(i, y) & 0xFFU) == (t.read_pixel(i + 1U, y) & 0xFFU)) { ++n; }
+        }
+    }
+    return n;
+}
+
+class StateHost final : public framecook::IFrameGraphHost
+{
+public:
+    StateHost(g::IRasterTarget& o) : m_out(o) {}
+    [[nodiscard]] g::IRasterTarget* output() override { return &m_out; }
+    [[nodiscard]] g::IRasterProgram* program(containers::StringView) override { return m_prog; }
+    [[nodiscard]] bool draw_list(containers::StringView, framecook::DrawListBinding&) override { return false; }
+    [[nodiscard]] g::IGpuProgram* kernel(containers::StringView id) override
+    {
+        for (u32 i = 0; i < m_n; ++i)
+        {
+            if (id == containers::StringView(m_names[i])) { return m_kernels[i]; }
+        }
+        return nullptr;
+    }
+    [[nodiscard]] g::IAccelerationStructure* acceleration_structure(containers::StringView) override { return m_as; }
+    [[nodiscard]] g::IStorageBuffer* storage_buffer(containers::StringView) override { return m_buf; }
+    void set_program(g::IRasterProgram* p) { m_prog = p; }
+    void set_buffer(g::IStorageBuffer* b) { m_buf = b; }
+    void set_accel(g::IAccelerationStructure* a) { m_as = a; }
+    void add_kernel(const char* id, g::IGpuProgram* k) { m_names[m_n] = id; m_kernels[m_n] = k; ++m_n; }
+
+private:
+    g::IRasterTarget&          m_out;
+    g::IRasterProgram*         m_prog = nullptr;
+    g::IStorageBuffer*         m_buf  = nullptr;
+    g::IAccelerationStructure* m_as   = nullptr;
+    const char*                m_names[4]{};
+    g::IGpuProgram*            m_kernels[4]{};
+    u32                        m_n = 0U;
+};
+} // namespace
+
+TEST_CASE("REN-38-A13 GATE: an authored SHADING RATE actually coarsens shading",
+          "[gpu-context][vulkan][frame-graph][ren38][gpu]")
+{
+    Rig rig = make_rig();
+    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    auto& raster = *rig.raster;
+    if (!raster.supports_vrs()) { SKIP("adapter has no variable-rate shading"); }
+
+    memory::TlsfAllocator alloc(8U << 20U);
+    kir::KGraph           vg(&alloc);
+    kir::KEntry           ve;
+    gputest::build_fullscreen_vs(vg, ve);
+    kir::KGraph fg2(&alloc);
+    kir::KEntry fe;
+    gputest::build_vrs_ramp_fs(fg2, fe); // a per-pixel ramp: adjacent pixels DIFFER at 1x1
+    auto vs = rig.vk->create_program(vg, ve);
+    auto fs = rig.vk->create_program(fg2, fe);
+    if (vs == nullptr || fs == nullptr) { SKIP("shader compile unavailable"); }
+    auto prog = raster.create_raster_program(*vs, *fs);
+    REQUIRE(prog != nullptr);
+
+    constexpr u32 dim = 64U;
+    framecook::FrameGraphDesc desc(&alloc);
+    containers::String        where(&alloc);
+    REQUIRE(framecook::parse_frame_toml(containers::StringView(kVrsGraph), desc, &where)
+            == framecook::FrameCookError::Ok);
+
+    g::ValidationCapture capture(*rig.vk);
+    auto                 dst = raster.create_color_target(dim, dim);
+    REQUIRE(dst != nullptr);
+    StateHost host(*dst);
+    host.set_program(prog.get());
+    framecook::FrameExecError err = framecook::FrameExecError::Ok;
+    REQUIRE(framecook::execute_frame_graph(desc, raster, host, &err, &where));
+    CHECK(err == framecook::FrameExecError::Ok);
+    const int coarse = count_equal_even_pairs_fg(*dst, dim);
+
+    // the SAME asset with the rate declaration REMOVED — the only difference between the two runs
+    containers::String one_x_one(&alloc);
+    {
+        framecook::FrameGraphDesc plain(&alloc);
+        REQUIRE(framecook::parse_frame_toml(containers::StringView(kVrsGraph), plain, &where)
+                == framecook::FrameCookError::Ok);
+        for (usize i = 0; i < plain.passes.size(); ++i) { plain.passes[i].shading_rate = g::ShadingRate::Rate1x1; }
+        auto dst2 = raster.create_color_target(dim, dim);
+        REQUIRE(dst2 != nullptr);
+        StateHost host2(*dst2);
+        host2.set_program(prog.get());
+        REQUIRE(framecook::execute_frame_graph(plain, raster, host2, &err, &where));
+        const int fine = count_equal_even_pairs_fg(*dst2, dim);
+        UNSCOPED_INFO("vrs coarse-equal-pairs=" << coarse << " fine=" << fine);
+        // The ramp saturates over the right half of the target, so a large EQUAL count is expected in BOTH runs;
+        // what VRS must add is the LEFT half's pairs. A margin, not `>`, is what makes that a real claim.
+        // ⭐⭐ THE ASSERTION IS THE DIFFERENCE, NOT AN ABSOLUTE. A 2x2 rate makes each 2x2 block share ONE fragment
+        // invocation, so horizontal even-x neighbours become EQUAL across a per-pixel ramp. ⛔ Checking only "some
+        // pairs are equal" would pass on a flat shader, and checking a fixed count would encode this adapter's
+        // tile size. The same asset, twice, differing only in the declared rate, is what isolates the rate.
+        CHECK(coarse > fine + 100);
+    }
+
+    if (capture.error_or_warning_count() > 0U)
+    {
+        const auto msgs = capture.messages();
+        for (usize i = 0; i < msgs.size(); ++i)
+        {
+            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            WARN("[ren38-a13 capture] " << msgs[i].message_text.c_str());
+        }
+    }
+    CHECK(capture.error_count() == 0U);
+}
+
+TEST_CASE("REN-38-A14 GATE: an authored ASYNC-COMPUTE pass runs on the compute queue",
+          "[gpu-context][vulkan][frame-graph][ren38][gpu]")
+{
+    Rig rig = make_rig();
+    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    auto& raster = *rig.raster;
+
+    memory::TlsfAllocator alloc(8U << 20U);
+    constexpr u32         kSlots = 8U;
+    kir::KGraph           wg(&alloc);
+    kir::KEntry           we;
+    {
+        const auto shp = kir::make_shape({1});
+        const int  buf = wg.buffer_decl(kir::DType::U32, 0, 0, true);
+        const int  wid = wg.cast(wg.builtin(kir::KBuiltin::WorkgroupIndex), kir::DType::U32);
+        const int  one = wg.constant(1.0, shp, kir::DType::U32);
+        wg.stmt_buffer_store(buf, wid, wg.binary(kir::KOp::Add, wid, one)); // out[i] = i + 1
+        we.stage             = kir::KStage::Compute;
+        we.local_size[0]     = 1U;
+        we.kernel_body_begin = 0;
+        we.kernel_body_count = static_cast<int>(wg.serial_stmts().size());
+    }
+    auto work = rig.vk->create_program(wg, we);
+    if (work == nullptr) { SKIP("compute shader compile unavailable"); }
+
+    auto out = raster.create_storage_buffer(kSlots * 4U);
+    REQUIRE(out != nullptr);
+    const u32 zero[kSlots]{};
+    REQUIRE(raster.upload_storage(*out, 0U, static_cast<const void*>(zero), sizeof(zero)));
+    auto dst = raster.create_color_target(64U, 64U);
+    REQUIRE(dst != nullptr);
+
+    framecook::FrameGraphDesc desc(&alloc);
+    containers::String        where(&alloc);
+    REQUIRE(framecook::parse_frame_toml(containers::StringView(kAsyncGraph), desc, &where)
+            == framecook::FrameCookError::Ok);
+
+    g::ValidationCapture capture(*rig.vk);
+    StateHost            host(*dst);
+    host.add_kernel("crd://kernels/work", work.get());
+    host.set_buffer(out.get());
+
+    auto fgraph = raster.create_frame_graph();
+    REQUIRE(fgraph != nullptr);
+    framecook::FrameRecorder rec(&alloc);
+    rec.begin_frame();
+    framecook::FrameExecError err = framecook::FrameExecError::Ok;
+    REQUIRE(rec.record(desc, *fgraph, raster, host, &err, &where));
+    REQUIRE(fgraph->build());
+    fgraph->execute();
+
+    // ⭐ THE WORK IS CORRECT WHEREVER IT RAN. That is the first claim, and it must hold on a one-queue adapter too.
+    REQUIRE(raster.download_storage(*out));
+    for (u32 i = 0; i < 4U; ++i) { CHECK(out->read_u32(i) == i + 1U); }
+    for (u32 i = 4U; i < kSlots; ++i) { CHECK(out->read_u32(i) == 0U); }
+
+    // ⭐⭐ AND THE GRAPH SAYS WHERE IT RAN. ⛔ `last_async_pass_count()` is 1 only when the adapter HAS a distinct
+    // compute family and the pass consumes nothing a graphics pass produces; otherwise it is 0 and the frame ran
+    // entirely on the graphics queue. Either answer is legal — silently claiming the first would not be, which is
+    // exactly why the counter exists rather than a bool the asset could have assumed.
+    const u32 async_n = fgraph->last_async_pass_count();
+    UNSCOPED_INFO("async passes on the compute queue: " << async_n);
+    CHECK(async_n <= 1U);
+    CHECK(fgraph->last_submit_count() == 1U); // the GRAPHICS submission is still ONE, whatever the compute queue did
+
+    if (capture.error_or_warning_count() > 0U)
+    {
+        const auto msgs = capture.messages();
+        for (usize i = 0; i < msgs.size(); ++i)
+        {
+            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            WARN("[ren38-a14 capture] " << msgs[i].message_text.c_str());
+        }
+    }
+    CHECK(capture.error_count() == 0U);
+}
+
+TEST_CASE("REN-38-A16 GATE: an authored RAY-TRACING PIPELINE traces through a shader binding table",
+          "[gpu-context][vulkan][frame-graph][ren38][gpu]")
+{
+    Rig rig = make_rig();
+    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    auto& raster = *rig.raster;
+    if (!raster.supports_rt_pipeline()) { SKIP("adapter has no ray-tracing pipeline"); }
+
+    g::VulkanRayTracingContext rt(*rig.vk);
+    REQUIRE(rt.valid());
+    memory::TlsfAllocator alloc(16U << 20U);
+
+    const float tri[9] = {-1.0F, -1.0F, 1.0F, 1.0F, -1.0F, 1.0F, 0.0F, 1.0F, 1.0F};
+    auto        scene  = rt.build_scene(tri, 1U);
+    REQUIRE(scene != nullptr);
+
+    kir::KGraph rgg(&alloc);
+    kir::KEntry rge;
+    kir::KGraph msg(&alloc);
+    kir::KEntry mse;
+    kir::KGraph chg(&alloc);
+    kir::KEntry che;
+    gputest::build_rt_pipeline_trio(rgg, rge, msg, mse, chg, che);
+    auto rgp = rig.vk->create_program(rgg, rge);
+    auto msp = rig.vk->create_program(msg, mse);
+    auto chp = rig.vk->create_program(chg, che);
+    if (rgp == nullptr || msp == nullptr || chp == nullptr) { SKIP("RT-stage compile unavailable"); }
+
+    constexpr u32 kRays = 4U;
+    auto          hits  = raster.create_storage_buffer(kRays * 4U);
+    REQUIRE(hits != nullptr);
+    const float sentinel[kRays] = {-7.0F, -7.0F, -7.0F, -7.0F};
+    REQUIRE(raster.upload_storage(*hits, 0U, static_cast<const void*>(sentinel), sizeof(sentinel)));
+    auto dst = raster.create_color_target(64U, 64U);
+    REQUIRE(dst != nullptr);
+
+    framecook::FrameGraphDesc desc(&alloc);
+    containers::String        where(&alloc);
+    REQUIRE(framecook::parse_frame_toml(containers::StringView(kRtPipeGraph), desc, &where)
+            == framecook::FrameCookError::Ok);
+
+    g::ValidationCapture capture(*rig.vk);
+    StateHost            host(*dst);
+    host.add_kernel("crd://rt/raygen", rgp.get());
+    host.add_kernel("crd://rt/miss", msp.get());
+    host.add_kernel("crd://rt/chit", chp.get());
+    host.set_buffer(hits.get());
+    host.set_accel(scene.get());
+
+    auto fgraph = raster.create_frame_graph();
+    REQUIRE(fgraph != nullptr);
+    framecook::FrameRecorder rec(&alloc);
+    rec.begin_frame();
+    framecook::FrameExecError err = framecook::FrameExecError::Ok;
+    REQUIRE(rec.record(desc, *fgraph, raster, host, &err, &where));
+    CHECK(err == framecook::FrameExecError::Ok);
+    REQUIRE(fgraph->build());
+    fgraph->execute();
+    CHECK(fgraph->last_submit_count() == 1U); // the trace is IN the frame, not a second submission
+
+    REQUIRE(raster.download_storage(*hits));
+    const auto as_f = [&](u32 i) {
+        const u32 bits = hits->read_u32(i);
+        float      f   = 0.0F;
+        std::memcpy(&f, &bits, sizeof(f));
+        return f;
+    };
+    UNSCOPED_INFO("rt-pipeline: " << as_f(0U) << " " << as_f(1U) << " " << as_f(2U) << " " << as_f(3U));
+    // ⭐⭐ THE SHADER BINDING TABLE IS WHAT THIS ASSERTS. Ray 0 and 1 HIT, so the CLOSEST-HIT record must have been
+    // fetched and it writes 1; rays 2 and 3 MISS, so the MISS record must have been fetched and it writes -1.
+    // ⛔ Getting the SBT stride or base alignment wrong is the classic DXR/VK-RT bug: the traversal fetches the
+    // WRONG record, so hits run the miss shader (or garbage). A "not the sentinel" check would pass through all
+    // of that; requiring the two groups to differ, in the right direction, is what pins the table layout.
+    CHECK(as_f(0U) > 0.5F);
+    CHECK(as_f(1U) > 0.5F);
+    CHECK(as_f(2U) < -0.5F);
+    CHECK(as_f(3U) < -0.5F);
+
+    if (capture.error_or_warning_count() > 0U)
+    {
+        const auto msgs = capture.messages();
+        for (usize i = 0; i < msgs.size(); ++i)
+        {
+            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            WARN("[ren38-a16 capture] " << msgs[i].message_text.c_str());
         }
     }
     CHECK(capture.error_count() == 0U);

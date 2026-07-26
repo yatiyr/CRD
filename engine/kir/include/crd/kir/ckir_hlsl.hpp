@@ -641,6 +641,23 @@ inline bool emit_rt_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory
             }
             break;
         case KOp::VecComp: self(self, nd.a); s.append("."); { const char sw[2] = {xyzw[nd.iidx], '\0'}; s.append(sw); } break;
+        // ⛔⛔ REN-38-A16: SELECT and SWIZZLE were MISSING from this printer, and the `default` arm emits the
+        // literal `0.0`. So a raygen that chose its ray DIRECTION per launch index compiled cleanly and traced
+        // `vec3(0,0,0)`, and one that indexed its output by the launch id wrote every ray to slot 0. Silently — a
+        // valid shader, the wrong shader. The RT emitters were the ONLY ones lacking them, which is why nothing
+        // else ever tripped it (the emitter-lag scar, one stage family over).
+        case KOp::Swizzle:
+            self(self, nd.a);
+            s.append(".");
+            for (int c = 0; c < g.node(node).type.comps(); ++c)
+            {
+                char sw[2];
+                sw[0] = xyzw[nd.perm[c]];
+                sw[1] = 0;
+                s.append(sw);
+            }
+            break;
+        case KOp::Select: s.append("("); self(self, nd.c); s.append(" ? "); self(self, nd.a); s.append(" : "); self(self, nd.b); s.append(")"); break;
         case KOp::PayloadLoad: s.append("pl.m"); app_uint(s, nd.iidx); break;
         case KOp::BufferLoad: s.append("asfloat(buf"); app_uint(s, g.node(nd.a).iidx); s.append(".Load(("); self(self, nd.b); s.append(") * 4u))"); break;
         case KOp::Cast:

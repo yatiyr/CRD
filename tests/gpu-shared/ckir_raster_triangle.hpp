@@ -1206,6 +1206,21 @@ inline void build_sample_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
     fe.out[0] = {col, 0};
 }
 
+// REN-38-A4: a G-BUFFER fragment shader — TWO colour outputs from one draw, which is what MRT is FOR. Writes a
+// solid RED to attachment 0 and a solid GREEN to attachment 1, so a readback can tell WHICH attachment received
+// WHICH value. ⛔ Two attachments both written with the same colour would pass even if the executor bound one
+// target twice, which is precisely the bug `RasterMrt` had while it borrowed the single-target path.
+inline void build_gbuffer_two_output_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
+{
+    namespace kir = crd::kir;
+    const auto sh = kir::make_shape({1});
+    const auto kf = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    fe.stage      = kir::KStage::Fragment;
+    fe.n_out      = 2;
+    fe.out[0]     = {g.vec4(kf(1.0), kf(0.0), kf(0.0), kf(1.0)), 0}; // attachment 0 = RED   (albedo slot)
+    fe.out[1]     = {g.vec4(kf(0.0), kf(1.0), kf(0.0), kf(1.0)), 1}; // attachment 1 = GREEN (normal slot)
+}
+
 // REN-38-A3: a fullscreen composite that samples TWO textures from a BINDLESS array and proves BOTH were bound,
 // IN DECLARATION ORDER. This is the shape of a deferred LIGHTING pass (albedo + normal + material + depth) reduced
 // to its smallest checkable form.
@@ -1219,8 +1234,11 @@ inline void build_two_texture_composite_fs(crd::kir::KGraph& g, crd::kir::KEntry
     const auto kf   = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
     const auto ku   = [&](crd::u32 v) { return g.constant(static_cast<double>(v), sh, kir::DType::U32); };
     const int  uv   = g.stage_in(kir::KType::vec(kir::DType::F32, 2), 0, kir::Interp::Smooth);
-    // a BINDLESS descriptor array of 2 textures — what `draw_bindless` binds
-    const int  tex  = g.texture(0, 1, kir::DType::F32, kir::TexDim::Tex2D, false, false, false, 2);
+    // ⛔ The BINDLESS ARRAY LIVES AT BINDING 3, not 1. Binding 1 is the SINGLE sampled image; `draw_bindless`
+    // writes the array at 3 and leaves 1 alone, so declaring the array at 1 makes the pipeline access a
+    // descriptor nothing ever wrote (VUID-vkCmdDraw-None-08114). `array_count = 8` matches `kBindlessMax` — the
+    // layout declares a fixed-size array, so a shorter declaration is a different type, not a subset.
+    const int  tex  = g.texture(0, 3, kir::DType::F32, kir::TexDim::Tex2D, false, false, false, /*array_count=*/8);
     const int  samp = g.sampler(0, 2);
     const int  c0   = g.tex_sample_at(tex, samp, uv, ku(0U));
     const int  c1   = g.tex_sample_at(tex, samp, uv, ku(1U));
@@ -3367,6 +3385,87 @@ inline void build_varying_probe_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
     fe.n_out      = 1;
     fe.out[0]     = {g.vec4(g.swizzle(n, 0), g.swizzle(n, 1), g.swizzle(n, 2),
                             g.constant(1.0, sh, kir::DType::F32)), 0};
+}
+
+
+// ── REN-38-A9: the SHARED inline-ray-query kernel — one definition, both backends. ──
+// TLAS at binding 0, rays (6 floats each: origin + direction) at binding 1, the hit distance at binding 2. ⛔ That
+// numbering is the CONTRACT `dispatch_kernel_rt` implements on Vulkan AND DX12, and it is the same one
+// `VulkanRayTracingContext::trace_dispatch` already used — so a kernel written for the offline rig runs unchanged
+// inside a frame graph. One convention or a CKIR kernel is not portable, which is the entire mission.
+inline crd::kir::KEntry build_trace_kernel_shared(crd::kir::KGraph& g, int local_size)
+{
+    namespace kir       = crd::kir;
+    const kir::Shape sh = kir::make_shape({1});
+    const auto cf = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const auto cu = [&](crd::u32 v) { return g.constant(static_cast<double>(v), sh, kir::DType::U32); };
+    const int  as   = g.accel_struct_decl(0, 0);
+    const int  rays = g.buffer_decl(kir::DType::F32, 0, 1, false);
+    const int  out  = g.buffer_decl(kir::DType::F32, 0, 2, true);
+    const int  mark = g.kernel_stmt_mark();
+    const int  tid  = g.binary(kir::KOp::Add,
+                               g.binary(kir::KOp::Mul, g.builtin(kir::KBuiltin::WorkgroupIndex),
+                                        cu(static_cast<crd::u32>(local_size))),
+                               g.builtin(kir::KBuiltin::LocalInvocationIndex));
+    const int  base = g.binary(kir::KOp::Mul, tid, cu(6U));
+    const auto ld   = [&](crd::u32 k) { return g.buffer_load(rays, g.binary(kir::KOp::Add, base, cu(k))); };
+    const int  t    = g.trace_ray_closest(as, ld(0), ld(1), ld(2), ld(3), ld(4), ld(5), cf(0.001), cf(1.0e30));
+    g.stmt_buffer_store(out, tid, t);
+    crd::kir::KEntry e;
+    e.stage             = kir::KStage::Compute;
+    e.local_size[0]     = static_cast<crd::u32>(local_size);
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
+    return e;
+}
+
+
+// ── REN-38-A16: the SHARED ray-tracing-PIPELINE trio — raygen · miss · closest-hit, one definition, both backends.
+// ──
+// The raygen shader fires ONE ray per launch index from a fixed table: rays 0-1 aim at the triangle, rays 2-3 aim
+// away. ⛔ The MISS shader writes -1 and the CLOSEST-HIT shader writes +1, so the two SBT records are
+// DISTINGUISHABLE in the readback — which is the only way to prove the shader binding table's stride and base
+// alignment are right. A trio where both wrote the same value would pass with a mis-indexed table.
+inline void build_rt_pipeline_trio(crd::kir::KGraph& rg, crd::kir::KEntry& rge, crd::kir::KGraph& ms,
+                                   crd::kir::KEntry& mse, crd::kir::KGraph& ch, crd::kir::KEntry& che)
+{
+    namespace kir = crd::kir;
+    const auto sh = kir::make_shape({1});
+    {
+        const auto cf  = [&](double v) { return rg.constant(v, sh, kir::DType::F32); };
+        const auto cu  = [&](crd::u32 v) { return rg.constant(static_cast<double>(v), sh, kir::DType::U32); };
+        const int  as  = rg.accel_struct_decl(0, 0);
+        const int  out = rg.buffer_decl(kir::DType::F32, 0, 1, true);
+        const int  pl  = rg.ray_payload_decl(1);
+        const int  mk  = rg.kernel_stmt_mark();
+        const int  idx = rg.cast(rg.swizzle(rg.builtin(kir::KBuiltin::LaunchId), 0), kir::DType::U32);
+        const int  fi  = rg.cast(idx, kir::DType::F32);
+        // rays 0,1 point +z at the triangle; rays 2,3 point -z, away from it
+        const int  aim = rg.binary(kir::KOp::CmpLt, fi, cf(2.0));
+        const int  dz  = rg.select(aim, cf(1.0), cf(-1.0));
+        rg.stmt_trace_ray_pipeline(as, pl, cf(0.0), cf(0.0), cf(0.0), cf(0.0), cf(0.0), dz, cf(0.001), cf(1.0e30));
+        rg.stmt_buffer_store(out, idx, rg.payload_load(pl, 0));
+        (void)cu;
+        rge.stage             = kir::KStage::RayGen;
+        rge.kernel_body_begin = mk;
+        rge.kernel_body_count = rg.stmt_count() - mk;
+    }
+    {
+        const int pl = ms.ray_payload_decl(1);
+        const int mk = ms.kernel_stmt_mark();
+        ms.stmt_payload_store(pl, 0, ms.constant(-1.0, sh, kir::DType::F32)); // the MISS record
+        mse.stage             = kir::KStage::Miss;
+        mse.kernel_body_begin = mk;
+        mse.kernel_body_count = ms.stmt_count() - mk;
+    }
+    {
+        const int pl = ch.ray_payload_decl(1);
+        const int mk = ch.kernel_stmt_mark();
+        ch.stmt_payload_store(pl, 0, ch.constant(1.0, sh, kir::DType::F32)); // the CLOSEST-HIT record
+        che.stage             = kir::KStage::ClosestHit;
+        che.kernel_body_begin = mk;
+        che.kernel_body_count = ch.stmt_count() - mk;
+    }
 }
 
 } // namespace crd::gputest

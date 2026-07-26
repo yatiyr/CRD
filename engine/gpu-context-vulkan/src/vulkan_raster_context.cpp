@@ -4,6 +4,8 @@
 
 #include <crd/gpu/vulkan_raster_context.hpp>
 
+#include <crd/gpu/vulkan_ray_tracing_context.hpp> // REN-38-A9: vulkan_scene_tlas — the TLAS behind a portable AS handle
+
 #include <crd/gpu/frame_graph.hpp>          // REN-1: the frame-graph interface this TU implements
 #include <crd/gpu/vulkan_gpu_allocator.hpp> // RET-4 pt 2: the ADR-0085 S6 suballocation core, absorbed
 
@@ -38,6 +40,11 @@ struct ShaderObjectApi
     PFN_vkCmdDrawMeshTasksEXT          draw_mesh_tasks           = nullptr; // B4: VK_EXT_mesh_shader (optional — null if absent)
     PFN_vkCmdDrawMeshTasksIndirectEXT  draw_mesh_tasks_indirect  = nullptr; // B4: GPU-driven indirect meshlet dispatch
     PFN_vkCmdSetPatchControlPointsEXT  set_patch_control_points  = nullptr; // B4-tess: EDS2 patch size (optional — null if absent)
+    // ⛔ REN-38-A7: REQUIRED whenever a TESS-EVAL shader object is bound (VUID-vkCmdDraw-None-07619). With shader
+    // objects EVERY pipeline state is dynamic, including the domain ORIGIN — there is no pipeline to bake it into,
+    // so not setting it is not "take the default", it is undefined. Missing until the A7 gate ran tessellation
+    // under a validation capture; the older tessellation gates never asserted a zero error count.
+    PFN_vkCmdSetTessellationDomainOriginEXT set_tess_domain_origin = nullptr;
 
     [[nodiscard]] bool valid() const noexcept
     {
@@ -72,8 +79,25 @@ struct ShaderObjectApi
         reinterpret_cast<PFN_vkCmdDrawMeshTasksIndirectEXT>(vkGetDeviceProcAddr(d, "vkCmdDrawMeshTasksIndirectEXT")); // B4
     a.set_patch_control_points =
         reinterpret_cast<PFN_vkCmdSetPatchControlPointsEXT>(vkGetDeviceProcAddr(d, "vkCmdSetPatchControlPointsEXT")); // B4-tess
+    a.set_tess_domain_origin = reinterpret_cast<PFN_vkCmdSetTessellationDomainOriginEXT>(
+        vkGetDeviceProcAddr(d, "vkCmdSetTessellationDomainOriginEXT")); // REN-38-A7
     return a;
 }
+
+// ── ⛔⛔ REN-38-A9/A10: THE ONE PLACE A BUFFER HANDLE IS RESOLVED. ──
+// A frame graph hands a pass its buffers as `IStorageBuffer*`, and there are TWO concrete kinds behind that: an
+// APPLICATION buffer (`VulkanStorageBuffer`, from `create_storage_buffer`) and a GRAPH TRANSIENT
+// (`VulkanTransientBuffer`, minted by `build()` over aliased memory). ⛔ Every dispatch verb used to
+// `static_cast<VulkanStorageBuffer&>` — which is undefined the moment the buffer is a transient, and crashed the
+// instant an authored pass declared `kind = "transient_buffer"` instead of importing an app buffer.
+//
+// ⛔ THIS INVALIDATED PART OF 38-A2's CLAIM. The compute-pass gate imported an APP-OWNED buffer, so the cast was
+// always correct there; a compute pass over the graph's OWN transients — the normal case, and the one the asset
+// schema encourages — was never executed until REN-38-A10's gate ran one.
+//
+// Resolving through one function is the fix: there is no other way to get a VkBuffer out of an IStorageBuffer, so
+// a third buffer kind cannot be added without this seeing it.
+[[nodiscard]] VkBuffer vk_buffer_of(IStorageBuffer& b) noexcept;
 
 inline constexpr crd::u32 kBindlessMax = 8U; // B2-d: bindless texture-array capacity (binding 3 descriptorCount)
 
@@ -351,11 +375,26 @@ public:
         sci2.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
         VkFenceCreateInfo fci{};
         fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        // ⛔⛔ ONE SEMAPHORE PER SWAPCHAIN IMAGE, not one per surface (VUID-vkQueueSubmit-pSignalSemaphores-00067).
+        // A binary semaphore signalled by the present submission is waited on by the PRESENTATION ENGINE, and
+        // nothing on the host observes that wait completing — our per-frame fence covers the SUBMIT, not the
+        // present. So re-signalling one shared semaphore next frame is only legal once the image it was used
+        // with has been RE-ACQUIRED, which is exactly what indexing by image index guarantees: image `i`'s
+        // semaphore is reused only when `vkAcquireNextImageKHR` hands back image `i`.
+        //
+        // ⛔ This was live and unnoticed: the RET-2 present gate presents into a fresh swapchain each run and the
+        // shared semaphore only trips validation once a SECOND frame lands on a DIFFERENT image index — the
+        // frame-graph present gate (REN-38-A5), which presents twice through one graph, is what surfaced it.
+        // The acquire semaphore does NOT need this: our submit waits on it and the fence proves that submit
+        // finished, so it is provably unsignalled by the time we reuse it.
         if (vkCreateSemaphore(m_device, &sci2, nullptr, &m_sem_acquire) != VK_SUCCESS
-            || vkCreateSemaphore(m_device, &sci2, nullptr, &m_sem_present) != VK_SUCCESS
             || vkCreateFence(m_device, &fci, nullptr, &m_fence) != VK_SUCCESS)
         {
             return;
+        }
+        for (crd::u32 i = 0; i < kMaxBackbuffers; ++i)
+        {
+            if (vkCreateSemaphore(m_device, &sci2, nullptr, &m_sem_present[i]) != VK_SUCCESS) { return; }
         }
         m_valid = create_swapchain(w, h);
     }
@@ -366,7 +405,10 @@ public:
         destroy_backbuffer_views();
         if (m_swapchain != VK_NULL_HANDLE) { vkDestroySwapchainKHR(m_device, m_swapchain, nullptr); }
         if (m_sem_acquire != VK_NULL_HANDLE) { vkDestroySemaphore(m_device, m_sem_acquire, nullptr); }
-        if (m_sem_present != VK_NULL_HANDLE) { vkDestroySemaphore(m_device, m_sem_present, nullptr); }
+        for (crd::u32 i = 0; i < kMaxBackbuffers; ++i)
+        {
+            if (m_sem_present[i] != VK_NULL_HANDLE) { vkDestroySemaphore(m_device, m_sem_present[i], nullptr); }
+        }
         if (m_fence != VK_NULL_HANDLE) { vkDestroyFence(m_device, m_fence, nullptr); }
         if (m_pool != VK_NULL_HANDLE) { vkDestroyCommandPool(m_device, m_pool, nullptr); }
         if (m_surface != VK_NULL_HANDLE) { vkDestroySurfaceKHR(m_instance, m_surface, nullptr); }
@@ -488,13 +530,13 @@ public:
         si.commandBufferCount   = 1;
         si.pCommandBuffers      = &m_cmd;
         si.signalSemaphoreCount = 1;
-        si.pSignalSemaphores    = &m_sem_present;
+        si.pSignalSemaphores    = &m_sem_present[idx]; // ⛔ per IMAGE — see the ctor note
         if (vkQueueSubmit(m_queue, 1, &si, m_fence) != VK_SUCCESS) { return false; }
 
         VkPresentInfoKHR pi{};
         pi.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
         pi.waitSemaphoreCount = 1;
-        pi.pWaitSemaphores    = &m_sem_present;
+        pi.pWaitSemaphores    = &m_sem_present[idx];
         pi.swapchainCount     = 1;
         pi.pSwapchains        = &m_swapchain;
         pi.pImageIndices      = &idx;
@@ -588,7 +630,7 @@ private:
         m_swapchain = next;
 
         destroy_backbuffer_views(); // stale views die with the old swapchain's images (resize/recreate)
-        m_n_images = 16U;
+        m_n_images = kMaxBackbuffers;
         if (vkGetSwapchainImagesKHR(m_device, m_swapchain, &m_n_images, m_images) != VK_SUCCESS) { return false; }
         m_format = chosen.format; // RET-5: overlay rendering + ImGui pipeline creation key on this
         m_w      = extent.width;
@@ -598,7 +640,7 @@ private:
 
     void destroy_backbuffer_views() noexcept
     {
-        for (crd::u32 i = 0; i < 16U; ++i)
+        for (crd::u32 i = 0; i < kMaxBackbuffers; ++i)
         {
             if (m_views[i] != VK_NULL_HANDLE)
             {
@@ -616,14 +658,15 @@ private:
     PresentMode      m_mode        = PresentMode::Fifo;
     VkSurfaceKHR     m_surface     = VK_NULL_HANDLE;
     VkSwapchainKHR   m_swapchain   = VK_NULL_HANDLE;
-    VkImage          m_images[16]  = {};
-    VkImageView      m_views[16]   = {}; // RET-5: lazy per-backbuffer views for overlay rendering
+    static constexpr crd::u32 kMaxBackbuffers = 16U;
+    VkImage          m_images[kMaxBackbuffers] = {};
+    VkImageView      m_views[kMaxBackbuffers]  = {}; // RET-5: lazy per-backbuffer views for overlay rendering
     VkFormat         m_format      = VK_FORMAT_UNDEFINED;
     crd::u32         m_n_images    = 0;
     VkCommandPool    m_pool        = VK_NULL_HANDLE;
     VkCommandBuffer  m_cmd         = VK_NULL_HANDLE;
     VkSemaphore      m_sem_acquire = VK_NULL_HANDLE;
-    VkSemaphore      m_sem_present = VK_NULL_HANDLE;
+    VkSemaphore      m_sem_present[kMaxBackbuffers] = {}; // REN-38-A5: one per IMAGE, indexed by acquire result
     VkFence          m_fence       = VK_NULL_HANDLE;
     crd::u32         m_w           = 0;
     crd::u32         m_h           = 0;
@@ -893,6 +936,29 @@ public:
         slci.bindingCount = 4U;
         slci.pBindings    = slb;
         vkCreateDescriptorSetLayout(m_device, &slci, nullptr, &m_storage_set_layout);
+
+        // ── REN-38-A2: the COMPUTE set + pipeline layout. ────────────────────────────────────────────────────
+        // ⛔ A SEPARATE layout, not the raster one. The raster set declares its storage buffer VERTEX|FRAGMENT
+        // visible and has exactly ONE; a kernel needs COMPUTE visibility and N. Reusing the raster layout would
+        // build a pipeline whose declared stages never include the one that actually runs.
+        VkDescriptorSetLayoutBinding cb[kMaxKernelBuffers]{};
+        for (crd::u32 i = 0; i < kMaxKernelBuffers; ++i)
+        {
+            cb[i].binding         = i;
+            cb[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            cb[i].descriptorCount = 1U;
+            cb[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo cslci{};
+        cslci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        cslci.bindingCount = kMaxKernelBuffers;
+        cslci.pBindings    = cb;
+        vkCreateDescriptorSetLayout(m_device, &cslci, nullptr, &m_compute_set_layout);
+        VkPipelineLayoutCreateInfo cplci{};
+        cplci.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        cplci.setLayoutCount = 1U;
+        cplci.pSetLayouts    = &m_compute_set_layout;
+        vkCreatePipelineLayout(m_device, &cplci, nullptr, &m_compute_pipe_layout);
         VkDescriptorPoolSize        dps[3]{{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4U}, {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 4U * (kBindlessMax + 1U)}, {VK_DESCRIPTOR_TYPE_SAMPLER, 4U}};
         VkDescriptorPoolCreateInfo  dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -924,6 +990,22 @@ public:
         if (m_cmp_sampler != VK_NULL_HANDLE) { vkDestroySampler(m_device, m_cmp_sampler, nullptr); }
         if (m_desc_pool != VK_NULL_HANDLE) { vkDestroyDescriptorPool(m_device, m_desc_pool, nullptr); }
         if (m_storage_set_layout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(m_device, m_storage_set_layout, nullptr); }
+        for (crd::u32 i = 0; i < m_kernel_n; ++i) { vkDestroyPipeline(m_device, m_kernel_pso[i], nullptr); }
+        for (crd::u32 i = 0; i < m_rt_pso_n; ++i) { vkDestroyPipeline(m_device, m_rt_pso[i], nullptr); }
+        // REN-38-A16: the ray-tracing PIPELINES and their shader binding tables. Each SBT owns a buffer AND its
+        // device memory (it is addressed by device address, not bound as a descriptor), so both must go.
+        for (crd::u32 i = 0; i < m_rtp_n; ++i)
+        {
+            if (m_rtp[i].pipeline != VK_NULL_HANDLE) { vkDestroyPipeline(m_device, m_rtp[i].pipeline, nullptr); }
+            if (m_rtp[i].sbt != VK_NULL_HANDLE) { vkDestroyBuffer(m_device, m_rtp[i].sbt, nullptr); }
+            if (m_rtp[i].sbt_mem != VK_NULL_HANDLE) { vkFreeMemory(m_device, m_rtp[i].sbt_mem, nullptr); }
+        }
+        if (m_rtp_pipe_layout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(m_device, m_rtp_pipe_layout, nullptr); }
+        if (m_rtp_set_layout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(m_device, m_rtp_set_layout, nullptr); }
+        if (m_rt_pipe_layout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(m_device, m_rt_pipe_layout, nullptr); }
+        if (m_rt_set_layout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(m_device, m_rt_set_layout, nullptr); }
+        if (m_compute_pipe_layout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(m_device, m_compute_pipe_layout, nullptr); }
+        if (m_compute_set_layout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(m_device, m_compute_set_layout, nullptr); }
         if (m_pool != VK_NULL_HANDLE) { vkDestroyCommandPool(m_device, m_pool, nullptr); }
     }
     VulkanRasterContext(const VulkanRasterContext&)            = delete;
@@ -1184,6 +1266,20 @@ public:
     void clear(IRasterTarget& target, ClearColor color) override
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
+
+        // ⭐ REN-38-A6: CLEAR IS RECORDABLE. It was the last verb in the whole surface with no recording path,
+        // so a `kind = "clear"` pass inside a frame graph would have submitted its own command buffer mid-frame
+        // — a second submission, out of order with the graph's, clearing a target the graph believed it owned.
+        // A clear stays a RASTER pass (LOAD_OP_CLEAR on an attachment), not a transfer one: the graph has
+        // already put the target in COLOR_ATTACHMENT_OPTIMAL, which is exactly where this needs it.
+        if (frame_recording())
+        {
+            VkRenderingAttachmentInfo att = colour_clear_attachment(t.view(), color);
+            VkRenderingInfo           ri  = one_colour_rendering(t, att);
+            vkCmdBeginRendering(m_frame_rec.cmd, &ri);
+            vkCmdEndRendering(m_frame_rec.cmd);
+            return;
+        }
 
         VkCommandBuffer cmd = begin_cmd();
         if (cmd == VK_NULL_HANDLE) { return; }
@@ -1450,11 +1546,43 @@ public:
 
     // B4-tess: draw `patch_count` QUAD patches through the tessellator (VS→TCS→TES→FS) with PATCH_LIST topology + a dynamic
     // patch size of 4. The domain shader displaces + writes the clip position. Colour-only; result host-readable via read_pixel.
+    // ── REN-38-A1d: the frame-mode body of `draw_tess`. ─────────────────────────────────────────────────────
+    // The portable displacement path. Same attachment-and-draw shape as `record_plain`, plus the two pieces of
+    // state tessellation needs: PATCH_LIST topology and the patch control-point count. Binds all FOUR stages
+    // (VS -> TCS -> TES -> FS), which is what distinguishes it from every other raster verb here.
+    void record_tess(VulkanRasterTarget& t, VulkanRasterProgram& p, ClearColor clear_color, crd::u32 patch_count,
+                     bool clear = true)
+    {
+        VkCommandBuffer cmd = m_frame_rec.cmd;
+        frame_self_barrier_if_needed(t);
+        VkRenderingAttachmentInfo att =
+            clear ? colour_clear_attachment(t.view(), clear_color) : colour_load_attachment(t.view());
+        VkRenderingInfo           ri  = one_colour_rendering(t, att);
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t.width(), t.height(), 1U, false, VK_COMPARE_OP_ALWAYS);
+        vkCmdSetPrimitiveTopology(cmd, VK_PRIMITIVE_TOPOLOGY_PATCH_LIST); // tessellation consumes patches
+        m_api.set_patch_control_points(cmd, 4U);                          // quad patch (layout(quads) domain shader)
+        // ⛔ UPPER_LEFT is the GL/Vulkan default the domain shaders were written against — but with shader
+        // objects it must be SET, not assumed (VUID-vkCmdDraw-None-07619).
+        if (m_api.set_tess_domain_origin != nullptr)
+        {
+            m_api.set_tess_domain_origin(cmd, VK_TESSELLATION_DOMAIN_ORIGIN_UPPER_LEFT);
+        }
+        const VkShaderStageFlagBits stages[4] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT,
+                                                 VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT,
+                                                 VK_SHADER_STAGE_FRAGMENT_BIT};
+        const VkShaderEXT           objs[4]   = {p.vs(), p.tcs(), p.tes(), p.fs()};
+        m_api.bind(cmd, 4U, stages, objs);
+        vkCmdDraw(cmd, patch_count * 4U, 1U, 0U, 0U); // 4 control points per quad patch
+        vkCmdEndRendering(cmd);
+    }
+
     void draw_tess(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, crd::u32 patch_count) override
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
         if (!m_api.valid() || m_api.set_patch_control_points == nullptr || !p.valid() || !p.is_tess()) { return; }
+        if (frame_recording()) { record_tess(t, p, clear_color, patch_count); return; }
 
         VkCommandBuffer cmd = begin_cmd();
         if (cmd == VK_NULL_HANDLE) { return; }
@@ -1486,6 +1614,10 @@ public:
         set_draw_state(cmd, t.width(), t.height(), t.samples(), false, VK_COMPARE_OP_ALWAYS);
         vkCmdSetPrimitiveTopology(cmd, VK_PRIMITIVE_TOPOLOGY_PATCH_LIST); // tessellation consumes patches, not triangles
         m_api.set_patch_control_points(cmd, 4U);                          // quad patch (matches the layout(quads) domain shader)
+        if (m_api.set_tess_domain_origin != nullptr)
+        {
+            m_api.set_tess_domain_origin(cmd, VK_TESSELLATION_DOMAIN_ORIGIN_UPPER_LEFT); // see record_tess
+        }
         const VkShaderStageFlagBits stages[4] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT,
                                                  VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
         const VkShaderEXT           objs[4]   = {p.vs(), p.tcs(), p.tes(), p.fs()};
@@ -1507,11 +1639,105 @@ public:
 
     // B4: bind a MESH program and dispatch `group_count` mesh workgroups. Colour-only (the mesh-triangle proof). VERTEX is bound
     // null (mutually exclusive with MESH); TESS/GEOM/TASK default to null in a fresh command buffer (as the vertex draw relies on).
+    // ── REN-38-A1c: the frame-mode body of the MESH/TASK family. ────────────────────────────────────────────
+    // The amplification path. Same attachment shape as `record_plain`, with three differences that matter:
+    //   · `set_draw_state(..., mesh_draw = true)` — a mesh pipeline has NO vertex-input state, and leaving the
+    //     vertex-input dynamic state set makes the bind invalid;
+    //   · the VERTEX stage must be explicitly UNBOUND (bind VK_NULL_HANDLE to it) or the driver still expects a
+    //     vertex pipeline alongside the mesh one;
+    //   · TASK is bound only when the program has one — a mesh-only program declares NO_TASK_SHADER, and binding
+    //     a null task stage to it is not the same thing as not binding it.
+    // `group_count` is TASK workgroups when `has_task()` (they amplify), MESH workgroups otherwise.
+    // `vrs_rate >= 0` applies a shading-rate override AFTER `set_draw_state` installs its 1x1 default and BEFORE
+    // the dispatch — it cannot be done by the caller, because the dispatch must happen INSIDE the rendering scope
+    // this function opens and closes.
+    void record_mesh(VulkanRasterTarget& t, VulkanRasterProgram& p, ClearColor clear_color, crd::u32 group_count,
+                     int vrs_rate = -1, VkDescriptorSet dset = VK_NULL_HANDLE, bool depth_on = false,
+                     float clear_depth = 0.0F, DepthCompare compare = DepthCompare::Always,
+                     VkBuffer indirect = VK_NULL_HANDLE, crd::u64 indirect_offset = 0U, bool clear = true)
+    {
+        VkCommandBuffer cmd = m_frame_rec.cmd;
+        frame_self_barrier_if_needed(t);
+        VkRenderingAttachmentInfo att =
+            clear ? colour_clear_attachment(t.view(), clear_color) : colour_load_attachment(t.view());
+        VkRenderingInfo           ri  = one_colour_rendering(t, att);
+        VkRenderingAttachmentInfo dep{};
+        if (depth_on && t.has_depth())
+        {
+            dep.sType                         = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            dep.imageView                     = t.depth_view();
+            dep.imageLayout                   = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            // ⛔ A CONTINUING mesh draw LOADS depth too. Clearing it would let the second meshlet group of a pass
+            // pass the depth test against nothing and overwrite the first — the same scar as the colour clear,
+            // one attachment over.
+            dep.loadOp                        = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+            dep.storeOp                       = VK_ATTACHMENT_STORE_OP_STORE;
+            dep.clearValue.depthStencil.depth = clear_depth;
+            ri.pDepthAttachment               = &dep;
+        }
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t.width(), t.height(), 1U, ri.pDepthAttachment != nullptr, to_vk_compare(compare), 1U,
+                       /*mesh_draw=*/true);
+        if (dset != VK_NULL_HANDLE)
+        {
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        }
+        const VkShaderStageFlagBits vnull[1] = {VK_SHADER_STAGE_VERTEX_BIT};
+        const VkShaderEXT           vnob[1]  = {VK_NULL_HANDLE};
+        m_api.bind(cmd, 1U, vnull, vnob);
+        if (p.has_task())
+        {
+            const VkShaderStageFlagBits tstage[1] = {VK_SHADER_STAGE_TASK_BIT_EXT};
+            const VkShaderEXT           tobj[1]   = {p.task()};
+            m_api.bind(cmd, 1U, tstage, tobj);
+        }
+        const VkShaderStageFlagBits mstages[2] = {VK_SHADER_STAGE_MESH_BIT_EXT, VK_SHADER_STAGE_FRAGMENT_BIT};
+        const VkShaderEXT           mobjs[2]   = {p.vs(), p.fs()};
+        m_api.bind(cmd, 2U, mstages, mobjs);
+        if (vrs_rate >= 0 && m_set_vrs != nullptr)
+        {
+            const VkExtent2D                         frag    = vrs_extent(static_cast<ShadingRate>(vrs_rate));
+            const VkFragmentShadingRateCombinerOpKHR comb[2] = {VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR,
+                                                                VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR};
+            m_set_vrs(cmd, &frag, comb);
+        }
+        // INDIRECT when an args buffer is given: the GPU decides the workgroup count (38-A1c's GPU-driven half).
+        if (indirect != VK_NULL_HANDLE) { m_api.draw_mesh_tasks_indirect(cmd, indirect, indirect_offset, 1U, 0U); }
+        else                            { m_api.draw_mesh_tasks(cmd, group_count, 1U, 1U); }
+        vkCmdEndRendering(cmd);
+    }
+
+    // ── ⭐ REN-38-A7/A8: the CONTINUING draws. ──
+    // ⛔ RECORDING-ONLY, and that is a CONTRACT, not a shortcut: "load the previous contents" is only meaningful
+    // while a frame is open. Every synchronous verb here ENDS by copying the target to its readback buffer and
+    // leaving it in TRANSFER_SRC, so a synchronous `_load` would have to walk it back to COLOR_ATTACHMENT, draw,
+    // and read back again — a submit-per-draw shape whose whole point the frame graph exists to remove. Outside
+    // a frame the call does nothing, VISIBLY: `draw_tess`/`draw_mesh` remain the synchronous verbs.
+    void draw_tess_load(IRasterTarget& target, IRasterProgram& program, crd::u32 patch_count) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        if (!m_api.valid() || m_api.set_patch_control_points == nullptr || !p.valid() || !p.is_tess()) { return; }
+        if (!frame_recording()) { return; }
+        record_tess(t, p, ClearColor{}, patch_count, /*clear=*/false);
+    }
+
+    void draw_mesh_load(IRasterTarget& target, IRasterProgram& program, crd::u32 group_count) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        if (!m_api.valid() || m_api.draw_mesh_tasks == nullptr || !p.valid() || !p.is_mesh()) { return; }
+        if (!frame_recording()) { return; }
+        record_mesh(t, p, ClearColor{}, group_count, -1, VK_NULL_HANDLE, false, 0.0F, DepthCompare::Always,
+                    VK_NULL_HANDLE, 0U, /*clear=*/false);
+    }
+
     void draw_mesh(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, crd::u32 group_count) override
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
         if (!m_api.valid() || m_api.draw_mesh_tasks == nullptr || !p.valid() || !p.is_mesh()) { return; }
+        if (frame_recording()) { record_mesh(t, p, clear_color, group_count); return; }
 
         VkCommandBuffer cmd = begin_cmd();
         if (cmd == VK_NULL_HANDLE) { return; }
@@ -1580,6 +1806,14 @@ public:
         auto& p = static_cast<VulkanRasterProgram&>(program);
         if (!m_api.valid() || m_api.draw_mesh_tasks == nullptr || !p.valid() || !p.is_mesh()) { return; }
         if (m_set_vrs == nullptr) { draw_mesh(target, program, clear_color, group_count); return; } // no VRS ⇒ full-rate mesh draw
+        // REN-38-A1c: the mesh path with a shading-rate override. ⛔ The rate must be applied INSIDE the
+        // rendering scope, after `set_draw_state`'s 1x1 default and before the dispatch — which is why it is a
+        // parameter of `record_mesh` rather than something the caller can do around it.
+        if (frame_recording())
+        {
+            record_mesh(t, p, clear_color, group_count, static_cast<int>(ShadingRate::Rate2x2));
+            return;
+        }
 
         VkCommandBuffer cmd = begin_cmd();
         if (cmd == VK_NULL_HANDLE) { return; }
@@ -1637,6 +1871,15 @@ public:
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
+        // REN-38-A1c: the GPU-DRIVEN mesh path — the workgroup count comes from a device buffer, so the CPU
+        // never learns it. `native_args` is the backend's own buffer handle (VkBuffer here).
+        if (frame_recording() && m_api.draw_mesh_tasks_indirect != nullptr && p.valid() && p.is_mesh()
+            && native_args != nullptr)
+        {
+            record_mesh(t, p, clear_color, 0U, -1, VK_NULL_HANDLE, false, 0.0F, DepthCompare::Always,
+                        static_cast<VkBuffer>(native_args), args_offset);
+            return;
+        }
         if (!m_api.valid() || m_api.draw_mesh_tasks_indirect == nullptr || !p.valid() || !p.is_mesh()
             || native_args == nullptr)
         {
@@ -1687,11 +1930,44 @@ public:
         end_and_wait(cmd);
     }
 
+    // ── REN-38-A1h: the frame-mode body shared by `draw` and `draw_depth`. ──────────────────────────────────
+    // The simplest verbs, and still not recordable until now — every utility and test graph needs them. They bind
+    // NO descriptor set (their shaders are self-contained), so this is the pure attachment-and-draw shape:
+    // no `begin_cmd`, no layout transitions (the graph owns those for a declared write), no readback, no submit.
+    void record_plain(VulkanRasterTarget& t, VulkanRasterProgram& p, ClearColor clear_color, bool depth_on,
+                      float clear_depth, DepthCompare compare, crd::u32 vertex_count)
+    {
+        VkCommandBuffer cmd = m_frame_rec.cmd;
+        frame_self_barrier_if_needed(t);
+        VkRenderingAttachmentInfo att = colour_clear_attachment(t.view(), clear_color);
+        VkRenderingInfo           ri  = one_colour_rendering(t, att);
+        VkRenderingAttachmentInfo dep{};
+        if (depth_on && t.has_depth())
+        {
+            dep.sType                         = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            dep.imageView                     = t.depth_view();
+            dep.imageLayout                   = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            dep.loadOp                        = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            dep.storeOp                       = VK_ATTACHMENT_STORE_OP_STORE;
+            dep.clearValue.depthStencil.depth = clear_depth;
+            ri.pDepthAttachment               = &dep;
+        }
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t.width(), t.height(), 1U, ri.pDepthAttachment != nullptr, to_vk_compare(compare));
+        bind_and_draw(cmd, p, vertex_count);
+        vkCmdEndRendering(cmd);
+    }
+
     void draw(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, crd::u32 vertex_count) override
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
         if (!m_api.valid() || !p.valid()) { return; }
+        if (frame_recording())
+        {
+            record_plain(t, p, clear_color, false, 0.0F, DepthCompare::Always, vertex_count);
+            return;
+        }
 
         VkCommandBuffer cmd = begin_cmd();
         if (cmd == VK_NULL_HANDLE) { return; }
@@ -1760,11 +2036,391 @@ public:
     // B4-vis-4: HW-raster into a R32_UINT VISIBILITY BUFFER (create_visbuffer_target). Identical to draw() but single-sample +
     // a UINT clear (R32_UINT requires the uint32 clear union). The FS writes SV_PrimitiveId, so each pixel records which
     // triangle the HW rasterizer covered it with — the hybrid Nanite path for big triangles. read_pixel returns the raw id.
+    // ── REN-38-A1e: the frame-mode body of `draw_visbuffer`. ────────────────────────────────────────────────
+    // `record_plain` with ONE difference that matters: an R32_UINT target clears with a UINT clear value, not a
+    // float one. ⛔ Writing the id through `clearValue.color.float32[0]` would reinterpret its BIT PATTERN as a
+    // float — id 1 becomes 1.4e-45, and every pixel reads "background" while the draw looks correct.
+    void record_visbuffer(VulkanRasterTarget& t, VulkanRasterProgram& p, crd::u32 clear_id, crd::u32 vertex_count,
+                          bool clear = true)
+    {
+        VkCommandBuffer cmd = m_frame_rec.cmd;
+        frame_self_barrier_if_needed(t);
+        VkRenderingAttachmentInfo att{};
+        att.sType                      = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att.imageView                  = t.view();
+        att.imageLayout                = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        // ⛔ REN-38-A11: a CONTINUING visibility draw LOADS. One image must hold EVERY visible primitive's id;
+        // clearing per draw would keep only the last mesh's, and the deferred shade would look like hard culling.
+        att.loadOp                     = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+        att.storeOp                    = VK_ATTACHMENT_STORE_OP_STORE;
+        att.clearValue.color.uint32[0] = clear_id; // R32_UINT: the empty/background id
+        VkRenderingInfo ri{};
+        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent    = {t.width(), t.height()};
+        ri.layerCount           = 1U;
+        ri.colorAttachmentCount = 1U;
+        ri.pColorAttachments    = &att;
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t.width(), t.height(), 1U, false, VK_COMPARE_OP_ALWAYS);
+        const VkShaderStageFlagBits stages[2] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
+        const VkShaderEXT           objs[2]   = {p.vs(), p.fs()};
+        m_api.bind(cmd, 2U, stages, objs);
+        vkCmdDraw(cmd, vertex_count, 1U, 0U, 0U);
+        vkCmdEndRendering(cmd);
+    }
+
+
+    // Shared caps for every kernel-shaped path (compute dispatch, inline ray query, RT pipeline). Declared HERE,
+    // above the first user, because a static constexpr member must be visible where it is used.
+    static constexpr crd::u32 kMaxKernelBuffers = 8U;
+    static constexpr crd::u32 kKernelPsoCap     = 16U;
+
+    // ── ⭐ REN-38-A16: THE RAY-TRACING PIPELINE, recorded into the frame. ──
+    // Three programs (raygen · miss · closest-hit) become a `VkPipeline` with three shader GROUPS, and the group
+    // HANDLES are copied into a SHADER BINDING TABLE the traversal hardware indexes. ⛔ The SBT's stride and base
+    // alignment come from the device (`shaderGroupHandleSize`, `shaderGroupBaseAlignment`) and are NOT the same
+    // number on every adapter — hard-coding either is the classic DXR/VK-RT bug where hit shaders run with the
+    // WRONG shader's record and the picture is subtly, plausibly wrong.
+    [[nodiscard]] bool supports_rt_pipeline() const noexcept override
+    {
+        // ⛔ PROBE THE ENTRY POINT, do not read the lazily-loaded cache. This accessor is `const`, so it can never
+        // trigger `ensure_rt_api()` — reading `m_rt.create_pipelines` here reported "no ray-tracing pipeline" on an
+        // adapter that has one, purely because nothing had called `trace_rays` yet. A capability query that
+        // depends on the feature already having been used is not a capability query.
+        if (m_ctx == nullptr || m_device == VK_NULL_HANDLE) { return false; }
+        return vkGetDeviceProcAddr(m_device, "vkCmdTraceRaysKHR") != nullptr;
+    }
+
+    void trace_rays(IGpuProgram& raygen, IGpuProgram& miss, IGpuProgram& closest_hit, IAccelerationStructure& as,
+                    crd::u32 width, crd::u32 height, IStorageBuffer* const* buffers, crd::u32 count) override
+    {
+        if (!frame_recording() || buffers == nullptr || count == 0U) { return; }
+        if (!ensure_rt_api()) { return; }
+        const auto tlas = reinterpret_cast<VkAccelerationStructureKHR>(vulkan_scene_tlas(as));
+        // ⛔ A scene that does not resolve is a NO-OP, never a trace against a null AS: traversal from an unwritten
+        // AS descriptor is undefined, not a frame of misses.
+        if (tlas == VK_NULL_HANDLE) { return; }
+        auto* rg = dynamic_cast<VulkanGpuProgram*>(&raygen);
+        auto* ms = dynamic_cast<VulkanGpuProgram*>(&miss);
+        auto* ch = dynamic_cast<VulkanGpuProgram*>(&closest_hit);
+        if (rg == nullptr || ms == nullptr || ch == nullptr) { return; }
+        RtPipe* pipe = rt_pipeline(rg->vk_module(), ms->vk_module(), ch->vk_module());
+        if (pipe == nullptr) { return; }
+
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool     = m_frame_rec.pool;
+        dsai.descriptorSetCount = 1U;
+        dsai.pSetLayouts        = &m_rtp_set_layout;
+        VkDescriptorSet dset = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return; }
+
+        const crd::u32 n = count < kMaxKernelBuffers ? count : kMaxKernelBuffers;
+        VkWriteDescriptorSetAccelerationStructureKHR as_info{};
+        as_info.sType                      = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+        as_info.accelerationStructureCount = 1U;
+        as_info.pAccelerationStructures    = &tlas;
+        VkDescriptorBufferInfo bi[kMaxKernelBuffers]{};
+        VkWriteDescriptorSet   wr[kMaxKernelBuffers + 1U]{};
+        wr[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wr[0].pNext           = &as_info;
+        wr[0].dstSet          = dset;
+        wr[0].dstBinding      = 0U;
+        wr[0].descriptorCount = 1U;
+        wr[0].descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+        for (crd::u32 i = 0; i < kMaxKernelBuffers; ++i)
+        {
+            bi[i] = {vk_buffer_of(*buffers[i < n ? i : 0U]), 0U, VK_WHOLE_SIZE};
+            wr[i + 1U].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            wr[i + 1U].dstSet          = dset;
+            wr[i + 1U].dstBinding      = i + 1U;
+            wr[i + 1U].descriptorCount = 1U;
+            wr[i + 1U].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            wr[i + 1U].pBufferInfo     = &bi[i];
+        }
+        vkUpdateDescriptorSets(m_device, kMaxKernelBuffers + 1U, wr, 0U, nullptr);
+
+        VkCommandBuffer cmd = m_frame_rec.cmd;
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipe->pipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_rtp_pipe_layout, 0U, 1U, &dset, 0U,
+                                nullptr);
+        m_rt.trace_rays(cmd, &pipe->rgen_region, &pipe->miss_region, &pipe->hit_region, &pipe->call_region,
+                        width > 0U ? width : 1U, height > 0U ? height : 1U, 1U);
+        // The RT stages write storage buffers, so the same COMPUTE→anything hazard applies.
+        kernel_write_barrier(cmd);
+    }
+
+private:
+    struct VkRtApi
+    {
+        PFN_vkCreateRayTracingPipelinesKHR        create_pipelines = nullptr;
+        PFN_vkGetRayTracingShaderGroupHandlesKHR  group_handles    = nullptr;
+        PFN_vkCmdTraceRaysKHR                     trace_rays       = nullptr;
+        PFN_vkGetBufferDeviceAddress              buffer_address   = nullptr;
+    };
+    struct RtPipe
+    {
+        VkShaderModule                 key[3]{};
+        VkPipeline                     pipeline = VK_NULL_HANDLE;
+        VkBuffer                       sbt      = VK_NULL_HANDLE;
+        VkDeviceMemory                 sbt_mem  = VK_NULL_HANDLE;
+        VkStridedDeviceAddressRegionKHR rgen_region{};
+        VkStridedDeviceAddressRegionKHR miss_region{};
+        VkStridedDeviceAddressRegionKHR hit_region{};
+        VkStridedDeviceAddressRegionKHR call_region{};
+    };
+
+    [[nodiscard]] bool ensure_rt_api()
+    {
+        if (m_rt_tried) { return m_rt.create_pipelines != nullptr && m_rtp_set_layout != VK_NULL_HANDLE; }
+        m_rt_tried = true;
+        m_rt.create_pipelines = reinterpret_cast<PFN_vkCreateRayTracingPipelinesKHR>(
+            vkGetDeviceProcAddr(m_device, "vkCreateRayTracingPipelinesKHR"));
+        m_rt.group_handles = reinterpret_cast<PFN_vkGetRayTracingShaderGroupHandlesKHR>(
+            vkGetDeviceProcAddr(m_device, "vkGetRayTracingShaderGroupHandlesKHR"));
+        m_rt.trace_rays = reinterpret_cast<PFN_vkCmdTraceRaysKHR>(vkGetDeviceProcAddr(m_device, "vkCmdTraceRaysKHR"));
+        m_rt.buffer_address =
+            reinterpret_cast<PFN_vkGetBufferDeviceAddress>(vkGetDeviceProcAddr(m_device, "vkGetBufferDeviceAddress"));
+        if (m_rt.create_pipelines == nullptr || m_rt.group_handles == nullptr || m_rt.trace_rays == nullptr
+            || m_rt.buffer_address == nullptr)
+        {
+            return false; // no VK_KHR_ray_tracing_pipeline on this adapter ⇒ the verb is a NO-OP, visibly
+        }
+        // ⛔ The device's SBT geometry. `shaderGroupHandleSize` and `shaderGroupBaseAlignment` differ between
+        // vendors; a hard-coded 32 works on one and silently mis-indexes the table on another.
+        m_rt_props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
+        VkPhysicalDeviceProperties2 p2{};
+        p2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        p2.pNext = &m_rt_props;
+        vkGetPhysicalDeviceProperties2(m_ctx->vk_physical_device(), &p2);
+        if (m_rt_props.shaderGroupHandleSize == 0U) { return false; }
+
+        // The RT descriptor layout: binding 0 = TLAS, 1..N = SSBOs — the A9 shape with RT stage flags instead of
+        // COMPUTE. ⛔ A layout's stageFlags must name the stages that actually access it; reusing A9's compute-only
+        // layout would make every RT-stage access invalid.
+        constexpr VkShaderStageFlags kRtStages = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR
+                                                 | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR
+                                                 | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+        VkDescriptorSetLayoutBinding lb[kMaxKernelBuffers + 1U]{};
+        lb[0].binding         = 0U;
+        lb[0].descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+        lb[0].descriptorCount = 1U;
+        lb[0].stageFlags      = kRtStages;
+        for (crd::u32 i = 0; i < kMaxKernelBuffers; ++i)
+        {
+            lb[i + 1U].binding         = i + 1U;
+            lb[i + 1U].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            lb[i + 1U].descriptorCount = 1U;
+            lb[i + 1U].stageFlags      = kRtStages;
+        }
+        VkDescriptorSetLayoutCreateInfo dlci{};
+        dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        dlci.bindingCount = kMaxKernelBuffers + 1U;
+        dlci.pBindings    = lb;
+        if (vkCreateDescriptorSetLayout(m_device, &dlci, nullptr, &m_rtp_set_layout) != VK_SUCCESS) { return false; }
+        VkPipelineLayoutCreateInfo plci{};
+        plci.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        plci.setLayoutCount = 1U;
+        plci.pSetLayouts    = &m_rtp_set_layout;
+        if (vkCreatePipelineLayout(m_device, &plci, nullptr, &m_rtp_pipe_layout) != VK_SUCCESS)
+        {
+            vkDestroyDescriptorSetLayout(m_device, m_rtp_set_layout, nullptr);
+            m_rtp_set_layout = VK_NULL_HANDLE;
+            return false;
+        }
+        return true;
+    }
+
+    // Build (or find) the pipeline + SBT for one raygen/miss/hit triple. Cached on the three modules, because an
+    // RT pipeline build is far more expensive than a graphics one and a pass rebuilds it every frame otherwise.
+    [[nodiscard]] RtPipe* rt_pipeline(VkShaderModule rg, VkShaderModule ms, VkShaderModule ch)
+    {
+        for (crd::u32 i = 0; i < m_rtp_n; ++i)
+        {
+            if (m_rtp[i].key[0] == rg && m_rtp[i].key[1] == ms && m_rtp[i].key[2] == ch) { return &m_rtp[i]; }
+        }
+        if (m_rtp_n >= kKernelPsoCap) { return nullptr; }
+        RtPipe out{};
+        out.key[0] = rg;
+        out.key[1] = ms;
+        out.key[2] = ch;
+
+        VkPipelineShaderStageCreateInfo st[3]{};
+        const VkShaderStageFlagBits     stage_bits[3] = {VK_SHADER_STAGE_RAYGEN_BIT_KHR, VK_SHADER_STAGE_MISS_BIT_KHR,
+                                                         VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR};
+        const VkShaderModule            mods[3]       = {rg, ms, ch};
+        for (crd::u32 i = 0; i < 3U; ++i)
+        {
+            st[i].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            st[i].stage  = stage_bits[i];
+            st[i].module = mods[i];
+            st[i].pName  = "main";
+        }
+        // THREE GROUPS: raygen (general, stage 0) · miss (general, stage 1) · hit (triangles, closest-hit = 2).
+        VkRayTracingShaderGroupCreateInfoKHR grp[3]{};
+        for (crd::u32 i = 0; i < 3U; ++i)
+        {
+            grp[i].sType              = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
+            grp[i].generalShader      = VK_SHADER_UNUSED_KHR;
+            grp[i].closestHitShader   = VK_SHADER_UNUSED_KHR;
+            grp[i].anyHitShader       = VK_SHADER_UNUSED_KHR;
+            grp[i].intersectionShader = VK_SHADER_UNUSED_KHR;
+        }
+        grp[0].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+        grp[0].generalShader = 0U;
+        grp[1].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+        grp[1].generalShader = 1U;
+        grp[2].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
+        grp[2].closestHitShader = 2U;
+
+        VkRayTracingPipelineCreateInfoKHR pci{};
+        pci.sType                        = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
+        pci.stageCount                   = 3U;
+        pci.pStages                      = st;
+        pci.groupCount                   = 3U;
+        pci.pGroups                      = grp;
+        pci.maxPipelineRayRecursionDepth = 1U;
+        pci.layout                       = m_rtp_pipe_layout;
+        if (m_rt.create_pipelines(m_device, VK_NULL_HANDLE, VK_NULL_HANDLE, 1U, &pci, nullptr, &out.pipeline)
+            != VK_SUCCESS)
+        {
+            return nullptr;
+        }
+
+        // ── the SBT: three records, each ALIGNED UP to shaderGroupBaseAlignment ──
+        const crd::u32 hsize   = m_rt_props.shaderGroupHandleSize;
+        const crd::u32 halign  = m_rt_props.shaderGroupHandleAlignment != 0U ? m_rt_props.shaderGroupHandleAlignment : 1U;
+        const crd::u32 balign  = m_rt_props.shaderGroupBaseAlignment != 0U ? m_rt_props.shaderGroupBaseAlignment : 1U;
+        const auto     up      = [](crd::u32 v, crd::u32 a) { return (v + a - 1U) / a * a; };
+        const crd::u32 stride  = up(hsize, halign);
+        const crd::u32 rec     = up(stride, balign); // each region starts base-aligned; one record per region here
+        crd::containers::Array<crd::u8> handles(crd::memory::default_allocator());
+        handles.resize(static_cast<crd::usize>(hsize) * 3U);
+        if (m_rt.group_handles(m_device, out.pipeline, 0U, 3U, handles.size(), handles.data()) != VK_SUCCESS)
+        {
+            vkDestroyPipeline(m_device, out.pipeline, nullptr);
+            return nullptr;
+        }
+        const crd::u32     total = rec * 3U;
+        VkBufferCreateInfo bci{};
+        bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bci.size  = total;
+        bci.usage = VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
+                    | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        if (vkCreateBuffer(m_device, &bci, nullptr, &out.sbt) != VK_SUCCESS)
+        {
+            vkDestroyPipeline(m_device, out.pipeline, nullptr);
+            return nullptr;
+        }
+        VkMemoryRequirements mr{};
+        vkGetBufferMemoryRequirements(m_device, out.sbt, &mr);
+        VkMemoryAllocateFlagsInfo afi{};
+        afi.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
+        afi.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT; // the SBT is addressed BY DEVICE ADDRESS, not bound
+        VkMemoryAllocateInfo mai{};
+        mai.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        mai.pNext           = &afi;
+        mai.allocationSize  = mr.size;
+        mai.memoryTypeIndex = find_memory_type_rt(mr.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+                                                                         | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        if (mai.memoryTypeIndex == 0xFFFFFFFFU
+            || vkAllocateMemory(m_device, &mai, nullptr, &out.sbt_mem) != VK_SUCCESS)
+        {
+            vkDestroyBuffer(m_device, out.sbt, nullptr);
+            vkDestroyPipeline(m_device, out.pipeline, nullptr);
+            return nullptr;
+        }
+        vkBindBufferMemory(m_device, out.sbt, out.sbt_mem, 0U);
+        void* mapped = nullptr;
+        vkMapMemory(m_device, out.sbt_mem, 0U, total, 0U, &mapped);
+        auto* dst = static_cast<crd::u8*>(mapped);
+        std::memset(dst, 0, total);
+        for (crd::u32 i = 0; i < 3U; ++i)
+        {
+            std::memcpy(dst + static_cast<crd::usize>(rec) * i, handles.data() + static_cast<crd::usize>(hsize) * i,
+                        hsize);
+        }
+        vkUnmapMemory(m_device, out.sbt_mem);
+
+        VkBufferDeviceAddressInfo bdai{};
+        bdai.sType  = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+        bdai.buffer = out.sbt;
+        const VkDeviceAddress base = m_rt.buffer_address(m_device, &bdai);
+        out.rgen_region = {base + 0U, rec, rec};
+        out.miss_region = {base + rec, rec, rec};
+        out.hit_region  = {base + static_cast<VkDeviceSize>(rec) * 2U, rec, rec};
+        out.call_region = {};
+
+        m_rtp[m_rtp_n] = out;
+        ++m_rtp_n;
+        return &m_rtp[m_rtp_n - 1U];
+    }
+
+    [[nodiscard]] crd::u32 find_memory_type_rt(crd::u32 bits, VkMemoryPropertyFlags props) const noexcept
+    {
+        VkPhysicalDeviceMemoryProperties mp{};
+        vkGetPhysicalDeviceMemoryProperties(m_ctx->vk_physical_device(), &mp);
+        for (crd::u32 i = 0; i < mp.memoryTypeCount; ++i)
+        {
+            if ((bits & (1U << i)) != 0U && (mp.memoryTypes[i].propertyFlags & props) == props) { return i; }
+        }
+        return 0xFFFFFFFFU;
+    }
+
+    VkRtApi                                          m_rt{};
+    bool                                             m_rt_tried = false;
+    VkPhysicalDeviceRayTracingPipelinePropertiesKHR  m_rt_props{};
+    VkDescriptorSetLayout                            m_rtp_set_layout  = VK_NULL_HANDLE;
+    VkPipelineLayout                                 m_rtp_pipe_layout = VK_NULL_HANDLE;
+    RtPipe                                           m_rtp[kKernelPsoCap]{};
+    crd::u32                                         m_rtp_n = 0U;
+
+public:
+    void draw_visbuffer_load(IRasterTarget& target, IRasterProgram& program, crd::u32 vertex_count) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        if (!m_api.valid() || !p.valid() || !frame_recording()) { return; }
+        record_visbuffer(t, p, 0U, vertex_count, /*clear=*/false);
+    }
+
+    // ⭐ REN-38-A12: the WBOIT composite — fullscreen, bindless, LOAD, BLEND. Recording-only, like every other
+    // continuing verb: "read what is already there" is only meaningful while a frame is open.
+    void draw_bindless_blend_load(IRasterTarget& target, IRasterProgram& program, ITexture* const* textures,
+                                  crd::u32 count, crd::u32 vertex_count, BlendMode blend) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        if (!m_api.valid() || !p.valid() || !frame_recording() || textures == nullptr || count == 0U) { return; }
+        VkCommandBuffer cmd  = m_frame_rec.cmd;
+        VkDescriptorSet dset = frame_alloc_bindless_set(textures, count);
+        if (dset == VK_NULL_HANDLE) { return; }
+        frame_self_barrier_if_needed(t);
+        VkRenderingAttachmentInfo att = colour_load_attachment(t.view());
+        VkRenderingInfo           ri  = one_colour_rendering(t, att);
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t.width(), t.height(), 1U, false, VK_COMPARE_OP_ALWAYS);
+        // ⛔ AFTER `set_draw_state`, which leaves blending DISABLED — the same ordering rule 38-A15 established
+        // for MRT. Setting it before would be silently overwritten and the composite would render opaque.
+        if (blend != BlendMode::Opaque && m_api.set_color_blend_enable != nullptr
+            && m_api.set_color_blend_equation != nullptr)
+        {
+            const VkBool32                en = VK_TRUE;
+            const VkColorBlendEquationEXT eq = blend_equation(blend);
+            m_api.set_color_blend_enable(cmd, 0U, 1U, &en);
+            m_api.set_color_blend_equation(cmd, 0U, 1U, &eq);
+        }
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        bind_and_draw(cmd, p, vertex_count);
+        vkCmdEndRendering(cmd);
+    }
+
     void draw_visbuffer(IRasterTarget& target, IRasterProgram& program, crd::u32 clear_id, crd::u32 vertex_count) override
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
         if (!m_api.valid() || !p.valid()) { return; }
+        if (frame_recording()) { record_visbuffer(t, p, clear_id, vertex_count); return; }
         VkCommandBuffer cmd = begin_cmd();
         if (cmd == VK_NULL_HANDLE) { return; }
 
@@ -1811,6 +2467,11 @@ public:
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
         if (!m_api.valid() || !p.valid() || !t.has_depth()) { return; } // needs a create_color_depth_target target
+        if (frame_recording())
+        {
+            record_plain(t, p, clear_color, true, clear_depth, compare, vertex_count);
+            return;
+        }
 
         VkCommandBuffer cmd = begin_cmd();
         if (cmd == VK_NULL_HANDLE) { return; }
@@ -1869,6 +2530,44 @@ public:
         end_and_wait(cmd);
     }
 
+    // ── REN-38-A1g: the frame-mode bodies of `draw_vrs` and `draw_conservative`. ────────────────────────────
+    // Both are `record_plain` plus ONE piece of DYNAMIC STATE. ⛔ `set_draw_state` installs the DEFAULTS (a 1x1
+    // shading rate, conservative DISABLED), so the override must come AFTER it — setting the rate first and then
+    // calling `set_draw_state` silently resets it, and the frame renders at 1x1 while every counter says VRS ran.
+    void record_vrs(VulkanRasterTarget& t, VulkanRasterProgram& p, ClearColor clear_color, ShadingRate rate,
+                    ShadingRateCombiner primitive_combiner, crd::u32 vertex_count)
+    {
+        VkCommandBuffer cmd = m_frame_rec.cmd;
+        frame_self_barrier_if_needed(t);
+        VkRenderingAttachmentInfo att = colour_clear_attachment(t.view(), clear_color);
+        VkRenderingInfo           ri  = one_colour_rendering(t, att);
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t.width(), t.height(), 1U, false, VK_COMPARE_OP_ALWAYS); // installs the 1x1 default
+        const VkExtent2D                         frag    = vrs_extent(rate);
+        const VkFragmentShadingRateCombinerOpKHR comb[2] = {
+            vrs_combiner(primitive_combiner),
+            t.has_vrs() ? VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR : VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR};
+        m_set_vrs(cmd, &frag, comb);
+        bind_and_draw(cmd, p, vertex_count);
+        vkCmdEndRendering(cmd);
+    }
+
+    void record_conservative(VulkanRasterTarget& t, VulkanRasterProgram& p, ClearColor clear_color,
+                             ConservativeMode mode, crd::u32 vertex_count)
+    {
+        VkCommandBuffer cmd = m_frame_rec.cmd;
+        frame_self_barrier_if_needed(t);
+        VkRenderingAttachmentInfo att = colour_clear_attachment(t.view(), clear_color);
+        VkRenderingInfo           ri  = one_colour_rendering(t, att);
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t.width(), t.height(), 1U, false, VK_COMPARE_OP_ALWAYS); // installs the DISABLED default
+        m_set_conservative(cmd, to_conservative_mode(mode));
+        // Overestimate + shader objects also needs the extra-overestimation-size state (VUID-vkCmdDraw-07632).
+        if (mode != ConservativeMode::Off && m_set_overest_size != nullptr) { m_set_overest_size(cmd, 0.0F); }
+        bind_and_draw(cmd, p, vertex_count);
+        vkCmdEndRendering(cmd);
+    }
+
     void draw_vrs(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, ShadingRate pipeline_rate,
                   ShadingRateCombiner primitive_combiner, crd::u32 vertex_count) override
     {
@@ -1876,6 +2575,11 @@ public:
         auto& p = static_cast<VulkanRasterProgram&>(program);
         if (!m_api.valid() || !p.valid()) { return; }
         if (m_set_vrs == nullptr) { draw(target, program, clear_color, vertex_count); return; } // no VRS ⇒ a plain 1x1 draw
+        if (frame_recording())
+        {
+            record_vrs(t, p, clear_color, pipeline_rate, primitive_combiner, vertex_count);
+            return;
+        }
 
         VkCommandBuffer cmd = begin_cmd();
         if (cmd == VK_NULL_HANDLE) { return; }
@@ -1945,6 +2649,7 @@ public:
         auto& p = static_cast<VulkanRasterProgram&>(program);
         if (!m_api.valid() || !p.valid()) { return; }
         if (m_set_conservative == nullptr) { draw(target, program, clear_color, vertex_count); return; } // unsupported
+        if (frame_recording()) { record_conservative(t, p, clear_color, mode, vertex_count); return; }
 
         VkCommandBuffer cmd = begin_cmd();
         if (cmd == VK_NULL_HANDLE) { return; }
@@ -2039,7 +2744,15 @@ public:
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
         auto& s = static_cast<VulkanStorageBuffer&>(storage);
-        if (!m_api.valid() || !p.valid() || m_desc_pool == VK_NULL_HANDLE || !t.has_depth()) { return; }
+        if (!m_api.valid() || !p.valid() || m_desc_pool == VK_NULL_HANDLE) { return; }
+        // ⛔ A DEPTH-LESS target is drawn COLOUR-ONLY, never silently skipped — see the note in `record_scene`.
+        // The SYNCHRONOUS path below binds the depth attachment unconditionally, so it delegates to the
+        // colour-only verb rather than growing a second shape.
+        if (!t.has_depth() && !frame_recording())
+        {
+            draw_storage(target, program, clear_color, storage, vertex_count);
+            return;
+        }
 
         if (frame_recording()) { record_scene(t, p, s, true, clear_color, clear_depth, compare, vertex_count); return; }
 
@@ -2107,7 +2820,8 @@ public:
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
         auto& s = static_cast<VulkanStorageBuffer&>(storage);
-        if (!m_api.valid() || !p.valid() || m_desc_pool == VK_NULL_HANDLE || !t.has_depth()) { return; }
+        if (!m_api.valid() || !p.valid() || m_desc_pool == VK_NULL_HANDLE) { return; }
+        if (!t.has_depth() && !frame_recording()) { return; } // the sync LOAD path needs the depth attachment
 
         if (frame_recording()) { record_scene(t, p, s, false, ClearColor{}, 0.0F, compare, vertex_count); return; }
 
@@ -2528,9 +3242,16 @@ public:
         ri.layerCount           = 1U;
         ri.colorAttachmentCount = 1U;
         ri.pColorAttachments    = &att;
-        ri.pDepthAttachment     = &dep;
+        // ⭐ REN-38-A6: DEPTH IS OPTIONAL. A frame-graph COLOUR transient has no depth image (depth is a
+        // separate `D32Float` resource in this system), so a `raster.geometry` pass drawing into one has
+        // `t.has_depth() == false`. ⛔ Before this the two storage-depth verbs simply RETURNED in that case: an
+        // authored geometry pass writing a colour transient parsed, validated, executed, reported no error and
+        // drew NOTHING — found by the A6 blit gate, whose source image came back pure clear.
+        // Binding no depth attachment is the CORRECT behaviour, not a fallback: a pass with no depth buffer is
+        // not depth-tested, and the graph already said so by not declaring one.
+        ri.pDepthAttachment     = t.has_depth() ? &dep : nullptr;
         vkCmdBeginRendering(cmd, &ri);
-        set_draw_state(cmd, t.width(), t.height(), 1U, true, to_vk_compare(compare));
+        set_draw_state(cmd, t.width(), t.height(), 1U, t.has_depth(), to_vk_compare(compare));
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
         bind_and_draw(cmd, p, vertex_count);
         vkCmdEndRendering(cmd);
@@ -3267,6 +3988,17 @@ public:
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
+        // REN-38-A1c: the mesh path with the BINDLESS set (38-A1a's frame allocator) and a depth attachment.
+        if (frame_recording() && p.valid() && p.is_mesh() && count > 0U && textures != nullptr && t.has_depth())
+        {
+            const crd::u32  n    = count < kBindlessMax ? count : kBindlessMax;
+            VkDescriptorSet dset = frame_alloc_bindless_set(textures, n);
+            if (dset != VK_NULL_HANDLE)
+            {
+                record_mesh(t, p, clear_color, group_count, -1, dset, true, clear_depth, compare);
+            }
+            return;
+        }
         if (!m_api.valid() || m_api.draw_mesh_tasks == nullptr || !p.valid() || !p.is_mesh() || m_desc_pool == VK_NULL_HANDLE
             || count == 0U || textures == nullptr || !t.has_depth())
         {
@@ -3318,6 +4050,368 @@ public:
             }
         }
         return std::make_unique<VulkanGBufferTarget>(m_device, attachments, imgs, readbacks, width, height);
+    }
+
+    // ── REN-38-A1b: MRT into N of the FRAME GRAPH's own transients. ─────────────────────────────────────────
+    // Same rendering shape as `draw_gbuffer` minus the G-buffer object: N colour attachments built from N
+    // independent targets the graph owns, aliases and barriers individually.
+    // ⛔ The graph has ALREADY transitioned every one of these to COLOR_ATTACHMENT_OPTIMAL (they are declared
+    // writes), so this must NOT insert its own layout transitions the way the synchronous `draw_gbuffer` does —
+    // a redundant UNDEFINED-source transition would DISCARD the contents the graph is tracking.
+    // REN-38-A15: map a declared BlendMode to the Vulkan equation. ⛔ `RevealageMultiply` is why the set is not
+    // just {Alpha, Additive, Multiply}: WBOIT revealage is `dst * (1 - src.rgb)`, which uses ONE_MINUS_SRC_COLOR
+    // as the DESTINATION factor with a ZERO source — no generic "multiply" spells that.
+    [[nodiscard]] static VkColorBlendEquationEXT blend_equation(BlendMode m) noexcept
+    {
+        switch (m)
+        {
+        case BlendMode::Alpha:
+            return {VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD,
+                    VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD};
+        case BlendMode::PremultipliedAlpha:
+            return {VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD,
+                    VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD};
+        case BlendMode::Additive:
+            return {VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD,
+                    VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD};
+        case BlendMode::Multiply:
+            return {VK_BLEND_FACTOR_DST_COLOR, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD,
+                    VK_BLEND_FACTOR_DST_ALPHA, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD};
+        case BlendMode::RevealageMultiply:
+            return {VK_BLEND_FACTOR_ZERO, VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR, VK_BLEND_OP_ADD,
+                    VK_BLEND_FACTOR_ZERO, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD};
+        case BlendMode::Opaque:
+        default:
+            return {VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD,
+                    VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD};
+        }
+    }
+
+    // ── REN-38-A2: dispatch a CKIR compute kernel INTO THE FRAME'S command buffer. ──────────────────────────
+    // The pass is ordered and barriered by its declared reads/writes exactly like a raster pass, and the frame
+    // still ends in ONE submission — which is the whole reason this is a raster-context verb rather than a call
+    // into `IComputeContext` (that owns its own command buffer and submits independently).
+    // ⛔ A COMPUTE->anything hazard needs a barrier the graph cannot see: it knows the pass wrote a buffer, but
+    // the WRITE happens in the shader, so the memory barrier is issued HERE, after the dispatch, covering
+    // shader-write -> everything. Leaving it to the graph would race a later pass that reads the result.
+    void dispatch_kernel(IGpuProgram& kernel, crd::u32 gx, crd::u32 gy, crd::u32 gz, IStorageBuffer* const* buffers,
+                         crd::u32 count) override
+    {
+        if (!frame_recording() || m_compute_set_layout == VK_NULL_HANDLE) { return; }
+        auto*      vk_prog = dynamic_cast<VulkanGpuProgram*>(&kernel);
+        if (vk_prog == nullptr) { return; }
+        VkPipeline pipe = kernel_pipeline(vk_prog->vk_module());
+        if (pipe == VK_NULL_HANDLE) { return; }
+        const crd::u32 n = count < kMaxKernelBuffers ? count : kMaxKernelBuffers;
+
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool     = m_frame_rec.pool;
+        dsai.descriptorSetCount = 1U;
+        dsai.pSetLayouts        = &m_compute_set_layout;
+        VkDescriptorSet dset = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return; }
+
+        // ⛔ EVERY binding of the layout must be written, not just the ones the kernel uses — an unwritten
+        // descriptor the pipeline is allowed to access is VUID-vkCmdDispatch-None-08114. Slots past `n` replicate
+        // slot 0, the same rule `frame_alloc_bindless_set` uses for its array.
+        VkDescriptorBufferInfo bi[kMaxKernelBuffers]{};
+        VkWriteDescriptorSet   wr[kMaxKernelBuffers]{};
+        if (n == 0U || buffers == nullptr) { return; }
+        for (crd::u32 i = 0; i < kMaxKernelBuffers; ++i)
+        {
+            bi[i] = {vk_buffer_of(*buffers[i < n ? i : 0U]), 0U, VK_WHOLE_SIZE};
+            wr[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            wr[i].dstSet          = dset;
+            wr[i].dstBinding      = i;
+            wr[i].descriptorCount = 1U;
+            wr[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            wr[i].pBufferInfo     = &bi[i];
+        }
+        vkUpdateDescriptorSets(m_device, kMaxKernelBuffers, wr, 0U, nullptr);
+
+        VkCommandBuffer cmd = m_frame_rec.cmd;
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_compute_pipe_layout, 0U, 1U, &dset, 0U, nullptr);
+        vkCmdDispatch(cmd, gx > 0U ? gx : 1U, gy > 0U ? gy : 1U, gz > 0U ? gz : 1U);
+
+        kernel_write_barrier(cmd);
+    }
+
+    // The COMPUTE->anything hazard barrier. The graph knows the pass wrote a buffer, but the WRITE happens inside
+    // the shader, so this is issued by the dispatching verb. INDIRECT_COMMAND_READ is in the destination mask on
+    // purpose: REN-38-A10's whole point is that the NEXT pass may consume this buffer as draw/dispatch arguments.
+    void kernel_write_barrier(VkCommandBuffer cmd) const
+    {
+        VkMemoryBarrier mb{};
+        mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        // ⛔ REN-38-A14: the ACCESS mask must match the STAGE mask. `INDIRECT_COMMAND_READ` is only valid with
+        // `DRAW_INDIRECT`, which is a graphics-queue stage — so on the async buffer it must go too. Dropping the
+        // stage while keeping the access is the same error one level down, and the validator says so.
+        mb.dstAccessMask = m_frame_rec.async
+                               ? (VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT)
+                               : (VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT
+                                  | VK_ACCESS_UNIFORM_READ_BIT);
+        // ⛔ REN-38-A14: a COMPUTE-ONLY queue rejects graphics stages in a barrier. On the async command buffer the
+        // graphics half is not merely unnecessary — naming it is INVALID, and the cross-queue ordering is carried
+        // by the SEMAPHORE the graphics submission waits on, not by this barrier.
+        const VkPipelineStageFlags dst = m_frame_rec.async
+                                             ? (VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT)
+                                             : (VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+                                                | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT);
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, dst, 0, 1U, &mb, 0U, nullptr, 0U, nullptr);
+    }
+
+    // ── ⭐ REN-38-A10: GPU-DRIVEN DISPATCH. The workgroup count comes from a buffer, not the CPU. ──
+    void dispatch_kernel_indirect(IGpuProgram& kernel, IStorageBuffer& args, crd::u64 args_offset,
+                                  IStorageBuffer* const* buffers, crd::u32 count) override
+    {
+        if (!frame_recording() || m_compute_set_layout == VK_NULL_HANDLE) { return; }
+        auto* vk_prog = dynamic_cast<VulkanGpuProgram*>(&kernel);
+        if (vk_prog == nullptr) { return; }
+        VkPipeline pipe = kernel_pipeline(vk_prog->vk_module());
+        if (pipe == VK_NULL_HANDLE || buffers == nullptr || count == 0U) { return; }
+        VkDescriptorSet dset = alloc_kernel_set(buffers, count, VK_NULL_HANDLE);
+        if (dset == VK_NULL_HANDLE) { return; }
+        VkCommandBuffer cmd = m_frame_rec.cmd;
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_compute_pipe_layout, 0U, 1U, &dset, 0U, nullptr);
+        vkCmdDispatchIndirect(cmd, vk_buffer_of(args), args_offset);
+        kernel_write_barrier(cmd);
+    }
+
+    // REN-38-A10: the mesh half — an indirect meshlet dispatch whose count a GRAPH-TRACKED buffer holds.
+    void draw_mesh_indirect_buffer(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
+                                   IStorageBuffer& args, crd::u64 args_offset) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        if (!m_api.valid() || m_api.draw_mesh_tasks_indirect == nullptr || !p.valid() || !p.is_mesh()) { return; }
+        if (!frame_recording()) { return; }
+        record_mesh(t, p, clear, 0U, -1, VK_NULL_HANDLE, false, 0.0F, DepthCompare::Always,
+                    vk_buffer_of(args), args_offset);
+    }
+
+    // ── ⭐ REN-38-A9: THE INLINE RAY-QUERY DISPATCH. ──
+    // The TLAS at set 0 / binding 0 and the pass's buffers at 1..N — the SAME convention
+    // `VulkanRayTracingContext::trace_dispatch` uses, so a kernel written for the offline rig runs unchanged here.
+    void dispatch_kernel_rt(IGpuProgram& kernel, IAccelerationStructure& as, crd::u32 gx, crd::u32 gy, crd::u32 gz,
+                            IStorageBuffer* const* buffers, crd::u32 count) override
+    {
+        if (!frame_recording() || buffers == nullptr || count == 0U) { return; }
+        const auto tlas = reinterpret_cast<VkAccelerationStructureKHR>(vulkan_scene_tlas(as));
+        // ⛔ A scene that does not resolve is a NO-OP, never a dispatch with an unwritten AS descriptor: an
+        // unwritten descriptor the pipeline may access is VUID-vkCmdDispatch-None-08114, i.e. undefined traversal.
+        if (tlas == VK_NULL_HANDLE) { return; }
+        VkDescriptorSetLayout layout = rt_set_layout();
+        if (layout == VK_NULL_HANDLE) { return; }
+        auto* vk_prog = dynamic_cast<VulkanGpuProgram*>(&kernel);
+        if (vk_prog == nullptr) { return; }
+        VkPipeline pipe = rt_kernel_pipeline(vk_prog->vk_module());
+        if (pipe == VK_NULL_HANDLE) { return; }
+
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool     = m_frame_rec.pool;
+        dsai.descriptorSetCount = 1U;
+        dsai.pSetLayouts        = &layout;
+        VkDescriptorSet dset = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return; }
+
+        const crd::u32 n = count < kMaxKernelBuffers ? count : kMaxKernelBuffers;
+        VkWriteDescriptorSetAccelerationStructureKHR as_info{};
+        as_info.sType                      = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+        as_info.accelerationStructureCount = 1U;
+        as_info.pAccelerationStructures    = &tlas;
+        VkDescriptorBufferInfo bi[kMaxKernelBuffers]{};
+        VkWriteDescriptorSet   wr[kMaxKernelBuffers + 1U]{};
+        wr[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wr[0].pNext           = &as_info;
+        wr[0].dstSet          = dset;
+        wr[0].dstBinding      = 0U;
+        wr[0].descriptorCount = 1U;
+        wr[0].descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+        for (crd::u32 i = 0; i < kMaxKernelBuffers; ++i)
+        {
+            bi[i] = {vk_buffer_of(*buffers[i < n ? i : 0U]), 0U, VK_WHOLE_SIZE};
+            wr[i + 1U].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            wr[i + 1U].dstSet          = dset;
+            wr[i + 1U].dstBinding      = i + 1U; // ⛔ buffers start at 1 — binding 0 IS the TLAS
+            wr[i + 1U].descriptorCount = 1U;
+            wr[i + 1U].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            wr[i + 1U].pBufferInfo     = &bi[i];
+        }
+        vkUpdateDescriptorSets(m_device, kMaxKernelBuffers + 1U, wr, 0U, nullptr);
+
+        VkCommandBuffer cmd = m_frame_rec.cmd;
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_rt_pipe_layout, 0U, 1U, &dset, 0U, nullptr);
+        vkCmdDispatch(cmd, gx > 0U ? gx : 1U, gy > 0U ? gy : 1U, gz > 0U ? gz : 1U);
+        kernel_write_barrier(cmd);
+    }
+
+    // The RT layout: binding 0 = TLAS, bindings 1..kMaxKernelBuffers = SSBOs. Built once, lazily — a device
+    // without ray query never pays for it.
+    [[nodiscard]] VkDescriptorSetLayout rt_set_layout()
+    {
+        if (m_rt_set_layout != VK_NULL_HANDLE) { return m_rt_set_layout; }
+        if (!m_ctx->ray_query()) { return VK_NULL_HANDLE; }
+        VkDescriptorSetLayoutBinding lb[kMaxKernelBuffers + 1U]{};
+        lb[0].binding         = 0U;
+        lb[0].descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+        lb[0].descriptorCount = 1U;
+        lb[0].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+        for (crd::u32 i = 0; i < kMaxKernelBuffers; ++i)
+        {
+            lb[i + 1U].binding         = i + 1U;
+            lb[i + 1U].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            lb[i + 1U].descriptorCount = 1U;
+            lb[i + 1U].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo dlci{};
+        dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        dlci.bindingCount = kMaxKernelBuffers + 1U;
+        dlci.pBindings    = lb;
+        if (vkCreateDescriptorSetLayout(m_device, &dlci, nullptr, &m_rt_set_layout) != VK_SUCCESS)
+        {
+            m_rt_set_layout = VK_NULL_HANDLE;
+            return VK_NULL_HANDLE;
+        }
+        VkPipelineLayoutCreateInfo plci{};
+        plci.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        plci.setLayoutCount = 1U;
+        plci.pSetLayouts    = &m_rt_set_layout;
+        if (vkCreatePipelineLayout(m_device, &plci, nullptr, &m_rt_pipe_layout) != VK_SUCCESS)
+        {
+            vkDestroyDescriptorSetLayout(m_device, m_rt_set_layout, nullptr);
+            m_rt_set_layout = VK_NULL_HANDLE;
+            return VK_NULL_HANDLE;
+        }
+        return m_rt_set_layout;
+    }
+
+    // ⛔ A SEPARATE cache from `kernel_pipeline`, keyed the same way. The two differ ONLY by pipeline layout, and
+    // a shared cache would hand an RT dispatch the plain layout the first time a module was seen as a plain
+    // kernel — a layout/descriptor mismatch, which is undefined rather than an error.
+    [[nodiscard]] VkPipeline rt_kernel_pipeline(VkShaderModule module)
+    {
+        for (crd::u32 i = 0; i < m_rt_pso_n; ++i)
+        {
+            if (m_rt_pso_key[i] == module) { return m_rt_pso[i]; }
+        }
+        if (m_rt_pso_n >= kKernelPsoCap) { return VK_NULL_HANDLE; }
+        VkPipelineShaderStageCreateInfo st{};
+        st.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        st.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+        st.module = module;
+        st.pName  = "main";
+        VkComputePipelineCreateInfo ci{};
+        ci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        ci.stage  = st;
+        ci.layout = m_rt_pipe_layout;
+        VkPipeline pipe = VK_NULL_HANDLE;
+        if (vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1U, &ci, nullptr, &pipe) != VK_SUCCESS)
+        {
+            return VK_NULL_HANDLE;
+        }
+        m_rt_pso_key[m_rt_pso_n] = module;
+        m_rt_pso[m_rt_pso_n]     = pipe;
+        ++m_rt_pso_n;
+        return pipe;
+    }
+
+    // The plain (no-AS) kernel descriptor set — factored out so `dispatch_kernel` and its indirect twin cannot
+    // drift apart in how they bind.
+    [[nodiscard]] VkDescriptorSet alloc_kernel_set(IStorageBuffer* const* buffers, crd::u32 count, VkDescriptorSet)
+    {
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool     = m_frame_rec.pool;
+        dsai.descriptorSetCount = 1U;
+        dsai.pSetLayouts        = &m_compute_set_layout;
+        VkDescriptorSet dset = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return VK_NULL_HANDLE; }
+        const crd::u32         n = count < kMaxKernelBuffers ? count : kMaxKernelBuffers;
+        VkDescriptorBufferInfo bi[kMaxKernelBuffers]{};
+        VkWriteDescriptorSet   wr[kMaxKernelBuffers]{};
+        for (crd::u32 i = 0; i < kMaxKernelBuffers; ++i)
+        {
+            bi[i] = {vk_buffer_of(*buffers[i < n ? i : 0U]), 0U, VK_WHOLE_SIZE};
+            wr[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            wr[i].dstSet          = dset;
+            wr[i].dstBinding      = i;
+            wr[i].descriptorCount = 1U;
+            wr[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            wr[i].pBufferInfo     = &bi[i];
+        }
+        vkUpdateDescriptorSets(m_device, kMaxKernelBuffers, wr, 0U, nullptr);
+        return dset;
+    }
+
+    void draw_storage_mrt(IRasterTarget* const* targets, crd::u32 count, IRasterProgram& program, ClearColor clear,
+                          float clear_depth, DepthCompare compare, IStorageBuffer& storage, crd::u32 vertex_count,
+                          const BlendMode* blend) override
+    {
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        auto& s = static_cast<VulkanStorageBuffer&>(storage);
+        if (!m_api.valid() || !p.valid() || targets == nullptr || count == 0U) { return; }
+        const crd::u32 n = count < kMaxGBuffer ? count : kMaxGBuffer;
+        if (!frame_recording()) { return; } // the graph is the only consumer; `draw_gbuffer` is the standalone path
+        auto& t0 = static_cast<VulkanRasterTarget&>(*targets[0]);
+
+        VkCommandBuffer cmd  = m_frame_rec.cmd;
+        VkDescriptorSet dset = frame_alloc_storage_set(s);
+        if (dset == VK_NULL_HANDLE) { return; }
+        VkRenderingAttachmentInfo att[kMaxGBuffer]{};
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            att[i] = colour_clear_attachment(static_cast<VulkanRasterTarget&>(*targets[i]).view(), clear);
+        }
+        VkRenderingInfo ri{};
+        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent    = {t0.width(), t0.height()};
+        ri.layerCount           = 1U;
+        ri.colorAttachmentCount = n;
+        ri.pColorAttachments    = att;
+        // A real G-buffer pass is DEPTH-TESTED — the deferred prepass writes depth the lighting pass then reads.
+        // Built inline the same way `record_depth_only` does; there is no shared helper to reuse.
+        VkRenderingAttachmentInfo dep{};
+        const bool                has_depth = t0.has_depth();
+        if (has_depth)
+        {
+            dep.sType                          = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            dep.imageView                      = t0.depth_view();
+            dep.imageLayout                    = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            dep.loadOp                         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            dep.storeOp                        = VK_ATTACHMENT_STORE_OP_STORE;
+            dep.clearValue.depthStencil.depth  = clear_depth;
+            ri.pDepthAttachment                = &dep;
+        }
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t0.width(), t0.height(), 1U, has_depth, to_vk_compare(compare), n);
+        // REN-38-A15: per-attachment blend, applied AFTER `set_draw_state` leaves blending disabled. Without this
+        // an MRT pass always rendered opaque, which is why WBOIT could not be authored as two ordinary passes.
+        if (blend != nullptr && m_api.set_color_blend_enable != nullptr && m_api.set_color_blend_equation != nullptr)
+        {
+            VkBool32                en[kMaxGBuffer]{};
+            VkColorBlendEquationEXT eq[kMaxGBuffer]{};
+            bool                    any = false;
+            for (crd::u32 i = 0; i < n; ++i)
+            {
+                en[i] = blend[i] != BlendMode::Opaque ? VK_TRUE : VK_FALSE;
+                eq[i] = blend_equation(blend[i]);
+                any   = any || en[i] == VK_TRUE;
+            }
+            if (any)
+            {
+                m_api.set_color_blend_enable(cmd, 0U, n, static_cast<const VkBool32*>(en));
+                m_api.set_color_blend_equation(cmd, 0U, n, static_cast<const VkColorBlendEquationEXT*>(eq));
+            }
+        }
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        bind_and_draw(cmd, p, vertex_count);
+        vkCmdEndRendering(cmd);
     }
 
     void draw_gbuffer(IGBufferTarget& target, IRasterProgram& program, ClearColor clear_color,
@@ -3616,6 +4710,19 @@ private:
     }
 
     // Shared draw scaffolding (B1-f factored these out so draw_conservative/draw_storage don't re-copy the boilerplate).
+    // REN-38-A7/A8: the CONTINUING attachment — same shape, `LOAD` instead of `CLEAR`. Split out so a recording
+    // body can serve both the first draw of a pass and every later one without duplicating the attachment setup.
+    static VkRenderingAttachmentInfo colour_load_attachment(VkImageView view)
+    {
+        VkRenderingAttachmentInfo att{};
+        att.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att.imageView   = view;
+        att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        att.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
+        att.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+        return att;
+    }
+
     static VkRenderingAttachmentInfo colour_clear_attachment(VkImageView view, ClearColor c)
     {
         VkRenderingAttachmentInfo att{};
@@ -3690,6 +4797,15 @@ private:
         // `tessellationShader` (B4-tess), vkCmdDraw requires the tess stages to be PROVIDED to vkCmdBindShadersEXT —
         // VK_NULL_HANDLE for non-tessellation draws. Bound here (before every per-draw shader bind) so a tess draw's
         // later real tcs/tes bind simply overrides the nulls.
+        // ⛔ REN-38-A11: the SAME rule, one feature over. Enabling `geometryShader` — which a visibility buffer
+        // FORCES, because `gl_PrimitiveID` in a fragment shader declares the Geometry SPIR-V capability — makes
+        // vkCmdDraw require the GEOMETRY stage to be provided too. Binding null here means no draw has to know.
+        if (m_ctx->geometry_shader())
+        {
+            const VkShaderStageFlagBits geom_stage[1] = {VK_SHADER_STAGE_GEOMETRY_BIT};
+            const VkShaderEXT           geom_null[1]  = {VK_NULL_HANDLE};
+            m_api.bind(cmd, 1U, geom_stage, geom_null);
+        }
         if (m_ctx->tessellation())
         {
             const VkShaderStageFlagBits tess_stages[2] = {VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT,
@@ -3887,8 +5003,18 @@ private:
         // Colour attachment. Single-sample doubles as the readback source (transfer-src); MSAA is attachment-only (resolved).
         // `color_fmt` is normally RGBA8; the B4-vis-4 visibility buffer passes VK_FORMAT_R32_UINT (read_pixel returns the id).
         ImageBundle color{};
+        // ⛔ REN-38-A6: TRANSFER_DST too. A colour target is a legal DESTINATION for `copy_image` / `blit_image`
+        // / `resolve_image`, and Vulkan enforces that at both the copy AND the barrier: without this flag
+        // `vkCmdBlitImage` is VUID-vkCmdBlitImage-dstImage-00224 and even the TRANSFER_DST_OPTIMAL transition is
+        // VUID-VkImageMemoryBarrier-oldLayout-01213. ⛔ It is not free — declaring transfer-dst can cost a
+        // driver's attachment compression on some hardware — but a target that cannot be copied INTO makes the
+        // whole utility-pass vocabulary unusable, and the alternative (guessing at creation which targets will
+        // ever be copy destinations) is exactly the kind of hidden coupling this codebase refuses.
+        // MSAA colour stays attachment-only: it is resolved, never copied into.
         const VkImageUsageFlags color_usage =
-            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | (ms ? 0U : static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_SRC_BIT));
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+            | (ms ? 0U
+                  : static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT));
         if (!create_image_bundle(width, height, sc, color_fmt, VK_IMAGE_ASPECT_COLOR_BIT, color_usage, color))
         {
             return nullptr;
@@ -3985,6 +5111,46 @@ private:
     PFN_vkCmdSetConservativeRasterizationModeEXT m_set_conservative = nullptr; // B1-f: null unless conservative raster on
     PFN_vkCmdSetExtraPrimitiveOverestimationSizeEXT m_set_overest_size = nullptr; // B1-f: companion overestimate dyn-state
     VkDescriptorSetLayout                m_storage_set_layout = VK_NULL_HANDLE; // material set 0: storage(0)+image(1)+sampler(2)
+    // ── REN-38-A2: compute inside the frame graph. A SEPARATE set layout (COMPUTE-visible, N storage buffers)
+    // and a tiny pipeline cache keyed on the shader MODULE — a kernel is dispatched every frame, so building its
+    // pipeline per dispatch would put a `vkCreateComputePipelines` in the hot path.
+    VkDescriptorSetLayout                m_compute_set_layout  = VK_NULL_HANDLE;
+    VkPipelineLayout                     m_compute_pipe_layout = VK_NULL_HANDLE;
+    VkShaderModule                       m_kernel_key[kKernelPsoCap]{};
+    VkPipeline                           m_kernel_pso[kKernelPsoCap]{};
+    crd::u32                             m_kernel_n = 0U;
+    // REN-38-A9: the RAY-QUERY layout (binding 0 = TLAS) and its own pipeline cache — see `rt_kernel_pipeline`
+    // for why the caches must not be shared.
+    VkDescriptorSetLayout                m_rt_set_layout  = VK_NULL_HANDLE;
+    VkPipelineLayout                     m_rt_pipe_layout = VK_NULL_HANDLE;
+    VkShaderModule                       m_rt_pso_key[kKernelPsoCap]{};
+    VkPipeline                           m_rt_pso[kKernelPsoCap]{};
+    crd::u32                             m_rt_pso_n = 0U;
+
+    [[nodiscard]] VkPipeline kernel_pipeline(VkShaderModule mod)
+    {
+        for (crd::u32 i = 0; i < m_kernel_n; ++i)
+        {
+            if (m_kernel_key[i] == mod) { return m_kernel_pso[i]; }
+        }
+        if (m_kernel_n >= kKernelPsoCap || m_compute_pipe_layout == VK_NULL_HANDLE) { return VK_NULL_HANDLE; }
+        VkComputePipelineCreateInfo cpci{};
+        cpci.sType        = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        cpci.stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        cpci.stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+        cpci.stage.module = mod;
+        cpci.stage.pName  = "main";
+        cpci.layout       = m_compute_pipe_layout;
+        VkPipeline pipe = VK_NULL_HANDLE;
+        if (vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1U, &cpci, nullptr, &pipe) != VK_SUCCESS)
+        {
+            return VK_NULL_HANDLE;
+        }
+        m_kernel_key[m_kernel_n] = mod;
+        m_kernel_pso[m_kernel_n] = pipe;
+        ++m_kernel_n;
+        return pipe;
+    }
     VkDescriptorPool                     m_desc_pool          = VK_NULL_HANDLE; // pool for draw_storage / draw_textured sets
     VkSampler                            m_default_sampler    = VK_NULL_HANDLE; // B2: the default bilinear/repeat sampler
     VkSampler                            m_cmp_sampler        = VK_NULL_HANDLE; // B2-b: comparison sampler (shadow)
@@ -3996,17 +5162,22 @@ private:
         VkCommandBuffer  cmd         = VK_NULL_HANDLE; // the frame's one command buffer (owned by the graph)
         VkDescriptorPool pool        = VK_NULL_HANDLE; // the graph's per-frame descriptor pool (reset once/frame)
         VkImage          pass_last   = VK_NULL_HANDLE; // last target drawn in the CURRENT pass (self-barrier key)
+        // ⛔ REN-38-A14: is this the ASYNC-COMPUTE command buffer? A compute-only queue REJECTS graphics pipeline
+        // stages in a barrier (VUID-vkCmdPipelineBarrier-dstStageMask-...), so a barrier that is correct on the
+        // graphics queue is INVALID here. The recording body must know which queue it is writing for.
+        bool             async       = false;
     };
     FrameRec m_frame_rec{};
 
 public:
     // REN-1: the frame graph brackets a frame's recording with these (defined in the anon namespace's
     // VulkanFrameGraph). While recording, draw_storage_depth / _load / draw_overlay record into `cmd`.
-    void frame_rec_begin(VkCommandBuffer cmd, VkDescriptorPool pool) noexcept
+    void frame_rec_begin(VkCommandBuffer cmd, VkDescriptorPool pool, bool async = false) noexcept
     {
         m_frame_rec.cmd = cmd;
         m_frame_rec.pool = pool;
         m_frame_rec.pass_last = VK_NULL_HANDLE;
+        m_frame_rec.async = async;
     }
     void frame_rec_new_pass() noexcept { m_frame_rec.pass_last = VK_NULL_HANDLE; } // clear the self-barrier key
     void frame_rec_end() noexcept { m_frame_rec = FrameRec{}; }
@@ -4017,6 +5188,142 @@ public:
     void frame_readback(VkCommandBuffer cmd, IRasterTarget& target)
     {
         copy_colour_to_readback(cmd, static_cast<VulkanRasterTarget&>(target));
+    }
+
+    // REN-38-A6: the readback for a target the frame left in some OTHER layout — a transfer pass's destination
+    // ends in TRANSFER_DST, not COLOR_ATTACHMENT, and a readback that assumed the attachment layout would move
+    // the image out of a layout it is not in (undefined contents, not an error, on an unvalidated driver).
+    void frame_readback_from(VkCommandBuffer cmd, IRasterTarget& target, VkImageLayout from)
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        if (from != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+        {
+            transition(cmd, t.image(), from, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_MEMORY_WRITE_BIT,
+                       VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT);
+        }
+        VkBufferImageCopy region{};
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.layerCount = 1U;
+        region.imageExtent                 = {t.width(), t.height(), 1U};
+        vkCmdCopyImageToBuffer(cmd, t.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, t.readback(), 1U, &region);
+    }
+
+    // ── ⭐ REN-38-A6: THE TRANSFER VERBS. ──
+    // Inside a frame the LAYOUTS ARE THE GRAPH'S: a `FgPassKind::Transfer` pass has already moved `dst` to
+    // TRANSFER_DST and `src` to TRANSFER_SRC before the body runs, so the body is the copy command and nothing
+    // else. Outside a frame this owns the whole begin → transition → copy → restore → submit cycle, exactly like
+    // every other synchronous verb.
+    enum class XferOp : crd::u8 { Copy = 0, Blit, Resolve };
+
+    void emit_xfer(VkCommandBuffer cmd, VulkanRasterTarget& dst, VulkanRasterTarget& src, XferOp op,
+                   BlitFilter filter)
+    {
+        VkImageSubresourceLayers sub{};
+        sub.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        sub.layerCount = 1U;
+        if (op == XferOp::Blit)
+        {
+            VkImageBlit b{};
+            b.srcSubresource = sub;
+            b.dstSubresource = sub;
+            b.srcOffsets[1]  = {static_cast<crd::i32>(src.width()), static_cast<crd::i32>(src.height()), 1};
+            b.dstOffsets[1]  = {static_cast<crd::i32>(dst.width()), static_cast<crd::i32>(dst.height()), 1};
+            vkCmdBlitImage(cmd, src.src_image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst.image(),
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1U, &b,
+                           filter == BlitFilter::Linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+            return;
+        }
+        if (op == XferOp::Resolve)
+        {
+            VkImageResolve r{};
+            r.srcSubresource = sub;
+            r.dstSubresource = sub;
+            r.extent         = {dst.width(), dst.height(), 1U};
+            // ⛔ The MULTISAMPLE image itself, NOT `src_image()`: `src_image()` already returns the RESOLVE
+            // attachment for a multisampled target, so resolving that would be a no-op that looks like it worked.
+            vkCmdResolveImage(cmd, src.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst.image(),
+                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1U, &r);
+            return;
+        }
+        VkImageCopy c{};
+        c.srcSubresource = sub;
+        c.dstSubresource = sub;
+        c.extent         = {dst.width(), dst.height(), 1U};
+        vkCmdCopyImage(cmd, src.src_image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst.image(),
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1U, &c);
+    }
+
+    // The SYNCHRONOUS path: own the layouts end to end and leave both targets where the rest of the context
+    // expects them — the SOURCE back in COLOR_ATTACHMENT (a copy is almost always followed by more work on the
+    // thing that was copied), and a readback copy for `dst` so `read_pixel` is valid the instant the call
+    // returns, the same affordance every other synchronous verb provides.
+    void sync_xfer(IRasterTarget& dst_t, IRasterTarget& src_t, XferOp op, BlitFilter filter)
+    {
+        auto& dst = static_cast<VulkanRasterTarget&>(dst_t);
+        auto& src = static_cast<VulkanRasterTarget&>(src_t);
+        if (!m_api.valid()) { return; }
+        VkCommandBuffer cmd = begin_cmd();
+        if (cmd == VK_NULL_HANDLE) { return; }
+        const VkImage src_img = op == XferOp::Resolve ? src.image() : src.src_image();
+        transition(cmd, src_img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 0,
+                   VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        transition(cmd, dst.image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+                   VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        emit_xfer(cmd, dst, src, op, filter);
+        transition(cmd, src_img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                   VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        transition(cmd, dst.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                   VK_PIPELINE_STAGE_TRANSFER_BIT);
+        VkBufferImageCopy region{};
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.layerCount = 1U;
+        region.imageExtent                 = {dst.width(), dst.height(), 1U};
+        vkCmdCopyImageToBuffer(cmd, dst.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst.readback(), 1U, &region);
+        end_and_wait(cmd);
+    }
+
+    void copy_image(IRasterTarget& dst, IRasterTarget& src) override
+    {
+        // ⛔ A MISMATCH IS A NO-OP, never a partial copy: `vkCmdCopyImage` with an extent larger than either
+        // image is undefined behaviour, and copying only the overlapping region reads back as a plausible image.
+        if (dst.width() != src.width() || dst.height() != src.height()) { return; }
+        if (frame_recording())
+        {
+            emit_xfer(m_frame_rec.cmd, static_cast<VulkanRasterTarget&>(dst), static_cast<VulkanRasterTarget&>(src),
+                      XferOp::Copy, BlitFilter::Nearest);
+            return;
+        }
+        sync_xfer(dst, src, XferOp::Copy, BlitFilter::Nearest);
+    }
+
+    void blit_image(IRasterTarget& dst, IRasterTarget& src, BlitFilter filter) override
+    {
+        if (frame_recording())
+        {
+            emit_xfer(m_frame_rec.cmd, static_cast<VulkanRasterTarget&>(dst), static_cast<VulkanRasterTarget&>(src),
+                      XferOp::Blit, filter);
+            return;
+        }
+        sync_xfer(dst, src, XferOp::Blit, filter);
+    }
+
+    void resolve_image(IRasterTarget& dst, IRasterTarget& src) override
+    {
+        if (dst.width() != src.width() || dst.height() != src.height()) { return; }
+        // ⛔ A SINGLE-SAMPLE source is REJECTED rather than quietly degraded to a copy: the author asked for a
+        // resolve, so a non-multisampled source means the graph declared the wrong sample count — and silently
+        // copying would make that authoring mistake produce a correct-looking aliased image.
+        if (!static_cast<VulkanRasterTarget&>(src).multisampled()) { return; }
+        if (frame_recording())
+        {
+            emit_xfer(m_frame_rec.cmd, static_cast<VulkanRasterTarget&>(dst), static_cast<VulkanRasterTarget&>(src),
+                      XferOp::Resolve, BlitFilter::Nearest);
+            return;
+        }
+        sync_xfer(dst, src, XferOp::Resolve, BlitFilter::Nearest);
     }
 
     // REN-1: the frame graph (defined out-of-line after VulkanFrameGraph, which needs this class complete).
@@ -4072,13 +5379,17 @@ public:
         // a large per-frame descriptor pool the passes allocate storage sets from (reset once per execute). The
         // shared set-0 layout carries storage(0) + sampled image(1) + sampler(2) + a bindless array(3), so the
         // pool must supply all four types (else vkAllocateDescriptorSets validation-warns) — sized ×kFrameSets.
-        VkDescriptorPoolSize dps[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kFrameSets},
+        // ⛔ REN-38-A9: the ACCELERATION-STRUCTURE type too. A pool that does not list a type cannot allocate a
+        // set whose layout uses it — the ray-tracing set failed to allocate and the trace pass silently did
+        // nothing, with only a validation warning to say so.
+        VkDescriptorPoolSize dps[4] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kFrameSets * (kBindlessMax + 1U)},
                                        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kFrameSets * (kBindlessMax + 1U)},
-                                       {VK_DESCRIPTOR_TYPE_SAMPLER, kFrameSets}};
+                                       {VK_DESCRIPTOR_TYPE_SAMPLER, kFrameSets},
+                                       {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, kFrameSets}};
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         dpci.maxSets       = kFrameSets;
-        dpci.poolSizeCount = 3U;
+        dpci.poolSizeCount = 4U;
         dpci.pPoolSizes    = dps;
         for (crd::u32 s = 0; s < kFramesInFlight; ++s)
         {
@@ -4112,6 +5423,17 @@ public:
     {
         // ⛔ never tear down a pool/fence, or free a transient, with work still in flight — drain EVERY slot
         wait_all_slots();
+        // REN-38-A14: the ASYNC submission has its own fence and is NOT covered by `wait_all_slots()` (which only
+        // drains the graphics slots) — tearing its pool down while the compute queue still reads it is a
+        // use-after-free that would look like a driver crash.
+        // ⛔⛔ ONLY WHEN SOMETHING WAS ACTUALLY SUBMITTED. A fence that was created and never submitted is
+        // UNSIGNALLED, so an unconditional `vkWaitForFences(..., UINT64_MAX)` blocks FOREVER — and the objects are
+        // created lazily on the first execute() of any graph on a device with a distinct compute family, so this
+        // hung EVERY frame-graph teardown, whether or not the asset ever asked for the async queue.
+        if (m_async_submitted) { vkWaitForFences(m_device, 1U, &m_async_fence, VK_TRUE, ~0ULL); }
+        if (m_async_done != VK_NULL_HANDLE) { vkDestroySemaphore(m_device, m_async_done, nullptr); }
+        if (m_async_fence != VK_NULL_HANDLE) { vkDestroyFence(m_device, m_async_fence, nullptr); }
+        if (m_async_pool != VK_NULL_HANDLE) { vkDestroyCommandPool(m_device, m_async_pool, nullptr); }
         free_transients();
         // REN-37.5: the persistent registry is the one thing `reset()` never touches, so the DESTRUCTOR is the
         // only place it is released. Ordered after `wait_all_slots()` for the same reason transients are.
@@ -4352,8 +5674,22 @@ public:
         VkBufferCreateInfo bci{};
         bci.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         bci.size        = size_bytes;
-        bci.usage       = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-        bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        // ⛔ REN-38-A10: INDIRECT_BUFFER too. A transient is exactly what a cull pass writes and a later pass
+        // consumes as draw/dispatch ARGUMENTS, and Vulkan refuses `vkCmdDispatchIndirect` on a buffer created
+        // without this flag — which cannot be added afterwards. Declaring it on every transient costs nothing
+        // (usage flags are not an allocation) and removes a creation-time decision the graph could get wrong.
+        bci.usage       = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT
+                          | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+        // ⛔⛔ REN-38-A14: CONCURRENT across the graphics + compute families when they differ. A buffer an
+        // async-compute pass WRITES and a graphics pass READS crosses a queue family, and an EXCLUSIVE buffer
+        // requires an explicit OWNERSHIP TRANSFER (a release barrier on one queue paired with an acquire on the
+        // other) for that to be defined. Concurrent trades a little bandwidth on some hardware for removing an
+        // entire class of "corrupt about once a week" bug — a trade this codebase takes deliberately, and states.
+        crd::u32       fams[2] = {m_rc->frame_ctx().graphics_family(), m_rc->frame_ctx().compute_family()};
+        const bool     split   = fams[0] != fams[1];
+        bci.sharingMode           = split ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE;
+        bci.queueFamilyIndexCount = split ? 2U : 0U;
+        bci.pQueueFamilyIndices   = split ? static_cast<const crd::u32*>(fams) : nullptr;
         if (vkCreateBuffer(m_device, &bci, nullptr, &n.vkbuf) != VK_SUCCESS) { return FgBuffer{0U}; }
         vkGetBufferMemoryRequirements(m_device, n.vkbuf, &n.mem_req);
         m_buffers.push_back(n);
@@ -4390,6 +5726,49 @@ public:
 
     [[nodiscard]] crd::u32 last_barrier_count() const noexcept override { return m_barrier_count; }
     [[nodiscard]] crd::u32 last_submit_count() const noexcept override { return m_submit_count; }
+    [[nodiscard]] crd::u32 last_present_count() const noexcept override { return m_present_count; }
+    [[nodiscard]] crd::u32 last_async_pass_count() const noexcept override { return m_async_pass_count; }
+
+    // REN-38-A14: does any pass in the built order actually get the compute queue? (`build()` answered this.)
+    [[nodiscard]] bool async_pass_pending() const noexcept
+    {
+        for (const crd::u32 i : m_order)
+        {
+            if (m_passes[i].on_async) { return true; }
+        }
+        return false;
+    }
+
+    // The async command pool / buffer / semaphore — built ONCE, lazily, on the COMPUTE family. ⛔ A command buffer
+    // must come from a pool created for the family it is submitted to; allocating from the graphics pool and
+    // submitting to the compute queue is undefined, not merely slow.
+    [[nodiscard]] bool ensure_async_objects()
+    {
+        if (m_async_cmd != VK_NULL_HANDLE) { return true; }
+        VulkanGpuContext& ctx = m_rc->frame_ctx();
+        if (ctx.compute_family() == ctx.graphics_family() || ctx.compute_queue() == VK_NULL_HANDLE) { return false; }
+        VkCommandPoolCreateInfo pci{};
+        pci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        pci.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        pci.queueFamilyIndex = ctx.compute_family();
+        if (vkCreateCommandPool(m_device, &pci, nullptr, &m_async_pool) != VK_SUCCESS) { return false; }
+        VkCommandBufferAllocateInfo cai{};
+        cai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cai.commandPool        = m_async_pool;
+        cai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cai.commandBufferCount = 1U;
+        if (vkAllocateCommandBuffers(m_device, &cai, &m_async_cmd) != VK_SUCCESS) { return false; }
+        VkSemaphoreCreateInfo sci{};
+        sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        VkFenceCreateInfo fci{};
+        fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        if (vkCreateSemaphore(m_device, &sci, nullptr, &m_async_done) != VK_SUCCESS
+            || vkCreateFence(m_device, &fci, nullptr, &m_async_fence) != VK_SUCCESS)
+        {
+            return false;
+        }
+        return true;
+    }
     [[nodiscard]] crd::u32 transient_memory_bytes() const noexcept override { return m_physical_bytes; }
     [[nodiscard]] crd::u32 transient_logical_bytes() const noexcept override { return m_logical_bytes; }
 
@@ -4508,6 +5887,8 @@ private:
         FgExecuteFn      fn    = nullptr;
         void*            user  = nullptr;
         IPresentSurface* present = nullptr;
+        FgQueue          want_queue = FgQueue::Graphics; // REN-38-A14: the REQUEST (see `on_async` for the answer)
+        bool             on_async   = false;             // … and whether the graph granted it
     };
 
     // a fluent builder that rebinds to the current pass (one instance reused — add_pass returns it)
@@ -4532,6 +5913,11 @@ private:
             m_g->m_passes[m_pass].present = &surface;
             return *this;
         }
+        IFramePassBuilder& queue(FgQueue q) override
+        {
+            m_g->m_passes[m_pass].want_queue = q;
+            return *this;
+        }
     private:
         void add_img(FgImage h, FgAccess a) { m_g->m_passes[m_pass].img_access.push_back({h.id, a}); }
         void add_buf(FgBuffer h, FgAccess a) { m_g->m_passes[m_pass].buf_access.push_back({h.id, a}); }
@@ -4548,16 +5934,22 @@ private:
         return 0xFFFFFFFFU;
     }
 
+    static constexpr VkImageUsageFlags kColourXferUsage =
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+
     static VkFormat to_vk_format(FgImageFormat f, VkImageUsageFlags& usage, VkImageAspectFlags& aspect) noexcept
     {
         switch (f)
         {
-        case FgImageFormat::RGBA8Unorm: usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R8G8B8A8_UNORM;
-        case FgImageFormat::RGBA8Srgb:  usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R8G8B8A8_SRGB;
-        case FgImageFormat::RGBA16F:    usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R16G16B16A16_SFLOAT;
-        case FgImageFormat::R16F:       usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R16_SFLOAT;
-        case FgImageFormat::R32F:       usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R32_SFLOAT;
-        case FgImageFormat::R32Uint:    usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R32_UINT;
+        // ⛔ REN-38-A6: EVERY colour transient carries TRANSFER_SRC|TRANSFER_DST. A transient is exactly what a
+        // copy/blit/resolve pass names on both sides (`hires → half → @output`), and Vulkan enforces the usage at
+        // the barrier as well as at the copy — so the flags cannot be added lazily when a copy shows up.
+        case FgImageFormat::RGBA8Unorm: usage = kColourXferUsage; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R8G8B8A8_UNORM;
+        case FgImageFormat::RGBA8Srgb:  usage = kColourXferUsage; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R8G8B8A8_SRGB;
+        case FgImageFormat::RGBA16F:    usage = kColourXferUsage; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R16G16B16A16_SFLOAT;
+        case FgImageFormat::R16F:       usage = kColourXferUsage; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R16_SFLOAT;
+        case FgImageFormat::R32F:       usage = kColourXferUsage; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R32_SFLOAT;
+        case FgImageFormat::R32Uint:    usage = kColourXferUsage; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R32_UINT;
         case FgImageFormat::D32Float:
         default:                        usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT; aspect = VK_IMAGE_ASPECT_DEPTH_BIT; return VK_FORMAT_D32_SFLOAT;
         }
@@ -4703,6 +6095,13 @@ private:
 
     crd::u32 m_barrier_count  = 0U;
     crd::u32 m_submit_count   = 0U;
+    crd::u32 m_present_count  = 0U; // REN-38-A5: present passes that ACTUALLY presented last execute()
+    crd::u32 m_async_pass_count = 0U; // REN-38-A14: passes that ACTUALLY ran on the async-compute queue
+    VkCommandPool   m_async_pool = VK_NULL_HANDLE;
+    VkCommandBuffer m_async_cmd  = VK_NULL_HANDLE;
+    VkSemaphore     m_async_done = VK_NULL_HANDLE;
+    VkFence         m_async_fence = VK_NULL_HANDLE;
+    bool            m_async_submitted = false; // ⛔ an unsubmitted fence is UNSIGNALLED — never wait on one
     // REN-8: device timestamp queries around each pass
     VkQueryPool                             m_ts_pool   = VK_NULL_HANDLE;
     double                                  m_ts_period = 1.0; // ns per tick
@@ -4721,12 +6120,23 @@ private:
 class VulkanTransientBuffer final : public IStorageBuffer
 {
 public:
-    explicit VulkanTransientBuffer(crd::u32 size) noexcept : m_size(size) {}
+    // ⛔ REN-38-A10: it carries the REAL `VkBuffer`. Before this it was a size-only stub, so a pass handed a
+    // transient could not bind it, dispatch from it, or read it — only ask how big it was.
+    VulkanTransientBuffer(crd::u32 size, VkBuffer buf) noexcept : m_size(size), m_buf(buf) {}
     [[nodiscard]] crd::u32 size_bytes() const noexcept override { return m_size; }
-    [[nodiscard]] crd::u32 read_u32(crd::u32) const noexcept override { return 0U; }
+    [[nodiscard]] crd::u32 read_u32(crd::u32) const noexcept override { return 0U; } // graph memory is not host-visible
+    [[nodiscard]] VkBuffer buf() const noexcept { return m_buf; }
 private:
     crd::u32 m_size = 0;
+    VkBuffer m_buf  = VK_NULL_HANDLE;
 };
+
+VkBuffer vk_buffer_of(IStorageBuffer& b) noexcept
+{
+    if (auto* s = dynamic_cast<VulkanStorageBuffer*>(&b)) { return s->buf(); }
+    if (auto* t = dynamic_cast<VulkanTransientBuffer*>(&b)) { return t->buf(); }
+    return VK_NULL_HANDLE;
+}
 
 bool VulkanFrameGraph::build()
 {
@@ -4804,6 +6214,47 @@ bool VulkanFrameGraph::build()
             {
                 if (edges[static_cast<crd::usize>(pick) * np + t] != 0U && indeg[t] != 0xFFFFFFFFU) { --indeg[t]; }
             }
+        }
+    }
+
+    // ── ⭐ REN-38-A14: WHICH ASYNC REQUESTS THE GRAPH CAN HONOUR. Decided here, once, from the sorted order. ──
+    // ⛔ A pass may only move to the compute queue when it CONSUMES NOTHING a graphics pass produces. The moment
+    // it does, the two queues need a per-resource OWNERSHIP TRANSFER on Vulkan — an acquire/release barrier pair
+    // on both sides, for every resource — and getting one of those subtly wrong is a corruption bug that
+    // reproduces about once a week. Declining is not a shortcut: it is the difference between a frame that is
+    // slower than it could be and a frame that is WRONG, and the graph REPORTS which it chose.
+    //
+    // ⛔ The check is on the SORTED order, not the declared one: "produced by an earlier pass" only means
+    // anything in execution order, which is exactly the mistake the transient-lifetime analysis below also had.
+    {
+        const bool have_async_family = m_rc->frame_ctx().compute_family() != m_rc->frame_ctx().graphics_family()
+                                       && m_rc->frame_ctx().compute_queue() != VK_NULL_HANDLE;
+        for (crd::usize oi = 0; oi < m_order.size(); ++oi)
+        {
+            Pass& p = m_passes[m_order[oi]];
+            p.on_async = false;
+            if (p.want_queue != FgQueue::Async || !have_async_family) { continue; }
+            bool consumes_graphics = false;
+            for (crd::usize prev = 0; prev < oi && !consumes_graphics; ++prev)
+            {
+                const Pass& q = m_passes[m_order[prev]];
+                if (q.want_queue == FgQueue::Async) { continue; } // an earlier ASYNC pass is on the same queue
+                for (const Access& a : p.img_access)
+                {
+                    for (const Access& b : q.img_access)
+                    {
+                        if (a.handle == b.handle && b.access != FgAccess::Read) { consumes_graphics = true; }
+                    }
+                }
+                for (const Access& a : p.buf_access)
+                {
+                    for (const Access& b : q.buf_access)
+                    {
+                        if (a.handle == b.handle && b.access != FgAccess::Read) { consumes_graphics = true; }
+                    }
+                }
+            }
+            p.on_async = !consumes_graphics;
         }
     }
 
@@ -5024,7 +6475,7 @@ bool VulkanFrameGraph::build_tail(crd::u32 img_slot_end, crd::containers::Array<
         s.free_after = n.last_pass;
         n.slot       = chosen;
         vkBindBufferMemory(m_device, n.vkbuf, s.memory, 0);
-        n.buffer = new VulkanTransientBuffer(n.size);
+        n.buffer = new VulkanTransientBuffer(n.size, n.vkbuf);
     }
 
     return true;
@@ -5060,13 +6511,51 @@ void VulkanFrameGraph::execute()
     m_frame_desc_pool = fs.pool;
     m_ts_pool         = fs.ts;
     wait_pending_submit();
-    m_submit_count = 0U;
+    m_submit_count     = 0U;
+    m_present_count    = 0U;
+    m_async_pass_count = 0U;
     vkResetDescriptorPool(m_device, m_frame_desc_pool, 0);
     vkResetCommandBuffer(m_cmd, 0);
     VkCommandBufferBeginInfo bi{};
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(m_cmd, &bi);
+
+    // ── ⭐ REN-38-A14: THE ASYNC-COMPUTE SUBMISSION. ──
+    // Async-eligible passes are recorded into their OWN command buffer on the compute family and submitted FIRST,
+    // signalling a semaphore the graphics submission then waits on. ⛔ Order is not a choice here: `build()` only
+    // marks a pass async when it consumes nothing a graphics pass produces, so "compute first, graphics waits" is
+    // the ONLY dependency direction that can exist — which is exactly why that restriction is worth its cost.
+    //
+    // ⛔ THIS BREAKS THE ONE-SUBMISSION INVARIANT ON PURPOSE, and only when an asset asks. `last_submit_count()`
+    // still counts the GRAPHICS submission (every REN-1 gate keeps its meaning); the async work is reported
+    // separately by `last_async_pass_count()`, so "we overlapped" and "we serialised" can never look alike.
+    const bool any_async = ensure_async_objects() && async_pass_pending();
+    if (any_async)
+    {
+        vkResetCommandBuffer(m_async_cmd, 0);
+        vkBeginCommandBuffer(m_async_cmd, &bi);
+        m_rc->frame_rec_begin(m_async_cmd, m_frame_desc_pool, /*async=*/true);
+        for (const crd::u32 pass_idx : m_order)
+        {
+            Pass& p = m_passes[pass_idx];
+            if (!p.on_async || p.fn == nullptr) { continue; }
+            m_rc->frame_rec_new_pass();
+            p.fn(*this, p.user);
+            ++m_async_pass_count;
+        }
+        m_rc->frame_rec_end();
+        vkEndCommandBuffer(m_async_cmd);
+        VkSubmitInfo asi{};
+        asi.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        asi.commandBufferCount   = 1U;
+        asi.pCommandBuffers      = &m_async_cmd;
+        asi.signalSemaphoreCount = 1U;
+        asi.pSignalSemaphores    = &m_async_done;
+        vkResetFences(m_device, 1U, &m_async_fence);
+        vkQueueSubmit(m_rc->frame_ctx().compute_queue(), 1U, &asi, m_async_fence);
+        m_async_submitted = true;
+    }
 
     m_rc->frame_rec_begin(m_cmd, m_frame_desc_pool);
     // Every FRAME-LOCAL node starts the frame undefined: a transient is a brand-new image and an imported
@@ -5152,29 +6641,52 @@ void VulkanFrameGraph::execute()
                 }
                 continue;
             }
+            // ── ⭐ REN-38-A6: THE LAYOUT A PASS WANTS COMES FROM ITS KIND, not from read-vs-write alone. ──
+            // A TRANSFER pass (copy / blit / resolve) needs TRANSFER_DST for what it writes and TRANSFER_SRC for
+            // what it reads. ⛔ Deriving the layout from access alone would have handed `vkCmdCopyImage` a
+            // destination in COLOR_ATTACHMENT_OPTIMAL — undefined contents on drivers that do not validate,
+            // which is a corrupted image rather than a crash.
+            const bool xfer = (p.kind == FgPassKind::Transfer);
+            const VkImageLayout want_w = xfer ? VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+                                              : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            const VkImageLayout want_r = xfer ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+                                              : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            const VkAccessFlags acc_w = xfer ? VK_ACCESS_TRANSFER_WRITE_BIT
+                                             : (VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT);
+            const VkAccessFlags acc_r = xfer ? VK_ACCESS_TRANSFER_READ_BIT : VK_ACCESS_SHADER_READ_BIT;
+            const VkPipelineStageFlags stg_w = xfer ? VK_PIPELINE_STAGE_TRANSFER_BIT
+                                                    : VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            const VkPipelineStageFlags stg_r = xfer ? VK_PIPELINE_STAGE_TRANSFER_BIT
+                                                    : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
             if (graph_owned(n)) // REN-2: an RTT image — render into it (COLOR_ATTACHMENT), then a later pass SAMPLES it
             {
                 auto& tt = static_cast<VulkanRasterTarget&>(*n.target);
-                if (writes && live_layout(n) != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                if (writes && live_layout(n) != want_w)
                 {
-                    img_barrier(tt.image(), VK_IMAGE_ASPECT_COLOR_BIT, live_layout(n),
-                                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT,
-                                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-                    live_layout(n) = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    img_barrier(tt.image(), VK_IMAGE_ASPECT_COLOR_BIT, live_layout(n), want_w, acc_w, stg_w);
+                    live_layout(n) = want_w;
                 }
-                else if (!writes && live_layout(n) == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                else if (!writes && live_layout(n) != want_r)
                 {
-                    // the RTT barrier: the render pass's writes complete → this pass samples it
-                    img_barrier(tt.image(), VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_SHADER_READ_BIT,
-                                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
-                    live_layout(n) = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    // the RTT barrier: the render pass's writes complete → this pass samples (or copies) it
+                    img_barrier(tt.image(), VK_IMAGE_ASPECT_COLOR_BIT, live_layout(n), want_r, acc_r, stg_r);
+                    live_layout(n) = want_r;
                 }
                 continue;
             }
             auto& t = static_cast<VulkanRasterTarget&>(*n.target);
             if (p.present != nullptr) { continue; } // present-pass reads → the final readback loop transitions
+            if (xfer) // an IMPORTED target inside a transfer pass — same rule, no attachment special-casing
+            {
+                const VkImageLayout want = writes ? want_w : want_r;
+                if (live_layout(n) != want)
+                {
+                    img_barrier(t.image(), VK_IMAGE_ASPECT_COLOR_BIT, live_layout(n), want, writes ? acc_w : acc_r,
+                                writes ? stg_w : stg_r);
+                    live_layout(n) = want;
+                }
+                continue;
+            }
             if (writes)
             {
                 if (live_layout(n) != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
@@ -5206,7 +6718,9 @@ void VulkanFrameGraph::execute()
         // a submission-relative wall-clock.
         const bool stamp = m_ts_pool != VK_NULL_HANDLE && pass_index < kMaxTimedPasses;
         if (stamp) { vkCmdWriteTimestamp(m_cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_ts_pool, pass_index * 2U); }
-        if (p.fn != nullptr) { p.fn(*this, p.user); }
+        // REN-38-A14: an async pass was already recorded into the compute command buffer above. Its BARRIERS still
+        // run here, on the graphics side, because that is where its consumers are.
+        if (p.fn != nullptr && !p.on_async) { p.fn(*this, p.user); }
         if (stamp)
         {
             vkCmdWriteTimestamp(m_cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_ts_pool, pass_index * 2U + 1U);
@@ -5221,12 +6735,16 @@ void VulkanFrameGraph::execute()
     {
         // Only APPLICATION-owned targets have a readback buffer — every graph-owned wrapper is a view over
         // graph memory built with an empty BufferBundle, and `read_pixel` is only ever about imported targets.
-        if (!graph_owned(n) && n.target != nullptr && n.layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+        // ⛔ REN-38-A6: any layout that is not already TRANSFER_SRC, not just COLOR_ATTACHMENT. A transfer
+        // pass leaves its destination in TRANSFER_DST, and the old `== COLOR_ATTACHMENT` test skipped it — so a
+        // frame whose LAST write was a copy read back the target's PREVIOUS contents. Green everywhere, wrong.
+        if (!graph_owned(n) && n.target != nullptr && n.layout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+            && n.layout != VK_IMAGE_LAYOUT_UNDEFINED)
         {
             if (m_readback)
             {
-                m_rc->frame_readback(m_cmd, *n.target);
-                ++m_barrier_count; // copy_colour_to_readback inserts a COLOR→TRANSFER_SRC barrier
+                m_rc->frame_readback_from(m_cmd, *n.target, n.layout);
+                ++m_barrier_count; // the readback inserts a <live layout>→TRANSFER_SRC barrier
             }
             else
             {
@@ -5238,8 +6756,8 @@ void VulkanFrameGraph::execute()
                 // This went unnoticed because every GATE runs with readback ON — only the sandbox, which turns
                 // it off, was affected, and only under validation. Cheap fix: the barrier without the copy.
                 img_barrier(static_cast<VulkanRasterTarget&>(*n.target).image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                            VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+                            n.layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_TRANSFER_READ_BIT,
+                            VK_PIPELINE_STAGE_TRANSFER_BIT);
             }
             n.layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         }
@@ -5251,6 +6769,14 @@ void VulkanFrameGraph::execute()
     si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     si.commandBufferCount = 1U;
     si.pCommandBuffers    = &m_cmd;
+    // REN-38-A14: wait for the async-compute submission before ANY graphics work touches what it wrote.
+    const VkPipelineStageFlags async_wait = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    if (m_async_pass_count > 0U)
+    {
+        si.waitSemaphoreCount = 1U;
+        si.pWaitSemaphores    = &m_async_done;
+        si.pWaitDstStageMask  = &async_wait;
+    }
     vkResetFences(m_device, 1U, &m_fence);
     vkQueueSubmit(m_queue, 1U, &si, m_fence);
     m_submit_count = 1U;
@@ -5276,6 +6802,37 @@ void VulkanFrameGraph::execute()
     else
     {
         m_slot = (m_slot + 1U) % kFramesInFlight; // advance ONLY when pipelining; the readback path stays in-place
+    }
+
+    // ── ⭐ REN-38-A5: THE PRESENT PASS PRESENTS. ──
+    // ⛔ Until this, `.present(surface)` was stored, READ BY THE BARRIER SCHEDULER, and then never acted on: the
+    // graph built, executed, reported one submission, and no frame ever reached a window. Declared-and-ignored is
+    // the shape this codebase treats as the worst kind of defect, because every check stays green.
+    //
+    // It runs AFTER the submit, not inside a pass, because presenting is not GPU work the graph records — it is
+    // acquire → blit → present, on submissions the SURFACE owns. Two facts make that safe without a CPU stall:
+    //   · both submissions go to the SAME queue, so the surface's blit is ordered after the graph's work; and
+    //   · the readback loop above already left every imported target in TRANSFER_SRC_OPTIMAL, which is exactly
+    //     the layout `IPresentSurface::present` declares for its source (the RET-2 contract).
+    // ⛔ That second point is why the present pass's reads are SKIPPED by the barrier scheduler (`p.present !=
+    // nullptr`) rather than transitioned to SHADER_READ_ONLY like an ordinary read — the two rules are one design
+    // and must be read together.
+    for (const crd::u32 pass_idx : m_order)
+    {
+        Pass& p = m_passes[pass_idx];
+        if (p.present == nullptr) { continue; }
+        IRasterTarget* src = nullptr;
+        for (const Access& a : p.img_access)
+        {
+            if (a.handle == 0U || a.handle > m_images.size()) { continue; }
+            ImageNode& n = m_images[a.handle - 1U];
+            // ⛔ A GRAPH-OWNED image cannot be presented: its memory is aliased and retired the moment its last
+            // reader is done, so the surface would blit from storage another transient already owns. Only an
+            // IMPORTED target outlives the graph, so only an imported target is a legal present source.
+            if (n.target != nullptr && !graph_owned(n)) { src = n.target; break; }
+        }
+        if (src == nullptr) { continue; }
+        if (p.present->present(*src)) { ++m_present_count; }
     }
 }
 

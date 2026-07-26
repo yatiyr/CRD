@@ -9,6 +9,7 @@
 
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
+#include <crd/gpu/raster_context.hpp> // REN-38-A9: IAccelerationStructure — the portable AS handle
 #include <crd/gpu/rt_capabilities.hpp>
 
 #include <memory>
@@ -18,11 +19,16 @@ namespace crd::gpu
 
 // A built DXR scene (one BLAS from a triangle soup + one identity-instance TLAS). Opaque; the RT context keeps the backing
 // resources alive for the scene's lifetime.
-class Dx12RtScene
+// ⭐ REN-38-A9: the DX12 mirror — a scene IS the portable `IAccelerationStructure`.
+class Dx12RtScene : public IAccelerationStructure
 {
 public:
-    virtual ~Dx12RtScene() = default;
+    ~Dx12RtScene() override = default;
 };
+
+// REN-38-A9: the TLAS's GPU VIRTUAL ADDRESS, which is exactly what a `RaytracingAccelerationStructure` SRV binds
+// (DXR takes the AS by address, not by resource). 0 when the scene has none.
+[[nodiscard]] crd::u64 dx12_scene_tlas(const IAccelerationStructure& scene) noexcept;
 
 class Dx12RayTracingContext
 {

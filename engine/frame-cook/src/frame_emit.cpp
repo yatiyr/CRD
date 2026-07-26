@@ -24,6 +24,18 @@ const char* from_pass_kind(FramePassKind k)
     case FramePassKind::RasterMrt:        return "raster.mrt";
     case FramePassKind::Compute:          return "compute";
     case FramePassKind::Present:          return "present";
+    case FramePassKind::Clear:            return "clear";
+    case FramePassKind::Copy:             return "copy";
+    case FramePassKind::Blit:             return "blit";
+    case FramePassKind::Resolve:          return "resolve";
+    case FramePassKind::RasterTess:       return "raster.tess";
+    case FramePassKind::RasterMesh:       return "raster.mesh";
+    case FramePassKind::RasterVisbuffer:  return "raster.visbuffer";
+    case FramePassKind::RasterComposite:  return "raster.composite";
+    case FramePassKind::RayTrace:         return "raytrace";
+    case FramePassKind::RayTracePipeline: return "raytrace.pipeline";
+    case FramePassKind::ComputeIndirect:  return "compute.indirect";
+    case FramePassKind::RasterMeshIndirect: return "raster.mesh.indirect";
     }
     return "raster.geometry";
 }
@@ -218,7 +230,18 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
         app(o, "\n[[resource]]\nname = ");
         app_quoted(o, r.name);
         app(o, "\nkind = ");
-        app(o, r.kind == FrameResourceKind::TransientBuffer ? "\"transient_buffer\"" : "\"transient_image\"");
+        // ⛔ REN-38-B3/B4: EVERY kind, not a two-way ternary. The old form emitted "transient_image" for an
+        // `indirect_args` or `acceleration_structure` resource, so a cooked pack would round-trip a GPU-driven
+        // graph into one whose args buffer was a texture — silently, and only at runtime.
+        switch (r.kind)
+        {
+        case FrameResourceKind::TransientBuffer:       app(o, "\"transient_buffer\""); break;
+        case FrameResourceKind::IndirectArgs:          app(o, "\"indirect_args\""); break;
+        case FrameResourceKind::ExternalBuffer:        app(o, "\"external_buffer\""); break;
+        case FrameResourceKind::AccelerationStructure: app(o, "\"acceleration_structure\""); break;
+        case FrameResourceKind::TransientImage:
+        default:                                       app(o, "\"transient_image\""); break;
+        }
         app(o, "\nformat = \"");
         app(o, from_format(r.format));
         app(o, "\"\n");
@@ -263,7 +286,78 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
         if (!p.view.empty())      { app(o, "view = ");      app_quoted(o, p.view);      app(o, "\n"); }
         if (!p.shader.empty())    { app(o, "shader = ");    app_quoted(o, p.shader);    app(o, "\n"); }
         if (!p.kernel.empty())    { app(o, "kernel = ");    app_quoted(o, p.kernel);    app(o, "\n"); }
+        if (!p.raygen.empty())      { app(o, "raygen = ");      app_quoted(o, p.raygen);      app(o, "\n"); }
+        if (!p.miss.empty())        { app(o, "miss = ");        app_quoted(o, p.miss);        app(o, "\n"); }
+        if (!p.closest_hit.empty()) { app(o, "closest_hit = "); app_quoted(o, p.closest_hit); app(o, "\n"); }
         if (!p.technique.empty()) { app(o, "technique = "); app_quoted(o, p.technique); app(o, "\n"); }
+        // REN-38-A6: only a BLIT rescales, so only a blit emits its filter — a round-trip that wrote `filter` on
+        // every pass would make two identical graphs differ by a field neither kind reads.
+        if (p.kind == FramePassKind::Blit)
+        {
+            app(o, "filter = \"");
+            app(o, p.filter == FrameBlitFilter::Nearest ? "nearest" : "linear");
+            app(o, "\"\n");
+        }
+        if (p.blend.size() > 0)
+        {
+            app(o, "blend = [");
+            for (crd::usize k = 0; k < p.blend.size(); ++k)
+            {
+                if (k > 0) { app(o, ", "); }
+                app(o, "\"");
+                switch (p.blend[k])
+                {
+                case crd::gpu::BlendMode::Alpha:              app(o, "alpha"); break;
+                case crd::gpu::BlendMode::PremultipliedAlpha: app(o, "premultiplied"); break;
+                case crd::gpu::BlendMode::Additive:           app(o, "additive"); break;
+                case crd::gpu::BlendMode::Multiply:           app(o, "multiply"); break;
+                case crd::gpu::BlendMode::RevealageMultiply:  app(o, "revealage_multiply"); break;
+                case crd::gpu::BlendMode::Opaque:
+                default:                                      app(o, "opaque"); break;
+                }
+                app(o, "\"");
+            }
+            app(o, "]\n");
+        }
+        // REN-38-A13/A14: only emit what was DECLARED — writing the defaults on every pass would make two
+        // identical graphs differ by fields neither meant to set.
+        if (p.shading_rate != crd::gpu::ShadingRate::Rate1x1)
+        {
+            app(o, "shading_rate = \"");
+            switch (p.shading_rate)
+            {
+            case crd::gpu::ShadingRate::Rate1x2: app(o, "1x2"); break;
+            case crd::gpu::ShadingRate::Rate2x1: app(o, "2x1"); break;
+            case crd::gpu::ShadingRate::Rate2x2: app(o, "2x2"); break;
+            case crd::gpu::ShadingRate::Rate2x4: app(o, "2x4"); break;
+            case crd::gpu::ShadingRate::Rate4x2: app(o, "4x2"); break;
+            case crd::gpu::ShadingRate::Rate4x4: app(o, "4x4"); break;
+            case crd::gpu::ShadingRate::Rate1x1:
+            default:                             app(o, "1x1"); break;
+            }
+            app(o, "\"\n");
+        }
+        if (p.rate_combiner != crd::gpu::ShadingRateCombiner::Keep)
+        {
+            app(o, "rate_combiner = \"");
+            switch (p.rate_combiner)
+            {
+            case crd::gpu::ShadingRateCombiner::Replace: app(o, "replace"); break;
+            case crd::gpu::ShadingRateCombiner::Min:     app(o, "min"); break;
+            case crd::gpu::ShadingRateCombiner::Max:     app(o, "max"); break;
+            case crd::gpu::ShadingRateCombiner::Mul:     app(o, "mul"); break;
+            case crd::gpu::ShadingRateCombiner::Keep:
+            default:                                     app(o, "keep"); break;
+            }
+            app(o, "\"\n");
+        }
+        if (p.conservative != crd::gpu::ConservativeMode::Off)
+        {
+            app(o, "conservative = \"");
+            app(o, p.conservative == crd::gpu::ConservativeMode::Underestimate ? "underestimate" : "overestimate");
+            app(o, "\"\n");
+        }
+        if (p.queue != FrameQueue::Graphics) { app(o, "queue = \"async\"\n"); }
         const char* mp = from_material(p.material_pass);
         if (mp != nullptr) { app(o, "material_pass = \""); app(o, mp); app(o, "\"\n"); }
         if (p.for_each != FrameForEach::None)

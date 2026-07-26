@@ -10,6 +10,7 @@
 #include <crd/gpu/vulkan_context.hpp>
 
 #include <crd/containers/span.hpp>
+#include <crd/gpu/raster_context.hpp> // REN-38-A9: IAccelerationStructure — the portable AS handle
 #include <crd/gpu/rt_capabilities.hpp>
 
 #include <memory>
@@ -19,11 +20,18 @@ namespace crd::gpu
 
 // A built scene acceleration structure (one BLAS from a triangle soup + one identity-instance TLAS). Opaque; the RT context
 // keeps the backing buffers alive for the scene's lifetime.
-class RtScene
+// ⭐ REN-38-A9: an RtScene IS the portable `IAccelerationStructure`, so an authored ray-tracing pass can name a
+// scene the host built and the raster context can bind its TLAS — without the frame layer knowing about Vulkan.
+class RtScene : public IAccelerationStructure
 {
 public:
-    virtual ~RtScene() = default;
+    ~RtScene() override = default;
 };
+
+// REN-38-A9: the native TLAS behind a scene, as an opaque u64 (a VkAccelerationStructureKHR), or 0. Exposed the
+// same way `vulkan_present_image_count` is — so the raster context, which lives in this module, can bind it
+// without either context including the other's private implementation.
+[[nodiscard]] crd::u64 vulkan_scene_tlas(const IAccelerationStructure& scene) noexcept;
 
 class VulkanRayTracingContext
 {

@@ -61,6 +61,19 @@ namespace
     case crd::kir::KStage::Task: out = ShaderStage::Task; return true; // B4: DX12 amplification (task) path
     case crd::kir::KStage::TessControl: out = ShaderStage::TessControl; return true; // B4-tess: DX12 hull
     case crd::kir::KStage::TessEval: out = ShaderStage::TessEval; return true;       // B4-tess: DX12 domain
+    // ⛔⛔ REN-38-A10: COMPUTE was MISSING, so `create_program(KGraph, KEntry)` refused every kernel on DX12 —
+    // while the dedicated `KStage::Compute && is_kernel()` branch a few lines below, which emits the HLSL, sat
+    // UNREACHABLE. Every authored compute pass on this backend failed at program creation and the caller saw
+    // only a null pointer.
+    // ⛔ THIS INVALIDATED 38-A2's "both backends" claim: the compute-pass gate was written on Vulkan only, so
+    // nothing ever asked DX12 to lower a kernel through this entry point. The A9/A10 gates are the first that do.
+    case crd::kir::KStage::Compute: out = ShaderStage::Compute; return true;
+    // ⛔ REN-38-A16: the RAY-TRACING stages. `emit_rt_stage_hlsl` and the `lib_6_3` DXIL profile both existed;
+    // this map did not name them, so every CKIR ray-tracing entry was refused before either could run.
+    case crd::kir::KStage::RayGen:     out = ShaderStage::RayGen;     return true;
+    case crd::kir::KStage::ClosestHit: out = ShaderStage::ClosestHit; return true;
+    case crd::kir::KStage::Miss:       out = ShaderStage::Miss;       return true;
+    case crd::kir::KStage::AnyHit:     out = ShaderStage::AnyHit;     return true;
     default: return false;
     }
 }
@@ -154,6 +167,14 @@ public:
         {
             // B4-tess: a domain KEntry → HLSL domain shader (bilerp patch_pos + displacement → SV_Position).
             if (!crd::kir::emit_tese_hlsl(graph, entry, m_alloc, kern)) { return nullptr; }
+        }
+        else if (entry.stage == crd::kir::KStage::RayGen || entry.stage == crd::kir::KStage::ClosestHit
+                 || entry.stage == crd::kir::KStage::Miss || entry.stage == crd::kir::KStage::AnyHit)
+        {
+            // REN-38-A16: a CKIR ray-tracing entry → DXR HLSL (`[shader("raygeneration")]` etc.), compiled as a
+            // `lib_6_3` LIBRARY — which is what a DXR state object consumes, and why the profile table already
+            // had the case.
+            if (!crd::kir::emit_rt_stage_hlsl(graph, entry, m_alloc, kern, false)) { return nullptr; }
         }
         else if (entry.stage == crd::kir::KStage::Compute && entry.is_kernel())
         {

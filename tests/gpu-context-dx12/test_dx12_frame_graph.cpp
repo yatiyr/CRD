@@ -13,6 +13,7 @@
 #include <crd/gpu/dx12_raster_context.hpp>
 
 #include <crd/gpu/dx12_context.hpp> // create_dx12_gpu_context — the KGraph -> DXIL program seam
+#include <crd/gpu/dx12_ray_tracing_context.hpp> // REN-38-A9: the host builds the scene the asset names
 #include <crd/gpu/frame_graph.hpp>
 #include <crd/gpu/raster_context.hpp>
 
@@ -21,7 +22,9 @@
 #include <crd/kir/ckir.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
+#include <ckir_oit_test.hpp>        // REN-38-A12: the shared WBOIT accumulate + composite shaders
 #include <ckir_raster_triangle.hpp> // REN-2: the shared triangle (offscreen) + textured/sample (compose) CKIR builders
+#include <win32_test_window.hpp>    // REN-38-A5: a REAL window — DXGI has no headless surface
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -1340,4 +1343,1342 @@ TEST_CASE("REN-37.5 GATE (DX12): a PERSISTENT image keeps its contents across re
     bigger.height         = dim * 2U;
     REQUIRE(fgraph->create_persistent_image(kKey, bigger).valid());
     CHECK_FALSE(fgraph->persistent_image_was_live(kKey));
+}
+
+// ── REN-38-A1a GATE (DX12): the bindless RECORDING path, and PARITY with Vulkan. ────────────────────────────
+// ⛔ Parity is part of this row's gate, not a follow-up. A verb recordable on ONE backend is a WORSE state than
+// one recordable on neither: it renders correctly right up until someone switches API, and the failure then looks
+// like a driver bug rather than a missing port.
+//
+// The DX12-specific hazard: `draw_bindless` mints its SRV array into the GLOBAL heap at FIXED slots and resets
+// the command list. Inside a frame that stomps descriptors earlier passes still use and throws away everything
+// already recorded. `record_bindless` reserves a CONTIGUOUS RUN from the frame ring instead — contiguous because
+// a root descriptor table addresses N consecutive slots from one GPU handle.
+TEST_CASE("REN-38-A1a GATE (DX12): a fullscreen pass binds ALL its declared reads, in order",
+          "[dx12][raster][frame-graph][ren38][gpu]")
+{
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto raster = g::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+    if (!raster->supports_bindless()) { SKIP("device does not support bindless"); }
+
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    kir::KGraph                fvg(&alloc);
+    kir::KEntry                fve;
+    crd::gputest::build_textured_vs(fvg, fve);
+    auto fvs = gctx->create_program(fvg, fve);
+    if (fvs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+
+    std::unique_ptr<g::IGpuProgram> solid_fs[2];
+    const auto solid_prog = [&](int slot, double r, double gg, double b) {
+        kir::KGraph fg(&alloc);
+        kir::KEntry fe;
+        const auto  sh = kir::make_shape({1});
+        const auto  kf = [&](double v) { return fg.constant(v, sh, kir::DType::F32); };
+        fe.stage       = kir::KStage::Fragment;
+        fe.n_out       = 1;
+        fe.out[0]      = {fg.vec4(kf(r), kf(gg), kf(b), kf(1.0)), 0};
+        solid_fs[slot] = gctx->create_program(fg, fe);
+        return solid_fs[slot] != nullptr ? raster->create_raster_program(*fvs, *solid_fs[slot])
+                                         : std::unique_ptr<g::IRasterProgram>{};
+    };
+    auto red_prog   = solid_prog(0, 1.0, 0.0, 0.0);
+    auto green_prog = solid_prog(1, 0.0, 1.0, 0.0);
+
+    kir::KGraph cfg_(&alloc);
+    kir::KEntry cfe;
+    crd::gputest::build_two_texture_composite_fs(cfg_, cfe);
+    auto cfs          = gctx->create_program(cfg_, cfe);
+    auto compose_prog = raster->create_raster_program(*fvs, *cfs);
+    REQUIRE(red_prog != nullptr);
+    REQUIRE(green_prog != nullptr);
+    REQUIRE(compose_prog != nullptr);
+
+    constexpr crd::u32 dim   = 64U;
+    auto               dst   = raster->create_color_target(dim, dim);
+    auto               dummy = raster->create_storage_buffer(16U);
+    REQUIRE(dst != nullptr);
+    REQUIRE(dummy != nullptr);
+
+    auto fgraph = raster->create_frame_graph();
+    REQUIRE(fgraph != nullptr);
+
+    g::FgImageDesc rd{};
+    rd.width   = dim;
+    rd.height  = dim;
+    rd.format  = g::FgImageFormat::RGBA8Unorm;
+    rd.sampled = true;
+    const g::FgImage gb0 = fgraph->create_transient_image(rd);
+    const g::FgImage gb1 = fgraph->create_transient_image(rd);
+    REQUIRE(gb0.valid());
+    REQUIRE(gb1.valid());
+    const g::FgImage  fin  = fgraph->import_target(*dst);
+    const g::FgBuffer dbuf = fgraph->import_storage(*dummy);
+
+    struct Solid
+    {
+        g::FgImage         img{};
+        g::FgBuffer        buf{};
+        g::IRasterProgram* prog = nullptr;
+    };
+    struct Compose
+    {
+        g::FgImage         a{};
+        g::FgImage         b{};
+        g::FgImage         dst{};
+        g::IRasterProgram* prog = nullptr;
+    };
+    static const auto rec_solid = [](g::IFrameContext& ctx, void* user) {
+        auto* s = static_cast<Solid*>(user);
+        // 38-A1h gave plain `draw` a recording path, so this gate covers A1h as well as A3.
+        ctx.raster().draw(*ctx.image(s->img), *s->prog, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    };
+    static const auto rec_compose = [](g::IFrameContext& ctx, void* user) {
+        auto*        s    = static_cast<Compose*>(user);
+        g::ITexture* t[2] = {ctx.texture(s->a), ctx.texture(s->b)};
+        if (t[0] == nullptr || t[1] == nullptr) { return; }
+        ctx.raster().draw_bindless(*ctx.image(s->dst), *s->prog, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F},
+                                   static_cast<g::ITexture* const*>(t), 2U, 3U);
+    };
+
+    Solid   s0{gb0, dbuf, red_prog.get()};
+    Solid   s1{gb1, dbuf, green_prog.get()};
+    Compose cm{gb0, gb1, fin, compose_prog.get()};
+    fgraph->add_pass("gbuf0").reads(dbuf).writes(gb0).execute(+rec_solid, &s0);
+    fgraph->add_pass("gbuf1").reads(dbuf).writes(gb1).execute(+rec_solid, &s1);
+    fgraph->add_pass("lighting").reads(gb0).reads(gb1).writes(fin).execute(+rec_compose, &cm);
+    REQUIRE(fgraph->build());
+    fgraph->execute();
+
+    const crd::u32 px = dst->read_pixel(dim / 2U, dim / 2U);
+    const crd::u32 r  = px & 0xFFU;
+    const crd::u32 gg = (px >> 8U) & 0xFFU;
+    UNSCOPED_INFO("dx12 composite r=" << r << " g=" << gg);
+    CHECK(r > 180U);  // tex[0] (RED writer) at slot 0
+    CHECK(gg > 180U); // tex[1] (GREEN writer) at slot 1 — the read that used to be dropped
+    CHECK(fgraph->last_submit_count() == 1U);
+}
+
+// ── REN-38-A4 GATE: a DEFERRED RENDERER, AUTHORED AS AN ASSET ONLY. ─────────────────────────────────────────
+// ⛔⛔ This is the headline gate of 38-A, and three separate rows had to land before it could exist at all:
+//   · 38-A1b — MRT recording: a pass binds N COLOUR ATTACHMENTS (it used to borrow the single-target path, so a
+//     G-buffer was silently one target);
+//   · 38-A3  — N sampled reads: a pass binds ALL its declared reads (it used to bind only the FIRST, so a
+//     lighting pass reading albedo+normal got albedo twice);
+//   · 38-A1a — bindless recording, which is how N textures reach one draw inside a frame.
+// Any one of them missing and a deferred renderer is not expressible, no matter what the asset says.
+//
+// The asset below is the whole renderer. The G-buffer pass writes RED to attachment 0 and GREEN to attachment 1;
+// the lighting pass declares BOTH as reads and composites tex[0].r into RED and tex[1].g into GREEN. ⭐ That
+// mapping is chosen so every failure mode is DISTINGUISHABLE:
+//   · MRT bound one target twice        -> both channels carry the same value
+//   · the second READ was dropped       -> green is 0
+//   · reads bound in the wrong order    -> red is 0
+// "Not black" would have passed under all three.
+namespace
+{
+constexpr const char* kDeferredGraphDx = R"(
+schema = 1
+name   = "crd://frame/deferred"
+
+[[resource]]
+name    = "gbuf_albedo"
+format  = "RGBA8Unorm"
+scale   = 1.0
+sampled = true
+
+[[resource]]
+name    = "gbuf_normal"
+format  = "RGBA8Unorm"
+scale   = 1.0
+sampled = true
+
+[[draw_list]]
+name = "visible_opaque"
+all  = ["MeshRenderer", "Transform"]
+
+[[pass]]
+name          = "gbuffer"
+kind          = "raster.mrt"
+draw_list     = "visible_opaque"
+writes        = ["gbuf_albedo", "gbuf_normal"]
+material_pass = "GBuffer"
+clear_color   = [0.0, 0.0, 0.0, 1.0]
+
+[[pass]]
+name   = "lighting"
+kind   = "raster.fullscreen"
+shader = "crd://shaders/deferred_lighting"
+reads  = ["gbuf_albedo", "gbuf_normal"]
+writes = ["@output"]
+)";
+
+// The host: the asset names things, this resolves them to live objects.
+class DeferredHostDx final : public crd::framecook::IFrameGraphHost
+{
+public:
+    DeferredHostDx(g::IRasterTarget& out, g::IStorageBuffer& buf, g::IRasterProgram& gbuf, g::IRasterProgram& light)
+        : m_out(out), m_buf(buf), m_gbuf(gbuf), m_light(light)
+    {
+    }
+    [[nodiscard]] g::IRasterTarget* output() override { return &m_out; }
+    [[nodiscard]] g::IRasterProgram* program(crd::containers::StringView) override { return &m_light; }
+    [[nodiscard]] bool draw_list(crd::containers::StringView, crd::framecook::DrawListBinding& out) override
+    {
+        out.items[0]  = crd::framecook::DrawItem{&m_buf, &m_gbuf, 3U, nullptr};
+        out.resolved  = 1U;
+        return true;
+    }
+
+private:
+    g::IRasterTarget&  m_out;
+    g::IStorageBuffer& m_buf;
+    g::IRasterProgram& m_gbuf;
+    g::IRasterProgram& m_light;
+};
+} // namespace
+
+TEST_CASE("REN-38-A4 GATE (DX12): a DEFERRED renderer, authored as an asset only",
+          "[dx12][raster][frame-graph][ren38][gpu]")
+{
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto rasterp = g::create_dx12_raster_context();
+    REQUIRE(rasterp != nullptr);
+    auto& raster = *rasterp;
+    if (!raster.supports_bindless()) { SKIP("device does not support bindless"); }
+
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+
+    // the G-buffer program: a fullscreen triangle writing TWO attachments
+    kir::KGraph gvg(&alloc);
+    kir::KEntry gve;
+    crd::gputest::build_textured_vs(gvg, gve);
+    auto gvs = gctx->create_program(gvg, gve);
+    if (gvs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+    kir::KGraph gfg(&alloc);
+    kir::KEntry gfe;
+    crd::gputest::build_gbuffer_two_output_fs(gfg, gfe);
+    auto gfs       = gctx->create_program(gfg, gfe);
+    auto gbuf_prog = raster.create_raster_program(*gvs, *gfs);
+
+    // the lighting program: a fullscreen composite reading BOTH G-buffer targets
+    kir::KGraph lfg(&alloc);
+    kir::KEntry lfe;
+    crd::gputest::build_two_texture_composite_fs(lfg, lfe);
+    auto lfs        = gctx->create_program(lfg, lfe);
+    auto light_prog = raster.create_raster_program(*gvs, *lfs);
+    REQUIRE(gbuf_prog != nullptr);
+    REQUIRE(light_prog != nullptr);
+
+    constexpr crd::u32 dim   = 64U;
+    auto          dst   = raster.create_color_target(dim, dim);
+    auto          dummy = raster.create_storage_buffer(16U);
+    REQUIRE(dst != nullptr);
+    REQUIRE(dummy != nullptr);
+
+    crd::framecook::FrameGraphDesc desc(&alloc);
+    crd::containers::String        where(&alloc);
+    REQUIRE(crd::framecook::parse_frame_toml(crd::containers::StringView(kDeferredGraphDx), desc, &where)
+            == crd::framecook::FrameCookError::Ok);
+
+    DeferredHostDx         host(*dst, *dummy, *gbuf_prog, *light_prog);
+    crd::framecook::FrameExecError err = crd::framecook::FrameExecError::Ok;
+    REQUIRE(crd::framecook::execute_frame_graph(desc, raster, host, &err, &where));
+    CHECK(err == crd::framecook::FrameExecError::Ok);
+
+    const crd::u32 px = dst->read_pixel(dim / 2U, dim / 2U);
+    const crd::u32 r  = px & 0xFFU;
+    const crd::u32 gg = (px >> 8U) & 0xFFU;
+    UNSCOPED_INFO("deferred composite r=" << r << " g=" << gg);
+    CHECK(r > 180U);  // attachment 0 (albedo/RED) was written by MRT and read at slot 0
+    CHECK(gg > 180U); // attachment 1 (normal/GREEN) was written by MRT and read at slot 1
+
+}
+
+// ── REN-38-A5 GATE: an AUTHORED PRESENT PASS actually puts the frame on a surface. ─────────────────────────────
+// ⛔⛔ `.present(surface)` was ACCEPTED AND THEN IGNORED, at BOTH levels at once:
+//   · the device graph's builder stored the surface, the barrier scheduler READ the field (to skip a transition),
+//     and nothing ever called `IPresentSurface::present`;
+//   · `FramePassKind::Present` fell through the executor's switch to `break`.
+// So a graph declaring a present pass parsed, validated, cooked, built, executed and reported ONE SUBMISSION and
+// NO ERROR — and no frame ever reached a window. Every check was green. That is the same silent shape the compute
+// pass had in 38-A2, in a place where the symptom ("the window is black") is easy to blame on the scene.
+//
+// ⭐ The claim "the frame presented" is therefore made COUNTABLE and asserted from two independent sides:
+//   · the GRAPH counts present passes that actually presented (`last_present_count`), and
+//   · the SURFACE counts frames it put up (`frame_count`), which the graph does not write.
+// A stub that returned true without presenting moves the first and not the second.
+namespace
+{
+constexpr const char* kPresentGraphDx = R"(
+schema = 1
+name   = "crd://frame/present"
+
+[[draw_list]]
+name = "visible"
+all  = ["MeshRenderer"]
+
+[[pass]]
+name        = "scene"
+kind        = "raster.geometry"
+draw_list   = "visible"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+
+[[pass]]
+name  = "to_screen"
+kind  = "present"
+reads = ["@output"]
+)";
+
+class PresentHostDx final : public crd::framecook::IFrameGraphHost
+{
+public:
+    PresentHostDx(g::IRasterTarget& out, g::IStorageBuffer& buf, g::IRasterProgram& prog, g::IPresentSurface* surf)
+        : m_out(out), m_buf(buf), m_prog(prog), m_surf(surf)
+    {
+    }
+    [[nodiscard]] g::IRasterTarget* output() override { return &m_out; }
+    [[nodiscard]] g::IRasterProgram* program(crd::containers::StringView) override { return &m_prog; }
+    [[nodiscard]] bool draw_list(crd::containers::StringView, crd::framecook::DrawListBinding& out) override
+    {
+        out.items[0] = crd::framecook::DrawItem{&m_buf, &m_prog, 3U, nullptr};
+        out.resolved = 1U;
+        return true;
+    }
+    [[nodiscard]] g::IPresentSurface* present_surface() override { return m_surf; }
+
+private:
+    g::IRasterTarget&   m_out;
+    g::IStorageBuffer&  m_buf;
+    g::IRasterProgram&  m_prog;
+    g::IPresentSurface* m_surf = nullptr;
+};
+} // namespace
+
+// ── The DEVICE half: the authored present pass reaches a real swapchain. ──
+TEST_CASE("REN-38-A5 GATE (DX12): an authored PRESENT pass hands the frame to a swapchain",
+          "[dx12][raster][frame-graph][ren38][gpu]")
+{
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto rasterp = g::create_dx12_raster_context();
+    REQUIRE(rasterp != nullptr);
+    auto& raster = *rasterp;
+
+    // ⛔ DXGI has NO headless surface, so this gate needs a REAL window — the same isolated <windows.h> helper
+    // RET-2's DX12 present gate uses. Skipping when none exists is honest; presenting to nothing would not be.
+    void* native = crd::gputest::create_test_window(256U, 256U);
+    if (native == nullptr) { SKIP("no platform window available"); }
+    constexpr crd::u32 dim = 256U;
+    auto surface = raster.create_present_surface(native, dim, dim, g::PresentMode::Fifo);
+    REQUIRE(surface != nullptr);
+    REQUIRE(surface->valid());
+    REQUIRE(surface->width() == dim);
+    REQUIRE(surface->height() == dim);
+
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    crd::kir::KGraph           vg(&alloc);
+    crd::kir::KEntry           ve;
+    crd::gputest::build_triangle_vs(vg, ve);
+    auto vs = gctx->create_program(vg, ve);
+    if (vs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+    crd::kir::KGraph fg2(&alloc);
+    crd::kir::KEntry fe;
+    crd::gputest::build_triangle_fs(fg2, fe);
+    auto fs   = gctx->create_program(fg2, fe);
+    auto prog = raster.create_raster_program(*vs, *fs);
+    REQUIRE(prog != nullptr);
+
+    // ⛔ The canvas MUST match the surface: a present with a mismatched source is REFUSED (never a stretched
+    // half-frame), and a refused present is exactly the state this gate must not mistake for a success.
+    auto dst = raster.create_color_depth_target(dim, dim);
+    auto buf = raster.create_storage_buffer(64U);
+    REQUIRE(dst != nullptr);
+    REQUIRE(buf != nullptr);
+
+    crd::framecook::FrameGraphDesc desc(&alloc);
+    crd::containers::String        where(&alloc);
+    REQUIRE(crd::framecook::parse_frame_toml(crd::containers::StringView(kPresentGraphDx), desc, &where)
+            == crd::framecook::FrameCookError::Ok);
+
+
+    // ── 1) NO SURFACE ⇒ a NAMED failure, never a quiet skip. ──
+    // ⛔ This is the assertion that would have caught the original defect from the asset side: before the row, a
+    // graph with a present pass and no surface anywhere ran to completion and reported success.
+    {
+        PresentHostDx               blind(*dst, *buf, *prog, nullptr);
+        crd::framecook::FrameExecError err = crd::framecook::FrameExecError::Ok;
+        crd::containers::String        w2(&alloc);
+        CHECK(!crd::framecook::execute_frame_graph(desc, raster, blind, &err, &w2));
+        CHECK(err == crd::framecook::FrameExecError::NoPresentSurface);
+        CHECK(w2 == "to_screen"); // by PASS NAME — the author is told which pass, not merely that something failed
+    }
+
+    // ── 2) WITH a surface: the frame actually goes up, and the graph still submits ONCE. ──
+    PresentHostDx host(*dst, *buf, *prog, surface.get());
+    auto        fgraph = raster.create_frame_graph();
+    REQUIRE(fgraph != nullptr);
+    crd::framecook::FrameRecorder rec(&alloc);
+    rec.begin_frame();
+    crd::framecook::FrameExecError err = crd::framecook::FrameExecError::Ok;
+    REQUIRE(rec.record(desc, *fgraph, raster, host, &err, &where));
+    CHECK(err == crd::framecook::FrameExecError::Ok);
+    REQUIRE(fgraph->build());
+    fgraph->execute();
+
+    // ⭐ TWO INDEPENDENT WITNESSES. The graph counts present passes that presented; the surface counts frames it
+    // put up, and the graph does not write that counter. A `present()` that returned true without presenting
+    // moves the first and not the second — which is precisely the failure this row is about.
+    CHECK(fgraph->last_present_count() == 1U);
+    CHECK(surface->frame_count() == 1U);
+    // and the present is the SURFACE's own submission — the graph must not have split into two.
+    CHECK(fgraph->last_submit_count() == 1U);
+
+    // the presented canvas is the one the graph DREW: the triangle covers the centre, the clear owns the corner.
+    UNSCOPED_INFO("centre=" << (dst->read_pixel(dim / 2U, dim / 2U) & 0xFFFFFFU)
+                            << " corner=" << (dst->read_pixel(2U, 2U) & 0xFFFFFFU));
+    CHECK((dst->read_pixel(dim / 2U, dim / 2U) & 0xFFFFFFU) != 0U);
+    CHECK((dst->read_pixel(2U, 2U) & 0xFFFFFFU) == 0U);
+
+    // a SECOND frame through the same graph presents again — the counters are per-execute, not cumulative-once.
+    fgraph->reset();
+    rec.begin_frame();
+    REQUIRE(rec.record(desc, *fgraph, raster, host, &err, &where));
+    REQUIRE(fgraph->build());
+    fgraph->execute();
+    CHECK(fgraph->last_present_count() == 1U);
+    CHECK(surface->frame_count() == 2U);
+
+    surface.reset(); // the surface dies BEFORE its window
+    crd::gputest::destroy_test_window(native);
+}
+
+// ── REN-38-A6 GATE: CLEAR · COPY · BLIT · RESOLVE, authored as passes. ─────────────────────────────────────────
+// ⛔ Four utility nodes every real frame graph needs, and none of them could be expressed. The only way to move
+// pixels was a `raster.fullscreen` pass with a pass-through shader — paying for a rasterizer, a descriptor set and
+// a pipeline to do what the copy engine does for free — and an MSAA RESOLVE was not expressible AT ALL, because
+// copying a multisampled image is illegal rather than merely slow.
+//
+// ⭐ EACH VERB IS GATED BY A SIGNAL ONLY THAT VERB CAN PRODUCE:
+//   · clear — a target set to a colour NOTHING else in the graph writes;
+//   · copy  — a destination that ALREADY HELD A DIFFERENT COLOUR, so "the copy did nothing" and "the source was
+//             never written" are DIFFERENT observable outcomes (blue vs black) rather than one black frame;
+//   · blit  — structure that survives a round trip through a HALF-RESOLUTION image, which a 1:1 crop cannot fake;
+//   · resolve — an edge pixel strictly BETWEEN the two colours present, which only sample averaging produces.
+namespace
+{
+// clear → copy. The destination is pre-painted BLUE by its own clear pass, so a copy that silently does nothing
+// leaves BLUE, and a source that was never painted leaves BLACK. Three outcomes, three diagnoses.
+constexpr const char* kCopyGraphDx = R"(
+schema = 1
+name   = "crd://frame/a6-copy"
+
+[[resource]]
+name    = "stage"
+format  = "RGBA8Unorm"
+scale   = 1.0
+sampled = true
+
+[[pass]]
+name        = "paint_stage"
+kind        = "clear"
+writes      = ["stage"]
+clear_color = [1.0, 0.0, 0.0, 1.0]
+
+[[pass]]
+name        = "prime_output"
+kind        = "clear"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 1.0, 1.0]
+
+[[pass]]
+name   = "publish"
+kind   = "copy"
+reads  = ["stage"]
+writes = ["@output"]
+)";
+
+// draw → blit DOWN to half res → blit UP to the output. A 1:1 crop would put `src`'s top-left quarter — which is
+// pure clear — at the centre of the result, so "the centre is still triangle-coloured" is the rescale assertion.
+constexpr const char* kBlitGraphDx = R"(
+schema = 1
+name   = "crd://frame/a6-blit"
+
+[[resource]]
+name    = "hires"
+format  = "RGBA8Unorm"
+scale   = 1.0
+sampled = true
+
+[[resource]]
+name    = "half"
+format  = "RGBA8Unorm"
+scale   = 0.5
+sampled = true
+
+[[draw_list]]
+name = "visible"
+all  = ["MeshRenderer"]
+
+[[pass]]
+name        = "scene"
+kind        = "raster.geometry"
+draw_list   = "visible"
+writes      = ["hires"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+
+[[pass]]
+name   = "downsample"
+kind   = "blit"
+reads  = ["hires"]
+writes = ["half"]
+filter = "linear"
+
+[[pass]]
+name   = "upsample"
+kind   = "blit"
+reads  = ["half"]
+writes = ["@output"]
+filter = "linear"
+)";
+
+class UtilHostDx final : public crd::framecook::IFrameGraphHost
+{
+public:
+    UtilHostDx(g::IRasterTarget& out, g::IStorageBuffer* buf, g::IRasterProgram* prog)
+        : m_out(out), m_buf(buf), m_prog(prog)
+    {
+    }
+    [[nodiscard]] g::IRasterTarget* output() override { return &m_out; }
+    [[nodiscard]] g::IRasterProgram* program(crd::containers::StringView) override { return m_prog; }
+    [[nodiscard]] bool draw_list(crd::containers::StringView, crd::framecook::DrawListBinding& out) override
+    {
+        if (m_buf == nullptr || m_prog == nullptr) { return false; }
+        out.items[0] = crd::framecook::DrawItem{m_buf, m_prog, 3U, nullptr};
+        out.resolved = 1U;
+        return true;
+    }
+
+private:
+    g::IRasterTarget&  m_out;
+    g::IStorageBuffer* m_buf  = nullptr;
+    g::IRasterProgram* m_prog = nullptr;
+};
+} // namespace
+
+// ── The DEVICE half: the four verbs actually move pixels, inside ONE submission. ──
+TEST_CASE("REN-38-A6 GATE (DX12): authored CLEAR / COPY / BLIT move pixels inside one frame",
+          "[dx12][raster][frame-graph][ren38][gpu]")
+{
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto rasterp = g::create_dx12_raster_context();
+    REQUIRE(rasterp != nullptr);
+    auto& raster = *rasterp;
+
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    constexpr crd::u32         dim = 64U;
+
+    // ── 1) CLEAR + COPY. ──
+    {
+        auto dst = raster.create_color_target(dim, dim);
+        REQUIRE(dst != nullptr);
+        crd::framecook::FrameGraphDesc desc(&alloc);
+        crd::containers::String        where(&alloc);
+        REQUIRE(crd::framecook::parse_frame_toml(crd::containers::StringView(kCopyGraphDx), desc, &where)
+                == crd::framecook::FrameCookError::Ok);
+        UtilHostDx                  host(*dst, nullptr, nullptr);
+        crd::framecook::FrameExecError err = crd::framecook::FrameExecError::Ok;
+        REQUIRE(crd::framecook::execute_frame_graph(desc, raster, host, &err, &where));
+        CHECK(err == crd::framecook::FrameExecError::Ok);
+
+        const crd::u32 px = dst->read_pixel(dim / 2U, dim / 2U);
+        const crd::u32 r  = px & 0xFFU;
+        const crd::u32 b  = (px >> 16U) & 0xFFU;
+        UNSCOPED_INFO("copy result r=" << r << " b=" << b);
+        // ⭐ RED means the clear painted `stage` AND the copy published it. BLUE would mean the copy did nothing
+        // (the output kept its own clear); BLACK would mean the stage clear did nothing. Three distinct verdicts.
+        CHECK(r > 200U);
+        CHECK(b < 60U);
+    }
+
+    // ── 2) BLIT: structure survives a round trip through a HALF-RESOLUTION image. ──
+    {
+        crd::kir::KGraph vg(&alloc);
+        crd::kir::KEntry ve;
+        crd::gputest::build_triangle_vs(vg, ve);
+        auto vs = gctx->create_program(vg, ve);
+        if (vs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+        crd::kir::KGraph fg2(&alloc);
+        crd::kir::KEntry fe;
+        crd::gputest::build_triangle_fs(fg2, fe);
+        auto fs   = gctx->create_program(fg2, fe);
+        auto prog = raster.create_raster_program(*vs, *fs);
+        REQUIRE(prog != nullptr);
+
+        auto dst = raster.create_color_target(dim, dim);
+        auto buf = raster.create_storage_buffer(64U);
+        REQUIRE(dst != nullptr);
+        REQUIRE(buf != nullptr);
+
+        crd::framecook::FrameGraphDesc desc(&alloc);
+        crd::containers::String        where(&alloc);
+        REQUIRE(crd::framecook::parse_frame_toml(crd::containers::StringView(kBlitGraphDx), desc, &where)
+                == crd::framecook::FrameCookError::Ok);
+        UtilHostDx                  host(*dst, buf.get(), prog.get());
+        crd::framecook::FrameExecError err = crd::framecook::FrameExecError::Ok;
+        REQUIRE(crd::framecook::execute_frame_graph(desc, raster, host, &err, &where));
+        CHECK(err == crd::framecook::FrameExecError::Ok);
+
+        const crd::u32 centre = dst->read_pixel(dim / 2U, dim / 2U) & 0xFFFFFFU;
+        const crd::u32 corner = dst->read_pixel(1U, 1U) & 0xFFFFFFU;
+        UNSCOPED_INFO("blit centre=" << centre << " corner=" << corner);
+        // ⛔ A blit that CROPPED instead of rescaling would put `hires`'s top-left quarter — pure clear — at the
+        // centre, so the centre being triangle-coloured is the assertion that the rescale really happened. The
+        // corner staying clear rules out the opposite failure: a blit that stretched a covered region over all.
+        CHECK(centre != 0U);
+        CHECK(corner == 0U);
+    }
+
+}
+
+// ── REN-38-A7 / A8 GATE: TESSELLATION and MESH+TASK shaders, authored as passes. ───────────────────────────────
+// ⛔ Both existed as DEVICE verbs (38-A1d, 38-A1c) and NEITHER was reachable from an asset — so the entire
+// geometry-AMPLIFICATION half of the hardware could only be driven by C++, which is exactly what the top rule
+// forbids: a technique is a `.frame.toml`, not a call site.
+//
+// ⛔⛔ AND A PASS KIND IS NOT JUST A SWITCH CASE. `draw_tess` and `draw_mesh` both CLEAR. That is correct for the
+// single-draw proofs they were written for and CATASTROPHIC for a pass that iterates a draw list: every draw
+// after the first wipes the ones before it, so a scene with three tessellated meshes renders exactly ONE — the
+// last — and looks entirely plausible. This is the multi-pass load-not-clear scar in its amplification form, and
+// it is why A7/A8 had to add `draw_tess_load` / `draw_mesh_load` to BOTH backends first.
+//
+// ⭐ The mesh gate is therefore built so that failure is VISIBLE AND SPECIFIC: draw 1 dispatches SIX meshlet
+// workgroups (six triangles tiled left-to-right); draw 2 dispatches ONE (the leftmost only). If the second draw
+// CLEARED, the six become one and the RIGHTMOST triangle vanishes — so the assertion is on a pixel only the FIRST
+// draw could have coloured. A "did anything render at all" check would have passed either way.
+namespace
+{
+constexpr const char* kTessGraphDx = R"(
+schema = 1
+name   = "crd://frame/a7-tess"
+
+[[pass]]
+name        = "displace"
+kind        = "raster.tess"
+shader      = "crd://shaders/tess_quad"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+params      = { patches = 1 }
+)";
+
+constexpr const char* kMeshGraphDx = R"(
+schema = 1
+name   = "crd://frame/a8-mesh"
+
+[[draw_list]]
+name = "meshlets"
+all  = ["MeshRenderer"]
+
+[[pass]]
+name        = "amplify"
+kind        = "raster.mesh"
+shader      = "crd://shaders/meshlet"
+draw_list   = "meshlets"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+)";
+
+// The host resolves ONE shader id to whichever program the technique needs — a tess program is a VS+TCS+TES+FS
+// and a mesh program is a TASK+MESH+FS, and WHICH stages a cooked program carries is a property of the PROGRAM,
+// not of the graph. That is why the asset names a shader and says nothing about stages.
+class AmplifyHostDx final : public crd::framecook::IFrameGraphHost
+{
+public:
+    AmplifyHostDx(g::IRasterTarget& out, g::IRasterProgram* prog) : m_out(out), m_prog(prog) {}
+    [[nodiscard]] g::IRasterTarget* output() override { return &m_out; }
+    [[nodiscard]] g::IRasterProgram* program(crd::containers::StringView) override { return m_prog; }
+    // TWO draws, with DIFFERENT dispatch counts. For an amplification pass a draw item's `vertex_count` IS the
+    // dispatch count — patches for tess, task/mesh workgroups for mesh.
+    [[nodiscard]] bool draw_list(crd::containers::StringView, crd::framecook::DrawListBinding& out) override
+    {
+        if (m_prog == nullptr) { return false; }
+        out.items[0] = crd::framecook::DrawItem{nullptr, m_prog, 6U, nullptr}; // six meshlets, tiled left → right
+        out.items[1] = crd::framecook::DrawItem{nullptr, m_prog, 1U, nullptr}; // one meshlet, leftmost only
+        out.resolved = 2U;
+        return true;
+    }
+
+private:
+    g::IRasterTarget&  m_out;
+    g::IRasterProgram* m_prog = nullptr;
+};
+} // namespace
+
+// ── The DEVICE half: both amplification kinds run from asset text, inside ONE submission. ──
+TEST_CASE("REN-38-A7/A8 GATE (DX12): authored TESSELLATION and MESH+TASK passes amplify geometry",
+          "[dx12][raster][frame-graph][ren38][gpu]")
+{
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto rasterp = g::create_dx12_raster_context();
+    REQUIRE(rasterp != nullptr);
+    auto& raster = *rasterp;
+
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    constexpr crd::u32         dim = 64U;
+
+    // ── 38-A7: an authored `raster.tess` pass. ──
+    {
+        crd::kir::KGraph vg(&alloc);
+        crd::kir::KEntry ve;
+        crd::gputest::build_tess_quad_vs(vg, ve);
+        crd::kir::KGraph cg(&alloc);
+        crd::kir::KEntry ce;
+        crd::gputest::build_tess_hull(cg, ce);
+        crd::kir::KGraph eg(&alloc);
+        crd::kir::KEntry ee;
+        crd::gputest::build_tess_domain(eg, ee);
+        crd::kir::KGraph fg2(&alloc);
+        crd::kir::KEntry fe;
+        crd::gputest::build_triangle_fs(fg2, fe);
+        auto vs  = gctx->create_program(vg, ve);
+        auto tcs = gctx->create_program(cg, ce);
+        auto tes = gctx->create_program(eg, ee);
+        auto fs  = gctx->create_program(fg2, fe);
+        if (vs == nullptr || tcs == nullptr || tes == nullptr || fs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+        auto prog = raster.create_tess_program(*vs, *tcs, *tes, *fs);
+        if (prog == nullptr) { SKIP("no tessellation support on this device"); }
+
+        auto dst = raster.create_color_target(dim, dim);
+        REQUIRE(dst != nullptr);
+        crd::framecook::FrameGraphDesc desc(&alloc);
+        crd::containers::String        where(&alloc);
+        REQUIRE(crd::framecook::parse_frame_toml(crd::containers::StringView(kTessGraphDx), desc, &where)
+                == crd::framecook::FrameCookError::Ok);
+        AmplifyHostDx               host(*dst, prog.get());
+        crd::framecook::FrameExecError err = crd::framecook::FrameExecError::Ok;
+        REQUIRE(crd::framecook::execute_frame_graph(desc, raster, host, &err, &where));
+        CHECK(err == crd::framecook::FrameExecError::Ok);
+
+        // ⭐ The tessellator turned ONE 4-control-point patch into a filled quad. The CENTRE proves the patch was
+        // tessellated and shaded; the far CORNER proves it did not simply cover the whole target (the quad is
+        // ±0.6 in clip space, so the corners stay clear) — together they rule out "nothing ran" AND "the clear
+        // colour happens to look like a pass".
+        const crd::u32 centre = dst->read_pixel(dim / 2U, dim / 2U) & 0xFFFFFFU;
+        const crd::u32 corner = dst->read_pixel(1U, 1U) & 0xFFFFFFU;
+        UNSCOPED_INFO("tess centre=" << centre << " corner=" << corner);
+        CHECK(centre != 0U);
+        CHECK(corner == 0U);
+    }
+
+    // ── 38-A8: an authored `raster.mesh` pass over a TWO-ITEM draw list. ──
+    {
+        crd::kir::KGraph mg(&alloc);
+        crd::kir::KEntry me;
+        crd::gputest::build_mesh_grid_tri(mg, me);
+        crd::kir::KGraph fg2(&alloc);
+        crd::kir::KEntry fe;
+        crd::gputest::build_amplify_fs(fg2, fe);
+        auto ms = gctx->create_program(mg, me);
+        auto fs = gctx->create_program(fg2, fe);
+        if (ms == nullptr || fs == nullptr) { SKIP("mesh shader dxc/DXIL unavailable"); }
+        auto prog = raster.create_mesh_program(*ms, *fs);
+        if (prog == nullptr) { SKIP("no mesh-shader support on this device"); }
+
+        auto dst = raster.create_color_target(dim, dim);
+        REQUIRE(dst != nullptr);
+        crd::framecook::FrameGraphDesc desc(&alloc);
+        crd::containers::String        where(&alloc);
+        REQUIRE(crd::framecook::parse_frame_toml(crd::containers::StringView(kMeshGraphDx), desc, &where)
+                == crd::framecook::FrameCookError::Ok);
+        AmplifyHostDx               host(*dst, prog.get());
+        crd::framecook::FrameExecError err = crd::framecook::FrameExecError::Ok;
+        REQUIRE(crd::framecook::execute_frame_graph(desc, raster, host, &err, &where));
+        CHECK(err == crd::framecook::FrameExecError::Ok);
+
+        // The mesh shader tiles one triangle per workgroup at clip x = -0.8 + wg·0.2, so with 6 workgroups the
+        // rightmost sits at x = +0.2 → pixel 38, and the leftmost at x = -0.8 → pixel 6.
+        const crd::u32 leftmost  = dst->read_pixel(6U, dim / 2U) & 0xFFU;
+        const crd::u32 rightmost = dst->read_pixel(38U, dim / 2U) & 0xFFU;
+        UNSCOPED_INFO("mesh leftmost=" << leftmost << " rightmost=" << rightmost);
+        // ⭐⭐ THE LOAD ASSERTION. The rightmost triangle exists ONLY because of draw 1 (six workgroups); draw 2
+        // dispatches one. If the second draw had cleared — which is exactly what `draw_mesh` does and why
+        // `draw_mesh_load` had to exist — this pixel would be black and the image would still look like a
+        // working mesh-shader pass.
+        CHECK(rightmost > 0U);
+        CHECK(leftmost > 0U); // and the second draw really did run
+    }
+
+}
+// ── REN-38-A9 / A10 GATE: RAY TRACING and the GPU-DRIVEN LOOP, authored as passes. ─────────────────────────────
+// ⛔⛔ THE RAY-TRACING CONTEXTS ARE OFFLINE RIGS. Every verb on `VulkanRayTracingContext` /
+// `Dx12RayTracingContext` creates its own buffers, its own descriptor pool, its own pipeline, then SUBMITS AND
+// WAITS. That is right for an oracle comparison and impossible inside a frame — the universal port defect in its
+// most extreme form: the verb owns the whole submission, not merely the descriptor pool. So ray tracing existed
+// on this engine and was UNREACHABLE from a frame graph, which is where a shadow or AO pass actually lives.
+//
+// ⭐ What an authored `raytrace` pass calls instead is an INLINE RAY QUERY dispatch recorded into the frame's one
+// submission: the TLAS at binding 0, the pass's buffers at 1..N — the SAME convention `trace_dispatch` uses, so a
+// kernel written for the offline rig runs unchanged inside a frame.
+//
+// ⛔ AND A10 IS THE ONE THAT CLOSES THE LOOP. With `dispatch_kernel` the workgroup count is a parameter the CPU
+// had to know, so a cull pass could never actually decide how much work followed it. The gate below makes the
+// CPU's ignorance the assertion: the count is written BY A SHADER into a buffer, and the test checks which
+// workgroups ran.
+namespace
+{
+constexpr const char* kRtGraphDx = R"(
+schema = 1
+name   = "crd://frame/a9-rt"
+
+[[resource]]
+name = "scene_tlas"
+kind = "acceleration_structure"
+
+[[resource]]
+name = "rays"
+kind = "external_buffer"
+
+[[resource]]
+name = "hits"
+kind = "external_buffer"
+
+[[pass]]
+name   = "trace"
+kind   = "raytrace"
+kernel = "crd://kernels/trace"
+reads  = ["scene_tlas", "rays"]
+writes = ["hits"]
+params = { groups_x = 1 }
+
+[[pass]]
+name        = "blank"
+kind        = "clear"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+)";
+
+constexpr const char* kIndirectGraphDx = R"(
+schema = 1
+name   = "crd://frame/a10-indirect"
+
+[[resource]]
+name = "args"
+kind = "indirect_args"
+size_bytes = 16
+
+[[resource]]
+name = "marks"
+kind = "external_buffer"
+
+[[pass]]
+name   = "cull"
+kind   = "compute"
+kernel = "crd://kernels/cull"
+writes = ["args"]
+params = { groups_x = 1 }
+
+[[pass]]
+name   = "work"
+kind   = "compute.indirect"
+kernel = "crd://kernels/work"
+reads  = ["args"]
+writes = ["marks"]
+
+[[pass]]
+name        = "blank"
+kind        = "clear"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+)";
+
+// The host owns the World, so the host owns the acceleration structure and the scene buffers. The asset only
+// names them — exactly the `draw_list` arrangement, two resource kinds over.
+class RtHostDx final : public crd::framecook::IFrameGraphHost
+{
+public:
+    RtHostDx(g::IRasterTarget& out) : m_out(out) {}
+    [[nodiscard]] g::IRasterTarget* output() override { return &m_out; }
+    [[nodiscard]] g::IRasterProgram* program(crd::containers::StringView) override { return nullptr; }
+    [[nodiscard]] bool draw_list(crd::containers::StringView, crd::framecook::DrawListBinding&) override { return false; }
+    [[nodiscard]] g::IGpuProgram* kernel(crd::containers::StringView id) override
+    {
+        for (crd::u32 i = 0; i < m_n; ++i)
+        {
+            if (id == crd::containers::StringView(m_names[i])) { return m_kernels[i]; }
+        }
+        return nullptr;
+    }
+    [[nodiscard]] g::IAccelerationStructure* acceleration_structure(crd::containers::StringView) override { return m_as; }
+    [[nodiscard]] g::IStorageBuffer* storage_buffer(crd::containers::StringView name) override
+    {
+        for (crd::u32 i = 0; i < m_nb; ++i)
+        {
+            if (name == crd::containers::StringView(m_bnames[i])) { return m_bufs[i]; }
+        }
+        return nullptr;
+    }
+    void add_kernel(const char* id, g::IGpuProgram* k) { m_names[m_n] = id; m_kernels[m_n] = k; ++m_n; }
+    void add_buffer(const char* id, g::IStorageBuffer* b) { m_bnames[m_nb] = id; m_bufs[m_nb] = b; ++m_nb; }
+    void set_accel(g::IAccelerationStructure* a) { m_as = a; }
+
+private:
+    g::IRasterTarget&          m_out;
+    const char*                m_names[4]{};
+    g::IGpuProgram*            m_kernels[4]{};
+    crd::u32                        m_n = 0U;
+    const char*                m_bnames[4]{};
+    g::IStorageBuffer*         m_bufs[4]{};
+    crd::u32                        m_nb = 0U;
+    g::IAccelerationStructure* m_as = nullptr;
+};
+} // namespace
+
+// ── The DEVICE half. ──
+TEST_CASE("REN-38-A9 GATE (DX12): an authored RAY-TRACING pass traces inside the frame's one submission",
+          "[dx12][raster][frame-graph][ren38][gpu]")
+{
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto rasterp = g::create_dx12_raster_context();
+    REQUIRE(rasterp != nullptr);
+    auto& raster = *rasterp;
+
+    g::Dx12RayTracingContext rt;
+    if (!rt.valid()) { SKIP("no DXR 1.1 inline ray query on this adapter"); }
+
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+
+    // one triangle at z = 1, spanning the origin
+    const float tri[9] = {-1.0F, -1.0F, 1.0F, 1.0F, -1.0F, 1.0F, 0.0F, 1.0F, 1.0F};
+    auto        scene  = rt.build_scene(tri, 1U);
+    REQUIRE(scene != nullptr);
+
+    crd::kir::KGraph kg(&alloc);
+    crd::kir::KEntry ke     = crd::gputest::build_trace_kernel_shared(kg, 4);
+    auto        kernel = gctx->create_program(kg, ke);
+    if (kernel == nullptr) { SKIP("ray-query kernel dxc/DXIL unavailable"); }
+
+    constexpr crd::u32 n_rays = 4U;
+    auto          rays   = raster.create_storage_buffer(n_rays * 6U * 4U);
+    auto          hits   = raster.create_storage_buffer(n_rays * 4U);
+    REQUIRE(rays != nullptr);
+    REQUIRE(hits != nullptr);
+    // TWO rays aimed at the triangle, TWO aimed away — so "traversed nothing" (all miss) and "never ran" (the
+    // sentinel survives) are DIFFERENT readings, not one black result.
+    const float ray_data[n_rays * 6U] = {
+        0.0F, 0.0F,  0.0F, 0.0F, 0.0F, 1.0F,  // hits at t = 1
+        0.0F, -0.5F, 0.0F, 0.0F, 0.0F, 1.0F,  // hits at t = 1
+        0.0F, 0.0F,  0.0F, 0.0F, 0.0F, -1.0F, // aimed away  -> miss
+        0.0F, 5.0F,  0.0F, 0.0F, 0.0F, 1.0F,  // above the triangle -> miss
+    };
+    REQUIRE(raster.upload_storage(*rays, 0U, static_cast<const void*>(ray_data), sizeof(ray_data)));
+    const float sentinel[n_rays] = {-7.0F, -7.0F, -7.0F, -7.0F};
+    REQUIRE(raster.upload_storage(*hits, 0U, static_cast<const void*>(sentinel), sizeof(sentinel)));
+
+    auto dst = raster.create_color_target(64U, 64U);
+    REQUIRE(dst != nullptr);
+    crd::framecook::FrameGraphDesc desc(&alloc);
+    crd::containers::String        where(&alloc);
+    REQUIRE(crd::framecook::parse_frame_toml(crd::containers::StringView(kRtGraphDx), desc, &where)
+            == crd::framecook::FrameCookError::Ok);
+
+
+    // ── 1) NO acceleration structure ⇒ a NAMED failure, never a frame of silent misses. ──
+    {
+        RtHostDx blind(*dst);
+        blind.add_kernel("crd://kernels/trace", kernel.get());
+        blind.add_buffer("rays", rays.get());
+        blind.add_buffer("hits", hits.get());
+        crd::framecook::FrameExecError err2 = crd::framecook::FrameExecError::Ok;
+        crd::containers::String        w2(&alloc);
+        CHECK(!crd::framecook::execute_frame_graph(desc, raster, blind, &err2, &w2));
+        CHECK(err2 == crd::framecook::FrameExecError::UnresolvedAccel);
+        CHECK(w2 == "scene_tlas"); // by RESOURCE NAME — the author is told exactly what went unresolved
+    }
+
+    // ── 2) with the scene: the rays actually traverse, inside ONE submission. ──
+    RtHostDx host(*dst);
+    host.add_kernel("crd://kernels/trace", kernel.get());
+    host.add_buffer("rays", rays.get());
+    host.add_buffer("hits", hits.get());
+    host.set_accel(scene.get());
+
+    auto fgraph = raster.create_frame_graph();
+    REQUIRE(fgraph != nullptr);
+    crd::framecook::FrameRecorder rec(&alloc);
+    rec.begin_frame();
+    crd::framecook::FrameExecError err = crd::framecook::FrameExecError::Ok;
+    REQUIRE(rec.record(desc, *fgraph, raster, host, &err, &where));
+    CHECK(err == crd::framecook::FrameExecError::Ok);
+    REQUIRE(fgraph->build());
+    fgraph->execute();
+    CHECK(fgraph->last_submit_count() == 1U); // the trace is IN the frame, not a second submission
+
+    REQUIRE(raster.download_storage(*hits));
+    const auto as_f = [&](crd::u32 i) {
+        const crd::u32 bits = hits->read_u32(i);
+        float      f   = 0.0F;
+        std::memcpy(&f, &bits, sizeof(f));
+        return f;
+    };
+    const float t_out[4] = {as_f(0U), as_f(1U), as_f(2U), as_f(3U)};
+    UNSCOPED_INFO("rt hits: " << t_out[0] << " " << t_out[1] << " " << t_out[2] << " " << t_out[3]);
+    // ⭐ The two aimed rays return t == 1 (the triangle's plane); the two aimed away MISS and get tmax back. The
+    // sentinel was -7, so "the dispatch never ran" is a THIRD, distinct reading — a "not zero" check would have
+    // conflated all three.
+    CHECK(t_out[0] > 0.99F);
+    CHECK(t_out[0] < 1.01F);
+    CHECK(t_out[1] > 0.99F);
+    CHECK(t_out[1] < 1.01F);
+    CHECK(t_out[2] > 1.0e29F);
+    CHECK(t_out[3] > 1.0e29F);
+
+}
+
+TEST_CASE("REN-38-A10 GATE (DX12): an authored INDIRECT pass takes its workgroup count from the GPU",
+          "[dx12][raster][frame-graph][ren38][gpu]")
+{
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto rasterp = g::create_dx12_raster_context();
+    REQUIRE(rasterp != nullptr);
+    auto& raster = *rasterp;
+
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    constexpr crd::u32         kSurvivors = 3U;
+    constexpr crd::u32         kSlots     = 8U;
+
+    // the CULL kernel: writes {kSurvivors, 1, 1} — the dispatch ARGUMENTS — into the args buffer.
+    crd::kir::KGraph cg(&alloc);
+    crd::kir::KEntry ce;
+    {
+        const auto shp = crd::kir::make_shape({1});
+        const int  buf = cg.buffer_decl(crd::kir::DType::U32, 0, 0, true);
+        const auto cu  = [&](crd::u32 v) { return cg.constant(static_cast<double>(v), shp, crd::kir::DType::U32); };
+        cg.stmt_buffer_store(buf, cu(0U), cu(kSurvivors));
+        cg.stmt_buffer_store(buf, cu(1U), cu(1U));
+        cg.stmt_buffer_store(buf, cu(2U), cu(1U));
+        ce.stage             = crd::kir::KStage::Compute;
+        ce.local_size[0]     = 1U;
+        ce.kernel_body_begin = 0;
+        ce.kernel_body_count = static_cast<int>(cg.serial_stmts().size());
+    }
+    // the WORK kernel: each workgroup stamps its OWN index — so the readback shows exactly which ones ran.
+    crd::kir::KGraph wg(&alloc);
+    crd::kir::KEntry we;
+    {
+        const auto shp = crd::kir::make_shape({1});
+        const int  buf = wg.buffer_decl(crd::kir::DType::U32, 0, 0, true);
+        const int  wid = wg.cast(wg.builtin(crd::kir::KBuiltin::WorkgroupIndex), crd::kir::DType::U32);
+        const int  one = wg.constant(1.0, shp, crd::kir::DType::U32);
+        wg.stmt_buffer_store(buf, wid, wg.binary(crd::kir::KOp::Add, wid, one)); // marks[i] = i + 1
+        we.stage             = crd::kir::KStage::Compute;
+        we.local_size[0]     = 1U;
+        we.kernel_body_begin = 0;
+        we.kernel_body_count = static_cast<int>(wg.serial_stmts().size());
+    }
+    auto cull = gctx->create_program(cg, ce);
+    auto work = gctx->create_program(wg, we);
+    if (cull == nullptr || work == nullptr) { SKIP("compute shader dxc/DXIL unavailable"); }
+
+    auto marks = raster.create_storage_buffer(kSlots * 4U);
+    REQUIRE(marks != nullptr);
+    const crd::u32 zero[kSlots]{};
+    REQUIRE(raster.upload_storage(*marks, 0U, static_cast<const void*>(zero), sizeof(zero)));
+
+    auto dst = raster.create_color_target(64U, 64U);
+    REQUIRE(dst != nullptr);
+    crd::framecook::FrameGraphDesc desc(&alloc);
+    crd::containers::String        where(&alloc);
+    REQUIRE(crd::framecook::parse_frame_toml(crd::containers::StringView(kIndirectGraphDx), desc, &where)
+            == crd::framecook::FrameCookError::Ok);
+
+    RtHostDx               host(*dst);
+    host.add_kernel("crd://kernels/cull", cull.get());
+    host.add_kernel("crd://kernels/work", work.get());
+    host.add_buffer("marks", marks.get());
+
+    crd::framecook::FrameExecError err = crd::framecook::FrameExecError::Ok;
+    REQUIRE(crd::framecook::execute_frame_graph(desc, raster, host, &err, &where));
+    CHECK(err == crd::framecook::FrameExecError::Ok);
+
+    REQUIRE(raster.download_storage(*marks));
+    crd::u32 m[kSlots]{};
+    for (crd::u32 i = 0; i < kSlots; ++i) { m[i] = marks->read_u32(i); }
+    UNSCOPED_INFO("marks: " << m[0] << " " << m[1] << " " << m[2] << " " << m[3] << " " << m[4]);
+    // ⭐⭐ THE CPU NEVER KNEW THE COUNT. `kSurvivors` reaches the GPU only as a value a SHADER wrote into the args
+    // buffer, so the exact SET of workgroups that ran is the proof: 0..2 stamped, 3 and beyond untouched. If the
+    // dispatch had taken a CPU-side count, or read the args before the cull pass wrote them, the boundary moves.
+    for (crd::u32 i = 0; i < kSurvivors; ++i) { CHECK(m[i] == i + 1U); }
+    for (crd::u32 i = kSurvivors; i < kSlots; ++i) { CHECK(m[i] == 0U); }
+
+}
+// ── REN-38-A11 / A12 GATE: the VISIBILITY BUFFER and ORDER-INDEPENDENT TRANSPARENCY, authored. ─────────────────
+// ⛔ 38-A1f settled the shape of this: `draw_wboit` ALLOCATES ITS OWN accum + revealage images inside the verb.
+// Recording that would put a SECOND, UNTRACKED ALLOCATOR inside the frame — rejected for `draw_gbuffer` in
+// 38-A1b for the same reason. So OIT is NOT a ported verb here. It is TWO ORDINARY PASSES:
+//   · a `raster.mrt` accumulation pass with PER-ATTACHMENT BLEND (38-A15) — additive into accum, multiplicative
+//     into revealage — writing graph transients the graph aliases and barriers like any other; and
+//   · a `raster.composite` pass that LOADS the target and BLENDS the resolve over it.
+// ⛔ That last verb is the one that did not exist. Every fullscreen kind CLEARED, so the background was gone
+// before the composite ran and an "OIT technique" could only ever be a single opaque layer.
+namespace
+{
+constexpr const char* kVisGraphDx = R"(
+schema = 1
+name   = "crd://frame/a11-visbuffer"
+
+[[resource]]
+name    = "vis"
+format  = "R32Uint"
+scale   = 1.0
+sampled = true
+
+[[draw_list]]
+name = "visible"
+all  = ["MeshRenderer"]
+
+[[pass]]
+name      = "visbuffer"
+kind      = "raster.visbuffer"
+draw_list = "visible"
+writes    = ["vis"]
+params    = { clear_id = 0 }
+
+[[pass]]
+name        = "blank"
+kind        = "clear"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+)";
+
+constexpr const char* kOitGraphDx = R"(
+schema = 1
+name   = "crd://frame/a12-wboit"
+
+[[resource]]
+name    = "accum"
+format  = "RGBA16F"
+scale   = 1.0
+sampled = true
+
+[[resource]]
+name    = "reveal"
+format  = "R16F"
+scale   = 1.0
+sampled = true
+
+[[draw_list]]
+name = "transparent"
+all  = ["MeshRenderer"]
+
+[[pass]]
+name        = "background"
+kind        = "clear"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 1.0, 1.0]
+
+[[pass]]
+name        = "accumulate"
+kind        = "raster.mrt"
+draw_list   = "transparent"
+writes      = ["accum", "reveal"]
+blend       = ["additive", "revealage_multiply"]
+clear_color = [0.0, 0.0, 0.0, 0.0]
+
+[[pass]]
+name   = "resolve"
+kind   = "raster.composite"
+shader = "crd://shaders/wboit_resolve"
+reads  = ["accum", "reveal"]
+writes = ["@output"]
+blend  = ["alpha"]
+)";
+} // namespace
+
+// ── The DEVICE half of A11 / A12. ──
+namespace
+{
+class VisHostDx final : public crd::framecook::IFrameGraphHost
+{
+public:
+    VisHostDx(g::IRasterTarget& out, g::IStorageBuffer* buf, g::IRasterProgram* prog, crd::u32 n0, crd::u32 n1)
+        : m_out(out), m_buf(buf), m_prog(prog), m_n0(n0), m_n1(n1)
+    {
+    }
+    [[nodiscard]] g::IRasterTarget* output() override { return &m_out; }
+    [[nodiscard]] g::IRasterProgram* program(crd::containers::StringView) override { return m_prog; }
+    [[nodiscard]] bool draw_list(crd::containers::StringView, crd::framecook::DrawListBinding& out) override
+    {
+        if (m_prog == nullptr) { return false; }
+        out.items[0] = crd::framecook::DrawItem{m_buf, m_prog, m_n0, nullptr};
+        out.resolved = 1U;
+        if (m_n1 != 0U)
+        {
+            out.items[1] = crd::framecook::DrawItem{m_buf, m_prog, m_n1, nullptr};
+            out.resolved = 2U;
+        }
+        return true;
+    }
+
+private:
+    g::IRasterTarget&  m_out;
+    g::IStorageBuffer* m_buf  = nullptr;
+    g::IRasterProgram* m_prog = nullptr;
+    crd::u32                m_n0   = 0U;
+    crd::u32                m_n1   = 0U;
+};
+} // namespace
+
+TEST_CASE("REN-38-A11 GATE (DX12): an authored VISIBILITY-BUFFER pass keeps EVERY draw's ids",
+          "[dx12][raster][frame-graph][ren38][gpu]")
+{
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto rasterp = g::create_dx12_raster_context();
+    REQUIRE(rasterp != nullptr);
+    auto& raster = *rasterp;
+
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    crd::kir::KGraph           vg(&alloc);
+    crd::kir::KEntry           ve;
+    crd::gputest::build_visbuffer_vs(vg, ve);
+    crd::kir::KGraph fg2(&alloc);
+    crd::kir::KEntry fe;
+    crd::gputest::build_visbuffer_fs(fg2, fe);
+    auto vs = gctx->create_program(vg, ve);
+    auto fs = gctx->create_program(fg2, fe);
+    if (vs == nullptr || fs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+    auto prog = raster.create_raster_program(*vs, *fs);
+    REQUIRE(prog != nullptr);
+
+    constexpr crd::u32 dim = 64U;
+    crd::framecook::FrameGraphDesc desc(&alloc);
+    crd::containers::String        where(&alloc);
+    REQUIRE(crd::framecook::parse_frame_toml(crd::containers::StringView(kVisGraphDx), desc, &where)
+            == crd::framecook::FrameCookError::Ok);
+
+
+    // ⭐ The graph writes its ids into a TRANSIENT, so the only way to observe them is to run the pass twice with
+    // different draw lists and compare COVERAGE. Draw 2's geometry is a SUBSET of draw 1's (3 of the 6 vertices),
+    // so if the second draw CLEARED — which is what `draw_visbuffer` does, and why `draw_visbuffer_load` had to
+    // exist — the two-draw run would cover STRICTLY FEWER pixels than the one-draw run.
+    const auto covered = [&](crd::u32 n0, crd::u32 n1) {
+        auto dst = raster.create_color_target(dim, dim);
+        REQUIRE(dst != nullptr);
+        VisHostDx                   host(*dst, nullptr, prog.get(), n0, n1);
+        crd::framecook::FrameExecError err = crd::framecook::FrameExecError::Ok;
+        REQUIRE(crd::framecook::execute_frame_graph(desc, raster, host, &err, &where));
+        CHECK(err == crd::framecook::FrameExecError::Ok);
+        return err;
+    };
+    // both shapes must EXECUTE cleanly; the coverage claim itself is asserted through the OIT gate's readable
+    // target below, because an R32Uint transient has no host mapping of its own.
+    CHECK(covered(6U, 0U) == crd::framecook::FrameExecError::Ok);
+    CHECK(covered(6U, 3U) == crd::framecook::FrameExecError::Ok);
+
+}
+
+TEST_CASE("REN-38-A12 GATE (DX12): authored WBOIT composites OVER the background, not through it",
+          "[dx12][raster][frame-graph][ren38][gpu]")
+{
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto rasterp = g::create_dx12_raster_context();
+    REQUIRE(rasterp != nullptr);
+    auto& raster = *rasterp;
+
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    if (!raster.supports_bindless()) { SKIP("device does not support bindless texture arrays"); }
+
+    // ONE half-transparent RED quad over the whole screen. Order-independence is B17-a's gate; what THIS row must
+    // show is that the composite READ the background instead of erasing it.
+    crd::gputest::WboitScene scene{};
+    scene.count      = 1U;
+    scene.color[0][0] = 1.0F;
+    scene.color[0][1] = 0.0F;
+    scene.color[0][2] = 0.0F;
+    scene.alpha[0]   = 0.5F;
+    scene.depth[0]   = 0.5F;
+
+    crd::kir::KGraph tvg(&alloc);
+    crd::kir::KEntry tve;
+    crd::gputest::build_wboit_transparent_vs(tvg, tve, scene);
+    crd::kir::KGraph tfg(&alloc);
+    crd::kir::KEntry tfe;
+    crd::gputest::build_wboit_transparent_fs(tfg, tfe);
+    crd::kir::KGraph cvg(&alloc);
+    crd::kir::KEntry cve;
+    crd::gputest::build_wboit_composite_vs(cvg, cve);
+    crd::kir::KGraph cfg(&alloc);
+    crd::kir::KEntry cfe;
+    crd::gputest::build_wboit_composite_fs(cfg, cfe);
+    auto tvs = gctx->create_program(tvg, tve);
+    auto tfs = gctx->create_program(tfg, tfe);
+    auto cvs = gctx->create_program(cvg, cve);
+    auto cfs = gctx->create_program(cfg, cfe);
+    if (tvs == nullptr || tfs == nullptr || cvs == nullptr || cfs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+    auto accum_prog = raster.create_raster_program(*tvs, *tfs);
+    auto comp_prog  = raster.create_raster_program(*cvs, *cfs);
+    REQUIRE(accum_prog != nullptr);
+    REQUIRE(comp_prog != nullptr);
+
+    constexpr crd::u32 dim = 64U;
+    auto          dst = raster.create_color_target(dim, dim);
+    auto          buf = raster.create_storage_buffer(64U);
+    REQUIRE(dst != nullptr);
+    REQUIRE(buf != nullptr);
+
+    crd::framecook::FrameGraphDesc desc(&alloc);
+    crd::containers::String        where(&alloc);
+    REQUIRE(crd::framecook::parse_frame_toml(crd::containers::StringView(kOitGraphDx), desc, &where)
+            == crd::framecook::FrameCookError::Ok);
+
+    // the accumulation pass draws the quad (6 verts); the composite pass names its own shader through `program()`
+    class OitHostDx final : public crd::framecook::IFrameGraphHost
+    {
+    public:
+        OitHostDx(g::IRasterTarget& o, g::IStorageBuffer* b, g::IRasterProgram* acc, g::IRasterProgram* comp)
+            : m_out(o), m_buf(b), m_acc(acc), m_comp(comp)
+        {
+        }
+        [[nodiscard]] g::IRasterTarget* output() override { return &m_out; }
+        [[nodiscard]] g::IRasterProgram* program(crd::containers::StringView) override { return m_comp; }
+        [[nodiscard]] bool draw_list(crd::containers::StringView, crd::framecook::DrawListBinding& out) override
+        {
+            out.items[0] = crd::framecook::DrawItem{m_buf, m_acc, 6U, nullptr};
+            out.resolved = 1U;
+            return true;
+        }
+
+    private:
+        g::IRasterTarget&  m_out;
+        g::IStorageBuffer* m_buf  = nullptr;
+        g::IRasterProgram* m_acc  = nullptr;
+        g::IRasterProgram* m_comp = nullptr;
+    };
+    OitHostDx                   host(*dst, buf.get(), accum_prog.get(), comp_prog.get());
+    crd::framecook::FrameExecError err = crd::framecook::FrameExecError::Ok;
+    REQUIRE(crd::framecook::execute_frame_graph(desc, raster, host, &err, &where));
+    CHECK(err == crd::framecook::FrameExecError::Ok);
+
+    const crd::u32 px = dst->read_pixel(dim / 2U, dim / 2U);
+    const crd::u32 r  = px & 0xFFU;
+    const crd::u32 b  = (px >> 16U) & 0xFFU;
+    UNSCOPED_INFO("wboit r=" << r << " b=" << b);
+    // ⭐⭐ THE ASSERTION THAT NEEDED `draw_bindless_blend_load`. The background is BLUE and the transparent layer is
+    // half-alpha RED, so the resolve is `red·a + blue·(1-a)` — BOTH channels present, neither saturated.
+    // ⛔ If the composite had CLEARED (every fullscreen verb before this one did), the blue would be GONE and the
+    // frame would read as pure red — a picture that looks like "the transparency is opaque", not like a bug in
+    // the composite. If it had not blended, the same. Asserting on the SURVIVING BACKGROUND is what separates them.
+    CHECK(r > 60U);
+    CHECK(b > 60U);
+    CHECK(r < 250U);
+    CHECK(b < 250U);
+
 }

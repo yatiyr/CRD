@@ -111,6 +111,65 @@ bool to_pass_kind(std::string_view s, FramePassKind& out)
     if (s == "raster.mrt")        { out = FramePassKind::RasterMrt;        return true; }
     if (s == "compute")           { out = FramePassKind::Compute;          return true; }
     if (s == "present")           { out = FramePassKind::Present;          return true; }
+    // REN-38-A6: the utility passes.
+    if (s == "clear")             { out = FramePassKind::Clear;            return true; }
+    if (s == "copy")              { out = FramePassKind::Copy;             return true; }
+    if (s == "blit")              { out = FramePassKind::Blit;             return true; }
+    if (s == "resolve")           { out = FramePassKind::Resolve;          return true; }
+    // REN-38-A7 / A8: the amplification kinds.
+    if (s == "raster.tess")       { out = FramePassKind::RasterTess;       return true; }
+    if (s == "raster.mesh")       { out = FramePassKind::RasterMesh;       return true; }
+    // REN-38-A9 / A10: ray tracing and the GPU-driven loop.
+    if (s == "raster.visbuffer")     { out = FramePassKind::RasterVisbuffer;    return true; }
+    if (s == "raster.composite")     { out = FramePassKind::RasterComposite;    return true; }
+    if (s == "raytrace")             { out = FramePassKind::RayTrace;           return true; }
+    if (s == "raytrace.pipeline")    { out = FramePassKind::RayTracePipeline;   return true; }
+    if (s == "compute.indirect")     { out = FramePassKind::ComputeIndirect;    return true; }
+    if (s == "raster.mesh.indirect") { out = FramePassKind::RasterMeshIndirect; return true; }
+    return false;
+}
+// REN-38-A13: the closed sets for per-pass render state. Every miss is a NAMED cook error — a typo that fell
+// back to the default would render at 1×1 while the asset says 2×2, and nothing in the frame would disagree.
+bool to_shading_rate(std::string_view s, crd::gpu::ShadingRate& out)
+{
+    using R = crd::gpu::ShadingRate;
+    if (s == "1x1") { out = R::Rate1x1; return true; }
+    if (s == "1x2") { out = R::Rate1x2; return true; }
+    if (s == "2x1") { out = R::Rate2x1; return true; }
+    if (s == "2x2") { out = R::Rate2x2; return true; }
+    if (s == "2x4") { out = R::Rate2x4; return true; }
+    if (s == "4x2") { out = R::Rate4x2; return true; }
+    if (s == "4x4") { out = R::Rate4x4; return true; }
+    return false;
+}
+bool to_rate_combiner(std::string_view s, crd::gpu::ShadingRateCombiner& out)
+{
+    using C = crd::gpu::ShadingRateCombiner;
+    if (s == "keep")    { out = C::Keep;    return true; }
+    if (s == "replace") { out = C::Replace; return true; }
+    if (s == "min")     { out = C::Min;     return true; }
+    if (s == "max")     { out = C::Max;     return true; }
+    if (s == "mul")     { out = C::Mul;     return true; }
+    return false;
+}
+bool to_conservative(std::string_view s, crd::gpu::ConservativeMode& out)
+{
+    using M = crd::gpu::ConservativeMode;
+    if (s == "off")          { out = M::Off;          return true; }
+    if (s == "overestimate") { out = M::Overestimate; return true; }
+    if (s == "underestimate"){ out = M::Underestimate;return true; }
+    return false;
+}
+bool to_queue(std::string_view s, FrameQueue& out)
+{
+    if (s == "graphics") { out = FrameQueue::Graphics; return true; }
+    if (s == "async")    { out = FrameQueue::Async;    return true; }
+    return false;
+}
+bool to_blit_filter(std::string_view s, FrameBlitFilter& out)
+{
+    if (s == "nearest") { out = FrameBlitFilter::Nearest; return true; }
+    if (s == "linear")  { out = FrameBlitFilter::Linear;  return true; }
     return false;
 }
 bool to_format(std::string_view s, crd::gpu::FgImageFormat& out)
@@ -151,6 +210,19 @@ bool to_cull(std::string_view s, FrameCullMode& out)
     if (s == "none")              { out = FrameCullMode::None;             return true; }
     if (s == "frustum")           { out = FrameCullMode::Frustum;          return true; }
     if (s == "frustum+occlusion") { out = FrameCullMode::FrustumOcclusion; return true; }
+    return false;
+}
+// REN-38-A15: the closed blend set. A small named set rather than raw src/dst/op factors, so the cooker can
+// VERIFY what an asset asked for — an open factor triple can only be obeyed, never checked.
+bool to_blend(std::string_view s, crd::gpu::BlendMode& out)
+{
+    using B = crd::gpu::BlendMode;
+    if (s == "opaque")             { out = B::Opaque;             return true; }
+    if (s == "alpha")              { out = B::Alpha;              return true; }
+    if (s == "premultiplied")      { out = B::PremultipliedAlpha; return true; }
+    if (s == "additive")           { out = B::Additive;           return true; }
+    if (s == "multiply")           { out = B::Multiply;           return true; }
+    if (s == "revealage_multiply") { out = B::RevealageMultiply;  return true; }
     return false;
 }
 bool to_sort(std::string_view s, FrameSortMode& out)
@@ -233,6 +305,7 @@ const char* frame_cook_error_text(FrameCookError err) noexcept
     case FrameCookError::UnknownFormat:         return "unknown resource `format`";
     case FrameCookError::UnknownCompare:        return "unknown `depth` comparison";
     case FrameCookError::UnknownSort:           return "unknown draw-list `sort`";
+    case FrameCookError::UnknownBlend:          return "unknown `blend` mode";
     case FrameCookError::UnknownCull:           return "unknown draw-list `cull`";
     case FrameCookError::UnknownMaterialPass:   return "unknown `material_pass`";
     case FrameCookError::UnknownForEach:        return "unknown `for_each` generator";
@@ -253,6 +326,26 @@ const char* frame_cook_error_text(FrameCookError err) noexcept
     case FrameCookError::AnchorUnknownPass:     return "an `[[anchor]]` names a pass that does not exist";
     case FrameCookError::UnresolvedInclude:     return "an included graph could not be resolved by name";
     case FrameCookError::IncludeCycle:          return "the includes form a CYCLE";
+    case FrameCookError::PresentNeedsOneRead:   return "a present pass must read EXACTLY ONE resource";
+    case FrameCookError::PresentWritesNothing:  return "a present pass declares a write; a present produces nothing";
+    case FrameCookError::PresentSourceInternal: return "a present pass reads a TRANSIENT; its memory is aliased away";
+    case FrameCookError::TransferNeedsOneRead:  return "a copy/blit/resolve pass must read EXACTLY ONE source";
+    case FrameCookError::TransferNeedsOneWrite: return "a copy/blit/resolve/clear pass must write EXACTLY ONE target";
+    case FrameCookError::ClearReadsNothing:     return "a clear pass declares a read; a clear consumes nothing";
+    case FrameCookError::UnknownFilter:         return "a `filter` that is not `nearest` or `linear`";
+    case FrameCookError::AmplifyNeedsCount:     return "a tess/mesh pass needs a draw list or a `patches`/`groups` count";
+    case FrameCookError::RayTraceNeedsAccel:    return "a raytrace pass reads no acceleration structure";
+    case FrameCookError::IndirectNeedsArgs:     return "an indirect pass reads no `indirect_args` buffer";
+    case FrameCookError::IndirectArgsNotArgs:   return "an indirect pass's declared reads contain no `indirect_args` buffer";
+    case FrameCookError::AccelIsExternal:       return "an acceleration structure was given a size/format; the graph never creates one";
+    case FrameCookError::VisbufferNeedsUintTarget: return "a visibility-buffer pass writes a target that is not R32Uint";
+    case FrameCookError::CompositeNeedsBlend:      return "a composite pass declares no blend; it would erase the background";
+    case FrameCookError::UnknownShadingRate:       return "unknown `shading_rate` (1x1/1x2/2x1/2x2/2x4/4x2/4x4)";
+    case FrameCookError::UnknownRateCombiner:      return "unknown `rate_combiner` (keep/replace/min/max/mul)";
+    case FrameCookError::UnknownConservative:      return "unknown `conservative` (off/overestimate/underestimate)";
+    case FrameCookError::UnknownQueue:             return "unknown `queue` (graphics/async)";
+    case FrameCookError::AsyncQueueNeedsCompute:   return "a raster pass asked for the async-compute queue";
+    case FrameCookError::RtPipelineNeedsThree:     return "a raytrace.pipeline pass needs raygen + miss + closest_hit";
     }
     return "unknown error";
 }
@@ -380,7 +473,15 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
                 if (str_eq(out.resources[i].name, *rn)) { set_where(where, *rn); return FrameCookError::DuplicateName; }
             }
             const auto kind = (*t)["kind"].value_or(std::string_view{"transient_image"});
-            r.kind = (kind == "transient_buffer") ? FrameResourceKind::TransientBuffer : FrameResourceKind::TransientImage;
+            // REN-38-B3/B4: the closed set of resource kinds. ⛔ An UNKNOWN kind must be a NAMED rejection — the
+            // old `?:` silently treated every typo as a transient IMAGE, so `kind = "indirect_args"` with a
+            // misspelling would have produced a 2-D texture and a pass that reads garbage arguments.
+            if (kind == "transient_buffer")           { r.kind = FrameResourceKind::TransientBuffer; }
+            else if (kind == "indirect_args")         { r.kind = FrameResourceKind::IndirectArgs; }
+            else if (kind == "external_buffer")       { r.kind = FrameResourceKind::ExternalBuffer; }
+            else if (kind == "acceleration_structure"){ r.kind = FrameResourceKind::AccelerationStructure; }
+            else if (kind == "transient_image")       { r.kind = FrameResourceKind::TransientImage; }
+            else { set_where(where, kind); return FrameCookError::UnknownFormat; }
             if (const auto f = (*t)["format"].value<std::string_view>())
             {
                 if (!to_format(*f, r.format)) { set_where(where, *f); return FrameCookError::UnknownFormat; }
@@ -492,7 +593,41 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
             if (const auto v = (*t)["view"].value<std::string_view>())      { set_str(p.view, *v); }
             if (const auto v = (*t)["shader"].value<std::string_view>())    { set_str(p.shader, *v); }
             if (const auto v = (*t)["kernel"].value<std::string_view>())    { set_str(p.kernel, *v); }
+            if (const auto v = (*t)["raygen"].value<std::string_view>())      { set_str(p.raygen, *v); }
+            if (const auto v = (*t)["miss"].value<std::string_view>())        { set_str(p.miss, *v); }
+            if (const auto v = (*t)["closest_hit"].value<std::string_view>()) { set_str(p.closest_hit, *v); }
             if (const auto v = (*t)["technique"].value<std::string_view>()) { set_str(p.technique, *v); }
+            if (const auto v = (*t)["filter"].value<std::string_view>())
+            {
+                if (!to_blit_filter(*v, p.filter)) { set_where(where, *v); return FrameCookError::UnknownFilter; }
+            }
+            // REN-38-A13 / A14: per-pass render state and queue placement.
+            if (const auto v = (*t)["shading_rate"].value<std::string_view>())
+            {
+                if (!to_shading_rate(*v, p.shading_rate)) { set_where(where, *v); return FrameCookError::UnknownShadingRate; }
+            }
+            if (const auto v = (*t)["rate_combiner"].value<std::string_view>())
+            {
+                if (!to_rate_combiner(*v, p.rate_combiner)) { set_where(where, *v); return FrameCookError::UnknownRateCombiner; }
+            }
+            if (const auto v = (*t)["conservative"].value<std::string_view>())
+            {
+                if (!to_conservative(*v, p.conservative)) { set_where(where, *v); return FrameCookError::UnknownConservative; }
+            }
+            if (const auto v = (*t)["queue"].value<std::string_view>())
+            {
+                if (!to_queue(*v, p.queue)) { set_where(where, *v); return FrameCookError::UnknownQueue; }
+            }
+            if (const auto* barr = (*t)["blend"].as_array())
+            {
+                for (const auto& b : *barr)
+                {
+                    const auto bs = b.value<std::string_view>();
+                    crd::gpu::BlendMode bm{};
+                    if (!bs || !to_blend(*bs, bm)) { set_where(where, bs ? *bs : ""); return FrameCookError::UnknownBlend; }
+                    p.blend.push_back(bm);
+                }
+            }
             if (const auto v = (*t)["material_pass"].value<std::string_view>())
             {
                 if (!to_material_pass(*v, p.material_pass)) { set_where(where, *v); return FrameCookError::UnknownMaterialPass; }
@@ -586,6 +721,22 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
         }
     }
 
+    // ── ⭐ REN-38-B4: an ACCELERATION STRUCTURE is EXTERNAL. ──
+    // ⛔ It is the host's, like `@output`: building a BLAS/TLAS needs scene geometry, which lives in the World,
+    // which this module must never depend on. So a size or a format on one is not a harmless extra field — it
+    // means the author believed the graph would ALLOCATE it, and every later question ("why is it empty?") starts
+    // from that wrong belief. Rejected while the file is still open.
+    for (crd::usize i = 0; i < desc.resources.size(); ++i)
+    {
+        const FrameResourceDesc& r = desc.resources[i];
+        if (r.kind != FrameResourceKind::AccelerationStructure) { continue; }
+        if (r.size_bytes != 0U || r.width != 0U || r.height != 0U || r.scale > 0.0F)
+        {
+            set_where(where, std::string_view(r.name.c_str(), r.name.size()));
+            return FrameCookError::AccelIsExternal;
+        }
+    }
+
     bool wrote_output = false;
     for (crd::usize pi = 0; pi < desc.passes.size(); ++pi)
     {
@@ -606,6 +757,217 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
         {
             set_where(where, std::string_view(p.name.c_str(), p.name.size()));
             return FrameCookError::MissingShader;
+        }
+        // ── ⭐ REN-38-A14: only COMPUTE-SHAPED work can go on the async-compute queue. ──
+        // ⛔ A compute queue cannot rasterise. A raster pass that asked for it would either be silently moved back
+        // to graphics (a perf claim the frame never delivered) or submitted somewhere it cannot run. Rejected.
+        if (p.queue == FrameQueue::Async && p.kind != FramePassKind::Compute
+            && p.kind != FramePassKind::ComputeIndirect && p.kind != FramePassKind::RayTrace)
+        {
+            set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+            return FrameCookError::AsyncQueueNeedsCompute;
+        }
+        // ── ⭐ REN-38-A11: what a VISIBILITY-BUFFER pass may say. ──
+        // ⛔ Its target MUST be R32Uint. A primitive id written into an RGBA8 attachment is quantised to 8 bits
+        // per channel, so ids beyond 255 alias onto each other and the deferred materialisation shades the WRONG
+        // MESH — a plausible picture with the wrong materials, which is far worse than a black one.
+        if (p.kind == FramePassKind::RasterVisbuffer)
+        {
+            if (p.draw_list.empty())
+            {
+                set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                return FrameCookError::MissingDrawList;
+            }
+            for (crd::usize w = 0; w < p.writes.size(); ++w)
+            {
+                const FrameResourceDesc* rd = find_resource(p.writes[w].name);
+                if (rd != nullptr && rd->format != crd::gpu::FgImageFormat::R32Uint)
+                {
+                    set_where(where, std::string_view(p.writes[w].name.c_str(), p.writes[w].name.size()));
+                    return FrameCookError::VisbufferNeedsUintTarget;
+                }
+            }
+        }
+        // ── ⭐ REN-38-A12: what a COMPOSITE pass may say. ──
+        // ⛔ A composite with no blend is a fullscreen pass that OVERWRITES — which is exactly the bug this kind
+        // exists to prevent, and it would look like "the transparency layer is opaque" rather than like a missing
+        // declaration. So the blend is REQUIRED, not defaulted.
+        if (p.kind == FramePassKind::RasterComposite)
+        {
+            if (p.shader.empty())
+            {
+                set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                return FrameCookError::MissingShader;
+            }
+            if (p.blend.size() == 0U || p.blend[0] == crd::gpu::BlendMode::Opaque)
+            {
+                set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                return FrameCookError::CompositeNeedsBlend;
+            }
+        }
+        // ── ⭐ REN-38-A9: what a RAY-TRACING pass may say. ──
+        // It names a KERNEL (an inline-ray-query compute shader) and READS an acceleration structure. ⛔ Without
+        // the AS it would traverse nothing and every ray would miss — a black image that looks exactly like a
+        // scene with no geometry, which is the single hardest RT bug to attribute.
+        // ── ⭐ REN-38-A16: a ray-tracing PIPELINE needs ALL THREE programs and an acceleration structure. ──
+        // ⛔ Two of three is not a degraded pipeline, it is an INVALID state object — and a missing miss shader in
+        // particular produces rays that hit nothing and write nothing, which reads as an empty scene.
+        if (p.kind == FramePassKind::RayTracePipeline)
+        {
+            if (p.raygen.empty() || p.miss.empty() || p.closest_hit.empty())
+            {
+                set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                return FrameCookError::RtPipelineNeedsThree;
+            }
+            bool has_as = false;
+            for (crd::usize r = 0; r < p.reads.size() && !has_as; ++r)
+            {
+                const FrameResourceDesc* rd = find_resource(p.reads[r].name);
+                has_as = rd != nullptr && rd->kind == FrameResourceKind::AccelerationStructure;
+            }
+            if (!has_as)
+            {
+                set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                return FrameCookError::RayTraceNeedsAccel;
+            }
+        }
+        if (p.kind == FramePassKind::RayTrace)
+        {
+            if (p.kernel.empty())
+            {
+                set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                return FrameCookError::MissingShader;
+            }
+            bool has_as = false;
+            for (crd::usize r = 0; r < p.reads.size() && !has_as; ++r)
+            {
+                const FrameResourceDesc* rd = find_resource(p.reads[r].name);
+                has_as = rd != nullptr && rd->kind == FrameResourceKind::AccelerationStructure;
+            }
+            if (!has_as)
+            {
+                set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                return FrameCookError::RayTraceNeedsAccel;
+            }
+        }
+        // ── ⭐ REN-38-A10: what an INDIRECT pass may say. ──
+        // The `args` parameter names the buffer holding the count. ⛔ It must exist AND be an `indirect_args`
+        // resource: an ordinary transient buffer is created without the INDIRECT usage flag, so binding one as
+        // arguments is invalid on Vulkan and an untransitionable state on D3D12 — and neither flag can be added
+        // after creation. Catching the kind here is the only place it can be caught before the device refuses.
+        if (p.kind == FramePassKind::ComputeIndirect || p.kind == FramePassKind::RasterMeshIndirect)
+        {
+            if (p.kind == FramePassKind::ComputeIndirect && p.kernel.empty())
+            {
+                set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                return FrameCookError::MissingShader;
+            }
+            if (p.kind == FramePassKind::RasterMeshIndirect && p.shader.empty())
+            {
+                set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                return FrameCookError::MissingShader;
+            }
+            const FrameResourceDesc* args = nullptr;
+            for (crd::usize r = 0; r < p.reads.size() && args == nullptr; ++r)
+            {
+                const FrameResourceDesc* rd = find_resource(p.reads[r].name);
+                if (rd != nullptr && rd->kind == FrameResourceKind::IndirectArgs) { args = rd; }
+            }
+            if (args == nullptr)
+            {
+                // Distinguish "named nothing" from "named the wrong kind" — they are different mistakes and the
+                // author fixes them differently.
+                bool any_read = p.reads.size() > 0U;
+                set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                return any_read ? FrameCookError::IndirectArgsNotArgs : FrameCookError::IndirectNeedsArgs;
+            }
+        }
+        // ── ⭐ REN-38-A7 / A8: what an AMPLIFICATION pass may say. ──
+        // The program is named exactly as a fullscreen pass names one — the HOST decides whether that id resolves
+        // to a `create_tess_program` or a `create_mesh_program`, because which stages a cooked program carries is
+        // a property of the PROGRAM, not of the graph. What the graph must state is WHAT TO DISPATCH.
+        if (p.kind == FramePassKind::RasterTess || p.kind == FramePassKind::RasterMesh)
+        {
+            if (p.shader.empty())
+            {
+                set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                return FrameCookError::MissingShader;
+            }
+            // ⛔ A DRAW LIST or an explicit count — one or the other, never neither. With neither, the runtime
+            // would dispatch ZERO patches / ZERO workgroups: a black image, no error, and nothing in the asset to
+            // point at. `patches` / `groups` are PARAMETERS (a dispatch size is not topology), and a draw list
+            // wins when both are present because a scene-driven pass is per-mesh by definition.
+            bool has_count = !p.draw_list.empty();
+            for (crd::usize k = 0; !has_count && k < p.params.size(); ++k)
+            {
+                const std::string_view pn(p.params[k].name.c_str(), p.params[k].name.size());
+                if ((pn == "patches" || pn == "groups") && p.params[k].v[0] > 0.0) { has_count = true; }
+            }
+            if (!has_count)
+            {
+                set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                return FrameCookError::AmplifyNeedsCount;
+            }
+        }
+        // ── ⭐ REN-38-A6: what a UTILITY pass may say. ──
+        // ⛔ EXACTLY ONE source and EXACTLY ONE destination for copy/blit/resolve. Zero of either has nothing to
+        // do; two of either means the executor picks one and the author is never told which. Both are silent, and
+        // "the image looks almost right" is the worst possible symptom to debug.
+        if (p.kind == FramePassKind::Copy || p.kind == FramePassKind::Blit || p.kind == FramePassKind::Resolve)
+        {
+            if (p.reads.size() != 1U)
+            {
+                set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                return FrameCookError::TransferNeedsOneRead;
+            }
+            if (p.writes.size() != 1U)
+            {
+                set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                return FrameCookError::TransferNeedsOneWrite;
+            }
+        }
+        // A clear PRODUCES a target and consumes nothing. A declared read would make the dependency sort order
+        // this pass AFTER whoever wrote that resource, for no reason — and, worse, would read as intent.
+        if (p.kind == FramePassKind::Clear)
+        {
+            if (p.writes.size() == 0U)
+            {
+                set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                return FrameCookError::TransferNeedsOneWrite;
+            }
+            if (p.reads.size() != 0U)
+            {
+                set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                return FrameCookError::ClearReadsNothing;
+            }
+        }
+        // ── ⭐ REN-38-A5: what a PRESENT pass may say. ──
+        // A present is a SINK: it consumes one finished canvas and produces nothing. All three rules below reject
+        // a graph that would otherwise build, execute and put a wrong (or no) image on screen:
+        if (p.kind == FramePassKind::Present)
+        {
+            // ⛔ EXACTLY ONE read. Zero ⇒ nothing to present and the executor would have to guess `@output`;
+            // two ⇒ the executor picks one and the author never learns which. Both are silent.
+            if (p.reads.size() != 1U)
+            {
+                set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                return FrameCookError::PresentNeedsOneRead;
+            }
+            // A write would make a present look like a producer to the dependency sort, so a later pass could be
+            // ordered AFTER the frame was already on screen.
+            if (p.writes.size() != 0U)
+            {
+                set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                return FrameCookError::PresentWritesNothing;
+            }
+            // ⛔ THE SOURCE MUST OUTLIVE THE GRAPH. A transient's memory is ALIASED and retired the instant its
+            // last reader finishes — by the time the surface blits, another transient may legally own those
+            // bytes. Rejected at COOK time, because at run time it is a garbage frame, not a crash.
+            if (!is_sentinel(p.reads[0].name))
+            {
+                set_where(where, std::string_view(p.reads[0].name.c_str(), p.reads[0].name.size()));
+                return FrameCookError::PresentSourceInternal;
+            }
         }
         const auto check_refs = [&](const crd::containers::Array<FrameResourceRef>& refs) -> FrameCookError {
             for (crd::usize i = 0; i < refs.size(); ++i)
@@ -645,6 +1007,17 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
     // importantly, a sign the author mistyped a name — `build()` already rejects it at runtime; we reject earlier)
     for (crd::usize ri = 0; ri < desc.resources.size(); ++ri)
     {
+        // ⛔ REN-38-B4: an ACCELERATION STRUCTURE is EXEMPT — it is external (the host built it), so no pass in
+        // this graph writes it and requiring one would make every ray-tracing asset invalid. The rule this loop
+        // enforces is "a resource the GRAPH owns must have a producer"; an AS is not one the graph owns.
+        // ⛔ An ACCELERATION STRUCTURE and an EXTERNAL BUFFER are both the HOST's — no pass in this graph writes
+        // them, and demanding a producer would make every ray-tracing asset, and every graph that consumes scene
+        // geometry, invalid. The rule is "a resource the GRAPH owns must have a producer"; neither is one.
+        if (desc.resources[ri].kind == FrameResourceKind::AccelerationStructure
+            || desc.resources[ri].kind == FrameResourceKind::ExternalBuffer)
+        {
+            continue;
+        }
         bool written = false;
         for (crd::usize pi = 0; pi < desc.passes.size() && !written; ++pi)
         {
@@ -786,6 +1159,8 @@ crd::containers::Array<crd::u8> cook_frame_graph(const FrameGraphDesc& desc, crd
         put_str(out, p.shader);
         put_str(out, p.kernel);
         put_str(out, p.technique);
+        put_u32(out, static_cast<crd::u32>(p.blend.size()));
+        for (crd::usize k = 0; k < p.blend.size(); ++k) { put_u8(out, static_cast<crd::u8>(p.blend[k])); }
         put_u8(out, static_cast<crd::u8>(p.material_pass));
         put_u8(out, static_cast<crd::u8>(p.for_each));
         put_u32(out, p.for_each_arg);
@@ -923,6 +1298,8 @@ bool read_frame_graph(crd::containers::ConstSpan<crd::u8> bytes, FrameGraphDesc&
         c.strv(p.shader);
         c.strv(p.kernel);
         c.strv(p.technique);
+        const crd::u32 nbl = c.u32v();
+        for (crd::u32 k = 0; k < nbl && c.ok; ++k) { p.blend.push_back(static_cast<crd::gpu::BlendMode>(c.u8v())); }
         p.material_pass   = static_cast<FrameMaterialPass>(c.u8v());
         p.for_each        = static_cast<FrameForEach>(c.u8v());
         p.for_each_arg    = c.u32v();

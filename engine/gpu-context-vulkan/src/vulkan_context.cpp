@@ -97,6 +97,7 @@ public:
     [[nodiscard]] bool     cluster_as() const noexcept override { return m_cluster_as; }             // FA-3
     [[nodiscard]] bool     linear_swept_spheres() const noexcept override { return m_lss; }          // B18-f
     [[nodiscard]] bool     tessellation() const noexcept override { return m_tessellation; } // B4-tess: tess + patch-ctrl-points
+    [[nodiscard]] bool     geometry_shader() const noexcept override { return m_geometry_shader; } // REN-38-A11
     [[nodiscard]] bool     render_capable() const noexcept override { return m_windowed; }
     [[nodiscard]] bool     present_capable() const noexcept override { return m_present_capable; }   // RET-2
     [[nodiscard]] bool     headless_surface() const noexcept override { return m_headless_surface; } // RET-2
@@ -135,6 +136,25 @@ public:
         }
 
         // B4: a MESH shader (the modern amplification path) — emit GL_EXT_mesh_shader GLSL → SPIR-V (1.6) → a mesh shader object.
+        // ── ⛔⛔ REN-38-A16: the RAY-TRACING STAGES were MISSING from this dispatch. ──
+        // `emit_rt_stage_glsl` has existed since FA-2 and the SPIR-V compiler has mapped RayGen/AnyHit/ClosestHit/
+        // Miss to their shaderc kinds all along — but `create_program(KGraph, KEntry)` never routed to it, so a
+        // CKIR ray-tracing entry fell through to the elementwise-compute tail and returned NULL. The whole
+        // ray-tracing-PIPELINE half of the IR was unreachable from the one entry point every consumer uses.
+        // Exactly the shape of the DX12 `KStage::Compute` gap 38-A10 found: an emitter written, wired to nothing.
+        if (entry.stage == crd::kir::KStage::RayGen || entry.stage == crd::kir::KStage::ClosestHit
+            || entry.stage == crd::kir::KStage::Miss || entry.stage == crd::kir::KStage::AnyHit)
+        {
+            crd::kir::GlslKernel kern(a);
+            if (!crd::kir::emit_rt_stage_glsl(graph, entry, a, kern, invocation_reorder())) { return nullptr; }
+            ShaderStage stage = ShaderStage::RayGen;
+            if (entry.stage == crd::kir::KStage::ClosestHit) { stage = ShaderStage::ClosestHit; }
+            else if (entry.stage == crd::kir::KStage::Miss)  { stage = ShaderStage::Miss; }
+            else if (entry.stage == crd::kir::KStage::AnyHit) { stage = ShaderStage::AnyHit; }
+            const auto spv = compile_glsl_to_spirv(stage, crd::containers::to_view(kern.source), "ckir_rt", a);
+            if (!spv.ok) { return nullptr; }
+            return create_program(stage, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()));
+        }
         if (entry.stage == crd::kir::KStage::Mesh)
         {
             if (!crd::kir::entry_valid(graph, entry)) { return nullptr; }
@@ -450,6 +470,13 @@ private:
         // B2-c: a CUBE-ARRAY texture (view + the SampledCubeArray SPIR-V capability) needs this feature (VUID-...-viewType-01004
         // / VUID-...-pCode-08740). Graphics-capable only.
         if (m_graphics_family != UINT32_MAX) { enabled_feats.imageCubeArray = avail_feats.imageCubeArray; }
+        // ⛔ REN-38-A11: a FRAGMENT shader that reads `gl_PrimitiveID` — which is the ENTIRE POINT of a visibility
+        // buffer — lowers to SPIR-V declaring the GEOMETRY capability, and that capability REQUIRES this feature
+        // (VUID-VkShaderCreateInfoEXT-pCode-08740). Without it a strict driver refuses to create the shader and a
+        // lenient one runs it anyway, so the visibility-buffer path worked on this machine while emitting a
+        // validation error on every program creation — found when the A11 gate ran it under a capture.
+        if (m_graphics_family != UINT32_MAX) { enabled_feats.geometryShader = avail_feats.geometryShader; }
+        m_geometry_shader = m_graphics_family != UINT32_MAX && avail_feats.geometryShader == VK_TRUE;
         // B4-tess: the tessellation control/eval stages need this core feature (the portable displacement path). Graphics-only.
         if (m_graphics_family != UINT32_MAX) { enabled_feats.tessellationShader = avail_feats.tessellationShader; }
         m_tessellation = m_tessellation && avail_feats.tessellationShader == VK_TRUE; // finalise: EDS2 + shader-obj + the feature
@@ -776,6 +803,7 @@ private:
     bool             m_invocation_reorder    = false; // FA-2: VK_NV_ray_tracing_invocation_reorder (SER)
     bool             m_cluster_as            = false; // FA-3: VK_NV_cluster_acceleration_structure
     bool             m_lss                   = false; // B18-f: VK_NV_ray_tracing_linear_swept_spheres
+    bool             m_geometry_shader       = false; // REN-38-A11: gl_PrimitiveID in a FS declares the Geometry capability
     bool             m_tessellation          = false; // B4-tess: tessellationShader + EDS2 patch-control-points enabled
     bool             m_valid           = false;
     char             m_name[256]       = {};

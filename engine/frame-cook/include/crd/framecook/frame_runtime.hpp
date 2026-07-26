@@ -14,6 +14,7 @@
 #include <crd/framecook/frame_asset.hpp>
 
 #include <crd/gpu/frame_graph.hpp>
+#include <crd/gpu/program.hpp> // REN-38-A2: IGpuProgram — a compute kernel is a single stage, not a linked pair
 #include <crd/gpu/raster_context.hpp>
 
 namespace crd::framecook
@@ -124,6 +125,47 @@ public:
     {
         return draw_list(crd::containers::StringView(query.name.c_str(), query.name.size()), out);
     }
+
+    // ── REN-38-A2: a COMPUTE pass's kernel. Appended at the END of the vtable (D135). ──
+    // ⛔ Distinct from `program()`, which returns an `IRasterProgram` — a raster program is a LINKED STAGE PAIR
+    // (VS+FS), while a kernel is a single `IGpuProgram`. One accessor returning both would have to lie about one
+    // of them. Null ⇒ the pass FAILS by name (`UnresolvedProgram`), never dispatches nothing.
+    [[nodiscard]] virtual crd::gpu::IGpuProgram* kernel(crd::containers::StringView /*id*/) { return nullptr; }
+
+    // ── REN-38-A5: the PRESENT SEAM. Appended at the END of the vtable (D135). ──
+    // The surface a `kind = "present"` pass hands its source to. Null ⇒ the pass FAILS by name
+    // (`NoPresentSurface`), because a graph that says it presents and then quietly does not is the exact shape
+    // this executor rejects everywhere else.
+    //
+    // ⛔ The SURFACE is the host's, not the asset's, and deliberately so: a swapchain is bound to a window, a
+    // size and a present mode — all of which are application state that changes without the renderer being
+    // re-authored. The asset says WHEN in the frame the present happens and WHAT it presents; the host says
+    // WHERE it lands. An asset naming a surface would have to name a window.
+    [[nodiscard]] virtual crd::gpu::IPresentSurface* present_surface() { return nullptr; }
+
+    // ── ⭐ REN-38-B4: the ACCELERATION-STRUCTURE seam. Appended at the END of the vtable (D135). ──
+    // A `kind = "acceleration_structure"` resource resolves through this. ⛔ The graph NEVER builds one, and that
+    // is structural rather than a simplification: a BLAS/TLAS is built from the scene's geometry, which lives in
+    // the World, and `crd-frame-cook` must never depend on `crd-scene` — the one-way edge that keeps the asset
+    // format free of engine types. So the asset NAMES an acceleration structure and the host, which owns the
+    // World, hands back the built one. Exactly the `draw_list` arrangement, one resource kind over.
+    //
+    // Null ⇒ the pass FAILS by name (`UnresolvedAccel`). A ray-tracing pass that traversed nothing would render
+    // every ray as a miss — a black image indistinguishable from a scene with no geometry, which is the single
+    // hardest RT failure to attribute.
+    [[nodiscard]] virtual crd::gpu::IAccelerationStructure* acceleration_structure(crd::containers::StringView /*name*/)
+    {
+        return nullptr;
+    }
+
+    // ── ⭐ REN-38-B3: the EXTERNAL-BUFFER seam. Appended at the END of the vtable (D135). ──
+    // A `kind = "external_buffer"` resource resolves through this and is IMPORTED into the graph, so it gets the
+    // same ordering and barriers a transient does while its STORAGE outlives the frame. Null ⇒ the pass FAILS by
+    // name (`UnresolvedResource`).
+    [[nodiscard]] virtual crd::gpu::IStorageBuffer* storage_buffer(crd::containers::StringView /*name*/)
+    {
+        return nullptr;
+    }
 };
 
 // ── WHY a graph failed. Reported, never swallowed. ───────────────────────────────────────────────────────────
@@ -140,7 +182,13 @@ enum class FrameExecError : crd::u8
     // REN-36.3: a pass declares `for_each` but the host answered 0 instances. A zero count is REPORTED, never
     // treated as "skip this pass" — a shadow graph that silently renders no cascades looks exactly like a scene
     // with no shadows. Appended at the END of the enum.
-    UnresolvedForEach
+    UnresolvedForEach,
+    // ── REN-38-A5. Appended at the END of the enum. ──
+    NoPresentSurface,     // a `kind = "present"` pass, and the host has no surface to present to
+    PresentSourceInvalid, // a present pass's source is not a target that outlives the graph
+    // ── REN-38-A9 / A10. Appended at the END of the enum. ──
+    UnresolvedAccel,      // a raytrace pass names an acceleration structure the host could not resolve
+    UnresolvedArgs        // an indirect pass names an args buffer the graph did not create
 };
 
 // WHICH graph actually ran. ⛔ A caller must be able to tell "my graph ran" from "something else ran instead" —

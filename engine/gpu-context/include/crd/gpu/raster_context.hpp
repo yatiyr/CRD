@@ -30,6 +30,24 @@ struct ClearColor
 };
 
 // B1-d: the depth-test comparison (fragment depth `op` stored depth ⇒ pass). Order matches VkCompareOp / D3D12.
+// ── REN-38-A15: PER-ATTACHMENT BLEND. ────────────────────────────────────────────────────────────────────────
+// A pass can declare N colour attachments and N reads, but until this it could not say how they BLEND — so every
+// pass rendered opaque. WBOIT alone needs TWO DIFFERENT EQUATIONS ON TWO ATTACHMENTS OF ONE PASS (accumulation
+// additive, revealage multiplicative), and additive particles, decals, premultiplied UI and every soft-blend
+// technique need it too.
+//
+// A small CLOSED SET rather than raw src/dst/op factors, for the same reason `BindType` is closed: the cooker has
+// to be able to VERIFY what an asset asked for, and an open factor triple cannot be checked — only obeyed.
+enum class BlendMode : crd::u8
+{
+    Opaque = 0,          // no blend; write RGBA (the default, and what every existing pass gets)
+    Alpha,               // src.a * src + (1 - src.a) * dst — the ordinary transparency blend
+    PremultipliedAlpha,  // src + (1 - src.a) * dst — UI and anything already premultiplied
+    Additive,            // src + dst — particles, emissive accumulation, WBOIT ACCUMULATION
+    Multiply,            // src * dst — decals, WBOIT REVEALAGE uses the ONE_MINUS_SRC_COLOR form below
+    RevealageMultiply,   // dst * (1 - src.rgb) — the WBOIT revealage equation, which no generic mode expresses
+};
+
 enum class DepthCompare : crd::u8
 {
     Never = 0,
@@ -484,6 +502,43 @@ public:
     // its port). Appended at END (vtable-stable).
     [[nodiscard]] virtual std::unique_ptr<IFrameGraph> create_frame_graph() { return nullptr; }
 
+    // ── REN-38-A1b: MULTIPLE RENDER TARGETS from the FRAME GRAPH's own transients. ────────────────────────────
+    // ⛔ WHY THIS EXISTS ALONGSIDE `draw_gbuffer`. That verb takes an `IGBufferTarget` — a self-contained resource
+    // with its own images, its own readbacks and its own lifetime. The frame graph owns none of that: it owns N
+    // independent transient images, aliases them against each other, and barriers them individually. Handing it a
+    // G-buffer object would put a second, untracked allocator inside the graph and defeat the aliasing it exists
+    // for. So the graph's MRT verb takes N of ITS OWN targets, which is also exactly what the asset writes:
+    //     writes = ["albedo", "normal", "material"]
+    // `draw_gbuffer` remains the standalone path; neither is a special case of the other.
+    //
+    // Every target must share width/height; the FIRST one's dimensions define the render area. Appended at the
+    // END of the vtable (D135). Default is a no-op so a backend without it fails VISIBLY (nothing renders) rather
+    // than by silently drawing into attachment 0 only.
+    // ── REN-38-A2: DISPATCH A COMPUTE KERNEL INSIDE THE FRAME GRAPH. ─────────────────────────────────────────
+    // ⛔ `FramePassKind::Compute` was DECLARED BUT NOT IMPLEMENTED: the executor's `record_pass` fell through to
+    // `break`, so a compute pass in an authored asset VALIDATED, COOKED, RAN and rendered NOTHING. Every check
+    // passed and the frame was silently wrong — the worst shape a defect can take in this system.
+    //
+    // Compute lives in `IComputeContext`, which owns its own command buffer and submits independently. That is
+    // exactly what a graph pass must NOT do, so the dispatch is a RASTER-CONTEXT verb: it records into the
+    // FRAME's one command buffer, between the raster passes, ordered and barriered by the same declared
+    // reads/writes as everything else. One submission still means one submission.
+    //
+    // `buffers` are the kernel's storage bindings at set 0, bindings 0..n-1 — the graph resolves them from the
+    // pass's declared reads and writes, so a kernel never names a slot. Appended at the vtable END (D135); the
+    // default is a no-op so a backend without it fails VISIBLY rather than half-running a technique.
+    virtual void dispatch_kernel(IGpuProgram& /*kernel*/, crd::u32 /*groups_x*/, crd::u32 /*groups_y*/,
+                                 crd::u32 /*groups_z*/, IStorageBuffer* const* /*buffers*/, crd::u32 /*count*/)
+    {
+    }
+
+    virtual void draw_storage_mrt(IRasterTarget* const* /*targets*/, crd::u32 /*count*/, IRasterProgram& /*program*/,
+                                  ClearColor /*clear*/, float /*clear_depth*/, DepthCompare /*compare*/,
+                                  IStorageBuffer& /*storage*/, crd::u32 /*vertex_count*/,
+                                  const BlendMode* /*blend*/ = nullptr)
+    {
+    }
+
     // RET-6 (ADR-0105): the OVERLAY draw — compose instanced primitives ONTO an existing target: color loadOp=LOAD
     // (the previous contents STAY — never cleared), standard alpha blending (srcAlpha · 1−srcAlpha), and a READ-ONLY
     // depth test at `compare` when the target carries a depth buffer (depth writes are never enabled; on a depthless
@@ -576,6 +631,152 @@ public:
     {
         draw_storage_depth_load(target, program, compare, storage, vertex_count);
     }
+
+    // ── ⭐ REN-38-A6: THE TRANSFER VERBS. Appended at the END of the vtable (D135). ──
+    // Moving pixels from one target to another without a shader. Every real frame graph needs these — a
+    // half-resolution downsample before a blur, an MSAA resolve before post, a snapshot for the next frame's
+    // reprojection — and until this row NONE of them could be expressed: the only way to copy an image was to
+    // author a fullscreen pass with a pass-through shader, which pays for a rasterizer, a descriptor set and a
+    // pipeline to do what the copy engine does for free.
+    //
+    // ⛔ THREE VERBS, NOT ONE, because the hardware genuinely distinguishes them and collapsing them would make
+    // one of the three silently wrong:
+    //   · copy    — identical extent AND format; a straight `vkCmdCopyImage` / `CopyResource`. Exact bytes.
+    //   · blit    — rescales and filters. NOT available on DX12's copy engine at all (see below).
+    //   · resolve — collapses an MSAA image to one sample. A copy of an MSAA image is illegal, not merely slow.
+    // A single `copy` that quietly rescaled would turn a mismatched-size authoring mistake into a soft image; a
+    // single `blit` that quietly did exact copies would turn a downsample into a crop.
+
+    // Filtering for `blit_image`. Nearest preserves exact texel values (the choice for id/visibility buffers,
+    // where interpolating two ids yields a THIRD id that names nothing); Linear is the box filter a downsample
+    // wants.
+    enum class BlitFilter : crd::u8 { Nearest = 0, Linear };
+
+    // Exact copy. `dst` and `src` must have the SAME extent and format; a mismatch is a NO-OP, never a partial
+    // copy — a half-copied target is indistinguishable from a correctly copied one in a readback of the copied
+    // region, which is exactly the kind of result this engine refuses to produce.
+    virtual void copy_image(IRasterTarget& /*dst*/, IRasterTarget& /*src*/) {}
+
+    // Rescaling copy. `src`'s full extent maps to `dst`'s full extent.
+    // ⛔ DX12's copy engine has NO blit: D3D12 offers CopyResource/CopyTextureRegion (1:1 only) and
+    // ResolveSubresource (MSAA only). The DX12 implementation therefore rescales through a fullscreen DRAW, and
+    // that asymmetry is REAL, not hidden — it is why `blit_image` is its own verb rather than `copy_image` with
+    // an extent argument.
+    virtual void blit_image(IRasterTarget& /*dst*/, IRasterTarget& /*src*/, BlitFilter /*filter*/) {}
+
+    // MSAA resolve: average `src`'s samples into single-sample `dst`. Same extent and a resolve-compatible
+    // format on both sides.
+    virtual void resolve_image(IRasterTarget& /*dst*/, IRasterTarget& /*src*/) {}
+
+    // ── ⭐ REN-38-A7 / A8: the CONTINUING tessellation and mesh draws. Appended at the END (D135). ──
+    // `draw_tess` and `draw_mesh` both CLEAR. That is right for the single-draw proof they were written for and
+    // WRONG for a pass that iterates a draw list: ⛔ every draw after the first would wipe the ones before it, so
+    // a scene with three tessellated meshes would render exactly ONE — the last — and look entirely plausible.
+    // This is the multi-pass load-not-clear scar in its tessellation/mesh form, and it is why an authored
+    // `raster.tess` / `raster.mesh` pass needs a continuing verb before it can iterate anything.
+    //
+    // Colour and depth LOAD (previous contents kept); otherwise identical to the clearing verb. The FIRST draw of
+    // a pass uses the clearing form, every later one uses this.
+    virtual void draw_tess_load(IRasterTarget& /*target*/, IRasterProgram& /*program*/, crd::u32 /*patch_count*/) {}
+    virtual void draw_mesh_load(IRasterTarget& /*target*/, IRasterProgram& /*program*/, crd::u32 /*group_count*/) {}
+
+    // ── ⭐ REN-38-A9: RAY TRACING INSIDE THE FRAME. Appended at the END of the vtable (D135). ──
+    // ⛔ The ray-tracing contexts (`VulkanRayTracingContext` / `Dx12RayTracingContext`) are OFFLINE rigs: every
+    // one of their verbs creates its own buffers, its own descriptor pool, its own pipeline, then submits AND
+    // WAITS. That is right for an oracle comparison and impossible inside a frame — it is the universal port
+    // defect this band keeps meeting, in its most extreme form (the verb owns the whole submission, not merely
+    // the descriptor pool). So an authored ray-tracing PASS cannot call them.
+    //
+    // What it calls instead is this: an INLINE RAY QUERY dispatch, recorded into the frame's command buffer like
+    // any other kernel. `VK_KHR_ray_query` / DXR-1.1 inline `RayQuery<>` need exactly two things a compute
+    // dispatch does not already have — the TLAS bound as a descriptor, and a shader that declares it — and CKIR
+    // already emits both (`KOp::AccelStructDecl` → `accelerationStructureEXT` / `RaytracingAccelerationStructure`).
+    // No shader binding table, no ray-tracing pipeline, one submission.
+    //
+    // ⛔ BINDING CONVENTION, stated here because it is the only place both backends can read it: the TLAS is at
+    // set 0 / binding 0 (t0 on DX12) and the pass's storage buffers follow at bindings 1..N (u1..uN). It matches
+    // `VulkanRayTracingContext::trace_dispatch` exactly, so a kernel written for the offline rig runs unchanged
+    // inside a frame — which is the whole point of having one convention rather than two.
+    virtual void dispatch_kernel_rt(IGpuProgram& /*kernel*/, class IAccelerationStructure& /*as*/, crd::u32 /*groups_x*/,
+                                    crd::u32 /*groups_y*/, crd::u32 /*groups_z*/, IStorageBuffer* const* /*buffers*/,
+                                    crd::u32 /*count*/)
+    {
+    }
+
+    // ── ⭐ REN-38-A10: GPU-DRIVEN DISPATCH. Appended at the END of the vtable (D135). ──
+    // The workgroup count comes from `args` (a buffer some earlier pass WROTE as {x, y, z}) rather than from the
+    // CPU. ⛔ That is the whole point and the reason it needs its own verb: with `dispatch_kernel` the count is a
+    // parameter the CPU had to know, so a cull pass could never actually decide how much work followed it — the
+    // GPU-driven loop was expressible in the device (`dispatch_indirect` exists on the compute context) and NOT
+    // inside a frame graph, which is where a cull pass lives.
+    virtual void dispatch_kernel_indirect(IGpuProgram& /*kernel*/, IStorageBuffer& /*args*/, crd::u64 /*args_offset*/,
+                                          IStorageBuffer* const* /*buffers*/, crd::u32 /*count*/)
+    {
+    }
+
+    // REN-38-A10: the mesh half of the same loop — `draw_mesh_indirect` against a graph-tracked buffer rather
+    // than a raw backend handle, so an authored pass can name the args buffer a compute pass just wrote.
+    virtual void draw_mesh_indirect_buffer(IRasterTarget& /*target*/, IRasterProgram& /*program*/,
+                                           ClearColor /*clear*/, IStorageBuffer& /*args*/, crd::u64 /*args_offset*/)
+    {
+    }
+
+    // ── ⭐ REN-38-A11: the CONTINUING visibility-buffer draw. Appended at the END (D135). ──
+    // ⛔ Same rule as `draw_tess_load` / `draw_mesh_load`, and it matters MORE here: a visibility buffer's whole
+    // purpose is that ONE image holds the ids of EVERY visible primitive. A pass that cleared per draw would keep
+    // only the LAST mesh's ids and the deferred materialisation would shade one object over a background of
+    // "nothing" — a picture that looks like aggressive culling rather than a bug.
+    virtual void draw_visbuffer_load(IRasterTarget& /*target*/, IRasterProgram& /*program*/,
+                                     crd::u32 /*vertex_count*/) {}
+
+    // ── ⭐ REN-38-A12: the COMPOSITE draw — fullscreen, N bindless textures, LOAD (not clear), BLENDED. ──
+    // ⛔ This is the verb that makes ORDER-INDEPENDENT TRANSPARENCY authorable as two ordinary passes instead of
+    // a bespoke `draw_wboit` that allocates its own images (the 38-A1f finding). WBOIT's resolve is by definition
+    // `rgb·(1-reveal) + background·reveal`: it must READ what is already in the target and BLEND over it. Every
+    // fullscreen verb before this CLEARED, so the background was gone before the composite ran and the "OIT
+    // technique" could only ever be a single opaque layer.
+    virtual void draw_bindless_blend_load(IRasterTarget& /*target*/, IRasterProgram& /*program*/,
+                                          ITexture* const* /*textures*/, crd::u32 /*count*/,
+                                          crd::u32 /*vertex_count*/, BlendMode /*blend*/) {}
+
+    // ── ⭐ REN-38-A16: THE RAY-TRACING PIPELINE, inside the frame. Appended at the END (D135). ──
+    // Distinct from 38-A9's inline ray query in the way that matters to the hardware: an inline query is an
+    // ordinary dispatch that happens to traverse, while THIS builds a PIPELINE out of separate raygen / miss /
+    // closest-hit programs and a SHADER BINDING TABLE the traversal hardware indexes into. That is what buys
+    // per-geometry hit shaders — different materials answering the same ray differently — which an inline query
+    // cannot express at all: it has ONE shader and must branch on everything itself.
+    //
+    // ⛔ SAME BINDING CONVENTION AS A9, deliberately: TLAS at set 0 / binding 0 (t0), the pass's buffers at 1..N
+    // (u1..uN). A kernel and a raygen shader should not need two mental models of where their data is.
+    //
+    // ⛔ Recorded into the FRAME's command buffer — not `VulkanRayTracingContext::trace_rays_pipeline`, which
+    // creates its own buffers, its own pool, its own pipeline and then SUBMITS AND WAITS. That verb is an offline
+    // rig; this is a pass.
+    virtual void trace_rays(IGpuProgram& /*raygen*/, IGpuProgram& /*miss*/, IGpuProgram& /*closest_hit*/,
+                            class IAccelerationStructure& /*as*/, crd::u32 /*width*/, crd::u32 /*height*/,
+                            IStorageBuffer* const* /*buffers*/, crd::u32 /*count*/)
+    {
+    }
+
+    // Does this backend/adapter offer a ray-tracing PIPELINE (not merely inline ray query)? ⛔ Reported, so an
+    // authored graph degrades by DECLARED CAPABILITY (REN-35's rule) instead of rendering a black frame.
+    [[nodiscard]] virtual bool supports_rt_pipeline() const noexcept { return false; }
+};
+
+// ⭐ REN-38-A9: a BUILT acceleration structure, behind one portable handle.
+// ⛔ It is declared HERE, in the backend-neutral header, and the backends' scene types DERIVE from it — rather
+// than the frame layer knowing about `RtScene` or `Dx12RtScene`. The asset names an AS; the host resolves that
+// name to one of these; the raster context unwraps it to its native handle. No layer above the backend ever sees
+// a VkAccelerationStructureKHR or a D3D12 GPU virtual address.
+class IAccelerationStructure
+{
+public:
+    IAccelerationStructure()                                         = default;
+    virtual ~IAccelerationStructure()                                = default;
+    IAccelerationStructure(const IAccelerationStructure&)            = delete;
+    IAccelerationStructure& operator=(const IAccelerationStructure&) = delete;
+    IAccelerationStructure(IAccelerationStructure&&)                 = delete;
+    IAccelerationStructure& operator=(IAccelerationStructure&&)      = delete;
 };
 
 // B5: an opaque deferred G-buffer (see `create_gbuffer_target`). `read_pixel(attachment, x, y)` is valid after a draw.

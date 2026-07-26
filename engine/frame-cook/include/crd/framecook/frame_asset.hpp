@@ -42,7 +42,51 @@ enum class FramePassKind : crd::u8
     RasterMrt,           // geometry into N colour attachments (deferred G-buffer)
     Compute,             // dispatch a CKIR kernel over a declared grid
     Present,             // hand the target to the swapchain
+    // ── ⭐ REN-38-A6: the UTILITY passes every real graph needs and none could express. Appended at the END
+    // of the enum (a renumbered kind silently reclassifies every already-cooked graph). ──
+    // ⛔ Before this row the ONLY way to move pixels was a fullscreen pass with a pass-through shader, paying
+    // for a rasterizer, a descriptor set and a pipeline to do what the copy engine does for free — and an MSAA
+    // resolve was not expressible AT ALL, because copying a multisampled image is illegal, not merely slow.
+    Clear,               // set a target to a constant colour, no draw
+    Copy,                // exact 1:1 image copy (same extent + format)
+    Blit,                // RESCALING copy, filtered — the half-res downsample every post chain starts with
+    Resolve,             // collapse an MSAA image to one sample
+    // ── ⭐ REN-38-A7 / A8: the two GEOMETRY-AMPLIFICATION pass kinds. Appended at the END of the enum. ──
+    // Both existed as DEVICE verbs (38-A1c, 38-A1d) and neither was reachable from an asset, so the entire
+    // amplification half of the hardware — tessellation AND mesh/task shaders — could only be driven by C++.
+    // That is precisely what the top rule forbids: a technique must be a `.frame.toml`, not a call site.
+    RasterTess,          // VS→TCS→TES→FS over PATCHES — the portable displacement path (no mesh-shader HW needed)
+    RasterMesh,          // TASK→MESH→FS — the amplification path; the mesh shader generates geometry, no vertex input
+    // ── ⭐ REN-38-A9 / A10. Appended at the END of the enum. ──
+    // ⛔ `RayTrace` is an INLINE RAY QUERY dispatch, not a ray-tracing PIPELINE. The distinction is real and is
+    // stated here rather than discovered: inline ray query (VK_KHR_ray_query / DXR-1.1 `RayQuery<>`) is an
+    // ordinary compute dispatch with a TLAS descriptor, so it records into the frame's ONE submission like every
+    // other pass. A ray-tracing PIPELINE needs a shader binding table and `vkCmdTraceRays` / `DispatchRays`, and
+    // the DX12 side of that does not exist in this engine at all — see 38-A16, which is where it lands.
+    // ── ⭐ REN-38-A11 / A12. Appended at the END of the enum. ──
+    // ⛔ `RasterVisbuffer` is not `RasterGeometry` with a different format: an R32_UINT target clears with a UINT
+    // clear value, and writing the id through a FLOAT clear reinterprets its BIT PATTERN (id 1 becomes 1.4e-45),
+    // so every pixel reads "background" while the draw looks perfectly healthy. The kind carries that.
+    RasterVisbuffer,     // HW-raster primitive ids into an R32_UINT target — the HW half of the Nanite split
+    // ⛔ `RasterComposite` is `RasterFullscreen` that LOADS and BLENDS instead of clearing. WBOIT's resolve is by
+    // definition `rgb·(1-reveal) + background·reveal` — it must read what is already in the target. Every
+    // fullscreen kind before this cleared, so the background was gone before the composite ran.
+    RasterComposite,     // fullscreen, N bindless reads, LOAD + BLEND over what the target already holds
+    RayTrace,            // an inline-ray-query kernel against a declared acceleration structure
+    // ⭐ REN-38-A16: the ray-tracing PIPELINE. ⛔ A separate kind from `RayTrace`, not a flag on it, because the
+    // two take DIFFERENT INPUTS: an inline query names ONE kernel, while a pipeline names THREE programs
+    // (raygen · miss · closest-hit) that the traversal hardware selects between through a shader binding table.
+    // That is what buys per-geometry hit shaders — different materials answering the same ray differently —
+    // which an inline query cannot express: it has one shader and must branch on everything itself.
+    RayTracePipeline,
+    ComputeIndirect,     // a kernel whose WORKGROUP COUNT a buffer holds — the GPU decides how much work follows
+    RasterMeshIndirect,  // a meshlet dispatch whose count a buffer holds — the Nanite-style cull→draw loop
 };
+
+// REN-38-A6: how `kind = "blit"` filters while it rescales.
+// ⛔ Nearest is not a performance option, it is a CORRECTNESS one: interpolating two ids in a visibility or
+// object-id buffer yields a THIRD id that names nothing.
+enum class FrameBlitFilter : crd::u8 { Nearest = 0, Linear };
 
 // Which cooked material variant a geometry pass draws with. Mirrors `crd::kir::cook::PassType`, which ALREADY
 // exists and already routes one authored surface to per-pass fragment programs — the asset names it by string.
@@ -55,12 +99,37 @@ enum class FrameMaterialPass : crd::u8
     Forward,
 };
 
+// ⭐ REN-38-A14: which QUEUE a pass asks for. ⛔ `Async` is a REQUEST, not a guarantee: an adapter with one
+// queue family runs it on the graphics queue and the graph SAYS SO through its counters, because silently
+// honouring it would make a perf claim the hardware never delivered.
+enum class FrameQueue : crd::u8 { Graphics = 0, Async };
+
 enum class FrameCullMode : crd::u8 { None = 0, Frustum, FrustumOcclusion };
 enum class FrameSortMode : crd::u8 { None = 0, FrontToBack, BackToFront, Material };
 
 // A graph-owned resource. Transients are lifetime-analysed + memory-aliased by the graph exactly as today; the
 // asset never expresses a lifetime or a barrier, because both are DERIVED from the pass reads/writes.
-enum class FrameResourceKind : crd::u8 { TransientImage = 0, TransientBuffer };
+// ⭐ REN-38-B3 / B4: what a declared resource IS.
+// ⛔ `IndirectArgs` is a distinct kind from `TransientBuffer` even though both are buffers, because the BACKING
+// DIFFERS: an indirect-args buffer must carry the INDIRECT usage flag (Vulkan) and be movable to
+// INDIRECT_ARGUMENT state (D3D12). Neither can be added after the fact — a buffer created without them simply
+// cannot be a draw or dispatch source, so "which kind" is a creation-time decision the ASSET must state.
+// ⛔ `AccelerationStructure` is EXTERNAL, like `@output`: the graph never creates one. Building a BLAS/TLAS
+// needs the scene's geometry, which lives in the World, which `crd-frame-cook` must never depend on. The asset
+// names it; the HOST resolves the name to a built structure.
+enum class FrameResourceKind : crd::u8
+{
+    TransientImage = 0,
+    TransientBuffer,
+    IndirectArgs,          // REN-38-B3: a buffer a pass writes and a LATER pass consumes as draw/dispatch args
+    // ⭐ REN-38-B3: a storage buffer the HOST owns and the graph merely IMPORTS. The scene's vertex, instance and
+    // material buffers are host-owned by nature, and so is anything whose value must survive the frame — a
+    // transient's memory is aliased away the moment its last reader finishes. ⛔ Without this the asset could
+    // only ever name buffers that die inside the frame, so no authored compute or ray-tracing pass could produce
+    // a result anything outside the graph could read.
+    ExternalBuffer,
+    AccelerationStructure, // REN-38-B4: a BLAS/TLAS the host owns — named here, never created here
+};
 
 struct FrameResourceDesc
 {
@@ -138,6 +207,12 @@ struct FramePassDesc
     crd::containers::String                       view;      // "camera.main", "light.0.cascade[$index]"
     crd::containers::String                       shader;    // fullscreen kinds — a cooked CKIR program id
     crd::containers::String                       kernel;    // compute kind — a cooked CKIR kernel id
+    // ⭐ REN-38-A16: the three programs a ray-tracing PIPELINE is built from. Named separately rather than as a
+    // list because their ROLES are fixed and positional: swapping miss and closest-hit in a list would build a
+    // pipeline that traces correctly and shades every hit with the miss shader.
+    crd::containers::String                       raygen;
+    crd::containers::String                       miss;
+    crd::containers::String                       closest_hit;
     // REN-37.2: the LIGHTING TECHNIQUE this pass shades with (a `.crdt` name — "standard_forward",
     // "forward_csm", "toon"). Empty ⇒ the engine's default. This is the field that makes the top rule reach the
     // FRAGMENT SHADER: swapping a technique is an asset edit, and the technique's declared PASS-frequency
@@ -151,10 +226,29 @@ struct FramePassDesc
     bool                                          has_clear_depth = false;
     float                                         clear_depth     = 1.0F;
     crd::gpu::DepthCompare                        depth = crd::gpu::DepthCompare::LessEqual;
+    // REN-38-A15: PER-ATTACHMENT BLEND, one entry per declared `writes` (missing entries default to Opaque).
+    // ⛔ A pass could declare N attachments (38-A1b) and N reads (38-A3) but not how they BLEND, so every pass
+    // rendered OPAQUE. WBOIT needs TWO DIFFERENT EQUATIONS ON TWO ATTACHMENTS OF ONE PASS — accumulation additive,
+    // revealage multiplicative — which is exactly what made it un-authorable and forced `draw_wboit` to allocate
+    // its own images. Additive particles, decals and premultiplied UI need it too.
+    crd::containers::Array<crd::gpu::BlendMode>   blend;
+    // ── ⭐ REN-38-A13: PER-PASS RENDER STATE. ──
+    // ⛔ These are ATTRIBUTES, not pass KINDS, and that is a deliberate design call rather than a shortcut. A
+    // shading rate is orthogonal to WHAT a pass draws — a geometry pass, a fullscreen pass and a mesh pass can
+    // each want one — so making "VRS" its own kind would have forced a combinatorial `raster.geometry.vrs`,
+    // `raster.fullscreen.vrs`, `raster.mesh.vrs` … and every future kind would have to be doubled again.
+    // Absent ⇒ the hardware default (1×1, no conservative raster), which is what every existing asset means.
+    crd::gpu::ShadingRate                         shading_rate = crd::gpu::ShadingRate::Rate1x1;
+    crd::gpu::ShadingRateCombiner                 rate_combiner = crd::gpu::ShadingRateCombiner::Keep;
+    crd::gpu::ConservativeMode                    conservative = crd::gpu::ConservativeMode::Off;
+    FrameQueue                                    queue        = FrameQueue::Graphics; // REN-38-A14
+    // REN-38-A6: how a `kind = "blit"` pass filters while it rescales. Ignored by every other kind.
+    FrameBlitFilter                               filter = FrameBlitFilter::Linear;
     crd::containers::Array<FrameParam>            params;
 
     explicit FramePassDesc(crd::memory::IAllocator* a)
-        : name(a), reads(a), writes(a), draw_list(a), view(a), shader(a), kernel(a), technique(a), params(a)
+        : name(a), reads(a), writes(a), draw_list(a), view(a), shader(a), kernel(a), raygen(a), miss(a),
+          closest_hit(a), technique(a), blend(a), params(a)
     {
     }
 };
@@ -256,6 +350,7 @@ enum class FrameCookError : crd::u8
     UnknownFormat,
     UnknownCompare,
     UnknownSort,
+    UnknownBlend, // REN-38-A15: a `blend` entry that is not in the closed set
     UnknownCull,
     UnknownMaterialPass,
     UnknownForEach,
@@ -280,6 +375,36 @@ enum class FrameCookError : crd::u8
     AnchorUnknownPass,    // an `[[anchor]]`'s `after`/`before` names a pass that does not exist
     UnresolvedInclude,    // the included graph could not be resolved by name (flatten only)
     IncludeCycle,         // graph A includes B includes A
+    // ── REN-38-A5: the PRESENT pass. Appended at the END of the enum. ──
+    PresentNeedsOneRead,  // a `kind = "present"` pass must read EXACTLY ONE resource — the canvas it presents
+    PresentWritesNothing, // a present pass declares a write: presenting produces no graph resource, it CONSUMES one
+    PresentSourceInternal, // a present pass reads a transient — aliased memory cannot survive to reach a swapchain
+    // ── REN-38-A6: the utility passes. Appended at the END of the enum. ──
+    TransferNeedsOneRead,  // copy/blit/resolve must read EXACTLY ONE source
+    TransferNeedsOneWrite, // … and write EXACTLY ONE destination
+    ClearReadsNothing,     // a clear pass declares a read; a clear consumes nothing
+    UnknownFilter,         // a `filter` that is not in the closed set
+    // ── REN-38-A7 / A8. Appended at the END of the enum. ──
+    // ⛔ A tess/mesh pass with neither a draw list nor a count has NOTHING TO DISPATCH. Left to the runtime it
+    // would draw zero patches or zero workgroups — a black image with no error, which is the shape this band
+    // exists to eliminate. Rejected at cook time, where the author is still holding the file.
+    AmplifyNeedsCount,
+    // ── REN-38-A9 / A10 / B3 / B4. Appended at the END of the enum. ──
+    RayTraceNeedsAccel,    // a `raytrace` pass names no acceleration structure — it would traverse nothing
+    IndirectNeedsArgs,     // an indirect pass names no args buffer — the count would come from nowhere
+    IndirectArgsNotArgs,   // … or names a resource that is not an `indirect_args` buffer
+    AccelIsExternal,       // an acceleration structure was given a size/format — the graph never creates one
+    // ── REN-38-A11 / A12. Appended at the END of the enum. ──
+    VisbufferNeedsUintTarget, // a visbuffer pass writes a target that is not R32Uint — ids would be float-clobbered
+    CompositeNeedsBlend,      // a composite pass declares no blend — it would render opaque and erase the background
+    // ── REN-38-A13 / A14. Appended at the END of the enum. ──
+    UnknownShadingRate,       // a `shading_rate` outside the closed set
+    UnknownRateCombiner,      // a `rate_combiner` outside the closed set
+    UnknownConservative,      // a `conservative` outside the closed set
+    UnknownQueue,             // a `queue` that is not `graphics` or `async`
+    AsyncQueueNeedsCompute,   // a raster pass asked for the async-compute queue — it cannot run there
+    // ── REN-38-A16. Appended at the END of the enum. ──
+    RtPipelineNeedsThree      // a `raytrace.pipeline` pass must name raygen + miss + closest_hit
 };
 
 // A human-readable message for `err`, plus the offending name when there is one.

@@ -48,6 +48,7 @@ struct SceneImpl final : Dx12RtScene
     D3D12_GPU_VIRTUAL_ADDRESS tlas_va = 0;
 };
 
+
 void barrier(ID3D12GraphicsCommandList4* list, ID3D12Resource* res, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to)
 {
     D3D12_RESOURCE_BARRIER b{};
@@ -452,6 +453,15 @@ bool Dx12RayTracingContext::trace_dispatch(const Dx12RtScene& scene_base, crd::c
         }
     }
     return true;
+}
+
+
+// REN-38-A9: the TLAS's GPU VIRTUAL ADDRESS — what a `RaytracingAccelerationStructure` SRV binds (DXR takes the
+// AS by address, not by resource). `dynamic_cast` so a scene from the other backend fails, never reinterprets.
+crd::u64 dx12_scene_tlas(const IAccelerationStructure& scene) noexcept
+{
+    const auto* s = dynamic_cast<const SceneImpl*>(&scene);
+    return s != nullptr ? static_cast<crd::u64>(s->tlas_va) : 0U;
 }
 
 } // namespace crd::gpu

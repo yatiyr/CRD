@@ -99,6 +99,11 @@ public:
     // B4-tess: `tessellationShader` + the EDS2 patch-control-points dynamic state enabled on a graphics-capable device — the
     // substrate for the PORTABLE displacement path (VS→TessControl→TessEval→FS + PATCH_LIST). false ⇒ mesh/vertex-pull fallback.
     [[nodiscard]] virtual bool tessellation() const noexcept = 0;
+    // REN-38-A11: is the GEOMETRY-shader feature enabled? Not because anything here writes a geometry shader —
+    // because a FRAGMENT shader reading `gl_PrimitiveID` (a visibility buffer's whole point) declares the Geometry
+    // SPIR-V capability, which requires it. With shader objects, an enabled feature's stage must then be BOUND on
+    // every draw (VK_NULL_HANDLE is fine) — exactly the rule tessellation already follows. Appended at END.
+    [[nodiscard]] virtual bool geometry_shader() const noexcept { return false; }
 
     // RET-2 (ADR-0105): the PRESENT capability — VK_KHR_surface (instance) + VK_KHR_swapchain (device) enabled. Both are
     // AVAILABILITY-driven now (a headless context can still present to a HEADLESS surface — the testable path);
