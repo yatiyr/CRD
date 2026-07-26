@@ -1,5 +1,21 @@
 # REN-3 design — the gold LIGHTING · SHADOW · SKY · ANTI-ALIASING device pipeline (D-007 row 100)
 
+> ## ⛔⛔⛔ TOP RULE — WE WILL ONLY USE OUR AUTHORED FRAME GRAPHS
+>
+> **(user, restated IN ANGER 2026-07-25)** Every rendering technique ships as an **authored `.frame.toml` ASSET**
+> (cooked → loaded → run by `execute_frame_graph`). **NOT** as C++ that builds passes. `FrameGraphBuilder` is for
+> **tests, node editors and runtime-generated graphs ONLY** — never for shipping an engine technique.
+>
+> **The test:** *can a user change pass order / resource formats / cascade count / insert a pass by editing an
+> ASSET, without recompiling the engine?* If no, the work is **not done**. A step that cannot be expressed is a
+> missing `FramePassKind` — add the kind with its gate, then author the technique on top of it.
+>
+> ⛔ **Violation on record:** REN-3.2-b's cascaded shadow maps were built as hardcoded C++ in
+> `scene_renderer.cpp` (atlas creation, four cascade passes, program selection) while this entire authoring stack
+> sat unused beside it. Moving CSM to an authored graph asset is the top REN debt.
+
+
+
 **Status**: spec v2, rewritten 2026-07-25 after a user-directed scope decision. v1 (same day) scoped REN-3 as
 "depth RTT + CSM + clustered culling + set-frequency model", gated on readback tests.
 

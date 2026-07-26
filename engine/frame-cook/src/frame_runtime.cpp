@@ -24,12 +24,20 @@ bool name_is(const crd::containers::String& s, const char* lit)
 
 // Per-pass recording state. Lives in an Array owned by the executor for the whole build+execute, because the
 // graph stores the `void* user` pointer and calls back during execute().
+// REN-38-A3: how many image reads one pass may bind. A stated cap, checked, never a silent truncation.
+constexpr crd::u32 kMaxPassReads = 8U;
+
 struct PassRec
 {
     const FramePassDesc* desc = nullptr;
     g::FgImage           target{};      // what this pass writes (the first image write)
-    g::FgImage           sampled{};     // the first image it READS (fullscreen kinds sample this)
-    bool                 sampled_is_depth = false;
+    // ⛔ REN-38-A3: ALL the images this pass READS, not just the first. A pass used to keep ONE `sampled` handle,
+    // which made a DEFERRED LIGHTING pass — the canonical N-texture consumer, reading albedo + normal + material +
+    // depth — literally inexpressible: the asset could declare four reads, the cooker validated them, the graph
+    // ordered and barriered them, and the executor bound exactly one. The declared-but-ignored failure again.
+    g::FgImage           sampled[kMaxPassReads]{};
+    crd::u32             n_sampled        = 0U;
+    bool                 sampled_is_depth = false; // of sampled[0] — the shadow-lookup case
     g::FgBuffer          storage{};
     g::IRasterProgram*   program = nullptr;
     crd::u32             vertex_count = 0U;
@@ -37,6 +45,15 @@ struct PassRec
     // `[$index]` subscript (⇒ it renders into ONE SLICE of a layered resource rather than the whole image).
     crd::u32             layer          = 0U;
     bool                 indexed_target = false;
+    // REN-36: the RESOLVED draw list (N draws) plus each draw's imported storage handle. The handles must be
+    // imported at BUILD time (so the graph tracks and barriers them) but resolved to buffers at RECORD time,
+    // hence two parallel arrays rather than one.
+    DrawListBinding      draws{};
+    g::FgBuffer          storage_of[kMaxDrawItems]{};
+    // ⛔ PRECEDENCE. A for_each instance's program (from `instance_program`) must beat the draw list's per-draw
+    // program, or every expanded cascade renders with the FIRST cascade's shader — all slices identical, which
+    // is exactly the degenerate state the cascade gate exists to reject. Tracked explicitly rather than inferred.
+    bool                 program_is_instance = false;
 };
 
 void record_pass(g::IFrameContext& ctx, void* user)
@@ -55,22 +72,86 @@ void record_pass(g::IFrameContext& ctx, void* user)
     {
     case FramePassKind::RasterDepthOnly:
     {
-        g::IStorageBuffer* sb = ctx.buffer(p->storage);
-        if (sb == nullptr) { return; }
-        r.draw_storage_depth_only(*t, *p->program, d.clear_depth, d.depth, *sb, p->vertex_count);
+        // ⛔ EVERY draw in the list, not just the first. A real scene resolves a draw list to many mesh groups;
+        // recording only one silently rendered a shadow map containing a single object. The FIRST draw clears
+        // the target, the rest LOAD — clearing per draw would leave only the last group in the map (the
+        // multi-pass load-not-clear scar, in its shadow-atlas form).
+        for (crd::u32 i = 0; i < p->draws.count(); ++i)
+        {
+            const DrawItem it = p->draws.at(i);
+            if (it.storage == nullptr) { continue; }
+            g::IStorageBuffer* sb = ctx.buffer(p->storage_of[i]);
+            if (sb == nullptr) { continue; }
+            g::IRasterProgram* prog = p->program;
+            if (!p->program_is_instance && it.program != nullptr) { prog = it.program; }
+            if (i == 0U) { r.draw_storage_depth_only(*t, *prog, d.clear_depth, d.depth, *sb, it.vertex_count); }
+            else         { r.draw_storage_depth_only_load(*t, *prog, d.depth, *sb, it.vertex_count); }
+        }
         break;
     }
     case FramePassKind::RasterGeometry:
     case FramePassKind::RasterMrt:
     {
-        g::IStorageBuffer* sb = ctx.buffer(p->storage);
-        if (sb == nullptr) { return; }
-        r.draw_storage_depth(*t, *p->program, clear, d.clear_depth, d.depth, *sb, p->vertex_count);
+        // A geometry pass that READS a sampled resource binds it — that is how an authored graph expresses a
+        // SHADOWED forward pass without needing a bespoke PassKind: it declares `reads = ["shadow_atlas"]` and
+        // the executor picks the comparison sampler because the resource's FORMAT is depth. Same rule the
+        // fullscreen kind already used, so the asset never has to name a sampler.
+        g::ITexture* pass_tex = p->n_sampled > 0U ? ctx.texture(p->sampled[0]) : nullptr;
+        for (crd::u32 i = 0; i < p->draws.count(); ++i)
+        {
+            const DrawItem it = p->draws.at(i);
+            if (it.storage == nullptr) { continue; }
+            g::IStorageBuffer* sb = ctx.buffer(p->storage_of[i]);
+            if (sb == nullptr) { continue; }
+            g::IRasterProgram* prog = p->program;
+            if (!p->program_is_instance && it.program != nullptr) { prog = it.program; }
+            const bool first = (i == 0U);
+            // REN-37.10: a draw's OWN texture wins over the pass's sampled read. Without this, a geometry pass
+            // that reads the shadow atlas would bind that atlas for every draw and any group carrying an albedo
+            // map would silently lose it the instant shadows turned on.
+            g::ITexture* tex       = it.texture != nullptr ? it.texture : pass_tex;
+            const bool   depth_tex = it.texture != nullptr ? false : p->sampled_is_depth;
+            if (tex != nullptr && depth_tex)
+            {
+                if (first) { r.draw_storage_shadowed_depth(*t, *prog, clear, d.clear_depth, d.depth, *sb, *tex, it.vertex_count); }
+                else       { r.draw_storage_shadowed_depth_load(*t, *prog, d.depth, *sb, *tex, it.vertex_count); }
+            }
+            else if (tex != nullptr)
+            {
+                if (first) { r.draw_storage_textured_depth(*t, *prog, clear, d.clear_depth, d.depth, *sb, *tex, it.vertex_count); }
+                else       { r.draw_storage_textured_depth_load(*t, *prog, d.depth, *sb, *tex, it.vertex_count); }
+            }
+            else
+            {
+                if (first) { r.draw_storage_depth(*t, *prog, clear, d.clear_depth, d.depth, *sb, it.vertex_count); }
+                else       { r.draw_storage_depth_load(*t, *prog, d.depth, *sb, it.vertex_count); }
+            }
+        }
         break;
     }
     case FramePassKind::RasterFullscreen:
     {
-        g::ITexture* tex = ctx.texture(p->sampled);
+        if (p->n_sampled == 0U) { return; }
+        // ⭐ REN-38-A3: N READS => N BOUND TEXTURES. A fullscreen pass that declares several reads gets all of
+        // them, in DECLARATION ORDER, through the bindless path — which is what makes a deferred LIGHTING pass
+        // (albedo + normal + material + depth) authorable at all. One read keeps the single-texture path, so the
+        // shadow-lookup case and every existing graph are byte-unchanged.
+        if (p->n_sampled > 1U)
+        {
+            g::ITexture* texs[kMaxPassReads]{};
+            crd::u32     n = 0U;
+            for (crd::u32 i = 0; i < p->n_sampled; ++i)
+            {
+                g::ITexture* tx = ctx.texture(p->sampled[i]);
+                // ⛔ A read that does not resolve to a texture ABORTS the pass rather than silently shifting every
+                // later texture down a slot — a shifted binding renders a plausible image from the wrong inputs.
+                if (tx == nullptr) { return; }
+                texs[n++] = tx;
+            }
+            r.draw_bindless(*t, *p->program, clear, static_cast<g::ITexture* const*>(texs), n, 3U);
+            break;
+        }
+        g::ITexture* tex = ctx.texture(p->sampled[0]);
         if (tex == nullptr) { return; }
         // Sampling a DEPTH resource means the comparison sampler — that is what a shadow lookup is. Choosing it
         // from the resource FORMAT (rather than from a flag the author must remember) keeps the asset honest:
@@ -88,9 +169,34 @@ void record_pass(g::IFrameContext& ctx, void* user)
 
 } // namespace
 
-bool execute_frame_graph(const FrameGraphDesc& desc, g::IRasterContext& raster, IFrameGraphHost& host,
-                         FrameExecError* err, crd::containers::String* where)
+// ── REN-37.10: the RECORDER. Owns the per-recording storage the graph's user pointers refer to. ──
+struct FrameRecorder::Impl
 {
+    crd::memory::IAllocator* alloc = nullptr;
+    // ⛔ RESERVED TO ITS EXACT TOTAL up front, so no growth can move a block the graph already points at. Each
+    // block is itself reserved exactly at record time, for the same reason one level down.
+    crd::containers::Array<crd::containers::Array<PassRec>> blocks;
+    crd::u32                                               used = 0U;
+
+    explicit Impl(crd::memory::IAllocator* a) : alloc(a), blocks(a)
+    {
+        blocks.reserve(FrameRecorder::kMaxRecordingsPerFrame);
+        for (crd::u32 i = 0; i < FrameRecorder::kMaxRecordingsPerFrame; ++i)
+        {
+            blocks.push_back(crd::containers::Array<PassRec>(a));
+        }
+    }
+};
+
+FrameRecorder::FrameRecorder(crd::memory::IAllocator* alloc) : m_impl(new Impl(alloc)) {}
+FrameRecorder::~FrameRecorder() { delete m_impl; }
+void FrameRecorder::begin_frame() noexcept { m_impl->used = 0U; }
+
+bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_ref, g::IRasterContext& raster,
+                           IFrameGraphHost& host, FrameExecError* err, crd::containers::String* where)
+{
+    (void)raster; // the graph is the caller's; the raster context is reached through it
+    g::IFrameGraph* fgraph = &fgraph_ref;
     const auto fail = [&](FrameExecError e, const crd::containers::String* name) {
         if (err != nullptr) { *err = e; }
         if (where != nullptr && name != nullptr) { *where = *name; }
@@ -110,9 +216,10 @@ bool execute_frame_graph(const FrameGraphDesc& desc, g::IRasterContext& raster, 
 
     g::IRasterTarget* out_target = host.output();
     if (out_target == nullptr) { return fail(FrameExecError::NoOutput, nullptr); }
-
-    auto fgraph = raster.create_frame_graph();
-    if (fgraph == nullptr) { return fail(FrameExecError::NoOutput, nullptr); }
+    // ⛔ The arena cap is CHECKED, not hoped: a 33rd recording would reuse a block the graph still points at.
+    if (m_impl->used >= kMaxRecordingsPerFrame) { return fail(FrameExecError::BuildRejected, &desc.name); }
+    crd::containers::Array<PassRec>& recs = m_impl->blocks[m_impl->used++];
+    recs.clear();
 
     auto* alloc = desc.resources.allocator();
 
@@ -195,7 +302,6 @@ bool execute_frame_graph(const FrameGraphDesc& desc, g::IRasterContext& raster, 
     }
 
     // ── passes ──
-    crd::containers::Array<PassRec> recs(alloc);
     recs.reserve(plan.size()); // ⛔ exact, up front — see the dangling-pointer note above
     for (crd::usize ii = 0; ii < plan.size(); ++ii)
     {
@@ -208,8 +314,9 @@ bool execute_frame_graph(const FrameGraphDesc& desc, g::IRasterContext& raster, 
         if (!d.draw_list.empty())
         {
             if (!resolve_query(d.draw_list, bind)) { return fail(FrameExecError::UnresolvedDrawList, &d.draw_list); }
-            rec.program      = bind.program;
-            rec.vertex_count = bind.vertex_count;
+            rec.draws        = bind;
+            rec.program      = bind.at(0).program;
+            rec.vertex_count = bind.at(0).vertex_count;
         }
         if (!d.shader.empty())
         {
@@ -223,7 +330,11 @@ bool execute_frame_graph(const FrameGraphDesc& desc, g::IRasterContext& raster, 
         {
             g::IRasterProgram* ip =
                 host.instance_program(crd::containers::StringView(d.name.c_str(), d.name.size()), plan[ii].index);
-            if (ip != nullptr) { rec.program = ip; }
+            if (ip != nullptr)
+            {
+                rec.program             = ip;
+                rec.program_is_instance = true;
+            }
         }
         recs.push_back(rec);
     }
@@ -260,9 +371,9 @@ bool execute_frame_graph(const FrameGraphDesc& desc, g::IRasterContext& raster, 
             if (resolve_image(d.reads[r].name, h, is_depth))
             {
                 pb.reads(h);
+                if (rec.n_sampled < kMaxPassReads) { rec.sampled[rec.n_sampled++] = h; }
                 if (first_read)
                 {
-                    rec.sampled          = h;
                     rec.sampled_is_depth = is_depth;
                     first_read           = false;
                 }
@@ -271,16 +382,41 @@ bool execute_frame_graph(const FrameGraphDesc& desc, g::IRasterContext& raster, 
         }
         // The draw list's vertex-pull buffer is a graph-tracked READ, so the graph orders + barriers it like any
         // other resource (this is why a pass never has to think about upload/consume hazards).
-        DrawListBinding bind{};
-        if (!d.draw_list.empty() && resolve_query(d.draw_list, bind) && bind.storage != nullptr)
+        // ⛔ EVERY draw's vertex-pull buffer is a graph-tracked READ, not just the first one. Importing only the
+        // first left the rest untracked: no ordering, no barrier, and an upload could race the draw that reads it.
+        for (crd::u32 di = 0; di < rec.draws.count(); ++di)
         {
-            rec.storage = fgraph->import_storage(*bind.storage);
-            pb.reads(rec.storage);
+            const DrawItem it = rec.draws.at(di);
+            if (it.storage == nullptr) { continue; }
+            rec.storage_of[di] = fgraph->import_storage(*it.storage);
+            pb.reads(rec.storage_of[di]);
+            if (di == 0U) { rec.storage = rec.storage_of[0]; }
         }
         pb.execute(&record_pass, &recs[ii]);
     }
 
-    if (!fgraph->build()) { return fail(FrameExecError::BuildRejected, &desc.name); }
+    return true;
+}
+
+// Exactly `record` plus create / build / execute — so the one-view and multi-view paths cannot drift.
+bool execute_frame_graph(const FrameGraphDesc& desc, g::IRasterContext& raster, IFrameGraphHost& host,
+                         FrameExecError* err, crd::containers::String* where)
+{
+    auto fgraph = raster.create_frame_graph();
+    if (fgraph == nullptr)
+    {
+        if (err != nullptr) { *err = FrameExecError::NoOutput; }
+        return false;
+    }
+    FrameRecorder rec(desc.resources.allocator());
+    rec.begin_frame();
+    if (!rec.record(desc, *fgraph, raster, host, err, where)) { return false; }
+    if (!fgraph->build())
+    {
+        if (err != nullptr) { *err = FrameExecError::BuildRejected; }
+        if (where != nullptr) { *where = desc.name; }
+        return false;
+    }
     fgraph->execute();
     return true;
 }

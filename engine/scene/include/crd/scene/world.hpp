@@ -165,6 +165,46 @@ public:
         return backend_for_const(id).has(e, id);
     }
 
+    // REN-36.3-b: the RUNTIME (non-template) archetype test. An authored frame-graph draw list names its
+    // components as STRINGS, so a renderer resolves them to `ComponentId`s and must test them WITHOUT a
+    // compile-time type. Same O(1) mask test as `has_component<T>`; it simply skips the type -> id lookup the
+    // caller has already done.
+    [[nodiscard]] bool has_component_id(EntityId e, ComponentId id) const noexcept
+    {
+        if (id.is_null() || !is_alive(e)) { return false; }
+        return backend_for_const(id).has(e, id);
+    }
+
+    // REN-36.3-b: resolve a component's AUTHORED name to its id. The registry stores `typeid(T).name()`, which is
+    // decorated per compiler ("struct crd::scene::MeshRenderer" on MSVC, "N3crd5scene12MeshRendererE" on Itanium),
+    // so the match is on the trailing identifier rather than the whole string.
+    // ⛔ Returns null for an unknown name. The caller must REPORT that, not treat it as "matches everything" — a
+    // silently-ignored filter is worse than an unsupported one, because it reads as working.
+    [[nodiscard]] ComponentId component_id_by_name(crd::containers::StringView want) const noexcept
+    {
+        for (crd::u16 i = 0; i < m_components.size(); ++i)
+        {
+            const ComponentInfo* info = m_components.info(ComponentId{i});
+            if (info == nullptr) { continue; }
+            const crd::containers::StringView n = info->name;
+            if (n.size() < want.size()) { continue; }
+            // trailing-identifier match: the decorated name must END with `want`, and the character before it
+            // must not be an identifier character (so "Renderer" never matches "MeshRenderer").
+            const crd::usize off = n.size() - want.size();
+            bool             eq  = true;
+            for (crd::usize k = 0; k < want.size() && eq; ++k) { eq = n[off + k] == want[k]; }
+            if (!eq) { continue; }
+            if (off > 0)
+            {
+                const char c = n[off - 1];
+                const bool ident = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+                if (ident) { continue; }
+            }
+            return info->id;
+        }
+        return ComponentId{};
+    }
+
     template <typename T> [[nodiscard]] const T* get_component(EntityId e) const
     {
         if (!is_alive(e))

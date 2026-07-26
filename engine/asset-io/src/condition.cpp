@@ -167,6 +167,103 @@ crd::u32 weld_exact(ImportedMesh& mesh, crd::memory::IAllocator* alloc)
 
 // ── crease-angle weighted normals ───────────────────────────────────────────────────────────────────────────────────────
 
+
+// ── REN-3.2-b: WINDING-AGNOSTIC ORIENTATION ─────────────────────────────────────────────────────────────────
+// `generate_normals` takes each face normal as cross(b-a, c-a), which ASSUMES counter-clockwise winding. A
+// clockwise-wound source (plenty of OBJ/STL exports are) therefore yields normals pointing INWARD on every
+// face — and an inward normal makes dot(N, L) <= 0 for real lights, so the surface renders at flat ambient and
+// looks exactly like it is in permanent shadow. That is what the sandbox's OBJ torus was doing.
+//
+// ⛔ The orientation must be decided by a metric INDEPENDENT of the winding assumption being tested, or it just
+// restates the bug (the marching-cubes winding scar, again). Signed volume via the divergence theorem is that
+// metric: V = (1/6) * sum dot(a, cross(b, c)) is POSITIVE exactly when a closed surface is wound outward,
+// and it never consults the normals we generated.
+//
+// Guarded on CLOSEDNESS: signed volume is only meaningful for a closed surface, so an open mesh (a plane, a
+// terrain patch, a cloth) is left exactly as authored rather than being flipped on a meaningless number.
+[[nodiscard]] bool mesh_is_closed(const ImportedMesh& mesh, crd::memory::IAllocator* alloc)
+{
+    const crd::u32 nf = mesh.triangle_count();
+    if (nf == 0U) { return false; }
+    // ⛔ Edges must be identified by POSITION, not by vertex index. generate_normals splits every corner that
+    // sits across a crease, so a perfectly closed tetrahedron has 12 distinct INDICES and would look "open" —
+    // the closedness test would then never fire and the orientation fix would silently do nothing. (That is
+    // exactly how the first version of this gate failed.)
+    crd::containers::HashMap<PosKey, crd::u32, PosKeyHash> pos_ids(alloc);
+    pos_ids.reserve(mesh.positions.size());
+    crd::containers::Array<crd::u32> vid(alloc);
+    vid.resize(static_cast<crd::u32>(mesh.positions.size()), 0U);
+    crd::u32 n_pos = 0U;
+    for (crd::u32 v = 0; v < static_cast<crd::u32>(mesh.positions.size()); ++v)
+    {
+        PosKey key{};
+        std::memcpy(key.p, &mesh.positions[v], 12);
+        if (const crd::u32* found = pos_ids.find(key)) { vid[v] = *found; }
+        else
+        {
+            pos_ids.insert(key, n_pos);
+            vid[v] = n_pos;
+            ++n_pos;
+        }
+    }
+
+    crd::containers::HashMap<crd::u64, crd::u32> edges(alloc);
+    edges.reserve(nf * 3U);
+    crd::u32 unique = 0U;
+    for (crd::u32 f = 0; f < nf; ++f)
+    {
+        for (crd::u32 e = 0; e < 3U; ++e)
+        {
+            const crd::u32 i0 = vid[mesh.indices[f * 3U + e]];
+            const crd::u32 i1 = vid[mesh.indices[f * 3U + ((e + 1U) % 3U)]];
+            if (i0 == i1) { return false; } // degenerate edge - not a clean manifold
+            const crd::u32 lo = i0 < i1 ? i0 : i1;
+            const crd::u32 hi = i0 < i1 ? i1 : i0;
+            const crd::u64 k  = (static_cast<crd::u64>(lo) << 32U) | static_cast<crd::u64>(hi);
+            if (crd::u32* found = edges.find(k))
+            {
+                ++(*found);
+                if (*found > 2U) { return false; } // non-manifold: an edge shared by 3+ faces
+            }
+            else
+            {
+                edges.insert(k, 1U);
+                ++unique;
+            }
+        }
+    }
+    // Closed manifold: 3*nf directed edges over exactly 3*nf/2 undirected ones, i.e. every edge used TWICE.
+    // With the >2 rejection above, this equality also rules out any edge used only ONCE (a boundary).
+    return unique * 2U == nf * 3U;
+}
+
+void orient_outward_if_closed(ImportedMesh& mesh, crd::memory::IAllocator* alloc)
+{
+    const crd::u32 nf = mesh.triangle_count();
+    if (nf == 0U || !mesh_is_closed(mesh, alloc)) { return; }
+
+    crd::f64 v6 = 0.0;
+    for (crd::u32 f = 0; f < nf; ++f)
+    {
+        const V3& a = mesh.positions[mesh.indices[f * 3U + 0U]];
+        const V3& b = mesh.positions[mesh.indices[f * 3U + 1U]];
+        const V3& c = mesh.positions[mesh.indices[f * 3U + 2U]];
+        v6 += static_cast<crd::f64>(dot(a, cross(b, c)));
+    }
+    if (v6 >= 0.0) { return; } // already outward - leave the authored winding untouched
+
+    // Inward: flip the WINDING (so future cross(b-a, c-a) is outward too) and the normals already generated.
+    // Flipping only one of the two would leave the mesh self-inconsistent - back-face culling and lighting
+    // would then disagree, which is worse than the original bug because it is view-dependent.
+    for (crd::u32 f = 0; f < nf; ++f)
+    {
+        const crd::u32 t                  = mesh.indices[f * 3U + 1U];
+        mesh.indices[f * 3U + 1U]         = mesh.indices[f * 3U + 2U];
+        mesh.indices[f * 3U + 2U]         = t;
+    }
+    for (V3& n : mesh.normals) { n = V3{-n.x, -n.y, -n.z}; }
+}
+
 void generate_normals(ImportedMesh& mesh, crd::memory::IAllocator* alloc, crd::f32 smooth_angle_rad)
 {
     const crd::u32 nf = mesh.triangle_count();
@@ -278,6 +375,8 @@ void generate_normals(ImportedMesh& mesh, crd::memory::IAllocator* alloc, crd::f
     mesh.indices   = static_cast<crd::containers::Array<crd::u32>&&>(out_idx);
     mesh.tangent.clear();
     (void)weld_exact(mesh, alloc);
+    // decide orientation from geometry, not from the winding we assumed
+    orient_outward_if_closed(mesh, alloc);
 }
 
 // ── MikkTSpace-compatible tangents ──────────────────────────────────────────────────────────────────────────────────────

@@ -197,3 +197,37 @@ TEST_CASE("B7-b: specialize collapses a static switch to a variant, bit-identica
     run(1.0, [](crd::f64 x) { return x * 2.0; });   // option > 0.5 → branch A (2x)
     run(0.0, [](crd::f64 x) { return x + 10.0; });  // option ≤ 0.5 → branch B (x+10)
 }
+
+// ⛔⛔ B7 REGRESSION GATE: a MEMORY READ must never be const-folded, however constant its INDEX is.
+// `StorageLoad`'s ONLY operand is the index, so `sbuf.data[22]` looked like an all-constant expression and the
+// const-folder replaced the READ with a literal. Every LOWERED shader that reads a storage buffer at a fixed
+// slot was silently miscompiled — the scene's cooked forward variant reads its light direction at word 22 and
+// rendered BLACK, while the un-lowered hand-written shader using the same reads was fine. That asymmetry is
+// what makes this class of bug so hard to see, and it also broke B7's documented "round-trip bit-stable"
+// invariant. `BufferLoad`/`SharedLoad` escaped only because their first operand is a resource declaration.
+TEST_CASE("B7 GATE: lowering never const-folds a memory read with a constant index", "[kir][lower][b7]")
+{
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+    crd::kir::KGraph           g(&alloc);
+
+    const auto sh  = crd::kir::make_shape({1});
+    const int  idx = g.constant(22.0, sh, crd::kir::DType::U32); // a LITERAL index — the trap
+    const int  ld  = g.storage_load(idx);
+    const int  val = g.int_bits_to_float(g.cast(ld, crd::kir::DType::I32));
+
+    crd::kir::KEntry e;
+    e.stage  = crd::kir::KStage::Fragment;
+    e.n_out  = 1;
+    e.out[0] = {g.vec4(val, val, val, g.constant(1.0, sh, crd::kir::DType::F32)), 0};
+
+    crd::kir::lower::lower_entry(g, e);
+
+    // the load must SURVIVE lowering: if the folder ate it, the shader reads a compile-time literal instead of
+    // memory, and every uniform/header value the material depends on becomes whatever the folder invented.
+    bool has_load = false;
+    for (int i = 0; i < g.size(); ++i)
+    {
+        if (g.node(i).op == crd::kir::KOp::StorageLoad) { has_load = true; }
+    }
+    CHECK(has_load);
+}

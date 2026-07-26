@@ -2292,6 +2292,14 @@ public:
                                      DepthCompare compare, IStorageBuffer& storage, ITexture& texture,
                                      crd::u32 vertex_count) override
     {
+        draw_storage_sampled_depth(target, program, clear, clear_depth, compare, storage, texture, vertex_count, 0U);
+    }
+    // REN-3.2-b: the shared body. sampler_slot picks FILTERING (0) or COMPARISON (1) from the sampler heap;
+    // everything else is identical, which is why the shadowed draw needs no new root signature or set layout.
+    void draw_storage_sampled_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
+                                    float clear_depth, DepthCompare compare, IStorageBuffer& storage,
+                                    ITexture& texture, crd::u32 vertex_count, crd::u32 sampler_slot)
+    {
         if (!m_ok || m_uav_heap == nullptr || m_sampler_heap == nullptr) { return; }
         auto& t   = static_cast<Dx12RasterTarget&>(target);
         auto& p   = static_cast<Dx12RasterProgram&>(program);
@@ -2337,7 +2345,9 @@ public:
         m_list->SetDescriptorHeaps(2, heaps);
         m_list->SetGraphicsRootDescriptorTable(0, m_uav_heap->GetGPUDescriptorHandleForHeapStart());  // storage (u0)
         m_list->SetGraphicsRootDescriptorTable(1, srv_gpu);                                            // base-color (t1)
-        m_list->SetGraphicsRootDescriptorTable(2, m_sampler_heap->GetGPUDescriptorHandleForHeapStart()); // sampler (s2)
+        D3D12_GPU_DESCRIPTOR_HANDLE samp_tbl = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
+        samp_tbl.ptr += static_cast<UINT64>(sampler_slot) * m_sampler_inc;
+        m_list->SetGraphicsRootDescriptorTable(2, samp_tbl); // sampler (s2): 0 = filtering, 1 = comparison
         m_list->SetPipelineState(pso);
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
@@ -2367,10 +2377,38 @@ public:
         if (!p.valid() || pso == nullptr) { return; }
         if (frame_recording())
         {
-            record_scene_textured(t, p, s, tex, pso, false, ClearColor{}, 0.0F, vertex_count);
+            record_scene_textured(t, p, s, tex, pso, false, ClearColor{}, 0.0F, vertex_count, 0U);
             return;
         }
         draw_storage_textured_depth(target, program, ClearColor{}, 0.0F, compare, storage, texture, vertex_count);
+    }
+
+    // ── REN-3.2-b: the SHADOWED scene draw — the textured body with the COMPARISON sampler at slot 1. ──
+    void draw_storage_shadowed_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
+                                     float clear_depth, DepthCompare compare, IStorageBuffer& storage,
+                                     ITexture& shadow_atlas, crd::u32 vertex_count) override
+    {
+        draw_storage_sampled_depth(target, program, clear, clear_depth, compare, storage, shadow_atlas,
+                                   vertex_count, 1U);
+    }
+    void draw_storage_shadowed_depth_load(IRasterTarget& target, IRasterProgram& program, DepthCompare compare,
+                                          IStorageBuffer& storage, ITexture& shadow_atlas,
+                                          crd::u32 vertex_count) override
+    {
+        auto& t   = static_cast<Dx12RasterTarget&>(target);
+        auto& p   = static_cast<Dx12RasterProgram&>(program);
+        auto& s   = static_cast<Dx12StorageBuffer&>(storage);
+        auto& tex = static_cast<Dx12Texture&>(shadow_atlas);
+        if (!m_ok || !t.has_depth()) { return; }
+        ID3D12PipelineState* pso = p.pso_for(1U, kDepthFormat, to_d3d12_compare(compare), false);
+        if (!p.valid() || pso == nullptr) { return; }
+        if (frame_recording())
+        {
+            record_scene_textured(t, p, s, tex, pso, false, ClearColor{}, 0.0F, vertex_count, 1U);
+            return;
+        }
+        draw_storage_shadowed_depth(target, program, ClearColor{}, 0.0F, compare, storage, shadow_atlas,
+                                    vertex_count);
     }
 
     // GEO-8: the CONTINUING scene draw — draw_storage_depth minus the Clear calls (colour + depth both persist;
@@ -3376,13 +3414,16 @@ private:
     // REN-2 Half B: the frame-mode body of draw_storage_textured_depth (clear) / _load (no clear) — a depth-tested
     // scene draw that ALSO samples a material texture: storage UAV (table 0) from the ring + SRV (table 1) from the
     // ring + sampler (table 2). Into the shared list; the graph transitioned the target to RENDER_TARGET.
+    // REN-3.2-b: sampler_slot 0 = the default FILTERING sampler (textured scene draw), 1 = the COMPARISON
+    // sampler (shadowed scene draw). Same tables either way, so one recording path serves both.
     void record_scene_textured(Dx12RasterTarget& t, Dx12RasterProgram& p, Dx12StorageBuffer& s, Dx12Texture& tex,
                                ID3D12PipelineState* pso, bool clear, ClearColor clear_color, float clear_depth,
-                               crd::u32 vertex_count)
+                               crd::u32 vertex_count, crd::u32 sampler_slot = 0U)
     {
         const D3D12_GPU_DESCRIPTOR_HANDLE uav_table = frame_alloc_storage_slot(s);
         const D3D12_GPU_DESCRIPTOR_HANDLE srv_table = frame_alloc_srv_slot(tex);
-        const D3D12_GPU_DESCRIPTOR_HANDLE samp_gpu  = m_sampler_heap->GetGPUDescriptorHandleForHeapStart(); // slot 0
+        D3D12_GPU_DESCRIPTOR_HANDLE samp_gpu = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
+        samp_gpu.ptr += static_cast<UINT64>(sampler_slot) * m_sampler_inc;
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv       = t.rtv();
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv       = t.dsv();
         m_list->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
@@ -3510,6 +3551,10 @@ public:
     {
         wait_pending_submit();
         free_transients();
+        // REN-37.5: the persistent registry is the one thing `reset()` never touches, so the DESTRUCTOR is the
+        // only place it is released.
+        for (Persistent& p : m_persist) { destroy_persistent_impl(p); }
+        m_persist.clear();
     }
     Dx12FrameGraph(const Dx12FrameGraph&)            = delete;
     Dx12FrameGraph& operator=(const Dx12FrameGraph&) = delete;
@@ -3552,8 +3597,8 @@ public:
             if (m_images[i].target == &target) { return FgImage{static_cast<crd::u32>(i + 1U)}; }
         }
         ImageNode n{};
-        n.target    = &target;
-        n.transient = false;
+        n.target = &target;
+        n.own    = Own::Imported;
         m_images.push_back(n);
         return FgImage{static_cast<crd::u32>(m_images.size())};
     }
@@ -3578,8 +3623,8 @@ public:
         // cascades, which is the worst class of graphics bug: it looks like art direction.
         if (desc.layers == 0U || desc.layers > kFgMaxImageLayers) { return FgImage{0U}; }
         ImageNode n{};
-        n.transient = true;
-        n.desc      = desc;
+        n.own  = Own::Transient;
+        n.desc = desc;
         bool is_depth = false;
         n.fmt       = to_dxgi_format(desc.format, is_depth);
         n.is_depth  = is_depth;
@@ -3610,6 +3655,109 @@ public:
         m_images.push_back(n);
         return FgImage{static_cast<crd::u32>(m_images.size())};
     }
+    // ── REN-37.5: PERSISTENT images - created ONCE, kept across `reset()`, never aliased, never retired. ──
+    // The DX12 mirror of the Vulkan contract: same keys, same semantics, same `was_live` reporting. The only
+    // backend difference is COMMITTED vs PLACED - a persistent resource cannot live in the aliasing heap, which
+    // is precisely what makes it persistent.
+    [[nodiscard]] FgImage create_persistent_image(crd::u32 key, const FgImageDesc& desc) override
+    {
+        if (desc.width == 0U || desc.height == 0U) { return FgImage{0U}; }
+        if (desc.layers == 0U || desc.layers > kFgMaxImageLayers) { return FgImage{0U}; }
+
+        crd::i32 found = -1;
+        for (crd::u32 i = 0; i < m_persist.size(); ++i)
+        {
+            if (m_persist[i].key != key) { continue; }
+            const FgImageDesc& d = m_persist[i].node.desc;
+            // A desc change (a resize, a format switch) genuinely INVALIDATES the history; reusing a
+            // differently-shaped image would read plausible-looking garbage rather than obviously-missing data.
+            if (d.width == desc.width && d.height == desc.height && d.format == desc.format
+                && d.layers == desc.layers && d.sampled == desc.sampled && d.storage == desc.storage)
+            {
+                found = static_cast<crd::i32>(i);
+            }
+            else { destroy_persistent_impl(m_persist[i]); m_persist[i].key = 0U; }
+            break;
+        }
+
+        if (found < 0)
+        {
+            Persistent p{};
+            p.key            = key;
+            p.node.own = Own::Persistent;
+            p.node.desc      = desc;
+            bool is_depth    = false;
+            p.node.fmt       = to_dxgi_format(desc.format, is_depth);
+            p.node.is_depth  = is_depth;
+            const bool depth_sampled  = is_depth && desc.sampled;
+            p.node.depth_sampled      = depth_sampled;
+            p.node.rdesc              = {};
+            p.node.rdesc.Dimension    = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+            p.node.rdesc.Width        = desc.width;
+            p.node.rdesc.Height       = desc.height;
+            p.node.rdesc.DepthOrArraySize = static_cast<UINT16>(desc.layers);
+            p.node.rdesc.MipLevels    = 1;
+            p.node.rdesc.Format       = depth_sampled ? DXGI_FORMAT_R32_TYPELESS : p.node.fmt;
+            p.node.rdesc.SampleDesc.Count = 1;
+            p.node.rdesc.Layout       = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+            p.node.rdesc.Flags = is_depth ? D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL : D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+            D3D12_HEAP_PROPERTIES hp{};
+            hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+            const D3D12_RESOURCE_STATES init = is_depth ? D3D12_RESOURCE_STATE_DEPTH_WRITE : D3D12_RESOURCE_STATE_COMMON;
+            if (FAILED(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &p.node.rdesc, init, nullptr,
+                                                         IID_PPV_ARGS(&p.node.resource))))
+            {
+                return FgImage{0U};
+            }
+            p.node.state = init;
+            crd::i32 dead = -1;
+            for (crd::u32 i = 0; i < m_persist.size(); ++i)
+            {
+                if (m_persist[i].key == 0U) { dead = static_cast<crd::i32>(i); break; }
+            }
+            if (dead >= 0) { m_persist[static_cast<crd::u32>(dead)] = static_cast<Persistent&&>(p); found = dead; }
+            else
+            {
+                m_persist.push_back(static_cast<Persistent&&>(p));
+                found = static_cast<crd::i32>(m_persist.size() - 1U);
+            }
+            if (!materialize_image(m_persist[static_cast<crd::u32>(found)].node)) { return FgImage{0U}; }
+            m_persist[static_cast<crd::u32>(found)].was_live = false;
+        }
+        else { m_persist[static_cast<crd::u32>(found)].was_live = true; }
+
+        Persistent& pe = m_persist[static_cast<crd::u32>(found)];
+        ImageNode   n{};
+        n.target        = pe.node.target;
+        n.texture       = pe.node.texture;
+        n.rtv_heap      = pe.node.rtv_heap;
+        n.dsv_heap      = pe.node.dsv_heap;
+        for (IRasterTarget* t : pe.node.layer_targets) { n.layer_targets.push_back(t); }
+        n.own           = Own::Persistent;
+        n.persist_index = found;
+        n.desc          = pe.node.desc;
+        n.fmt           = pe.node.fmt;
+        n.is_depth      = pe.node.is_depth;
+        n.depth_sampled = pe.node.depth_sampled;
+        n.rdesc         = pe.node.rdesc;
+        n.mem_size      = pe.node.mem_size;
+        n.mem_align     = pe.node.mem_align;
+        n.resource      = pe.node.resource;
+        n.state         = pe.node.state; // carried ACROSS the frame boundary - see the write-back in execute()
+        m_images.push_back(static_cast<ImageNode&&>(n));
+        return FgImage{static_cast<crd::u32>(m_images.size())};
+    }
+
+    [[nodiscard]] bool persistent_image_was_live(crd::u32 key) const noexcept override
+    {
+        for (crd::u32 i = 0; i < m_persist.size(); ++i)
+        {
+            if (m_persist[i].key == key) { return m_persist[i].was_live; }
+        }
+        return false;
+    }
+
     [[nodiscard]] FgBuffer create_transient_buffer(crd::u32 size_bytes) override
     {
         if (size_bytes == 0U) { return FgBuffer{0U}; }
@@ -3687,6 +3835,25 @@ private:
         UINT64             size       = 0;
         crd::i32           free_after  = -1; // the last pass index whose transient occupied this slot (-1 = free)
     };
+    // ⛔ WHO OWNS THIS, and FOR HOW LONG. This used to be a single `bool transient`, and that bool silently
+    // conflated THREE INDEPENDENT QUESTIONS:
+    //     · is the resource GRAPH-OWNED?   -> RTT barrier semantics, and NO end-of-frame readback (a borrowed
+    //                                         wrapper has no readback buffer to copy into)
+    //     · is it ALIASABLE?               -> the placed-resource heap, the free path
+    //     · is its state FRAME-LOCAL?      -> whether frame-start resets apply to it
+    // The third question has NO predicate on purpose: it is answered by WHERE THE STATE LIVES. A persistent
+    // image's live state is stored in the registry entry (`live_state()`), which the frame-start reset
+    // cannot reach, so "skip persistent here" is not a rule anyone has to remember.
+    // For a transient all three answers are "yes" and for an import all three are "no", so one bool served — right
+    // up until a PERSISTENT resource, which is graph-owned, NOT aliasable, and NOT frame-local. The enum + the
+    // three NAMED predicates make each site say which question it is asking. (Kept identical to the Vulkan side:
+    // the two backends must not diverge on what ownership MEANS.)
+    enum class Own : crd::u8
+    {
+        Imported = 0, // the application owns it; the graph only tracks its access
+        Transient,    // the graph owns it for ONE frame: aliased, freed, reset
+        Persistent,   // the graph owns it ACROSS frames: never aliased, never freed, never reset
+    };
     struct ImageNode
     {
         IRasterTarget*         target    = nullptr; // imported: the real target; transient: the borrowed target (set in build)
@@ -3699,7 +3866,7 @@ private:
         // Dx12RasterTarget takes the ComPtr BY VALUE, so each slice target keeps its own heap alive.
         // The SRV, by contrast, is a single TEXTURE2DARRAY view spanning every slice.
         crd::containers::Array<IRasterTarget*> layer_targets{crd::memory::default_allocator()};
-        bool                   transient = false;
+        Own                    own       = Own::Imported;
         FgImageDesc            desc{};
         DXGI_FORMAT            fmt       = DXGI_FORMAT_UNKNOWN;
         bool                   is_depth  = false;
@@ -3715,6 +3882,23 @@ private:
         crd::i32               slot       = -1;
         bool                   has_write  = false;
         D3D12_RESOURCE_STATES  state      = D3D12_RESOURCE_STATE_COMMON; // imported target's live state during execute
+        // REN-37.5: >= 0 => this node BORROWS a persistent entry's device objects AND its LIVE STATE. The
+        // resource state of a persistent image lives in the REGISTRY, never here — see `live_state()`. That is
+        // what makes the frame-start reset harmless for it BY CONSTRUCTION rather than by remembering a skip.
+        crd::i32               persist_index = -1;
+    };
+
+    // The two questions that DO need a predicate, each answerable on its own.
+    [[nodiscard]] static bool graph_owned(const ImageNode& n) noexcept { return n.own != Own::Imported; }
+    [[nodiscard]] static bool aliasable(const ImageNode& n) noexcept { return n.own == Own::Transient; }
+
+    // REN-37.5: one persistent image, keyed by a caller-chosen stable identity. Survives `reset()`, owns a
+    // COMMITTED resource (not a placed one - it is never part of the aliasing heap), and is never retired.
+    struct Persistent
+    {
+        crd::u32  key      = 0U;   // 0 = a dead slot, reusable after a resize freed one
+        bool      was_live = false; // did it already carry history when this frame asked for it?
+        ImageNode node{};
     };
     struct BufferNode
     {
@@ -3798,7 +3982,7 @@ private:
     {
         for (ImageNode& n : m_images)
         {
-            if (n.transient)
+            if (aliasable(n))
             {
                 // REN-2: delete the borrowed wrappers (they hold ComPtr refs), then release the placed resource + RTV heap.
                 delete n.texture;
@@ -3833,6 +4017,36 @@ private:
 
     crd::containers::Array<ImageNode>  m_images{crd::memory::default_allocator()};
     crd::containers::Array<BufferNode> m_buffers{crd::memory::default_allocator()};
+    // REN-37.5: the persistent registry - the ONE thing in this graph that outlives `reset()`.
+    crd::containers::Array<Persistent> m_persist{crd::memory::default_allocator()};
+
+    // ⭐ THE LIVE RESOURCE STATE HAS EXACTLY ONE HOME. For a frame-local node that is the node's own field; for a
+    // PERSISTENT one it is the registry entry, which `reset()` and the frame-start reset never touch. Routing
+    // every read and write through here means there is nothing to copy back at end of frame and nothing to
+    // remember to skip at the start of one.
+    [[nodiscard]] D3D12_RESOURCE_STATES& live_state(ImageNode& n) noexcept
+    {
+        return n.persist_index >= 0 ? m_persist[static_cast<crd::u32>(n.persist_index)].node.state : n.state;
+    }
+
+    [[nodiscard]] bool materialize_image(ImageNode& n);
+    // Release ONE persistent entry. Same teardown order as `free_transients` (the layered `target` aliases
+    // layer_targets[0], so null it before the plain delete or slice 0 is destroyed twice).
+    void destroy_persistent_impl(Persistent& p) noexcept
+    {
+        ImageNode& n = p.node;
+        delete n.texture;
+        n.texture = nullptr;
+        for (IRasterTarget* lt : n.layer_targets) { delete lt; }
+        if (n.layer_targets.size() > 0) { n.target = nullptr; }
+        n.layer_targets.clear();
+        delete n.target;
+        n.target = nullptr;
+        n.rtv_heap.Reset();
+        n.dsv_heap.Reset();
+        n.resource.Reset();
+        n.state = D3D12_RESOURCE_STATE_COMMON;
+    }
     crd::containers::Array<Pass>       m_passes{crd::memory::default_allocator()};
     crd::containers::Array<Slot>       m_slots{crd::memory::default_allocator()};
     Builder m_builder{};
@@ -3951,7 +4165,7 @@ bool Dx12FrameGraph::build()
             if (a.access != FgAccess::Read) { n.has_write = true; }
         }
     }
-    for (const ImageNode& n : m_images) { if (n.transient && !n.has_write) { return false; } } // a transient no pass writes
+    for (const ImageNode& n : m_images) { if (aliasable(n) && !n.has_write) { return false; } } // a transient no pass writes
     for (const BufferNode& n : m_buffers) { if (n.transient && !n.has_write) { return false; } }
 
     // 3) ALIASING — greedy interval assignment: process transients in first_pass order; reuse a slot whose last
@@ -3976,7 +4190,7 @@ crd::u32 Dx12FrameGraph::alias_class(bool images)
     const crd::usize count = images ? m_images.size() : m_buffers.size();
     for (crd::u32 i = 0; i < count; ++i)
     {
-        const bool tr = images ? m_images[i].transient : m_buffers[i].transient;
+        const bool tr = images ? aliasable(m_images[i]) : m_buffers[i].transient;
         if (tr) { order.push_back(i); }
     }
     const auto first_pass_of = [&](crd::u32 i) { return images ? m_images[i].first_pass : m_buffers[i].first_pass; };
@@ -4032,6 +4246,32 @@ crd::u32 Dx12FrameGraph::alias_class(bool images)
             {
                 return 0xFFFFFFFFU;
             }
+            if (!materialize_image(n)) { return 0xFFFFFFFFU; }
+        }
+        else
+        {
+            BufferNode& n = m_buffers[idx];
+            n.slot = chosen;
+            if (FAILED(m_device->CreatePlacedResource(s.heap.Get(), 0, &n.rdesc, D3D12_RESOURCE_STATE_COMMON, nullptr,
+                                                      IID_PPV_ARGS(&n.resource))))
+            {
+                return 0xFFFFFFFFU;
+            }
+            n.buffer = new Dx12TransientBuffer(n.size);
+        }
+    }
+    return static_cast<crd::u32>(m_slots.size()) - slot_base;
+}
+
+// REN-37.5: MATERIALIZE an image node - its attachment view(s), its borrowed render target(s) and (if `sampled`)
+// its borrowed SRV texture. Factored out of the placement loop because a PERSISTENT image needs exactly the same
+// materialization but over a COMMITTED resource instead of a placed one. Two copies of this would be two places
+// for the layered/depth/typeless rules to drift apart - and those rules are the largest, sharpest part of the
+// DX12 port (the R32_TYPELESS / D32_FLOAT / R32_FLOAT three-format dance, the per-slice DSV-in-its-own-heap rule).
+bool Dx12FrameGraph::materialize_image(ImageNode& n)
+{
+    {
+        {
             const bool   is_array = n.desc.layers > 1U;
             const crd::u32 slices = n.desc.layers;
             const D3D12_PLACED_SUBRESOURCE_FOOTPRINT tfp{}; // no readback footprint — a transient is device-local
@@ -4088,7 +4328,7 @@ crd::u32 Dx12FrameGraph::alias_class(bool images)
                 for (crd::u32 l = 0; l < slices; ++l)
                 {
                     ComPtr<ID3D12DescriptorHeap> heap;
-                    if (!slice_heap(l, heap)) { return 0xFFFFFFFFU; }
+                    if (!slice_heap(l, heap)) { return false; }
                     n.layer_targets.push_back(slice_target(heap));
                 }
                 n.target = n.layer_targets[0]; // image() on a layered transient = slice 0 (never the whole array)
@@ -4096,7 +4336,7 @@ crd::u32 Dx12FrameGraph::alias_class(bool images)
             else
             {
                 ComPtr<ID3D12DescriptorHeap>& heap = n.is_depth ? n.dsv_heap : n.rtv_heap;
-                if (!slice_heap(0U, heap)) { return 0xFFFFFFFFU; }
+                if (!slice_heap(0U, heap)) { return false; }
                 n.target = slice_target(heap);
             }
 
@@ -4123,19 +4363,8 @@ crd::u32 Dx12FrameGraph::alias_class(bool images)
                 n.texture = new Dx12Texture(n.resource, n.desc.width, n.desc.height, srv);
             }
         }
-        else
-        {
-            BufferNode& n = m_buffers[idx];
-            n.slot = chosen;
-            if (FAILED(m_device->CreatePlacedResource(s.heap.Get(), 0, &n.rdesc, D3D12_RESOURCE_STATE_COMMON, nullptr,
-                                                      IID_PPV_ARGS(&n.resource))))
-            {
-                return 0xFFFFFFFFU;
-            }
-            n.buffer = new Dx12TransientBuffer(n.size);
-        }
     }
-    return static_cast<crd::u32>(m_slots.size()) - slot_base;
+    return true;
 }
 
 void Dx12FrameGraph::execute()
@@ -4147,6 +4376,9 @@ void Dx12FrameGraph::execute()
     m_barrier_count = 0U;
     m_submit_count  = 0U;
     m_rc->frame_rec_begin(m_frame_heap.Get(), m_srv_inc);
+    // Every FRAME-LOCAL node starts the frame at COMMON: a transient is a brand-new placed resource and an
+    // imported target's state is tracked by the raster context. This loop needs no exception for persistent
+    // images — their live state is not stored here at all (`live_state`), so clearing these fields cannot reach it.
     for (ImageNode& n : m_images) { n.state = D3D12_RESOURCE_STATE_COMMON; }
 
     // REN-8: only the NAMES are cleared. m_timed_passes / m_gpu_ms_total belong to resolve_timestamps(), which
@@ -4164,53 +4396,57 @@ void Dx12FrameGraph::execute()
             ImageNode& n = m_images[a.handle - 1U];
             if (n.target == nullptr) { continue; }
             const bool writes = (a.access != FgAccess::Read);
-            if (n.transient && n.is_depth)
+            if (graph_owned(n) && n.is_depth)
             {
                 // REN-3.1: a DEPTH RTT transient — the depth-only pass renders into it (DEPTH_WRITE), a later pass
                 // SAMPLES it (PIXEL_SHADER_RESOURCE). Note the resource was CREATED in DEPTH_WRITE (see the placed-
                 // resource init state), so the first write needs no barrier — only the write→read flip does.
                 auto& dt = static_cast<Dx12RasterTarget&>(*n.target);
-                if (writes && n.state != D3D12_RESOURCE_STATE_DEPTH_WRITE)
+                if (writes && live_state(n) != D3D12_RESOURCE_STATE_DEPTH_WRITE)
                 {
-                    m_rc->frame_transition(dt.depth_tex(), n.state, D3D12_RESOURCE_STATE_DEPTH_WRITE);
-                    n.state = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+                    m_rc->frame_transition(dt.depth_tex(), live_state(n), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+                    live_state(n) = D3D12_RESOURCE_STATE_DEPTH_WRITE;
                     ++m_barrier_count;
                 }
-                else if (!writes && n.state == D3D12_RESOURCE_STATE_DEPTH_WRITE)
+                else if (!writes && live_state(n) == D3D12_RESOURCE_STATE_DEPTH_WRITE)
                 {
                     // the DEPTH RTT barrier: the shadow pass's depth writes complete → this pass samples it
                     m_rc->frame_transition(dt.depth_tex(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
                                            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-                    n.state = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+                    live_state(n) = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
                     ++m_barrier_count;
                 }
                 continue;
             }
-            if (n.transient) // REN-2: RTT transient — render into it (RENDER_TARGET), then a later pass SAMPLES it
+            // ⛔ REN-37.5: the RTT barrier path keys on GRAPH-OWNED, not on `transient`. A PERSISTENT image is
+            // graph-owned too - rendered into, then sampled - it simply is not aliased or freed. Keying on
+            // `transient` sent it down the IMPORTED path, whose end-of-frame readback belongs to a target the
+            // application owns (and whose borrowed wrapper has no readback buffer at all).
+            if (graph_owned(n)) // REN-2: an RTT image — render into it (RENDER_TARGET), then a later pass SAMPLES it
             {
                 auto& tt = static_cast<Dx12RasterTarget&>(*n.target);
-                if (writes && n.state != D3D12_RESOURCE_STATE_RENDER_TARGET)
+                if (writes && live_state(n) != D3D12_RESOURCE_STATE_RENDER_TARGET)
                 {
-                    m_rc->frame_transition(tt.tex(), n.state, D3D12_RESOURCE_STATE_RENDER_TARGET);
-                    n.state = D3D12_RESOURCE_STATE_RENDER_TARGET;
+                    m_rc->frame_transition(tt.tex(), live_state(n), D3D12_RESOURCE_STATE_RENDER_TARGET);
+                    live_state(n) = D3D12_RESOURCE_STATE_RENDER_TARGET;
                     ++m_barrier_count;
                 }
-                else if (!writes && n.state == D3D12_RESOURCE_STATE_RENDER_TARGET)
+                else if (!writes && live_state(n) == D3D12_RESOURCE_STATE_RENDER_TARGET)
                 {
                     // the RTT barrier: the render pass's writes complete → this pass samples it
                     m_rc->frame_transition(tt.tex(), D3D12_RESOURCE_STATE_RENDER_TARGET,
                                            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-                    n.state = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+                    live_state(n) = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
                     ++m_barrier_count;
                 }
                 continue;
             }
             if (p.present != nullptr) { continue; } // present pass reads → readback loop transitions
-            if (writes && n.state != D3D12_RESOURCE_STATE_RENDER_TARGET)
+            if (writes && live_state(n) != D3D12_RESOURCE_STATE_RENDER_TARGET)
             {
                 auto& t = static_cast<Dx12RasterTarget&>(*n.target);
-                m_rc->frame_transition(t.tex(), n.state, D3D12_RESOURCE_STATE_RENDER_TARGET);
-                n.state = D3D12_RESOURCE_STATE_RENDER_TARGET;
+                m_rc->frame_transition(t.tex(), live_state(n), D3D12_RESOURCE_STATE_RENDER_TARGET);
+                live_state(n) = D3D12_RESOURCE_STATE_RENDER_TARGET;
                 ++m_barrier_count;
             }
         }
@@ -4244,7 +4480,9 @@ void Dx12FrameGraph::execute()
     // is bit-identical to the sync path), then back to COMMON. The direct-to-backbuffer present is REN-8.
     for (ImageNode& n : m_images)
     {
-        if (m_readback && !n.transient && n.target != nullptr && n.state == D3D12_RESOURCE_STATE_RENDER_TARGET)
+        // Only APPLICATION-owned targets have a readback buffer, and `read_pixel` is only ever about those.
+        if (m_readback && !graph_owned(n) && n.target != nullptr
+            && n.state == D3D12_RESOURCE_STATE_RENDER_TARGET)
         {
             m_rc->frame_readback(static_cast<Dx12RasterTarget&>(*n.target));
             n.state = D3D12_RESOURCE_STATE_COMMON;

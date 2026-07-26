@@ -39,18 +39,31 @@ Rules for AI agents working on Cerid. As binding as the engineering principles.
 - **Substrate work ships proactively; speculative paths defer.** Filed follow-ons with settled designs + cheap tests ship in-line when the harness is fresh. Follow-ons with unsettled design tradeoffs only a consumer can resolve defer until that consumer arrives. (Memory: `feedback_ship_at_consumer_template_from_day_one`.)
 - **Document paper-divergence explicitly.** When implementing a canonical algorithm with a different sub-step (D124 SAT-vs-Mamou-centroid, D129 voxel-fraction-vs-Hausdorff, D94 super-tet ordering), pin the divergence as a numbered Dxxx + rationale paragraph in the ADR amendment + system doc.
 - **Append new pure-virtuals at the END of an interface.** Inserting in the middle shifts vtable slots and silently dispatches to the wrong method in win-release LTCG. (Memory: `feedback_vtable_stability_append_at_end`. Case study: rhi-compute v0-close SEGV 2026-05-17.)
-- **⛔⛔ HARD RULE (user, 2026-07-25) — EVERY RENDER PASS GOES THROUGH OUR OWN MACHINERY.** *"Every render pass,
-  light pass or any other rendering machinery MUST GO THROUGH OUR OWN MACHINERY, PROGRAMMATICALLY OR LOADED FROM
-  ASSETS IT DOES NOT MATTER BUT IT MUST USE OUR OWN MACHINERY."* Concretely: a rendering step is a **pass in a
-  `FrameGraphDesc`** — either built with `FrameGraphBuilder` or loaded from a cooked `.frame.toml` — executed by
-  `execute_frame_graph`. It is NOT a bespoke sequence of `draw_*` calls hand-rolled in `scene_renderer.cpp`, a
-  sandbox, a tool, or a test. Shadow passes, CSM cascades, sky bakes, post chains, TAA resolve, editor overlays,
-  picking — all of them. **The two provenances are equal and interchangeable** (gated: TOML, cooked, and
-  programmatic descriptions render pixel-identically), so "I need it in C++" is never a reason to bypass the
-  system — build the description in C++ and run it through the same executor. If a step genuinely cannot be
-  expressed, that is a missing **`FramePassKind`** — add the kind with its own gate; never route around the
-  machinery. **Why:** the moment one renderer path lives outside the graph, authored graphs stop being able to
-  express the engine's own rendering, and the "anyone can author any rendering technique" contract is a lie.
+- **⛔⛔⛔ HARD RULE (user, 2026-07-25, RESTATED IN ANGER AFTER I BROKE IT) — WE WILL ONLY USE OUR AUTHORED
+  FRAME GRAPHS.** *"THAT'S THE WHOLE REASON WHY WE BUILD THE SYSTEM! WHY WE DID THAT! ... PLEASE WRITE THAT RULE
+  EVERYWHERE YOU CAN! WE WILL ONLY USE OUR AUTHORED FRAME GRAPHS!"*
+
+  **Every rendering technique ships as an AUTHORED FRAME-GRAPH ASSET (`.frame.toml` → cooked `.crdr`), loaded and
+  executed by `execute_frame_graph`.** Not as C++ that builds passes. Not as a `draw_*` sequence. An **asset**.
+  Shadow cascades, sky bakes, IBL prefilter, HDR/tonemap chains, TAA resolve, GI, OIT, editor overlays, picking,
+  debug viz — every one of them. The engine's own rendering ships in the **built-in pack** that mounts first;
+  applications override a technique purely by shadowing its name.
+
+  ⛔ **`FrameGraphBuilder` (programmatic construction) is for TESTS, node editors, and runtime-generated graphs
+  ONLY.** It is NOT an acceptable way to ship an engine technique. An earlier, weaker wording of this rule said
+  the two provenances were "equal and interchangeable"; that was read as licence to hardcode, and REN-3.2-b's CSM
+  was built as C++ in `scene_renderer.cpp` while REN-36's whole authoring stack sat unused beside it. **That
+  wording is retracted.** Interchangeable means *the asset path must produce identical pixels* — it does not mean
+  you may choose the C++ path for engine features.
+
+  **The test, applied to any rendering work before it is called done:** *can a user change this technique — pass
+  order, resource formats, cascade count, an inserted pass — by editing an asset and WITHOUT recompiling the
+  engine?* If no, it is not done. A step that genuinely cannot be expressed is a missing **`FramePassKind`**: add
+  the kind with its own gate, then author the technique on top of it. Never route around the system.
+
+  **Why this is not negotiable:** the entire REN-36 investment exists so applications, tools, and agents can
+  invent rendering techniques (deferred, Forward+, NPR, whatever) without engine changes. Every technique
+  hardcoded in C++ is one the authoring system provably cannot express, and it turns the contract into a lie.
 - **No dual code paths for "demo" vs "real" content.** When the sandbox uses the engine, it goes through the same surface a downstream consumer would. If a legacy path exists, the slice adding the new path replaces the legacy — does not run alongside it.
 - **Hook-based contracts > explicit-call APIs.** When a prior slice left a cleanup contract for a follow-up to pin (e.g. per-component drop callback), build the proper hook. Don't paper over with an explicit-call API the consumer remembers to invoke.
 - **Stub targets are not integration.** A consumer (e.g. `IPresetTarget`) must consume at least one real field that drives observable behaviour. "Display the value in ImGui" is observability, not integration.

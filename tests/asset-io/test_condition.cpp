@@ -397,3 +397,68 @@ TEST_CASE("assetio: OUR tangents vs the REFERENCE mikktspace.c ORACLE", "[asseti
     }
     CHECK(corners_checked == m.indices.size());
 }
+
+// ── REN-3.2-b: NORMALS MUST POINT OUTWARD, whatever the source winding. ──────────────────────────────────────
+// ⛔ `generate_normals` takes each face normal as cross(b-a, c-a) — a COUNTER-CLOCKWISE assumption. A
+// clockwise-wound source produced inward normals on every face, which makes dot(N, L) <= 0 for real lights, so
+// the mesh renders at flat ambient and looks permanently shadowed. The sandbox's OBJ torus did exactly that,
+// and NO existing test caught it: the suite covered smoothing and crease behaviour but never asserted
+// ORIENTATION. The check has to use a metric independent of the winding assumption or it just restates the
+// bug — signed volume (divergence theorem) never consults the generated normals.
+TEST_CASE("assetio: generated normals point OUTWARD for BOTH source windings", "[assetio][condition][normals]")
+{
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    // a closed tetrahedron, CCW (outward) — 4 verts, 4 faces
+    const auto make_tet = [&](bool clockwise) {
+        aio::ImportedMesh m(&alloc);
+        m.positions.push_back({0.0F, 0.0F, 0.0F});
+        m.positions.push_back({1.0F, 0.0F, 0.0F});
+        m.positions.push_back({0.0F, 1.0F, 0.0F});
+        m.positions.push_back({0.0F, 0.0F, 1.0F});
+        const crd::u32 ccw[12] = {0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3};
+        for (crd::u32 f = 0; f < 4U; ++f)
+        {
+            const crd::u32 a = ccw[f * 3U + 0U];
+            const crd::u32 b = ccw[f * 3U + 1U];
+            const crd::u32 c = ccw[f * 3U + 2U];
+            m.indices.push_back(a);
+            m.indices.push_back(clockwise ? c : b); // swapping two corners REVERSES the winding
+            m.indices.push_back(clockwise ? b : c);
+        }
+        return m;
+    };
+
+    for (int cw = 0; cw < 2; ++cw)
+    {
+        aio::ImportedMesh m = make_tet(cw != 0);
+        aio::generate_normals(m, &alloc, 1.0F);
+        REQUIRE(m.has_normals());
+        REQUIRE(m.triangle_count() == 4U);
+
+        // centroid of the tetrahedron; every face normal must point AWAY from it
+        float cx = 0.0F;
+        float cy = 0.0F;
+        float cz = 0.0F;
+        for (const auto& p : m.positions)
+        {
+            cx += p.x;
+            cy += p.y;
+            cz += p.z;
+        }
+        const auto n = static_cast<float>(m.positions.size());
+        cx /= n;
+        cy /= n;
+        cz /= n;
+
+        for (crd::u32 i = 0; i < static_cast<crd::u32>(m.indices.size()); ++i)
+        {
+            const crd::u32 vi = m.indices[i];
+            const auto&    p  = m.positions[vi];
+            const auto&    nr = m.normals[vi];
+            const float d = nr.x * (p.x - cx) + nr.y * (p.y - cy) + nr.z * (p.z - cz);
+            // ⛔ outward: the normal at a vertex points away from the interior. An INWARD normal makes this
+            // NEGATIVE, which is precisely the state that renders as permanent shadow.
+            CHECK(d > 0.0F);
+        }
+    }
+}

@@ -244,6 +244,38 @@ public:
     // Measured in the sandbox: 1.8 ms of actual pass work sat behind a 7.1 ms stall.
     // Default TRUE so every existing gate keeps its readback semantics unchanged; a real-time consumer opts out.
     virtual void set_readback_enabled(bool /*on*/) noexcept {}
+
+    // ── REN-37.5: PERSISTENT resources. Appended at the END of the vtable (D135). ──
+    // Everything the graph owns today is a TRANSIENT whose entire purpose is to be aliased away and destroyed at
+    // `reset()`. A whole class of technique needs the opposite: TAA history, SSR / DDGI / ReSTIR temporal reuse,
+    // auto-exposure adaptation, and (REN-37.9) a cached viewport thumbnail all need data that SURVIVES the frame.
+    //
+    // `key` is a caller-chosen STABLE IDENTITY (the authored resource's name hash). Calling this with the same
+    // key and the same desc across frames returns a handle to the SAME image, contents and layout intact. A desc
+    // that no longer matches (a resize) recreates it — the history is genuinely invalid then, so silently reusing
+    // a differently-sized image would be worse than losing it.
+    //
+    // ⛔ A persistent image is EXCLUDED from transient aliasing and from the retire queue, and that exclusion is
+    // the whole point: `retire_transients_to` frees graph-owned images once their fence signals, which is exactly
+    // wrong for a resource whose VALUE IS ITS HISTORY. It is otherwise an ordinary tracked node — barriers,
+    // ordering and layer slices all work identically.
+    //
+    // PING-PONG is built ON this rather than beside it: two persistent images under two keys, with the executor
+    // swapping which is `$prev` and which is `$curr` each frame. No author ever hand-manages a frame-parity bit
+    // (the classic source of one-frame-stale bugs).
+    //
+    // Returns an invalid handle on an unsupported desc or on a backend without support.
+    [[nodiscard]] virtual FgImage create_persistent_image(crd::u32 /*key*/, const FgImageDesc& /*desc*/)
+    {
+        return FgImage{0U};
+    }
+
+    // Was `key`'s image ALREADY LIVE when `create_persistent_image` was called this frame — i.e. does it carry
+    // real history, or was it created (or recreated after a resize) just now? A temporal pass MUST branch on
+    // this: reprojecting into an uninitialized history buffer is how TAA ghosts garbage on frame 0 and after
+    // every resize. Reported rather than inferred, because "is this the first frame" is not something a shader
+    // can work out for itself.
+    [[nodiscard]] virtual bool persistent_image_was_live(crd::u32 /*key*/) const noexcept { return false; }
 };
 
 } // namespace crd::gpu

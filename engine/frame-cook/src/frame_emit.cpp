@@ -160,6 +160,58 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
         app(o, "\n");
     }
 
+    // REN-37.6: composition, emitted BEFORE the resources so a reader sees what this graph is made OF first.
+    for (crd::usize i = 0; i < desc.includes.size(); ++i)
+    {
+        const FrameIncludeDesc& inc = desc.includes[i];
+        app(o, "\n[[include]]\ngraph = ");
+        app_quoted(o, inc.graph);
+        app(o, "\nas = ");
+        app_quoted(o, inc.as);
+        app(o, "\n");
+        if (inc.atomic) { app(o, "atomic = true\n"); }
+        if (inc.bind.size() > 0)
+        {
+            app(o, "bind = { ");
+            for (crd::usize k = 0; k < inc.bind.size(); ++k)
+            {
+                if (k > 0) { app(o, ", "); }
+                app_quoted(o, inc.bind[k].from); // ⛔ `@input` is not a bare TOML key — always quote it
+                app(o, " = ");
+                app_quoted(o, inc.bind[k].to);
+            }
+            app(o, " }\n");
+        }
+    }
+    for (crd::usize i = 0; i < desc.anchors.size(); ++i)
+    {
+        const FrameAnchorDesc& an = desc.anchors[i];
+        app(o, "\n[[anchor]]\nname = ");
+        app_quoted(o, an.name);
+        app(o, "\n");
+        const auto emit_list = [&](const char* key, const crd::containers::Array<crd::containers::String>& l) {
+            if (l.size() == 0) { return; }
+            app(o, key);
+            app(o, " = [");
+            for (crd::usize k = 0; k < l.size(); ++k)
+            {
+                if (k > 0) { app(o, ", "); }
+                app_quoted(o, l[k]);
+            }
+            app(o, "]\n");
+        };
+        emit_list("after", an.after);
+        emit_list("before", an.before);
+    }
+    for (crd::usize i = 0; i < desc.injects.size(); ++i)
+    {
+        app(o, "\n[[inject]]\nat = ");
+        app_quoted(o, desc.injects[i].anchor);
+        app(o, "\npass = ");
+        app_quoted(o, desc.injects[i].pass);
+        app(o, "\n");
+    }
+
     for (crd::usize i = 0; i < desc.resources.size(); ++i)
     {
         const FrameResourceDesc& r = desc.resources[i];
@@ -211,6 +263,7 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
         if (!p.view.empty())      { app(o, "view = ");      app_quoted(o, p.view);      app(o, "\n"); }
         if (!p.shader.empty())    { app(o, "shader = ");    app_quoted(o, p.shader);    app(o, "\n"); }
         if (!p.kernel.empty())    { app(o, "kernel = ");    app_quoted(o, p.kernel);    app(o, "\n"); }
+        if (!p.technique.empty()) { app(o, "technique = "); app_quoted(o, p.technique); app(o, "\n"); }
         const char* mp = from_material(p.material_pass);
         if (mp != nullptr) { app(o, "material_pass = \""); app(o, mp); app(o, "\"\n"); }
         if (p.for_each != FrameForEach::None)

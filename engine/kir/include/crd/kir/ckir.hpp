@@ -1782,6 +1782,14 @@ public:
             if (g.op == KOp::Call) { continue; } // GM-3: a pre-lowering module call is OPAQUE — never fold it (lower_calls inlines it first; a stray 0-arg Call must not fold)
             if (g.op == KOp::Attention) { continue; } // AS-4: the fused attention intrinsic is OPAQUE (a whole-tensor op) — never const-fold it
             if (is_resource_leaf(g.op)) { continue; } // buffer/shared/texture/sampler/AS/payload decls NAME storage — never fold
+            // ⛔⛔ A MEMORY READ IS NEVER A COMPILE-TIME CONSTANT, however constant its INDEX is.
+            // `StorageLoad`'s ONLY operand is the index (`sbuf.data[i]`), so a literal index made every
+            // header/uniform read look foldable and it was replaced by a literal — silently miscompiling any
+            // LOWERED shader that reads a storage buffer at a fixed slot. That is exactly what the scene's cooked
+            // forward variant does (light direction at word 22, cascade matrices at 32+), and it rendered BLACK.
+            // `BufferLoad`/`SharedLoad` escaped only by accident: their FIRST operand is a resource declaration,
+            // which is already unfoldable. Excluding the whole family makes that safety intentional.
+            if (g.op == KOp::StorageLoad || g.op == KOp::BufferLoad || g.op == KOp::SharedLoad) { continue; }
             if (is_stage_leaf(g.op)) { continue; } // B3 leaves have no operands — a SCALAR one (Builtin::VertexIndex, a
                                                   // scalar StageIn) would otherwise const-fold into a compile-time value
             if (g.n_ext != 0 || g.op == KOp::FieldGet || g.op == KOp::ArrayGet) { continue; } // aggregates never fold to one scalar Const

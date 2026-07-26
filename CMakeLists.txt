@@ -602,6 +602,8 @@ add_subdirectory(engine/kir-hip)  # v17-d; CKIR HIP/ROCm backend (KirBackend ove
 add_subdirectory(engine/kir-metal)  # v17-d; CKIR Metal backend (KirBackend over Apple Metal, Objective-C++); APPLE-only; validated at Part C; ADR-0098
 add_subdirectory(engine/frame-cook)   # REN-36 (D-007 row 139): the AUTHORABLE FRAME GRAPH — render passes,
                                       # pipelines and whole rendering architectures as cooked, API-agnostic assets
+add_subdirectory(engine/technique-cook) # REN-37 (D-007 row 140): the LIGHTING TECHNIQUE as an authored `.crdt`
+                                      # asset + the BINDING CONTRACT verified against a frame-graph pass
 add_subdirectory(engine/shader-cook)  # D-007 D2; OFFLINE shader cook — CKIR graph -> .crdr bundle (IR + reflection + per-backend blobs); ADR-0104
 add_subdirectory(engine/hesap-opt)  # v7; OPTIMISATION (unconstrained + constrained) over Objective<T>; ADR-0090 (now consumes hesap-autodiff)
 add_subdirectory(engine/hesap-stats)  # v12 cluster (created early as a v12-pull: Philox counter-RNG for v7-i)

@@ -14,6 +14,8 @@ add_library(crd-frame-cook
     src/frame_asset.cpp
     src/frame_emit.cpp      # REN-36.2: description -> .frame.toml (the editor round-trip)
     src/frame_runtime.cpp   # REN-36.2: execute a cooked graph through IFrameGraph
+    src/frame_compose.cpp   # REN-37.6: SUBGRAPHS + INJECTION POINTS, flattened away before build()
+    src/viewport.cpp        # REN-37.8/37.9: the FRAME-LEVEL graph composer + the budgeted viewport scheduler
 )
 
 target_include_directories(crd-frame-cook PUBLIC include)

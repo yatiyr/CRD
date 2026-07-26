@@ -2288,6 +2288,50 @@ public:
         draw_storage_textured_depth(target, program, ClearColor{}, 0.0F, compare, storage, texture, vertex_count);
     }
 
+    // ── REN-3.2-b: the SHADOWED scene draw — identical to the textured one but binding the COMPARISON sampler.
+    void draw_storage_shadowed_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color,
+                                     float clear_depth, DepthCompare compare, IStorageBuffer& storage,
+                                     ITexture& shadow_atlas, crd::u32 vertex_count) override
+    {
+        auto& t   = static_cast<VulkanRasterTarget&>(target);
+        auto& p   = static_cast<VulkanRasterProgram&>(program);
+        auto& s   = static_cast<VulkanStorageBuffer&>(storage);
+        auto& tex = static_cast<VulkanTexture&>(shadow_atlas);
+        if (!m_api.valid() || !p.valid() || m_desc_pool == VK_NULL_HANDLE || !t.has_depth()) { return; }
+        if (frame_recording())
+        {
+            record_scene_textured(t, p, s, tex, true, clear_color, clear_depth, compare, vertex_count, m_cmp_sampler);
+            return;
+        }
+        vkResetDescriptorPool(m_device, m_desc_pool, 0);
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool     = m_desc_pool;
+        dsai.descriptorSetCount = 1U;
+        dsai.pSetLayouts        = &m_storage_set_layout;
+        VkDescriptorSet dset = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return; }
+        write_scene_textured(m_device, dset, s.buf(), tex.view(), m_cmp_sampler);
+        render_dset_depth(t, p, clear_color, clear_depth, compare, dset, vertex_count);
+    }
+    void draw_storage_shadowed_depth_load(IRasterTarget& target, IRasterProgram& program, DepthCompare compare,
+                                          IStorageBuffer& storage, ITexture& shadow_atlas,
+                                          crd::u32 vertex_count) override
+    {
+        auto& t   = static_cast<VulkanRasterTarget&>(target);
+        auto& p   = static_cast<VulkanRasterProgram&>(program);
+        auto& s   = static_cast<VulkanStorageBuffer&>(storage);
+        auto& tex = static_cast<VulkanTexture&>(shadow_atlas);
+        if (!m_api.valid() || !p.valid() || !t.has_depth()) { return; }
+        if (frame_recording())
+        {
+            record_scene_textured(t, p, s, tex, false, ClearColor{}, 0.0F, compare, vertex_count, m_cmp_sampler);
+            return;
+        }
+        draw_storage_shadowed_depth(target, program, ClearColor{}, 0.0F, compare, storage, shadow_atlas,
+                                    vertex_count);
+    }
+
     // RET-6 (ADR-0105): the OVERLAY draw — see IRasterContext::draw_overlay. Composites onto the target's EXISTING
     // contents (color loadOp=LOAD; the target's post-draw layout is TRANSFER_SRC — the RET-2 contract — so the
     // preserving transition is TRANSFER_SRC → COLOR_ATTACHMENT, never UNDEFINED, which would discard). Standard alpha
@@ -2406,14 +2450,29 @@ public:
     // Before drawing to `t` AGAIN within the current pass, order this draw after the prior group's colour+depth
     // writes (a self-barrier — the intra-pass analog of the graph's cross-pass barriers). The FIRST draw of a
     // pass skips it (the graph already transitioned the target into COLOR/DEPTH_ATTACHMENT before the pass).
+    // ⛔ A DEPTH-ONLY target has NO colour image, so `t.image()` is VK_NULL_HANDLE — and `pass_last` also starts
+    // as VK_NULL_HANDLE, which made `pass_last == t.image()` fire on the FIRST draw of every depth-only pass and
+    // emit a barrier with a null image (VUID-VkImageMemoryBarrier-image-parameter). Latent since REN-3.1; the
+    // REN-3.2-b cascade passes are the first code to record MULTIPLE draws into a depth-only target, which is
+    // what surfaced it. Identity is now the target's PRIMARY image — colour when it has one, depth otherwise —
+    // so depth-only targets still get their between-draw self-barrier, keyed on something real.
+    [[nodiscard]] static VkImage primary_image(VulkanRasterTarget& t) noexcept
+    {
+        return t.image() != VK_NULL_HANDLE ? t.image() : t.depth_image();
+    }
     void frame_self_barrier_if_needed(VulkanRasterTarget& t)
     {
-        if (m_frame_rec.pass_last == t.image())
+        const VkImage id = primary_image(t);
+        if (id != VK_NULL_HANDLE && m_frame_rec.pass_last == id)
         {
-            transition(m_frame_rec.cmd, t.image(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                       VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-                       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT,
-                       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+            if (t.image() != VK_NULL_HANDLE)
+            {
+                transition(m_frame_rec.cmd, t.image(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                           VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT,
+                           VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                           VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+            }
             if (t.has_depth())
             {
                 VkImageMemoryBarrier db{};
@@ -2434,7 +2493,7 @@ public:
                                      0, 0, nullptr, 0, nullptr, 1U, &db);
             }
         }
-        m_frame_rec.pass_last = t.image();
+        m_frame_rec.pass_last = primary_image(t); // colour when present, else depth (depth-only passes)
     }
 
     // The frame-mode body of draw_storage_depth (clear=true) / draw_storage_depth_load (clear=false): one
@@ -2586,9 +2645,12 @@ public:
 
     // REN-2 Half B: the frame-mode body of draw_storage_textured_depth (clear) / _load (no clear) — a depth-tested
     // scene draw that ALSO samples the material texture, into the shared cmd. The SceneRenderer's textured forward pass.
+    // REN-3.2-b:  selects the sampler bound at slot 2. VK_NULL_HANDLE means the default FILTERING sampler
+    // (the textured scene draw); the shadowed draw passes the COMPARISON sampler. Same descriptor layout either
+    // way, so there is one recording path rather than two that could drift apart.
     void record_scene_textured(VulkanRasterTarget& t, VulkanRasterProgram& p, VulkanStorageBuffer& s, VulkanTexture& tex,
                                bool clear, ClearColor clear_color, float clear_depth, DepthCompare compare,
-                               crd::u32 vertex_count)
+                               crd::u32 vertex_count, VkSampler samp = VK_NULL_HANDLE)
     {
         VkCommandBuffer             cmd = m_frame_rec.cmd;
         VkDescriptorSetAllocateInfo dsai{};
@@ -2598,7 +2660,7 @@ public:
         dsai.pSetLayouts        = &m_storage_set_layout;
         VkDescriptorSet dset = VK_NULL_HANDLE;
         if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return; }
-        write_scene_textured(m_device, dset, s.buf(), tex.view(), m_default_sampler);
+        write_scene_textured(m_device, dset, s.buf(), tex.view(), samp != VK_NULL_HANDLE ? samp : m_default_sampler);
         frame_self_barrier_if_needed(t);
 
         VkRenderingAttachmentInfo att{};
@@ -3997,6 +4059,10 @@ public:
         // ⛔ never tear down a pool/fence, or free a transient, with work still in flight — drain EVERY slot
         wait_all_slots();
         free_transients();
+        // REN-37.5: the persistent registry is the one thing `reset()` never touches, so the DESTRUCTOR is the
+        // only place it is released. Ordered after `wait_all_slots()` for the same reason transients are.
+        for (Persistent& p : m_persist) { destroy_persistent_impl(p); }
+        m_persist.clear();
         for (crd::u32 s = 0; s < kFramesInFlight; ++s)
         {
             FrameSlot& fs = m_slots_if[s];
@@ -4047,8 +4113,8 @@ public:
             if (m_images[i].target == &target) { return FgImage{static_cast<crd::u32>(i + 1U)}; }
         }
         ImageNode n{};
-        n.target    = &target;
-        n.transient = false;
+        n.target = &target;
+        n.own    = Own::Imported;
         m_images.push_back(n);
         return FgImage{static_cast<crd::u32>(m_images.size())};
     }
@@ -4073,8 +4139,8 @@ public:
         // cascades, which is the worst class of graphics bug: it looks like art direction.
         if (desc.layers == 0U || desc.layers > kFgMaxImageLayers) { return FgImage{0U}; }
         ImageNode n{};
-        n.transient = true;
-        n.desc      = desc;
+        n.own  = Own::Transient;
+        n.desc = desc;
         VkImageUsageFlags usage = 0;
         VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT;
         VkFormat fmt = to_vk_format(desc.format, usage, aspect);
@@ -4102,6 +4168,127 @@ public:
         m_images.push_back(n);
         return FgImage{static_cast<crd::u32>(m_images.size())};
     }
+    // ── REN-37.5: PERSISTENT images — created ONCE, kept across `reset()`, never aliased, never retired. ──
+    // The substrate for TAA history, SSR/DDGI/ReSTIR temporal reuse, auto-exposure, ping-pong blur chains, and
+    // (REN-37.9) cached viewport thumbnails whose steady-state cost must be ZERO passes.
+    [[nodiscard]] FgImage create_persistent_image(crd::u32 key, const FgImageDesc& desc) override
+    {
+        if (desc.width == 0U || desc.height == 0U) { return FgImage{0U}; }
+        if (desc.layers == 0U || desc.layers > kFgMaxImageLayers) { return FgImage{0U}; }
+
+        crd::i32 found = -1;
+        for (crd::u32 i = 0; i < m_persist.size(); ++i)
+        {
+            if (m_persist[i].key != key) { continue; }
+            const FgImageDesc& d = m_persist[i].node.desc;
+            // ⛔ A desc change (a resize, a format switch) genuinely INVALIDATES the history. Reusing a
+            // differently-shaped image would be worse than losing it — the reprojection would read garbage that
+            // looks like plausible motion. Destroy and recreate, and report it via `persistent_image_was_live`.
+            if (d.width == desc.width && d.height == desc.height && d.format == desc.format
+                && d.layers == desc.layers && d.sampled == desc.sampled && d.storage == desc.storage)
+            {
+                found = static_cast<crd::i32>(i);
+            }
+            else { destroy_persistent_impl(m_persist[i]); m_persist[i].key = 0U; }
+            break;
+        }
+
+        if (found < 0)
+        {
+            Persistent p{};
+            p.key            = key;
+            p.node.desc      = desc;
+            p.node.own = Own::Persistent;
+            VkImageUsageFlags  usage  = 0;
+            VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+            const VkFormat     fmt    = to_vk_format(desc.format, usage, aspect);
+            if (desc.sampled) { usage |= VK_IMAGE_USAGE_SAMPLED_BIT; }
+            if (desc.storage) { usage |= VK_IMAGE_USAGE_STORAGE_BIT; }
+            // ⛔ NO `VK_IMAGE_CREATE_ALIAS_BIT`: this image's memory is dedicated and must never be handed to a
+            // disjoint-lifetime peer. Aliasing is precisely the thing a history buffer must be exempt from.
+            VkImageCreateInfo ici{};
+            ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            ici.imageType     = VK_IMAGE_TYPE_2D;
+            ici.format        = fmt;
+            ici.extent        = {desc.width, desc.height, 1U};
+            ici.mipLevels     = 1U;
+            ici.arrayLayers   = desc.layers;
+            ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+            ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+            ici.usage         = usage;
+            ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+            ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            if (vkCreateImage(m_device, &ici, nullptr, &p.node.image) != VK_SUCCESS) { return FgImage{0U}; }
+            vkGetImageMemoryRequirements(m_device, p.node.image, &p.node.mem_req);
+            p.node.aspect = aspect;
+            p.node.fmt    = fmt;
+
+            const crd::u32 mt = find_memory_type(p.node.mem_req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            if (mt == 0xFFFFFFFFU) { vkDestroyImage(m_device, p.node.image, nullptr); return FgImage{0U}; }
+            VkMemoryAllocateInfo mai{};
+            mai.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            mai.allocationSize  = p.node.mem_req.size;
+            mai.memoryTypeIndex = mt;
+            if (vkAllocateMemory(m_device, &mai, nullptr, &p.memory) != VK_SUCCESS)
+            {
+                vkDestroyImage(m_device, p.node.image, nullptr);
+                return FgImage{0U};
+            }
+            if (vkBindImageMemory(m_device, p.node.image, p.memory, 0) != VK_SUCCESS)
+            {
+                vkFreeMemory(m_device, p.memory, nullptr);
+                vkDestroyImage(m_device, p.node.image, nullptr);
+                return FgImage{0U};
+            }
+            // reuse a dead entry if a resize freed one, so keys do not leak slots across resizes
+            crd::i32 dead = -1;
+            for (crd::u32 i = 0; i < m_persist.size(); ++i)
+            {
+                if (m_persist[i].key == 0U) { dead = static_cast<crd::i32>(i); break; }
+            }
+            if (dead >= 0) { m_persist[static_cast<crd::u32>(dead)] = static_cast<Persistent&&>(p); found = dead; }
+            else
+            {
+                m_persist.push_back(static_cast<Persistent&&>(p));
+                found = static_cast<crd::i32>(m_persist.size() - 1U);
+            }
+            if (!materialize_image(m_persist[static_cast<crd::u32>(found)].node)) { return FgImage{0U}; }
+            m_persist[static_cast<crd::u32>(found)].was_live = false;
+        }
+        else { m_persist[static_cast<crd::u32>(found)].was_live = true; }
+
+        // The per-frame tracked node BORROWS the persistent entry's device objects and its LIVE LAYOUT — carrying
+        // the layout across frames is what lets the barrier scheduler transition it correctly on frame 2 without
+        // an UNDEFINED (contents-discarding) transition.
+        Persistent& p = m_persist[static_cast<crd::u32>(found)];
+        ImageNode   n{};
+        n.target        = p.node.target;
+        n.texture       = p.node.texture;
+        n.own           = Own::Persistent;
+        n.persist_index = found;
+        n.desc          = p.node.desc;
+        n.image         = p.node.image;
+        n.view          = p.node.view;
+        for (VkImageView v : p.node.layer_views) { n.layer_views.push_back(v); }
+        for (IRasterTarget* t : p.node.layer_targets) { n.layer_targets.push_back(t); }
+        n.fmt          = p.node.fmt;
+        n.aspect       = p.node.aspect;
+        n.mem_req      = p.node.mem_req;
+        n.layout       = p.node.layout;
+        n.depth_layout = p.node.depth_layout;
+        m_images.push_back(static_cast<ImageNode&&>(n));
+        return FgImage{static_cast<crd::u32>(m_images.size())};
+    }
+
+    [[nodiscard]] bool persistent_image_was_live(crd::u32 key) const noexcept override
+    {
+        for (crd::u32 i = 0; i < m_persist.size(); ++i)
+        {
+            if (m_persist[i].key == key) { return m_persist[i].was_live; }
+        }
+        return false;
+    }
+
     [[nodiscard]] FgBuffer create_transient_buffer(crd::u32 size_bytes) override
     {
         if (size_bytes == 0U) { return FgBuffer{0U}; }
@@ -4180,11 +4367,31 @@ private:
         crd::i32       free_after  = -1; // the last pass index whose transient occupied this slot (-1 = free)
         crd::u32       type_bits   = 0xFFFFFFFFU;
     };
+    // ⛔ WHO OWNS THIS, and FOR HOW LONG. This used to be a single `bool transient`, and that bool silently
+    // conflated THREE INDEPENDENT QUESTIONS:
+    //     · is the resource GRAPH-OWNED?   -> RTT barrier semantics, and NO end-of-frame readback (a borrowed
+    //                                         wrapper has no readback buffer to copy into)
+    //     · is it ALIASABLE?               -> the transient memory pool, the retire queue, the free path
+    //     · is its state FRAME-LOCAL?      -> whether frame-start resets apply to it
+    // The third question has NO predicate on purpose: it is answered by WHERE THE STATE LIVES. A persistent
+    // image's live layout is stored in the registry entry (`live_layout()`), which the frame-start reset
+    // cannot reach, so "skip persistent here" is not a rule anyone has to remember.
+    // For a transient all three answers are "yes" and for an import all three are "no", so one bool served — right
+    // up until a PERSISTENT resource, which is graph-owned, NOT aliasable, and NOT frame-local. Every site that
+    // read `transient` then meant one of the three and got the other two for free, incorrectly.
+    // The enum + the three NAMED predicates below make each site say which question it is asking, so a fourth
+    // ownership kind cannot silently inherit the wrong answer.
+    enum class Own : crd::u8
+    {
+        Imported = 0, // the application owns it; the graph only tracks its access
+        Transient,    // the graph owns it for ONE frame: aliased, retired, reset
+        Persistent,   // the graph owns it ACROSS frames: never aliased, never retired, never reset
+    };
     struct ImageNode
     {
-        IRasterTarget* target    = nullptr; // imported: the real target; transient: the borrowed target (set in build)
-        ITexture*      texture   = nullptr; // REN-2: transient + sampled ⇒ the borrowed sampled view (set in build)
-        bool           transient = false;
+        IRasterTarget* target    = nullptr; // imported: the real target; graph-owned: the borrowed target
+        ITexture*      texture   = nullptr; // REN-2: sampled + graph-owned ⇒ the borrowed sampled view
+        Own            own       = Own::Imported;
         FgImageDesc    desc{};
         VkImage        image     = VK_NULL_HANDLE; // transient only
         VkImageView    view      = VK_NULL_HANDLE; // transient only; layers>1 ⇒ the whole-array SAMPLING view
@@ -4202,6 +4409,24 @@ private:
         bool           has_write  = false;
         VkImageLayout  layout       = VK_IMAGE_LAYOUT_UNDEFINED;
         VkImageLayout  depth_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        // REN-37.5: >= 0 ⇒ this node BORROWS a persistent entry's device objects AND its LIVE LAYOUT. The
+        // layout of a persistent image lives in the REGISTRY, never here — see `live_layout()`. That is what
+        // makes the frame-start reset below harmless for it BY CONSTRUCTION rather than by remembering a skip.
+        crd::i32       persist_index = -1;
+    };
+
+    // The two questions that DO need a predicate, each answerable on its own.
+    [[nodiscard]] static bool graph_owned(const ImageNode& n) noexcept { return n.own != Own::Imported; }
+    [[nodiscard]] static bool aliasable(const ImageNode& n) noexcept { return n.own == Own::Transient; }
+
+    // REN-37.5: one persistent image, keyed by a caller-chosen stable identity. Survives `reset()`, owns its own
+    // dedicated memory, and is never handed to the aliasing allocator or the retire queue.
+    struct Persistent
+    {
+        crd::u32       key      = 0U; // 0 = a dead slot, reusable after a resize freed one
+        bool           was_live = false; // did it already carry history when this frame asked for it?
+        VkDeviceMemory memory   = VK_NULL_HANDLE;
+        ImageNode      node{};
     };
     struct BufferNode
     {
@@ -4288,7 +4513,7 @@ private:
     {
         for (ImageNode& n : m_images)
         {
-            if (n.transient)
+            if (aliasable(n))
             {
                 // REN-2: the wrappers are BORROWED (their dtors free nothing) — delete the wrapper objects, then the
                 // graph-owned view+image they viewed. Delete via the base (virtual dtor); the target is now a borrowed
@@ -4316,6 +4541,28 @@ private:
         m_slots.clear();
         m_physical_bytes = 0U;
         m_logical_bytes  = 0U;
+    }
+
+    // REN-37.5: release ONE persistent entry. Same teardown order as `free_transients` (the layered `target`
+    // aliases `layer_targets[0]`, so null it before the plain delete or slice 0 is destroyed twice) plus its own
+    // dedicated memory, which no transient has.
+    void destroy_persistent_impl(Persistent& p) noexcept
+    {
+        ImageNode& n = p.node;
+        delete n.texture;
+        n.texture = nullptr;
+        for (IRasterTarget* lt : n.layer_targets) { delete lt; }
+        if (n.layer_targets.size() > 0) { n.target = nullptr; }
+        n.layer_targets.clear();
+        for (VkImageView lv : n.layer_views) { vkDestroyImageView(m_device, lv, nullptr); }
+        n.layer_views.clear();
+        delete n.target;
+        n.target = nullptr;
+        if (n.view != VK_NULL_HANDLE) { vkDestroyImageView(m_device, n.view, nullptr); n.view = VK_NULL_HANDLE; }
+        if (n.image != VK_NULL_HANDLE) { vkDestroyImage(m_device, n.image, nullptr); n.image = VK_NULL_HANDLE; }
+        if (p.memory != VK_NULL_HANDLE) { vkFreeMemory(m_device, p.memory, nullptr); p.memory = VK_NULL_HANDLE; }
+        n.layout       = VK_IMAGE_LAYOUT_UNDEFINED;
+        n.depth_layout = VK_IMAGE_LAYOUT_UNDEFINED;
     }
 
     static constexpr crd::u32 kFrameSets = 256U;
@@ -4376,6 +4623,26 @@ private:
 
     crd::containers::Array<ImageNode>  m_images{crd::memory::default_allocator()};
     crd::containers::Array<BufferNode> m_buffers{crd::memory::default_allocator()};
+    // REN-37.5: the persistent registry — the ONE thing in this graph that outlives `reset()`.
+    crd::containers::Array<Persistent> m_persist{crd::memory::default_allocator()};
+
+    // ⭐ THE LIVE LAYOUT HAS EXACTLY ONE HOME. For a frame-local node that is the node's own field; for a
+    // PERSISTENT one it is the registry entry, which `reset()` and the frame-start reset never touch. Routing
+    // every read and write through here means there is nothing to copy back at end of frame and nothing to
+    // remember to skip at the start of one — the durable state simply lives with the resource that owns it.
+    [[nodiscard]] VkImageLayout& live_layout(ImageNode& n) noexcept
+    {
+        return n.persist_index >= 0 ? m_persist[static_cast<crd::u32>(n.persist_index)].node.layout : n.layout;
+    }
+    [[nodiscard]] VkImageLayout& live_depth_layout(ImageNode& n) noexcept
+    {
+        return n.persist_index >= 0 ? m_persist[static_cast<crd::u32>(n.persist_index)].node.depth_layout
+                                    : n.depth_layout;
+    }
+
+    [[nodiscard]] bool materialize_image(ImageNode& n);
+    [[nodiscard]] bool build_tail(crd::u32 img_slot_end, crd::containers::Array<crd::u32>& border);
+    
     crd::containers::Array<Pass>       m_passes{crd::memory::default_allocator()};
     crd::containers::Array<Slot>       m_slots{crd::memory::default_allocator()};
     Builder m_builder{};
@@ -4509,7 +4776,7 @@ bool VulkanFrameGraph::build()
             if (a.access != FgAccess::Read) { n.has_write = true; }
         }
     }
-    for (const ImageNode& n : m_images) { if (n.transient && !n.has_write) { return false; } } // a transient no pass writes
+    for (const ImageNode& n : m_images) { if (aliasable(n) && !n.has_write) { return false; } } // a transient no pass writes
     for (const BufferNode& n : m_buffers) { if (n.transient && !n.has_write) { return false; } }
 
     // 3) ALIASING — greedy interval assignment: process transients in first_pass order; reuse a slot whose last
@@ -4522,7 +4789,7 @@ bool VulkanFrameGraph::build()
     crd::containers::Array<crd::u32> order{crd::memory::default_allocator()};
     for (crd::u32 i = 0; i < m_images.size(); ++i)
     {
-        if (m_images[i].transient) { order.push_back(i); }
+        if (aliasable(m_images[i])) { order.push_back(i); }
     }
     for (crd::usize a = 1; a < order.size(); ++a) // insertion sort by first_pass (small N)
     {
@@ -4573,8 +4840,35 @@ bool VulkanFrameGraph::build()
     }
     for (ImageNode& n : m_images)
     {
-        if (!n.transient || n.slot < 0) { continue; }
+        if (!aliasable(n) || n.slot < 0) { continue; }
         if (vkBindImageMemory(m_device, n.image, m_slots[static_cast<crd::u32>(n.slot)].memory, 0) != VK_SUCCESS) { return false; }
+        if (!materialize_image(n)) { return false; }
+    }
+
+    // -- buffers (their own slots, appended after the image slots) --
+    const crd::u32 img_slot_end = static_cast<crd::u32>(m_slots.size());
+    crd::containers::Array<crd::u32> border{crd::memory::default_allocator()};
+    for (crd::u32 i = 0; i < m_buffers.size(); ++i)
+    {
+        if (m_buffers[i].transient) { border.push_back(i); }
+    }
+    for (crd::usize a = 1; a < border.size(); ++a)
+    {
+        const crd::u32 v = border[a];
+        crd::usize     b = a;
+        while (b > 0 && m_buffers[border[b - 1]].first_pass > m_buffers[v].first_pass) { border[b] = border[b - 1]; --b; }
+        border[b] = v;
+    }
+    return build_tail(img_slot_end, border);
+}
+
+// REN-37.5: MATERIALIZE an image node — its views, its borrowed render target(s) and (if `sampled`) its borrowed
+// sampled view. Factored out of `build()` because a PERSISTENT image needs exactly the same materialization but
+// at CREATION time (it has dedicated memory and is never part of the aliasing pass). Two copies of this would be
+// two places for the layered/depth/array-view rules to drift apart.
+bool VulkanFrameGraph::materialize_image(ImageNode& n)
+{
+    {
         const bool is_depth  = (n.aspect & VK_IMAGE_ASPECT_DEPTH_BIT) != 0U;
         const bool is_array  = n.desc.layers > 1U;
 
@@ -4641,21 +4935,11 @@ bool VulkanFrameGraph::build()
             n.texture = tex;
         }
     }
+    return true;
+}
 
-    // -- buffers (their own slots, appended after the image slots) --
-    const crd::u32 img_slot_end = static_cast<crd::u32>(m_slots.size());
-    crd::containers::Array<crd::u32> border{crd::memory::default_allocator()};
-    for (crd::u32 i = 0; i < m_buffers.size(); ++i)
-    {
-        if (m_buffers[i].transient) { border.push_back(i); }
-    }
-    for (crd::usize a = 1; a < border.size(); ++a)
-    {
-        const crd::u32 v = border[a];
-        crd::usize     b = a;
-        while (b > 0 && m_buffers[border[b - 1]].first_pass > m_buffers[v].first_pass) { border[b] = border[b - 1]; --b; }
-        border[b] = v;
-    }
+bool VulkanFrameGraph::build_tail(crd::u32 img_slot_end, crd::containers::Array<crd::u32>& border)
+{
     for (crd::u32 idx : border)
     {
         BufferNode& n = m_buffers[idx];
@@ -4731,7 +5015,14 @@ void VulkanFrameGraph::execute()
     vkBeginCommandBuffer(m_cmd, &bi);
 
     m_rc->frame_rec_begin(m_cmd, m_frame_desc_pool);
-    for (ImageNode& n : m_images) { n.layout = VK_IMAGE_LAYOUT_UNDEFINED; n.depth_layout = VK_IMAGE_LAYOUT_UNDEFINED; }
+    // Every FRAME-LOCAL node starts the frame undefined: a transient is a brand-new image and an imported
+    // target's layout is tracked by the raster context. This loop needs no exception for persistent images —
+    // their live layout is not stored here at all (`live_layout`), so clearing these fields cannot reach it.
+    for (ImageNode& n : m_images)
+    {
+        n.layout       = VK_IMAGE_LAYOUT_UNDEFINED;
+        n.depth_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    }
 
     // REN-8: a timestamp pool MUST be reset on the device before it is written, or results are undefined.
     // ⛔ Only the NAMES are cleared here. `m_timed_passes` / `m_gpu_ms_total` belong to `resolve_timestamps()`,
@@ -4778,7 +5069,7 @@ void VulkanFrameGraph::execute()
             ImageNode& n = m_images[a.handle - 1U];
             if (n.target == nullptr) { continue; }
             const bool writes = (a.access != FgAccess::Read);
-            if (n.transient && (n.aspect & VK_IMAGE_ASPECT_DEPTH_BIT) != 0U)
+            if (graph_owned(n) && (n.aspect & VK_IMAGE_ASPECT_DEPTH_BIT) != 0U)
             {
                 // REN-3.1: a DEPTH RTT transient — a depth-only pass renders into it (DEPTH_ATTACHMENT_OPTIMAL),
                 // then a later pass SAMPLES it through the comparison sampler. Same shape as the colour RTT
@@ -4789,42 +5080,42 @@ void VulkanFrameGraph::execute()
                 // a depth image, but mixing the two is not — the first run of the REN-3.1 gate failed on exactly
                 // that (VUID-vkCmdDraw-imageLayout-00344), which is why the spec listed it as risk #2.
                 auto& dt = static_cast<VulkanRasterTarget&>(*n.target);
-                if (writes && n.depth_layout != VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
+                if (writes && live_depth_layout(n) != VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
                 {
-                    img_barrier(dt.depth_image(), VK_IMAGE_ASPECT_DEPTH_BIT, n.depth_layout,
+                    img_barrier(dt.depth_image(), VK_IMAGE_ASPECT_DEPTH_BIT, live_depth_layout(n),
                                 VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
                                 VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT);
-                    n.depth_layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+                    live_depth_layout(n) = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
                 }
-                else if (!writes && n.depth_layout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
+                else if (!writes && live_depth_layout(n) == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
                 {
                     // the DEPTH RTT barrier: the shadow pass's depth writes complete → this pass samples it
                     img_barrier(dt.depth_image(), VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_SHADER_READ_BIT,
                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
-                    n.depth_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    live_depth_layout(n) = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
                 }
                 continue;
             }
-            if (n.transient) // REN-2: an RTT transient — render into it (COLOR_ATTACHMENT), then a later pass SAMPLES it
+            if (graph_owned(n)) // REN-2: an RTT image — render into it (COLOR_ATTACHMENT), then a later pass SAMPLES it
             {
                 auto& tt = static_cast<VulkanRasterTarget&>(*n.target);
-                if (writes && n.layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                if (writes && live_layout(n) != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
                 {
-                    img_barrier(tt.image(), VK_IMAGE_ASPECT_COLOR_BIT, n.layout,
+                    img_barrier(tt.image(), VK_IMAGE_ASPECT_COLOR_BIT, live_layout(n),
                                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                 VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT,
                                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-                    n.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    live_layout(n) = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
                 }
-                else if (!writes && n.layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                else if (!writes && live_layout(n) == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
                 {
                     // the RTT barrier: the render pass's writes complete → this pass samples it
                     img_barrier(tt.image(), VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_SHADER_READ_BIT,
                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
-                    n.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    live_layout(n) = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
                 }
                 continue;
             }
@@ -4832,12 +5123,12 @@ void VulkanFrameGraph::execute()
             if (p.present != nullptr) { continue; } // present-pass reads → the final readback loop transitions
             if (writes)
             {
-                if (n.layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                if (live_layout(n) != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
                 {
-                    img_barrier(t.image(), VK_IMAGE_ASPECT_COLOR_BIT, n.layout, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    img_barrier(t.image(), VK_IMAGE_ASPECT_COLOR_BIT, live_layout(n), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                 VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT,
                                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-                    n.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    live_layout(n) = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
                 }
                 else // already an attachment (a prior pass wrote it): a WRITE→READ|WRITE cross-pass ordering barrier
                 {
@@ -4848,11 +5139,11 @@ void VulkanFrameGraph::execute()
                 }
                 if (t.has_depth())
                 {
-                    const VkImageLayout dfrom = n.depth_layout;
+                    const VkImageLayout dfrom = live_depth_layout(n);
                     img_barrier(t.depth_image(), VK_IMAGE_ASPECT_DEPTH_BIT, dfrom, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                                 VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT);
-                    n.depth_layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+                    live_depth_layout(n) = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
                 }
             }
         }
@@ -4874,12 +5165,29 @@ void VulkanFrameGraph::execute()
     // read_pixel is bit-identical to the sync path). The direct-to-backbuffer present is REN-8.
     for (ImageNode& n : m_images)
     {
-        if (m_readback && !n.transient && n.target != nullptr
-            && n.layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+        // Only APPLICATION-owned targets have a readback buffer — every graph-owned wrapper is a view over
+        // graph memory built with an empty BufferBundle, and `read_pixel` is only ever about imported targets.
+        if (!graph_owned(n) && n.target != nullptr && n.layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
         {
-            m_rc->frame_readback(m_cmd, *n.target);
+            if (m_readback)
+            {
+                m_rc->frame_readback(m_cmd, *n.target);
+                ++m_barrier_count; // copy_colour_to_readback inserts a COLOR→TRANSFER_SRC barrier
+            }
+            else
+            {
+                // ⛔ REN-8: skipping the readback must skip the COPY, never the TRANSITION. The readback did two
+                // things — a 3.7 MB host copy AND a COLOR_ATTACHMENT → TRANSFER_SRC move — and the present path
+                // depends on the second: its compose descriptor declares TRANSFER_SRC_OPTIMAL (the RET-2
+                // contract). Dropping both left the target in COLOR_ATTACHMENT and produced
+                // VUID-vkCmdDraw-None-09600 on every presented frame.
+                // This went unnoticed because every GATE runs with readback ON — only the sandbox, which turns
+                // it off, was affected, and only under validation. Cheap fix: the barrier without the copy.
+                img_barrier(static_cast<VulkanRasterTarget&>(*n.target).image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                            VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+            }
             n.layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            ++m_barrier_count; // copy_colour_to_readback inserts a COLOR→TRANSFER_SRC barrier
         }
     }
 
@@ -4952,7 +5260,7 @@ void VulkanFrameGraph::retire_transients_to(FrameSlot& slot) noexcept
 {
     for (ImageNode& n : m_images)
     {
-        if (!n.transient) { continue; }
+        if (!aliasable(n)) { continue; }
         if (n.texture != nullptr) { slot.dead_textures.push_back(n.texture); n.texture = nullptr; }
         // a layered transient's `target` ALIASES layer_targets[0] — retire the per-slice ones and null `target`
         // FIRST, exactly as free_transients() does, or the slice-0 wrapper is destroyed twice.

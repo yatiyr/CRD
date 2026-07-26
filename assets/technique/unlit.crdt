@@ -1,0 +1,14 @@
+# unlit — REN-37.2: the smallest possible technique, and the proof that the lighting axis is REAL.
+#
+# The material still authors a full OpenPBR surface; the TECHNIQUE is what decides that surface is emitted rather
+# than shaded. Under B7 lowering, choosing this collapses every BRDF term away — the same free DCE the depth-only
+# passes get, applied to the lighting axis instead of the pass axis.
+#
+# ⛔ Note what this is NOT: it is not a material flag. A material tagged `Unlit` declares INTENT; the render path
+# is what applies it. Keeping the decision here is what stops every material from having to know about every
+# technique (ADR-0102).
+
+schema  = 1
+name    = "unlit"
+surface = "OpenPBRSurface"
+body    = "builtin:unlit"

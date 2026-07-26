@@ -1,0 +1,84 @@
+# forward_csm.frame.toml — the ENGINE'S DEFAULT forward renderer with cascaded shadow maps.
+#
+# ⛔⛔⛔ TOP RULE: WE WILL ONLY USE OUR AUTHORED FRAME GRAPHS. This file IS cascaded shadow mapping — the
+# technique lives here, as data, not in C++. Everything a user might want to change about it is in this file:
+#
+#   * cascade COUNT      -> `layers` on the atlas (and how many the light reports; the pass expands to match)
+#   * shadow RESOLUTION  -> `width`/`height` on the atlas
+#   * atlas FORMAT       -> `format`
+#   * what CASTS shadows -> the `shadow_casters` draw list's component query
+#   * what RECEIVES them -> the `visible_geometry` query
+#   * pass ORDER         -> derived from the declared reads/writes, so inserting a pass just works
+#   * the LIGHTING itself -> `technique` on the forward pass (REN-37.2). Point it at a different `.crdt` and
+#                            every material re-shades: `standard_forward` (no shadows), `unlit`, a toon
+#                            technique someone authored. THAT is the frame graph reaching the fragment shader.
+#
+# None of that requires recompiling the engine. That is the whole point of REN-36, and the reason this file
+# exists instead of the equivalent C++ in `scene_renderer.cpp`.
+#
+# ── how it composes ─────────────────────────────────────────────────────────────────────────────────────────
+# ONE `[[pass]]` declaration renders ALL cascades: `for_each = "light.0.cascades"` expands it into N ordinary
+# passes at build time, each writing `shadow_atlas[$index]` — one array SLICE per cascade. The forward pass then
+# READS the whole atlas, and because it reads what the cascade passes write, the graph's dependency sort places
+# every cascade FIRST automatically. Declaration order here is for human readability only.
+#
+# The forward pass samples the atlas through the COMPARISON sampler purely because the resource's format is
+# `D32Float` — the asset never names a sampler, so a shadow map cannot be sampled with a filtering sampler by
+# mistake.
+
+schema   = 1
+name     = "crd://frame/forward_csm"
+# ⭐ SHADOWS ON/OFF is a DECLARED CAPABILITY TIER with a named fallback (REN-35’s rule), not an `if` in the
+# renderer. A host that cannot (or will not) do shadows steps down to `forward_basic` — which has no atlas, no
+# cascade passes and a different technique — and the step-down is REPORTED, never silent.
+requires = ["shadows"]
+fallback = "crd://frame/forward_basic"
+
+# ── the cascade atlas: one 2D-ARRAY depth image, one slice per cascade ──────────────────────────────────────
+[[resource]]
+name    = "shadow_atlas"
+kind    = "transient_image"
+format  = "D32Float"
+width   = 2048
+height  = 2048
+layers  = 4       # cascade count. 1..16; the pass expands to whatever the light actually reports.
+sampled = true    # rendered into, then READ by the forward pass
+
+# ── what casts, and what receives ──────────────────────────────────────────────────────────────────────────
+[[draw_list]]
+name = "shadow_casters"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"          # per-cascade frustum culling is the host's job; the asset states the intent
+sort = "front_to_back"    # depth-only passes want early-Z
+
+[[draw_list]]
+name = "visible_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "material"         # batch by material to minimise state changes in the forward pass
+
+# ── ONE declaration -> N cascade passes ────────────────────────────────────────────────────────────────────
+[[pass]]
+name          = "csm_cascade"
+kind          = "raster.depth_only"
+draw_list     = "shadow_casters"
+for_each      = "light.0.cascades"
+writes        = ["shadow_atlas[$index]"]
+material_pass = "Shadow"   # depth-only: n_out = 0, the surface is never consumed, lowering DCEs all of it
+clear_depth   = 1.0
+depth         = "LessEqual"
+
+# ── the shadowed forward pass ──────────────────────────────────────────────────────────────────────────────
+# `reads` on a geometry pass is what makes it SHADOWED: the executor binds the atlas and, seeing a depth format,
+# selects the comparison sampler. No bespoke pass kind, no sampler named in the asset.
+[[pass]]
+name          = "forward"
+kind          = "raster.geometry"
+draw_list     = "visible_geometry"
+reads         = ["shadow_atlas"]
+writes        = ["@output"]
+technique     = "forward_csm"   # <- REN-37.2: THE LIGHTING, AS A NAME. Swap it and the whole scene re-shades.
+material_pass = "Forward"
+clear_color   = [0.09, 0.10, 0.13, 1.0]
+clear_depth   = 0.0
+depth         = "GreaterEqual"   # reverse-Z

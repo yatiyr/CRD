@@ -31,10 +31,15 @@
 >   `KOp::SampleCmp` **arrayed-shadow GLSL emitter fix** (`sampler2DArrayShadow` needs `vec4(uv, layer, ref)`).
 >   Gated by a 4-cascade 4-bit-code probe; Vulkan validation-silent. Detail + 3 scars: D-007 row 100.
 >
-> ⛔⛔ **HARD RULE (user, 2026-07-25) — EVERY render/light/any pass goes through OUR frame-graph machinery,**
-> **programmatically OR from an asset, never a hand-rolled `draw_*` sequence.** Recorded in AGENTS.md + memory
-> `[[feedback_every_render_pass_through_our_own_frame_graph_machinery]]`. A step that cannot be expressed is a
-> missing `FramePassKind` — add the kind with its own gate; never route around the system.
+> ⛔⛔⛔ **TOP RENDERING RULE (user, restated IN ANGER 2026-07-25) — WE WILL ONLY USE OUR AUTHORED FRAME GRAPHS.**
+> Every rendering technique ships as a **`.frame.toml` ASSET** (cooked, loaded, run by `execute_frame_graph`) —
+> NOT as C++ that builds passes. `FrameGraphBuilder` is for tests, node editors and runtime graphs ONLY.
+> **The test: can a user change pass order / formats / cascade count by editing an ASSET, without recompiling?
+> If no, it is not done.** A step that cannot be expressed is a missing `FramePassKind` — add the kind with its
+> gate, then author on top of it.
+> ⛔ **VIOLATION ON RECORD:** REN-3.2-b's CSM was built as hardcoded C++ in `scene_renderer.cpp` while REN-36's
+> entire authoring stack sat unused. It MUST be moved to an authored graph asset — that is the top REN debt.
+> Full detail: AGENTS.md + memory `[[feedback_every_render_pass_through_our_own_frame_graph_machinery]]`.
 >
 > **NEXT: REN-3** (row 100) — spec **v2** `docs/design/ren-3-lighting-shadow-pipeline.md`, rewritten 2026-07-25
 > after a ⭐ USER SCOPE DECISION: *"REN-3 needs to be visible in the sandbox to count as done — a fully correct

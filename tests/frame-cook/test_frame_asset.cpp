@@ -379,3 +379,294 @@ TEST_CASE("REN-36.1: every error code has a human-readable message", "[framecook
         CHECK(std::strcmp(t, "unknown error") != 0);
     }
 }
+
+// ── REN-37.6 GATES: SUBGRAPHS + INJECTION POINTS. ───────────────────────────────────────────────────────────
+// Two capabilities the user asked for by name: *"we might add different passes between some nodes of an existing
+// graph"* and *"techniques should compose instead of being copy-pasted"*. Both are flattened away BEFORE build(),
+// exactly as `for_each` is, so lifetime analysis / barriers / aliasing / the dependency sort need no special case.
+namespace
+{
+// A tiny blur "technique" someone might ship: one transient, one pass, an `@input`/`@output` seam its includer
+// binds. Note it names NOTHING about who uses it.
+constexpr const char* kBlurSubgraph = R"(
+schema = 1
+name   = "crd://technique/blur"
+
+[[resource]]
+name    = "scratch"
+format  = "RGBA16F"
+scale   = 0.5
+sampled = true
+
+[[pass]]
+name   = "h"
+kind   = "raster.fullscreen"
+shader = "crd://shaders/blur_h"
+reads  = ["@input"]
+writes = ["scratch"]
+
+[[pass]]
+name   = "v"
+kind   = "raster.fullscreen"
+shader = "crd://shaders/blur_v"
+reads  = ["scratch"]
+writes = ["@output"]
+)";
+
+// The base graph: renders, declares an ANCHOR where extension is safe, and includes the blur TWICE.
+constexpr const char* kComposedGraph = R"(
+schema = 1
+name   = "composed"
+
+[[include]]
+graph = "crd://technique/blur"
+as    = "bloom"
+bind  = { "@input" = "outlined", "@output" = "bloomed" }
+
+[[include]]
+graph = "crd://technique/blur"
+as    = "dof"
+bind  = { "@input" = "bloomed", "@output" = "@output" }
+
+[[anchor]]
+name  = "after_opaque"
+after = ["forward"]
+
+[[resource]]
+name    = "hdr"
+format  = "RGBA16F"
+scale   = 1.0
+sampled = true
+
+[[resource]]
+name    = "outlined"
+format  = "RGBA16F"
+scale   = 1.0
+sampled = true
+
+[[resource]]
+name    = "bloomed"
+format  = "RGBA16F"
+scale   = 1.0
+sampled = true
+
+[[draw_list]]
+name = "visible"
+all  = ["MeshRenderer", "Transform"]
+
+[[pass]]
+name      = "forward"
+kind      = "raster.geometry"
+draw_list = "visible"
+writes    = ["hdr"]
+
+[[pass]]
+name   = "outline"
+kind   = "raster.fullscreen"
+shader = "crd://shaders/outline"
+reads  = ["hdr"]
+writes = ["outlined"]
+
+[[inject]]
+at   = "after_opaque"
+pass = "outline"
+)";
+
+const fc::FrameGraphDesc* g_blur = nullptr;
+const fc::FrameGraphDesc* resolve_blur(crd::containers::StringView name, void* /*user*/)
+{
+    const char* want = "crd://technique/blur";
+    crd::usize  i    = 0;
+    while (want[i] != '\0' && i < name.size() && name[i] == want[i]) { ++i; }
+    return (want[i] == '\0' && i == name.size()) ? g_blur : nullptr;
+}
+
+[[nodiscard]] bool has_name(const crd::containers::Array<fc::FramePassDesc>& v, const char* n)
+{
+    for (crd::usize i = 0; i < v.size(); ++i)
+    {
+        crd::usize k = 0;
+        while (n[k] != '\0' && k < v[i].name.size() && v[i].name.c_str()[k] == n[k]) { ++k; }
+        if (n[k] == '\0' && k == v[i].name.size()) { return true; }
+    }
+    return false;
+}
+[[nodiscard]] crd::i64 index_of(const crd::containers::Array<fc::FramePassDesc>& v, const char* n)
+{
+    for (crd::usize i = 0; i < v.size(); ++i)
+    {
+        crd::usize k = 0;
+        while (n[k] != '\0' && k < v[i].name.size() && v[i].name.c_str()[k] == n[k]) { ++k; }
+        if (n[k] == '\0' && k == v[i].name.size()) { return static_cast<crd::i64>(i); }
+    }
+    return -1;
+}
+[[nodiscard]] bool has_resource(const crd::containers::Array<fc::FrameResourceDesc>& v, const char* n)
+{
+    for (crd::usize i = 0; i < v.size(); ++i)
+    {
+        crd::usize k = 0;
+        while (n[k] != '\0' && k < v[i].name.size() && v[i].name.c_str()[k] == n[k]) { ++k; }
+        if (n[k] == '\0' && k == v[i].name.size()) { return true; }
+    }
+    return false;
+}
+} // namespace
+
+TEST_CASE("REN-37.6 GATE: two instances of the SAME subgraph compose without colliding", "[framecook][ren37]")
+{
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    fc::FrameGraphDesc         blur(&alloc);
+    crd::containers::String    where(&alloc);
+    REQUIRE(fc::parse_frame_toml(crd::containers::StringView(kBlurSubgraph), blur, &where)
+            == fc::FrameCookError::Ok);
+    g_blur = &blur;
+
+    fc::FrameGraphDesc base(&alloc);
+    REQUIRE(fc::parse_frame_toml(crd::containers::StringView(kComposedGraph), base, &where)
+            == fc::FrameCookError::Ok);
+    REQUIRE(base.includes.size() == 2U);
+    REQUIRE(base.anchors.size() == 1U);
+    REQUIRE(base.injects.size() == 1U);
+
+    fc::FrameGraphDesc flat(&alloc);
+    REQUIRE(fc::flatten_frame_graph(base, &resolve_blur, nullptr, flat, &where) == fc::FrameCookError::Ok);
+
+    // ⛔ THE CLAIM THAT MATTERS: two instances of the same subgraph produced DISTINCT passes and DISTINCT
+    // resources. Without namespacing both would declare `scratch` and both would write it — which no validator
+    // would flag, and the picture would look *almost* right.
+    CHECK(has_name(flat.passes, "bloom.h"));
+    CHECK(has_name(flat.passes, "bloom.v"));
+    CHECK(has_name(flat.passes, "dof.h"));
+    CHECK(has_name(flat.passes, "dof.v"));
+    CHECK(has_resource(flat.resources, "bloom.scratch"));
+    CHECK(has_resource(flat.resources, "dof.scratch"));
+    // ...and the base graph's own names are untouched
+    CHECK(has_name(flat.passes, "forward"));
+    CHECK(has_resource(flat.resources, "hdr"));
+
+    // BINDING: the subgraph's `@input`/`@output` resolved to the INCLUDER's names, so it reads the parent's `hdr`
+    // rather than a private buffer nothing writes.
+    const crd::i64 bh = index_of(flat.passes, "bloom.h");
+    REQUIRE(bh >= 0);
+    REQUIRE(flat.passes[static_cast<crd::usize>(bh)].reads.size() == 1U);
+    CHECK(flat.passes[static_cast<crd::usize>(bh)].reads[0].name.size() == 8U); // "outlined" — the BOUND name
+    // dof's tail was bound to the graph OUTPUT, so the composed graph still has a terminal pass
+    const crd::i64 dv = index_of(flat.passes, "dof.v");
+    REQUIRE(dv >= 0);
+    REQUIRE(flat.passes[static_cast<crd::usize>(dv)].writes.size() == 1U);
+    CHECK(flat.passes[static_cast<crd::usize>(dv)].writes[0].name.size() == 7U); // "@output"
+
+    // INJECTION: `outline` was spliced immediately AFTER the anchor's `after` pass, not left where it was
+    // declared (last). The dependency sort still owns real ordering — what this guarantees is a deterministic,
+    // author-visible position for passes that are otherwise independent.
+    const crd::i64 fwd = index_of(flat.passes, "forward");
+    const crd::i64 out = index_of(flat.passes, "outline");
+    REQUIRE(fwd >= 0);
+    REQUIRE(out >= 0);
+    CHECK(out == fwd + 1);
+
+    // The flattened graph faces the SAME validator a hand-authored one does — composition is not a weaker path.
+    CHECK(fc::validate_frame_graph(flat, &where) == fc::FrameCookError::Ok);
+}
+
+TEST_CASE("REN-37.6 GATE: composition is rejected BY NAME, never silently dropped", "[framecook][ren37]")
+{
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    fc::FrameGraphDesc         blur(&alloc);
+    crd::containers::String    where(&alloc);
+    REQUIRE(fc::parse_frame_toml(crd::containers::StringView(kBlurSubgraph), blur, &where)
+            == fc::FrameCookError::Ok);
+    g_blur = &blur;
+
+    const auto parse = [&](const char* toml, fc::FrameGraphDesc& d) {
+        return fc::parse_frame_toml(crd::containers::StringView(toml), d, &where);
+    };
+
+    // an include with no `as` namespace: two instances WOULD collide, so it is refused up front
+    {
+        fc::FrameGraphDesc d(&alloc);
+        CHECK(parse("schema = 1\nname = \"x\"\n[[include]]\ngraph = \"crd://technique/blur\"\n", d)
+              == fc::FrameCookError::IncludeMissingName);
+    }
+    // two includes sharing a namespace: the same collision, stated instead of discovered
+    {
+        fc::FrameGraphDesc d(&alloc);
+        CHECK(parse("schema = 1\nname = \"x\"\n"
+                    "[[include]]\ngraph = \"crd://technique/blur\"\nas = \"a\"\n"
+                    "[[include]]\ngraph = \"crd://technique/blur\"\nas = \"a\"\n",
+                    d)
+              == fc::FrameCookError::DuplicateInclude);
+    }
+    // ⛔ an unresolvable include FAILS. A viewport that silently contributes no passes is indistinguishable from
+    // a viewport that rendered nothing, which is the exact class of lie `UnresolvedForEach` exists to prevent.
+    {
+        fc::FrameGraphDesc d(&alloc);
+        REQUIRE(parse("schema = 1\nname = \"x\"\n[[include]]\ngraph = \"crd://nope\"\nas = \"a\"\n", d)
+                == fc::FrameCookError::Ok);
+        fc::FrameGraphDesc flat(&alloc);
+        CHECK(fc::flatten_frame_graph(d, &resolve_blur, nullptr, flat, &where)
+              == fc::FrameCookError::UnresolvedInclude);
+    }
+    // ⛔ an inject at an anchor NOBODY DECLARED. Anchors are declared precisely so the base-graph author states
+    // where extension is safe — that is the difference between an extension point and a monkey-patch.
+    {
+        fc::FrameGraphDesc d(&alloc);
+        REQUIRE(parse("schema = 1\nname = \"x\"\n"
+                      "[[draw_list]]\nname = \"v\"\nall = [\"T\"]\n"
+                      "[[pass]]\nname = \"p\"\nkind = \"raster.geometry\"\ndraw_list = \"v\"\nwrites = [\"@output\"]\n"
+                      "[[inject]]\nat = \"nowhere\"\npass = \"p\"\n",
+                      d)
+                == fc::FrameCookError::Ok);
+        fc::FrameGraphDesc flat(&alloc);
+        CHECK(fc::flatten_frame_graph(d, &resolve_blur, nullptr, flat, &where) == fc::FrameCookError::UnknownAnchor);
+    }
+    // an inject naming a pass this asset does not declare
+    {
+        fc::FrameGraphDesc d(&alloc);
+        REQUIRE(parse("schema = 1\nname = \"x\"\n"
+                      "[[draw_list]]\nname = \"v\"\nall = [\"T\"]\n"
+                      "[[anchor]]\nname = \"a\"\nafter = [\"p\"]\n"
+                      "[[pass]]\nname = \"p\"\nkind = \"raster.geometry\"\ndraw_list = \"v\"\nwrites = [\"@output\"]\n"
+                      "[[inject]]\nat = \"a\"\npass = \"ghost\"\n",
+                      d)
+                == fc::FrameCookError::Ok);
+        fc::FrameGraphDesc flat(&alloc);
+        CHECK(fc::flatten_frame_graph(d, &resolve_blur, nullptr, flat, &where)
+              == fc::FrameCookError::InjectUnknownPass);
+    }
+}
+
+TEST_CASE("REN-37.6: a composed graph ROUND-TRIPS through emit and cook", "[framecook][ren37]")
+{
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    fc::FrameGraphDesc         base(&alloc);
+    crd::containers::String    where(&alloc);
+    REQUIRE(fc::parse_frame_toml(crd::containers::StringView(kComposedGraph), base, &where)
+            == fc::FrameCookError::Ok);
+
+    // the cooked blob carries the composition records...
+    const crd::containers::Array<crd::u8> blob = fc::cook_frame_graph(base, &alloc);
+    fc::FrameGraphDesc                    back(&alloc);
+    REQUIRE(fc::read_frame_graph(crd::containers::ConstSpan<crd::u8>(blob.data(), blob.size()), back));
+    CHECK(back.includes.size() == 2U);
+    CHECK(back.includes[0].bind.size() == 2U);
+    CHECK(back.anchors.size() == 1U);
+    CHECK(back.anchors[0].after.size() == 1U);
+    CHECK(back.injects.size() == 1U);
+
+    // ...and the EDITOR ROUND-TRIP is lossless: emit -> parse -> cook reproduces the same bytes, so a node-editor
+    // save cannot quietly drop an include, an anchor or an injection.
+    const crd::containers::String emitted = fc::emit_frame_toml(base, &alloc);
+    fc::FrameGraphDesc            reparsed(&alloc);
+    REQUIRE(fc::parse_frame_toml(crd::containers::StringView(emitted.c_str(), emitted.size()), reparsed, &where)
+            == fc::FrameCookError::Ok);
+    const crd::containers::Array<crd::u8> blob2 = fc::cook_frame_graph(reparsed, &alloc);
+    REQUIRE(blob.size() == blob2.size());
+    bool same = true;
+    for (crd::usize i = 0; i < blob.size(); ++i)
+    {
+        if (blob[i] != blob2[i]) { same = false; break; }
+    }
+    CHECK(same);
+}

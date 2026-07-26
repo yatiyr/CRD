@@ -20,6 +20,8 @@ target_link_libraries(crd-scene-render
         crd-anim           # GEO-8: clip sampling + skin palettes for the skinned draw path
         crd-gpu-context
         crd-kir
+        crd-frame-cook     # REN-37.10: the renderer HOSTS an authored frame graph rather than building passes
+        crd-log            # REN-37.10: a graph that fails to record must REPORT which pass and why
 )
 
 target_compile_features(crd-scene-render PUBLIC cxx_std_20)

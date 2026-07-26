@@ -138,6 +138,11 @@ struct FramePassDesc
     crd::containers::String                       view;      // "camera.main", "light.0.cascade[$index]"
     crd::containers::String                       shader;    // fullscreen kinds — a cooked CKIR program id
     crd::containers::String                       kernel;    // compute kind — a cooked CKIR kernel id
+    // REN-37.2: the LIGHTING TECHNIQUE this pass shades with (a `.crdt` name — "standard_forward",
+    // "forward_csm", "toon"). Empty ⇒ the engine's default. This is the field that makes the top rule reach the
+    // FRAGMENT SHADER: swapping a technique is an asset edit, and the technique's declared PASS-frequency
+    // bindings are verified against this pass's `reads` at cook time (`verify_technique_bindings`).
+    crd::containers::String                       technique;
     FrameMaterialPass                             material_pass = FrameMaterialPass::None;
     FrameForEach                                  for_each      = FrameForEach::None;
     crd::u32                                      for_each_arg  = 0U; // e.g. the light index in light.N.cascades
@@ -149,9 +154,70 @@ struct FramePassDesc
     crd::containers::Array<FrameParam>            params;
 
     explicit FramePassDesc(crd::memory::IAllocator* a)
-        : name(a), reads(a), writes(a), draw_list(a), view(a), shader(a), kernel(a), params(a)
+        : name(a), reads(a), writes(a), draw_list(a), view(a), shader(a), kernel(a), technique(a), params(a)
     {
     }
+};
+
+// ── REN-37.6: SUBGRAPHS — a graph may INCLUDE another by name, with PARAMETER BINDING. ─────────────────────
+// Taken from AMD RPS subprograms. Techniques then COMPOSE instead of being copy-pasted, and — the reason this is
+// the keystone for REN-37.8 — a VIEWPORT is just an include of a rendering graph with its own output, camera and
+// draw scope bound.
+//
+// ⛔ NAMESPACING IS NOT COSMETIC. `as = "vp.main"` prefixes every resource, draw list and pass the included graph
+// declares, so TWO INSTANCES OF THE SAME GRAPH CANNOT COLLIDE. Without it, including `forward_csm` twice would
+// have both instances writing the same `shadow_atlas`, which is not an error anywhere — it just renders one
+// viewport's shadows into the other.
+//
+// `bind` rewrites a name INSIDE the included graph to a name in the includer's scope: `{ output = "@output" }`
+// makes the subgraph's `@output` resolve to the parent's. Anything not bound stays namespaced and private.
+struct FrameBinding
+{
+    crd::containers::String from; // the name as the INCLUDED graph spells it
+    crd::containers::String to;   // the name it resolves to in the INCLUDER's scope
+
+    explicit FrameBinding(crd::memory::IAllocator* a) : from(a), to(a) {}
+};
+
+struct FrameIncludeDesc
+{
+    crd::containers::String                 graph; // the graph to include, by name
+    crd::containers::String                 as;    // the instance namespace (required — see above)
+    crd::containers::Array<FrameBinding>    bind;
+    // RPS's warning, adopted: composition needs SCHEDULING ATTRIBUTES, or an injected pass can be scheduled into
+    // the middle of a scope that must stay contiguous. An `atomic` include refuses to have anything spliced into
+    // it (a same-named anchor inside it is not addressable from outside).
+    bool                                    atomic = false;
+
+    explicit FrameIncludeDesc(crd::memory::IAllocator* a) : graph(a), as(a), bind(a) {}
+};
+
+// ── REN-37.6: INJECTION POINTS — insert a pass BETWEEN existing nodes without forking the base graph. ──────
+// Unity URP's idea, and the one that makes the system genuinely EXTENSIBLE rather than merely editable: a user
+// should not have to fork `forward_csm` to add an outline pass.
+//
+// ⛔ ANCHORS ARE DECLARED. The base-graph author states WHERE extension is safe; that is the whole difference
+// between an extension point and a monkey-patch. An `[[inject]]` naming an anchor nobody declared is rejected by
+// name at cook time.
+//
+// After splicing, the NORMAL dependency sort still runs — so an injected pass that reads something produced later
+// still lands correctly, and a cycle it introduces is still rejected by name. The anchor decides where it is
+// INSERTED; the declared reads/writes still decide where it EXECUTES.
+struct FrameAnchorDesc
+{
+    crd::containers::String                         name;
+    crd::containers::Array<crd::containers::String> after;  // passes this anchor sits after
+    crd::containers::Array<crd::containers::String> before; // ...and before
+
+    explicit FrameAnchorDesc(crd::memory::IAllocator* a) : name(a), after(a), before(a) {}
+};
+
+struct FrameInjectDesc
+{
+    crd::containers::String anchor; // the anchor name this pass splices at
+    crd::containers::String pass;   // a pass declared in THIS asset
+
+    explicit FrameInjectDesc(crd::memory::IAllocator* a) : anchor(a), pass(a) {}
 };
 
 // The whole authored graph.
@@ -164,9 +230,16 @@ struct FrameGraphDesc
     crd::containers::Array<FramePassDesc>                passes;
     crd::containers::Array<crd::containers::String>      requires_caps; // capability tier (REN-35's rule)
     crd::containers::String                              fallback;      // the graph to use when unsupported
+    // REN-37.6: composition. All three are EXPANDED AWAY by `flatten_frame_graph` before `build()`, exactly as
+    // `for_each` is — so lifetime analysis, barriers and aliasing only ever see ordinary passes and need no
+    // special cases at all. That is the same design decision, for the same reason, one level up.
+    crd::containers::Array<FrameIncludeDesc>             includes;
+    crd::containers::Array<FrameAnchorDesc>              anchors;
+    crd::containers::Array<FrameInjectDesc>              injects;
 
     explicit FrameGraphDesc(crd::memory::IAllocator* a)
-        : name(a), resources(a), draw_lists(a), passes(a), requires_caps(a), fallback(a)
+        : name(a), resources(a), draw_lists(a), passes(a), requires_caps(a), fallback(a), includes(a), anchors(a),
+          injects(a)
     {
     }
 };
@@ -198,6 +271,15 @@ enum class FrameCookError : crd::u8
     // REN-3.2: `layers` outside [1, kFgMaxImageLayers]. Rejected HERE, at cook time, so a cascade atlas that
     // the device could not create can never ship inside a pack — appended at the END of the enum.
     LayersOutOfRange,
+    // ── REN-37.6: COMPOSITION. Appended at the END of the enum (a renumbered error is a silently different
+    // rejection in every log and every test). ──
+    IncludeMissingName,   // an `[[include]]` with no `graph`, or no `as` namespace (two instances would collide)
+    DuplicateInclude,     // two includes share an `as` namespace — same collision, stated up front
+    UnknownAnchor,        // an `[[inject]]` names an anchor no graph declares
+    InjectUnknownPass,    // an `[[inject]]` names a pass this asset does not declare
+    AnchorUnknownPass,    // an `[[anchor]]`'s `after`/`before` names a pass that does not exist
+    UnresolvedInclude,    // the included graph could not be resolved by name (flatten only)
+    IncludeCycle,         // graph A includes B includes A
 };
 
 // A human-readable message for `err`, plus the offending name when there is one.
@@ -252,6 +334,7 @@ public:
     void     pass_writes(crd::u32 pass, crd::containers::StringView resource, bool indexed = false);
     void     pass_shader(crd::u32 pass, crd::containers::StringView id);
     void     pass_kernel(crd::u32 pass, crd::containers::StringView id);
+    void     pass_technique(crd::u32 pass, crd::containers::StringView id); // REN-37.2: the lighting technique
     void     pass_draw_list(crd::u32 pass, crd::containers::StringView name);
     void     pass_view(crd::u32 pass, crd::containers::StringView name);
     void     pass_material(crd::u32 pass, FrameMaterialPass mp);
@@ -286,5 +369,21 @@ private:
 
 // Read a cooked blob back. Returns false on bad magic / version / truncation — never a partial description.
 [[nodiscard]] bool read_frame_graph(crd::containers::ConstSpan<crd::u8> bytes, FrameGraphDesc& out);
+
+// ── REN-37.6: FLATTEN — expand every `[[include]]` and `[[inject]]` into ONE ordinary graph. ────────────────
+// The composition analogue of REN-36.3's `for_each` expansion, and the same decision for the same reason: it
+// happens BEFORE `build()`, so lifetime analysis, barriers, aliasing and the dependency sort only ever see plain
+// passes and need no special cases whatsoever. Every composition feature this adds is therefore free at runtime.
+//
+// `resolve` maps an included graph's NAME to its description (the built-in pack, an app's mounted assets, a test's
+// table). Returning null is `UnresolvedInclude` — a named failure, never a quietly missing subgraph, because a
+// viewport that silently contributes no passes looks exactly like a viewport that rendered nothing.
+//
+// Included names are prefixed with `<as>.` unless `bind` rewrites them; nesting is followed recursively and a
+// cycle is rejected as `IncludeCycle`.
+using FrameGraphResolveFn = const FrameGraphDesc* (*)(crd::containers::StringView name, void* user);
+
+[[nodiscard]] FrameCookError flatten_frame_graph(const FrameGraphDesc& desc, FrameGraphResolveFn resolve, void* user,
+                                                 FrameGraphDesc& out, crd::containers::String* where = nullptr);
 
 } // namespace crd::framecook

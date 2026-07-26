@@ -19,7 +19,12 @@ namespace
 // byte-identically under gcc/clang. (The ckir_serialize scar — never memcpy a POD into an artifact.)
 constexpr crd::u32 kFourCC = (static_cast<crd::u32>('F')) | (static_cast<crd::u32>('R') << 8U)
                              | (static_cast<crd::u32>('A') << 16U) | (static_cast<crd::u32>('M') << 24U);
-constexpr crd::u32 kBlobVersion = 1U;
+// v2 = REN-37.2 added `FramePassDesc::technique` to the pass record. A v1 blob is cleanly REJECTED (recook)
+// rather than read with a shifted layout — the same discipline `ckir_serialize` uses.
+// v3 = REN-37.6 appended the include/anchor/inject records. Appended at the END of the blob so the earlier
+// sections are byte-unchanged; the version still bumps because a v2 reader would stop short and silently produce
+// a graph with no composition at all.
+constexpr crd::u32 kBlobVersion = 3U;
 
 using Bytes = crd::containers::Array<crd::u8>;
 
@@ -241,6 +246,13 @@ const char* frame_cook_error_text(FrameCookError err) noexcept
     case FrameCookError::NoOutputPass:          return "no pass writes `@output`";
     case FrameCookError::BadResourceSize:       return "a resource needs either width+height or scale";
     case FrameCookError::LayersOutOfRange:      return "`layers` must be between 1 and 16";
+    case FrameCookError::IncludeMissingName:    return "an `[[include]]` needs both `graph` and `as`";
+    case FrameCookError::DuplicateInclude:      return "two includes share an `as` namespace";
+    case FrameCookError::UnknownAnchor:         return "an `[[inject]]` names an anchor no graph declares";
+    case FrameCookError::InjectUnknownPass:     return "an `[[inject]]` names a pass this asset does not declare";
+    case FrameCookError::AnchorUnknownPass:     return "an `[[anchor]]` names a pass that does not exist";
+    case FrameCookError::UnresolvedInclude:     return "an included graph could not be resolved by name";
+    case FrameCookError::IncludeCycle:          return "the includes form a CYCLE";
     }
     return "unknown error";
 }
@@ -272,6 +284,83 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
             crd::containers::String cap(alloc);
             set_str(cap, *s);
             out.requires_caps.push_back(static_cast<crd::containers::String&&>(cap));
+        }
+    }
+
+    // ── REN-37.6: includes / anchors / injects ──
+    if (const auto* arr = root["include"].as_array())
+    {
+        for (const auto& node : *arr)
+        {
+            const toml::table* t = node.as_table();
+            if (t == nullptr) { return FrameCookError::ParseFailed; }
+            FrameIncludeDesc inc(alloc);
+            const auto gname = (*t)["graph"].value<std::string_view>();
+            const auto as    = (*t)["as"].value<std::string_view>();
+            if (!gname || gname->empty() || !as || as->empty()) { return FrameCookError::IncludeMissingName; }
+            set_str(inc.graph, *gname);
+            set_str(inc.as, *as);
+            inc.atomic = (*t)["atomic"].value_or(false);
+            for (crd::usize i = 0; i < out.includes.size(); ++i)
+            {
+                if (str_eq(out.includes[i].as, *as)) { set_where(where, *as); return FrameCookError::DuplicateInclude; }
+            }
+            if (const toml::table* bt = (*t)["bind"].as_table())
+            {
+                for (const auto& [k, v] : *bt)
+                {
+                    const auto sv = v.value<std::string_view>();
+                    if (!sv) { return FrameCookError::ParseFailed; }
+                    FrameBinding b(alloc);
+                    set_str(b.from, std::string_view(k.str()));
+                    set_str(b.to, *sv);
+                    inc.bind.push_back(static_cast<FrameBinding&&>(b));
+                }
+            }
+            out.includes.push_back(static_cast<FrameIncludeDesc&&>(inc));
+        }
+    }
+    if (const auto* arr = root["anchor"].as_array())
+    {
+        for (const auto& node : *arr)
+        {
+            const toml::table* t = node.as_table();
+            if (t == nullptr) { return FrameCookError::ParseFailed; }
+            FrameAnchorDesc a(alloc);
+            const auto an = (*t)["name"].value<std::string_view>();
+            if (!an || an->empty()) { return FrameCookError::MissingName; }
+            set_str(a.name, *an);
+            const auto list = [&](const char* key, crd::containers::Array<crd::containers::String>& dst) -> bool {
+                if (const auto* ar = (*t)[key].as_array())
+                {
+                    for (const auto& e : *ar)
+                    {
+                        const auto sv = e.value<std::string_view>();
+                        if (!sv) { return false; }
+                        crd::containers::String v(alloc);
+                        set_str(v, *sv);
+                        dst.push_back(static_cast<crd::containers::String&&>(v));
+                    }
+                }
+                return true;
+            };
+            if (!list("after", a.after) || !list("before", a.before)) { return FrameCookError::ParseFailed; }
+            out.anchors.push_back(static_cast<FrameAnchorDesc&&>(a));
+        }
+    }
+    if (const auto* arr = root["inject"].as_array())
+    {
+        for (const auto& node : *arr)
+        {
+            const toml::table* t = node.as_table();
+            if (t == nullptr) { return FrameCookError::ParseFailed; }
+            FrameInjectDesc inj(alloc);
+            const auto at = (*t)["at"].value<std::string_view>();
+            const auto ps = (*t)["pass"].value<std::string_view>();
+            if (!at || at->empty() || !ps || ps->empty()) { return FrameCookError::MissingName; }
+            set_str(inj.anchor, *at);
+            set_str(inj.pass, *ps);
+            out.injects.push_back(static_cast<FrameInjectDesc&&>(inj));
         }
     }
 
@@ -403,6 +492,7 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
             if (const auto v = (*t)["view"].value<std::string_view>())      { set_str(p.view, *v); }
             if (const auto v = (*t)["shader"].value<std::string_view>())    { set_str(p.shader, *v); }
             if (const auto v = (*t)["kernel"].value<std::string_view>())    { set_str(p.kernel, *v); }
+            if (const auto v = (*t)["technique"].value<std::string_view>()) { set_str(p.technique, *v); }
             if (const auto v = (*t)["material_pass"].value<std::string_view>())
             {
                 if (!to_material_pass(*v, p.material_pass)) { set_where(where, *v); return FrameCookError::UnknownMaterialPass; }
@@ -470,6 +560,17 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
         return nullptr;
     };
     const auto is_output = [](const crd::containers::String& n) { return str_eq(n, "@output"); };
+    // ⛔ REN-37.6: an `@`-prefixed name is an EXTERNAL SENTINEL, not a graph resource. `@output` was always
+    // one; a SUBGRAPH additionally has `@input`-style parameters its includer binds. Neither is declared by the
+    // graph that names it, so neither can be checked against the resource table - that check belongs to the
+    // FLATTENED graph, after binding has resolved them.
+    const auto is_sentinel = [](const crd::containers::String& n) {
+        return n.size() > 0U && n.c_str()[0] == '@';
+    };
+    // A graph WITH INCLUDES is legitimately PARTIAL: its `@output` may be produced by an included subgraph, and
+    // its resources may be consumed by one. Deferring the completeness checks to `flatten_frame_graph` - which
+    // runs this same validator on the result - is what lets a subgraph be authored and shipped on its own.
+    const bool composed = desc.includes.size() > 0U;
 
     // REN-3.2: the layer-count bound lives HERE, in the validator, not in the TOML parser — a PROGRAMMATIC graph
     // never passes through the parser, and the hard rule is that the two provenances are equal. A check only the
@@ -509,7 +610,7 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
         const auto check_refs = [&](const crd::containers::Array<FrameResourceRef>& refs) -> FrameCookError {
             for (crd::usize i = 0; i < refs.size(); ++i)
             {
-                if (is_output(refs[i].name)) { continue; }
+                if (is_sentinel(refs[i].name)) { continue; } // `@output` and subgraph `@`-parameters
                 const FrameResourceDesc* r = find_resource(refs[i].name);
                 if (r == nullptr)
                 {
@@ -538,7 +639,7 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
             if (is_output(p.writes[i].name)) { wrote_output = true; }
         }
     }
-    if (!wrote_output) { return FrameCookError::NoOutputPass; }
+    if (!wrote_output && !composed) { return FrameCookError::NoOutputPass; }
 
     // every DECLARED resource must be produced by some pass (an unwritten transient is dead weight and, more
     // importantly, a sign the author mistyped a name — `build()` already rejects it at runtime; we reject earlier)
@@ -557,7 +658,7 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
                 }
             }
         }
-        if (!written)
+        if (!written && !composed)
         {
             set_where(where, std::string_view(desc.resources[ri].name.c_str(), desc.resources[ri].name.size()));
             return FrameCookError::ResourceNeverWritten;
@@ -684,6 +785,7 @@ crd::containers::Array<crd::u8> cook_frame_graph(const FrameGraphDesc& desc, crd
         put_str(out, p.view);
         put_str(out, p.shader);
         put_str(out, p.kernel);
+        put_str(out, p.technique);
         put_u8(out, static_cast<crd::u8>(p.material_pass));
         put_u8(out, static_cast<crd::u8>(p.for_each));
         put_u32(out, p.for_each_arg);
@@ -699,6 +801,38 @@ crd::containers::Array<crd::u8> cook_frame_graph(const FrameGraphDesc& desc, crd
             put_u8(out, static_cast<crd::u8>(p.params[k].type));
             for (crd::u32 c = 0; c < 4U; ++c) { put_f64(out, p.params[k].v[c]); }
         }
+    }
+
+    // REN-37.6: composition records, appended at the END.
+    put_u32(out, static_cast<crd::u32>(desc.includes.size()));
+    for (crd::usize i = 0; i < desc.includes.size(); ++i)
+    {
+        put_str(out, desc.includes[i].graph);
+        put_str(out, desc.includes[i].as);
+        put_u8(out, desc.includes[i].atomic ? 1U : 0U);
+        put_u32(out, static_cast<crd::u32>(desc.includes[i].bind.size()));
+        for (crd::usize k = 0; k < desc.includes[i].bind.size(); ++k)
+        {
+            put_str(out, desc.includes[i].bind[k].from);
+            put_str(out, desc.includes[i].bind[k].to);
+        }
+    }
+    put_u32(out, static_cast<crd::u32>(desc.anchors.size()));
+    for (crd::usize i = 0; i < desc.anchors.size(); ++i)
+    {
+        put_str(out, desc.anchors[i].name);
+        const auto put_list = [&](const crd::containers::Array<crd::containers::String>& l) {
+            put_u32(out, static_cast<crd::u32>(l.size()));
+            for (crd::usize k = 0; k < l.size(); ++k) { put_str(out, l[k]); }
+        };
+        put_list(desc.anchors[i].after);
+        put_list(desc.anchors[i].before);
+    }
+    put_u32(out, static_cast<crd::u32>(desc.injects.size()));
+    for (crd::usize i = 0; i < desc.injects.size(); ++i)
+    {
+        put_str(out, desc.injects[i].anchor);
+        put_str(out, desc.injects[i].pass);
     }
     return out;
 }
@@ -788,6 +922,7 @@ bool read_frame_graph(crd::containers::ConstSpan<crd::u8> bytes, FrameGraphDesc&
         c.strv(p.view);
         c.strv(p.shader);
         c.strv(p.kernel);
+        c.strv(p.technique);
         p.material_pass   = static_cast<FrameMaterialPass>(c.u8v());
         p.for_each        = static_cast<FrameForEach>(c.u8v());
         p.for_each_arg    = c.u32v();
@@ -806,6 +941,54 @@ bool read_frame_graph(crd::containers::ConstSpan<crd::u8> bytes, FrameGraphDesc&
             p.params.push_back(static_cast<FrameParam&&>(prm));
         }
         out.passes.push_back(static_cast<FramePassDesc&&>(p));
+    }
+
+    // REN-37.6: composition records.
+    const crd::u32 ninc = c.u32v();
+    if (!c.ok) { return false; }
+    for (crd::u32 i = 0; i < ninc; ++i)
+    {
+        FrameIncludeDesc inc(alloc);
+        c.strv(inc.graph);
+        c.strv(inc.as);
+        inc.atomic       = c.u8v() != 0U;
+        const crd::u32 nb = c.u32v();
+        for (crd::u32 k = 0; k < nb && c.ok; ++k)
+        {
+            FrameBinding b(alloc);
+            c.strv(b.from);
+            c.strv(b.to);
+            inc.bind.push_back(static_cast<FrameBinding&&>(b));
+        }
+        out.includes.push_back(static_cast<FrameIncludeDesc&&>(inc));
+    }
+    const crd::u32 nanc = c.u32v();
+    if (!c.ok) { return false; }
+    for (crd::u32 i = 0; i < nanc; ++i)
+    {
+        FrameAnchorDesc a(alloc);
+        c.strv(a.name);
+        const auto get_list = [&](crd::containers::Array<crd::containers::String>& l) {
+            const crd::u32 n = c.u32v();
+            for (crd::u32 k = 0; k < n && c.ok; ++k)
+            {
+                crd::containers::String v(alloc);
+                c.strv(v);
+                l.push_back(static_cast<crd::containers::String&&>(v));
+            }
+        };
+        get_list(a.after);
+        get_list(a.before);
+        out.anchors.push_back(static_cast<FrameAnchorDesc&&>(a));
+    }
+    const crd::u32 nij = c.u32v();
+    if (!c.ok) { return false; }
+    for (crd::u32 i = 0; i < nij; ++i)
+    {
+        FrameInjectDesc inj(alloc);
+        c.strv(inj.anchor);
+        c.strv(inj.pass);
+        out.injects.push_back(static_cast<FrameInjectDesc&&>(inj));
     }
     return c.ok;
 }
@@ -907,6 +1090,7 @@ void FrameGraphBuilder::pass_writes(crd::u32 pass, crd::containers::StringView r
 }
 void FrameGraphBuilder::pass_shader(crd::u32 pass, crd::containers::StringView id) { bset(m_desc.passes[pass].shader, id); }
 void FrameGraphBuilder::pass_kernel(crd::u32 pass, crd::containers::StringView id) { bset(m_desc.passes[pass].kernel, id); }
+void FrameGraphBuilder::pass_technique(crd::u32 pass, crd::containers::StringView id) { bset(m_desc.passes[pass].technique, id); }
 void FrameGraphBuilder::pass_draw_list(crd::u32 pass, crd::containers::StringView n) { bset(m_desc.passes[pass].draw_list, n); }
 void FrameGraphBuilder::pass_view(crd::u32 pass, crd::containers::StringView n) { bset(m_desc.passes[pass].view, n); }
 void FrameGraphBuilder::pass_material(crd::u32 pass, FrameMaterialPass mp) { m_desc.passes[pass].material_pass = mp; }

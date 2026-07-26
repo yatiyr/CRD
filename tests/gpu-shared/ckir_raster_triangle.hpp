@@ -1206,6 +1206,30 @@ inline void build_sample_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
     fe.out[0] = {col, 0};
 }
 
+// REN-38-A3: a fullscreen composite that samples TWO textures from a BINDLESS array and proves BOTH were bound,
+// IN DECLARATION ORDER. This is the shape of a deferred LIGHTING pass (albedo + normal + material + depth) reduced
+// to its smallest checkable form.
+// ⛔ It writes tex[0].r into RED and tex[1].g into GREEN, so the two failure modes are DISTINGUISHABLE: binding
+// only the first read leaves green at 0, and binding them SWAPPED leaves red at 0. A test that merely asserted
+// "not black" would pass under both.
+inline void build_two_texture_composite_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
+{
+    namespace kir  = crd::kir;
+    const auto sh   = kir::make_shape({1});
+    const auto kf   = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const auto ku   = [&](crd::u32 v) { return g.constant(static_cast<double>(v), sh, kir::DType::U32); };
+    const int  uv   = g.stage_in(kir::KType::vec(kir::DType::F32, 2), 0, kir::Interp::Smooth);
+    // a BINDLESS descriptor array of 2 textures — what `draw_bindless` binds
+    const int  tex  = g.texture(0, 1, kir::DType::F32, kir::TexDim::Tex2D, false, false, false, 2);
+    const int  samp = g.sampler(0, 2);
+    const int  c0   = g.tex_sample_at(tex, samp, uv, ku(0U));
+    const int  c1   = g.tex_sample_at(tex, samp, uv, ku(1U));
+
+    fe.stage  = kir::KStage::Fragment;
+    fe.n_out  = 1;
+    fe.out[0] = {g.vec4(g.swizzle(c0, 0), g.swizzle(c1, 1), kf(0.0), kf(1.0)), 0};
+}
+
 // REN-2 Half B: the TEXTURED scene material shader. VS vertex-pulls {x,y,z,u,v} (5 floats/vertex, the GEO-1 pull
 // seam) from the storage buffer by VertexIndex and emits position + UV; FS samples the material base-color (albedo)
 // map at UV (texture set 0/binding 1, sampler binding 2 — draw_storage_textured_depth's layout). Proves the forward
@@ -3306,6 +3330,43 @@ inline int build_noise_worley_expected(crd::u32 x)
     if (q < 0) { q = 0; }
     if (q > 255) { q = 255; }
     return q;
+}
+
+
+
+// ── REN-37.1 DIAGNOSTIC pair: does a vec3 VARYING transport from VS to FS at all? ────────────────────────────
+// The scene renderer's world-normal varying reads ~0 in the fragment shader even though the emitted GLSL is
+// correct on both sides (VS declares AND writes location 0; FS declares AND consumes it). This is the smallest
+// possible isolation of that: one vec3 varying carrying a CONSTANT, written straight out as colour.
+//   green pixel => varyings transport; the scene bug is elsewhere (extra unmatched VS outputs, or the pairing).
+//   black pixel => the VK_EXT_shader_object raster path drops varyings, which would affect EVERY raster program.
+// `extra_outs` adds unconsumed VS outputs at locations 1..N — the scene VS emits 4 while its FS reads 2, and
+// that asymmetry is the other suspect.
+inline void build_varying_probe_vs(crd::kir::KGraph& g, crd::kir::KEntry& ve, crd::u32 extra_outs)
+{
+    namespace kir = crd::kir;
+    build_fullscreen_vs(g, ve);
+    const auto sh = kir::make_shape({1});
+    const auto k  = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    ve.out[0]     = {g.vec3(k(0.0), k(1.0), k(0.0)), 0, kir::Interp::Smooth}; // constant GREEN normal
+    ve.n_out      = 1;
+    for (crd::u32 i = 0; i < extra_outs && ve.n_out < 4; ++i)
+    {
+        ve.out[ve.n_out] = {g.vec4(k(0.25), k(0.5), k(0.75), k(1.0)), static_cast<int>(ve.n_out),
+                            kir::Interp::Smooth};
+        ++ve.n_out;
+    }
+}
+// FS: read the vec3 varying at location 0 and write it out. No lighting, no maths — just transport.
+inline void build_varying_probe_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
+{
+    namespace kir = crd::kir;
+    const auto sh = kir::make_shape({1});
+    const int  n  = g.stage_in(kir::KType::vec(kir::DType::F32, 3), 0, kir::Interp::Smooth);
+    fe.stage      = kir::KStage::Fragment;
+    fe.n_out      = 1;
+    fe.out[0]     = {g.vec4(g.swizzle(n, 0), g.swizzle(n, 1), g.swizzle(n, 2),
+                            g.constant(1.0, sh, kir::DType::F32)), 0};
 }
 
 } // namespace crd::gputest

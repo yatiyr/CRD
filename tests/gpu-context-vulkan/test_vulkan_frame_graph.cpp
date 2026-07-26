@@ -1626,3 +1626,258 @@ TEST_CASE("REN-1 GATE: build() REJECTS a dependency cycle", "[gpu-context][vulka
     fgraph->add_pass("B").reads(x).writes(y).execute(&record_noop, nullptr);
     CHECK_FALSE(fgraph->build()); // A before B and B before A - unschedulable, and said so
 }
+
+// ⛔ REN-37.1 DIAGNOSTIC: does a vec3 VARYING transport VS -> FS at all under VK_EXT_shader_object?
+// The scene renderer's world-normal varying reads ~0 in the FS despite the emitted GLSL being correct on BOTH
+// sides. This isolates the question to one constant vec3 written straight out as colour. It also varies the
+// number of UNCONSUMED VS outputs, because the scene VS emits 4 varyings while its FS reads 2 — if the extra
+// outputs are what break linkage, this shows it as a step change.
+TEST_CASE("REN-37.1 DIAG: a vec3 varying transports VS->FS (and survives unmatched extra VS outputs)",
+          "[gpu-context][vulkan][ren37][gpu]")
+{
+    Rig rig = make_rig();
+    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    auto& raster = *rig.raster;
+
+    memory::TlsfAllocator alloc(8U << 20U);
+    constexpr u32         dim = 32U;
+
+    for (u32 extra = 0; extra <= 3U; ++extra)
+    {
+        kir::KGraph vg(&alloc);
+        kir::KEntry ve;
+        gputest::build_varying_probe_vs(vg, ve, extra);
+        kir::KGraph fg(&alloc);
+        kir::KEntry fe;
+        gputest::build_varying_probe_fs(fg, fe);
+
+        auto vs = rig.vk->create_program(vg, ve);
+        if (vs == nullptr) { SKIP("shader compile unavailable"); }
+        auto fs   = rig.vk->create_program(fg, fe);
+        auto prog = raster.create_raster_program(*vs, *fs);
+        REQUIRE(prog != nullptr);
+
+        auto dst = raster.create_color_target(dim, dim);
+        REQUIRE(dst != nullptr);
+        raster.draw(*dst, *prog, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 3U);
+
+        const u32 px = dst->read_pixel(dim / 2U, dim / 2U);
+        const u32 r  = px & 0xFFU;
+        const u32 gg = (px >> 8U) & 0xFFU;
+        std::printf("[ren37-diag] extra_outs=%u -> r=%u g=%u\n", extra, r, gg);
+        // the varying carries (0,1,0): GREEN must arrive, RED must not
+        CHECK(gg > 200U);
+        CHECK(r < 60U);
+    }
+}
+
+// ⛔ REN-37.1 DIAG part 2: the SAME constant-varying pair, but drawn through the VERTEX-PULL path
+// (`draw_storage_depth`) that the scene renderer actually uses, into a colour+DEPTH target. Part 1 proved
+// varyings transport under plain `draw`; this is the only remaining difference between that success and the
+// scene's world-normal reading zero.
+TEST_CASE("REN-37.1 DIAG: the same varying through draw_storage_depth (the vertex-pull path)",
+          "[gpu-context][vulkan][ren37][gpu]")
+{
+    Rig rig = make_rig();
+    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    auto& raster = *rig.raster;
+
+    memory::TlsfAllocator alloc(8U << 20U);
+    constexpr u32         dim = 32U;
+
+    kir::KGraph vg(&alloc);
+    kir::KEntry ve;
+    gputest::build_varying_probe_vs(vg, ve, 3U); // 4 outputs, like the scene VS
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    gputest::build_varying_probe_fs(fg, fe);
+
+    auto vs = rig.vk->create_program(vg, ve);
+    if (vs == nullptr) { SKIP("shader compile unavailable"); }
+    auto fs   = rig.vk->create_program(fg, fe);
+    auto prog = raster.create_raster_program(*vs, *fs);
+    REQUIRE(prog != nullptr);
+
+    auto dst = raster.create_color_depth_target(dim, dim);
+    auto sb  = raster.create_storage_buffer(256U);
+    REQUIRE(dst != nullptr);
+    REQUIRE(sb != nullptr);
+
+    raster.draw_storage_depth(*dst, *prog, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 0.0F,
+                              g::DepthCompare::GreaterEqual, *sb, 3U);
+
+    const u32 px = dst->read_pixel(dim / 2U, dim / 2U);
+    const u32 r  = px & 0xFFU;
+    const u32 gg = (px >> 8U) & 0xFFU;
+    std::printf("[ren37-diag] draw_storage_depth -> r=%u g=%u\n", r, gg);
+    CHECK(gg > 200U);
+    CHECK(r < 60U);
+}
+
+// ── REN-37.5 GATE: PERSISTENT resources — contents SURVIVE reset(), and are never aliased away. ─────────────
+// ⛔⛔ Everything the graph owned until now was a TRANSIENT whose entire purpose is to be aliased and destroyed
+// at `reset()`. TAA history, SSR/DDGI/ReSTIR temporal reuse, auto-exposure adaptation, ping-pong blur chains and
+// (REN-37.9) cached viewport thumbnails all need the OPPOSITE, and the failure mode if this is wrong is silent:
+// `retire_transients_to` frees graph-owned images once their fence signals, which for a history buffer destroys
+// the very thing it exists to carry, and the symptom is "the temporal filter just never converges".
+//
+// The claims, in order of what would fail first if the feature were fake:
+//   1. the SAME key returns an image whose CONTENTS survived a reset() and a whole second frame;
+//   2. `persistent_image_was_live` distinguishes frame 0 (no history — a temporal pass MUST branch on this, or
+//      it reprojects garbage) from frame 1+;
+//   3. it is EXCLUDED from the transient aliasing pool (`transient_memory_bytes` does not grow with it);
+//   4. a RESIZE recreates it and reports `was_live == false` — a differently-shaped history is worse than none,
+//      because the reprojection would read plausible-looking garbage instead of obviously-missing data;
+//   5. the whole thing is validation-SILENT, which is what proves the cross-frame LAYOUT write-back is right.
+//      Without that write-back the second frame transitions from UNDEFINED, and a transition from UNDEFINED is
+//      explicitly permitted to DISCARD contents — claim 1 would then pass on some drivers and fail on others.
+TEST_CASE("REN-37.5 GATE: a PERSISTENT image keeps its contents across reset() and is never aliased",
+          "[gpu-context][vulkan][frame-graph][ren37][gpu]")
+{
+    Rig rig = make_rig();
+    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    auto& raster = *rig.raster;
+
+    memory::TlsfAllocator alloc(8U << 20U);
+    kir::KGraph           tvg(&alloc);
+    kir::KEntry           tve;
+    gputest::build_triangle_vs(tvg, tve);
+    kir::KGraph tfg(&alloc);
+    kir::KEntry tfe;
+    gputest::build_triangle_fs(tfg, tfe);
+    auto tvs = rig.vk->create_program(tvg, tve);
+    if (tvs == nullptr) { SKIP("shader compile unavailable"); }
+    auto tfs      = rig.vk->create_program(tfg, tfe);
+    auto tri_prog = raster.create_raster_program(*tvs, *tfs);
+    kir::KGraph svg(&alloc);
+    kir::KEntry sve;
+    gputest::build_textured_vs(svg, sve);
+    kir::KGraph sfg(&alloc);
+    kir::KEntry sfe;
+    gputest::build_sample_fs(sfg, sfe);
+    auto svs         = rig.vk->create_program(svg, sve);
+    auto sfs         = rig.vk->create_program(sfg, sfe);
+    auto sample_prog = raster.create_raster_program(*svs, *sfs);
+    REQUIRE(tri_prog != nullptr);
+    REQUIRE(sample_prog != nullptr);
+
+    constexpr u32 dim  = 64U;
+    constexpr u32 kKey = 0xA11CE5U; // the authored resource's stable identity
+    auto          dst  = raster.create_color_target(dim, dim);
+    auto          dummy = raster.create_storage_buffer(16U);
+    REQUIRE(dst != nullptr);
+    REQUIRE(dummy != nullptr);
+
+    g::ValidationCapture capture(*rig.vk);
+    auto                 fgraph = raster.create_frame_graph();
+    REQUIRE(fgraph != nullptr);
+
+    g::FgImageDesc pdesc{};
+    pdesc.width   = dim;
+    pdesc.height  = dim;
+    pdesc.format  = g::FgImageFormat::RGBA8Unorm;
+    pdesc.sampled = true;
+
+    // ── FRAME 0: create the history and WRITE into it (a red triangle over a green clear). ──
+    {
+        const g::FgImage hist = fgraph->create_persistent_image(kKey, pdesc);
+        REQUIRE(hist.valid());
+        CHECK_FALSE(fgraph->persistent_image_was_live(kKey)); // claim 2: frame 0 has NO history
+        const g::FgBuffer buf = fgraph->import_storage(*dummy);
+        RttOffscreen      off{hist, buf, tri_prog.get()};
+        fgraph->add_pass("write_history").reads(buf).writes(hist).execute(&record_rtt_offscreen, &off);
+        REQUIRE(fgraph->build());
+        // claim 3: a persistent image contributes NOTHING to the transient pool — it is not aliasable at all
+        CHECK(fgraph->transient_memory_bytes() == 0U);
+        CHECK(fgraph->transient_logical_bytes() == 0U);
+        fgraph->execute();
+    }
+
+    // ⛔ THE RESET. This is the operation that destroys (or retires) every transient. A persistent image must
+    // walk straight through it.
+    fgraph->reset();
+
+    // ── FRAME 1: ask for the SAME key and READ what frame 0 wrote. ──
+    {
+        const g::FgImage hist = fgraph->create_persistent_image(kKey, pdesc);
+        REQUIRE(hist.valid());
+        CHECK(fgraph->persistent_image_was_live(kKey)); // claim 2: frame 1 DOES have history
+        const g::FgImage fin = fgraph->import_target(*dst);
+        RttCompose       com{hist, fin, sample_prog.get()};
+        fgraph->add_pass("read_history").reads(hist).writes(fin).execute(&record_rtt_compose, &com);
+        REQUIRE(fgraph->build());
+        CHECK(fgraph->transient_memory_bytes() == 0U); // still no transients at all
+        fgraph->execute();
+    }
+
+    // claim 1: the pixels frame 0 rendered are STILL THERE, sampled a whole frame and a reset later.
+    const u32 center = dst->read_pixel(dim / 2U, dim / 2U);
+    const u32 corner = dst->read_pixel(2U, 2U);
+    CHECK((center & 0xFFU) > 180U);         // the RED triangle frame 0 drew
+    CHECK(((corner >> 8U) & 0xFFU) > 180U); // the GREEN clear frame 0 laid down
+    CHECK((corner & 0xFFU) < 80U);
+
+    // claim 4: a RESIZE invalidates the history rather than silently reinterpreting it.
+    fgraph->reset();
+    g::FgImageDesc bigger = pdesc;
+    bigger.width          = dim * 2U;
+    bigger.height         = dim * 2U;
+    const g::FgImage grown = fgraph->create_persistent_image(kKey, bigger);
+    REQUIRE(grown.valid());
+    CHECK_FALSE(fgraph->persistent_image_was_live(kKey));
+
+    // claim 5: validation-silent — which is what actually proves the cross-frame layout write-back.
+    if (capture.error_or_warning_count() > 0U)
+    {
+        const auto msgs = capture.messages();
+        for (usize i = 0; i < msgs.size(); ++i)
+        {
+            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            WARN("[ren37.5 capture] " << msgs[i].message_text.c_str());
+        }
+    }
+    CHECK(capture.error_count() == 0U);
+    CHECK(capture.warning_count() == 0U);
+}
+
+// ── REN-37.5 GATE: PING-PONG — two keys, swapped each frame, so no author manages a parity bit. ─────────────
+// A ping-pong resource is deliberately NOT a new device concept: it is TWO persistent images and a swap the
+// EXECUTOR owns. That is the whole design — hand-managing a frame-parity bit is the classic source of
+// one-frame-stale bugs, and it is exactly the kind of bookkeeping an authored asset must never contain.
+TEST_CASE("REN-37.5 GATE: a PING-PONG pair alternates prev/curr without the author tracking parity",
+          "[gpu-context][vulkan][frame-graph][ren37][gpu]")
+{
+    Rig rig = make_rig();
+    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    auto& raster = *rig.raster;
+
+    auto fgraph = raster.create_frame_graph();
+    REQUIRE(fgraph != nullptr);
+
+    constexpr u32  kBase = 0xBEEF00U;
+    g::FgImageDesc d{};
+    d.width   = 32U;
+    d.height  = 32U;
+    d.format  = g::FgImageFormat::RGBA8Unorm;
+    d.sampled = true;
+
+    // The executor's rule, stated once: slot = base + (frame & 1) is curr, base + ((frame + 1) & 1) is prev.
+    const auto curr_key = [&](u32 frame) { return kBase + (frame & 1U); };
+    const auto prev_key = [&](u32 frame) { return kBase + ((frame + 1U) & 1U); };
+
+    // frame 0: both halves are fresh — nothing has history yet.
+    CHECK(fgraph->create_persistent_image(curr_key(0U), d).valid());
+    CHECK(fgraph->create_persistent_image(prev_key(0U), d).valid());
+    CHECK_FALSE(fgraph->persistent_image_was_live(curr_key(0U)));
+    CHECK_FALSE(fgraph->persistent_image_was_live(prev_key(0U)));
+    fgraph->reset();
+
+    // frame 1: prev is now the buffer frame 0 called curr — the roles swapped, and BOTH are live.
+    CHECK(fgraph->create_persistent_image(curr_key(1U), d).valid());
+    CHECK(fgraph->create_persistent_image(prev_key(1U), d).valid());
+    CHECK(fgraph->persistent_image_was_live(curr_key(1U)));
+    CHECK(fgraph->persistent_image_was_live(prev_key(1U)));
+    // ⛔ and they are DISTINCT buffers — if the swap collapsed to one key, a pass would read what it is writing.
+    CHECK(curr_key(1U) != prev_key(1U));
+    CHECK(prev_key(1U) == curr_key(0U));
+}

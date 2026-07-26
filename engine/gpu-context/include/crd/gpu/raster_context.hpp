@@ -553,6 +553,29 @@ public:
                                               crd::u32 /*vertex_count*/)
     {
     }
+
+    // ── REN-3.2-b: the SHADOWED scene draw. Appended at the END of the vtable (D135). ──
+    // Identical to `draw_storage_textured_depth` in every respect but ONE: the sampler bound at slot 2 is the
+    // COMPARISON sampler, not the filtering one. The descriptor layout (storage 0 · sampled image 1 · sampler 2)
+    // is unchanged, which is why this needs no new set layout on either backend — a shadow lookup is a normal
+    // texture read whose sampler happens to compare instead of filter.
+    // `shadow_atlas` is the layered depth atlas from REN-3.2-a; the FS selects its cascade via the layer coord.
+    // ⛔ Choosing the comparison sampler from the CALL rather than from the texture keeps it impossible to
+    // sample a shadow map with a filtering sampler by accident — the two draws are different entry points.
+    // The default drops the atlas and draws unshadowed, so a backend that has not implemented it renders a
+    // correct-but-unshadowed image rather than nothing.
+    virtual void draw_storage_shadowed_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
+                                             float /*clear_depth*/, DepthCompare compare, IStorageBuffer& storage,
+                                             class ITexture& /*shadow_atlas*/, crd::u32 vertex_count)
+    {
+        draw_storage_depth(target, program, clear, 0.0F, compare, storage, vertex_count);
+    }
+    virtual void draw_storage_shadowed_depth_load(IRasterTarget& target, IRasterProgram& program,
+                                                  DepthCompare compare, IStorageBuffer& storage,
+                                                  class ITexture& /*shadow_atlas*/, crd::u32 vertex_count)
+    {
+        draw_storage_depth_load(target, program, compare, storage, vertex_count);
+    }
 };
 
 // B5: an opaque deferred G-buffer (see `create_gbuffer_target`). `read_pixel(attachment, x, y)` is valid after a draw.

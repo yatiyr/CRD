@@ -1,0 +1,33 @@
+# forward_basic.frame.toml — the SHADOWS-OFF tier of the engine's default forward renderer.
+#
+# ⭐ This file is how "shadows off" is expressed: NOT an `if` in the renderer, but a DECLARED CAPABILITY TIER with
+# a named fallback (REN-35's rule). `forward_csm.frame.toml` says `requires = ["shadows"]` and
+# `fallback = "crd://frame/forward_basic"`; when the host reports it cannot (or will not) do shadows, the executor
+# steps down to THIS graph and REPORTS that it did.
+#
+# The step-down is reported rather than silent for the same reason every fallback in this system is: a graph that
+# quietly rendered something plausible would be indistinguishable from the one you asked for.
+#
+# Note what it does NOT contain: no atlas, no cascade passes, and a `standard_forward` technique instead of
+# `forward_csm`. Turning shadows off therefore costs nothing at all — not a pass, not a transient, not a binding —
+# rather than running the machinery and multiplying by one.
+
+schema = 1
+name   = "crd://frame/forward_basic"
+
+[[draw_list]]
+name = "visible_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "material"
+
+[[pass]]
+name          = "forward"
+kind          = "raster.geometry"
+draw_list     = "visible_geometry"
+writes        = ["@output"]
+technique     = "standard_forward"
+material_pass = "Forward"
+clear_color   = [0.09, 0.10, 0.13, 1.0]
+clear_depth   = 0.0
+depth         = "GreaterEqual"   # reverse-Z

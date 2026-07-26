@@ -24,6 +24,7 @@
 #include <crd/jobs/jobs.hpp>
 #include <crd/kir/ckir.hpp>
 #include <crd/log/log.hpp>
+#include <crd/math/cmath.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/perf/perf.hpp>
@@ -179,12 +180,16 @@ int main(int argc, char** argv)
     // real cost is measurable; that is the only honest way to profile the frame.
     crd::gpu::PresentMode present_mode   = crd::gpu::PresentMode::Fifo;
     bool                  force_readback = false;
+    bool                  want_shadows   = true;
     for (int i = 1; i < argc; ++i)
     {
         if (std::strcmp(argv[i], "--headless") == 0) { headless = true; }
         // REN-8: A/B the per-frame readback copy. Run-to-run fps varies by ~10 on this host, so a claim like
         // "removing the readback made it faster" is only honest if BOTH arms are measured on the same build.
         else if (std::strcmp(argv[i], "--readback") == 0) { force_readback = true; }
+        // REN-3.2-b: A/B the shadows. If an object looks unlit with shadows ON and STILL looks unlit with them
+        // OFF, the cause is its NORMALS (ndl == 0 gives the same flat ambient as vis == 0), not the shadow map.
+        else if (std::strcmp(argv[i], "--no-shadows") == 0) { want_shadows = false; }
         else if (std::strcmp(argv[i], "--present") == 0 && i + 1 < argc)
         {
             ++i;
@@ -321,6 +326,36 @@ int main(int argc, char** argv)
                  || name_contains(pack_mesh_names[mi], ".ply") || name_contains(pack_mesh_names[mi], ".3mf"))
         {
             monument_meshes.push_back(pack_meshes[mi]);
+            // REN-3.2-b DIAGNOSTIC: print this monument's NORMAL health. Two hypotheses about the unlit torus
+            // were both wrong; this reports the fact. mean_len ~0 => generation failed; outward_frac low =>
+            // normals point INWARD (dot(N,L) <= 0 everywhere, which renders as flat ambient = "always shadowed").
+            {
+                const auto*      mr     = handle.get();
+                const crd::usize stride = crd::resources::kMeshVertexStride;
+                const crd::usize vc     = mr->vertices.size() / stride;
+                double           sumlen = 0.0;
+                double           cx = 0.0, cy = 0.0, cz = 0.0;
+                for (crd::usize v = 0; v < vc; ++v)
+                {
+                    const auto* f = reinterpret_cast<const crd::f32*>(mr->vertices.data() + v * stride);
+                    cx += f[0]; cy += f[1]; cz += f[2];
+                }
+                if (vc > 0U) { cx /= static_cast<double>(vc); cy /= static_cast<double>(vc); cz /= static_cast<double>(vc); }
+                crd::usize outward = 0;
+                for (crd::usize v = 0; v < vc; ++v)
+                {
+                    const auto* f = reinterpret_cast<const crd::f32*>(mr->vertices.data() + v * stride);
+                    const double nl = crd::math::sqrt(static_cast<double>(f[3] * f[3] + f[4] * f[4] + f[5] * f[5]));
+                    sumlen += nl;
+                    const double d = f[3] * (f[0] - cx) + f[4] * (f[1] - cy) + f[5] * (f[2] - cz);
+                    if (d > 0.0) { ++outward; }
+                }
+                CRD_LOG_INFO(g_log_sandbox,
+                             "[normal-check] {} verts={} mean_len={:.4f} outward={:.1f}%",
+                             pack_mesh_names[mi].c_str(), vc,
+                             vc > 0U ? sumlen / static_cast<double>(vc) : 0.0,
+                             vc > 0U ? 100.0 * static_cast<double>(outward) / static_cast<double>(vc) : 0.0);
+            }
         }
         else { static_meshes.push_back(pack_meshes[mi]); }
     }
@@ -403,6 +438,9 @@ int main(int argc, char** argv)
             animated.push_back(e);
         }
     }
+    // REN-3.2-b DIAGNOSTIC: report each monument mesh's NORMAL health at load. Two guesses about why the
+    // torus renders unlit were both wrong; this prints the fact instead — mean normal length (0 => generation
+    // failed) and the fraction pointing OUTWARD from the mesh centroid (low => inward winding).
     // the GEO MONUMENTS: every non-glTF import (STL icosahedron · OBJ torus with GENERATED normals · the teal
     // 3MF box whose displaycolor travelled sRGB→linear→PBRM→PRIM→this frame) — large, slowly spinning
     struct Monument
@@ -506,6 +544,20 @@ int main(int argc, char** argv)
     // REN-8: the sandbox PRESENTS, it never reads pixels back — so skip the per-frame full-target host copy the
     // frame graph does for `read_pixel`. Measured cost of leaving it on: a 7.1 ms stall behind 1.8 ms of passes.
     scene_renderer.set_readback_enabled(force_readback);
+
+    // REN-3.2-b: cascaded shadow maps. `set_shadows_enabled` returns whether they actually became ACTIVE (the
+    // cascade shaders had to compile), so a silent "on but not really" is impossible to miss here.
+    {
+        crd::scenerender::CsmConfig ccfg;
+        ccfg.cascade_count = 4;
+        ccfg.map_size      = 2048;
+        ccfg.far_plane     = 160.0F; // the sandbox field is ~110 units across; cascades past that buy nothing
+        scene_renderer.set_csm_config(ccfg);
+        const bool shadows_on = scene_renderer.set_shadows_enabled(want_shadows);
+        CRD_LOG_INFO(g_log_sandbox, "REN-3.2-b cascaded shadows: {} ({} cascades @ {}px)",
+                     shadows_on ? "ON" : "unavailable (cascade shaders failed to build)", ccfg.cascade_count,
+                     ccfg.map_size);
+    }
 
     // ⛔ HARD RULE: the grid goes through OUR frame graph. `record_overlay_pass` runs as a pass of the scene's
     // graph, so `submit_overlay`'s `draw_overlay` calls hit the raster context's RECORDING path and land in the
@@ -633,6 +685,11 @@ int main(int argc, char** argv)
         const crd::math::Mat4f vp   = proj * view;
 
         const auto t_frame_begin = now_ms();
+        // ⛔ BEFORE render(): render() EXECUTES the frame graph, and the overlay runs as a pass inside it. `canvas`
+        // is recreated on resize, so refreshing this pointer after the render call leaves the overlay pass using
+        // the DESTROYED target for exactly one frame — which is a use-after-free that crashes on a fullscreen
+        // toggle. Ordering, not just freshness, is what makes this correct.
+        overlay_ctx.target = canvas.get();
         if (scene_ready)
         {
             last_sync         = scene_renderer.sync(world);
@@ -653,6 +710,10 @@ int main(int argc, char** argv)
         // here each frame; the recording itself happens when the graph executes the "overlay" pass above.
         if (draw_ready)
         {
+            // ⛔ REFRESH THE TARGET EVERY FRAME. `canvas` is RECREATED on resize (fullscreen toggle), so a
+            // pointer captured once at setup dangles the moment the window changes size — the overlay pass then
+            // renders into freed image views and the process dies with an "Invalid VkImageView" a long way from
+            // the cause. Nothing in the frame graph can catch this: it is a raw pointer the pass callback owns.
             overlay_ctx.cfg.view_proj   = vp;
             overlay_ctx.cfg.viewport_px = {static_cast<crd::f32>(surface->width()),
                                            static_cast<crd::f32>(surface->height())};

@@ -21,11 +21,42 @@ namespace crd::framecook
 
 // What a draw list resolves to when a pass records. REN-36.2 binds these STATICALLY through the host; REN-36.3
 // replaces the binding with the real ECS query the asset already declares (`all`/`any`/`none` + cull + sort).
+// ONE recorded draw within a resolved draw list. A real scene resolves to MANY of these (one per mesh group /
+// per material batch), which is why a draw list is a LIST and not a single binding: a pass that could only ever
+// issue one draw would force every multi-group technique back into hand-written C++, defeating the whole point
+// of authoring the graph.
+struct DrawItem
+{
+    crd::gpu::IStorageBuffer* storage      = nullptr; // the vertex-pull buffer this draw reads
+    crd::gpu::IRasterProgram* program      = nullptr; // the program for this draw (per-material / per-group)
+    crd::u32                  vertex_count = 0U;
+    // REN-37.10: this draw's own MATERIAL TEXTURE (a base-colour map), appended at the END of the struct.
+    // ⛔ It must beat the pass's sampled read. A geometry pass that reads the shadow atlas binds that atlas for
+    // every draw; without a per-draw override, a group carrying an albedo map would silently lose it the moment
+    // shadows turned on — a visible regression that looks like the texture failed to load.
+    crd::gpu::ITexture*       texture      = nullptr;
+};
+
+inline constexpr crd::u32 kMaxDrawItems = 256; // stated cap; `resolved` reports what was actually filled
+
 struct DrawListBinding
 {
-    crd::gpu::IStorageBuffer* storage      = nullptr; // the vertex-pull buffer the draw reads
-    crd::gpu::IRasterProgram* program      = nullptr; // the program this list draws with
+    // The host fills `items[0 .. resolved-1]`. `storage`/`program`/`vertex_count` remain as the FIRST item so
+    // every existing single-draw host keeps working untouched.
+    crd::gpu::IStorageBuffer* storage      = nullptr;
+    crd::gpu::IRasterProgram* program      = nullptr;
     crd::u32                  vertex_count = 0U;
+
+    DrawItem items[kMaxDrawItems]{};
+    crd::u32 resolved = 0U; // 0 => use the single storage/program/vertex_count triple above
+
+    // Uniform view for the executor: one draw when the host filled the legacy triple, N when it filled `items`.
+    [[nodiscard]] crd::u32 count() const noexcept { return resolved > 0U ? resolved : (storage != nullptr ? 1U : 0U); }
+    [[nodiscard]] DrawItem at(crd::u32 i) const noexcept
+    {
+        if (resolved > 0U) { return items[i]; }
+        return DrawItem{storage, program, vertex_count, nullptr};
+    }
 };
 
 // The seam between an authored graph and the running application. The asset names things (`"@output"`,
@@ -136,8 +167,46 @@ struct FrameExecResult
 [[nodiscard]] const char* frame_exec_error_text(FrameExecError e) noexcept;
 [[nodiscard]] const char* frame_exec_status_text(FrameExecStatus s) noexcept;
 
+// ── REN-37.10: RECORD an authored graph into a CALLER-OWNED frame graph. ────────────────────────────────────
+// `execute_frame_graph` below creates a graph, records into it, builds and executes — fine for one view, and
+// structurally wrong for a frame that has several. A recorder lets a host reset ONE graph, record N authored
+// graphs into it (one per viewport), then build and execute ONCE. That is the frame-level model (REN-37.8) at
+// the ASSET layer, and it is the same split `SceneRenderer::contribute()` makes at the renderer layer.
+//
+// ⛔ WHY THIS IS A CLASS AND NOT A FREE FUNCTION. `add_pass(...).execute(fn, user)` stores the USER POINTER and
+// dereferences it at `execute()` time. While recording and executing happened in one call, that pointer could be
+// a LOCAL. Split them and every such local DANGLES — the host executes long after `record()` returned. The
+// recorder owns that storage, at addresses reserved up front so no growth can move an entry the graph already
+// points at (the same discipline the `for_each` expansion table uses).
+class FrameRecorder
+{
+public:
+    explicit FrameRecorder(crd::memory::IAllocator* alloc);
+    ~FrameRecorder();
+    FrameRecorder(const FrameRecorder&)            = delete;
+    FrameRecorder& operator=(const FrameRecorder&) = delete;
+    FrameRecorder(FrameRecorder&&)                 = delete;
+    FrameRecorder& operator=(FrameRecorder&&)      = delete;
+
+    // Recycle the arena. Call ONCE per frame, right after the host's `IFrameGraph::reset()` and before the first
+    // `record()`. The cap is CHECKED, so forgetting it surfaces as a reported failure, not a use-after-free.
+    void begin_frame() noexcept;
+
+    // How many authored graphs one frame may record. Stated rather than hidden: exceeding it FAILS by name.
+    static constexpr crd::u32 kMaxRecordingsPerFrame = 32U;
+
+    [[nodiscard]] bool record(const FrameGraphDesc& desc, crd::gpu::IFrameGraph& fg, crd::gpu::IRasterContext& raster,
+                              IFrameGraphHost& host, FrameExecError* err = nullptr,
+                              crd::containers::String* where = nullptr);
+
+private:
+    struct Impl;
+    Impl* m_impl = nullptr;
+};
+
 // Build + execute `desc` once. `err`/`where` receive the failure reason when it returns false — never a
-// partially-recorded frame.
+// partially-recorded frame. Exactly `FrameRecorder::record` plus create/build/execute, so the one-view and
+// multi-view paths cannot drift.
 //
 // `for_each` expansion (REN-36.3) is NOT applied here yet: a pass declaring `for_each` records ONCE with index 0.
 // That is stated rather than silent because a caller could otherwise mistake one cascade for four.

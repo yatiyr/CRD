@@ -1,0 +1,62 @@
+# forward_csm — REN-37.4: CASCADED SHADOW MAPS AS AN AUTHORED TECHNIQUE.
+#
+# ⛔⛔ THIS FILE IS THE POINT OF REN-37. CSM used to be ~120 lines of hand-written C++ inside `scene_renderer.cpp`
+# — the violation the top rule was restated in anger over — because a frame-graph asset could schedule the cascade
+# PASSES but had no way to say that a lighting technique also changes what every material's FRAGMENT SHADER
+# computes. It does now: the graph pass says `technique = "forward_csm"`, and this contract is what the cooker
+# verifies that pass against.
+#
+# Change `cascade_count`, change `pcf_taps`, or point a pass at a different technique entirely — all by editing
+# assets, with no engine recompile. That is the close test for the whole slice.
+
+schema  = 1
+name    = "forward_csm"
+surface = "OpenPBRSurface"
+body    = "builtin:forward_csm"
+
+# ── the PASS-frequency inputs. Frequencies, not authors, decide descriptor sets (ADR-0102: 0 frame · 1 pass ·
+# 2 material · 3 object) — which is what ended the slot fight between the shadow atlas and the base-colour map.
+#
+# TWO CLASSES, checked in two places, on purpose:
+#   • RESOURCE bindings (textures) MUST appear in the pass's `reads`. A frame graph's `reads` list is what the
+#     lifetime analysis, the barriers and the aliasing allocator are derived from, so a texture the technique
+#     samples but the pass never declares is a real dependency error. `verify_technique_bindings` rejects it BY
+#     NAME at cook time.
+#   • VALUE bindings (`csm_light_vp`, `csm_map_size`) are ENGINE STATE, not graph resources. Listing them in
+#     `reads` would put non-resources into the dependency graph and the cooker would then reject them as never
+#     written. They are checked one layer down instead: a renderer that cannot supply a declared value binding
+#     fails to build its programs, by name.
+
+[[binding]]
+name      = "shadow_atlas"
+type      = "texture2DArrayShadow"
+frequency = "pass"
+# ⛔ The type is checked for SHAPE, not just presence: a `texture2DArrayShadow` wired to a resource with
+# layers == 1 compiles, binds and renders every cascade from slice 0. That degenerate failure looks like art
+# direction on screen, so it is rejected at COOK time instead.
+
+[[binding]]
+name      = "csm_light_vp"
+type      = "mat4[]"
+count     = 4
+frequency = "pass"
+
+[[binding]]
+name      = "csm_map_size"
+type      = "float"
+frequency = "pass"
+
+# ── the DECLARED variant axes. Bounded on purpose: REN-37.7 enumerates the matrix from what is declared here and
+# never from what it discovers, so an unbounded option would be an unbounded matrix.
+
+[[option]]
+name    = "cascade_count"
+min     = 1
+max     = 4
+default = 4
+
+[[option]]
+name    = "pcf_taps"
+min     = 1
+max     = 16
+default = 4

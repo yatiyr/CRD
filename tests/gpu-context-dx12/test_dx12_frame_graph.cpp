@@ -1241,3 +1241,103 @@ TEST_CASE("REN-1 GATE (DX12): build() REJECTS a dependency cycle", "[dx12][raste
     fgraph->add_pass("B").reads(x).writes(y).execute(&record_noop, nullptr);
     CHECK_FALSE(fgraph->build());
 }
+
+// ── REN-37.5 GATE (DX12): PERSISTENT resources — the Vulkan gate's mirror, same claims, same keys. ──────────
+// ⛔⛔ One asset, both backends. A persistent image is the substrate for TAA history, SSR/DDGI/ReSTIR temporal
+// reuse, auto-exposure, ping-pong blur chains and (REN-37.9) cached viewport thumbnails, so it MUST behave
+// identically here — a technique authored against it cannot be allowed to work on Vulkan and quietly not on DX12.
+//
+// The DX12-specific hazard this pins: a persistent image is a COMMITTED resource, not a PLACED one in the
+// aliasing heap, and its RESOURCE STATE has to be carried across the frame boundary by hand. Reset the state at
+// frame start (which is right for every other node) and the barrier scheduler emits a transition FROM a state the
+// resource is not in.
+TEST_CASE("REN-37.5 GATE (DX12): a PERSISTENT image keeps its contents across reset() and is never aliased",
+          "[dx12][raster][frame-graph][ren37][gpu]")
+{
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto raster = g::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    kir::KGraph                tvg(&alloc);
+    kir::KEntry                tve;
+    crd::gputest::build_triangle_vs(tvg, tve);
+    kir::KGraph tfg(&alloc);
+    kir::KEntry tfe;
+    crd::gputest::build_triangle_fs(tfg, tfe);
+    auto tvs = gctx->create_program(tvg, tve);
+    if (tvs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+    auto tfs      = gctx->create_program(tfg, tfe);
+    auto tri_prog = raster->create_raster_program(*tvs, *tfs);
+    kir::KGraph svg(&alloc);
+    kir::KEntry sve;
+    crd::gputest::build_textured_vs(svg, sve);
+    kir::KGraph sfg(&alloc);
+    kir::KEntry sfe;
+    crd::gputest::build_sample_fs(sfg, sfe);
+    auto svs         = gctx->create_program(svg, sve);
+    auto sfs         = gctx->create_program(sfg, sfe);
+    auto sample_prog = raster->create_raster_program(*svs, *sfs);
+    REQUIRE(tri_prog != nullptr);
+    REQUIRE(sample_prog != nullptr);
+
+    constexpr crd::u32 dim   = 64U;
+    constexpr crd::u32 kKey  = 0xA11CE5U; // the same stable identity the Vulkan gate uses
+    auto               dst   = raster->create_color_target(dim, dim);
+    auto               dummy = raster->create_storage_buffer(16U);
+    REQUIRE(dst != nullptr);
+    REQUIRE(dummy != nullptr);
+
+    auto fgraph = raster->create_frame_graph();
+    REQUIRE(fgraph != nullptr);
+
+    g::FgImageDesc pdesc{};
+    pdesc.width   = dim;
+    pdesc.height  = dim;
+    pdesc.format  = g::FgImageFormat::RGBA8Unorm;
+    pdesc.sampled = true;
+
+    // ── FRAME 0: create the history and WRITE into it. ──
+    {
+        const g::FgImage hist = fgraph->create_persistent_image(kKey, pdesc);
+        REQUIRE(hist.valid());
+        CHECK_FALSE(fgraph->persistent_image_was_live(kKey));
+        const g::FgBuffer buf = fgraph->import_storage(*dummy);
+        RttOffscreen      off{hist, buf, tri_prog.get()};
+        fgraph->add_pass("write_history").reads(buf).writes(hist).execute(&record_rtt_offscreen, &off);
+        REQUIRE(fgraph->build());
+        CHECK(fgraph->transient_memory_bytes() == 0U);  // never in the aliasing heap
+        CHECK(fgraph->transient_logical_bytes() == 0U);
+        fgraph->execute();
+    }
+
+    fgraph->reset(); // ⛔ the operation that destroys every transient
+
+    // ── FRAME 1: same key, READ what frame 0 wrote. ──
+    {
+        const g::FgImage hist = fgraph->create_persistent_image(kKey, pdesc);
+        REQUIRE(hist.valid());
+        CHECK(fgraph->persistent_image_was_live(kKey));
+        const g::FgImage fin = fgraph->import_target(*dst);
+        RttCompose       com{hist, fin, sample_prog.get()};
+        fgraph->add_pass("read_history").reads(hist).writes(fin).execute(&record_rtt_compose, &com);
+        REQUIRE(fgraph->build());
+        CHECK(fgraph->transient_memory_bytes() == 0U);
+        fgraph->execute();
+    }
+
+    const crd::u32 center = dst->read_pixel(dim / 2U, dim / 2U);
+    const crd::u32 corner = dst->read_pixel(2U, 2U);
+    CHECK((center & 0xFFU) > 180U);         // the RED triangle frame 0 drew, still there
+    CHECK(((corner >> 8U) & 0xFFU) > 180U); // the GREEN clear frame 0 laid down
+    CHECK((corner & 0xFFU) < 80U);
+
+    // a RESIZE invalidates the history rather than silently reinterpreting it
+    fgraph->reset();
+    g::FgImageDesc bigger = pdesc;
+    bigger.width          = dim * 2U;
+    bigger.height         = dim * 2U;
+    REQUIRE(fgraph->create_persistent_image(kKey, bigger).valid());
+    CHECK_FALSE(fgraph->persistent_image_was_live(kKey));
+}

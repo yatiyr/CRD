@@ -15,6 +15,7 @@ add_executable(crd-kir-tests
     test_ckir_nodes.cpp
     test_ckir_noise.cpp
     test_ckir_lower.cpp
+    test_ckir_variant.cpp   # REN-37.7: the DECLARED variant matrix + content-hash dedup + the dual mode
     test_ckir_lighting.cpp
     test_ckir_kernel.cpp
     test_ckir_kernel_emit.cpp

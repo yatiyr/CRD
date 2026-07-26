@@ -1,0 +1,14 @@
+# standard_forward — REN-37.2: the engine's default forward lighting technique, as an ASSET.
+#
+# This is the port of what used to be `cook::shade_forward`, a FIXED FUNCTION nobody could name, swap or verify.
+# It shades the OpenPBR surface with the B8 Cook-Torrance BRDF for the scene's directional key light and adds
+# emissive. Declaring NO bindings is the point of making it first: it proves the technique seam works before the
+# binding contract is also under test.
+#
+# Swap the `technique = "standard_forward"` line in a frame-graph pass for any other `.crdt` name and the whole
+# scene re-shades. No engine recompile. That is the top rule reaching the fragment shader.
+
+schema  = 1
+name    = "standard_forward"
+surface = "OpenPBRSurface"
+body    = "builtin:standard_forward"
