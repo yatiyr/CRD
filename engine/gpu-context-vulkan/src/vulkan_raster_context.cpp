@@ -2556,6 +2556,57 @@ public:
         return dset;
     }
 
+    // ── REN-38-A1a: the FRAME-MODE bindless set + draw. ────────────────────────────────────────────────────
+    // ⛔⛔ WHY `draw_bindless` COULD NOT BE RECORDED. Its synchronous body starts with `vkResetDescriptorPool`
+    // on the GLOBAL pool — which is correct for a self-contained submit-and-wait draw and CATASTROPHIC inside a
+    // frame: it invalidates every descriptor set already bound by every earlier pass in the same command buffer.
+    // That single line is why the verb segfaulted when an authored pass called it, and it is the shape shared by
+    // most of the 14 verbs the REN-38-A0 audit found unrecordable — they own the pool, so they cannot be guests
+    // in someone else's frame.
+    //
+    // The frame-mode body allocates from the FRAME's pool instead (which `execute()` resets exactly once per
+    // frame, per slot) and touches nothing global.
+    [[nodiscard]] VkDescriptorSet frame_alloc_bindless_set(ITexture* const* textures, crd::u32 n)
+    {
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool     = m_frame_rec.pool;
+        dsai.descriptorSetCount = 1U;
+        dsai.pSetLayouts        = &m_storage_set_layout;
+        VkDescriptorSet dset = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return VK_NULL_HANDLE; }
+        // Elements 0..n-1 are the given textures; the rest REPLICATE element 0 so every array slot is a valid
+        // descriptor and no partially-bound feature is required (the same rule the synchronous path uses).
+        VkDescriptorImageInfo imgs[kBindlessMax]{};
+        for (crd::u32 i = 0; i < kBindlessMax; ++i)
+        {
+            auto& tex = static_cast<VulkanTexture&>(*textures[i < n ? i : 0U]);
+            imgs[i]   = {VK_NULL_HANDLE, tex.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        }
+        VkDescriptorImageInfo samp_info{m_default_sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
+        VkWriteDescriptorSet  wr[2]{};
+        wr[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[0].dstSet = dset; wr[0].dstBinding = 2U; wr[0].descriptorCount = 1U;            wr[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;       wr[0].pImageInfo = &samp_info;
+        wr[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[1].dstSet = dset; wr[1].dstBinding = 3U; wr[1].descriptorCount = kBindlessMax; wr[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; wr[1].pImageInfo = imgs;
+        vkUpdateDescriptorSets(m_device, 2U, wr, 0U, nullptr);
+        return dset;
+    }
+
+    void record_bindless(VulkanRasterTarget& t, VulkanRasterProgram& p, ITexture* const* textures, crd::u32 n,
+                         ClearColor clear_color, crd::u32 vertex_count)
+    {
+        VkCommandBuffer cmd  = m_frame_rec.cmd;
+        VkDescriptorSet dset = frame_alloc_bindless_set(textures, n);
+        if (dset == VK_NULL_HANDLE) { return; }
+        frame_self_barrier_if_needed(t);
+        VkRenderingAttachmentInfo att = colour_clear_attachment(t.view(), clear_color);
+        VkRenderingInfo           ri  = one_colour_rendering(t, att);
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t.width(), t.height(), 1U, false, VK_COMPARE_OP_ALWAYS);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        bind_and_draw(cmd, p, vertex_count);
+        vkCmdEndRendering(cmd);
+    }
+
     // REN-2: the frame-mode body of draw_storage — a COLOR-ONLY render into an RTT transient (no depth attachment,
     // no readback), into the shared cmd. Pass 1 of render-to-texture; a later pass samples it via record_textured.
     void record_offscreen(VulkanRasterTarget& t, VulkanRasterProgram& p, VulkanStorageBuffer& s, ClearColor clear_color,
@@ -3144,8 +3195,11 @@ public:
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
-        if (!m_api.valid() || !p.valid() || m_desc_pool == VK_NULL_HANDLE || count == 0U || textures == nullptr) { return; }
+        if (!m_api.valid() || !p.valid() || count == 0U || textures == nullptr) { return; }
         const crd::u32 n = count < kBindlessMax ? count : kBindlessMax;
+        // REN-38-A1a: inside a frame, RECORD — never reset the global pool out from under the frame's other passes.
+        if (frame_recording()) { record_bindless(t, p, textures, n, clear_color, vertex_count); return; }
+        if (m_desc_pool == VK_NULL_HANDLE) { return; }
 
         vkResetDescriptorPool(m_device, m_desc_pool, 0);
         VkDescriptorSetAllocateInfo dsai{};

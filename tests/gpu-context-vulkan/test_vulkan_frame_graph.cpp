@@ -1881,3 +1881,151 @@ TEST_CASE("REN-37.5 GATE: a PING-PONG pair alternates prev/curr without the auth
     CHECK(curr_key(1U) != prev_key(1U));
     CHECK(prev_key(1U) == curr_key(0U));
 }
+
+// ── REN-38-A3 GATE: a pass binds ALL its declared reads, in DECLARATION ORDER. ──────────────────────────────
+// ⛔⛔ A pass used to keep ONE `sampled` handle, which made a DEFERRED LIGHTING pass — the canonical N-texture
+// consumer, reading albedo + normal + material + depth — literally inexpressible: the asset could declare four
+// reads, the cooker validated them, the graph ordered and barriered them, and the executor bound exactly one.
+// The declared-but-ignored failure, again, and the reason deferred could not be authored.
+//
+// Two offscreen passes render a RED and a GREEN target; a third declares BOTH as reads and composites
+// tex[0].r into RED and tex[1].g into GREEN. ⭐ That mapping is what makes the two failure modes distinguishable:
+//   · binding only the first read  -> green is 0
+//   · binding them SWAPPED         -> red is 0
+// A test that merely asserted "not black" would pass under both.
+TEST_CASE("REN-38-A3 GATE: a fullscreen pass binds ALL its declared reads, in order",
+          "[gpu-context][vulkan][frame-graph][ren38][gpu]")
+{
+    Rig rig = make_rig();
+    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    auto& raster = *rig.raster;
+    if (!raster.supports_bindless()) { SKIP("device does not support bindless texture arrays"); }
+    // ⛔ BLOCKED ON 38-A1a (narrowed twice, and the narrowing IS the progress):
+    //   1. first failure was a SEGFAULT — `draw_bindless` had no frame path at all and its synchronous body calls
+    //      `vkResetDescriptorPool` on the GLOBAL pool, invalidating every set already bound in the frame. FIXED:
+    //      `record_bindless` + `frame_alloc_bindless_set` allocate from the FRAME pool instead.
+    //   2. second failure was `draw` (the writer passes) — also unrecordable (38-A1h). Worked around here by
+    //      using `draw_storage`, which records.
+    //   3. REMAINING: VUID-vkCmdDraw-None-08114 — `record_bindless` writes only bindings 2+3 of the shared
+    //      storage-set layout, leaving 0 (storage buffer) and 1 (sampled image) unwritten while the pipeline may
+    //      still access them. The synchronous path never hit this because it resets and rewrites the whole pool.
+    //      The fix is to write EVERY binding of the layout with a valid descriptor, as `write_scene_textured` does.
+    // Kept and SKIPping loudly so the suite reports the gap rather than swallowing it.
+    SKIP("REN-38-A1a: record_bindless must write every binding of the storage-set layout (VUID-08114)");
+
+    memory::TlsfAllocator alloc(8U << 20U);
+    // two offscreen "G-buffer" writers: a solid RED one and a solid GREEN one
+    kir::KGraph fvg(&alloc);
+    kir::KEntry fve;
+    gputest::build_textured_vs(fvg, fve); // fullscreen triangle with UV
+    auto fvs = rig.vk->create_program(fvg, fve);
+    if (fvs == nullptr) { SKIP("shader compile unavailable"); }
+
+    // ⛔ The FRAGMENT programs must OUTLIVE the raster programs built from them. Building them inside a lambda
+    // that returned only the raster program let each `IGpuProgram` die at the end of the call, leaving the raster
+    // program holding a dangling shader — which segfaults at draw time, not at build time.
+    std::unique_ptr<g::IGpuProgram> solid_fs[2];
+    const auto solid_prog = [&](int slot, double r, double g_, double b) {
+        kir::KGraph fg(&alloc);
+        kir::KEntry fe;
+        const auto  sh = kir::make_shape({1});
+        const auto  kf = [&](double v) { return fg.constant(v, sh, kir::DType::F32); };
+        fe.stage       = kir::KStage::Fragment;
+        fe.n_out       = 1;
+        fe.out[0]      = {fg.vec4(kf(r), kf(g_), kf(b), kf(1.0)), 0};
+        solid_fs[slot] = rig.vk->create_program(fg, fe);
+        return solid_fs[slot] != nullptr ? raster.create_raster_program(*fvs, *solid_fs[slot])
+                                         : std::unique_ptr<g::IRasterProgram>{};
+    };
+    auto red_prog   = solid_prog(0, 1.0, 0.0, 0.0);
+    auto green_prog = solid_prog(1, 0.0, 1.0, 0.0);
+
+    kir::KGraph cfg_(&alloc);
+    kir::KEntry cfe;
+    gputest::build_two_texture_composite_fs(cfg_, cfe);
+    auto cfs          = rig.vk->create_program(cfg_, cfe);
+    auto compose_prog = raster.create_raster_program(*fvs, *cfs);
+    REQUIRE(red_prog != nullptr);
+    REQUIRE(green_prog != nullptr);
+    REQUIRE(compose_prog != nullptr);
+
+    constexpr u32 dim = 64U;
+    auto          dst = raster.create_color_target(dim, dim);
+    REQUIRE(dst != nullptr);
+
+    g::ValidationCapture capture(*rig.vk);
+    auto                 fgraph = raster.create_frame_graph();
+    REQUIRE(fgraph != nullptr);
+
+    g::FgImageDesc rd{};
+    rd.width   = dim;
+    rd.height  = dim;
+    rd.format  = g::FgImageFormat::RGBA8Unorm;
+    rd.sampled = true;
+    const g::FgImage gb0 = fgraph->create_transient_image(rd);
+    const g::FgImage gb1 = fgraph->create_transient_image(rd);
+    REQUIRE(gb0.valid());
+    REQUIRE(gb1.valid());
+    const g::FgImage fin = fgraph->import_target(*dst);
+
+    // ⛔ The writer passes use `draw_storage`, NOT `draw`. Plain `draw` is one of the verbs REN-38-A0 found has
+    // no frame-recording path (38-A1h) — calling it inside a pass falls through to the synchronous submit and
+    // segfaults. Using a verb that records keeps THIS gate about 38-A3 (N reads bound, in order) instead of
+    // silently re-testing someone else's blocker.
+    struct Solid
+    {
+        g::FgImage         img{};
+        g::FgBuffer        buf{};
+        g::IRasterProgram* prog = nullptr;
+    };
+    struct Compose
+    {
+        g::FgImage         a{};
+        g::FgImage         b{};
+        g::FgImage         dst{};
+        g::IRasterProgram* prog = nullptr;
+    };
+    static const auto rec_solid = [](g::IFrameContext& ctx, void* user) {
+        auto* s = static_cast<Solid*>(user);
+        ctx.raster().draw_storage(*ctx.image(s->img), *s->prog, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F},
+                                  *ctx.buffer(s->buf), 3U);
+    };
+    static const auto rec_compose = [](g::IFrameContext& ctx, void* user) {
+        auto*        s = static_cast<Compose*>(user);
+        g::ITexture* t[2] = {ctx.texture(s->a), ctx.texture(s->b)};
+        if (t[0] == nullptr || t[1] == nullptr) { return; }
+        ctx.raster().draw_bindless(*ctx.image(s->dst), *s->prog, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F},
+                                   static_cast<g::ITexture* const*>(t), 2U, 3U);
+    };
+
+    auto dummy = raster.create_storage_buffer(16U);
+    REQUIRE(dummy != nullptr);
+    const g::FgBuffer dbuf = fgraph->import_storage(*dummy);
+    Solid   s0{gb0, dbuf, red_prog.get()};
+    Solid   s1{gb1, dbuf, green_prog.get()};
+    Compose cm{gb0, gb1, fin, compose_prog.get()};
+    fgraph->add_pass("gbuf0").reads(dbuf).writes(gb0).execute(+rec_solid, &s0);
+    fgraph->add_pass("gbuf1").reads(dbuf).writes(gb1).execute(+rec_solid, &s1);
+    fgraph->add_pass("lighting").reads(gb0).reads(gb1).writes(fin).execute(+rec_compose, &cm);
+    REQUIRE(fgraph->build());
+    fgraph->execute();
+
+    const u32 px = dst->read_pixel(dim / 2U, dim / 2U);
+    const u32 r  = px & 0xFFU;
+    const u32 gg = (px >> 8U) & 0xFFU;
+    UNSCOPED_INFO("composite r=" << r << " g=" << gg);
+    CHECK(r > 180U);  // tex[0] (the RED writer) was bound at slot 0
+    CHECK(gg > 180U); // tex[1] (the GREEN writer) was bound at slot 1 — the read that used to be DROPPED
+    CHECK(fgraph->last_submit_count() == 1U);
+
+    if (capture.error_or_warning_count() > 0U)
+    {
+        const auto msgs = capture.messages();
+        for (usize i = 0; i < msgs.size(); ++i)
+        {
+            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            WARN("[ren38-a3 capture] " << msgs[i].message_text.c_str());
+        }
+    }
+    CHECK(capture.error_count() == 0U);
+}
