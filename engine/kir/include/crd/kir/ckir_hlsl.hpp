@@ -1084,6 +1084,9 @@ inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::I
     for (int i = 0; i < n; ++i)
     {
         if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::Builtin) { continue; }
+        // REN-38: DrawIndex is NOT a system value — it arrives as a ROOT CONSTANT (b7), declared in the
+        // prologue and read as `pc_draw_index`; ExecuteIndirect's command signature varies it per command.
+        if (static_cast<KBuiltin>(g.node(i).iidx) == KBuiltin::DrawIndex) { continue; }
         const char* bt = nullptr;
         const char* sv = nullptr;
         if (!hlsl_vsfs_builtin(static_cast<KBuiltin>(g.node(i).iidx), bt, sv)) { return false; } // unsupported builtin
@@ -1146,6 +1149,15 @@ inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::I
         s.append((!is_vertex && entry.interlock) ? "RasterizerOrderedStructuredBuffer<uint>" : "RWStructuredBuffer<uint>");
         s.append(" sbuf : register(u0);\n");
     }
+    for (int i = 0; i < n; ++i) // REN-38: the DrawIndex root constant (b7) — one uint, varied per command by ExecuteIndirect
+    {
+        if (reach[static_cast<crd::usize>(i)] && g.node(i).op == KOp::Builtin
+            && static_cast<KBuiltin>(g.node(i).iidx) == KBuiltin::DrawIndex)
+        {
+            s.append("cbuffer PcDraw : register(b7) { uint pc_draw_index; };\n");
+            break;
+        }
+    }
     for (int i = 0; i < n; ++i) // B2: separable texture (register(tB, spaceS)) + sampler (register(sB, spaceS)) declarations
     {
         if (!reach[static_cast<crd::usize>(i)]) { continue; }
@@ -1205,6 +1217,10 @@ inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::I
         if (lnd.op == KOp::StageIn) { emit_stmt_prefix_hlsl(gg, li, ss); ss.append("i.a"); app_uint(ss, static_cast<crd::u32>(lnd.iidx)); ss.append(";\n"); return true; }
         if (lnd.op == KOp::Builtin)
         {
+            if (static_cast<KBuiltin>(lnd.iidx) == KBuiltin::DrawIndex) // REN-38: the root constant, not an SV
+            {
+                emit_stmt_prefix_hlsl(gg, li, ss); ss.append("pc_draw_index;\n"); return true;
+            }
             const char* bt = nullptr;
             const char* sv = nullptr;
             if (!hlsl_vsfs_builtin(static_cast<KBuiltin>(lnd.iidx), bt, sv)) { return false; }

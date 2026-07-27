@@ -36,6 +36,10 @@ struct DrawItem
     // every draw; without a per-draw override, a group carrying an albedo map would silently lose it the moment
     // shadows turned on — a visible regression that looks like the texture failed to load.
     crd::gpu::ITexture*       texture      = nullptr;
+    // ⭐⭐ REN-38: this item was built for the DRAW-INDEX contract — its program rebases every load by
+    // `table[DrawIndex]`, so it MUST be recorded through the multi verb (which pushes the row) even as a
+    // run of one; a classic verb would leave the push stale and the draw would read another region.
+    bool               indexed = false;
 };
 
 inline constexpr crd::u32 kMaxDrawItems = 256; // stated cap; `resolved` reports what was actually filled
@@ -52,7 +56,11 @@ struct DrawListBinding
     crd::u32 resolved = 0U; // 0 => use the single storage/program/vertex_count triple above
 
     // Uniform view for the executor: one draw when the host filled the legacy triple, N when it filled `items`.
-    [[nodiscard]] crd::u32 count() const noexcept { return resolved > 0U ? resolved : (storage != nullptr ? 1U : 0U); }
+    [[nodiscard]] crd::u32 count() const noexcept
+    {
+        if (resolved > 0U) { return resolved; }
+        return storage != nullptr ? 1U : 0U;
+    }
     [[nodiscard]] DrawItem at(crd::u32 i) const noexcept
     {
         if (resolved > 0U) { return items[i]; }

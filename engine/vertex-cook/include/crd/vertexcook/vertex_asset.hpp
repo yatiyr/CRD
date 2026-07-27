@@ -367,6 +367,10 @@ struct VertexProgramDesc
     // This is what lets a screen-space line quad, a corner-table patch VS or a fullscreen triangle pair be a
     // declaration instead of a C++ builder.
     crd::containers::String                position_node;
+    // ⭐⭐ REN-38 (scene-buffer consolidation): non-zero = the DRAW-TABLE word offset. The pull VS reads its
+    // region base from `sbuf[rebase_table + DrawIndex]` and rebases EVERY storage load by it — one scene
+    // buffer, per-group regions, cross-group multi-draw. 0 keeps the historical absolute layout.
+    crd::u32                               rebase_table = 0U;
     ExpandDesc                             expand;
 
     explicit VertexProgramDesc(crd::memory::IAllocator* a)

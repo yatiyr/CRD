@@ -94,6 +94,13 @@ inline constexpr crd::u32 kHdrCsmLightVp      = 32U; // 4 x 16 floats
 // but it is exactly the kind of edit that silently corrupts every shader if one consumer hardcodes 96.
 inline constexpr crd::u32 kHdrCameraPos       = 96U; // 3 floats (+1 pad, keeping the header 4-word aligned)
 inline constexpr crd::u32 kVertexWords        = 12U; // the cooked 48-byte vertex
+// ⭐⭐ REN-38 (scene-buffer consolidation): the ONE scene buffer's fixed prefix. Words [0..119] hold THE frame
+// header (what the FS reads absolutely — every group's header carries the same frame fields, so one canonical
+// copy serves); [120..375] is the DRAW TABLE (one word per draw-list row: that draw's region base); group
+// regions start at 384 (4-word aligned), each an exact image of the group's historical private buffer, so the
+// region-relative offsets stored in its header keep working under the VS's DrawIndex rebase unchanged.
+inline constexpr crd::u32 kSceneDrawTableOff  = 120U; // == kHeaderWords — the table sits right after the header
+inline constexpr crd::u32 kSceneFirstRegion   = 384U; // 120 header + 256 table + pad to 4-word alignment
 inline constexpr crd::u32 kInstanceWords      = 20U; // world matrix 16 + colour 4
 
 // One per-instance GPU record (kInstanceWords * 4 bytes).
@@ -135,6 +142,7 @@ struct MeshGroup
     crd::u32 instances_off = 0;
     crd::u32 visible_off = 0;
     crd::u32 capacity = 0;           // instance slots the buffer holds
+    crd::u32 region_base = 0;        // REN-38: this group's word base inside the ONE scene buffer (0 = unassigned)
     bool     geometry_uploaded = false;
 
     // GEO-8: the SKINNED path — groups whose mesh carries the SKNV stream draw through the skinned program:

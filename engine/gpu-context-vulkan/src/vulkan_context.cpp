@@ -91,6 +91,7 @@ public:
     [[nodiscard]] bool     shader_object() const noexcept override { return m_shader_object; }
     [[nodiscard]] bool     mesh_shader() const noexcept override { return m_mesh_shader; } // B4: VK_EXT_mesh_shader + meshShader
     [[nodiscard]] bool     task_shader() const noexcept override { return m_task_shader; }    // REN-38: + taskShader (amplification)
+    [[nodiscard]] bool     partially_bound() const noexcept override { return m_partially_bound; } // REN-38: bindless heap
     [[nodiscard]] bool     ray_query() const noexcept override { return m_ray_query; } // B9/RT: VK_KHR_ray_query + acceleration_structure
     [[nodiscard]] bool     opacity_micromap() const noexcept override { return m_opacity_micromap; } // FA-1
     [[nodiscard]] bool     rt_pipeline() const noexcept override { return m_rt_pipeline; }           // FA-2
@@ -594,6 +595,18 @@ private:
             interlock.fragmentShaderSampleInterlock      = VK_FALSE; // enable ONLY the pixel-ordered mode we emit
             interlock.fragmentShaderShadingRateInterlock = VK_FALSE;
         }
+        // ⭐⭐ REN-38 (multi-draw): `shaderDrawParameters` (Vulkan 1.1 core) — gl_DrawID, the batched-draw id.
+        // Queried and enabled whenever the device offers it; the rebased scene VS cannot compile without it.
+        VkPhysicalDeviceShaderDrawParametersFeatures sdp{};
+        sdp.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES;
+        if (m_graphics_family != UINT32_MAX)
+        {
+            VkPhysicalDeviceFeatures2 f2s{};
+            f2s.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            f2s.pNext = &sdp;
+            vkGetPhysicalDeviceFeatures2(m_physical, &f2s);
+            sdp.pNext = nullptr; // keep only the queried bit; chained below when TRUE
+        }
         // B2-d: BINDLESS — non-uniform sampled-image array indexing (Vulkan 1.2 core descriptor indexing). Query the bit,
         // enable only what the bindless texture path needs. Graphics-capable only (keeps the compute device minimal).
         VkPhysicalDeviceDescriptorIndexingFeatures descidx{};
@@ -605,10 +618,15 @@ private:
             f2.pNext = &descidx;
             vkGetPhysicalDeviceFeatures2(m_physical, &f2);
             m_bindless = descidx.shaderSampledImageArrayNonUniformIndexing == VK_TRUE;
+            // REN-38 bindless-heap slice: PARTIALLY BOUND is what turns the array from "write every slot per
+            // draw" into a real heap — only the slots a frame registered are written, the rest stay invalid
+            // and legal as long as no shader reads them. Enabled whenever the device offers it.
+            m_partially_bound = descidx.descriptorBindingPartiallyBound == VK_TRUE;
             VkPhysicalDeviceDescriptorIndexingFeatures keep{};
             keep.sType                                       = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
             keep.shaderSampledImageArrayNonUniformIndexing   = descidx.shaderSampledImageArrayNonUniformIndexing;
-            descidx                                          = keep; // enable ONLY the non-uniform sampled-image bit
+            keep.descriptorBindingPartiallyBound             = descidx.descriptorBindingPartiallyBound;
+            descidx                                          = keep; // enable ONLY what the bindless path uses
         }
 
         // B4: mesh shaders — confirm the meshShader bit before committing (the extension can be exposed without it).
@@ -712,6 +730,8 @@ private:
         if (m_tessellation) { eds2.pNext = chain; chain = &eds2; } // B4-tess: patch-control-points dynamic state
         if (m_fragment_interlock) { interlock.pNext = chain; chain = &interlock; }
         if (m_bindless) { descidx.pNext = chain; chain = &descidx; }
+        // REN-38: gl_DrawID for the batched scene VS — chained whenever the device offers it
+        if (sdp.shaderDrawParameters == VK_TRUE) { sdp.pNext = chain; chain = &sdp; }
         if (m_windowed) { sync2.pNext = chain; chain = &sync2; }
         if (m_shader_object) { sho.pNext = chain; chain = &sho; }
         if (m_mesh_shader) { mesh.pNext = chain; chain = &mesh; maint4.pNext = chain; chain = &maint4; }
@@ -808,6 +828,7 @@ private:
     bool             m_bindless              = false; // B2-d: non-uniform sampled-image array indexing enabled
     bool             m_mesh_shader           = false; // B4: VK_EXT_mesh_shader + meshShader feature enabled
     bool             m_task_shader           = false; // REN-38: + taskShader (amplification) — enabled when offered
+    bool             m_partially_bound       = false; // REN-38: descriptorBindingPartiallyBound — the bindless heap flag
     bool             m_ray_query             = false; // B9/RT: VK_KHR_ray_query + acceleration_structure + BDA enabled
     bool             m_opacity_micromap      = false; // FA-1: VK_EXT_opacity_micromap
     bool             m_rt_pipeline           = false; // FA-2: VK_KHR_ray_tracing_pipeline

@@ -1851,3 +1851,255 @@ TEST_CASE("REN-38-F15 GATE: a disk asset SHADOWS the embedded pack, and a corrup
         CHECK_FALSE(renderer.set_asset_root(root.c_str()));
     }
 }
+
+// ── ⭐⭐ REN-38 GATE: a group is TEXTURED **AND** SHADOWED in the same frame. ────────────────────────────────
+// Until this slice the base-colour map and the shadow atlas fought over descriptor bindings 1/2, so
+// `record_one_group` had to NULL one of them — textured monuments lost their maps the instant shadows turned
+// on (the user saw it immediately). The atlas now lives at its OWN bindings (4/5 on Vulkan, t4/s5 on DX12) and
+// the renderer cooks a COMBINED variant, so this gate demands BOTH properties of one receiver in ONE frame:
+//   (a) the texture is VISIBLE  — the receiver's left and right halves sample different texels (red vs green);
+//   (b) the shadow LANDS on it  — a compact patch darkens when shadows turn on, on the SAME textured surface.
+// Either property alone was already gated (Half B / the occluder gate); their CONJUNCTION is what was impossible.
+TEST_CASE("REN-38 GATE: a TEXTURED receiver is ALSO SHADOWED in one frame (Vulkan)",
+          "[scene-render][ren38][material][shadow][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    // cook + mount: the UV QUAD (the receiver, textured), a plain CUBE (the caster), the 2x1 red/green TXTR
+    // and an OpenPbrMaterial referencing it — the exact assets Half B proves individually.
+    memory::TlsfAllocator       a2(4U << 20U);
+    const resources::ResourceId quad_id = resources::ResourceId::mint_random();
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const resources::ResourceId tex_id  = resources::ResourceId::mint_random();
+    const resources::ResourceId mtl_id  = resources::ResourceId::mint_random();
+    const platform::fs::Path    quad_path(containers::StringView("sr_ts_quad.crdr"));
+    const platform::fs::Path    tex_path(containers::StringView("sr_ts_tex.crdr"));
+    const platform::fs::Path    mtl_path(containers::StringView("sr_ts_mtl.crdr"));
+    const TempPack              cube_pack("sr_ts_cube_", cube_id);
+    write_one_pack(quad_path, quad_id, resources::kFourCC_MESH, build_quad_mesh_crdr(quad_id), "quad");
+    write_one_pack(tex_path, tex_id, resources::kFourCC_TXTR, build_rg_txtr_crdr(tex_id), "rg");
+    write_mesh_pack(cube_pack.path, cube_id);
+    resources::PbrmParams params;
+    params.base_color[0] = 1.0F;
+    params.base_color[1] = 1.0F;
+    params.base_color[2] = 1.0F;
+    params.base_alpha    = 1.0F;
+    resources::PbrmTextures textures;
+    textures.base_color = tex_id;
+    auto mtl_bytes      = resources::pbrm_build(params, textures, mtl_id, &a2);
+    write_one_pack(mtl_path, mtl_id, resources::kFourCC_PBRM, mtl_bytes, "mtl");
+
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    resources::register_texture_loader(&rm);
+    resources::register_openpbr_material_loader(&rm);
+    REQUIRE(rm.mount_manifest(quad_path.generic()).is_valid());
+    REQUIRE(rm.mount_manifest(tex_path.generic()).is_valid());
+    REQUIRE(rm.mount_manifest(mtl_path.generic()).is_valid());
+    REQUIRE(rm.mount_manifest(cube_pack.path.generic()).is_valid());
+
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait(), scene::SpatialBVH{});
+    scene::register_render_components(world);
+    // the TEXTURED receiver: the +Z-facing UV quad laid FLAT (rotated to face +Y), scaled wide
+    {
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        const math::Quatf     q = math::from_axis_angle(math::Vec3f{1.0F, 0.0F, 0.0F}, -1.57079632679F);
+        t.translation           = math::from_raw_vec<units::dim::Length>(math::Vec3f{0.0F, 0.0F, 0.0F});
+        t.rotation              = q;
+        t.scale                 = {24.0F, 24.0F, 1.0F};
+        t.world                 = math::from_trs({0.0F, 0.0F, 0.0F}, q, {24.0F, 24.0F, 1.0F});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{quad_id, mtl_id});
+    }
+    // the CASTER: a plain cube floating above the origin
+    {
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.translation = math::from_raw_vec<units::dim::Length>(math::Vec3f{0.0F, 8.0F, 0.0F});
+        t.scale       = {4.0F, 4.0F, 4.0F};
+        t.world       = math::from_trs({0.0F, 8.0F, 0.0F}, math::Quatf::identity(), {4.0F, 4.0F, 4.0F});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{cube_id, {}});
+    }
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    REQUIRE(renderer.init_programs(*vk));
+    const auto sy = renderer.sync(world);
+    CHECK(sy.total_instances == 2U);
+
+    auto target = raster->create_color_depth_target(256U, 256U);
+    REQUIRE(target != nullptr);
+
+    const math::Mat4f view = math::look_at(math::Vec3f{0.0F, 30.0F, 42.0F}, math::Vec3f{0, 0, 0},
+                                           math::Vec3f{0, 1, 0});
+    const math::Mat4f     proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Mat4f     vp   = proj * view;
+    const math::Vec3f     light{0.0F, 1.0F, 0.0F}; // straight down — the shadow lands under the caster
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+
+    scenerender::CsmConfig ccfg;
+    ccfg.cascade_count = 4;
+    ccfg.map_size      = 1024;
+    ccfg.far_plane     = 120.0F;
+    renderer.set_csm_config(ccfg);
+
+    // shadows OFF — the reference image (and the texture-visibility half of the claim)
+    renderer.set_shadows_enabled(false);
+    REQUIRE(renderer.render(*target, vp, light, clear, nullptr).draws > 0U);
+    containers::Array<u32> unshadowed(&galloc());
+    u32 red_left = 0U;
+    u32 grn_right = 0U;
+    for (u32 y = 0; y < 256U; y += 4U)
+    {
+        for (u32 x = 0; x < 256U; x += 4U)
+        {
+            const u32 px = target->read_pixel(x, y);
+            unshadowed.push_back(px);
+            if ((px & 0x00FFFFFFU) == 0U) { continue; } // background
+            const u32 r = px & 0xFFU;
+            const u32 g = (px >> 8U) & 0xFFU;
+            if (x < 120U && r > g + 40U) { ++red_left; }   // the RED texel dominates screen-left
+            if (x > 136U && g > r + 40U) { ++grn_right; }  // the GREEN texel dominates screen-right
+        }
+    }
+    // (a) the TEXTURE is visible: both texels of the base-colour map show through on their own halves
+    CHECK(red_left > 30U);
+    CHECK(grn_right > 30U);
+
+    // shadows ON — the same scene, same camera
+    REQUIRE(renderer.set_shadows_enabled(true));
+    REQUIRE(renderer.render(*target, vp, light, clear, nullptr).draws > 0U);
+    u32 darker    = 0U;
+    u32 idx       = 0U;
+    u32 red_left2 = 0U;
+    u32 grn_right2 = 0U;
+    for (u32 y = 0; y < 256U; y += 4U)
+    {
+        for (u32 x = 0; x < 256U; x += 4U)
+        {
+            const u32 px     = target->read_pixel(x, y);
+            const u32 before = unshadowed[idx++];
+            const u32 lb     = ((before & 0xFFU) + ((before >> 8U) & 0xFFU) + ((before >> 16U) & 0xFFU)) / 3U;
+            const u32 la     = ((px & 0xFFU) + ((px >> 8U) & 0xFFU) + ((px >> 16U) & 0xFFU)) / 3U;
+            if (la + 12U < lb) { ++darker; }
+            if ((px & 0x00FFFFFFU) == 0U) { continue; }
+            const u32 r = px & 0xFFU;
+            const u32 g = (px >> 8U) & 0xFFU;
+            if (x < 120U && r > g + 40U) { ++red_left2; }
+            if (x > 136U && g > r + 40U) { ++grn_right2; }
+        }
+    }
+    // (b) the SHADOW lands: a compact patch darkened on the textured receiver...
+    CHECK(darker > 20U);
+    CHECK(darker < 2000U);
+    // ...(c) AND the texture SURVIVED shadows turning on — the exact conjunction that used to be impossible
+    // (the old router nulled base_color under active shadows, collapsing the receiver to the flat material).
+    CHECK(red_left2 > 30U);
+    CHECK(grn_right2 > 30U);
+}
+
+// ── ⭐⭐ REN-38 GATE: CROSS-GROUP SCENE BATCHING — two mesh groups, ONE device draw command. ────────────────
+// The consolidation's whole claim: plain groups render from ONE scene buffer (per-group regions + a draw
+// table), the scene VS rebases every load by `table[DrawIndex]`, and the executor merges the draw list into a
+// single multi-draw batch. Two DIFFERENT meshes (a cube group and a second cube group from a distinct mesh id
+// — distinct groups by construction) must land in ONE batch:
+//   (a) `multi_batch_count()` advances by EXACTLY ONE for the frame (one bucket, one vkCmdDrawIndirect);
+//   (b) BOTH groups' geometry is visible (each instance tinted via its instance colour, probed separately) —
+//       which fails loudly if the second draw's rebase reads the first group's region.
+TEST_CASE("REN-38 GATE: two mesh groups render as ONE multi-draw batch from the scene buffer (Vulkan)",
+          "[scene-render][ren38][multidraw][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    // two DISTINCT mesh resources ⇒ two groups ⇒ two rows of the draw table
+    const resources::ResourceId mesh_a = resources::ResourceId::mint_random();
+    const resources::ResourceId mesh_b = resources::ResourceId::mint_random();
+    const TempPack              pack_a("sr_mdg_a_", mesh_a);
+    const TempPack              pack_b("sr_mdg_b_", mesh_b);
+    write_mesh_pack(pack_a.path, mesh_a);
+    write_mesh_pack(pack_b.path, mesh_b);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack_a.path.generic()).is_valid());
+    REQUIRE(rm.mount_manifest(pack_b.path.generic()).is_valid());
+
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait(), scene::SpatialBVH{});
+    scene::register_render_components(world);
+    const auto add = [&](const resources::ResourceId& mid, math::Vec3f pos) {
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.translation = math::from_raw_vec<units::dim::Length>(pos);
+        t.scale       = {2.0F, 2.0F, 2.0F};
+        t.world       = math::from_trs(pos, math::Quatf::identity(), {2.0F, 2.0F, 2.0F});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{mid, {}});
+    };
+    add(mesh_a, {-4.0F, 0.0F, 0.0F}); // group A, screen-left
+    add(mesh_b, {4.0F, 0.0F, 0.0F});  // group B, screen-right
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    REQUIRE(renderer.init_programs(*vk));
+    const auto sy = renderer.sync(world);
+    CHECK(sy.total_instances == 2U);
+    REQUIRE(renderer.mesh_groups().size() == 2U); // two GROUPS — the cross-group claim needs both
+
+    auto target = raster->create_color_depth_target(256U, 256U);
+    REQUIRE(target != nullptr);
+    const math::Mat4f view = math::look_at(math::Vec3f{0.0F, 6.0F, 16.0F}, math::Vec3f{0, 0, 0},
+                                           math::Vec3f{0, 1, 0});
+    const math::Mat4f     proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Vec3f     light{0.3F, 1.0F, 0.2F};
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+
+    const crd::u64 batches_before = raster->multi_batch_count();
+    const auto     r              = renderer.render(*target, proj * view, light, clear, nullptr);
+    CHECK(r.draws == 2U);
+    CHECK(r.drawn_instances == 2U);
+
+    // (a) ONE batch covered both groups — the count assert "looped" cannot fake
+    CHECK(raster->multi_batch_count() == batches_before + 1U);
+
+    // (b) BOTH halves show geometry: a wrong rebase collapses one side to background (or garbage clip space)
+    u32 left = 0U;
+    u32 right = 0U;
+    for (u32 y = 64U; y < 192U; y += 2U)
+    {
+        for (u32 x = 0U; x < 256U; x += 2U)
+        {
+            const u32 px = target->read_pixel(x, y);
+            if ((px & 0x00FFFFFFU) == 0U) { continue; }
+            if (x < 120U) { ++left; }
+            if (x > 136U) { ++right; }
+        }
+    }
+    INFO("coverage left=" << left << " right=" << right);
+    CHECK(left > 40U);
+    CHECK(right > 40U);
+}

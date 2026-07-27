@@ -594,6 +594,10 @@ inline bool emit_value_stmt(const KGraph& g, int i, crd::containers::String& s, 
     {
     case KBuiltin::VertexIndex:   return "gl_VertexIndex";
     case KBuiltin::InstanceIndex: return "gl_InstanceIndex";
+    // REN-38: WHICH DRAW AM I - push constant for a classic single draw (gl_DrawID stays 0); gl_DrawID
+    // counts commands inside a multi-draw. One shader serves both shapes, so batching is a recording
+    // change rather than a shader variant.
+    case KBuiltin::DrawIndex:     return "(pc_draw.index + uint(gl_DrawIDARB))"; // ARB spelling — core `gl_DrawID` needs 460
     case KBuiltin::FragCoord:     return "gl_FragCoord";
     case KBuiltin::FrontFacing:   return "gl_FrontFacing";
     case KBuiltin::PrimitiveId:   return "gl_PrimitiveID"; // B4-vis-4: the HW-raster visibility-buffer primitive id (int)
@@ -1288,6 +1292,16 @@ inline bool emit_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory::I
     s.clear();
     s.append("#version 450\n");
     if (is_vertex && entry.shading_rate >= 0) { s.append("#extension GL_EXT_fragment_shading_rate : require\n"); } // B1-e
+    for (int i = 0; i < n; ++i) // REN-38: DrawIndex needs gl_DrawID (draw-parameters ext at 450) + the push block
+    {
+        if (reach[static_cast<crd::usize>(i)] && g.node(i).op == KOp::Builtin
+            && static_cast<KBuiltin>(g.node(i).iidx) == KBuiltin::DrawIndex)
+        {
+            s.append("#extension GL_ARB_shader_draw_parameters : require\n");
+            s.append("layout(push_constant) uniform PcDraw { uint index; } pc_draw;\n");
+            break;
+        }
+    }
     for (int i = 0; i < n; ++i) // B2-d: a bindless SampleIndexed needs the nonuniform-indexing qualifier
     {
         if (reach[static_cast<crd::usize>(i)] && (g.node(i).op == KOp::SampleIndexed || g.node(i).op == KOp::SampleIndexedLod))

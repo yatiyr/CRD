@@ -88,6 +88,9 @@ public:
     // REN-38: the taskShader (amplification) feature — meshShader alone does NOT license a TASK shader object
     // (VUID-08421). Appended with a default so existing mocks stay source-compatible; the real context overrides.
     [[nodiscard]] virtual bool task_shader() const noexcept { return false; }
+    // REN-38: `descriptorBindingPartiallyBound` enabled — the bindless material heap writes ONLY the registered
+    // slots. false ⇒ the caller must fill every slot of the array (the pre-heap duplicate-fill contract).
+    [[nodiscard]] virtual bool partially_bound() const noexcept { return false; }
     [[nodiscard]] virtual bool ray_query() const noexcept   = 0; // B9/RT: inline ray query (VK_KHR_ray_query + acceleration_structure)
     [[nodiscard]] virtual bool opacity_micromap() const noexcept   = 0; // FA-1: VK_EXT_opacity_micromap (alpha-tested geometry)
     [[nodiscard]] virtual bool rt_pipeline() const noexcept        = 0; // FA-2: VK_KHR_ray_tracing_pipeline (raygen/hit/miss + SBT)

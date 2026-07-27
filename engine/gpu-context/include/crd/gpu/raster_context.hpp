@@ -933,6 +933,62 @@ public:
                                         IStorageBuffer& /*storage*/, crd::u32 /*group_count*/)
     {
     }
+
+    // ── ⭐⭐ REN-38: the COMBINED textured+shadowed scene draw. Appended at the END (vtable-stable). ──────
+    // The material base-colour map binds at set 0 bindings 1/2 and the shadow atlas at ITS OWN 4/5 with the
+    // comparison sampler — one draw samples both. Until this verb the two fought over bindings 1/2, so a group
+    // could keep its texture OR its shadow but never both (the REN-3.2-b regression the user saw immediately).
+    // ⛔ The default falls back to the TEXTURED draw: on a backend without the override the group keeps its map
+    // and loses only the shadow — the visually-lesser loss, and the same side of the trade the renderer already
+    // chose. Both real backends override, so the fallback exists only for stubs.
+    virtual void draw_storage_textured_shadowed_depth(IRasterTarget& target, IRasterProgram& program,
+                                                      ClearColor clear, float clear_depth, DepthCompare compare,
+                                                      IStorageBuffer& storage, ITexture& texture,
+                                                      ITexture& /*shadow_atlas*/, crd::u32 vertex_count)
+    {
+        draw_storage_textured_depth(target, program, clear, clear_depth, compare, storage, texture, vertex_count);
+    }
+    virtual void draw_storage_textured_shadowed_depth_load(IRasterTarget& target, IRasterProgram& program,
+                                                           DepthCompare compare, IStorageBuffer& storage,
+                                                           ITexture& texture, ITexture& /*shadow_atlas*/,
+                                                           crd::u32 vertex_count)
+    {
+        draw_storage_textured_depth_load(target, program, compare, storage, texture, vertex_count);
+    }
+
+    // ── ⭐⭐ REN-38: MULTI-DRAW — N depth-tested storage draws in ONE device command. Appended at END. ──────
+    // The batching measurement (6.1x on Vulkan, 38.8x on DX12 at 64 draws) named the per-draw descriptor
+    // reset as the whole cost; this verb records ONE descriptor set, ONE state block, and ONE
+    // vkCmdDrawIndirect / ExecuteIndirect over `count` commands. `vertex_counts[i]` sizes command i.
+    //
+    // THE DRAW-INDEX CONTRACT: command i executes with `DrawIndex == first_draw_index + i` — on Vulkan the
+    // batch's first index rides a push constant and `gl_DrawID` counts commands; on DX12 the command signature
+    // varies a root constant per command. A vertex program cooked with `KBuiltin::DrawIndex` uses it to find
+    // its record (its buffer base, its material index) in the shared storage buffer — which is what makes many
+    // DIFFERENT objects one draw call. A program that never reads DrawIndex batches identical-record draws.
+    //
+    // `load_target` false ⇒ the first command clears (colour + depth), the rest continue — the same first/load
+    // split every scene pass already uses. ⛔ The default falls back to a LOOP of classic draws WITHOUT the
+    // index channel: correct only for programs that do not read DrawIndex. Both real backends override; the
+    // fallback exists for stubs, and a stub feeding an index-reading program would draw record 0 repeatedly —
+    // visibly wrong rather than silently absent, which is the honest failure shape.
+    // REN-38: how many MULTI-DRAW batches this context has recorded (monotonic). The batching gates assert a
+    // DELTA of exactly one batch per bucket — pixels alone cannot distinguish "batched" from "looped".
+    [[nodiscard]] virtual crd::u64 multi_batch_count() const noexcept { return 0U; }
+    virtual void draw_storage_multi_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
+                                          float clear_depth, DepthCompare compare, IStorageBuffer& storage,
+                                          const crd::u32* vertex_counts, crd::u32 count,
+                                          crd::u32 /*first_draw_index*/, bool load_target)
+    {
+        for (crd::u32 i = 0; i < count; ++i)
+        {
+            if (i == 0U && !load_target)
+            {
+                draw_storage_depth(target, program, clear, clear_depth, compare, storage, vertex_counts[i]);
+            }
+            else { draw_storage_depth_load(target, program, compare, storage, vertex_counts[i]); }
+        }
+    }
 };
 
 // ⭐ REN-38-A9: a BUILT acceleration structure, behind one portable handle.

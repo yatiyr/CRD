@@ -399,3 +399,30 @@ What broke it open was making the silent skip LOUD (the recorder now names a pro
 noticing that `group_matches` was called on Linux and NOT on Windows — a platform split in pure CPU logic, which
 no graphics explanation can produce. **When a "GPU bug" splits by COMPILER rather than by DEVICE, stop looking
 at the GPU.**
+
+### The renderer-weakness campaign (same day): shadows+albedo COMPOSE, the heap, DrawIndex, MULTI-DRAW
+
+Four slices, user-directed ("close those gaps, best full frontier implementations"):
+1. **Torus unlit — CLOSED.** The orientation fix existed; the missing piece was the ARTIFACT-CLASS gate: a
+   genus-1 CW/CCW torus through weld+generate_normals, outwardness by the RING-DISTANCE metric (a torus is not
+   star-shaped — the centroid metric cannot test it). The shipped torus.obj measured 6V = -18.35 (CW).
+2. **Shadows/albedo exclusivity — DEAD.** The atlas moved to its OWN bindings (VK 4/5, DX12 t4/s5); the
+   renderer cooks a COMBINED textured+shadowed variant; the executor routes item-texture + pass-depth-read to
+   the new combined verb. Gate: the CONJUNCTION (texture visible + shadow lands + texture survives shadows-on).
+3. **The bindless heap is real:** kBindlessMax 8 → 1024 both backends, PARTIALLY_BOUND enabled when offered,
+   fill sites write only the registered slots.
+4. **MULTI-DRAW:** `KBuiltin::DrawIndex` (GLSL `pc_draw.index + gl_DrawID`, HLSL root-constant b7 — one shader
+   serves single AND batched draws); `draw_storage_multi_depth` = ONE vkCmdDrawIndirect / ONE ExecuteIndirect
+   over an args ring; the executor coalesces consecutive plain items; the gate asserts BIT-IDENTICAL pixels
+   AND `multi_batch_count()` delta == 1 (pixels alone cannot distinguish batched from looped).
+
+⭐⭐ **AND THE SCENE-BUFFER CONSOLIDATION LANDED (user-directed, same session):** one renderer-owned buffer —
+frame header at words [0..119] (the FS reads absolutely, so it needed NO change and no flat varying), the draw
+table at [120..375], group regions from 384 as exact images of the private layouts. The scene VS is the SAME
+declaration plus one `rebase_table = 120` line; `Vx::loadu` (the single load choke point) rebases everything.
+Plain groups on a shadow-free single-viewport frame now render as ONE multi-draw batch — gated by TWO DISTINCT
+mesh groups producing `multi_batch_count()` delta == exactly 1 with both halves' pixels present. Scars: (a)
+`gl_DrawID` must be spelled `gl_DrawIDARB` under #version 450 (shaderc fails silently and the fallback keeps
+pixels right while batches read 0 — the COUNT gate caught what pixels could not); (b) `shaderDrawParameters`
+must be ENABLED at device creation; (c) an explicitly installed frame graph (the authored CULL graph) computes
+visibility into the PRIVATE buffers, so consolidation defers to it — found by the CULL gate, not inspection.

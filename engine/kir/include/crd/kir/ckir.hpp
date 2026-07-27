@@ -438,6 +438,15 @@ enum class KBuiltin : crd::u8
     TaskPayload1, // uint — task→mesh payload field 1
     TaskPayload2, // uint — task→mesh payload field 2
     TaskPayload3, // uint — task→mesh payload field 3
+    // ⭐⭐ REN-38 (GPU-driven batching): WHICH DRAW AM I — the uint every batched draw uses to find its record
+    // in the scene draw table. Lowering is the cross-API bridge, not a single builtin:
+    //   · GLSL:  `(pc_draw.index + uint(gl_DrawID))` — a push constant carries the index for a CLASSIC single
+    //     draw (gl_DrawID stays 0 there), and a MULTI-draw leaves the push at the batch's first index while
+    //     gl_DrawID counts commands. One shader serves both, which is what makes batching a pure recording
+    //     change rather than a shader variant.
+    //   · HLSL:  `pc_draw_index` — a root constant (b7); ExecuteIndirect's command signature varies it
+    //     PER COMMAND, which is D3D12's native spelling of the same channel.
+    DrawIndex, // uint — appended at END (enum values are cook-serialized)
 };
 
 struct KBuiltinInfo
@@ -468,6 +477,7 @@ struct KBuiltinInfo
     case KBuiltin::TaskPayload2:         return {t_uint, stage_mask::kMesh, "TaskPayload2"};         // B4: payload field 2
     case KBuiltin::TaskPayload3:         return {t_uint, stage_mask::kMesh, "TaskPayload3"};         // B4: payload field 3
     case KBuiltin::TessPatchPosition:    return {KType::vec(DType::F32, 4), stage_mask::kTessEval, "TessPatchPosition"}; // B4-tess
+    case KBuiltin::DrawIndex:            return {t_uint, stage_mask::kVertex, "DrawIndex"}; // REN-38: batched-draw id
 
     case KBuiltin::VertexIndex:   return {t_int, stage_mask::kVertex, "VertexIndex"};
     case KBuiltin::InstanceIndex: return {t_int, stage_mask::kVertex, "InstanceIndex"};

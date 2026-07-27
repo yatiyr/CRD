@@ -507,9 +507,12 @@ struct SceneShaderConfig
         if (tq::detail::tech_name_eq(n, "shadow_atlas"))
         {
             // texture + COMPARISON sampler — two nodes, as `bind_type_node_count` states.
-            out.push_back(g.texture(0, 1, kir::DType::F32, kir::TexDim::Tex2D, /*arrayed=*/true, /*ms=*/false,
+            // ⛔⛔ REN-38: bindings 4/5, NOT 1/2. The material base-colour map lives at 1/2, and when the atlas
+            // shared those slots a group could be textured OR shadowed but never both — the REN-3.2-b regression
+            // the user saw the moment shadows turned on. A frame singleton gets its own fixed binding.
+            out.push_back(g.texture(0, 4, kir::DType::F32, kir::TexDim::Tex2D, /*arrayed=*/true, /*ms=*/false,
                                     /*shadow=*/true));
-            out.push_back(g.sampler(0, 2, /*shadow=*/true));
+            out.push_back(g.sampler(0, 5, /*shadow=*/true));
         }
         else if (tq::detail::tech_name_eq(n, "csm_light_vp"))
         {
@@ -1074,6 +1077,9 @@ struct SceneDraw
     crd::gpu::IStorageBuffer* buffer     = nullptr;
     crd::gpu::ITexture*       base_color = nullptr; // REN-2 Half B: the material albedo map (null ⇒ the flat draw)
     crd::u32                  vertex_count = 0;
+    // ⭐⭐ REN-38: this draw's program rebases every load by `table[DrawIndex]` — the executor must record it
+    // through the multi verb (which pushes the row) even alone; a classic verb would leave the push stale.
+    bool                      rebased = false;
 };
 
 // ── the Impl ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1097,6 +1103,19 @@ struct SceneRenderer::Impl
     // is declared next to material_color below (ctor init order). REN-37.2 removed its separate VERTEX program —
     // the textured variant is the same cooked material with `textured = true`, over the one shared VS.
     crd::gpu::IGpuProgram*                    fs_textured = nullptr; // borrowed from `fs_programs`
+    // REN-38: the COMBINED textured+shadowed variant — base colour at bindings 1/2 AND the atlas at 4/5.
+    crd::gpu::IGpuProgram*                    fs_textured_shadowed = nullptr; // borrowed from `fs_programs`
+    std::unique_ptr<crd::gpu::IRasterProgram> program_textured_shadowed;
+    // ⭐⭐ REN-38 (scene-buffer consolidation): the REBASED scene VS (rebase_table = kSceneDrawTableOff) over
+    // the same flat FS, and THE one scene buffer its draws read. Plain groups under a shadow-free frame render
+    // through this pair as ONE multi-draw batch; skinned/textured groups keep their private buffers (their
+    // verbs bind per-draw state a batch cannot share yet, and their VSs are not rebased).
+    [[nodiscard]] bool scene_ok() const noexcept { return raster != nullptr; }
+    std::unique_ptr<crd::gpu::IGpuProgram>    vs_rebased; // the DrawIndex-rebased scene VS (owned)
+    std::unique_ptr<crd::gpu::IRasterProgram> program_rebased;
+    std::unique_ptr<crd::gpu::IStorageBuffer> scene_buf;
+    crd::u32                                  scene_buf_words = 0U;
+    bool                                      scene_geom_valid = false; // regions hold geometry (re-upload on rebuild)
     std::unique_ptr<crd::gpu::IRasterProgram> program_textured;
     crd::containers::HashMap<crd::resources::ResourceId, crd::resources::ResourceHandle<crd::anim::SkeletonResource>>
         skeleton_cache{nullptr};
@@ -1843,6 +1862,31 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
     m_impl->fs      = fs_flat;
     m_impl->program = m_impl->raster->create_raster_program(*m_impl->vs, *fs_flat);
 
+    // ⭐⭐ REN-38 (scene-buffer consolidation): the REBASED variant of the SAME declaration — one extra
+    // top-level line (`rebase_table`) ahead of the same prologue+varyings, so there is exactly one source of
+    // truth for the vertex vocabulary and the rebased twin can never drift from it.
+    {
+        crd::kir::KGraph rvg(m_impl->alloc);
+        crd::kir::KEntry rve;
+        crd::containers::String vs_rb(m_impl->alloc);
+        char rb_line[64];
+        (void)std::snprintf(static_cast<char*>(rb_line), sizeof(rb_line), "rebase_table = %u\n",
+                            kSceneDrawTableOff);
+        vs_rb.append(static_cast<const char*>(rb_line));
+        vs_rb.append(kVsPrologue);
+        vs_rb.append(kVsVaryings);
+        crd::vertcook::VertexProgramDesc rb_desc(m_impl->alloc);
+        if (cook_vs(m_impl->alloc, vs_rb.c_str(), nullptr, rvg, rve, &rb_desc)
+            && contract_ok(rb_desc, static_cast<const crd::vertcook::VaryingRequirement*>(fwd_reqs), n_fwd_reqs))
+        {
+            m_impl->vs_rebased = ctx.create_program(rvg, rve);
+            if (m_impl->vs_rebased != nullptr)
+            {
+                m_impl->program_rebased = m_impl->raster->create_raster_program(*m_impl->vs_rebased, *fs_flat);
+            }
+        }
+    }
+
     crd::kir::KGraph svg(m_impl->alloc);
     crd::kir::KEntry sve;
     crd::containers::String vs_skin(m_impl->alloc);
@@ -1924,6 +1968,20 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
         {
             m_impl->program_shadowed =
                 m_impl->raster->create_raster_program(*m_impl->vs, *m_impl->fs_shadowed);
+        }
+        // ⭐⭐ REN-38: the COMBINED variant — the SAME cooked material with textured=true UNDER the SAME shadow
+        // technique. The base-colour map rides bindings 1/2 and the atlas its own 4/5, so a group keeps its
+        // texture AND its shadow; `record_one_group` stops having to null one of them.
+        SceneShaderConfig tscfg = scfg;
+        tscfg.textured          = true;
+        crd::vertcook::VaryingRequirement ts_reqs[crd::vertcook::kMaxVaryings];
+        crd::u32                          n_ts_reqs = 0U;
+        m_impl->fs_textured_shadowed = m_impl->cook_fs(tscfg, ts_reqs, crd::vertcook::kMaxVaryings, &n_ts_reqs);
+        if (m_impl->fs_textured_shadowed != nullptr
+            && contract_ok(scene_desc, static_cast<const crd::vertcook::VaryingRequirement*>(ts_reqs), n_ts_reqs))
+        {
+            m_impl->program_textured_shadowed =
+                m_impl->raster->create_raster_program(*m_impl->vs, *m_impl->fs_textured_shadowed);
         }
         // ⛔ Shadows need BOTH halves: the cascade writers AND the reader. Having only the writers would render
         // a shadow atlas nothing samples — pure cost, zero pixels changed.
@@ -2560,6 +2618,7 @@ private:
             crd::framecook::DrawItem it;
             it.storage      = d.buffer;
             it.program      = d.program;
+            it.indexed      = d.rebased; // REN-38: must record through the multi verb (it pushes the row)
             it.vertex_count = d.vertex_count;
             it.texture      = d.base_color; // beats the pass's sampled read (REN-37.10)
             out.items[out.resolved++] = it;
@@ -2644,6 +2703,50 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
     draw_list.clear();
     impl.groups_view.clear();
 
+    // ── ⭐⭐ REN-38 (scene-buffer consolidation): can THIS frame render its plain groups from the ONE scene
+    // buffer as a single multi-draw batch? Requires the rebased program, the single-viewport owner path (a
+    // contribution would collide on the shared draw table), and a shadow-free frame (the shadowed forward pass
+    // samples the atlas per draw — a per-draw binding a batch cannot share until material indices go bindless).
+    // Skinned and textured groups keep their private buffers either way.
+    // ⛔ An EXPLICITLY installed frame graph owns its own data flow (the authored CULL graph computes
+    // visibility INTO the private buffers) — consolidation would split the frame across two buffers.
+    const bool consolidate = impl.program_rebased != nullptr && impl.scene_ok() && contrib == 0U
+                             && !impl.shadows_active() && !impl.frame_overridden;
+    if (consolidate)
+    {
+        // assign region bases (an exact image of each group's private layout) and size the buffer
+        crd::u32 total = kSceneFirstRegion;
+        for (MeshGroup& group : m_groups)
+        {
+            if (group.skinned || group.buffer == nullptr) { continue; }
+            group.region_base = total;
+            total += (group.visible_off + group.capacity + 3U) & ~3U;
+        }
+        if (impl.scene_buf == nullptr || impl.scene_buf_words < total)
+        {
+            impl.scene_buf        = impl.raster->create_storage_buffer(total * 4U);
+            impl.scene_buf_words  = total;
+            impl.scene_geom_valid = false;
+        }
+        if (impl.scene_buf != nullptr && !impl.scene_geom_valid)
+        {
+            // regions carry their own geometry image — uploaded on (re)build, exactly as the private buffers do
+            for (MeshGroup& group : m_groups)
+            {
+                if (group.skinned || group.buffer == nullptr || group.mesh.get() == nullptr) { continue; }
+                const auto* mesh = group.mesh.get();
+                (void)impl.raster->upload_storage(*impl.scene_buf, (group.region_base + group.indices_off) * 4U,
+                                                  mesh->indices.data(), static_cast<crd::u32>(mesh->indices.size()));
+                (void)impl.raster->upload_storage(*impl.scene_buf, (group.region_base + group.vertices_off) * 4U,
+                                                  mesh->vertices.data(),
+                                                  static_cast<crd::u32>(mesh->vertices.size()));
+            }
+            impl.scene_geom_valid = true;
+        }
+    }
+    crd::u32 draw_table[crd::framecook::kMaxDrawItems] = {};
+    bool     wrote_frame_header = false;
+
     // broad phase: a configured BVH prunes to the frustum's AABB; otherwise every slot is a candidate
     const bool use_bvh = bvh != nullptr && bvh->is_configured();
     crd::containers::Array<crd::scene::EntityId> candidates(impl.alloc);
@@ -2720,10 +2823,38 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         // ⭐ REN-37.3: the FRAME-frequency camera position, so the forward BRDF has a real view vector. Derived
         // from `view_proj` rather than passed in, so it cannot disagree with the matrix beside it in the header.
         std::memcpy(&header[kHdrCameraPos], &eye_ws, 3U * 4U);
-        (void)impl.raster->upload_storage(*group.buffer, 0U, header, sizeof(header));
-        (void)impl.raster->upload_storage(*group.buffer, group.visible_off * 4U, group.visible.data(),
-                                          visible_count * 4U);
-        stats.uploaded_bytes += sizeof(header) + static_cast<crd::u64>(visible_count) * 4U;
+        // ⭐⭐ REN-38: a plain group in a consolidated frame writes its region of THE scene buffer instead of
+        // its private one — header at the region base, visible list at its region offset, and the FULL instance
+        // payload (the region's copy is not covered by sync's dirty tracking; this is the per-frame cost the
+        // consolidation pays for one-batch drawing, in the same class as the header+visible writes beside it).
+        const bool use_region = consolidate && !group.skinned && impl.scene_buf != nullptr
+                                && group.region_base != 0U
+                                && impl.resolve_base_color_texture(group.material) == nullptr;
+        if (use_region)
+        {
+            const crd::u32 rb = group.region_base;
+            (void)impl.raster->upload_storage(*impl.scene_buf, rb * 4U, header, sizeof(header));
+            (void)impl.raster->upload_storage(*impl.scene_buf, (rb + group.visible_off) * 4U,
+                                              group.visible.data(), visible_count * 4U);
+            const crd::u32 inst_bytes = static_cast<crd::u32>(group.instances.size())
+                                        * static_cast<crd::u32>(sizeof(InstanceGpu));
+            (void)impl.raster->upload_storage(*impl.scene_buf, (rb + group.instances_off) * 4U,
+                                              group.instances.data(), inst_bytes);
+            stats.uploaded_bytes += sizeof(header) + static_cast<crd::u64>(visible_count) * 4U + inst_bytes;
+            if (!wrote_frame_header)
+            {
+                // word 0 = THE frame header the (absolute-reading) FS samples — one canonical copy
+                (void)impl.raster->upload_storage(*impl.scene_buf, 0U, header, sizeof(header));
+                wrote_frame_header = true;
+            }
+        }
+        else
+        {
+            (void)impl.raster->upload_storage(*group.buffer, 0U, header, sizeof(header));
+            (void)impl.raster->upload_storage(*group.buffer, group.visible_off * 4U, group.visible.data(),
+                                              visible_count * 4U);
+            stats.uploaded_bytes += sizeof(header) + static_cast<crd::u64>(visible_count) * 4U;
+        }
 
         // REN-2 Half B: a group whose material carries a base-color map draws TEXTURED (samples albedo); else flat.
         // (Groups batch by MESH; the group's representative material drives the map — correct for one-material meshes.
@@ -2731,14 +2862,16 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         crd::gpu::ITexture*       base_color = group.skinned ? nullptr : impl.resolve_base_color_texture(group.material);
         crd::gpu::IRasterProgram* program    = impl.program.get();
         if (group.skinned && impl.program_skinned != nullptr) { program = impl.program_skinned.get(); }
-        // REN-3.2-b: when shadows are active the forward pass runs the SHADOWED program (it samples the atlas).
-        // Skinned keeps its own program - a shadowed-skinned variant rides the REN-3.3 material work.
-        // ⛔ Shadows and albedo both want descriptor slot 1, so a group can have ONE of them until the binding
-        // is widened. Dropping the ALBEDO was the wrong side of that trade: it made every textured monument lose
-        // its map the instant shadows turned on, which is a visible regression, whereas a textured group merely
-        // missing its shadow is not. Textured groups therefore keep their texture; untextured ones take shadows.
-        // This is an INTERIM state - the real fix is a separate binding for the atlas so a group gets both.
-        if (impl.shadows_active() && !group.skinned && impl.program_shadowed != nullptr && base_color == nullptr)
+        // ⭐⭐ REN-38: shadows and albedo COMPOSE now. The atlas moved to its own bindings (4/5), so a textured
+        // group under active shadows takes the COMBINED program and keeps BOTH — the interim either/or that made
+        // textured monuments lose their maps the instant shadows turned on is gone. Skinned still keeps its own
+        // program (a shadowed-skinned variant rides the REN-3.3 material work).
+        const bool want_shadow = impl.shadows_active() && !group.skinned;
+        if (want_shadow && base_color != nullptr && impl.program_textured_shadowed != nullptr)
+        {
+            program = impl.program_textured_shadowed.get(); // textured AND shadowed — the whole point
+        }
+        else if (want_shadow && base_color == nullptr && impl.program_shadowed != nullptr)
         {
             program = impl.program_shadowed.get();
         }
@@ -2749,6 +2882,18 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         d.buffer       = group.buffer.get();
         d.base_color   = base_color;
         d.vertex_count = visible_count * group.index_count;
+        if (use_region)
+        {
+            // ⭐⭐ REN-38: the consolidated draw — the rebased program over THE scene buffer; its table row is
+            // its position in this draw list (the executor pushes exactly that as the batch's first index).
+            d.program = impl.program_rebased.get();
+            d.buffer  = impl.scene_buf.get();
+            d.rebased = true;
+            if (draw_list.size() < crd::framecook::kMaxDrawItems)
+            {
+                draw_table[draw_list.size()] = group.region_base;
+            }
+        }
         draw_list.push_back(d);
         // REN-36.3-b: mirror this group's entities alongside the draw so the asset's component filter has
         // something to test. Index-parallel with `draw_list` BY CONSTRUCTION — culled groups are skipped in both.
@@ -2761,6 +2906,12 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         stats.drawn_instances += visible_count;
     }
 
+    if (consolidate && impl.scene_buf != nullptr && wrote_frame_header)
+    {
+        // one canonical table write per frame — row i belongs to draw-list item i, the multi verb's contract
+        (void)impl.raster->upload_storage(*impl.scene_buf, kSceneDrawTableOff * 4U, draw_table,
+                                          sizeof(draw_table));
+    }
     if (draw_list.size() == 0U) { return stats; }
 
     // REN-1: compose all N culled groups in ONE submission through the frame graph (the async single-submission

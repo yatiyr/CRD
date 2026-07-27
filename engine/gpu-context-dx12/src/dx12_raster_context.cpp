@@ -31,7 +31,7 @@ using Microsoft::WRL::ComPtr;
 namespace
 {
 constexpr DXGI_FORMAT kColorFormat  = DXGI_FORMAT_R8G8B8A8_UNORM;
-constexpr UINT        kBindlessMax  = 8; // B2-d: bindless texture-array capacity (heap slots 2.. + the t3 SRV table)
+constexpr UINT        kBindlessMax  = 1024; // REN-38: the material-heap capacity (heap slots 2.. + the t3 SRV table) — mirrors Vulkan
 
 // A host-visible READBACK buffer (the render target is copied here so the CPU can read pixels back).
 ComPtr<ID3D12Resource> make_readback_buffer(ID3D12Device* dev, UINT64 size)
@@ -965,10 +965,12 @@ public:
             m_binding_tier      = opt.ResourceBindingTier; // B2-d: Tier 2+ = dynamic/non-uniform descriptor-array indexing
         }
         // A shader-visible CBV/SRV/UAV heap: slot 0 = storage UAV (draw_storage) · slot 1 = a texture SRV (draw_textured) ·
-        // slots 2..2+kBindlessMax-1 = the bindless SRV array (draw_bindless, B2-d). Plus a shader-visible SAMPLER heap.
+        // slots 2..2+kBindlessMax-1 = the bindless SRV array (draw_bindless, B2-d) · slot 2+kBindlessMax = the
+        // SHADOW-ATLAS SRV (REN-38 — appended at the END so the bindless slot math is untouched). Plus a
+        // shader-visible SAMPLER heap.
         D3D12_DESCRIPTOR_HEAP_DESC shd{};
         shd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        shd.NumDescriptors = 2 + kBindlessMax;
+        shd.NumDescriptors = 3 + kBindlessMax;
         shd.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         m_device->CreateDescriptorHeap(&shd, IID_PPV_ARGS(&m_uav_heap));
         m_srv_inc = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
@@ -1427,15 +1429,39 @@ public:
         bindless_range.BaseShaderRegister                = 3; // t3
         bindless_range.RegisterSpace                     = 0;
         bindless_range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-        // param 0 = UAV (u0, storage) · 1 = SRV (t1, texture) · 2 = sampler (s2) · 3 = bindless SRV array (t3[N]). Every
-        // program carries all four; a draw sets only the tables its FS uses (an unreferenced table needs no binding).
-        D3D12_ROOT_PARAMETER param[4]{};
+        // REN-38: t4 = the SHADOW ATLAS's own register + s5 = its comparison sampler — the pair that ends the
+        // atlas/base-colour fight over t1/s2, mirroring the Vulkan bindings 4/5.
+        D3D12_DESCRIPTOR_RANGE atlas_range{};
+        atlas_range.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        atlas_range.NumDescriptors                    = 1;
+        atlas_range.BaseShaderRegister                = 4; // t4
+        atlas_range.RegisterSpace                     = 0;
+        atlas_range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+        D3D12_DESCRIPTOR_RANGE cmp_range{};
+        cmp_range.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER;
+        cmp_range.NumDescriptors                    = 1;
+        cmp_range.BaseShaderRegister                = 5; // s5
+        cmp_range.RegisterSpace                     = 0;
+        cmp_range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+        // param 0 = UAV (u0, storage) · 1 = SRV (t1, texture) · 2 = sampler (s2) · 3 = bindless SRV array (t3[N]) ·
+        // 4 = atlas SRV (t4) · 5 = comparison sampler (s5). Every program carries all six; a draw sets only the
+        // tables its FS uses (an unreferenced table needs no binding).
+        D3D12_ROOT_PARAMETER param[7]{};
         param[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[0].DescriptorTable.NumDescriptorRanges = 1; param[0].DescriptorTable.pDescriptorRanges = &uav_range;      param[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL; // GEO-1: + VERTEX (vertex pulling reads u0 in the VS)
         param[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[1].DescriptorTable.NumDescriptorRanges = 1; param[1].DescriptorTable.pDescriptorRanges = &srv_range;      param[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
         param[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[2].DescriptorTable.NumDescriptorRanges = 1; param[2].DescriptorTable.pDescriptorRanges = &samp_range;     param[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
         param[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[3].DescriptorTable.NumDescriptorRanges = 1; param[3].DescriptorTable.pDescriptorRanges = &bindless_range; param[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        param[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[4].DescriptorTable.NumDescriptorRanges = 1; param[4].DescriptorTable.pDescriptorRanges = &atlas_range;    param[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        param[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[5].DescriptorTable.NumDescriptorRanges = 1; param[5].DescriptorTable.pDescriptorRanges = &cmp_range;      param[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        // REN-38: param 6 = the DrawIndex ROOT CONSTANT (b7, one uint, VERTEX) — ExecuteIndirect's command
+        // signature varies it PER COMMAND, D3D12's native draw-id channel. A shader without b7 ignores it.
+        param[6].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        param[6].Constants.ShaderRegister = 7; // b7
+        param[6].Constants.RegisterSpace  = 0;
+        param[6].Constants.Num32BitValues = 1;
+        param[6].ShaderVisibility         = D3D12_SHADER_VISIBILITY_VERTEX;
         D3D12_ROOT_SIGNATURE_DESC rsd{};
-        rsd.NumParameters = 4;
+        rsd.NumParameters = 7;
         rsd.pParameters   = param;
         rsd.Flags         = D3D12_ROOT_SIGNATURE_FLAG_NONE;
         ComPtr<ID3DBlob> sig;
@@ -3170,9 +3196,12 @@ public:
     }
     // REN-3.2-b: the shared body. sampler_slot picks FILTERING (0) or COMPARISON (1) from the sampler heap;
     // everything else is identical, which is why the shadowed draw needs no new root signature or set layout.
+    // REN-38: `atlas` non-null ⇒ ALSO bind it at t4 with the comparison sampler at s5 — the combined
+    // textured+shadowed draw (and, after the binding move, the shadowed-only FS reads t4/s5 too).
     void draw_storage_sampled_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
                                     float clear_depth, DepthCompare compare, IStorageBuffer& storage,
-                                    ITexture& texture, crd::u32 vertex_count, crd::u32 sampler_slot)
+                                    ITexture& texture, crd::u32 vertex_count, crd::u32 sampler_slot,
+                                    Dx12Texture* atlas = nullptr)
     {
         if (!m_ok || m_uav_heap == nullptr || m_sampler_heap == nullptr) { return; }
         auto& t   = static_cast<Dx12RasterTarget&>(target);
@@ -3184,7 +3213,7 @@ public:
         if (!p.valid() || pso == nullptr) { return; }
         if (frame_recording())
         {
-            record_scene_textured(t, p, s, tex, pso, true, clear, clear_depth, vertex_count);
+            record_scene_textured(t, p, s, tex, pso, true, clear, clear_depth, vertex_count, sampler_slot, atlas);
             return;
         }
 
@@ -3200,6 +3229,16 @@ public:
         m_device->CreateShaderResourceView(tex.tex(), &srv, srv_cpu);
         D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu = m_uav_heap->GetGPUDescriptorHandleForHeapStart();
         srv_gpu.ptr += static_cast<UINT64>(m_srv_inc);
+        D3D12_GPU_DESCRIPTOR_HANDLE atlas_gpu{};
+        if (atlas != nullptr) // REN-38: the atlas rides its OWN heap slot (2+kBindlessMax) and root table (t4)
+        {
+            const D3D12_SHADER_RESOURCE_VIEW_DESC asrv    = atlas->srv();
+            D3D12_CPU_DESCRIPTOR_HANDLE           acpu    = m_uav_heap->GetCPUDescriptorHandleForHeapStart();
+            acpu.ptr += static_cast<SIZE_T>(2U + kBindlessMax) * m_srv_inc;
+            m_device->CreateShaderResourceView(atlas->tex(), &asrv, acpu);
+            atlas_gpu = m_uav_heap->GetGPUDescriptorHandleForHeapStart();
+            atlas_gpu.ptr += static_cast<UINT64>(2U + kBindlessMax) * m_srv_inc;
+        }
 
         m_cmd_alloc->Reset();
         m_list->Reset(m_cmd_alloc.Get(), nullptr);
@@ -3222,6 +3261,13 @@ public:
         D3D12_GPU_DESCRIPTOR_HANDLE samp_tbl = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
         samp_tbl.ptr += static_cast<UINT64>(sampler_slot) * m_sampler_inc;
         m_list->SetGraphicsRootDescriptorTable(2, samp_tbl); // sampler (s2): 0 = filtering, 1 = comparison
+        if (atlas != nullptr)
+        {
+            D3D12_GPU_DESCRIPTOR_HANDLE cmp_tbl = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
+            cmp_tbl.ptr += static_cast<UINT64>(1U) * m_sampler_inc;    // the COMPARISON sampler slot
+            m_list->SetGraphicsRootDescriptorTable(4, atlas_gpu);      // shadow atlas (t4)
+            m_list->SetGraphicsRootDescriptorTable(5, cmp_tbl);        // comparison sampler (s5)
+        }
         m_list->SetPipelineState(pso);
         apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -3263,8 +3309,10 @@ public:
                                      float clear_depth, DepthCompare compare, IStorageBuffer& storage,
                                      ITexture& shadow_atlas, crd::u32 vertex_count) override
     {
+        // REN-38: the shadowed FS reads the atlas at t4/s5 now — route it through the atlas channel as well.
+        auto& atlas = static_cast<Dx12Texture&>(shadow_atlas);
         draw_storage_sampled_depth(target, program, clear, clear_depth, compare, storage, shadow_atlas,
-                                   vertex_count, 1U);
+                                   vertex_count, 1U, &atlas);
     }
     void draw_storage_shadowed_depth_load(IRasterTarget& target, IRasterProgram& program, DepthCompare compare,
                                           IStorageBuffer& storage, ITexture& shadow_atlas,
@@ -3279,11 +3327,157 @@ public:
         if (!p.valid() || pso == nullptr) { return; }
         if (frame_recording())
         {
-            record_scene_textured(t, p, s, tex, pso, false, ClearColor{}, 0.0F, vertex_count, 1U);
+            record_scene_textured(t, p, s, tex, pso, false, ClearColor{}, 0.0F, vertex_count, 1U, &tex);
             return;
         }
         draw_storage_shadowed_depth(target, program, ClearColor{}, 0.0F, compare, storage, shadow_atlas,
                                     vertex_count);
+    }
+
+    // ── ⭐⭐ REN-38: the COMBINED textured+shadowed scene draw (the DX12 face). Base colour at t1/s2, the
+    // shadow atlas at ITS OWN t4/s5 — one draw samples both, ending the REN-3.2-b either/or.
+    void draw_storage_textured_shadowed_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
+                                              float clear_depth, DepthCompare compare, IStorageBuffer& storage,
+                                              ITexture& texture, ITexture& shadow_atlas,
+                                              crd::u32 vertex_count) override
+    {
+        auto& atlas = static_cast<Dx12Texture&>(shadow_atlas);
+        draw_storage_sampled_depth(target, program, clear, clear_depth, compare, storage, texture, vertex_count, 0U,
+                                   &atlas);
+    }
+    void draw_storage_textured_shadowed_depth_load(IRasterTarget& target, IRasterProgram& program,
+                                                   DepthCompare compare, IStorageBuffer& storage, ITexture& texture,
+                                                   ITexture& shadow_atlas, crd::u32 vertex_count) override
+    {
+        auto& t     = static_cast<Dx12RasterTarget&>(target);
+        auto& p     = static_cast<Dx12RasterProgram&>(program);
+        auto& s     = static_cast<Dx12StorageBuffer&>(storage);
+        auto& tex   = static_cast<Dx12Texture&>(texture);
+        auto& atlas = static_cast<Dx12Texture&>(shadow_atlas);
+        if (!m_ok || !t.has_depth()) { return; }
+        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false);
+        if (!p.valid() || pso == nullptr) { return; }
+        if (frame_recording())
+        {
+            record_scene_textured(t, p, s, tex, pso, false, ClearColor{}, 0.0F, vertex_count, 0U, &atlas);
+            return;
+        }
+        draw_storage_textured_shadowed_depth(target, program, ClearColor{}, 0.0F, compare, storage, texture,
+                                             shadow_atlas, vertex_count);
+    }
+
+    // ── ⭐⭐ REN-38 MULTI-DRAW: N storage scene draws, ONE ExecuteIndirect. The 38.8x batching headroom at 64
+    // draws was per-draw root-table setting + PSO re-binding; this pays them once per BATCH. The command
+    // signature {ROOT_CONSTANT(b7), DRAW} varies the DrawIndex per command: command i writes
+    // `first_draw_index + i` into b7 before its draw — D3D12's native spelling of gl_DrawID.
+    void draw_storage_multi_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
+                                  float clear_depth, DepthCompare compare, IStorageBuffer& storage,
+                                  const crd::u32* vertex_counts, crd::u32 count, crd::u32 first_draw_index,
+                                  bool load_target) override
+    {
+        auto& t = static_cast<Dx12RasterTarget&>(target);
+        auto& p = static_cast<Dx12RasterProgram&>(program);
+        auto& s = static_cast<Dx12StorageBuffer&>(storage);
+        if (!m_ok || count == 0U || vertex_counts == nullptr || !t.has_depth()) { return; }
+        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false);
+        if (!p.valid() || pso == nullptr) { return; }
+        const crd::u32 n = count < kMultiMax ? count : kMultiMax;
+        if (!frame_recording() || !ensure_multi(p.root()))
+        {
+            for (crd::u32 i = 0; i < n; ++i) // stub-shaped fallback — the interface documents the index gap
+            {
+                if (i == 0U && !load_target)
+                {
+                    draw_storage_depth(target, program, clear, clear_depth, compare, storage, vertex_counts[i]);
+                }
+                else { draw_storage_depth_load(target, program, compare, storage, vertex_counts[i]); }
+            }
+            return;
+        }
+
+        // write this batch's chunk of the args ring: {u32 draw_index, D3D12_DRAW_ARGUMENTS} per command
+        const crd::u32 chunk  = m_multi_cursor % kMultiChunks;
+        m_multi_cursor        = (m_multi_cursor + 1U) % kMultiChunks;
+        const crd::u64 offset = static_cast<crd::u64>(chunk) * kMultiMax * kMultiStride;
+        crd::u8*       w      = m_multi_map + offset;
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            const crd::u32 di      = first_draw_index + i;
+            const crd::u32 args[5] = {di, vertex_counts[i], 1U, 0U, 0U};
+            std::memcpy(w + static_cast<crd::u64>(i) * kMultiStride, static_cast<const void*>(args), kMultiStride);
+        }
+
+        const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
+        const D3D12_CPU_DESCRIPTOR_HANDLE rtv   = t.rtv();
+        const D3D12_CPU_DESCRIPTOR_HANDLE dsv   = t.dsv();
+        m_list->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+        if (!load_target)
+        {
+            const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
+            m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
+            m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr);
+        }
+        const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
+        const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
+        m_list->RSSetViewports(1, &vp);
+        m_list->RSSetScissorRects(1, &sc);
+        m_list->SetGraphicsRootSignature(p.root());
+        m_list->SetGraphicsRootDescriptorTable(0, table);
+        m_list->SetPipelineState(pso);
+        apply_stencil_ref();
+        m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        m_list->ExecuteIndirect(m_multi_sig.Get(), n, m_multi_args.Get(), offset, nullptr, 0);
+        ++m_multi_batches;
+    }
+
+    [[nodiscard]] crd::u64 multi_batch_count() const noexcept override { return m_multi_batches; }
+
+    // lazily build the args ring + the {ROOT_CONSTANT(b7), DRAW} command signature. ⛔ A signature containing a
+    // root-constant argument must be created AGAINST the root signature it patches, so the cache is keyed on it
+    // (every raster program shares one root-signature SHAPE but owns its object; rebuilding on change is cheap
+    // and correct where caching on the first would silently patch the wrong object).
+    [[nodiscard]] bool ensure_multi(ID3D12RootSignature* root)
+    {
+        if (m_multi_args == nullptr)
+        {
+            D3D12_HEAP_PROPERTIES hp{};
+            hp.Type = D3D12_HEAP_TYPE_UPLOAD;
+            D3D12_RESOURCE_DESC rd{};
+            rd.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+            rd.Width            = static_cast<crd::u64>(kMultiChunks) * kMultiMax * kMultiStride;
+            rd.Height           = 1;
+            rd.DepthOrArraySize = 1;
+            rd.MipLevels        = 1;
+            rd.SampleDesc       = {1, 0};
+            rd.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+            if (FAILED(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+                                                         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                                         IID_PPV_ARGS(&m_multi_args))))
+            {
+                return false;
+            }
+            const D3D12_RANGE none{0, 0};
+            void*             mapped = nullptr;
+            if (FAILED(m_multi_args->Map(0, &none, &mapped))) { m_multi_args.Reset(); return false; }
+            m_multi_map = static_cast<crd::u8*>(mapped);
+        }
+        if (m_multi_sig == nullptr || m_multi_sig_root != root)
+        {
+            D3D12_INDIRECT_ARGUMENT_DESC args[2]{};
+            args[0].Type                              = D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT;
+            args[0].Constant.RootParameterIndex       = 6; // the DrawIndex root constant (b7)
+            args[0].Constant.DestOffsetIn32BitValues  = 0;
+            args[0].Constant.Num32BitValuesToSet      = 1;
+            args[1].Type                              = D3D12_INDIRECT_ARGUMENT_TYPE_DRAW;
+            D3D12_COMMAND_SIGNATURE_DESC csd{};
+            csd.ByteStride       = kMultiStride;
+            csd.NumArgumentDescs = 2;
+            csd.pArgumentDescs   = args;
+            m_multi_sig.Reset();
+            if (FAILED(m_device->CreateCommandSignature(&csd, root, IID_PPV_ARGS(&m_multi_sig)))) { return false; }
+            m_multi_sig_root = root;
+        }
+        return true;
     }
 
     // GEO-8: the CONTINUING scene draw — draw_storage_depth minus the Clear calls (colour + depth both persist;
@@ -5003,9 +5197,10 @@ private:
     // ring + sampler (table 2). Into the shared list; the graph transitioned the target to RENDER_TARGET.
     // REN-3.2-b: sampler_slot 0 = the default FILTERING sampler (textured scene draw), 1 = the COMPARISON
     // sampler (shadowed scene draw). Same tables either way, so one recording path serves both.
+    // REN-38: `atlas` non-null ⇒ the combined textured+shadowed draw — atlas SRV at t4, comparison at s5.
     void record_scene_textured(Dx12RasterTarget& t, Dx12RasterProgram& p, Dx12StorageBuffer& s, Dx12Texture& tex,
                                ID3D12PipelineState* pso, bool clear, ClearColor clear_color, float clear_depth,
-                               crd::u32 vertex_count, crd::u32 sampler_slot = 0U)
+                               crd::u32 vertex_count, crd::u32 sampler_slot = 0U, Dx12Texture* atlas = nullptr)
     {
         const D3D12_GPU_DESCRIPTOR_HANDLE uav_table = frame_alloc_storage_slot(s);
         const D3D12_GPU_DESCRIPTOR_HANDLE srv_table = frame_alloc_srv_slot(tex);
@@ -5028,6 +5223,14 @@ private:
         m_list->SetGraphicsRootDescriptorTable(0, uav_table); // storage (u0)
         m_list->SetGraphicsRootDescriptorTable(1, srv_table); // base-color SRV (t1)
         m_list->SetGraphicsRootDescriptorTable(2, samp_gpu);  // sampler (s2)
+        if (atlas != nullptr)
+        {
+            const D3D12_GPU_DESCRIPTOR_HANDLE atlas_table = frame_alloc_srv_slot(*atlas);
+            D3D12_GPU_DESCRIPTOR_HANDLE       cmp_tbl     = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
+            cmp_tbl.ptr += static_cast<UINT64>(1U) * m_sampler_inc; // the COMPARISON sampler slot
+            m_list->SetGraphicsRootDescriptorTable(4, atlas_table); // shadow atlas (t4)
+            m_list->SetGraphicsRootDescriptorTable(5, cmp_tbl);     // comparison sampler (s5)
+        }
         m_list->SetPipelineState(pso);
         apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -5051,6 +5254,18 @@ private:
     ComPtr<ID3D12GraphicsCommandList5> m_list5; // B1-e: RSSetShadingRate(Image) — null on an old runtime
     ComPtr<ID3D12GraphicsCommandList6> m_list6; // B4: DispatchMesh — null on an old runtime
     ComPtr<ID3D12CommandSignature>     m_mesh_indirect_sig; // B4: DISPATCH_MESH command signature for ExecuteIndirect (lazy)
+    // ── REN-38 MULTI-DRAW: the {ROOT_CONSTANT(b7), DRAW} command signature (lazy, per root signature — a
+    // signature containing a root-constant argument must be created AGAINST that root signature) + the args
+    // upload ring. Stride = 4 (the DrawIndex constant) + 16 (D3D12_DRAW_ARGUMENTS) = 20 bytes per command.
+    ComPtr<ID3D12CommandSignature>     m_multi_sig;
+    ID3D12RootSignature*               m_multi_sig_root = nullptr; // which root the cached signature was built for
+    static constexpr crd::u32          kMultiMax    = 256U;
+    static constexpr crd::u32          kMultiChunks = 32U;
+    static constexpr crd::u32          kMultiStride = 20U;
+    ComPtr<ID3D12Resource>             m_multi_args;
+    crd::u8*                           m_multi_map    = nullptr;
+    crd::u32                           m_multi_cursor = 0U;
+    crd::u64                           m_multi_batches = 0U;
     bool                               m_mesh_shader = false; // B4: D3D12_FEATURE_D3D12_OPTIONS7 MeshShaderTier supported
     ComPtr<ID3D12Fence>                m_fence;
     HANDLE                             m_event     = nullptr;

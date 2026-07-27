@@ -198,6 +198,12 @@ void record_pass(g::IFrameContext& ctx, void* user)
         // the executor picks the comparison sampler because the resource's FORMAT is depth. Same rule the
         // fullscreen kind already used, so the asset never has to name a sampler.
         g::ITexture* pass_tex = p->n_sampled > 0U ? ctx.texture(p->sampled[0]) : nullptr;
+        // ── ⭐⭐ REN-38 MULTI-DRAW: coalesce a RUN of consecutive PLAIN items (same program, same storage
+        // buffer, no per-item texture, no pass texture) into ONE draw_storage_multi_depth. The measured cost
+        // of this loop was never the draws — it was the per-draw descriptor reset each classic verb pays; a
+        // run pays it once. Items with textures, per-item programs, or a pass read keep the classic verbs
+        // (their verbs bind per-draw state a batch cannot share yet).
+        const bool batchable_pass = pass_tex == nullptr && d.kind == FramePassKind::RasterGeometry;
         for (crd::u32 i = 0; i < p->draws.count(); ++i)
         {
             const DrawItem it = p->draws.at(i);
@@ -213,7 +219,16 @@ void record_pass(g::IFrameContext& ctx, void* user)
             // map would silently lose it the instant shadows turned on.
             g::ITexture* tex       = it.texture != nullptr ? it.texture : pass_tex;
             const bool   depth_tex = it.texture != nullptr ? false : p->sampled_is_depth;
-            if (tex != nullptr && depth_tex)
+            // ⭐⭐ REN-38: a draw with its OWN texture in a pass that reads a DEPTH resource is the COMBINED
+            // textured+shadowed shape — the base-colour map AND the atlas, one draw. Before this arm the item
+            // texture simply WON and the atlas was dropped, which is how "textured monuments lose their shadows"
+            // survived the executor even after the renderer stopped nulling the map.
+            if (it.texture != nullptr && pass_tex != nullptr && p->sampled_is_depth)
+            {
+                if (first) { r.draw_storage_textured_shadowed_depth(*t, *prog, clear, d.clear_depth, d.depth, *sb, *it.texture, *pass_tex, it.vertex_count); }
+                else       { r.draw_storage_textured_shadowed_depth_load(*t, *prog, d.depth, *sb, *it.texture, *pass_tex, it.vertex_count); }
+            }
+            else if (tex != nullptr && depth_tex)
             {
                 if (first) { r.draw_storage_shadowed_depth(*t, *prog, clear, d.clear_depth, d.depth, *sb, *tex, it.vertex_count); }
                 else       { r.draw_storage_shadowed_depth_load(*t, *prog, d.depth, *sb, *tex, it.vertex_count); }
@@ -225,8 +240,38 @@ void record_pass(g::IFrameContext& ctx, void* user)
             }
             else
             {
-                if (first) { r.draw_storage_depth(*t, *prog, clear, d.clear_depth, d.depth, *sb, it.vertex_count); }
-                else       { r.draw_storage_depth_load(*t, *prog, d.depth, *sb, it.vertex_count); }
+                // how long is the run of batchable items starting HERE? (same program, same storage, no
+                // texture, same INDEXED-ness — an indexed item may never merge with a non-indexed one: their
+                // programs disagree about what a load address means)
+                crd::u32 run = 1U;
+                if (batchable_pass && it.texture == nullptr)
+                {
+                    while (i + run < p->draws.count() && run < crd::framecook::kMaxDrawItems)
+                    {
+                        const DrawItem& nx = p->draws.at(i + run);
+                        g::IRasterProgram* nprog = p->program;
+                        if (!p->program_is_instance && nx.program != nullptr) { nprog = nx.program; }
+                        if (nx.storage == nullptr || nx.texture != nullptr || nprog != prog
+                            || nx.indexed != it.indexed || ctx.buffer(p->storage_of[i + run]) != sb)
+                        {
+                            break;
+                        }
+                        ++run;
+                    }
+                }
+                // ⭐⭐ REN-38: an INDEXED item goes through the multi verb even ALONE — its program rebases
+                // every load by table[DrawIndex], and only the multi verb pushes the row (a classic verb would
+                // leave the push stale and the draw would read another group's region).
+                if (run > 1U || it.indexed)
+                {
+                    crd::u32 counts[crd::framecook::kMaxDrawItems];
+                    for (crd::u32 k = 0; k < run; ++k) { counts[k] = p->draws.at(i + k).vertex_count; }
+                    r.draw_storage_multi_depth(*t, *prog, clear, d.clear_depth, d.depth, *sb,
+                                               static_cast<const crd::u32*>(counts), run, i, !first);
+                    i += run - 1U; // the loop's ++i consumes the last item of the run
+                }
+                else if (first) { r.draw_storage_depth(*t, *prog, clear, d.clear_depth, d.depth, *sb, it.vertex_count); }
+                else            { r.draw_storage_depth_load(*t, *prog, d.depth, *sb, it.vertex_count); }
             }
         }
         break;

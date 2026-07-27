@@ -33,6 +33,7 @@ void oracle_project(crd::memory::TlsfAllocator& alloc, crd::containers::Array<do
                     crd::containers::Array<double>& cam, crd::containers::Array<double>& prep)
 {
     kir::gsplat::Gsplat2dProjectConfig pcfg;
+    pcfg.count = static_cast<crd::u32>(ns); // REN-38: tail-thread guard (dispatch rounds up)
     kir::KGraph                        pg(&alloc);
     const kir::KEntry                  pe = kir::gsplat::build_gsplat2d_project_kernel(pg, pcfg);
     prep.resize(uz(ns) * 19U, 0.0);

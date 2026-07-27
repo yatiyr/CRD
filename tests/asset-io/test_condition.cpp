@@ -462,3 +462,87 @@ TEST_CASE("assetio: generated normals point OUTWARD for BOTH source windings", "
         }
     }
 }
+
+// ── REN-38: the TORUS class — orientation on a CLOSED, NON-CONVEX, genus-1 surface. ─────────────────────────
+// The tetrahedron gate above proves the flip logic, but the artifact that shipped broken was a TORUS: the
+// centroid metric used up there is meaningless on it (a torus is not star-shaped — half its outward normals
+// point TOWARD the centroid), and `mesh_is_closed` has real work to do on a welded 576-face grid with wrap
+// seams, where it found only 12 distinct indices on the tetrahedron. The independent metric here is the RING
+// distance: for a torus of ring radius R about the z-axis, the outward direction at p is p minus its nearest
+// point on the ring circle — pure geometry, never consulting the winding or the generated normals.
+// (`assets/source/torus.obj` is wound CW — signed 6V = -18.35 — so the CW half of this gate IS that asset.)
+TEST_CASE("assetio: generated normals point OUTWARD on a genus-1 torus, BOTH windings", "[assetio][condition][normals]")
+{
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    constexpr float            ring = 1.0F;  // ring radius R
+    constexpr float            tube = 0.4F;  // tube radius r
+    constexpr crd::u32         nu   = 24U;   // segments around the ring
+    constexpr crd::u32         nv   = 12U;   // segments around the tube
+    constexpr float            two_pi = 6.28318530717958F;
+
+    const auto make_torus = [&](bool clockwise) {
+        aio::ImportedMesh m(&alloc);
+        for (crd::u32 iu = 0; iu < nu; ++iu)
+        {
+            const float u  = two_pi * static_cast<float>(iu) / static_cast<float>(nu);
+            const float cu = std::cos(u);
+            const float su = std::sin(u);
+            for (crd::u32 iv = 0; iv < nv; ++iv)
+            {
+                const float v  = two_pi * static_cast<float>(iv) / static_cast<float>(nv);
+                const float cv = std::cos(v);
+                const float sv = std::sin(v);
+                m.positions.push_back({(ring + tube * cv) * cu, (ring + tube * cv) * su, tube * sv});
+            }
+        }
+        for (crd::u32 iu = 0; iu < nu; ++iu)
+        {
+            for (crd::u32 iv = 0; iv < nv; ++iv)
+            {
+                const crd::u32 a = iu * nv + iv;
+                const crd::u32 b = ((iu + 1U) % nu) * nv + iv;
+                const crd::u32 c = ((iu + 1U) % nu) * nv + ((iv + 1U) % nv);
+                const crd::u32 d = iu * nv + ((iv + 1U) % nv);
+                // CCW for the outward parameterization above; `clockwise` swaps two corners of each triangle
+                const crd::u32 t[6] = {a, b, c, a, c, d};
+                for (crd::u32 k = 0; k < 2U; ++k)
+                {
+                    m.indices.push_back(t[k * 3U + 0U]);
+                    m.indices.push_back(clockwise ? t[k * 3U + 2U] : t[k * 3U + 1U]);
+                    m.indices.push_back(clockwise ? t[k * 3U + 1U] : t[k * 3U + 2U]);
+                }
+            }
+        }
+        return m;
+    };
+
+    for (int cw = 0; cw < 2; ++cw)
+    {
+        aio::ImportedMesh m = make_torus(cw != 0);
+        aio::generate_normals(m, &alloc, 1.0F);
+        REQUIRE(m.has_normals());
+        REQUIRE(m.triangle_count() == nu * nv * 2U);
+
+        crd::u32 outward_ok = 0U;
+        crd::u32 total      = 0U;
+        for (crd::u32 vi = 0; vi < static_cast<crd::u32>(m.positions.size()); ++vi)
+        {
+            const auto& p  = m.positions[vi];
+            const auto& nr = m.normals[vi];
+            // nearest ring point: R * normalize(p.xy, 0); outward = p - that
+            const float len_xy = std::sqrt(p.x * p.x + p.y * p.y);
+            REQUIRE(len_xy > 0.1F); // the parameterization never touches the axis
+            const float qx = ring * p.x / len_xy;
+            const float qy = ring * p.y / len_xy;
+            const float ox = p.x - qx;
+            const float oy = p.y - qy;
+            const float oz = p.z;
+            const float d  = nr.x * ox + nr.y * oy + nr.z * oz;
+            ++total;
+            if (d > 0.0F) { ++outward_ok; }
+        }
+        INFO((cw != 0 ? "CW" : "CCW") << " torus: " << outward_ok << "/" << total << " normals outward");
+        // ⛔ ALL of them, not most: one inward vertex is one permanently-black patch in the frame
+        CHECK(outward_ok == total);
+    }
+}

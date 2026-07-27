@@ -63,7 +63,12 @@ struct Vx
     [[nodiscard]] int sub(int a, int b) { return g.binary(KOp::Sub, a, b); }
     [[nodiscard]] int mul(int a, int b) { return g.binary(KOp::Mul, a, b); }
     [[nodiscard]] int dvd(int a, int b) { return g.binary(KOp::Div, a, b); }
-    [[nodiscard]] int loadu(int idx) { return g.storage_load(idx); }
+    // ⭐⭐ REN-38 (scene-buffer consolidation): `base >= 0` rebases EVERY load by the draw's region base —
+    // the ONE choke point that turns "each group owns a buffer" into "one scene buffer with per-group
+    // regions". Header offsets stored IN the region stay region-relative, so the chain
+    // `loadu(add(hdru(index_off), i))` lands at base + index_off_value + i with no other change anywhere.
+    int               base = -1;
+    [[nodiscard]] int loadu(int idx) { return g.storage_load(base >= 0 ? add(base, idx) : idx); }
     [[nodiscard]] int loadf(int idx) { return g.int_bits_to_float(g.cast(loadu(idx), DType::I32)); }
     [[nodiscard]] int hdru(crd::u32 word) { return loadu(ku(word)); }
     [[nodiscard]] int hdrf(crd::u32 word) { return loadf(ku(word)); }
@@ -487,6 +492,9 @@ VertexCookError parse_vertex_toml(crd::containers::StringView toml_text, VertexP
     if (tr == "light_vp") { out.transform = VertexTransform::LightVp; }
     else if (tr == "none") { out.transform = VertexTransform::None; }
     out.cascade = static_cast<crd::u32>(root["cascade"].value_or<int64_t>(0));
+    // ⭐⭐ REN-38: `rebase_table = <word>` — the DRAW-TABLE offset. Non-zero makes the pull VS read its region
+    // base from `sbuf[rebase_table + DrawIndex]` and rebase every load by it (the scene-buffer consolidation).
+    out.rebase_table = static_cast<crd::u32>(root["rebase_table"].value_or<int64_t>(0));
 
     if (const auto* nt = root["node"].as_array())
     {
@@ -2202,6 +2210,14 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
         return emit_procedural_varyings(desc, g, pc, ve, built, g.swizzle(pos, 3));
     }
     Vx c(g);
+    if (desc.rebase_table != 0U)
+    {
+        // ⭐⭐ REN-38: WHICH REGION AM I — the draw table (absolute) holds each draw's region base; DrawIndex
+        // picks the row (push constant + gl_DrawID on Vulkan, the root constant on DX12). Set AFTER the table
+        // read (the table itself is absolute), BEFORE any other load, so the whole pull chain rebases.
+        const int di = g.cast(g.builtin(crd::kir::KBuiltin::DrawIndex), DType::U32);
+        c.base       = c.loadu(c.add(c.ku(desc.rebase_table), di));
+    }
 
     // ── the pull address. One draw covers N instances of one mesh, so the vertex id carries both: the instance
     // is the quotient and the local index the remainder. (The GEO-1 idiom, scaled to instancing.)

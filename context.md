@@ -51,6 +51,17 @@
 >   `crd-simd-emission-check` miss was a bare-ctest/vcvars artifact — it needs `dumpbin` on PATH). All touched
 >   files clang-tidy-clean at LLVM 20.1.8. ⚠ A parallel `ctest -j N` on WSL oversubscribes llvmpipe
 >   (N x nproc worker threads); `wsl-build.ps1` now caps `LP_NUM_THREADS=4` so it cannot fake failures.
+> - ⭐⭐ **THE RENDERER-WEAKNESS CAMPAIGN (same day):** (1) torus unlit CLOSED (genus-1 ring-metric gate; the
+>   fix predated it, the artifact-class gate did not); (2) shadows+albedo COMPOSE — atlas at its OWN bindings
+>   (VK 4/5 · DX12 t4/s5), combined textured+shadowed program + verb + executor routing, conjunction-gated;
+>   (3) bindless heap 8→1024 with PARTIALLY_BOUND; (4) `KBuiltin::DrawIndex` (pc+gl_DrawID / root-const b7)
+>   + `draw_storage_multi_depth` (ONE vkCmdDrawIndirect / ExecuteIndirect over an args ring) + executor
+>   run-coalescing, gated by BIT-IDENTICAL pixels AND batch-count==1 on BOTH platforms.
+> - ⭐⭐ **THE SCENE-BUFFER CONSOLIDATION LANDED TOO (user-directed):** one scene buffer (frame header @0 — FS
+>   untouched; draw table @120; regions from 384), the SAME scene declaration + `rebase_table = 120`,
+>   `Vx::loadu` rebasing, `DrawItem.indexed` → the multi verb even alone. **Two distinct mesh groups render as
+>   ONE batch** (count-gated). Scars: `gl_DrawIDARB` at #version 450; `shaderDrawParameters` enabled at device
+>   creation; consolidation defers to an explicitly installed frame graph (the authored CULL gate found it).
 >
 > ---
 >

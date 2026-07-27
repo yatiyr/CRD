@@ -6578,3 +6578,113 @@ TEST_CASE("REN-38-F6+ GATE: a FETCH mesh stage renders the buffer's geometry and
     }
     CHECK(capture.error_count() == 0U);
 }
+
+// ── ⭐⭐ REN-38 GATE: MULTI-DRAW — N draws, ONE device command, pixels identical to the classic loop. ────────
+// The batching board measured 6.1x (VK) / 38.8x (DX12) headroom at 64 draws, all of it per-draw descriptor
+// churn. `draw_storage_multi_depth` records ONE descriptor set + ONE indirect command over N draws. This gate
+// demands BOTH halves of the claim, because pixels alone cannot distinguish "batched" from "looped":
+//   (a) the batched frame's readback is BIT-IDENTICAL to a frame of classic per-draw calls;
+//   (b) `multi_batch_count()` advanced by EXACTLY ONE — one bucket, one device command.
+namespace
+{
+struct MultiGateState
+{
+    g::FgImage         img{};
+    g::IRasterProgram* prog = nullptr;
+    g::IStorageBuffer* sb   = nullptr;
+    const crd::u32*    counts = nullptr;
+};
+void record_multi_classic(g::IFrameContext& ctx, void* user)
+{
+    auto* u = static_cast<MultiGateState*>(user);
+    ctx.raster().draw_storage_depth(*ctx.image(u->img), *u->prog, g::ClearColor{0.05F, 0.0F, 0.0F, 1.0F}, 0.0F,
+                                    g::DepthCompare::Always, *u->sb, 3U);
+    for (crd::u32 i = 1; i < 8U; ++i)
+    {
+        ctx.raster().draw_storage_depth_load(*ctx.image(u->img), *u->prog, g::DepthCompare::Always, *u->sb, 3U);
+    }
+}
+void record_multi_batched(g::IFrameContext& ctx, void* user)
+{
+    auto* u = static_cast<MultiGateState*>(user);
+    ctx.raster().draw_storage_multi_depth(*ctx.image(u->img), *u->prog, g::ClearColor{0.05F, 0.0F, 0.0F, 1.0F},
+                                          0.0F, g::DepthCompare::Always, *u->sb, u->counts, 8U, 0U, false);
+}
+} // namespace
+
+TEST_CASE("REN-38 GATE: multi-draw batches N draws into ONE indirect command, bit-identical pixels",
+          "[gpu-context][vulkan][frame-graph][ren38][multidraw][gpu]")
+{
+    Rig rig = make_rig();
+    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    auto& raster = *rig.raster;
+
+    memory::TlsfAllocator alloc(8U << 20U);
+    kir::KGraph vg(&alloc);
+    kir::KEntry ve;
+    gputest::build_triangle_vs(vg, ve);
+    kir::KGraph fg2(&alloc);
+    kir::KEntry fe;
+    gputest::build_triangle_fs(fg2, fe);
+    auto vs = rig.vk->create_program(vg, ve);
+    auto fs = rig.vk->create_program(fg2, fe);
+    REQUIRE(vs != nullptr);
+    REQUIRE(fs != nullptr);
+    auto prog = raster.create_raster_program(*vs, *fs);
+    REQUIRE(prog != nullptr);
+    auto sb = raster.create_storage_buffer(16U);
+    REQUIRE(sb != nullptr);
+
+    crd::u32 counts[8];
+    for (crd::u32 i = 0; i < 8U; ++i) { counts[i] = 3U; } // the same triangle, drawn 8 times
+
+    // ── the CLASSIC reference: a frame of per-draw calls through the graph ──
+    auto ref = raster.create_color_depth_target(64U, 64U);
+    REQUIRE(ref != nullptr);
+    {
+        auto fgraph = raster.create_frame_graph();
+        REQUIRE(fgraph != nullptr);
+        MultiGateState st;
+        st.img  = fgraph->import_target(*ref);
+        st.prog = prog.get();
+        st.sb   = sb.get();
+        fgraph->add_pass("classic").writes(st.img).execute(&record_multi_classic, &st);
+        REQUIRE(fgraph->build());
+        fgraph->execute();
+    }
+
+    // ── the BATCHED frame: ONE multi-draw over the same 8 ──
+    auto tgt = raster.create_color_depth_target(64U, 64U);
+    REQUIRE(tgt != nullptr);
+    const crd::u64 batches_before = raster.multi_batch_count();
+    {
+        auto fgraph = raster.create_frame_graph();
+        REQUIRE(fgraph != nullptr);
+        MultiGateState st;
+        st.img    = fgraph->import_target(*tgt);
+        st.prog   = prog.get();
+        st.sb     = sb.get();
+        st.counts = static_cast<const crd::u32*>(counts);
+        fgraph->add_pass("batched").writes(st.img).execute(&record_multi_batched, &st);
+        REQUIRE(fgraph->build());
+        fgraph->execute();
+    }
+    // (b) EXACTLY one batch was recorded — the count assert that "looped" cannot fake
+    CHECK(raster.multi_batch_count() == batches_before + 1U);
+
+    // (a) bit-identical pixels, over a frame that actually drew
+    crd::u32 diffs   = 0U;
+    crd::u32 covered = 0U;
+    for (crd::u32 y = 0; y < 64U; ++y)
+    {
+        for (crd::u32 x = 0; x < 64U; ++x)
+        {
+            const crd::u32 a = ref->read_pixel(x, y);
+            const crd::u32 b = tgt->read_pixel(x, y);
+            if (a != b) { ++diffs; }
+            if ((b & 0x00FFFFFFU) != 0U) { ++covered; }
+        }
+    }
+    CHECK(diffs == 0U);
+    CHECK(covered > 100U); // a blank==blank match proves nothing
+}
