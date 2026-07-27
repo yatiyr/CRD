@@ -126,6 +126,7 @@ TEST_CASE("ckir tsdf: 2DGS render -> surface depth -> TSDF crosses zero at the s
 
     // project + render (1 surfel, already "sorted")
     kir::gsplat::Gsplat2dProjectConfig pcfg;
+    pcfg.count = 1U; // REN-38: tail-thread guard — ONE surfel in this fixture
     kir::KGraph                        pg(&alloc);
     const kir::KEntry                  pe = kir::gsplat::build_gsplat2d_project_kernel(pg, pcfg);
     crd::containers::Array<double>     prep(&alloc);

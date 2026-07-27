@@ -118,8 +118,20 @@ TEST_CASE("AS-2: select_schedule REPLAYS the auto-tuned DB deterministically, wi
 {
     crd::memory::TlsfAllocator alloc(16U << 20U);
 
-    // the DB carries a measured winner for 1024^3 — lookup_tuned finds it, and select_schedule returns exactly it.
+    // REN-38 llvmpipe campaign: a tuned row replays ONLY in the environment it was measured in (the same
+    // sm_89 under WSL measured the win32-tuned attention tile 2.27x slower than its own winner). The
+    // checked-in rows are win32 measurements, so on any other OS the SAME lookups must MISS — and that miss
+    // is asserted as the env key working, not skipped over.
+    const bool db_env = crd::kir::tuning_device_eq(crd::kir::tuning_env(), "win32");
     crd::kir::TileSchedule tuned;
+    if (!db_env)
+    {
+        CHECK_FALSE(crd::kir::lookup_tuned(crd::kir::KOp::Contract, nullptr, 1024, 1024, 1024, tuned));
+        CHECK_FALSE(crd::kir::lookup_tuned(crd::kir::KOp::Contract, "sm_89", 1024, 1024, 1024, tuned));
+        std::printf("[AS-2] env-keyed DB: win32 rows correctly refuse to replay on %s -> heuristic fallback\n",
+                    crd::kir::tuning_env());
+        return;
+    }
     REQUIRE(crd::kir::lookup_tuned(crd::kir::KOp::Contract, nullptr, 1024, 1024, 1024, tuned));
     CHECK(tuned.kind == crd::kir::Sched::WarpTiled);
     const crd::kir::TileSchedule s1024 = sched_for(&alloc, 1024, 1024, 1024);
@@ -157,7 +169,18 @@ TEST_CASE("AS-2: select_schedule REPLAYS the auto-tuned DB deterministically, wi
 TEST_CASE("AS-6a: the tuning DB is DEVICE-KEYED -- right GPU hits, others miss, wildcard matches any", "[kir][autotune]")
 {
     crd::kir::TileSchedule s;
-    // exact device match: the checked-in DB was tuned on sm_89.
+    // exact device match: the checked-in DB was tuned on sm_89 — AND on win32 (rows are env-keyed; on any
+    // other OS the hit halves of this test assert the MISS instead — see AS-2).
+    const bool db_env = crd::kir::tuning_device_eq(crd::kir::tuning_env(), "win32");
+    if (!db_env)
+    {
+        CHECK_FALSE(crd::kir::lookup_tuned(crd::kir::KOp::Contract, "sm_89", 1024, 1024, 1024, s));
+        CHECK(crd::kir::tuning_device_eq(nullptr, "sm_89"));
+        CHECK(crd::kir::tuning_device_eq("sm_89", "sm_89"));
+        CHECK_FALSE(crd::kir::tuning_device_eq("sm_89", "sm_8"));
+        std::printf("[AS-6a] env-keyed DB: sm_89/win32 rows miss on %s\n", crd::kir::tuning_env());
+        return;
+    }
     CHECK(crd::kir::lookup_tuned(crd::kir::KOp::Contract, "sm_89", 1024, 1024, 1024, s));
     // a DIFFERENT device is NOT a match ⇒ that GPU falls back to the heuristic (a sm_89-tuned schedule may be wrong for it).
     CHECK_FALSE(crd::kir::lookup_tuned(crd::kir::KOp::Contract, "sm_75", 1024, 1024, 1024, s));
@@ -312,6 +335,15 @@ TEST_CASE("AS-4: the attention tuning DB replays the tuned (BR,BC) per (device,S
 {
     int br = 0;
     int bc = 0;
+    const bool db_env = crd::kir::tuning_device_eq(crd::kir::tuning_env(), "win32"); // rows are win32 measurements
+    if (!db_env)
+    {
+        CHECK_FALSE(crd::kir::lookup_attention_tuned("sm_89", 1024, 64, br, bc));
+        CHECK_FALSE(crd::kir::lookup_attention_tuned(nullptr, 512, 64, br, bc));
+        std::printf("[AS-4] env-keyed attention DB: win32 rows miss on %s -> heuristic fallback\n",
+                    crd::kir::tuning_env());
+        return;
+    }
     // HITS: the on-device measured winners for sm_89, D=64 (BR=128 wide query block across the S sweep).
     CHECK(crd::kir::lookup_attention_tuned("sm_89", 1024, 64, br, bc));
     CHECK(br == 128);

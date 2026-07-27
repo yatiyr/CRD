@@ -217,9 +217,11 @@ TEST_CASE("THE 4-TRACK GATE: offline render bit-stable, mix verifiable, master e
     f64 tail = 0.0;
     for (i64 i = 0; i < 4800; ++i)
     {
-        head += static_cast<f64>(fade_only[static_cast<usize>(i) * 2]) * fade_only[static_cast<usize>(i) * 2];
-        const usize k = static_cast<usize>(frames - 4800 + i) * 2;
-        tail += static_cast<f64>(fade_only[k]) * fade_only[k];
+        const f64 hs = static_cast<f64>(fade_only[static_cast<usize>(i) * 2]);
+        head += hs * hs;
+        const usize k  = static_cast<usize>(frames - 4800 + i) * 2;
+        const f64   ts = static_cast<f64>(fade_only[k]);
+        tail += ts * ts;
     }
     CHECK(tail * 100.0 < head); // ≥ 20 dB down after the fade — the automation is REAL
 

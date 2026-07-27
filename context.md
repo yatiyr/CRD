@@ -28,7 +28,29 @@
 >   **Audit the SKIP list, not just the failure count.**
 > - Tidy caught a REAL F13 emit hole (Intersection/Callable fell out of the `[rt]` emit arm — canonical form
 >   dropped `sphere_radius`/`callable_*`; fixed + round-trip gated). Touched families 453/453, ZERO skips in
->   the REN-38 set. Full sweep + suite numbers: end-of-session state below.
+>   the REN-38 set. CLOSE VERDICT: win-debug FULL suite green (5,482; asan/shipping/tidy ceded to CI, user-
+>   directed) · Linux gcc-release green — build clean after 9 portability fixes (3 more emitters missing the
+>   F13 arms; Vulkan-Headers now PINNED via FetchContent to the Windows SDK tag; DX12 gates now _WIN32-guarded)
+>   and the llvmpipe-only failure set — WHICH WAS THEN FIXED FULLY (user-directed): the 17 triaged to four
+>   root causes, including THREE REAL KERNEL DEFECTS NV robustness had been hiding (phantom-lane ~ballot in
+>   the sort match, unguarded tail threads in the 2DGS project, an eager-Select sentinel OOB load in the
+>   StopThePop resort). The oracle now ASSERTS on OOB; subgroup width + shared budget are device queries;
+>   `pick_sort_config` derives device-true sort shapes; native-op tolerances are spec-derived envelopes;
+>   autotune rows are environment-keyed. See Part 4 of the session log +
+>   `feedback_llvmpipe_campaign_three_kernel_defects.md`. WSL llvmpipe is now a FIRST-CLASS gate.
+> - ⛔⛔ **THE LAST ONE WAS A NAME-MANGLING BUG, NOT A GPU BUG.** `component_id_by_name` matched an authored
+>   component name against `typeid(T).name()` using only the MSVC decoration (ends with the identifier); the
+>   Itanium ABI gcc/clang use gives `N3crd5scene12MeshRendererE` (length-prefixed, trailing `E`), so the match
+>   NEVER hit on Linux/macOS — every authored draw-list component filter silently rejected every group, the
+>   draw list resolved EMPTY, and SceneRenderer frames were black on every gcc build since REN-36.3-b.
+>   `World::decorated_names` now handles BOTH, gated by a test asserting both literal spellings.
+>   ⭐ Diagnostic lesson: it presented as "black on llvmpipe, fine on gpu-context" and I chased barriers/layouts
+>   for hours — what cracked it was making the silent skip LOUD, then seeing `group_matches` called on Linux and
+>   NOT on Windows. **When a "GPU bug" splits by COMPILER rather than DEVICE, stop looking at the GPU.**
+> - **BOTH PLATFORMS GREEN:** Linux gcc-release 5221/5221 · Windows win-debug 5482/5482 (the earlier
+>   `crd-simd-emission-check` miss was a bare-ctest/vcvars artifact — it needs `dumpbin` on PATH). All touched
+>   files clang-tidy-clean at LLVM 20.1.8. ⚠ A parallel `ctest -j N` on WSL oversubscribes llvmpipe
+>   (N x nproc worker threads); `wsl-build.ps1` now caps `LP_NUM_THREADS=4` so it cannot fake failures.
 >
 > ---
 >

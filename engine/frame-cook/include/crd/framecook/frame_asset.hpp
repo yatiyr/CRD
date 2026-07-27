@@ -270,7 +270,7 @@ struct FramePassDesc
     bool                                          has_clear_color = false;
     float                                         clear_color[4]  = {0.0F, 0.0F, 0.0F, 1.0F};
     bool                                          has_clear_depth = false;
-    float                                         clear_depth     = 1.0F;
+    float                                         clear_depth     = 1.0F; // crd-lint-allow-untagged-physical: NDC depth in [0,1] (a normalized-device coordinate, not a length)
     crd::gpu::DepthCompare                        depth = crd::gpu::DepthCompare::LessEqual;
     // REN-38-A15: PER-ATTACHMENT BLEND, one entry per declared `writes` (missing entries default to Opaque).
     // ⛔ A pass could declare N attachments (38-A1b) and N reads (38-A3) but not how they BLEND, so every pass

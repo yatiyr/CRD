@@ -34,6 +34,9 @@ public:
 
     [[nodiscard]] bool valid() const noexcept override;
     [[nodiscard]] bool supports_shader_int64() const noexcept override;
+    // REN-38: the queried device truths behind the warp-synchronous kernel shapes (vtable END in the interface)
+    [[nodiscard]] crd::u32 subgroup_size() const noexcept override;
+    [[nodiscard]] crd::u32 shared_memory_bytes() const noexcept override;
 
     [[nodiscard]] std::unique_ptr<ComputeBuffer> create_buffer(crd::u64 bytes, crd::u32 usage, ComputeMemory memory) override;
 

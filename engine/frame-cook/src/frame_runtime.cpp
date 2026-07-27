@@ -802,6 +802,20 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             // a missing program must FAIL, never render something plausible
             if (rec.program == nullptr) { return fail(FrameExecError::UnresolvedProgram, &d.shader); }
         }
+        // ⛔⛔ REN-38 llvmpipe campaign: a pass that DRAWS with no resolved program used to fall through to
+        // `record_pass`, whose program guard returned SILENTLY — a black frame with draws reported and no
+        // error anywhere (the exact class this band keeps killing, one layer further in). A draw-list pass
+        // whose host binding carries no program is now the SAME named failure as a missing shader.
+        {
+            const bool draws_geometry = d.kind == FramePassKind::RasterGeometry
+                                        || d.kind == FramePassKind::RasterMrt
+                                        || d.kind == FramePassKind::RasterTess || d.kind == FramePassKind::RasterMesh
+                                        || d.kind == FramePassKind::RasterDepthOnly;
+            if (draws_geometry && rec.program == nullptr)
+            {
+                return fail(FrameExecError::UnresolvedProgram, &d.name);
+            }
+        }
         // ⭐ REN-38-B4: resolve every acceleration structure this pass READS, through the host. A raytrace pass
         // takes the first — the cooker already proved there is one.
         if (d.kind == FramePassKind::RayTrace || d.kind == FramePassKind::RayTracePipeline)

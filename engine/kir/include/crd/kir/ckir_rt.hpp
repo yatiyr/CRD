@@ -1126,6 +1126,9 @@ struct PathTraceFullConfig
     crd::u32 nlights    = 2U;  // area lights (their quads are the LAST 2·nlights triangles; params in the light buffer)
     crd::u32 light_prim0 = 2U; // first light-triangle primId; lights occupy [prim0, prim0 + 2·nlights), 2 tris each
     crd::u32 local_size = 64U;
+    // ⛔ REN-38 llvmpipe campaign: the POINT COUNT this kernel is dispatched over. Tail threads past it index
+    // OOB (silent on a robustness GPU, loud in the oracle now). 0 = caller promises an exact multiple.
+    crd::u32 count      = 0U;
 };
 
 // FULL PRODUCTION PATH TRACER — the culmination of integrator breadth: MANY-LIGHTS next-event estimation with MULTIPLE
@@ -1171,6 +1174,9 @@ struct PathTraceFullConfig
 
     const int  mark = g.kernel_stmt_mark();
     const int  tid  = uadd(umul(g.builtin(k::KBuiltin::WorkgroupIndex), cu(cfg.local_size)), g.builtin(k::KBuiltin::LocalInvocationIndex));
+    const int  oob_guard = cfg.count > 0U
+                               ? g.stmt_if_begin(g.binary(k::KOp::CmpLt, tid, cu(cfg.count)))
+                               : -1; // REN-38: tail-thread guard
     const int  b3   = umul(tid, cu(3U));
     const auto lp   = [&](int buf, int base, crd::u32 c) { return g.buffer_load(buf, uadd(base, cu(c))); };
     const int pnx = lp(nrm, b3, 0U);
@@ -1305,7 +1311,12 @@ struct PathTraceFullConfig
         const int              hitsurf = mul(nomiss, sub(cf(1.0), inrng));
 
         // ── EMISSIVE HIT (MIS): the BSDF ray landed on light lidx ⇒ add its Le weighted against the light-sampling pdf ──
-        const int lidx = g.binary(k::KOp::Div, sub(mn(hit.prim, cu(cfg.light_prim0 + 2U * cfg.nlights - 1U)), cu(cfg.light_prim0)), cu(2U));
+        // ⛔ REN-38 llvmpipe campaign: clamp on BOTH sides before the subtract. The upper clamp alone left a
+        // non-light hit (prim < light_prim0, e.g. any wall) UNDERFLOWING this u32 subtraction to ~4e9, and the
+        // light-buffer load below happens REGARDLESS of the `inrng` discard (a GPU evaluates both Select arms,
+        // and so does the scalar oracle) — a wild OOB read that robustBufferAccess silently returned 0 for.
+        const int lprim = mx(mn(hit.prim, cu(cfg.light_prim0 + 2U * cfg.nlights - 1U)), cu(cfg.light_prim0));
+        const int lidx  = g.binary(k::KOp::Div, sub(lprim, cu(cfg.light_prim0)), cu(2U));
         const int elb  = umul(lidx, cu(15U));
         const int elex = lp(lts, elb, 12U);
         const int eley = lp(lts, elb, 13U);
@@ -1374,6 +1385,7 @@ struct PathTraceFullConfig
     g.stmt_buffer_store(out, uadd(b3, cu(1U)), mul(lp(out, b3, 1U), inv));
     g.stmt_buffer_store(out, uadd(b3, cu(2U)), mul(lp(out, b3, 2U), inv));
 
+    if (oob_guard >= 0) { g.stmt_if_end(oob_guard); }
     k::KEntry e;
     e.stage             = k::KStage::Compute;
     e.local_size[0]     = cfg.local_size;

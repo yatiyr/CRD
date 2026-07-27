@@ -26,7 +26,8 @@ namespace kir = crd::kir;
 namespace
 {
 // The one-thread-per-ray inline-ray-query kernel: TLAS at binding 0, rays (6 floats each) at binding 1, out distance at 2.
-kir::KEntry build_trace_kernel(kir::KGraph& g, int local_size)
+// REN-38: `n_rays` bounds the tail threads (a dispatch rounds up); 0 keeps the historical unguarded shape
+kir::KEntry build_trace_kernel(kir::KGraph& g, int local_size, crd::u32 n_rays = 0U)
 {
     const kir::Shape sh1 = kir::make_shape({1});
     const auto       cf  = [&](double v) { return g.constant(v, sh1, kir::DType::F32); };
@@ -36,10 +37,12 @@ kir::KEntry build_trace_kernel(kir::KGraph& g, int local_size)
     const int        out  = g.buffer_decl(kir::DType::F32, 0, 2, true);
     const int        mark = g.kernel_stmt_mark();
     const int        tid  = g.binary(kir::KOp::Add, g.binary(kir::KOp::Mul, g.builtin(kir::KBuiltin::WorkgroupIndex), cu(static_cast<crd::u32>(local_size))), g.builtin(kir::KBuiltin::LocalInvocationIndex));
+    const int        guard = n_rays > 0U ? g.stmt_if_begin(g.binary(kir::KOp::CmpLt, tid, cu(n_rays))) : -1;
     const int        base = g.binary(kir::KOp::Mul, tid, cu(6U));
     const auto       ld   = [&](crd::u32 k) { return g.buffer_load(rays, g.binary(kir::KOp::Add, base, cu(k))); };
     const int        t    = g.trace_ray_closest(as, ld(0), ld(1), ld(2), ld(3), ld(4), ld(5), cf(0.001), cf(1.0e30));
     g.stmt_buffer_store(out, tid, t);
+    if (guard >= 0) { g.stmt_if_end(guard); }
     kir::KEntry e;
     e.stage             = kir::KStage::Compute;
     e.local_size[0]     = static_cast<crd::u32>(local_size);
@@ -69,7 +72,7 @@ TEST_CASE("D-007 RT-1: inline rayQuery on Vulkan (GPU BLAS/TLAS build + trace) =
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
     kir::KGraph                g(&alloc);
-    const kir::KEntry          e = build_trace_kernel(g, local);
+    const kir::KEntry          e = build_trace_kernel(g, local, num_rays);
 
     kir::GlslKernel kern(&alloc);
     REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
@@ -1245,7 +1248,7 @@ TEST_CASE("D-007 IB-1: full path tracer on Vulkan (many-lights+emissive+RR+GI, u
         kir::rt::PathTraceFullConfig pc;
         pc.samples = spp; pc.bounces = 4U; pc.rr_start = rr_start;
         pc.albedo[0] = 0.6F; pc.albedo[1] = 0.6F; pc.albedo[2] = 0.6F;
-        pc.ntri = num_tri; pc.nlights = 2U; pc.light_prim0 = 2U; pc.local_size = 64U;
+        pc.ntri = num_tri; pc.nlights = 2U; pc.light_prim0 = 2U; pc.local_size = 64U; pc.count = num_pts; // REN-38: tail-thread guard
         kir::KGraph g(&alloc);
         const kir::KEntry e = kir::rt::build_pathtrace_full_kernel(g, pc);
         kir::GlslKernel kern(&alloc);
@@ -1264,7 +1267,7 @@ TEST_CASE("D-007 IB-1: full path tracer on Vulkan (many-lights+emissive+RR+GI, u
     const kir::KEntry e16 = run(16U, 1U, gpu16);
     {
         kir::rt::PathTraceFullConfig pc; pc.samples = 16U; pc.bounces = 4U; pc.rr_start = 1U;
-        pc.albedo[0] = 0.6F; pc.albedo[1] = 0.6F; pc.albedo[2] = 0.6F; pc.ntri = num_tri; pc.nlights = 2U; pc.light_prim0 = 2U; pc.local_size = 64U;
+        pc.albedo[0] = 0.6F; pc.albedo[1] = 0.6F; pc.albedo[2] = 0.6F; pc.ntri = num_tri; pc.nlights = 2U; pc.light_prim0 = 2U; pc.local_size = 64U; pc.count = num_pts; // REN-38: tail-thread guard
         kir::KGraph g(&alloc);
         const kir::KEntry e = kir::rt::build_pathtrace_full_kernel(g, pc);
         crd::containers::Array<crd::f64> geo(&alloc);

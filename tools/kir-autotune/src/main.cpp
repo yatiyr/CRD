@@ -77,8 +77,8 @@ int main(int argc, char** argv)
     for (int i = 0; i < nres; ++i)
     {
         const crd::kir::AutotuneResult& r = results[i];
-        std::fprintf(f, "{ KOp::Contract, \"%s\", %d, %d, %d, { Sched::WarpTiled, %d, %d, %d, %d, %d, %d, %d, %d, %d, %s, %s } },\n",
-                     dev, r.m, r.n, r.k, r.sched.bm, r.sched.bn, r.sched.bk, r.sched.wm, r.sched.wn, r.sched.wniter, r.sched.tm,
+        std::fprintf(f, "{ KOp::Contract, \"%s\", \"%s\", %d, %d, %d, { Sched::WarpTiled, %d, %d, %d, %d, %d, %d, %d, %d, %d, %s, %s } },\n",
+                     dev, crd::kir::tuning_env(), r.m, r.n, r.k, r.sched.bm, r.sched.bn, r.sched.bk, r.sched.wm, r.sched.wn, r.sched.wniter, r.sched.tm,
                      r.sched.tn, r.sched.nt, r.sched.double_buffer ? "true" : "false", r.sched.fma ? "true" : "false");
     }
     if (outpath != nullptr) { std::fclose(f); std::fprintf(stderr, "[kir_autotune] wrote %d entries -> %s\n", nres, outpath); }

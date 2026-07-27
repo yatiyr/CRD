@@ -1478,7 +1478,8 @@ public:
     [[nodiscard]] std::unique_ptr<IRasterProgram>
     create_task_mesh_program(IGpuProgram& task, IGpuProgram& mesh, IGpuProgram& fragment) override
     {
-        if (!m_api.valid() || m_api.draw_mesh_tasks == nullptr || !m_ctx->mesh_shader() || task.stage() != ShaderStage::Task
+        // REN-38: the amplification pair needs the taskShader FEATURE, not just meshShader (VUID-08421)
+        if (!m_api.valid() || m_api.draw_mesh_tasks == nullptr || !m_ctx->task_shader() || task.stage() != ShaderStage::Task
             || mesh.stage() != ShaderStage::Mesh || fragment.stage() != ShaderStage::Fragment)
         {
             return nullptr;
@@ -1747,10 +1748,12 @@ public:
         const VkShaderStageFlagBits vnull[1] = {VK_SHADER_STAGE_VERTEX_BIT};
         const VkShaderEXT           vnob[1]  = {VK_NULL_HANDLE};
         m_api.bind(cmd, 1U, vnull, vnob);
-        if (p.has_task())
+        // REN-38: with the taskShader FEATURE enabled, EVERY mesh draw must bind the TASK stage — as the
+        // program's task shader when it has one, as VK_NULL_HANDLE otherwise (the shader-object completeness
+        // rule; leaving the stage unbound is a validation error the fetch-mesh gate caught on both layers).
         {
             const VkShaderStageFlagBits tstage[1] = {VK_SHADER_STAGE_TASK_BIT_EXT};
-            const VkShaderEXT           tobj[1]   = {p.task()};
+            const VkShaderEXT           tobj[1]   = {p.has_task() ? p.task() : VK_NULL_HANDLE};
             m_api.bind(cmd, 1U, tstage, tobj);
         }
         const VkShaderStageFlagBits mstages[2] = {VK_SHADER_STAGE_MESH_BIT_EXT, VK_SHADER_STAGE_FRAGMENT_BIT};
@@ -1880,10 +1883,12 @@ public:
         const VkShaderEXT           vnob[1]  = {VK_NULL_HANDLE};
         m_api.bind(cmd, 1U, vnull, vnob);
         // B4: bind the TASK (amplification) stage if this is a task→mesh program; else it stays null (mesh has NO_TASK_SHADER).
-        if (p.has_task())
+        // REN-38: with the taskShader FEATURE enabled, EVERY mesh draw must bind the TASK stage — as the
+        // program's task shader when it has one, as VK_NULL_HANDLE otherwise (the shader-object completeness
+        // rule; leaving the stage unbound is a validation error the fetch-mesh gate caught on both layers).
         {
             const VkShaderStageFlagBits tstage[1] = {VK_SHADER_STAGE_TASK_BIT_EXT};
-            const VkShaderEXT           tobj[1]   = {p.task()};
+            const VkShaderEXT           tobj[1]   = {p.has_task() ? p.task() : VK_NULL_HANDLE};
             m_api.bind(cmd, 1U, tstage, tobj);
         }
         const VkShaderStageFlagBits mstages[2] = {VK_SHADER_STAGE_MESH_BIT_EXT, VK_SHADER_STAGE_FRAGMENT_BIT};
@@ -1944,10 +1949,12 @@ public:
         const VkShaderStageFlagBits vnull[1] = {VK_SHADER_STAGE_VERTEX_BIT};
         const VkShaderEXT           vnob[1]  = {VK_NULL_HANDLE};
         m_api.bind(cmd, 1U, vnull, vnob);
-        if (p.has_task())
+        // REN-38: with the taskShader FEATURE enabled, EVERY mesh draw must bind the TASK stage — as the
+        // program's task shader when it has one, as VK_NULL_HANDLE otherwise (the shader-object completeness
+        // rule; leaving the stage unbound is a validation error the fetch-mesh gate caught on both layers).
         {
             const VkShaderStageFlagBits tstage[1] = {VK_SHADER_STAGE_TASK_BIT_EXT};
-            const VkShaderEXT           tobj[1]   = {p.task()};
+            const VkShaderEXT           tobj[1]   = {p.has_task() ? p.task() : VK_NULL_HANDLE};
             m_api.bind(cmd, 1U, tstage, tobj);
         }
         const VkShaderStageFlagBits mstages[2] = {VK_SHADER_STAGE_MESH_BIT_EXT, VK_SHADER_STAGE_FRAGMENT_BIT};
@@ -2012,10 +2019,12 @@ public:
         const VkShaderStageFlagBits vnull[1] = {VK_SHADER_STAGE_VERTEX_BIT};
         const VkShaderEXT           vnob[1]  = {VK_NULL_HANDLE};
         m_api.bind(cmd, 1U, vnull, vnob);
-        if (p.has_task())
+        // REN-38: with the taskShader FEATURE enabled, EVERY mesh draw must bind the TASK stage — as the
+        // program's task shader when it has one, as VK_NULL_HANDLE otherwise (the shader-object completeness
+        // rule; leaving the stage unbound is a validation error the fetch-mesh gate caught on both layers).
         {
             const VkShaderStageFlagBits tstage[1] = {VK_SHADER_STAGE_TASK_BIT_EXT};
-            const VkShaderEXT           tobj[1]   = {p.task()};
+            const VkShaderEXT           tobj[1]   = {p.has_task() ? p.task() : VK_NULL_HANDLE};
             m_api.bind(cmd, 1U, tstage, tobj);
         }
         const VkShaderStageFlagBits mstages[2] = {VK_SHADER_STAGE_MESH_BIT_EXT, VK_SHADER_STAGE_FRAGMENT_BIT};
@@ -5019,10 +5028,9 @@ private:
             const VkShaderStageFlagBits vnull[1] = {VK_SHADER_STAGE_VERTEX_BIT};
             const VkShaderEXT           vnob[1]  = {VK_NULL_HANDLE};
             m_api.bind(cmd, 1U, vnull, vnob);
-            if (p.has_task()) // B4: bind the amplification stage for a task→mesh program
-            {
+            { // REN-38: TASK always bound (null when absent) — the shader-object completeness rule
                 const VkShaderStageFlagBits tstage[1] = {VK_SHADER_STAGE_TASK_BIT_EXT};
-                const VkShaderEXT           tobj[1]   = {p.task()};
+                const VkShaderEXT           tobj[1]   = {p.has_task() ? p.task() : VK_NULL_HANDLE};
                 m_api.bind(cmd, 1U, tstage, tobj);
             }
             const VkShaderStageFlagBits mstages[2] = {VK_SHADER_STAGE_MESH_BIT_EXT, VK_SHADER_STAGE_FRAGMENT_BIT};
@@ -5239,6 +5247,21 @@ private:
         for (crd::u32 i = 0; i < nca; ++i) { blend_enable[i] = VK_FALSE; write_mask[i] = all_rgba; }
         m_api.set_color_blend_enable(cmd, 0U, nca, blend_enable);
         m_api.set_color_write_mask(cmd, 0U, nca, write_mask);
+        // REN-38 llvmpipe campaign: ALSO record a default blend EQUATION for every attachment. The spec only
+        // requires the equation where blending is ENABLED, but validation layers of the 1.3.27x vintage (what
+        // Ubuntu 24.04 ships) fire VUID-09418 whenever the state was never recorded at all — a false positive
+        // fixed in later layers. One extra call per pass keeps every layer vintage quiet and costs nothing;
+        // blend-enabling paths still overwrite it with their real equation AFTER this baseline (the A15 rule).
+        if (m_api.set_color_blend_equation != nullptr)
+        {
+            VkColorBlendEquationEXT default_eq[kMaxGBuffer];
+            for (crd::u32 i = 0; i < nca; ++i)
+            {
+                default_eq[i] = {VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD,
+                                 VK_BLEND_FACTOR_ONE,       VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD};
+            }
+            m_api.set_color_blend_equation(cmd, 0U, nca, static_cast<const VkColorBlendEquationEXT*>(default_eq));
+        }
         // B1-e: with VK_KHR_fragment_shading_rate enabled, a shader-object draw MUST set the fragment shading rate — default
         // it to 1x1 (no VRS). draw_vrs re-sets it AFTER this to the requested rate.
         if (m_set_vrs != nullptr)
@@ -5257,6 +5280,15 @@ private:
             const VkShaderStageFlagBits mnull[1] = {VK_SHADER_STAGE_MESH_BIT_EXT};
             const VkShaderEXT           mnob[1]  = {VK_NULL_HANDLE};
             m_api.bind(cmd, 1U, mnull, mnob);
+        }
+        // REN-38: the SAME completeness rule for TASK once taskShader is enabled (VUID-vkCmdDraw-None-08689) —
+        // every non-task draw (vertex AND task-less mesh) must bind the stage as VK_NULL_HANDLE. The task-mesh
+        // record paths overwrite this with the real task shader after set_draw_state, per the A15 ordering rule.
+        if (m_ctx->task_shader())
+        {
+            const VkShaderStageFlagBits tnull[1] = {VK_SHADER_STAGE_TASK_BIT_EXT};
+            const VkShaderEXT           tnob[1]  = {VK_NULL_HANDLE};
+            m_api.bind(cmd, 1U, tnull, tnob);
         }
     }
 

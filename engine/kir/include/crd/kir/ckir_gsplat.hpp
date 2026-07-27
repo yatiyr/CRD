@@ -62,6 +62,11 @@ struct GsplatProjectConfig
     double smooth_3d = 0.2;   // 3D filter size, as a fraction of the pixel footprint (d/f) — the frequency cap
     double mip_2d    = 0.3;   // 2D Mip filter variance (the pixel integration footprint, px²)
     int    local_size = 64;
+    // ⛔ REN-38 llvmpipe campaign: the ELEMENT COUNT this kernel is dispatched over. A dispatch rounds up to
+    // whole workgroups, so tail threads past `count` index OUT OF BOUNDS — absorbed by robustBufferAccess on
+    // desktop GPUs, heap corruption on a CPU Vulkan implementation, and (since the oracle stopped imitating
+    // robustness) a loud CPU-oracle failure. 0 = the caller PROMISES an exact multiple of local_size.
+    crd::u32 count = 0;
 };
 
 [[nodiscard]] inline KEntry build_gsplat_project_kernel(KGraph& g, const GsplatProjectConfig& cfg)
@@ -79,6 +84,10 @@ struct GsplatProjectConfig
                              g.builtin(KBuiltin::LocalInvocationIndex));
 
     const int  mark = g.kernel_stmt_mark();
+    // the TAIL-THREAD guard (see the config's `count`): the whole body — loads AND stores — runs inside
+    const int oob_guard = cfg.count > 0U
+                              ? g.stmt_if_begin(g.binary(KOp::CmpLt, tid, cu(cfg.count)))
+                              : -1;
     const int  gb   = g.binary(KOp::Mul, tid, cu(14U));
     const auto gl   = [&](int k) {
         const int v = g.buffer_load(gauss_b, g.binary(KOp::Add, gb, cu(static_cast<crd::u32>(k))));
@@ -254,6 +263,7 @@ struct GsplatProjectConfig
     st(7, col_r); st(8, col_g); st(9, col_b);
     st(10, opac_out); st(11, valid);
 
+    if (oob_guard >= 0) { g.stmt_if_end(oob_guard); } // close the tail-thread guard
     KEntry e;
     e.stage             = KStage::Compute;
     e.local_size[0]     = static_cast<crd::u32>(cfg.local_size);
@@ -406,6 +416,11 @@ struct GsplatRenderConfig
 struct GsplatDepthKeyConfig
 {
     int    local_size = 64;
+    // ⛔ REN-38 llvmpipe campaign: the ELEMENT COUNT this kernel is dispatched over. A dispatch rounds up to
+    // whole workgroups, so tail threads past `count` index OUT OF BOUNDS — absorbed by robustBufferAccess on
+    // desktop GPUs, heap corruption on a CPU Vulkan implementation, and (since the oracle stopped imitating
+    // robustness) a loud CPU-oracle failure. 0 = the caller PROMISES an exact multiple of local_size.
+    crd::u32 count = 0;
 };
 
 [[nodiscard]] inline KEntry build_gsplat_depthkey_kernel(KGraph& g, const GsplatDepthKeyConfig& cfg)
@@ -423,6 +438,10 @@ struct GsplatDepthKeyConfig
                              g.builtin(KBuiltin::LocalInvocationIndex));
 
     const int mark = g.kernel_stmt_mark();
+    // the TAIL-THREAD guard (see the config's `count`): the whole body — loads AND stores — runs inside
+    const int oob_guard = cfg.count > 0U
+                              ? g.stmt_if_begin(g.binary(KOp::CmpLt, tid, cu(cfg.count)))
+                              : -1;
     const int dmin = g.buffer_load(par_b, cu(0U));
     const int dmax = g.buffer_load(par_b, cu(1U));
     g.stmt_materialize(dmin); g.stmt_materialize(dmax);
@@ -436,6 +455,7 @@ struct GsplatDepthKeyConfig
     g.stmt_buffer_store(key_b, tid, key);
     g.stmt_buffer_store(val_b, tid, g.cast(tid, DType::U32));
 
+    if (oob_guard >= 0) { g.stmt_if_end(oob_guard); } // close the tail-thread guard
     KEntry e;
     e.stage             = KStage::Compute;
     e.local_size[0]     = static_cast<crd::u32>(cfg.local_size);
@@ -640,6 +660,11 @@ struct GsplatBinConfig
     int tile_px    = 16;
     int max_cover  = 64;  // max tiles one splat may fan out to (the scatter grid stride); gates assert it's not exceeded
     int local_size = 64;
+    // ⛔ REN-38 llvmpipe campaign: the ELEMENT COUNT this kernel is dispatched over. A dispatch rounds up to
+    // whole workgroups, so tail threads past `count` index OUT OF BOUNDS — absorbed by robustBufferAccess on
+    // desktop GPUs, heap corruption on a CPU Vulkan implementation, and (since the oracle stopped imitating
+    // robustness) a loud CPU-oracle failure. 0 = the caller PROMISES an exact multiple of local_size.
+    crd::u32 count = 0;
 };
 
 // TILECOUNT: per depth-sorted splat → number of covered screen tiles (half-open clamped rect, Kerbl getRect).
@@ -659,6 +684,10 @@ struct GsplatBinConfig
                              g.builtin(KBuiltin::LocalInvocationIndex));
 
     const int mark    = g.kernel_stmt_mark();
+    // the TAIL-THREAD guard (see the config's `count`): the whole body — loads AND stores — runs inside
+    const int oob_guard = cfg.count > 0U
+                              ? g.stmt_if_begin(g.binary(KOp::CmpLt, tid, cu(cfg.count)))
+                              : -1;
     const int tiles_x = (cfg.width + cfg.tile_px - 1) / cfg.tile_px;
     const int tiles_y = (cfg.height + cfg.tile_px - 1) / cfg.tile_px;
     const int base    = g.binary(KOp::Mul, tid, cu(12U));
@@ -684,6 +713,7 @@ struct GsplatBinConfig
     const int tc  = g.select(g.binary(KOp::CmpGt, valid, ks(0.5)), mul(g, cx, cy), ks(0.0));
     g.stmt_buffer_store(tc_b, tid, tc);
 
+    if (oob_guard >= 0) { g.stmt_if_end(oob_guard); } // close the tail-thread guard
     KEntry e;
     e.stage             = KStage::Compute;
     e.local_size[0]     = static_cast<crd::u32>(cfg.local_size);
@@ -717,6 +747,14 @@ struct GsplatBinConfig
                              g.builtin(KBuiltin::LocalInvocationIndex));
 
     const int mark    = g.kernel_stmt_mark();
+    // the TAIL-THREAD guard (see the config's `count`): the whole body — loads AND stores — runs inside
+    // ⛔ this kernel's GRID is N x max_cover (thread -> splat = tid/max_cover, slot = tid%max_cover), so the
+    // tail-thread bound is the PRODUCT, not the splat count — guarding by `count` alone would drop every
+    // thread past the first `count`, i.e. all but the first slot of the first splats.
+    const int oob_guard = cfg.count > 0U
+                              ? g.stmt_if_begin(g.binary(KOp::CmpLt, tid,
+                                                         cu(cfg.count * static_cast<crd::u32>(cfg.max_cover))))
+                              : -1;
     const int tiles_x = (cfg.width + cfg.tile_px - 1) / cfg.tile_px;
     const int tiles_y = (cfg.height + cfg.tile_px - 1) / cfg.tile_px;
     const int splat   = g.binary(KOp::Div, tid, cu(static_cast<crd::u32>(cfg.max_cover)));
@@ -763,6 +801,7 @@ struct GsplatBinConfig
     }
     g.stmt_if_end(cif);
 
+    if (oob_guard >= 0) { g.stmt_if_end(oob_guard); } // close the tail-thread guard
     KEntry e;
     e.stage             = KStage::Compute;
     e.local_size[0]     = static_cast<crd::u32>(cfg.local_size);
@@ -1157,6 +1196,11 @@ struct GsplatBlockConfig
 struct GsplatMortonConfig
 {
     int local_size = 64;
+    // ⛔ REN-38 llvmpipe campaign: the ELEMENT COUNT this kernel is dispatched over. A dispatch rounds up to
+    // whole workgroups, so tail threads past `count` index OUT OF BOUNDS — absorbed by robustBufferAccess on
+    // desktop GPUs, heap corruption on a CPU Vulkan implementation, and (since the oracle stopped imitating
+    // robustness) a loud CPU-oracle failure. 0 = the caller PROMISES an exact multiple of local_size.
+    crd::u32 count = 0;
 };
 
 [[nodiscard]] inline KEntry build_gsplat_morton_kernel(KGraph& g, const GsplatMortonConfig& cfg)
@@ -1217,6 +1261,11 @@ struct GsplatQuantizeConfig
     int natt       = 14;
     int bits       = 12;
     int local_size = 64;
+    // ⛔ REN-38 llvmpipe campaign: the ELEMENT COUNT this kernel is dispatched over. A dispatch rounds up to
+    // whole workgroups, so tail threads past `count` index OUT OF BOUNDS — absorbed by robustBufferAccess on
+    // desktop GPUs, heap corruption on a CPU Vulkan implementation, and (since the oracle stopped imitating
+    // robustness) a loud CPU-oracle failure. 0 = the caller PROMISES an exact multiple of local_size.
+    crd::u32 count = 0;
 };
 
 [[nodiscard]] inline KEntry build_gsplat_quantize_kernel(KGraph& g, const GsplatQuantizeConfig& cfg)
@@ -1233,6 +1282,10 @@ struct GsplatQuantizeConfig
     const int tid = g.binary(KOp::Add, g.binary(KOp::Mul, g.builtin(KBuiltin::WorkgroupIndex), cu(static_cast<crd::u32>(cfg.local_size))),
                          g.builtin(KBuiltin::LocalInvocationIndex));
     const int mark = g.kernel_stmt_mark();
+    // the TAIL-THREAD guard (see the config's `count`): the whole body — loads AND stores — runs inside
+    const int oob_guard = cfg.count > 0U
+                              ? g.stmt_if_begin(g.binary(KOp::CmpLt, tid, cu(cfg.count)))
+                              : -1;
     const int base = g.binary(KOp::Mul, tid, cu(static_cast<crd::u32>(cfg.natt)));
     const int loop = g.stmt_for_begin(cu(static_cast<crd::u32>(cfg.natt)));
     const int k    = g.kernel_loop_var(loop);
@@ -1246,6 +1299,7 @@ struct GsplatQuantizeConfig
     g.stmt_buffer_store(qb, gi, q);
     g.stmt_for_end(loop);
 
+    if (oob_guard >= 0) { g.stmt_if_end(oob_guard); } // close the tail-thread guard
     KEntry e;
     e.stage             = KStage::Compute;
     e.local_size[0]     = static_cast<crd::u32>(cfg.local_size);
@@ -1270,6 +1324,10 @@ struct GsplatQuantizeConfig
     const int tid = g.binary(KOp::Add, g.binary(KOp::Mul, g.builtin(KBuiltin::WorkgroupIndex), cu(static_cast<crd::u32>(cfg.local_size))),
                          g.builtin(KBuiltin::LocalInvocationIndex));
     const int mark = g.kernel_stmt_mark();
+    // the TAIL-THREAD guard (see the config's `count`): the whole body — loads AND stores — runs inside
+    const int oob_guard = cfg.count > 0U
+                              ? g.stmt_if_begin(g.binary(KOp::CmpLt, tid, cu(cfg.count)))
+                              : -1;
     const int base = g.binary(KOp::Mul, tid, cu(static_cast<crd::u32>(cfg.natt)));
     const int loop = g.stmt_for_begin(cu(static_cast<crd::u32>(cfg.natt)));
     const int k    = g.kernel_loop_var(loop);
@@ -1282,6 +1340,7 @@ struct GsplatQuantizeConfig
     g.stmt_buffer_store(ob, gi, xr);
     g.stmt_for_end(loop);
 
+    if (oob_guard >= 0) { g.stmt_if_end(oob_guard); } // close the tail-thread guard
     KEntry e;
     e.stage             = KStage::Compute;
     e.local_size[0]     = static_cast<crd::u32>(cfg.local_size);

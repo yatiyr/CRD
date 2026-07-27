@@ -139,6 +139,7 @@ TEST_CASE("B19-a showcase: 3D Gaussian splatting forward render on Vulkan", "[.]
 
     // ── PROJECT on the GPU ──
     kir::gsplat::GsplatProjectConfig pcfg;
+    pcfg.count = static_cast<crd::u32>(ng); // REN-38: tail-thread guard (dispatch rounds up)
     kir::KGraph                      pg(&alloc);
     const kir::KEntry                pe = kir::gsplat::build_gsplat_project_kernel(pg, pcfg);
     kir::GlslKernel                  pk(&alloc);
@@ -317,12 +318,18 @@ TEST_CASE("B19-a3: on-device depth sort (project->depthkey->KV radix sort->gathe
     using cg::compute_usage::transfer_src;
 
     constexpr int n            = 4096;             // = nblocks(4) * epb(1024)
-    constexpr int threads      = 256;
-    constexpr int radix_bits   = 8;
-    constexpr int nbins        = 256;
-    constexpr int epb          = 1024;
+    constexpr int epb = 1024;
+    // REN-38 llvmpipe campaign: the KV-sort shape is DEVICE-DERIVED (subgroup width + shared budget) â€” see
+    // pick_sort_config. llvmpipe is 8-wide/32 KB, where the warp-32 8-bit shape is wrong AND unbuildable.
+    const crd::u32 sg_lanes = compute.subgroup_size();
+    if (sg_lanes == 0U || sg_lanes > 32U) { SKIP("no u32-maskable subgroup width reported"); }
+    const kir::SortConfig scfg    = kir::pick_sort_config(sg_lanes, compute.shared_memory_bytes(), epb, true);
+    const int             threads = scfg.threads;
+    const int             radix_bits = scfg.radix_bits;
+    const int             nbins   = 1 << radix_bits;
+    const int             npasses = scfg.passes;
     constexpr int nblocks      = n / epb;
-    constexpr int scan_threads = nblocks < threads ? nblocks : threads;
+    const int     scan_threads = nblocks < threads ? nblocks : threads;
     const double  c0          = kir::gsplat::detail::kShC0;
 
     // scene: n splats at DISTINCT linearly-spaced depths over [3,9]; x,y scattered (irrelevant to the sort)
@@ -368,14 +375,18 @@ TEST_CASE("B19-a3: on-device depth sort (project->depthkey->KV radix sort->gathe
     auto p_off1 = mk(gof1, kir::build_sort_offset_local(gof1, nblocks, radix_bits, scan_threads), 3, "gs_off1");
     auto p_off2 = mk(gof2, kir::build_sort_gbase(gof2, radix_bits), 2, "gs_gbase");
     auto p_gath = mk(gg, kir::gsplat::build_gsplat_gather_kernel(gg), 3, "gs_gather");
-    std::unique_ptr<cg::ComputePipeline> ph_s[4];
-    std::unique_ptr<cg::ComputePipeline> ps_s[4];
-    kir::KGraph ghg[4] = {kir::KGraph(&alloc), kir::KGraph(&alloc), kir::KGraph(&alloc), kir::KGraph(&alloc)};
-    kir::KGraph gsg[4] = {kir::KGraph(&alloc), kir::KGraph(&alloc), kir::KGraph(&alloc), kir::KGraph(&alloc)};
-    for (int p = 0; p < 4; ++p)
+    std::unique_ptr<cg::ComputePipeline> ph_s[8];
+    std::unique_ptr<cg::ComputePipeline> ps_s[8];
+    crd::containers::Array<kir::KGraph> ghg(&alloc);
+    crd::containers::Array<kir::KGraph> gsg(&alloc);
+    for (int p = 0; p < npasses; ++p) { ghg.emplace_back(&alloc); gsg.emplace_back(&alloc); }
+    for (int p = 0; p < npasses; ++p)
     {
-        ph_s[p] = mk(ghg[p], kir::build_sort_histogram(ghg[p], epb, threads, radix_bits, p * 8, nblocks), 2, "gs_hist");
-        ps_s[p] = mk(gsg[p], kir::build_sort_scatter(gsg[p], epb, threads, radix_bits, p * 8, nblocks, true), 6, "gs_scat");
+        const crd::usize up = static_cast<crd::usize>(p);
+        ph_s[p] = mk(ghg[up], kir::build_sort_histogram(ghg[up], epb, threads, radix_bits, p * radix_bits, nblocks,
+                                                        static_cast<int>(sg_lanes)), 2, "gs_hist");
+        ps_s[p] = mk(gsg[up], kir::build_sort_scatter(gsg[up], epb, threads, radix_bits, p * radix_bits, nblocks,
+                                                      static_cast<int>(sg_lanes), true), 6, "gs_scat");
         REQUIRE(ph_s[p] != nullptr); REQUIRE(ps_s[p] != nullptr);
     }
     REQUIRE(p_proj != nullptr); REQUIRE(p_key != nullptr); REQUIRE(p_off1 != nullptr); REQUIRE(p_off2 != nullptr); REQUIRE(p_gath != nullptr);
@@ -426,7 +437,7 @@ TEST_CASE("B19-a3: on-device depth sort (project->depthkey->KV radix sort->gathe
     // 4 LSD passes, ping-ponging keys (ka/kb) AND vals (va/vb)
     cg::ComputeBuffer* ck = d_ka.get(); cg::ComputeBuffer* ok = d_kb.get();
     cg::ComputeBuffer* cv = d_va.get(); cg::ComputeBuffer* ov = d_vb.get();
-    for (int p = 0; p < 4; ++p)
+    for (int p = 0; p < npasses; ++p)
     {
         cg::ComputeBuffer* hb[2] = {ck, d_hist.get()};
         disp(*ph_s[p], hb, 2, static_cast<crd::u32>(nblocks));
@@ -524,12 +535,16 @@ TEST_CASE("B19-a4: full GPU tile binning + block render on Vulkan == brute rende
     constexpr int max_cover   = 16;
     constexpr int local       = 64;
     constexpr int n_pad       = 2048;
-    constexpr int threads     = 256;
-    constexpr int radix_bits  = 8;
-    constexpr int nbins       = 256;
-    constexpr int epb         = 1024;
+    constexpr int epb = 1024;
+    const crd::u32 sg_lanes = compute.subgroup_size(); // REN-38: device-derived KV-sort shape (see pick_sort_config)
+    if (sg_lanes == 0U || sg_lanes > 32U) { SKIP("no u32-maskable subgroup width reported"); }
+    const kir::SortConfig scfg    = kir::pick_sort_config(sg_lanes, compute.shared_memory_bytes(), epb, true);
+    const int             threads = scfg.threads;
+    const int             radix_bits = scfg.radix_bits;
+    const int             nbins   = 1 << radix_bits;
+    const int             npasses = scfg.passes;
     constexpr int nblocks     = n_pad / epb;
-    constexpr int scan_threads = nblocks < threads ? nblocks : threads;
+    const int     scan_threads = nblocks < threads ? nblocks : threads;
     const double  pos_c       = 0.5 / kir::gsplat::detail::kShC0;
     const double  neg_c       = -0.5 / kir::gsplat::detail::kShC0;
 
@@ -562,6 +577,7 @@ TEST_CASE("B19-a4: full GPU tile binning + block render on Vulkan == brute rende
     }
     {
         kir::gsplat::GsplatProjectConfig pcfg;
+        pcfg.count = static_cast<crd::u32>(n_pad); // REN-38: tail-thread guard (dispatch rounds up)
         kir::KGraph                      hg(&alloc);
         const kir::KEntry                he = kir::gsplat::build_gsplat_project_kernel(hg, pcfg);
         proj.resize(uz(n) * 12U, 0.0);
@@ -587,6 +603,7 @@ TEST_CASE("B19-a4: full GPU tile binning + block render on Vulkan == brute rende
     }
 
     kir::gsplat::GsplatBinConfig   bcfg;
+    bcfg.count = static_cast<crd::u32>(n_pad); // REN-38: tail-thread guard (dispatch rounds up)
     bcfg.width = imw; bcfg.height = imh; bcfg.tile_px = tile_px; bcfg.max_cover = max_cover; bcfg.local_size = local;
     kir::gsplat::GsplatBlockConfig blkcfg;
     blkcfg.width = imw; blkcfg.height = imh; blkcfg.tile_px = tile_px;
@@ -619,20 +636,24 @@ TEST_CASE("B19-a4: full GPU tile binning + block render on Vulkan == brute rende
     auto p_rng = mk(grg, kir::gsplat::build_gsplat_tile_ranges_kernel(grg, local), 3, "gs_ranges");
     auto p_blk = mk(gbl, kir::gsplat::build_gsplat_block_render_kernel(gbl, blkcfg), 5, "gs_block");
     auto p_bru = mk(gbr, kir::gsplat::build_gsplat_render_kernel(gbr, brcfg), 3, "gs_brute");
-    std::unique_ptr<cg::ComputePipeline> ph_s[4];
-    std::unique_ptr<cg::ComputePipeline> ps_s[4];
+    std::unique_ptr<cg::ComputePipeline> ph_s[8];
+    std::unique_ptr<cg::ComputePipeline> ps_s[8];
     std::unique_ptr<cg::ComputePipeline> po1_s;
     std::unique_ptr<cg::ComputePipeline> po2_s;
     kir::KGraph gof1(&alloc);
     kir::KGraph gof2(&alloc);
     po1_s = mk(gof1, kir::build_sort_offset_local(gof1, nblocks, radix_bits, scan_threads), 3, "gs_off1");
     po2_s = mk(gof2, kir::build_sort_gbase(gof2, radix_bits), 2, "gs_gbase");
-    kir::KGraph ghg[4] = {kir::KGraph(&alloc), kir::KGraph(&alloc), kir::KGraph(&alloc), kir::KGraph(&alloc)};
-    kir::KGraph gsg[4] = {kir::KGraph(&alloc), kir::KGraph(&alloc), kir::KGraph(&alloc), kir::KGraph(&alloc)};
-    for (int p = 0; p < 4; ++p)
+    crd::containers::Array<kir::KGraph> ghg(&alloc);
+    crd::containers::Array<kir::KGraph> gsg(&alloc);
+    for (int p = 0; p < npasses; ++p) { ghg.emplace_back(&alloc); gsg.emplace_back(&alloc); }
+    for (int p = 0; p < npasses; ++p)
     {
-        ph_s[p] = mk(ghg[p], kir::build_sort_histogram(ghg[p], epb, threads, radix_bits, p * 8, nblocks), 2, "gs_hist");
-        ps_s[p] = mk(gsg[p], kir::build_sort_scatter(gsg[p], epb, threads, radix_bits, p * 8, nblocks, true), 6, "gs_scat");
+        const crd::usize up = static_cast<crd::usize>(p);
+        ph_s[p] = mk(ghg[up], kir::build_sort_histogram(ghg[up], epb, threads, radix_bits, p * radix_bits, nblocks,
+                                                        static_cast<int>(sg_lanes)), 2, "gs_hist");
+        ps_s[p] = mk(gsg[up], kir::build_sort_scatter(gsg[up], epb, threads, radix_bits, p * radix_bits, nblocks,
+                                                      static_cast<int>(sg_lanes), true), 6, "gs_scat");
     }
 
     // device buffers
@@ -729,7 +750,7 @@ TEST_CASE("B19-a4: full GPU tile binning + block render on Vulkan == brute rende
         bar_w(rec, *d_ka); bar_w(rec, *d_va);
         cg::ComputeBuffer* ck = d_ka.get(); cg::ComputeBuffer* ok = d_kb.get();
         cg::ComputeBuffer* cv = d_va.get(); cg::ComputeBuffer* ov = d_vb.get();
-        for (int p = 0; p < 4; ++p)
+        for (int p = 0; p < npasses; ++p)
         {
             cg::ComputeBuffer* hb[2] = {ck, d_hist.get()};
             disp(rec, *ph_s[p], hb, 2, static_cast<crd::u32>(nblocks));
@@ -847,6 +868,7 @@ TEST_CASE("B19-c: 2DGS surfel project + ray-surfel render on Vulkan == CPU oracl
 
     // GPU project
     kir::gsplat::Gsplat2dProjectConfig pcfg;
+    pcfg.count = static_cast<crd::u32>(ns); // REN-38: guard the tail threads of the rounded-up dispatch
     kir::KGraph                        pg(&alloc);
     auto p_proj = mk(pg, kir::gsplat::build_gsplat2d_project_kernel(pg, pcfg), 3, "gs2d_project");
     REQUIRE(p_proj != nullptr);
@@ -1241,6 +1263,7 @@ TEST_CASE("B19-e: relightable 2DGS render on Vulkan == CPU oracle", "[gpu-contex
         return compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
     };
     kir::gsplat::Gsplat2dProjectConfig pcfg;
+    pcfg.count = static_cast<crd::u32>(ns); // REN-38: guard the tail threads of the rounded-up dispatch
     kir::KGraph pg(&alloc);
     auto p_proj = mk(pg, kir::gsplat::build_gsplat2d_project_kernel(pg, pcfg), 3, "gs2d_proj");
     crd::containers::Array<float> prep(&alloc);
@@ -1338,6 +1361,7 @@ TEST_CASE("B19 StopThePop: per-pixel resort render on Vulkan == CPU oracle", "[g
         return compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
     };
     kir::gsplat::Gsplat2dProjectConfig pcfg;
+    pcfg.count = static_cast<crd::u32>(ns); // REN-38: guard the tail threads of the rounded-up dispatch
     kir::KGraph pg(&alloc);
     auto p_proj = mk(pg, kir::gsplat::build_gsplat2d_project_kernel(pg, pcfg), 3, "gs2d_proj");
     crd::containers::Array<float> prep(&alloc);
@@ -1422,6 +1446,7 @@ TEST_CASE("B19-d: quantise/dequantise codec on Vulkan == CPU oracle", "[gpu-cont
         return compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
     };
     kir::gsplat::GsplatQuantizeConfig qc;
+    qc.count = static_cast<crd::u32>(n); // REN-38: tail-thread guard (dispatch rounds up)
     qc.natt = natt; qc.bits = bits;
     kir::KGraph qg(&alloc); kir::KGraph dg(&alloc);
     auto p_q = mk(qg, kir::gsplat::build_gsplat_quantize_kernel(qg, qc), 3, "gs_quant");

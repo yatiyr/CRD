@@ -90,6 +90,7 @@ public:
     [[nodiscard]] crd::u32 graphics_family() const noexcept override { return m_graphics_family; }
     [[nodiscard]] bool     shader_object() const noexcept override { return m_shader_object; }
     [[nodiscard]] bool     mesh_shader() const noexcept override { return m_mesh_shader; } // B4: VK_EXT_mesh_shader + meshShader
+    [[nodiscard]] bool     task_shader() const noexcept override { return m_task_shader; }    // REN-38: + taskShader (amplification)
     [[nodiscard]] bool     ray_query() const noexcept override { return m_ray_query; } // B9/RT: VK_KHR_ray_query + acceleration_structure
     [[nodiscard]] bool     opacity_micromap() const noexcept override { return m_opacity_micromap; } // FA-1
     [[nodiscard]] bool     rt_pipeline() const noexcept override { return m_rt_pipeline; }           // FA-2
@@ -610,8 +611,11 @@ private:
             descidx                                          = keep; // enable ONLY the non-uniform sampled-image bit
         }
 
-        // B4: mesh shaders — confirm the meshShader bit before committing (the extension can be exposed without it). Enable
-        // ONLY meshShader (not taskShader/multiview yet — our path dispatches mesh workgroups directly, no amplification stage).
+        // B4: mesh shaders — confirm the meshShader bit before committing (the extension can be exposed without it).
+        // ⛔⛔ REN-38 llvmpipe campaign: taskShader is ENABLED TOO (when present). The original comment said "no
+        // amplification stage" — but B4 then grew `create_task_mesh_program`, which creates a TASK shader object,
+        // and creating one with taskShader DISABLED violates VUID-VkShaderCreateInfoEXT-stage-08421 on EVERY
+        // platform. NVIDIA's runtime tolerated it silently; Ubuntu's validation layer was the first to say it.
         VkPhysicalDeviceMeshShaderFeaturesEXT mesh{};
         mesh.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT;
         if (m_mesh_shader)
@@ -621,10 +625,12 @@ private:
             f2.pNext = &mesh;
             vkGetPhysicalDeviceFeatures2(m_physical, &f2);
             m_mesh_shader = mesh.meshShader == VK_TRUE;
+            m_task_shader = m_mesh_shader && mesh.taskShader == VK_TRUE; // amplification needs BOTH bits
             VkPhysicalDeviceMeshShaderFeaturesEXT keep{};
             keep.sType      = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT;
             keep.meshShader = mesh.meshShader;
-            mesh            = keep; // enable ONLY the meshShader bit
+            keep.taskShader = mesh.taskShader; // enable exactly what the device offers of the pair
+            mesh            = keep;
         }
         // B4-tess: confirm the patch-control-points feature (the EDS2 extension can be exposed without this optional bit).
         if (m_tessellation)
@@ -801,6 +807,7 @@ private:
     bool             m_fragment_interlock    = false; // B1-f: pixel-ordered fragment-shader interlock (ROV) enabled
     bool             m_bindless              = false; // B2-d: non-uniform sampled-image array indexing enabled
     bool             m_mesh_shader           = false; // B4: VK_EXT_mesh_shader + meshShader feature enabled
+    bool             m_task_shader           = false; // REN-38: + taskShader (amplification) — enabled when offered
     bool             m_ray_query             = false; // B9/RT: VK_KHR_ray_query + acceleration_structure + BDA enabled
     bool             m_opacity_micromap      = false; // FA-1: VK_EXT_opacity_micromap
     bool             m_rt_pipeline           = false; // FA-2: VK_KHR_ray_tracing_pipeline

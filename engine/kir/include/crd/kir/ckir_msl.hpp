@@ -320,6 +320,7 @@ inline bool emit_compute_kernel_msl(const KGraph& g, const KEntry& entry, crd::m
             case KStmtKind::TraceRayClosest:  case KStmtKind::TraceRayHit:   case KStmtKind::TraceRayCurves:
             case KStmtKind::TraceRayPipeline:  case KStmtKind::PayloadStore:  case KStmtKind::ReorderThread:
             case KStmtKind::IgnoreHitIf:
+            case KStmtKind::ReportHit: case KStmtKind::ExecuteCallable: // REN-38-F13: same RT-only family
                 // Inline ray tracing / RT-pipeline statements are GLSL/HLSL-only; Metal has no inline-RT path here, so a kernel
                 // carrying them is never routed to this emitter. Listed explicitly (not a catch-all default) so a future
                 // NON-RT KStmtKind still trips -Wswitch and gets wired to every backend. Advance past the statement.

@@ -227,8 +227,8 @@ bool automation_value(const TimelineResource& tl, crd::u32 index, const Rational
         const crd::f64 sec0 = crd::time::to_seconds_f64(key_time(seg));
         const crd::f64 sec1 = crd::time::to_seconds_f64(key_time(seg + 1));
         const crd::f64 u    = (crd::time::to_seconds_f64(t) - sec0) / (sec1 - sec0); // the f64 value edge
-        const crd::f32 v0   = key_value(seg);
-        const crd::f32 v1   = key_value(seg + 1);
+        const crd::f64 v0   = static_cast<crd::f64>(key_value(seg));
+        const crd::f64 v1   = static_cast<crd::f64>(key_value(seg + 1));
         out                 = static_cast<crd::f32>(v0 + u * (v1 - v0));
         return true;
     }

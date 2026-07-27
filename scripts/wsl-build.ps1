@@ -144,6 +144,13 @@ if (-not $skipTestsForPreset) {
     # CTestTestfile.cmake from exactly where we built it.
     # (Phase 3.1 v1a-sandbox-smoke debugging surfaced this — Linux ctest was
     # running yesterday's enumeration, missing the new eylem tests.)
+    # REN-38 (2026-07-27): BOUND llvmpipe's worker pool. WSL has no GPU passthrough for Vulkan, so the GPU tests
+    # run on Mesa's llvmpipe (a CPU driver) — and it spawns ~nproc worker threads PER PROCESS. A parallel ctest
+    # (`-j N`) therefore lands N x nproc llvmpipe threads plus N JIT compilers on the same cores, and the heaviest
+    # shader in the suite (the IB-1 path tracer: 4 unrolled bounces x many-lights NEE+MIS) SEGFAULTed once under
+    # that pressure while passing every serial and single-family run. Capping the pool keeps a parallel run
+    # deterministic instead of producing phantom failures that read like code defects.
+    $bashLines += 'export LP_NUM_THREADS=4'
     $bashLines += "ctest --test-dir `"`$BUILD_DIR`" --output-on-failure"
 }
 

@@ -8,7 +8,7 @@
 #include <crd/cooker/cook_handler.hpp>
 #include <crd/cooker/cook_io.hpp>
 #include <crd/cooker/texture_cook.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/deflate.hpp>
@@ -32,7 +32,7 @@ namespace
 {
 
 // NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
-crd::memory::MallocAllocator g_alloc;
+crd::memory::GrowableTlsfAllocator g_alloc{crd::usize{64} << 20U, nullptr, "texture_cook-tests"};
 // NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
 void register_handlers_once()

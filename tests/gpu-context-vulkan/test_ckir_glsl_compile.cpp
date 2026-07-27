@@ -16,6 +16,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstdio>  // std::printf — the dxc soft-skip notice
+#include <cstring> // std::strstr — the dxc soft-skip marker probe
+
 namespace kir = crd::kir;
 
 namespace
@@ -30,6 +33,15 @@ bool compiles(const kir::GlslKernel& k, crd::memory::IAllocator* a)
 bool compiles_hlsl(const kir::GlslKernel& k, crd::memory::IAllocator* a)
 {
     const auto res = crd::gpu::compile_hlsl_to_spirv(crd::gpu::ShaderStage::Compute, crd::containers::to_view(k.source), "ckir_ew_hlsl", a);
+    // the documented soft-skip (`compile_hlsl_to_spirv`'s contract, and test_hlsl_conformance's idiom): the
+    // CRD_HAS_DXC=0 stub is CAPABILITY ABSENT (Linux without dxc-dev), not a compile failure. Keyed on the
+    // stub's unique marker so every REAL dxc rejection still fails loudly below. ⛔ NOT the SKIP macro:
+    // this helper runs INSIDE a CHECK(...), whose try/catch turns the skip exception into a failure.
+    if (!res.ok && std::strstr(res.error_message.c_str(), "CRD_HAS_DXC=0") != nullptr)
+    {
+        std::printf("[dxc unavailable] HLSL half soft-skipped (CRD_HAS_DXC=0)\n");
+        return true;
+    }
     INFO(res.error_message.c_str());
     CHECK(res.ok);
     return res.ok && res.spirv.size() > 0;

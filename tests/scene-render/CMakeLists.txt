@@ -19,7 +19,6 @@ target_link_libraries(crd-scene-render-tests PRIVATE
     crd-scene-render
     crd-gpu-context
     crd-gpu-context-vulkan
-    crd-gpu-context-dx12   # REN-38-F6: the DX12 twins of the advanced-family render gates
     crd-kir
     crd-jobs
     Catch2::Catch2WithMain
@@ -28,6 +27,9 @@ target_link_libraries(crd-scene-render-tests PRIVATE
 crd_enable_default_pch(crd-scene-render-tests)
 target_compile_definitions(crd-scene-render-tests PRIVATE _CRT_SECURE_NO_WARNINGS) # std::getenv (the drift gate's ctest env)
 target_link_libraries(crd-scene-render-tests PRIVATE crd-material-cook crd-vertex-cook crd-light-cook) # REN-38: the drift gate parses all five vocabularies
+if(WIN32) # REN-38-F6: the DX12 twins of the advanced-family render gates (the backend exists only on Windows)
+    target_link_libraries(crd-scene-render-tests PRIVATE crd-gpu-context-dx12)
+endif()
 
 # REN-38 audit: the DRIFT GATE reads the shipped authored assets — the root rides ctest, so the guard lives in
 # ctest exactly like every cross-config guard (binary-direct runs SKIP rather than passing on nothing).

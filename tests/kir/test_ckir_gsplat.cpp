@@ -58,6 +58,7 @@ TEST_CASE("ckir gsplat projection matches closed-form geometry for on-axis Gauss
     put_gauss(gauss, 2, 0.0, 0.0, -10.0, s, 0, 0, 0, 1, 0.9, 0.0, 0.0, 0.0); // BEHIND the camera (view-z = -5) ⇒ culled
 
     kir::gsplat::GsplatProjectConfig cfg;
+    cfg.count = static_cast<crd::u32>(ng); // REN-38: tail-thread guard (dispatch rounds up)
     kir::KGraph                      g(&alloc);
     const kir::KEntry                e = kir::gsplat::build_gsplat_project_kernel(g, cfg);
     out.resize(static_cast<crd::usize>(ng) * 12U, 0.0);
@@ -119,6 +120,7 @@ TEST_CASE("ckir gsplat render composites depth-sorted splats front-to-back", "[c
 
     // ── project ──
     kir::gsplat::GsplatProjectConfig pcfg;
+    pcfg.count = static_cast<crd::u32>(ng); // REN-38: tail-thread guard (dispatch rounds up)
     kir::KGraph                      pg(&alloc);
     const kir::KEntry                pe = kir::gsplat::build_gsplat_project_kernel(pg, pcfg);
     proj.resize(static_cast<crd::usize>(ng) * 12U, 0.0);
@@ -219,6 +221,7 @@ TEST_CASE("ckir gsplat TILED render == brute-force render (the perf structure is
 
     // ── project ──
     kir::gsplat::GsplatProjectConfig pcfg;
+    pcfg.count = static_cast<crd::u32>(ng); // REN-38: tail-thread guard (dispatch rounds up)
     kir::KGraph                      pg(&alloc);
     const kir::KEntry                pe = kir::gsplat::build_gsplat_project_kernel(pg, pcfg);
     proj.resize(static_cast<crd::usize>(ng) * 12U, 0.0);
@@ -355,6 +358,7 @@ TEST_CASE("ckir gsplat MIP-SPLATTING is alias-free: total energy tracks true spl
         gauss.resize(14U, 0.0); out.resize(12U, 0.0);
         put_gauss(gauss, 0, 0.0, 0.0, 0.0, s, 0, 0, 0, 1, 0.9, 0.0, 0.0, 0.0);
         kir::gsplat::GsplatProjectConfig cfg;
+        cfg.count = 1U; // REN-38: tail-thread guard — this probe projects ONE gaussian
         cfg.mip = mip; cfg.smooth_3d = 0.0; // isolate the 2D Mip filter (no 3D smoothing) for a clean invariant
         cfg.lowpass = 0.3; cfg.mip_2d = 0.3;
         kir::KGraph       g(&alloc);
@@ -424,6 +428,7 @@ TEST_CASE("ckir gsplat ON-DEVICE depth sort == host sort (the sort half runs on 
 
     // project
     kir::gsplat::GsplatProjectConfig pcfg;
+    pcfg.count = static_cast<crd::u32>(n); // REN-38: tail-thread guard (dispatch rounds up)
     kir::KGraph                      pg(&alloc);
     const kir::KEntry                pe = kir::gsplat::build_gsplat_project_kernel(pg, pcfg);
     proj.resize(static_cast<crd::usize>(n) * 12U, 0.0);
@@ -459,10 +464,10 @@ TEST_CASE("ckir gsplat ON-DEVICE depth sort == host sort (the sort half runs on 
         kir::KGraph gof1(&alloc);
         kir::KGraph gof2(&alloc);
         kir::KGraph gs(&alloc);
-        const kir::KEntry eh  = kir::build_sort_histogram(gh, epb, threads, radix_bits, shift, nblocks);
+        const kir::KEntry eh  = kir::build_sort_histogram(gh, epb, threads, radix_bits, shift, nblocks, 32);
         const kir::KEntry eo1 = kir::build_sort_offset_local(gof1, nblocks, radix_bits, scan_threads);
         const kir::KEntry eo2 = kir::build_sort_gbase(gof2, radix_bits);
-        const kir::KEntry es  = kir::build_sort_scatter(gs, epb, threads, radix_bits, shift, nblocks, true);
+        const kir::KEntry es  = kir::build_sort_scatter(gs, epb, threads, radix_bits, shift, nblocks, 32, true);
         kir::KernelBuffer h[2] = {{ck, n, 0, 0}, {bh.data(), nblocks * nbins, 0, 1}};
         kir::eval_cpu_kernel(gh, eh, h, 2, eh.local_size[0], &alloc, static_cast<crd::u32>(nblocks));
         kir::KernelBuffer o1[3] = {{bh.data(), nblocks * nbins, 0, 0}, {go.data(), nblocks * nbins, 0, 1}, {tot.data(), nbins, 0, 2}};
@@ -554,6 +559,7 @@ TEST_CASE("B19-a4 tilecount: covered-tile count per splat matches the host bbox 
     }
 
     kir::gsplat::GsplatProjectConfig pcfg;
+    pcfg.count = static_cast<crd::u32>(n); // REN-38: tail-thread guard (dispatch rounds up)
     kir::KGraph                      pg(&alloc);
     const kir::KEntry                pe = kir::gsplat::build_gsplat_project_kernel(pg, pcfg);
     proj.resize(static_cast<crd::usize>(n) * 12U, 0.0);
@@ -561,6 +567,7 @@ TEST_CASE("B19-a4 tilecount: covered-tile count per splat matches the host bbox 
     kir::eval_cpu_kernel(pg, pe, pb, 3, pe.local_size[0], &alloc, 1U);
 
     kir::gsplat::GsplatBinConfig bcfg;
+    bcfg.count = static_cast<crd::u32>(n); // REN-38: tail-thread guard (dispatch rounds up)
     bcfg.width = imw; bcfg.height = imh; bcfg.tile_px = tile_px; bcfg.max_cover = 16;
     kir::KGraph       tg(&alloc);
     const kir::KEntry te = kir::gsplat::build_gsplat_tilecount_kernel(tg, bcfg);
@@ -633,6 +640,7 @@ TEST_CASE("B19-a4 scatter: tilecount->scan->scatter packs (tile,splat) instances
     }
 
     kir::gsplat::GsplatProjectConfig pcfg;
+    pcfg.count = static_cast<crd::u32>(n); // REN-38: tail-thread guard (dispatch rounds up)
     kir::KGraph                      pg(&alloc);
     const kir::KEntry                pe = kir::gsplat::build_gsplat_project_kernel(pg, pcfg);
     proj.resize(static_cast<crd::usize>(n) * 12U, 0.0);
@@ -640,6 +648,7 @@ TEST_CASE("B19-a4 scatter: tilecount->scan->scatter packs (tile,splat) instances
     kir::eval_cpu_kernel(pg, pe, pb, 3, pe.local_size[0], &alloc, 1U);
 
     kir::gsplat::GsplatBinConfig bcfg;
+    bcfg.count = static_cast<crd::u32>(n); // REN-38: tail-thread guard (dispatch rounds up)
     bcfg.width = imw; bcfg.height = imh; bcfg.tile_px = tile_px; bcfg.max_cover = max_cover; bcfg.local_size = local;
 
     // tilecount
@@ -787,6 +796,7 @@ TEST_CASE("B19-a4 FULL GPU BINNING: tilecount->scan->scatter->sort->ranges->bloc
 
     // project
     kir::gsplat::GsplatProjectConfig pcfg;
+    pcfg.count = static_cast<crd::u32>(n_pad); // REN-38: tail-thread guard (dispatch rounds up)
     kir::KGraph                      pg(&alloc);
     const kir::KEntry                pe = kir::gsplat::build_gsplat_project_kernel(pg, pcfg);
     proj.resize(static_cast<crd::usize>(n) * 12U, 0.0);
@@ -819,6 +829,7 @@ TEST_CASE("B19-a4 FULL GPU BINNING: tilecount->scan->scatter->sort->ranges->bloc
     }
 
     kir::gsplat::GsplatBinConfig bcfg;
+    bcfg.count = static_cast<crd::u32>(n_pad); // REN-38: tail-thread guard (dispatch rounds up)
     bcfg.width = imw; bcfg.height = imh; bcfg.tile_px = tile_px; bcfg.max_cover = max_cover; bcfg.local_size = local;
 
     // tilecount → tc
@@ -874,10 +885,10 @@ TEST_CASE("B19-a4 FULL GPU BINNING: tilecount->scan->scatter->sort->ranges->bloc
         kir::KGraph gof1(&alloc);
         kir::KGraph gof2(&alloc);
         kir::KGraph gs(&alloc);
-        const kir::KEntry eh  = kir::build_sort_histogram(gh, epb, threads, radix_bits, shift, nblocks);
+        const kir::KEntry eh  = kir::build_sort_histogram(gh, epb, threads, radix_bits, shift, nblocks, 32);
         const kir::KEntry eo1 = kir::build_sort_offset_local(gof1, nblocks, radix_bits, scan_threads);
         const kir::KEntry eo2 = kir::build_sort_gbase(gof2, radix_bits);
-        const kir::KEntry es  = kir::build_sort_scatter(gs, epb, threads, radix_bits, shift, nblocks, true);
+        const kir::KEntry es  = kir::build_sort_scatter(gs, epb, threads, radix_bits, shift, nblocks, 32, true);
         kir::KernelBuffer h[2] = {{ck, n_pad, 0, 0}, {bh.data(), nblocks * nbins, 0, 1}};
         kir::eval_cpu_kernel(gh, eh, h, 2, eh.local_size[0], &alloc, static_cast<crd::u32>(nblocks));
         kir::KernelBuffer o1[3] = {{bh.data(), nblocks * nbins, 0, 0}, {go.data(), nblocks * nbins, 0, 1}, {tot.data(), nbins, 0, 2}};
@@ -976,6 +987,7 @@ TEST_CASE("B19-d quantise: the K-bit attribute codec round-trips within the quan
     }
 
     kir::gsplat::GsplatQuantizeConfig qc;
+    qc.count = static_cast<crd::u32>(n); // REN-38: tail-thread guard (dispatch rounds up)
     qc.natt = natt; qc.bits = bits;
     crd::containers::Array<double> codes(&alloc);
     crd::containers::Array<double> recon(&alloc);
@@ -1052,10 +1064,10 @@ TEST_CASE("B19-d Morton: sorting by the Z-order key gives spatial locality (adja
         kir::KGraph gof1(&alloc);
         kir::KGraph gof2(&alloc);
         kir::KGraph gscat(&alloc);
-        const kir::KEntry eh  = kir::build_sort_histogram(gh, epb, threads, radix_bits, shift, nblocks);
+        const kir::KEntry eh  = kir::build_sort_histogram(gh, epb, threads, radix_bits, shift, nblocks, 32);
         const kir::KEntry eo1 = kir::build_sort_offset_local(gof1, nblocks, radix_bits, scan_threads);
         const kir::KEntry eo2 = kir::build_sort_gbase(gof2, radix_bits);
-        const kir::KEntry es  = kir::build_sort_scatter(gscat, epb, threads, radix_bits, shift, nblocks, true);
+        const kir::KEntry es  = kir::build_sort_scatter(gscat, epb, threads, radix_bits, shift, nblocks, 32, true);
         kir::KernelBuffer h[2] = {{ck, n, 0, 0}, {bh.data(), nblocks * nbins, 0, 1}};
         kir::eval_cpu_kernel(gh, eh, h, 2, eh.local_size[0], &alloc, static_cast<crd::u32>(nblocks));
         kir::KernelBuffer o1[3] = {{bh.data(), nblocks * nbins, 0, 0}, {go.data(), nblocks * nbins, 0, 1}, {tot.data(), nbins, 0, 2}};
@@ -1227,6 +1239,7 @@ TEST_CASE("B19 perf: shared-memory block render == direct block render (bit-exac
     }
 
     kir::gsplat::GsplatProjectConfig pcfg;
+    pcfg.count = static_cast<crd::u32>(n); // REN-38: tail-thread guard (dispatch rounds up)
     kir::KGraph                      pg(&alloc);
     const kir::KEntry                pe = kir::gsplat::build_gsplat_project_kernel(pg, pcfg);
     proj.resize(static_cast<crd::usize>(n) * 12U, 0.0);

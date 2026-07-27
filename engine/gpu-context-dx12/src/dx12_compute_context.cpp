@@ -265,6 +265,17 @@ Dx12ComputeContext::~Dx12ComputeContext()
 
 bool Dx12ComputeContext::valid() const noexcept { return m_impl->ok; }
 bool Dx12ComputeContext::supports_shader_int64() const noexcept { return false; } // not queried in this slice
+// REN-38: the device truths the warp-synchronous kernels are built against. D3D12 pins compute-shader TGSM at
+// 32 KB by spec; the wave width comes from OPTIONS1 (WaveLaneCountMin — the width WaveGetLaneCount() delivers
+// on every current adapter; NV/Intel 32, AMD RDNA 32).
+crd::u32 Dx12ComputeContext::subgroup_size() const noexcept
+{
+    if (m_impl->device == nullptr) { return 0U; }
+    D3D12_FEATURE_DATA_D3D12_OPTIONS1 o1{};
+    if (FAILED(m_impl->device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS1, &o1, sizeof(o1)))) { return 0U; }
+    return o1.WaveOps != FALSE ? o1.WaveLaneCountMin : 0U;
+}
+crd::u32 Dx12ComputeContext::shared_memory_bytes() const noexcept { return 32768U; } // D3D12 CS TGSM spec limit
 
 // D4: serialize the pipeline library (the PSO cache) so it can be persisted to disk.
 void Dx12ComputeContext::pipeline_cache_data(crd::containers::Array<crd::u8>& out) const

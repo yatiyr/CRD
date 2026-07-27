@@ -2,7 +2,7 @@
 
 // ckir_subgroup_test.hpp — B11: a shared CKIR kernel exercising the wave/subgroup reduce · scan · broadcast · shuffle ops, so the
 // Vulkan (GLSL) and DX12 (HLSL) gates run the IDENTICAL kernel and the same CPU-oracle reference (bit-exact both backends). One
-// 64-thread workgroup = two 32-lane subgroups; each thread writes 7 results to out[k*threads + tid].
+// 64-thread workgroup over the DEVICE subgroup width (`lanes` — llvmpipe 8, NV/DX12 32); each thread writes 7 results to out[k*threads + tid].
 
 #include <crd/kir/ckir.hpp>
 
@@ -12,7 +12,7 @@ namespace crd::gputest
 constexpr int kSubgroupNOut = 11; // add·max·incl·excl·bcast·shuffle·or + quad{broadcast·swapX·swapY·swapDiag}
 
 // in (binding 0, u32[threads]) → out (binding 1, u32[kSubgroupNOut*threads]). INTEGER ops ⇒ bit-exact vs the oracle.
-inline crd::kir::KEntry build_subgroup_ops_kernel(crd::kir::KGraph& g, int threads)
+inline crd::kir::KEntry build_subgroup_ops_kernel(crd::kir::KGraph& g, int threads, int lanes)
 {
     namespace kir     = crd::kir;
     const auto  sh    = kir::make_shape({1});
@@ -36,7 +36,9 @@ inline crd::kir::KEntry build_subgroup_ops_kernel(crd::kir::KGraph& g, int threa
     store(2, g.subgroup_inclusive_add(x));
     store(3, g.subgroup_exclusive_add(x));
     store(4, g.subgroup_broadcast_first(x));
-    const int lane = g.binary(kir::KOp::BitAnd, add(tid, ku(1)), ku(31)); // read from the next lane in the subgroup ((tid+1)&31)
+    // read from the next lane WITHIN the subgroup: (tid+1) & (lanes-1) — the old literal &31 pointed OUTSIDE an
+    // 8-wide llvmpipe subgroup for lane 7 (undefined per spec). `lanes` is a power of two on every device we run.
+    const int lane = g.binary(kir::KOp::BitAnd, add(tid, ku(1)), ku(static_cast<crd::u32>(lanes - 1)));
     store(5, g.subgroup_shuffle(x, lane));
     store(6, g.subgroup_or(x));
     store(7, g.quad_broadcast(x, ku(2)));  // every lane in a 2×2 quad ← quad lane 2's value

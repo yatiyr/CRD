@@ -227,8 +227,8 @@ TEST_CASE("B18-c: Zinke dual scattering attenuates with depth, broadens, and tra
 
     // LUT row actually consulted at θd = 0.20 (bin (0.20+π/2)/π·64 ≈ 36) — printed so any failure is diagnosable at a glance.
     const int  bin36 = 36;
-    const auto l     = [&](const crd::containers::Array<double>& l, int k) {
-        return l[static_cast<crd::usize>(bin36) * static_cast<crd::usize>(kir::hairms::kLutStride) + static_cast<crd::usize>(k)];
+    const auto l     = [&](const crd::containers::Array<double>& lut, int k) {
+        return lut[static_cast<crd::usize>(bin36) * static_cast<crd::usize>(kir::hairms::kLutStride) + static_cast<crd::usize>(k)];
     };
     INFO("LUT[light] a_f=" << l(lut_light, 0) << " a_b=" << l(lut_light, 1) << " bf2=" << l(lut_light, 2)
          << " db=" << l(lut_light, 3) << " sb2=" << l(lut_light, 4));

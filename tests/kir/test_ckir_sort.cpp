@@ -30,7 +30,7 @@ TEST_CASE("B-cmp: CKIR radix-sort HISTOGRAM == direct per-block digit count", "[
     for (int shift = 0; shift < 32; shift += 8) // all four 8-bit digits
     {
         kir::KGraph       g(&alloc);
-        const kir::KEntry e = kir::build_sort_histogram(g, epb, threads, radix_bits, shift, nblocks);
+        const kir::KEntry e = kir::build_sort_histogram(g, epb, threads, radix_bits, shift, nblocks, 32);
 
         crd::containers::Array<crd::f64> bhist(&alloc);
         bhist.resize(static_cast<crd::usize>(nblocks) * static_cast<crd::usize>(nbins), -1.0);
@@ -60,14 +60,16 @@ TEST_CASE("B-cmp: CKIR radix-sort HISTOGRAM == direct per-block digit count", "[
     }
 }
 
-TEST_CASE("B-cmp: CKIR full 4-pass LSD radix sort == sorted (oracle)", "[kir][kernel][sort]")
+namespace
 {
-    constexpr int n          = 16384;
-    constexpr int threads    = 256;
-    constexpr int radix_bits = 8;
-    constexpr int nbins      = 1 << radix_bits;
-    constexpr int epb        = 1024;
-    constexpr int nblocks    = n / epb;
+// The full-sort oracle, SHAPE-PARAMETERIZED (REN-38 llvmpipe campaign): the same driver must hold on the
+// warp-32 shape (NV/DX12) AND the 8-lane 4-bit shape pick_sort_config derives for llvmpipe-class devices.
+void run_full_sort_oracle(int threads, int radix_bits, int lanes)
+{
+    constexpr int n = 16384;
+    const int nbins = 1 << radix_bits;
+    constexpr int epb = 1024;
+    constexpr int nblocks = n / epb;
     crd::memory::TlsfAllocator alloc(128U << 20U);
 
     crd::containers::Array<crd::f64> ka(&alloc); crd::containers::Array<crd::f64> kb(&alloc);
@@ -78,22 +80,23 @@ TEST_CASE("B-cmp: CKIR full 4-pass LSD radix sort == sorted (oracle)", "[kir][ke
     go.resize(static_cast<crd::usize>(nblocks) * static_cast<crd::usize>(nbins), 0.0);
     tot.resize(static_cast<crd::usize>(nbins), 0.0);
     gb.resize(static_cast<crd::usize>(nbins), 0.0);
-    constexpr int scan_threads = nblocks < threads ? nblocks : threads; // divides nblocks (16 here)
+    const int scan_threads = nblocks < threads ? nblocks : threads; // divides nblocks (16 here)
     for (int i = 0; i < n; ++i) { ka[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<crd::u32>((i * 1103515245U + 12345U) ^ (static_cast<crd::u32>(i) << 13U))); }
 
     crd::f64* cur = ka.data();
     crd::f64* oth = kb.data();
-    for (int pass = 0; pass < 4; ++pass)
+    const int npasses = 32 / radix_bits;
+    for (int pass = 0; pass < npasses; ++pass)
     {
-        const int shift = pass * 8;
+        const int shift = pass * radix_bits;
         kir::KGraph gh(&alloc); kir::KGraph gof1(&alloc); kir::KGraph gof2(&alloc); kir::KGraph gs(&alloc);
-        const kir::KEntry eh  = kir::build_sort_histogram(gh, epb, threads, radix_bits, shift, nblocks);
+        const kir::KEntry eh  = kir::build_sort_histogram(gh, epb, threads, radix_bits, shift, nblocks, lanes);
         const kir::KEntry eo1 = kir::build_sort_offset_local(gof1, nblocks, radix_bits, scan_threads);
         const kir::KEntry eo2 = kir::build_sort_gbase(gof2, radix_bits);
-        const kir::KEntry es  = kir::build_sort_scatter(gs, epb, threads, radix_bits, shift, nblocks);
+        const kir::KEntry es  = kir::build_sort_scatter(gs, epb, threads, radix_bits, shift, nblocks, lanes);
 
         kir::KernelBuffer h[2] = {{cur, n, 0, 0}, {bh.data(), nblocks * nbins, 0, 1}};
-        kir::eval_cpu_kernel(gh, eh, h, 2, eh.local_size[0], &alloc, static_cast<crd::u32>(nblocks));
+        kir::eval_cpu_kernel(gh, eh, h, 2, eh.local_size[0], &alloc, static_cast<crd::u32>(nblocks), static_cast<crd::u32>(lanes));
         // parallel offset: local (grid=nbins) → within-bin block prefix + totals; gbase (1 WG) → per-bin global base gb.
         kir::KernelBuffer o1[3] = {{bh.data(), nblocks * nbins, 0, 0}, {go.data(), nblocks * nbins, 0, 1}, {tot.data(), nbins, 0, 2}};
         kir::eval_cpu_kernel(gof1, eo1, o1, 3, eo1.local_size[0], &alloc, static_cast<crd::u32>(nbins));
@@ -116,7 +119,7 @@ TEST_CASE("B-cmp: CKIR full 4-pass LSD radix sort == sorted (oracle)", "[kir][ke
             CHECK(running == static_cast<crd::u32>(n));
         }
         kir::KernelBuffer s[4] = {{cur, n, 0, 0}, {oth, n, 0, 1}, {go.data(), nblocks * nbins, 0, 2}, {gb.data(), nbins, 0, 3}};
-        kir::eval_cpu_kernel(gs, es, s, 4, es.local_size[0], &alloc, static_cast<crd::u32>(nblocks));
+        kir::eval_cpu_kernel(gs, es, s, 4, es.local_size[0], &alloc, static_cast<crd::u32>(nblocks), static_cast<crd::u32>(lanes));
 
         crd::f64* tmp = cur; cur = oth; oth = tmp; // ping-pong
     }
@@ -135,6 +138,13 @@ TEST_CASE("B-cmp: CKIR full 4-pass LSD radix sort == sorted (oracle)", "[kir][ke
     }
     CHECK(ix == sx);
     CHECK(is == ss);
+}
+} // namespace
+
+TEST_CASE("B-cmp: CKIR full LSD radix sort == sorted (oracle, both device shapes)", "[kir][kernel][sort]")
+{
+    SECTION("warp-32 shape (256 threads, 8-bit)") { run_full_sort_oracle(256, 8, 32); }
+    SECTION("llvmpipe shape (16 threads, 4-bit, 8 lanes)") { run_full_sort_oracle(16, 4, 8); }
 }
 
 // B19-a3: the KEY-VALUE radix sort — a per-key payload rides the same permutation as its key. The keystone that 3DGS
@@ -175,10 +185,10 @@ TEST_CASE("B-cmp: CKIR key-VALUE radix sort carries the payload bit-exactly", "[
     {
         const int shift = pass * 8;
         kir::KGraph gh(&alloc); kir::KGraph gof1(&alloc); kir::KGraph gof2(&alloc); kir::KGraph gs(&alloc);
-        const kir::KEntry eh  = kir::build_sort_histogram(gh, epb, threads, radix_bits, shift, nblocks);
+        const kir::KEntry eh  = kir::build_sort_histogram(gh, epb, threads, radix_bits, shift, nblocks, 32);
         const kir::KEntry eo1 = kir::build_sort_offset_local(gof1, nblocks, radix_bits, scan_threads);
         const kir::KEntry eo2 = kir::build_sort_gbase(gof2, radix_bits);
-        const kir::KEntry es  = kir::build_sort_scatter(gs, epb, threads, radix_bits, shift, nblocks, /*carry_val=*/true);
+        const kir::KEntry es  = kir::build_sort_scatter(gs, epb, threads, radix_bits, shift, nblocks, 32, /*carry_val=*/true);
 
         kir::KernelBuffer h[2] = {{ck, n, 0, 0}, {bh.data(), nblocks * nbins, 0, 1}};
         kir::eval_cpu_kernel(gh, eh, h, 2, eh.local_size[0], &alloc, static_cast<crd::u32>(nblocks));

@@ -34,6 +34,11 @@ struct Gsplat2dProjectConfig
 {
     double near_plane = 0.2;
     int    local_size = 64;
+    // ⛔ REN-38 llvmpipe campaign: the SURFEL COUNT. A dispatch rounds up to whole workgroups, so the tail
+    // threads past `count` MUST be guarded — unguarded they read+write out of bounds, which robustBufferAccess
+    // devices absorb silently and a CPU Vulkan implementation turns into heap corruption. count == 0 means the
+    // caller PROMISES an exact multiple of local_size (the padded-scene contract the 3DGS tests use).
+    crd::u32 count = 0;
 };
 
 [[nodiscard]] inline KEntry build_gsplat2d_project_kernel(KGraph& g, const Gsplat2dProjectConfig& cfg)
@@ -51,6 +56,8 @@ struct Gsplat2dProjectConfig
                              g.builtin(KBuiltin::LocalInvocationIndex));
 
     const int mark = g.kernel_stmt_mark();
+    // the TAIL-THREAD guard (see Gsplat2dProjectConfig::count): everything below — loads AND stores — is inside
+    const int guard = cfg.count > 0U ? g.stmt_if_begin(g.binary(KOp::CmpLt, tid, cu(cfg.count))) : -1;
     const auto cl  = [&](int k) {
         const int v = g.buffer_load(cam_b, cu(static_cast<crd::u32>(k)));
         g.stmt_materialize(v);
@@ -160,6 +167,7 @@ struct Gsplat2dProjectConfig
     st(18, valid);
     (void)cx; (void)cy;
 
+    if (guard >= 0) { g.stmt_if_end(guard); } // close the tail-thread guard
     KEntry e;
     e.stage             = KStage::Compute;
     e.local_size[0]     = static_cast<crd::u32>(cfg.local_size);
@@ -661,7 +669,12 @@ struct Gsplat2dResortConfig
     const int cur_last_lam = sld(0);
     const int cur_last_idx = sld(1);
     const int found = g.binary(KOp::CmpLt, bi, nf);
-    const Hit hb = hit(g.cast(bi, DType::U32));
+    // ⛔ REN-38 llvmpipe campaign: CLAMP the record index BEFORE the load. `Select` evaluates BOTH arms on the
+    // GPU exactly as the scalar oracle does, so `hit(bi)` at the not-found SENTINEL reads one-past-the-end —
+    // absorbed by robustBufferAccess on desktop GPUs, heap corruption on a CPU Vulkan implementation, and now
+    // refused loudly by the oracle's OOB assert. The clamped record's values are select-discarded via `found`.
+    const int bi_safe = mn(bi, g.binary(KOp::Max, sub(g, nf, ks(1.0)), ks(0.0)));
+    const Hit hb = hit(g.cast(bi_safe, DType::U32));
     const int a = g.select(andd(found, hb.keep), hb.aeff, ks(0.0));
     const int t_old = g.buffer_load(out_b, g.binary(KOp::Add, p4, cu(3U)));
     g.stmt_materialize(t_old);

@@ -338,16 +338,21 @@ int main(int argc, char** argv)
                 for (crd::usize v = 0; v < vc; ++v)
                 {
                     const auto* f = reinterpret_cast<const crd::f32*>(mr->vertices.data() + v * stride);
-                    cx += f[0]; cy += f[1]; cz += f[2];
+                    cx += static_cast<double>(f[0]); cy += static_cast<double>(f[1]); cz += static_cast<double>(f[2]);
                 }
                 if (vc > 0U) { cx /= static_cast<double>(vc); cy /= static_cast<double>(vc); cz /= static_cast<double>(vc); }
                 crd::usize outward = 0;
                 for (crd::usize v = 0; v < vc; ++v)
                 {
                     const auto* f = reinterpret_cast<const crd::f32*>(mr->vertices.data() + v * stride);
-                    const double nl = crd::math::sqrt(static_cast<double>(f[3] * f[3] + f[4] * f[4] + f[5] * f[5]));
+                    const double nx = static_cast<double>(f[3]);
+                    const double ny = static_cast<double>(f[4]);
+                    const double nz = static_cast<double>(f[5]);
+                    const double nl = crd::math::sqrt(nx * nx + ny * ny + nz * nz);
                     sumlen += nl;
-                    const double d = f[3] * (f[0] - cx) + f[4] * (f[1] - cy) + f[5] * (f[2] - cz);
+                    const double d = static_cast<double>(f[3]) * (static_cast<double>(f[0]) - cx)
+                                     + static_cast<double>(f[4]) * (static_cast<double>(f[1]) - cy)
+                                     + static_cast<double>(f[5]) * (static_cast<double>(f[2]) - cz);
                     if (d > 0.0) { ++outward; }
                 }
                 CRD_LOG_INFO(g_log_sandbox,

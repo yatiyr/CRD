@@ -117,6 +117,10 @@ Shipped assets: `assets/vertex/{scene,scene_skinned,shadow}.crdv`, `assets/light
 
 ## ⚠ WHAT IS **NOT** DONE — the honest handoff
 
+> **SUPERSEDED (same day, parts 2–3):** all four items below are CLOSED — F6 renders on both backends,
+> `ckir_draw.hpp` is deleted, `VariantKey::vertex` is engine-filled, and the full sweep ran at session
+> close. Kept verbatim as the record of where part 1 stopped; see Part 3 for the closures.
+
 - **38-F6 — the advanced stages are not wired to the renderer.** F1–F5 are proven at the COOK layer only. No
   `.crdv`-driven mesh, tessellation, RT, cull or visbuffer pass draws a frame; `SceneRenderer` still creates
   exactly three program pairs, all `stage = vertex`. This is the same integration gap the post-E audit found, one
@@ -267,3 +271,131 @@ for. Fixed + round-trip gated.
 
 Suites at part 3 close: the touched families (REN-3*, CKIR, v17, vertex-cook, frame*) run 453/453 with ZERO
 skips in the REN-38 set; kir serialize 5/5 at graph-blob v3. Full sweep at session close.
+
+### The Linux epilogue (user-directed: "win-debug + linux release, CI owns the rest")
+
+The Windows sweep was cut after win-debug (full suite green after the typed-units guard fix — five justified
+`crd-lint-allow-untagged-physical` suppressions: NDC/device/object-space scalars, not physical quantities).
+The first WSL `linux-gcc-release` run in months then earned its keep, in order:
+
+- **gcc `-Wswitch` found THREE more emitters missing the F13 statement arms** (CUDA, MSL, WGSL + the CPU
+  kernel oracle) — tidy had only covered the files I touched; the wire-ALL-backends scar, fifth occurrence.
+- **The frontier NV extensions don't exist in distro Vulkan headers** (1.3.27x vs the cluster-AS/LSS types).
+  Fixed structurally: `FetchContent` pins Khronos Vulkan-Headers to the SAME SDK tag Windows CI caches
+  (`vulkan-sdk-1.4.341.0`), `BEFORE PUBLIC`, populate-only. One code path; also un-reddens Linux CI.
+- **My DX12 twin gates leaked into the Linux build** — now `#ifdef _WIN32` + a conditional CMake link.
+- **Committed-code portability nits MSVC never flags**: unused function (frame_compose), `-Wshadow` ×2
+  (lighting_asset, hair-scatter test), `-Wdouble-promotion` (timeline, audio, sandbox, audio test),
+  MSVC-only `strtok_s` in the ceridc MCP tool (portable `CRD_STRTOK` now).
+- **The no-malloc guard flagged six committed test fixtures** (`MallocAllocator` globals in ceridc + five
+  cooker suites) → named `GrowableTlsfAllocator`s, green on both OSes.
+- **The HLSL-validation family failed without dxc** — `compile_hlsl_to_spirv`'s contract says the
+  `CRD_HAS_DXC=0` stub exists "so conformance tests soft-skip", but `test_ckir_glsl_compile.cpp` never wired
+  it. Now keyed on the stub's unique marker; every real dxc rejection still fails.
+
+**⛔ OPEN, recorded not masked:** WSL runs MORE than CI — llvmpipe is a real (software) Vulkan device, while
+CI installs the loader with no ICD, so every GPU-dispatch test SKIPS on CI. Under llvmpipe the B19 gsplat
+suites SIGSEGV/timeout (a shader OOB corrupts HOST memory there — possibly a real OOB that GPU robustness
+absorbs), the B-cmp radix sort aborts, and the B11/B16/B18 to-ULP oracles mismatch (llvmpipe transcendentals
+are libm, not the HW the claims were calibrated on). Triage owed the day a Linux GPU claim matters — the
+segfault family first. `reference_wsl_linux_sweep_and_llvmpipe_exposure.md` carries the map, including the
+CI-mirror trick (`VK_DRIVER_FILES=/nonexistent ctest`). **FINAL VERDICT (native WSL, llvmpipe present):
+5,203 / 5,220 green — all 17 failures in the recorded llvmpipe-only dispatch class** (B19 ×5 · sort · subgroup
+×2 · hair/fur/transcendental ULP ×5 · D2 cook-run · AS autotuners ×2 · v9e-b), none of which CI executes.
+Windows: win-debug FULL suite green (5,482, one comment-only guard fix); asan/shipping/tidy ceded to CI at
+the user's direction.
+
+---
+
+## Part 4 — "FIX THIS FULLY": the llvmpipe 17, triaged to four root causes, all killed
+
+The user rejected the recorded-open handoff for the llvmpipe failures. The campaign triaged all 17 into four
+classes and fixed every one — and the biggest finds were REAL kernel defects the whole NVIDIA-only history had
+been absorbing:
+
+### Class A — the subgroup-width assumption (the SEGFAULT family, 8 tests)
+
+llvmpipe's subgroup width is 8, fixed (min=max — not even pinnable to 32). Three genuine defects fell out:
+
+1. ⛔⛔ **Phantom-lane ballot complement** (`ckir_sort` scatter + onesweep): the digit-match's `~ballot` arm
+   sets every bit above the device's subgroup — `BitCount` then hands the leader up to 24 ghost lanes, the
+   per-digit counts explode, and the staged ranks run past the shared arrays. Reproduced DETERMINISTICALLY on
+   the CPU oracle once the oracle was taught the device width. Fix: the match starts from the ACTIVE-lane mask.
+2. ⛔⛔ **Unguarded tail threads** (2DGS project): dispatches round up; threads past the surfel count read and
+   write OOB. `Gsplat2dProjectConfig::count` + an If-guard over the whole body.
+3. ⛔⛔ **Eager-`Select` sentinel load** (StopThePop resort): `Select` evaluates BOTH arms on the GPU exactly
+   like the scalar oracle, so `hit(best_idx)` at the not-found sentinel loads one-past-the-end. Fix: clamp the
+   index BEFORE the load; the clamped record stays select-discarded.
+
+Systemically: `eval_cpu_kernel` **now asserts on OOB** (it used to imitate robustBufferAccess with silent 0.0 —
+which is exactly how 2 and 3 passed every oracle gate; the assert immediately caught 3);
+`IComputeContext::subgroup_size()`/`shared_memory_bytes()` (vtable END, VK+DX12 queries); the sort builders take
+`lanes` EXPLICITLY and `pick_sort_config` derives the device-true shape (llvmpipe: 16-thread/4-bit/8-pass);
+the sort oracle test now runs BOTH shapes permanently; the shared subgroup kernel's shuffle uses
+`(tid+1)&(lanes-1)`; ballot-test oracles group by the device width. DX12 face: WARP reports wave 4 — the same
+adaptation covers it.
+
+### Class B — NVIDIA-calibrated tolerances on native ops (6 tests)
+
+The native-op tier tests asserted NVIDIA's delivered precision, not the Vulkan spec's guarantees (inverse-trig
+is granted 4096 ULP ≈ 5e-4 relative; llvmpipe uses the headroom, conformantly). Tolerances are now
+SPEC-DERIVED conformance envelopes with the derivation and both measurements (NV + llvmpipe) in the comments —
+the exp-amplified BCSDF cones get the condition-number bound (|v|≈40 amplifies a conformant argument error
+~40×). The bit-exact claims live untouched in the deterministic tier.
+
+### Class C — dxc-absence asserts (D2)
+
+The offline-cook test demanded DXIL bytes unconditionally; a trivial-HLSL availability probe now gates the
+DXIL halves (the same documented soft-skip contract as the conformance suite).
+
+### Class D — environment-stale autotune rows (both autotuners)
+
+A tuned row is a measurement cache, and the SAME sm_89 silicon under WSL-CUDA measured the Windows-tuned
+attention tile 2.27× slower than that run's own winner. `TuningEntry`/`AttentionTuningEntry` now carry the
+OS they were measured on (`tuning_env()`), the generator emits it, and rows replay ONLY in their environment —
+everything else falls back to the heuristic. AS-6b's 200-GFLOPS floor keys on
+`VkPhysicalDeviceProperties::deviceType`: a CPU device owes correctness, not throughput.
+
+Windows re-verification at every step stayed green (the 32-lane shape is what the pickers derive on NV/DX12,
+bit-for-bit the historical behavior). Final: full suites both platforms — numbers below.
+
+### The layer un-hid 8 more scene gates (they had SKIPPED on Linux forever)
+
+Installing the validation layer to debug B19 also un-hid 8 scene-render gates that REQUIRE validation and had
+silently skipped in every prior Linux run. Four now pass (after two MORE real fixes the layer forced: the
+engine had never ENABLED `taskShader` while creating TASK shader objects — VUID-08421 on every platform, NV
+just tolerated it — and with the feature enabled, the shader-object completeness rule requires TASK bound as
+VK_NULL_HANDLE on every non-task draw; both fixed, plus a default blend-equation baseline for old-layer 09418
+false positives). ⛔ OPEN (llvmpipe-only, 4 gates): REN-3.2-b slanted / REN-37.2 technique swap / REN-37.8 +
+REN-37.10 viewports return an ALL-ZERO readback (not even the clear alpha) with draws recorded and validation
+clean — a submission/readback interaction unique to those harnesses on llvmpipe; their siblings on the same
+machinery render fine. Evidence pinned here; Windows green throughout.
+
+### Where part 4 STOPS (honest state)
+
+The OOB assert added in Class A is doing its job beyond the tests it was written for: the Windows full suite
+now fails 9 kernel tests with `eval_cpu_kernel: OOB buffer READ - guard the tail threads` — the 3DGS family
+(project/render/tiled/mip-splatting, B19-a4 tilecount, shared-block render, the 2DGS→TSDF chain) and the
+inline-rayQuery oracle. Same class, same fix shape as the 2DGS project (declared `count` + If-guard, or a
+pre-load clamp for Select sentinels) — REAL OOB reads that used to be silent. ⛔ The assert must NOT be
+weakened to make them green. Also open: the 4 llvmpipe scene gates, whose cause is now pinned to a draw-list
+binding with a NULL program (the recorder now REJECTS that loudly instead of skipping silently — a real
+silent-black-frame hole closed); what remains is why the host resolves no program on a capability-reduced
+device. `crd-simd-emission-check` in a bare `ctest` is the known vcvars/dumpbin scar, not a regression.
+
+### The llvmpipe scene gates were a NAME-MANGLING bug, not a graphics bug
+
+⛔⛔ `World::component_id_by_name` matched an authored component name against `typeid(T).name()` using only the
+MSVC decoration ("struct crd::scene::MeshRenderer" — the string ENDS with the identifier). The Itanium ABI gcc
+and clang use produces "N3crd5scene12MeshRendererE": LENGTH-PREFIXED components, terminated by `E`. A trailing
+match therefore NEVER succeeded on Linux/macOS, `component_id_by_name` returned null, `group_matches` rejected
+every group, the authored draw list resolved EMPTY, and the renderer drew nothing — silently, on every gcc
+build, since REN-36.3-b shipped. `decorated_names` now tries BOTH decorations, gated by a test that asserts the
+two literal spellings so it fails on whichever compiler the author is not using. All 8 scene gates green.
+
+⭐ The lesson is diagnostic, not technical: this presented for hours as "SceneRenderer frames are black on
+llvmpipe while gpu-context frames render fine", and I chased barriers, layouts, imported targets and readback.
+What broke it open was making the silent skip LOUD (the recorder now names a program-less drawing pass) and then
+noticing that `group_matches` was called on Linux and NOT on Windows — a platform split in pure CPU logic, which
+no graphics explanation can produce. **When a "GPU bug" splits by COMPILER rather than by DEVICE, stop looking
+at the GPU.**

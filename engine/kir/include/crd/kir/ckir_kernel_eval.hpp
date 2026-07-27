@@ -48,9 +48,13 @@ struct PendingWrite
 // Evaluate the kernel `entry` of `g` over `num_workgroups` INDEPENDENT workgroups of `local_size` threads (default 1).
 // Each workgroup gets fresh (zeroed) shared memory and sees its own `WorkgroupIndex`; buffers persist across workgroups (a
 // batched kernel offsets its global buffers by `WorkgroupIndex`, so each workgroup writes its own slice). In place.
+// REN-38 llvmpipe campaign: `subgroup_lanes` models the DEVICE's subgroup width (NV/DX12 warp = 32, llvmpipe = 8,
+// Intel can be 16). The old hardwired 32 silently mismatched every subgroup kernel on a non-32 device. Ballot masks
+// are u32 ⇒ lanes > 32 (AMD wave64) is refused loudly, never truncated.
 inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* bufs, int nbufs, crd::u32 local_size,
-                            crd::memory::IAllocator* scratch, crd::u32 num_workgroups = 1)
+                            crd::memory::IAllocator* scratch, crd::u32 num_workgroups = 1, crd::u32 subgroup_lanes = 32)
 {
+    CRD_ASSERT_MSG(subgroup_lanes >= 1U && subgroup_lanes <= 32U, "eval_cpu_kernel: subgroup_lanes must be in [1,32] (u32 ballot masks)");
     using crd::containers::Array;
     using kernel_detail::PendingWrite;
 
@@ -99,7 +103,12 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
         }
         if (is_shared) { return shared_pool[static_cast<crd::usize>(shared_off[res_node]) + static_cast<crd::usize>(idx)]; }
         const KernelBuffer* kb = buffer_for(res_node);
-        if (kb == nullptr || idx < 0 || idx >= kb->len) { return 0.0; }
+        if (kb == nullptr) { return 0.0; }
+        // ⛔ REN-38 llvmpipe campaign: an OOB read is a KERNEL DEFECT, never quietly 0.0 — the old clamp
+        // imitated robustBufferAccess, so unguarded TAIL THREADS (dispatch rounded up past the element count)
+        // passed every oracle gate while corrupting memory on any device without robustness (llvmpipe: SIGSEGV).
+        CRD_ASSERT_MSG(idx >= 0 && idx < kb->len, "eval_cpu_kernel: OOB buffer READ - guard the tail threads");
+        if (idx < 0 || idx >= kb->len) { return 0.0; } // release-build containment only; the assert is the gate
         return kb->data[idx];
     };
 
@@ -139,12 +148,12 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
             case KOp::SharedLoad: r = read_res(n.a, static_cast<int>(self(self, n.b)), true); break;
             case KOp::Select:     r = self(self, n.c) != 0.0 ? self(self, n.a) : self(self, n.b); break; // a=true b=false c=cond
             case KOp::Cast:       r = self(self, n.a); break;                                             // round below to n.dtype
-            case KOp::SubgroupBallot: // model 32-lane subgroups: bit `lane` set iff lane's predicate is nonzero (all lanes active)
+            case KOp::SubgroupBallot: // model `subgroup_lanes`-wide subgroups: bit `lane` set iff lane's predicate is nonzero (all lanes active)
             {
                 const crd::u32 saved  = tid;
-                const crd::u32 sgbase = (saved / 32U) * 32U;
+                const crd::u32 sgbase = (saved / subgroup_lanes) * subgroup_lanes;
                 crd::u32       mask   = 0U;
-                for (crd::u32 l = sgbase; l < sgbase + 32U && l < local_size; ++l)
+                for (crd::u32 l = sgbase; l < sgbase + subgroup_lanes && l < local_size; ++l)
                 {
                     tid = l;
                     if (self(self, n.a) != 0.0) { mask |= (1U << (l - sgbase)); }
@@ -153,13 +162,13 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                 r   = static_cast<crd::f64>(mask);
                 break;
             }
-            case KOp::SubgroupMatch: // 32-lane subgroup: bit `lane` set iff lane's value equals THIS thread's value
+            case KOp::SubgroupMatch: // subgroup-wide: bit `lane` set iff lane's value equals THIS thread's value
             {
                 const crd::u32 saved  = tid;
-                const crd::u32 sgbase = (saved / 32U) * 32U;
+                const crd::u32 sgbase = (saved / subgroup_lanes) * subgroup_lanes;
                 const crd::f64 mine   = self(self, n.a);
                 crd::u32       mask   = 0U;
-                for (crd::u32 l = sgbase; l < sgbase + 32U && l < local_size; ++l)
+                for (crd::u32 l = sgbase; l < sgbase + subgroup_lanes && l < local_size; ++l)
                 {
                     tid = l;
                     if (self(self, n.a) == mine) { mask |= (1U << (l - sgbase)); }
@@ -171,14 +180,14 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
             case KOp::SubgroupBallotExclCount: // popcount of ballot bits strictly below this lane
             {
                 const crd::u32 mask = static_cast<crd::u32>(static_cast<crd::i64>(self(self, n.a)));
-                const crd::u32 lane = tid % 32U;
+                const crd::u32 lane = tid % subgroup_lanes;
                 const crd::u32 low  = (lane == 0U) ? 0U : (mask & ((1U << lane) - 1U));
                 int            cnt  = 0;
                 for (crd::u32 v = low; v != 0U; v >>= 1U) { cnt += static_cast<int>(v & 1U); }
                 r = static_cast<crd::f64>(cnt);
                 break;
             }
-            // B11: WAVE reductions over the 32-lane subgroup. Sums accumulate in f64 (32·u32 < 2^53) then `round_dtype` wraps
+            // B11: WAVE reductions over the `subgroup_lanes`-wide subgroup. Sums accumulate in f64 (32·u32 < 2^53) then `round_dtype` wraps
             //   mod-2^32 for U32 (modular add is associative ⇒ == the GPU's per-step wrap); bitwise stay in u32; min/max compare.
             case KOp::SubgroupAdd:
             case KOp::SubgroupMin:
@@ -188,18 +197,18 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
             case KOp::SubgroupXor:
             {
                 const crd::u32 saved  = tid;
-                const crd::u32 sgbase = (saved / 32U) * 32U;
+                const crd::u32 sgbase = (saved / subgroup_lanes) * subgroup_lanes;
                 const bool     bitw   = n.op == KOp::SubgroupAnd || n.op == KOp::SubgroupOr || n.op == KOp::SubgroupXor;
                 crd::f64       acc    = 0.0;
                 crd::u32       bacc   = n.op == KOp::SubgroupAnd ? 0xFFFFFFFFU : 0U;
                 bool           first  = true;
-                for (crd::u32 l = sgbase; l < sgbase + 32U && l < local_size; ++l)
+                for (crd::u32 l = sgbase; l < sgbase + subgroup_lanes && l < local_size; ++l)
                 {
                     tid              = l;
                     const crd::f64 v = self(self, n.a);
                     if (n.op == KOp::SubgroupAdd) { acc += v; }
-                    else if (n.op == KOp::SubgroupMin) { acc = first ? v : (v < acc ? v : acc); }
-                    else if (n.op == KOp::SubgroupMax) { acc = first ? v : (v > acc ? v : acc); }
+                    else if (n.op == KOp::SubgroupMin) { if (first || v < acc) { acc = v; } }
+                    else if (n.op == KOp::SubgroupMax) { if (first || v > acc) { acc = v; } }
                     else
                     {
                         const crd::u32 u = static_cast<crd::u32>(static_cast<crd::i64>(v));
@@ -217,7 +226,7 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
             case KOp::SubgroupExclusiveAdd:
             {
                 const crd::u32 saved  = tid;
-                const crd::u32 sgbase = (saved / 32U) * 32U;
+                const crd::u32 sgbase = (saved / subgroup_lanes) * subgroup_lanes;
                 const crd::u32 upto   = n.op == KOp::SubgroupInclusiveAdd ? saved + 1U : saved; // prefix over lanes < upto
                 crd::f64       acc    = 0.0;
                 for (crd::u32 l = sgbase; l < upto && l < local_size; ++l) { tid = l; acc += self(self, n.a); }
@@ -228,7 +237,7 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
             case KOp::SubgroupBroadcastFirst:
             {
                 const crd::u32 saved = tid;
-                tid                  = (saved / 32U) * 32U; // the lowest lane of this subgroup
+                tid                  = (saved / subgroup_lanes) * subgroup_lanes; // the lowest lane of this subgroup
                 r                    = self(self, n.a);
                 tid                  = saved;
                 break;
@@ -236,7 +245,7 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
             case KOp::SubgroupShuffle:
             {
                 const crd::u32 saved  = tid;
-                const crd::u32 sgbase = (saved / 32U) * 32U;
+                const crd::u32 sgbase = (saved / subgroup_lanes) * subgroup_lanes;
                 const crd::u32 lane   = static_cast<crd::u32>(static_cast<crd::i64>(self(self, n.b))) & 31U; // source lane (this lane's request)
                 tid                   = sgbase + lane;
                 r                     = self(self, n.a);
@@ -259,7 +268,9 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
             case KOp::QuadSwapDiagonal:
             {
                 const crd::u32 saved = tid;
-                const crd::u32 xr    = n.op == KOp::QuadSwapX ? 1U : (n.op == KOp::QuadSwapY ? 2U : 3U);
+                crd::u32 xr = 3U; // QuadSwapDiagonal: flip BOTH quad axes
+                if (n.op == KOp::QuadSwapX) { xr = 1U; }
+                else if (n.op == KOp::QuadSwapY) { xr = 2U; }
                 tid                  = saved ^ xr;
                 r                    = self(self, n.a);
                 tid                  = saved;
@@ -301,7 +312,17 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
         {
             const PendingWrite& w = overlay[k];
             if (w.is_shared) { shared_pool[static_cast<crd::usize>(shared_off[w.res_node]) + static_cast<crd::usize>(w.index)] = w.value; }
-            else { KernelBuffer* kb = buffer_for(w.res_node); if (kb != nullptr && w.index >= 0 && w.index < kb->len) { kb->data[w.index] = w.value; } }
+            else
+            {
+                KernelBuffer* kb = buffer_for(w.res_node);
+                if (kb != nullptr)
+                {
+                    // ⛔ same rule as the read side: an OOB WRITE is a kernel defect, refused loudly (see read_res)
+                    CRD_ASSERT_MSG(w.index >= 0 && w.index < kb->len,
+                                   "eval_cpu_kernel: OOB buffer WRITE - guard the tail threads");
+                    if (w.index >= 0 && w.index < kb->len) { kb->data[w.index] = w.value; }
+                }
+            }
         }
         overlay.resize(0);
     };
@@ -672,7 +693,9 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                 case KStmtKind::TraceRayPipeline:
                 case KStmtKind::PayloadStore:
                 case KStmtKind::ReorderThread:
-                case KStmtKind::IgnoreHitIf: ++i; break;
+                case KStmtKind::IgnoreHitIf:
+                case KStmtKind::ReportHit:
+                case KStmtKind::ExecuteCallable: ++i; break; // REN-38-F13: same RT-only family
             }
         }
     };

@@ -2825,7 +2825,8 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         }
         // ⛔ Only the OWNER builds and executes. A contributor that built here would submit a partial frame and
         // reset the graph out from under the viewports that had not recorded yet.
-        if (owns_graph && fg.build())
+        const bool built_ok = owns_graph ? fg.build() : false;
+        if (owns_graph && built_ok)
         {
             fg.execute();
             // REN-8: what the DEVICE spent. Compared against `cpu_ms` below, the gap is the frame's stall.

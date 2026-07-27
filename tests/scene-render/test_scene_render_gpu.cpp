@@ -8,9 +8,11 @@
 #include <crd/gpu/vulkan_context.hpp>
 #include <crd/gpu/vulkan_raster_context.hpp>
 #include <crd/gpu/vulkan_ray_tracing_context.hpp>
+#if defined(_WIN32) // the D3D12 backend exists only on Windows; the DX12 twin gates ride the same guard
 #include <crd/gpu/dx12_context.hpp>
 #include <crd/gpu/dx12_raster_context.hpp>
 #include <crd/gpu/dx12_ray_tracing_context.hpp>
+#endif
 #include <crd/math/mat.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
@@ -1500,6 +1502,7 @@ TEST_CASE("REN-38-F6 GATE: the authored RT PIPELINE graph traces the scene TLAS 
     CHECK(written == 4U);
 }
 
+#if defined(_WIN32)
 // ── ⭐⭐ REN-38-F6 GATES (DX12): the SAME renderer joins on the OTHER backend. ────────────────────────────────
 // ⛔ A per-backend claim closed on the strength of the Vulkan gate alone leaves the entire DX12 dispatch path —
 // PSO/state creation for tess/mesh pipelines, the DXR SBT, the compute binding order — unexecuted (the exact
@@ -1717,6 +1720,7 @@ TEST_CASE("REN-38-F6 GATE (DX12): the authored RT PIPELINE graph traces the scen
     UNSCOPED_INFO("written ray records: " << written << " of 4");
     CHECK(written == 4U);
 }
+#endif // _WIN32 (the DX12 twin gates)
 
 // ── ⭐ REN-38-F15 GATE: DISK-FIRST asset loading — a file under the root SHADOWS the embedded pack. ──────────
 // The claim has two halves, and both must be pixel-visible: (1) an EDITED disk declaration changes the frame

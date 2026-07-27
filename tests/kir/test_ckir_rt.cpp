@@ -20,7 +20,9 @@ namespace
 {
 // A one-thread-per-ray inline-ray-query kernel. Binding 0 = the acceleration structure (its geometry, in the oracle);
 // binding 1 = the rays (6 floats each: origin.xyz, dir.xyz); binding 2 = the output closest-hit distance.
-kir::KEntry build_trace_kernel(kir::KGraph& g, int local_size)
+// REN-38: `n_rays` is the tail-thread guard bound — a dispatch rounds up to whole workgroups, so threads
+// past the ray count would read OOB (silently on a robustness GPU, loudly in the oracle now).
+kir::KEntry build_trace_kernel(kir::KGraph& g, int local_size, crd::u32 n_rays = 0U)
 {
     const kir::Shape sh1 = kir::make_shape({1});
     const auto       cf  = [&](double v) { return g.constant(v, sh1, kir::DType::F32); };
@@ -33,11 +35,13 @@ kir::KEntry build_trace_kernel(kir::KGraph& g, int local_size)
     const int mark = g.kernel_stmt_mark();
     const int tid  = g.binary(kir::KOp::Add, g.binary(kir::KOp::Mul, g.builtin(kir::KBuiltin::WorkgroupIndex), cu(static_cast<crd::u32>(local_size))),
                               g.builtin(kir::KBuiltin::LocalInvocationIndex));
+    const int guard = n_rays > 0U ? g.stmt_if_begin(g.binary(kir::KOp::CmpLt, tid, cu(n_rays))) : -1;
     const int base = g.binary(kir::KOp::Mul, tid, cu(6U));
     const auto ld  = [&](crd::u32 k) { return g.buffer_load(rays, g.binary(kir::KOp::Add, base, cu(k))); };
     const int t    = g.trace_ray_closest(as, ld(0), ld(1), ld(2), ld(3), ld(4), ld(5), cf(0.001), cf(1.0e30));
     g.stmt_buffer_store(out, tid, t);
 
+    if (guard >= 0) { g.stmt_if_end(guard); }
     kir::KEntry e;
     e.stage             = kir::KStage::Compute;
     e.local_size[0]     = static_cast<crd::u32>(local_size);
@@ -53,7 +57,7 @@ TEST_CASE("B9/RT-1a: CKIR inline rayQuery oracle == hand-computed ray-triangle h
     crd::memory::TlsfAllocator alloc(16U << 20U);
     kir::KGraph                g(&alloc);
     constexpr int              k_n_rays = 4;
-    const kir::KEntry          e      = build_trace_kernel(g, 64);
+    const kir::KEntry          e      = build_trace_kernel(g, 64, static_cast<crd::u32>(k_n_rays));
 
     // Scene: ONE triangle at z = 2 spanning (0,0)-(1,0)-(0,1). Geometry buffer layout the oracle reads:
     // [triCount, v0.xyz, v1.xyz, v2.xyz].

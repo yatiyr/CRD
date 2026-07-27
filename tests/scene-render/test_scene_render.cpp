@@ -480,3 +480,42 @@ TEST_CASE("REN-38 DRIFT GATE: every shipped authored asset matches the built-in 
         CHECK(same(lightcook::emit_lighting_toml(a, &alloc), lightcook::emit_lighting_toml(b, &alloc)));
     }
 }
+
+// ⛔⛔ REN-38 (2026-07-27): `component_id_by_name` resolves an AUTHORED component name against the registry's
+// `typeid(T).name()`, which is decorated DIFFERENTLY PER ABI. The original matcher only handled the MSVC spelling
+// ("struct crd::scene::MeshRenderer" — the decorated name ENDS with the identifier), so on gcc/clang, where the
+// Itanium ABI produces "N3crd5scene12MeshRendererE" with LENGTH-PREFIXED components and a trailing 'E', NOTHING
+// ever matched. Every authored draw-list component filter then rejected every group SILENTLY: the renderer's
+// draw list resolved empty and the frame drew nothing, on every Linux and macOS build. It presented as a Vulkan
+// bug (it surfaced first on llvmpipe) and was a name-mangling bug. This gate pins BOTH spellings so the class
+// cannot come back on whichever compiler the author happens not to be using.
+TEST_CASE("REN-36.3-b: component_id_by_name matches BOTH ABI decorations (MSVC and Itanium)", "[scene][ecs]")
+{
+    crd::memory::TlsfAllocator alloc(1U << 20U);
+    crd::scene::World          world{&alloc};
+    world.register_component<crd::scene::Transform>(crd::scene::transform_serialize_trait());
+    crd::scene::register_render_components(world);
+
+    // the names an ASSET writes — resolved on whatever compiler built this
+    CHECK_FALSE(world.component_id_by_name(crd::containers::StringView("Transform")).is_null());
+    CHECK_FALSE(world.component_id_by_name(crd::containers::StringView("MeshRenderer")).is_null());
+    // ⛔ and a filter that names something unregistered must stay NULL (the caller reports it; a null that
+    // matched everything is the silently-ignored-filter shape this row exists to prevent)
+    CHECK(world.component_id_by_name(crd::containers::StringView("NoSuchComponent")).is_null());
+    // ⛔ a SUFFIX of a real name must not match — "Renderer" is not "MeshRenderer"
+    CHECK(world.component_id_by_name(crd::containers::StringView("Renderer")).is_null());
+
+    // the ABI-decoration matcher itself, against both real spellings, so this gate fails on the compiler that
+    // does NOT produce the local decoration too
+    CHECK(crd::scene::World::decorated_names(crd::containers::StringView("struct crd::scene::MeshRenderer"),
+                                             crd::containers::StringView("MeshRenderer")));
+    CHECK(crd::scene::World::decorated_names(crd::containers::StringView("N3crd5scene12MeshRendererE"),
+                                             crd::containers::StringView("MeshRenderer")));
+    CHECK(crd::scene::World::decorated_names(crd::containers::StringView("N3crd5scene9TransformE"),
+                                             crd::containers::StringView("Transform")));
+    // negatives under BOTH decorations
+    CHECK_FALSE(crd::scene::World::decorated_names(crd::containers::StringView("N3crd5scene12MeshRendererE"),
+                                                   crd::containers::StringView("Renderer")));
+    CHECK_FALSE(crd::scene::World::decorated_names(crd::containers::StringView("struct crd::scene::MeshRenderer"),
+                                                   crd::containers::StringView("Renderer")));
+}

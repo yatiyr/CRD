@@ -176,31 +176,61 @@ public:
     }
 
     // REN-36.3-b: resolve a component's AUTHORED name to its id. The registry stores `typeid(T).name()`, which is
-    // decorated per compiler ("struct crd::scene::MeshRenderer" on MSVC, "N3crd5scene12MeshRendererE" on Itanium),
-    // so the match is on the trailing identifier rather than the whole string.
+    // DECORATED DIFFERENTLY PER ABI, so the match must understand both spellings:
+    //   · MSVC:    "struct crd::scene::MeshRenderer"   — the plain name, so the decorated string ENDS with it.
+    //   · Itanium: "N3crd5scene12MeshRendererE"        — LENGTH-PREFIXED components and a trailing 'E'.
+    // ⛔⛔ REN-38 (2026-07-27): the original matcher only did the MSVC trailing test, so on gcc/clang the name
+    // ended in 'E' and NOTHING ever matched — every authored `all`/`any`/`none` component filter rejected every
+    // group, silently, on every Linux/macOS build. The renderer's draw list then resolved EMPTY and the frame
+    // drew nothing. It looked like a Vulkan-implementation bug (it surfaced on llvmpipe) and was a MANGLING bug.
     // ⛔ Returns null for an unknown name. The caller must REPORT that, not treat it as "matches everything" — a
     // silently-ignored filter is worse than an unsupported one, because it reads as working.
+    [[nodiscard]] static bool name_char_is_ident(char c) noexcept
+    {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+    }
+    // Does `decorated` name exactly the component `want`, under either ABI's decoration?
+    [[nodiscard]] static bool decorated_names(crd::containers::StringView decorated,
+                                              crd::containers::StringView want) noexcept
+    {
+        if (want.size() == 0U || decorated.size() < want.size()) { return false; }
+        // ── MSVC / plain: the decorated name ENDS with `want`, on an identifier boundary. ──
+        {
+            const crd::usize off = decorated.size() - want.size();
+            bool             eq  = true;
+            for (crd::usize k = 0; k < want.size() && eq; ++k) { eq = decorated[off + k] == want[k]; }
+            if (eq && (off == 0U || !name_char_is_ident(decorated[off - 1U]))) { return true; }
+        }
+        // ── Itanium: the component appears as "<decimal length><name>", e.g. "12MeshRenderer". Matching the
+        //    LENGTH PREFIX is exact — it cannot collide with a longer name that merely ends the same way. ──
+        char       digits[8]{};
+        crd::u32   ndig = 0U;
+        crd::usize n    = want.size();
+        while (n > 0U && ndig < 8U) { digits[ndig++] = static_cast<char>('0' + (n % 10U)); n /= 10U; }
+        if (ndig == 0U || n != 0U) { return false; } // unrepresentable length ⇒ no Itanium form to look for
+        for (crd::usize i = 0; i + ndig + want.size() <= decorated.size(); ++i)
+        {
+            bool eq = true;
+            for (crd::u32 d = 0; d < ndig && eq; ++d) { eq = decorated[i + d] == digits[ndig - 1U - d]; } // MSB first
+            if (!eq) { continue; }
+            if (i > 0U && decorated[i - 1U] >= '0' && decorated[i - 1U] <= '9') { continue; } // mid-number, not a prefix
+            for (crd::usize k = 0; k < want.size() && eq; ++k) { eq = decorated[i + ndig + k] == want[k]; }
+            if (!eq) { continue; }
+            // the component must END here: next is the mangling's terminator/another length, never more identifier
+            const crd::usize after = i + ndig + want.size();
+            if (after == decorated.size()) { return true; }
+            const char c = decorated[after];
+            if (c == 'E' || (c >= '0' && c <= '9') || !name_char_is_ident(c)) { return true; }
+        }
+        return false;
+    }
     [[nodiscard]] ComponentId component_id_by_name(crd::containers::StringView want) const noexcept
     {
         for (crd::u16 i = 0; i < m_components.size(); ++i)
         {
             const ComponentInfo* info = m_components.info(ComponentId{i});
             if (info == nullptr) { continue; }
-            const crd::containers::StringView n = info->name;
-            if (n.size() < want.size()) { continue; }
-            // trailing-identifier match: the decorated name must END with `want`, and the character before it
-            // must not be an identifier character (so "Renderer" never matches "MeshRenderer").
-            const crd::usize off = n.size() - want.size();
-            bool             eq  = true;
-            for (crd::usize k = 0; k < want.size() && eq; ++k) { eq = n[off + k] == want[k]; }
-            if (!eq) { continue; }
-            if (off > 0)
-            {
-                const char c = n[off - 1];
-                const bool ident = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
-                if (ident) { continue; }
-            }
-            return info->id;
+            if (decorated_names(info->name, want)) { return info->id; }
         }
         return ComponentId{};
     }

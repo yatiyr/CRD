@@ -47,8 +47,10 @@ namespace
         case crd::hesap::interp::KeyInterp::Step: return key_value(seg);
         case crd::hesap::interp::KeyInterp::Linear:
         {
-            const crd::f64 u = (ts - s0) / (s1 - s0);
-            return static_cast<crd::f32>(key_value(seg) + u * (key_value(seg + 1) - key_value(seg)));
+            const crd::f64 u  = (ts - s0) / (s1 - s0);
+            const crd::f64 v0 = static_cast<crd::f64>(key_value(seg));
+            const crd::f64 v1 = static_cast<crd::f64>(key_value(seg + 1));
+            return static_cast<crd::f32>(v0 + u * (v1 - v0));
         }
         case crd::hesap::interp::KeyInterp::CubicHermite:
         default:

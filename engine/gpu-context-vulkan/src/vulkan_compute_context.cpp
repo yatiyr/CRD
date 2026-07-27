@@ -115,6 +115,8 @@ struct VulkanComputeContext::Impl final : public ComputeRecorder
     crd::u32         family    = 0;
     crd::u32         gfx_family = UINT32_MAX; // B4: graphics family — for CONCURRENT sharing of an INDIRECT-args buffer read by a mesh draw
     bool             int64     = false;
+    crd::u32         sg_size    = 0U;     // REN-38: the device SUBGROUP width (llvmpipe 8, NV 32) — queried at init
+    crd::u32         shared_max = 16384U; // REN-38: maxComputeSharedMemorySize (llvmpipe 32K, NV 48K+)
     VkCommandPool    cmd_pool  = VK_NULL_HANDLE;
     VkDescriptorPool desc_pool = VK_NULL_HANDLE;
     VkCommandBuffer  cmd       = VK_NULL_HANDLE;
@@ -241,6 +243,17 @@ VulkanComputeContext::VulkanComputeContext(VulkanGpuContext& ctx, crd::memory::I
     impl.family   = ctx.compute_family();
     impl.gfx_family = ctx.graphics_capable() ? ctx.graphics_family() : UINT32_MAX; // B4: for the indirect-args concurrent buffer
     impl.int64    = ctx.shader_int64();
+    if (impl.physical != VK_NULL_HANDLE) // REN-38: the warp-synchronous kernels are BUILT against these truths
+    {
+        VkPhysicalDeviceSubgroupProperties sgp{};
+        sgp.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
+        VkPhysicalDeviceProperties2 p2{};
+        p2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        p2.pNext = &sgp;
+        vkGetPhysicalDeviceProperties2(impl.physical, &p2);
+        impl.sg_size    = sgp.subgroupSize;
+        impl.shared_max = p2.properties.limits.maxComputeSharedMemorySize;
+    }
     if (impl.device == VK_NULL_HANDLE || impl.queue == VK_NULL_HANDLE) { return; }
 
     VkCommandPoolCreateInfo cpci{};
@@ -303,6 +316,8 @@ VulkanComputeContext::~VulkanComputeContext()
 
 bool VulkanComputeContext::valid() const noexcept { return m_impl->ok; }
 bool VulkanComputeContext::supports_shader_int64() const noexcept { return m_impl->int64; }
+crd::u32 VulkanComputeContext::subgroup_size() const noexcept { return m_impl->sg_size; }
+crd::u32 VulkanComputeContext::shared_memory_bytes() const noexcept { return m_impl->shared_max; }
 
 // D4: serialize the driver's pipeline cache (grows as pipelines are created) so it can be persisted to disk.
 void VulkanComputeContext::pipeline_cache_data(crd::containers::Array<crd::u8>& out) const

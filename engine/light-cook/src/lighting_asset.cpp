@@ -978,8 +978,8 @@ int cook_lighting(const LightingDesc& d, KGraph& g, const LightingInputs& in, co
                     int occl = c.kf(0.0);
                     for (crd::u32 g0 = 0; g0 < d.shadow.contact_steps; g0 += 4U)
                     {
-                        const auto at = [&](crd::u32 i) {
-                            const crd::u32 idx = g0 + i < d.shadow.contact_steps ? g0 + i
+                        const auto at = [&](crd::u32 k) {
+                            const crd::u32 idx = g0 + k < d.shadow.contact_steps ? g0 + k
                                                                                  : d.shadow.contact_steps - 1U;
                             return idx;
                         };

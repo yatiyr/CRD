@@ -20,15 +20,6 @@ namespace crd::framecook
 namespace
 {
 
-void set_str(crd::containers::String& dst, crd::containers::StringView s)
-{
-    dst.clear();
-    for (crd::usize i = 0; i < s.size(); ++i)
-    {
-        const char one[2] = {s[i], '\0'};
-        dst.append(static_cast<const char*>(one));
-    }
-}
 void copy_str(crd::containers::String& dst, const crd::containers::String& s)
 {
     dst.clear();

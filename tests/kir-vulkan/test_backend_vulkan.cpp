@@ -1600,7 +1600,9 @@ TEST_CASE("v17 Phase A2: CKIR transcendental intrinsics (exp2/log2/rsqrt/tan/ata
     const kir::Shape sh = kir::make_shape({in});
 
     // one-input op vs a std reference, within ULP tolerance (transcendentals are ULP on GPU).
-    auto check1 = [&](kir::KOp op, float (*ref)(float), float lo, float hi) -> int {
+    // rel_tol per op class: the Vulkan spec grants inverse-trig (asin/acos/atan/atan2) 4096 ULP (~5e-4
+    // relative) — llvmpipe uses that headroom, NV does not. Everything else keeps the tight 2e-4.
+    auto check1 = [&](kir::KOp op, float (*ref)(float), float lo, float hi, float rel_tol = 2e-4F) -> int {
         kir::KGraph g(&alloc);
         const int   x = g.input(sh, kir::DType::F32);
         const int   o = g.unary(op, x);
@@ -1610,7 +1612,7 @@ TEST_CASE("v17 Phase A2: CKIR transcendental intrinsics (exp2/log2/rsqrt/tan/ata
         float        gpu[in];
         if (!vk.run(g, o, inp, 1, gpu)) { return -1; }
         int bad = 0;
-        for (int i = 0; i < in; ++i) { const float r = ref(xv[i]); if (std::fabs(gpu[i] - r) > (2e-4F * std::fabs(r)) + 1e-6F) { ++bad; } }
+        for (int i = 0; i < in; ++i) { const float r = ref(xv[i]); if (std::fabs(gpu[i] - r) > (rel_tol * std::fabs(r)) + 1e-6F) { ++bad; } }
         return bad;
     };
     CHECK(check1(kir::KOp::Exp2, [](float v) { return std::exp2(v); }, 0.5F, 3.0F) == 0);
@@ -1618,9 +1620,9 @@ TEST_CASE("v17 Phase A2: CKIR transcendental intrinsics (exp2/log2/rsqrt/tan/ata
     CHECK(check1(kir::KOp::Rsqrt, [](float v) { return 1.0F / std::sqrt(v); }, 0.5F, 8.0F) == 0);
     CHECK(check1(kir::KOp::Tan, [](float v) { return std::tan(v); }, -1.0F, 1.0F) == 0);
     CHECK(check1(kir::KOp::Radians, [](float v) { return v * 0.017453292519943295F; }, -180.0F, 180.0F) == 0);
-    CHECK(check1(kir::KOp::Asin, [](float v) { return std::asin(v); }, -0.9F, 0.9F) == 0);
-    CHECK(check1(kir::KOp::Acos, [](float v) { return std::acos(v); }, -0.9F, 0.9F) == 0);
-    CHECK(check1(kir::KOp::Atan, [](float v) { return std::atan(v); }, -3.0F, 3.0F) == 0);
+    CHECK(check1(kir::KOp::Asin, [](float v) { return std::asin(v); }, -0.9F, 0.9F, 5e-4F) == 0);
+    CHECK(check1(kir::KOp::Acos, [](float v) { return std::acos(v); }, -0.9F, 0.9F, 5e-4F) == 0);
+    CHECK(check1(kir::KOp::Atan, [](float v) { return std::atan(v); }, -3.0F, 3.0F, 5e-4F) == 0);
     CHECK(check1(kir::KOp::Sinh, [](float v) { return std::sinh(v); }, -2.0F, 2.0F) == 0);
     CHECK(check1(kir::KOp::Cosh, [](float v) { return std::cosh(v); }, -2.0F, 2.0F) == 0);
     CHECK(check1(kir::KOp::Cbrt, [](float v) { return std::cbrt(v); }, -8.0F, 8.0F) == 0);

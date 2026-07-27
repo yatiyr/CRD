@@ -55,6 +55,7 @@ TEST_CASE("ckir 2dgs project matches closed-form tangent frame and view centre",
     put_surfel(surf, 1, 0.0, 0.0, -10.0, 0.3, 0.2, 0, 0, 0, 1, 0.9, 0.0, 0.0, 0.0);
 
     kir::gsplat::Gsplat2dProjectConfig cfg;
+    cfg.count = static_cast<crd::u32>(ns); // REN-38: tail-thread guard
     kir::KGraph                        g(&alloc);
     const kir::KEntry                  e = kir::gsplat::build_gsplat2d_project_kernel(g, cfg);
     out.resize(static_cast<crd::usize>(ns) * 19U, 0.0);
@@ -92,6 +93,7 @@ void project_and_render(crd::memory::TlsfAllocator& alloc, crd::containers::Arra
                         crd::containers::Array<double>& img)
 {
     kir::gsplat::Gsplat2dProjectConfig pcfg;
+    pcfg.count = static_cast<crd::u32>(ns); // REN-38: tail-thread guard
     kir::KGraph                        pg(&alloc);
     const kir::KEntry                  pe = kir::gsplat::build_gsplat2d_project_kernel(pg, pcfg);
     crd::containers::Array<double>     prep(&alloc);
@@ -262,6 +264,7 @@ void project_and_relight(crd::memory::TlsfAllocator& alloc, crd::containers::Arr
                          crd::containers::Array<double>& img)
 {
     kir::gsplat::Gsplat2dProjectConfig pcfg;
+    pcfg.count = static_cast<crd::u32>(ns); // REN-38: tail-thread guard
     kir::KGraph                        pg(&alloc);
     const kir::KEntry                  pe = kir::gsplat::build_gsplat2d_project_kernel(pg, pcfg);
     crd::containers::Array<double>     prep(&alloc);
@@ -358,6 +361,7 @@ TEST_CASE("ckir 2dgs StopThePop: per-pixel resort composites depth-crossing surf
 
     // project + sort by centre depth (nearest first) → A (z 4.99) before B (z 5.01)
     kir::gsplat::Gsplat2dProjectConfig pcfg;
+    pcfg.count = 2U; // REN-38: tail-thread guard (two surfels in this fixture)
     kir::KGraph                        pg(&alloc);
     const kir::KEntry                  pe = kir::gsplat::build_gsplat2d_project_kernel(pg, pcfg);
     crd::containers::Array<double>     prep(&alloc);

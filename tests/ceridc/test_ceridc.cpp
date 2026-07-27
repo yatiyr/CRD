@@ -7,7 +7,7 @@
 #include <crd/assetio/otio.hpp>
 #include <crd/ceridc/verbs.hpp>
 #include <crd/cooker/cook_handler.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/hdr_image.hpp>
 
@@ -23,7 +23,7 @@ namespace
 {
 
 // NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
-crd::memory::MallocAllocator g_alloc;
+crd::memory::GrowableTlsfAllocator g_alloc{crd::usize{64} << 20U, nullptr, "ceridc-tests"};
 // NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
 // one JSON-RPC call through the REAL protocol handler

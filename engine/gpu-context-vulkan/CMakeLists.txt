@@ -21,6 +21,24 @@ if(DEFINED ENV{VULKAN_SDK})
 endif()
 find_package(Vulkan REQUIRED)
 
+# REN-38 close: the frontier RT extensions this backend implements (VK_NV_cluster_acceleration_structure — FA-3,
+# VK_NV_ray_tracing_linear_swept_spheres — B18-f) need 1.4.3xx headers. Windows pins the LunarG SDK (CI caches
+# 1.4.341.1; local installs match); Linux distros ship 1.3.27x, where those extensions do not exist and the two
+# RT translation units fail to compile. PIN the Khronos headers to the SAME SDK tag and put them AHEAD of the
+# system include — ONE code path, no #ifdef degradation. The system LOADER stays as-is: every extension entry
+# point is fetched via vkGetDeviceProcAddr at runtime, so header version and loader version are independent.
+if(UNIX)
+    include(FetchContent)
+    FetchContent_Declare(crd_vulkan_headers
+        GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
+        GIT_TAG        vulkan-sdk-1.4.341.0
+        # populate-only: their CMakeLists re-creates the Vulkan::Headers alias find_package(Vulkan) already made;
+        # pointing SOURCE_SUBDIR at a dir with no CMakeLists.txt makes MakeAvailable skip add_subdirectory.
+        SOURCE_SUBDIR  include
+    )
+    FetchContent_MakeAvailable(crd_vulkan_headers)
+endif()
+
 # ADR-0103 / D-008: this backend OWNS the Vulkan-target shading-language compilers (moved out of crd-shader). shaderc
 # (GLSL→SPIR-V) and dxc (HLSL→SPIR-V) headers; both libraries are loaded DYNAMICALLY at runtime, so no link dependency.
 # dxc is optional — absent (e.g. Linux without dxc-dev) ⇒ CRD_HAS_DXC=0 and compile_hlsl_to_spirv returns ok=false.
@@ -49,6 +67,11 @@ target_include_directories(crd-gpu-context-vulkan
     PRIVATE
         "${CRD_SHADERC_INCLUDE_DIR}"
 )
+if(UNIX) # the pinned 1.4.3xx headers shadow the distro's 1.3.27x ones (see the FetchContent note above).
+         # PUBLIC: the backend's TESTS (and any consumer touching the Vulkan API directly) must compile against
+         # the SAME header version as the backend — a private pin would leave them on the distro headers.
+    target_include_directories(crd-gpu-context-vulkan BEFORE PUBLIC "${crd_vulkan_headers_SOURCE_DIR}/include")
+endif()
 
 if(CRD_HAS_DXC)
     target_include_directories(crd-gpu-context-vulkan PRIVATE "${CRD_DXC_INCLUDE_DIR}")

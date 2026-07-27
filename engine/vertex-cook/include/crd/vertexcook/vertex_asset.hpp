@@ -311,7 +311,7 @@ struct RtDesc
     // IGNORED (`ignoreIntersectionEXT` / `IgnoreHit()`), the portable OMM fallback for alpha-tested geometry.
     double   alpha_cutoff  = 0.0;
     // ── REN-38-F13 (appended). ──
-    double   sphere_radius  = 0.5; // Intersection: the analytic sphere's radius (object space, centred at 0)
+    double   sphere_radius  = 0.5; // crd-lint-allow-untagged-physical: OBJECT-SPACE radius — the modeling space the instance matrix scales, unit-agnostic like the vertex positions themselves (Intersection: analytic sphere centred at 0)
     double   callable_scale = 2.0; // Callable: cd.m0 = cd.m0 * scale + bias — a transform a gate can verify
     double   callable_bias  = 1.0;
     bool     use_callable   = false; // RayGen: after the trace, run the callable over the payload and store ITS result

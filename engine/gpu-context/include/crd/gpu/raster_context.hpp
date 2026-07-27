@@ -126,9 +126,9 @@ struct PassRasterState
 {
     bool         depth_write      = true;
     // Depth bias: constant (in device units) + slope-scaled + clamp. All zero = disabled, the historical value.
-    float        depth_bias       = 0.0F;
-    float        depth_bias_slope = 0.0F;
-    float        depth_bias_clamp = 0.0F;
+    float        depth_bias       = 0.0F; // crd-lint-allow-untagged-physical: device depth-bias units (the API scalar VK/D3D define), not a physical quantity
+    float        depth_bias_slope = 0.0F; // crd-lint-allow-untagged-physical: dimensionless slope factor
+    float        depth_bias_clamp = 0.0F; // crd-lint-allow-untagged-physical: device depth units, same space as depth_bias
     FaceCull     face_cull        = FaceCull::None;
     FrontFace    front_face       = FrontFace::CounterClockwise;
     // Stencil (front and back faces share one description — the closed form every declared technique needs).

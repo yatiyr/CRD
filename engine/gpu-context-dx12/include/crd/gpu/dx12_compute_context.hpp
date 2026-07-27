@@ -37,6 +37,8 @@ public:
 
     [[nodiscard]] bool valid() const noexcept override;
     [[nodiscard]] bool supports_shader_int64() const noexcept override;
+    [[nodiscard]] crd::u32 subgroup_size() const noexcept override;        // REN-38: OPTIONS1 WaveLaneCountMin
+    [[nodiscard]] crd::u32 shared_memory_bytes() const noexcept override;  // REN-38: 32 KB TGSM spec limit
 
     [[nodiscard]] std::unique_ptr<ComputeBuffer> create_buffer(crd::u64 bytes, crd::u32 usage, ComputeMemory memory) override;
 

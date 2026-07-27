@@ -6571,5 +6571,10 @@ TEST_CASE("REN-38-F6+ GATE: a FETCH mesh stage renders the buffer's geometry and
     CHECK(one_r == 0U);
     CHECK(two_l != 0U); // ...count 2: the buffer word ALONE lit the second quad
     CHECK(two_r != 0U);
+    if (capture.error_count() > 0U) // print WHAT before failing — a bare count diagnoses nothing
+    {
+        const auto msgs = capture.messages();
+        for (usize i = 0; i < msgs.size(); ++i) { WARN("[fetch-gate capture] " << msgs[i].message_text.c_str()); }
+    }
     CHECK(capture.error_count() == 0U);
 }

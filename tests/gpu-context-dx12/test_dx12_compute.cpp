@@ -1879,19 +1879,25 @@ TEST_CASE("B-cmp: CKIR radix sort DISPATCHES on DX12 == sorted permutation", "[d
     using g::compute_usage::transfer_src;
 
     constexpr int n          = 16384;
-    constexpr int threads    = 256;
-    constexpr int radix_bits = 8;
-    constexpr int nbins      = 256;
+    // REN-38 llvmpipe campaign (DX12 face): the shape is DEVICE-DERIVED — a WARP software adapter reports
+    // wave width 4, where the warp-32 shape is silently wrong. Correctness is shape-independent.
+    const crd::u32 dev_lanes = ctx.subgroup_size();
+    if (dev_lanes == 0U || dev_lanes > 32U) { SKIP("no u32-maskable wave width reported"); }
+    const kir::SortConfig scfg    = kir::pick_sort_config(dev_lanes, ctx.shared_memory_bytes(), 1024, false);
+    const int             threads = scfg.threads;
+    const int             radix_bits = scfg.radix_bits;
+    const int             npasses = scfg.passes;
+    const int     nbins      = 1 << radix_bits;
     constexpr int epb        = 1024;
     constexpr int nblocks    = n / epb;
 
-    constexpr int scan_threads = nblocks < threads ? nblocks : threads; // divides nblocks
-    std::unique_ptr<g::ComputePipeline> ph_s[4];
-    std::unique_ptr<g::ComputePipeline> ps_s[4];
+    const int scan_threads = nblocks < threads ? nblocks : threads; // divides nblocks
+    std::unique_ptr<g::ComputePipeline> ph_s[8];
+    std::unique_ptr<g::ComputePipeline> ps_s[8];
     std::unique_ptr<g::ComputePipeline> po1_s;
     std::unique_ptr<g::ComputePipeline> po2_s;
-    g::ComputePipeline*                 ph[4] = {};
-    g::ComputePipeline*                 ps[4] = {};
+    g::ComputePipeline*                 ph[8] = {};
+    g::ComputePipeline*                 ps[8] = {};
     const auto mk = [&](kir::KGraph& gg, const kir::KEntry& e, int nb, const char* nm) -> std::unique_ptr<g::ComputePipeline> {
         kir::GlslKernel k(&alloc);
         REQUIRE(kir::emit_compute_kernel_hlsl(gg, e, &alloc, k));
@@ -1904,12 +1910,16 @@ TEST_CASE("B-cmp: CKIR radix sort DISPATCHES on DX12 == sorted permutation", "[d
     po2_s = mk(gof2, kir::build_sort_gbase(gof2, radix_bits), 2, "sort_gb");
     g::ComputePipeline* po1 = po1_s.get();
     g::ComputePipeline* po2 = po2_s.get();
-    kir::KGraph ghg[4] = {kir::KGraph(&alloc), kir::KGraph(&alloc), kir::KGraph(&alloc), kir::KGraph(&alloc)};
-    kir::KGraph gsg[4] = {kir::KGraph(&alloc), kir::KGraph(&alloc), kir::KGraph(&alloc), kir::KGraph(&alloc)};
-    for (int p = 0; p < 4; ++p)
+    crd::containers::Array<kir::KGraph> ghg(&alloc);
+    crd::containers::Array<kir::KGraph> gsg(&alloc);
+    for (int p = 0; p < npasses; ++p) { ghg.emplace_back(&alloc); gsg.emplace_back(&alloc); }
+    for (int p = 0; p < npasses; ++p)
     {
-        ph_s[p] = mk(ghg[p], kir::build_sort_histogram(ghg[p], epb, threads, radix_bits, p * 8, nblocks), 2, "sort_hist");
-        ps_s[p] = mk(gsg[p], kir::build_sort_scatter(gsg[p], epb, threads, radix_bits, p * 8, nblocks), 4, "sort_scat");
+        const crd::usize up = static_cast<crd::usize>(p);
+        ph_s[p] = mk(ghg[up], kir::build_sort_histogram(ghg[up], epb, threads, radix_bits, p * radix_bits, nblocks,
+                                                        static_cast<int>(dev_lanes)), 2, "sort_hist");
+        ps_s[p] = mk(gsg[up], kir::build_sort_scatter(gsg[up], epb, threads, radix_bits, p * radix_bits, nblocks,
+                                                      static_cast<int>(dev_lanes)), 4, "sort_scat");
         ph[p] = ph_s[p].get(); ps[p] = ps_s[p].get();
         REQUIRE(ph[p] != nullptr); REQUIRE(ps[p] != nullptr);
     }
@@ -1936,7 +1946,7 @@ TEST_CASE("B-cmp: CKIR radix sort DISPATCHES on DX12 == sorted permutation", "[d
 
     auto& rec = ctx.begin();
     g::ComputeBuffer* in = d_a.get(); g::ComputeBuffer* out = d_b.get();
-    for (int p = 0; p < 4; ++p)
+    for (int p = 0; p < npasses; ++p)
     {
         g::ComputeBuffer* hb[2] = {in, d_h.get()};
         rec.dispatch(*ph[p], crd::containers::ConstSpan<g::ComputeBuffer*>(hb, 2), nullptr, 0U, static_cast<crd::u32>(nblocks), 1U, 1U);
@@ -1989,7 +1999,9 @@ TEST_CASE("D-007 B11: CKIR wave/subgroup ops DISPATCH on DX12 == oracle bit-exac
     constexpr int t_n = 64;
     constexpr int no  = crd::gputest::kSubgroupNOut;
     kir::KGraph       g0(&alloc);
-    const kir::KEntry e = crd::gputest::build_subgroup_ops_kernel(g0, t_n);
+    const crd::u32 sg_lanes = ctx.subgroup_size(); // REN-38: DEVICE width shapes kernel + oracle
+    if (sg_lanes == 0U || sg_lanes > 32U) { SKIP("no u32-maskable wave width reported"); }
+    const kir::KEntry e = crd::gputest::build_subgroup_ops_kernel(g0, t_n, static_cast<int>(sg_lanes));
 
     crd::containers::Array<crd::u32> xin(&alloc);   xin.resize(uz(t_n));
     for (int i = 0; i < t_n; ++i) { xin[uz(i)] = (static_cast<crd::u32>(i) * 2654435761U) & 0xFFU; }
@@ -1997,7 +2009,7 @@ TEST_CASE("D-007 B11: CKIR wave/subgroup ops DISPATCH on DX12 == oracle bit-exac
     crd::containers::Array<crd::f64> out64(&alloc); out64.resize(uz(no * t_n), 0.0);
     for (int i = 0; i < t_n; ++i) { xin64[uz(i)] = static_cast<crd::f64>(xin[uz(i)]); }
     kir::KernelBuffer bufs[2] = {{xin64.data(), t_n, 0, 0}, {out64.data(), no * t_n, 0, 1}};
-    kir::eval_cpu_kernel(g0, e, bufs, 2, static_cast<crd::u32>(t_n), &alloc, 1U);
+    kir::eval_cpu_kernel(g0, e, bufs, 2, static_cast<crd::u32>(t_n), &alloc, 1U, sg_lanes);
 
     kir::GlslKernel kern(&alloc);
     REQUIRE(kir::emit_compute_kernel_hlsl(g0, e, &alloc, kern));

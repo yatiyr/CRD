@@ -11,6 +11,13 @@
 namespace crd::ceridc
 {
 
+// `strtok_s` is the MSVC spelling of POSIX `strtok_r` — same signature, same semantics. One portable name.
+#if defined(_WIN32)
+#define CRD_STRTOK(str, delim, ctx) strtok_s((str), (delim), (ctx))
+#else
+#define CRD_STRTOK(str, delim, ctx) strtok_r((str), (delim), (ctx))
+#endif
+
 namespace
 {
     using crd::assetio::JsonWriter;
@@ -44,7 +51,7 @@ namespace
         char buf[512];
         std::snprintf(buf, sizeof(buf), "%s", args);
         char* save = nullptr;
-        for (char* tok = strtok_s(buf, ",", &save); tok != nullptr; tok = strtok_s(nullptr, ",", &save))
+        for (char* tok = CRD_STRTOK(buf, ",", &save); tok != nullptr; tok = CRD_STRTOK(nullptr, ",", &save))
         {
             char* colon = std::strchr(tok, ':');
             if (colon == nullptr) { continue; }
@@ -63,7 +70,7 @@ namespace
         char buf2[512];
         std::snprintf(buf2, sizeof(buf2), "%s", args);
         save = nullptr;
-        for (char* tok = strtok_s(buf2, ",", &save); tok != nullptr; tok = strtok_s(nullptr, ",", &save))
+        for (char* tok = CRD_STRTOK(buf2, ",", &save); tok != nullptr; tok = CRD_STRTOK(nullptr, ",", &save))
         {
             if (std::strchr(tok, '!') == nullptr) { continue; }
             char* colon = std::strchr(tok, ':');

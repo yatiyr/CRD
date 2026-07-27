@@ -85,6 +85,9 @@ public:
     // B4: `VK_EXT_mesh_shader` + the `meshShader` feature enabled on a graphics-capable device — the substrate for the modern
     // amplification path (mesh shader objects + `vkCmdDrawMeshTasksEXT`). false ⇒ the caller uses the vertex-pull fallback.
     [[nodiscard]] virtual bool mesh_shader() const noexcept = 0;
+    // REN-38: the taskShader (amplification) feature — meshShader alone does NOT license a TASK shader object
+    // (VUID-08421). Appended with a default so existing mocks stay source-compatible; the real context overrides.
+    [[nodiscard]] virtual bool task_shader() const noexcept { return false; }
     [[nodiscard]] virtual bool ray_query() const noexcept   = 0; // B9/RT: inline ray query (VK_KHR_ray_query + acceleration_structure)
     [[nodiscard]] virtual bool opacity_micromap() const noexcept   = 0; // FA-1: VK_EXT_opacity_micromap (alpha-tested geometry)
     [[nodiscard]] virtual bool rt_pipeline() const noexcept        = 0; // FA-2: VK_KHR_ray_tracing_pipeline (raygen/hit/miss + SBT)

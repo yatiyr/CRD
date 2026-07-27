@@ -10,7 +10,7 @@
 #include <crd/audio/midi.hpp>
 #include <crd/cooker/cook_handler.hpp>
 #include <crd/cooker/cook_io.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/loader.hpp>
 #include <crd/resources/resource_id.hpp>
@@ -28,7 +28,7 @@ namespace
 {
 
 // NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
-crd::memory::MallocAllocator g_alloc;
+crd::memory::GrowableTlsfAllocator g_alloc{crd::usize{64} << 20U, nullptr, "audio_cook-tests"};
 // NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
 void ensure_registered()

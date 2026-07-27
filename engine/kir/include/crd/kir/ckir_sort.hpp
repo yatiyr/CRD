@@ -23,14 +23,45 @@ namespace crd::kir
 // coalesce across concurrent blocks in L2, since consecutive blocks write consecutive addresses per bin). Uses K=threads/32
 // PER-WARP sub-histograms to cut shared-atomic CONTENTION ~K× (each warp accumulates into its OWN copy `s_hist[warp][·]`), then
 // merges the K copies. The count is an order-independent SUM ⇒ bit-exact regardless of the atomic order. Buffers: keys in = 0
-// (ro, U32), block_hist out = 1 (rw, U32). `nbins` a multiple of `threads`; `threads` a multiple of 32.
-[[nodiscard]] inline KEntry build_sort_histogram(KGraph& g, int elems, int threads, int radix_bits, int shift, int nblocks)
+// (ro, U32), block_hist out = 1 (rw, U32). `nbins` a multiple of `threads`; `threads` a multiple of `lanes`.
+// ── REN-38 llvmpipe campaign: the DEVICE-ADAPTIVE sort configuration. ────────────────────────────────────────
+// The builders below take the device's SUBGROUP WIDTH (`lanes`) explicitly — the old hardwired 32 made every
+// warp-synchronous structure silently wrong on a non-32 device (llvmpipe is 8, fixed; Intel can be 16), and the
+// scatter's shared arrays scale with threads/lanes, so an 8-wide device also needs a NARROWER radix to fit its
+// smaller shared memory (llvmpipe: 32 KB vs NVIDIA's 48+). One picker owns that arithmetic so every caller
+// (tests, B19 pipelines, autotuner boards) derives the SAME device-true shape.
+struct SortConfig
+{
+    int radix_bits = 8; // bins = 1 << radix_bits; scatter requires threads == bins
+    int threads    = 256;
+    int passes     = 4; // 32 / radix_bits — full u32 keys
+};
+[[nodiscard]] inline SortConfig pick_sort_config(crd::u32 lanes, crd::u32 shared_bytes, int elems_per_block,
+                                                 bool carry_val)
+{
+    // scatter shared words: key staging (+ value staging when carried) + seg[(threads/lanes) x bins] + dhist[bins]
+    const auto fits = [&](int bits, int threads) {
+        const crd::u64 bins  = crd::u64{1} << bits;
+        const crd::u64 words = static_cast<crd::u64>(elems_per_block) * (carry_val ? 2U : 1U)
+                               + (static_cast<crd::u64>(threads) / lanes) * bins + bins + 64U; // +64: slack
+        return words * 4U <= shared_bytes;
+    };
+    SortConfig c;
+    if (lanes >= 16U && fits(8, 256)) { c.radix_bits = 8; c.threads = 256; c.passes = 4; return c; }
+    c.radix_bits = 4; // 16-thread blocks, 8 passes — slower, and CORRECT on any conformant device
+    c.threads    = 16;
+    c.passes     = 8;
+    return c;
+}
+
+[[nodiscard]] inline KEntry build_sort_histogram(KGraph& g, int elems, int threads, int radix_bits, int shift, int nblocks,
+                                                 int lanes)
 {
     const int   nbins = 1 << radix_bits;
     const int   mask  = nbins - 1;
     const int   pt    = elems / threads; // keys per thread
     const int   nb    = nbins / threads; // bins per thread (nbins multiple of threads)
-    const int   ksub  = threads / 32;    // per-warp sub-histograms
+    const int   ksub  = threads / lanes; // per-warp sub-histograms (warp = the DEVICE subgroup width)
     const Shape sh1   = make_shape({1});
     const auto  ku    = [&](crd::u32 v) { return g.constant(static_cast<crd::f64>(v), sh1, DType::U32); };
     const auto  add   = [&](int a, int b) { return g.binary(KOp::Add, a, b); };
@@ -41,7 +72,7 @@ namespace crd::kir
     const int s_hist  = g.shared_decl(DType::U32, ksub * nbins); // [warp][bin]
     const int tid     = g.builtin(KBuiltin::LocalInvocationIndex);
     const int wid     = g.builtin(KBuiltin::WorkgroupIndex);
-    const int sg      = g.binary(KOp::Div, tid, ku(32)); // this thread's warp = its sub-histogram
+    const int sg      = g.binary(KOp::Div, tid, ku(static_cast<crd::u32>(lanes))); // this thread's warp = its sub-histogram
     const int base    = mul(wid, ku(static_cast<crd::u32>(elems)));
     const int soff    = mul(sg, ku(static_cast<crd::u32>(nbins)));
     const int uone    = g.constant(1.0, sh1, DType::U32);
@@ -207,16 +238,16 @@ namespace crd::kir
 
 // *** SCATTER (SUBGROUP rank + LOCAL REORDER -> COALESCED writes): block `wid` writes each key to
 // out[gb[digit] + off[wid,digit] + stable block rank]. Rank via subgroup ballots (pt rounds, position order => stable =>
-// bit-exact under a linear 32-lane subgroup mapping); every key + digit + rank is REGISTER-staged during the rounds, then the
+// bit-exact under a linear `lanes`-wide subgroup mapping); every key + digit + rank is REGISTER-staged during the rounds, then the
 // block's keys are locally REORDERED in shared (sorted by digit) so the global write phase emits per-digit RUNS (coalesced) --
 // the CUB structure. dest bytes identical to a direct scatter (p - lbase[d] == rank). in = keys(0), out = sorted(1),
 // off = within-bin block prefix(2), gb = per-bin global base(3). `nbins == threads`, `elems` a multiple of `threads`.
 [[nodiscard]] inline KEntry build_sort_scatter(KGraph& g, int elems, int threads, int radix_bits, int shift, int nblocks,
-                                               bool carry_val = false)
+                                               int lanes, bool carry_val = false)
 {
     const int   nbins   = 1 << radix_bits;
     const int   pt      = elems / threads;
-    const int   sgs     = threads / 32;             // subgroups per workgroup
+    const int   sgs     = threads / lanes;          // subgroups per workgroup (the DEVICE width)
     const int   seginit = (sgs * nbins) / threads;  // seg entries each thread zeroes per round
     const Shape sh1     = make_shape({1});
     const auto  ku      = [&](crd::u32 v) { return g.constant(static_cast<crd::f64>(v), sh1, DType::U32); };
@@ -240,7 +271,7 @@ namespace crd::kir
     const int dhist   = g.shared_decl(DType::U32, nbins);       // cross-round per-digit accumulator
     const int tid     = g.builtin(KBuiltin::LocalInvocationIndex);
     const int wid     = g.builtin(KBuiltin::WorkgroupIndex);
-    const int sg      = g.binary(KOp::Div, tid, ku(32));
+    const int sg      = g.binary(KOp::Div, tid, ku(static_cast<crd::u32>(lanes)));
     const int base    = mul(wid, ku(static_cast<crd::u32>(elems)));
     const int u0      = ku(0);
 
@@ -272,7 +303,13 @@ namespace crd::kir
         g.stmt_materialize(d);
         // MATCH via radix_bits-ballot intersection. MEASURED faster than the hardware subgroupPartitionNV here (0.43 vs 0.59
         // ms/pass on Ada — the 8 independent ballots pipeline; the partition op serializes). Same mask either way (bit-exact).
-        int mask = g.unary(KOp::BitNot, u0);
+        // ⛔ REN-38 llvmpipe campaign: the match STARTS from the ACTIVE-LANE mask, never ~0. `bal ^ (bitv-1)`
+        // complements the ballot when bitv==0, and on a device narrower than 32 lanes the complement SETS the
+        // phantom bits above the subgroup — BitCount then hands the leader up to 24 ghost lanes, the per-digit
+        // counts explode, and the staged scatter ranks run past the shared array (heap corruption under a CPU
+        // Vulkan implementation; silent garbage risk anywhere). On a 32-lane device this is the SAME ~0.
+        const crd::u32 lane_mask = lanes >= 32 ? 0xFFFFFFFFU : ((1U << static_cast<crd::u32>(lanes)) - 1U);
+        int mask = ku(lane_mask);
         for (int bit = 0; bit < radix_bits; ++bit) // branchless: keep = bal ^ (bitv-1) (bitv=1 -> bal; bitv=0 -> ~bal)
         {
             const int bitv = g.binary(KOp::BitAnd, g.binary(KOp::Shr, key, ku(static_cast<crd::u32>(shift + bit))), ku(1));
@@ -452,11 +489,11 @@ namespace crd::kir
 // the standard onesweep assumption, same as the chained scan. in = keys(0), out(1), gb(2: 4*nbins), aux(3: COHERENT
 // [ghist|look]). `nbins == threads`, `elems` a multiple of `threads`.
 [[nodiscard]] inline KEntry build_sort_scatter_onesweep(KGraph& g, int elems, int threads, int radix_bits, int shift,
-                                                        int pass, int nblocks, bool hw_match = false)
+                                                        int pass, int nblocks, int lanes, bool hw_match = false)
 {
     const int   nbins   = 1 << radix_bits;
     const int   pt      = elems / threads;
-    const int   sgs     = threads / 32;
+    const int   sgs     = threads / lanes;
     const int   seginit = (sgs * nbins) / threads;
     const Shape sh1     = make_shape({1});
     const auto  ku      = [&](crd::u32 v) { return g.constant(static_cast<crd::f64>(v), sh1, DType::U32); };
@@ -472,7 +509,7 @@ namespace crd::kir
     const int dhist   = g.shared_decl(DType::U32, nbins);
     const int s_tk    = g.shared_decl(DType::U32, 1);          // the block's DYNAMIC position (atomic ticket)
     const int tid     = g.builtin(KBuiltin::LocalInvocationIndex);
-    const int sg      = g.binary(KOp::Div, tid, ku(32));
+    const int sg      = g.binary(KOp::Div, tid, ku(static_cast<crd::u32>(lanes)));
     const int u0      = ku(0);
     const int lookb   = ku(static_cast<crd::u32>(4 * nbins + 4 + pass * nblocks * nbins)); // look base (after ghist + 4 tickets)
 
@@ -516,7 +553,8 @@ namespace crd::kir
         if (hw_match) { mask = g.subgroup_match(d); } // CUDA __match_any_sync: 1 hardware op (bit-exact: same mask)
         else
         {
-            mask = g.unary(KOp::BitNot, u0);
+            // REN-38: active-lane mask, not ~0 — same phantom-lane ghost-count bug as the scatter (see above)
+            mask = ku(lanes >= 32 ? 0xFFFFFFFFU : ((1U << static_cast<crd::u32>(lanes)) - 1U));
             for (int bit = 0; bit < radix_bits; ++bit) // branchless: keep = bal ^ (bitv-1)
             {
                 const int bitv = g.binary(KOp::BitAnd, g.binary(KOp::Shr, key, ku(static_cast<crd::u32>(shift + bit))), ku(1));

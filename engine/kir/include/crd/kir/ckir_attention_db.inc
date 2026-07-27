@@ -5,11 +5,11 @@
 // Device: RTX 4070 Ti SUPER (Ada, sm_89). BR=128 (wide query block) beats the fixed BR=64 default across the S sweep, D∈{32,64}.
 // ⚠ Other GPUs need their own rows (measure on the target hardware — only sm_89 available this session). D=128 spills the per-thread
 // q[D]+acc[D] accumulator (>255 regs) ⇒ it runs but needs the warp-collaborative kernel for a competitive tile (future).
-{"sm_89", 512, 32, 128, 32},
-{"sm_89", 1024, 32, 128, 32},
-{"sm_89", 2048, 32, 128, 32},
-{"sm_89", 4096, 32, 128, 32},
-{"sm_89", 512, 64, 128, 32},
-{"sm_89", 1024, 64, 128, 32},
-{"sm_89", 2048, 64, 128, 32},
-{"sm_89", 4096, 64, 128, 32},
+{"sm_89", "win32", 512, 32, 128, 32},
+{"sm_89", "win32", 1024, 32, 128, 32},
+{"sm_89", "win32", 2048, 32, 128, 32},
+{"sm_89", "win32", 4096, 32, 128, 32},
+{"sm_89", "win32", 512, 64, 128, 32},
+{"sm_89", "win32", 1024, 64, 128, 32},
+{"sm_89", "win32", 2048, 64, 128, 32},
+{"sm_89", "win32", 4096, 64, 128, 32},

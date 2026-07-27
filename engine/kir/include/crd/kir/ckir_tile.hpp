@@ -47,6 +47,7 @@ struct TuningEntry
 {
     KOp          op;
     const char*  device;
+    const char*  env; // the OS the row was MEASURED on (see tuning_env below) — a row never replays elsewhere
     int          m;
     int          n;
     int          k;
@@ -55,6 +56,22 @@ struct TuningEntry
 
 // C-string equality (no std). nullptr on either side: a nullptr `want` is a WILDCARD (match any device — the single-device /
 // backward-compatible query); otherwise an exact match is required.
+// ⛔ REN-38 llvmpipe campaign: a tuned row is a MEASUREMENT CACHE, and a measurement belongs to the whole
+// environment it was taken in — the SAME sm_89 silicon under WSL-CUDA measured the Windows-tuned attention tile
+// 2.27x SLOWER than that run's own winner (different OS/driver submission characteristics). Rows therefore carry
+// the OS they were measured on and replay ONLY there; every other environment falls back to the heuristic (or
+// earns its own rows).
+[[nodiscard]] inline const char* tuning_env() noexcept
+{
+#if defined(_WIN32)
+    return "win32";
+#elif defined(__APPLE__)
+    return "macos";
+#else
+    return "linux";
+#endif
+}
+
 [[nodiscard]] inline bool tuning_device_eq(const char* want, const char* have) noexcept
 {
     if (want == nullptr) { return true; } // wildcard
@@ -73,7 +90,8 @@ struct TuningEntry
     };
     for (const TuningEntry& e : kDb)
     {
-        if (e.op == op && tuning_device_eq(device, e.device) && static_cast<crd::i64>(e.m) == m
+        if (e.op == op && tuning_device_eq(device, e.device) && tuning_device_eq(tuning_env(), e.env)
+            && static_cast<crd::i64>(e.m) == m
             && static_cast<crd::i64>(e.n) == n && static_cast<crd::i64>(e.k) == k)
         {
             out = e.sched;
@@ -88,6 +106,7 @@ struct TuningEntry
 struct AttentionTuningEntry
 {
     const char* device;
+    const char* env; // the OS the row was MEASURED on (see tuning_env) — a row never replays elsewhere
     int         s;  // sequence length
     int         d;  // head dim
     int         br; // tuned query-tile height
@@ -103,7 +122,8 @@ struct AttentionTuningEntry
     };
     for (const AttentionTuningEntry& e : kDb)
     {
-        if (tuning_device_eq(device, e.device) && static_cast<crd::i64>(e.s) == s && static_cast<crd::i64>(e.d) == d)
+        if (tuning_device_eq(device, e.device) && tuning_device_eq(tuning_env(), e.env)
+            && static_cast<crd::i64>(e.s) == s && static_cast<crd::i64>(e.d) == d)
         {
             br = e.br;
             bc = e.bc;
