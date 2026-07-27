@@ -1,0 +1,31 @@
+# scene_forward.crdl - REN-38-E7: the editable form of the scene lighting technique.
+#
+# Change the counts, the shadow scheme or the filter here and the cooked fragment program changes. The same
+# declaration is embedded in scene_renderer.cpp as the built-in default (the frame-graph pack rule), and the
+# REN-38 drift gate PINS the two: this file and the embedded copy must stay one declaration.
+
+schema = 1
+name   = "crd://lighting/scene_forward"
+
+[header]
+view_proj   = 6
+csm_splits  = 28
+light_off   = 99
+
+[record]
+stride      = 16
+position    = 0
+color       = 4
+direction   = 8
+falloff     = 3
+spot_scale  = 7
+spot_offset = 11
+
+[counts]
+directional = 1
+
+[shadow]
+directional = "csm"
+filter      = "pcf"
+taps        = 4
+cascades    = 4

@@ -11,6 +11,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include <algorithm> // std::ranges::any_of
 #include <cstdint>
 #include <cstring> // std::memcpy — MSVC provides it transitively, GCC does not
 
@@ -176,6 +177,23 @@ inline void destroy_buffer_bundle(VkDevice d, const BufferBundle& b) noexcept
     return VK_COMPARE_OP_ALWAYS;
 }
 
+// REN-38 audit (pass-state vocabulary): the backend-neutral StencilOp → VkStencilOp, mapped explicitly.
+[[nodiscard]] inline VkStencilOp to_vk_stencil_op(StencilOp op) noexcept
+{
+    switch (op)
+    {
+    case StencilOp::Keep:      return VK_STENCIL_OP_KEEP;
+    case StencilOp::Zero:      return VK_STENCIL_OP_ZERO;
+    case StencilOp::Replace:   return VK_STENCIL_OP_REPLACE;
+    case StencilOp::IncrClamp: return VK_STENCIL_OP_INCREMENT_AND_CLAMP;
+    case StencilOp::DecrClamp: return VK_STENCIL_OP_DECREMENT_AND_CLAMP;
+    case StencilOp::Invert:    return VK_STENCIL_OP_INVERT;
+    case StencilOp::IncrWrap:  return VK_STENCIL_OP_INCREMENT_AND_WRAP;
+    case StencilOp::DecrWrap:  return VK_STENCIL_OP_DECREMENT_AND_WRAP;
+    }
+    return VK_STENCIL_OP_KEEP;
+}
+
 // B1-e: ShadingRate → the VkExtent2D fragment size {width, height} for vkCmdSetFragmentShadingRateKHR.
 [[nodiscard]] inline VkExtent2D vrs_extent(ShadingRate r) noexcept
 {
@@ -232,9 +250,10 @@ class VulkanRasterTarget final : public IRasterTarget
 {
 public:
     VulkanRasterTarget(VkDevice device, const ImageBundle& color, const ImageBundle& resolve, const ImageBundle& depth,
-                       const BufferBundle& readback, crd::u32 samples, crd::u32 w, crd::u32 h) noexcept
+                       const BufferBundle& readback, crd::u32 samples, crd::u32 w, crd::u32 h,
+                       bool has_stencil = false) noexcept
         : m_device(device), m_color(color), m_resolve(resolve), m_depth(depth), m_readback(readback),
-          m_samples(samples), m_w(w), m_h(h)
+          m_samples(samples), m_w(w), m_h(h), m_has_stencil(has_stencil)
     {
     }
     ~VulkanRasterTarget() override
@@ -275,6 +294,19 @@ public:
     [[nodiscard]] bool        has_depth() const noexcept { return m_depth.image != VK_NULL_HANDLE; } // B1-d
     [[nodiscard]] VkImage     depth_image() const noexcept { return m_depth.image; }
     [[nodiscard]] VkImageView depth_view() const noexcept { return m_depth.view; }
+    // REN-38-F11: a D24S8 target. Attachments, layouts AND barriers must then carry BOTH aspects — a depth-only
+    // view/barrier over a stencil format makes every stencil op silently read and write nothing.
+    [[nodiscard]] bool               has_stencil() const noexcept { return m_has_stencil; }
+    [[nodiscard]] VkImageAspectFlags depth_aspect() const noexcept
+    {
+        return m_has_stencil ? (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)
+                             : VK_IMAGE_ASPECT_DEPTH_BIT;
+    }
+    [[nodiscard]] VkImageLayout depth_attach_layout() const noexcept
+    {
+        return m_has_stencil ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                             : VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    }
     [[nodiscard]] bool        has_vrs() const noexcept { return m_vrs.image != VK_NULL_HANDLE; } // B1-e attachment VRS
     [[nodiscard]] VkImage     vrs_image() const noexcept { return m_vrs.image; }
     [[nodiscard]] VkImageView vrs_view() const noexcept { return m_vrs.view; }
@@ -293,6 +325,7 @@ private:
     crd::u32     m_w       = 0;
     crd::u32     m_h       = 0;
     bool         m_borrowed = false; // REN-2: true ⇒ a frame-graph RTT transient view; the dtor frees nothing
+    bool         m_has_stencil = false; // REN-38-F11: the depth bundle is D24S8 (attachments/barriers carry both aspects)
 };
 
 // ── RET-2 (ADR-0105): the present surface — the swapchain seam of the ONE graphics layer ──────────────────────────────
@@ -927,7 +960,15 @@ public:
         const VkShaderStageFlags vs_fs = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
                                          | (m_ctx->mesh_shader() ? static_cast<VkShaderStageFlags>(VK_SHADER_STAGE_MESH_BIT_EXT) : 0U);
         VkDescriptorSetLayoutBinding slb[4]{};
-        slb[0].binding = 0U; slb[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; slb[0].descriptorCount = 1U;            slb[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT; // GEO-1: + VERTEX for vertex pulling
+        // GEO-1: + VERTEX for vertex pulling. REN-38-F6+: + TESC/TESE and (when the device has them) TASK/MESH —
+        // the storage-bound tess/mesh verbs let ANY amplification stage pull real geometry through this binding,
+        // and a layout must name every stage that actually accesses it (the A9 scar, one comment down).
+        slb[0].binding = 0U; slb[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; slb[0].descriptorCount = 1U;
+        slb[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
+                          | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT
+                          | (m_ctx->mesh_shader() ? static_cast<VkShaderStageFlags>(VK_SHADER_STAGE_TASK_BIT_EXT
+                                                                                    | VK_SHADER_STAGE_MESH_BIT_EXT)
+                                                  : 0U);
         slb[1].binding = 1U; slb[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;  slb[1].descriptorCount = 1U;            slb[1].stageFlags = vs_fs;
         slb[2].binding = 2U; slb[2].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;        slb[2].descriptorCount = 1U;            slb[2].stageFlags = vs_fs;
         slb[3].binding = 3U; slb[3].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;  slb[3].descriptorCount = kBindlessMax; slb[3].stageFlags = vs_fs;
@@ -987,6 +1028,7 @@ public:
     ~VulkanRasterContext() override
     {
         if (m_default_sampler != VK_NULL_HANDLE) { vkDestroySampler(m_device, m_default_sampler, nullptr); }
+        for (crd::u32 i = 0; i < m_sampler_n; ++i) { vkDestroySampler(m_device, m_sampler_obj[i], nullptr); }
         if (m_cmp_sampler != VK_NULL_HANDLE) { vkDestroySampler(m_device, m_cmp_sampler, nullptr); }
         if (m_desc_pool != VK_NULL_HANDLE) { vkDestroyDescriptorPool(m_device, m_desc_pool, nullptr); }
         if (m_storage_set_layout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(m_device, m_storage_set_layout, nullptr); }
@@ -1035,6 +1077,13 @@ public:
     [[nodiscard]] std::unique_ptr<IRasterTarget> create_color_depth_target(crd::u32 width, crd::u32 height) override
     {
         return make_target(width, height, 1U, true); // B1-d: single-sample colour + D32 depth
+    }
+
+    // REN-38-F11: colour + D24S8 — the target the authored stencil vocabulary draws against.
+    [[nodiscard]] std::unique_ptr<IRasterTarget> create_color_depth_stencil_target(crd::u32 width,
+                                                                                   crd::u32 height) override
+    {
+        return make_target(width, height, 1U, true, kColorFormat, VK_FORMAT_D24_UNORM_S8_UINT);
     }
 
     // B4-vis-4: a R32_UINT VISIBILITY-BUFFER target — the HW-raster path's fragment shader writes a per-pixel primitive id
@@ -1551,7 +1600,7 @@ public:
     // state tessellation needs: PATCH_LIST topology and the patch control-point count. Binds all FOUR stages
     // (VS -> TCS -> TES -> FS), which is what distinguishes it from every other raster verb here.
     void record_tess(VulkanRasterTarget& t, VulkanRasterProgram& p, ClearColor clear_color, crd::u32 patch_count,
-                     bool clear = true)
+                     bool clear = true, VkDescriptorSet dset = VK_NULL_HANDLE)
     {
         VkCommandBuffer cmd = m_frame_rec.cmd;
         frame_self_barrier_if_needed(t);
@@ -1560,6 +1609,11 @@ public:
         VkRenderingInfo           ri  = one_colour_rendering(t, att);
         vkCmdBeginRendering(cmd, &ri);
         set_draw_state(cmd, t.width(), t.height(), 1U, false, VK_COMPARE_OP_ALWAYS);
+        // REN-38-F6+: the storage-bound form — the tess VS PULLS its control points (the GEO-1 seam)
+        if (dset != VK_NULL_HANDLE)
+        {
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        }
         vkCmdSetPrimitiveTopology(cmd, VK_PRIMITIVE_TOPOLOGY_PATCH_LIST); // tessellation consumes patches
         m_api.set_patch_control_points(cmd, 4U);                          // quad patch (layout(quads) domain shader)
         // ⛔ UPPER_LEFT is the GL/Vulkan default the domain shaders were written against — but with shader
@@ -1666,7 +1720,7 @@ public:
         {
             dep.sType                         = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
             dep.imageView                     = t.depth_view();
-            dep.imageLayout                   = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            dep.imageLayout                   = t.depth_attach_layout();
             // ⛔ A CONTINUING mesh draw LOADS depth too. Clearing it would let the second meshlet group of a pass
             // pass the depth test against nothing and overwrite the first — the same scar as the colour clear,
             // one attachment over.
@@ -1674,6 +1728,14 @@ public:
             dep.storeOp                       = VK_ATTACHMENT_STORE_OP_STORE;
             dep.clearValue.depthStencil.depth = clear_depth;
             ri.pDepthAttachment               = &dep;
+            // REN-38-F11: a stencil-capable target binds the SAME image as the stencil attachment (load/store
+            // mirror depth; the clear value is ignored under LOAD). Omitting this leaves every authored stencil
+            // op writing nothing, silently.
+            if (t.has_stencil())
+            {
+                dep.clearValue.depthStencil.stencil = 0U;
+                ri.pStencilAttachment               = &dep;
+            }
         }
         vkCmdBeginRendering(cmd, &ri);
         set_draw_state(cmd, t.width(), t.height(), 1U, ri.pDepthAttachment != nullptr, to_vk_compare(compare), 1U,
@@ -1713,6 +1775,28 @@ public:
     // leaving it in TRANSFER_SRC, so a synchronous `_load` would have to walk it back to COLOR_ATTACHMENT, draw,
     // and read back again — a submit-per-draw shape whose whole point the frame graph exists to remove. Outside
     // a frame the call does nothing, VISIBLY: `draw_tess`/`draw_mesh` remain the synchronous verbs.
+    // REN-38-F6+: storage-bound tessellation — frame-graph recording only, like every RT verb.
+    void draw_tess_storage(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color,
+                           IStorageBuffer& storage, crd::u32 patch_count) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        auto& s2 = static_cast<VulkanStorageBuffer&>(storage);
+        if (!m_api.valid() || m_api.set_patch_control_points == nullptr || !p.valid() || !p.is_tess()) { return; }
+        if (!frame_recording()) { return; }
+        record_tess(t, p, clear_color, patch_count, true, frame_alloc_storage_set(s2));
+    }
+    void draw_tess_storage_load(IRasterTarget& target, IRasterProgram& program, IStorageBuffer& storage,
+                                crd::u32 patch_count) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        auto& s2 = static_cast<VulkanStorageBuffer&>(storage);
+        if (!m_api.valid() || m_api.set_patch_control_points == nullptr || !p.valid() || !p.is_tess()) { return; }
+        if (!frame_recording()) { return; }
+        record_tess(t, p, ClearColor{}, patch_count, false, frame_alloc_storage_set(s2));
+    }
+
     void draw_tess_load(IRasterTarget& target, IRasterProgram& program, crd::u32 patch_count) override
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
@@ -1730,6 +1814,29 @@ public:
         if (!frame_recording()) { return; }
         record_mesh(t, p, ClearColor{}, group_count, -1, VK_NULL_HANDLE, false, 0.0F, DepthCompare::Always,
                     VK_NULL_HANDLE, 0U, /*clear=*/false);
+    }
+
+    // REN-38-F6+: storage-bound mesh dispatch — frame-graph recording only, like the tess twin above.
+    void draw_mesh_storage(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color,
+                           IStorageBuffer& storage, crd::u32 group_count) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        auto& s2 = static_cast<VulkanStorageBuffer&>(storage);
+        if (!m_api.valid() || m_api.draw_mesh_tasks == nullptr || !p.valid() || !p.is_mesh()) { return; }
+        if (!frame_recording()) { return; }
+        record_mesh(t, p, clear_color, group_count, -1, frame_alloc_storage_set(s2));
+    }
+    void draw_mesh_storage_load(IRasterTarget& target, IRasterProgram& program, IStorageBuffer& storage,
+                                crd::u32 group_count) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        auto& s2 = static_cast<VulkanStorageBuffer&>(storage);
+        if (!m_api.valid() || m_api.draw_mesh_tasks == nullptr || !p.valid() || !p.is_mesh()) { return; }
+        if (!frame_recording()) { return; }
+        record_mesh(t, p, ClearColor{}, group_count, -1, frame_alloc_storage_set(s2), false, 0.0F,
+                    DepthCompare::Always, VK_NULL_HANDLE, 0U, /*clear=*/false);
     }
 
     void draw_mesh(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, crd::u32 group_count) override
@@ -1946,11 +2053,19 @@ public:
         {
             dep.sType                         = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
             dep.imageView                     = t.depth_view();
-            dep.imageLayout                   = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            dep.imageLayout                   = t.depth_attach_layout();
             dep.loadOp                        = VK_ATTACHMENT_LOAD_OP_CLEAR;
             dep.storeOp                       = VK_ATTACHMENT_STORE_OP_STORE;
             dep.clearValue.depthStencil.depth = clear_depth;
             ri.pDepthAttachment               = &dep;
+            // REN-38-F11: a stencil-capable target binds the SAME image as the stencil attachment (load/store
+            // mirror depth; the clear value is ignored under LOAD). Omitting this leaves every authored stencil
+            // op writing nothing, silently.
+            if (t.has_stencil())
+            {
+                dep.clearValue.depthStencil.stencil = 0U;
+                ri.pStencilAttachment               = &dep;
+            }
         }
         vkCmdBeginRendering(cmd, &ri);
         set_draw_state(cmd, t.width(), t.height(), 1U, ri.pDepthAttachment != nullptr, to_vk_compare(compare));
@@ -2094,17 +2209,54 @@ public:
     void trace_rays(IGpuProgram& raygen, IGpuProgram& miss, IGpuProgram& closest_hit, IAccelerationStructure& as,
                     crd::u32 width, crd::u32 height, IStorageBuffer* const* buffers, crd::u32 count) override
     {
+        trace_rays_impl(raygen, miss, closest_hit, nullptr, as, width, height, buffers, count);
+    }
+
+    // ⭐ REN-38 audit (the full RT hit group): the same trace with an ANY-HIT stage in the hit group — the
+    // traversal calls it per candidate and `ignoreIntersectionEXT` rejects the transparent ones.
+    void trace_rays_anyhit(IGpuProgram& raygen, IGpuProgram& miss, IGpuProgram& closest_hit, IGpuProgram& any_hit,
+                           IAccelerationStructure& as, crd::u32 width, crd::u32 height,
+                           IStorageBuffer* const* buffers, crd::u32 count) override
+    {
+        trace_rays_impl(raygen, miss, closest_hit, &any_hit, as, width, height, buffers, count);
+    }
+
+    // REN-38-F13: the FULL vocabulary — procedural hit groups + the callable table.
+    void trace_rays_full(IGpuProgram& raygen, IGpuProgram& miss, IGpuProgram& closest_hit, IGpuProgram* any_hit,
+                         IGpuProgram* intersection, IGpuProgram* callable, IAccelerationStructure& as,
+                         crd::u32 width, crd::u32 height, IStorageBuffer* const* buffers, crd::u32 count) override
+    {
+        trace_rays_impl(raygen, miss, closest_hit, any_hit, as, width, height, buffers, count, intersection,
+                        callable);
+    }
+
+    void trace_rays_impl(IGpuProgram& raygen, IGpuProgram& miss, IGpuProgram& closest_hit, IGpuProgram* any_hit,
+                         IAccelerationStructure& as, crd::u32 width, crd::u32 height,
+                         IStorageBuffer* const* buffers, crd::u32 count, IGpuProgram* intersection = nullptr,
+                         IGpuProgram* callable = nullptr)
+    {
         if (!frame_recording() || buffers == nullptr || count == 0U) { return; }
         if (!ensure_rt_api()) { return; }
-        const auto tlas = reinterpret_cast<VkAccelerationStructureKHR>(vulkan_scene_tlas(as));
+        // The seam is an opaque u64 by design (no private impl leak); VK_DEFINE_NON_DISPATCHABLE_HANDLE makes
+        // the handle a pointer only on 64-bit hosts, so the cast is the Vulkan-interop idiom, not a perf bug.
+        const auto tlas = reinterpret_cast<VkAccelerationStructureKHR>(vulkan_scene_tlas(as)); // NOLINT(performance-no-int-to-ptr)
         // ⛔ A scene that does not resolve is a NO-OP, never a trace against a null AS: traversal from an unwritten
         // AS descriptor is undefined, not a frame of misses.
         if (tlas == VK_NULL_HANDLE) { return; }
         auto* rg = dynamic_cast<VulkanGpuProgram*>(&raygen);
         auto* ms = dynamic_cast<VulkanGpuProgram*>(&miss);
         auto* ch = dynamic_cast<VulkanGpuProgram*>(&closest_hit);
+        auto* ah = any_hit != nullptr ? dynamic_cast<VulkanGpuProgram*>(any_hit) : nullptr;
+        auto* is = intersection != nullptr ? dynamic_cast<VulkanGpuProgram*>(intersection) : nullptr;
+        auto* cl = callable != nullptr ? dynamic_cast<VulkanGpuProgram*>(callable) : nullptr;
         if (rg == nullptr || ms == nullptr || ch == nullptr) { return; }
-        RtPipe* pipe = rt_pipeline(rg->vk_module(), ms->vk_module(), ch->vk_module());
+        if (any_hit != nullptr && ah == nullptr) { return; } // a named any-hit that is not ours is never dropped silently
+        if (intersection != nullptr && is == nullptr) { return; } // F13: same rule for the last two stages
+        if (callable != nullptr && cl == nullptr) { return; }
+        RtPipe* pipe = rt_pipeline(rg->vk_module(), ms->vk_module(), ch->vk_module(),
+                                   ah != nullptr ? ah->vk_module() : VK_NULL_HANDLE,
+                                   is != nullptr ? is->vk_module() : VK_NULL_HANDLE,
+                                   cl != nullptr ? cl->vk_module() : VK_NULL_HANDLE);
         if (pipe == nullptr) { return; }
 
         VkDescriptorSetAllocateInfo dsai{};
@@ -2160,7 +2312,7 @@ private:
     };
     struct RtPipe
     {
-        VkShaderModule                 key[3]{};
+        VkShaderModule                 key[6]{}; // rg · ms · ch · ah · isect · callable (every stage is identity)
         VkPipeline                     pipeline = VK_NULL_HANDLE;
         VkBuffer                       sbt      = VK_NULL_HANDLE;
         VkDeviceMemory                 sbt_mem  = VK_NULL_HANDLE;
@@ -2198,20 +2350,22 @@ private:
         // The RT descriptor layout: binding 0 = TLAS, 1..N = SSBOs — the A9 shape with RT stage flags instead of
         // COMPUTE. ⛔ A layout's stageFlags must name the stages that actually access it; reusing A9's compute-only
         // layout would make every RT-stage access invalid.
-        constexpr VkShaderStageFlags kRtStages = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR
+        constexpr VkShaderStageFlags rt_stages = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR
                                                  | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR
-                                                 | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+                                                 | VK_SHADER_STAGE_ANY_HIT_BIT_KHR
+                                                 | VK_SHADER_STAGE_INTERSECTION_BIT_KHR // REN-38-F13
+                                                 | VK_SHADER_STAGE_CALLABLE_BIT_KHR;
         VkDescriptorSetLayoutBinding lb[kMaxKernelBuffers + 1U]{};
         lb[0].binding         = 0U;
         lb[0].descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         lb[0].descriptorCount = 1U;
-        lb[0].stageFlags      = kRtStages;
+        lb[0].stageFlags      = rt_stages;
         for (crd::u32 i = 0; i < kMaxKernelBuffers; ++i)
         {
             lb[i + 1U].binding         = i + 1U;
             lb[i + 1U].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             lb[i + 1U].descriptorCount = 1U;
-            lb[i + 1U].stageFlags      = kRtStages;
+            lb[i + 1U].stageFlags      = rt_stages;
         }
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -2233,32 +2387,50 @@ private:
 
     // Build (or find) the pipeline + SBT for one raygen/miss/hit triple. Cached on the three modules, because an
     // RT pipeline build is far more expensive than a graphics one and a pass rebuilds it every frame otherwise.
-    [[nodiscard]] RtPipe* rt_pipeline(VkShaderModule rg, VkShaderModule ms, VkShaderModule ch)
+    [[nodiscard]] RtPipe* rt_pipeline(VkShaderModule rg, VkShaderModule ms, VkShaderModule ch,
+                                      VkShaderModule ah = VK_NULL_HANDLE, VkShaderModule is = VK_NULL_HANDLE,
+                                      VkShaderModule cl = VK_NULL_HANDLE)
     {
         for (crd::u32 i = 0; i < m_rtp_n; ++i)
         {
-            if (m_rtp[i].key[0] == rg && m_rtp[i].key[1] == ms && m_rtp[i].key[2] == ch) { return &m_rtp[i]; }
+            if (m_rtp[i].key[0] == rg && m_rtp[i].key[1] == ms && m_rtp[i].key[2] == ch && m_rtp[i].key[3] == ah
+                && m_rtp[i].key[4] == is && m_rtp[i].key[5] == cl)
+            {
+                return &m_rtp[i];
+            }
         }
         if (m_rtp_n >= kKernelPsoCap) { return nullptr; }
         RtPipe out{};
         out.key[0] = rg;
         out.key[1] = ms;
         out.key[2] = ch;
+        out.key[3] = ah; // REN-38 audit: the any-hit is part of the pipeline identity, like every other stage
+        out.key[4] = is; // REN-38-F13: and so are the intersection + callable stages
+        out.key[5] = cl;
 
-        VkPipelineShaderStageCreateInfo st[3]{};
-        const VkShaderStageFlagBits     stage_bits[3] = {VK_SHADER_STAGE_RAYGEN_BIT_KHR, VK_SHADER_STAGE_MISS_BIT_KHR,
-                                                         VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR};
-        const VkShaderModule            mods[3]       = {rg, ms, ch};
-        for (crd::u32 i = 0; i < 3U; ++i)
+        VkPipelineShaderStageCreateInfo st[6]{};
+        const VkShaderStageFlagBits     all_bits[6] = {VK_SHADER_STAGE_RAYGEN_BIT_KHR, VK_SHADER_STAGE_MISS_BIT_KHR,
+                                                       VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR,
+                                                       VK_SHADER_STAGE_ANY_HIT_BIT_KHR,
+                                                       VK_SHADER_STAGE_INTERSECTION_BIT_KHR,
+                                                       VK_SHADER_STAGE_CALLABLE_BIT_KHR};
+        const VkShaderModule            all_mods[6] = {rg, ms, ch, ah, is, cl};
+        crd::u32                        n_stages    = 0U;
+        crd::u32                        idx_of[6]   = {0U, 0U, 0U, 0U, 0U, 0U}; // stage index per slot (dense)
+        for (crd::u32 i = 0; i < 6U; ++i)
         {
-            st[i].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            st[i].stage  = stage_bits[i];
-            st[i].module = mods[i];
-            st[i].pName  = "main";
+            if (all_mods[i] == VK_NULL_HANDLE) { continue; }
+            st[n_stages].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            st[n_stages].stage  = all_bits[i];
+            st[n_stages].module = all_mods[i];
+            st[n_stages].pName  = "main";
+            idx_of[i]           = n_stages;
+            ++n_stages;
         }
-        // THREE GROUPS: raygen (general, stage 0) · miss (general, stage 1) · hit (triangles, closest-hit = 2).
-        VkRayTracingShaderGroupCreateInfoKHR grp[3]{};
-        for (crd::u32 i = 0; i < 3U; ++i)
+        // GROUPS: raygen (general) · miss (general) · the hit group (⛔ PROCEDURAL when an intersection stage is
+        // present — its AABBs only bound the shape; TRIANGLES otherwise) · REN-38-F13: + a callable group.
+        VkRayTracingShaderGroupCreateInfoKHR grp[4]{};
+        for (crd::u32 i = 0; i < 4U; ++i)
         {
             grp[i].sType              = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
             grp[i].generalShader      = VK_SHADER_UNUSED_KHR;
@@ -2267,17 +2439,26 @@ private:
             grp[i].intersectionShader = VK_SHADER_UNUSED_KHR;
         }
         grp[0].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-        grp[0].generalShader = 0U;
+        grp[0].generalShader = idx_of[0];
         grp[1].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-        grp[1].generalShader = 1U;
-        grp[2].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
-        grp[2].closestHitShader = 2U;
+        grp[1].generalShader = idx_of[1];
+        grp[2].type = is != VK_NULL_HANDLE ? VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR
+                                           : VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
+        grp[2].closestHitShader = idx_of[2];
+        if (ah != VK_NULL_HANDLE) { grp[2].anyHitShader = idx_of[3]; }
+        if (is != VK_NULL_HANDLE) { grp[2].intersectionShader = idx_of[4]; }
+        const crd::u32 n_groups = cl != VK_NULL_HANDLE ? 4U : 3U;
+        if (cl != VK_NULL_HANDLE)
+        {
+            grp[3].type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+            grp[3].generalShader = idx_of[5];
+        }
 
         VkRayTracingPipelineCreateInfoKHR pci{};
         pci.sType                        = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
-        pci.stageCount                   = 3U;
+        pci.stageCount                   = n_stages;
         pci.pStages                      = st;
-        pci.groupCount                   = 3U;
+        pci.groupCount                   = n_groups;
         pci.pGroups                      = grp;
         pci.maxPipelineRayRecursionDepth = 1U;
         pci.layout                       = m_rtp_pipe_layout;
@@ -2295,13 +2476,13 @@ private:
         const crd::u32 stride  = up(hsize, halign);
         const crd::u32 rec     = up(stride, balign); // each region starts base-aligned; one record per region here
         crd::containers::Array<crd::u8> handles(crd::memory::default_allocator());
-        handles.resize(static_cast<crd::usize>(hsize) * 3U);
-        if (m_rt.group_handles(m_device, out.pipeline, 0U, 3U, handles.size(), handles.data()) != VK_SUCCESS)
+        handles.resize(static_cast<crd::usize>(hsize) * n_groups);
+        if (m_rt.group_handles(m_device, out.pipeline, 0U, n_groups, handles.size(), handles.data()) != VK_SUCCESS)
         {
             vkDestroyPipeline(m_device, out.pipeline, nullptr);
             return nullptr;
         }
-        const crd::u32     total = rec * 3U;
+        const crd::u32     total = rec * n_groups;
         VkBufferCreateInfo bci{};
         bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         bci.size  = total;
@@ -2335,7 +2516,7 @@ private:
         vkMapMemory(m_device, out.sbt_mem, 0U, total, 0U, &mapped);
         auto* dst = static_cast<crd::u8*>(mapped);
         std::memset(dst, 0, total);
-        for (crd::u32 i = 0; i < 3U; ++i)
+        for (crd::u32 i = 0; i < n_groups; ++i)
         {
             std::memcpy(dst + static_cast<crd::usize>(rec) * i, handles.data() + static_cast<crd::usize>(hsize) * i,
                         hsize);
@@ -2349,7 +2530,10 @@ private:
         out.rgen_region = {base + 0U, rec, rec};
         out.miss_region = {base + rec, rec, rec};
         out.hit_region  = {base + static_cast<VkDeviceSize>(rec) * 2U, rec, rec};
-        out.call_region = {};
+        // REN-38-F13: the CALLABLE table is the fourth region — empty when the pipeline has no callable
+        out.call_region = cl != VK_NULL_HANDLE
+                              ? VkStridedDeviceAddressRegionKHR{base + static_cast<VkDeviceSize>(rec) * 3U, rec, rec}
+                              : VkStridedDeviceAddressRegionKHR{};
 
         m_rtp[m_rtp_n] = out;
         ++m_rtp_n;
@@ -2376,6 +2560,104 @@ private:
     crd::u32                                         m_rtp_n = 0U;
 
 public:
+    // ⭐ REN-38-B3: zero (or fill) a buffer range inside the frame — what resets an APPEND COUNTER.
+    // ⛔ `vkCmdFillBuffer` is a TRANSFER command, so it needs a barrier before the shader that appends can see
+    // the zero. The graph cannot insert that one for us: it knows the pass WRITES the buffer, but this write
+    // happens in the transfer stage rather than the compute one, so the hazard is transfer→shader and only this
+    // verb knows it exists.
+    // ── ⭐ REN-38-B8: the ACTIVE sampler, and a tiny cache keyed on the whole description. ──
+    // ⛔ Samplers are DEVICE OBJECTS with a creation cost, and a pass installs one per draw — so creating one per
+    // call would put `vkCreateSampler` in the hot path. The cache is keyed on the FULL desc because two samplers
+    // that differ only in address mode are genuinely different objects, and collapsing them by filter alone is
+    // how a clamped post-process ends up repeating.
+    void set_sampler(const SamplerDesc& desc) override { m_active_sampler = sampler_for(desc); }
+
+    // ── ⭐ REN-38 audit: the DECLARED per-pass raster state. Applied inside `set_draw_state` (every recorded
+    // draw goes through it — and it is also the one place that could silently re-default the values, the A1g
+    // ordering scar) and reset to the defaults at every pass boundary in `frame_rec_new_pass`. ──
+    void set_pass_state(const PassRasterState& state) override { m_pass_state = state; }
+
+    [[nodiscard]] VkSampler sampler_for(const SamplerDesc& d)
+    {
+        for (crd::u32 i = 0; i < m_sampler_n; ++i)
+        {
+            const SamplerDesc& k = m_sampler_key[i];
+            if (k.min_filter == d.min_filter && k.mag_filter == d.mag_filter && k.mip_filter == d.mip_filter
+                && k.address == d.address && k.compare == d.compare && k.anisotropy == d.anisotropy
+                && k.mip_bias == d.mip_bias)
+            {
+                return m_sampler_obj[i];
+            }
+        }
+        if (m_sampler_n >= kSamplerCacheCap) { return m_default_sampler; }
+        const auto flt = [](SamplerFilter f) { return f == SamplerFilter::Nearest ? VK_FILTER_NEAREST : VK_FILTER_LINEAR; };
+        VkSamplerCreateInfo sci{};
+        sci.sType     = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        sci.minFilter = flt(d.min_filter);
+        sci.magFilter = flt(d.mag_filter);
+        sci.mipmapMode = d.mip_filter == SamplerFilter::Nearest ? VK_SAMPLER_MIPMAP_MODE_NEAREST
+                                                                : VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        VkSamplerAddressMode am = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        switch (d.address)
+        {
+        case SamplerAddress::ClampToEdge:   am = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE; break;
+        case SamplerAddress::ClampToBorder: am = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER; break;
+        case SamplerAddress::Mirror:        am = VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT; break;
+        case SamplerAddress::Repeat:
+        default:                            am = VK_SAMPLER_ADDRESS_MODE_REPEAT; break;
+        }
+        sci.addressModeU = am;
+        sci.addressModeV = am;
+        sci.addressModeW = am;
+        sci.mipLodBias   = d.mip_bias;
+        sci.maxLod       = VK_LOD_CLAMP_NONE;
+        sci.borderColor  = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE; // a shadow lookup outside its frustum must be LIT
+        if (d.anisotropy > 1U)
+        {
+            sci.anisotropyEnable = VK_TRUE;
+            sci.maxAnisotropy    = static_cast<float>(d.anisotropy);
+        }
+        if (d.compare)
+        {
+            sci.compareEnable = VK_TRUE;
+            sci.compareOp     = VK_COMPARE_OP_LESS_OR_EQUAL;
+        }
+        VkSampler s = VK_NULL_HANDLE;
+        if (vkCreateSampler(m_device, &sci, nullptr, &s) != VK_SUCCESS) { return m_default_sampler; }
+        m_sampler_key[m_sampler_n] = d;
+        m_sampler_obj[m_sampler_n] = s;
+        ++m_sampler_n;
+        return s;
+    }
+
+    // The sampler a recorded draw binds: the pass's, when it declared one, else the engine default.
+    [[nodiscard]] VkSampler active_sampler() const noexcept
+    {
+        return m_active_sampler != VK_NULL_HANDLE ? m_active_sampler : m_default_sampler;
+    }
+
+    void fill_buffer(IStorageBuffer& buffer, crd::u64 offset, crd::u64 size, crd::u32 value) override
+    {
+        if (!frame_recording()) { return; }
+        const VkBuffer buf = vk_buffer_of(buffer);
+        if (buf == VK_NULL_HANDLE) { return; }
+        VkCommandBuffer cmd = m_frame_rec.cmd;
+        vkCmdFillBuffer(cmd, buf, offset, size == 0U ? VK_WHOLE_SIZE : size, value);
+        VkBufferMemoryBarrier bb{};
+        bb.sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        bb.srcAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
+        bb.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        bb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        bb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        bb.buffer              = buf;
+        bb.offset              = offset;
+        bb.size                = size == 0U ? VK_WHOLE_SIZE : size;
+        const VkPipelineStageFlags dst = m_frame_rec.async
+                                             ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+                                             : (VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT);
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, dst, 0, 0U, nullptr, 1U, &bb, 0U, nullptr);
+    }
+
     void draw_visbuffer_load(IRasterTarget& target, IRasterProgram& program, crd::u32 vertex_count) override
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
@@ -2495,7 +2777,7 @@ public:
         VkRenderingAttachmentInfo dep{};
         dep.sType                              = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         dep.imageView                          = t.depth_view();
-        dep.imageLayout                        = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        dep.imageLayout                        = t.depth_attach_layout();
         dep.loadOp                             = VK_ATTACHMENT_LOAD_OP_CLEAR;
         dep.storeOp                            = VK_ATTACHMENT_STORE_OP_DONT_CARE; // depth is never read back
         dep.clearValue.depthStencil.depth      = clear_depth;
@@ -2507,6 +2789,14 @@ public:
         ri.colorAttachmentCount = 1U;
         ri.pColorAttachments    = &att;
         ri.pDepthAttachment     = &dep;
+        // REN-38-F11: a stencil-capable target binds the SAME image as the stencil attachment (load/store
+        // mirror depth; the clear value is ignored under LOAD). Omitting this leaves every authored stencil
+        // op writing nothing, silently.
+        if (t.has_stencil())
+        {
+            dep.clearValue.depthStencil.stencil = 0U;
+            ri.pStencilAttachment               = &dep;
+        }
         vkCmdBeginRendering(cmd, &ri);
 
         set_draw_state(cmd, t.width(), t.height(), 1U, true, to_vk_compare(compare));
@@ -2788,7 +3078,7 @@ public:
         VkRenderingAttachmentInfo dep{};
         dep.sType                         = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         dep.imageView                     = t.depth_view();
-        dep.imageLayout                   = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        dep.imageLayout                   = t.depth_attach_layout();
         dep.loadOp                        = VK_ATTACHMENT_LOAD_OP_CLEAR;
         dep.storeOp                       = VK_ATTACHMENT_STORE_OP_STORE; // overlays test against the scene's depth
         dep.clearValue.depthStencil.depth = clear_depth;
@@ -2800,6 +3090,14 @@ public:
         ri.colorAttachmentCount = 1U;
         ri.pColorAttachments    = &att;
         ri.pDepthAttachment     = &dep;
+        // REN-38-F11: a stencil-capable target binds the SAME image as the stencil attachment (load/store
+        // mirror depth; the clear value is ignored under LOAD). Omitting this leaves every authored stencil
+        // op writing nothing, silently.
+        if (t.has_stencil())
+        {
+            dep.clearValue.depthStencil.stencil = 0U;
+            ri.pStencilAttachment               = &dep;
+        }
         vkCmdBeginRendering(cmd, &ri);
 
         set_draw_state(cmd, t.width(), t.height(), 1U, true, to_vk_compare(compare));
@@ -2861,7 +3159,7 @@ public:
         VkRenderingAttachmentInfo dep{};
         dep.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         dep.imageView   = t.depth_view();
-        dep.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        dep.imageLayout = t.depth_attach_layout();
         dep.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;   // the frame's depth so far
         dep.storeOp     = VK_ATTACHMENT_STORE_OP_STORE; // and this group's writes join it
 
@@ -2872,6 +3170,14 @@ public:
         ri.colorAttachmentCount = 1U;
         ri.pColorAttachments    = &att;
         ri.pDepthAttachment     = &dep;
+        // REN-38-F11: a stencil-capable target binds the SAME image as the stencil attachment (load/store
+        // mirror depth; the clear value is ignored under LOAD). Omitting this leaves every authored stencil
+        // op writing nothing, silently.
+        if (t.has_stencil())
+        {
+            dep.clearValue.depthStencil.stencil = 0U;
+            ri.pStencilAttachment               = &dep;
+        }
         vkCmdBeginRendering(cmd, &ri);
 
         set_draw_state(cmd, t.width(), t.height(), 1U, true, to_vk_compare(compare));
@@ -2923,7 +3229,7 @@ public:
         VkRenderingAttachmentInfo dep{};
         dep.sType                         = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         dep.imageView                     = t.depth_view();
-        dep.imageLayout                   = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        dep.imageLayout                   = t.depth_attach_layout();
         dep.loadOp                        = VK_ATTACHMENT_LOAD_OP_CLEAR;
         dep.storeOp                       = VK_ATTACHMENT_STORE_OP_STORE;
         dep.clearValue.depthStencil.depth = clear_depth;
@@ -2935,6 +3241,14 @@ public:
         ri.colorAttachmentCount = 0U; // no colour attachment at all
         ri.pColorAttachments    = nullptr;
         ri.pDepthAttachment     = &dep;
+        // REN-38-F11: a stencil-capable target binds the SAME image as the stencil attachment (load/store
+        // mirror depth; the clear value is ignored under LOAD). Omitting this leaves every authored stencil
+        // op writing nothing, silently.
+        if (t.has_stencil())
+        {
+            dep.clearValue.depthStencil.stencil = 0U;
+            ri.pStencilAttachment               = &dep;
+        }
         vkCmdBeginRendering(cmd, &ri);
         set_draw_state(cmd, t.width(), t.height(), 1U, true, to_vk_compare(compare), 0U);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
@@ -2981,7 +3295,7 @@ public:
         dsai.pSetLayouts        = &m_storage_set_layout;
         VkDescriptorSet dset = VK_NULL_HANDLE;
         if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return; }
-        write_scene_textured(m_device, dset, s.buf(), tex.view(), m_default_sampler);
+        write_scene_textured(m_device, dset, s.buf(), tex.view(), active_sampler()); // REN-38-B8
         render_dset_depth(t, p, clear_color, clear_depth, compare, dset, vertex_count);
     }
     void draw_storage_textured_depth_load(IRasterTarget& target, IRasterProgram& program, DepthCompare compare,
@@ -3105,7 +3419,7 @@ public:
         {
             dep.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
             dep.imageView   = t.depth_view();
-            dep.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            dep.imageLayout = t.depth_attach_layout();
             dep.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;  // the scene's depth is the test source
             dep.storeOp     = VK_ATTACHMENT_STORE_OP_STORE; // preserved — chained overlay draws re-test against it
         }
@@ -3117,6 +3431,12 @@ public:
         ri.colorAttachmentCount = 1U;
         ri.pColorAttachments    = &att;
         ri.pDepthAttachment     = depth_on ? &dep : nullptr;
+        // REN-38-F11: a stencil-capable target binds the SAME image as the stencil attachment
+        if (ri.pDepthAttachment != nullptr && t.has_stencil())
+        {
+            dep.clearValue.depthStencil.stencil = 0U;
+            ri.pStencilAttachment               = &dep;
+        }
         vkCmdBeginRendering(cmd, &ri);
 
         set_draw_state(cmd, t.width(), t.height(), 1U, depth_on, to_vk_compare(compare));
@@ -3231,7 +3551,7 @@ public:
         VkRenderingAttachmentInfo dep{};
         dep.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         dep.imageView   = t.depth_view();
-        dep.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        dep.imageLayout = t.depth_attach_layout();
         dep.loadOp      = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
         dep.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
         if (clear) { dep.clearValue.depthStencil.depth = clear_depth; }
@@ -3250,6 +3570,12 @@ public:
         // Binding no depth attachment is the CORRECT behaviour, not a fallback: a pass with no depth buffer is
         // not depth-tested, and the graph already said so by not declaring one.
         ri.pDepthAttachment     = t.has_depth() ? &dep : nullptr;
+        // REN-38-F11: a stencil-capable target binds the SAME image as the stencil attachment
+        if (ri.pDepthAttachment != nullptr && t.has_stencil())
+        {
+            dep.clearValue.depthStencil.stencil = 0U;
+            ri.pStencilAttachment               = &dep;
+        }
         vkCmdBeginRendering(cmd, &ri);
         set_draw_state(cmd, t.width(), t.height(), 1U, t.has_depth(), to_vk_compare(compare));
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
@@ -3304,7 +3630,7 @@ public:
             auto& tex = static_cast<VulkanTexture&>(*textures[i < n ? i : 0U]);
             imgs[i]   = {VK_NULL_HANDLE, tex.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         }
-        VkDescriptorImageInfo samp_info{m_default_sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
+        VkDescriptorImageInfo samp_info{active_sampler(), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED}; // REN-38-B8
         VkWriteDescriptorSet  wr[2]{};
         wr[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[0].dstSet = dset; wr[0].dstBinding = 2U; wr[0].descriptorCount = 1U;            wr[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;       wr[0].pImageInfo = &samp_info;
         wr[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[1].dstSet = dset; wr[1].dstBinding = 3U; wr[1].descriptorCount = kBindlessMax; wr[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; wr[1].pImageInfo = imgs;
@@ -3360,7 +3686,7 @@ public:
         VkRenderingAttachmentInfo dep{};
         dep.sType                          = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         dep.imageView                      = t.depth_view();
-        dep.imageLayout                    = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        dep.imageLayout                    = t.depth_attach_layout();
         // clear ⇒ the FIRST mesh of the shadow pass; load ⇒ every later mesh joins the SAME map (without this a
         // multi-mesh shadow pass would wipe itself, see draw_storage_depth_only_load).
         dep.loadOp                         = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
@@ -3374,6 +3700,14 @@ public:
         ri.colorAttachmentCount = 0U;      // ⛔ the whole point: NO colour attachment is bound
         ri.pColorAttachments    = nullptr;
         ri.pDepthAttachment     = &dep;
+        // REN-38-F11: a stencil-capable target binds the SAME image as the stencil attachment (load/store
+        // mirror depth; the clear value is ignored under LOAD). Omitting this leaves every authored stencil
+        // op writing nothing, silently.
+        if (t.has_stencil())
+        {
+            dep.clearValue.depthStencil.stencil = 0U;
+            ri.pStencilAttachment               = &dep;
+        }
         vkCmdBeginRendering(cmd, &ri);
         // samples = 1, depth_test on, and COLOR_ATTACHMENTS = 0 (the 6th arg) — the blend/colour-write state must
         // agree with the zero colour attachments in VkRenderingInfo or the pipeline is invalid.
@@ -3432,7 +3766,8 @@ public:
         dsai.pSetLayouts        = &m_storage_set_layout;
         VkDescriptorSet dset = VK_NULL_HANDLE;
         if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return; }
-        write_scene_textured(m_device, dset, s.buf(), tex.view(), samp != VK_NULL_HANDLE ? samp : m_default_sampler);
+        // REN-38-B8: an explicit sampler (the shadow comparison one) still wins; otherwise the pass's.
+        write_scene_textured(m_device, dset, s.buf(), tex.view(), samp != VK_NULL_HANDLE ? samp : active_sampler());
         frame_self_barrier_if_needed(t);
 
         VkRenderingAttachmentInfo att{};
@@ -3445,7 +3780,7 @@ public:
         VkRenderingAttachmentInfo dep{};
         dep.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         dep.imageView   = t.depth_view();
-        dep.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        dep.imageLayout = t.depth_attach_layout();
         dep.loadOp      = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
         dep.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
         if (clear) { dep.clearValue.depthStencil.depth = clear_depth; }
@@ -3456,6 +3791,14 @@ public:
         ri.colorAttachmentCount = 1U;
         ri.pColorAttachments    = &att;
         ri.pDepthAttachment     = &dep;
+        // REN-38-F11: a stencil-capable target binds the SAME image as the stencil attachment (load/store
+        // mirror depth; the clear value is ignored under LOAD). Omitting this leaves every authored stencil
+        // op writing nothing, silently.
+        if (t.has_stencil())
+        {
+            dep.clearValue.depthStencil.stencil = 0U;
+            ri.pStencilAttachment               = &dep;
+        }
         vkCmdBeginRendering(cmd, &ri);
         set_draw_state(cmd, t.width(), t.height(), 1U, true, to_vk_compare(compare));
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
@@ -3485,7 +3828,7 @@ public:
         {
             dep.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
             dep.imageView   = t.depth_view();
-            dep.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            dep.imageLayout = t.depth_attach_layout();
             dep.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
             dep.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
         }
@@ -3497,6 +3840,12 @@ public:
         ri.colorAttachmentCount = 1U;
         ri.pColorAttachments    = &att;
         ri.pDepthAttachment     = depth_on ? &dep : nullptr;
+        // REN-38-F11: a stencil-capable target binds the SAME image as the stencil attachment
+        if (ri.pDepthAttachment != nullptr && t.has_stencil())
+        {
+            dep.clearValue.depthStencil.stencil = 0U;
+            ri.pStencilAttachment               = &dep;
+        }
         vkCmdBeginRendering(cmd, &ri);
         set_draw_state(cmd, t.width(), t.height(), 1U, depth_on, to_vk_compare(compare));
         vkCmdSetDepthWriteEnable(cmd, VK_FALSE);
@@ -3854,7 +4203,7 @@ public:
     void draw_textured(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, ITexture& texture,
                        crd::u32 vertex_count) override
     {
-        draw_sampled(target, program, clear_color, static_cast<VulkanTexture&>(texture).view(), m_default_sampler,
+        draw_sampled(target, program, clear_color, static_cast<VulkanTexture&>(texture).view(), active_sampler(), // REN-38-B8
                      vertex_count);
     }
 
@@ -3938,7 +4287,7 @@ public:
             auto& tex = static_cast<VulkanTexture&>(*textures[i < n ? i : 0U]);
             imgs[i]   = {VK_NULL_HANDLE, tex.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         }
-        VkDescriptorImageInfo samp_info{m_default_sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
+        VkDescriptorImageInfo samp_info{active_sampler(), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED}; // REN-38-B8
         VkWriteDescriptorSet  wr[2]{};
         wr[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[0].dstSet = dset; wr[0].dstBinding = 2U; wr[0].descriptorCount = 1U;            wr[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;       wr[0].pImageInfo = &samp_info;
         wr[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[1].dstSet = dset; wr[1].dstBinding = 3U; wr[1].descriptorCount = kBindlessMax; wr[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; wr[1].pImageInfo = imgs;
@@ -3972,7 +4321,7 @@ public:
             auto& tex = static_cast<VulkanTexture&>(*textures[i < n ? i : 0U]);
             imgs[i]   = {VK_NULL_HANDLE, tex.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         }
-        VkDescriptorImageInfo samp_info{m_default_sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
+        VkDescriptorImageInfo samp_info{active_sampler(), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED}; // REN-38-B8
         VkWriteDescriptorSet  wr[2]{};
         wr[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[0].dstSet = dset; wr[0].dstBinding = 2U; wr[0].descriptorCount = 1U;            wr[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;       wr[0].pImageInfo = &samp_info;
         wr[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[1].dstSet = dset; wr[1].dstBinding = 3U; wr[1].descriptorCount = kBindlessMax; wr[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; wr[1].pImageInfo = imgs;
@@ -4019,7 +4368,7 @@ public:
             auto& tex = static_cast<VulkanTexture&>(*textures[i < n ? i : 0U]);
             imgs[i]   = {VK_NULL_HANDLE, tex.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         }
-        VkDescriptorImageInfo samp_info{m_default_sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
+        VkDescriptorImageInfo samp_info{active_sampler(), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED}; // REN-38-B8
         VkWriteDescriptorSet  wr[2]{};
         wr[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[0].dstSet = dset; wr[0].dstBinding = 2U; wr[0].descriptorCount = 1U;            wr[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;       wr[0].pImageInfo = &samp_info;
         wr[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[1].dstSet = dset; wr[1].dstBinding = 3U; wr[1].descriptorCount = kBindlessMax; wr[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; wr[1].pImageInfo = imgs;
@@ -4200,7 +4549,9 @@ public:
                             IStorageBuffer* const* buffers, crd::u32 count) override
     {
         if (!frame_recording() || buffers == nullptr || count == 0U) { return; }
-        const auto tlas = reinterpret_cast<VkAccelerationStructureKHR>(vulkan_scene_tlas(as));
+        // The seam is an opaque u64 by design (no private impl leak); VK_DEFINE_NON_DISPATCHABLE_HANDLE makes
+        // the handle a pointer only on 64-bit hosts, so the cast is the Vulkan-interop idiom, not a perf bug.
+        const auto tlas = reinterpret_cast<VkAccelerationStructureKHR>(vulkan_scene_tlas(as)); // NOLINT(performance-no-int-to-ptr)
         // ⛔ A scene that does not resolve is a NO-OP, never a dispatch with an unwritten AS descriptor: an
         // unwritten descriptor the pipeline may access is VUID-vkCmdDispatch-None-08114, i.e. undefined traversal.
         if (tlas == VK_NULL_HANDLE) { return; }
@@ -4382,11 +4733,19 @@ public:
         {
             dep.sType                          = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
             dep.imageView                      = t0.depth_view();
-            dep.imageLayout                    = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            dep.imageLayout                    = t0.depth_attach_layout();
             dep.loadOp                         = VK_ATTACHMENT_LOAD_OP_CLEAR;
             dep.storeOp                        = VK_ATTACHMENT_STORE_OP_STORE;
             dep.clearValue.depthStencil.depth  = clear_depth;
             ri.pDepthAttachment                = &dep;
+            // REN-38-F11: a stencil-capable target binds the SAME image as the stencil attachment (load/store
+            // mirror depth; the clear value is ignored under LOAD). Omitting this leaves every authored stencil
+            // op writing nothing, silently.
+            if (t0.has_stencil())
+            {
+                dep.clearValue.depthStencil.stencil = 0U;
+                ri.pStencilAttachment               = &dep;
+            }
         }
         vkCmdBeginRendering(cmd, &ri);
         set_draw_state(cmd, t0.width(), t0.height(), 1U, has_depth, to_vk_compare(compare), n);
@@ -4544,7 +4903,7 @@ public:
             {
                 imgs[i] = {VK_NULL_HANDLE, i == 1U ? reveal.view : accum.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
             }
-            VkDescriptorImageInfo samp_info{m_default_sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
+            VkDescriptorImageInfo samp_info{active_sampler(), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED}; // REN-38-B8
             VkWriteDescriptorSet  wr[2]{};
             wr[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[0].dstSet = dset; wr[0].dstBinding = 2U; wr[0].descriptorCount = 1U;            wr[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;       wr[0].pImageInfo = &samp_info;
             wr[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[1].dstSet = dset; wr[1].dstBinding = 3U; wr[1].descriptorCount = kBindlessMax; wr[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; wr[1].pImageInfo = imgs;
@@ -4638,12 +4997,20 @@ private:
         VkRenderingAttachmentInfo dep{};
         dep.sType                         = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         dep.imageView                     = t.depth_view();
-        dep.imageLayout                   = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        dep.imageLayout                   = t.depth_attach_layout();
         dep.loadOp                        = VK_ATTACHMENT_LOAD_OP_CLEAR;
         dep.storeOp                       = VK_ATTACHMENT_STORE_OP_DONT_CARE; // depth is never read back
         dep.clearValue.depthStencil.depth = clear_depth;
         VkRenderingInfo ri  = one_colour_rendering(t, att);
         ri.pDepthAttachment = &dep;
+        // REN-38-F11: a stencil-capable target binds the SAME image as the stencil attachment (load/store
+        // mirror depth; the clear value is ignored under LOAD). Omitting this leaves every authored stencil
+        // op writing nothing, silently.
+        if (t.has_stencil())
+        {
+            dep.clearValue.depthStencil.stencil = 0U;
+            ri.pStencilAttachment               = &dep;
+        }
         vkCmdBeginRendering(cmd, &ri);
         set_draw_state(cmd, t.width(), t.height(), 1U, true, to_vk_compare(compare), 1U, mesh_draw);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
@@ -4820,13 +5187,35 @@ private:
         const VkRect2D scissor{{0, 0}, {w, h}};
         vkCmdSetScissorWithCount(cmd, 1U, &scissor);
         vkCmdSetRasterizerDiscardEnable(cmd, VK_FALSE);
-        vkCmdSetCullMode(cmd, VK_CULL_MODE_NONE);
-        vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
+        // ── ⭐ REN-38 audit: the DECLARED pass state replaces the hardwired defaults. `m_pass_state` is reset
+        // to `PassRasterState{}` — exactly the values that used to be literals here — at every pass boundary,
+        // so a pass that declares nothing gets the historical behaviour bit for bit. With shader objects every
+        // one of these is dynamic state, and it must be set HERE, after nothing can re-default it (the A1g
+        // ordering scar: state set before `set_draw_state` is silently reset by it).
+        const PassRasterState& ps = m_pass_state;
+        VkCullModeFlags        cull = VK_CULL_MODE_NONE;
+        if (ps.face_cull == FaceCull::Back)  { cull = VK_CULL_MODE_BACK_BIT; }
+        if (ps.face_cull == FaceCull::Front) { cull = VK_CULL_MODE_FRONT_BIT; }
+        vkCmdSetCullMode(cmd, cull);
+        vkCmdSetFrontFace(cmd, ps.front_face == FrontFace::Clockwise ? VK_FRONT_FACE_CLOCKWISE
+                                                                     : VK_FRONT_FACE_COUNTER_CLOCKWISE);
         vkCmdSetDepthTestEnable(cmd, depth_test ? VK_TRUE : VK_FALSE);
-        vkCmdSetDepthWriteEnable(cmd, depth_test ? VK_TRUE : VK_FALSE);
+        // ⛔ depth_write is meaningful only where a depth attachment exists — a depth-less draw keeps FALSE.
+        vkCmdSetDepthWriteEnable(cmd, (depth_test && ps.depth_write) ? VK_TRUE : VK_FALSE);
         if (depth_test) { vkCmdSetDepthCompareOp(cmd, depth_op); }
-        vkCmdSetDepthBiasEnable(cmd, VK_FALSE);
-        vkCmdSetStencilTestEnable(cmd, VK_FALSE);
+        const bool bias_on = ps.depth_bias != 0.0F || ps.depth_bias_slope != 0.0F;
+        vkCmdSetDepthBiasEnable(cmd, bias_on ? VK_TRUE : VK_FALSE);
+        if (bias_on) { vkCmdSetDepthBias(cmd, ps.depth_bias, ps.depth_bias_clamp, ps.depth_bias_slope); }
+        vkCmdSetStencilTestEnable(cmd, ps.stencil_enable ? VK_TRUE : VK_FALSE);
+        if (ps.stencil_enable)
+        {
+            vkCmdSetStencilOp(cmd, VK_STENCIL_FACE_FRONT_AND_BACK, to_vk_stencil_op(ps.stencil_fail),
+                              to_vk_stencil_op(ps.stencil_pass), to_vk_stencil_op(ps.stencil_depth_fail),
+                              to_vk_compare(ps.stencil_compare));
+            vkCmdSetStencilCompareMask(cmd, VK_STENCIL_FACE_FRONT_AND_BACK, ps.stencil_read_mask);
+            vkCmdSetStencilWriteMask(cmd, VK_STENCIL_FACE_FRONT_AND_BACK, ps.stencil_write_mask);
+            vkCmdSetStencilReference(cmd, VK_STENCIL_FACE_FRONT_AND_BACK, ps.stencil_ref);
+        }
         // B4: the vertex-input / primitive-topology / restart dynamic states are IGNORED when a mesh shader is bound, and setting
         // them alongside a mesh shader faults some drivers (device-lost). Skip them for a mesh draw.
         if (!mesh_draw)
@@ -4990,7 +5379,8 @@ private:
     // Build a colour target at `samples` sample count (+ a B1-d D32 depth buffer when `with_depth`). samples==1 → a plain
     // single-sample image (read back directly); samples>1 → an MSAA colour image + a single-sample AVERAGE-resolve image.
     [[nodiscard]] std::unique_ptr<IRasterTarget> make_target(crd::u32 width, crd::u32 height, crd::u32 samples,
-                                                             bool with_depth, VkFormat color_fmt = kColorFormat)
+                                                             bool with_depth, VkFormat color_fmt = kColorFormat,
+                                                             VkFormat depth_fmt = kDepthFormat)
     {
         if (width == 0U || height == 0U) { return nullptr; }
         VkSampleCountFlagBits sc = VK_SAMPLE_COUNT_1_BIT;
@@ -5030,10 +5420,16 @@ private:
             return nullptr;
         }
 
-        // B1-d: a matching-sample-count D32 depth buffer (never read back — attachment only).
+        // B1-d: a matching-sample-count depth buffer (never read back — attachment only). ⛔ REN-38-F11: a
+        // STENCIL format's aspect mask carries BOTH bits — a depth-only view over D24S8 makes every stencil op
+        // read and write nothing, silently (the same trap the transient path documents).
+        const bool has_stencil = depth_fmt == VK_FORMAT_D24_UNORM_S8_UINT
+                                 || depth_fmt == VK_FORMAT_D32_SFLOAT_S8_UINT;
+        const VkImageAspectFlags depth_aspect =
+            has_stencil ? (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT) : VK_IMAGE_ASPECT_DEPTH_BIT;
         ImageBundle depth{};
         if (with_depth
-            && !create_image_bundle(width, height, sc, kDepthFormat, VK_IMAGE_ASPECT_DEPTH_BIT,
+            && !create_image_bundle(width, height, sc, depth_fmt, depth_aspect,
                                     VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, depth))
         {
             destroy_image_bundle(m_device, color);
@@ -5049,7 +5445,8 @@ private:
             destroy_image_bundle(m_device, depth);
             return nullptr;
         }
-        return std::make_unique<VulkanRasterTarget>(m_device, color, resolve, depth, readback, samples, width, height);
+        return std::make_unique<VulkanRasterTarget>(m_device, color, resolve, depth, readback, samples, width,
+                                                    height, with_depth && has_stencil);
     }
 
     [[nodiscard]] VkCommandBuffer begin_cmd()
@@ -5126,6 +5523,13 @@ private:
     VkShaderModule                       m_rt_pso_key[kKernelPsoCap]{};
     VkPipeline                           m_rt_pso[kKernelPsoCap]{};
     crd::u32                             m_rt_pso_n = 0U;
+    // REN-38-B8: the authored-sampler cache.
+    static constexpr crd::u32 kSamplerCacheCap = 16U;
+    SamplerDesc               m_sampler_key[kSamplerCacheCap]{};
+    VkSampler                 m_sampler_obj[kSamplerCacheCap]{};
+    crd::u32                  m_sampler_n      = 0U;
+    VkSampler                 m_active_sampler = VK_NULL_HANDLE;
+    PassRasterState           m_pass_state{}; // REN-38 audit: the declared pass state (defaults = historical)
 
     [[nodiscard]] VkPipeline kernel_pipeline(VkShaderModule mod)
     {
@@ -5179,7 +5583,15 @@ public:
         m_frame_rec.pass_last = VK_NULL_HANDLE;
         m_frame_rec.async = async;
     }
-    void frame_rec_new_pass() noexcept { m_frame_rec.pass_last = VK_NULL_HANDLE; } // clear the self-barrier key
+    // ⛔ REN-38-B8: a pass boundary RESETS the active sampler. Without this a pass that declares nothing would
+    // inherit whatever its NEIGHBOUR installed — a bug that appears only when two passes with different sampling
+    // run in the same frame, and disappears the moment you reorder them to investigate.
+    void frame_rec_new_pass() noexcept
+    {
+        m_frame_rec.pass_last = VK_NULL_HANDLE;
+        m_active_sampler      = VK_NULL_HANDLE;
+        m_pass_state          = PassRasterState{}; // REN-38 audit: no pass inherits its neighbour's raster state
+    }
     void frame_rec_end() noexcept { m_frame_rec = FrameRec{}; }
     [[nodiscard]] bool frame_recording() const noexcept { return m_frame_rec.cmd != VK_NULL_HANDLE; }
 
@@ -5482,6 +5894,27 @@ public:
     }
 
     // ── IFrameGraph ──
+    // ⭐ REN-38-B5: import an APP-OWNED texture — read-only content the graph never writes.
+    // ⛔ It gets an ImageNode with NO target and NO ownership, so the barrier scheduler skips it entirely (it only
+    // ever walks nodes with a target) and `free_transients` never touches it. Read-only really means read-only:
+    // there is no layout to transition, because the application already put it in SHADER_READ_ONLY and keeps it
+    // there. Giving it a target would hand the graph permission to write content the app owns.
+    [[nodiscard]] FgImage import_texture(ITexture& texture) override
+    {
+        for (crd::usize i = 0; i < m_images.size(); ++i)
+        {
+            if (m_images[i].texture == &texture && m_images[i].target == nullptr)
+            {
+                return FgImage{static_cast<crd::u32>(i + 1U)};
+            }
+        }
+        ImageNode n{};
+        n.texture = &texture;
+        n.own     = Own::Imported;
+        m_images.push_back(n);
+        return FgImage{static_cast<crd::u32>(m_images.size())};
+    }
+
     [[nodiscard]] FgImage import_target(IRasterTarget& target) override
     {
         for (crd::usize i = 0; i < m_images.size(); ++i)
@@ -5526,11 +5959,29 @@ public:
         VkImageCreateInfo ici{};
         ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         ici.flags         = VK_IMAGE_CREATE_ALIAS_BIT; // graph aliases this image's memory with a disjoint-lifetime peer
-        ici.imageType     = VK_IMAGE_TYPE_2D;
+        // ── ⭐ REN-38-B2: the SHAPE. ──
+        // ⛔ A CUBE is six ARRAY LAYERS plus the CUBE_COMPATIBLE flag — the flag is what lets a cube VIEW be made
+        // over them, and without it the image is an ordinary 6-layer array that `samplerCube` cannot bind. It is
+        // not an optimisation hint; it is the difference between the resource existing and not.
+        // ⛔ A 3-D volume puts its slice count in `extent.depth`, NOT in `arrayLayers` — the two are different
+        // resources (a volume's slices are INTERPOLATED between; an array's are not), and Vulkan rejects a 3-D
+        // image with arrayLayers > 1 outright.
+        const bool is_cube = desc.kind == FgImageKind::Cube || desc.kind == FgImageKind::CubeArray;
+        const bool is_3d   = desc.kind == FgImageKind::Tex3D;
+        if (is_cube) { ici.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT; }
+        if (is_3d)   { ici.flags |= VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT; }
+        ici.imageType     = is_3d ? VK_IMAGE_TYPE_3D : VK_IMAGE_TYPE_2D;
         ici.format        = fmt;
-        ici.extent        = {desc.width, desc.height, 1U};
-        ici.mipLevels     = 1U;
-        ici.arrayLayers   = desc.layers; // REN-3.2: >1 ⇒ the 2D-ARRAY cascade/cube/stereo atlas
+        const crd::u32 volume_depth = desc.depth > 0U ? desc.depth : 1U;
+        ici.extent        = {desc.width, desc.height, is_3d ? volume_depth : 1U};
+        ici.mipLevels     = desc.mips > 0U ? desc.mips : 1U;
+        // A cube is 6 faces PER cube; a cube array is 6 x layers. REN-3.2's plain 2-D array keeps `layers` as-is.
+        const crd::u32 cube_count = desc.layers > 0U ? desc.layers : 1U;
+        crd::u32       layer_count = desc.layers;
+        if (is_3d)        { layer_count = 1U; }
+        else if (is_cube) { layer_count = 6U * cube_count; }
+        ici.arrayLayers   = layer_count;
+        n.no_alias        = desc.no_alias; // REN-38-B6
         ici.samples       = VK_SAMPLE_COUNT_1_BIT;
         ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
         ici.usage         = usage;
@@ -5728,15 +6179,13 @@ public:
     [[nodiscard]] crd::u32 last_submit_count() const noexcept override { return m_submit_count; }
     [[nodiscard]] crd::u32 last_present_count() const noexcept override { return m_present_count; }
     [[nodiscard]] crd::u32 last_async_pass_count() const noexcept override { return m_async_pass_count; }
+    void set_memory_budget(crd::u64 bytes) noexcept override { m_budget = bytes; }
+    [[nodiscard]] bool last_build_exceeded_budget() const noexcept override { return m_over_budget; }
 
     // REN-38-A14: does any pass in the built order actually get the compute queue? (`build()` answered this.)
     [[nodiscard]] bool async_pass_pending() const noexcept
     {
-        for (const crd::u32 i : m_order)
-        {
-            if (m_passes[i].on_async) { return true; }
-        }
-        return false;
+        return std::ranges::any_of(m_order, [this](crd::u32 i) { return m_passes[i].on_async; });
     }
 
     // The async command pool / buffer / semaphore — built ONCE, lazily, on the COMPUTE family. ⛔ A command buffer
@@ -5846,10 +6295,14 @@ private:
         // layout of a persistent image lives in the REGISTRY, never here — see `live_layout()`. That is what
         // makes the frame-start reset below harmless for it BY CONSTRUCTION rather than by remembering a skip.
         crd::i32       persist_index = -1;
+        bool     no_alias = false; // REN-38-B6: the author PINNED this transient out of the aliaser
     };
 
     // The two questions that DO need a predicate, each answerable on its own.
     [[nodiscard]] static bool graph_owned(const ImageNode& n) noexcept { return n.own != Own::Imported; }
+    // ⛔⛔ REN-38-B6: `no_alias` forbids SLOT REUSE, NOT allocation. My first attempt excluded pinned transients
+    // from `aliasable()` — and the aliasing pass is what BINDS MEMORY, so a pinned image was created, never
+    // backed, and reported zero bytes. A pin must make a resource MORE isolated, never less real.
     [[nodiscard]] static bool aliasable(const ImageNode& n) noexcept { return n.own == Own::Transient; }
 
     // REN-37.5: one persistent image, keyed by a caller-chosen stable identity. Survives `reset()`, owns its own
@@ -5950,6 +6403,26 @@ private:
         case FgImageFormat::R16F:       usage = kColourXferUsage; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R16_SFLOAT;
         case FgImageFormat::R32F:       usage = kColourXferUsage; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R32_SFLOAT;
         case FgImageFormat::R32Uint:    usage = kColourXferUsage; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R32_UINT;
+        // ── REN-38-B7: the rest of the vocabulary. Colour formats all take the shared transfer usage so any of
+        // them can be a copy/blit/resolve endpoint (38-A6) without a second decision here. ──
+        case FgImageFormat::RG16F:       usage = kColourXferUsage; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R16G16_SFLOAT;
+        case FgImageFormat::RG32F:       usage = kColourXferUsage; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R32G32_SFLOAT;
+        case FgImageFormat::RGBA32F:     usage = kColourXferUsage; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R32G32B32A32_SFLOAT;
+        case FgImageFormat::R11G11B10F:  usage = kColourXferUsage; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_B10G11R11_UFLOAT_PACK32;
+        case FgImageFormat::RGB10A2:     usage = kColourXferUsage; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+        case FgImageFormat::R8:          usage = kColourXferUsage; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R8_UNORM;
+        case FgImageFormat::RG8:         usage = kColourXferUsage; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R8G8_UNORM;
+        case FgImageFormat::RGBA16Unorm: usage = kColourXferUsage; aspect = VK_IMAGE_ASPECT_COLOR_BIT; return VK_FORMAT_R16G16B16A16_UNORM;
+        // ⛔ A STENCIL format's aspect mask carries BOTH bits. Omitting STENCIL here would create the image with a
+        // depth-only view, and every stencil op would read and write nothing — silently, since neither API errors.
+        case FgImageFormat::D24S8:
+            usage  = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+            aspect = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+            return VK_FORMAT_D24_UNORM_S8_UINT;
+        case FgImageFormat::D32FloatS8:
+            usage  = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+            aspect = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+            return VK_FORMAT_D32_SFLOAT_S8_UINT;
         case FgImageFormat::D32Float:
         default:                        usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT; aspect = VK_IMAGE_ASPECT_DEPTH_BIT; return VK_FORMAT_D32_SFLOAT;
         }
@@ -6097,6 +6570,8 @@ private:
     crd::u32 m_submit_count   = 0U;
     crd::u32 m_present_count  = 0U; // REN-38-A5: present passes that ACTUALLY presented last execute()
     crd::u32 m_async_pass_count = 0U; // REN-38-A14: passes that ACTUALLY ran on the async-compute queue
+    crd::u64 m_budget       = 0U;     // REN-38-B6: 0 = unbounded
+    bool     m_over_budget  = false;
     VkCommandPool   m_async_pool = VK_NULL_HANDLE;
     VkCommandBuffer m_async_cmd  = VK_NULL_HANDLE;
     VkSemaphore     m_async_done = VK_NULL_HANDLE;
@@ -6142,6 +6617,7 @@ bool VulkanFrameGraph::build()
 {
     m_barrier_count = 0U;
     m_submit_count  = 0U;
+    m_over_budget   = false; // REN-38-B6: a fresh verdict every build
 
     // 1) every pass access must reference an existing resource
     for (const Pass& p : m_passes)
@@ -6311,7 +6787,7 @@ bool VulkanFrameGraph::build()
         for (crd::u32 si = 0; si < m_slots.size(); ++si)
         {
             Slot& s = m_slots[si];
-            if (s.free_after < n.first_pass && (s.type_bits & n.mem_req.memoryTypeBits) != 0U)
+            if (!n.no_alias && s.free_after < n.first_pass && (s.type_bits & n.mem_req.memoryTypeBits) != 0U) // B6
             {
                 chosen = static_cast<crd::i32>(si);
                 break;
@@ -6440,6 +6916,12 @@ bool VulkanFrameGraph::materialize_image(ImageNode& n)
             n.texture = tex;
         }
     }
+    // ── ⭐ REN-38-B6: THE HARD BUDGET. Checked AFTER aliasing, because the budget is about what the frame
+    // actually costs, not what it would cost without the aliaser — bounding the pre-alias total would reject
+    // graphs that fit comfortably. ⛔ FAIL, never warn: the failure this prevents is an allocation that succeeds
+    // on the dev machine and OOMs on the target months later, in a build nobody can bisect.
+    m_over_budget = m_budget != 0U && static_cast<crd::u64>(m_physical_bytes) > m_budget;
+    if (m_over_budget) { return false; }
     return true;
 }
 
@@ -6453,6 +6935,7 @@ bool VulkanFrameGraph::build_tail(crd::u32 img_slot_end, crd::containers::Array<
         for (crd::u32 si = img_slot_end; si < m_slots.size(); ++si)
         {
             Slot& s = m_slots[si];
+            // REN-38-B6: only IMAGES carry an author-visible pin today; buffers behave exactly as before.
             if (s.free_after < n.first_pass && (s.type_bits & n.mem_req.memoryTypeBits) != 0U) { chosen = static_cast<crd::i32>(si); break; }
         }
         if (chosen < 0)
@@ -6623,18 +7106,23 @@ void VulkanFrameGraph::execute()
                 // a depth image, but mixing the two is not — the first run of the REN-3.1 gate failed on exactly
                 // that (VUID-vkCmdDraw-imageLayout-00344), which is why the spec listed it as risk #2.
                 auto& dt = static_cast<VulkanRasterTarget&>(*n.target);
-                if (writes && live_depth_layout(n) != VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
+                // REN-38-F11: a D24S8 transient's barriers carry BOTH aspects (n.aspect stores them) and the
+                // COMBINED attachment layout — a depth-only barrier over a stencil format is a validation error
+                // and leaves the stencil aspect in the wrong layout.
+                const bool          n_stencil = (n.aspect & VK_IMAGE_ASPECT_STENCIL_BIT) != 0U;
+                const VkImageLayout att_l     = n_stencil ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                                                          : VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+                if (writes && live_depth_layout(n) != att_l)
                 {
-                    img_barrier(dt.depth_image(), VK_IMAGE_ASPECT_DEPTH_BIT, live_depth_layout(n),
-                                VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                    img_barrier(dt.depth_image(), n.aspect, live_depth_layout(n), att_l,
                                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
                                 VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT);
-                    live_depth_layout(n) = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+                    live_depth_layout(n) = att_l;
                 }
-                else if (!writes && live_depth_layout(n) == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
+                else if (!writes && live_depth_layout(n) == att_l)
                 {
                     // the DEPTH RTT barrier: the shadow pass's depth writes complete → this pass samples it
-                    img_barrier(dt.depth_image(), VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                    img_barrier(dt.depth_image(), n.aspect, att_l,
                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_SHADER_READ_BIT,
                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
                     live_depth_layout(n) = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -6705,11 +7193,12 @@ void VulkanFrameGraph::execute()
                 }
                 if (t.has_depth())
                 {
+                    // REN-38-F11: aspect + layout come from the TARGET — a D24S8 import barriers both aspects
                     const VkImageLayout dfrom = live_depth_layout(n);
-                    img_barrier(t.depth_image(), VK_IMAGE_ASPECT_DEPTH_BIT, dfrom, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                    img_barrier(t.depth_image(), t.depth_aspect(), dfrom, t.depth_attach_layout(),
                                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                                 VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT);
-                    live_depth_layout(n) = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+                    live_depth_layout(n) = t.depth_attach_layout();
                 }
             }
         }

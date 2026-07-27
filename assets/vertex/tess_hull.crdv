@@ -1,0 +1,8 @@
+schema = 1
+name   = "crd://vertex/tess_hull"
+stage  = "tess_control"
+
+[tess]
+patch_size = 4
+inner      = 8.0
+outer      = 8.0

@@ -282,6 +282,25 @@ Path user_config_dir(containers::StringView app_name) noexcept
 #endif
 }
 
+Path temp_directory() noexcept
+{
+    try
+    {
+        std::error_code ec;
+        const stdfs::path t = stdfs::temp_directory_path(ec);
+        if (ec)
+        {
+            CRD_LOG_ERROR(g_log_platform, "temp_directory_path() failed: {}", ec.message());
+            return current_working_dir();
+        }
+        return from_native_path(t);
+    }
+    catch (...)
+    {
+        return Path{}; // allocation failure under noexcept: an empty path, never std::terminate
+    }
+}
+
 bool exists(const Path& path) noexcept
 {
     std::error_code ec;

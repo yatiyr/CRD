@@ -64,6 +64,40 @@ inline void build_triangle_vs(crd::kir::KGraph& g, crd::kir::KEntry& ve)
     ve.n_out    = 0;   // no interpolants: the fragment shader paints a constant
 }
 
+// REN-38 pass-state gates: the same triangle at a DECLARED depth. z = 0.5 puts the primitive's exponent where a
+// constant depth bias has a usable device unit (float-depth bias scales by 2^(exp(z)-23), so at z = 0 a bias of
+// any size moves nothing and a bias gate would pass with the state ignored).
+inline void build_triangle_z_vs(crd::kir::KGraph& g, crd::kir::KEntry& ve, double z_ndc)
+{
+    namespace kir = crd::kir;
+    const auto sh = kir::make_shape({1});
+    const int vid = g.builtin(kir::KBuiltin::VertexIndex);
+    const int k0  = g.constant(0.0, sh, kir::DType::I32);
+    const int k1  = g.constant(1.0, sh, kir::DType::I32);
+    const int eq0 = g.binary(kir::KOp::CmpEq, vid, k0);
+    const int eq1 = g.binary(kir::KOp::CmpEq, vid, k1);
+    const int x   = g.select(eq0, g.constant(0.0, sh, kir::DType::F32),
+                             g.select(eq1, g.constant(0.8, sh, kir::DType::F32), g.constant(-0.8, sh, kir::DType::F32)));
+    const int y   = g.select(eq0, g.constant(-0.8, sh, kir::DType::F32), g.constant(0.8, sh, kir::DType::F32));
+    const int pos = g.vec4(x, y, g.constant(z_ndc, sh, kir::DType::F32), g.constant(1.0, sh, kir::DType::F32));
+    ve.stage    = kir::KStage::Vertex;
+    ve.position = pos;
+    ve.n_out    = 0;
+}
+
+// REN-38 pass-state gates: a constant SOLID colour — the probe draw needs a colour only IT can produce, so
+// "who won the depth test" is readable from the pixel.
+inline void build_solid_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe, double r, double green, double b)
+{
+    namespace kir = crd::kir;
+    const auto sh  = kir::make_shape({1});
+    const int  col = g.vec4(g.constant(r, sh, kir::DType::F32), g.constant(green, sh, kir::DType::F32),
+                            g.constant(b, sh, kir::DType::F32), g.constant(1.0, sh, kir::DType::F32));
+    fe.stage  = kir::KStage::Fragment;
+    fe.n_out  = 1;
+    fe.out[0] = {col, 0};
+}
+
 // FRAGMENT entry: a constant red colour attachment at location 0 (no interpolant input — matches the VS above).
 inline void build_triangle_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
 {
@@ -3426,6 +3460,23 @@ inline crd::kir::KEntry build_trace_kernel_shared(crd::kir::KGraph& g, int local
 // away. ⛔ The MISS shader writes -1 and the CLOSEST-HIT shader writes +1, so the two SBT records are
 // DISTINGUISHABLE in the readback — which is the only way to prove the shader binding table's stride and base
 // alignment are right. A trio where both wrote the same value would pass with a mis-indexed table.
+// REN-38 audit: the ANY-HIT for the trio's pipeline — ignores every candidate whose barycentric u+v falls
+// below `cutoff`. cutoff 2.0 ignores ALL hits (u+v <= 1 inside a triangle), turning every ray into a MISS —
+// the strongest distinguishable claim an any-hit gate can make; cutoff 0.0 ignores none, so hits still hit.
+inline void build_rt_anyhit(crd::kir::KGraph& g, crd::kir::KEntry& e, double cutoff)
+{
+    namespace kir = crd::kir;
+    (void)g.ray_payload_decl(1); // shares the pipeline's payload signature
+    const int mark = g.kernel_stmt_mark();
+    const int bary = g.builtin(kir::KBuiltin::HitBary);
+    const int a    = g.binary(kir::KOp::Add, g.vec_comp(bary, 0), g.vec_comp(bary, 1));
+    g.stmt_ignore_hit_if(
+        g.binary(kir::KOp::CmpLt, a, g.constant(cutoff, kir::make_shape({1}), kir::DType::F32)));
+    e.stage             = kir::KStage::AnyHit;
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
+}
+
 inline void build_rt_pipeline_trio(crd::kir::KGraph& rg, crd::kir::KEntry& rge, crd::kir::KGraph& ms,
                                    crd::kir::KEntry& mse, crd::kir::KGraph& ch, crd::kir::KEntry& che)
 {
@@ -3466,6 +3517,29 @@ inline void build_rt_pipeline_trio(crd::kir::KGraph& rg, crd::kir::KEntry& rge, 
         che.kernel_body_begin = mk;
         che.kernel_body_count = ch.stmt_count() - mk;
     }
+}
+
+
+// ── REN-38-B8: a fullscreen triangle whose UVs run 0..2 rather than 0..1. ──
+// ⛔ The point is the OUT-OF-RANGE half: at uv > 1 a CLAMP sampler keeps returning the edge texel while a REPEAT
+// sampler wraps back to the start, so the two address modes produce DIFFERENT pixels. With 0..1 UVs they would
+// agree everywhere and a gate could not tell whether the authored sampler had been honoured at all.
+inline void build_uv_wrap_vs(crd::kir::KGraph& g, crd::kir::KEntry& ve)
+{
+    namespace kir  = crd::kir;
+    const auto sh  = kir::make_shape({1});
+    const auto f   = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const int  vid = g.cast(g.builtin(kir::KBuiltin::VertexIndex), kir::DType::I32);
+    const auto eqi = [&](int v) { return g.binary(kir::KOp::CmpEq, vid, g.constant(static_cast<double>(v), sh, kir::DType::I32)); };
+    const int  x   = g.select(eqi(1), f(3.0), f(-1.0));
+    const int  y   = g.select(eqi(2), f(3.0), f(-1.0));
+    // uv = (clip + 1) × 0.5 × 2 ⇒ 0..2 across the visible quad
+    const int  ux  = g.binary(kir::KOp::Add, x, f(1.0));
+    const int  uy  = g.binary(kir::KOp::Add, y, f(1.0));
+    ve.stage    = kir::KStage::Vertex;
+    ve.position = g.vec4(x, y, f(0.0), f(1.0));
+    ve.n_out    = 1;
+    ve.out[0]   = {g.vec2(ux, uy), 0, kir::Interp::Smooth};
 }
 
 } // namespace crd::gputest

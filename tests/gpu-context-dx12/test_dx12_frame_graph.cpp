@@ -13,7 +13,8 @@
 #include <crd/gpu/dx12_raster_context.hpp>
 
 #include <crd/gpu/dx12_context.hpp> // create_dx12_gpu_context — the KGraph -> DXIL program seam
-#include <crd/gpu/dx12_ray_tracing_context.hpp> // REN-38-A9: the host builds the scene the asset names
+#include <crd/gpu/dx12_ray_tracing_context.hpp>
+#include <crd/vertexcook/vertex_asset.hpp> // REN-38-F13: the authored RT stages // REN-38-A9: the host builds the scene the asset names
 #include <crd/gpu/frame_graph.hpp>
 #include <crd/gpu/raster_context.hpp>
 
@@ -1286,7 +1287,7 @@ TEST_CASE("REN-37.5 GATE (DX12): a PERSISTENT image keeps its contents across re
     REQUIRE(sample_prog != nullptr);
 
     constexpr crd::u32 dim   = 64U;
-    constexpr crd::u32 kKey  = 0xA11CE5U; // the same stable identity the Vulkan gate uses
+    constexpr crd::u32 probe_key = 0xA11CE5U; // the same stable identity the Vulkan gate uses
     auto               dst   = raster->create_color_target(dim, dim);
     auto               dummy = raster->create_storage_buffer(16U);
     REQUIRE(dst != nullptr);
@@ -1303,9 +1304,9 @@ TEST_CASE("REN-37.5 GATE (DX12): a PERSISTENT image keeps its contents across re
 
     // ── FRAME 0: create the history and WRITE into it. ──
     {
-        const g::FgImage hist = fgraph->create_persistent_image(kKey, pdesc);
+        const g::FgImage hist = fgraph->create_persistent_image(probe_key, pdesc);
         REQUIRE(hist.valid());
-        CHECK_FALSE(fgraph->persistent_image_was_live(kKey));
+        CHECK_FALSE(fgraph->persistent_image_was_live(probe_key));
         const g::FgBuffer buf = fgraph->import_storage(*dummy);
         RttOffscreen      off{hist, buf, tri_prog.get()};
         fgraph->add_pass("write_history").reads(buf).writes(hist).execute(&record_rtt_offscreen, &off);
@@ -1319,9 +1320,9 @@ TEST_CASE("REN-37.5 GATE (DX12): a PERSISTENT image keeps its contents across re
 
     // ── FRAME 1: same key, READ what frame 0 wrote. ──
     {
-        const g::FgImage hist = fgraph->create_persistent_image(kKey, pdesc);
+        const g::FgImage hist = fgraph->create_persistent_image(probe_key, pdesc);
         REQUIRE(hist.valid());
-        CHECK(fgraph->persistent_image_was_live(kKey));
+        CHECK(fgraph->persistent_image_was_live(probe_key));
         const g::FgImage fin = fgraph->import_target(*dst);
         RttCompose       com{hist, fin, sample_prog.get()};
         fgraph->add_pass("read_history").reads(hist).writes(fin).execute(&record_rtt_compose, &com);
@@ -1341,8 +1342,8 @@ TEST_CASE("REN-37.5 GATE (DX12): a PERSISTENT image keeps its contents across re
     g::FgImageDesc bigger = pdesc;
     bigger.width          = dim * 2U;
     bigger.height         = dim * 2U;
-    REQUIRE(fgraph->create_persistent_image(kKey, bigger).valid());
-    CHECK_FALSE(fgraph->persistent_image_was_live(kKey));
+    REQUIRE(fgraph->create_persistent_image(probe_key, bigger).valid());
+    CHECK_FALSE(fgraph->persistent_image_was_live(probe_key));
 }
 
 // ── REN-38-A1a GATE (DX12): the bindless RECORDING path, and PARITY with Vulkan. ────────────────────────────
@@ -1386,10 +1387,10 @@ TEST_CASE("REN-38-A1a GATE (DX12): a fullscreen pass binds ALL its declared read
     auto red_prog   = solid_prog(0, 1.0, 0.0, 0.0);
     auto green_prog = solid_prog(1, 0.0, 1.0, 0.0);
 
-    kir::KGraph cfg_(&alloc);
+    kir::KGraph cfg_graph(&alloc);
     kir::KEntry cfe;
-    crd::gputest::build_two_texture_composite_fs(cfg_, cfe);
-    auto cfs          = gctx->create_program(cfg_, cfe);
+    crd::gputest::build_two_texture_composite_fs(cfg_graph, cfe);
+    auto cfs          = gctx->create_program(cfg_graph, cfe);
     auto compose_prog = raster->create_raster_program(*fvs, *cfs);
     REQUIRE(red_prog != nullptr);
     REQUIRE(green_prog != nullptr);
@@ -1429,12 +1430,12 @@ TEST_CASE("REN-38-A1a GATE (DX12): a fullscreen pass binds ALL its declared read
         g::FgImage         dst{};
         g::IRasterProgram* prog = nullptr;
     };
-    static const auto rec_solid = [](g::IFrameContext& ctx, void* user) {
+    const auto rec_solid = [](g::IFrameContext& ctx, void* user) {
         auto* s = static_cast<Solid*>(user);
         // 38-A1h gave plain `draw` a recording path, so this gate covers A1h as well as A3.
         ctx.raster().draw(*ctx.image(s->img), *s->prog, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
     };
-    static const auto rec_compose = [](g::IFrameContext& ctx, void* user) {
+    const auto rec_compose = [](g::IFrameContext& ctx, void* user) {
         auto*        s    = static_cast<Compose*>(user);
         g::ITexture* t[2] = {ctx.texture(s->a), ctx.texture(s->b)};
         if (t[0] == nullptr || t[1] == nullptr) { return; }
@@ -2350,17 +2351,17 @@ TEST_CASE("REN-38-A10 GATE (DX12): an authored INDIRECT pass takes its workgroup
     auto& raster = *rasterp;
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
-    constexpr crd::u32         kSurvivors = 3U;
-    constexpr crd::u32         kSlots     = 8U;
+    constexpr crd::u32         survivor_count = 3U;
+    constexpr crd::u32         slot_count     = 8U;
 
-    // the CULL kernel: writes {kSurvivors, 1, 1} — the dispatch ARGUMENTS — into the args buffer.
+    // the CULL kernel: writes {survivor_count, 1, 1} — the dispatch ARGUMENTS — into the args buffer.
     crd::kir::KGraph cg(&alloc);
     crd::kir::KEntry ce;
     {
         const auto shp = crd::kir::make_shape({1});
         const int  buf = cg.buffer_decl(crd::kir::DType::U32, 0, 0, true);
         const auto cu  = [&](crd::u32 v) { return cg.constant(static_cast<double>(v), shp, crd::kir::DType::U32); };
-        cg.stmt_buffer_store(buf, cu(0U), cu(kSurvivors));
+        cg.stmt_buffer_store(buf, cu(0U), cu(survivor_count));
         cg.stmt_buffer_store(buf, cu(1U), cu(1U));
         cg.stmt_buffer_store(buf, cu(2U), cu(1U));
         ce.stage             = crd::kir::KStage::Compute;
@@ -2386,9 +2387,9 @@ TEST_CASE("REN-38-A10 GATE (DX12): an authored INDIRECT pass takes its workgroup
     auto work = gctx->create_program(wg, we);
     if (cull == nullptr || work == nullptr) { SKIP("compute shader dxc/DXIL unavailable"); }
 
-    auto marks = raster.create_storage_buffer(kSlots * 4U);
+    auto marks = raster.create_storage_buffer(slot_count * 4U);
     REQUIRE(marks != nullptr);
-    const crd::u32 zero[kSlots]{};
+    const crd::u32 zero[slot_count]{};
     REQUIRE(raster.upload_storage(*marks, 0U, static_cast<const void*>(zero), sizeof(zero)));
 
     auto dst = raster.create_color_target(64U, 64U);
@@ -2408,14 +2409,14 @@ TEST_CASE("REN-38-A10 GATE (DX12): an authored INDIRECT pass takes its workgroup
     CHECK(err == crd::framecook::FrameExecError::Ok);
 
     REQUIRE(raster.download_storage(*marks));
-    crd::u32 m[kSlots]{};
-    for (crd::u32 i = 0; i < kSlots; ++i) { m[i] = marks->read_u32(i); }
+    crd::u32 m[slot_count]{};
+    for (crd::u32 i = 0; i < slot_count; ++i) { m[i] = marks->read_u32(i); }
     UNSCOPED_INFO("marks: " << m[0] << " " << m[1] << " " << m[2] << " " << m[3] << " " << m[4]);
-    // ⭐⭐ THE CPU NEVER KNEW THE COUNT. `kSurvivors` reaches the GPU only as a value a SHADER wrote into the args
+    // ⭐⭐ THE CPU NEVER KNEW THE COUNT. `survivor_count` reaches the GPU only as a value a SHADER wrote into the args
     // buffer, so the exact SET of workgroups that ran is the proof: 0..2 stamped, 3 and beyond untouched. If the
     // dispatch had taken a CPU-side count, or read the args before the cull pass wrote them, the boundary moves.
-    for (crd::u32 i = 0; i < kSurvivors; ++i) { CHECK(m[i] == i + 1U); }
-    for (crd::u32 i = kSurvivors; i < kSlots; ++i) { CHECK(m[i] == 0U); }
+    for (crd::u32 i = 0; i < survivor_count; ++i) { CHECK(m[i] == i + 1U); }
+    for (crd::u32 i = survivor_count; i < slot_count; ++i) { CHECK(m[i] == 0U); }
 
 }
 // ── REN-38-A11 / A12 GATE: the VISIBILITY BUFFER and ORDER-INDEPENDENT TRANSPARENCY, authored. ─────────────────
@@ -2681,4 +2682,1214 @@ TEST_CASE("REN-38-A12 GATE (DX12): authored WBOIT composites OVER the background
     CHECK(r < 250U);
     CHECK(b < 250U);
 
+}
+
+// ── The DEVICE half of B7: every format must actually CREATE, including the stencil pair. ──
+TEST_CASE("REN-38-B7 GATE (DX12): every declared format creates a real transient on the device",
+          "[dx12][raster][frame-graph][ren38][gpu]")
+{
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto rasterp = g::create_dx12_raster_context();
+    REQUIRE(rasterp != nullptr);
+    auto& raster = *rasterp;
+
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    auto                  fgraph = raster.create_frame_graph();
+    REQUIRE(fgraph != nullptr);
+
+    const g::FgImageFormat all[] = {
+        g::FgImageFormat::RGBA8Unorm, g::FgImageFormat::RGBA8Srgb, g::FgImageFormat::RGBA16F,
+        g::FgImageFormat::R16F,       g::FgImageFormat::R32F,      g::FgImageFormat::R32Uint,
+        g::FgImageFormat::RG16F,      g::FgImageFormat::RG32F,     g::FgImageFormat::RGBA32F,
+        g::FgImageFormat::R11G11B10F, g::FgImageFormat::RGB10A2,   g::FgImageFormat::R8,
+        g::FgImageFormat::RG8,        g::FgImageFormat::RGBA16Unorm, g::FgImageFormat::D32Float,
+        g::FgImageFormat::D24S8,      g::FgImageFormat::D32FloatS8,
+    };
+    // ⭐ A DECLARED format that the device refuses is the failure this gate exists to catch. `create_transient_image`
+    // returns an INVALID handle rather than a truncated allocation, so the handle's validity IS the answer — and
+    // asserting it per format is what stops a format being added to the enum and the parser but not the backend.
+    for (const g::FgImageFormat f : all)
+    {
+        g::FgImageDesc d{};
+        d.width   = 64U;
+        d.height  = 64U;
+        d.format  = f;
+        d.sampled = !g::fg_format_has_depth(f); // a depth/stencil transient is an ATTACHMENT here, not a texture
+        INFO("format index " << static_cast<int>(f));
+        CHECK(fgraph->create_transient_image(d).valid());
+    }
+
+}
+
+// ── REN-38-B2 GATE (DX12): CUBE / 3D / MIP-CHAIN resources. ──────────────────────────────────────────────────────────
+// ⛔ The graph had 2-D plus `layers`, and `layers` ALONE CANNOT EXPRESS THESE. A cube is six layers the hardware
+// samples by a DIRECTION; a volume's slices are INTERPOLATED between and an array's are not. `textureLod(cube,
+// dir)` and `texture(array, vec3(uv, layer))` are different instructions — an env prefilter written against one
+// and handed the other reads the wrong texel with no error anywhere. Without these: no env prefilter, no
+// point-light cube shadows, no froxel volumes (38-E5), no volumetric fog, no DDGI probe volumes, no 3-D
+// atmosphere LUT, and no bloom down/up chain (which needs a MIP CHAIN, not N separate resources).
+TEST_CASE("REN-38-B2 GATE (DX12): cube, volume and mip-chain transients create on the device",
+          "[dx12][raster][frame-graph][ren38][gpu]")
+{
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto rasterp = g::create_dx12_raster_context();
+    REQUIRE(rasterp != nullptr);
+    auto& raster = *rasterp;
+    auto                 fgraph = raster.create_frame_graph();
+    REQUIRE(fgraph != nullptr);
+
+    const auto make = [&](g::FgImageKind k, crd::u32 w, crd::u32 h, crd::u32 depth, crd::u32 layers, crd::u32 mips) {
+        g::FgImageDesc d{};
+        d.width   = w;
+        d.height  = h;
+        d.format  = g::FgImageFormat::RGBA16F;
+        d.sampled = true;
+        d.kind    = k;
+        d.depth   = depth;
+        d.layers  = layers;
+        d.mips    = mips;
+        return fgraph->create_transient_image(d).valid();
+    };
+    CHECK(make(g::FgImageKind::Tex2D, 64U, 64U, 1U, 1U, 1U));     // the baseline shape still works
+    CHECK(make(g::FgImageKind::Cube, 64U, 64U, 1U, 1U, 1U));      // 6 faces + CUBE_COMPATIBLE (VK) / 6 layers (DX12)
+    CHECK(make(g::FgImageKind::CubeArray, 32U, 32U, 1U, 4U, 1U)); // 4 probes = 24 layers
+    CHECK(make(g::FgImageKind::Tex3D, 32U, 32U, 16U, 1U, 1U));    // a froxel volume: depth is SLICES, not layers
+    CHECK(make(g::FgImageKind::Tex2D, 64U, 64U, 1U, 1U, 7U));     // a bloom chain: 64 halves to 1 in 7 levels
+    CHECK(make(g::FgImageKind::Cube, 64U, 64U, 1U, 1U, 7U));      // a prefiltered env map: roughness per mip
+
+}
+
+
+// ── ⭐⭐ REN-38 PASS-STATE GATES (the audit's vocabulary gap #5): depth-write · depth bias · face cull. ────────
+// ⛔ Until this landed, depth bias was hardwired OFF and face culling hardwired NONE in both backends, and the
+// depth WRITE could not be turned off — so a transparent pass could not keep the opaque depth read-only and a
+// shadow pass could not bias or front-face-cull. Every gate below asserts a DIFFERENCE between two runs that
+// differ only in the declared state, because "it rendered" passes with the state ignored entirely.
+namespace
+{
+constexpr const char* kStateCullHeadDx = R"(
+schema = 1
+name   = "crd://frame/state-cull-dx12"
+
+[[draw_list]]
+name = "visible"
+all  = ["MeshRenderer"]
+
+[[pass]]
+name        = "scene"
+kind        = "raster.geometry"
+draw_list   = "visible"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+clear_depth = 1.0
+depth       = "LessEqual"
+)";
+
+class StateCullHostDx final : public crd::framecook::IFrameGraphHost
+{
+public:
+    StateCullHostDx(g::IRasterTarget* out, g::IRasterProgram* prog, g::IStorageBuffer* sb)
+        : m_out(out), m_prog(prog), m_sb(sb)
+    {
+    }
+    g::IRasterTarget*  output() override { return m_out; }
+    g::IRasterProgram* program(crd::containers::StringView) override { return m_prog; }
+    bool               draw_list(crd::containers::StringView, crd::framecook::DrawListBinding& out) override
+    {
+        out.storage      = m_sb;
+        out.program      = m_prog;
+        out.vertex_count = 3U;
+        return true;
+    }
+
+private:
+    g::IRasterTarget*  m_out  = nullptr;
+    g::IRasterProgram* m_prog = nullptr;
+    g::IStorageBuffer* m_sb   = nullptr;
+};
+} // namespace
+
+TEST_CASE("REN-38 STATE GATE: DX12: an authored FACE CULL reaches the rasterizer through the asset",
+          "[dx12][raster][frame-graph][ren38][gpu]")
+{
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto raster_p = g::create_dx12_raster_context();
+    REQUIRE(raster_p != nullptr);
+    auto& raster = *raster_p;
+
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    kir::KGraph           vg(&alloc);
+    kir::KEntry           ve;
+    crd::gputest::build_triangle_vs(vg, ve);
+    kir::KGraph fg2(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_triangle_fs(fg2, fe);
+    auto vs = gctx->create_program(vg, ve);
+    auto fs = gctx->create_program(fg2, fe);
+    if (vs == nullptr || fs == nullptr) { SKIP("shader compile unavailable"); }
+    auto prog = raster.create_raster_program(*vs, *fs);
+    REQUIRE(prog != nullptr);
+
+    const auto           run = [&](const char* cull_line) {
+        auto sb = raster.create_storage_buffer(16U);
+        REQUIRE(sb != nullptr);
+        auto dst = raster.create_color_depth_target(64U, 64U);
+        REQUIRE(dst != nullptr);
+        crd::containers::String toml(&alloc);
+        toml.append(kStateCullHeadDx);
+        toml.append(cull_line);
+        crd::framecook::FrameGraphDesc desc(&alloc);
+        crd::containers::String        where(&alloc);
+        REQUIRE(crd::framecook::parse_frame_toml(crd::containers::StringView(toml.c_str(), toml.size()), desc, &where)
+                == crd::framecook::FrameCookError::Ok);
+        StateCullHostDx                host(dst.get(), prog.get(), sb.get());
+        crd::framecook::FrameExecError err = crd::framecook::FrameExecError::Ok;
+        REQUIRE(crd::framecook::execute_frame_graph(desc, raster, host, &err, &where));
+        CHECK(err == crd::framecook::FrameExecError::Ok);
+        return dst->read_pixel(32U, 32U) & 0xFFFFFFU;
+    };
+
+    const crd::u32 none_px  = run("");
+    const crd::u32 back_px  = run("face_cull = \"back\"\n");
+    const crd::u32 front_px = run("face_cull = \"front\"\n");
+    UNSCOPED_INFO("none=" << none_px << " back=" << back_px << " front=" << front_px);
+    // Under `none` the triangle covers the centre (the historical behaviour, byte-unchanged).
+    CHECK((none_px & 0xFFU) > 200U);
+    // EXACTLY ONE of back/front erases it. The gate does not encode the triangle's winding — it asserts the
+    // DICHOTOMY, which is precisely "the declared state reached the rasterizer": a state that never arrived
+    // leaves both runs identical to `none`, and a state applied to the wrong face kills the wrong one only.
+    const bool back_kills  = (back_px & 0xFFFFFFU) == 0U;
+    const bool front_kills = (front_px & 0xFFFFFFU) == 0U;
+    CHECK(back_kills != front_kills);
+}
+
+TEST_CASE("REN-38 STATE GATE: DX12: depth_write = false leaves the depth buffer UNTOUCHED",
+          "[dx12][raster][frame-graph][ren38][gpu]")
+{
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto raster_p = g::create_dx12_raster_context();
+    REQUIRE(raster_p != nullptr);
+    auto& raster = *raster_p;
+
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    kir::KGraph           vg(&alloc);
+    kir::KEntry           ve;
+    crd::gputest::build_triangle_z_vs(vg, ve, 0.5);
+    kir::KGraph rg2(&alloc);
+    kir::KEntry rfe;
+    crd::gputest::build_triangle_fs(rg2, rfe); // red
+    kir::KGraph gg(&alloc);
+    kir::KEntry gfe;
+    crd::gputest::build_solid_fs(gg, gfe, 0.0, 1.0, 0.0); // the GREEN probe — only it can paint green
+    auto vs   = gctx->create_program(vg, ve);
+    auto fsr  = gctx->create_program(rg2, rfe);
+    auto fsg  = gctx->create_program(gg, gfe);
+    if (vs == nullptr || fsr == nullptr || fsg == nullptr) { SKIP("shader compile unavailable"); }
+    auto red   = raster.create_raster_program(*vs, *fsr);
+    auto green = raster.create_raster_program(*vs, *fsg);
+    REQUIRE(red != nullptr);
+    REQUIRE(green != nullptr);
+
+    const auto           run = [&](bool depth_write) {
+        auto sb = raster.create_storage_buffer(16U);
+        REQUIRE(sb != nullptr);
+        auto dst = raster.create_color_depth_target(64U, 64U);
+        REQUIRE(dst != nullptr);
+        g::PassRasterState st{};
+        st.depth_write = depth_write;
+        raster.set_pass_state(st);
+        raster.draw_storage_depth(*dst, *red, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 1.0F,
+                                  g::DepthCompare::LessEqual, *sb, 3U);
+        raster.set_pass_state(g::PassRasterState{});
+        // The GREEN probe re-draws the same triangle with compare NOT-EQUAL to its own depth: it can only pass
+        // where the first draw did NOT store 0.5 — i.e. exactly when depth_write was declared off.
+        raster.draw_storage_depth_load(*dst, *green, g::DepthCompare::NotEqual, *sb, 3U);
+        return dst->read_pixel(32U, 32U) & 0xFFFFFFU;
+    };
+    const crd::u32 wrote = run(true);
+    const crd::u32 kept  = run(false);
+    UNSCOPED_INFO("write_on=" << wrote << " write_off=" << kept);
+    CHECK((wrote & 0xFFU) > 200U);        // write ON: stored == probe z, NotEqual fails, RED survives
+    CHECK(((kept >> 8U) & 0xFFU) > 200U); // write OFF: depth still clear, probe passes, GREEN wins
+}
+
+TEST_CASE("REN-38 STATE GATE: DX12: a declared DEPTH BIAS moves what the depth buffer stores",
+          "[dx12][raster][frame-graph][ren38][gpu]")
+{
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto raster_p = g::create_dx12_raster_context();
+    REQUIRE(raster_p != nullptr);
+    auto& raster = *raster_p;
+
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    kir::KGraph           vg(&alloc);
+    kir::KEntry           ve;
+    crd::gputest::build_triangle_z_vs(vg, ve, 0.5); // z = 0.5: the exponent where a device-unit bias is usable
+    kir::KGraph rg2(&alloc);
+    kir::KEntry rfe;
+    crd::gputest::build_triangle_fs(rg2, rfe);
+    kir::KGraph gg(&alloc);
+    kir::KEntry gfe;
+    crd::gputest::build_solid_fs(gg, gfe, 0.0, 1.0, 0.0);
+    auto vs  = gctx->create_program(vg, ve);
+    auto fsr = gctx->create_program(rg2, rfe);
+    auto fsg = gctx->create_program(gg, gfe);
+    if (vs == nullptr || fsr == nullptr || fsg == nullptr) { SKIP("shader compile unavailable"); }
+    auto red   = raster.create_raster_program(*vs, *fsr);
+    auto green = raster.create_raster_program(*vs, *fsg);
+    REQUIRE(red != nullptr);
+    REQUIRE(green != nullptr);
+
+    const auto           run = [&](float bias) {
+        auto sb = raster.create_storage_buffer(16U);
+        REQUIRE(sb != nullptr);
+        auto dst = raster.create_color_depth_target(64U, 64U);
+        REQUIRE(dst != nullptr);
+        g::PassRasterState st{};
+        st.depth_bias = bias;
+        raster.set_pass_state(st);
+        raster.draw_storage_depth(*dst, *red, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 1.0F,
+                                  g::DepthCompare::LessEqual, *sb, 3U);
+        raster.set_pass_state(g::PassRasterState{});
+        // The probe passes NOT-EQUAL only where the stored depth is not the unbiased 0.5 — i.e. exactly when
+        // the bias actually moved what the first draw stored.
+        raster.draw_storage_depth_load(*dst, *green, g::DepthCompare::NotEqual, *sb, 3U);
+        return dst->read_pixel(32U, 32U) & 0xFFFFFFU;
+    };
+    const crd::u32 unbiased = run(0.0F);
+    const crd::u32 biased   = run(16777216.0F); // 2^24 device units at exponent(0.5) — an unmissable shift
+    UNSCOPED_INFO("unbiased=" << unbiased << " biased=" << biased);
+    CHECK((unbiased & 0xFFU) > 200U);       // no bias: stored == 0.5, probe fails, RED survives
+    CHECK(((biased >> 8U) & 0xFFU) > 200U); // biased: stored != 0.5, probe passes, GREEN wins
+}
+
+// ── ⭐⭐ REN-38 RT GATES (DX12): the AUTHORED RT PIPELINE traces, and the ANY-HIT joins its hit group. ────────
+// ⛔ The A16 DX12 half (state object · SBT · DispatchRays) had never been RUN by a device gate — it was proven
+// by HLSL-lowering compile only, the exact "written, compiled, never run" shape the A8 DX12 scar describes.
+// This gate is therefore double duty: the first real DispatchRays proof on this backend, plus the any-hit.
+
+namespace
+{
+constexpr const char* kRtAnyHitGraphDx = R"(
+schema = 1
+name   = "crd://frame/ren38-rt-anyhit-dx12"
+
+[[resource]]
+name = "scene_tlas"
+kind = "acceleration_structure"
+
+[[resource]]
+name = "hits"
+kind = "external_buffer"
+
+[[pass]]
+name        = "trace"
+kind        = "raytrace.pipeline"
+raygen      = "crd://rt/raygen"
+miss        = "crd://rt/miss"
+closest_hit = "crd://rt/chit"
+any_hit     = "crd://rt/anyhit"
+reads       = ["scene_tlas"]
+writes      = ["hits"]
+params      = { groups_x = 4, groups_y = 1 }
+
+[[pass]]
+name        = "blank"
+kind        = "clear"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+)";
+
+class RtAnyHitHostDx final : public crd::framecook::IFrameGraphHost
+{
+public:
+    RtAnyHitHostDx(g::IRasterTarget* out) : m_out(out) {}
+    g::IRasterTarget*  output() override { return m_out; }
+    g::IRasterProgram* program(crd::containers::StringView) override { return nullptr; }
+    bool draw_list(crd::containers::StringView, crd::framecook::DrawListBinding&) override { return false; }
+    g::IGpuProgram* kernel(crd::containers::StringView id) override
+    {
+        for (crd::u32 i = 0; i < m_n; ++i)
+        {
+            if (id == crd::containers::StringView(m_names[i])) { return m_kernels[i]; }
+        }
+        return nullptr;
+    }
+    g::IAccelerationStructure* acceleration_structure(crd::containers::StringView) override { return m_as; }
+    g::IStorageBuffer*         storage_buffer(crd::containers::StringView) override { return m_buf; }
+    void set_buffer(g::IStorageBuffer* b) { m_buf = b; }
+    void set_accel(g::IAccelerationStructure* a) { m_as = a; }
+    void add_kernel(const char* id, g::IGpuProgram* k) { m_names[m_n] = id; m_kernels[m_n] = k; ++m_n; }
+
+private:
+    g::IRasterTarget*          m_out = nullptr;
+    g::IStorageBuffer*         m_buf = nullptr;
+    g::IAccelerationStructure* m_as  = nullptr;
+    const char*                m_names[4]{};
+    g::IGpuProgram*            m_kernels[4]{};
+    crd::u32                   m_n = 0U;
+};
+} // namespace
+
+TEST_CASE("REN-38 RT GATE (DX12): the authored pipeline traces and the ANY-HIT can IGNORE every hit",
+          "[dx12][raster][frame-graph][ren38][gpu]")
+{
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto raster = g::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+    if (!raster->supports_rt_pipeline()) { SKIP("adapter has no DXR ray-tracing pipeline"); }
+
+    g::Dx12RayTracingContext rt;
+    if (!rt.valid()) { SKIP("no DXR-capable device"); }
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+
+    const float tri[9] = {-1.0F, -1.0F, 1.0F, 1.0F, -1.0F, 1.0F, 0.0F, 1.0F, 1.0F};
+    // ⛔ NON-OPAQUE geometry, or the gate proves nothing: traversal skips the any-hit for OPAQUE geometry.
+    const float identity[12] = {1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F};
+    auto scene = rt.build_scene_instanced(tri, 1U, identity, 1U, /*opaque=*/false);
+    REQUIRE(scene != nullptr);
+
+    kir::KGraph rgg(&alloc);
+    kir::KEntry rge;
+    kir::KGraph msg(&alloc);
+    kir::KEntry mse;
+    kir::KGraph chg(&alloc);
+    kir::KEntry che;
+    crd::gputest::build_rt_pipeline_trio(rgg, rge, msg, mse, chg, che);
+    auto rgp = gctx->create_program(rgg, rge);
+    if (rgp == nullptr) { SKIP("dxc/DXIL RT-stage compile unavailable"); }
+    auto msp = gctx->create_program(msg, mse);
+    auto chp = gctx->create_program(chg, che);
+    REQUIRE(msp != nullptr);
+    REQUIRE(chp != nullptr);
+
+    const auto run = [&](double cutoff, float out[4]) {
+        kir::KGraph ahg(&alloc);
+        kir::KEntry ahe;
+        crd::gputest::build_rt_anyhit(ahg, ahe, cutoff);
+        auto ahp = gctx->create_program(ahg, ahe);
+        REQUIRE(ahp != nullptr);
+
+        constexpr crd::u32 ray_count = 4U;
+        auto               hits  = raster->create_storage_buffer(ray_count * 4U);
+        REQUIRE(hits != nullptr);
+        const float sentinel[ray_count] = {-7.0F, -7.0F, -7.0F, -7.0F};
+        REQUIRE(raster->upload_storage(*hits, 0U, static_cast<const void*>(sentinel), sizeof(sentinel)));
+        auto dst = raster->create_color_target(64U, 64U);
+        REQUIRE(dst != nullptr);
+
+        crd::framecook::FrameGraphDesc desc(&alloc);
+        crd::containers::String        where(&alloc);
+        REQUIRE(crd::framecook::parse_frame_toml(crd::containers::StringView(kRtAnyHitGraphDx), desc, &where)
+                == crd::framecook::FrameCookError::Ok);
+        RtAnyHitHostDx host(dst.get());
+        host.add_kernel("crd://rt/raygen", rgp.get());
+        host.add_kernel("crd://rt/miss", msp.get());
+        host.add_kernel("crd://rt/chit", chp.get());
+        host.add_kernel("crd://rt/anyhit", ahp.get());
+        host.set_buffer(hits.get());
+        host.set_accel(scene.get());
+
+        auto fgraph = raster->create_frame_graph();
+        REQUIRE(fgraph != nullptr);
+        crd::framecook::FrameRecorder rec(&alloc);
+        rec.begin_frame();
+        crd::framecook::FrameExecError err = crd::framecook::FrameExecError::Ok;
+        REQUIRE(rec.record(desc, *fgraph, *raster, host, &err, &where));
+        CHECK(err == crd::framecook::FrameExecError::Ok);
+        REQUIRE(fgraph->build());
+        fgraph->execute();
+        REQUIRE(raster->download_storage(*hits));
+        for (crd::u32 i = 0; i < ray_count; ++i)
+        {
+            const crd::u32 bits = hits->read_u32(i);
+            std::memcpy(&out[i], &bits, sizeof(float));
+        }
+    };
+
+    // cutoff 0: the any-hit is PRESENT and ignores nothing — rays 0-1 hit (+1), rays 2-3 miss (-1). This is
+    // ALSO the first device proof that the DX12 state object + SBT + DispatchRays chain works at all.
+    float keep[4] = {};
+    run(0.0, keep);
+    UNSCOPED_INFO("anyhit keep: " << keep[0] << " " << keep[1] << " " << keep[2] << " " << keep[3]);
+    CHECK(keep[0] > 0.5F);
+    CHECK(keep[1] > 0.5F);
+    CHECK(keep[2] < -0.5F);
+    CHECK(keep[3] < -0.5F);
+
+    // cutoff 2: EVERY candidate is ignored, so the rays that hit above must now MISS.
+    float ignore_all[4] = {};
+    run(2.0, ignore_all);
+    UNSCOPED_INFO("anyhit ignore: " << ignore_all[0] << " " << ignore_all[1] << " " << ignore_all[2] << " "
+                                    << ignore_all[3]);
+    CHECK(ignore_all[0] < -0.5F);
+    CHECK(ignore_all[1] < -0.5F);
+    CHECK(ignore_all[2] < -0.5F);
+    CHECK(ignore_all[3] < -0.5F);
+}
+
+// ── ⭐⭐ REN-38-F11 GATE (DX12): the STENCIL ATTACHMENT — the Vulkan gate, joint for joint, on D3D12. ─────────
+// The DX12-specific claims: the PSO's DSVFormat comes from the TARGET (D24_UNORM_S8_UINT — a D32 PSO on a
+// stencil target is a device error), the depth clear carries D3D12_CLEAR_FLAG_STENCIL, and OMSetStencilRef
+// installs the authored reference.
+namespace
+{
+constexpr const char* kStencilGraphDx = R"(
+schema = 1
+name   = "crd://frame/f11-stencil-dx"
+
+[[draw_list]]
+name = "mask_geo"
+
+[[draw_list]]
+name = "cover_geo"
+
+[[pass]]
+name            = "mask"
+kind            = "raster.geometry"
+draw_list       = "mask_geo"
+writes          = ["@output"]
+clear_color     = [0.0, 0.0, 0.0, 1.0]
+stencil         = true
+stencil_compare = "Always"
+stencil_ref     = 1
+stencil_pass    = "replace"
+
+[[pass]]
+name            = "cover"
+kind            = "raster.geometry"
+draw_list       = "cover_geo"
+writes          = ["@output"]
+load            = true
+depth           = "Always"
+)";
+
+constexpr const char* kStencilCoverOnDx = R"(stencil         = true
+stencil_compare = "Equal"
+stencil_ref     = 1
+)";
+
+class StencilHostDx final : public crd::framecook::IFrameGraphHost
+{
+public:
+    StencilHostDx(g::IRasterTarget* out, g::IRasterProgram* mask, g::IRasterProgram* cover, g::IStorageBuffer* sb)
+        : m_out(out), m_mask(mask), m_cover(cover), m_sb(sb)
+    {
+    }
+    [[nodiscard]] g::IRasterTarget*  output() override { return m_out; }
+    [[nodiscard]] g::IRasterProgram* program(crd::containers::StringView) override { return nullptr; }
+    [[nodiscard]] bool draw_list(crd::containers::StringView name, crd::framecook::DrawListBinding& out) override
+    {
+        const bool mask = name == crd::containers::StringView("mask_geo");
+        out.items[0]    = crd::framecook::DrawItem{m_sb, mask ? m_mask : m_cover, mask ? 3U : 6U, nullptr};
+        out.resolved    = 1U;
+        return true;
+    }
+
+private:
+    g::IRasterTarget*  m_out   = nullptr;
+    g::IRasterProgram* m_mask  = nullptr;
+    g::IRasterProgram* m_cover = nullptr;
+    g::IStorageBuffer* m_sb    = nullptr;
+};
+} // namespace
+
+TEST_CASE("REN-38-F11 GATE (DX12): an authored stencil MASK-then-TEST pass pair draws through a D24S8 target",
+          "[dx12][raster][frame-graph][ren38][gpu]")
+{
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto raster_p = g::create_dx12_raster_context();
+    REQUIRE(raster_p != nullptr);
+    auto& raster = *raster_p;
+
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    kir::KGraph mvg(&alloc);
+    kir::KEntry mve;
+    crd::gputest::build_triangle_vs(mvg, mve);
+    kir::KGraph mfg(&alloc);
+    kir::KEntry mfe;
+    crd::gputest::build_triangle_fs(mfg, mfe);
+    kir::KGraph cvg(&alloc);
+    kir::KEntry cve;
+    crd::gputest::build_visbuffer_vs(cvg, cve);
+    kir::KGraph cfg2(&alloc);
+    kir::KEntry cfe;
+    crd::gputest::build_solid_fs(cfg2, cfe, 0.0, 1.0, 0.0);
+    auto mvs = gctx->create_program(mvg, mve);
+    auto mfs = gctx->create_program(mfg, mfe);
+    auto cvs = gctx->create_program(cvg, cve);
+    auto cfs = gctx->create_program(cfg2, cfe);
+    if (mvs == nullptr || mfs == nullptr || cvs == nullptr || cfs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+    auto mask_prog  = raster.create_raster_program(*mvs, *mfs);
+    auto cover_prog = raster.create_raster_program(*cvs, *cfs);
+    REQUIRE(mask_prog != nullptr);
+    REQUIRE(cover_prog != nullptr);
+
+    const auto run = [&](bool stencil_on, crd::u32& centre, crd::u32& corner) {
+        auto dst = raster.create_color_depth_stencil_target(64U, 64U);
+        REQUIRE(dst != nullptr); // the F11 verb — a D24S8 target
+        auto sb = raster.create_storage_buffer(16U);
+        REQUIRE(sb != nullptr);
+        crd::containers::String toml(&alloc);
+        toml.append(kStencilGraphDx);
+        if (stencil_on) { toml.append(kStencilCoverOnDx); }
+        crd::framecook::FrameGraphDesc desc(&alloc);
+        crd::containers::String        where(&alloc);
+        REQUIRE(crd::framecook::parse_frame_toml(crd::containers::StringView(toml.c_str(), toml.size()), desc, &where)
+                == crd::framecook::FrameCookError::Ok);
+        StencilHostDx                  host(dst.get(), mask_prog.get(), cover_prog.get(), sb.get());
+        crd::framecook::FrameExecError err = crd::framecook::FrameExecError::Ok;
+        REQUIRE(crd::framecook::execute_frame_graph(desc, raster, host, &err, &where));
+        CHECK(err == crd::framecook::FrameExecError::Ok);
+        centre = dst->read_pixel(32U, 32U) & 0xFFFFFFU;
+        corner = dst->read_pixel(2U, 2U) & 0xFFFFFFU;
+    };
+
+    crd::u32 c_on  = 0;
+    crd::u32 k_on  = 0;
+    crd::u32 c_off = 0;
+    crd::u32 k_off = 0;
+    run(true, c_on, k_on);
+    run(false, c_off, k_off);
+    UNSCOPED_INFO("stencil: centre=" << c_on << " corner=" << k_on
+                                     << " | control: centre=" << c_off << " corner=" << k_off);
+    const auto green = [](crd::u32 px) { return ((px >> 8U) & 0xFFU) > 200U && (px & 0xFFU) < 50U; };
+    CHECK(green(c_on));
+    CHECK((k_on & 0xFFFFFFU) == 0U);
+    CHECK(green(c_off));
+    CHECK(green(k_off));
+}
+
+// ── ⭐⭐ REN-38-F13 GATE: INTERSECTION + CALLABLE — the last two CKIR stages reach the device, AUTHORED. ──────
+// The hit group goes PROCEDURAL: the BLAS holds only an AABB, and the authored `.crdv` intersection stage's
+// sphere quadratic IS the geometry — a hit can only exist if that stage ran. The raygen routes its traced
+// payload THROUGH the SBT's callable table (`use_callable`), whose authored transform (×2 + 1) is what lands in
+// the output — so the numbers prove BOTH stages dispatched: hit payload 1.0 → 3.0 with the callable, 1.0
+// without. Five stages, five declarations, zero C++ shader builders.
+namespace
+{
+constexpr const char* kF13GraphDx = R"(
+schema = 1
+name   = "crd://frame/f13-full"
+
+[[resource]]
+name = "scene_tlas"
+kind = "acceleration_structure"
+
+[[resource]]
+name = "hits"
+kind = "external_buffer"
+
+[[pass]]
+name         = "trace"
+kind         = "raytrace.pipeline"
+raygen       = "crd://f13/raygen"
+miss         = "crd://f13/miss"
+closest_hit  = "crd://f13/chit"
+intersection = "crd://f13/isect"
+callable     = "crd://f13/call"
+reads        = ["scene_tlas"]
+writes       = ["hits"]
+params       = { groups_x = 4, groups_y = 1 }
+
+[[pass]]
+name        = "blank"
+kind        = "clear"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+)";
+
+// the SAME graph without the callable — the control (payload lands untransformed)
+constexpr const char* kF13GraphDxNoCall = R"(
+schema = 1
+name   = "crd://frame/f13-nocall"
+
+[[resource]]
+name = "scene_tlas"
+kind = "acceleration_structure"
+
+[[resource]]
+name = "hits"
+kind = "external_buffer"
+
+[[pass]]
+name         = "trace"
+kind         = "raytrace.pipeline"
+raygen       = "crd://f13/raygen_plain"
+miss         = "crd://f13/miss"
+closest_hit  = "crd://f13/chit"
+intersection = "crd://f13/isect"
+reads        = ["scene_tlas"]
+writes       = ["hits"]
+params       = { groups_x = 4, groups_y = 1 }
+
+[[pass]]
+name        = "blank"
+kind        = "clear"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+)";
+
+class F13HostDx final : public crd::framecook::IFrameGraphHost
+{
+public:
+    F13HostDx(g::IRasterTarget* out) : m_out(out) {}
+    [[nodiscard]] g::IRasterTarget*  output() override { return m_out; }
+    [[nodiscard]] g::IRasterProgram* program(crd::containers::StringView) override { return nullptr; }
+    [[nodiscard]] bool draw_list(crd::containers::StringView, crd::framecook::DrawListBinding&) override { return false; }
+    [[nodiscard]] g::IGpuProgram* kernel(crd::containers::StringView id) override
+    {
+        for (crd::u32 i = 0; i < m_n; ++i)
+        {
+            if (id == crd::containers::StringView(m_names[i])) { return m_kernels[i]; }
+        }
+        return nullptr;
+    }
+    [[nodiscard]] g::IAccelerationStructure* acceleration_structure(crd::containers::StringView) override { return m_as; }
+    [[nodiscard]] g::IStorageBuffer*         storage_buffer(crd::containers::StringView) override { return m_buf; }
+    void set_accel(g::IAccelerationStructure* a) { m_as = a; }
+    void set_buffer(g::IStorageBuffer* b) { m_buf = b; }
+    void add_kernel(const char* id, g::IGpuProgram* k)
+    {
+        m_names[m_n]   = id;
+        m_kernels[m_n] = k;
+        ++m_n;
+    }
+
+private:
+    g::IRasterTarget*          m_out = nullptr;
+    g::IStorageBuffer*         m_buf = nullptr;
+    g::IAccelerationStructure* m_as  = nullptr;
+    const char*                m_names[6]{};
+    g::IGpuProgram*            m_kernels[6]{};
+    crd::u32                        m_n = 0U;
+};
+} // namespace
+
+TEST_CASE("REN-38-F13 GATE (DX12): authored INTERSECTION + CALLABLE stages trace a procedural sphere through the SBT",
+          "[dx12][raster][frame-graph][ren38][gpu]")
+{
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto raster_p = g::create_dx12_raster_context();
+    REQUIRE(raster_p != nullptr);
+    auto& raster = *raster_p;
+    if (!raster.supports_rt_pipeline()) { SKIP("adapter has no DXR ray-tracing pipeline"); }
+
+    g::Dx12RayTracingContext rt;
+    if (!rt.valid()) { SKIP("no DXR-capable device"); }
+    crd::memory::TlsfAllocator alloc(32U << 20U);
+
+    // ONE degenerate curve segment at the origin, radius 0.5 → one AABB [-0.5-eps, +0.5+eps]^3. The AABB only
+    // BOUNDS the shape; the authored intersection stage's sphere is the geometry.
+    const float seg[8] = {0.0F, 0.0F, 0.0F, 0.5F, 0.0F, 0.0F, 0.0F, 0.5F};
+    auto        scene  = rt.build_scene_curves(seg, 1U);
+    REQUIRE(scene != nullptr);
+
+    // the five authored stages (+ the plain-raygen control), cooked from declarations
+    const auto cook_stage = [&](const char* stage_line, const char* extra) -> std::unique_ptr<g::IGpuProgram> {
+        crd::containers::String t(&alloc);
+        t.append("schema = 1\nname = \"crd://vertex/f13\"\n");
+        t.append(stage_line);
+        t.append("\n[rt]\npayload_words = 2\nas_binding = 0\nout_binding = 1\n");
+        t.append(extra);
+        crd::vertcook::VertexProgramDesc d(&alloc);
+        crd::containers::String               where(&alloc);
+        REQUIRE(crd::vertcook::parse_vertex_toml(crd::containers::StringView(t.c_str(), t.size()), d, &where)
+                == crd::vertcook::VertexCookError::Ok);
+        kir::KGraph g2(&alloc);
+        kir::KEntry e;
+        REQUIRE(crd::vertcook::cook_vertex_program(d, g2, e));
+        return gctx->create_program(g2, e);
+    };
+    auto rg  = cook_stage("stage = \"raygen\"\n", "use_callable = true\n");
+    auto rgp = cook_stage("stage = \"raygen\"\n", "");
+    auto ms  = cook_stage("stage = \"miss\"\n", "");
+    auto ch  = cook_stage("stage = \"closest_hit\"\n", "");
+    auto is  = cook_stage("stage = \"intersection\"\n", "sphere_radius = 0.5\n");
+    auto cl  = cook_stage("stage = \"callable\"\n", "callable_scale = 2.0\ncallable_bias = 1.0\n");
+    if (rg == nullptr || rgp == nullptr || ms == nullptr || ch == nullptr || is == nullptr || cl == nullptr)
+    {
+        SKIP("RT-stage compile unavailable");
+    }
+
+    
+    const auto           run = [&](const char* graph_toml, bool with_call, float out[4]) {
+        constexpr crd::u32 ray_count = 4U;
+        auto          hits      = raster.create_storage_buffer(ray_count * 4U);
+        REQUIRE(hits != nullptr);
+        const float sentinel[ray_count] = {-7.0F, -7.0F, -7.0F, -7.0F};
+        REQUIRE(raster.upload_storage(*hits, 0U, static_cast<const void*>(sentinel), sizeof(sentinel)));
+        auto dst = raster.create_color_target(16U, 16U);
+        REQUIRE(dst != nullptr);
+        crd::framecook::FrameGraphDesc desc(&alloc);
+        crd::containers::String        where(&alloc);
+        REQUIRE(crd::framecook::parse_frame_toml(crd::containers::StringView(graph_toml), desc, &where)
+                == crd::framecook::FrameCookError::Ok);
+        F13HostDx host(dst.get());
+        host.add_kernel("crd://f13/raygen", rg.get());
+        host.add_kernel("crd://f13/raygen_plain", rgp.get());
+        host.add_kernel("crd://f13/miss", ms.get());
+        host.add_kernel("crd://f13/chit", ch.get());
+        host.add_kernel("crd://f13/isect", is.get());
+        if (with_call) { host.add_kernel("crd://f13/call", cl.get()); }
+        host.set_accel(scene.get());
+        host.set_buffer(hits.get());
+        crd::framecook::FrameExecError err = crd::framecook::FrameExecError::Ok;
+        REQUIRE(crd::framecook::execute_frame_graph(desc, raster, host, &err, &where));
+        CHECK(err == crd::framecook::FrameExecError::Ok);
+        REQUIRE(raster.download_storage(*hits));
+        for (crd::u32 i = 0; i < ray_count; ++i)
+        {
+            const crd::u32 bits = hits->read_u32(i);
+            std::memcpy(&out[i], &bits, 4U);
+        }
+    };
+
+    // every ray starts at the origin INSIDE the sphere and exits through it: the intersection stage reports the
+    // far root, the closest-hit writes payload 1.0, and the callable transforms it to 1.0*2 + 1 = 3.0
+    float with_call[4]{};
+    float no_call[4]{};
+    run(kF13GraphDx, true, with_call);
+    run(kF13GraphDxNoCall, false, no_call);
+    UNSCOPED_INFO("with callable: " << with_call[0] << " " << with_call[1] << " " << with_call[2] << " "
+                                    << with_call[3]);
+    UNSCOPED_INFO("without:      " << no_call[0] << " " << no_call[1] << " " << no_call[2] << " " << no_call[3]);
+    for (crd::u32 i = 0; i < 4U; ++i)
+    {
+        CHECK(with_call[i] == 3.0F); // hit (intersection ran) AND transformed (callable ran)
+        CHECK(no_call[i] == 1.0F);   // hit, untransformed — the dichotomy pins the callable specifically
+    }
+}
+
+// ── ⭐⭐ REN-38-F6+ GATE (DX12): STORAGE-BOUND TESSELLATION — real control points, PULLED. ───────────────────
+// The DX12 twin of the Vulkan gate: an AUTHORED pull `.crdv` fetches the patch's control points from the draw
+// item's storage buffer through `draw_tess_storage`, and re-uploading smaller corners darkens the probe pixel —
+// the BUFFER, not a procedural table, drives the tessellated patch.
+namespace
+{
+constexpr const char* kTessPullGraphDx = R"(
+schema = 1
+name   = "crd://frame/f6-tess-pull"
+
+[[draw_list]]
+name = "patches"
+
+[[pass]]
+name        = "displace"
+kind        = "raster.tess"
+shader      = "crd://shaders/tess_pull"
+draw_list   = "patches"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+)";
+
+constexpr const char* kTessPullVsDx = R"(
+schema = 1
+name   = "crd://vertex/tess_pull"
+
+[header]
+index_count  = 0
+index_off    = 2
+vertex_off   = 3
+instance_off = 4
+visible_off  = 5
+view_proj    = 6
+
+[vertex]
+stride = 3
+
+[[attribute]]
+name   = "position"
+offset = 0
+comps  = 3
+kind   = "position"
+
+[instance]
+stride    = 20
+transform = 0
+)";
+
+class TessPullHostDx final : public crd::framecook::IFrameGraphHost
+{
+public:
+    TessPullHostDx(g::IRasterTarget* out, g::IRasterProgram* prog, g::IStorageBuffer* sb)
+        : m_out(out), m_prog(prog), m_sb(sb)
+    {
+    }
+    [[nodiscard]] g::IRasterTarget*  output() override { return m_out; }
+    [[nodiscard]] g::IRasterProgram* program(crd::containers::StringView) override { return m_prog; }
+    [[nodiscard]] bool draw_list(crd::containers::StringView, crd::framecook::DrawListBinding& out) override
+    {
+        out.items[0] = crd::framecook::DrawItem{m_sb, m_prog, 1U, nullptr}; // ONE quad patch, pulled
+        out.resolved = 1U;
+        return true;
+    }
+
+private:
+    g::IRasterTarget*  m_out  = nullptr;
+    g::IRasterProgram* m_prog = nullptr;
+    g::IStorageBuffer* m_sb   = nullptr;
+};
+
+// the pull buffer: header words + indices + 4 corner vertices at (+-h, +-h, 0) + identity instance + slot list
+void fill_tess_pull_buffer_dx(crd::containers::Array<crd::u32>& w, float h)
+{
+    w.clear();
+    w.resize(140U);
+    for (crd::usize i = 0; i < w.size(); ++i) { w[i] = 0U; }
+    const auto fbits = [](float f) { crd::u32 u = 0; std::memcpy(&u, &f, 4U); return u; };
+    w[0] = 4U;   // index COUNT (per instance)
+    w[2] = 32U;  // indices at word 32
+    w[3] = 36U;  // vertices at word 36
+    w[4] = 100U; // instance record at word 100
+    w[5] = 120U; // visible slot list at word 120
+    for (crd::u32 c = 0; c < 4U; ++c) { w[6U + c * 4U + c] = fbits(1.0F); } // identity view_proj (column-major)
+    for (crd::u32 i = 0; i < 4U; ++i) { w[32U + i] = i; }                    // identity index list
+    const float cx[4] = {-h, h, h, -h};
+    const float cy[4] = {-h, -h, h, h};
+    for (crd::u32 i = 0; i < 4U; ++i)
+    {
+        w[36U + i * 3U + 0U] = fbits(cx[i]);
+        w[36U + i * 3U + 1U] = fbits(cy[i]);
+        w[36U + i * 3U + 2U] = fbits(0.0F);
+    }
+    for (crd::u32 c = 0; c < 4U; ++c) { w[100U + c * 4U + c] = fbits(1.0F); } // identity instance matrix
+    w[120] = 0U;                                                              // visible slot 0
+}
+} // namespace
+
+TEST_CASE("REN-38-F6+ GATE (DX12): storage-bound tessellation PULLS its control points from the draw item's buffer",
+          "[dx12][raster][frame-graph][ren38][gpu]")
+{
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto rasterp = g::create_dx12_raster_context();
+    REQUIRE(rasterp != nullptr);
+    auto& raster = *rasterp;
+
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    const auto                 cook_vc = [&](const char* toml) -> std::unique_ptr<g::IGpuProgram> {
+        crd::vertcook::VertexProgramDesc d(&alloc);
+        crd::containers::String          where(&alloc);
+        REQUIRE(crd::vertcook::parse_vertex_toml(crd::containers::StringView(toml), d, &where)
+                == crd::vertcook::VertexCookError::Ok);
+        crd::kir::KGraph g2(&alloc);
+        crd::kir::KEntry e;
+        REQUIRE(crd::vertcook::cook_vertex_program(d, g2, e));
+        return gctx->create_program(g2, e);
+    };
+    auto vs = cook_vc(kTessPullVsDx);
+    auto hs = cook_vc("stage = \"tess_control\"\nschema = 1\nname = \"h\"\n\n[tess]\npatch_size = 4\ninner = "
+                      "8.0\nouter = 8.0\n");
+    auto ds = cook_vc("stage = \"tess_eval\"\nschema = 1\nname = \"d\"\ndisplace = \"expand\"\n\n[vertex]\nstride "
+                      "= 3\n\n[[attribute]]\nname = \"position\"\noffset = 0\ncomps = 3\nkind = "
+                      "\"position\"\n\n[tess]\npatch_size = 4\ninner = 8.0\nouter = 8.0\n\n[[node]]\nname = "
+                      "\"expand\"\nop = \"multiply\"\ninputs = [\"@position\", [1.3, 1.3, 1.0]]\n");
+    crd::kir::KGraph fg2(&alloc);
+    crd::kir::KEntry fe;
+    crd::gputest::build_solid_fs(fg2, fe, 1.0, 0.3, 0.1);
+    auto fs = gctx->create_program(fg2, fe);
+    if (vs == nullptr || hs == nullptr || ds == nullptr || fs == nullptr) { SKIP("shader compile unavailable"); }
+    auto prog = raster.create_tess_program(*vs, *hs, *ds, *fs);
+    REQUIRE(prog != nullptr);
+
+    const auto run = [&](float h) {
+        auto dst = raster.create_color_target(128U, 128U);
+        REQUIRE(dst != nullptr);
+        crd::containers::Array<crd::u32> words(&alloc);
+        fill_tess_pull_buffer_dx(words, h);
+        auto sb = raster.create_storage_buffer(static_cast<crd::u32>(words.size() * 4U));
+        REQUIRE(sb != nullptr);
+        REQUIRE(raster.upload_storage(*sb, 0U, words.data(), static_cast<crd::u32>(words.size() * 4U)));
+        crd::framecook::FrameGraphDesc desc(&alloc);
+        crd::containers::String        where(&alloc);
+        REQUIRE(crd::framecook::parse_frame_toml(crd::containers::StringView(kTessPullGraphDx), desc, &where)
+                == crd::framecook::FrameCookError::Ok);
+        TessPullHostDx                 host(dst.get(), prog.get(), sb.get());
+        crd::framecook::FrameExecError err = crd::framecook::FrameExecError::Ok;
+        REQUIRE(crd::framecook::execute_frame_graph(desc, raster, host, &err, &where));
+        CHECK(err == crd::framecook::FrameExecError::Ok);
+        return dst->read_pixel(108U, 64U) & 0xFFFFFFU; // NDC ~0.69: inside h=0.6 x1.3, far outside h=0.3 x1.3
+    };
+
+    const crd::u32 big   = run(0.6F);
+    const crd::u32 small = run(0.3F);
+    UNSCOPED_INFO("big=" << big << " small=" << small);
+    CHECK(big != 0U);
+    CHECK(small == 0U);
+
+    // ── REN-38-F6+ (#26): the DOMAIN itself reads the buffer — `hdr:22` scales the expansion, so the tese
+    // emitters' sbuf lowering is proven by PIXELS, not by a compile: scale 1.3 reaches the probe, 0.55 does not.
+    constexpr const char* hdr_ds_toml = R"(
+schema   = 1
+name     = "d2"
+stage    = "tess_eval"
+displace = "expand"
+
+[vertex]
+stride = 3
+
+[[attribute]]
+name   = "position"
+offset = 0
+comps  = 3
+kind   = "position"
+
+[tess]
+patch_size = 4
+inner      = 8.0
+outer      = 8.0
+
+[[node]]
+name   = "expand"
+op     = "multiply"
+inputs = ["@position", "hdr:22"]
+)";
+    auto ds2 = cook_vc(hdr_ds_toml);
+    REQUIRE(ds2 != nullptr);
+    auto prog2 = raster.create_tess_program(*vs, *hs, *ds2, *fs);
+    REQUIRE(prog2 != nullptr);
+    const auto run_hdr = [&](float scale) {
+        auto dst = raster.create_color_target(128U, 128U);
+        REQUIRE(dst != nullptr);
+        crd::containers::Array<crd::u32> words(&alloc);
+        fill_tess_pull_buffer_dx(words, 0.6F);
+        std::memcpy(&words[22], &scale, 4U); // the domain's scale word
+        auto sb = raster.create_storage_buffer(static_cast<crd::u32>(words.size() * 4U));
+        REQUIRE(sb != nullptr);
+        REQUIRE(raster.upload_storage(*sb, 0U, words.data(), static_cast<crd::u32>(words.size() * 4U)));
+        crd::framecook::FrameGraphDesc desc(&alloc);
+        crd::containers::String        where(&alloc);
+        REQUIRE(crd::framecook::parse_frame_toml(crd::containers::StringView(kTessPullGraphDx), desc, &where)
+                == crd::framecook::FrameCookError::Ok);
+        TessPullHostDx              host(dst.get(), prog2.get(), sb.get());
+        crd::framecook::FrameExecError err = crd::framecook::FrameExecError::Ok;
+        REQUIRE(crd::framecook::execute_frame_graph(desc, raster, host, &err, &where));
+        CHECK(err == crd::framecook::FrameExecError::Ok);
+        return dst->read_pixel(108U, 64U) & 0xFFFFFFU;
+    };
+    const crd::u32 hdr_big  = run_hdr(1.3F);
+    const crd::u32 hdr_damp = run_hdr(0.55F);
+    UNSCOPED_INFO("hdr_big=" << hdr_big << " hdr_damp=" << hdr_damp);
+    CHECK(hdr_big != 0U);  // 0.6 x 1.3 = 0.78 covers the probe...
+    CHECK(hdr_damp == 0U); // ...0.6 x 0.55 = 0.33 does not — the WORD drove the domain
+}
+
+// ── ⭐⭐ REN-38-F6+ GATE: MESHLET FETCH — the mesh stage PULLS real geometry, and the TASK count is GPU-driven.
+// Two dichotomies over ONE authored buffer layout (the same scene pull contract the VS uses):
+//   1. a `fetch = true` mesh stage renders quads whose EXTENT tracks the buffer's vertex records — re-upload
+//      smaller corners and the probe pixel goes dark;
+//   2. a task stage with `emit_header` dispatches as many mesh workgroups as the BUFFER says — word 130 = 1
+//      renders only instance 0's quad, word 130 = 2 lights instance 1's quad too.
+namespace
+{
+constexpr const char* kMeshFetchGraphDx = R"(
+schema = 1
+name   = "crd://frame/f6-mesh-fetch"
+
+[[draw_list]]
+name = "meshlets"
+
+[[pass]]
+name        = "fetch"
+kind        = "raster.mesh"
+shader      = "crd://shaders/mesh_fetch"
+draw_list   = "meshlets"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+)";
+
+constexpr const char* kMeshFetchVsDx = R"(
+schema = 1
+name   = "crd://vertex/meshfetch"
+stage  = "mesh"
+
+[vertex]
+stride = 3
+
+[[attribute]]
+name   = "position"
+offset = 0
+comps  = 3
+kind   = "position"
+
+[instance]
+stride    = 20
+transform = 0
+
+[mesh]
+max_vertices   = 6
+max_primitives = 2
+workgroup      = 6
+fetch          = true
+)";
+
+constexpr const char* kTaskHdrTomlDx = R"(
+schema = 1
+name   = "crd://vertex/taskhdr"
+stage  = "task"
+
+[mesh]
+workgroup = 1
+
+[task]
+emit        = 1
+emit_header = 130
+)";
+
+class MeshFetchHostDx final : public crd::framecook::IFrameGraphHost
+{
+public:
+    MeshFetchHostDx(g::IRasterTarget* out, g::IRasterProgram* prog, g::IStorageBuffer* sb, crd::u32 groups)
+        : m_out(out), m_prog(prog), m_sb(sb), m_groups(groups)
+    {
+    }
+    [[nodiscard]] g::IRasterTarget*  output() override { return m_out; }
+    [[nodiscard]] g::IRasterProgram* program(crd::containers::StringView) override { return m_prog; }
+    [[nodiscard]] bool draw_list(crd::containers::StringView, crd::framecook::DrawListBinding& out) override
+    {
+        out.items[0] = crd::framecook::DrawItem{m_sb, m_prog, m_groups, nullptr};
+        out.resolved = 1U;
+        return true;
+    }
+
+private:
+    g::IRasterTarget*  m_out    = nullptr;
+    g::IRasterProgram* m_prog   = nullptr;
+    g::IStorageBuffer* m_sb     = nullptr;
+    crd::u32                m_groups = 1U;
+};
+
+// the pull buffer: 6 indices (two triangles = one quad), 4 corner records (+-h), TWO instances translated to
+// x = -0.5 / x = +0.5, identity view_proj, and the task's amplification count at word 130
+void fill_mesh_fetch_buffer_dx(crd::containers::Array<crd::u32>& w, float h, crd::u32 task_count)
+{
+    w.clear();
+    w.resize(140U);
+    for (crd::usize i = 0; i < w.size(); ++i) { w[i] = 0U; }
+    const auto fbits = [](float f) { crd::u32 u = 0; std::memcpy(&u, &f, 4U); return u; };
+    w[0] = 6U;   // index COUNT (per instance)
+    w[2] = 32U;  // indices at word 32
+    w[3] = 40U;  // vertices at word 40
+    w[4] = 60U;  // instance records at word 60 (stride 20)
+    w[5] = 110U; // visible slot list at word 110
+    for (crd::u32 c = 0; c < 4U; ++c) { w[6U + c * 4U + c] = fbits(1.0F); } // identity view_proj (column-major)
+    const crd::u32 idx[6] = {0U, 1U, 2U, 0U, 2U, 3U};
+    for (crd::u32 i = 0; i < 6U; ++i) { w[32U + i] = idx[i]; }
+    const float cx[4] = {-h, h, h, -h};
+    const float cy[4] = {-h, -h, h, h};
+    for (crd::u32 i = 0; i < 4U; ++i)
+    {
+        w[40U + i * 3U + 0U] = fbits(cx[i]);
+        w[40U + i * 3U + 1U] = fbits(cy[i]);
+        w[40U + i * 3U + 2U] = fbits(0.0F);
+    }
+    for (crd::u32 inst = 0; inst < 2U; ++inst) // identity + a translation: instance 0 left, instance 1 right
+    {
+        const crd::u32 base = 60U + inst * 20U;
+        for (crd::u32 c = 0; c < 4U; ++c) { w[base + c * 4U + c] = fbits(1.0F); }
+        w[base + 12U] = fbits(inst == 0U ? -0.5F : 0.5F); // column-major translation x
+    }
+    w[110] = 0U;
+    w[111] = 1U;
+    w[130] = task_count; // the GPU-driven amplification count
+}
+} // namespace
+
+TEST_CASE("REN-38-F6+ GATE (DX12): a FETCH mesh stage renders the buffer's geometry and emit_header drives the dispatch",
+          "[dx12][raster][frame-graph][ren38][gpu]")
+{
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto rasterp = g::create_dx12_raster_context();
+    REQUIRE(rasterp != nullptr);
+    auto& raster = *rasterp;
+
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    const auto            cook_vc = [&](const char* toml) -> std::unique_ptr<g::IGpuProgram> {
+        crd::vertcook::VertexProgramDesc d(&alloc);
+        crd::containers::String               where(&alloc);
+        REQUIRE(crd::vertcook::parse_vertex_toml(crd::containers::StringView(toml), d, &where)
+                == crd::vertcook::VertexCookError::Ok);
+        crd::kir::KGraph g2(&alloc);
+        crd::kir::KEntry e;
+        REQUIRE(crd::vertcook::cook_vertex_program(d, g2, e));
+        return gctx->create_program(g2, e);
+    };
+    auto ms = cook_vc(kMeshFetchVsDx);
+    // the task-paired variant: `payload = true` declares the AS->MS payload contract the D3D12 PSO validator
+    // enforces — an MS with no payload input cannot pair with an AS whose DispatchMesh always passes one
+    crd::containers::String fetch_pl(&alloc);
+    fetch_pl.append(kMeshFetchVsDx);
+    fetch_pl.append("payload        = true\n");
+    auto msp = cook_vc(fetch_pl.c_str());
+    auto tk  = cook_vc(kTaskHdrTomlDx);
+    crd::kir::KGraph fg2(&alloc);
+    crd::kir::KEntry fe;
+    crd::gputest::build_solid_fs(fg2, fe, 1.0, 0.3, 0.1);
+    auto fs = gctx->create_program(fg2, fe);
+    if (ms == nullptr || msp == nullptr || tk == nullptr || fs == nullptr) { SKIP("mesh shader compile unavailable"); }
+    auto mesh_prog = raster.create_mesh_program(*ms, *fs);
+    auto task_prog = raster.create_task_mesh_program(*tk, *msp, *fs);
+    if (mesh_prog == nullptr || task_prog == nullptr)
+    {
+        WARN("mesh_prog null=" << (mesh_prog == nullptr) << " task_prog null=" << (task_prog == nullptr));
+        SKIP("no mesh-shader support on this device");
+    }
+
+    // probe pixels sit 0.2 NDC RIGHT of each quad centre (-0.5 / +0.5): inside an h = 0.35 quad, outside an
+    // h = 0.05 one -- a centre probe would stay covered no matter how small the pulled corners became
+    const auto run = [&](g::IRasterProgram* prog, crd::u32 groups, float h, crd::u32 task_count, crd::u32* left, crd::u32* right) {
+        auto dst = raster.create_color_target(128U, 128U);
+        REQUIRE(dst != nullptr);
+        crd::containers::Array<crd::u32> words(&alloc);
+        fill_mesh_fetch_buffer_dx(words, h, task_count);
+        auto sb = raster.create_storage_buffer(static_cast<crd::u32>(words.size() * 4U));
+        REQUIRE(sb != nullptr);
+        REQUIRE(raster.upload_storage(*sb, 0U, words.data(), static_cast<crd::u32>(words.size() * 4U)));
+        crd::framecook::FrameGraphDesc desc(&alloc);
+        crd::containers::String        where(&alloc);
+        REQUIRE(crd::framecook::parse_frame_toml(crd::containers::StringView(kMeshFetchGraphDx), desc, &where)
+                == crd::framecook::FrameCookError::Ok);
+        MeshFetchHostDx             host(dst.get(), prog, sb.get(), groups);
+        crd::framecook::FrameExecError err = crd::framecook::FrameExecError::Ok;
+        REQUIRE(crd::framecook::execute_frame_graph(desc, raster, host, &err, &where));
+        CHECK(err == crd::framecook::FrameExecError::Ok);
+        *left  = dst->read_pixel(44U, 64U) & 0xFFFFFFU;  // NDC -0.3
+        *right = dst->read_pixel(108U, 64U) & 0xFFFFFFU; // NDC +0.7
+    };
+
+    // ── claim 1: the FETCH — quad extent tracks the buffer's vertex records ──
+    crd::u32 big_l = 0U;
+    crd::u32 big_r = 0U;
+    run(mesh_prog.get(), 2U, 0.35F, 2U, &big_l, &big_r);
+    crd::u32 small_l = 0U;
+    crd::u32 small_r = 0U;
+    run(mesh_prog.get(), 2U, 0.05F, 2U, &small_l, &small_r);
+    UNSCOPED_INFO("fetch big=(" << big_l << "," << big_r << ") small=(" << small_l << "," << small_r << ")");
+    CHECK(big_l != 0U);   // both instances' quads cover their probe pixels...
+    CHECK(big_r != 0U);
+    CHECK(small_l == 0U); // ...and shrink to nothing when the BUFFER's corners shrink — the geometry was PULLED
+    CHECK(small_r == 0U);
+
+    // ── claim 2: the GPU-driven COUNT — word 130 decides how many meshlets exist ──
+    crd::u32 one_l = 0U;
+    crd::u32 one_r = 0U;
+    run(task_prog.get(), 1U, 0.35F, 1U, &one_l, &one_r);
+    crd::u32 two_l = 0U;
+    crd::u32 two_r = 0U;
+    run(task_prog.get(), 1U, 0.35F, 2U, &two_l, &two_r);
+    UNSCOPED_INFO("task one=(" << one_l << "," << one_r << ") two=(" << two_l << "," << two_r << ")");
+    CHECK(one_l != 0U); // count 1: instance 0 only...
+    CHECK(one_r == 0U);
+    CHECK(two_l != 0U); // ...count 2: the buffer word ALONE lit the second quad
+    CHECK(two_r != 0U);
 }

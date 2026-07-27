@@ -1,0 +1,442 @@
+schema   = 1
+name     = "crd://vertex/draw_line"
+position = "node:clip"
+
+[header]
+view_proj = 0
+
+[expand]
+verts_per_instance = 6
+instance_words     = 9
+instance_off       = 32
+category_field     = 7
+category_mask_word = 18
+
+[[varying]]
+name       = "v_color"
+location   = 0
+interp     = "smooth"
+source     = ["node:col"]
+node_comps = [4]
+
+[[varying]]
+name       = "v_quad"
+location   = 1
+interp     = "smooth"
+source     = ["node:quadv"]
+node_comps = [2]
+
+[[node]]
+name   = "cxc"
+op     = "ifequal"
+inputs = ["@corner", 5.0, 1.0, 0.0]
+
+[[node]]
+name   = "cxb"
+op     = "ifequal"
+inputs = ["@corner", 4.0, 1.0, "cxc"]
+
+[[node]]
+name   = "cx"
+op     = "ifequal"
+inputs = ["@corner", 1.0, 1.0, "cxb"]
+
+[[node]]
+name   = "cyc"
+op     = "ifequal"
+inputs = ["@corner", 5.0, 1.0, -1.0]
+
+[[node]]
+name   = "cyb"
+op     = "ifequal"
+inputs = ["@corner", 3.0, 1.0, "cyc"]
+
+[[node]]
+name   = "cy"
+op     = "ifequal"
+inputs = ["@corner", 2.0, 1.0, "cyb"]
+
+[[node]]
+name   = "sp"
+op     = "combine3"
+inputs = ["field:0", "field:1", "field:2"]
+
+[[node]]
+name   = "ep"
+op     = "combine3"
+inputs = ["field:3", "field:4", "field:5"]
+
+[[node]]
+name   = "ca"
+op     = "view_proj"
+inputs = ["sp"]
+
+[[node]]
+name   = "cb"
+op     = "view_proj"
+inputs = ["ep"]
+
+[[node]]
+name   = "cax"
+op     = "extract"
+inputs = ["ca", 0]
+
+[[node]]
+name   = "cay"
+op     = "extract"
+inputs = ["ca", 1]
+
+[[node]]
+name   = "caz"
+op     = "extract"
+inputs = ["ca", 2]
+
+[[node]]
+name   = "caw"
+op     = "extract"
+inputs = ["ca", 3]
+
+[[node]]
+name   = "cbx"
+op     = "extract"
+inputs = ["cb", 0]
+
+[[node]]
+name   = "cby"
+op     = "extract"
+inputs = ["cb", 1]
+
+[[node]]
+name   = "cbz"
+op     = "extract"
+inputs = ["cb", 2]
+
+[[node]]
+name   = "cbw"
+op     = "extract"
+inputs = ["cb", 3]
+
+[[node]]
+name   = "hvx"
+op     = "multiply"
+inputs = ["hdr:16", 0.5]
+
+[[node]]
+name   = "hvy"
+op     = "multiply"
+inputs = ["hdr:17", 0.5]
+
+[[node]]
+name   = "ndax"
+op     = "divide"
+inputs = ["cax", "caw"]
+
+[[node]]
+name   = "ax"
+op     = "multiply"
+inputs = ["ndax", "hvx"]
+
+[[node]]
+name   = "nday"
+op     = "divide"
+inputs = ["cay", "caw"]
+
+[[node]]
+name   = "ay"
+op     = "multiply"
+inputs = ["nday", "hvy"]
+
+[[node]]
+name   = "ndbx"
+op     = "divide"
+inputs = ["cbx", "cbw"]
+
+[[node]]
+name   = "bx"
+op     = "multiply"
+inputs = ["ndbx", "hvx"]
+
+[[node]]
+name   = "ndby"
+op     = "divide"
+inputs = ["cby", "cbw"]
+
+[[node]]
+name   = "by"
+op     = "multiply"
+inputs = ["ndby", "hvy"]
+
+[[node]]
+name   = "dx0"
+op     = "subtract"
+inputs = ["bx", "ax"]
+
+[[node]]
+name   = "dy0"
+op     = "subtract"
+inputs = ["by", "ay"]
+
+[[node]]
+name   = "l2a"
+op     = "multiply"
+inputs = ["dx0", "dx0"]
+
+[[node]]
+name   = "l2b"
+op     = "multiply"
+inputs = ["dy0", "dy0"]
+
+[[node]]
+name   = "l2"
+op     = "add"
+inputs = ["l2a", "l2b"]
+
+[[node]]
+name   = "len0"
+op     = "sqrt"
+inputs = ["l2"]
+
+[[node]]
+name   = "len"
+op     = "ifgreater"
+inputs = [0.001, "len0", 1.0, "len0"]
+
+[[node]]
+name   = "dirx0"
+op     = "divide"
+inputs = ["dx0", "len"]
+
+[[node]]
+name   = "dirx"
+op     = "ifgreater"
+inputs = [0.001, "len0", 1.0, "dirx0"]
+
+[[node]]
+name   = "diry0"
+op     = "divide"
+inputs = ["dy0", "len"]
+
+[[node]]
+name   = "diry"
+op     = "ifgreater"
+inputs = [0.001, "len0", 0.0, "diry0"]
+
+[[node]]
+name   = "halfw"
+op     = "multiply"
+inputs = ["field:8", 0.5]
+
+[[node]]
+name   = "bmx"
+op     = "multiply"
+inputs = ["dx0", "cx"]
+
+[[node]]
+name   = "basex"
+op     = "add"
+inputs = ["ax", "bmx"]
+
+[[node]]
+name   = "bmy"
+op     = "multiply"
+inputs = ["dy0", "cx"]
+
+[[node]]
+name   = "basey"
+op     = "add"
+inputs = ["ay", "bmy"]
+
+[[node]]
+name   = "push"
+op     = "multiply"
+inputs = ["cy", "halfw"]
+
+[[node]]
+name   = "nx"
+op     = "multiply"
+inputs = ["diry", -1.0]
+
+[[node]]
+name   = "fxm"
+op     = "multiply"
+inputs = ["nx", "push"]
+
+[[node]]
+name   = "fx"
+op     = "add"
+inputs = ["basex", "fxm"]
+
+[[node]]
+name   = "fym"
+op     = "multiply"
+inputs = ["dirx", "push"]
+
+[[node]]
+name   = "fy"
+op     = "add"
+inputs = ["basey", "fym"]
+
+[[node]]
+name   = "fx2"
+op     = "multiply"
+inputs = ["fx", 2.0]
+
+[[node]]
+name   = "ndcx"
+op     = "divide"
+inputs = ["fx2", "hdr:16"]
+
+[[node]]
+name   = "fy2"
+op     = "multiply"
+inputs = ["fy", 2.0]
+
+[[node]]
+name   = "ndcy"
+op     = "divide"
+inputs = ["fy2", "hdr:17"]
+
+[[node]]
+name   = "dw"
+op     = "subtract"
+inputs = ["cbw", "caw"]
+
+[[node]]
+name   = "wmx"
+op     = "multiply"
+inputs = ["dw", "cx"]
+
+[[node]]
+name   = "w"
+op     = "add"
+inputs = ["caw", "wmx"]
+
+[[node]]
+name   = "za"
+op     = "divide"
+inputs = ["caz", "caw"]
+
+[[node]]
+name   = "zb"
+op     = "divide"
+inputs = ["cbz", "cbw"]
+
+[[node]]
+name   = "dz"
+op     = "subtract"
+inputs = ["zb", "za"]
+
+[[node]]
+name   = "zmx"
+op     = "multiply"
+inputs = ["dz", "cx"]
+
+[[node]]
+name   = "z"
+op     = "add"
+inputs = ["za", "zmx"]
+
+[[node]]
+name   = "pxw"
+op     = "multiply"
+inputs = ["ndcx", "w"]
+
+[[node]]
+name   = "pyw"
+op     = "multiply"
+inputs = ["ndcy", "w"]
+
+[[node]]
+name   = "pzw"
+op     = "multiply"
+inputs = ["z", "w"]
+
+[[node]]
+name   = "vis"
+op     = "multiply"
+inputs = ["@category", 1.0]
+
+[[node]]
+name   = "pxd"
+op     = "subtract"
+inputs = ["pxw", 2.0]
+
+[[node]]
+name   = "pxm"
+op     = "multiply"
+inputs = ["vis", "pxd"]
+
+[[node]]
+name   = "px"
+op     = "add"
+inputs = ["pxm", 2.0]
+
+[[node]]
+name   = "pyd"
+op     = "subtract"
+inputs = ["pyw", 2.0]
+
+[[node]]
+name   = "pym"
+op     = "multiply"
+inputs = ["vis", "pyd"]
+
+[[node]]
+name   = "py"
+op     = "add"
+inputs = ["pym", 2.0]
+
+[[node]]
+name   = "pzd"
+op     = "subtract"
+inputs = ["pzw", 2.0]
+
+[[node]]
+name   = "pzm"
+op     = "multiply"
+inputs = ["vis", "pzd"]
+
+[[node]]
+name   = "pz"
+op     = "add"
+inputs = ["pzm", 2.0]
+
+[[node]]
+name   = "pwd"
+op     = "subtract"
+inputs = ["w", 1.0]
+
+[[node]]
+name   = "pwm"
+op     = "multiply"
+inputs = ["vis", "pwd"]
+
+[[node]]
+name   = "pw"
+op     = "add"
+inputs = ["pwm", 1.0]
+
+[[node]]
+name   = "clip"
+op     = "combine4"
+inputs = ["px", "py", "pz", "pw"]
+
+[[node]]
+name   = "col"
+op     = "multiply"
+inputs = ["fieldc:6", [1.0, 1.0, 1.0, 1.0]]
+
+[[node]]
+name   = "hwm"
+op     = "maximum"
+inputs = ["halfw", 0.5]
+
+[[node]]
+name   = "fade"
+op     = "divide"
+inputs = [1.0, "hwm"]
+
+[[node]]
+name   = "quadv"
+op     = "combine2"
+inputs = ["cy", "fade"]

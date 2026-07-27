@@ -50,8 +50,10 @@ public:
 
     // Build one BLAS + a TLAS of `ninst` INSTANCES of it, each with a row-major 3×4 world transform (`transforms` = ninst×12
     // floats). The DXR twin of VulkanRayTracingContext::build_scene_instanced — instanced traversal, portable across backends.
+    // `opaque=false` builds NON-OPAQUE geometry so an any-hit shader is invoked (matches the Vulkan twin).
     [[nodiscard]] std::unique_ptr<Dx12RtScene>
-    build_scene_instanced(const float* vertices, crd::u32 ntris, const float* transforms, crd::u32 ninst);
+    build_scene_instanced(const float* vertices, crd::u32 ntris, const float* transforms, crd::u32 ninst,
+                          bool opaque = true);
 
     // B18-f: build a scene of HAIR STRANDS as PROCEDURAL geometry — the DXR twin of
     // VulkanRayTracingContext::build_scene_curves. Each segment becomes one AABB in the BLAS; the shader intersects the

@@ -166,6 +166,12 @@ public:
     {
         return nullptr;
     }
+
+    // ── ⭐ REN-38-B5: the EXTERNAL-TEXTURE seam. Appended at the END of the vtable (D135). ──
+    // A `kind = "external_texture"` resource resolves through this. Null ⇒ the pass FAILS by name
+    // (`UnresolvedResource`) — a UI pass that silently sampled nothing would render a transparent overlay, which
+    // looks exactly like "the UI is disabled".
+    [[nodiscard]] virtual crd::gpu::ITexture* texture(crd::containers::StringView /*name*/) { return nullptr; }
 };
 
 // ── WHY a graph failed. Reported, never swallowed. ───────────────────────────────────────────────────────────

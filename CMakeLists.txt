@@ -603,6 +603,9 @@ add_subdirectory(engine/kir-metal)  # v17-d; CKIR Metal backend (KirBackend over
 add_subdirectory(engine/frame-cook)   # REN-36 (D-007 row 139): the AUTHORABLE FRAME GRAPH — render passes,
                                       # pipelines and whole rendering architectures as cooked, API-agnostic assets
 add_subdirectory(engine/technique-cook) # REN-37 (D-007 row 140): the LIGHTING TECHNIQUE as an authored `.crdt`
+add_subdirectory(engine/material-cook)  # REN-38-C (D-007 row 141): the MATERIAL as an authored `.crdm`
+add_subdirectory(engine/vertex-cook)    # REN-38-D (D-007 row 141): the VERTEX PROGRAM as an authored `.crdv`
+add_subdirectory(engine/light-cook)     # REN-38-E (D-007 row 141): the LIGHTING VOCABULARY as an authored asset
                                       # asset + the BINDING CONTRACT verified against a frame-graph pass
 add_subdirectory(engine/shader-cook)  # D-007 D2; OFFLINE shader cook — CKIR graph -> .crdr bundle (IR + reflection + per-backend blobs); ADR-0104
 add_subdirectory(engine/hesap-opt)  # v7; OPTIMISATION (unconstrained + constrained) over Objective<T>; ADR-0090 (now consumes hesap-autodiff)

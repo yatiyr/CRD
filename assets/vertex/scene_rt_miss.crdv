@@ -1,0 +1,9 @@
+stage = "miss"
+schema = 1
+name   = "crd://vertex/scene_rt"
+
+[rt]
+payload_words = 2
+as_binding    = 0
+out_binding   = 1
+alpha_cutoff  = 0.35

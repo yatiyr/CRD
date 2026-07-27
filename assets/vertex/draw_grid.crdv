@@ -1,0 +1,168 @@
+schema   = 1
+name     = "crd://vertex/draw_grid"
+position = "node:clip"
+
+[header]
+view_proj = 0
+
+[expand]
+verts_per_instance = 6
+
+[[varying]]
+name       = "v_world"
+location   = 0
+interp     = "smooth"
+source     = ["node:wp"]
+node_comps = [3]
+
+[[varying]]
+name       = "v_camrel"
+location   = 1
+interp     = "smooth"
+source     = ["node:cr3"]
+node_comps = [3]
+
+[[varying]]
+name       = "v_cells"
+location   = 2
+interp     = "smooth"
+source     = ["node:cells"]
+node_comps = [2]
+
+[[varying]]
+name       = "v_colp"
+location   = 3
+interp     = "smooth"
+source     = ["node:colp"]
+node_comps = [4]
+
+[[varying]]
+name       = "v_cols"
+location   = 4
+interp     = "smooth"
+source     = ["node:cols"]
+node_comps = [4]
+
+[[varying]]
+name       = "v_colax"
+location   = 5
+interp     = "smooth"
+source     = ["node:colax"]
+node_comps = [4]
+
+[[varying]]
+name       = "v_colaz"
+location   = 6
+interp     = "smooth"
+source     = ["node:colaz"]
+node_comps = [4]
+
+[[node]]
+name   = "cxb"
+op     = "ifequal"
+inputs = ["@corner", 4.0, 1.0, -1.0]
+
+[[node]]
+name   = "cxa"
+op     = "ifequal"
+inputs = ["@corner", 2.0, 1.0, "cxb"]
+
+[[node]]
+name   = "cx"
+op     = "ifequal"
+inputs = ["@corner", 1.0, 1.0, "cxa"]
+
+[[node]]
+name   = "czb"
+op     = "ifequal"
+inputs = ["@corner", 5.0, 1.0, -1.0]
+
+[[node]]
+name   = "cza"
+op     = "ifequal"
+inputs = ["@corner", 4.0, 1.0, "czb"]
+
+[[node]]
+name   = "cz"
+op     = "ifequal"
+inputs = ["@corner", 2.0, 1.0, "cza"]
+
+[[node]]
+name   = "half"
+op     = "maximum"
+inputs = ["hdr:28", 1.0]
+
+[[node]]
+name   = "wxm"
+op     = "multiply"
+inputs = ["cx", "half"]
+
+[[node]]
+name   = "wx"
+op     = "add"
+inputs = ["hdr:20", "wxm"]
+
+[[node]]
+name   = "wzm"
+op     = "multiply"
+inputs = ["cz", "half"]
+
+[[node]]
+name   = "wz"
+op     = "add"
+inputs = ["hdr:22", "wzm"]
+
+[[node]]
+name   = "wy"
+op     = "multiply"
+inputs = ["hdr:23", 1.0]
+
+[[node]]
+name   = "wp"
+op     = "combine3"
+inputs = ["wx", "wy", "wz"]
+
+[[node]]
+name   = "clip"
+op     = "view_proj"
+inputs = ["wp"]
+
+[[node]]
+name   = "crx"
+op     = "subtract"
+inputs = ["wx", "hdr:20"]
+
+[[node]]
+name   = "crz"
+op     = "subtract"
+inputs = ["wz", "hdr:22"]
+
+[[node]]
+name   = "cr3"
+op     = "combine3"
+inputs = ["crx", "crz", "half"]
+
+[[node]]
+name   = "cells"
+op     = "combine2"
+inputs = ["hdr:26", "hdr:27"]
+
+[[node]]
+name   = "colp"
+op     = "multiply"
+inputs = ["hdrc:24", [1.0, 1.0, 1.0, 1.0]]
+
+[[node]]
+name   = "cols"
+op     = "multiply"
+inputs = ["hdrc:25", [1.0, 1.0, 1.0, 1.0]]
+
+[[node]]
+name   = "colax"
+op     = "multiply"
+inputs = ["hdrc:29", [1.0, 1.0, 1.0, 1.0]]
+
+[[node]]
+name   = "colaz"
+op     = "multiply"
+inputs = ["hdrc:30", [1.0, 1.0, 1.0, 1.0]]

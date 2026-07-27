@@ -6,11 +6,16 @@
 
 #include <crd/draw/renderer.hpp>
 
-#include <crd/draw/ckir_draw.hpp>
 #include <crd/draw/detail/gpu_types.hpp>
+#include <crd/draw/draw_assets.hpp> // REN-38-F7: the AUTHORED suite — ckir_draw.hpp (the C++ builders) is DELETED
 #include <crd/gpu/vulkan_context.hpp>
+#include <crd/kir/ckir_cook.hpp>
+#include <crd/kir/ckir_material.hpp>
+#include <crd/kir/ckir_technique.hpp>
 #include <crd/log/log.hpp>
+#include <crd/matcook/material_asset.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/vertexcook/vertex_asset.hpp>
 
 CRD_DEFINE_LOG_CHANNEL(g_log_draw, "Draw", crd::log::LogLevel::Info)
 
@@ -31,10 +36,17 @@ bool g_overlay_enabled = true;
 
 [[nodiscard]] crd::u32 draw_buffer_bytes(const InitConfig& cfg) noexcept
 {
-    const crd::u32 line_words = cfg.max_lines_per_frame * ckir::kLineInstanceWords;
-    const crd::u32 tri_words  = cfg.max_triangles_per_frame * ckir::kTriInstanceWords;
+    const crd::u32 line_words = cfg.max_lines_per_frame * kLineInstanceWords;
+    const crd::u32 tri_words  = cfg.max_triangles_per_frame * kTriInstanceWords;
     const crd::u32 inst_words = line_words > tri_words ? line_words : tri_words;
-    return (ckir::kHeaderWords + inst_words) * 4U;
+    return (kHeaderWords + inst_words) * 4U;
+}
+
+// The `MaterialTemplate` adapter for the authored draw materials (the scene renderer's exact pattern).
+int draw_material_surface(crd::kir::KGraph& g, int struct_id, const crd::kir::cook::SurfaceInputs& /*in*/,
+                          void* user)
+{
+    return crd::matcook::cook_material(*static_cast<const crd::matcook::MaterialDesc*>(user), g, struct_id);
 }
 } // namespace
 
@@ -52,20 +64,53 @@ bool init(crd::gpu::VulkanGpuContext& ctx, crd::gpu::IRasterContext& raster, con
         return false;
     }
 
-    // Build the six CKIR graphs + compile. A TLSF scratch feeds graph construction; the compiled programs own their
-    // device objects, so the graphs (and this allocator) die at scope end.
-    crd::memory::TlsfAllocator graph_alloc(8U << 20U);
-    const auto make = [&](void (*build_vs)(crd::kir::KGraph&, crd::kir::KEntry&),
-                          void (*build_fs)(crd::kir::KGraph&, crd::kir::KEntry&),
+    // ⭐⭐ REN-38-F7: cook the six programs FROM THE AUTHORED DECLARATIONS (`draw_assets.hpp` — the same texts
+    // ship under `assets/`, drift-gated). The 339-line C++ builder suite is DELETED; if these declarations could
+    // not express the draw shaders, that code would have had to stay. A TLSF scratch feeds cooking; the compiled
+    // programs own their device objects, so the graphs (and this allocator) die at scope end.
+    crd::memory::TlsfAllocator graph_alloc(16U << 20U);
+    const auto cook_vs_toml = [&](const char* toml, crd::kir::KGraph& g, crd::kir::KEntry& e) {
+        crd::vertcook::VertexProgramDesc d(&graph_alloc);
+        crd::containers::String          where(&graph_alloc);
+        return crd::vertcook::parse_vertex_toml(crd::containers::StringView(toml), d, &where)
+                   == crd::vertcook::VertexCookError::Ok
+               && crd::vertcook::cook_vertex_program(d, g, e);
+    };
+    // The FS: the authored material through the `unlit` technique with CONSTANT surface inputs, so the cooked
+    // graph reads exactly the varyings the material names (by location) and nothing else.
+    const auto cook_fs_toml = [&](const char* toml, crd::kir::KGraph& g, crd::kir::KEntry& e) {
+        namespace ck = crd::kir::cook;
+        namespace tq = crd::kir::technique;
+        crd::matcook::MaterialDesc d(&graph_alloc);
+        crd::containers::String    where(&graph_alloc);
+        if (crd::matcook::parse_material_toml(crd::containers::StringView(toml), d, &where)
+            != crd::matcook::MaterialCookError::Ok)
+        {
+            return false;
+        }
+        const auto sh = crd::kir::make_shape({1});
+        const auto k  = [&](double v) { return g.constant(v, sh, crd::kir::DType::F32); };
+        ck::SurfaceInputs in;
+        in.world_normal = g.vec3(k(0.0), k(0.0), k(1.0));
+        in.world_pos    = g.vec3(k(0.0), k(0.0), k(0.0));
+        in.view_dir     = g.vec3(k(0.0), k(0.0), k(1.0));
+        const ck::MaterialTemplate tmpl{&draw_material_surface, &d};
+        const ck::VariantOptions   opts{crd::kir::material::AlphaMode::Opaque, 0.5};
+        const tq::Technique        un = tq::unlit();
+        return tq::build_fs_for_pass(tmpl, un, ck::PassType::Forward, opts, in, g, e,
+                                     g.vec3(k(0.0), k(0.0), k(1.0)), g.vec3(k(1.0), k(1.0), k(1.0)), nullptr,
+                                     0, nullptr, 0);
+    };
+    const auto make = [&](const char* vs_toml, const char* fs_toml,
                           std::unique_ptr<crd::gpu::IGpuProgram>&    out_vs,
                           std::unique_ptr<crd::gpu::IGpuProgram>&    out_fs,
                           std::unique_ptr<crd::gpu::IRasterProgram>& out_prog) {
         crd::kir::KGraph vg(&graph_alloc);
         crd::kir::KEntry ve;
-        build_vs(vg, ve);
+        if (!cook_vs_toml(vs_toml, vg, ve)) { return false; }
         crd::kir::KGraph fg(&graph_alloc);
         crd::kir::KEntry fe;
-        build_fs(fg, fe);
+        if (!cook_fs_toml(fs_toml, fg, fe)) { return false; }
         out_vs = ctx.create_program(vg, ve);
         out_fs = ctx.create_program(fg, fe);
         if (out_vs == nullptr || out_fs == nullptr) { return false; }
@@ -73,11 +118,11 @@ bool init(crd::gpu::VulkanGpuContext& ctx, crd::gpu::IRasterContext& raster, con
         return out_prog != nullptr;
     };
 
-    if (!make(&ckir::build_line_vs, &ckir::build_line_fs, s.line_vs, s.line_fs, s.line_prog)
-        || !make(&ckir::build_tri_vs, &ckir::build_tri_fs, s.tri_vs, s.tri_fs, s.tri_prog)
-        || !make(&ckir::build_grid_vs, &ckir::build_grid_fs, s.grid_vs, s.grid_fs, s.grid_prog))
+    if (!make(kDrawLineVs, kDrawLineMat, s.line_vs, s.line_fs, s.line_prog)
+        || !make(kDrawTriVs, kDrawTriMat, s.tri_vs, s.tri_fs, s.tri_prog)
+        || !make(kDrawGridVs, kDrawGridMat, s.grid_vs, s.grid_fs, s.grid_prog))
     {
-        CRD_LOG_ERROR(g_log_draw, "draw::init: CKIR draw program compilation failed");
+        CRD_LOG_ERROR(g_log_draw, "draw::init: authored draw program cook/compile failed");
         shutdown();
         return false;
     }

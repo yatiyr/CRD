@@ -61,8 +61,8 @@ enum class FramePassKind : crd::u8
     // ⛔ `RayTrace` is an INLINE RAY QUERY dispatch, not a ray-tracing PIPELINE. The distinction is real and is
     // stated here rather than discovered: inline ray query (VK_KHR_ray_query / DXR-1.1 `RayQuery<>`) is an
     // ordinary compute dispatch with a TLAS descriptor, so it records into the frame's ONE submission like every
-    // other pass. A ray-tracing PIPELINE needs a shader binding table and `vkCmdTraceRays` / `DispatchRays`, and
-    // the DX12 side of that does not exist in this engine at all — see 38-A16, which is where it lands.
+    // other pass. A ray-tracing PIPELINE needs a shader binding table and `vkCmdTraceRays` / `DispatchRays` —
+    // that is `RayTracePipeline` below (38-A16, both backends; the DX12 state-object half was written for it).
     // ── ⭐ REN-38-A11 / A12. Appended at the END of the enum. ──
     // ⛔ `RasterVisbuffer` is not `RasterGeometry` with a different format: an R32_UINT target clears with a UINT
     // clear value, and writing the id through a FLOAT clear reinterprets its BIT PATTERN (id 1 becomes 1.4e-45),
@@ -129,6 +129,30 @@ enum class FrameResourceKind : crd::u8
     // a result anything outside the graph could read.
     ExternalBuffer,
     AccelerationStructure, // REN-38-B4: a BLAS/TLAS the host owns — named here, never created here
+    // ── ⭐ REN-38-B1: RESOURCES WHOSE VALUE IS THEIR HISTORY. ──
+    // A transient's memory is aliased and retired the instant its last reader finishes — correct for a G-buffer,
+    // fatal for anything TEMPORAL. TAA history, SSR/DDGI/ReSTIR reuse, auto-exposure and the REN-37.9 cached
+    // thumbnail all need the frame N-1 contents to still be there in frame N.
+    PersistentImage,
+    // ⛔ PING-PONG needs TWO images, and the read/write direction is what distinguishes them — so the asset needs
+    // NO new syntax for it: **a READ of a ping-pong resource resolves to the PREVIOUS frame's image and a WRITE
+    // resolves to THIS frame's**, and the pair swaps every frame. That IS what "history buffer" means, and it
+    // removes the classic one-frame-stale bug at the source: an author cannot hold the parity bit wrong because
+    // they never hold it. A `$prev`/`$curr` syntax would have given them the chance.
+    PingPongImage,
+    // ── ⭐ REN-38-B3 (the half I closed this row without): STRUCTURED and COUNTER buffers. ──
+    // ⛔ A STRUCTURED buffer is a stride and a count, not a byte size. It matters on DX12, where a UAV carries
+    // `StructureByteStride` and a mismatched stride reads every element at the wrong offset — an off-by-N that
+    // grows with the index, so element 0 looks right and element 1000 is nonsense. `size_bytes` alone cannot say
+    // it, and hard-coding 4 (as the UAV path did) makes every buffer an array of u32 whatever the shader thinks.
+    StructuredBuffer,
+    // ⛔ A COUNTER buffer is a structured buffer whose first 4 bytes are an ATOMIC COUNTER the graph ZEROES every
+    // frame. The zeroing is the whole point — see `IRasterContext::fill_buffer`.
+    CounterBuffer,
+    // ⭐ REN-38-B5: an APP-OWNED texture the graph only ever READS — a UI atlas, a video frame, a captured HDR, a
+    // baked LUT. ⛔ External like `@output` and the acceleration structure, and for the same reason: its contents
+    // and its update schedule belong to the application, not to the frame.
+    ExternalTexture,
 };
 
 struct FrameResourceDesc
@@ -143,6 +167,19 @@ struct FrameResourceDesc
     crd::u32                samples = 1U;
     bool                    sampled = false;
     bool                    storage = false;
+    // ── ⭐ REN-38-B2: SHAPE. Appended at the END. ──
+    crd::gpu::FgImageKind   kind_2d = crd::gpu::FgImageKind::Tex2D; // `dimension = "2d"|"3d"|"cube"|"cube_array"`
+    crd::u32                depth   = 1U;  // 3d only
+    crd::u32                mips    = 1U;  // the chain length; 0 ⇒ "full chain" is REJECTED, never guessed
+    // ── ⭐ REN-38-B3: a STRUCTURED buffer's shape. `size_bytes` is derived (stride × count) when both are given,
+    // so an author states elements — which is what they actually have — rather than doing the multiplication.
+    // ⭐ REN-38-B6: PIN this transient out of the aliaser. ⛔ The graph aliases by DECLARED lifetime; when a pass
+    // touches a resource it did not declare (a debug overlay, a tool capture) the derivation is right and the
+    // reality is not, and the symptom is another transient's pixels inside this one. An author who knows that
+    // needs a way to say so — the alternative is turning aliasing off globally, trading the whole memory win.
+    bool                    no_alias = false;
+    crd::u32                stride  = 0U;
+    crd::u32                count   = 0U;
     crd::u32                size_bytes = 0U; // buffers only
 
     explicit FrameResourceDesc(crd::memory::IAllocator* a) : name(a) {}
@@ -213,6 +250,15 @@ struct FramePassDesc
     crd::containers::String                       raygen;
     crd::containers::String                       miss;
     crd::containers::String                       closest_hit;
+    // ⭐ REN-38 audit (the full hit group): the OPTIONAL any-hit — what alpha-tested geometry needs in RT. The
+    // traversal calls it per candidate and it may IGNORE the hit, so a chain-link fence shadows as a fence
+    // rather than as a solid plate. Empty = no any-hit stage (the historical pipeline, byte-unchanged).
+    crd::containers::String                       any_hit;
+    // ⭐ REN-38-F13: the LAST two SBT roles. `intersection` makes the hit group PROCEDURAL (the BLAS AABBs only
+    // bound the shape — the authored math IS the geometry); `callable` joins the SBT's fourth table. Both
+    // optional; a NAMED one that does not resolve FAILS (the F12 any-hit rule).
+    crd::containers::String                       intersection;
+    crd::containers::String                       callable;
     // REN-37.2: the LIGHTING TECHNIQUE this pass shades with (a `.crdt` name — "standard_forward",
     // "forward_csm", "toon"). Empty ⇒ the engine's default. This is the field that makes the top rule reach the
     // FRAGMENT SHADER: swapping a technique is an asset edit, and the technique's declared PASS-frequency
@@ -242,13 +288,32 @@ struct FramePassDesc
     crd::gpu::ShadingRateCombiner                 rate_combiner = crd::gpu::ShadingRateCombiner::Keep;
     crd::gpu::ConservativeMode                    conservative = crd::gpu::ConservativeMode::Off;
     FrameQueue                                    queue        = FrameQueue::Graphics; // REN-38-A14
+    // ── ⭐ REN-38-B8: HOW this pass SAMPLES its reads. ──
+    // ⛔ Per PASS, not per binding, and that is a deliberate limit rather than an oversight: a pass samples its
+    // inputs one way (a post-process clamps, a material tiles), and per-binding samplers would mean the asset
+    // carries a sampler for every read whether it differs or not. When a technique genuinely needs two, it is two
+    // passes — which the graph already composes. Absent ⇒ the engine default, so every existing asset is
+    // byte-unchanged.
+    bool                                          has_sampler  = false;
+    crd::gpu::SamplerDesc                         sampler{};
     // REN-38-A6: how a `kind = "blit"` pass filters while it rescales. Ignored by every other kind.
     FrameBlitFilter                               filter = FrameBlitFilter::Linear;
+    // ── ⭐ REN-38 audit: the PASS-STATE vocabulary (depth-write · depth bias · face cull · stencil). ──
+    // Appended at the END; every default is the backends' historical hardwired behaviour, so every existing
+    // asset is byte-unchanged. Same attribute-not-kind reasoning as the A13 block above. The stencil REFERENCE
+    // riding the asset is deliberate: a portal/outline pass pair must agree on the marked value, and two
+    // passes agreeing through data they both declare is the whole point of authoring.
+    crd::gpu::PassRasterState                     state{};
+    // ── ⭐ REN-38-F11: `load = true` — this pass LOADS its target instead of clearing it. ──
+    // Appended at the END (blob v5). Without it, two raster passes stacked on ONE target re-cleared: the second
+    // pass's first draw wiped the first pass's colour, depth AND stencil — which made the whole stencil
+    // vocabulary un-authorable as a mask-then-test pass pair (the very thing stencil exists for).
+    bool                                          load_target = false;
     crd::containers::Array<FrameParam>            params;
 
     explicit FramePassDesc(crd::memory::IAllocator* a)
         : name(a), reads(a), writes(a), draw_list(a), view(a), shader(a), kernel(a), raygen(a), miss(a),
-          closest_hit(a), technique(a), blend(a), params(a)
+          closest_hit(a), any_hit(a), intersection(a), callable(a), technique(a), blend(a), params(a)
     {
     }
 };
@@ -331,6 +396,12 @@ struct FrameGraphDesc
     crd::containers::Array<FrameAnchorDesc>              anchors;
     crd::containers::Array<FrameInjectDesc>              injects;
 
+    // ⭐ REN-38-B6: a HARD ceiling on graph-owned transient memory, in BYTES. 0 = unbounded, so every existing
+    // asset is unchanged. ⛔ Checked AFTER aliasing (the budget is about what the frame COSTS, not what it would
+    // cost without the aliaser) and it FAILS the build rather than warning — the failure it prevents is an
+    // allocation that succeeds on the dev machine and OOMs on the target months later.
+    crd::u64                                 memory_budget_bytes = 0U;
+
     explicit FrameGraphDesc(crd::memory::IAllocator* a)
         : name(a), resources(a), draw_lists(a), passes(a), requires_caps(a), fallback(a), includes(a), anchors(a),
           injects(a)
@@ -366,6 +437,19 @@ enum class FrameCookError : crd::u8
     // REN-3.2: `layers` outside [1, kFgMaxImageLayers]. Rejected HERE, at cook time, so a cascade atlas that
     // the device could not create can never ship inside a pack — appended at the END of the enum.
     LayersOutOfRange,
+    // ── REN-38-B2. Appended at the END of the enum. ──
+    UnknownDimension,     // a `dimension` outside the closed set
+    CubeNeedsSquare,      // a cube face must be square — the hardware has no other shape for one
+    BadMipCount,          // `mips` is 0, or more levels than the extent can halve down to
+    VolumeNeedsDepth,     // `dimension = "3d"` with no `depth`
+    // ── REN-38-B1. Appended at the END of the enum. ──
+    PersistentNeedsSize,  // a persistent/ping-pong image sized only by `scale` — its key must be stable across frames
+    PingPongNeedsBothWays, // a ping-pong resource that is only read, or only written — the pair would never rotate
+    StructuredNeedsStride, // a structured/counter buffer with no `stride` — its elements have no size
+    StrideNotAligned,      // … or a stride that is not a multiple of 4 (both APIs require it)
+    ExternalTextureIsReadOnly, // a pass WRITES an external texture — the application owns its contents
+    UnknownSamplerFilter,      // a `filter`/`mip_filter` outside the closed set
+    UnknownSamplerAddress,     // an `address` outside the closed set
     // ── REN-37.6: COMPOSITION. Appended at the END of the enum (a renumbered error is a silently different
     // rejection in every log and every test). ──
     IncludeMissingName,   // an `[[include]]` with no `graph`, or no `as` namespace (two instances would collide)
@@ -404,7 +488,14 @@ enum class FrameCookError : crd::u8
     UnknownQueue,             // a `queue` that is not `graphics` or `async`
     AsyncQueueNeedsCompute,   // a raster pass asked for the async-compute queue — it cannot run there
     // ── REN-38-A16. Appended at the END of the enum. ──
-    RtPipelineNeedsThree      // a `raytrace.pipeline` pass must name raygen + miss + closest_hit
+    RtPipelineNeedsThree,     // a `raytrace.pipeline` pass must name raygen + miss + closest_hit
+    // ── REN-38 audit (pass-state vocabulary). Appended at the END of the enum. ──
+    UnknownFaceCull,          // a `face_cull` outside none/back/front
+    UnknownFrontFace,         // a `front_face` outside ccw/cw
+    UnknownStencilOp,         // a `stencil_*` op outside the closed eight
+    BadStencilValue,          // a stencil ref/mask outside 0..255 — truncation would mark one value, test another
+    // REN-38-F11 (appended)
+    LoadNeedsGeometry         // `load = true` on a kind without load draw verbs — it would silently clear
 };
 
 // A human-readable message for `err`, plus the offending name when there is one.

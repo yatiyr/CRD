@@ -135,7 +135,8 @@ std::unique_ptr<Dx12RtScene> Dx12RayTracingContext::build_scene(const float* ver
 }
 
 std::unique_ptr<Dx12RtScene> Dx12RayTracingContext::build_scene_instanced(const float* vertices, crd::u32 ntris,
-                                                                          const float* transforms, crd::u32 ninst)
+                                                                          const float* transforms, crd::u32 ninst,
+                                                                          bool opaque)
 {
     auto& impl = *m_impl;
     if (!impl.ok || ntris == 0 || ninst == 0) { return nullptr; }
@@ -155,7 +156,9 @@ std::unique_ptr<Dx12RtScene> Dx12RayTracingContext::build_scene_instanced(const 
     // ── BLAS from the triangle soup (indexless: 3 verts per triangle in order) ──
     D3D12_RAYTRACING_GEOMETRY_DESC geom{};
     geom.Type                                 = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
-    geom.Flags                                = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+    // REN-38 audit: `opaque=false` builds NON-opaque geometry so an ANY-HIT shader is invoked — traversal
+    // skips the any-hit stage entirely for OPAQUE geometry, which is the flag's whole meaning (the VK twin).
+    geom.Flags = opaque ? D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE : D3D12_RAYTRACING_GEOMETRY_FLAG_NONE;
     geom.Triangles.VertexBuffer.StartAddress  = vbuf->GetGPUVirtualAddress();
     geom.Triangles.VertexBuffer.StrideInBytes = 3U * sizeof(float);
     geom.Triangles.VertexCount                = nverts;

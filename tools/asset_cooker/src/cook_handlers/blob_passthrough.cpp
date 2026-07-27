@@ -42,10 +42,12 @@ CookResult blob_passthrough_handler(const CookContext& ctx)
 } // anonymous namespace
 
 // Forward declarations for other handler registration functions in this directory.
-void register_glsl_handler();
-void register_material_handler();
+// ⛔ REN-38-C4: `register_glsl_handler` / `register_material_handler` are GONE. They cooked the LEGACY
+// `.mat.toml` -> GLSL-file material (`assets/shaders/surface.vert`) — a SECOND material vocabulary that
+// rendered while `.crdm` merely cooked. One vocabulary, and it is the IR one.
 void register_texture_handler();
 void register_wave1_mesh_handler(); // GEO-1: .stl/.obj/.ply via crd-asset-io (our own parsers)
+void register_authored_program_handlers(); // REN-38: .crdm/.crdv/.crdl/.crdt/.frame.toml — VALIDATED at cook time
 void register_preset_handler();
 void register_profile_handler();
 void register_obek_handler();
@@ -55,8 +57,6 @@ void register_audio_handlers();        // GEO-10: .wav/.aiff/.flac → 'ABUF' ·
 void register_builtin_handlers()
 {
     register_cook_handler(".bin", blob_passthrough_handler, kBlobHandlerVersion);
-    register_glsl_handler();
-    register_material_handler();
     register_texture_handler();
     register_wave1_mesh_handler(); // GEO-1..5: OUR parsers own every mesh format (the legacy cgltf path is DELETED)
     register_preset_handler();
@@ -64,6 +64,7 @@ void register_builtin_handlers()
     register_obek_handler();
     register_otio_timeline_handler(); // GEO-9
     register_audio_handlers();        // GEO-10
+    register_authored_program_handlers(); // REN-38: the five authored-program vocabularies ride the pipeline
 }
 
 } // namespace crd::cooker

@@ -1,0 +1,41 @@
+schema   = 1
+name     = "crd://vertex/visbuffer_fullscreen"
+position = "node:clip"
+
+[expand]
+verts_per_instance = 6
+
+[[node]]
+name   = "x_b"
+op     = "ifequal"
+inputs = ["@corner", 4.0, 1.0, -1.0]
+
+[[node]]
+name   = "x_a"
+op     = "ifequal"
+inputs = ["@corner", 2.0, 1.0, "x_b"]
+
+[[node]]
+name   = "x"
+op     = "ifequal"
+inputs = ["@corner", 1.0, 1.0, "x_a"]
+
+[[node]]
+name   = "y_b"
+op     = "ifequal"
+inputs = ["@corner", 5.0, 1.0, -1.0]
+
+[[node]]
+name   = "y_a"
+op     = "ifequal"
+inputs = ["@corner", 4.0, 1.0, "y_b"]
+
+[[node]]
+name   = "y"
+op     = "ifequal"
+inputs = ["@corner", 2.0, 1.0, "y_a"]
+
+[[node]]
+name   = "clip"
+op     = "combine4"
+inputs = ["x", "y", 0.5, 1.0]

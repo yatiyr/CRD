@@ -157,6 +157,17 @@ TechniqueCookError parse_technique_toml(crd::containers::StringView toml_text, T
     if (!res) { return TechniqueCookError::ParseFailed; }
     const toml::table& root = res.table();
 
+    // ⛔ RESET THE OUTPUT FIRST — the scar every cooker parser carries (material/vertex/light fixed it first):
+    // parsing into a descriptor that already held a technique APPENDED to it, so a second asset's bindings and
+    // options joined the first's — `DuplicateBinding` naming the wrong thing when names overlapped, a silently
+    // merged technique when they did not. Any tool with a load button hits this on the normal path.
+    out.name.clear();
+    out.surface.clear();
+    out.body.clear();
+    out.body_kind = TechniqueBodyKind::Builtin;
+    out.bindings.clear();
+    out.options.clear();
+
     const auto sch = root["schema"].value<int64_t>();
     if (!sch || *sch != static_cast<int64_t>(kTechniqueSchemaVersion)) { return TechniqueCookError::BadSchema; }
     out.schema = kTechniqueSchemaVersion;
@@ -389,6 +400,14 @@ bool read_technique(crd::containers::ConstSpan<crd::u8> bytes, TechniqueDesc& ou
     Cursor c{bytes, 0, true};
     if (c.u32v() != kFourCC || !c.ok) { return false; }
     if (c.u32v() != kBlobVersion) { return false; }
+    // ⛔ RESET FIRST — the same load-button scar the TOML parser above carries: deserializing into a reused
+    // descriptor APPENDED the blob's bindings and options to whatever was already there.
+    out.name.clear();
+    out.surface.clear();
+    out.body.clear();
+    out.body_kind = TechniqueBodyKind::Builtin;
+    out.bindings.clear();
+    out.options.clear();
     out.schema = c.u32v();
     c.strv(out.name);
     c.strv(out.surface);

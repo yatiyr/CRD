@@ -3,7 +3,11 @@
 // table, structural-vs-incremental sync, and THE partial-re-upload gate — move ONE entity and exactly its chunk
 // run's bytes re-upload, nothing else. Plus the frustum helpers' truth table.
 
+#include <crd/framecook/frame_asset.hpp>
 #include <crd/gpu/raster_context.hpp>
+#include <crd/lightcook/lighting_asset.hpp>
+#include <crd/matcook/material_asset.hpp>
+#include <crd/vertexcook/vertex_asset.hpp>
 #include <crd/math/mat.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
@@ -17,6 +21,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstdlib> // std::getenv - the drift gate reads the ctest-provided asset root
 #include <cstring>
 
 using namespace crd;
@@ -220,7 +225,9 @@ struct Rig
         containers::String name("sr_pack_", &galloc());
         name.append(cube_id.to_string(&galloc()));
         name.append(".crdr");
-        pack_path = platform::fs::Path(containers::StringView(name.data(), name.size()));
+        // ⛔ In the OS temp dir, never a RELATIVE path — that resolves to wherever ctest was launched from,
+        // which on a dev box is the repo checkout, and the checkout grows artifact crops .gitignore then chases.
+        pack_path = platform::fs::temp_directory() / containers::StringView(name.data(), name.size());
         write_mesh_pack(pack_path, cube_id);
         resources::register_mesh_loader(&rm, nullptr);
         REQUIRE(rm.mount_manifest(pack_path.generic()).is_valid());
@@ -349,4 +356,127 @@ TEST_CASE("scene-render: frustum planes + AABB test -- in front passes, behind c
     CHECK(fbox.min.x <= at_origin.min.x);
     CHECK(fbox.max.x >= at_origin.max.x);
     CHECK(fbox.min.z <= at_origin.min.z);
+}
+
+// ── ⭐⭐ REN-38 audit THE DRIFT GATE: the SHIPPED assets and the BUILT-IN pack are ONE declaration. ───────────
+// The renderer's defaults are embedded text (no file IO on the init path) and the same declarations ship as
+// editable files under `assets/`. ⛔ Two copies of one declaration DRIFT — the two-vocabularies disease one
+// level down: an author edits `assets/vertex/scene.crdv`, nothing changes on screen, and the file quietly
+// stops being true. This gate parses BOTH sides and compares their CANONICAL EMITTED form — whitespace-blind,
+// comment-blind, meaning-exact — so a drift in either direction fails by NAME.
+//
+// `CRD_ASSETS_DIR` is set by ctest (the guard lives in ctest, like every cross-config guard); without it the
+// gate SKIPS rather than passing on nothing.
+TEST_CASE("REN-38 DRIFT GATE: every shipped authored asset matches the built-in pack, canonically",
+          "[scene-render][ren38]")
+{
+    const char* root = std::getenv("CRD_ASSETS_DIR");
+    if (root == nullptr || root[0] == '\0') { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
+    memory::TlsfAllocator alloc(16U << 20U, nullptr, "ren38-drift");
+
+    const auto read_shipped = [&](const char* rel, containers::String& out) {
+        containers::String p(&alloc);
+        p.append(root);
+        p.append("/");
+        p.append(rel);
+        return platform::fs::read_file_text(platform::fs::Path(containers::StringView(p.c_str(), p.size())), out);
+    };
+    const auto builtin = [&](const char* rel, containers::String& out) {
+        return scenerender::builtin_asset_text(rel, out);
+    };
+    const auto same = [&](const containers::String& a, const containers::String& b) {
+        return a.size() == b.size() && std::memcmp(a.c_str(), b.c_str(), a.size()) == 0;
+    };
+
+    // frame graphs: canonical form = the emitted TOML of the parsed declaration.
+    const auto check_frame = [&](const char* rel) {
+        INFO(rel);
+        containers::String shipped(&alloc);
+        containers::String embedded(&alloc);
+        REQUIRE(read_shipped(rel, shipped));
+        REQUIRE(builtin(rel, embedded));
+        framecook::FrameGraphDesc a(&alloc);
+        framecook::FrameGraphDesc b(&alloc);
+        containers::String        where(&alloc);
+        REQUIRE(framecook::parse_frame_toml(containers::StringView(shipped.c_str(), shipped.size()), a, &where)
+                == framecook::FrameCookError::Ok);
+        REQUIRE(framecook::parse_frame_toml(containers::StringView(embedded.c_str(), embedded.size()), b, &where)
+                == framecook::FrameCookError::Ok);
+        CHECK(same(framecook::emit_frame_toml(a, &alloc), framecook::emit_frame_toml(b, &alloc)));
+    };
+    check_frame("frame/forward_csm.frame.toml");
+    check_frame("frame/forward_basic.frame.toml");
+    // REN-38-F6: the advanced-family scene graphs
+    check_frame("frame/scene_tess.frame.toml");
+    check_frame("frame/scene_mesh.frame.toml");
+    check_frame("frame/scene_visbuffer.frame.toml");
+    check_frame("frame/scene_cull.frame.toml");
+    check_frame("frame/scene_rt.frame.toml");
+
+    const auto check_material = [&](const char* rel) {
+        INFO(rel);
+        containers::String shipped(&alloc);
+        containers::String embedded(&alloc);
+        REQUIRE(read_shipped(rel, shipped));
+        REQUIRE(builtin(rel, embedded));
+        matcook::MaterialDesc a(&alloc);
+        matcook::MaterialDesc b(&alloc);
+        containers::String    where(&alloc);
+        REQUIRE(matcook::parse_material_toml(containers::StringView(shipped.c_str(), shipped.size()), a, &where)
+                == matcook::MaterialCookError::Ok);
+        REQUIRE(matcook::parse_material_toml(containers::StringView(embedded.c_str(), embedded.size()), b, &where)
+                == matcook::MaterialCookError::Ok);
+        CHECK(same(matcook::emit_material_toml(a, &alloc), matcook::emit_material_toml(b, &alloc)));
+    };
+    check_material("material/scene.crdm");
+    check_material("material/scene_textured.crdm");
+
+    const auto check_vertex = [&](const char* rel) {
+        INFO(rel);
+        containers::String shipped(&alloc);
+        containers::String embedded(&alloc);
+        REQUIRE(read_shipped(rel, shipped));
+        REQUIRE(builtin(rel, embedded));
+        vertcook::VertexProgramDesc a(&alloc);
+        vertcook::VertexProgramDesc b(&alloc);
+        containers::String          where(&alloc);
+        REQUIRE(vertcook::parse_vertex_toml(containers::StringView(shipped.c_str(), shipped.size()), a, &where)
+                == vertcook::VertexCookError::Ok);
+        REQUIRE(vertcook::parse_vertex_toml(containers::StringView(embedded.c_str(), embedded.size()), b, &where)
+                == vertcook::VertexCookError::Ok);
+        CHECK(same(vertcook::emit_vertex_toml(a, &alloc), vertcook::emit_vertex_toml(b, &alloc)));
+    };
+    check_vertex("vertex/scene.crdv");
+    check_vertex("vertex/scene_skinned.crdv");
+    check_vertex("vertex/shadow.crdv");
+    // REN-38-F6: the advanced-stage declarations
+    check_vertex("vertex/tess_corners.crdv");
+    check_vertex("vertex/tess_hull.crdv");
+    check_vertex("vertex/tess_domain.crdv");
+    check_vertex("vertex/scene_meshlet.crdv");
+    check_vertex("vertex/scene_task.crdv");
+    check_vertex("vertex/visbuffer_fullscreen.crdv");
+    check_vertex("vertex/scene_cull.crdv");
+    check_vertex("vertex/scene_cull_mark.crdv");
+    check_vertex("vertex/scene_rt_raygen.crdv");
+    check_vertex("vertex/scene_rt_miss.crdv");
+    check_vertex("vertex/scene_rt_closest_hit.crdv");
+    check_vertex("vertex/scene_rt_any_hit.crdv");
+    check_material("material/flat.crdm");
+
+    {
+        INFO("lighting/scene_forward.crdl");
+        containers::String shipped(&alloc);
+        containers::String embedded(&alloc);
+        REQUIRE(read_shipped("lighting/scene_forward.crdl", shipped));
+        REQUIRE(builtin("lighting/scene_forward.crdl", embedded));
+        lightcook::LightingDesc a(&alloc);
+        lightcook::LightingDesc b(&alloc);
+        containers::String      where(&alloc);
+        REQUIRE(lightcook::parse_lighting_toml(containers::StringView(shipped.c_str(), shipped.size()), a, &where)
+                == lightcook::LightingCookError::Ok);
+        REQUIRE(lightcook::parse_lighting_toml(containers::StringView(embedded.c_str(), embedded.size()), b, &where)
+                == lightcook::LightingCookError::Ok);
+        CHECK(same(lightcook::emit_lighting_toml(a, &alloc), lightcook::emit_lighting_toml(b, &alloc)));
+    }
 }

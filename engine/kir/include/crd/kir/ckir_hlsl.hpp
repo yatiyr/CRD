@@ -550,7 +550,10 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
             case KStmtKind::TraceRayPipeline:
             case KStmtKind::PayloadStore:
             case KStmtKind::ReorderThread:
-            case KStmtKind::IgnoreHitIf: ok = false; ++i; break;
+            case KStmtKind::IgnoreHitIf:
+            // REN-38-F13: the RT-only statements have no KERNEL lowering — refuse loudly, never skip
+            case KStmtKind::ReportHit:
+            case KStmtKind::ExecuteCallable: ok = false; ++i; break;
             }
         }
     };
@@ -598,16 +601,31 @@ inline bool emit_rt_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory
 {
     using glsl_detail::app_uint;
     const KStage st = entry.stage;
-    if (st != KStage::RayGen && st != KStage::ClosestHit && st != KStage::Miss && st != KStage::AnyHit) { return false; }
+    // REN-38-F13: + INTERSECTION (procedural hit shapes) and CALLABLE (SBT subroutines)
+    if (st != KStage::RayGen && st != KStage::ClosestHit && st != KStage::Miss && st != KStage::AnyHit
+        && st != KStage::Intersection && st != KStage::Callable)
+    {
+        return false;
+    }
     const int                n = g.size();
     crd::containers::String& s = out.source;
     s.clear();
 
-    int payload_n = 1;
+    int payload_n  = 1;
+    int callable_n = 0; // REN-38-F13: components of the callable-data block (0 = none in this graph)
     for (int i = 0; i < n; ++i) { if (g.node(i).op == KOp::RayPayloadDecl) { payload_n = g.node(i).iidx > 0 ? g.node(i).iidx : 1; } }
+    for (int i = 0; i < n; ++i) { if (g.node(i).op == KOp::CallableDataDecl) { callable_n = g.node(i).iidx > 0 ? g.node(i).iidx : 1; } }
     s.append("struct RtPayload { ");
     for (int c = 0; c < payload_n; ++c) { s.append("float m"); app_uint(s, c); s.append("; "); }
     s.append("};\n");
+    if (callable_n > 0 || st == KStage::Callable)
+    {
+        s.append("struct CallData { ");
+        for (int c = 0; c < (callable_n > 0 ? callable_n : 1); ++c) { s.append("float m"); app_uint(s, c); s.append("; "); }
+        s.append("};\n");
+    }
+    // REN-38-F13: DXR ReportHit needs an ATTRIBUTES argument even when the hit carries none
+    if (st == KStage::Intersection) { s.append("struct RtAttr { float2 v; };\n"); }
     for (int i = 0; i < n; ++i)
     {
         const KNode& nd = g.node(i);
@@ -637,6 +655,11 @@ inline bool emit_rt_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory
             case KBuiltin::InstanceId:          // DXR exposes ONE instance id; both CKIR builtins map onto it
             case KBuiltin::InstanceCustomIndex: s.append("InstanceID()"); break;
             case KBuiltin::HitBary: s.append("attr.barycentrics"); break; // P4: DXR triangle barycentrics (float2)
+            // REN-38-F13: the object-space ray an intersection shader tests its analytic shape against
+            case KBuiltin::ObjectRayOrigin: s.append("ObjectRayOrigin()"); break;
+            case KBuiltin::ObjectRayDirection: s.append("ObjectRayDirection()"); break;
+            case KBuiltin::WorldRayOrigin: s.append("WorldRayOrigin()"); break;
+            case KBuiltin::WorldRayDirection: s.append("WorldRayDirection()"); break;
             default: s.append("0u"); break;
             }
             break;
@@ -658,7 +681,10 @@ inline bool emit_rt_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory
             }
             break;
         case KOp::Select: s.append("("); self(self, nd.c); s.append(" ? "); self(self, nd.a); s.append(" : "); self(self, nd.b); s.append(")"); break;
-        case KOp::PayloadLoad: s.append("pl.m"); app_uint(s, nd.iidx); break;
+        case KOp::PayloadLoad: // REN-38-F13: the target decl picks the block (payload vs callable data)
+            s.append(g.node(nd.a).op == KOp::CallableDataDecl ? "cd.m" : "pl.m");
+            app_uint(s, nd.iidx);
+            break;
         case KOp::BufferLoad: s.append("asfloat(buf"); app_uint(s, g.node(nd.a).iidx); s.append(".Load(("); self(self, nd.b); s.append(") * 4u))"); break;
         case KOp::Cast:
         {
@@ -683,6 +709,7 @@ inline bool emit_rt_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory
         case KOp::CmpNe: bin(" != "); break;
         case KOp::Max: s.append("max("); self(self, nd.a); s.append(", "); self(self, nd.b); s.append(")"); break;
         case KOp::Min: s.append("min("); self(self, nd.a); s.append(", "); self(self, nd.b); s.append(")"); break;
+        case KOp::Sqrt: s.append("sqrt("); self(self, nd.a); s.append(")"); break; // F13: the sphere discriminant
         default: s.append("0.0"); break;
         }
     };
@@ -690,13 +717,33 @@ inline bool emit_rt_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory
 
     if (st == KStage::RayGen) { s.append("[shader(\"raygeneration\")]\nvoid main() {\n  RtPayload pl;\n"); }
     else if (st == KStage::ClosestHit) { s.append("[shader(\"closesthit\")]\nvoid main(inout RtPayload pl, in BuiltInTriangleIntersectionAttributes attr) {\n"); }
+    // REN-38 audit: the ANY-HIT arm was MISSING — an any-hit entry fell into the miss branch below, emitted
+    // `[shader("miss")]` without the `attr` parameter its body reads, and DXC refused it. The emitter-lag scar
+    // in its RT-stage form: the GLSL emitter had the arm (P4 was Vulkan-proven) and this one silently lagged.
+    else if (st == KStage::AnyHit) { s.append("[shader(\"anyhit\")]\nvoid main(inout RtPayload pl, in BuiltInTriangleIntersectionAttributes attr) {\n"); }
+    // REN-38-F13: the last two stage kinds. An intersection shader has no payload; a callable sees its data
+    // block as the inout parameter (the caller's CallShader argument).
+    else if (st == KStage::Intersection) { s.append("[shader(\"intersection\")]\nvoid main() {\n"); }
+    else if (st == KStage::Callable) { s.append("[shader(\"callable\")]\nvoid main(inout CallData cd) {\n"); }
     else { s.append("[shader(\"miss\")]\nvoid main(inout RtPayload pl) {\n"); }
+    // the caller-side callable data block lives as a local (CallShader takes it inout)
+    if (callable_n > 0 && st != KStage::Callable) { s.append("  CallData cd = (CallData)0;\n"); }
 
+    // REN-38-F13: `If` bodies nest inside the flat statement range — track where each one closes.
+    int if_end[8];
+    int if_depth = 0;
     for (int i = 0; i < bn; ++i)
     {
+        while (if_depth > 0 && i == if_end[if_depth - 1]) { s.append("  }\n"); --if_depth; }
         const KStmt& stm = g.stmt(b0 + i);
         switch (stm.kind)
         {
+        case KStmtKind::If:
+            s.append("  if (");
+            vv(stm.value);
+            s.append(") {\n");
+            if (if_depth < 8) { if_end[if_depth++] = (stm.body_begin - b0) + stm.body_count; }
+            break;
         case KStmtKind::TraceRayPipeline:
         {
             const auto ex = [&](int k) { return g.stmt_ext_operand(stm, k); };
@@ -705,13 +752,23 @@ inline bool emit_rt_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory
             s.append("  TraceRay(as"); app_uint(s, g.node(stm.target).iidx); s.append(", RAY_FLAG_NONE, 0xFFu, 0u, 0u, 0u, ray, pl);\n");
             break;
         }
-        case KStmtKind::PayloadStore: s.append("  pl.m"); app_uint(s, stm.index); s.append(" = "); vv(stm.value); s.append(";\n"); break;
+        case KStmtKind::PayloadStore:
+            s.append(g.node(stm.target).op == KOp::CallableDataDecl ? "  cd.m" : "  pl.m");
+            app_uint(s, stm.index);
+            s.append(" = ");
+            vv(stm.value);
+            s.append(";\n");
+            break;
+        // REN-38-F13: the last two stages' verbs (the API validates t against [tmin, tmax] itself)
+        case KStmtKind::ReportHit: s.append("  { RtAttr a0 = (RtAttr)0; ReportHit("); vv(stm.value); s.append(", "); vv(stm.index); s.append(", a0); }\n"); break;
+        case KStmtKind::ExecuteCallable: s.append("  CallShader("); vv(stm.value); s.append(", cd);\n"); break;
         case KStmtKind::BufferStore: s.append("  buf"); app_uint(s, g.node(stm.target).iidx); s.append(".Store(("); vv(stm.index); s.append(") * 4u, asuint("); vv(stm.value); s.append("));\n"); break;
         case KStmtKind::IgnoreHitIf: s.append("  if ("); vv(stm.value); s.append(") { IgnoreHit(); }\n"); break; // P4 any-hit alpha
         // ReorderThread: DX12 SER is not wired, so the reorder hint drops — a perf-only no-op, same as default.
         default: break;
         }
     }
+    while (if_depth > 0) { s.append("  }\n"); --if_depth; }
     s.append("}\n");
     return true;
 }
@@ -1003,14 +1060,26 @@ inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::I
     crd::containers::String& s = out.source;
     s.clear();
     // input struct: StageIn (location) + Builtin (SV_) members
+    // ⚠ StageIns are declared SORTED BY LOCATION, never in node order: DXIL links inter-stage user varyings by
+    // PACKED REGISTER (= declaration order), so a PSIn declared in first-use order packs TEXCOORD2 at row 0
+    // against the VS's row 2 and the graphics PSO fails link with E_INVALIDARG — the pixel-side twin of the
+    // SV_Position-LAST scar two comments down. (SPIR-V links by explicit vk::location and never cares, which is
+    // exactly why only a DX12 render gate could see it.)
     s.append(is_vertex ? "struct VSIn {\n" : "struct PSIn {\n");
-    for (int i = 0; i < n; ++i)
+    for (crd::u32 loc = 0; loc < 32U; ++loc)
     {
-        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::StageIn) { continue; }
-        const KNode& nd = g.node(i);
-        s.append("  [[vk::location("); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(")]] ");
-        if (!is_vertex) { s.append(hlsl_interp(static_cast<Interp>(nd.dset))); } // B1-c: interp on FS interpolant inputs
-        s.append(htype(nd.type)); s.append(" a"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(" : TEXCOORD"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(";\n");
+        for (int i = 0; i < n; ++i)
+        {
+            if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::StageIn
+                || static_cast<crd::u32>(g.node(i).iidx) != loc)
+            {
+                continue;
+            }
+            const KNode& nd = g.node(i);
+            s.append("  [[vk::location("); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(")]] ");
+            if (!is_vertex) { s.append(hlsl_interp(static_cast<Interp>(nd.dset))); } // B1-c: interp on FS interpolant inputs
+            s.append(htype(nd.type)); s.append(" a"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(" : TEXCOORD"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(";\n");
+        }
     }
     for (int i = 0; i < n; ++i)
     {
@@ -1299,6 +1368,14 @@ inline bool emit_tese_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
         for (int f = 0; f < fc; ++f) { s.append("  "); s.append(htype(g.struct_field(sid, f))); s.append(" u"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append("_f"); app_uint(s, static_cast<crd::u32>(f)); s.append(";\n"); }
         s.append("};\n");
     }
+    for (int i = 0; i < n; ++i) // REN-38-F6+ (GEO-1): a reachable StorageLoad makes this a PULLING stage
+    {
+        if (reach[static_cast<crd::usize>(i)] && g.node(i).op == KOp::StorageLoad)
+        {
+            s.append("[[vk::binding(0, 0)]] RWStructuredBuffer<uint> sbuf : register(u0);\n");
+            break;
+        }
+    }
     const auto dom_leaf = [&](const KGraph& gg, int li, crd::containers::String& ss) -> bool
     {
         const KNode& lnd = gg.node(li);
@@ -1381,6 +1458,14 @@ inline bool emit_task_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
         const int fc = g.struct_field_count(sid);
         for (int f = 0; f < fc; ++f) { s.append("  "); s.append(htype(g.struct_field(sid, f))); s.append(" u"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append("_f"); app_uint(s, static_cast<crd::u32>(f)); s.append(";\n"); }
         s.append("};\n");
+    }
+    for (int i = 0; i < n; ++i) // REN-38-F6+ (GEO-1): a reachable StorageLoad makes this a PULLING stage
+    {
+        if (reach[static_cast<crd::usize>(i)] && g.node(i).op == KOp::StorageLoad)
+        {
+            s.append("[[vk::binding(0, 0)]] RWStructuredBuffer<uint> sbuf : register(u0);\n");
+            break;
+        }
     }
     s.append("struct MeshPayload { uint v0; uint v1; uint v2; uint v3; };\ngroupshared MeshPayload s_payload;\n"); // B4: FIXED 4-field payload
     const crd::u32 ls = entry.local_size[0] > 0U ? entry.local_size[0] : 1U;
@@ -1498,7 +1583,17 @@ inline bool emit_mesh_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
         }
     }
 
-    bool reads_payload = false; // B4: does this mesh read ANY task→mesh payload field (v0..v3)?
+    for (int i = 0; i < n; ++i) // REN-38-F6+ (GEO-1): a reachable StorageLoad makes this a PULLING stage
+    {
+        if (reach[static_cast<crd::usize>(i)] && g.node(i).op == KOp::StorageLoad)
+        {
+            s.append("[[vk::binding(0, 0)]] RWStructuredBuffer<uint> sbuf : register(u0);\n");
+            break;
+        }
+    }
+    // B4: does this mesh read ANY task→mesh payload field (v0..v3)? REN-38-F6+: OR the asset DECLARED the task
+    // pairing — DispatchMesh always passes a payload, and the D3D12 PSO validator rejects a size mismatch.
+    bool reads_payload = entry.mesh_payload_in;
     for (int i = 0; i < n; ++i)
     {
         const KBuiltin b = static_cast<KBuiltin>(g.node(i).iidx);

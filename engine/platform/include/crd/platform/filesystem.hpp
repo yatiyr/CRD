@@ -39,6 +39,10 @@ private:
 [[nodiscard]] Path current_working_dir() noexcept;
 [[nodiscard]] Path executable_dir() noexcept;
 [[nodiscard]] Path user_config_dir(containers::StringView app_name) noexcept;
+// The OS scratch directory. ⛔ Anything a test or tool writes "just for now" goes HERE, never to a relative
+// path — a relative path resolves to wherever the process was LAUNCHED from, which for ctest on a dev box is
+// the repo checkout, and the checkout grows artifact crops that .gitignore then chases pattern by pattern.
+[[nodiscard]] Path temp_directory() noexcept;
 
 [[nodiscard]] bool exists(const Path& path) noexcept;
 [[nodiscard]] bool is_file(const Path& path) noexcept;

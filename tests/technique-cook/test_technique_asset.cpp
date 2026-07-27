@@ -204,6 +204,48 @@ TEST_CASE("technique asset rejects every malformed shape by name", "[technique][
           == tc::TechniqueCookError::DuplicateOption);
 }
 
+TEST_CASE("a REUSED descriptor holds ONLY the second asset after a second parse or blob read", "[technique][ren38]")
+{
+    // ⛔ THE LOAD-BUTTON SCAR (REN-38 audit): parsing into a descriptor that already held a technique APPENDED
+    // to it — `DuplicateBinding` naming the wrong thing when names overlapped, a silently MERGED technique when
+    // they did not. Any tool with a load button hits this on the normal path, not as an edge case.
+    crd::memory::TlsfAllocator alloc(1U << 20U, nullptr, "technique-reuse-test");
+    crd::containers::String    where(&alloc);
+    tc::TechniqueDesc          d(&alloc);
+
+    REQUIRE(tc::parse_technique_toml(crd::containers::StringView(kValidTechnique), d, &where)
+            == tc::TechniqueCookError::Ok);
+    REQUIRE(d.bindings.size() == 3U);
+    REQUIRE(d.options.size() == 2U);
+
+    // Second parse into the SAME descriptor: one binding, no options, a graph body. Everything from the first
+    // asset must be GONE — including scalars the second file never writes (body_kind must not survive).
+    constexpr const char* second_toml =
+        "schema = 1\nname = \"unlit2\"\nbody = \"crd://technique/unlit\"\n"
+        "[[binding]]\nname=\"tint\"\ntype=\"vec3\"\nfrequency=\"pass\"\n";
+    REQUIRE(tc::parse_technique_toml(crd::containers::StringView(second_toml), d, &where)
+            == tc::TechniqueCookError::Ok);
+    CHECK(d.bindings.size() == 1U);
+    CHECK(d.options.size() == 0U);
+    CHECK(d.body_kind == tc::TechniqueBodyKind::Graph);
+
+    // The BLOB path carries the same scar: read A, then read B into the same descriptor — only B may remain.
+    tc::TechniqueDesc a(&alloc);
+    tc::TechniqueDesc b(&alloc);
+    REQUIRE(tc::parse_technique_toml(crd::containers::StringView(kValidTechnique), a, &where)
+            == tc::TechniqueCookError::Ok);
+    REQUIRE(tc::parse_technique_toml(crd::containers::StringView(second_toml), b, &where)
+            == tc::TechniqueCookError::Ok);
+    const crd::containers::Array<crd::u8> blob_a = tc::cook_technique(a, &alloc);
+    const crd::containers::Array<crd::u8> blob_b = tc::cook_technique(b, &alloc);
+    tc::TechniqueDesc                     reused(&alloc);
+    REQUIRE(tc::read_technique(crd::containers::ConstSpan<crd::u8>(blob_a.data(), blob_a.size()), reused));
+    REQUIRE(tc::read_technique(crd::containers::ConstSpan<crd::u8>(blob_b.data(), blob_b.size()), reused));
+    CHECK(reused.bindings.size() == 1U);
+    CHECK(reused.options.size() == 0U);
+    CHECK(bytes_equal(blob_b, tc::cook_technique(reused, &alloc)));
+}
+
 TEST_CASE("REN-37.3 binding contract rejects a pass that does not supply a declared input", "[technique][ren37]")
 {
     crd::memory::TlsfAllocator alloc(1U << 21U, nullptr, "technique-contract-test");

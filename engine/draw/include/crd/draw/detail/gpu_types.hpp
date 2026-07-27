@@ -2,7 +2,7 @@
 
 // crd-draw — internal GPU state shared by renderer.cpp (init/shutdown) + overlay_pass.cpp (per-submit packing/draws).
 // RET-6 (ADR-0105): re-founded on gpu-context — programs are CKIR-compiled shader objects, the instance stream is ONE
-// u32 storage buffer (layout constants live in ckir_draw.hpp: 32-word header + 9-word lines + 11-word triangles).
+// u32 storage buffer (layout constants live in draw_assets.hpp: 32-word header + 9-word lines + 11-word triangles).
 //
 // `detail/` marks this engine-private; external consumers should not include it.
 

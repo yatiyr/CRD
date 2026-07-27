@@ -1,0 +1,9 @@
+schema = 1
+name   = "crd://vertex/scene_task"
+stage  = "task"
+
+[mesh]
+workgroup = 32
+
+[task]
+emit = 2

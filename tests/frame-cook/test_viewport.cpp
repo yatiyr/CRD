@@ -85,9 +85,9 @@ TEST_CASE("REN-37.9 GATE: an editor-shaped viewport set schedules within budget 
     reg.note_cost(anim_i, 0.2);
 
     // 16 file-browser thumbnails — OnDemand, each showing one asset
-    constexpr crd::u32 kThumbs = 16U;
+    constexpr crd::u32 thumb_count = 16U;
     crd::u32           thumb_first = 0U;
-    for (crd::u32 t = 0; t < kThumbs; ++t)
+    for (crd::u32 t = 0; t < thumb_count; ++t)
     {
         fc::ViewportDesc d(&alloc);
         thumb_id(d.id, t);
@@ -102,7 +102,7 @@ TEST_CASE("REN-37.9 GATE: an editor-shaped viewport set schedules within budget 
         reg.depends_on(i, fc::DependencyKind::Asset, 1000ULL + t);
         reg.depends_on(i, fc::DependencyKind::Material, 500ULL); // they all share one material
     }
-    REQUIRE(reg.count() == kThumbs + 2U);
+    REQUIRE(reg.count() == thumb_count + 2U);
 
     // A budget that admits the two live viewports (2.2 ms) plus a HANDFUL of thumbnails.
     // ⛔ The exact number is deliberately NOT asserted anywhere below. `charged_ms` accumulates in floating point,
@@ -125,7 +125,7 @@ TEST_CASE("REN-37.9 GATE: an editor-shaped viewport set schedules within budget 
     CHECK(sel.active.size() > 2U);                       // ...and some thumbnails DID fit
     CHECK(sel.active.size() <= budget.max_viewports);    // ...within the declared cap
     CHECK(sel.charged_ms <= budget.max_gpu_ms);          // ...and within the measured-time budget
-    CHECK(sel.deferred.size() == kThumbs - (sel.active.size() - 2U)); // everything else is REPORTED, not dropped
+    CHECK(sel.deferred.size() == thumb_count - (sel.active.size() - 2U)); // everything else is REPORTED, not dropped
     fc::commit_selection(reg, sel, 0U);
 
     // ── the drain. ⭐ THE PROPERTY THAT MATTERS: every dirty thumbnail renders within a BOUNDED number of frames,
@@ -141,7 +141,7 @@ TEST_CASE("REN-37.9 GATE: an editor-shaped viewport set schedules within budget 
         if (sel.active.size() == 2U && sel.deferred.empty()) { break; }
     }
     CHECK(frame < 32U);
-    for (crd::u32 t = 0; t < kThumbs; ++t) { CHECK_FALSE(reg.at(thumb_first + t).dirty); }
+    for (crd::u32 t = 0; t < thumb_count; ++t) { CHECK_FALSE(reg.at(thumb_first + t).dirty); }
 
     // ── SETTLED: only the two live viewports run; the thumbnails contribute NOTHING. That is the property that
     // makes a 400-asset folder viable at all.
@@ -159,11 +159,11 @@ TEST_CASE("REN-37.9 GATE: an editor-shaped viewport set schedules within budget 
 
     // ── invalidating the SHARED MATERIAL dirties all 16 — and they drain over several frames rather than
     // blowing the frame budget in one.
-    CHECK(reg.invalidate(fc::DependencyKind::Material, 500ULL) == kThumbs);
+    CHECK(reg.invalidate(fc::DependencyKind::Material, 500ULL) == thumb_count);
     fc::select_viewports(reg, budget, ++frame, sel);
     CHECK(sel.active.size() > 2U);
     CHECK(sel.active.size() <= budget.max_viewports);
-    CHECK(sel.deferred.size() == kThumbs - (sel.active.size() - 2U));
+    CHECK(sel.deferred.size() == thumb_count - (sel.active.size() - 2U));
     // ⛔ deferred viewports stay DIRTY. Marking them clean here is the silent-cap failure in its purest form.
     for (crd::usize i = 0; i < sel.deferred.size(); ++i) { CHECK(reg.at(sel.deferred[i]).dirty); }
     fc::commit_selection(reg, sel, frame);

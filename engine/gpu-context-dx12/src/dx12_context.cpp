@@ -74,6 +74,9 @@ namespace
     case crd::kir::KStage::ClosestHit: out = ShaderStage::ClosestHit; return true;
     case crd::kir::KStage::Miss:       out = ShaderStage::Miss;       return true;
     case crd::kir::KStage::AnyHit:     out = ShaderStage::AnyHit;     return true;
+    // REN-38-F13: the last two stages — same library profile, same state-object consumption
+    case crd::kir::KStage::Intersection: out = ShaderStage::Intersection; return true;
+    case crd::kir::KStage::Callable:     out = ShaderStage::Callable;     return true;
     default: return false;
     }
 }
@@ -169,7 +172,8 @@ public:
             if (!crd::kir::emit_tese_hlsl(graph, entry, m_alloc, kern)) { return nullptr; }
         }
         else if (entry.stage == crd::kir::KStage::RayGen || entry.stage == crd::kir::KStage::ClosestHit
-                 || entry.stage == crd::kir::KStage::Miss || entry.stage == crd::kir::KStage::AnyHit)
+                 || entry.stage == crd::kir::KStage::Miss || entry.stage == crd::kir::KStage::AnyHit
+                 || entry.stage == crd::kir::KStage::Intersection || entry.stage == crd::kir::KStage::Callable)
         {
             // REN-38-A16: a CKIR ray-tracing entry → DXR HLSL (`[shader("raygeneration")]` etc.), compiled as a
             // `lib_6_3` LIBRARY — which is what a DXR state object consumes, and why the profile table already

@@ -1,0 +1,13 @@
+schema = 1
+name   = "crd://frame/scene_visbuffer"
+
+[[draw_list]]
+name = "visbuffer_geometry"
+
+[[pass]]
+name      = "ids"
+kind      = "raster.visbuffer"
+shader    = "crd://scene/visbuffer"
+draw_list = "visbuffer_geometry"
+writes    = ["@output"]
+params    = { clear_id = 7 }

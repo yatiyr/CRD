@@ -7,7 +7,109 @@
 
 ## Current focus — Phase 3.1.6 **v17 GPU compute (CKIR)** — on the **GPU-program-system detour** (D-007+D-008 MERGED)
 
-> ### ⏩ SESSION HANDOFF (2026-07-25) — READ THIS FIRST on re-entry
+> ### ⏩ SESSION HANDOFF (2026-07-27, fourth window) — READ THIS FIRST on re-entry
+> **THE ENTIRE 38-F BAND IS CLOSED (F1–F16), user-directed "fully finish 38-F, no gaps no deferrals".**
+> Next: **38-G — port every technique we have built as assets** (the technique library rows). Full detail:
+> Part 3 of `docs/sessions/2026-07-27-ren38-authored-programs.md`. Highlights:
+> - ⭐⭐ **F11 stencil attachment** (D24S8 targets both backends + the pass-level `load = true` key, blob v5) ·
+>   **F13 Intersection+Callable** (RT emitters grew If-NESTING + object-ray builtins; `trace_rays_full`;
+>   blob v6; gates pin the pair by numbers on both backends) · **F15 disk-first load** (pinned the audit
+>   SIGSEGV: three cookers parsed with THROWING toml++ under a live device — all five non-throwing now) ·
+>   **GPU-driven cull chain** (real indirect args + header word 100 = instance count, 116→120 words).
+> - ⭐⭐ **F16: amplification PULLS REAL GEOMETRY.** task/mesh/tese emitters lower the sbuf seam (both
+>   backends); `draw_tess_storage(_load)` + `draw_mesh_storage(_load)` at vtable END; `[mesh] fetch = true`
+>   (the scene pull contract in the mesh stage), `[task] emit_header = N` (GPU-driven meshlet count),
+>   `hdr:`/`hdru:` in tess_eval/fetch-mesh graphs. ⛔⛔ D3D12 demands AS→MS payload AGREEMENT (HLSL
+>   DispatchMesh always passes one): `[mesh] payload = true` → `KEntry::mesh_payload_in` (graph blob v3).
+> - ⛔⛔ **EVERY DX12 SCENE RENDER GATE HAD BEEN SILENTLY DEAD** behind a `SKIP("dxc unavailable")`: the HLSL
+>   emitter declared PSIn in NODE order and DXIL links varyings by PACKED REGISTER → every scene PSO failed
+>   `E_INVALIDARG` (the pixel-side twin of SV_Position-LAST). StageIns now declare SORTED BY LOCATION; the
+>   visbuffer probes moved to the orientation-invariant midline. All three DX12 scene gates RUN and PASS.
+>   **Audit the SKIP list, not just the failure count.**
+> - Tidy caught a REAL F13 emit hole (Intersection/Callable fell out of the `[rt]` emit arm — canonical form
+>   dropped `sphere_radius`/`callable_*`; fixed + round-trip gated). Touched families 453/453, ZERO skips in
+>   the REN-38 set. Full sweep + suite numbers: end-of-session state below.
+>
+> ---
+>
+> ### ⏮ PREVIOUS HANDOFF (2026-07-27, third session)
+> **38-F6 + 38-F7 CLOSED (user-directed "no gaps, no debts"). The renderer draws every advanced family from
+> authored assets, and the LAST hand-written shader builder is DELETED.** Full detail: Part 2 of
+> `docs/sessions/2026-07-27-ren38-authored-programs.md`. Highlights:
+> - ⛔⛔ **THE F6 JOIN FALSIFIED FIVE F-BAND COOKS** that were device-impossible yet closed green behind
+>   cook-only gates: TessEval/Mesh pulled by `VertexIndex`, Task rode the pull tail (position+outputs a task
+>   entry may not carry), the cull kernel used the raster storage seam + `GlobalInvocationId` (no kernel-emitter
+>   arms) at an unbindable binding 3, and the mesh DEFAULT budget violated the grid contract (V == 3·P, now
+>   validated). All rewritten device-true; **every F-band gate now asserts `entry_valid`**.
+> - ⭐⭐ **F6 renderer seams**: `set_frame_graph_toml` (explicit graph overrides the shadows step-down),
+>   lazy host cache for `crd://scene/tess|mesh|visbuffer` programs + `crd://scene/cull`/`crd://scene/rt/*`
+>   kernels, `set_scene_accel`, `debug_scene_buffer`. 11 new `.crdv` + `material/flat.crdm` + 5 scene
+>   `.frame.toml` (embedded + shipped + drift-gated). THREE Vulkan gates RENDER (tess displacement pixels,
+>   visbuffer id greys, cull verdicts read back, RT 4 rays through the 4-stage authored pipeline).
+> - ⭐⭐ **F7: `ckir_draw.hpp` DELETED (339 lines).** The `.crdv` vocabulary grew the PROCEDURAL VERTEX mode:
+>   `position = "node:…"` + `[expand]` + `@corner`/`@instance`/`@category`/`field:`/`hdr:`(+`u`/`c`) inputs +
+>   the vertex-local `view_proj` op; the material registry gained `fwidth`. line/tri/grid are
+>   `.crdv`+`.crdm` pairs in `draw_assets.hpp` (shipped + drift-gated); the RET-6 Vulkan pixel gate cooks the
+>   authored pair and still composites. Suites: draw 17/17 · vertex-cook 19/19 · scene-render 21/21.
+> - **Full `per-slice-check.ps1` sweep + per-target tidy: see the end-of-session state below** (owed at close).
+>
+> ---
+>
+> ### ⏮ PREVIOUS HANDOFF (2026-07-27, second session)
+> **THE REN-38 FULL-ARC AUDIT + HYGIENE PASS (user-directed "fix all the gaps"). All 8 audit gaps CLOSED,
+> with 8 real latent defects found and killed along the way.** Full detail:
+> `docs/sessions/2026-07-27-ren38-audit-and-hygiene.md`. Highlights:
+> - ⭐⭐ **THE SHAPE CHECKER exists** (`ckir_shape.hpp`, oracle-exact rules, run by all three cookers, pointing
+>   errors). First catches: the PCSS blocker search through the comparison sampler (new REQUIRED
+>   `shadow_plain_sampler` binding) and contact shadows feeding SCALARS to the 4-tap helper.
+> - ⭐⭐ **The 38-D4 varying contract runs LIVE** in `init_programs` (`fs_varying_requirements` derives the FS
+>   read set from the graph). First catch: tint declared FLAT vs `geomcolor`'s SMOOTH — now smooth everywhere.
+> - ⭐⭐ **THE PASS-STATE VOCABULARY**: depth_write · depth_bias(+slope/clamp) · face_cull/front_face ·
+>   stencil ops/ref/masks — asset → blob v4 → executor → BOTH backends (VK dynamic, DX12 PSO-key exact),
+>   6 device gates. ⚠ stencil ATTACHMENT (D24S8 target path) is a named open row — stencil is fully declared
+>   and baked but cannot draw a frame until targets carry the aspect.
+> - ⭐⭐ **RT ANY-HIT end-to-end** (`stage = "any_hit"` + `alpha_cutoff`, `any_hit` on `raytrace.pipeline`,
+>   `trace_rays_anyhit` on both backends) — the DX12 gate is the FIRST real DispatchRays device proof (A16's
+>   DX12 half had been compile-proven only; its lazy `supports_rt_pipeline()` scar fixed). ⚠ Intersection +
+>   Callable = named open row (no CKIR statement surface yet).
+> - ⭐⭐ **The authored programs RIDE THE ASSET PIPELINE**: validating cook handlers for all five formats
+>   (malformed assets FAIL the cook by name), `builtin_asset_text()` + THE DRIFT GATE pinning shipped
+>   `assets/` == embedded pack canonically. First catch: the shipped `.crdl` was CORRUPT (never parsed —
+>   inert copy); `assets/material/*.crdm` did not exist on disk. ⚠ disk-first mounted load = named open row.
+> - **Blob v4** (v3 silently dropped raygen/miss/chit + VRS/queue/sampler/filter — field-SURVIVAL gate now);
+>   the vertex emitter's dropped stage sections fixed + gated; the parse-reset scar killed in the last four
+>   parsers (technique/frame × TOML/blob); `TempPack` + `platform::fs::temp_directory()` end the repo-root
+>   artifact crop; the uncommitted-work tidy onion fully peeled (all touched targets exit 0, LLVM 20.1.8).
+> - **38-F6 and 38-F7 remain the next rows** (unchanged scope; the audit hardened the ground they build on).
+>
+> ---
+>
+> ### ⏮ PREVIOUS HANDOFF (2026-07-27, first session)
+> **REN-38 bands C · D · E · F shipped: EVERY GPU PROGRAM THE RENDERER RUNS IS NOW COOKED FROM AN ASSET.**
+> D-007 row 141: **53 rows ✅, 12 open.** Full detail + all 8 scars: `docs/sessions/2026-07-27-ren38-authored-programs.md`.
+>
+> **Three new cooker modules** (same shape as `crd-frame-cook` / `crd-technique-cook`):
+> `crd-material-cook` (`.crdm`, 94 ops) · `crd-vertex-cook` (`.crdv`, all 14 CKIR stages) · `crd-light-cook` (`.crdl`).
+>
+> **⭐⭐ THE DELETIONS ARE THE PROOF.** `scene_build_surface`, `build_scene_vs_shadowed`/`_skinned`/`build_shadow_vs`
+> (~200 lines) and `build_shadow_fs` are GONE from `scene_renderer.cpp`. Also deleted: the SECOND material
+> vocabulary that actually rendered — `assets/materials/*.mat.toml` → `assets/shaders/*.vert|.frag` and the two
+> asset-cooker handlers that fed it. Shipped assets: `assets/vertex/*.crdv`, `assets/lighting/scene_forward.crdl`.
+>
+> **⚠ NEXT, AND IT IS AN INTEGRATION GAP, NOT A FEATURE GAP:**
+> - **38-F6** — F1–F5 (tess · mesh/task · RT · cull · visbuffer) are proven at the **COOK layer only**. No
+>   `.crdv`-driven advanced-stage pass DRAWS A FRAME; `SceneRenderer` still creates three program pairs, all
+>   `stage = vertex`. Close it the way C4/D5/E7 were closed (frame asset → cooked stage → a Vulkan gate that
+>   RENDERS). ⛔ Two of this session’s worst scars appeared ONLY once something actually rendered — that is the
+>   argument for doing F6 before the G band.
+> - **38-F7** — `engine/draw/ckir_draw.hpp` is still 339 lines of hand-written CKIR (line/tri/grid VS+FS).
+> - **`VariantKey::vertex` is still not filled by engine code** (no engine code cooks a variant matrix at all);
+>   `vertex_layout_id` is the correct value and is gated as such. The D5 row overclaimed this and was corrected.
+> - **The full `per-slice-check.ps1` sweep has NOT been run** this session (user direction). It is owed.
+>
+> ---
+>
+> ### ⏮ PREVIOUS HANDOFF (2026-07-25)
 > **The RENDERER band is under way. This session shipped REN-1 + REN-2; REN-3 is designed and next.**
 >
 > **DONE + CERTIFIED (win-debug full build+ctest PASS + all module gates green, both backends):**

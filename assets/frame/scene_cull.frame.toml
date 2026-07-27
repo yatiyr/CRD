@@ -1,0 +1,40 @@
+schema = 1
+name   = "crd://frame/scene_cull"
+
+[[resource]]
+name = "instances"
+kind = "external_buffer"
+
+[[resource]]
+name = "cull_flags"
+kind = "external_buffer"
+
+[[resource]]
+name = "cull_args"
+kind = "indirect_args"
+size_bytes = 16
+
+[[resource]]
+name = "cull_marks"
+kind = "external_buffer"
+
+[[pass]]
+name   = "cull"
+kind   = "compute"
+kernel = "crd://scene/cull"
+reads  = ["instances"]
+writes = ["cull_flags", "cull_args"]
+params = { groups_x = 1 }
+
+[[pass]]
+name   = "mark"
+kind   = "compute.indirect"
+kernel = "crd://scene/cull_mark"
+reads  = ["cull_args", "instances"]
+writes = ["cull_marks"]
+
+[[pass]]
+name        = "blank"
+kind        = "clear"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]

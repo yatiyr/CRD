@@ -95,6 +95,83 @@ fc::FrameCookError parse_of(const char* text, crd::memory::IAllocator* a, crd::c
 }
 } // namespace
 
+TEST_CASE("a REUSED graph descriptor holds ONLY the second asset after a second parse or blob read",
+          "[framecook][ren38]")
+{
+    // ⛔ THE LOAD-BUTTON SCAR (REN-38 audit): parsing into a descriptor that already held a graph APPENDED to it
+    // (a silently merged frame), and the SCALARS carried over too — a reused desc kept the previous graph's
+    // `memory_budget_bytes` and `fallback` when the new asset declared neither.
+    crd::memory::TlsfAllocator alloc(4U << 20U, nullptr, "frame-reuse-test");
+    fc::FrameGraphDesc         d(&alloc);
+    crd::containers::String    where(&alloc);
+
+    constexpr const char* budgeted_toml = R"(
+schema = 1
+name   = "budgeted"
+memory_budget_mb = 64
+fallback = "crd://frames/forward_basic"
+
+[[resource]]
+name = "hdr"
+format = "RGBA16F"
+scale = 1.0
+sampled = true
+
+[[pass]]
+name = "paint"
+kind = "clear"
+writes = ["hdr"]
+clear_color = [0.2, 0.0, 0.0, 1.0]
+
+[[pass]]
+name = "fs"
+kind = "raster.fullscreen"
+reads = ["hdr"]
+writes = ["@output"]
+shader = "crd://shaders/post/agx_tonemap"
+)";
+    constexpr const char* minimal_toml  = R"(
+schema = 1
+name   = "minimal"
+
+[[pass]]
+name = "clear"
+kind = "clear"
+writes = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+)";
+    REQUIRE(fc::parse_frame_toml(crd::containers::StringView(budgeted_toml), d, &where) == fc::FrameCookError::Ok);
+    REQUIRE(d.resources.size() == 1U);
+    REQUIRE(d.memory_budget_bytes == 64ULL * 1024ULL * 1024ULL);
+    REQUIRE(d.fallback.size() > 0U);
+
+    REQUIRE(fc::parse_frame_toml(crd::containers::StringView(minimal_toml), d, &where) == fc::FrameCookError::Ok);
+    CHECK(d.resources.size() == 0U);
+    CHECK(d.passes.size() == 1U);
+    CHECK(d.requires_caps.size() == 0U);
+    // The scalars the second file never writes must be RESET, not inherited — a budget the asset never declared
+    // fails builds the author cannot explain, and a stale fallback names a graph the pack may not even hold.
+    CHECK(d.memory_budget_bytes == 0U);
+    CHECK(d.fallback.size() == 0U);
+
+    // The BLOB path carries the same scar: read A, then read B into the same descriptor — only B may remain.
+    fc::FrameGraphDesc a(&alloc);
+    fc::FrameGraphDesc b(&alloc);
+    REQUIRE(fc::parse_frame_toml(crd::containers::StringView(budgeted_toml), a, &where) == fc::FrameCookError::Ok);
+    REQUIRE(fc::parse_frame_toml(crd::containers::StringView(minimal_toml), b, &where) == fc::FrameCookError::Ok);
+    const crd::containers::Array<crd::u8> blob_a = fc::cook_frame_graph(a, &alloc);
+    const crd::containers::Array<crd::u8> blob_b = fc::cook_frame_graph(b, &alloc);
+    REQUIRE(blob_a.size() > 0U);
+    REQUIRE(blob_b.size() > 0U);
+    fc::FrameGraphDesc reused(&alloc);
+    REQUIRE(fc::read_frame_graph(crd::containers::ConstSpan<crd::u8>(blob_a.data(), blob_a.size()), reused));
+    REQUIRE(fc::read_frame_graph(crd::containers::ConstSpan<crd::u8>(blob_b.data(), blob_b.size()), reused));
+    CHECK(reused.resources.size() == 0U);
+    CHECK(reused.passes.size() == 1U);
+    CHECK(reused.memory_budget_bytes == 0U);
+    CHECK(reused.fallback.size() == 0U);
+}
+
 TEST_CASE("REN-36.1: a valid .frame.toml parses, and every field survives", "[framecook][ren36]")
 {
     crd::memory::TlsfAllocator alloc(4U << 20U);
@@ -669,4 +746,215 @@ TEST_CASE("REN-37.6: a composed graph ROUND-TRIPS through emit and cook", "[fram
         if (blob[i] != blob2[i]) { same = false; break; }
     }
     CHECK(same);
+}
+
+TEST_CASE("REN-38 pass-state: parse, emit round-trip, and NAMED rejections", "[framecook][ren38]")
+{
+    crd::memory::TlsfAllocator alloc(4U << 20U, nullptr, "frame-state-test");
+    fc::FrameGraphDesc         d(&alloc);
+    crd::containers::String    where(&alloc);
+
+    constexpr const char* state_toml = R"(
+schema = 1
+name   = "stateful"
+
+[[resource]]
+name = "depth"
+format = "D32Float"
+width = 64
+height = 64
+sampled = true
+
+[[draw_list]]
+name = "casters"
+all  = ["MeshRenderer"]
+
+[[pass]]
+name = "shadow"
+kind = "raster.depth_only"
+writes = ["depth"]
+draw_list = "casters"
+clear_depth = 1.0
+depth_write = true
+depth_bias = 4.0
+depth_bias_slope = 1.5
+depth_bias_clamp = 0.01
+face_cull = "front"
+front_face = "cw"
+
+[[pass]]
+name = "mark"
+kind = "raster.geometry"
+reads = ["depth"]
+writes = ["@output"]
+draw_list = "casters"
+depth_write = false
+stencil = true
+stencil_compare = "Always"
+stencil_ref = 7
+stencil_read_mask = 15
+stencil_write_mask = 15
+stencil_fail = "keep"
+stencil_depth_fail = "decr_clamp"
+stencil_pass = "replace"
+)";
+    REQUIRE(fc::parse_frame_toml(crd::containers::StringView(state_toml), d, &where) == fc::FrameCookError::Ok);
+    REQUIRE(d.passes.size() == 2U);
+    const crd::gpu::PassRasterState& s0 = d.passes[0].state;
+    CHECK(s0.depth_write);
+    CHECK(s0.depth_bias == 4.0F);
+    CHECK(s0.depth_bias_slope == 1.5F);
+    CHECK(s0.depth_bias_clamp == 0.01F);
+    CHECK(s0.face_cull == crd::gpu::FaceCull::Front);
+    CHECK(s0.front_face == crd::gpu::FrontFace::Clockwise);
+    CHECK_FALSE(s0.stencil_enable);
+    const crd::gpu::PassRasterState& s1 = d.passes[1].state;
+    CHECK_FALSE(s1.depth_write);
+    CHECK(s1.stencil_enable);
+    CHECK(s1.stencil_compare == crd::gpu::DepthCompare::Always);
+    CHECK(s1.stencil_ref == 7U);
+    CHECK(s1.stencil_read_mask == 15U);
+    CHECK(s1.stencil_write_mask == 15U);
+    CHECK(s1.stencil_depth_fail == crd::gpu::StencilOp::DecrClamp);
+    CHECK(s1.stencil_pass == crd::gpu::StencilOp::Replace);
+
+    // The EDITOR round trip: emit -> parse -> cook must equal parse -> cook (a node-editor save must not drop
+    // the state block).
+    const crd::containers::Array<crd::u8> direct = fc::cook_frame_graph(d, &alloc);
+    const crd::containers::String         emitted = fc::emit_frame_toml(d, &alloc);
+    fc::FrameGraphDesc                    re(&alloc);
+    REQUIRE(fc::parse_frame_toml(crd::containers::StringView(emitted.c_str(), emitted.size()), re, &where)
+            == fc::FrameCookError::Ok);
+    const crd::containers::Array<crd::u8> from_emit = fc::cook_frame_graph(re, &alloc);
+    REQUIRE(direct.size() == from_emit.size());
+    bool same = true;
+    for (crd::usize i = 0; i < direct.size(); ++i)
+    {
+        if (direct[i] != from_emit[i]) { same = false; break; }
+    }
+    CHECK(same);
+
+    // Every misdeclaration is refused BY NAME — a typo that fell back to the default would render at the
+    // hardwired behaviour while the asset says otherwise, with nothing in the frame to disagree.
+    const auto err_of = [&](const char* pass_extra) {
+        crd::containers::String t(&alloc);
+        t.append("schema = 1\nname = \"x\"\n[[pass]]\nname = \"p\"\nkind = \"clear\"\nwrites = [\"@output\"]\n"
+                 "clear_color = [0.0, 0.0, 0.0, 1.0]\n");
+        t.append(pass_extra);
+        fc::FrameGraphDesc bad(&alloc);
+        return fc::parse_frame_toml(crd::containers::StringView(t.c_str(), t.size()), bad, &where);
+    };
+    CHECK(err_of("face_cull = \"bcak\"\n") == fc::FrameCookError::UnknownFaceCull);
+    CHECK(err_of("front_face = \"cww\"\n") == fc::FrameCookError::UnknownFrontFace);
+    CHECK(err_of("stencil_pass = \"replcae\"\n") == fc::FrameCookError::UnknownStencilOp);
+    CHECK(err_of("stencil_ref = 256\n") == fc::FrameCookError::BadStencilValue);
+    CHECK(err_of("stencil_write_mask = 300\n") == fc::FrameCookError::BadStencilValue);
+}
+
+TEST_CASE("REN-38: EVERY pass field SURVIVES the cooked blob (the v3 loss regression)", "[framecook][ren38]")
+{
+    // ⛔⛔ THE GAP THIS PINS: blob v3 silently DROPPED the RT pipeline's three program names, VRS state,
+    // conservative, queue, the sampler and the blit filter — and the byte-identity round-trip gate could not
+    // see it, because a field dropped by BOTH the writer and the reader round-trips "byte-identically". The
+    // claim here is FIELD SURVIVAL: parse -> cook -> read, then compare every field to the parsed original.
+    crd::memory::TlsfAllocator alloc(4U << 20U, nullptr, "frame-blob-survival");
+    fc::FrameGraphDesc         d(&alloc);
+    crd::containers::String    where(&alloc);
+
+    constexpr const char* rich_toml = R"(
+schema = 1
+name   = "rich"
+
+[[resource]]
+name = "img"
+format = "RGBA16F"
+width = 64
+height = 64
+sampled = true
+
+[[resource]]
+name = "rt_out"
+kind = "external_buffer"
+
+[[resource]]
+name = "scene_as"
+kind = "acceleration_structure"
+
+[[pass]]
+name = "paint"
+kind = "raster.fullscreen"
+writes = ["img"]
+shader = "crd://shaders/paint"
+shading_rate = "2x2"
+rate_combiner = "keep"
+conservative = "overestimate"
+address = "clamp"
+anisotropy = 4
+mip_bias = 0.5
+depth_write = false
+face_cull = "back"
+stencil = true
+stencil_ref = 3
+stencil_pass = "replace"
+
+[[pass]]
+name = "trace"
+kind = "raytrace.pipeline"
+reads = ["scene_as"]
+writes = ["rt_out"]
+raygen = "crd://rt/raygen"
+miss = "crd://rt/miss"
+closest_hit = "crd://rt/chit"
+any_hit = "crd://rt/ahit"
+intersection = "crd://rt/isect"
+callable = "crd://rt/call"
+params = { groups_x = 4, groups_y = 1 }
+
+[[pass]]
+name = "cover"
+kind = "raster.geometry"
+draw_list = "geo"
+writes = ["img"]
+load = true
+
+[[draw_list]]
+name = "geo"
+
+[[pass]]
+name = "out"
+kind = "blit"
+reads = ["img"]
+writes = ["@output"]
+filter = "nearest"
+)";
+    REQUIRE(fc::parse_frame_toml(crd::containers::StringView(rich_toml), d, &where) == fc::FrameCookError::Ok);
+    const crd::containers::Array<crd::u8> blob = fc::cook_frame_graph(d, &alloc);
+    REQUIRE(blob.size() > 0U);
+    fc::FrameGraphDesc r(&alloc);
+    REQUIRE(fc::read_frame_graph(crd::containers::ConstSpan<crd::u8>(blob.data(), blob.size()), r));
+    REQUIRE(r.passes.size() == d.passes.size());
+    for (crd::usize i = 0; i < d.passes.size(); ++i)
+    {
+        const fc::FramePassDesc& a = d.passes[i];
+        const fc::FramePassDesc& b = r.passes[i];
+        INFO("pass " << i);
+        CHECK(std::strcmp(a.raygen.c_str(), b.raygen.c_str()) == 0);
+        CHECK(std::strcmp(a.miss.c_str(), b.miss.c_str()) == 0);
+        CHECK(std::strcmp(a.closest_hit.c_str(), b.closest_hit.c_str()) == 0);
+        CHECK(std::strcmp(a.any_hit.c_str(), b.any_hit.c_str()) == 0);
+        CHECK(std::strcmp(a.intersection.c_str(), b.intersection.c_str()) == 0); // v6 (REN-38-F13)
+        CHECK(std::strcmp(a.callable.c_str(), b.callable.c_str()) == 0);
+        CHECK(a.shading_rate == b.shading_rate);
+        CHECK(a.rate_combiner == b.rate_combiner);
+        CHECK(a.conservative == b.conservative);
+        CHECK(a.queue == b.queue);
+        CHECK(a.filter == b.filter);
+        CHECK(a.has_sampler == b.has_sampler);
+        CHECK(a.sampler.address == b.sampler.address);
+        CHECK(a.sampler.anisotropy == b.sampler.anisotropy);
+        CHECK(a.sampler.mip_bias == b.sampler.mip_bias);
+        CHECK(a.sampler.compare == b.sampler.compare);
+        CHECK(a.state == b.state);
+        CHECK(a.load_target == b.load_target); // v5 (REN-38-F11)
+    }
 }

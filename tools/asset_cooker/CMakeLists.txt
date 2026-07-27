@@ -28,6 +28,11 @@ target_link_libraries(crd-cooker
         crd-anim                 # GEO-8: SKEL/ANIM builders (the skins/animations decompose)
         crd-timeline             # GEO-9: the TIML builder (.otio → the editorial timeline resource)
         crd-audio                # GEO-10: the ABUF/MIDI builders (.wav/.aiff/.flac/.mid)
+        crd-frame-cook           # REN-38: the authored-program handlers VALIDATE + cook the five vocabularies
+        crd-technique-cook
+        crd-material-cook
+        crd-vertex-cook
+        crd-light-cook
         # stb RETIRED (GEO-3 stage 2b): texture.cpp decodes via OUR ldr_decode. cgltf + mikktspace RETIRED
         # (GEO-6: the legacy mesh.cpp DELETED — our parsers own every format; mikktspace lives on ONLY as the
         # test-side oracle, linked by the test targets themselves).

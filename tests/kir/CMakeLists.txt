@@ -14,6 +14,8 @@ add_executable(crd-kir-tests
     test_ckir_bitops.cpp
     test_ckir_nodes.cpp
     test_ckir_noise.cpp
+    test_ckir_shape.cpp     # REN-38 audit: the shape checker every cooker runs
+
     test_ckir_lower.cpp
     test_ckir_variant.cpp   # REN-37.7: the DECLARED variant matrix + content-hash dedup + the dual mode
     test_ckir_lighting.cpp

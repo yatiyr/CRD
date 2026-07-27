@@ -85,12 +85,15 @@ CONTEXT.md
 AGENTS.md
 opencode.json
 
-# session/profiler artifacts (2026-07-02 cleanup — never track these again)
+# session/profiler artifacts (2026-07-02 cleanup ï¿½ never track these again)
 cachegrind.out.*
 ev_stream_*.crdr
 PATH-backup-*
 *.log
 test_pack_body_*.crdr
+# scene-render gates now write their per-run packs to the OS TEMP dir (TempPack RAII, REN-38 hygiene pass);
+# this pattern stays as a belt-and-braces guard for older checkouts and crashed runs.
+sr_*.crdr
 ev_stream_*.crdr
 .crd_*/
 imgui.ini

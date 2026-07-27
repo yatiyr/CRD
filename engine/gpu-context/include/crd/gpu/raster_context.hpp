@@ -61,6 +61,91 @@ enum class DepthCompare : crd::u8
 };
 
 // B1-e: a VARIABLE-RATE-SHADING rate — one fragment-shader invocation covers a WxH block of pixels (coarser = cheaper).
+// ── ⭐ REN-38-B8: HOW a binding is SAMPLED. ──
+// ⛔ This is a CORRECTNESS vocabulary, not a tuning one. A bloom chain sampled with REPEAT wraps bright pixels
+// onto the opposite edge — a bloom that glows from the wrong side of the screen. A tiling detail map sampled with
+// CLAMP smears its border across the whole surface. One binding needs each, and until this row an asset could
+// say NEITHER: the sampler was INFERRED from the resource FORMAT (depth ⇒ comparison, else linear-repeat).
+enum class SamplerFilter : crd::u8 { Nearest = 0, Linear };
+enum class SamplerAddress : crd::u8
+{
+    Repeat = 0,
+    ClampToEdge,   // the post-process default — an edge texel repeats instead of wrapping
+    ClampToBorder, // … or a declared border colour, which is what a shadow map outside its frustum needs
+    Mirror,
+};
+// A whole sampler, as an asset says it. `compare` turns it into a COMPARISON sampler — which is what a shadow
+// lookup is, and which the format-inference rule used to decide for the author.
+struct SamplerDesc
+{
+    SamplerFilter  min_filter = SamplerFilter::Linear;
+    SamplerFilter  mag_filter = SamplerFilter::Linear;
+    SamplerFilter  mip_filter = SamplerFilter::Linear;
+    SamplerAddress address    = SamplerAddress::Repeat;
+    bool           compare    = false;
+    crd::u32       anisotropy = 1U; // 1 = off; the device clamps to its maximum
+    float          mip_bias   = 0.0F;
+};
+
+// ── ⭐ REN-38 audit: the PASS-STATE vocabulary — the per-pass raster state a technique DECLARES. ─────────────
+// ⛔ Until this landed, depth bias was hardwired OFF and face culling hardwired NONE in both backends, the
+// depth WRITE could not be turned off, and stencil had FORMATS (B7) but no OPS — so a transparent pass could
+// not keep the opaque depth read-only, a shadow pass could not bias or front-face-cull, and the decal/portal/
+// outline techniques B7's stencil formats exist for were still inexpressible. Every default below is the
+// exact behaviour the backends hardwired, so every existing asset and every existing gate is byte-unchanged.
+enum class FaceCull : crd::u8
+{
+    None = 0, // the historical hardwired value — vertex-pulled geometry has no authored winding guarantee
+    Back,
+    Front,    // the shadow-caster trick: cull FRONT faces so acne moves to the unlit side
+};
+enum class FrontFace : crd::u8
+{
+    CounterClockwise = 0,
+    Clockwise,
+};
+// The closed stencil-op set (VK and D3D12 agree on all eight).
+enum class StencilOp : crd::u8
+{
+    Keep = 0,
+    Zero,
+    Replace,   // write the reference — the "mark this region" half of every portal/outline/mask technique
+    IncrClamp,
+    DecrClamp,
+    Invert,
+    IncrWrap,
+    DecrWrap,
+};
+
+// The whole per-pass raster state, as an asset says it. CONTEXT STATE like `SamplerDesc` (the B8 discipline):
+// installed before a pass records, RESET to these defaults at every pass boundary, never an argument on twenty
+// draw verbs. ⛔ On Vulkan (shader objects) every field is dynamic state; on D3D12 everything except the
+// stencil REFERENCE is PSO state, so the state participates in the PSO cache key exactly as BlendMode does —
+// two passes with different state must never share a pipeline.
+struct PassRasterState
+{
+    bool         depth_write      = true;
+    // Depth bias: constant (in device units) + slope-scaled + clamp. All zero = disabled, the historical value.
+    float        depth_bias       = 0.0F;
+    float        depth_bias_slope = 0.0F;
+    float        depth_bias_clamp = 0.0F;
+    FaceCull     face_cull        = FaceCull::None;
+    FrontFace    front_face       = FrontFace::CounterClockwise;
+    // Stencil (front and back faces share one description — the closed form every declared technique needs).
+    bool         stencil_enable     = false;
+    DepthCompare stencil_compare    = DepthCompare::Always;
+    crd::u32     stencil_ref        = 0U;
+    crd::u32     stencil_read_mask  = 0xFFU;
+    crd::u32     stencil_write_mask = 0xFFU;
+    StencilOp    stencil_fail       = StencilOp::Keep; // stencil test failed
+    StencilOp    stencil_depth_fail = StencilOp::Keep; // stencil passed, depth failed
+    StencilOp    stencil_pass       = StencilOp::Keep; // both passed
+
+    // ⛔ EXACT comparison, member by member — the D3D12 PSO cache keys on the WHOLE state (hashing it and
+    // colliding would hand one pass another's pipeline: a wrong image with both declarations looking correct).
+    [[nodiscard]] constexpr bool operator==(const PassRasterState&) const noexcept = default;
+};
+
 enum class ShadingRate : crd::u8
 {
     Rate1x1 = 0, // one invocation per pixel (the default)
@@ -761,6 +846,93 @@ public:
     // Does this backend/adapter offer a ray-tracing PIPELINE (not merely inline ray query)? ⛔ Reported, so an
     // authored graph degrades by DECLARED CAPABILITY (REN-35's rule) instead of rendering a black frame.
     [[nodiscard]] virtual bool supports_rt_pipeline() const noexcept { return false; }
+
+    // ── ⭐ REN-38-B3: FILL a buffer range with a 32-bit value, recorded into the frame. Appended at END (D135). ──
+    // ⛔ This exists for ONE reason and it is not convenience: an APPEND/COUNTER buffer must be RESET TO ZERO at
+    // the start of every frame. A counter that is not reset accumulates across frames — so the cull pass appends
+    // past the end of its list on frame 2, and the GPU-driven draw reads garbage indices. Nothing about that is
+    // visible in the asset, and it gets worse the longer the app runs, which is the hardest failure shape to
+    // attribute to a missing memset.
+    //
+    // Recorded, never a separate submission: the reset must be ORDERED against the pass that appends, and the only
+    // thing that can order it is the graph.
+    virtual void fill_buffer(IStorageBuffer& /*buffer*/, crd::u64 /*offset*/, crd::u64 /*size*/, crd::u32 /*value*/) {}
+
+    // ── ⭐ REN-38-B8: install the sampler the NEXT recorded draw binds. Appended at the END (D135). ──
+    // ⛔ Stated as CONTEXT STATE rather than an extra argument on twenty draw verbs, for the same reason the frame
+    // graph owns barriers: adding a parameter to every `draw_*` would mean every future verb has to remember it,
+    // and the one that forgets renders with whatever the last pass installed — a bug that only appears when two
+    // passes with different sampling run in the same frame. Reset to the engine default at each pass boundary,
+    // so a pass that says nothing gets the default and never inherits its neighbour's.
+    virtual void set_sampler(const SamplerDesc& /*desc*/) {}
+
+    // ── ⭐ REN-38 audit: install the pass-state the NEXT recorded draws use. Appended at the END (D135). ──
+    // Same discipline as `set_sampler` directly above, for the same reason: context state, reset to the
+    // defaults at each pass boundary, so a pass that declares nothing gets the historical behaviour and never
+    // inherits its neighbour's bias, cull mode or stencil configuration.
+    virtual void set_pass_state(const PassRasterState& /*state*/) {}
+
+    // ── ⭐ REN-38 audit (the full RT hit group): trace with an ANY-HIT stage in the hit group. Appended at the
+    // END (D135) — a NEW verb rather than a parameter on `trace_rays`, because the vtable is append-only and a
+    // defaulted parameter re-types an existing slot. An any-hit is what alpha-tested geometry needs in RT: the
+    // traversal calls it per candidate and `ignoreIntersectionEXT` / `IgnoreHit()` rejects the transparent
+    // texels, so a chain-link fence shadows as a fence rather than as a solid plate. Default: a NO-OP, so a
+    // backend that has not wired it fails VISIBLY (nothing traced) rather than tracing without the any-hit.
+    virtual void trace_rays_anyhit(IGpuProgram& /*raygen*/, IGpuProgram& /*miss*/, IGpuProgram& /*closest_hit*/,
+                                   IGpuProgram& /*any_hit*/, IAccelerationStructure& /*as*/, crd::u32 /*width*/,
+                                   crd::u32 /*height*/, IStorageBuffer* const* /*buffers*/, crd::u32 /*count*/)
+    {
+    }
+
+    // ── ⭐ REN-38-F13: trace with the FULL hit-group + SBT vocabulary. Appended at the END (D135). ──
+    // `intersection` makes the hit group PROCEDURAL (its AABBs only bound the shape — the authored math IS the
+    // geometry); `callable` joins the SBT's fourth table (`executeCallableEXT` / `CallShader` reaches it). Either
+    // may be null; with both null this is exactly `trace_rays`/`trace_rays_anyhit`. Default: a NO-OP, so a
+    // backend that has not wired the last two stages fails VISIBLY (nothing traced), never silently without them.
+    virtual void trace_rays_full(IGpuProgram& /*raygen*/, IGpuProgram& /*miss*/, IGpuProgram& /*closest_hit*/,
+                                 IGpuProgram* /*any_hit*/, IGpuProgram* /*intersection*/, IGpuProgram* /*callable*/,
+                                 IAccelerationStructure& /*as*/, crd::u32 /*width*/, crd::u32 /*height*/,
+                                 IStorageBuffer* const* /*buffers*/, crd::u32 /*count*/)
+    {
+    }
+
+    // ── ⭐ REN-38-F6+: STORAGE-BOUND tessellation. Appended at the END (D135). ──
+    // `draw_tess` binds nothing, so a tessellation VS could only ever be procedural — the pull idiom (real
+    // control points from a buffer, the GEO-1 seam) was unreachable for the one pipeline built to displace real
+    // geometry. These bind `storage` at set 0 / binding 0 exactly as `draw_storage` does; the `_load` form is
+    // the multi-draw continuation (the load-not-clear scar, amplification form). Defaults: NO-OPs, visibly.
+    virtual void draw_tess_storage(IRasterTarget& /*target*/, IRasterProgram& /*program*/, ClearColor /*clear*/,
+                                   IStorageBuffer& /*storage*/, crd::u32 /*patch_count*/)
+    {
+    }
+    virtual void draw_tess_storage_load(IRasterTarget& /*target*/, IRasterProgram& /*program*/,
+                                        IStorageBuffer& /*storage*/, crd::u32 /*patch_count*/)
+    {
+    }
+
+    // ── ⭐ REN-38-F11: a colour + DEPTH-STENCIL target (D24S8). Appended at the END (D135). ──
+    // The F10 pass-state vocabulary declared, cooked and installed every stencil op — and no target carried the
+    // stencil ASPECT, so the whole axis could configure but never draw. Draw verbs bind the stencil attachment
+    // whenever the target has one; the pass-state ref/masks/ops then work exactly as declared. Default null: a
+    // backend without it makes the stencil gates SKIP rather than pass on a depth-only image.
+    [[nodiscard]] virtual std::unique_ptr<IRasterTarget> create_color_depth_stencil_target(crd::u32 /*width*/,
+                                                                                           crd::u32 /*height*/)
+    {
+        return nullptr;
+    }
+
+    // ── ⭐ REN-38-F6+: STORAGE-BOUND mesh dispatch. Appended at the END (D135). ──
+    // The mesh twin of `draw_tess_storage`: `draw_mesh` bound nothing, so an authored mesh stage could only ever
+    // GENERATE geometry — the meshlet-fetch idiom (real vertices pulled from the scene buffer by workgroup) was
+    // unreachable. Binds `storage` at set 0 / binding 0 exactly as `draw_storage` does; `_load` continues.
+    virtual void draw_mesh_storage(IRasterTarget& /*target*/, IRasterProgram& /*program*/, ClearColor /*clear*/,
+                                   IStorageBuffer& /*storage*/, crd::u32 /*group_count*/)
+    {
+    }
+    virtual void draw_mesh_storage_load(IRasterTarget& /*target*/, IRasterProgram& /*program*/,
+                                        IStorageBuffer& /*storage*/, crd::u32 /*group_count*/)
+    {
+    }
 };
 
 // ⭐ REN-38-A9: a BUILT acceleration structure, behind one portable handle.

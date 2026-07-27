@@ -24,7 +24,11 @@ constexpr crd::u32 kFourCC = (static_cast<crd::u32>('F')) | (static_cast<crd::u3
 // v3 = REN-37.6 appended the include/anchor/inject records. Appended at the END of the blob so the earlier
 // sections are byte-unchanged; the version still bumps because a v2 reader would stop short and silently produce
 // a graph with no composition at all.
-constexpr crd::u32 kBlobVersion = 3U;
+// v4 (REN-38 audit): the per-pass record grew the fields v3 was silently DROPPING — the RT pipeline's three
+// program names, VRS state, conservative, queue, the sampler and the blit filter — plus the new pass-state
+// block. ⛔ The byte-identity gate could not see the loss: a field dropped by BOTH the writer and the reader
+// round-trips "byte-identically", which is why the round-trip gate now asserts FIELD SURVIVAL instead.
+constexpr crd::u32 kBlobVersion = 6U; // v6 (REN-38-F13): + the intersection/callable SBT roles (v5: `load`)
 
 using Bytes = crd::containers::Array<crd::u8>;
 
@@ -160,10 +164,36 @@ bool to_conservative(std::string_view s, crd::gpu::ConservativeMode& out)
     if (s == "underestimate"){ out = M::Underestimate;return true; }
     return false;
 }
+// REN-38-B8: the closed sampler sets.
+bool to_sampler_filter(std::string_view s, crd::gpu::SamplerFilter& out)
+{
+    if (s == "nearest") { out = crd::gpu::SamplerFilter::Nearest; return true; }
+    if (s == "linear")  { out = crd::gpu::SamplerFilter::Linear;  return true; }
+    return false;
+}
+bool to_sampler_address(std::string_view s, crd::gpu::SamplerAddress& out)
+{
+    using A = crd::gpu::SamplerAddress;
+    if (s == "repeat")          { out = A::Repeat;        return true; }
+    if (s == "clamp")           { out = A::ClampToEdge;   return true; }
+    if (s == "clamp_to_border") { out = A::ClampToBorder; return true; }
+    if (s == "mirror")          { out = A::Mirror;        return true; }
+    return false;
+}
 bool to_queue(std::string_view s, FrameQueue& out)
 {
     if (s == "graphics") { out = FrameQueue::Graphics; return true; }
     if (s == "async")    { out = FrameQueue::Async;    return true; }
+    return false;
+}
+// REN-38-B2: the closed set of resource SHAPES.
+bool to_dimension(std::string_view s, crd::gpu::FgImageKind& out)
+{
+    using K = crd::gpu::FgImageKind;
+    if (s == "2d")         { out = K::Tex2D;     return true; }
+    if (s == "3d")         { out = K::Tex3D;     return true; }
+    if (s == "cube")       { out = K::Cube;      return true; }
+    if (s == "cube_array") { out = K::CubeArray; return true; }
     return false;
 }
 bool to_blit_filter(std::string_view s, FrameBlitFilter& out)
@@ -182,6 +212,18 @@ bool to_format(std::string_view s, crd::gpu::FgImageFormat& out)
     if (s == "R32F")       { out = F::R32F;       return true; }
     if (s == "R32Uint")    { out = F::R32Uint;    return true; }
     if (s == "D32Float")   { out = F::D32Float;   return true; }
+    // REN-38-B7: the rest of the vocabulary. Names match the enum exactly — an asset should never have to learn a
+    // second spelling for a format it can already read in the header.
+    if (s == "RG16F")      { out = F::RG16F;      return true; }
+    if (s == "RG32F")      { out = F::RG32F;      return true; }
+    if (s == "RGBA32F")    { out = F::RGBA32F;    return true; }
+    if (s == "R11G11B10F") { out = F::R11G11B10F; return true; }
+    if (s == "RGB10A2")    { out = F::RGB10A2;    return true; }
+    if (s == "R8")         { out = F::R8;         return true; }
+    if (s == "RG8")        { out = F::RG8;        return true; }
+    if (s == "RGBA16Unorm"){ out = F::RGBA16Unorm;return true; }
+    if (s == "D24S8")      { out = F::D24S8;      return true; }
+    if (s == "D32FloatS8") { out = F::D32FloatS8; return true; }
     return false;
 }
 bool to_compare(std::string_view s, crd::gpu::DepthCompare& out)
@@ -195,6 +237,37 @@ bool to_compare(std::string_view s, crd::gpu::DepthCompare& out)
     if (s == "NotEqual")     { out = C::NotEqual;     return true; }
     if (s == "GreaterEqual") { out = C::GreaterEqual; return true; }
     if (s == "Always")       { out = C::Always;       return true; }
+    return false;
+}
+// ── REN-38 audit: the PASS-STATE closed sets. Same rule as every set here: a typo is a NAMED rejection, never
+// a silent fall-back to the default — a pass that says `face_cull = "bcak"` and renders uncalled reads as a
+// winding bug, not as a spelling one.
+bool to_face_cull(std::string_view s, crd::gpu::FaceCull& out)
+{
+    using F = crd::gpu::FaceCull;
+    if (s == "none")  { out = F::None;  return true; }
+    if (s == "back")  { out = F::Back;  return true; }
+    if (s == "front") { out = F::Front; return true; }
+    return false;
+}
+bool to_front_face(std::string_view s, crd::gpu::FrontFace& out)
+{
+    using F = crd::gpu::FrontFace;
+    if (s == "ccw") { out = F::CounterClockwise; return true; }
+    if (s == "cw")  { out = F::Clockwise;        return true; }
+    return false;
+}
+bool to_stencil_op(std::string_view s, crd::gpu::StencilOp& out)
+{
+    using O = crd::gpu::StencilOp;
+    if (s == "keep")       { out = O::Keep;      return true; }
+    if (s == "zero")       { out = O::Zero;      return true; }
+    if (s == "replace")    { out = O::Replace;   return true; }
+    if (s == "incr_clamp") { out = O::IncrClamp; return true; }
+    if (s == "decr_clamp") { out = O::DecrClamp; return true; }
+    if (s == "invert")     { out = O::Invert;    return true; }
+    if (s == "incr_wrap")  { out = O::IncrWrap;  return true; }
+    if (s == "decr_wrap")  { out = O::DecrWrap;  return true; }
     return false;
 }
 bool to_material_pass(std::string_view s, FrameMaterialPass& out)
@@ -319,6 +392,17 @@ const char* frame_cook_error_text(FrameCookError err) noexcept
     case FrameCookError::NoOutputPass:          return "no pass writes `@output`";
     case FrameCookError::BadResourceSize:       return "a resource needs either width+height or scale";
     case FrameCookError::LayersOutOfRange:      return "`layers` must be between 1 and 16";
+    case FrameCookError::UnknownDimension:      return "unknown `dimension` (2d/3d/cube/cube_array)";
+    case FrameCookError::CubeNeedsSquare:       return "a cube face must be SQUARE";
+    case FrameCookError::BadMipCount:           return "`mips` is 0, or more levels than the extent can halve to";
+    case FrameCookError::VolumeNeedsDepth:      return "`dimension = \"3d\"` needs a non-zero `depth`";
+    case FrameCookError::PersistentNeedsSize:   return "a persistent/ping-pong image needs an absolute width+height";
+    case FrameCookError::PingPongNeedsBothWays: return "a ping-pong resource must be both READ and WRITTEN";
+    case FrameCookError::StructuredNeedsStride: return "a structured/counter buffer needs a `stride`";
+    case FrameCookError::StrideNotAligned:      return "a structured `stride` must be a multiple of 4";
+    case FrameCookError::ExternalTextureIsReadOnly: return "a pass writes an external texture; the app owns it";
+    case FrameCookError::UnknownSamplerFilter:  return "unknown sampler `filter` (nearest/linear)";
+    case FrameCookError::UnknownSamplerAddress: return "unknown sampler `address` (repeat/clamp/clamp_to_border/mirror)";
     case FrameCookError::IncludeMissingName:    return "an `[[include]]` needs both `graph` and `as`";
     case FrameCookError::DuplicateInclude:      return "two includes share an `as` namespace";
     case FrameCookError::UnknownAnchor:         return "an `[[inject]]` names an anchor no graph declares";
@@ -346,6 +430,11 @@ const char* frame_cook_error_text(FrameCookError err) noexcept
     case FrameCookError::UnknownQueue:             return "unknown `queue` (graphics/async)";
     case FrameCookError::AsyncQueueNeedsCompute:   return "a raster pass asked for the async-compute queue";
     case FrameCookError::RtPipelineNeedsThree:     return "a raytrace.pipeline pass needs raygen + miss + closest_hit";
+    case FrameCookError::UnknownFaceCull:          return "unknown `face_cull` (none/back/front)";
+    case FrameCookError::UnknownFrontFace:         return "unknown `front_face` (ccw/cw)";
+    case FrameCookError::UnknownStencilOp:         return "unknown stencil op";
+    case FrameCookError::BadStencilValue:          return "a stencil ref/mask outside 0..255";
+    case FrameCookError::LoadNeedsGeometry:        return "`load = true` is only supported on raster.geometry passes";
     }
     return "unknown error";
 }
@@ -359,9 +448,30 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
     if (!res) { return FrameCookError::ParseFailed; }
     const toml::table& root = res.table();
 
+    // ⛔ RESET THE OUTPUT FIRST — the scar every cooker parser carries (material/vertex/light fixed it first):
+    // parsing into a descriptor that already held a graph APPENDED to it (a silently merged frame), and the
+    // SCALARS carried over too — a reused desc kept the previous graph's `memory_budget_bytes` and `fallback`
+    // when the new asset declared neither, which is a budget and a fallback the file never wrote.
+    out.name.clear();
+    out.resources.clear();
+    out.draw_lists.clear();
+    out.passes.clear();
+    out.requires_caps.clear();
+    out.fallback.clear();
+    out.includes.clear();
+    out.anchors.clear();
+    out.injects.clear();
+    out.memory_budget_bytes = 0U;
+
     const auto sch = root["schema"].value<int64_t>();
     if (!sch || *sch != static_cast<int64_t>(kFrameSchemaVersion)) { return FrameCookError::BadSchema; }
     out.schema = kFrameSchemaVersion;
+    // REN-38-B6: the graph-level transient budget, stated in MEGABYTES because that is the unit a platform target
+    // is actually written in. Converted here so nothing downstream has to remember the factor.
+    if (const auto mb = root["memory_budget_mb"].value<int64_t>())
+    {
+        out.memory_budget_bytes = static_cast<crd::u64>(*mb > 0 ? *mb : 0) * 1024ULL * 1024ULL;
+    }
 
     const auto nm = root["name"].value<std::string_view>();
     if (!nm || nm->empty()) { return FrameCookError::MissingName; }
@@ -479,6 +589,11 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
             if (kind == "transient_buffer")           { r.kind = FrameResourceKind::TransientBuffer; }
             else if (kind == "indirect_args")         { r.kind = FrameResourceKind::IndirectArgs; }
             else if (kind == "external_buffer")       { r.kind = FrameResourceKind::ExternalBuffer; }
+            else if (kind == "persistent_image")      { r.kind = FrameResourceKind::PersistentImage; }
+            else if (kind == "pingpong_image")        { r.kind = FrameResourceKind::PingPongImage; }
+            else if (kind == "structured_buffer")     { r.kind = FrameResourceKind::StructuredBuffer; }
+            else if (kind == "counter_buffer")        { r.kind = FrameResourceKind::CounterBuffer; }
+            else if (kind == "external_texture")      { r.kind = FrameResourceKind::ExternalTexture; }
             else if (kind == "acceleration_structure"){ r.kind = FrameResourceKind::AccelerationStructure; }
             else if (kind == "transient_image")       { r.kind = FrameResourceKind::TransientImage; }
             else { set_where(where, kind); return FrameCookError::UnknownFormat; }
@@ -493,7 +608,23 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
             r.samples    = static_cast<crd::u32>((*t)["samples"].value_or<int64_t>(1));
             r.sampled    = (*t)["sampled"].value_or(false);
             r.storage    = (*t)["storage"].value_or(false);
+            r.depth      = static_cast<crd::u32>((*t)["depth"].value_or<int64_t>(1));
+            r.mips       = static_cast<crd::u32>((*t)["mips"].value_or<int64_t>(1));
+            if (const auto dv = (*t)["dimension"].value<std::string_view>())
+            {
+                if (!to_dimension(*dv, r.kind_2d)) { set_where(where, *dv); return FrameCookError::UnknownDimension; }
+            }
+            r.no_alias   = (*t)["no_alias"].value_or(false); // REN-38-B6
+            r.stride     = static_cast<crd::u32>((*t)["stride"].value_or<int64_t>(0));
+            r.count      = static_cast<crd::u32>((*t)["count"].value_or<int64_t>(0));
             r.size_bytes = static_cast<crd::u32>((*t)["size_bytes"].value_or<int64_t>(0));
+            // REN-38-B3: elements × stride IS the size. Stating both would let them disagree, and the resulting
+            // buffer would be a different length than the shader indexes — so one is derived, never checked.
+            if (r.size_bytes == 0U && r.stride != 0U && r.count != 0U) { r.size_bytes = r.stride * r.count; }
+            // ⛔ A COUNTER buffer's first 4 bytes ARE the counter, so its payload starts after them. Folding that
+            // into the declared size here means no author ever has to remember the +4, and no two techniques can
+            // disagree about whether it was already included.
+            if (r.kind == FrameResourceKind::CounterBuffer) { r.size_bytes += 4U; }
             if (r.kind == FrameResourceKind::TransientImage
                 && ((r.width == 0U || r.height == 0U) && r.scale <= 0.0F))
             {
@@ -596,6 +727,9 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
             if (const auto v = (*t)["raygen"].value<std::string_view>())      { set_str(p.raygen, *v); }
             if (const auto v = (*t)["miss"].value<std::string_view>())        { set_str(p.miss, *v); }
             if (const auto v = (*t)["closest_hit"].value<std::string_view>()) { set_str(p.closest_hit, *v); }
+            if (const auto v = (*t)["any_hit"].value<std::string_view>())     { set_str(p.any_hit, *v); }
+            if (const auto v = (*t)["intersection"].value<std::string_view>()) { set_str(p.intersection, *v); }
+            if (const auto v = (*t)["callable"].value<std::string_view>())     { set_str(p.callable, *v); }
             if (const auto v = (*t)["technique"].value<std::string_view>()) { set_str(p.technique, *v); }
             if (const auto v = (*t)["filter"].value<std::string_view>())
             {
@@ -618,6 +752,45 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
             {
                 if (!to_queue(*v, p.queue)) { set_where(where, *v); return FrameCookError::UnknownQueue; }
             }
+            // ── ⭐ REN-38-B8: the pass's sampler. Any one field present makes the pass sampler-declaring. ──
+            if (const auto v = (*t)["filter"].value<std::string_view>())
+            {
+                // NOTE: `filter` is ALSO the blit filter (38-A6). A blit is not a sampled draw and a sampled draw
+                // is not a blit, so the two never collide on one pass — and reusing the word keeps the asset from
+                // having `filter` and `sample_filter` mean nearly the same thing in different places.
+                crd::gpu::SamplerFilter sf{};
+                if (to_sampler_filter(*v, sf))
+                {
+                    p.sampler.min_filter = sf;
+                    p.sampler.mag_filter = sf;
+                    p.sampler.mip_filter = sf;
+                    p.has_sampler        = true;
+                }
+            }
+            if (const auto v = (*t)["address"].value<std::string_view>())
+            {
+                if (!to_sampler_address(*v, p.sampler.address))
+                {
+                    set_where(where, *v);
+                    return FrameCookError::UnknownSamplerAddress;
+                }
+                p.has_sampler = true;
+            }
+            if (const auto v = (*t)["anisotropy"].value<int64_t>())
+            {
+                p.sampler.anisotropy = static_cast<crd::u32>(*v > 0 ? *v : 1);
+                p.has_sampler        = true;
+            }
+            if (const auto v = (*t)["mip_bias"].value<double>())
+            {
+                p.sampler.mip_bias = static_cast<float>(*v);
+                p.has_sampler      = true;
+            }
+            if (const auto v = (*t)["compare"].value<bool>())
+            {
+                p.sampler.compare = *v;
+                p.has_sampler     = true;
+            }
             if (const auto* barr = (*t)["blend"].as_array())
             {
                 for (const auto& b : *barr)
@@ -639,6 +812,68 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
             if (const auto v = (*t)["depth"].value<std::string_view>())
             {
                 if (!to_compare(*v, p.depth)) { set_where(where, *v); return FrameCookError::UnknownCompare; }
+            }
+            // ── ⭐ REN-38 audit: the PASS-STATE vocabulary. Every default is the historical hardwired value. ──
+            if (const auto v = (*t)["depth_write"].value<bool>()) { p.state.depth_write = *v; }
+            if (const auto v = (*t)["depth_bias"].value<double>()) { p.state.depth_bias = static_cast<float>(*v); }
+            if (const auto v = (*t)["depth_bias_slope"].value<double>())
+            {
+                p.state.depth_bias_slope = static_cast<float>(*v);
+            }
+            if (const auto v = (*t)["depth_bias_clamp"].value<double>())
+            {
+                p.state.depth_bias_clamp = static_cast<float>(*v);
+            }
+            if (const auto v = (*t)["face_cull"].value<std::string_view>())
+            {
+                if (!to_face_cull(*v, p.state.face_cull)) { set_where(where, *v); return FrameCookError::UnknownFaceCull; }
+            }
+            if (const auto v = (*t)["front_face"].value<std::string_view>())
+            {
+                if (!to_front_face(*v, p.state.front_face)) { set_where(where, *v); return FrameCookError::UnknownFrontFace; }
+            }
+            // REN-38-F11: this pass LOADS its target instead of clearing (mask-then-test pass pairs)
+            if (const auto v = (*t)["load"].value<bool>()) { p.load_target = *v; }
+            if (const auto v = (*t)["stencil"].value<bool>()) { p.state.stencil_enable = *v; }
+            if (const auto v = (*t)["stencil_compare"].value<std::string_view>())
+            {
+                if (!to_compare(*v, p.state.stencil_compare)) { set_where(where, *v); return FrameCookError::UnknownCompare; }
+                p.state.stencil_enable = true;
+            }
+            if (const auto v = (*t)["stencil_ref"].value<int64_t>())
+            {
+                // ⛔ Stencil is EIGHT BITS on every backend; a reference of 256 silently truncating to 0 would
+                // make a portal pass mark one value and test another — refused by name instead.
+                if (*v < 0 || *v > 255) { set_where(where, p.name.size() > 0U ? p.name.c_str() : "stencil_ref"); return FrameCookError::BadStencilValue; }
+                p.state.stencil_ref    = static_cast<crd::u32>(*v);
+                p.state.stencil_enable = true;
+            }
+            if (const auto v = (*t)["stencil_read_mask"].value<int64_t>())
+            {
+                if (*v < 0 || *v > 255) { set_where(where, p.name.size() > 0U ? p.name.c_str() : "stencil_read_mask"); return FrameCookError::BadStencilValue; }
+                p.state.stencil_read_mask = static_cast<crd::u32>(*v);
+                p.state.stencil_enable    = true;
+            }
+            if (const auto v = (*t)["stencil_write_mask"].value<int64_t>())
+            {
+                if (*v < 0 || *v > 255) { set_where(where, p.name.size() > 0U ? p.name.c_str() : "stencil_write_mask"); return FrameCookError::BadStencilValue; }
+                p.state.stencil_write_mask = static_cast<crd::u32>(*v);
+                p.state.stencil_enable     = true;
+            }
+            if (const auto v = (*t)["stencil_fail"].value<std::string_view>())
+            {
+                if (!to_stencil_op(*v, p.state.stencil_fail)) { set_where(where, *v); return FrameCookError::UnknownStencilOp; }
+                p.state.stencil_enable = true;
+            }
+            if (const auto v = (*t)["stencil_depth_fail"].value<std::string_view>())
+            {
+                if (!to_stencil_op(*v, p.state.stencil_depth_fail)) { set_where(where, *v); return FrameCookError::UnknownStencilOp; }
+                p.state.stencil_enable = true;
+            }
+            if (const auto v = (*t)["stencil_pass"].value<std::string_view>())
+            {
+                if (!to_stencil_op(*v, p.state.stencil_pass)) { set_where(where, *v); return FrameCookError::UnknownStencilOp; }
+                p.state.stencil_enable = true;
             }
             if (const auto* cc = (*t)["clear_color"].as_array())
             {
@@ -719,6 +954,87 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
             set_where(where, std::string_view(r.name.c_str(), r.name.size()));
             return FrameCookError::LayersOutOfRange;
         }
+        // ── ⭐ REN-38-B3: what a STRUCTURED / COUNTER buffer may say. ──
+        if (r.kind == FrameResourceKind::StructuredBuffer || r.kind == FrameResourceKind::CounterBuffer)
+        {
+            const auto ew = std::string_view(r.name.c_str(), r.name.size());
+            // ⛔ Elements with no SIZE. DX12 carries the stride in the UAV, and a wrong one reads every element at
+            // the wrong offset — an error that GROWS with the index, so element 0 looks right and element 1000 is
+            // nonsense. There is no safe default to pick here, so there is none.
+            if (r.stride == 0U) { set_where(where, ew); return FrameCookError::StructuredNeedsStride; }
+            // ⛔ Both APIs require a 4-byte-aligned structure stride. Rounding it up silently would change the
+            // element the shader lands on; refusing names the resource while the author can still fix it.
+            if ((r.stride % 4U) != 0U) { set_where(where, ew); return FrameCookError::StrideNotAligned; }
+        }
+        // ── ⭐ REN-38-B1: what a PERSISTENT / PING-PONG resource may say. ──
+        if (r.kind == FrameResourceKind::PersistentImage || r.kind == FrameResourceKind::PingPongImage)
+        {
+            // ⛔ An ABSOLUTE size, never `scale` alone. A persistent image is looked up by a STABLE KEY across
+            // frames, and a scale-relative extent changes the moment the output resizes — which recreates the
+            // image and DISCARDS the history, silently, mid-session. The author must state the size they mean.
+            if (r.width == 0U || r.height == 0U)
+            {
+                set_where(where, std::string_view(r.name.c_str(), r.name.size()));
+                return FrameCookError::PersistentNeedsSize;
+            }
+            // ⛔ A PING-PONG resource that is only read, or only written, never rotates — so it is a persistent
+            // image the author mislabelled, and every frame would read the same stale image forever.
+            if (r.kind == FrameResourceKind::PingPongImage)
+            {
+                bool read = false;
+                bool wrote = false;
+                for (crd::usize pi2 = 0; pi2 < desc.passes.size(); ++pi2)
+                {
+                    for (crd::usize k = 0; k < desc.passes[pi2].reads.size(); ++k)
+                    {
+                        if (str_eq(r.name, std::string_view(desc.passes[pi2].reads[k].name.c_str(),
+                                                            desc.passes[pi2].reads[k].name.size()))) { read = true; }
+                    }
+                    for (crd::usize k = 0; k < desc.passes[pi2].writes.size(); ++k)
+                    {
+                        if (str_eq(r.name, std::string_view(desc.passes[pi2].writes[k].name.c_str(),
+                                                            desc.passes[pi2].writes[k].name.size()))) { wrote = true; }
+                    }
+                }
+                if (!(read && wrote) && !composed)
+                {
+                    set_where(where, std::string_view(r.name.c_str(), r.name.size()));
+                    return FrameCookError::PingPongNeedsBothWays;
+                }
+            }
+        }
+        // ── ⭐ REN-38-B2: what a SHAPED resource may say. ──
+        if (r.kind == FrameResourceKind::TransientImage)
+        {
+            const auto ew = std::string_view(r.name.c_str(), r.name.size());
+            // ⛔ A CUBE FACE MUST BE SQUARE — the hardware has no other shape for one, so a non-square request is
+            // either silently squashed or refused at creation. Refusing it HERE names the resource.
+            if ((r.kind_2d == crd::gpu::FgImageKind::Cube || r.kind_2d == crd::gpu::FgImageKind::CubeArray)
+                && r.width != r.height)
+            {
+                set_where(where, ew);
+                return FrameCookError::CubeNeedsSquare;
+            }
+            // ⛔ A VOLUME with no depth is a 2-D texture the author believes is a volume; every froxel index into
+            // it would then read slice 0. `depth = 1` is a legal volume, so only ZERO is the mistake.
+            if (r.kind_2d == crd::gpu::FgImageKind::Tex3D && r.depth == 0U)
+            {
+                set_where(where, ew);
+                return FrameCookError::VolumeNeedsDepth;
+            }
+            // ⛔ MIPS: 0 is not "full chain" — guessing what an author meant is how a bloom chain silently gets a
+            // different length than the technique reading it expects. And a chain cannot outlive its extent: the
+            // levels halve to 1x1 and no further, so more levels than that is a request the device must refuse.
+            if (r.mips == 0U) { set_where(where, ew); return FrameCookError::BadMipCount; }
+            crd::u32 ext = r.width > r.height ? r.width : r.height;
+            if (ext == 0U && r.scale > 0.0F) { ext = 0U; } // scale-relative: the runtime checks against the output
+            if (ext != 0U)
+            {
+                crd::u32 max_mips = 1U;
+                while ((ext >> max_mips) != 0U) { ++max_mips; }
+                if (r.mips > max_mips) { set_where(where, ew); return FrameCookError::BadMipCount; }
+            }
+        }
     }
 
     // ── ⭐ REN-38-B4: an ACCELERATION STRUCTURE is EXTERNAL. ──
@@ -753,6 +1069,13 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
             set_where(where, std::string_view(p.name.c_str(), p.name.size()));
             return FrameCookError::MissingShader;
         }
+        // REN-38-F11: `load = true` is honoured only by kinds with load draw verbs — anywhere else it would
+        // silently clear, which is the exact wrongness the flag exists to prevent.
+        if (p.load_target && p.kind != FramePassKind::RasterGeometry)
+        {
+            set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+            return FrameCookError::LoadNeedsGeometry;
+        }
         if (p.kind == FramePassKind::Compute && p.kernel.empty())
         {
             set_where(where, std::string_view(p.name.c_str(), p.name.size()));
@@ -766,6 +1089,19 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
         {
             set_where(where, std::string_view(p.name.c_str(), p.name.size()));
             return FrameCookError::AsyncQueueNeedsCompute;
+        }
+        // ── ⭐ REN-38-B5: an EXTERNAL TEXTURE is READ-ONLY. ──
+        // ⛔ A pass that writes one would have the graph schedule a barrier and a layout transition on content the
+        // APPLICATION owns and may be updating from another thread — so the write is rejected, by pass name,
+        // rather than producing a frame that races with whoever fills the atlas.
+        for (crd::usize w = 0; w < p.writes.size(); ++w)
+        {
+            const FrameResourceDesc* wr = find_resource(p.writes[w].name);
+            if (wr != nullptr && wr->kind == FrameResourceKind::ExternalTexture)
+            {
+                set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                return FrameCookError::ExternalTextureIsReadOnly;
+            }
         }
         // ── ⭐ REN-38-A11: what a VISIBILITY-BUFFER pass may say. ──
         // ⛔ Its target MUST be R32Uint. A primitive id written into an RGBA8 attachment is quantised to 8 bits
@@ -1010,11 +1346,21 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
         // ⛔ REN-38-B4: an ACCELERATION STRUCTURE is EXEMPT — it is external (the host built it), so no pass in
         // this graph writes it and requiring one would make every ray-tracing asset invalid. The rule this loop
         // enforces is "a resource the GRAPH owns must have a producer"; an AS is not one the graph owns.
+        // ⛔ REN-38-B5: an EXTERNAL TEXTURE is the host's too — read-only content with its own update schedule.
+        if (desc.resources[ri].kind == FrameResourceKind::ExternalTexture) { continue; }
         // ⛔ An ACCELERATION STRUCTURE and an EXTERNAL BUFFER are both the HOST's — no pass in this graph writes
         // them, and demanding a producer would make every ray-tracing asset, and every graph that consumes scene
         // geometry, invalid. The rule is "a resource the GRAPH owns must have a producer"; neither is one.
         if (desc.resources[ri].kind == FrameResourceKind::AccelerationStructure
             || desc.resources[ri].kind == FrameResourceKind::ExternalBuffer)
+        {
+            continue;
+        }
+        // ⛔ REN-38-B1: a PERSISTENT image need not be written THIS frame — that is the entire point. A cached
+        // thumbnail or a converged accumulation buffer is read for many frames and rewritten only when something
+        // changed, so demanding a producer would forbid exactly the steady state the row exists to make possible.
+        if (desc.resources[ri].kind == FrameResourceKind::PersistentImage
+            || desc.resources[ri].kind == FrameResourceKind::PingPongImage)
         {
             continue;
         }
@@ -1176,6 +1522,42 @@ crd::containers::Array<crd::u8> cook_frame_graph(const FrameGraphDesc& desc, crd
             put_u8(out, static_cast<crd::u8>(p.params[k].type));
             for (crd::u32 c = 0; c < 4U; ++c) { put_f64(out, p.params[k].v[c]); }
         }
+        // ── v4 (REN-38 audit): the fields v3 dropped, appended at the record's END. ──
+        put_str(out, p.raygen);
+        put_str(out, p.miss);
+        put_str(out, p.closest_hit);
+        put_str(out, p.any_hit);
+        put_str(out, p.intersection); // v6 (REN-38-F13)
+        put_str(out, p.callable);
+        put_u8(out, static_cast<crd::u8>(p.shading_rate));
+        put_u8(out, static_cast<crd::u8>(p.rate_combiner));
+        put_u8(out, static_cast<crd::u8>(p.conservative));
+        put_u8(out, static_cast<crd::u8>(p.queue));
+        put_u8(out, static_cast<crd::u8>(p.filter));
+        put_u8(out, p.has_sampler ? 1U : 0U);
+        put_u8(out, static_cast<crd::u8>(p.sampler.min_filter));
+        put_u8(out, static_cast<crd::u8>(p.sampler.mag_filter));
+        put_u8(out, static_cast<crd::u8>(p.sampler.mip_filter));
+        put_u8(out, static_cast<crd::u8>(p.sampler.address));
+        put_u8(out, p.sampler.compare ? 1U : 0U);
+        put_u32(out, p.sampler.anisotropy);
+        put_f32(out, p.sampler.mip_bias);
+        put_u8(out, p.state.depth_write ? 1U : 0U);
+        put_f32(out, p.state.depth_bias);
+        put_f32(out, p.state.depth_bias_slope);
+        put_f32(out, p.state.depth_bias_clamp);
+        put_u8(out, static_cast<crd::u8>(p.state.face_cull));
+        put_u8(out, static_cast<crd::u8>(p.state.front_face));
+        put_u8(out, p.state.stencil_enable ? 1U : 0U);
+        put_u8(out, static_cast<crd::u8>(p.state.stencil_compare));
+        put_u32(out, p.state.stencil_ref);
+        put_u32(out, p.state.stencil_read_mask);
+        put_u32(out, p.state.stencil_write_mask);
+        put_u8(out, static_cast<crd::u8>(p.state.stencil_fail));
+        put_u8(out, static_cast<crd::u8>(p.state.stencil_depth_fail));
+        put_u8(out, static_cast<crd::u8>(p.state.stencil_pass));
+        // v5: the pass-level load flag rides the same record (field-survival gated like the rest)
+        put_u8(out, p.load_target ? 1U : 0U);
     }
 
     // REN-37.6: composition records, appended at the END.
@@ -1217,6 +1599,18 @@ bool read_frame_graph(crd::containers::ConstSpan<crd::u8> bytes, FrameGraphDesc&
     Cursor c{bytes, 0, true};
     if (c.u32v() != kFourCC || !c.ok) { return false; }
     if (c.u32v() != kBlobVersion) { return false; }
+    // ⛔ RESET FIRST — the same load-button scar the TOML parser above carries: deserializing into a reused
+    // descriptor APPENDED every list and kept stale scalars the blob never wrote.
+    out.name.clear();
+    out.resources.clear();
+    out.draw_lists.clear();
+    out.passes.clear();
+    out.requires_caps.clear();
+    out.fallback.clear();
+    out.includes.clear();
+    out.anchors.clear();
+    out.injects.clear();
+    out.memory_budget_bytes = 0U;
     out.schema = c.u32v();
     c.strv(out.name);
     c.strv(out.fallback);
@@ -1317,6 +1711,41 @@ bool read_frame_graph(crd::containers::ConstSpan<crd::u8> bytes, FrameGraphDesc&
             for (crd::u32 v = 0; v < 4U; ++v) { prm.v[v] = c.f64v(); }
             p.params.push_back(static_cast<FrameParam&&>(prm));
         }
+        // ── v4 (REN-38 audit): the fields v3 dropped, appended at the record's END. ──
+        c.strv(p.raygen);
+        c.strv(p.miss);
+        c.strv(p.closest_hit);
+        c.strv(p.any_hit);
+        c.strv(p.intersection); // v6 (REN-38-F13)
+        c.strv(p.callable);
+        p.shading_rate  = static_cast<crd::gpu::ShadingRate>(c.u8v());
+        p.rate_combiner = static_cast<crd::gpu::ShadingRateCombiner>(c.u8v());
+        p.conservative  = static_cast<crd::gpu::ConservativeMode>(c.u8v());
+        p.queue         = static_cast<FrameQueue>(c.u8v());
+        p.filter        = static_cast<FrameBlitFilter>(c.u8v());
+        p.has_sampler   = c.u8v() != 0U;
+        p.sampler.min_filter = static_cast<crd::gpu::SamplerFilter>(c.u8v());
+        p.sampler.mag_filter = static_cast<crd::gpu::SamplerFilter>(c.u8v());
+        p.sampler.mip_filter = static_cast<crd::gpu::SamplerFilter>(c.u8v());
+        p.sampler.address    = static_cast<crd::gpu::SamplerAddress>(c.u8v());
+        p.sampler.compare    = c.u8v() != 0U;
+        p.sampler.anisotropy = c.u32v();
+        p.sampler.mip_bias   = c.f32v();
+        p.state.depth_write        = c.u8v() != 0U;
+        p.state.depth_bias         = c.f32v();
+        p.state.depth_bias_slope   = c.f32v();
+        p.state.depth_bias_clamp   = c.f32v();
+        p.state.face_cull          = static_cast<crd::gpu::FaceCull>(c.u8v());
+        p.state.front_face         = static_cast<crd::gpu::FrontFace>(c.u8v());
+        p.state.stencil_enable     = c.u8v() != 0U;
+        p.state.stencil_compare    = static_cast<crd::gpu::DepthCompare>(c.u8v());
+        p.state.stencil_ref        = c.u32v();
+        p.state.stencil_read_mask  = c.u32v();
+        p.state.stencil_write_mask = c.u32v();
+        p.state.stencil_fail       = static_cast<crd::gpu::StencilOp>(c.u8v());
+        p.state.stencil_depth_fail = static_cast<crd::gpu::StencilOp>(c.u8v());
+        p.state.stencil_pass       = static_cast<crd::gpu::StencilOp>(c.u8v());
+        p.load_target              = c.u8v() != 0U; // v5
         out.passes.push_back(static_cast<FramePassDesc&&>(p));
     }
 

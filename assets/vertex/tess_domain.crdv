@@ -1,0 +1,23 @@
+schema   = 1
+name     = "crd://vertex/tess_domain"
+stage    = "tess_eval"
+displace = "expand"
+
+[vertex]
+stride = 3
+
+[[attribute]]
+name   = "position"
+offset = 0
+comps  = 3
+kind   = "position"
+
+[tess]
+patch_size = 4
+inner      = 8.0
+outer      = 8.0
+
+[[node]]
+name   = "expand"
+op     = "multiply"
+inputs = ["@position", [1.3, 1.3, 1.0]]

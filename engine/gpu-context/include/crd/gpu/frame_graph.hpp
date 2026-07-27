@@ -104,7 +104,37 @@ enum class FgImageFormat : crd::u8
     R32F,    // depth-as-colour / distance
     R32Uint, // visibility / id buffer
     D32Float, // depth attachment
+    // ── ⭐ REN-38-B7: THE REST OF THE VOCABULARY. Appended at the END (a renumbered format silently
+    // reinterprets every already-cooked graph). Each one below blocks a NAMED technique by its absence. ──
+    RG16F,      // ⛔ MOTION VECTORS — without this TAA (38-G2) is not authorable at all. Also SSR ray data.
+    RG32F,      // high-precision motion / VSM-EVSM variance (moment pairs) / the split-BRDF LUT
+    RGBA32F,    // ReSTIR reservoirs · path-trace accumulation · NRC weights — anywhere f16 would drift
+    R11G11B10F, // the STANDARD HDR light buffer: same dynamic range as RGBA16F at HALF the bandwidth, no alpha
+    RGB10A2,    // G-buffer NORMAL packing — 10 bits/axis is the accepted floor before banding shows on smooth shading
+    R8,         // SSAO · coverage · single-channel masks
+    RG8,        // two-channel masks · packed octahedral normals at low precision
+    RGBA16Unorm,// high-precision UNORM (displacement, height, packed velocity) without float cost
+    // ⛔⛔ STENCIL. There was NO stencil format at all, so decals (38-E4), portals, outlines and masked lighting
+    // were not "imprecise" — they were INEXPRESSIBLE. D24S8 is the universally-supported pair; D32FloatS8 is the
+    // high-precision one, and an adapter without it must be told so rather than silently given D24S8 (a depth
+    // format substituted underneath an author is a precision change they never see and cannot debug).
+    D24S8,
+    D32FloatS8,
 };
+
+// REN-38-B7: does this format carry a STENCIL aspect? Asked in one place so no backend has to re-derive it.
+[[nodiscard]] constexpr bool fg_format_has_stencil(FgImageFormat f) noexcept
+{
+    return f == FgImageFormat::D24S8 || f == FgImageFormat::D32FloatS8;
+}
+
+// REN-38-B7: does it carry a DEPTH aspect? ⛔ Every depth format, not just `D32Float` — the aspect mask, the
+// attachment slot and the sampler choice all key on this, and a stencil format missed here would be bound as a
+// COLOUR attachment, which is not an error on either API, just a wrong image.
+[[nodiscard]] constexpr bool fg_format_has_depth(FgImageFormat f) noexcept
+{
+    return f == FgImageFormat::D32Float || f == FgImageFormat::D24S8 || f == FgImageFormat::D32FloatS8;
+}
 
 // The most array layers one transient may declare. A cap, and therefore stated rather than hidden: 4 CSM
 // cascades, 6 cube faces, 2 stereo views, 8 point-light faces-per-atlas all fit; `create_transient_image`
@@ -122,6 +152,19 @@ inline constexpr crd::u32 kFgMaxImageLayers = 16;
 // the same shape. The graph tracks a layered image as ONE node, so its barriers cover every slice at once
 // (VK_REMAINING_ARRAY_LAYERS / a whole-resource DX12 transition) — conservative and always correct, and the
 // per-slice writes are already ordered by the declared DAG.
+// ⭐ REN-38-B2: what SHAPE a transient is. ⛔ `layers > 1` alone cannot express this: a CUBE is six layers the
+// hardware samples by a DIRECTION, and a 3D volume is a genuinely different resource type whose slices are
+// interpolated between. Treating a cube as a 2D array is not a naming quibble — `textureLod(cube, dir)` and
+// `texture(array, vec3(uv, layer))` are different instructions, and an env prefilter written against one and
+// given the other reads the wrong texel with no error anywhere.
+enum class FgImageKind : crd::u8
+{
+    Tex2D = 0,
+    Tex3D,      // froxel/clustered light volumes · volumetric fog · DDGI probe volumes · the 3D scattering LUT
+    Cube,       // env prefilter · point-light shadows · reflection probes — sampled by a direction
+    CubeArray,  // N probes at once
+};
+
 struct FgImageDesc
 {
     crd::u32      width   = 0;
@@ -131,6 +174,21 @@ struct FgImageDesc
     bool          sampled = false;
     bool          storage = false;
     crd::u32      layers  = 1; // REN-3.2: >1 ⇒ 2D array (CSM cascades / cube faces / stereo). Appended at END.
+    // ── ⭐ REN-38-B2. Appended at the END (a reordered field silently reinterprets every cooked graph). ──
+    FgImageKind   kind    = FgImageKind::Tex2D;
+    crd::u32      depth   = 1; // Tex3D only — the slice count
+    // ⛔ A MIP CHAIN, not a mip COUNT that someone remembers to honour. Bloom's down/up chain, SSR's hi-Z and the
+    // prefiltered environment map are all "one resource, N levels, each level written by one pass and read by the
+    // next" — without this they must be N SEPARATE resources, which defeats the aliaser and makes the chain's
+    // length an asset-authoring chore instead of a number.
+    crd::u32      mips    = 1;
+    // ── ⭐ REN-38-B6: EXCLUDE this transient from memory aliasing. ──
+    // ⛔ The graph aliases by LIFETIME, and a lifetime is derived from the reads and writes an asset DECLARES. When
+    // a pass touches a resource it did not declare — a debug overlay reading a buffer out-of-band, a tool
+    // capturing an intermediate — the derivation is right and the reality is not, and the symptom is another
+    // transient's pixels appearing inside this one. An author who knows that needs a way to say so, and the
+    // alternative (turning aliasing off globally) trades one correct frame for the whole memory win.
+    bool          no_alias = false;
 };
 
 // The recording surface handed to a pass's execute callback. `raster()` is the raster context IN FRAME
@@ -209,6 +267,16 @@ public:
     // A resource imported twice returns the same handle. Handles are stable until reset().
     [[nodiscard]] virtual FgImage  import_target(IRasterTarget& target)   = 0;
     [[nodiscard]] virtual FgBuffer import_storage(IStorageBuffer& buffer) = 0;
+
+    // ── ⭐ REN-38-B5: IMPORT AN APP-OWNED TEXTURE. Appended at the END of the vtable (D135). ──
+    // A UI atlas, a video frame, a captured HDR, a baked LUT — content the graph READS and never produces. ⛔ It
+    // is NOT `import_target`: a render target is something a pass can WRITE, and letting a UI atlas be written
+    // would put the graph in charge of content the application owns and updates on its own schedule. Read-only is
+    // the whole distinction, so it gets its own verb rather than a flag on the existing one.
+    //
+    // The graph tracks it for ORDERING only — there is no barrier to derive, because nothing in the frame writes
+    // it. Returning an invalid handle on a backend without support is the honest answer; the default does.
+    [[nodiscard]] virtual FgImage import_texture(class ITexture& /*texture*/) { return FgImage{0U}; }
 
     // Declare a TRANSIENT the graph owns + aliases (its memory may be shared with another disjoint-lifetime
     // transient). Invalid handle on an unsupported format/desc. `texture()` resolves it only if `sampled`.
@@ -317,6 +385,17 @@ public:
     // consumes graphics output). ⛔ Counted rather than assumed, for the same reason `last_present_count` is: a
     // declaration the device quietly ignored is a lie the frame cannot expose on its own.
     [[nodiscard]] virtual crd::u32 last_async_pass_count() const noexcept { return 0U; }
+
+    // ── ⭐ REN-38-B6: A HARD MEMORY BUDGET for graph-owned transients. Appended at the END (D135). ──
+    // `build()` FAILS when the post-aliasing footprint exceeds `bytes`; 0 (the default) means unbounded, so every
+    // existing graph is unchanged. ⛔ A budget that only WARNED would be useless: the failure it prevents is an
+    // allocation that succeeds on the development machine and OOMs on the target, months later, in a build nobody
+    // can bisect. Failing at BUILD names the graph while the author is holding it.
+    virtual void set_memory_budget(crd::u64 /*bytes*/) {}
+
+    // Did the last `build()` fail because of that budget (rather than for any other reason)? ⛔ Reported
+    // separately because "too big" and "malformed" need different fixes, and a single false cannot say which.
+    [[nodiscard]] virtual bool last_build_exceeded_budget() const noexcept { return false; }
 };
 
 } // namespace crd::gpu

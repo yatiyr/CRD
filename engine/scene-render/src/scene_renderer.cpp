@@ -3,6 +3,13 @@
 
 #include <crd/scenerender/scene_renderer.hpp>
 
+// REN-38-D5: every vertex program this renderer runs is COOKED FROM A `.crdv`.
+#include <crd/vertexcook/vertex_asset.hpp>
+// REN-38-C4: the scene SURFACE is cooked from an authored `.crdm`, not a C++ builder.
+#include <crd/matcook/material_asset.hpp>
+// REN-38-E7: the LIGHTING is an authored declaration cooked into the technique body.
+#include <crd/lightcook/lighting_asset.hpp>
+
 #include <crd/scenerender/csm.hpp> // REN-3.2-b: stabilized cascade fitting
 
 #include <crd/anim/pose.hpp>
@@ -17,6 +24,7 @@
 #include <crd/framecook/frame_asset.hpp>   // REN-37.10: the AUTHORED frame graph this renderer HOSTS
 #include <crd/framecook/frame_runtime.hpp> // REN-37.10: FrameRecorder + IFrameGraphHost
 #include <crd/log/log.hpp>              // REN-37.10: a graph that fails to record must SAY so
+#include <crd/platform/filesystem.hpp>  // REN-38-F15: disk-first asset resolution (a file shadows the pack)
 #include <crd/resources/openpbr_material.hpp>
 #include <crd/resources/resource_manager.hpp>
 #include <crd/resources/texture_resource.hpp> // REN-2 Half B: the cooked base-color map the forward pass samples
@@ -235,31 +243,229 @@ struct SceneSurfaceCtx
     bool textured = false;
 };
 
-// The scene material: base colour = instance tint (times the base-colour map when the group has one), a dielectric
-// default, and the interpolated world normal. NO lighting - that is the render path's job, and keeping it out is
-// what lets the same surface serve the Shadow, DepthPrepass, GBuffer and Forward variants.
-int scene_build_surface(crd::kir::KGraph& g, int struct_id, const crd::kir::cook::SurfaceInputs& in, void* user)
+// ── ⭐⭐ REN-38-C4: THE SCENE MATERIAL IS AN AUTHORED `.crdm`. ────────────────────────
+// ⛔⛔ `scene_build_surface` USED TO LIVE HERE — a C++ `MaterialTemplate::build_surface` function pointer, which
+// is what made "invent a material" mean "edit and recompile the engine". It is GONE. The surface is now a node
+// graph cooked by `crd-material-cook`, and THE DELETION IS THE PROOF the C band landed.
+//
+// ⭐ The material reads its inputs BY VARYING LOCATION through the geometric nodes — `geomcolor(1)` is the
+// per-instance tint, `normal(0)` the interpolated world normal, `texcoord(3)` the uv — which is the same
+// contract 38-D4 checks the vertex program against. The material declares what it reads instead of being handed
+// it, so a material that wants the TANGENT frame at location 4 needs no engine change either.
+namespace
 {
-    namespace kir = crd::kir;
-    namespace mat = crd::kir::material;
-    auto*      c  = static_cast<SceneSurfaceCtx*>(user);
-    const auto sh = kir::make_shape({1});
-    const auto k  = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+constexpr const char* kSceneMaterial = R"(
+schema = 1
+name   = "crd://material/scene"
 
-    int br = g.swizzle(c->tint, 0);
-    int bg = g.swizzle(c->tint, 1);
-    int bb = g.swizzle(c->tint, 2);
-    if (c->textured)
+[[node]]
+name   = "tint"
+op     = "geomcolor"
+inputs = [1]
+
+[[node]]
+name   = "tr"
+op     = "extract"
+inputs = ["tint", 0]
+
+[[node]]
+name   = "tg"
+op     = "extract"
+inputs = ["tint", 1]
+
+[[node]]
+name   = "tb"
+op     = "extract"
+inputs = ["tint", 2]
+
+[[node]]
+name   = "alpha"
+op     = "extract"
+inputs = ["tint", 3]
+
+[[node]]
+name   = "base"
+op     = "combine3"
+inputs = ["tr", "tg", "tb"]
+
+[[node]]
+name   = "nrm"
+op     = "normal"
+inputs = [0]
+
+[[node]]
+name   = "metal"
+op     = "multiply"
+inputs = [0.0, 1.0]
+
+[[node]]
+name   = "rough"
+op     = "multiply"
+inputs = [0.8, 1.0]
+
+[surface]
+base_color = "base"
+normal     = "nrm"
+metallic   = "metal"
+roughness  = "rough"
+opacity    = "alpha"
+)";
+
+// The TEXTURED variant: the same surface with the base-colour map multiplied in. ⭐ It is a different MATERIAL,
+// not a different shader — which is the whole REN-37.2 point, now expressible without touching C++. The
+// descriptor coordinates (set 0, texture binding 1, sampler binding 2) are ATTRIBUTES of the `sample2d` node:
+// a binding index is topology, not a value.
+constexpr const char* kSceneMaterialTextured = R"(
+schema = 1
+name   = "crd://material/scene_textured"
+
+[[node]]
+name   = "tint"
+op     = "geomcolor"
+inputs = [1]
+
+[[node]]
+name   = "uv"
+op     = "texcoord"
+inputs = [3]
+
+[[node]]
+name   = "map"
+op     = "sample2d"
+inputs = ["uv", 0, 1, 2]
+
+[[node]]
+name   = "tr"
+op     = "extract"
+inputs = ["tint", 0]
+
+[[node]]
+name   = "tg"
+op     = "extract"
+inputs = ["tint", 1]
+
+[[node]]
+name   = "tb"
+op     = "extract"
+inputs = ["tint", 2]
+
+[[node]]
+name   = "alpha"
+op     = "extract"
+inputs = ["tint", 3]
+
+[[node]]
+name   = "mr"
+op     = "extract"
+inputs = ["map", 0]
+
+[[node]]
+name   = "mg"
+op     = "extract"
+inputs = ["map", 1]
+
+[[node]]
+name   = "mb"
+op     = "extract"
+inputs = ["map", 2]
+
+[[node]]
+name   = "br"
+op     = "multiply"
+inputs = ["tr", "mr"]
+
+[[node]]
+name   = "bg"
+op     = "multiply"
+inputs = ["tg", "mg"]
+
+[[node]]
+name   = "bb"
+op     = "multiply"
+inputs = ["tb", "mb"]
+
+[[node]]
+name   = "base"
+op     = "combine3"
+inputs = ["br", "bg", "bb"]
+
+[[node]]
+name   = "nrm"
+op     = "normal"
+inputs = [0]
+
+[[node]]
+name   = "metal"
+op     = "multiply"
+inputs = [0.0, 1.0]
+
+[[node]]
+name   = "rough"
+op     = "multiply"
+inputs = [0.8, 1.0]
+
+[surface]
+base_color = "base"
+normal     = "nrm"
+metallic   = "metal"
+roughness  = "rough"
+opacity    = "alpha"
+)";
+
+// ⭐ REN-38-F6: the FLAT material — a CONSTANT surface that reads NO varyings at all. It is the fragment side of
+// the advanced-geometry pipelines (tessellation / mesh shading), whose procedural stages emit no attribute
+// varyings; an FS with an EMPTY read set satisfies the 38-D4 contract against ANY vertex program trivially.
+constexpr const char* kFlatMaterial = R"(
+schema = 1
+name   = "crd://material/flat"
+
+[[node]]
+name   = "base"
+op     = "combine3"
+inputs = [1.0, 0.35, 0.1]
+
+[[node]]
+name   = "one"
+op     = "multiply"
+inputs = [1.0, 1.0]
+
+[surface]
+base_color = "base"
+opacity    = "one"
+)";
+} // namespace
+
+// The `MaterialTemplate` adapter: cook the authored `.crdm` for this variant. ⛔ A cook failure returns a
+// NEGATIVE node, never a substitute surface — a material silently replaced by another renders a plausible
+// object that is not the one anybody authored.
+int scene_build_surface(crd::kir::KGraph& g, int struct_id, const crd::kir::cook::SurfaceInputs& /*in*/, void* user)
+{
+    auto* c = static_cast<SceneSurfaceCtx*>(user);
+    crd::matcook::MaterialDesc desc(crd::memory::default_allocator());
+    crd::containers::String    where(crd::memory::default_allocator());
+    const char*                text = (c != nullptr && c->textured) ? kSceneMaterialTextured : kSceneMaterial;
+    if (crd::matcook::parse_material_toml(crd::containers::StringView(text), desc, &where)
+        != crd::matcook::MaterialCookError::Ok)
     {
-        const int tex  = g.texture(0, 1, kir::DType::F32, kir::TexDim::Tex2D, false, false, false);
-        const int samp = g.sampler(0, 2, false);
-        const int t    = g.tex_sample(tex, samp, g.vec2(g.swizzle(c->uv, 0), g.swizzle(c->uv, 1)));
-        br = g.binary(kir::KOp::Mul, br, g.swizzle(t, 0));
-        bg = g.binary(kir::KOp::Mul, bg, g.swizzle(t, 1));
-        bb = g.binary(kir::KOp::Mul, bb, g.swizzle(t, 2));
+        return -1;
     }
-    return mat::build_surface(g, struct_id, g.vec3(br, bg, bb), k(0.0), k(0.8), in.world_normal,
-                              g.vec3(k(0.0), k(0.0), k(0.0)), k(1.0), g.swizzle(c->tint, 3));
+    return crd::matcook::cook_material(desc, g, struct_id);
+}
+
+// REN-38-F6: the same adapter for the FLAT material (nothing varies). `user` (F15) optionally carries the
+// DISK-resolved text; null falls back to the embedded copy.
+int flat_build_surface(crd::kir::KGraph& g, int struct_id, const crd::kir::cook::SurfaceInputs& /*in*/,
+                       void* user)
+{
+    crd::matcook::MaterialDesc desc(crd::memory::default_allocator());
+    crd::containers::String    where(crd::memory::default_allocator());
+    const char* text = user != nullptr ? static_cast<const crd::containers::String*>(user)->c_str() : kFlatMaterial;
+    if (crd::matcook::parse_material_toml(crd::containers::StringView(text), desc, &where)
+        != crd::matcook::MaterialCookError::Ok)
+    {
+        return -1;
+    }
+    return crd::matcook::cook_material(desc, g, struct_id);
 }
 
 // ── REN-37.2/37.3: WHAT THE RENDERER COOKS, and the BINDING CONTRACT's runtime half ─────────────────────────
@@ -389,63 +595,427 @@ struct SceneShaderConfig
                                  static_cast<int>(binds.size()), option_values, cfg.tech->n_options);
 }
 
-// REN-3.2-b SHADOWED SCENE VS: the scene VS plus the two things a cascade lookup needs — the WORLD position
-// (to project into light space) and the VIEW DEPTH (to select the cascade). Packed into one vec4 varying so the
-// shadowed path costs exactly one extra interpolant over the flat one.
-void build_scene_vs_shadowed(crd::kir::KGraph& g, crd::kir::KEntry& ve)
+// ── ⭐⭐ REN-38-D5: THE VERTEX PROGRAMS ARE AUTHORED. ─────────────────────────────
+// ⛔⛔ `build_scene_vs_shadowed` / `_skinned` / `build_shadow_vs` USED TO LIVE HERE — ~200 lines of C++ with the
+// vertex-pull layout compiled in: the header word map as bare integers, the 12-word vertex record, the instance
+// record, four-influence linear-blend skinning, and a hardcoded varying set. They are GONE. Each is now a `.crdv`
+// cooked by `crd-vertex-cook`, and THE DELETION IS THE PROOF the D band landed: if the asset could not express
+// these programs, this code would have had to stay.
+//
+// ⭐ The declarations are BUILT-IN TEXT for the same reason the technique library and the frame-graph pack are:
+// an engine default an app overrides by name, with no file IO on the init path. The shipped copies under
+// `assets/vertex/` are the same declarations in editable form.
+namespace
 {
-    namespace kir = crd::kir;
-    Gx c(g);
+// The shared prologue — the header word map, the cooked 48-byte vertex record and the 20-word instance record.
+// ⭐ The TANGENT at words 8..11 has been in this buffer since the mesh cooker was written and no shader could
+// read it; it is declared here so a material that wants a tangent frame needs no engine change.
+constexpr const char* kVsPrologue = R"(
+schema = 1
+name   = "crd://vertex/scene"
 
-    const int vid  = g.cast(g.builtin(kir::KBuiltin::VertexIndex), kir::DType::U32);
-    const int idxc = c.hdru(0U);
-    const int ii   = c.dvd(vid, idxc);
-    const int li   = c.sub(vid, c.mul(ii, idxc));
+[header]
+index_count  = 0
+index_off    = 2
+vertex_off   = 3
+instance_off = 4
+visible_off  = 5
+view_proj    = 6
+light_vp     = 32
+skin_off     = 25
+palette_off  = 26
+joint_count  = 27
+instance_count = 100
 
-    const int vidx  = c.loadu(c.add(c.hdru(2U), li));
-    const int vbase = c.add(c.hdru(3U), c.mul(vidx, c.ku(kVertexWords)));
-    const int px    = c.loadf(c.add(vbase, c.ku(0U)));
-    const int py    = c.loadf(c.add(vbase, c.ku(1U)));
-    const int pz    = c.loadf(c.add(vbase, c.ku(2U)));
-    const int nx    = c.loadf(c.add(vbase, c.ku(3U)));
-    const int ny    = c.loadf(c.add(vbase, c.ku(4U)));
-    const int nz    = c.loadf(c.add(vbase, c.ku(5U)));
+[vertex]
+stride = 12
 
-    const int slot  = c.loadu(c.add(c.hdru(5U), ii));
-    const int ibase = c.add(c.hdru(4U), c.mul(slot, c.ku(kInstanceWords)));
-    int       m[16];
-    for (crd::u32 k = 0; k < 16U; ++k) { m[k] = c.loadf(c.add(ibase, c.ku(k))); }
+[[attribute]]
+name   = "position"
+offset = 0
+comps  = 3
+kind   = "position"
 
-    const int wx = c.add(c.add(c.mul(m[0], px), c.mul(m[4], py)), c.add(c.mul(m[8], pz), m[12]));
-    const int wy = c.add(c.add(c.mul(m[1], px), c.mul(m[5], py)), c.add(c.mul(m[9], pz), m[13]));
-    const int wz = c.add(c.add(c.mul(m[2], px), c.mul(m[6], py)), c.add(c.mul(m[10], pz), m[14]));
-    const int nwx = c.add(c.add(c.mul(m[0], nx), c.mul(m[4], ny)), c.mul(m[8], nz));
-    const int nwy = c.add(c.add(c.mul(m[1], nx), c.mul(m[5], ny)), c.mul(m[9], nz));
-    const int nwz = c.add(c.add(c.mul(m[2], nx), c.mul(m[6], ny)), c.mul(m[10], nz));
+[[attribute]]
+name   = "normal"
+offset = 3
+comps  = 3
+kind   = "direction"
 
-    int clip[4];
-    c.mul_view_proj(wx, wy, wz, clip);
+[[attribute]]
+name   = "uv"
+offset = 6
+comps  = 2
+kind   = "value"
 
-    const int cr = c.loadf(c.add(ibase, c.ku(16U)));
-    const int cg = c.loadf(c.add(ibase, c.ku(17U)));
-    const int cb = c.loadf(c.add(ibase, c.ku(18U)));
-    const int ca = c.loadf(c.add(ibase, c.ku(19U)));
+[[attribute]]
+name   = "tangent"
+offset = 8
+comps  = 4
+kind   = "direction"
 
-    // REN-37.1: the varying set every COOKED material variant reads. uv rides at 3 so a textured material needs
-    // no separate VS — the variant key decides whether the FS samples it, and lowering drops the interpolant
-    // when it does not.
-    const int u0 = c.loadf(c.add(vbase, c.ku(6U)));
-    const int v0 = c.loadf(c.add(vbase, c.ku(7U)));
-    ve.stage    = kir::KStage::Vertex;
-    ve.position = g.vec4(clip[0], clip[1], clip[2], clip[3]);
-    ve.n_out    = 4;
-    ve.out[0]   = {g.vec3(nwx, nwy, nwz), 0, kir::Interp::Smooth};
-    ve.out[1]   = {g.vec4(cr, cg, cb, ca), 1, kir::Interp::Flat};
-    // ⛔ clip.w IS the view-space distance for a standard perspective projection, so cascade selection needs no
-    // extra matrix multiply and no separate view matrix in the header — the value is already computed.
-    ve.out[2]   = {g.vec4(wx, wy, wz, clip[3]), 2, kir::Interp::Smooth};
-    ve.out[3]   = {g.vec2(u0, v0), 3, kir::Interp::Smooth};
+[instance]
+stride    = 20
+transform = 0
+
+[[instance_attribute]]
+name   = "color"
+offset = 16
+comps  = 4
+kind   = "value"
+)";
+
+// The varying set EVERY cooked fragment variant reads: normal@0 · tint@1 · worldpos+depth@2 · uv@3.
+// ⛔ The tint is SMOOTH, not flat, and that is the CONTRACT, not a preference: the material reads it through
+// `geomcolor`, whose StageIn declares Smooth (a MaterialX vertex colour), and mismatched interpolation between
+// the two stages is a spec violation that HAPPENS to render here — a per-instance constant interpolates to
+// itself — while shading faceted the moment a real per-vertex colour arrives. The live 38-D4 contract check
+// (REN-38 audit) is what caught the disagreement; it refuses the pair at init now.
+// ⛔⛔ THE SKINNED PATH USED TO EMIT ONLY TWO OF THESE. `build_scene_vs_skinned` wrote locations 0 and 1 and
+// stopped, while every fragment program reads 0..3 — so a skinned draw shaded from UNDEFINED interpolants at
+// locations 2 and 3 (the world position the specular and shadow terms need, and the uv). It linked, it bound, it
+// rendered. 38-D4’s varying contract is exactly the check that finds this, and sharing one declared varying set
+// is what makes it impossible to reintroduce.
+constexpr const char* kVsVaryings = R"(
+[[varying]]
+name     = "world_normal"
+location = 0
+interp   = "smooth"
+source   = ["world:normal"]
+
+[[varying]]
+name     = "tint"
+location = 1
+interp   = "smooth"
+source   = ["instance:color"]
+
+[[varying]]
+name     = "world_pos_depth"
+location = 2
+interp   = "smooth"
+source   = ["world:position", "clip.w"]
+
+[[varying]]
+name     = "uv"
+location = 3
+interp   = "smooth"
+source   = ["uv"]
+)";
+
+// GEO-8 skinning, DECLARED: four influences of linear blending over a 6-word skin record and a 16-word palette.
+// Changing the influence count or moving to dual-quaternion blending is now an edit here, not an engine change.
+constexpr const char* kVsSkin = R"(
+[skin]
+scheme         = "linear_blend"
+influences     = 4
+stride         = 6
+joint_words    = 2
+weight_off     = 2
+palette_stride = 16
+)";
+
+// ── ⭐⭐ REN-38-F6: THE ADVANCED-STAGE DECLARATIONS. ─────────────────────────────────────────────────────────
+// Every stage of every advanced pipeline — tessellation, mesh shading, the visibility buffer, GPU culling and
+// the ray-tracing hit group — is an AUTHORED `.crdv`, cooked here exactly the way the scene VS is. The F band
+// proved the vocabulary; this is the join the F6 audit found missing: nothing had ever CREATED a program from
+// these declarations, and the first attempt exposed that the F1/F2 cooks produced device-impossible entries.
+
+// The tessellation control-point VS: a PROCEDURAL corner table (the F7 vocabulary) — four quad corners at
+// ±0.6 clip, selected by `@corner`. `draw_tess` binds NO storage, so a pulling VS could never run here.
+constexpr const char* kTessCornersVs = R"(
+schema   = 1
+name     = "crd://vertex/tess_corners"
+position = "node:clip"
+
+[expand]
+verts_per_instance = 4
+
+[[node]]
+name   = "x_hi"
+op     = "ifequal"
+inputs = ["@corner", 2.0, 0.6, -0.6]
+
+[[node]]
+name   = "x"
+op     = "ifequal"
+inputs = ["@corner", 1.0, 0.6, "x_hi"]
+
+[[node]]
+name   = "y"
+op     = "ifgreater"
+inputs = ["@corner", 1.5, 0.6, -0.6]
+
+[[node]]
+name   = "clip"
+op     = "combine4"
+inputs = ["x", "y", 0.0, 1.0]
+)";
+
+// The hull: levels only — its whole job in the B4 model.
+constexpr const char* kTessHullVs = R"(
+schema = 1
+name   = "crd://vertex/tess_hull"
+stage  = "tess_control"
+
+[tess]
+patch_size = 4
+inner      = 8.0
+outer      = 8.0
+)";
+
+// The domain: the emitter's bilerped patch point, DISPLACED by the authored graph (×1.3 in xy — the proven
+// A1d expansion, so a pixel between the base edge and the expanded one proves the domain ran per vertex).
+constexpr const char* kTessDomainVs = R"(
+schema   = 1
+name     = "crd://vertex/tess_domain"
+stage    = "tess_eval"
+displace = "expand"
+
+[vertex]
+stride = 3
+
+[[attribute]]
+name   = "position"
+offset = 0
+comps  = 3
+kind   = "position"
+
+[tess]
+patch_size = 4
+inner      = 8.0
+outer      = 8.0
+
+[[node]]
+name   = "expand"
+op     = "multiply"
+inputs = ["@position", [1.3, 1.3, 1.0]]
+)";
+
+// The meshlet grid (the F6-corrected procedural mesh contract: vertices == 3 · primitives).
+constexpr const char* kMeshletVs = R"(
+schema = 1
+name   = "crd://vertex/scene_meshlet"
+stage  = "mesh"
+
+[mesh]
+max_vertices   = 18
+max_primitives = 6
+workgroup      = 18
+)";
+
+// The amplification stage: each task workgroup launches `emit` mesh workgroups.
+constexpr const char* kTaskVs = R"(
+schema = 1
+name   = "crd://vertex/scene_task"
+stage  = "task"
+
+[mesh]
+workgroup = 32
+
+[task]
+emit = 2
+)";
+
+// The visibility-buffer VS: a PROCEDURAL fullscreen pair (6 vertices, 2 triangles) — `draw_visbuffer` binds no
+// storage either, and each half of the screen carries a distinct primitive id for the FS to write.
+constexpr const char* kVisbufferVs = R"(
+schema   = 1
+name     = "crd://vertex/visbuffer_fullscreen"
+position = "node:clip"
+
+[expand]
+verts_per_instance = 6
+
+[[node]]
+name   = "x_b"
+op     = "ifequal"
+inputs = ["@corner", 4.0, 1.0, -1.0]
+
+[[node]]
+name   = "x_a"
+op     = "ifequal"
+inputs = ["@corner", 2.0, 1.0, "x_b"]
+
+[[node]]
+name   = "x"
+op     = "ifequal"
+inputs = ["@corner", 1.0, 1.0, "x_a"]
+
+[[node]]
+name   = "y_b"
+op     = "ifequal"
+inputs = ["@corner", 5.0, 1.0, -1.0]
+
+[[node]]
+name   = "y_a"
+op     = "ifequal"
+inputs = ["@corner", 4.0, 1.0, "y_b"]
+
+[[node]]
+name   = "y"
+op     = "ifequal"
+inputs = ["@corner", 2.0, 1.0, "y_a"]
+
+[[node]]
+name   = "clip"
+op     = "combine4"
+inputs = ["x", "y", 0.5, 1.0]
+)";
+
+// The ray-tracing declaration — ONE [rt] contract, cooked once per stage (the stage line is prepended).
+constexpr const char* kRtBody = R"(
+schema = 1
+name   = "crd://vertex/scene_rt"
+
+[rt]
+payload_words = 2
+as_binding    = 0
+out_binding   = 1
+alpha_cutoff  = 0.35
+)";
+
+// ── The SCENE FRAME GRAPHS for the advanced families. Each is the smallest graph that RENDERS (or computes)
+// through its family — the F6 join: an authored pass naming an authored program, resolved by the live host.
+constexpr const char* kSceneTessGraph = R"(
+schema = 1
+name   = "crd://frame/scene_tess"
+
+[[pass]]
+name        = "displace"
+kind        = "raster.tess"
+shader      = "crd://scene/tess"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+params      = { patches = 1 }
+)";
+
+constexpr const char* kSceneMeshGraph = R"(
+schema = 1
+name   = "crd://frame/scene_mesh"
+
+[[pass]]
+name        = "amplify"
+kind        = "raster.mesh"
+shader      = "crd://scene/mesh"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+params      = { groups = 2 }
+)";
+
+constexpr const char* kSceneVisbufferGraph = R"(
+schema = 1
+name   = "crd://frame/scene_visbuffer"
+
+[[draw_list]]
+name = "visbuffer_geometry"
+
+[[pass]]
+name      = "ids"
+kind      = "raster.visbuffer"
+shader    = "crd://scene/visbuffer"
+draw_list = "visbuffer_geometry"
+writes    = ["@output"]
+params    = { clear_id = 7 }
+)";
+
+constexpr const char* kSceneCullGraph = R"(
+schema = 1
+name   = "crd://frame/scene_cull"
+
+[[resource]]
+name = "instances"
+kind = "external_buffer"
+
+[[resource]]
+name = "cull_flags"
+kind = "external_buffer"
+
+[[resource]]
+name = "cull_args"
+kind = "indirect_args"
+size_bytes = 16
+
+[[resource]]
+name = "cull_marks"
+kind = "external_buffer"
+
+[[pass]]
+name   = "cull"
+kind   = "compute"
+kernel = "crd://scene/cull"
+reads  = ["instances"]
+writes = ["cull_flags", "cull_args"]
+params = { groups_x = 1 }
+
+[[pass]]
+name   = "mark"
+kind   = "compute.indirect"
+kernel = "crd://scene/cull_mark"
+reads  = ["cull_args", "instances"]
+writes = ["cull_marks"]
+
+[[pass]]
+name        = "blank"
+kind        = "clear"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+)";
+
+constexpr const char* kSceneRtGraph = R"(
+schema = 1
+name   = "crd://frame/scene_rt"
+
+[[resource]]
+name = "scene_tlas"
+kind = "acceleration_structure"
+
+[[resource]]
+name = "hits"
+kind = "external_buffer"
+
+[[pass]]
+name        = "trace"
+kind        = "raytrace.pipeline"
+raygen      = "crd://scene/rt/raygen"
+miss        = "crd://scene/rt/miss"
+closest_hit = "crd://scene/rt/chit"
+any_hit     = "crd://scene/rt/anyhit"
+reads       = ["scene_tlas"]
+writes      = ["hits"]
+params      = { groups_x = 4, groups_y = 1 }
+
+[[pass]]
+name        = "blank"
+kind        = "clear"
+writes      = ["@output"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+)";
+} // namespace
+
+namespace
+{
+// ⛔ A cook failure must FAIL, never fall back: a vertex program silently replaced by another reads the same
+// buffer with a different layout, and the mesh draws as noise rather than not at all.
+// `out_desc` (optional) receives the parsed declaration — the REN-38 live varying contract verifies every
+// cooked fragment program's read set against it at program-creation time.
+[[nodiscard]] bool cook_vs(crd::memory::IAllocator* alloc, const char* body, const char* extra,
+                           crd::kir::KGraph& g, crd::kir::KEntry& ve,
+                           crd::vertcook::VertexProgramDesc* out_desc = nullptr)
+{
+    crd::containers::String toml(alloc);
+    toml.append(body);
+    if (extra != nullptr) { toml.append(extra); }
+    crd::vertcook::VertexProgramDesc local(alloc);
+    crd::vertcook::VertexProgramDesc& desc = out_desc != nullptr ? *out_desc : local;
+    crd::containers::String          where(alloc);
+    if (crd::vertcook::parse_vertex_toml(crd::containers::StringView(toml.c_str(), toml.size()), desc, &where)
+        != crd::vertcook::VertexCookError::Ok)
+    {
+        return false;
+    }
+    return crd::vertcook::cook_vertex_program(desc, g, ve);
 }
+} // namespace
 
 // ⭐⭐ REN-37.4: the hand-written CASCADED-SHADOW fragment shader USED TO LIVE HERE - ~120 lines of C++ that
 // selected a cascade, projected, PCF-filtered and attenuated. It is GONE. The identical shading is now the
@@ -453,41 +1023,9 @@ void build_scene_vs_shadowed(crd::kir::KGraph& g, crd::kir::KEntry& ve)
 // frame-graph pass that says `technique = "forward_csm"`. THE DELETION IS THE PROOF the slice landed: if the
 // technique path could not express CSM, this code would have had to stay.
 
-// REN-3.2-b SHADOW VS: the scene VS's pull path, transformed by cascade `c`'s light_vp instead of the camera's
-// view_proj, with NO varyings — a shadow pass writes depth and nothing else. One variant per cascade, so the
-// cascade index is a compile-time constant and a single storage binding serves every cascade pass.
-void build_shadow_vs(crd::kir::KGraph& g, crd::kir::KEntry& ve, crd::u32 cascade)
-{
-    namespace kir = crd::kir;
-    Gx c(g);
-
-    const int vid  = g.cast(g.builtin(kir::KBuiltin::VertexIndex), kir::DType::U32);
-    const int idxc = c.hdru(0U);
-    const int ii   = c.dvd(vid, idxc);
-    const int li   = c.sub(vid, c.mul(ii, idxc));
-
-    const int vidx  = c.loadu(c.add(c.hdru(2U), li));
-    const int vbase = c.add(c.hdru(3U), c.mul(vidx, c.ku(kVertexWords)));
-    const int px    = c.loadf(c.add(vbase, c.ku(0U)));
-    const int py    = c.loadf(c.add(vbase, c.ku(1U)));
-    const int pz    = c.loadf(c.add(vbase, c.ku(2U)));
-
-    const int slot  = c.loadu(c.add(c.hdru(5U), ii));
-    const int ibase = c.add(c.hdru(4U), c.mul(slot, c.ku(kInstanceWords)));
-    int       m[16];
-    for (crd::u32 k = 0; k < 16U; ++k) { m[k] = c.loadf(c.add(ibase, c.ku(k))); }
-
-    const int wx = c.add(c.add(c.mul(m[0], px), c.mul(m[4], py)), c.add(c.mul(m[8], pz), m[12]));
-    const int wy = c.add(c.add(c.mul(m[1], px), c.mul(m[5], py)), c.add(c.mul(m[9], pz), m[13]));
-    const int wz = c.add(c.add(c.mul(m[2], px), c.mul(m[6], py)), c.add(c.mul(m[10], pz), m[14]));
-
-    int clip[4];
-    c.mul_light_vp(cascade, wx, wy, wz, clip);
-
-    ve.stage    = kir::KStage::Vertex;
-    ve.position = g.vec4(clip[0], clip[1], clip[2], clip[3]);
-    ve.n_out    = 0; // depth only - no varyings to interpolate
-}
+// ⭐ REN-38-D5: the SHADOW vertex program was `build_shadow_vs(g, ve, cascade)` — the scene pull path with a
+// different matrix, hand-written. It is now the SAME declaration with `transform = "light_vp"` and a cascade,
+// and no varyings at all (a shadow pass writes depth and nothing else).
 
 // ⭐ REN-37.1: the shadow FS is no longer HAND-WRITTEN — it is COOKED FROM THE MATERIAL at PassType::Shadow.
 // `build_fs_for_pass` sets n_out = 0 and never consumes the surface, so B7 `lower_entry` DCEs the entire surface
@@ -495,105 +1033,12 @@ void build_shadow_vs(crd::kir::KGraph& g, crd::kir::KEntry& ve, crd::u32 cascade
 // empty program, deduped by content hash. This is the "free collapse" the REN-37 design predicts, exercised for
 // real: what other engines hand-engineer as depth-only permutations falls out of lowering because we compose in
 // an IR rather than in text.
-[[nodiscard]] bool build_shadow_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
-{
-    SceneShaderConfig cfg;
-    cfg.pass = crd::kir::cook::PassType::Shadow;
-    return build_scene_fs_cooked(g, fe, cfg);
-}
+// ⛔ REN-38-C4: the `build_shadow_fs` wrapper is GONE too — it was a one-line alias for `cook_fs` with
+// `PassType::Shadow`, and once the surface came from a `.crdm` it had no caller at all. A dead wrapper that
+// still compiles is the kind of redundancy that later reads as a second path.
 
-// GEO-8 skinned VS: the same pull path, but the vertex ALSO pulls its packed skin record (header [25] = skin
-// stream offset, 6 words/vertex: joints as two u16-pairs + 4 weights) and blends FOUR palette matrices from the
-// per-instance palette section (header [26] = palette offset, [27] = joint count) — B8-j's LBS formulation:
-// blending the transformed positions is affine-equivalent to blending the matrices.
-void build_scene_vs_skinned(crd::kir::KGraph& g, crd::kir::KEntry& ve)
-{
-    namespace kir = crd::kir;
-    Gx c(g);
-
-    const int vid  = g.cast(g.builtin(kir::KBuiltin::VertexIndex), kir::DType::U32);
-    const int idxc = c.hdru(0U);
-    const int ii   = c.dvd(vid, idxc);
-    const int li   = c.sub(vid, c.mul(ii, idxc));
-
-    const int vidx  = c.loadu(c.add(c.hdru(2U), li));
-    const int vbase = c.add(c.hdru(3U), c.mul(vidx, c.ku(kVertexWords)));
-    const int px    = c.loadf(c.add(vbase, c.ku(0U)));
-    const int py    = c.loadf(c.add(vbase, c.ku(1U)));
-    const int pz    = c.loadf(c.add(vbase, c.ku(2U)));
-    const int nx    = c.loadf(c.add(vbase, c.ku(3U)));
-    const int ny    = c.loadf(c.add(vbase, c.ku(4U)));
-    const int nz    = c.loadf(c.add(vbase, c.ku(5U)));
-
-    const int slot  = c.loadu(c.add(c.hdru(5U), ii));
-    const int ibase = c.add(c.hdru(4U), c.mul(slot, c.ku(kInstanceWords)));
-
-    // the skin record
-    const int sbase = c.add(c.hdru(25U), c.mul(vidx, c.ku(6U)));
-    const int jw0   = c.loadu(sbase);
-    const int jw1   = c.loadu(c.add(sbase, c.ku(1U)));
-    const int mask  = c.ku(0xFFFFU);
-    int       joints[4];
-    joints[0] = g.binary(kir::KOp::BitAnd, jw0, mask);
-    joints[1] = g.binary(kir::KOp::Shr, jw0, c.ku(16U));
-    joints[2] = g.binary(kir::KOp::BitAnd, jw1, mask);
-    joints[3] = g.binary(kir::KOp::Shr, jw1, c.ku(16U));
-    int weights[4];
-    for (crd::u32 k = 0; k < 4U; ++k) { weights[k] = c.loadf(c.add(sbase, c.ku(2U + k))); }
-
-    // the per-instance palette: pbase = palette_off + slot·joint_count·16
-    const int pbase = c.add(c.hdru(26U), c.mul(slot, c.mul(c.hdru(27U), c.ku(16U))));
-
-    // LBS: Σ wk · (Mk · [p,1]) for position, Σ wk · (Mk · [n,0]) for the normal (B8-j)
-    int sx = c.kf(0.0);
-    int sy = c.kf(0.0);
-    int sz = c.kf(0.0);
-    int snx = c.kf(0.0);
-    int sny = c.kf(0.0);
-    int snz = c.kf(0.0);
-    for (crd::u32 k = 0; k < 4U; ++k)
-    {
-        const int mb = c.add(pbase, c.mul(joints[k], c.ku(16U)));
-        int       m[16];
-        for (crd::u32 e = 0; e < 16U; ++e) { m[e] = c.loadf(c.add(mb, c.ku(e))); }
-        const int tx = c.add(c.add(c.mul(m[0], px), c.mul(m[4], py)), c.add(c.mul(m[8], pz), m[12]));
-        const int ty = c.add(c.add(c.mul(m[1], px), c.mul(m[5], py)), c.add(c.mul(m[9], pz), m[13]));
-        const int tz = c.add(c.add(c.mul(m[2], px), c.mul(m[6], py)), c.add(c.mul(m[10], pz), m[14]));
-        sx           = c.add(sx, c.mul(tx, weights[k]));
-        sy           = c.add(sy, c.mul(ty, weights[k]));
-        sz           = c.add(sz, c.mul(tz, weights[k]));
-        const int tnx = c.add(c.add(c.mul(m[0], nx), c.mul(m[4], ny)), c.mul(m[8], nz));
-        const int tny = c.add(c.add(c.mul(m[1], nx), c.mul(m[5], ny)), c.mul(m[9], nz));
-        const int tnz = c.add(c.add(c.mul(m[2], nx), c.mul(m[6], ny)), c.mul(m[10], nz));
-        snx           = c.add(snx, c.mul(tnx, weights[k]));
-        sny           = c.add(sny, c.mul(tny, weights[k]));
-        snz           = c.add(snz, c.mul(tnz, weights[k]));
-    }
-
-    // then the instance's world matrix (the entity transform on top of the skinned model-space result)
-    int m[16];
-    for (crd::u32 e = 0; e < 16U; ++e) { m[e] = c.loadf(c.add(ibase, c.ku(e))); }
-    const int wx  = c.add(c.add(c.mul(m[0], sx), c.mul(m[4], sy)), c.add(c.mul(m[8], sz), m[12]));
-    const int wy  = c.add(c.add(c.mul(m[1], sx), c.mul(m[5], sy)), c.add(c.mul(m[9], sz), m[13]));
-    const int wz  = c.add(c.add(c.mul(m[2], sx), c.mul(m[6], sy)), c.add(c.mul(m[10], sz), m[14]));
-    const int nwx = c.add(c.add(c.mul(m[0], snx), c.mul(m[4], sny)), c.mul(m[8], snz));
-    const int nwy = c.add(c.add(c.mul(m[1], snx), c.mul(m[5], sny)), c.mul(m[9], snz));
-    const int nwz = c.add(c.add(c.mul(m[2], snx), c.mul(m[6], sny)), c.mul(m[10], snz));
-
-    int clip[4];
-    c.mul_view_proj(wx, wy, wz, clip);
-
-    const int cr = c.loadf(c.add(ibase, c.ku(16U)));
-    const int cg = c.loadf(c.add(ibase, c.ku(17U)));
-    const int cb = c.loadf(c.add(ibase, c.ku(18U)));
-    const int ca = c.loadf(c.add(ibase, c.ku(19U)));
-
-    ve.stage    = kir::KStage::Vertex;
-    ve.position = g.vec4(clip[0], clip[1], clip[2], clip[3]);
-    ve.n_out    = 2;
-    ve.out[0]   = {g.vec3(nwx, nwy, nwz), 0, kir::Interp::Smooth};
-    ve.out[1]   = {g.vec4(cr, cg, cb, ca), 1, kir::Interp::Flat};
-}
+// ⭐ REN-38-D5: the SKINNED vertex program was ~90 lines that unpacked a 6-word skin record and blended four
+// palette matrices by hand. It is now the shared declaration plus a `[skin]` block.
 
 
 // ⭐ REN-37.2: the hand-written TEXTURED scene VS + FS used to live here. Both are GONE. The textured variant
@@ -726,6 +1171,9 @@ struct SceneRenderer::Impl
     // cascade count, the atlas format, the pass order, or the technique an ASSET EDIT rather than a rebuild.
     crd::framecook::FrameGraphDesc  frame;
     crd::framecook::FrameGraphDesc  fallback;
+    // REN-38-F6: true once `set_frame_graph_toml` installed an explicit graph — the shadows-tier step-down
+    // then no longer applies (it is the built-in forward pair's capability contract, not the frame's).
+    bool                            frame_overridden = false;
     crd::framecook::FrameRecorder   recorder;
     bool                            frame_ok = false;
     // REN-36.3-b: the World this renderer last synced. Borrowed — the caller owns it, and it is only read during
@@ -758,12 +1206,24 @@ struct SceneRenderer::Impl
 
     // Cook `cfg`, hash the lowered graph, and return the cached program when one already matches. Null on a cook
     // or compile failure — never a silently-wrong program.
-    [[nodiscard]] crd::gpu::IGpuProgram* cook_fs(const SceneShaderConfig& cfg)
+    // ⭐⭐ REN-38 audit (the LIVE half of 38-D4): `reqs`/`n_reqs` (optional, cap `req_cap`) receive the varying
+    // read set of the cooked fragment graph — location, width, interpolation — so `init_programs` verifies every
+    // (VS, FS) pair against the DECLARED `.crdv` at program-creation time. The skinned-VS scar (two of four
+    // varyings emitted, shading from undefined interpolants) was found by this check in a TEST; running it on
+    // the live path is what makes it impossible to reintroduce through ANY future asset edit.
+    [[nodiscard]] crd::gpu::IGpuProgram* cook_fs(const SceneShaderConfig& cfg,
+                                                 crd::vertcook::VaryingRequirement* reqs = nullptr,
+                                                 crd::u32 req_cap = 0U, crd::u32* n_reqs = nullptr)
     {
         if (ctx == nullptr) { return nullptr; }
         crd::kir::KGraph g(alloc);
         crd::kir::KEntry e;
         if (!build_scene_fs_cooked(g, e, cfg)) { return nullptr; }
+        if (reqs != nullptr && n_reqs != nullptr
+            && !crd::vertcook::fs_varying_requirements(g, e, reqs, req_cap, n_reqs, alloc))
+        {
+            return nullptr; // a fragment program that disagrees with itself about a location — never bind it
+        }
         ++variants_cooked;
         const crd::u64 h = crd::kir::technique::graph_content_hash(g, e, alloc);
         for (crd::usize i = 0; i < fs_hashes.size(); ++i)
@@ -781,13 +1241,233 @@ struct SceneRenderer::Impl
     crd::kir::technique::TechniqueLibrary  techniques{nullptr};
     const char*                            forward_technique = "standard_forward";
     const char*                            shadow_technique  = "forward_csm";
-    crd::u32                               pcf_taps          = 4U; // the `pcf_taps` option value (1|4|8|16)
+    crd::u32                               pcf_taps          = 4U; // the `pcf_taps` option value (1|2|4|8|16)
+
+    // ── ⭐⭐ REN-38-F6: the ADVANCED-STAGE programs, cooked from the authored declarations above. ──
+    // Lazy (a renderer that never runs an advanced graph pays nothing) and CACHED (a program is cooked once).
+    // Every failure returns null, which the executor reports BY NAME — never a silently-skipped pass.
+    crd::containers::Array<std::unique_ptr<crd::gpu::IGpuProgram>> adv_stages; // keep-alive for linked programs
+    std::unique_ptr<crd::gpu::IRasterProgram> prog_tess;
+    std::unique_ptr<crd::gpu::IRasterProgram> prog_mesh;
+    std::unique_ptr<crd::gpu::IRasterProgram> prog_visbuffer;
+    crd::gpu::IGpuProgram*                    kern_cull = nullptr; // borrowed from adv_stages
+    crd::gpu::IGpuProgram*                    kern_cull_mark = nullptr; // borrowed from adv_stages
+    crd::gpu::IGpuProgram*                    kern_rt[4] = {nullptr, nullptr, nullptr, nullptr}; // rg/ms/ch/ah
+    crd::gpu::IGpuProgram*                    flat_fs   = nullptr; // borrowed from adv_stages
+    // The scene TLAS, provided by whoever owns the geometry's device form (B4: the graph names it, the HOST
+    // resolves it — the asset format stays free of engine types).
+    crd::gpu::IAccelerationStructure*         scene_accel = nullptr;
+    // REN-38: the vertex axis of the VariantKey, folded from the LIVE .crdv (the D5-correction close)
+    crd::u32                                  vertex_variant = 0U;
+    // Host-resolved external buffers for the compute/RT graphs ("cull_flags", "hits").
+    std::unique_ptr<crd::gpu::IStorageBuffer> buf_cull_flags;
+    std::unique_ptr<crd::gpu::IStorageBuffer> buf_cull_marks;
+    std::unique_ptr<crd::gpu::IStorageBuffer> buf_hits;
+
+    // ── ⭐ REN-38-F15: DISK-FIRST asset resolution. ──
+    // When an asset root is installed (`set_asset_root`), a shipped file under it SHADOWS the embedded copy —
+    // that is what makes the `assets/` directory live rather than documentation. ⛔ A file that EXISTS is used
+    // unconditionally: a corrupt disk copy fails the cook loudly downstream, it never silently falls back to
+    // the embedded text (a fallback that renders is indistinguishable from the edit having worked).
+    crd::containers::String asset_root; // empty = embedded pack only
+    [[nodiscard]] bool asset_text(const char* name, crd::containers::String& out)
+    {
+        if (asset_root.size() > 0U)
+        {
+            crd::containers::String p(alloc);
+            p.append(asset_root.c_str());
+            p.append("/");
+            p.append(name);
+            const crd::platform::fs::Path path(crd::containers::StringView(p.c_str(), p.size()));
+            if (crd::platform::fs::exists(path))
+            {
+                return crd::platform::fs::read_file_text(path, out);
+            }
+        }
+        return builtin_asset_text(name, out);
+    }
+
+    // Cook one authored stage BY ASSET NAME (disk-first) and create its device program.
+    [[nodiscard]] crd::gpu::IGpuProgram* cook_stage_named(const char* asset_name)
+    {
+        if (ctx == nullptr) { return nullptr; }
+        crd::containers::String t(alloc);
+        if (!asset_text(asset_name, t)) { return nullptr; }
+        crd::kir::KGraph g(alloc);
+        crd::kir::KEntry e;
+        if (!cook_vs(alloc, t.c_str(), nullptr, g, e)) { return nullptr; }
+        std::unique_ptr<crd::gpu::IGpuProgram> p = ctx->create_program(g, e);
+        if (p == nullptr) { return nullptr; }
+        crd::gpu::IGpuProgram* raw = p.get();
+        adv_stages.push_back(std::move(p));
+        return raw;
+    }
+
+    // Cook one authored stage (optionally with a prepended stage line) and create its device program.
+    [[nodiscard]] crd::gpu::IGpuProgram* cook_stage(const char* pre, const char* body)
+    {
+        if (ctx == nullptr) { return nullptr; }
+        crd::containers::String t(alloc);
+        if (pre != nullptr) { t.append(pre); }
+        t.append(body);
+        crd::kir::KGraph g(alloc);
+        crd::kir::KEntry e;
+        if (!cook_vs(alloc, t.c_str(), nullptr, g, e)) { return nullptr; }
+        std::unique_ptr<crd::gpu::IGpuProgram> p = ctx->create_program(g, e);
+        if (p == nullptr) { return nullptr; }
+        crd::gpu::IGpuProgram* raw = p.get();
+        adv_stages.push_back(std::move(p));
+        return raw;
+    }
+
+    // The FLAT fragment program: the authored flat material through the `unlit` technique, with CONSTANT surface
+    // inputs — so the cooked graph contains NO StageIn at all and the 38-D4 contract holds against any VS.
+    [[nodiscard]] crd::gpu::IGpuProgram* ensure_flat_fs()
+    {
+        if (flat_fs != nullptr) { return flat_fs; }
+        if (ctx == nullptr) { return nullptr; }
+        namespace kir = crd::kir;
+        namespace ck  = crd::kir::cook;
+        namespace tq  = crd::kir::technique;
+        kir::KGraph g(alloc);
+        kir::KEntry e;
+        const auto  sh = kir::make_shape({1});
+        const auto  k  = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+        ck::SurfaceInputs in;
+        in.world_normal = g.vec3(k(0.0), k(0.0), k(1.0));
+        in.world_pos    = g.vec3(k(0.0), k(0.0), k(0.0));
+        in.view_dir     = g.vec3(k(0.0), k(0.0), k(1.0));
+        // F15: the flat material resolves disk-first like every stage declaration
+        crd::containers::String flat_text(alloc);
+        const bool              have_disk = asset_root.size() > 0U && asset_text("material/flat.crdm", flat_text);
+        const ck::MaterialTemplate tmpl{&flat_build_surface, have_disk ? &flat_text : nullptr};
+        const ck::VariantOptions   opts{crd::kir::material::AlphaMode::Opaque, 0.5};
+        const tq::Technique        un   = tq::unlit();
+        const int                  ldir = g.vec3(k(0.0), k(0.0), k(1.0));
+        const int                  lcol = g.vec3(k(1.0), k(1.0), k(1.0));
+        if (!tq::build_fs_for_pass(tmpl, un, ck::PassType::Forward, opts, in, g, e, ldir, lcol, nullptr, 0,
+                                   nullptr, 0))
+        {
+            return nullptr;
+        }
+        std::unique_ptr<crd::gpu::IGpuProgram> p = ctx->create_program(g, e);
+        if (p == nullptr) { return nullptr; }
+        flat_fs = p.get();
+        adv_stages.push_back(std::move(p));
+        return flat_fs;
+    }
+
+    // ⛔ The visibility-buffer FS is NOT a material — the pass writes an ID, not a surface. This three-node
+    // entry is the fixed contract of the pass KIND, the way the empty depth-only FS is the fixed contract of a
+    // shadow pass; the authorable halves (the fullscreen VS, the graph, the resolve material) stay assets.
+    [[nodiscard]] crd::gpu::IGpuProgram* ensure_visbuffer_fs()
+    {
+        if (ctx == nullptr) { return nullptr; }
+        namespace kir = crd::kir;
+        kir::KGraph g(alloc);
+        kir::KEntry e;
+        // The id as a GRADED GREY — (primId + 1) · 0.25 — so the F6 gate can assert per-primitive pixels on the
+        // ordinary colour output (the pixel-blind-smoke scar): left triangle 0.25, right 0.5, clear elsewhere.
+        // The full R32Uint id-buffer path is the A11 device gate's claim; this join renders THROUGH it.
+        const auto sh   = kir::make_shape({1});
+        const int  prim = g.cast(g.builtin(kir::KBuiltin::PrimitiveId), kir::DType::F32);
+        const int  grey = g.binary(kir::KOp::Mul,
+                                   g.binary(kir::KOp::Add, prim, g.constant(1.0, sh, kir::DType::F32)),
+                                   g.constant(0.25, sh, kir::DType::F32));
+        e.stage  = kir::KStage::Fragment;
+        e.n_out  = 1;
+        e.out[0] = {g.vec4(grey, grey, grey, g.constant(1.0, sh, kir::DType::F32)), 0};
+        std::unique_ptr<crd::gpu::IGpuProgram> p = ctx->create_program(g, e);
+        if (p == nullptr) { return nullptr; }
+        crd::gpu::IGpuProgram* raw = p.get();
+        adv_stages.push_back(std::move(p));
+        return raw;
+    }
+
+    [[nodiscard]] crd::gpu::IRasterProgram* ensure_tess_program()
+    {
+        if (prog_tess != nullptr) { return prog_tess.get(); }
+        if (raster == nullptr) { return nullptr; }
+        crd::gpu::IGpuProgram* tvs = cook_stage_named("vertex/tess_corners.crdv");
+        crd::gpu::IGpuProgram* ths = cook_stage_named("vertex/tess_hull.crdv");
+        crd::gpu::IGpuProgram* tds = cook_stage_named("vertex/tess_domain.crdv");
+        crd::gpu::IGpuProgram* tfs = ensure_flat_fs();
+        if (tvs == nullptr || ths == nullptr || tds == nullptr || tfs == nullptr) { return nullptr; }
+        prog_tess = raster->create_tess_program(*tvs, *ths, *tds, *tfs);
+        return prog_tess.get();
+    }
+
+    [[nodiscard]] crd::gpu::IRasterProgram* ensure_mesh_program()
+    {
+        if (prog_mesh != nullptr) { return prog_mesh.get(); }
+        if (raster == nullptr) { return nullptr; }
+        crd::gpu::IGpuProgram* mtk = cook_stage_named("vertex/scene_task.crdv");
+        crd::gpu::IGpuProgram* mms = cook_stage_named("vertex/scene_meshlet.crdv");
+        crd::gpu::IGpuProgram* mfs = ensure_flat_fs();
+        if (mtk == nullptr || mms == nullptr || mfs == nullptr) { return nullptr; }
+        prog_mesh = raster->create_task_mesh_program(*mtk, *mms, *mfs);
+        return prog_mesh.get();
+    }
+
+    [[nodiscard]] crd::gpu::IRasterProgram* ensure_visbuffer_program()
+    {
+        if (prog_visbuffer != nullptr) { return prog_visbuffer.get(); }
+        if (raster == nullptr) { return nullptr; }
+        crd::gpu::IGpuProgram* vvs = cook_stage_named("vertex/visbuffer_fullscreen.crdv");
+        crd::gpu::IGpuProgram* vfs = ensure_visbuffer_fs();
+        if (vvs == nullptr || vfs == nullptr) { return nullptr; }
+        prog_visbuffer = raster->create_raster_program(*vvs, *vfs);
+        return prog_visbuffer.get();
+    }
+
+    [[nodiscard]] crd::gpu::IGpuProgram* ensure_cull_kernel()
+    {
+        if (kern_cull != nullptr) { return kern_cull; }
+        kern_cull = cook_stage_named("vertex/scene_cull.crdv");
+        return kern_cull;
+    }
+
+    // The MARK kernel of the GPU-driven chain: the passthrough cull variant, dispatched INDIRECTLY with the
+    // args the frustum cull wrote — workgroup 1, so each surviving slot stamps marks[wgi] = 1 and the CPU
+    // never learns the count.
+    [[nodiscard]] crd::gpu::IGpuProgram* ensure_cull_mark_kernel()
+    {
+        if (kern_cull_mark != nullptr) { return kern_cull_mark; }
+        kern_cull_mark = cook_stage_named("vertex/scene_cull_mark.crdv");
+        return kern_cull_mark;
+    }
+
+    [[nodiscard]] crd::gpu::IGpuProgram* ensure_rt_kernel(crd::u32 which) // 0 rg · 1 ms · 2 ch · 3 ah
+    {
+        if (which >= 4U) { return nullptr; }
+        if (kern_rt[which] != nullptr) { return kern_rt[which]; }
+        static constexpr const char* kRtAsset[4] = {"vertex/scene_rt_raygen.crdv", "vertex/scene_rt_miss.crdv",
+                                                    "vertex/scene_rt_closest_hit.crdv",
+                                                    "vertex/scene_rt_any_hit.crdv"};
+        kern_rt[which] = cook_stage_named(kRtAsset[which]);
+        return kern_rt[which];
+    }
+
+    [[nodiscard]] crd::gpu::IStorageBuffer* ensure_scratch(std::unique_ptr<crd::gpu::IStorageBuffer>& slot)
+    {
+        if (slot == nullptr && raster != nullptr)
+        {
+            slot = raster->create_storage_buffer(4096U);
+            if (slot != nullptr)
+            {
+                // fresh device memory is NOT guaranteed zero, and the gates read these buffers back
+                crd::u8 zeros[4096] = {};
+                (void)raster->upload_storage(*slot, 0U, static_cast<const void*>(zeros), 4096U);
+            }
+        }
+        return slot.get();
+    }
 
     explicit Impl(crd::memory::IAllocator* a)
         : alloc(a), skeleton_cache(a), clip_cache(a), pose_scratch(a), world_scratch(a), palette_scratch(a),
           palette_staging(a), group_of_mesh(a), material_color(a), material_texture(a), entity_slot(a),
           contrib_draws(a), frame(a), fallback(a), recorder(a), groups_view(a), fs_hashes(a), fs_programs(a),
-          techniques(a)
+          techniques(a), adv_stages(a)
     {
         // The built-in pack, parsed once. ⛔ If the EMBEDDED default fails to parse the renderer must not fall
         // back to hand-built passes — there would then be two rendering paths and only one of them authored.
@@ -914,6 +1594,187 @@ void SceneRenderer::set_readback_enabled(bool on) noexcept
     if (impl.frame_graph != nullptr) { impl.frame_graph->set_readback_enabled(on); }
 }
 
+// ── ⭐⭐ REN-38-F6: the ADVANCED-GRAPH seams. ────────────────────────────────────────────────────────────────
+// ⛔ A parse or validation failure REFUSES the graph and keeps the previous one — it never half-installs. The
+// caller gates on the return value; silently rendering the old graph while claiming the new one is the exact
+// class of lie the magenta error graph exists to prevent, which is why the failure is a `false`, not a log line.
+bool SceneRenderer::set_frame_graph_toml(const char* toml_text)
+{
+    if (toml_text == nullptr || m_impl == nullptr) { return false; }
+    Impl&                          impl = *m_impl;
+    crd::framecook::FrameGraphDesc d(impl.alloc);
+    crd::containers::String        where(impl.alloc);
+    if (crd::framecook::parse_frame_toml(crd::containers::StringView(toml_text), d, &where)
+        != crd::framecook::FrameCookError::Ok)
+    {
+        CRD_LOG_ERROR(g_log_scenerender, "set_frame_graph_toml: parse failed at '{}'", where.c_str());
+        return false;
+    }
+    if (crd::framecook::validate_frame_graph(d, &where) != crd::framecook::FrameCookError::Ok)
+    {
+        CRD_LOG_ERROR(g_log_scenerender, "set_frame_graph_toml: validation failed at '{}'", where.c_str());
+        return false;
+    }
+    impl.frame            = static_cast<crd::framecook::FrameGraphDesc&&>(d);
+    impl.frame_ok         = true;
+    impl.frame_overridden = true;
+    return true;
+}
+
+void SceneRenderer::set_scene_accel(crd::gpu::IAccelerationStructure* accel) noexcept
+{
+    if (m_impl != nullptr) { m_impl->scene_accel = accel; }
+}
+
+// ── ⭐ REN-38-F15: DISK-FIRST asset loading. ────────────────────────────────────────────────────────────────
+// A shipped file under `root` SHADOWS the embedded copy for every authored asset this renderer cooks — which is
+// what makes editing `assets/` change the frame without a rebuild. The built-in FRAME PAIR was parsed at
+// construction, so it re-resolves here; ⛔ a disk copy that exists but fails to parse REFUSES the root (false,
+// nothing half-installed) — it never silently falls back to the embedded text.
+bool SceneRenderer::set_asset_root(const char* dir)
+{
+    if (m_impl == nullptr || dir == nullptr) { return false; }
+    Impl& impl = *m_impl;
+    impl.asset_root.clear();
+    impl.asset_root.append(dir);
+    crd::containers::String t(impl.alloc);
+    crd::containers::String where(impl.alloc);
+    const auto reparse = [&](const char* name, crd::framecook::FrameGraphDesc& into) {
+        if (!impl.asset_text(name, t)) { return false; }
+        crd::framecook::FrameGraphDesc d(impl.alloc);
+        if (crd::framecook::parse_frame_toml(crd::containers::StringView(t.c_str(), t.size()), d, &where)
+            != crd::framecook::FrameCookError::Ok)
+        {
+            CRD_LOG_ERROR(g_log_scenerender, "set_asset_root: '{}' failed to parse at '{}'", name, where.c_str());
+            return false;
+        }
+        into = static_cast<crd::framecook::FrameGraphDesc&&>(d);
+        return true;
+    };
+    // an EXPLICITLY installed graph (set_frame_graph_toml) is not disturbed by the root swap
+    if (!impl.frame_overridden && !reparse("frame/forward_csm.frame.toml", impl.frame))
+    {
+        impl.asset_root.clear();
+        return false;
+    }
+    if (!reparse("frame/forward_basic.frame.toml", impl.fallback))
+    {
+        impl.asset_root.clear();
+        return false;
+    }
+    impl.frame_ok = true;
+    return true;
+}
+
+crd::u32 SceneRenderer::debug_variant_vertex() const noexcept
+{
+    return m_impl != nullptr ? m_impl->vertex_variant : 0U;
+}
+
+crd::gpu::IStorageBuffer* SceneRenderer::debug_scene_buffer(const char* name) noexcept
+{
+    if (m_impl == nullptr || name == nullptr) { return nullptr; }
+    const crd::containers::StringView n(name);
+    if (n == crd::containers::StringView("cull_flags")) { return m_impl->buf_cull_flags.get(); }
+    if (n == crd::containers::StringView("cull_marks")) { return m_impl->buf_cull_marks.get(); }
+    if (n == crd::containers::StringView("hits")) { return m_impl->buf_hits.get(); }
+    return nullptr;
+}
+
+namespace
+{
+// ── ⭐⭐ REN-38-E7: THE LIGHTING TECHNIQUE IS AN AUTHORED DECLARATION. ─────────────────
+// ⛔⛔ Every technique body was a C++ `TechniqueBody` (`body = "builtin:forward_csm"`), so the scene was lit by
+// ONE HARDCODED DIRECTIONAL LIGHT no matter what any asset said — while `ckir_lighting.hpp` held 1100 lines of
+// punctual/area/IBL/shadow math nothing could reach. This body is `cook_lighting` driven by the declaration
+// below: change the light counts, the shadow scheme or the filter HERE and the cooked program changes.
+//
+// ⛔ The light RECORD is declared against the same group storage buffer everything else pulls from, so lighting
+// needs no second binding mechanism — the light section is a header word like every other section.
+constexpr const char* kSceneLighting = R"(
+schema = 1
+name   = "crd://lighting/scene_forward"
+
+[header]
+view_proj   = 6
+csm_splits  = 28
+light_off   = 99
+
+[record]
+stride      = 16
+position    = 0
+color       = 4
+direction   = 8
+falloff     = 3
+spot_scale  = 7
+spot_offset = 11
+
+[counts]
+directional = 1
+
+[shadow]
+directional = "csm"
+filter      = "pcf"
+taps        = 4
+cascades    = 4
+)";
+
+// The parsed declaration, owned for the process. ⛔ Parsed ONCE and reused: re-parsing per cook would make the
+// technique’s identity depend on when it was cooked rather than on what it says.
+[[nodiscard]] crd::lightcook::LightingDesc& scene_lighting_desc()
+{
+    static crd::lightcook::LightingDesc desc = [] {
+        crd::lightcook::LightingDesc d(crd::memory::default_allocator());
+        crd::containers::String       where(crd::memory::default_allocator());
+        (void)crd::lightcook::parse_lighting_toml(crd::containers::StringView(kSceneLighting), d, &where);
+        return d;
+    }();
+    return desc;
+}
+
+// The technique body: the ABI’s fixed inputs in, the authored lighting out. ⛔ Returns -1 on any missing input
+// or binding rather than a partial graph — a lighting technique that silently dropped its shadow term renders a
+// scene with no shadows and no error.
+int body_scene_authored(crd::kir::KGraph& g, const crd::kir::technique::TechniqueContext& tc, void* /*user*/)
+{
+    namespace tq = crd::kir::technique;
+    crd::lightcook::LightingInputs in;
+    in.base_color = tc.fixed[tq::kTiBaseColor];
+    in.metallic   = tc.fixed[tq::kTiMetallic];
+    in.roughness  = tc.fixed[tq::kTiRoughness];
+    in.normal     = tc.fixed[tq::kTiNormal];
+    in.view_dir   = tc.fixed[tq::kTiViewDir];
+    in.world_pos  = tc.fixed[tq::kTiWorldPos];
+    in.emissive   = tc.fixed[tq::kTiEmissive];
+    // ⛔ The fixed ABI carries no fragment COORDINATE, so the PCF dither falls back to a constant. Stated
+    // rather than hidden: it costs the per-pixel rotation that hides the tap pattern, not correctness.
+    in.frag_xy = -1;
+
+    crd::lightcook::LightingBindings b;
+    b.shadow_atlas   = tc.binding(tq::kCsmBindAtlasTex);
+    b.shadow_sampler = tc.binding(tq::kCsmBindAtlasSamp);
+    for (crd::u32 c = 0; c < crd::lightcook::kMaxCascades; ++c)
+    {
+        b.csm_light_vp[c] = tc.binding(tq::kCsmBindLightVp0 + static_cast<int>(c));
+    }
+    b.csm_map_size = tc.binding(tq::kCsmBindMapSize);
+    return crd::lightcook::cook_lighting(scene_lighting_desc(), g, in, b);
+}
+
+// ⭐ Same DECLARED contract as `forward_csm` — same bindings, same ABI order — so the renderer’s resolver
+// feeds it identically. What differs is the provenance of the BODY: a declaration instead of C++.
+[[nodiscard]] crd::kir::technique::Technique scene_authored_technique() noexcept
+{
+    crd::kir::technique::Technique t;
+    t.name       = "forward_authored";
+    t.body       = &body_scene_authored;
+    t.bindings   = crd::kir::technique::kForwardCsmBindings;
+    t.n_bindings = 3;
+    t.options    = crd::kir::technique::kForwardCsmOptions;
+    t.n_options  = 2;
+    return t;
+}
+} // namespace
 bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
 {
     if (m_impl->raster == nullptr) { return false; }
@@ -924,6 +1785,9 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
     // shader-half twin of the built-in frame-graph pack: engine defaults register first, and an app overrides
     // purely by shadowing a name.
     crd::kir::technique::register_builtin_techniques(m_impl->techniques);
+    // REN-38-E7: the AUTHORED lighting technique, registered after the builtins so an app can shadow
+    // it by name exactly as it can shadow a built-in one.
+    m_impl->techniques.define(scene_authored_technique());
     const crd::kir::technique::Technique* fwd = m_impl->techniques.find(m_impl->forward_technique);
     const crd::kir::technique::Technique* csm = m_impl->techniques.find(m_impl->shadow_technique);
     // ⛔ A named technique that does not resolve FAILS. Falling back to a default would render a plausible frame
@@ -935,21 +1799,63 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
     // textured path and the shadowed path ended up disagreeing about what location 2 meant.
     crd::kir::KGraph vg(m_impl->alloc);
     crd::kir::KEntry ve;
-    build_scene_vs_shadowed(vg, ve);
+    crd::containers::String vs_scene(m_impl->alloc);
+    vs_scene.append(kVsPrologue);
+    vs_scene.append(kVsVaryings);
+    crd::vertcook::VertexProgramDesc scene_desc(m_impl->alloc);
+    if (!cook_vs(m_impl->alloc, vs_scene.c_str(), nullptr, vg, ve, &scene_desc)) { return false; }
+    // ⭐ REN-38 (the D5 correction closed): `VariantKey::vertex` is ENGINE-FILLED from the LIVE declaration —
+    // the folded `vertex_layout_id` of the very `.crdv` this renderer just cooked. Until now no engine code
+    // filled the field at all, so the variant identity's vertex axis was a documented claim, not a value.
+    {
+        const crd::u64 lid       = crd::vertcook::vertex_layout_id(scene_desc);
+        m_impl->vertex_variant   = static_cast<crd::u32>(lid ^ (lid >> 32U));
+    }
+    // ⭐⭐ REN-38 audit: the 38-D4 varying contract runs at THE JOIN, on the live path — every cooked fragment
+    // read set (location + width + interpolation, derived from the graph itself) is verified against the `.crdv`
+    // declaration BEFORE a program pair is created. The skinned-VS scar linked, bound and rendered from
+    // undefined interpolants; nothing on either backend can see it, so the cook boundary is where it must die.
+    const auto contract_ok = [&](const crd::vertcook::VertexProgramDesc&      vdesc,
+                                 const crd::vertcook::VaryingRequirement* rq, crd::u32 nq) {
+        crd::containers::String cw(m_impl->alloc);
+        const auto              rc = crd::vertcook::verify_varying_contract(vdesc, rq, nq, &cw);
+        if (rc != crd::vertcook::VertexCookError::Ok)
+        {
+            CRD_LOG_ERROR(g_log_scenerender, "varying contract refused: {} at '{}' ({} fragment reads)",
+                          crd::vertcook::vertex_cook_error_text(rc), cw.c_str(), nq);
+        }
+        return rc == crd::vertcook::VertexCookError::Ok;
+    };
     // ⭐ REN-37.7: every fragment program below comes from `cook_fs` — cook, lower, CONTENT-HASH, reuse. The
     // renderer no longer decides how many device programs it needs; the deduped matrix does.
     SceneShaderConfig fcfg;
     fcfg.pass = crd::kir::cook::PassType::Forward;
     fcfg.tech = fwd;
     m_impl->vs = ctx.create_program(vg, ve);
-    crd::gpu::IGpuProgram* fs_flat = m_impl->cook_fs(fcfg);
+    crd::vertcook::VaryingRequirement fwd_reqs[crd::vertcook::kMaxVaryings];
+    crd::u32                          n_fwd_reqs = 0U;
+    crd::gpu::IGpuProgram* fs_flat = m_impl->cook_fs(fcfg, fwd_reqs, crd::vertcook::kMaxVaryings, &n_fwd_reqs);
     if (m_impl->vs == nullptr || fs_flat == nullptr) { return false; }
+    if (!contract_ok(scene_desc, static_cast<const crd::vertcook::VaryingRequirement*>(fwd_reqs), n_fwd_reqs))
+    {
+        { return false; }
+    }
     m_impl->fs      = fs_flat;
     m_impl->program = m_impl->raster->create_raster_program(*m_impl->vs, *fs_flat);
 
     crd::kir::KGraph svg(m_impl->alloc);
     crd::kir::KEntry sve;
-    build_scene_vs_skinned(svg, sve);
+    crd::containers::String vs_skin(m_impl->alloc);
+    vs_skin.append(kVsPrologue);
+    vs_skin.append(kVsSkin);
+    vs_skin.append(kVsVaryings);
+    crd::vertcook::VertexProgramDesc skin_desc(m_impl->alloc);
+    if (!cook_vs(m_impl->alloc, vs_skin.c_str(), nullptr, svg, sve, &skin_desc)) { return false; }
+    // The skinned declaration serves the SAME fragment set — the exact pair the 38-D5 scar broke.
+    if (!contract_ok(skin_desc, static_cast<const crd::vertcook::VaryingRequirement*>(fwd_reqs), n_fwd_reqs))
+    {
+        { return false; }
+    }
     m_impl->vs_skinned = ctx.create_program(svg, sve);
     if (m_impl->vs_skinned != nullptr)
     {
@@ -960,8 +1866,11 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
     // material SURFACE, not a second shader. Same VS, same technique, same BRDF.
     SceneShaderConfig tcfg = fcfg;
     tcfg.textured          = true;
-    m_impl->fs_textured    = m_impl->cook_fs(tcfg);
-    if (m_impl->fs_textured != nullptr)
+    crd::vertcook::VaryingRequirement tex_reqs[crd::vertcook::kMaxVaryings];
+    crd::u32                          n_tex_reqs = 0U;
+    m_impl->fs_textured = m_impl->cook_fs(tcfg, tex_reqs, crd::vertcook::kMaxVaryings, &n_tex_reqs);
+    if (m_impl->fs_textured != nullptr
+        && contract_ok(scene_desc, static_cast<const crd::vertcook::VaryingRequirement*>(tex_reqs), n_tex_reqs))
     {
         m_impl->program_textured = m_impl->raster->create_raster_program(*m_impl->vs, *m_impl->fs_textured);
     }
@@ -980,7 +1889,14 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
         {
             crd::kir::KGraph shvg(m_impl->alloc);
             crd::kir::KEntry shve;
-            build_shadow_vs(shvg, shve, c);
+            // ⛔ The cascade is a COMPILE-TIME constant, so one storage binding serves every cascade pass:
+            // the variant selects the header slice rather than a uniform selecting it per draw.
+            char casc[64];
+            (void)std::snprintf(static_cast<char*>(casc), sizeof(casc), "\ntransform = \"light_vp\"\ncascade = %u\n", c);
+            crd::containers::String vs_shadow(m_impl->alloc);
+            vs_shadow.append(static_cast<const char*>(casc));
+            vs_shadow.append(kVsPrologue);
+            if (!cook_vs(m_impl->alloc, vs_shadow.c_str(), nullptr, shvg, shve)) { all_ok = false; break; }
             m_impl->shadow_vs[c] = ctx.create_program(shvg, shve);
             if (m_impl->shadow_vs[c] == nullptr) { all_ok = false; break; }
             m_impl->shadow_prog[c] =
@@ -999,9 +1915,12 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
         scfg.map_size = m_impl->csm.map_size;
         scfg.cascades = m_impl->csm.cascade_count;
         scfg.pcf_taps = m_impl->pcf_taps;
-        m_impl->fs_shadowed = m_impl->cook_fs(scfg);
+        crd::vertcook::VaryingRequirement sh_reqs[crd::vertcook::kMaxVaryings];
+        crd::u32                          n_sh_reqs = 0U;
+        m_impl->fs_shadowed = m_impl->cook_fs(scfg, sh_reqs, crd::vertcook::kMaxVaryings, &n_sh_reqs);
         m_impl->vs_shadowed = m_impl->vs.get(); // one VS, every variant
-        if (m_impl->fs_shadowed != nullptr)
+        if (m_impl->fs_shadowed != nullptr
+            && contract_ok(scene_desc, static_cast<const crd::vertcook::VaryingRequirement*>(sh_reqs), n_sh_reqs))
         {
             m_impl->program_shadowed =
                 m_impl->raster->create_raster_program(*m_impl->vs, *m_impl->fs_shadowed);
@@ -1516,12 +2435,61 @@ public:
 
     [[nodiscard]] crd::gpu::IRasterTarget* output() override { return &m_target; }
 
-    // Fullscreen/compute passes name a cooked program id. The scene graph has none yet; a pass that named one
-    // would FAIL by name rather than render nothing plausible.
-    [[nodiscard]] crd::gpu::IRasterProgram* program(crd::containers::StringView) override { return nullptr; }
-
-    [[nodiscard]] bool draw_list(crd::containers::StringView, crd::framecook::DrawListBinding& out) override
+    // ⭐⭐ REN-38-F6: the ADVANCED-FAMILY program ids, resolved to programs cooked from the authored
+    // declarations. An id the host does not know stays null, which the executor reports BY NAME.
+    [[nodiscard]] crd::gpu::IRasterProgram* program(crd::containers::StringView id) override
     {
+        if (str_is(id, "crd://scene/tess")) { return m_impl.ensure_tess_program(); }
+        if (str_is(id, "crd://scene/mesh")) { return m_impl.ensure_mesh_program(); }
+        if (str_is(id, "crd://scene/visbuffer")) { return m_impl.ensure_visbuffer_program(); }
+        return nullptr;
+    }
+
+    // The single-stage kernels: GPU culling and the four ray-tracing stages.
+    [[nodiscard]] crd::gpu::IGpuProgram* kernel(crd::containers::StringView id) override
+    {
+        if (str_is(id, "crd://scene/cull")) { return m_impl.ensure_cull_kernel(); }
+        if (str_is(id, "crd://scene/cull_mark")) { return m_impl.ensure_cull_mark_kernel(); }
+        if (str_is(id, "crd://scene/rt/raygen")) { return m_impl.ensure_rt_kernel(0U); }
+        if (str_is(id, "crd://scene/rt/miss")) { return m_impl.ensure_rt_kernel(1U); }
+        if (str_is(id, "crd://scene/rt/chit")) { return m_impl.ensure_rt_kernel(2U); }
+        if (str_is(id, "crd://scene/rt/anyhit")) { return m_impl.ensure_rt_kernel(3U); }
+        return nullptr;
+    }
+
+    // B4: the graph NAMES an acceleration structure; the renderer resolves it to the one the host installed
+    // via `set_scene_accel` — the asset format stays free of engine types.
+    [[nodiscard]] crd::gpu::IAccelerationStructure* acceleration_structure(crd::containers::StringView) override
+    {
+        return m_impl.scene_accel;
+    }
+
+    // The external buffers the compute/RT scene graphs declare: the culled group's instance buffer, and the
+    // renderer-owned result buffers the gates read back.
+    [[nodiscard]] crd::gpu::IStorageBuffer* storage_buffer(crd::containers::StringView name) override
+    {
+        if (str_is(name, "instances"))
+        {
+            return m_draws.size() > 0U ? m_draws[0].buffer : nullptr;
+        }
+        if (str_is(name, "cull_flags")) { return m_impl.ensure_scratch(m_impl.buf_cull_flags); }
+        if (str_is(name, "cull_marks")) { return m_impl.ensure_scratch(m_impl.buf_cull_marks); }
+        if (str_is(name, "hits")) { return m_impl.ensure_scratch(m_impl.buf_hits); }
+        return nullptr;
+    }
+
+    [[nodiscard]] bool draw_list(crd::containers::StringView name, crd::framecook::DrawListBinding& out) override
+    {
+        // REN-38-F6: the visibility-buffer list is ONE fullscreen expansion (6 procedural vertices) drawn with
+        // the visbuffer program — `draw_visbuffer` binds no storage, so the scene pull items cannot serve here.
+        if (str_is(name, "visbuffer_geometry"))
+        {
+            crd::gpu::IRasterProgram* vp = m_impl.ensure_visbuffer_program();
+            if (vp == nullptr) { return false; }
+            out.items[0] = crd::framecook::DrawItem{nullptr, vp, 6U, nullptr};
+            out.resolved = 1U;
+            return true;
+        }
         return fill(out, nullptr);
     }
 
@@ -1531,6 +2499,17 @@ public:
     [[nodiscard]] bool draw_list_query(const crd::framecook::FrameDrawListDesc& q,
                                        crd::framecook::DrawListBinding&         out) override
     {
+        // REN-38-F6: the visibility-buffer list resolves through the QUERY path too (the executor prefers it
+        // whenever the desc exists) — missing this arm handed the visbuffer pass the scene PULL items, whose
+        // programs bind storage `draw_visbuffer` never provides.
+        if (str_is(crd::containers::StringView(q.name.c_str(), q.name.size()), "visbuffer_geometry"))
+        {
+            crd::gpu::IRasterProgram* vp = m_impl.ensure_visbuffer_program();
+            if (vp == nullptr) { return false; }
+            out.items[0] = crd::framecook::DrawItem{nullptr, vp, 6U, nullptr};
+            out.resolved = 1U;
+            return true;
+        }
         return fill(out, &q);
     }
 
@@ -1710,6 +2689,27 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         header[5] = group.visible_off;
         std::memcpy(&header[6], &view_proj, 16U * 4U);
         std::memcpy(&header[22], &light_dir, 3U * 4U);
+        // ⭐ REN-38-E7: the authored light ARRAY. One directional record, laid out exactly as
+        // `assets/lighting/scene_forward.crdl` declares it — the declaration and the upload agree because the
+        // record offsets are the SAME numbers in both, which is the point of declaring them.
+        // ⛔ Floats go in as BIT PATTERNS: the pull shader reinterprets the word, it does not convert it.
+        header[kHdrLightOff] = kHeaderWords - kLightSectionWords;
+        // REN-38-F6+: the GPU cull kernel's range guard — the group's TOTAL instance count
+        header[kHdrInstanceCount] = static_cast<crd::u32>(group.instances.size());
+        {
+            const crd::u32 lb = header[kHdrLightOff];
+            const crd::f32 white[3] = {1.0F, 1.0F, 1.0F};
+            std::memcpy(&header[lb + 4U], static_cast<const void*>(white), 3U * 4U);   // color @4
+            // ⛔⛔ THE CONVENTION BOUNDARY, and it renders PURE BLACK if you get it wrong. The header stores
+            // the direction TOWARD the light at [22..24]; the light record’s `direction` field is the
+            // direction light TRAVELS, because that is what `lighting::directional_light` negates internally.
+            // Copying the header value straight through flips L away from the light, so N·L ≤ 0 everywhere
+            // and the scene is uniformly dark — the same scar `build_scene_fs_cooked` documents one negation
+            // over. Negate ONCE, here, at the boundary.
+            const crd::f32 travel[3] = {-light_dir.x, -light_dir.y, -light_dir.z};
+            std::memcpy(&header[lb + 8U], static_cast<const void*>(travel), 3U * 4U); // direction @8
+        }
+
         header[25] = group.skin_off;    // GEO-8: the skinned VS's extra sections
         header[26] = group.palette_off;
         header[27] = group.joint_count;
@@ -1802,8 +2802,10 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         SceneHost host(impl, target, clear, draw_list, img);
         crd::framecook::FrameExecError  ferr = crd::framecook::FrameExecError::Ok;
         crd::containers::String         fwhere(impl.alloc);
-        const crd::framecook::FrameGraphDesc& authored =
-            impl.shadows_active() ? impl.frame : impl.fallback;
+        // REN-38-F6: an EXPLICITLY installed graph (set_frame_graph_toml) is the frame, full stop — the
+        // shadows-tier step-down applies only to the built-in forward pair, whose capability contract it is.
+        const bool use_frame = impl.frame_overridden || impl.shadows_active();
+        const crd::framecook::FrameGraphDesc& authored = use_frame ? impl.frame : impl.fallback;
         if (!impl.frame_ok || !impl.recorder.record(authored, fg, *impl.raster, host, &ferr, &fwhere))
         {
             // ⛔ REPORTED, never a silent black frame. A graph that fails to record must say which pass, which
@@ -1921,6 +2923,77 @@ crd::geometry::primitives::AABB3<crd::f32> frustum_aabb(const crd::math::Mat4f& 
         }
     }
     return box;
+}
+
+// ── ⭐ REN-38 audit: the BUILT-IN AUTHORED PACK, exposed (see the header note). ─────────────────────────────
+bool builtin_asset_text(const char* name, crd::containers::String& out)
+{
+    const crd::containers::StringView n(name);
+    out.clear();
+    const auto is = [&](const char* k) { return n == crd::containers::StringView(k); };
+    if (is("frame/forward_csm.frame.toml")) { out.append(kBuiltinForwardCsm); return true; }
+    if (is("frame/forward_basic.frame.toml")) { out.append(kBuiltinForwardBasic); return true; }
+    if (is("material/scene.crdm")) { out.append(kSceneMaterial); return true; }
+    if (is("material/scene_textured.crdm")) { out.append(kSceneMaterialTextured); return true; }
+    if (is("vertex/scene.crdv"))
+    {
+        out.append(kVsPrologue);
+        out.append(kVsVaryings);
+        return true;
+    }
+    if (is("vertex/scene_skinned.crdv"))
+    {
+        out.append(kVsPrologue);
+        out.append(kVsSkin);
+        out.append(kVsVaryings);
+        return true;
+    }
+    if (is("vertex/shadow.crdv"))
+    {
+        // The live renderer bakes one variant PER CASCADE; cascade 0 is the canonical shipped copy.
+        out.append("transform = \"light_vp\"\ncascade = 0\n");
+        out.append(kVsPrologue);
+        return true;
+    }
+    if (is("lighting/scene_forward.crdl")) { out.append(kSceneLighting); return true; }
+    // ── REN-38-F6: the advanced-stage declarations + the scene graphs for their families. ──
+    if (is("material/flat.crdm")) { out.append(kFlatMaterial); return true; }
+    if (is("vertex/tess_corners.crdv")) { out.append(kTessCornersVs); return true; }
+    if (is("vertex/tess_hull.crdv")) { out.append(kTessHullVs); return true; }
+    if (is("vertex/tess_domain.crdv")) { out.append(kTessDomainVs); return true; }
+    if (is("vertex/scene_meshlet.crdv")) { out.append(kMeshletVs); return true; }
+    if (is("vertex/scene_task.crdv")) { out.append(kTaskVs); return true; }
+    if (is("vertex/visbuffer_fullscreen.crdv")) { out.append(kVisbufferVs); return true; }
+    if (is("vertex/scene_cull.crdv"))
+    {
+        out.append("stage = \"cull\"\n");
+        out.append(kVsPrologue);
+        out.append("\n[cull]\nfrustum   = true\nworkgroup = 64\n");
+        return true;
+    }
+    // the GPU-driven chain's MARK kernel: the passthrough cull variant at workgroup 1, dispatched INDIRECTLY
+    if (is("vertex/scene_cull_mark.crdv"))
+    {
+        out.append("stage = \"cull\"\n");
+        out.append(kVsPrologue);
+        out.append("\n[cull]\nfrustum   = false\nworkgroup = 1\n");
+        return true;
+    }
+    if (is("vertex/scene_rt_raygen.crdv")) { out.append("stage = \"raygen\"\n"); out.append(kRtBody); return true; }
+    if (is("vertex/scene_rt_miss.crdv")) { out.append("stage = \"miss\"\n"); out.append(kRtBody); return true; }
+    if (is("vertex/scene_rt_closest_hit.crdv"))
+    {
+        out.append("stage = \"closest_hit\"\n");
+        out.append(kRtBody);
+        return true;
+    }
+    if (is("vertex/scene_rt_any_hit.crdv")) { out.append("stage = \"any_hit\"\n"); out.append(kRtBody); return true; }
+    if (is("frame/scene_tess.frame.toml")) { out.append(kSceneTessGraph); return true; }
+    if (is("frame/scene_mesh.frame.toml")) { out.append(kSceneMeshGraph); return true; }
+    if (is("frame/scene_visbuffer.frame.toml")) { out.append(kSceneVisbufferGraph); return true; }
+    if (is("frame/scene_cull.frame.toml")) { out.append(kSceneCullGraph); return true; }
+    if (is("frame/scene_rt.frame.toml")) { out.append(kSceneRtGraph); return true; }
+    return false;
 }
 
 } // namespace crd::scenerender

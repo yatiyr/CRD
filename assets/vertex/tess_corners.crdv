@@ -1,0 +1,26 @@
+schema   = 1
+name     = "crd://vertex/tess_corners"
+position = "node:clip"
+
+[expand]
+verts_per_instance = 4
+
+[[node]]
+name   = "x_hi"
+op     = "ifequal"
+inputs = ["@corner", 2.0, 0.6, -0.6]
+
+[[node]]
+name   = "x"
+op     = "ifequal"
+inputs = ["@corner", 1.0, 0.6, "x_hi"]
+
+[[node]]
+name   = "y"
+op     = "ifgreater"
+inputs = ["@corner", 1.5, 0.6, -0.6]
+
+[[node]]
+name   = "clip"
+op     = "combine4"
+inputs = ["x", "y", 0.0, 1.0]

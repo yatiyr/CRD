@@ -7,6 +7,10 @@
 #include <crd/gpu/raster_context.hpp>
 #include <crd/gpu/vulkan_context.hpp>
 #include <crd/gpu/vulkan_raster_context.hpp>
+#include <crd/gpu/vulkan_ray_tracing_context.hpp>
+#include <crd/gpu/dx12_context.hpp>
+#include <crd/gpu/dx12_raster_context.hpp>
+#include <crd/gpu/dx12_ray_tracing_context.hpp>
 #include <crd/math/mat.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
@@ -27,6 +31,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstring>
+#include <cstdio> // REN-38-F15: per-run temp root stamp
+#include <ctime>  // REN-38-F15: per-run temp root stamp
 
 using namespace crd;
 
@@ -107,6 +113,28 @@ void write_mesh_pack(const platform::fs::Path& path, const resources::ResourceId
     for (u8 b : art_bytes) { pack.push_back(b); }
     REQUIRE(platform::fs::write_file_binary(path, containers::as_const_span(pack)));
 }
+
+// Every pack a gate writes lives in the OS TEMP directory and is REMOVED when the test ends — Catch2 failures
+// unwind, so the destructor runs even when a REQUIRE fails mid-test. ⛔ These used to be RELATIVE paths,
+// resolved against wherever ctest was launched from — the repo checkout, on a dev box — and the checkout grew
+// a crop of `sr_*_pack_*.crdr` artifacts that .gitignore then chased pattern by pattern.
+struct TempPack
+{
+    platform::fs::Path path;
+
+    TempPack(const char* prefix, const resources::ResourceId& id)
+    {
+        containers::String name(prefix, &galloc());
+        name.append(id.to_string(&galloc()));
+        name.append(".crdr");
+        path = platform::fs::temp_directory() / containers::StringView(name.data(), name.size());
+    }
+    ~TempPack() { static_cast<void>(platform::fs::remove_file(path)); }
+    TempPack(const TempPack&)            = delete;
+    TempPack& operator=(const TempPack&) = delete;
+    TempPack(TempPack&&)                 = delete;
+    TempPack& operator=(TempPack&&)      = delete;
+};
 
 // world AABB extractor: Transform (the trigger component) + the fixed cube half-extent
 struct CubeExtractor final : scene::IAabbExtractor
@@ -225,10 +253,8 @@ TEST_CASE("GEO-7 GATE: 10k instances -- chunk-grain sync + BVH/frustum cull + ON
 
     // the cooked cube through the REAL resource pipeline
     const resources::ResourceId cube_id = resources::ResourceId::mint_random();
-    containers::String pack_name("sr_gpu_pack_", &galloc());
-    pack_name.append(cube_id.to_string(&galloc()));
-    pack_name.append(".crdr");
-    const platform::fs::Path pack_path(containers::StringView(pack_name.data(), pack_name.size()));
+    const TempPack           pack("sr_gpu_pack_", cube_id);
+    const platform::fs::Path pack_path = pack.path;
     write_mesh_pack(pack_path, cube_id);
     resources::ResourceManager rm(&galloc());
     resources::register_mesh_loader(&rm, nullptr);
@@ -434,12 +460,12 @@ TEST_CASE("REN-2 Half B GATE: the SceneRenderer forward pass SAMPLES a material 
     //
     // (Both channels are partly mixed — 146/94 rather than 255/0 — because the 2x1 texture is sampled with
     // bilinear filtering at UVs that are not exactly on the texel centres. That is pre-existing and unrelated.)
-    constexpr u32 kFloor  = 60U; // a flat clear or an unsampled map would leave the dominant channel far below
-    constexpr u32 kMargin = 25U; // measured separation is ~49 on both sides
-    CHECK(lr > kFloor);
-    CHECK(rg > kFloor);
-    CHECK(lr > rr + kMargin); // screen-LEFT sampled the RED texel
-    CHECK(rg > lg + kMargin); // screen-RIGHT sampled the GREEN texel
+    constexpr u32 floor_v  = 60U; // a flat clear or an unsampled map would leave the dominant channel far below
+    constexpr u32 margin_v = 25U; // measured separation is ~49 on both sides
+    CHECK(lr > floor_v);
+    CHECK(rg > floor_v);
+    CHECK(lr > rr + margin_v); // screen-LEFT sampled the RED texel
+    CHECK(rg > lg + margin_v); // screen-RIGHT sampled the GREEN texel
     CHECK(lr != rr);                                                // left and right differ → UV.x drives the sample
 
     (void)platform::fs::remove_file(mesh_path);
@@ -470,10 +496,8 @@ TEST_CASE("REN-3.2-b GATE: an occluder CASTS a cascade shadow onto the receiver 
     REQUIRE(raster != nullptr);
 
     const resources::ResourceId cube_id = resources::ResourceId::mint_random();
-    containers::String          pack_name("sr_csm_pack_", &galloc());
-    pack_name.append(cube_id.to_string(&galloc()));
-    pack_name.append(".crdr");
-    const platform::fs::Path pack_path(containers::StringView(pack_name.data(), pack_name.size()));
+    const TempPack           pack("sr_csm_pack_", cube_id);
+    const platform::fs::Path pack_path = pack.path;
     write_mesh_pack(pack_path, cube_id);
     resources::ResourceManager rm(&galloc());
     resources::register_mesh_loader(&rm, nullptr);
@@ -593,10 +617,8 @@ TEST_CASE("REN-3.2-b GATE: a SLANTED light puts the shadow on the correct SIDE o
     REQUIRE(raster != nullptr);
 
     const resources::ResourceId cube_id = resources::ResourceId::mint_random();
-    containers::String          pack_name("sr_csm_dir_", &galloc());
-    pack_name.append(cube_id.to_string(&galloc()));
-    pack_name.append(".crdr");
-    const platform::fs::Path pack_path(containers::StringView(pack_name.data(), pack_name.size()));
+    const TempPack           pack("sr_csm_dir_", cube_id);
+    const platform::fs::Path pack_path = pack.path;
     write_mesh_pack(pack_path, cube_id);
     resources::ResourceManager rm(&galloc());
     resources::register_mesh_loader(&rm, nullptr);
@@ -809,10 +831,8 @@ TEST_CASE("REN-37.2 GATE: swapping the LIGHTING TECHNIQUE by name re-shades the 
     REQUIRE(raster != nullptr);
 
     const resources::ResourceId cube_id = resources::ResourceId::mint_random();
-    containers::String          pack_name("sr_tech_pack_", &galloc());
-    pack_name.append(cube_id.to_string(&galloc()));
-    pack_name.append(".crdr");
-    const platform::fs::Path pack_path(containers::StringView(pack_name.data(), pack_name.size()));
+    const TempPack           pack("sr_tech_pack_", cube_id);
+    const platform::fs::Path pack_path = pack.path;
     write_mesh_pack(pack_path, cube_id);
     resources::ResourceManager rm(&galloc());
     resources::register_mesh_loader(&rm, nullptr);
@@ -917,6 +937,41 @@ TEST_CASE("REN-37.2 GATE: swapping the LIGHTING TECHNIQUE by name re-shades the 
     CHECK(darker < lit.size() / 2U);
     CHECK(brighter == 0U);
 
+    // (c2) ⭐⭐ REN-38-E7: THE SAME SHADOWED FRAME, LIT BY AN AUTHORED DECLARATION. `forward_authored`’s
+    // body is not C++ — it is `crd-light-cook` cooking `assets/lighting/scene_forward.crdl`: a declared light
+    // record, a declared directional count, a declared CSM+PCF shadow scheme. ⛔ Until this row EVERY technique
+    // body was a `TechniqueBody` function pointer, so the scene was lit by one hardcoded directional light no
+    // matter what an asset said.
+    //
+    // ⛔⛔ THE CLAIM IS THAT IT LIGHTS AND SHADOWS, not that it compiles. A cooked-but-wrong lighting body
+    // would still draw the geometry — so this asserts the SAME shape of result the C++ technique produces:
+    // a real shading gradient, and a compact region that DARKENS with nothing getting brighter.
+    containers::Array<u32> authored(&galloc());
+    REQUIRE(sample("forward_authored", true, authored));
+    REQUIRE(authored.size() == lit.size());
+    u32 a_min = 255U;
+    u32 a_max = 0U;
+    u32 a_cov = 0U;
+    u32 a_dark = 0U;
+    u32 a_bright = 0U;
+    for (usize i = 0; i < lit.size(); ++i)
+    {
+        const u32 v = authored[i] & 0xFFU;
+        if ((authored[i] & 0x00FFFFFFU) != 0U)
+        {
+            ++a_cov;
+            if (v < a_min) { a_min = v; }
+            if (v > a_max) { a_max = v; }
+        }
+        const u32 before = lit[i] & 0xFFU;
+        if (v + 12U < before) { ++a_dark; }
+        else if (before + 12U < v) { ++a_bright; }
+    }
+    CHECK(a_cov > 500U);       // it draws the scene
+    CHECK(a_max > a_min);      // …with a real shading gradient, not a constant
+    CHECK(a_dark > 20U);       // …and the declared CSM term actually occludes
+    CHECK(a_bright == 0U);     // …in the right direction
+
     // (d) ⛔ AN UNRESOLVED TECHNIQUE NAME FAILS. It must not fall back to a default: rendering a plausible frame
     // with the WRONG technique is exactly the class of lie the magenta error graph exists to prevent, and it
     // would make every assertion above meaningless (a typo would read as a pass).
@@ -960,10 +1015,8 @@ TEST_CASE("REN-37.8 GATE: TWO viewports contribute to ONE graph and cost ONE sub
     REQUIRE(raster != nullptr);
 
     const resources::ResourceId cube_id = resources::ResourceId::mint_random();
-    containers::String          pack_name("sr_vp_pack_", &galloc());
-    pack_name.append(cube_id.to_string(&galloc()));
-    pack_name.append(".crdr");
-    const platform::fs::Path pack_path(containers::StringView(pack_name.data(), pack_name.size()));
+    const TempPack           pack("sr_vp_pack_", cube_id);
+    const platform::fs::Path pack_path = pack.path;
     write_mesh_pack(pack_path, cube_id);
     resources::ResourceManager rm(&galloc());
     resources::register_mesh_loader(&rm, nullptr);
@@ -1070,10 +1123,8 @@ TEST_CASE("REN-37.10 GATE: the viewport scheduler drives contributions into ONE 
     REQUIRE(raster != nullptr);
 
     const resources::ResourceId cube_id = resources::ResourceId::mint_random();
-    containers::String          pack_name("sr_loop_pack_", &galloc());
-    pack_name.append(cube_id.to_string(&galloc()));
-    pack_name.append(".crdr");
-    const platform::fs::Path pack_path(containers::StringView(pack_name.data(), pack_name.size()));
+    const TempPack           pack("sr_loop_pack_", cube_id);
+    const platform::fs::Path pack_path = pack.path;
     write_mesh_pack(pack_path, cube_id);
     resources::ResourceManager rm(&galloc());
     resources::register_mesh_loader(&rm, nullptr);
@@ -1189,4 +1240,610 @@ TEST_CASE("REN-37.10 GATE: the viewport scheduler drives contributions into ONE 
 
     (void)vp_a;
     (void)platform::fs::remove_file(pack_path);
+}
+
+// ── ⭐⭐ REN-38-F6 GATES: the renderer draws THROUGH the advanced stages, from AUTHORED assets only. ──────────
+// The F band proved each stage cooks; the A band proved each device verb draws. NOTHING had ever joined them:
+// an authored `.frame.toml` naming an authored program, resolved by the LIVE renderer host, putting pixels (or
+// compute results) where an assertion can see them. That join is what found the F1/F2 device-impossible
+// entries, the pull-tail task decoration and the cull kernel's unbindable binding — all closed green by
+// cook-only gates.
+
+TEST_CASE("REN-38-F6 GATE: TESS, MESH and VISBUFFER families render through authored scene graphs (Vulkan)",
+          "[scene-render][ren38][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    // one cube in the world — the advanced graphs do not draw it, but the renderer contributes nothing at all
+    // for an EMPTY scene (the draw-list early-out), and the cull family needs real instances anyway
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_f6_pack_", cube_id);
+    write_mesh_pack(pack.path, cube_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+    {
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.world = math::from_trs(math::Vec3f{0, 0, 0}, math::Quatf::identity(), math::Vec3f{1, 1, 1});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{cube_id, {}});
+    }
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    REQUIRE(renderer.init_programs(*vk));
+    // REN-38: the vertex variant axis is ENGINE-FILLED from the live declaration the renderer just cooked
+    CHECK(renderer.debug_variant_vertex() != 0U);
+    (void)renderer.sync(world);
+
+    auto target = raster->create_color_depth_target(128U, 128U);
+    REQUIRE(target != nullptr);
+    const math::Mat4f view = math::look_at(math::Vec3f{0, 0, 5}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Vec3f light{0.4F, 1.0F, 0.2F};
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+
+    containers::String graph(&galloc());
+
+    // ── TESSELLATION: the corner-table VS + hull levels + DISPLACING domain, all `.crdv`. The domain expands
+    // the quad x1.3, so a pixel between the base edge (NDC 0.6) and the expanded one (0.78) is a pixel ONLY a
+    // running domain shader could have coloured — "did anything render" would pass without tessellation.
+    {
+        REQUIRE(scenerender::builtin_asset_text("frame/scene_tess.frame.toml", graph));
+        REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
+        (void)renderer.render(*target, proj * view, light, clear);
+        CHECK((target->read_pixel(64U, 64U) & 0x00FFFFFFU) != 0U);   // inside the base quad
+        CHECK((target->read_pixel(108U, 64U) & 0x00FFFFFFU) != 0U);  // NDC ~0.69: expansion-only territory
+        CHECK((target->read_pixel(124U, 64U) & 0x00FFFFFFU) == 0U);  // NDC ~0.94: beyond even the expansion
+    }
+
+    // ── MESH + TASK: the amplification pipeline from two declarations (task emits 2 mesh workgroups each; the
+    // meshlet grid tiles thin triangles left to right). The claim is the JOIN renders — the amplification
+    // COUNTS are the A8 device gates' claim.
+    {
+        REQUIRE(scenerender::builtin_asset_text("frame/scene_mesh.frame.toml", graph));
+        REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
+        (void)renderer.render(*target, proj * view, light, clear);
+        u32 lit_total = 0;
+        u32 lit_left  = 0;
+        for (u32 sy = 4U; sy < 128U; sy += 4U)
+        {
+            for (u32 sx = 2U; sx < 128U; sx += 2U)
+            {
+                if ((target->read_pixel(sx, sy) & 0x00FFFFFFU) != 0U)
+                {
+                    ++lit_total;
+                    if (sx < 43U) { ++lit_left; }
+                }
+            }
+        }
+        CHECK(lit_total > 0U);
+        CHECK(lit_left > 0U); // workgroup 0 tiles from NDC -0.8 — the left third
+    }
+
+    // ── VISIBILITY BUFFER: the procedural fullscreen pair (`.crdv`, the F7 vocabulary) with the id-grading FS.
+    // Each half-screen triangle carries a DISTINCT primitive id, so the two halves must read back as two
+    // DIFFERENT non-background greys — a pixel-true assertion, not a smoke one.
+    {
+        REQUIRE(scenerender::builtin_asset_text("frame/scene_visbuffer.frame.toml", graph));
+        REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
+        (void)renderer.render(*target, proj * view, light, clear);
+        const u32 a = target->read_pixel(96U, 24U) & 0x00FFFFFFU;
+        const u32 b = target->read_pixel(24U, 96U) & 0x00FFFFFFU;
+        CHECK(a != 0U);
+        CHECK(b != 0U);
+        CHECK(a != b); // two primitives, two ids, two greys
+    }
+}
+
+TEST_CASE("REN-38-F6 GATE: the authored CULL graph computes real frustum visibility for the scene (Vulkan)",
+          "[scene-render][ren38][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_f6c_pack_", cube_id);
+    write_mesh_pack(pack.path, cube_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+    // 8 cubes near the origin (in view), 8 far off to +x/+z (outside every frustum plane)
+    constexpr u32 near_count = 8U;
+    constexpr u32 far_count  = 8U;
+    for (u32 i = 0; i < near_count + far_count; ++i)
+    {
+        const f32 x = i < near_count ? (static_cast<f32>(i) - 3.5F) * 1.5F : 1000.0F + static_cast<f32>(i);
+        const f32 z = i < near_count ? 0.0F : 1000.0F;
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.world = math::from_trs(math::Vec3f{x, 0.0F, z}, math::Quatf::identity(), math::Vec3f{1, 1, 1});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{cube_id, {}});
+    }
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    REQUIRE(renderer.init_programs(*vk));
+    (void)renderer.sync(world);
+    REQUIRE(renderer.mesh_groups().size() == 1U);
+
+    auto target = raster->create_color_depth_target(64U, 64U);
+    REQUIRE(target != nullptr);
+    const math::Mat4f view = math::look_at(math::Vec3f{0, 8, 20}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+
+    containers::String graph(&galloc());
+    REQUIRE(scenerender::builtin_asset_text("frame/scene_cull.frame.toml", graph));
+    REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
+    (void)renderer.render(*target, proj * view, math::Vec3f{0.4F, 1.0F, 0.2F}, gpu::ClearColor{0, 0, 0, 1});
+
+    // ⛔ The authored kernel's verdicts, read back: near instances VISIBLE, far ones CULLED. A gate that only
+    // counted "some flags written" would pass a kernel that wrote 1 everywhere.
+    gpu::IStorageBuffer* flags = renderer.debug_scene_buffer("cull_flags");
+    REQUIRE(flags != nullptr);
+    REQUIRE(raster->download_storage(*flags));
+    u32 visible = 0;
+    for (u32 i = 0; i < near_count + far_count; ++i) { visible += flags->read_u32(i) != 0U ? 1U : 0U; }
+    UNSCOPED_INFO("visible " << visible << " of " << (near_count + far_count));
+    CHECK(visible >= 1U);
+    CHECK(visible <= near_count); // every far instance culled; near ones (mostly) survive
+
+    // the GPU-DRIVEN half: the INDIRECT mark pass ran exactly one workgroup per survivor off the args
+    // the cull kernel wrote -- the count never touched the CPU. marked == visible is the whole claim.
+    gpu::IStorageBuffer* marks = renderer.debug_scene_buffer("cull_marks");
+    REQUIRE(marks != nullptr);
+    REQUIRE(raster->download_storage(*marks));
+    u32 marked = 0;
+    for (u32 i = 0; i < near_count + far_count; ++i) { marked += marks->read_u32(i) != 0U ? 1U : 0U; }
+    UNSCOPED_INFO("marked " << marked);
+    CHECK(marked == visible);
+    CHECK(marked >= 1U);
+}
+
+TEST_CASE("REN-38-F6 GATE: the authored RT PIPELINE graph traces the scene TLAS through the live host (Vulkan)",
+          "[scene-render][ren38][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+    if (!raster->supports_rt_pipeline()) { SKIP("adapter has no ray-tracing pipeline"); }
+
+    gpu::VulkanRayTracingContext rt(*vk);
+    REQUIRE(rt.valid());
+    // ⛔ NON-OPAQUE, or the graph's declared any-hit stage is silently skipped by traversal (the flag's whole
+    // meaning) and the fourth authored stage proves nothing.
+    const float tri[9]       = {-1.0F, -1.0F, 1.0F, 1.0F, -1.0F, 1.0F, 0.0F, 1.0F, 1.0F};
+    const float identity[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+    auto        scene_as     = rt.build_scene_instanced(tri, 1U, identity, 1U, /*opaque=*/false);
+    REQUIRE(scene_as != nullptr);
+
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_f6r_pack_", cube_id);
+    write_mesh_pack(pack.path, cube_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+    {
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.world = math::from_trs(math::Vec3f{0, 0, 0}, math::Quatf::identity(), math::Vec3f{1, 1, 1});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{cube_id, {}});
+    }
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    REQUIRE(renderer.init_programs(*vk));
+    (void)renderer.sync(world);
+    renderer.set_scene_accel(scene_as.get());
+
+    auto target = raster->create_color_depth_target(64U, 64U);
+    REQUIRE(target != nullptr);
+    const math::Mat4f view = math::look_at(math::Vec3f{0, 0, 5}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+
+    containers::String graph(&galloc());
+    REQUIRE(scenerender::builtin_asset_text("frame/scene_rt.frame.toml", graph));
+    REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
+    (void)renderer.render(*target, proj * view, math::Vec3f{0.4F, 1.0F, 0.2F}, gpu::ClearColor{0, 0, 0, 1});
+
+    // the four authored stages ran: every ray slot holds a WRITTEN record (a hit t or the miss marker — both
+    // are non-zero bit patterns), where a dead pipeline leaves the fresh buffer untouched
+    gpu::IStorageBuffer* hits = renderer.debug_scene_buffer("hits");
+    REQUIRE(hits != nullptr);
+    REQUIRE(raster->download_storage(*hits));
+    u32 written = 0;
+    // the raygen writes `out[LaunchId.x] = payload[0]` — one f32 record per ray, hit 1.0 / miss -1.0
+    for (u32 i = 0; i < 4U; ++i) { written += hits->read_u32(i) != 0U ? 1U : 0U; }
+    UNSCOPED_INFO("written ray records: " << written << " of 4");
+    CHECK(written == 4U);
+}
+
+// ── ⭐⭐ REN-38-F6 GATES (DX12): the SAME renderer joins on the OTHER backend. ────────────────────────────────
+// ⛔ A per-backend claim closed on the strength of the Vulkan gate alone leaves the entire DX12 dispatch path —
+// PSO/state creation for tess/mesh pipelines, the DXR SBT, the compute binding order — unexecuted (the exact
+// scar A16 carried: "compiled" standing in for "ran"). These are the Vulkan gates, joint for joint, on D3D12.
+
+TEST_CASE("REN-38-F6 GATE (DX12): TESS, MESH and VISBUFFER families render through authored scene graphs",
+          "[scene-render][ren38][gpu][dx12]")
+{
+    auto gctx = gpu::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto raster = gpu::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_f6dx_pack_", cube_id);
+    write_mesh_pack(pack.path, cube_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+    {
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.world = math::from_trs(math::Vec3f{0, 0, 0}, math::Quatf::identity(), math::Vec3f{1, 1, 1});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{cube_id, {}});
+    }
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    if (!renderer.init_programs(*gctx)) { SKIP("dxc/DXIL unavailable"); }
+    (void)renderer.sync(world);
+
+    auto target = raster->create_color_depth_target(128U, 128U);
+    REQUIRE(target != nullptr);
+    const math::Mat4f view = math::look_at(math::Vec3f{0, 0, 5}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Vec3f light{0.4F, 1.0F, 0.2F};
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+
+    containers::String graph(&galloc());
+
+    // TESSELLATION: the displacement-territory pixel is the claim (see the Vulkan twin for the geometry)
+    {
+        REQUIRE(scenerender::builtin_asset_text("frame/scene_tess.frame.toml", graph));
+        REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
+        (void)renderer.render(*target, proj * view, light, clear);
+        CHECK((target->read_pixel(64U, 64U) & 0x00FFFFFFU) != 0U);
+        CHECK((target->read_pixel(108U, 64U) & 0x00FFFFFFU) != 0U);
+        CHECK((target->read_pixel(124U, 64U) & 0x00FFFFFFU) == 0U);
+    }
+
+    // MESH + TASK amplification
+    {
+        REQUIRE(scenerender::builtin_asset_text("frame/scene_mesh.frame.toml", graph));
+        REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
+        (void)renderer.render(*target, proj * view, light, clear);
+        u32 lit_total = 0;
+        u32 lit_left  = 0;
+        for (u32 sy = 4U; sy < 128U; sy += 4U)
+        {
+            for (u32 sx = 2U; sx < 128U; sx += 2U)
+            {
+                if ((target->read_pixel(sx, sy) & 0x00FFFFFFU) != 0U)
+                {
+                    ++lit_total;
+                    if (sx < 43U) { ++lit_left; }
+                }
+            }
+        }
+        CHECK(lit_total > 0U);
+        CHECK(lit_left > 0U);
+    }
+
+    // VISIBILITY BUFFER: two primitives, two ids, two greys.
+    // ⚠ The probes sit on the HORIZONTAL midline (NDC y ~ 0): the fullscreen quad's two triangles split along
+    // the y = x diagonal, and D3D's raster y-orientation MIRRORS that diagonal relative to Vulkan — corner
+    // probes that straddle it on one backend both land on a single triangle on the other. A midline pair
+    // classifies identically under either orientation.
+    {
+        REQUIRE(scenerender::builtin_asset_text("frame/scene_visbuffer.frame.toml", graph));
+        REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
+        (void)renderer.render(*target, proj * view, light, clear);
+        const u32 a = target->read_pixel(98U, 64U) & 0x00FFFFFFU; // NDC (+0.53, ~0) — the y<x triangle
+        const u32 b = target->read_pixel(30U, 64U) & 0x00FFFFFFU; // NDC (-0.53, ~0) — the y>x triangle
+        CHECK(a != 0U);
+        CHECK(b != 0U);
+        CHECK(a != b);
+    }
+}
+
+TEST_CASE("REN-38-F6 GATE (DX12): the authored CULL graph computes real frustum visibility for the scene",
+          "[scene-render][ren38][gpu][dx12]")
+{
+    auto gctx = gpu::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto raster = gpu::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_f6dxc_pack_", cube_id);
+    write_mesh_pack(pack.path, cube_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+    constexpr u32 near_count = 8U;
+    constexpr u32 far_count  = 8U;
+    for (u32 i = 0; i < near_count + far_count; ++i)
+    {
+        const f32 x = i < near_count ? (static_cast<f32>(i) - 3.5F) * 1.5F : 1000.0F + static_cast<f32>(i);
+        const f32 z = i < near_count ? 0.0F : 1000.0F;
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.world = math::from_trs(math::Vec3f{x, 0.0F, z}, math::Quatf::identity(), math::Vec3f{1, 1, 1});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{cube_id, {}});
+    }
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    if (!renderer.init_programs(*gctx)) { SKIP("dxc/DXIL unavailable"); }
+    (void)renderer.sync(world);
+    REQUIRE(renderer.mesh_groups().size() == 1U);
+
+    auto target = raster->create_color_depth_target(64U, 64U);
+    REQUIRE(target != nullptr);
+    const math::Mat4f view = math::look_at(math::Vec3f{0, 8, 20}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+
+    containers::String graph(&galloc());
+    REQUIRE(scenerender::builtin_asset_text("frame/scene_cull.frame.toml", graph));
+    REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
+    (void)renderer.render(*target, proj * view, math::Vec3f{0.4F, 1.0F, 0.2F}, gpu::ClearColor{0, 0, 0, 1});
+
+    gpu::IStorageBuffer* flags = renderer.debug_scene_buffer("cull_flags");
+    REQUIRE(flags != nullptr);
+    REQUIRE(raster->download_storage(*flags));
+    u32 visible = 0;
+    for (u32 i = 0; i < near_count + far_count; ++i) { visible += flags->read_u32(i) != 0U ? 1U : 0U; }
+    UNSCOPED_INFO("visible " << visible << " of " << (near_count + far_count));
+    CHECK(visible >= 1U);
+    CHECK(visible <= near_count);
+
+    // the GPU-DRIVEN half: the INDIRECT mark pass ran exactly one workgroup per survivor off the args
+    // the cull kernel wrote -- the count never touched the CPU. marked == visible is the whole claim.
+    gpu::IStorageBuffer* marks = renderer.debug_scene_buffer("cull_marks");
+    REQUIRE(marks != nullptr);
+    REQUIRE(raster->download_storage(*marks));
+    u32 marked = 0;
+    for (u32 i = 0; i < near_count + far_count; ++i) { marked += marks->read_u32(i) != 0U ? 1U : 0U; }
+    UNSCOPED_INFO("marked " << marked);
+    CHECK(marked == visible);
+    CHECK(marked >= 1U);
+}
+
+TEST_CASE("REN-38-F6 GATE (DX12): the authored RT PIPELINE graph traces the scene TLAS through the live host",
+          "[scene-render][ren38][gpu][dx12]")
+{
+    auto gctx = gpu::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto raster = gpu::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+    if (!raster->supports_rt_pipeline()) { SKIP("adapter has no DXR ray-tracing pipeline"); }
+
+    gpu::Dx12RayTracingContext rt;
+    if (!rt.valid()) { SKIP("no DXR-capable device"); }
+    const float tri[9]       = {-1.0F, -1.0F, 1.0F, 1.0F, -1.0F, 1.0F, 0.0F, 1.0F, 1.0F};
+    const float identity[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+    auto        scene_as     = rt.build_scene_instanced(tri, 1U, identity, 1U, /*opaque=*/false);
+    REQUIRE(scene_as != nullptr);
+
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_f6dxr_pack_", cube_id);
+    write_mesh_pack(pack.path, cube_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+    {
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.world = math::from_trs(math::Vec3f{0, 0, 0}, math::Quatf::identity(), math::Vec3f{1, 1, 1});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{cube_id, {}});
+    }
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    if (!renderer.init_programs(*gctx)) { SKIP("dxc/DXIL unavailable"); }
+    (void)renderer.sync(world);
+    renderer.set_scene_accel(scene_as.get());
+
+    auto target = raster->create_color_depth_target(64U, 64U);
+    REQUIRE(target != nullptr);
+    const math::Mat4f view = math::look_at(math::Vec3f{0, 0, 5}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+
+    containers::String graph(&galloc());
+    REQUIRE(scenerender::builtin_asset_text("frame/scene_rt.frame.toml", graph));
+    REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
+    (void)renderer.render(*target, proj * view, math::Vec3f{0.4F, 1.0F, 0.2F}, gpu::ClearColor{0, 0, 0, 1});
+
+    gpu::IStorageBuffer* hits = renderer.debug_scene_buffer("hits");
+    REQUIRE(hits != nullptr);
+    REQUIRE(raster->download_storage(*hits));
+    u32 written = 0;
+    for (u32 i = 0; i < 4U; ++i) { written += hits->read_u32(i) != 0U ? 1U : 0U; }
+    UNSCOPED_INFO("written ray records: " << written << " of 4");
+    CHECK(written == 4U);
+}
+
+// ── ⭐ REN-38-F15 GATE: DISK-FIRST asset loading — a file under the root SHADOWS the embedded pack. ──────────
+// The claim has two halves, and both must be pixel-visible: (1) an EDITED disk declaration changes the frame
+// without a rebuild; (2) a CORRUPT disk declaration fails LOUDLY — it never silently falls back to the
+// embedded copy, because a fallback that renders is indistinguishable from the edit having worked.
+TEST_CASE("REN-38-F15 GATE: a disk asset SHADOWS the embedded pack, and a corrupt one refuses loudly (Vulkan)",
+          "[scene-render][ren38][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    // an asset root in the temp directory holding ONE edited declaration: the tess corner table at +-0.9
+    // instead of +-0.6 — under the x1.3 domain expansion, a pixel near NDC 0.9 is reachable ONLY via the disk
+    // copy (the embedded quad tops out at 0.78)
+    containers::String root(&galloc());
+    root.append(platform::fs::temp_directory().generic());
+    root.append("/crd_f15_root_");
+    {
+        // a FRESH root per run: the corrupt copies halves 2/3 write must not poison the next run's half 1
+        char stamp[32];
+        std::snprintf(stamp, sizeof(stamp), "%llu",
+                      static_cast<unsigned long long>(std::time(nullptr)));
+        root.append(stamp);
+    }
+    containers::String vdir(&galloc());
+    vdir.append(root.c_str());
+    vdir.append("/vertex");
+    REQUIRE(platform::fs::create_directories(platform::fs::Path(containers::StringView(vdir.c_str(), vdir.size()))));
+    containers::String edited(&galloc());
+    REQUIRE(scenerender::builtin_asset_text("vertex/tess_corners.crdv", edited));
+    // widen the corner table: every 0.6 literal becomes 0.9 (the ifequal chains carry them)
+    for (usize i = 0; i + 3U <= edited.size(); ++i)
+    {
+        if (edited.c_str()[i] == '0' && edited.c_str()[i + 1U] == '.' && edited.c_str()[i + 2U] == '6')
+        {
+            edited.data()[i + 2U] = '9';
+        }
+    }
+    containers::String vfile(&galloc());
+    vfile.append(vdir.c_str());
+    vfile.append("/tess_corners.crdv");
+    REQUIRE(platform::fs::write_file_text(platform::fs::Path(containers::StringView(vfile.c_str(), vfile.size())),
+                                          containers::StringView(edited.c_str(), edited.size())));
+
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_f15_pack_", cube_id);
+    write_mesh_pack(pack.path, cube_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+    {
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.world = math::from_trs(math::Vec3f{0, 0, 0}, math::Quatf::identity(), math::Vec3f{1, 1, 1});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{cube_id, {}});
+    }
+    const math::Mat4f view = math::look_at(math::Vec3f{0, 0, 5}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+    containers::String graph(&galloc());
+    REQUIRE(scenerender::builtin_asset_text("frame/scene_tess.frame.toml", graph));
+
+    // half 1: the DISK copy draws — a pixel the embedded declaration cannot reach lights up
+    {
+        scenerender::SceneRenderer renderer(&galloc());
+        REQUIRE(renderer.init(*raster, rm));
+        REQUIRE(renderer.init_programs(*vk));
+        REQUIRE(renderer.set_asset_root(root.c_str()));
+        (void)renderer.sync(world);
+        auto target = raster->create_color_depth_target(128U, 128U);
+        REQUIRE(target != nullptr);
+        REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
+        const auto r1 = renderer.render(*target, proj * view, math::Vec3f{0.4F, 1.0F, 0.2F}, clear);
+        CHECK(r1.timed_passes > 0U); // the graph executed
+        CHECK((target->read_pixel(120U, 64U) & 0x00FFFFFFU) != 0U); // NDC ~0.87: disk-only territory
+        CHECK((target->read_pixel(64U, 64U) & 0x00FFFFFFU) != 0U);
+    }
+
+    // half 2: a CORRUPT disk copy REFUSES — the pass fails by name, nothing silently falls back and renders
+    {
+        REQUIRE(platform::fs::write_file_text(
+            platform::fs::Path(containers::StringView(vfile.c_str(), vfile.size())),
+            containers::StringView("this is not a vertex declaration")));
+        scenerender::SceneRenderer renderer(&galloc());
+        REQUIRE(renderer.init(*raster, rm));
+        REQUIRE(renderer.init_programs(*vk));
+        REQUIRE(renderer.set_asset_root(root.c_str()));
+        (void)renderer.sync(world);
+        auto target = raster->create_color_depth_target(128U, 128U);
+        REQUIRE(target != nullptr);
+        REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
+        const auto r2 = renderer.render(*target, proj * view, math::Vec3f{0.4F, 1.0F, 0.2F}, clear);
+        // ⛔ EXECUTION truth, not pixels: a fresh target's readback can recycle the PREVIOUS target's host
+        // memory, so a stale image would fake either verdict. A refused cook means the record fails by name
+        // and NO pass executes — and no embedded fallback sneaks in behind the corrupt disk copy.
+        CHECK(r2.timed_passes == 0U);
+    }
+
+    // half 3: a corrupt disk FRAME graph refuses the root itself
+    {
+        containers::String fdir(&galloc());
+        fdir.append(root.c_str());
+        fdir.append("/frame");
+        REQUIRE(platform::fs::create_directories(
+            platform::fs::Path(containers::StringView(fdir.c_str(), fdir.size()))));
+        containers::String ffile(&galloc());
+        ffile.append(fdir.c_str());
+        ffile.append("/forward_basic.frame.toml");
+        REQUIRE(platform::fs::write_file_text(
+            platform::fs::Path(containers::StringView(ffile.c_str(), ffile.size())),
+            containers::StringView("not a graph")));
+        scenerender::SceneRenderer renderer(&galloc());
+        REQUIRE(renderer.init(*raster, rm));
+        CHECK_FALSE(renderer.set_asset_root(root.c_str()));
+    }
 }

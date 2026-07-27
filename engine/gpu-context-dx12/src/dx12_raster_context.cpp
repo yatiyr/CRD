@@ -71,6 +71,11 @@ ComPtr<ID3D12Resource> make_upload_buffer(ID3D12Device* dev, UINT64 size)
     return res;
 }
 
+// REN-38 audit: the pass-state converters live beside `to_d3d12_compare` below; declared here because
+// `build_graphics_pso` bakes the declared state into the PSO.
+[[nodiscard]] D3D12_COMPARISON_FUNC to_d3d12_compare(DepthCompare c) noexcept;
+[[nodiscard]] D3D12_STENCIL_OP      to_d3d12_stencil_op(StencilOp op) noexcept;
+
 // Build the attributeless graphics PSO (empty root sig, cull-none, RGBA8 RTV) at a given sample count + depth config. A
 // D3D12 PSO BAKES SampleDesc.Count AND the depth-stencil state + DSVFormat (unlike Vulkan shader objects, where these are
 // dynamic), so a draw needs a PSO matching the target's samples AND depth compare — hence both are parameters and
@@ -81,7 +86,8 @@ ComPtr<ID3D12PipelineState> build_graphics_pso(ID3D12Device* dev, ID3D12RootSign
                                                D3D12_SHADER_BYTECODE hs = D3D12_SHADER_BYTECODE{},  // B4-tess: hull (empty = none)
                                                D3D12_SHADER_BYTECODE ds = D3D12_SHADER_BYTECODE{},  // B4-tess: domain
                                                DXGI_FORMAT rt_fmt = kColorFormat,                   // B4-vis-4: R32_UINT vis buffer
-                                               const BlendMode* blend = nullptr)                     // REN-38-A15: per-RT blend
+                                               const BlendMode* blend = nullptr,                    // REN-38-A15: per-RT blend
+                                               const PassRasterState* state = nullptr)              // REN-38 audit: pass state
 {
     D3D12_GRAPHICS_PIPELINE_STATE_DESC pd{};
     pd.pRootSignature                                   = root;
@@ -143,6 +149,36 @@ ComPtr<ID3D12PipelineState> build_graphics_pso(ID3D12Device* dev, ID3D12RootSign
         pd.DepthStencilState.DepthEnable    = TRUE;
         pd.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
         pd.DepthStencilState.DepthFunc      = depth_func;
+    }
+    // ── ⭐ REN-38 audit: the DECLARED pass state — PSO-baked on D3D12, so it is part of the PSO cache key
+    // (see `pso_for`), exactly as blend is. Null = the historical hardwired behaviour above, bit for bit. ──
+    if (state != nullptr)
+    {
+        auto& rs = pd.RasterizerState;
+        if (state->face_cull == FaceCull::Back)  { rs.CullMode = D3D12_CULL_MODE_BACK; }
+        if (state->face_cull == FaceCull::Front) { rs.CullMode = D3D12_CULL_MODE_FRONT; }
+        rs.FrontCounterClockwise = state->front_face == FrontFace::CounterClockwise ? TRUE : FALSE;
+        // ⛔ D3D12's constant bias is an INT in device units where Vulkan's is a float — the asset declares the
+        // same number for both, which is the portable meaning for the fixed-point depth paths shadows use.
+        rs.DepthBias             = static_cast<INT>(state->depth_bias);
+        rs.SlopeScaledDepthBias  = state->depth_bias_slope;
+        rs.DepthBiasClamp        = state->depth_bias_clamp;
+        if (dsv != DXGI_FORMAT_UNKNOWN)
+        {
+            pd.DepthStencilState.DepthWriteMask =
+                state->depth_write ? D3D12_DEPTH_WRITE_MASK_ALL : D3D12_DEPTH_WRITE_MASK_ZERO;
+            if (state->stencil_enable)
+            {
+                pd.DepthStencilState.StencilEnable    = TRUE;
+                pd.DepthStencilState.StencilReadMask  = static_cast<UINT8>(state->stencil_read_mask);
+                pd.DepthStencilState.StencilWriteMask = static_cast<UINT8>(state->stencil_write_mask);
+                const D3D12_DEPTH_STENCILOP_DESC ops{
+                    to_d3d12_stencil_op(state->stencil_fail), to_d3d12_stencil_op(state->stencil_depth_fail),
+                    to_d3d12_stencil_op(state->stencil_pass), to_d3d12_compare(state->stencil_compare)};
+                pd.DepthStencilState.FrontFace = ops;
+                pd.DepthStencilState.BackFace  = ops;
+            }
+        }
     }
     ComPtr<ID3D12PipelineState> pso;
     if (FAILED(dev->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&pso)))) { return nullptr; }
@@ -233,13 +269,24 @@ struct alignas(void*) PsoStreamSub
 ComPtr<ID3D12PipelineState> build_mesh_pso(ID3D12Device2* dev2, ID3D12RootSignature* root, D3D12_SHADER_BYTECODE ms,
                                            D3D12_SHADER_BYTECODE ps, UINT samples, DXGI_FORMAT dsv,
                                            D3D12_COMPARISON_FUNC depth_func, UINT num_rts = 1,
-                                           D3D12_SHADER_BYTECODE as = D3D12_SHADER_BYTECODE{}) // B4: AS = the task shader (empty = none)
+                                           D3D12_SHADER_BYTECODE as = D3D12_SHADER_BYTECODE{}, // B4: AS = the task shader (empty = none)
+                                           const PassRasterState* state = nullptr) // REN-38 audit: pass state
 {
     if (dev2 == nullptr) { return nullptr; }
     D3D12_RASTERIZER_DESC rast{};
     rast.FillMode        = D3D12_FILL_MODE_SOLID;
     rast.CullMode        = D3D12_CULL_MODE_NONE; // match the graphics path (attributeless / mesh-generated winding moot)
     rast.DepthClipEnable = TRUE;
+    // REN-38 audit: a mesh pass declares the same state a geometry pass does — same fields, same defaults.
+    if (state != nullptr)
+    {
+        if (state->face_cull == FaceCull::Back)  { rast.CullMode = D3D12_CULL_MODE_BACK; }
+        if (state->face_cull == FaceCull::Front) { rast.CullMode = D3D12_CULL_MODE_FRONT; }
+        rast.FrontCounterClockwise = state->front_face == FrontFace::CounterClockwise ? TRUE : FALSE;
+        rast.DepthBias             = static_cast<INT>(state->depth_bias);
+        rast.SlopeScaledDepthBias  = state->depth_bias_slope;
+        rast.DepthBiasClamp        = state->depth_bias_clamp;
+    }
     D3D12_BLEND_DESC blend{};
     blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
     D3D12_RT_FORMAT_ARRAY rts{};
@@ -251,8 +298,20 @@ ComPtr<ID3D12PipelineState> build_mesh_pso(ID3D12Device2* dev2, ID3D12RootSignat
     if (dsv != DXGI_FORMAT_UNKNOWN)
     {
         ds.DepthEnable    = TRUE;
-        ds.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+        ds.DepthWriteMask = state != nullptr && !state->depth_write ? D3D12_DEPTH_WRITE_MASK_ZERO
+                                                                    : D3D12_DEPTH_WRITE_MASK_ALL;
         ds.DepthFunc      = depth_func;
+        if (state != nullptr && state->stencil_enable)
+        {
+            ds.StencilEnable    = TRUE;
+            ds.StencilReadMask  = static_cast<UINT8>(state->stencil_read_mask);
+            ds.StencilWriteMask = static_cast<UINT8>(state->stencil_write_mask);
+            const D3D12_DEPTH_STENCILOP_DESC ops{
+                to_d3d12_stencil_op(state->stencil_fail), to_d3d12_stencil_op(state->stencil_depth_fail),
+                to_d3d12_stencil_op(state->stencil_pass), to_d3d12_compare(state->stencil_compare)};
+            ds.FrontFace = ops;
+            ds.BackFace  = ops;
+        }
     }
 
     struct MeshStream
@@ -303,6 +362,22 @@ ComPtr<ID3D12PipelineState> build_mesh_pso(ID3D12Device2* dev2, ID3D12RootSignat
     }
     return D3D12_COMPARISON_FUNC_ALWAYS;
 }
+// REN-38 audit (pass-state vocabulary): the backend-neutral StencilOp → D3D12_STENCIL_OP, mapped explicitly.
+[[nodiscard]] D3D12_STENCIL_OP to_d3d12_stencil_op(StencilOp op) noexcept
+{
+    switch (op)
+    {
+    case StencilOp::Keep:      return D3D12_STENCIL_OP_KEEP;
+    case StencilOp::Zero:      return D3D12_STENCIL_OP_ZERO;
+    case StencilOp::Replace:   return D3D12_STENCIL_OP_REPLACE;
+    case StencilOp::IncrClamp: return D3D12_STENCIL_OP_INCR_SAT;
+    case StencilOp::DecrClamp: return D3D12_STENCIL_OP_DECR_SAT;
+    case StencilOp::Invert:    return D3D12_STENCIL_OP_INVERT;
+    case StencilOp::IncrWrap:  return D3D12_STENCIL_OP_INCR;
+    case StencilOp::DecrWrap:  return D3D12_STENCIL_OP_DECR;
+    }
+    return D3D12_STENCIL_OP_KEEP;
+}
 constexpr DXGI_FORMAT kDepthFormat = DXGI_FORMAT_D32_FLOAT; // B1-d depth buffer format
 
 // B1-e: ShadingRate → D3D12_SHADING_RATE. The D3D12 enum values ARE the packed (Yshift<<2)|Xshift byte (2x2 = 0x5), the
@@ -346,10 +421,10 @@ public:
     Dx12RasterTarget(ComPtr<ID3D12Resource> tex, ComPtr<ID3D12Resource> resolve, ComPtr<ID3D12Resource> depth,
                      ComPtr<ID3D12Resource> readback, ComPtr<ID3D12DescriptorHeap> rtv_heap,
                      ComPtr<ID3D12DescriptorHeap> dsv_heap, void* mapped, const D3D12_PLACED_SUBRESOURCE_FOOTPRINT& fp,
-                     crd::u32 samples, crd::u32 w, crd::u32 h) noexcept
+                     crd::u32 samples, crd::u32 w, crd::u32 h, bool has_stencil = false) noexcept
         : m_tex(std::move(tex)), m_resolve(std::move(resolve)), m_depth(std::move(depth)),
           m_readback(std::move(readback)), m_rtv_heap(std::move(rtv_heap)), m_dsv_heap(std::move(dsv_heap)),
-          m_mapped(mapped), m_fp(fp), m_samples(samples), m_w(w), m_h(h)
+          m_mapped(mapped), m_fp(fp), m_samples(samples), m_w(w), m_h(h), m_has_stencil(has_stencil)
     {
     }
     ~Dx12RasterTarget() override
@@ -388,6 +463,16 @@ public:
     [[nodiscard]] ID3D12Resource* copy_src() const noexcept { return m_samples > 1U ? m_resolve.Get() : m_tex.Get(); }
     [[nodiscard]] bool            has_depth() const noexcept { return m_depth != nullptr; } // B1-d
     [[nodiscard]] ID3D12Resource* depth_tex() const noexcept { return m_depth.Get(); }
+    // REN-38-F11: a D24S8 target — the PSO's DSVFormat and every depth clear must then carry the stencil half.
+    [[nodiscard]] bool              has_stencil() const noexcept { return m_has_stencil; }
+    [[nodiscard]] DXGI_FORMAT       dsv_format() const noexcept
+    {
+        return m_has_stencil ? DXGI_FORMAT_D24_UNORM_S8_UINT : DXGI_FORMAT_D32_FLOAT;
+    }
+    [[nodiscard]] D3D12_CLEAR_FLAGS clear_flags() const noexcept
+    {
+        return m_has_stencil ? (D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL) : D3D12_CLEAR_FLAG_DEPTH;
+    }
     [[nodiscard]] D3D12_CPU_DESCRIPTOR_HANDLE dsv() const noexcept
     {
         return m_dsv_heap->GetCPUDescriptorHandleForHeapStart();
@@ -409,6 +494,7 @@ private:
     crd::u32                            m_samples = 1;
     crd::u32                            m_w = 0;
     crd::u32                            m_h = 0;
+    bool                                m_has_stencil = false; // REN-38-F11: the depth resource is D24S8 (appended at END)
 };
 
 // ── RET-2 (ADR-0105): the DX12 present surface — the DXGI mirror of the Vulkan sink design ────────────────────────────
@@ -601,7 +687,8 @@ public:
     // small keyed cache (a handful of configs per program at most). `dsv == DXGI_FORMAT_UNKNOWN` ⇒ the depth-off colour path.
     [[nodiscard]] ID3D12PipelineState* pso_for(crd::u32 samples, DXGI_FORMAT dsv, D3D12_COMPARISON_FUNC depth_func,
                                                bool conservative, crd::u32 num_rts = 1U, DXGI_FORMAT rt_fmt = kColorFormat,
-                                               const BlendMode* blend = nullptr)
+                                               const BlendMode* blend = nullptr,
+                                               const PassRasterState* state = nullptr)
     {
         // REN-38-A15: fold the blend modes into the cache key. ⛔ Without this, two passes asking for DIFFERENT
         // blends would share one PSO and the second would render with the first's equations — a wrong image with
@@ -614,8 +701,12 @@ public:
                 blend_key |= (static_cast<crd::u32>(blend[i]) & 0x7U) << (i * 3U);
             }
         }
+        // ⭐ REN-38 audit: the declared pass state joins the cache identity — EXACTLY, member by member, never
+        // hashed (a hash collision hands one pass another's pipeline). Default state keeps the historical key.
+        const PassRasterState def_state{};
+        const PassRasterState& st = state != nullptr ? *state : def_state;
         if (samples <= 1U && dsv == DXGI_FORMAT_UNKNOWN && !conservative && num_rts == 1U && rt_fmt == kColorFormat
-            && blend_key == 0U)
+            && blend_key == 0U && st == def_state)
         {
             return m_pso1.Get();
         }
@@ -624,19 +715,24 @@ public:
                              | (conservative ? 0x10000U : 0U) | (num_rts << 20U) // B5: RT count in the key (MRT G-buffer)
                              | (rt_fmt == kColorFormat ? 0U : 0x40000U) // B4-vis-4: the R32_UINT visibility-buffer format
                              | (blend_key << 24U);                       // REN-38-A15: per-RT blend modes
-        for (int i = 0; i < m_cache_n; ++i) { if (m_cache[i].key == key) { return m_cache[i].pso.Get(); } }
+        for (int i = 0; i < m_cache_n; ++i)
+        {
+            if (m_cache[i].key == key && m_cache[i].state == st) { return m_cache[i].pso.Get(); }
+        }
         if (m_cache_n >= kPsoCacheCap) { return nullptr; }
-        m_cache[m_cache_n].key = key;
+        m_cache[m_cache_n].key   = key;
+        m_cache[m_cache_n].state = st;
         m_cache[m_cache_n].pso =
             m_is_mesh ? build_mesh_pso(m_device2, m_root.Get(), D3D12_SHADER_BYTECODE{m_vs.get(), m_vs_size},
                                        D3D12_SHADER_BYTECODE{m_fs.get(), m_fs_size}, samples, dsv, depth_func, num_rts,
-                                       D3D12_SHADER_BYTECODE{m_as.get(), m_as_size}) // B4: AS (task) when present, else empty
+                                       D3D12_SHADER_BYTECODE{m_as.get(), m_as_size}, // B4: AS (task) when present, else empty
+                                       &st)                                          // REN-38 audit: pass state
                       : build_graphics_pso(m_device, m_root.Get(), D3D12_SHADER_BYTECODE{m_vs.get(), m_vs_size},
                                            D3D12_SHADER_BYTECODE{m_fs.get(), m_fs_size}, samples, dsv, depth_func,
                                            conservative, num_rts,
                                            D3D12_SHADER_BYTECODE{m_hs.get(), m_hs_size},   // B4-tess: hull (empty ⇒ non-tess)
                                            D3D12_SHADER_BYTECODE{m_ds.get(), m_ds_size},   // B4-tess: domain
-                                           rt_fmt, blend);                                 // B4-vis-4: RT format · A15: blend
+                                           rt_fmt, blend, &st);                            // A15 blend · REN-38 state
         return m_cache[m_cache_n++].pso.Get();
     }
 
@@ -645,6 +741,7 @@ private:
     struct PsoCacheEntry
     {
         crd::u32                    key = 0;
+        PassRasterState             state{}; // REN-38 audit: exact per-pass state, part of the cache identity
         ComPtr<ID3D12PipelineState> pso;
     };
     ID3D12Device*               m_device  = nullptr; // the context (which owns the device) outlives its programs
@@ -877,7 +974,10 @@ public:
         m_srv_inc = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         D3D12_DESCRIPTOR_HEAP_DESC smh{};
         smh.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER;
-        smh.NumDescriptors = 2; // slot 0 = default bilinear/wrap · slot 1 = comparison (shadow)
+        // REN-38-B8: slots 0/1 keep their historical meaning (default · comparison); 2..N are the AUTHORED
+        // sampler cache. ⛔ Growing the heap rather than reusing slot 0 matters: a shader-visible sampler heap
+        // cannot be resized after creation, and overwriting slot 0 would change every OTHER pass's sampling.
+        smh.NumDescriptors = 2 + kSamplerCacheCap;
         smh.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         m_device->CreateDescriptorHeap(&smh, IID_PPV_ARGS(&m_sampler_heap));
         m_sampler_inc = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
@@ -1102,6 +1202,19 @@ public:
 
     [[nodiscard]] std::unique_ptr<IRasterTarget> create_color_depth_target(crd::u32 width, crd::u32 height) override
     {
+        return make_color_depth_target(width, height, kDepthFormat);
+    }
+
+    // REN-38-F11: colour + D24S8 - the target the authored stencil vocabulary draws against.
+    [[nodiscard]] std::unique_ptr<IRasterTarget> create_color_depth_stencil_target(crd::u32 width,
+                                                                                   crd::u32 height) override
+    {
+        return make_color_depth_target(width, height, DXGI_FORMAT_D24_UNORM_S8_UINT);
+    }
+
+    [[nodiscard]] std::unique_ptr<IRasterTarget> make_color_depth_target(crd::u32 width, crd::u32 height,
+                                                                         DXGI_FORMAT depth_fmt)
+    {
         if (!m_ok || width == 0U || height == 0U) { return nullptr; }
 
         D3D12_HEAP_PROPERTIES hp{};
@@ -1128,7 +1241,7 @@ public:
         // D32 depth texture, created in DEPTH_WRITE (it is only ever a depth attachment, never copied). No optimized clear
         // value: the harness clears to an arbitrary depth, so a baked value would only earn a clear-value-mismatch warning.
         D3D12_RESOURCE_DESC dd = rd;
-        dd.Format              = kDepthFormat;
+        dd.Format              = depth_fmt;
         dd.Flags               = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
         ComPtr<ID3D12Resource> depth;
         if (FAILED(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &dd, D3D12_RESOURCE_STATE_DEPTH_WRITE,
@@ -1165,7 +1278,8 @@ public:
 
         return std::make_unique<Dx12RasterTarget>(std::move(tex), ComPtr<ID3D12Resource>{}, std::move(depth),
                                                   std::move(readback), std::move(rtv_heap), std::move(dsv_heap), mapped,
-                                                  fp, 1U, width, height);
+                                                  fp, 1U, width, height,
+                                                  depth_fmt == DXGI_FORMAT_D24_UNORM_S8_UINT);
     }
 
     [[nodiscard]] std::unique_ptr<IRasterTarget> create_color_vrs_target(crd::u32 width, crd::u32 height,
@@ -1547,16 +1661,72 @@ public:
     // ── ⭐ REN-38-A7/A8: the CONTINUING draws — the DX12 mirror. ──
     // ⛔ RECORDING-ONLY by contract: "keep the previous contents" is only meaningful while a frame is open, and
     // every synchronous verb here ends by copying to the readback buffer and returning the target to COMMON.
+    // REN-38-F6+: storage-bound tessellation — frame-graph recording only, like every RT verb.
+    void draw_tess_storage(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
+                           IStorageBuffer& storage, crd::u32 patch_count) override
+    {
+        if (!m_ok || !frame_recording()) { return; }
+        auto& t = static_cast<Dx12RasterTarget&>(target);
+        auto& p = static_cast<Dx12RasterProgram&>(program);
+        auto& s2 = static_cast<Dx12StorageBuffer&>(storage);
+        if (!p.is_tess()) { return; }
+        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        if (!p.valid() || pso == nullptr) { return; }
+        record_plain_topology(t, p, pso, clear, D3D_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST,
+                              patch_count * 4U, /*clear=*/true, &s2);
+    }
+    void draw_tess_storage_load(IRasterTarget& target, IRasterProgram& program, IStorageBuffer& storage,
+                                crd::u32 patch_count) override
+    {
+        if (!m_ok || !frame_recording()) { return; }
+        auto& t = static_cast<Dx12RasterTarget&>(target);
+        auto& p = static_cast<Dx12RasterProgram&>(program);
+        auto& s2 = static_cast<Dx12StorageBuffer&>(storage);
+        if (!p.is_tess()) { return; }
+        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        if (!p.valid() || pso == nullptr) { return; }
+        record_plain_topology(t, p, pso, ClearColor{}, D3D_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST,
+                              patch_count * 4U, /*clear=*/false, &s2);
+    }
+
     void draw_tess_load(IRasterTarget& target, IRasterProgram& program, crd::u32 patch_count) override
     {
         if (!m_ok || !frame_recording()) { return; }
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         if (!p.is_tess()) { return; }
-        ID3D12PipelineState* pso = p.pso_for(t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
         if (!p.valid() || pso == nullptr) { return; }
         record_plain_topology(t, p, pso, ClearColor{}, D3D_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST,
                               patch_count * 4U, /*clear=*/false);
+    }
+
+    // REN-38-F6+: storage-bound mesh dispatch — frame-graph recording only, like the tess twin.
+    void draw_mesh_storage(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
+                           IStorageBuffer& storage, crd::u32 group_count) override
+    {
+        if (!m_ok || !frame_recording() || m_list6 == nullptr) { return; }
+        auto& t = static_cast<Dx12RasterTarget&>(target);
+        auto& p = static_cast<Dx12RasterProgram&>(program);
+        auto& s2 = static_cast<Dx12StorageBuffer&>(storage);
+        if (!p.is_mesh()) { return; }
+        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        if (!p.valid() || pso == nullptr) { return; }
+        record_mesh(t, p, pso, clear, group_count, false, 0.0F, nullptr, false, D3D12_SHADING_RATE_1X1,
+                    nullptr, nullptr, 0U, /*clear=*/true, &s2);
+    }
+    void draw_mesh_storage_load(IRasterTarget& target, IRasterProgram& program, IStorageBuffer& storage,
+                                crd::u32 group_count) override
+    {
+        if (!m_ok || !frame_recording() || m_list6 == nullptr) { return; }
+        auto& t = static_cast<Dx12RasterTarget&>(target);
+        auto& p = static_cast<Dx12RasterProgram&>(program);
+        auto& s2 = static_cast<Dx12StorageBuffer&>(storage);
+        if (!p.is_mesh()) { return; }
+        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        if (!p.valid() || pso == nullptr) { return; }
+        record_mesh(t, p, pso, ClearColor{}, group_count, false, 0.0F, nullptr, false, D3D12_SHADING_RATE_1X1,
+                    nullptr, nullptr, 0U, /*clear=*/false, &s2);
     }
 
     void draw_mesh_load(IRasterTarget& target, IRasterProgram& program, crd::u32 group_count) override
@@ -1565,7 +1735,7 @@ public:
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         if (!p.is_mesh()) { return; }
-        ID3D12PipelineState* pso = p.pso_for(t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
         if (!p.valid() || pso == nullptr) { return; }
         record_mesh(t, p, pso, ClearColor{}, group_count, false, 0.0F, nullptr, false, D3D12_SHADING_RATE_1X1,
                     nullptr, nullptr, 0U, /*clear=*/false);
@@ -1578,7 +1748,7 @@ public:
         auto&      p  = static_cast<Dx12RasterProgram&>(program);
         if (!p.is_tess()) { return; } // only a VS+HS+DS+PS program can be patch-drawn
         const bool ms = t.multisampled();
-        ID3D12PipelineState* pso = p.pso_for(t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
         if (!p.valid() || pso == nullptr) { return; }
         // REN-38-A1d: inside a frame, RECORD — same attachment-and-draw shape as `record_plain` plus the patch
         // topology the tessellator consumes. No allocator/list reset, no transitions, no resolve, no readback.
@@ -1604,6 +1774,7 @@ public:
         m_list->RSSetScissorRects(1, &sc);
         m_list->SetGraphicsRootSignature(p.root());
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST); // the tessellator consumes quad patches
         m_list->DrawInstanced(patch_count * 4U, 1, 0, 0);                                 // patch_count patches × 4 control points
 
@@ -1649,7 +1820,7 @@ public:
         auto&      t   = static_cast<Dx12RasterTarget&>(target);
         auto&      p   = static_cast<Dx12RasterProgram&>(program);
         const bool ms  = t.multisampled();
-        ID3D12PipelineState* pso = p.pso_for(t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
         if (!p.valid() || !p.is_mesh() || pso == nullptr) { return; }
         if (frame_recording())
         {
@@ -1673,6 +1844,7 @@ public:
         m_list->RSSetScissorRects(1, &sc);
         m_list->SetGraphicsRootSignature(p.root());
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list6->DispatchMesh(group_count, 1, 1); // mesh shaders emit their own topology — no IASetPrimitiveTopology
 
         if (ms)
@@ -1721,7 +1893,7 @@ public:
             draw_mesh(target, program, clear, group_count); // no VRS ⇒ a full-rate mesh draw
             return;
         }
-        ID3D12PipelineState* pso = p.pso_for(1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
         if (!p.valid() || !p.is_mesh() || pso == nullptr) { return; }
         if (frame_recording())
         {
@@ -1745,6 +1917,7 @@ public:
         m_list->RSSetScissorRects(1, &sc);
         m_list->SetGraphicsRootSignature(p.root());
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         // combiner[0] = base∘primitive (OVERRIDE ⇒ the SV_ShadingRate output wins); combiner[1] = ∘attachment (none).
         const D3D12_SHADING_RATE_COMBINER comb[2] = {D3D12_SHADING_RATE_COMBINER_OVERRIDE,
                                                      D3D12_SHADING_RATE_COMBINER_PASSTHROUGH};
@@ -1776,7 +1949,7 @@ public:
         if (!m_ok || !m_mesh_shader || m_list6 == nullptr || native_args == nullptr) { return; }
         auto&                t   = static_cast<Dx12RasterTarget&>(target);
         auto&                p   = static_cast<Dx12RasterProgram&>(program);
-        ID3D12PipelineState* pso = p.pso_for(1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
         if (!p.valid() || !p.is_mesh() || pso == nullptr) { return; }
         auto* args = static_cast<ID3D12Resource*>(native_args);
         // REN-38-A1c: the GPU-DRIVEN mesh path. ⛔ The args buffer must already be in INDIRECT_ARGUMENT state —
@@ -1814,6 +1987,7 @@ public:
         m_list->RSSetScissorRects(1, &sc);
         m_list->SetGraphicsRootSignature(p.root());
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->ExecuteIndirect(m_mesh_indirect_sig.Get(), 1U, args, args_offset, nullptr, 0U); // ONE DISPATCH_MESH command
 
         transition(t.tex(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -1846,7 +2020,7 @@ public:
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         if (!t.has_depth()) { return; } // needs a create_color_depth_target
-        ID3D12PipelineState* pso = p.pso_for(1U, kDepthFormat, to_d3d12_compare(compare), false);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false);
         if (!p.valid() || !p.is_mesh() || pso == nullptr) { return; }
         const crd::u32 n = count < static_cast<crd::u32>(kBindlessMax) ? count : static_cast<crd::u32>(kBindlessMax);
         // REN-38-A1c: the mesh path with the BINDLESS run from 38-A1a's frame ring + a depth attachment. The
@@ -1880,7 +2054,7 @@ public:
         m_list->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
         const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
         m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
-        m_list->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, clear_depth, 0, 0, nullptr);
+        m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr);
 
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
         const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
@@ -1892,6 +2066,7 @@ public:
         m_list->SetGraphicsRootDescriptorTable(2, m_sampler_heap->GetGPUDescriptorHandleForHeapStart()); // sampler s2
         m_list->SetGraphicsRootDescriptorTable(3, bindless_gpu);                                          // bindless t3[]
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list6->DispatchMesh(group_count, 1, 1); // mesh emits its own topology — no IASetPrimitiveTopology
 
         transition(t.tex(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -1925,7 +2100,7 @@ public:
                      crd::u32 group_count, bool depth_on, float clear_depth,
                      const D3D12_GPU_DESCRIPTOR_HANDLE* bindless, bool vrs, D3D12_SHADING_RATE rate,
                      const D3D12_SHADING_RATE_COMBINER* comb, ID3D12Resource* indirect, crd::u64 indirect_offset,
-                     bool clear = true)
+                     bool clear = true, Dx12StorageBuffer* storage = nullptr)
     {
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv       = t.rtv();
         const bool                        use_depth = depth_on && t.has_depth();
@@ -1938,19 +2113,25 @@ public:
         {
             const float rgba[4] = {clear_color.r, clear_color.g, clear_color.b, clear_color.a};
             m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
-            if (use_depth) { m_list->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, clear_depth, 0, 0, nullptr); }
+            if (use_depth) { m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr); }
         }
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
         const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
         m_list->RSSetViewports(1, &vp);
         m_list->RSSetScissorRects(1, &sc);
         m_list->SetGraphicsRootSignature(p.root());
+        // REN-38-F6+: the storage-bound form — the mesh stage PULLS its geometry (the GEO-1 seam)
+        if (storage != nullptr)
+        {
+            m_list->SetGraphicsRootDescriptorTable(0, frame_alloc_storage_slot(*storage));
+        }
         if (bindless != nullptr)
         {
             m_list->SetGraphicsRootDescriptorTable(2, m_sampler_heap->GetGPUDescriptorHandleForHeapStart());
             m_list->SetGraphicsRootDescriptorTable(3, *bindless);
         }
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         if (vrs && m_list5 != nullptr)
         {
             m_list5->RSSetShadingRate(rate, comb);
@@ -1965,7 +2146,7 @@ public:
 
     void record_plain_topology(Dx12RasterTarget& t, Dx12RasterProgram& p, ID3D12PipelineState* pso,
                                ClearColor clear_color, D3D12_PRIMITIVE_TOPOLOGY topo, crd::u32 vertex_count,
-                               bool clear = true)
+                               bool clear = true, Dx12StorageBuffer* storage = nullptr)
     {
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
         m_list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
@@ -1979,7 +2160,13 @@ public:
         m_list->RSSetViewports(1, &vp);
         m_list->RSSetScissorRects(1, &sc);
         m_list->SetGraphicsRootSignature(p.root());
+        // REN-38-F6+: the storage-bound form — the tess VS PULLS its control points (the GEO-1 seam)
+        if (storage != nullptr)
+        {
+            m_list->SetGraphicsRootDescriptorTable(0, frame_alloc_storage_slot(*storage));
+        }
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(topo);
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
     }
@@ -1993,13 +2180,14 @@ public:
         m_list->OMSetRenderTargets(1, &rtv, FALSE, use_depth ? &dsv : nullptr);
         const float rgba[4] = {clear_color.r, clear_color.g, clear_color.b, clear_color.a};
         m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
-        if (use_depth) { m_list->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, clear_depth, 0, 0, nullptr); }
+        if (use_depth) { m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr); }
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
         const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
         m_list->RSSetViewports(1, &vp);
         m_list->RSSetScissorRects(1, &sc);
         m_list->SetGraphicsRootSignature(p.root());
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
     }
@@ -2010,7 +2198,7 @@ public:
         auto&      t  = static_cast<Dx12RasterTarget&>(target);
         auto&      p  = static_cast<Dx12RasterProgram&>(program);
         const bool ms = t.multisampled();
-        ID3D12PipelineState* pso = p.pso_for(t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false); // colour, no depth
+        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false); // colour, no depth
         if (!p.valid() || pso == nullptr) { return; }
         if (frame_recording()) { record_plain(t, p, pso, clear, false, 0.0F, vertex_count); return; }
 
@@ -2029,6 +2217,7 @@ public:
         m_list->RSSetScissorRects(1, &sc);
         m_list->SetGraphicsRootSignature(p.root());
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
 
@@ -2082,17 +2271,55 @@ public:
     // renames its single export.
     struct DxrPipe
     {
-        const void*                    key[3]{};
+        const void*                    key[6]{}; // rg / ms / ch / ah / isect / callable — every stage is identity
         ComPtr<ID3D12StateObject>      state;
         ComPtr<ID3D12Resource>         sbt;
-        D3D12_GPU_VIRTUAL_ADDRESS      sbt_va     = 0;
-        UINT64                         rec_stride = 0;
+        D3D12_GPU_VIRTUAL_ADDRESS      sbt_va       = 0;
+        UINT64                         rec_stride   = 0;
+        bool                           has_callable = false; // REN-38-F13: record 3 is the callable identifier
     };
 
-    [[nodiscard]] bool supports_rt_pipeline() const noexcept override { return m_dxr_device != nullptr; }
+    // ⛔ REN-38 audit: the A16 Vulkan scar in its DX12 form, found by the FIRST DX12 RT-pipeline device gate.
+    // The DXR device is created LAZILY by the first trace, so `m_dxr_device != nullptr` answered "no
+    // ray-tracing pipeline" on a DXR adapter until the feature had already been used — a capability query that
+    // depends on the capability having been exercised is not a query. Answer from the feature check itself.
+    [[nodiscard]] bool supports_rt_pipeline() const noexcept override
+    {
+        if (m_dxr_device != nullptr) { return true; }
+        if (m_device == nullptr) { return false; }
+        D3D12_FEATURE_DATA_D3D12_OPTIONS5 o5{};
+        return SUCCEEDED(m_device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &o5, sizeof(o5)))
+               && o5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_0;
+    }
 
     void trace_rays(IGpuProgram& raygen, IGpuProgram& miss, IGpuProgram& closest_hit, IAccelerationStructure& as,
                     crd::u32 width, crd::u32 height, IStorageBuffer* const* buffers, crd::u32 count) override
+    {
+        trace_rays_impl(raygen, miss, closest_hit, nullptr, as, width, height, buffers, count);
+    }
+
+    // ⭐ REN-38 audit (the full RT hit group): the same trace with an ANY-HIT stage in the hit group — the
+    // traversal calls it per candidate and `IgnoreHit()` rejects the transparent ones.
+    void trace_rays_anyhit(IGpuProgram& raygen, IGpuProgram& miss, IGpuProgram& closest_hit, IGpuProgram& any_hit,
+                           IAccelerationStructure& as, crd::u32 width, crd::u32 height,
+                           IStorageBuffer* const* buffers, crd::u32 count) override
+    {
+        trace_rays_impl(raygen, miss, closest_hit, &any_hit, as, width, height, buffers, count);
+    }
+
+    // REN-38-F13: the FULL vocabulary — procedural hit groups + the callable table.
+    void trace_rays_full(IGpuProgram& raygen, IGpuProgram& miss, IGpuProgram& closest_hit, IGpuProgram* any_hit,
+                         IGpuProgram* intersection, IGpuProgram* callable, IAccelerationStructure& as,
+                         crd::u32 width, crd::u32 height, IStorageBuffer* const* buffers, crd::u32 count) override
+    {
+        trace_rays_impl(raygen, miss, closest_hit, any_hit, as, width, height, buffers, count, intersection,
+                        callable);
+    }
+
+    void trace_rays_impl(IGpuProgram& raygen, IGpuProgram& miss, IGpuProgram& closest_hit, IGpuProgram* any_hit,
+                         IAccelerationStructure& as, crd::u32 width, crd::u32 height,
+                         IStorageBuffer* const* buffers, crd::u32 count, IGpuProgram* intersection = nullptr,
+                         IGpuProgram* callable = nullptr)
     {
         if (!m_ok || !frame_recording() || buffers == nullptr || count == 0U) { return; }
         if (!ensure_dxr()) { return; }
@@ -2101,8 +2328,17 @@ public:
         auto* rg = dynamic_cast<Dx12GpuProgram*>(&raygen);
         auto* ms = dynamic_cast<Dx12GpuProgram*>(&miss);
         auto* ch = dynamic_cast<Dx12GpuProgram*>(&closest_hit);
+        auto* ah = any_hit != nullptr ? dynamic_cast<Dx12GpuProgram*>(any_hit) : nullptr;
+        auto* is = intersection != nullptr ? dynamic_cast<Dx12GpuProgram*>(intersection) : nullptr;
+        auto* cl = callable != nullptr ? dynamic_cast<Dx12GpuProgram*>(callable) : nullptr;
         if (rg == nullptr || ms == nullptr || ch == nullptr) { return; }
-        DxrPipe* pipe = dxr_pipeline(rg->dxil(), ms->dxil(), ch->dxil());
+        if (any_hit != nullptr && ah == nullptr) { return; } // a named any-hit that is not ours is never dropped silently
+        if (intersection != nullptr && is == nullptr) { return; } // F13: same rule for the last two stages
+        if (callable != nullptr && cl == nullptr) { return; }
+        DxrPipe* pipe = dxr_pipeline(rg->dxil(), ms->dxil(), ch->dxil(),
+                                     ah != nullptr ? ah->dxil() : crd::containers::ConstSpan<crd::u8>{},
+                                     is != nullptr ? is->dxil() : crd::containers::ConstSpan<crd::u8>{},
+                                     cl != nullptr ? cl->dxil() : crd::containers::ConstSpan<crd::u8>{});
         if (pipe == nullptr) { return; }
 
         ComPtr<ID3D12GraphicsCommandList4> list4;
@@ -2122,6 +2358,13 @@ public:
         drd.HitGroupTable.StartAddress             = pipe->sbt_va + pipe->rec_stride * 2U;
         drd.HitGroupTable.SizeInBytes              = pipe->rec_stride;
         drd.HitGroupTable.StrideInBytes            = pipe->rec_stride;
+        // REN-38-F13: the CALLABLE table is the fourth record when the pipeline carries one
+        if (pipe->has_callable)
+        {
+            drd.CallableShaderTable.StartAddress  = pipe->sbt_va + pipe->rec_stride * 3U;
+            drd.CallableShaderTable.SizeInBytes   = pipe->rec_stride;
+            drd.CallableShaderTable.StrideInBytes = pipe->rec_stride;
+        }
         drd.Width  = width > 0U ? width : 1U;
         drd.Height = height > 0U ? height : 1U;
         drd.Depth  = 1U;
@@ -2145,11 +2388,18 @@ public:
 
     [[nodiscard]] DxrPipe* dxr_pipeline(crd::containers::ConstSpan<crd::u8> rg,
                                         crd::containers::ConstSpan<crd::u8> ms,
-                                        crd::containers::ConstSpan<crd::u8> ch)
+                                        crd::containers::ConstSpan<crd::u8> ch,
+                                        crd::containers::ConstSpan<crd::u8> ah = {},
+                                        crd::containers::ConstSpan<crd::u8> isect = {},
+                                        crd::containers::ConstSpan<crd::u8> call = {})
     {
+        const bool has_ah = ah.data() != nullptr && ah.size() > 0U;
+        const bool has_is = isect.data() != nullptr && isect.size() > 0U; // REN-38-F13
+        const bool has_cl = call.data() != nullptr && call.size() > 0U;
         for (crd::u32 i = 0; i < m_dxr_n; ++i)
         {
-            if (m_dxr[i].key[0] == rg.data() && m_dxr[i].key[1] == ms.data() && m_dxr[i].key[2] == ch.data())
+            if (m_dxr[i].key[0] == rg.data() && m_dxr[i].key[1] == ms.data() && m_dxr[i].key[2] == ch.data()
+                && m_dxr[i].key[3] == ah.data() && m_dxr[i].key[4] == isect.data() && m_dxr[i].key[5] == call.data())
             {
                 return &m_dxr[i];
             }
@@ -2158,28 +2408,41 @@ public:
         ID3D12RootSignature* root = rt_kernel_root();
         if (root == nullptr) { return nullptr; }
 
-        // ── the state object: 3 renamed DXIL libraries · 1 hit group · shader config · pipeline config · root sig ──
-        static const wchar_t* kRgName = L"crd_rgen";
-        static const wchar_t* kMsName = L"crd_miss";
-        static const wchar_t* kChName = L"crd_chit";
-        static const wchar_t* kHgName = L"crd_hitgroup";
+        // ── the state object: 3–4 renamed DXIL libraries · 1 hit group · shader config · pipeline config ·
+        // root sig. REN-38 audit: the ANY-HIT is a fourth renamed library joining the same hit group. ──
+        static const wchar_t* rg_name = L"crd_rgen";
+        static const wchar_t* ms_name = L"crd_miss";
+        static const wchar_t* ch_name = L"crd_chit";
+        static const wchar_t* ah_name = L"crd_ahit";
+        static const wchar_t* is_name = L"crd_isect"; // REN-38-F13
+        static const wchar_t* cl_name = L"crd_call";
+        static const wchar_t* hg_name = L"crd_hitgroup";
 
-        D3D12_EXPORT_DESC ex[3]{};
-        ex[0].Name = kRgName; ex[0].ExportToRename = L"main";
-        ex[1].Name = kMsName; ex[1].ExportToRename = L"main";
-        ex[2].Name = kChName; ex[2].ExportToRename = L"main";
-        D3D12_DXIL_LIBRARY_DESC libs[3]{};
-        const crd::containers::ConstSpan<crd::u8> code[3] = {rg, ms, ch};
-        for (crd::u32 i = 0; i < 3U; ++i)
+        D3D12_EXPORT_DESC ex[6]{};
+        ex[0].Name = rg_name; ex[0].ExportToRename = L"main";
+        ex[1].Name = ms_name; ex[1].ExportToRename = L"main";
+        ex[2].Name = ch_name; ex[2].ExportToRename = L"main";
+        ex[3].Name = ah_name; ex[3].ExportToRename = L"main";
+        ex[4].Name = is_name; ex[4].ExportToRename = L"main";
+        ex[5].Name = cl_name; ex[5].ExportToRename = L"main";
+        D3D12_DXIL_LIBRARY_DESC libs[6]{};
+        const crd::containers::ConstSpan<crd::u8> code[6] = {rg, ms, ch, ah, isect, call};
+        crd::u32                                  n_libs  = 0U;
+        for (crd::u32 i = 0; i < 6U; ++i)
         {
-            libs[i].DXILLibrary   = {code[i].data(), code[i].size()};
-            libs[i].NumExports    = 1U;
-            libs[i].pExports      = &ex[i];
+            if (code[i].data() == nullptr || code[i].size() == 0U) { continue; }
+            libs[n_libs].DXILLibrary = {code[i].data(), code[i].size()};
+            libs[n_libs].NumExports  = 1U;
+            libs[n_libs].pExports    = &ex[i];
+            ++n_libs;
         }
         D3D12_HIT_GROUP_DESC hg{};
-        hg.HitGroupExport           = kHgName;
-        hg.Type                     = D3D12_HIT_GROUP_TYPE_TRIANGLES;
-        hg.ClosestHitShaderImport   = kChName;
+        hg.HitGroupExport           = hg_name;
+        // REN-38-F13: an intersection shader makes the hit group PROCEDURAL — its AABBs only bound the shape
+        hg.Type                     = has_is ? D3D12_HIT_GROUP_TYPE_PROCEDURAL_PRIMITIVE : D3D12_HIT_GROUP_TYPE_TRIANGLES;
+        hg.ClosestHitShaderImport   = ch_name;
+        if (has_ah) { hg.AnyHitShaderImport = ah_name; }
+        if (has_is) { hg.IntersectionShaderImport = is_name; }
         // ⛔ The payload is `struct RtPayload { float m0; ... }` from the CKIR emitter and the attributes are
         // `BuiltInTriangleIntersectionAttributes` (2 floats). Declaring these too SMALL is undefined behaviour the
         // runtime does not always catch, so both are sized generously from what the emitter can produce.
@@ -2191,23 +2454,26 @@ public:
         D3D12_GLOBAL_ROOT_SIGNATURE grs{};
         grs.pGlobalRootSignature = root;
 
-        D3D12_STATE_SUBOBJECT so[7]{};
-        so[0] = {D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, &libs[0]};
-        so[1] = {D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, &libs[1]};
-        so[2] = {D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, &libs[2]};
-        so[3] = {D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP, &hg};
-        so[4] = {D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG, &shader_cfg};
-        so[5] = {D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG, &pipe_cfg};
-        so[6] = {D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE, &grs};
+        D3D12_STATE_SUBOBJECT so[10]{};
+        crd::u32              n_so = 0U;
+        for (crd::u32 i = 0; i < n_libs; ++i) { so[n_so++] = {D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, &libs[i]}; }
+        so[n_so++] = {D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP, &hg};
+        so[n_so++] = {D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG, &shader_cfg};
+        so[n_so++] = {D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG, &pipe_cfg};
+        so[n_so++] = {D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE, &grs};
         D3D12_STATE_OBJECT_DESC sod{};
         sod.Type          = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE;
-        sod.NumSubobjects = 7U;
+        sod.NumSubobjects = n_so;
         sod.pSubobjects   = so;
 
         DxrPipe out{};
         out.key[0] = rg.data();
         out.key[1] = ms.data();
         out.key[2] = ch.data();
+        out.key[3] = ah.data(); // REN-38 audit: the any-hit joins the pipeline identity
+        out.key[4] = isect.data(); // REN-38-F13: and so do the intersection + callable stages
+        out.key[5] = call.data();
+        out.has_callable = has_cl;
         if (FAILED(m_dxr_device->CreateStateObject(&sod, IID_PPV_ARGS(&out.state)))) { return nullptr; }
         ComPtr<ID3D12StateObjectProperties> props;
         if (FAILED(out.state.As(&props))) { return nullptr; }
@@ -2216,21 +2482,22 @@ public:
         // D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT (32) and each TABLE base a multiple of
         // D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT (64). Using one number for both is the classic DXR bug
         // where the miss table lands mid-record and every miss runs a garbage shader identifier.
-        constexpr UINT64 kRec = D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT; // 64 ⇒ satisfies both rules
-        out.rec_stride        = kRec;
-        const UINT64 total    = kRec * 3U;
+        constexpr UINT64 rec_bytes = D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT; // 64 ⇒ satisfies both rules
+        out.rec_stride        = rec_bytes;
+        const crd::u32   n_rec = has_cl ? 4U : 3U; // REN-38-F13: the callable identifier is record 3
+        const UINT64 total    = rec_bytes * n_rec;
         out.sbt               = make_upload_buffer(m_device.Get(), total);
         if (out.sbt == nullptr) { return nullptr; }
         void* mapped = nullptr;
         if (FAILED(out.sbt->Map(0, nullptr, &mapped))) { return nullptr; }
         std::memset(mapped, 0, static_cast<crd::usize>(total));
         auto*                 dst   = static_cast<crd::u8*>(mapped);
-        const wchar_t* const  ids[3] = {kRgName, kMsName, kHgName};
-        for (crd::u32 i = 0; i < 3U; ++i)
+        const wchar_t* const  ids[4] = {rg_name, ms_name, hg_name, cl_name};
+        for (crd::u32 i = 0; i < n_rec; ++i)
         {
             const void* id = props->GetShaderIdentifier(ids[i]);
             if (id == nullptr) { out.sbt->Unmap(0, nullptr); return nullptr; }
-            std::memcpy(dst + kRec * i, id, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+            std::memcpy(dst + rec_bytes * i, id, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
         }
         out.sbt->Unmap(0, nullptr);
         out.sbt_va = out.sbt->GetGPUVirtualAddress();
@@ -2240,13 +2507,136 @@ public:
         return &m_dxr[m_dxr_n - 1U];
     }
 
+    // ⭐ REN-38-B3: the DX12 mirror — zero a buffer range inside the frame.
+    // ⛔ D3D12 has NO `FillBuffer`. The portable way to zero a UAV is `ClearUnorderedAccessViewUint`, which needs
+    // BOTH a shader-visible descriptor AND a non-shader-visible one for the same view — an API quirk with no
+    // Vulkan counterpart, and getting it wrong is a silent no-op rather than an error. The non-shader-visible
+    // heap is created once, lazily, purely for this.
+    // ── ⭐ REN-38-B8: the ACTIVE sampler, cached into the shader-visible sampler heap. ──
+    // ⛔ D3D12 samplers live in a HEAP, not as free-standing objects, so "cache" here means "which heap slot" —
+    // and the heap is fixed-size and shader-visible, which is why the capacity is declared up front and a full
+    // cache falls back to slot 0 rather than resizing something the GPU may be reading.
+    void set_sampler(const SamplerDesc& desc) override { m_active_sampler_slot = sampler_slot_for(desc); }
+
+    // ── ⭐ REN-38 audit: the DECLARED per-pass raster state. On D3D12 everything except the stencil REFERENCE
+    // is PSO state, so `pass_pso` threads the state into every PSO lookup (default state ⇒ the identical cache
+    // key, so synchronous paths are untouched) and `apply_stencil_ref` sets the one command-list piece after
+    // each pipeline bind. Reset at every pass boundary in `frame_rec_new_pass` — the B8 sampler discipline. ──
+    void set_pass_state(const PassRasterState& state) override { m_pass_state = state; }
+
+    [[nodiscard]] ID3D12PipelineState* pass_pso(Dx12RasterProgram& p, crd::u32 samples, DXGI_FORMAT dsv,
+                                                D3D12_COMPARISON_FUNC depth_func, bool conservative,
+                                                crd::u32 num_rts = 1U, DXGI_FORMAT rt_fmt = kColorFormat,
+                                                const BlendMode* blend = nullptr)
+    {
+        return p.pso_for(samples, dsv, depth_func, conservative, num_rts, rt_fmt, blend, &m_pass_state);
+    }
+
+    void apply_stencil_ref()
+    {
+        if (m_pass_state.stencil_enable && m_list != nullptr) { m_list->OMSetStencilRef(m_pass_state.stencil_ref); }
+    }
+
+    [[nodiscard]] crd::u32 sampler_slot_for(const SamplerDesc& d)
+    {
+        if (m_sampler_heap == nullptr) { return 0U; }
+        for (crd::u32 i = 0; i < m_sampler_n; ++i)
+        {
+            const SamplerDesc& k = m_sampler_key[i];
+            if (k.min_filter == d.min_filter && k.mag_filter == d.mag_filter && k.mip_filter == d.mip_filter
+                && k.address == d.address && k.compare == d.compare && k.anisotropy == d.anisotropy
+                && k.mip_bias == d.mip_bias)
+            {
+                return 2U + i;
+            }
+        }
+        if (m_sampler_n >= kSamplerCacheCap) { return d.compare ? 1U : 0U; }
+        D3D12_SAMPLER_DESC sd{};
+        // ⛔ D3D12 packs min/mag/mip filtering + comparison into ONE enum rather than three fields, so the mapping
+        // is a lookup, not a field copy. Anisotropy is a FILTER MODE here (not a separate toggle as in Vulkan) and
+        // it OVERRIDES the min/mag/mip choice — asking for both is not additive, it is a different filter.
+        const bool aniso = d.anisotropy > 1U;
+        if (aniso) { sd.Filter = d.compare ? D3D12_FILTER_COMPARISON_ANISOTROPIC : D3D12_FILTER_ANISOTROPIC; }
+        else if (d.min_filter == SamplerFilter::Nearest && d.mag_filter == SamplerFilter::Nearest)
+        {
+            sd.Filter = d.compare ? D3D12_FILTER_COMPARISON_MIN_MAG_MIP_POINT : D3D12_FILTER_MIN_MAG_MIP_POINT;
+        }
+        else { sd.Filter = d.compare ? D3D12_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR : D3D12_FILTER_MIN_MAG_MIP_LINEAR; }
+        D3D12_TEXTURE_ADDRESS_MODE am = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+        switch (d.address)
+        {
+        case SamplerAddress::ClampToEdge:   am = D3D12_TEXTURE_ADDRESS_MODE_CLAMP; break;
+        case SamplerAddress::ClampToBorder: am = D3D12_TEXTURE_ADDRESS_MODE_BORDER; break;
+        case SamplerAddress::Mirror:        am = D3D12_TEXTURE_ADDRESS_MODE_MIRROR; break;
+        case SamplerAddress::Repeat:
+        default:                            am = D3D12_TEXTURE_ADDRESS_MODE_WRAP; break;
+        }
+        sd.AddressU       = am;
+        sd.AddressV       = am;
+        sd.AddressW       = am;
+        sd.MipLODBias     = d.mip_bias;
+        sd.MaxAnisotropy  = aniso ? d.anisotropy : 1U;
+        sd.ComparisonFunc = d.compare ? D3D12_COMPARISON_FUNC_LESS_EQUAL : D3D12_COMPARISON_FUNC_NEVER;
+        sd.MaxLOD         = D3D12_FLOAT32_MAX;
+        for (int c = 0; c < 4; ++c) { sd.BorderColor[c] = 1.0F; } // a shadow lookup outside its frustum must be LIT
+        D3D12_CPU_DESCRIPTOR_HANDLE h = m_sampler_heap->GetCPUDescriptorHandleForHeapStart();
+        h.ptr += static_cast<SIZE_T>(2U + m_sampler_n) * m_sampler_inc;
+        m_device->CreateSampler(&sd, h);
+        m_sampler_key[m_sampler_n] = d;
+        ++m_sampler_n;
+        return 2U + (m_sampler_n - 1U);
+    }
+
+    // The sampler slot a recorded draw binds: the pass's when it declared one, else the historical default for
+    // the draw's own kind (0 = filtering, 1 = comparison), which is what every existing gate expects.
+    [[nodiscard]] crd::u32 active_sampler_slot(crd::u32 fallback) const noexcept
+    {
+        return m_active_sampler_slot != 0xFFFFFFFFU ? m_active_sampler_slot : fallback;
+    }
+
+    void fill_buffer(IStorageBuffer& buffer, crd::u64 offset, crd::u64 size, crd::u32 value) override
+    {
+        if (!m_ok || !frame_recording()) { return; }
+        ID3D12Resource* res = dx_buffer_of(buffer);
+        if (res == nullptr || !ensure_clear_heap()) { return; }
+        const crd::u32 first = static_cast<crd::u32>(offset / 4U);
+        const crd::u32 n     = static_cast<crd::u32>((size == 0U ? buffer.size_bytes() - offset : size) / 4U);
+        if (n == 0U) { return; }
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
+        uav.Format                     = DXGI_FORMAT_R32_UINT; // a RAW u32 view — the fill value is a u32
+        uav.ViewDimension              = D3D12_UAV_DIMENSION_BUFFER;
+        uav.Buffer.FirstElement        = first;
+        uav.Buffer.NumElements         = n;
+        m_device->CreateUnorderedAccessView(res, nullptr, &uav, m_clear_heap->GetCPUDescriptorHandleForHeapStart());
+        D3D12_CPU_DESCRIPTOR_HANDLE cpu = m_frame_rec.heap->GetCPUDescriptorHandleForHeapStart();
+        cpu.ptr += static_cast<SIZE_T>(m_frame_rec.cursor) * m_frame_rec.inc;
+        m_device->CreateUnorderedAccessView(res, nullptr, &uav, cpu);
+        D3D12_GPU_DESCRIPTOR_HANDLE gpu = m_frame_rec.heap->GetGPUDescriptorHandleForHeapStart();
+        gpu.ptr += static_cast<UINT64>(m_frame_rec.cursor) * m_frame_rec.inc;
+        ++m_frame_rec.cursor;
+        const UINT vals[4] = {value, value, value, value};
+        m_list->ClearUnorderedAccessViewUint(gpu, m_clear_heap->GetCPUDescriptorHandleForHeapStart(), res, vals, 0,
+                                             nullptr);
+        uav_write_barrier();
+    }
+
+    [[nodiscard]] bool ensure_clear_heap()
+    {
+        if (m_clear_heap != nullptr) { return true; }
+        D3D12_DESCRIPTOR_HEAP_DESC hd{};
+        hd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        hd.NumDescriptors = 1U;
+        hd.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_NONE; // ⛔ NON-shader-visible, which is the whole point
+        return SUCCEEDED(m_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&m_clear_heap)));
+    }
+
     void draw_visbuffer_load(IRasterTarget& target, IRasterProgram& program, crd::u32 vertex_count) override
     {
         if (!m_ok || !frame_recording()) { return; }
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         ID3D12PipelineState* pso =
-            p.pso_for(1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, DXGI_FORMAT_R32_UINT);
+            pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, DXGI_FORMAT_R32_UINT);
         if (!p.valid() || pso == nullptr) { return; }
         record_plain_topology(t, p, pso, ClearColor{}, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, vertex_count,
                               /*clear=*/false);
@@ -2262,7 +2652,7 @@ public:
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         const BlendMode      modes[1] = {blend};
-        ID3D12PipelineState* pso      = p.pso_for(1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U,
+        ID3D12PipelineState* pso      = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U,
                                                   kColorFormat, static_cast<const BlendMode*>(modes));
         if (!p.valid() || pso == nullptr) { return; }
         record_bindless(t, p, pso, textures, count, ClearColor{}, vertex_count, /*clear=*/false);
@@ -2273,7 +2663,7 @@ public:
         if (!m_ok) { return; }
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
-        ID3D12PipelineState* pso = p.pso_for(1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, DXGI_FORMAT_R32_UINT);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, DXGI_FORMAT_R32_UINT);
         if (!p.valid() || pso == nullptr) { return; }
         // REN-38-A1e: inside a frame, RECORD. `ClearRenderTargetView` takes a FLOAT[4] even for an R32_UINT
         // target, and D3D12 reinterprets those bits as the typed clear — so the id goes in as its bit pattern,
@@ -2299,6 +2689,7 @@ public:
         m_list->RSSetScissorRects(1, &sc);
         m_list->SetGraphicsRootSignature(p.root());
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
 
@@ -2323,7 +2714,7 @@ public:
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         if (!t.has_depth()) { return; } // needs a create_color_depth_target target
-        ID3D12PipelineState* pso = p.pso_for(1U, kDepthFormat, to_d3d12_compare(compare), false); // depth-enabled PSO (baked)
+        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false); // depth-enabled PSO (baked)
         if (!p.valid() || pso == nullptr) { return; }
         if (frame_recording()) { record_plain(t, p, pso, clear, true, clear_depth, vertex_count); return; }
 
@@ -2336,7 +2727,7 @@ public:
         m_list->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
         const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
         m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
-        m_list->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, clear_depth, 0, 0, nullptr);
+        m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr);
 
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
         const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
@@ -2344,6 +2735,7 @@ public:
         m_list->RSSetScissorRects(1, &sc);
         m_list->SetGraphicsRootSignature(p.root());
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
 
@@ -2372,7 +2764,7 @@ public:
             draw(target, program, clear, vertex_count); // no VRS ⇒ a plain 1x1 draw
             return;
         }
-        ID3D12PipelineState* pso = p.pso_for(t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
         if (!p.valid() || pso == nullptr) { return; }
         // REN-38-A1g: inside a frame, RECORD. VRS is DYNAMIC state on DX12, so it is set after the PSO is
         // bound and before the draw; `record_plain_topology` with vertex_count 0 sets up the pass without
@@ -2404,6 +2796,7 @@ public:
         m_list->RSSetScissorRects(1, &sc);
         m_list->SetGraphicsRootSignature(p.root());
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
         // VRS: combiner[0] = pipeline∘primitive (Override ⇒ the SV_ShadingRate output wins); combiner[1] = ∘attachment
@@ -2441,7 +2834,7 @@ public:
         const bool conservative = mode != ConservativeMode::Off && supports_conservative_raster();
         if (!conservative) { draw(target, program, clear, vertex_count); return; } // no conservative raster ⇒ a normal draw
         const bool           ms  = t.multisampled();
-        ID3D12PipelineState* pso = p.pso_for(t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, true);
+        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, true);
         // REN-38-A1g: conservative raster is BAKED INTO THE PSO on DX12 (unlike Vulkan's dynamic state), so the
         // frame path is exactly `record_plain_topology` with that PSO — nothing extra to set.
         if (frame_recording() && pso != nullptr)
@@ -2466,6 +2859,7 @@ public:
         m_list->RSSetScissorRects(1, &sc);
         m_list->SetGraphicsRootSignature(p.root());
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
 
@@ -2579,7 +2973,7 @@ public:
         auto&                t   = static_cast<Dx12RasterTarget&>(target);
         auto&                p   = static_cast<Dx12RasterProgram&>(program);
         auto&                s   = static_cast<Dx12StorageBuffer&>(storage);
-        ID3D12PipelineState* pso = p.pso_for(1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false); // single-sample colour
+        ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false); // single-sample colour
         if (!p.valid() || pso == nullptr) { return; }
 
         // REN-2: in frame-graph recording mode, draw_storage into an RTT transient records color-only (no readback).
@@ -2612,6 +3006,7 @@ public:
         m_list->SetDescriptorHeaps(1, heaps);
         m_list->SetGraphicsRootDescriptorTable(0, m_uav_heap->GetGPUDescriptorHandleForHeapStart());
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
 
@@ -2648,7 +3043,7 @@ public:
         auto& p = static_cast<Dx12RasterProgram&>(program);
         auto& s = static_cast<Dx12StorageBuffer&>(storage);
         if (!t.has_depth()) { return; }
-        ID3D12PipelineState* pso = p.pso_for(1U, kDepthFormat, to_d3d12_compare(compare), false, /*num_rts*/ 0U);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false, /*num_rts*/ 0U);
         if (!p.valid() || pso == nullptr) { return; }
 
         if (frame_recording()) { record_depth_only(t, p, s, pso, true, clear_depth, vertex_count); return; }
@@ -2665,7 +3060,7 @@ public:
         m_list->Reset(m_cmd_alloc.Get(), nullptr);
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv = t.dsv();
         m_list->OMSetRenderTargets(0, nullptr, FALSE, &dsv);
-        m_list->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, clear_depth, 0, 0, nullptr);
+        m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr);
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
         const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
         m_list->RSSetViewports(1, &vp);
@@ -2675,6 +3070,7 @@ public:
         m_list->SetDescriptorHeaps(1, heaps);
         m_list->SetGraphicsRootDescriptorTable(0, m_uav_heap->GetGPUDescriptorHandleForHeapStart());
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
         submit_and_wait(); // (submit_and_wait closes the list itself, like every other standalone draw)
@@ -2689,7 +3085,7 @@ public:
         auto& p = static_cast<Dx12RasterProgram&>(program);
         auto& s = static_cast<Dx12StorageBuffer&>(storage);
         if (!t.has_depth()) { return; }
-        ID3D12PipelineState* pso = p.pso_for(1U, kDepthFormat, to_d3d12_compare(compare), false, /*num_rts*/ 0U);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false, /*num_rts*/ 0U);
         if (!p.valid() || pso == nullptr) { return; }
         if (frame_recording()) { record_depth_only(t, p, s, pso, false, 0.0F, vertex_count); }
     }
@@ -2705,7 +3101,7 @@ public:
         // means DXGI_FORMAT_UNKNOWN for the depth-stencil format, or the pipeline disagrees with the OM state.
         const bool           depth_on = t.has_depth();
         ID3D12PipelineState* pso =
-            p.pso_for(1U, depth_on ? kDepthFormat : DXGI_FORMAT_UNKNOWN, to_d3d12_compare(compare), false);
+            pass_pso(p, 1U, depth_on ? kDepthFormat : DXGI_FORMAT_UNKNOWN, to_d3d12_compare(compare), false);
         if (!p.valid() || pso == nullptr) { return; }
         if (!depth_on && !frame_recording())
         {
@@ -2735,7 +3131,7 @@ public:
         m_list->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
         const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
         m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
-        m_list->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, clear_depth, 0, 0, nullptr);
+        m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr);
 
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
         const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
@@ -2746,6 +3142,7 @@ public:
         m_list->SetDescriptorHeaps(1, heaps);
         m_list->SetGraphicsRootDescriptorTable(0, m_uav_heap->GetGPUDescriptorHandleForHeapStart());
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
 
@@ -2783,7 +3180,7 @@ public:
         auto& s   = static_cast<Dx12StorageBuffer&>(storage);
         auto& tex = static_cast<Dx12Texture&>(texture);
         if (!t.has_depth()) { return; }
-        ID3D12PipelineState* pso = p.pso_for(1U, kDepthFormat, to_d3d12_compare(compare), false);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false);
         if (!p.valid() || pso == nullptr) { return; }
         if (frame_recording())
         {
@@ -2812,7 +3209,7 @@ public:
         m_list->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
         const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
         m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
-        m_list->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, clear_depth, 0, 0, nullptr);
+        m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr);
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
         const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
         m_list->RSSetViewports(1, &vp);
@@ -2826,6 +3223,7 @@ public:
         samp_tbl.ptr += static_cast<UINT64>(sampler_slot) * m_sampler_inc;
         m_list->SetGraphicsRootDescriptorTable(2, samp_tbl); // sampler (s2): 0 = filtering, 1 = comparison
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
 
@@ -2850,7 +3248,7 @@ public:
         auto& s   = static_cast<Dx12StorageBuffer&>(storage);
         auto& tex = static_cast<Dx12Texture&>(texture);
         if (!m_ok || !t.has_depth()) { return; }
-        ID3D12PipelineState* pso = p.pso_for(1U, kDepthFormat, to_d3d12_compare(compare), false);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false);
         if (!p.valid() || pso == nullptr) { return; }
         if (frame_recording())
         {
@@ -2877,7 +3275,7 @@ public:
         auto& s   = static_cast<Dx12StorageBuffer&>(storage);
         auto& tex = static_cast<Dx12Texture&>(shadow_atlas);
         if (!m_ok || !t.has_depth()) { return; }
-        ID3D12PipelineState* pso = p.pso_for(1U, kDepthFormat, to_d3d12_compare(compare), false);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false);
         if (!p.valid() || pso == nullptr) { return; }
         if (frame_recording())
         {
@@ -2898,7 +3296,7 @@ public:
         auto& p = static_cast<Dx12RasterProgram&>(program);
         auto& s = static_cast<Dx12StorageBuffer&>(storage);
         if (!t.has_depth()) { return; }
-        ID3D12PipelineState* pso = p.pso_for(1U, kDepthFormat, to_d3d12_compare(compare), false);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false);
         if (!p.valid() || pso == nullptr) { return; }
 
         // REN-1 pt-2: record into the shared open list (LOAD variant — no clears) when a frame graph is executing.
@@ -2929,6 +3327,7 @@ public:
         m_list->SetDescriptorHeaps(1, heaps);
         m_list->SetGraphicsRootDescriptorTable(0, m_uav_heap->GetGPUDescriptorHandleForHeapStart());
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
 
@@ -3292,7 +3691,7 @@ public:
         if (!m_ok || m_uav_heap == nullptr || m_sampler_heap == nullptr || count == 0U || textures == nullptr) { return; }
         auto&                t   = static_cast<Dx12RasterTarget&>(target);
         auto&                p   = static_cast<Dx12RasterProgram&>(program);
-        ID3D12PipelineState* pso = p.pso_for(1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
         if (!p.valid() || pso == nullptr) { return; }
         const crd::u32 n = count < static_cast<crd::u32>(kBindlessMax) ? count : static_cast<crd::u32>(kBindlessMax);
         // REN-38-A1a: inside a frame, RECORD — never stomp the global heap or reset the list mid-frame.
@@ -3327,6 +3726,7 @@ public:
         m_list->SetGraphicsRootDescriptorTable(2, m_sampler_heap->GetGPUDescriptorHandleForHeapStart()); // sampler s2
         m_list->SetGraphicsRootDescriptorTable(3, bindless_gpu);                                          // bindless t3[]
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
 
@@ -3504,6 +3904,7 @@ public:
         m_list->SetComputeRootShaderResourceView(0, static_cast<D3D12_GPU_VIRTUAL_ADDRESS>(tlas_va));
         m_list->SetComputeRootDescriptorTable(1, alloc_kernel_uav_run(buffers, n));
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->Dispatch(gx > 0U ? gx : 1U, gy > 0U ? gy : 1U, gz > 0U ? gz : 1U);
         uav_write_barrier();
     }
@@ -3530,6 +3931,7 @@ public:
         m_list->SetComputeRootSignature(kernel_root());
         m_list->SetComputeRootDescriptorTable(0, alloc_kernel_uav_run(buffers, n));
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->ExecuteIndirect(sig, 1U, ab, args_offset, nullptr, 0U);
         frame_transition(ab, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         uav_write_barrier();
@@ -3542,7 +3944,7 @@ public:
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         if (!p.is_mesh()) { return; }
-        ID3D12PipelineState* pso = p.pso_for(t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
         if (!p.valid() || pso == nullptr) { return; }
         ID3D12Resource* ab = dx_buffer_of(args);
         if (ab == nullptr) { return; }
@@ -3600,6 +4002,7 @@ public:
         m_list->SetComputeRootSignature(kernel_root());
         m_list->SetComputeRootDescriptorTable(0, gpu);
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->Dispatch(gx > 0U ? gx : 1U, gy > 0U ? gy : 1U, gz > 0U ? gz : 1U);
 
         // ⛔ The COMPUTE->anything hazard: the graph knows the pass wrote a buffer, but the WRITE happens inside
@@ -3622,7 +4025,7 @@ public:
         const bool     has_depth = t0.has_depth();
         // REN-38-A15: blend is PSO state on DX12, so it goes into `pso_for` (and its cache key) rather than being
         // set dynamically the way Vulkan does it.
-        ID3D12PipelineState* pso = p.pso_for(n, has_depth ? DXGI_FORMAT_D32_FLOAT : DXGI_FORMAT_UNKNOWN,
+        ID3D12PipelineState* pso = pass_pso(p, n, has_depth ? DXGI_FORMAT_D32_FLOAT : DXGI_FORMAT_UNKNOWN,
                                              to_d3d12_compare(compare), has_depth, n, kColorFormat, blend);
         if (!p.valid() || pso == nullptr) { return; }
 
@@ -3633,7 +4036,7 @@ public:
                                    has_depth ? &dsv : nullptr);
         const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
         for (crd::u32 i = 0; i < n; ++i) { m_list->ClearRenderTargetView(rtvs[i], rgba, 0, nullptr); }
-        if (has_depth) { m_list->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, clear_depth, 0, 0, nullptr); }
+        if (has_depth) { m_list->ClearDepthStencilView(dsv, t0.clear_flags(), clear_depth, 0, 0, nullptr); }
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t0.width()), static_cast<float>(t0.height()), 0.0F, 1.0F};
         const D3D12_RECT     sc{0, 0, static_cast<LONG>(t0.width()), static_cast<LONG>(t0.height())};
         m_list->RSSetViewports(1, &vp);
@@ -3641,6 +4044,7 @@ public:
         m_list->SetGraphicsRootSignature(p.root());
         m_list->SetGraphicsRootDescriptorTable(0, frame_alloc_storage_slot(sb));
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
     }
@@ -3699,7 +4103,7 @@ public:
         auto&                t   = static_cast<Dx12GBufferTarget&>(target);
         auto&                p   = static_cast<Dx12RasterProgram&>(program);
         const crd::u32       n   = t.attachment_count();
-        ID3D12PipelineState* pso = p.pso_for(1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, n);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, n);
         if (!p.valid() || pso == nullptr) { return; }
 
         m_cmd_alloc->Reset();
@@ -3716,6 +4120,7 @@ public:
         m_list->RSSetScissorRects(1, &sc);
         m_list->SetGraphicsRootSignature(p.root());
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
 
@@ -3876,7 +4281,7 @@ private:
         if (!m_ok || m_uav_heap == nullptr || m_sampler_heap == nullptr) { return; }
         auto&                t   = static_cast<Dx12RasterTarget&>(target);
         auto&                p   = static_cast<Dx12RasterProgram&>(program);
-        ID3D12PipelineState* pso = p.pso_for(1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
         if (!p.valid() || pso == nullptr) { return; }
 
         // REN-2: in frame-graph recording mode, sampling records into the shared list (RTT compose / material forward).
@@ -3889,7 +4294,7 @@ private:
         D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu = m_uav_heap->GetGPUDescriptorHandleForHeapStart();
         srv_gpu.ptr += static_cast<UINT64>(m_srv_inc);
         D3D12_GPU_DESCRIPTOR_HANDLE samp_gpu = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
-        samp_gpu.ptr += static_cast<UINT64>(sampler_slot) * m_sampler_inc;
+        samp_gpu.ptr += static_cast<UINT64>(active_sampler_slot(sampler_slot)) * m_sampler_inc; // REN-38-B8
 
         m_cmd_alloc->Reset();
         m_list->Reset(m_cmd_alloc.Get(), nullptr);
@@ -3908,6 +4313,7 @@ private:
         m_list->SetGraphicsRootDescriptorTable(1, srv_gpu);  // SRV table (t1)
         m_list->SetGraphicsRootDescriptorTable(2, samp_gpu); // sampler table (s2)
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
 
@@ -3946,7 +4352,7 @@ private:
         if (m_blit.tried) { return m_blit.pso != nullptr; }
         m_blit.tried = true;
 
-        static const char* kBlitVs =
+        static const char* blit_vs_src =
             "struct VSOut { float2 uv : TEXCOORD0; float4 pos : SV_Position; };\n"
             "VSOut main(uint vid : SV_VertexID)\n"
             "{\n"
@@ -3958,7 +4364,7 @@ private:
             "}\n";
         // ⛔ SV_Position LAST in VSOut (D-007's HLSL register-packing scar): a SV_Position declared first shifts
         // every user varying's register and the PS reads the wrong one.
-        static const char* kBlitPs =
+        static const char* blit_ps_src =
             "struct VSOut { float2 uv : TEXCOORD0; float4 pos : SV_Position; };\n"
             "Texture2D<float4> g_src : register(t0);\n"
             "SamplerState g_point  : register(s0);\n"
@@ -3969,9 +4375,9 @@ private:
             "    return g_filter != 0u ? g_src.Sample(g_linear, i.uv) : g_src.Sample(g_point, i.uv);\n"
             "}\n";
 
-        const auto vs = compile_hlsl_to_dxil(ShaderStage::Vertex, crd::containers::StringView(kBlitVs),
+        const auto vs = compile_hlsl_to_dxil(ShaderStage::Vertex, crd::containers::StringView(blit_vs_src),
                                              crd::containers::StringView("crd_blit_vs"));
-        const auto ps = compile_hlsl_to_dxil(ShaderStage::Fragment, crd::containers::StringView(kBlitPs),
+        const auto ps = compile_hlsl_to_dxil(ShaderStage::Fragment, crd::containers::StringView(blit_ps_src),
                                              crd::containers::StringView("crd_blit_ps"));
         if (!vs.ok || !ps.ok) { return false; } // dxc unavailable ⇒ blit_image is a NO-OP, never a wrong image
 
@@ -4364,6 +4770,14 @@ public:
         transition(t.tex(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
     }
 
+    // REN-38-B8: a pass boundary RESETS the active sampler, so no pass inherits its neighbour's. DX12
+    // had NO per-pass hook at all (Vulkan's `frame_rec_new_pass` clears the self-barrier key); it needed one.
+    void frame_rec_new_pass() noexcept
+    {
+        m_active_sampler_slot = 0xFFFFFFFFU;
+        m_pass_state          = PassRasterState{}; // REN-38 audit: no pass inherits its neighbour's raster state
+    }
+
     void frame_readback(Dx12RasterTarget& t)
     {
         transition(t.tex(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -4430,7 +4844,7 @@ private:
         {
             const float rgba[4] = {clear_color.r, clear_color.g, clear_color.b, clear_color.a};
             m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
-            if (depth_on) { m_list->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, clear_depth, 0, 0, nullptr); }
+            if (depth_on) { m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr); }
         }
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
         const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
@@ -4439,6 +4853,7 @@ private:
         m_list->SetGraphicsRootSignature(p.root());
         m_list->SetGraphicsRootDescriptorTable(0, table);
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
     }
@@ -4454,7 +4869,7 @@ private:
         m_list->OMSetRenderTargets(0, nullptr, FALSE, &dsv); // ⛔ zero RTVs: depth-only
         // clear ⇒ the FIRST mesh of the shadow pass; otherwise every later mesh joins the SAME map (clearing per
         // draw would wipe the previous occluder — see draw_storage_depth_only_load).
-        if (clear) { m_list->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, clear_depth, 0, 0, nullptr); }
+        if (clear) { m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr); }
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
         const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
         m_list->RSSetViewports(1, &vp);
@@ -4462,6 +4877,7 @@ private:
         m_list->SetGraphicsRootSignature(p.root());
         m_list->SetGraphicsRootDescriptorTable(0, table);
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
     }
@@ -4530,6 +4946,7 @@ private:
         m_list->SetGraphicsRootDescriptorTable(2, samp_gpu);     // sampler s2
         m_list->SetGraphicsRootDescriptorTable(3, bindless_gpu); // bindless t3[]
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
     }
@@ -4551,6 +4968,7 @@ private:
         m_list->SetGraphicsRootSignature(p.root());
         m_list->SetGraphicsRootDescriptorTable(0, table);
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
     }
@@ -4562,7 +4980,7 @@ private:
     {
         const D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu  = frame_alloc_srv_slot(tex);
         D3D12_GPU_DESCRIPTOR_HANDLE       samp_gpu = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
-        samp_gpu.ptr += static_cast<UINT64>(sampler_slot) * m_sampler_inc;
+        samp_gpu.ptr += static_cast<UINT64>(active_sampler_slot(sampler_slot)) * m_sampler_inc; // REN-38-B8
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
         m_list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
         const float rgba[4] = {clear_color.r, clear_color.g, clear_color.b, clear_color.a};
@@ -4575,6 +4993,7 @@ private:
         m_list->SetGraphicsRootDescriptorTable(1, srv_gpu);  // SRV table (t1)
         m_list->SetGraphicsRootDescriptorTable(2, samp_gpu); // sampler table (s2)
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
     }
@@ -4591,7 +5010,7 @@ private:
         const D3D12_GPU_DESCRIPTOR_HANDLE uav_table = frame_alloc_storage_slot(s);
         const D3D12_GPU_DESCRIPTOR_HANDLE srv_table = frame_alloc_srv_slot(tex);
         D3D12_GPU_DESCRIPTOR_HANDLE samp_gpu = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
-        samp_gpu.ptr += static_cast<UINT64>(sampler_slot) * m_sampler_inc;
+        samp_gpu.ptr += static_cast<UINT64>(active_sampler_slot(sampler_slot)) * m_sampler_inc; // REN-38-B8
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv       = t.rtv();
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv       = t.dsv();
         m_list->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
@@ -4599,7 +5018,7 @@ private:
         {
             const float rgba[4] = {clear_color.r, clear_color.g, clear_color.b, clear_color.a};
             m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
-            m_list->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, clear_depth, 0, 0, nullptr);
+            m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr);
         }
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
         const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
@@ -4610,6 +5029,7 @@ private:
         m_list->SetGraphicsRootDescriptorTable(1, srv_table); // base-color SRV (t1)
         m_list->SetGraphicsRootDescriptorTable(2, samp_gpu);  // sampler (s2)
         m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
     }
@@ -4654,6 +5074,13 @@ private:
     ComPtr<ID3D12PipelineState>        m_rt_pso[kKernelPsoCap];
     crd::u32                           m_rt_pso_n = 0U;
     ComPtr<ID3D12CommandSignature>     m_dispatch_sig;          // REN-38-A10: ExecuteIndirect(DISPATCH)
+    ComPtr<ID3D12DescriptorHeap>       m_clear_heap;            // REN-38-B3: the NON-shader-visible UAV ClearUint needs
+    // REN-38-B8: the authored-sampler cache — heap slots 2..N.
+    static constexpr crd::u32          kSamplerCacheCap = 16U;
+    SamplerDesc                        m_sampler_key[kSamplerCacheCap]{};
+    crd::u32                           m_sampler_n           = 0U;
+    crd::u32                           m_active_sampler_slot = 0xFFFFFFFFU;
+    PassRasterState                    m_pass_state{}; // REN-38 audit: the declared pass state (defaults = historical)
     ComPtr<ID3D12Device5>              m_dxr_device;            // REN-38-A16: CreateStateObject lives on Device5
     bool                               m_dxr_tried = false;
     DxrPipe                            m_dxr[kKernelPsoCap];
@@ -4794,6 +5221,24 @@ public:
     }
 
     // ── IFrameGraph ──
+    // ⭐ REN-38-B5: import an APP-OWNED texture — the DX12 mirror. Read-only: no target, so the state tracker
+    // never touches it and the app keeps it in PIXEL_SHADER_RESOURCE on its own schedule.
+    [[nodiscard]] FgImage import_texture(ITexture& texture) override
+    {
+        for (crd::usize i = 0; i < m_images.size(); ++i)
+        {
+            if (m_images[i].texture == &texture && m_images[i].target == nullptr)
+            {
+                return FgImage{static_cast<crd::u32>(i + 1U)};
+            }
+        }
+        ImageNode n{};
+        n.texture = &texture;
+        n.own     = Own::Imported;
+        m_images.push_back(n);
+        return FgImage{static_cast<crd::u32>(m_images.size())};
+    }
+
     [[nodiscard]] FgImage import_target(IRasterTarget& target) override
     {
         for (crd::usize i = 0; i < m_images.size(); ++i)
@@ -4833,11 +5278,27 @@ public:
         n.fmt       = to_dxgi_format(desc.format, is_depth);
         n.is_depth  = is_depth;
         n.rdesc                  = {};
-        n.rdesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        // ── ⭐ REN-38-B2: the SHAPE. ──
+        // ⛔ D3D12 has NO cube RESOURCE and no cube flag: a cube IS a 6-layer Texture2D array, and "cubeness" lives
+        // ENTIRELY in the SRV (`D3D12_SRV_DIMENSION_TEXTURECUBE`). That is the opposite of Vulkan, where the image
+        // needs CUBE_COMPATIBLE at creation — so the same authored `dimension = "cube"` lands in different places
+        // on the two backends, and getting it wrong on either gives an array a cube shader cannot bind.
+        // ⛔ `DepthOrArraySize` is exactly one field for two meanings: SLICES for a 3-D texture, LAYERS for a 2-D
+        // array. Writing `layers` into it for a volume would create a 1-slice volume with N array elements, which
+        // D3D12 rejects — and writing `depth` into it for an array is silently a different resource.
+        const bool is_cube = desc.kind == FgImageKind::Cube || desc.kind == FgImageKind::CubeArray;
+        const bool is_3d   = desc.kind == FgImageKind::Tex3D;
+        n.rdesc.Dimension        = is_3d ? D3D12_RESOURCE_DIMENSION_TEXTURE3D : D3D12_RESOURCE_DIMENSION_TEXTURE2D;
         n.rdesc.Width            = desc.width;
         n.rdesc.Height           = desc.height;
-        n.rdesc.DepthOrArraySize = static_cast<UINT16>(desc.layers); // REN-3.2: the 2D-ARRAY cascade atlas
-        n.rdesc.MipLevels        = 1;
+        const crd::u32 volume_depth = desc.depth > 0U ? desc.depth : 1U;
+        const crd::u32 cube_count   = desc.layers > 0U ? desc.layers : 1U;
+        crd::u32       depth_or_layers = desc.layers;
+        if (is_3d)        { depth_or_layers = volume_depth; }
+        else if (is_cube) { depth_or_layers = 6U * cube_count; }
+        n.rdesc.DepthOrArraySize = static_cast<UINT16>(depth_or_layers);
+        n.rdesc.MipLevels        = static_cast<UINT16>(desc.mips > 0U ? desc.mips : 1U);
+        n.no_alias               = desc.no_alias; // REN-38-B6
         // ⛔ REN-3.1 — THE DX12 DEPTH-SRV RULE. A D3D12 resource created with a fully-TYPED depth format
         // (DXGI_FORMAT_D32_FLOAT) can never have a Shader-Resource View created over it, so a `sampled` depth
         // transient would fail SRV creation (or hand back garbage). Sampling a depth target requires THREE formats
@@ -5010,6 +5471,8 @@ public:
     [[nodiscard]] crd::u32 last_barrier_count() const noexcept override { return m_barrier_count; }
     [[nodiscard]] crd::u32 last_submit_count() const noexcept override { return m_submit_count; }
     [[nodiscard]] crd::u32 last_present_count() const noexcept override { return m_present_count; }
+    void set_memory_budget(crd::u64 bytes) noexcept override { m_budget = bytes; }
+    [[nodiscard]] bool last_build_exceeded_budget() const noexcept override { return m_over_budget; }
     [[nodiscard]] crd::u32 transient_memory_bytes() const noexcept override { return m_physical_bytes; }
     [[nodiscard]] crd::u32 transient_logical_bytes() const noexcept override { return m_logical_bytes; }
     // REN-8: same opt-out as Vulkan — the per-frame full-target host copy is a TEST affordance, so a presenting
@@ -5091,10 +5554,14 @@ private:
         // resource state of a persistent image lives in the REGISTRY, never here — see `live_state()`. That is
         // what makes the frame-start reset harmless for it BY CONSTRUCTION rather than by remembering a skip.
         crd::i32               persist_index = -1;
+        bool     no_alias = false; // REN-38-B6: the author PINNED this transient out of the aliaser
     };
 
     // The two questions that DO need a predicate, each answerable on its own.
     [[nodiscard]] static bool graph_owned(const ImageNode& n) noexcept { return n.own != Own::Imported; }
+    // ⛔⛔ REN-38-B6: `no_alias` forbids SLOT REUSE, NOT allocation. My first attempt excluded pinned transients
+    // from `aliasable()` — and the aliasing pass is what BINDS MEMORY, so a pinned image was created, never
+    // backed, and reported zero bytes. A pin must make a resource MORE isolated, never less real.
     [[nodiscard]] static bool aliasable(const ImageNode& n) noexcept { return n.own == Own::Transient; }
 
     // REN-37.5: one persistent image, keyed by a caller-chosen stable identity. Survives `reset()`, owns a
@@ -5178,6 +5645,20 @@ private:
         case FgImageFormat::R16F:       return DXGI_FORMAT_R16_FLOAT;
         case FgImageFormat::R32F:       return DXGI_FORMAT_R32_FLOAT;
         case FgImageFormat::R32Uint:    return DXGI_FORMAT_R32_UINT;
+        // ── REN-38-B7: the rest of the vocabulary. ──
+        case FgImageFormat::RG16F:       return DXGI_FORMAT_R16G16_FLOAT;
+        case FgImageFormat::RG32F:       return DXGI_FORMAT_R32G32_FLOAT;
+        case FgImageFormat::RGBA32F:     return DXGI_FORMAT_R32G32B32A32_FLOAT;
+        // ⛔ DXGI orders this format's channels the OTHER WAY from Vulkan's name: `R11G11B10_FLOAT` and
+        // `B10G11R11_UFLOAT_PACK32` are the SAME bit layout — Vulkan names packed formats least-significant-first.
+        // Reading the two names as different formats is how a "portable" HDR buffer ends up channel-swapped.
+        case FgImageFormat::R11G11B10F:  return DXGI_FORMAT_R11G11B10_FLOAT;
+        case FgImageFormat::RGB10A2:     return DXGI_FORMAT_R10G10B10A2_UNORM;
+        case FgImageFormat::R8:          return DXGI_FORMAT_R8_UNORM;
+        case FgImageFormat::RG8:         return DXGI_FORMAT_R8G8_UNORM;
+        case FgImageFormat::RGBA16Unorm: return DXGI_FORMAT_R16G16B16A16_UNORM;
+        case FgImageFormat::D24S8:      is_depth = true; return DXGI_FORMAT_D24_UNORM_S8_UINT;
+        case FgImageFormat::D32FloatS8: is_depth = true; return DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
         case FgImageFormat::D32Float:
         default:                        is_depth = true; return DXGI_FORMAT_D32_FLOAT;
         }
@@ -5259,6 +5740,8 @@ private:
     crd::u32 m_barrier_count  = 0U;
     crd::u32 m_submit_count   = 0U;
     crd::u32 m_present_count  = 0U; // REN-38-A5: present passes that ACTUALLY presented last execute()
+    crd::u64 m_budget         = 0U;  // REN-38-B6: 0 = unbounded
+    bool     m_over_budget    = false;
     bool     m_readback       = true;  // REN-8: opt-out; gates keep read_pixel
     bool     m_pending_submit = false; // REN-8: a submit not yet waited on
     // REN-1: the DEPENDENCY-SORTED execution order (declaration indices) — execute() walks THIS.
@@ -5280,6 +5763,7 @@ bool Dx12FrameGraph::build()
 {
     m_barrier_count = 0U;
     m_submit_count  = 0U;
+    m_over_budget   = false; // REN-38-B6: a fresh verdict every build
 
     // 1) every pass access must reference an existing resource
     for (const Pass& p : m_passes)
@@ -5383,6 +5867,12 @@ bool Dx12FrameGraph::build()
     const crd::u32 img_slots = alias_class(true);
     if (img_slots == 0xFFFFFFFFU) { return false; }
     if (alias_class(false) == 0xFFFFFFFFU) { return false; }
+    // ── ⭐ REN-38-B6: THE HARD BUDGET. Checked AFTER aliasing, because the budget is about what the frame
+    // actually costs, not what it would cost without the aliaser — bounding the pre-alias total would reject
+    // graphs that fit comfortably. ⛔ FAIL, never warn: the failure this prevents is an allocation that succeeds
+    // on the dev machine and OOMs on the target months later, in a build nobody can bisect.
+    m_over_budget = m_budget != 0U && static_cast<crd::u64>(m_physical_bytes) > m_budget;
+    if (m_over_budget) { return false; }
     return true;
 }
 
@@ -5416,8 +5906,12 @@ crd::u32 Dx12FrameGraph::alias_class(bool images)
         const crd::i32 lp   = images ? m_images[idx].last_pass : m_buffers[idx].last_pass;
         m_logical_bytes += static_cast<crd::u32>(sz);
 
-        crd::i32 chosen = -1;
-        for (crd::u32 si = slot_base; si < m_slots.size(); ++si)
+        // REN-38-B6: a PINNED transient never reuses a heap slot, so it always allocates a fresh one — dedicated
+        // memory, still created/barriered/retired like any other transient. Only IMAGES carry the pin today;
+        // buffers have no author-visible shape to pin against yet, so they behave exactly as before.
+        const bool pinned = images && m_images[idx].no_alias;
+        crd::i32   chosen = -1;
+        for (crd::u32 si = slot_base; !pinned && si < m_slots.size(); ++si)
         {
             if (m_slots[si].free_after < fp) { chosen = static_cast<crd::i32>(si); break; }
         }
@@ -5678,6 +6172,7 @@ void Dx12FrameGraph::execute()
         }
         // REN-8: bracket THIS pass with device timestamps. D3D12 has no begin/end pair for TIMESTAMP — each is a
         // single `EndQuery`, so a pass is two of them and the delta is its GPU cost.
+        m_rc->frame_rec_new_pass(); // REN-38-B8: no pass inherits its neighbour's sampler
         ID3D12GraphicsCommandList* ts_list = m_rc->frame_cmd_list();
         const bool stamp = m_ts_heap != nullptr && ts_list != nullptr && pass_index < kMaxTimedPasses;
         if (stamp) { ts_list->EndQuery(m_ts_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, pass_index * 2U); }

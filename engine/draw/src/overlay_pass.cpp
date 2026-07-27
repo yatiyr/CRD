@@ -5,7 +5,7 @@
 
 #include <crd/draw/overlay_pass.hpp>
 
-#include <crd/draw/ckir_draw.hpp>
+#include <crd/draw/draw_assets.hpp>
 #include <crd/draw/detail/gpu_types.hpp>
 #include <crd/draw/render_buffer.hpp>
 #include <crd/draw/renderer.hpp>
@@ -63,7 +63,7 @@ constexpr crd::u32 kVariantCount         = 3U;
     return kVariantAlways;
 }
 
-// Pack the 32-word header (the ckir_draw.hpp contract) into the scratch's first words.
+// Pack the 32-word header (the draw_assets.hpp contract) into the scratch's first words.
 void pack_header(crd::containers::Array<crd::u32>& w, const OverlayPassConfig& cfg)
 {
     w.clear();
@@ -105,7 +105,7 @@ bool submit_overlay(crd::gpu::IRasterTarget& target, const RenderBuffer& buffer,
 
     // ONE header upload serves every draw in this submission (the instance region re-uploads per bin batch).
     pack_header(s.scratch, config);
-    if (!s.raster->upload_storage(*s.storage, 0U, s.scratch.data(), ckir::kHeaderWords * 4U))
+    if (!s.raster->upload_storage(*s.storage, 0U, s.scratch.data(), kHeaderWords * 4U))
     {
         CRD_LOG_ERROR(g_log_overlay, "draw-buffer header upload refused -- skipping overlay");
         return false;
@@ -126,7 +126,7 @@ bool submit_overlay(crd::gpu::IRasterTarget& target, const RenderBuffer& buffer,
     // Triangles, then lines — each variant in compose-on-top order. Instances pack into the scratch tail and
     // upload at the instance region (word 32); batches over the configured cap keep unbounded counts rendering.
     const auto draw_bins = [&](bool is_tri) {
-        const crd::u32 words_per = is_tri ? ckir::kTriInstanceWords : ckir::kLineInstanceWords;
+        const crd::u32 words_per = is_tri ? kTriInstanceWords : kLineInstanceWords;
         const crd::u32 cap       = is_tri ? s.config.max_triangles_per_frame : s.config.max_lines_per_frame;
         const crd::u32 verts_per = is_tri ? 3U : 6U;
         auto&          prog      = is_tri ? *s.tri_prog : *s.line_prog;
@@ -139,7 +139,7 @@ bool submit_overlay(crd::gpu::IRasterTarget& target, const RenderBuffer& buffer,
             crd::u32 in_batch = 0U;
             const auto flush  = [&]() {
                 if (in_batch == 0U) { return; }
-                if (!s.raster->upload_storage(*s.storage, ckir::kHeaderWords * 4U, s.scratch.data(),
+                if (!s.raster->upload_storage(*s.storage, kHeaderWords * 4U, s.scratch.data(),
                                               static_cast<crd::u32>(s.scratch.size() * 4U))
                     || !s.raster->draw_overlay(target, prog, *s.storage, compare_of[v], in_batch * verts_per))
                 {

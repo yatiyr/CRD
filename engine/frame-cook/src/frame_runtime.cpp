@@ -64,9 +64,17 @@ struct PassRec
     // REN-38-A7/A8: the declared `patches` / `groups` count for an amplification pass with no draw list.
     crd::u32             amplify_count  = 0U;
     crd::u32             clear_id       = 0U; // REN-38-A11: the visibility buffer's background id
+    // REN-38-B3: counter buffers this pass must ZERO before it runs. A counter that is not reset accumulates
+    // across frames, so the append walks past the end of its list on frame 2 and the GPU-driven draw reads
+    // garbage indices — a failure that gets WORSE the longer the app runs.
+    g::FgBuffer          counters[kMaxPassReads]{};
+    crd::u32             n_counters     = 0U;
     g::IGpuProgram*      rt_raygen      = nullptr; // REN-38-A16: the three programs a pipeline is built from
     g::IGpuProgram*      rt_miss        = nullptr;
     g::IGpuProgram*      rt_chit        = nullptr;
+    g::IGpuProgram*      rt_anyhit      = nullptr; // REN-38 audit: the OPTIONAL any-hit joining the hit group
+    g::IGpuProgram*      rt_isect       = nullptr; // REN-38-F13: procedural hit shapes (optional)
+    g::IGpuProgram*      rt_callable    = nullptr; // REN-38-F13: the SBT fourth table (optional)
     // REN-38-A9/A10: the acceleration structure a raytrace pass traverses, and the buffer an indirect pass
     // takes its count from. Both are resolved at RECORD time and held here, like every other pass input.
     g::IAccelerationStructure* accel      = nullptr;
@@ -77,6 +85,21 @@ struct PassRec
     // is exactly the degenerate state the cascade gate exists to reject. Tracked explicitly rather than inferred.
     bool                 program_is_instance = false;
 };
+
+// ⭐ REN-38-B1: a STABLE key for a persistent image — FNV-1a over the resource NAME. ⛔ Not the declaration
+// index: an index shifts the moment someone adds a resource above it in the file, and a persistent image is
+// looked up BY KEY across frames — so a shifted key silently swaps two histories (TAA reading the auto-exposure
+// buffer) or discards one. The name is what the author actually stated, so the name is what keys it.
+[[nodiscard]] crd::u32 name_key(const crd::containers::String& n) noexcept
+{
+    crd::u32 h = 2166136261U;
+    for (crd::usize i = 0; i < n.size(); ++i)
+    {
+        h ^= static_cast<crd::u32>(static_cast<crd::u8>(n.c_str()[i]));
+        h *= 16777619U;
+    }
+    return h;
+}
 
 void record_pass(g::IFrameContext& ctx, void* user)
 {
@@ -104,6 +127,20 @@ void record_pass(g::IFrameContext& ctx, void* user)
                                && d.kind != FramePassKind::RayTracePipeline;
     if (needs_program && p->program == nullptr) { return; }
 
+    // ⭐ REN-38-B3: ZERO this pass's counters FIRST. Recorded here rather than as a separate pass so the reset is
+    // ORDERED against the append by construction — nothing between them can observe the old value.
+    for (crd::u32 ci = 0; ci < p->n_counters; ++ci)
+    {
+        g::IStorageBuffer* cb = ctx.buffer(p->counters[ci]);
+        if (cb != nullptr) { r.fill_buffer(*cb, 0U, 4U, 0U); }
+    }
+    // ⭐ REN-38-B8: install this pass's sampler BEFORE any draw records. A pass that declared none leaves the
+    // context on its engine default, which `frame_rec_new_pass` restored at the pass boundary.
+    if (d.has_sampler) { r.set_sampler(d.sampler); }
+    // ⭐ REN-38 audit: install this pass's DECLARED raster state — depth-write, depth bias, face cull, stencil —
+    // under the exact same discipline: context state, reset to the historical defaults at the pass boundary,
+    // so a pass that says nothing never inherits its neighbour's bias or stencil configuration.
+    r.set_pass_state(d.state);
     const g::ClearColor clear{d.clear_color[0], d.clear_color[1], d.clear_color[2], d.clear_color[3]};
     switch (d.kind)
     {
@@ -169,7 +206,8 @@ void record_pass(g::IFrameContext& ctx, void* user)
             if (sb == nullptr) { continue; }
             g::IRasterProgram* prog = p->program;
             if (!p->program_is_instance && it.program != nullptr) { prog = it.program; }
-            const bool first = (i == 0U);
+            // REN-38-F11: an authored `load = true` pass NEVER clears — it stacks on the previous pass
+            const bool first = (i == 0U) && !d.load_target;
             // REN-37.10: a draw's OWN texture wins over the pass's sampled read. Without this, a geometry pass
             // that reads the shadow atlas would bind that atlas for every draw and any group carrying an albedo
             // map would silently lose it the instant shadows turned on.
@@ -341,8 +379,23 @@ void record_pass(g::IFrameContext& ctx, void* user)
             bufs[nb++] = sb;
         }
         if (nb == 0U) { return; }
-        r.trace_rays(*p->rt_raygen, *p->rt_miss, *p->rt_chit, *p->accel, p->groups[0], p->groups[1],
-                     static_cast<g::IStorageBuffer* const*>(bufs), nb);
+        // REN-38-F13: any pass naming an intersection or callable goes through the FULL verb.
+        if (p->rt_isect != nullptr || p->rt_callable != nullptr)
+        {
+            r.trace_rays_full(*p->rt_raygen, *p->rt_miss, *p->rt_chit, p->rt_anyhit, p->rt_isect, p->rt_callable,
+                              *p->accel, p->groups[0], p->groups[1],
+                              static_cast<g::IStorageBuffer* const*>(bufs), nb);
+        }
+        else if (p->rt_anyhit != nullptr)
+        {
+            r.trace_rays_anyhit(*p->rt_raygen, *p->rt_miss, *p->rt_chit, *p->rt_anyhit, *p->accel, p->groups[0],
+                                p->groups[1], static_cast<g::IStorageBuffer* const*>(bufs), nb);
+        }
+        else
+        {
+            r.trace_rays(*p->rt_raygen, *p->rt_miss, *p->rt_chit, *p->accel, p->groups[0], p->groups[1],
+                         static_cast<g::IStorageBuffer* const*>(bufs), nb);
+        }
         break;
     }
     // ── ⭐ REN-38-A10: THE GPU-DRIVEN PASSES. ──
@@ -405,15 +458,23 @@ void record_pass(g::IFrameContext& ctx, void* user)
             // pass, task/mesh workgroups for a mesh pass. A zero-count item is SKIPPED, never dispatched as one.
             const crd::u32 n = it.vertex_count;
             if (n == 0U) { continue; }
+            // ⭐ REN-38-F6+: a tess draw item CARRYING A STORAGE BUFFER binds it (the GEO-1 pull seam) — its
+            // control points come from the buffer, not from a procedural corner table. Without this, the one
+            // pipeline built to displace real geometry could only ever amplify procedural quads.
+            g::IStorageBuffer* sb = it.storage != nullptr && i < kMaxDrawItems ? ctx.buffer(p->storage_of[i]) : nullptr;
             if (i == 0U)
             {
-                if (mesh) { r.draw_mesh(*t, *prog, clear, n); }
-                else      { r.draw_tess(*t, *prog, clear, n); }
+                if (mesh && sb != nullptr) { r.draw_mesh_storage(*t, *prog, clear, *sb, n); }
+                else if (mesh)             { r.draw_mesh(*t, *prog, clear, n); }
+                else if (sb != nullptr)    { r.draw_tess_storage(*t, *prog, clear, *sb, n); }
+                else                       { r.draw_tess(*t, *prog, clear, n); }
             }
             else
             {
-                if (mesh) { r.draw_mesh_load(*t, *prog, n); }
-                else      { r.draw_tess_load(*t, *prog, n); }
+                if (mesh && sb != nullptr) { r.draw_mesh_storage_load(*t, *prog, *sb, n); }
+                else if (mesh)             { r.draw_mesh_load(*t, *prog, n); }
+                else if (sb != nullptr)    { r.draw_tess_storage_load(*t, *prog, *sb, n); }
+                else                       { r.draw_tess_load(*t, *prog, n); }
             }
         }
         break;
@@ -466,6 +527,10 @@ struct FrameRecorder::Impl
     // block is itself reserved exactly at record time, for the same reason one level down.
     crd::containers::Array<crd::containers::Array<PassRec>> blocks;
     crd::u32                                               used = 0U;
+    // REN-38-B1: which side of the ping-pong pair is CURRENT. Advanced by `begin_frame()`, so a graph recorded
+    // twice in one frame (the multi-viewport path) sees ONE parity — two viewports must not disagree about which
+    // image is history.
+    crd::u32                                               frame_parity = 0U;
 
     explicit Impl(crd::memory::IAllocator* a) : alloc(a), blocks(a)
     {
@@ -479,7 +544,11 @@ struct FrameRecorder::Impl
 
 FrameRecorder::FrameRecorder(crd::memory::IAllocator* alloc) : m_impl(new Impl(alloc)) {}
 FrameRecorder::~FrameRecorder() { delete m_impl; }
-void FrameRecorder::begin_frame() noexcept { m_impl->used = 0U; }
+void FrameRecorder::begin_frame() noexcept
+{
+    m_impl->used = 0U;
+    ++m_impl->frame_parity; // REN-38-B1: rotate the ping-pong pair, once per frame
+}
 
 bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_ref, g::IRasterContext& raster,
                            IFrameGraphHost& host, FrameExecError* err, crd::containers::String* where)
@@ -519,6 +588,9 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
     // Parallel to `images` and indexed the same way, so `desc.resources[i]` maps to both.
     crd::containers::Array<g::FgBuffer> buffers(alloc);
     crd::containers::Array<g::FgImage> images(alloc);
+    // REN-38-B1: for a ping-pong resource, the PREVIOUS frame's image. Index-parallel with `images`, which holds
+    // the CURRENT one — so a read and a write of the same authored name resolve to different handles.
+    crd::containers::Array<g::FgImage> pingpong(alloc);
     for (crd::usize i = 0; i < desc.resources.size(); ++i)
     {
         const FrameResourceDesc& r = desc.resources[i];
@@ -528,6 +600,18 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         {
             buffers.push_back(g::FgBuffer{});
             images.push_back(g::FgImage{});
+            pingpong.push_back(g::FgImage{});
+            continue;
+        }
+        // ⭐ REN-38-B5: an EXTERNAL TEXTURE is the host's — IMPORTED read-only. The graph tracks it for ORDERING
+        // only; there is no barrier to derive because nothing in the frame writes it.
+        if (r.kind == FrameResourceKind::ExternalTexture)
+        {
+            g::ITexture* tx = host.texture(crd::containers::StringView(r.name.c_str(), r.name.size()));
+            if (tx == nullptr) { return fail(FrameExecError::UnresolvedResource, &r.name); }
+            images.push_back(fgraph->import_texture(*tx));
+            buffers.push_back(g::FgBuffer{});
+            pingpong.push_back(g::FgImage{});
             continue;
         }
         // REN-38-B3: an EXTERNAL buffer is the host's — IMPORTED, not created, so the graph orders and barriers it
@@ -538,17 +622,60 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             if (sb == nullptr) { return fail(FrameExecError::UnresolvedResource, &r.name); }
             buffers.push_back(fgraph->import_storage(*sb));
             images.push_back(g::FgImage{});
+            pingpong.push_back(g::FgImage{});
+            continue;
+        }
+        // ── ⭐ REN-38-B1: PERSISTENT and PING-PONG images. ──
+        // ⛔ The KEY is a hash of the resource NAME, not its index. An index would shift the moment someone added
+        // a resource above it in the file — and a persistent image is looked up BY KEY across frames, so a shifted
+        // key silently swaps two histories (TAA reading the auto-exposure buffer) or discards one.
+        if (r.kind == FrameResourceKind::PersistentImage || r.kind == FrameResourceKind::PingPongImage)
+        {
+            g::FgImageDesc pid{};
+            pid.width   = r.width;
+            pid.height  = r.height;
+            pid.format  = r.format;
+            pid.samples = r.samples;
+            pid.sampled = r.sampled;
+            pid.storage = r.storage;
+            pid.layers  = r.layers;
+            pid.kind    = r.kind_2d;
+            pid.depth   = r.depth;
+            pid.mips    = r.mips;
+            const crd::u32 base = name_key(r.name);
+            if (r.kind == FrameResourceKind::PersistentImage)
+            {
+                const g::FgImage h = fgraph->create_persistent_image(base, pid);
+                if (!h.valid()) { return fail(FrameExecError::TransientFailed, &r.name); }
+                images.push_back(h);
+                buffers.push_back(g::FgBuffer{});
+                pingpong.push_back(g::FgImage{}); // not a pair
+                continue;
+            }
+            // ⭐ A PING-PONG resource is TWO persistent images under two keys, and the pair ROTATES BY FRAME
+            // PARITY. ⛔ The author never sees the parity bit — which is precisely why they cannot get it wrong:
+            // a READ resolves to the previous frame's image and a WRITE to this frame's, and that IS what a
+            // history buffer means. The classic one-frame-stale bug has no place left to live.
+            const bool     odd  = (m_impl->frame_parity & 1U) != 0U;
+            const g::FgImage a  = fgraph->create_persistent_image(base ^ 0x9E3779B9U, pid);
+            const g::FgImage b2 = fgraph->create_persistent_image(base ^ 0x85EBCA6BU, pid);
+            if (!a.valid() || !b2.valid()) { return fail(FrameExecError::TransientFailed, &r.name); }
+            images.push_back(odd ? b2 : a);   // CURR — what a write lands in
+            pingpong.push_back(odd ? a : b2); // PREV — what a read comes from
+            buffers.push_back(g::FgBuffer{});
             continue;
         }
         // REN-38-B3: an `indirect_args` resource is a transient BUFFER — the device already declares the indirect
         // usage on every one of them, so the two kinds differ in INTENT and in what the cooker will accept, not
         // in backing. Handling them together is what makes "a cull pass writes args" work with no special case.
-        if (r.kind == FrameResourceKind::TransientBuffer || r.kind == FrameResourceKind::IndirectArgs)
+        if (r.kind == FrameResourceKind::TransientBuffer || r.kind == FrameResourceKind::IndirectArgs
+            || r.kind == FrameResourceKind::StructuredBuffer || r.kind == FrameResourceKind::CounterBuffer)
         {
             const g::FgBuffer bh = fgraph->create_transient_buffer(r.size_bytes);
             if (!bh.valid()) { return fail(FrameExecError::TransientFailed, &r.name); }
             buffers.push_back(bh);
-            images.push_back(g::FgImage{}); // keep the two arrays index-parallel
+            images.push_back(g::FgImage{}); // keep the arrays index-parallel
+            pingpong.push_back(g::FgImage{});
             continue;
         }
         buffers.push_back(g::FgBuffer{});
@@ -561,21 +688,48 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         id.sampled = r.sampled;
         id.storage = r.storage;
         id.layers  = r.layers; // REN-3.2: >1 ⇒ the 2D-array cascade/cube/stereo atlas
+        // ⛔⛔ REN-38-B2 + B6: THE SHAPE AND THE ALIAS PIN REACH THE TRANSIENT PATH TOO. They were wired into the
+        // PERSISTENT branch above and NOT here, so an authored `dimension = "cube"` TRANSIENT parsed, validated
+        // and was created as an ordinary 2-D image — which a `samplerCube` binding cannot use and which no
+        // validation layer complains about. ⛔ B2's own gate missed it because it called
+        // `create_transient_image` DIRECTLY with a hand-built desc instead of going through the asset: a gate
+        // that bypasses the layer it is meant to prove is not a gate for that layer.
+        id.kind     = r.kind_2d;
+        id.depth    = r.depth;
+        id.mips     = r.mips;
+        id.no_alias = r.no_alias;
         const g::FgImage h = fgraph->create_transient_image(id);
         if (!h.valid()) { return fail(FrameExecError::TransientFailed, &r.name); }
         images.push_back(h);
+        pingpong.push_back(g::FgImage{});
     }
+    // REN-38-B6: the graph-level transient budget, installed BEFORE `build()` — which is where it is enforced,
+    // because the post-aliasing footprint is a DEVICE answer (alignment and memory-type rules differ per adapter),
+    // not something the asset could compute for itself.
+    fgraph->set_memory_budget(desc.memory_budget_bytes);
     const g::FgImage out_handle = fgraph->import_target(*out_target);
 
-    const auto resolve_image = [&](const crd::containers::String& n, g::FgImage& h, bool& is_depth) -> bool {
+    // ⭐ REN-38-B1: `for_read` is what makes ping-pong work with no new syntax. Everything else ignores it.
+    const auto resolve_image = [&](const crd::containers::String& n, g::FgImage& h, bool& is_depth,
+                                   bool for_read = false) -> bool {
         if (name_is(n, "@output")) { h = out_handle; is_depth = false; return true; }
         for (crd::usize i = 0; i < desc.resources.size(); ++i)
         {
             if (desc.resources[i].name.size() == n.size()
                 && std::memcmp(desc.resources[i].name.c_str(), n.c_str(), n.size()) == 0)
             {
-                h        = images[i];
-                is_depth = desc.resources[i].format == g::FgImageFormat::D32Float;
+                h = images[i];
+                // ⭐ REN-38-B1: a READ of a PING-PONG resource resolves to the PREVIOUS frame's image, a write to
+                // this frame's. That is the whole mechanism, and it needs no syntax the author can hold wrong.
+                if (for_read && desc.resources[i].kind == FrameResourceKind::PingPongImage && pingpong[i].valid())
+                {
+                    h = pingpong[i];
+                }
+                // ⛔ REN-38-B7: ASK THE PREDICATE, never compare to one format. `is_depth` picks the COMPARISON
+                // sampler for a pass that reads this resource, so a D24S8 or D32FloatS8 shadow map compared to
+                // `D32Float` alone would come back false and be sampled with a FILTERING sampler — a shadow term
+                // that is smooth, plausible and wrong.
+                is_depth = g::fg_format_has_depth(desc.resources[i].format);
                 return true;
             }
         }
@@ -709,6 +863,24 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             if (rec.rt_miss == nullptr) { return fail(FrameExecError::UnresolvedProgram, &d.miss); }
             rec.rt_chit = host.kernel(crd::containers::StringView(d.closest_hit.c_str(), d.closest_hit.size()));
             if (rec.rt_chit == nullptr) { return fail(FrameExecError::UnresolvedProgram, &d.closest_hit); }
+            // REN-38 audit: the any-hit is OPTIONAL, but a NAMED one that does not resolve FAILS — a pipeline
+            // silently built without its any-hit traces every transparent texel as solid, which renders.
+            if (d.any_hit.size() > 0U)
+            {
+                rec.rt_anyhit = host.kernel(crd::containers::StringView(d.any_hit.c_str(), d.any_hit.size()));
+                if (rec.rt_anyhit == nullptr) { return fail(FrameExecError::UnresolvedProgram, &d.any_hit); }
+            }
+            // REN-38-F13: the last two SBT roles - optional, but a NAMED one that does not resolve FAILS.
+            if (d.intersection.size() > 0U)
+            {
+                rec.rt_isect = host.kernel(crd::containers::StringView(d.intersection.c_str(), d.intersection.size()));
+                if (rec.rt_isect == nullptr) { return fail(FrameExecError::UnresolvedProgram, &d.intersection); }
+            }
+            if (d.callable.size() > 0U)
+            {
+                rec.rt_callable = host.kernel(crd::containers::StringView(d.callable.c_str(), d.callable.size()));
+                if (rec.rt_callable == nullptr) { return fail(FrameExecError::UnresolvedProgram, &d.callable); }
+            }
         }
         // ⛔ REN-38-A16: the LAUNCH GRID is read for the RT-pipeline kind too. It was not, so `groups` stayed
         // {1,1,1} and a `raytrace.pipeline` pass fired exactly ONE ray however many the asset declared — one
@@ -764,7 +936,13 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         // the barrier scheduler's layout choice, so a present pass recorded as Raster would have its source
         // transitioned to SHADER_READ_ONLY and the surface would blit from the wrong layout.
         g::FgPassKind dev_kind = g::FgPassKind::Raster;
-        if (d.kind == FramePassKind::Compute) { dev_kind = g::FgPassKind::Compute; }
+        // REN-38-A9/A10: a ray-tracing pass and an indirect DISPATCH are compute work exactly as an authored
+        // compute pass is; an indirect MESH draw is raster work that merely takes its count from a buffer.
+        if (d.kind == FramePassKind::Compute || d.kind == FramePassKind::RayTrace
+            || d.kind == FramePassKind::ComputeIndirect || d.kind == FramePassKind::RayTracePipeline)
+        {
+            dev_kind = g::FgPassKind::Compute;
+        }
         else if (d.kind == FramePassKind::Present) { dev_kind = g::FgPassKind::Present; }
         // ⛔ REN-38-A6: copy/blit/resolve are TRANSFER passes so the barrier scheduler picks TRANSFER_SRC/DST.
         // A CLEAR is NOT: it is `LOAD_OP_CLEAR` on an attachment (`ClearRenderTargetView` on DX12), which needs
@@ -774,13 +952,6 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
                  || d.kind == FramePassKind::Resolve)
         {
             dev_kind = g::FgPassKind::Transfer;
-        }
-        // REN-38-A9/A10: a ray-tracing pass and an indirect DISPATCH are compute work; an indirect MESH draw is
-        // raster work that merely takes its count from a buffer.
-        else if (d.kind == FramePassKind::RayTrace || d.kind == FramePassKind::ComputeIndirect
-                 || d.kind == FramePassKind::RayTracePipeline)
-        {
-            dev_kind = g::FgPassKind::Compute;
         }
         g::IFramePassBuilder&       pb          = fgraph->add_pass(d.name.c_str(), dev_kind);
         // REN-38-A14: pass the asset's QUEUE REQUEST through. The graph decides whether it can honour it and
@@ -795,7 +966,8 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             {
                 const FrameResourceKind wk = desc.resources[bi].kind;
                 if (wk != FrameResourceKind::TransientBuffer && wk != FrameResourceKind::IndirectArgs
-                    && wk != FrameResourceKind::ExternalBuffer)
+                    && wk != FrameResourceKind::ExternalBuffer && wk != FrameResourceKind::StructuredBuffer
+                    && wk != FrameResourceKind::CounterBuffer)
                 {
                     continue;
                 }
@@ -806,6 +978,12 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
                     continue;
                 }
                 pb.writes(buffers[bi]);
+                // REN-38-B3: a pass that WRITES a counter buffer is the pass that appends into it, so it is the
+                // pass whose reset must precede. Collected here, issued at the top of the body.
+                if (wk == FrameResourceKind::CounterBuffer && rec.n_counters < kMaxPassReads)
+                {
+                    rec.counters[rec.n_counters++] = buffers[bi];
+                }
                 w_buffer = true;
                 break;
             }
@@ -835,7 +1013,8 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             {
                 const FrameResourceKind rk = desc.resources[bi].kind;
                 if (rk != FrameResourceKind::TransientBuffer && rk != FrameResourceKind::IndirectArgs
-                    && rk != FrameResourceKind::ExternalBuffer && rk != FrameResourceKind::AccelerationStructure)
+                    && rk != FrameResourceKind::ExternalBuffer && rk != FrameResourceKind::AccelerationStructure
+                    && rk != FrameResourceKind::StructuredBuffer && rk != FrameResourceKind::CounterBuffer)
                 {
                     continue;
                 }
@@ -858,7 +1037,7 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             }
             if (was_accel) { continue; }
             if (was_buffer) { continue; }
-            if (resolve_image(d.reads[r].name, h, is_depth))
+            if (resolve_image(d.reads[r].name, h, is_depth, /*for_read=*/true))
             {
                 pb.reads(h);
                 if (rec.n_sampled < kMaxPassReads) { rec.sampled[rec.n_sampled++] = h; }
@@ -899,6 +1078,8 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
                     const FrameResourceKind rk = desc.resources[bi].kind;
                     const bool bindable = rk == FrameResourceKind::TransientBuffer
                                           || rk == FrameResourceKind::ExternalBuffer
+                                          || rk == FrameResourceKind::StructuredBuffer
+                                          || rk == FrameResourceKind::CounterBuffer
                                           || (rk == FrameResourceKind::IndirectArgs && as_args);
                     if (!bindable) { continue; }
                     if (desc.resources[bi].name.size() != n.size()

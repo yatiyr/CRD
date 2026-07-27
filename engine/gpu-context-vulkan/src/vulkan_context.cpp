@@ -143,7 +143,8 @@ public:
         // ray-tracing-PIPELINE half of the IR was unreachable from the one entry point every consumer uses.
         // Exactly the shape of the DX12 `KStage::Compute` gap 38-A10 found: an emitter written, wired to nothing.
         if (entry.stage == crd::kir::KStage::RayGen || entry.stage == crd::kir::KStage::ClosestHit
-            || entry.stage == crd::kir::KStage::Miss || entry.stage == crd::kir::KStage::AnyHit)
+            || entry.stage == crd::kir::KStage::Miss || entry.stage == crd::kir::KStage::AnyHit
+            || entry.stage == crd::kir::KStage::Intersection || entry.stage == crd::kir::KStage::Callable)
         {
             crd::kir::GlslKernel kern(a);
             if (!crd::kir::emit_rt_stage_glsl(graph, entry, a, kern, invocation_reorder())) { return nullptr; }
@@ -151,6 +152,9 @@ public:
             if (entry.stage == crd::kir::KStage::ClosestHit) { stage = ShaderStage::ClosestHit; }
             else if (entry.stage == crd::kir::KStage::Miss)  { stage = ShaderStage::Miss; }
             else if (entry.stage == crd::kir::KStage::AnyHit) { stage = ShaderStage::AnyHit; }
+            // REN-38-F13: the last two stages route through the SAME emitter + compile seam
+            else if (entry.stage == crd::kir::KStage::Intersection) { stage = ShaderStage::Intersection; }
+            else if (entry.stage == crd::kir::KStage::Callable) { stage = ShaderStage::Callable; }
             const auto spv = compile_glsl_to_spirv(stage, crd::containers::to_view(kern.source), "ckir_rt", a);
             if (!spv.ok) { return nullptr; }
             return create_program(stage, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()));

@@ -1,0 +1,57 @@
+stage = "cull"
+schema = 1
+name   = "crd://vertex/scene"
+
+[header]
+index_count  = 0
+index_off    = 2
+vertex_off   = 3
+instance_off = 4
+visible_off  = 5
+view_proj    = 6
+light_vp     = 32
+skin_off     = 25
+palette_off  = 26
+joint_count  = 27
+instance_count = 100
+
+[vertex]
+stride = 12
+
+[[attribute]]
+name   = "position"
+offset = 0
+comps  = 3
+kind   = "position"
+
+[[attribute]]
+name   = "normal"
+offset = 3
+comps  = 3
+kind   = "direction"
+
+[[attribute]]
+name   = "uv"
+offset = 6
+comps  = 2
+kind   = "value"
+
+[[attribute]]
+name   = "tangent"
+offset = 8
+comps  = 4
+kind   = "direction"
+
+[instance]
+stride    = 20
+transform = 0
+
+[[instance_attribute]]
+name   = "color"
+offset = 16
+comps  = 4
+kind   = "value"
+
+[cull]
+frustum   = false
+workgroup = 1

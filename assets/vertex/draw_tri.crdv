@@ -1,0 +1,180 @@
+schema   = 1
+name     = "crd://vertex/draw_tri"
+position = "node:clip"
+
+[header]
+view_proj = 0
+
+[expand]
+verts_per_instance = 3
+instance_words     = 11
+instance_off       = 32
+category_field     = 10
+category_mask_word = 18
+
+[[varying]]
+name       = "v_color"
+location   = 0
+interp     = "smooth"
+source     = ["node:col"]
+node_comps = [4]
+
+[[node]]
+name   = "w0"
+op     = "ifequal"
+inputs = ["@corner", 0.0, 1.0, 0.0]
+
+[[node]]
+name   = "w1"
+op     = "ifequal"
+inputs = ["@corner", 1.0, 1.0, 0.0]
+
+[[node]]
+name   = "w01"
+op     = "add"
+inputs = ["w0", "w1"]
+
+[[node]]
+name   = "w2"
+op     = "subtract"
+inputs = [1.0, "w01"]
+
+[[node]]
+name   = "wsel"
+op     = "combine3"
+inputs = ["w0", "w1", "w2"]
+
+[[node]]
+name   = "px3"
+op     = "combine3"
+inputs = ["field:0", "field:3", "field:6"]
+
+[[node]]
+name   = "py3"
+op     = "combine3"
+inputs = ["field:1", "field:4", "field:7"]
+
+[[node]]
+name   = "pz3"
+op     = "combine3"
+inputs = ["field:2", "field:5", "field:8"]
+
+[[node]]
+name   = "wx"
+op     = "dotproduct"
+inputs = ["wsel", "px3"]
+
+[[node]]
+name   = "wy"
+op     = "dotproduct"
+inputs = ["wsel", "py3"]
+
+[[node]]
+name   = "wz"
+op     = "dotproduct"
+inputs = ["wsel", "pz3"]
+
+[[node]]
+name   = "wp"
+op     = "combine3"
+inputs = ["wx", "wy", "wz"]
+
+[[node]]
+name   = "cp"
+op     = "view_proj"
+inputs = ["wp"]
+
+[[node]]
+name   = "cpx"
+op     = "extract"
+inputs = ["cp", 0]
+
+[[node]]
+name   = "cpy"
+op     = "extract"
+inputs = ["cp", 1]
+
+[[node]]
+name   = "cpz"
+op     = "extract"
+inputs = ["cp", 2]
+
+[[node]]
+name   = "cpw"
+op     = "extract"
+inputs = ["cp", 3]
+
+[[node]]
+name   = "vis"
+op     = "multiply"
+inputs = ["@category", 1.0]
+
+[[node]]
+name   = "pxd"
+op     = "subtract"
+inputs = ["cpx", 2.0]
+
+[[node]]
+name   = "pxm"
+op     = "multiply"
+inputs = ["vis", "pxd"]
+
+[[node]]
+name   = "px"
+op     = "add"
+inputs = ["pxm", 2.0]
+
+[[node]]
+name   = "pyd"
+op     = "subtract"
+inputs = ["cpy", 2.0]
+
+[[node]]
+name   = "pym"
+op     = "multiply"
+inputs = ["vis", "pyd"]
+
+[[node]]
+name   = "py"
+op     = "add"
+inputs = ["pym", 2.0]
+
+[[node]]
+name   = "pzd"
+op     = "subtract"
+inputs = ["cpz", 2.0]
+
+[[node]]
+name   = "pzm"
+op     = "multiply"
+inputs = ["vis", "pzd"]
+
+[[node]]
+name   = "pz"
+op     = "add"
+inputs = ["pzm", 2.0]
+
+[[node]]
+name   = "pwd"
+op     = "subtract"
+inputs = ["cpw", 1.0]
+
+[[node]]
+name   = "pwm"
+op     = "multiply"
+inputs = ["vis", "pwd"]
+
+[[node]]
+name   = "pw"
+op     = "add"
+inputs = ["pwm", 1.0]
+
+[[node]]
+name   = "clip"
+op     = "combine4"
+inputs = ["px", "py", "pz", "pw"]
+
+[[node]]
+name   = "col"
+op     = "multiply"
+inputs = ["fieldc:9", [1.0, 1.0, 1.0, 1.0]]

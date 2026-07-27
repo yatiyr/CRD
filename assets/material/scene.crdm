@@ -1,0 +1,54 @@
+schema = 1
+name   = "crd://material/scene"
+
+[[node]]
+name   = "tint"
+op     = "geomcolor"
+inputs = [1]
+
+[[node]]
+name   = "tr"
+op     = "extract"
+inputs = ["tint", 0]
+
+[[node]]
+name   = "tg"
+op     = "extract"
+inputs = ["tint", 1]
+
+[[node]]
+name   = "tb"
+op     = "extract"
+inputs = ["tint", 2]
+
+[[node]]
+name   = "alpha"
+op     = "extract"
+inputs = ["tint", 3]
+
+[[node]]
+name   = "base"
+op     = "combine3"
+inputs = ["tr", "tg", "tb"]
+
+[[node]]
+name   = "nrm"
+op     = "normal"
+inputs = [0]
+
+[[node]]
+name   = "metal"
+op     = "multiply"
+inputs = [0.0, 1.0]
+
+[[node]]
+name   = "rough"
+op     = "multiply"
+inputs = [0.8, 1.0]
+
+[surface]
+base_color = "base"
+normal     = "nrm"
+metallic   = "metal"
+roughness  = "rough"
+opacity    = "alpha"

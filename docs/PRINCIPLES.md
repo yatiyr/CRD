@@ -170,3 +170,25 @@ If circumstances genuinely change, open a new ADR or escalate to `@heavy`.
   catalog suitable for committing alongside agent prompts. This
   discipline is what lets AI agents author scripts they can trust
   across Cerid versions. → ADR-0081 §2.
+
+## ⭐⭐ The deletion is the proof (REN-37/38, 2026-07-27)
+
+When a capability moves from C++ into an authored asset, the slice is not done when the asset COOKS — it is done
+when **the C++ it replaced is deleted and the engine still renders**. Anything less leaves two paths, and the one
+that actually draws the frame is the old one.
+
+Three things this band showed, each of which had been true for months without anyone noticing:
+
+1. **A parallel vocabulary always wins by default.** `assets/materials/*.mat.toml` → GLSL files rendered while
+   `.crdm` merely cooked. Two vocabularies for one thing is not redundancy to tidy up later; it is a decision
+   about which one is real, made silently.
+2. **"It cooks" and "it draws" find different bugs.** Every defect in this band that could destroy an image — a
+   varying pair that disagreed, a uv width the emitter rejected, a light direction negated in the wrong place —
+   was invisible until something rendered. A cook-layer gate is necessary and is not sufficient.
+3. **An unreachable library is indistinguishable from a missing one.** `ckir_lighting.hpp` held 1100 lines of
+   gold-standard shading — LTC area lights, split-sum IBL, PCSS/EVSM/MSM — while the technique ABI carried
+   exactly one directional light. None of it was unfinished. There was simply no vocabulary to name it, and a
+   capability nothing can name does not exist.
+
+Corollary for reviews: ask **what would have to change for this to be wrong, and can anything see it?** If the
+answer is "nothing on either backend", the check has to move to cook time and be a DECLARED contract.

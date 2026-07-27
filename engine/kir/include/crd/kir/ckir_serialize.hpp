@@ -33,7 +33,7 @@ namespace crd::kir
 inline constexpr crd::u32 kShaderGraphFourCC =
     (static_cast<crd::u32>('K')) | (static_cast<crd::u32>('G') << 8U) | (static_cast<crd::u32>('P') << 16U) | (static_cast<crd::u32>('H') << 24U);
 // v2 = the canonical padding-free records (v1 was the raw-POD blast; a v1 blob is cleanly rejected ⇒ recook).
-inline constexpr crd::u32 kShaderGraphVersion = 2U;
+inline constexpr crd::u32 kShaderGraphVersion = 3U; // v3: KEntry += mesh_payload_in (REN-38-F6+)
 
 static_assert(std::is_trivially_copyable_v<KNode>, "KNode must be trivially copyable to pool-serialize");
 static_assert(std::is_trivially_copyable_v<KStmt>, "KStmt must be trivially copyable");
@@ -50,7 +50,7 @@ inline constexpr crd::u32 kNodeRec  = 127U; // op(1) + type(10) + shape(68) + a�
                                             //   + perm[8](8) + tier(1) + ext(4) + n_ext(2) + dset(1)
 inline constexpr crd::u32 kStmtRec  = 32U;  // kind(1) + target·index·value(12) + scope(1) + begin·count·result·ext(16) + n_ext(2)
 inline constexpr crd::u32 kOutRec   = 9U;   // node(4) + location(4) + interp(1)
-inline constexpr crd::u32 kEntryRec = 172U; // see write_entry — the field-by-field sum
+inline constexpr crd::u32 kEntryRec = 173U; // see write_entry — the field-by-field sum
 
 // The three array extents the record widths are derived from. If one changes, the widths above are stale.
 static_assert(kMaxRank == 8, "kShapeRec/kNodeRec assume Shape::dims[8] + perm[8]");
@@ -269,7 +269,8 @@ inline void write_entry(ByteArray& b, const KEntry& e)
     put_u32(b, e.n_task_payload);                                 // 4
     put_u32(b, e.tess_patch_size);                                // 4
     put_i32(b, e.tess_inner);                                     // 4
-    put_i32(b, e.tess_outer);                                     // 4  => 172
+    put_i32(b, e.tess_outer);                                     // 4
+    put_bool(b, e.mesh_payload_in);                               // 1  => 173 (v3, REN-38-F6+)
 }
 inline KEntry read_entry(Cursor& c)
 {
@@ -303,6 +304,7 @@ inline KEntry read_entry(Cursor& c)
     e.tess_patch_size = c.u32v();
     e.tess_inner      = c.i32v();
     e.tess_outer      = c.i32v();
+    e.mesh_payload_in = c.boolv(); // v3 (REN-38-F6+)
     return e;
 }
 } // namespace serial_detail

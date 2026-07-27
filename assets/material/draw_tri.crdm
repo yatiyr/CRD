@@ -1,0 +1,36 @@
+schema = 1
+name   = "crd://material/draw_tri"
+
+[[node]]
+name   = "col"
+op     = "geomcolor"
+inputs = [0]
+
+[[node]]
+name   = "cr"
+op     = "extract"
+inputs = ["col", 0]
+
+[[node]]
+name   = "cg"
+op     = "extract"
+inputs = ["col", 1]
+
+[[node]]
+name   = "cb"
+op     = "extract"
+inputs = ["col", 2]
+
+[[node]]
+name   = "ca"
+op     = "extract"
+inputs = ["col", 3]
+
+[[node]]
+name   = "base"
+op     = "combine3"
+inputs = ["cr", "cg", "cb"]
+
+[surface]
+base_color = "base"
+opacity    = "ca"

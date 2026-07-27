@@ -46,7 +46,9 @@ namespace detail
     if (ca == cb) { return g.binary(op, a, b); }
     if (ca == 1) { return g.binary(op, g.splat(a, cb), b); }
     if (cb == 1) { return g.binary(op, a, g.splat(b, ca)); }
-    return g.binary(op, a, b); // two mismatched vectors — a caller error; leave to the shape checker
+    return g.binary(op, a, b); // two mismatched vectors — a caller error; `ckir_shape.hpp`'s checker (run by
+                               // every cooker) refuses the graph BY NAME instead of letting the shader compiler
+                               // fail far from the asset (the 38-E7 pcf-uv scar)
 }
 // ternary op (Clamp/Mix/Smoothstep) with every operand broadcast to the widest comps.
 [[nodiscard]] inline int tern(KGraph& g, KOp op, int a, int b, int c)

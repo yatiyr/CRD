@@ -1,0 +1,8 @@
+schema = 1
+name   = "crd://vertex/scene_meshlet"
+stage  = "mesh"
+
+[mesh]
+max_vertices   = 18
+max_primitives = 6
+workgroup      = 18

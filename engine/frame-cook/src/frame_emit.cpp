@@ -51,6 +51,20 @@ const char* from_format(crd::gpu::FgImageFormat f)
     case F::R32F:       return "R32F";
     case F::R32Uint:    return "R32Uint";
     case F::D32Float:   return "D32Float";
+    // ⛔ REN-38-B7: EVERY format, and the fall-through below is now unreachable for a valid enum. The old
+    // `return "RGBA8Unorm"` tail meant any format the emitter did not name round-tripped INTO RGBA8 — so a cooked
+    // pack would have silently turned an HDR light buffer, a motion-vector target or a STENCIL attachment into an
+    // 8-bit colour image. Same class as the pass-kind default that turned `raytrace.pipeline` into geometry.
+    case F::RG16F:       return "RG16F";
+    case F::RG32F:       return "RG32F";
+    case F::RGBA32F:     return "RGBA32F";
+    case F::R11G11B10F:  return "R11G11B10F";
+    case F::RGB10A2:     return "RGB10A2";
+    case F::R8:          return "R8";
+    case F::RG8:         return "RG8";
+    case F::RGBA16Unorm: return "RGBA16Unorm";
+    case F::D24S8:       return "D24S8";
+    case F::D32FloatS8:  return "D32FloatS8";
     }
     return "RGBA8Unorm";
 }
@@ -159,6 +173,13 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
     app(o, "\nname = ");
     app_quoted(o, desc.name);
     app(o, "\n");
+    // REN-38-B6: the budget round-trips in MEGABYTES — the unit a platform target is actually written in.
+    if (desc.memory_budget_bytes != 0U)
+    {
+        app(o, "memory_budget_mb = ");
+        app_u32(o, static_cast<crd::u32>(desc.memory_budget_bytes / (1024ULL * 1024ULL)));
+        app(o, "\n");
+    }
     if (desc.requires_caps.size() > 0)
     {
         app(o, "requires = ");
@@ -238,6 +259,11 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
         case FrameResourceKind::TransientBuffer:       app(o, "\"transient_buffer\""); break;
         case FrameResourceKind::IndirectArgs:          app(o, "\"indirect_args\""); break;
         case FrameResourceKind::ExternalBuffer:        app(o, "\"external_buffer\""); break;
+        case FrameResourceKind::PersistentImage:       app(o, "\"persistent_image\""); break;
+        case FrameResourceKind::PingPongImage:         app(o, "\"pingpong_image\""); break;
+        case FrameResourceKind::StructuredBuffer:      app(o, "\"structured_buffer\""); break;
+        case FrameResourceKind::CounterBuffer:         app(o, "\"counter_buffer\""); break;
+        case FrameResourceKind::ExternalTexture:       app(o, "\"external_texture\""); break;
         case FrameResourceKind::AccelerationStructure: app(o, "\"acceleration_structure\""); break;
         case FrameResourceKind::TransientImage:
         default:                                       app(o, "\"transient_image\""); break;
@@ -249,10 +275,32 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
         if (r.height != 0U)     { app(o, "height = ");     app_u32(o, r.height);     app(o, "\n"); }
         if (r.scale > 0.0F)     { app(o, "scale = ");      app_f64(o, static_cast<double>(r.scale)); app(o, "\n"); }
         if (r.layers != 1U)     { app(o, "layers = ");     app_u32(o, r.layers);     app(o, "\n"); }
+        // REN-38-B2: shape. Only when it differs from the default, so an ordinary 2-D transient
+        // round-trips byte-clean.
+        if (r.kind_2d != crd::gpu::FgImageKind::Tex2D)
+        {
+            app(o, "dimension = \"");
+            switch (r.kind_2d)
+            {
+            case crd::gpu::FgImageKind::Tex3D:     app(o, "3d"); break;
+            case crd::gpu::FgImageKind::Cube:      app(o, "cube"); break;
+            case crd::gpu::FgImageKind::CubeArray: app(o, "cube_array"); break;
+            case crd::gpu::FgImageKind::Tex2D:
+            default:                               app(o, "2d"); break;
+            }
+            app(o, "\"\n");
+        }
+        if (r.depth != 1U)      { app(o, "depth = ");      app_u32(o, r.depth);      app(o, "\n"); }
+        if (r.mips != 1U)       { app(o, "mips = ");       app_u32(o, r.mips);       app(o, "\n"); }
         if (r.samples != 1U)    { app(o, "samples = ");    app_u32(o, r.samples);    app(o, "\n"); }
         if (r.sampled)          { app(o, "sampled = true\n"); }
         if (r.storage)          { app(o, "storage = true\n"); }
-        if (r.size_bytes != 0U) { app(o, "size_bytes = "); app_u32(o, r.size_bytes); app(o, "\n"); }
+        if (r.no_alias)         { app(o, "no_alias = true\n"); } // REN-38-B6
+        // REN-38-B3: emit STRIDE and COUNT, not the derived `size_bytes`. Re-parsing a counter buffer's
+        // size would add its 4-byte counter a SECOND time, so the round trip would grow it every cook.
+        if (r.stride != 0U)     { app(o, "stride = ");     app_u32(o, r.stride);     app(o, "\n"); }
+        if (r.count != 0U)      { app(o, "count = ");      app_u32(o, r.count);      app(o, "\n"); }
+        if (r.size_bytes != 0U && r.stride == 0U) { app(o, "size_bytes = "); app_u32(o, r.size_bytes); app(o, "\n"); }
     }
 
     for (crd::usize i = 0; i < desc.draw_lists.size(); ++i)
@@ -289,6 +337,10 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
         if (!p.raygen.empty())      { app(o, "raygen = ");      app_quoted(o, p.raygen);      app(o, "\n"); }
         if (!p.miss.empty())        { app(o, "miss = ");        app_quoted(o, p.miss);        app(o, "\n"); }
         if (!p.closest_hit.empty()) { app(o, "closest_hit = "); app_quoted(o, p.closest_hit); app(o, "\n"); }
+        if (!p.any_hit.empty())     { app(o, "any_hit = ");     app_quoted(o, p.any_hit);     app(o, "\n"); }
+        // REN-38-F13: the last two SBT roles
+        if (!p.intersection.empty()) { app(o, "intersection = "); app_quoted(o, p.intersection); app(o, "\n"); }
+        if (!p.callable.empty())     { app(o, "callable = ");     app_quoted(o, p.callable);     app(o, "\n"); }
         if (!p.technique.empty()) { app(o, "technique = "); app_quoted(o, p.technique); app(o, "\n"); }
         // REN-38-A6: only a BLIT rescales, so only a blit emits its filter — a round-trip that wrote `filter` on
         // every pass would make two identical graphs differ by a field neither kind reads.
@@ -358,6 +410,29 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
             app(o, "\"\n");
         }
         if (p.queue != FrameQueue::Graphics) { app(o, "queue = \"async\"\n"); }
+        // REN-38-B8: only a pass that DECLARED a sampler emits one — writing the defaults everywhere would make
+        // two identical graphs differ by fields neither meant to set.
+        if (p.has_sampler)
+        {
+            if (p.kind != FramePassKind::Blit) // `filter` on a blit already means the blit filter
+            {
+                app(o, "filter = \"");
+                app(o, p.sampler.mag_filter == crd::gpu::SamplerFilter::Nearest ? "nearest" : "linear");
+                app(o, "\"\n");
+            }
+            app(o, "address = \"");
+            switch (p.sampler.address)
+            {
+            case crd::gpu::SamplerAddress::ClampToEdge:   app(o, "clamp"); break;
+            case crd::gpu::SamplerAddress::ClampToBorder: app(o, "clamp_to_border"); break;
+            case crd::gpu::SamplerAddress::Mirror:        app(o, "mirror"); break;
+            case crd::gpu::SamplerAddress::Repeat:
+            default:                                      app(o, "repeat"); break;
+            }
+            app(o, "\"\n");
+            if (p.sampler.anisotropy > 1U) { app(o, "anisotropy = "); app_u32(o, p.sampler.anisotropy); app(o, "\n"); }
+            if (p.sampler.compare) { app(o, "compare = true\n"); }
+        }
         const char* mp = from_material(p.material_pass);
         if (mp != nullptr) { app(o, "material_pass = \""); app(o, mp); app(o, "\"\n"); }
         if (p.for_each != FrameForEach::None)
@@ -396,6 +471,79 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
         app(o, "depth = \"");
         app(o, from_compare(p.depth));
         app(o, "\"\n");
+        // ── ⭐ REN-38 audit: the PASS-STATE vocabulary — non-default fields only, and BEFORE `[pass.params]`
+        // (a bare key written after a table belongs to THAT table; the root-keys-before-tables scar). ──
+        {
+            const crd::gpu::PassRasterState& st = p.state;
+            const auto from_stencil_op = [](crd::gpu::StencilOp op) {
+                switch (op)
+                {
+                case crd::gpu::StencilOp::Keep:      return "keep";
+                case crd::gpu::StencilOp::Zero:      return "zero";
+                case crd::gpu::StencilOp::Replace:   return "replace";
+                case crd::gpu::StencilOp::IncrClamp: return "incr_clamp";
+                case crd::gpu::StencilOp::DecrClamp: return "decr_clamp";
+                case crd::gpu::StencilOp::Invert:    return "invert";
+                case crd::gpu::StencilOp::IncrWrap:  return "incr_wrap";
+                case crd::gpu::StencilOp::DecrWrap:  return "decr_wrap";
+                }
+                return "keep";
+            };
+            // REN-38-F11: the pass-level LOAD flag (mask-then-test pass pairs stack on one target)
+            if (p.load_target) { app(o, "load = true\n"); }
+            if (!st.depth_write) { app(o, "depth_write = false\n"); }
+            if (st.depth_bias != 0.0F) { app(o, "depth_bias = "); app_f64(o, static_cast<double>(st.depth_bias)); app(o, "\n"); }
+            if (st.depth_bias_slope != 0.0F)
+            {
+                app(o, "depth_bias_slope = ");
+                app_f64(o, static_cast<double>(st.depth_bias_slope));
+                app(o, "\n");
+            }
+            if (st.depth_bias_clamp != 0.0F)
+            {
+                app(o, "depth_bias_clamp = ");
+                app_f64(o, static_cast<double>(st.depth_bias_clamp));
+                app(o, "\n");
+            }
+            if (st.face_cull != crd::gpu::FaceCull::None)
+            {
+                app(o, "face_cull = \"");
+                app(o, st.face_cull == crd::gpu::FaceCull::Back ? "back" : "front");
+                app(o, "\"\n");
+            }
+            if (st.front_face != crd::gpu::FrontFace::CounterClockwise) { app(o, "front_face = \"cw\"\n"); }
+            if (st.stencil_enable)
+            {
+                app(o, "stencil = true\n");
+                app(o, "stencil_compare = \"");
+                app(o, from_compare(st.stencil_compare));
+                app(o, "\"\n");
+                app(o, "stencil_ref = ");
+                app_u32(o, st.stencil_ref);
+                app(o, "\n");
+                if (st.stencil_read_mask != 0xFFU)
+                {
+                    app(o, "stencil_read_mask = ");
+                    app_u32(o, st.stencil_read_mask);
+                    app(o, "\n");
+                }
+                if (st.stencil_write_mask != 0xFFU)
+                {
+                    app(o, "stencil_write_mask = ");
+                    app_u32(o, st.stencil_write_mask);
+                    app(o, "\n");
+                }
+                app(o, "stencil_fail = \"");
+                app(o, from_stencil_op(st.stencil_fail));
+                app(o, "\"\n");
+                app(o, "stencil_depth_fail = \"");
+                app(o, from_stencil_op(st.stencil_depth_fail));
+                app(o, "\"\n");
+                app(o, "stencil_pass = \"");
+                app(o, from_stencil_op(st.stencil_pass));
+                app(o, "\"\n");
+            }
+        }
         if (p.params.size() > 0)
         {
             app(o, "[pass.params]\n");
@@ -424,3 +572,4 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
 }
 
 } // namespace crd::framecook
+

@@ -7,7 +7,12 @@
 #include <crd/gpu/vulkan_raster_context.hpp>
 #include <crd/gpu/vulkan_shader_compile.hpp>
 
-#include <crd/draw/ckir_draw.hpp>    // RET-6: the crd-draw CKIR shader suite (the overlay-draw seam gate)
+#include <crd/draw/draw_assets.hpp>  // REN-38-F7: the AUTHORED draw suite (the overlay-draw seam gate)
+#include <crd/kir/ckir_cook.hpp>
+#include <crd/kir/ckir_material.hpp>
+#include <crd/kir/ckir_technique.hpp>
+#include <crd/matcook/material_asset.hpp>
+#include <crd/vertexcook/vertex_asset.hpp>
 #include <crd/draw/overlay_pass.hpp> // RET-6 pt 3: submit_overlay (the GPU half under test)
 #include <crd/draw/render_buffer.hpp>
 #include <crd/draw/renderer.hpp>
@@ -13116,16 +13121,45 @@ TEST_CASE("RET-6: draw_overlay composites the CKIR line shader over an existing 
     REQUIRE(target != nullptr);
     raster->draw(*target, *scene, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 3U);
 
-    // 2. the OVERLAY program: the crd-draw line_aa CKIR port (vertex-pulled, header-driven)
+    // 2. the OVERLAY program — ⭐⭐ REN-38-F7: cooked from the AUTHORED declarations (`draw_assets.hpp`), the
+    // same texts crd-draw's init cooks. The hand-written `ckir_draw.hpp` builders this gate used to exercise
+    // are DELETED; this pixel gate is the proof the authored suite renders identically.
     kir::KGraph lvg(&alloc);
     kir::KEntry lve;
-    crd::draw::ckir::build_line_vs(lvg, lve);
+    {
+        crd::vertcook::VertexProgramDesc d(&alloc);
+        crd::containers::String          where(&alloc);
+        REQUIRE(crd::vertcook::parse_vertex_toml(crd::containers::StringView(crd::draw::kDrawLineVs), d, &where)
+                == crd::vertcook::VertexCookError::Ok);
+        REQUIRE(crd::vertcook::cook_vertex_program(d, lvg, lve));
+    }
     kir::KGraph lfg(&alloc);
     kir::KEntry lfe;
-    crd::draw::ckir::build_line_fs(lfg, lfe);
+    {
+        namespace ck = crd::kir::cook;
+        namespace tq = crd::kir::technique;
+        crd::matcook::MaterialDesc d(&alloc);
+        crd::containers::String    where(&alloc);
+        REQUIRE(crd::matcook::parse_material_toml(crd::containers::StringView(crd::draw::kDrawLineMat), d, &where)
+                == crd::matcook::MaterialCookError::Ok);
+        const auto kf = [&](double v) { return lfg.constant(v, kir::make_shape({1}), kir::DType::F32); };
+        ck::SurfaceInputs in;
+        in.world_normal = lfg.vec3(kf(0.0), kf(0.0), kf(1.0));
+        in.world_pos    = lfg.vec3(kf(0.0), kf(0.0), kf(0.0));
+        in.view_dir     = lfg.vec3(kf(0.0), kf(0.0), kf(1.0));
+        const auto surface_thunk = [](kir::KGraph& gg, int sid, const ck::SurfaceInputs&, void* user) {
+            return crd::matcook::cook_material(*static_cast<const crd::matcook::MaterialDesc*>(user), gg, sid);
+        };
+        const ck::MaterialTemplate tmpl{surface_thunk, &d};
+        const ck::VariantOptions   opts{crd::kir::material::AlphaMode::Opaque, 0.5};
+        const tq::Technique        un = tq::unlit();
+        REQUIRE(tq::build_fs_for_pass(tmpl, un, ck::PassType::Forward, opts, in, lfg, lfe,
+                                      lfg.vec3(kf(0.0), kf(0.0), kf(1.0)), lfg.vec3(kf(1.0), kf(1.0), kf(1.0)),
+                                      nullptr, 0, nullptr, 0));
+    }
     auto lvs = ctx->create_program(lvg, lve);
     auto lfs = ctx->create_program(lfg, lfe);
-    REQUIRE(lvs != nullptr); // the u32 storage pull + intBitsToFloat lowers through the VERTEX stage
+    REQUIRE(lvs != nullptr); // the u32 record pull + intBitsToFloat lowers through the VERTEX stage
     REQUIRE(lfs != nullptr);
     auto line = raster->create_raster_program(*lvs, *lfs);
     REQUIRE(line != nullptr);

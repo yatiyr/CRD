@@ -3,7 +3,7 @@
 // crd-draw — Renderer (RET-6, ADR-0105: re-founded on the ONE graphics layer; the rhi original — ADR-0066 §10 —
 // retired with it).
 //
-// The GPU-side counterpart to RenderBuffer, on gpu-context: the CKIR draw-shader suite (ckir_draw.hpp — line_aa /
+// The GPU-side counterpart to RenderBuffer, on gpu-context: the AUTHORED draw-shader suite (draw_assets.hpp — line_aa /
 // triangle_solid / infinite_grid) compiled through `VulkanGpuContext::create_program` + assembled into three
 // `IRasterProgram`s, and ONE u32 storage buffer carrying the 32-word header + packed instances (the vertex-pulling
 // contract — no vertex-input state, no pipeline objects, no cooked-GLSL pack, no push constants).

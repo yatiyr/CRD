@@ -43,6 +43,9 @@ add_subdirectory(hesap-autodiff)
 add_subdirectory(kir)
 add_subdirectory(frame-cook)
 add_subdirectory(technique-cook)  # REN-37 (D-007 row 140): the LIGHTING TECHNIQUE as an authored `.crdt` asset
+add_subdirectory(material-cook)   # REN-38-C (D-007 row 141): the MATERIAL as an authored `.crdm` asset
+add_subdirectory(vertex-cook)     # REN-38-D (D-007 row 141): the VERTEX PROGRAM as an authored `.crdv` asset
+add_subdirectory(light-cook)      # REN-38-E (D-007 row 141): the LIGHTING VOCABULARY as an authored asset
 add_subdirectory(gpu-context-vulkan)  # ADR-0099 v17-i-a
 add_subdirectory(gpu-context-dx12)    # ADR-0100 v17-i: D3D12 IComputeContext backend
 add_subdirectory(kir-vulkan)

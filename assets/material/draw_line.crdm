@@ -1,0 +1,76 @@
+schema = 1
+name   = "crd://material/draw_line"
+
+[[node]]
+name   = "col"
+op     = "geomcolor"
+inputs = [0]
+
+[[node]]
+name   = "q"
+op     = "texcoord"
+inputs = [1]
+
+[[node]]
+name   = "d0"
+op     = "extract"
+inputs = ["q", 0]
+
+[[node]]
+name   = "d"
+op     = "absval"
+inputs = ["d0"]
+
+[[node]]
+name   = "fade"
+op     = "extract"
+inputs = ["q", 1]
+
+[[node]]
+name   = "edge0"
+op     = "subtract"
+inputs = [1.0, "fade"]
+
+[[node]]
+name   = "aa"
+op     = "smoothstep"
+inputs = ["edge0", 1.0, "d"]
+
+[[node]]
+name   = "alpha"
+op     = "subtract"
+inputs = [1.0, "aa"]
+
+[[node]]
+name   = "cr"
+op     = "extract"
+inputs = ["col", 0]
+
+[[node]]
+name   = "cg"
+op     = "extract"
+inputs = ["col", 1]
+
+[[node]]
+name   = "cb"
+op     = "extract"
+inputs = ["col", 2]
+
+[[node]]
+name   = "ca"
+op     = "extract"
+inputs = ["col", 3]
+
+[[node]]
+name   = "base"
+op     = "combine3"
+inputs = ["cr", "cg", "cb"]
+
+[[node]]
+name   = "aout"
+op     = "multiply"
+inputs = ["ca", "alpha"]
+
+[surface]
+base_color = "base"
+opacity    = "aout"

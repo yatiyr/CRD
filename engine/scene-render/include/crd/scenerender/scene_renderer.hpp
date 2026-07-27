@@ -67,7 +67,21 @@ namespace crd::scenerender
 // same append-only discipline the vtables use, for the same reason: a renumbered header would silently feed
 // every pull shader the wrong field.
 //   [96..98] REN-37.3: the FRAME-frequency CAMERA POSITION (world space) — the real view vector
-inline constexpr crd::u32 kHeaderWords        = 100U;
+// ⭐⭐ REN-38-E7: the LIGHT SECTION. The lighting technique is an authored declaration now, and a declaration
+// that names a light array needs one to exist — before this the header carried a bare `light_dir` at [22..24]
+// and nothing else, which is exactly why every technique body could only ever be one directional light.
+// Word [99] (the old pad) holds the light section OFFSET; [100..115] is one 16-word light record.
+// ⛔ APPENDED, never renumbered — every existing word index is unchanged, the same discipline the header has
+// followed since it grew from 32 to 96. A renumbered header silently feeds every pull shader the wrong field.
+inline constexpr crd::u32 kHdrLightOff        = 99U;  // holds the word offset of the light section
+inline constexpr crd::u32 kLightSectionWords  = 16U;  // one record: position@0 falloff@3 color@4 direction@8
+// ⭐ REN-38-F6+: the header grows 116 → 120 (4-word aligned). The LIGHT SECTION is derived
+// (`header[99] = kHeaderWords − 16`), so the record slides to [104..119] and every consumer follows the offset
+// word; the freed [100] holds the group's TOTAL INSTANCE COUNT — the GPU cull kernel's range guard (threads
+// past the instance section read garbage transforms, and their verdicts polluted the indirect-args atomic).
+// [101..103] are the new pad. Every existing index is unchanged — the append-only discipline.
+inline constexpr crd::u32 kHdrInstanceCount   = 100U;
+inline constexpr crd::u32 kHeaderWords        = 120U;
 inline constexpr crd::u32 kHdrCsmSplits       = 28U; // 4 floats
 inline constexpr crd::u32 kHdrCsmLightVp      = 32U; // 4 x 16 floats
 // ⭐ REN-37.3: the camera position, appended at 96. `shade_forward`'s `view_dir` was a PLACEHOLDER CONSTANT
@@ -221,6 +235,27 @@ public:
     // prevent, and it would make "swap the technique" untestable (a typo would look like success).
     void set_forward_technique(const char* name) noexcept;
     void set_shadow_technique(const char* name) noexcept;
+
+    // ── ⭐⭐ REN-38-F6: the ADVANCED-GRAPH seams. ──
+    // Install a DIFFERENT authored frame graph (a `.frame.toml` text) as this renderer's frame. The shipped
+    // advanced families (`frame/scene_tess|scene_mesh|scene_visbuffer|scene_cull|scene_rt.frame.toml`, via
+    // `builtin_asset_text`) name programs the host cooks from the authored stage declarations. ⛔ Returns false
+    // and KEEPS the previous graph on any parse/validation failure — never a half-installed frame.
+    [[nodiscard]] bool set_frame_graph_toml(const char* toml_text);
+    // ── ⭐ REN-38-F15: DISK-FIRST asset loading. ──
+    // A file under `dir` shadows the embedded copy for every authored asset this renderer cooks (frame graphs,
+    // stage declarations, materials) — editing `assets/` then changes the frame without a rebuild. ⛔ A disk
+    // copy that exists but does not parse REFUSES the root (returns false); it never silently falls back.
+    [[nodiscard]] bool set_asset_root(const char* dir);
+    // The scene TLAS for `raytrace.*` passes. The graph NAMES an acceleration structure; whoever owns the
+    // geometry's device form installs it here (B4: the asset format stays free of engine types).
+    void set_scene_accel(crd::gpu::IAccelerationStructure* accel) noexcept;
+    // The renderer-owned result buffers of the compute/RT scene graphs ("cull_flags", "hits") — the seam the
+    // device gates read back through. Null until the graph that fills the buffer has executed once.
+    [[nodiscard]] crd::gpu::IStorageBuffer* debug_scene_buffer(const char* name) noexcept;
+    // REN-38: the ENGINE-FILLED vertex axis of the variant identity (folded from the live .crdv; 0 before
+    // init_programs). The D5 row overclaimed this once; the accessor is what the gate asserts against.
+    [[nodiscard]] crd::u32 debug_variant_vertex() const noexcept;
     // The `pcf_taps` option value handed to the shadow technique (1 | 4 | 8 | 16). A DECLARED option, so each
     // choice cooks to its own fully-unrolled variant rather than a dynamic loop.
     void set_pcf_taps(crd::u32 taps) noexcept;
@@ -262,6 +297,16 @@ private:
     std::unique_ptr<Impl> m_impl;
     crd::containers::Array<MeshGroup> m_groups;
 };
+
+// ── ⭐ REN-38 audit: the BUILT-IN AUTHORED PACK, exposed. ────────────────────────────────────────────────────
+// The renderer's default assets are embedded TEXT (an engine default an app overrides by name, no file IO on
+// the init path) and the same declarations ship as editable files under `assets/`. ⛔ TWO COPIES OF ONE
+// DECLARATION DRIFT — that is the two-vocabularies disease one level down — so the copies are PINNED: the
+// drift gate parses both sides to their canonical form and refuses a mismatch. This accessor is that gate's
+// seam, and the disk-first loader's fallback source. Names mirror the shipped paths ("frame/forward_csm.frame.toml",
+// "material/scene.crdm", "vertex/scene.crdv", "lighting/scene_forward.crdl", ...). Returns false for a name
+// the pack does not hold.
+[[nodiscard]] bool builtin_asset_text(const char* name, crd::containers::String& out);
 
 // Extract the 6 world-space frustum planes (ax+by+cz+d ≥ 0 = inside) from a view-projection matrix
 // (Gribb–Hartmann; clip z in [0,1] — the Vulkan/reverse-Z convention). Plane order: L R B T N F.

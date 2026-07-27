@@ -238,7 +238,13 @@ enum class KOp : crd::u8
     // ONE tiled online-softmax (flash) kernel that never materializes the S×S scores to DRAM — the structural moat the unfused
     // 3-kernel path (which round-trips S² through DRAM) cannot cross. The CPU oracle computes the naive reference; flash is a FAST
     // tier (online softmax reassociates ⇒ ULP-tolerant vs the oracle, not bit-exact). Appended at END (cook/serialization stability).
-    Attention
+    Attention,
+    // ── REN-38-F13: the CALLABLE-shader data block (the last two unreachable RT stages). ──
+    // Declares an N-float callable-data struct (iidx = component count) — `callableDataEXT`/`callableDataInEXT`
+    // in GLSL, the inout struct param of a DXR `[shader("callable")]`. `PayloadLoad`/`PayloadStore` REUSE this
+    // node as their target: the emitters pick the variable name from the DECL node's op, so the load/store
+    // machinery needed no second copy. Appended at END (cook/serialization stability).
+    CallableDataDecl
 };
 
 // B1: fragment derivatives are the only ops that read NEIGHBOURING invocations (the 2×2 pixel quad), so they are legal
@@ -525,7 +531,7 @@ struct KBuiltinInfo
 [[nodiscard]] inline bool is_resource_leaf(KOp op) noexcept
 {
     return op == KOp::BufferDecl || op == KOp::SharedDecl || op == KOp::Texture || op == KOp::Sampler
-        || op == KOp::AccelStructDecl || op == KOp::RayPayloadDecl;
+        || op == KOp::AccelStructDecl || op == KOp::RayPayloadDecl || op == KOp::CallableDataDecl;
 }
 
 // D-007 D12: a SPECIALIZATION CONSTANT — a scalar leaf whose value is fixed at PIPELINE-CREATION (Vulkan VkSpecializationInfo,
@@ -661,8 +667,14 @@ enum class KStmtKind : crd::u8
     TraceRayPipeline,
     PayloadStore,   // payload component write (hit/miss shaders): target = RayPayloadDecl node · index = component · value = value node
     ReorderThread,  // FA-2 SER: reorderThreadNV / MaybeReorderThread — a no-op where unsupported (perf only). No operands.
-    IgnoreHitIf     // P4 (any-hit ALPHA test): `if (cond) ignoreIntersectionEXT()` / `if (cond) IgnoreHit()` — the portable
+    IgnoreHitIf,    // P4 (any-hit ALPHA test): `if (cond) ignoreIntersectionEXT()` / `if (cond) IgnoreHit()` — the portable
                     // OMM fallback (alpha-tested geometry in a shader). value = the BOOL condition node.
+    // ── REN-38-F13 (appended at END). ──
+    ReportHit,      // INTERSECTION stage: `reportIntersectionEXT(t, kind)` / `ReportHit(t, kind, attr)`.
+                    // value = the float t node · index = the uint hit-kind node. The API itself validates t
+                    // against [tmin, tmax], so the stage needs no extra range plumbing.
+    ExecuteCallable // `executeCallableEXT(sbtIndex, location)` / `CallShader(index, data)`.
+                    // target = the CallableDataDecl node · value = the uint SBT-record index node.
 };
 struct KStmt
 {
@@ -734,6 +746,12 @@ struct KEntry
     crd::u32     tess_patch_size = 0; // control points per patch (4 = quad; 0 ⇒ not a tess entry)
     int          tess_inner      = -1; // TessControl: inner tess level (float node)
     int          tess_outer      = -1; // TessControl: outer tess level (float node)
+    // ── REN-38-F6+ (appended at END — KEntry is cook-serialized). A mesh stage DISPATCHED BY A TASK must
+    // declare the payload input even when it reads no field: HLSL's DispatchMesh always passes one, and the
+    // D3D12 PSO validator rejects an AS→MS pair whose payload sizes disagree — silently on some runtimes.
+    // The asset declares the pairing (`[mesh] payload = true`); the emitters then declare the fixed 4-field
+    // struct on both backends. False = a standalone mesh (an MS with a payload input needs an AS in front).
+    bool mesh_payload_in = false;
     [[nodiscard]] bool is_kernel() const noexcept { return kernel_body_count > 0; }
     [[nodiscard]] bool is_mesh() const noexcept { return stage == KStage::Mesh && mesh_vertices > 0U; }
     [[nodiscard]] bool is_task() const noexcept { return stage == KStage::Task && task_emit >= 0; }
@@ -1134,6 +1152,10 @@ public:
     void stmt_reorder_thread() { KStmt s; s.kind = KStmtKind::ReorderThread; m_stmts.push_back(s); }
     // P4 (any-hit ALPHA test): ignore this candidate intersection when `cond` (a BOOL node) is true — the portable OMM fallback.
     void stmt_ignore_hit_if(int cond) { KStmt s; s.kind = KStmtKind::IgnoreHitIf; s.value = cond; m_stmts.push_back(s); }
+    // ── REN-38-F13: the last two RT stages' surface. ──
+    [[nodiscard]] int callable_data_decl(int n_components) { KNode nd; nd.op = KOp::CallableDataDecl; nd.type = KType::make_scalar(DType::F32); nd.shape = make_shape({1}); nd.iidx = n_components; return push(nd); }
+    void stmt_report_hit(int t_value, int kind_value) { KStmt s; s.kind = KStmtKind::ReportHit; s.value = t_value; s.index = kind_value; m_stmts.push_back(s); }
+    void stmt_execute_callable(int sbt_index, int data_decl) { KStmt s; s.kind = KStmtKind::ExecuteCallable; s.target = data_decl; s.value = sbt_index; m_stmts.push_back(s); }
     // Read the k-th variadic scalar operand of a statement (RT ray components) from the ext pool.
     [[nodiscard]] int stmt_ext_operand(const KStmt& s, int k) const { return m_ext[static_cast<crd::usize>(s.ext) + static_cast<crd::usize>(k)]; }
     void stmt_for_break_if(int cond) { KStmt s; s.kind = KStmtKind::ForBreakIf; s.value = cond; m_stmts.push_back(s); }
@@ -2048,6 +2070,7 @@ private:
         if (g.node(e.mesh_prim).type != KType::vec(DType::U32, 3)) { return fail("`mesh_prim` must be a uvec3"); }
     }
     else if (e.mesh_prim >= 0 || e.mesh_vertices > 0U) { return fail("`mesh_*` fields are only for a mesh stage"); }
+    if (e.mesh_payload_in && e.stage != KStage::Mesh) { return fail("`mesh_payload_in` is only for a mesh stage"); }
 
     // B4: a TASK / amplification entry computes `task_emit` (the mesh-workgroup count it launches) + an optional single-uint
     // `task_payload`. It emits NO geometry (no position / out / mesh_*), so it renders nothing itself — it drives the mesh.

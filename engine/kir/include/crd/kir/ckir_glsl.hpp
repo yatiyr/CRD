@@ -1047,7 +1047,10 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
             case KStmtKind::TraceRayPipeline:
             case KStmtKind::PayloadStore:
             case KStmtKind::ReorderThread:
-            case KStmtKind::IgnoreHitIf: ok = false; ++i; break;
+            case KStmtKind::IgnoreHitIf:
+            // REN-38-F13: the RT-only statements have no KERNEL lowering — refuse loudly, never skip
+            case KStmtKind::ReportHit:
+            case KStmtKind::ExecuteCallable: ok = false; ++i; break;
             }
         }
     };
@@ -1066,13 +1069,20 @@ inline bool emit_rt_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory
 {
     using namespace glsl_detail;
     const KStage st = entry.stage;
-    if (st != KStage::RayGen && st != KStage::ClosestHit && st != KStage::Miss && st != KStage::AnyHit) { return false; }
+    // REN-38-F13: + the last two stages — INTERSECTION (procedural hit shapes) and CALLABLE (SBT subroutines)
+    if (st != KStage::RayGen && st != KStage::ClosestHit && st != KStage::Miss && st != KStage::AnyHit
+        && st != KStage::Intersection && st != KStage::Callable)
+    {
+        return false;
+    }
     const int                n = g.size();
     crd::containers::String& s = out.source;
     s.clear();
 
-    int payload_n = 1;
+    int payload_n  = 1;
+    int callable_n = 0; // REN-38-F13: components of the callable-data block (0 = none in this graph)
     for (int i = 0; i < n; ++i) { if (g.node(i).op == KOp::RayPayloadDecl) { payload_n = g.node(i).iidx > 0 ? g.node(i).iidx : 1; } }
+    for (int i = 0; i < n; ++i) { if (g.node(i).op == KOp::CallableDataDecl) { callable_n = g.node(i).iidx > 0 ? g.node(i).iidx : 1; } }
     const int b0 = entry.kernel_body_begin;
     const int bn = entry.kernel_body_count;
     bool      has_reorder = false;
@@ -1084,14 +1094,26 @@ inline bool emit_rt_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory
     s.append("struct RtPayload { ");
     for (int c = 0; c < payload_n; ++c) { s.append("float m"); app_uint(s, c); s.append("; "); }
     s.append("};\n");
+    if (callable_n > 0 || st == KStage::Callable)
+    {
+        s.append("struct CallData { ");
+        for (int c = 0; c < (callable_n > 0 ? callable_n : 1); ++c) { s.append("float m"); app_uint(s, c); s.append("; "); }
+        s.append("};\n");
+    }
     for (int i = 0; i < n; ++i) // resource decls: AS + storage buffers
     {
         const KNode& nd = g.node(i);
         if (nd.op == KOp::AccelStructDecl) { s.append("layout(set = 0, binding = "); app_uint(s, nd.iidx); s.append(") uniform accelerationStructureEXT as"); app_uint(s, nd.iidx); s.append(";\n"); }
         else if (nd.op == KOp::BufferDecl) { s.append("layout(std430, binding = "); app_uint(s, nd.iidx); s.append(") buffer B"); app_uint(s, nd.iidx); s.append(" { "); s.append(buf_ctype(nd.dtype())); s.append(" buf"); app_uint(s, nd.iidx); s.append("[]; };\n"); }
     }
-    if (st == KStage::RayGen) { s.append("layout(location = 0) rayPayloadEXT RtPayload pl;\n"); }
-    else { s.append("layout(location = 0) rayPayloadInEXT RtPayload pl;\n"); if (st != KStage::Miss) { s.append("hitAttributeEXT vec2 hattr;\n"); } }
+    // REN-38-F13: an INTERSECTION shader has NO payload access at all, and a CALLABLE sees only its data block.
+    if (st == KStage::Callable) { s.append("layout(location = 0) callableDataInEXT CallData cd;\n"); }
+    else if (st != KStage::Intersection)
+    {
+        if (st == KStage::RayGen) { s.append("layout(location = 0) rayPayloadEXT RtPayload pl;\n"); }
+        else { s.append("layout(location = 0) rayPayloadInEXT RtPayload pl;\n"); if (st != KStage::Miss) { s.append("hitAttributeEXT vec2 hattr;\n"); } }
+        if (callable_n > 0) { s.append("layout(location = 0) callableDataEXT CallData cd;\n"); }
+    }
     s.append("void main() {\n");
 
     // compact recursive value printer for the op subset RT-pipeline shaders use (everything inlined — the bodies are small).
@@ -1117,6 +1139,11 @@ inline bool emit_rt_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory
             case KBuiltin::InstanceId: s.append("gl_InstanceID"); break;
             case KBuiltin::InstanceCustomIndex: s.append("gl_InstanceCustomIndexEXT"); break;
             case KBuiltin::HitBary: s.append("hattr"); break; // P4: the barycentric hitAttribute (vec2 u,v)
+            // REN-38-F13: the object-space ray an intersection shader tests its analytic shape against
+            case KBuiltin::ObjectRayOrigin: s.append("gl_ObjectRayOriginEXT"); break;
+            case KBuiltin::ObjectRayDirection: s.append("gl_ObjectRayDirectionEXT"); break;
+            case KBuiltin::WorldRayOrigin: s.append("gl_WorldRayOriginEXT"); break;
+            case KBuiltin::WorldRayDirection: s.append("gl_WorldRayDirectionEXT"); break;
             default: s.append("0u"); break;
             }
             break;
@@ -1138,7 +1165,10 @@ inline bool emit_rt_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory
             }
             break;
         case KOp::Select: s.append("("); self(self, nd.c); s.append(" ? "); self(self, nd.a); s.append(" : "); self(self, nd.b); s.append(")"); break;
-        case KOp::PayloadLoad: s.append("pl.m"); app_uint(s, nd.iidx); break;
+        case KOp::PayloadLoad: // REN-38-F13: the target decl picks the block (payload vs callable data)
+            s.append(g.node(nd.a).op == KOp::CallableDataDecl ? "cd.m" : "pl.m");
+            app_uint(s, nd.iidx);
+            break;
         case KOp::BufferLoad: s.append("buf"); app_uint(s, g.node(nd.a).iidx); s.append("["); self(self, nd.b); s.append("]"); break;
         case KOp::Cast: s.append(ctype(nd.dtype())); s.append("("); self(self, nd.a); s.append(")"); break;
         case KOp::Neg: s.append("(-"); self(self, nd.a); s.append(")"); break;
@@ -1154,16 +1184,27 @@ inline bool emit_rt_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory
         case KOp::CmpNe: bin(" != "); break;
         case KOp::Max: s.append("max("); self(self, nd.a); s.append(", "); self(self, nd.b); s.append(")"); break;
         case KOp::Min: s.append("min("); self(self, nd.a); s.append(", "); self(self, nd.b); s.append(")"); break;
+        case KOp::Sqrt: s.append("sqrt("); self(self, nd.a); s.append(")"); break; // F13: the sphere discriminant
         default: s.append("0.0"); break;
         }
     };
     const auto vv = [&](int node) { pv(pv, node); };
 
+    // REN-38-F13: `If` bodies nest inside the flat statement range — track where each one closes.
+    int if_end[8];
+    int if_depth = 0;
     for (int i = 0; i < bn; ++i) // emit the body statements
     {
+        while (if_depth > 0 && i == if_end[if_depth - 1]) { s.append("  }\n"); --if_depth; }
         const KStmt& stm = g.stmt(b0 + i);
         switch (stm.kind)
         {
+        case KStmtKind::If:
+            s.append("  if (");
+            vv(stm.value);
+            s.append(") {\n");
+            if (if_depth < 8) { if_end[if_depth++] = (stm.body_begin - b0) + stm.body_count; }
+            break;
         case KStmtKind::TraceRayPipeline:
         {
             const auto ex = [&](int k) { return g.stmt_ext_operand(stm, k); };
@@ -1183,13 +1224,23 @@ inline bool emit_rt_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory
             }
             break;
         }
-        case KStmtKind::PayloadStore: s.append("  pl.m"); app_uint(s, stm.index); s.append(" = "); vv(stm.value); s.append(";\n"); break;
+        case KStmtKind::PayloadStore:
+            s.append(g.node(stm.target).op == KOp::CallableDataDecl ? "  cd.m" : "  pl.m");
+            app_uint(s, stm.index);
+            s.append(" = ");
+            vv(stm.value);
+            s.append(";\n");
+            break;
+        // REN-38-F13: the last two stages' verbs. The API validates t against [tmin, tmax] itself.
+        case KStmtKind::ReportHit: s.append("  reportIntersectionEXT("); vv(stm.value); s.append(", "); vv(stm.index); s.append(");\n"); break;
+        case KStmtKind::ExecuteCallable: s.append("  executeCallableEXT("); vv(stm.value); s.append(", 0);\n"); break;
         case KStmtKind::BufferStore: s.append("  buf"); app_uint(s, g.node(stm.target).iidx); s.append("["); vv(stm.index); s.append("] = "); vv(stm.value); s.append(";\n"); break;
         case KStmtKind::IgnoreHitIf: s.append("  if ("); vv(stm.value); s.append(") { ignoreIntersectionEXT; }\n"); break; // P4 any-hit alpha
         // ReorderThread is absorbed into the trace when use_ser, and is a perf-only no-op otherwise — same as default.
         default: break;
         }
     }
+    while (if_depth > 0) { s.append("  }\n"); --if_depth; }
     s.append("}\n");
     return true;
 }
@@ -1488,6 +1539,14 @@ inline bool emit_task_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
         for (int f = 0; f < fc; ++f) { s.append("  "); s.append(vtype(g.struct_field(sid, f))); s.append(" f"); app_uint(s, static_cast<crd::u32>(f)); s.append(";\n"); }
         s.append("} ubo_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(";\n");
     }
+    for (int i = 0; i < n; ++i) // REN-38-F6+ (GEO-1): a reachable StorageLoad makes this a PULLING stage
+    {
+        if (reach[static_cast<crd::usize>(i)] && g.node(i).op == KOp::StorageLoad)
+        {
+            s.append("layout(set = 0, binding = 0, std430) readonly buffer StorageBuf { uint data[]; } sbuf;\n");
+            break;
+        }
+    }
     if (entry.n_task_payload > 0U) { s.append("struct TaskPayload { uint v0; uint v1; uint v2; uint v3; };\ntaskPayloadSharedEXT TaskPayload mesh_payload;\n"); } // B4: FIXED 4-field payload (task + mesh layouts always match)
 
     s.append("void main() {\n");
@@ -1613,6 +1672,14 @@ inline bool emit_mesh_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
         for (int f = 0; f < fc; ++f) { s.append("  "); s.append(vtype(g.struct_field(sid, f))); s.append(" f"); app_uint(s, static_cast<crd::u32>(f)); s.append(";\n"); }
         s.append("} ubo_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(";\n");
     }
+    for (int i = 0; i < n; ++i) // REN-38-F6+ (GEO-1): a reachable StorageLoad makes this a PULLING stage
+    {
+        if (reach[static_cast<crd::usize>(i)] && g.node(i).op == KOp::StorageLoad)
+        {
+            s.append("layout(set = 0, binding = 0, std430) readonly buffer StorageBuf { uint data[]; } sbuf;\n");
+            break;
+        }
+    }
     for (int i = 0; i < n; ++i) // B4: declare the task→mesh payload iff this mesh reads ANY payload field (v0..v3)
     {
         const bool is_payload = g.node(i).op == KOp::Builtin
@@ -1620,7 +1687,9 @@ inline bool emit_mesh_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
                                     || static_cast<KBuiltin>(g.node(i).iidx) == KBuiltin::TaskPayload1
                                     || static_cast<KBuiltin>(g.node(i).iidx) == KBuiltin::TaskPayload2
                                     || static_cast<KBuiltin>(g.node(i).iidx) == KBuiltin::TaskPayload3);
-        if (reach[static_cast<crd::usize>(i)] && is_payload)
+        // REN-38-F6+: OR the asset DECLARED the task pairing (`mesh_payload_in`) — the HLSL twin must declare
+        // the payload input for the D3D12 AS→MS PSO contract, and the two backends must not disagree.
+        if ((reach[static_cast<crd::usize>(i)] && is_payload) || entry.mesh_payload_in)
         {
             s.append("struct TaskPayload { uint v0; uint v1; uint v2; uint v3; };\ntaskPayloadSharedEXT TaskPayload mesh_payload;\n"); // FIXED 4-field (matches the task)
             break;
@@ -1806,6 +1875,15 @@ inline bool emit_tese_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
         const int fc = g.struct_field_count(sid);
         for (int f = 0; f < fc; ++f) { s.append("  "); s.append(vtype(g.struct_field(sid, f))); s.append(" f"); app_uint(s, static_cast<crd::u32>(f)); s.append(";\n"); }
         s.append("} ubo_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(";\n");
+    }
+
+    for (int i = 0; i < n; ++i) // REN-38-F6+ (GEO-1): a reachable StorageLoad makes this a PULLING stage
+    {
+        if (reach[static_cast<crd::usize>(i)] && g.node(i).op == KOp::StorageLoad)
+        {
+            s.append("layout(set = 0, binding = 0, std430) readonly buffer StorageBuf { uint data[]; } sbuf;\n");
+            break;
+        }
     }
 
     s.append("void main() {\n");
