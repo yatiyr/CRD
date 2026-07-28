@@ -129,6 +129,16 @@ public:
     // `crd-scene` (its one-way edge is what keeps the asset format free of engine types); the renderer owns the
     // World, so the renderer runs the query. The default forwards to the name-based `draw_list` so every
     // existing host keeps working unchanged — it simply ignores filters it never asked for.
+    // ⭐⭐ 38-G1 perf: `instance` is the FOR_EACH expansion index (the CASCADE, for a CSM pass) — 0 for an
+    // ordinary pass. A host uses it to answer with a list culled for THAT cascade: the shadow passes were
+    // drawing every camera-visible instance four times, and cascade 0 covers a few metres of a 110-unit field.
+    // Measured on the sandbox: shadows cost 8 ms of GPU and 78 fps (130 -> 53), nearly all of it vertex work
+    // on geometry the cascade then clips away. Defaulted so every existing host compiles unchanged.
+    [[nodiscard]] virtual bool draw_list_query(const FrameDrawListDesc& query, DrawListBinding& out,
+                                               crd::u32 /*instance*/)
+    {
+        return draw_list_query(query, out);
+    }
     [[nodiscard]] virtual bool draw_list_query(const FrameDrawListDesc& query, DrawListBinding& out)
     {
         return draw_list(crd::containers::StringView(query.name.c_str(), query.name.size()), out);

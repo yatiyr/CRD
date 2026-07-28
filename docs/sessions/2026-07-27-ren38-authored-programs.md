@@ -426,3 +426,14 @@ mesh groups producing `multi_batch_count()` delta == exactly 1 with both halves'
 pixels right while batches read 0 — the COUNT gate caught what pixels could not); (b) `shaderDrawParameters`
 must be ENABLED at device creation; (c) an explicitly installed frame graph (the authored CULL graph) computes
 visibility into the PRIVATE buffers, so consolidation defers to it — found by the CULL gate, not inspection.
+
+### 38-G opens: the POST context (G1a)
+
+The technique-library band began with a finding that DESIGNED it: `is_lighting_op` already refuses `tonemap`
+and `exposure` in materials — ADR-0102 enforced in code. So the post family is not a material extension; it is
+a SECOND LEGALITY CONTEXT over the same node registry: `parse_post_toml` + `cook_post_graph` accept the
+tonemap ops and refuse surface readers; `cook_material` refuses the tonemap ops by name. One grammar, one
+registry, two faces — the same split that keeps materials out of the lighting model keeps them out of the
+display transform. The output node is NAMED ("output"), never inferred. Gated two-sided; 46/46 win, 41/41
+linux, tidy-clean. G1b (the device half: host `crd://post/` resolution, the authored scene→tonemap frame,
+3-backend pixel gates, then the first deletion) is the next session's opening move.

@@ -50,8 +50,6 @@
 #include <crd/shadercook/warmup.hpp>  // D-007 D11: AsyncPipelineWarmer (warm pipelines off the render thread on crd-jobs)
 #include <crd/jobs/jobs.hpp>          // D-007 D10/D11: the fiber scheduler (jobs::init/shutdown/parallel_for)
 #include <crd/kir/ckir_serialize.hpp> // D2: ShaderReflection (the IR-derived reflection carried in the bundle)
-#include <crd/kir/ckir_material.hpp>  // materials: the OpenPBR surface slab (define_surface/build_surface/pack_gbuffer)
-#include <crd/kir/ckir_cook.hpp>      // materials: SurfaceInputs + specialize_variant (the material variant seam)
 #include <crd/platform/filesystem.hpp> // D2: create the cook cache dir
 #include <ckir_kernel_dispatch.hpp> // B-cmp: the SHARED both-backend kernel dispatch + oracle-compare harness
 #include <ckir_raster_triangle.hpp> // B3-e: the SHARED, backend-neutral CKIR triangle (identical on Vulkan + DX12)
@@ -13110,9 +13108,25 @@ TEST_CASE("RET-5: ImGui composites through the gpu-context overlay present (Vulk
             crd::gputest::pump_test_window();
         }
         CHECK(surface->frame_count() == 3U);
+        // ⭐⭐ 38-G1: THE PIPELINING CONTRACT — present() keeps a ring of frames in flight (the deferral that
+        // removed a ~7 ms per-frame stall), so `target` (the blit source, dying at this scope's end while the
+        // surface lives on) must wait for the pending presents first. This line IS the contract the interface
+        // documents; without it the last present's command buffer still references the target when it dies.
+        surface->wait_idle();
     } // the backend drains + shuts down BEFORE the ImGui context dies
     ImGui::DestroyContext();
 
+    if (capture.error_or_warning_count() > 0U) // diagnose on failure: the FIRST few captured messages, verbatim
+    {
+        const auto msgs  = capture.messages();
+        crd::u32   shown = 0;
+        for (crd::usize i = 0; i < msgs.size() && shown < 4U; ++i)
+        {
+            if (msgs[i].severity == crd::gpu::ValidationSeverity::Info) { continue; }
+            WARN("[ret5 capture] id=" << msgs[i].message_id_number << " " << msgs[i].message_text.c_str());
+            ++shown;
+        }
+    }
     CHECK(capture.error_count() == 0U); // init + font upload + 3 composited frames + teardown, all SILENT
     CHECK(capture.warning_count() == 0U);
     surface.reset(); // the surface dies BEFORE its window

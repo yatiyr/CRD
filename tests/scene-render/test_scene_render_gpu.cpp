@@ -2103,3 +2103,337 @@ TEST_CASE("REN-38 GATE: two mesh groups render as ONE multi-draw batch from the 
     CHECK(left > 40U);
     CHECK(right > 40U);
 }
+
+// ── ⭐⭐ 38-G1 GATE: an AUTHORED POST GRAPH transforms the frame — the technique library reaches the device. ──
+// The frame is `scene → post` where the post pass's shader is `crd://post/...`: a fullscreen VS asset + an FS
+// cooked from a `[[node]]` POST graph (parse_post_toml → cook_post_graph). Two halves, deliberately split:
+//   (a) EXACTNESS on `srgb_only` — the sRGB OETF is a SPEC formula the test recomputes independently, so the
+//       whole chain (authored graph → cook → FS → fullscreen sample → pixels) is pinned to real numbers;
+//   (b) REACHABILITY on `tonemap_agx` — the AgX pixels must differ from the sRGB-only pixels (the display
+//       transform actually ran; its own numeric truth lives with the ckir_post oracle tests).
+TEST_CASE("38-G1 GATE: an authored POST graph tonemaps the frame (scene -> post, Vulkan)",
+          "[scene-render][ren38][g1][post][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_g1_", cube_id);
+    write_mesh_pack(pack.path, cube_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait(), scene::SpatialBVH{});
+    scene::register_render_components(world);
+    {
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.world = math::from_trs({0.0F, 0.0F, 0.0F}, math::Quatf::identity(), {2.0F, 2.0F, 2.0F});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{cube_id, {}});
+    }
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    REQUIRE(renderer.init_programs(*vk));
+    (void)renderer.sync(world);
+
+    // the authored frame: the scene into a transient, the POST graph over it into @output
+    const auto frame_toml = [](const char* shader, const char* fname) {
+        static char buf[1280];
+        (void)std::snprintf(static_cast<char*>(buf), sizeof(buf), R"(
+schema = 1
+name   = "crd://frame/%s"
+
+[[resource]]
+name    = "scene_hdr"
+kind    = "transient_image"
+format  = "RGBA8Unorm"
+width   = 128
+height  = 128
+sampled = true
+
+[[draw_list]]
+name = "visible_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "material"
+
+[[pass]]
+name          = "scene"
+kind          = "raster.geometry"
+draw_list     = "visible_geometry"
+writes        = ["scene_hdr"]
+material_pass = "Forward"
+clear_color   = [0.10, 0.30, 0.60, 1.0]
+
+[[pass]]
+name   = "post"
+kind   = "raster.fullscreen"
+reads  = ["scene_hdr"]
+writes = ["@output"]
+shader = "%s"
+)", fname, shader);
+        return static_cast<const char*>(buf);
+    };
+
+    auto target = raster->create_color_depth_target(128U, 128U);
+    REQUIRE(target != nullptr);
+    const math::Mat4f vp = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F)
+                           * math::look_at(math::Vec3f{0, 2, 8}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Vec3f     light{0.3F, 1.0F, 0.2F};
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+
+    // (a) EXACTNESS: srgb_only — a background pixel holds the clear colour, so out = OETF(clear), computed here
+    REQUIRE(renderer.set_frame_graph_toml(frame_toml("crd://post/srgb_only", "g1_post_srgb")));
+    REQUIRE(renderer.render(*target, vp, light, clear, nullptr).draws > 0U);
+    const u32 srgb_px = target->read_pixel(4U, 4U); // top corner: background in this camera
+    const auto oetf = [](double c) {
+        return c <= 0.0031308 ? 12.92 * c : 1.055 * std::pow(c, 1.0 / 2.4) - 0.055;
+    };
+    const auto ch = [&](double c) { return static_cast<i32>(std::lround(oetf(c) * 255.0)); };
+    const i32 er = ch(0.10);
+    const i32 eg = ch(0.30);
+    const i32 eb = ch(0.60);
+    const i32 ar = static_cast<i32>(srgb_px & 0xFFU);
+    const i32 ag = static_cast<i32>((srgb_px >> 8U) & 0xFFU);
+    const i32 ab = static_cast<i32>((srgb_px >> 16U) & 0xFFU);
+    INFO("srgb got (" << ar << "," << ag << "," << ab << ") want (" << er << "," << eg << "," << eb << ")");
+    CHECK(std::abs(ar - er) <= 2);
+    CHECK(std::abs(ag - eg) <= 2);
+    CHECK(std::abs(ab - eb) <= 2);
+
+    // (b) REACHABILITY: the AgX graph produces a DIFFERENT frame than srgb_only over the same scene.
+    // A FRESH renderer isolates the swap from any per-renderer program state.
+    scenerender::SceneRenderer r2(&galloc());
+    REQUIRE(r2.init(*raster, rm));
+    REQUIRE(r2.init_programs(*vk));
+    (void)r2.sync(world);
+    REQUIRE(r2.set_frame_graph_toml(frame_toml("crd://post/tonemap_agx", "g1_post_agx")));
+    REQUIRE(r2.render(*target, vp, light, clear, nullptr).draws > 0U);
+    const u32 agx_px = target->read_pixel(4U, 4U);
+    CHECK(agx_px != srgb_px); // the display transform ran (AgX bends what a bare OETF does not)
+    CHECK((agx_px & 0x00FFFFFFU) != 0U); // and produced a real colour, not a dropped pass
+
+    // ⛔⛔ AND THE GEOMETRY IS IN IT. Sampling only the background proved the CLEAR reached the post pass and
+    // nothing more — which is exactly how a live app ended up showing a tonemapped EMPTY frame: the textured
+    // and shadowed scene verbs refused the depth-less colour transient and drew nothing, silently. A post gate
+    // that never looks at the mesh cannot see that.
+    u32 differs = 0U;
+    for (u32 y = 0; y < 128U; y += 2U)
+    {
+        for (u32 x = 0; x < 128U; x += 2U)
+        {
+            if ((target->read_pixel(x, y) & 0x00FFFFFFU) != (agx_px & 0x00FFFFFFU)) { ++differs; }
+        }
+    }
+    INFO("pixels differing from the background: " << differs);
+    CHECK(differs > 200U); // the cube covers a real part of the frame
+}
+
+#ifdef _WIN32
+// ── ⭐⭐ 38-G1 GATE (DX12): the SAME authored post frame on the OTHER backend — sRGB pinned to the spec
+// OETF, AgX distinct. One asset, two APIs; a divergence here is an emitter bug by construction.
+TEST_CASE("38-G1 GATE (DX12): an authored POST graph tonemaps the frame (scene -> post)",
+          "[scene-render][ren38][g1][post][gpu][dx12]")
+{
+    auto gctx = gpu::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto raster = gpu::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_g1dx_", cube_id);
+    write_mesh_pack(pack.path, cube_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait(), scene::SpatialBVH{});
+    scene::register_render_components(world);
+    {
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.world = math::from_trs({0.0F, 0.0F, 0.0F}, math::Quatf::identity(), {2.0F, 2.0F, 2.0F});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{cube_id, {}});
+    }
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    if (!renderer.init_programs(*gctx)) { SKIP("dxc/DXIL unavailable"); }
+    (void)renderer.sync(world);
+
+    const auto frame_toml = [](const char* shader, const char* fname) {
+        static char buf[1280];
+        (void)std::snprintf(static_cast<char*>(buf), sizeof(buf), R"(
+schema = 1
+name   = "crd://frame/%s"
+
+[[resource]]
+name    = "scene_hdr"
+kind    = "transient_image"
+format  = "RGBA8Unorm"
+width   = 128
+height  = 128
+sampled = true
+
+[[draw_list]]
+name = "visible_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "material"
+
+[[pass]]
+name          = "scene"
+kind          = "raster.geometry"
+draw_list     = "visible_geometry"
+writes        = ["scene_hdr"]
+material_pass = "Forward"
+clear_color   = [0.10, 0.30, 0.60, 1.0]
+
+[[pass]]
+name   = "post"
+kind   = "raster.fullscreen"
+reads  = ["scene_hdr"]
+writes = ["@output"]
+shader = "%s"
+)", fname, shader);
+        return static_cast<const char*>(buf);
+    };
+
+    auto target = raster->create_color_depth_target(128U, 128U);
+    REQUIRE(target != nullptr);
+    const math::Mat4f vp = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F)
+                           * math::look_at(math::Vec3f{0, 2, 8}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Vec3f     light{0.3F, 1.0F, 0.2F};
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+
+    REQUIRE(renderer.set_frame_graph_toml(frame_toml("crd://post/srgb_only", "g1dx_post_srgb")));
+    REQUIRE(renderer.render(*target, vp, light, clear, nullptr).draws > 0U);
+    const u32  srgb_px = target->read_pixel(4U, 4U);
+    const auto oetf    = [](double c) {
+        return c <= 0.0031308 ? 12.92 * c : 1.055 * std::pow(c, 1.0 / 2.4) - 0.055;
+    };
+    const auto ch = [&](double c) { return static_cast<i32>(std::lround(oetf(c) * 255.0)); };
+    const i32  er = ch(0.10);
+    const i32  eg = ch(0.30);
+    const i32  eb = ch(0.60);
+    const i32  ar = static_cast<i32>(srgb_px & 0xFFU);
+    const i32  ag = static_cast<i32>((srgb_px >> 8U) & 0xFFU);
+    const i32  ab = static_cast<i32>((srgb_px >> 16U) & 0xFFU);
+    INFO("srgb got (" << ar << "," << ag << "," << ab << ") want (" << er << "," << eg << "," << eb << ")");
+    CHECK(std::abs(ar - er) <= 2);
+    CHECK(std::abs(ag - eg) <= 2);
+    CHECK(std::abs(ab - eb) <= 2);
+
+    scenerender::SceneRenderer r2(&galloc());
+    REQUIRE(r2.init(*raster, rm));
+    if (!r2.init_programs(*gctx)) { SKIP("dxc/DXIL unavailable"); }
+    (void)r2.sync(world);
+    REQUIRE(r2.set_frame_graph_toml(frame_toml("crd://post/tonemap_agx", "g1dx_post_agx")));
+    REQUIRE(r2.render(*target, vp, light, clear, nullptr).draws > 0U);
+    const u32 agx_px = target->read_pixel(4U, 4U);
+    CHECK(agx_px != srgb_px);
+    CHECK((agx_px & 0x00FFFFFFU) != 0U);
+    // ⛔⛔ and the GEOMETRY is in the post-processed frame (see the Vulkan twin: a background-only gate
+    // cannot see a scene pass that silently drew nothing).
+    u32 differs = 0U;
+    for (u32 y = 0; y < 128U; y += 2U)
+    {
+        for (u32 x = 0; x < 128U; x += 2U)
+        {
+            if ((target->read_pixel(x, y) & 0x00FFFFFFU) != (agx_px & 0x00FFFFFFU)) { ++differs; }
+        }
+    }
+    INFO("pixels differing from the background: " << differs);
+    CHECK(differs > 200U);
+}
+#endif // _WIN32
+
+// ── ⭐⭐ REN-38 GATE: THE FRAME LOOP SURVIVES. 64 consecutive renders, every one drawing. ─────────────────
+// ⛔⛔ THE SCAR THIS EXISTS FOR: `FrameRecorder` hands out one PassRec block per `record()` from a ring of
+// 32 and `begin_frame()` is what returns them — and NOTHING CALLED IT. The counter climbed one per frame, so
+// the 33rd frame began failing every record with `BuildRejected`, permanently. The sandbox froze about half a
+// second in on a black-ish frame; the WHOLE offscreen test suite stayed green because a gate renders once or
+// twice and never reaches 33. A per-frame arena needs a per-frame reset, and only a LOOP can prove it.
+// ⭐ 64 is deliberately > 2x the ring: it catches an off-by-one reset as well as a missing one.
+TEST_CASE("REN-38 GATE: 64 consecutive frames all render (the per-frame recorder arena is recycled)",
+          "[scene-render][ren38][frameloop][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_loop_", cube_id);
+    write_mesh_pack(pack.path, cube_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait(), scene::SpatialBVH{});
+    scene::register_render_components(world);
+    {
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.world = math::from_trs({0.0F, 0.0F, 0.0F}, math::Quatf::identity(), {2.0F, 2.0F, 2.0F});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{cube_id, {}});
+    }
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    REQUIRE(renderer.init_programs(*vk));
+    (void)renderer.sync(world);
+
+    auto target = raster->create_color_depth_target(64U, 64U);
+    REQUIRE(target != nullptr);
+    const math::Mat4f vp = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F)
+                           * math::look_at(math::Vec3f{0, 2, 8}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Vec3f     light{0.3F, 1.0F, 0.2F};
+    const gpu::ClearColor clear{0.05F, 0.05F, 0.08F, 1.0F};
+
+    u32 first_bad = 0U;
+    u32 drew      = 0U;
+    for (u32 f = 1; f <= 64U; ++f)
+    {
+        const auto st = renderer.render(*target, vp, light, clear, nullptr);
+        // ⛔ `draws` counts the draw list built BEFORE recording — it stays positive when the RECORD fails,
+        // which is exactly how the arena bug hid. `timed_passes` comes from device timestamps AFTER execute:
+        // it is zero when nothing ran. Assert on the signal that can only come from the GPU.
+        if (st.draws > 0U && st.timed_passes > 0U) { ++drew; }
+        else if (first_bad == 0U) { first_bad = f; }
+    }
+    INFO("frames that drew: " << drew << "/64; first failing frame: " << first_bad);
+    // ⛔ EVERY frame, not "most": the arena bug is silent until frame 33 and total afterwards
+    CHECK(first_bad == 0U);
+    CHECK(drew == 64U);
+    // and the last frame still produced real pixels (not a stale or cleared surface)
+    u32 covered = 0U;
+    for (u32 y = 0; y < 64U; y += 2U)
+    {
+        for (u32 x = 0; x < 64U; x += 2U)
+        {
+            if ((target->read_pixel(x, y) & 0x00FFFFFFU) != 0U) { ++covered; }
+        }
+    }
+    CHECK(covered > 50U);
+}

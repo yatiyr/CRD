@@ -194,6 +194,17 @@ TEST_CASE("REN-38-C2: the MaterialX-class node set is reachable AS DATA", "[mate
         mc::MaterialDesc   d(&alloc);
         containers::String where(&alloc);
         INFO(op);
+        if (mc::material_op_post_only(i))
+        {
+            // 38-G1: a POST-ONLY op is covered through ITS context — the material face must REFUSE it
+            crd::matcook::MaterialDesc pd(&alloc);
+            REQUIRE(mc::parse_post_toml(containers::StringView(toml.c_str(), toml.size()), pd, &where)
+                    == mc::MaterialCookError::Ok);
+            CHECK(mc::parse_material_toml(containers::StringView(toml.c_str(), toml.size()), d, &where)
+                  == mc::MaterialCookError::ForbiddenLighting);
+            ++built; // covered through its OWN context — both faces asserted
+            continue;
+        }
         REQUIRE(mc::parse_material_toml(containers::StringView(toml.c_str(), toml.size()), d, &where)
                 == mc::MaterialCookError::Ok);
         kir::KGraph g(&alloc);
@@ -354,4 +365,122 @@ TEST_CASE("REN-38-C1: a `.crdm` survives an editor ROUND TRIP", "[material-cook]
     CHECK(b.surface.base_color == a.surface.base_color);
     CHECK(b.surface.roughness == a.surface.roughness);
     CHECK(b.surface.metallic == a.surface.metallic);
+}
+
+// ── ⭐⭐ 38-G1: THE POST CONTEXT — the technique library's first asset family. ────────────────────────────
+// The tonemap family (`agx`, `pbr_neutral`, `srgb_encode`, `pq_encode`, `ev100`/`exposure_scale`,
+// `gamut_compress`, `contrast_curve`) joins the ONE node registry under a second legality context:
+// `cook_post_graph` accepts it, `cook_material` refuses it — ADR-0102 enforced from BOTH sides (a material
+// describes surface response; the display transform is a frame operation). This gate pins the contract:
+//   (a) an authored AgX tonemap GRAPH cooks through the post context to a real CKIR node;
+//   (b) a MATERIAL naming `agx` is refused BY NAME (ForbiddenLighting — the same error lighting ops get);
+//   (c) a POST graph naming a surface reader (`geomcolor`) is refused, with `where` pointing at the node;
+//   (d) the output is NAMED, never inferred — a graph without an "output" node refuses.
+TEST_CASE("38-G1: the POST context cooks the tonemap family; materials refuse it (two-sided ADR-0102)",
+          "[matcook][post][g1]")
+{
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+
+    // (a) the authored tonemap: sample the pass input, expose, AgX, sRGB-encode — the whole G1 shape
+    constexpr const char* tonemap_text = R"(
+schema = 1
+name   = "crd://post/tonemap_agx"
+
+[[node]]
+name   = "uv"
+op     = "texcoord"
+inputs = [0]
+
+[[node]]
+name   = "scene"
+op     = "sample2d"
+inputs = ["uv", 0, 1, 2]
+
+[[node]]
+name   = "mapped"
+op     = "agx"
+inputs = ["scene"]
+
+[[node]]
+name   = "output"
+op     = "srgb_encode"
+inputs = ["mapped"]
+)";
+    crd::matcook::MaterialDesc desc(&alloc);
+    crd::containers::String    where(&alloc);
+    REQUIRE(crd::matcook::parse_post_toml(crd::containers::StringView(tonemap_text), desc, &where)
+            == crd::matcook::MaterialCookError::Ok);
+    {
+        crd::kir::KGraph g(&alloc);
+        const int        out = crd::matcook::cook_post_graph(desc, g, &where);
+        INFO("where=" << where.c_str());
+        REQUIRE(out >= 0);
+        CHECK(g.node(out).comps() == 3); // a colour, as authored
+    }
+
+    // (b) the SAME ops in a MATERIAL are refused by name — the mirror of the lighting refusal
+    constexpr const char* bad_material_text = R"(
+schema = 1
+name   = "crd://material/bad_tonemap"
+
+[[node]]
+name   = "tint"
+op     = "geomcolor"
+inputs = [1]
+
+[[node]]
+name   = "mapped"
+op     = "agx"
+inputs = ["tint"]
+
+[surface]
+base_color = "mapped"
+)";
+    crd::matcook::MaterialDesc bad(&alloc);
+    // the MATERIAL face refuses at parse (it validates inline) — the same error lighting ops get
+    CHECK(crd::matcook::parse_material_toml(crd::containers::StringView(bad_material_text), bad, &where)
+          == crd::matcook::MaterialCookError::ForbiddenLighting);
+    CHECK(where.size() > 0U); // the refusal NAMES the node
+
+    // (c) a POST graph reaching for surface state is refused the same way
+    constexpr const char* bad_post_text = R"(
+schema = 1
+name   = "crd://post/bad_surface"
+
+[[node]]
+name   = "n"
+op     = "geomcolor"
+inputs = [1]
+
+[[node]]
+name   = "output"
+op     = "srgb_encode"
+inputs = ["n"]
+)";
+    crd::matcook::MaterialDesc badp(&alloc);
+    REQUIRE(crd::matcook::parse_post_toml(crd::containers::StringView(bad_post_text), badp, &where)
+            == crd::matcook::MaterialCookError::Ok);
+    {
+        crd::kir::KGraph g(&alloc);
+        CHECK(crd::matcook::cook_post_graph(badp, g, &where) < 0);
+        CHECK(where.size() > 0U);
+    }
+
+    // (d) no node named "output" ⇒ refusal, never "the last node happened to be it"
+    constexpr const char* no_out_text = R"(
+schema = 1
+name   = "crd://post/no_output"
+
+[[node]]
+name   = "uv"
+op     = "texcoord"
+inputs = [0]
+)";
+    crd::matcook::MaterialDesc noout(&alloc);
+    REQUIRE(crd::matcook::parse_post_toml(crd::containers::StringView(no_out_text), noout, &where)
+            == crd::matcook::MaterialCookError::Ok);
+    {
+        crd::kir::KGraph g(&alloc);
+        CHECK(crd::matcook::cook_post_graph(noout, g, &where) < 0);
+    }
 }

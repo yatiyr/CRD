@@ -462,7 +462,27 @@ TEST_CASE("REN-38 DRIFT GATE: every shipped authored asset matches the built-in 
     check_vertex("vertex/scene_rt_miss.crdv");
     check_vertex("vertex/scene_rt_closest_hit.crdv");
     check_vertex("vertex/scene_rt_any_hit.crdv");
+    check_vertex("vertex/post_fullscreen.crdv"); // 38-G1: the post fullscreen pair
     check_material("material/flat.crdm");
+
+    // ── 38-G1: the POST graphs — parsed through THEIR face, compared canonically (comment-blind). ──
+    const auto check_post = [&](const char* rel) {
+        INFO(rel);
+        containers::String shipped(&alloc);
+        containers::String embedded(&alloc);
+        REQUIRE(read_shipped(rel, shipped));
+        REQUIRE(builtin(rel, embedded));
+        matcook::MaterialDesc a(&alloc);
+        matcook::MaterialDesc b(&alloc);
+        containers::String         where(&alloc);
+        REQUIRE(matcook::parse_post_toml(containers::StringView(shipped.c_str(), shipped.size()), a, &where)
+                == matcook::MaterialCookError::Ok);
+        REQUIRE(matcook::parse_post_toml(containers::StringView(embedded.c_str(), embedded.size()), b, &where)
+                == matcook::MaterialCookError::Ok);
+        CHECK(same(matcook::emit_material_toml(a, &alloc), matcook::emit_material_toml(b, &alloc)));
+    };
+    check_post("post/tonemap_agx.crdp");
+    check_post("post/srgb_only.crdp");
 
     {
         INFO("lighting/scene_forward.crdl");

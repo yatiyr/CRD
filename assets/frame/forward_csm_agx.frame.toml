@@ -1,0 +1,72 @@
+# forward_csm_agx.frame.toml - forward + cascades + the AgX display transform.
+#
+# 38-G1: the default forward frame PLUS the authored display transform. The only difference from
+# `forward_csm.frame.toml` is the last two things: the forward pass writes an HDR transient instead of the
+# output, and a fullscreen `post` pass names a shipped `.crdp` graph that resolves the frame to the window.
+#
+# Swapping the tonemap is EDITING THE `shader` LINE BELOW. No rebuild, no shader variant, no C++ branch.
+
+schema = 1
+name   = "crd://frame/forward_csm_agx"
+
+[[resource]]
+name    = "shadow_atlas"
+kind    = "transient_image"
+format  = "D32Float"
+width   = 2048
+height  = 2048
+layers  = 4
+sampled = true
+
+# the scene lands HERE first, so the post pass has something to read. `scale = 1.0` follows the window.
+[[resource]]
+name    = "scene_hdr"
+kind    = "transient_image"
+format  = "RGBA8Unorm"
+scale   = 1.0
+sampled = true
+# the scene is DEPTH-TESTED into this target exactly as it would be into the window — without a depth
+# attachment the forward pass draws with broken occlusion, which is a WRONG image, not a missing one.
+depth_buffer = true
+
+[[draw_list]]
+name = "shadow_casters"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "front_to_back"
+
+[[draw_list]]
+name = "visible_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "material"
+
+[[pass]]
+name          = "csm_cascade"
+kind          = "raster.depth_only"
+draw_list     = "shadow_casters"
+for_each      = "light.0.cascades"
+writes        = ["shadow_atlas[$index]"]
+material_pass = "Shadow"
+clear_depth   = 1.0
+depth         = "LessEqual"
+
+[[pass]]
+name          = "forward"
+kind          = "raster.geometry"
+draw_list     = "visible_geometry"
+reads         = ["shadow_atlas"]
+writes        = ["scene_hdr"]
+technique     = "forward_csm"
+material_pass = "Forward"
+clear_color   = [0.09, 0.10, 0.13, 1.0]
+clear_depth   = 0.0
+depth         = "GreaterEqual"
+
+# ⭐⭐ THE DISPLAY TRANSFORM, AS DATA — the 38-G1 technique-library pass.
+[[pass]]
+name   = "post"
+kind   = "raster.fullscreen"
+reads  = ["scene_hdr"]
+writes = ["@output"]
+shader = "crd://post/tonemap_agx"

@@ -398,7 +398,7 @@ inline void unpack_surface(KGraph& g, int surface, const cook::SurfaceInputs& in
     if (se.n_out < 1) { return -1; }
 
     crd::containers::Array<crd::i32> args(al);
-    args.reserve(static_cast<crd::usize>(kTechFixedInputs + tc.n_bindings));
+    args.reserve(static_cast<crd::usize>(kTechFixedInputs) + static_cast<crd::usize>(tc.n_bindings));
     for (int i = 0; i < kTechFixedInputs; ++i) { args.push_back(tc.fixed[i]); }
     for (int i = 0; i < tc.n_bindings; ++i) { args.push_back(tc.bindings[i]); }
     return splice_graph(g, src, args.data(), static_cast<int>(args.size()), se.out[0].node);
@@ -418,6 +418,11 @@ inline void unpack_surface(KGraph& g, int surface, const cook::SurfaceInputs& in
 {
     const int struct_id = material::define_surface(g);
     const int surface   = mt.build_surface(g, struct_id, in, mt.user);
+    // ⛔ The template's documented failure shape is a NEGATIVE node ("never a substitute surface") — and this
+    // was the one consumer that never checked it: `unpack_surface`/`field_get` indexed the node table with -1,
+    // an access violation. Found by the 38-G1 override proof (a deliberately broken user `.crdm` on disk must
+    // fail the cook BY NAME, not crash the app).
+    if (surface < 0) { return false; }
     e.stage             = KStage::Fragment;
     switch (pass)
     {

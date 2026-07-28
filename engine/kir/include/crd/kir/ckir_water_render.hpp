@@ -75,7 +75,7 @@ inline void ocean_projected_vertex(KGraph& g, int ux, int uy, const OceanCascade
     const int wx = mul(s, dx);
     const int wz = s;
 
-    const int tex  = g.texture(0, 3, kir::DType::F32, kir::TexDim::Tex2D, false, false, false, /*array_count=*/8);
+    const int tex  = g.texture(0, 16, kir::DType::F32, kir::TexDim::Tex2D, false, false, false, /*array_count=*/8);
     const int samp = g.sampler(0, 2);
     int       wy0  = k(0.0);
     for (int c = 0; c < oc.count; ++c)
@@ -281,7 +281,7 @@ inline void build_ocean_water_geo_fs(KGraph& g, KEntry& fe, const OceanCascadeRe
     const int dist  = wz;                             // forward distance ≈ range to eye (eye at z=0)
     const int distf = sat(mul(sub(dist, k(30.0)), k(0.005)));
 
-    const int tex  = g.texture(0, 3, kir::DType::F32, kir::TexDim::Tex2D, false, false, false, /*array_count=*/8);
+    const int tex  = g.texture(0, 16, kir::DType::F32, kir::TexDim::Tex2D, false, false, false, /*array_count=*/8);
     const int samp = g.sampler(0, 2);
     const int cfade = sub(k(1.0), mul(distf, k(0.35))); // fine detail eases off with distance (keeps the far field calm)
     int       slx  = k(0.0);

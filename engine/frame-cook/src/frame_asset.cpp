@@ -607,6 +607,7 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
             r.layers     = static_cast<crd::u32>((*t)["layers"].value_or<int64_t>(1));
             r.samples    = static_cast<crd::u32>((*t)["samples"].value_or<int64_t>(1));
             r.sampled    = (*t)["sampled"].value_or(false);
+            r.depth_buffer = (*t)["depth_buffer"].value_or(false); // 38-G1: an intermediate render target's depth
             r.storage    = (*t)["storage"].value_or(false);
             r.depth      = static_cast<crd::u32>((*t)["depth"].value_or<int64_t>(1));
             r.mips       = static_cast<crd::u32>((*t)["mips"].value_or<int64_t>(1));
@@ -1463,6 +1464,7 @@ crd::containers::Array<crd::u8> cook_frame_graph(const FrameGraphDesc& desc, crd
         put_u32(out, r.layers);
         put_u32(out, r.samples);
         put_u8(out, r.sampled ? 1U : 0U);
+        put_u8(out, r.depth_buffer ? 1U : 0U); // 38-G1
         put_u8(out, r.storage ? 1U : 0U);
         put_u32(out, r.size_bytes);
     }
@@ -1639,6 +1641,7 @@ bool read_frame_graph(crd::containers::ConstSpan<crd::u8> bytes, FrameGraphDesc&
         r.layers     = c.u32v();
         r.samples    = c.u32v();
         r.sampled    = c.u8v() != 0U;
+        r.depth_buffer = c.u8v() != 0U; // 38-G1
         r.storage    = c.u8v() != 0U;
         r.size_bytes = c.u32v();
         out.resources.push_back(static_cast<FrameResourceDesc&&>(r));

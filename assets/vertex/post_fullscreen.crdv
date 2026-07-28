@@ -1,0 +1,48 @@
+schema   = 1
+name     = "crd://vertex/post_fullscreen"
+position = "node:clip"
+
+[expand]
+verts_per_instance = 3
+
+[[node]]
+name   = "x"
+op     = "ifequal"
+inputs = ["@corner", 1.0, 3.0, -1.0]
+
+[[node]]
+name   = "y"
+op     = "ifequal"
+inputs = ["@corner", 2.0, 3.0, -1.0]
+
+[[node]]
+name   = "clip"
+op     = "combine4"
+inputs = ["x", "y", 0.0, 1.0]
+
+[[node]]
+name   = "u_half"
+op     = "multiply"
+inputs = ["x", 0.5]
+
+[[node]]
+name   = "u01"
+op     = "add"
+inputs = ["u_half", 0.5]
+
+[[node]]
+name   = "v_half"
+op     = "multiply"
+inputs = ["y", 0.5]
+
+[[node]]
+name   = "v01"
+op     = "add"
+inputs = ["v_half", 0.5]
+
+[[varying]]
+name       = "uv"
+location   = 0
+interp     = "smooth"
+source     = ["node:u01", "node:v01"]
+node_comps = [1, 1]

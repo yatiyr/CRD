@@ -294,6 +294,7 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
         if (r.mips != 1U)       { app(o, "mips = ");       app_u32(o, r.mips);       app(o, "\n"); }
         if (r.samples != 1U)    { app(o, "samples = ");    app_u32(o, r.samples);    app(o, "\n"); }
         if (r.sampled)          { app(o, "sampled = true\n"); }
+        if (r.depth_buffer)     { app(o, "depth_buffer = true\n"); }
         if (r.storage)          { app(o, "storage = true\n"); }
         if (r.no_alias)         { app(o, "no_alias = true\n"); } // REN-38-B6
         // REN-38-B3: emit STRIDE and COUNT, not the derived `size_bytes`. Re-parsing a counter buffer's

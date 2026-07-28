@@ -150,7 +150,7 @@ inline void build_wboit_composite_fs(kir::KGraph& g, kir::KEntry& fe)
 {
     const auto sh   = kir::make_shape({1});
     const int  uv   = g.stage_in(kir::KType::vec(kir::DType::F32, 2), 0, kir::Interp::Smooth);
-    const int  tex  = g.texture(0, 3, kir::DType::F32, kir::TexDim::Tex2D, false, false, false, /*array_count=*/8);
+    const int  tex  = g.texture(0, 16, kir::DType::F32, kir::TexDim::Tex2D, false, false, false, /*array_count=*/8);
     const int  samp = g.sampler(0, 2);
     const int  i0   = g.constant(0.0, sh, kir::DType::U32);
     const int  i1   = g.constant(1.0, sh, kir::DType::U32);
@@ -197,7 +197,8 @@ inline void build_wboit_composite_fs(kir::KGraph& g, kir::KEntry& fe)
         const float avg  = accum[c] / denom;
         const float bg_q = static_cast<float>(std::lround(scene.background[c] * 255.0F)) / 255.0F; // dequantised clear
         float       v    = avg * (1.0F - reveal) + bg_q * reveal;
-        v                = v < 0.0F ? 0.0F : (v > 1.0F ? 1.0F : v);
+        if (v < 0.0F) { v = 0.0F; }
+        if (v > 1.0F) { v = 1.0F; }
         out |= static_cast<crd::u32>(std::lround(v * 255.0F)) << (8 * c);
     }
     return out;
@@ -234,7 +235,8 @@ inline void build_wboit_composite_fs(kir::KGraph& g, kir::KEntry& fe)
     for (int ch = 0; ch < 3; ++ch)
     {
         float v = c[ch] + t * scene.background[ch];
-        v       = v < 0.0F ? 0.0F : (v > 1.0F ? 1.0F : v);
+        if (v < 0.0F) { v = 0.0F; }
+        if (v > 1.0F) { v = 1.0F; }
         out |= static_cast<crd::u32>(std::lround(v * 255.0F)) << (8 * ch);
     }
     return out;

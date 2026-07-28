@@ -730,7 +730,8 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         id.height  = r.height != 0U ? r.height : static_cast<crd::u32>(static_cast<float>(out_target->height()) * r.scale);
         id.format  = r.format;
         id.samples = r.samples;
-        id.sampled = r.sampled;
+        id.sampled      = r.sampled;
+        id.depth_buffer = r.depth_buffer; // 38-G1: an intermediate render target's depth attachment
         id.storage = r.storage;
         id.layers  = r.layers; // REN-3.2: >1 ⇒ the 2D-array cascade/cube/stereo atlas
         // ⛔⛔ REN-38-B2 + B6: THE SHAPE AND THE ALIAS PIN REACH THE TRANSIENT PATH TOO. They were wired into the
@@ -785,13 +786,16 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
     // the host. Falls back to a synthesized name-only desc if the graph never declared the list — the cooker
     // rejects that (`MissingDrawList`), so it is unreachable from a validated graph, but the executor must not
     // depend on that to stay memory-safe.
-    const auto resolve_query = [&](const crd::containers::String& n, DrawListBinding& out) -> bool {
+    const auto resolve_query = [&](const crd::containers::String& n, DrawListBinding& out,
+                                   crd::u32 instance) -> bool {
         for (crd::usize i = 0; i < desc.draw_lists.size(); ++i)
         {
             if (desc.draw_lists[i].name.size() == n.size()
                 && std::memcmp(desc.draw_lists[i].name.c_str(), n.c_str(), n.size()) == 0)
             {
-                return host.draw_list_query(desc.draw_lists[i], out);
+                // 38-G1 perf: the EXPANSION INDEX reaches the host, so a cascade pass can be answered with a
+                // list culled for that cascade rather than the camera's.
+                return host.draw_list_query(desc.draw_lists[i], out, instance);
             }
         }
         return host.draw_list(crd::containers::StringView(n.c_str(), n.size()), out);
@@ -836,7 +840,15 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         DrawListBinding bind{};
         if (!d.draw_list.empty())
         {
-            if (!resolve_query(d.draw_list, bind)) { return fail(FrameExecError::UnresolvedDrawList, &d.draw_list); }
+            // ⛔⛔ ONLY an EXPANDED pass carries its instance to the host. `plan[ii].index` is 0 for BOTH
+            // "cascade 0" and "not expanded at all" — and handing 0 to the host made it stamp CASCADE 0's
+            // vertex counts onto the FORWARD pass, truncating the whole scene draw (textures gone, shadows
+            // wrong, geometry missing — the exact live-app symptom). kNoInstance = "this pass is not one of N".
+            if (!resolve_query(d.draw_list, bind,
+                               d.for_each != FrameForEach::None ? plan[ii].index : 0xFFFFFFFFU))
+            {
+                return fail(FrameExecError::UnresolvedDrawList, &d.draw_list);
+            }
             rec.draws        = bind;
             rec.program      = bind.at(0).program;
             rec.vertex_count = bind.at(0).vertex_count;

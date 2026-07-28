@@ -183,6 +183,8 @@ enum class MaterialCookError : crd::u8
 [[nodiscard]] const char* material_op_name(crd::u32 index) noexcept;
 [[nodiscard]] crd::u32    material_op_arity(crd::u32 index) noexcept;
 [[nodiscard]] bool        material_op_exists(crd::containers::StringView op) noexcept;
+// 38-G1: true when the op is POST-CONTEXT ONLY (legal in `cook_post_graph`, refused in `cook_material`).
+[[nodiscard]] bool        material_op_post_only(crd::u32 index) noexcept;
 
 // ⛔⛔ NOT EVERY ARGUMENT IS A WIRE, and in C++ the two are spelled identically — both `int`. `extract(v, index)`,
 // `convert_f_vec(a, width)`, `place2d(…, order)`, `range(…, doclamp)`, `facingratio(…, ff, invert)` and the
@@ -200,6 +202,19 @@ enum class MaterialCookError : crd::u8
 // a node id for a wire slot, the integer itself for an attribute slot. Returns <0 for an unknown op.
 [[nodiscard]] int         material_build_op(crd::kir::KGraph& g, crd::containers::StringView op, const int* in,
                                             crd::u32 n);
+
+// ── ⭐⭐ 38-G1: THE POST CONTEXT — the technique library's first asset family. ────────────────────────────
+// The SAME `[[node]]` vocabulary and registry, under the OTHER legality: the post-only ops (`agx`,
+// `srgb_encode`, `pq_encode`, `pbr_neutral`, `ev100`/`exposure_scale`, `gamut_compress`, `contrast_curve`)
+// are LEGAL here and refused in materials; the surface readers (`geomcolor`, `normal`, …) are refused here
+// (`texcoord` stays — in a fullscreen pass it is the screen coordinate a post graph samples by). The graph's
+// OUTPUT is the node named "output" (validated, never inferred). Returns the colour node id, or a negative
+// value with `where` naming the offending node — the same loud-refusal contract as `cook_material`.
+// 38-G1: parse WITHOUT the material-context validation (the post face of the same grammar).
+[[nodiscard]] MaterialCookError parse_post_toml(crd::containers::StringView toml_text, MaterialDesc& out,
+                                                crd::containers::String* where = nullptr);
+[[nodiscard]] int cook_post_graph(const MaterialDesc& desc, crd::kir::KGraph& g,
+                                  crd::containers::String* where = nullptr);
 
 // The natural component count of a WIRE argument (1 = scalar/polymorphic, 2/3/4 = a vector the op indexes into).
 // ⛔ Real registry information, not test scaffolding: `over` swizzles `.a`, so feeding it a float is a silently

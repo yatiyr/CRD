@@ -1,0 +1,17 @@
+schema = 1
+name   = "crd://post/srgb_only"
+
+[[node]]
+name   = "uv"
+op     = "texcoord"
+inputs = [0]
+
+[[node]]
+name   = "scene"
+op     = "sample2d"
+inputs = ["uv", 0, 1, 2]
+
+[[node]]
+name   = "output"
+op     = "srgb_encode"
+inputs = ["scene"]

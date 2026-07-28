@@ -62,16 +62,34 @@ namespace agx_detail
 [[nodiscard]] inline int agx(KGraph& g, int color)
 {
     const auto k     = [&](double v) { return detail::kf(g, color, v); };
-    // AgX inset matrix (Filament, column-major columns = the transpose of the row-major fit).
-    const int  c0    = g.vec3(k(0.842479062253094), k(0.0784335999999992), k(0.0792237451477643));
-    const int  c1    = g.vec3(k(0.0423282422610123), k(0.878468636469772), k(0.0791661274605434));
-    const int  c2    = g.vec3(k(0.0423756549057051), k(0.0784336), k(0.879142973793104));
     namespace nd     = nodes;
-    const int  v     = g.mat_mul_vec(g.mat3(c0, c1, c2), color);
+    // 38-G1: accept a SAMPLED vec4 too (a post graph feeds the sampler result straight in) — AgX is an RGB
+    // transform, so the alpha lane is dropped here rather than at every call site.
+    const int  rgb   = g.node(color).comps() >= 4
+                           ? g.vec3(g.vec_comp(color, 0), g.vec_comp(color, 1), g.vec_comp(color, 2))
+                           : color;
+    // AgX inset matrix as ROW dot products — identical math to the mat3 multiply, in ops every stage lowers
+    // (the raster FS emitter has no MatVecMul arm; a display transform must run exactly there).
+    const auto kk    = [&](double v) { return detail::kf(g, rgb, v); };
+    const int  row0  = g.vec3(kk(0.842479062253094), kk(0.0423282422610123), kk(0.0423756549057051));
+    const int  row1  = g.vec3(kk(0.0784335999999992), kk(0.878468636469772), kk(0.0784336));
+    const int  row2  = g.vec3(kk(0.0792237451477643), kk(0.0791661274605434), kk(0.879142973793104));
+    const int  v     = g.vec3(g.dot(rgb, row0), g.dot(rgb, row1), g.dot(rgb, row2));
     const int  vpos  = nd::detail::bin(g, KOp::Max, v, k(1.0e-10));             // avoid log2(0)
     const int  lg    = nodes::clamp(g, g.unary(KOp::Log2, vpos), k(-12.47393), k(4.026069));
     const int  norm  = nd::detail::bin(g, KOp::Div, nd::detail::bin(g, KOp::Sub, lg, k(-12.47393)), k(4.026069 - (-12.47393))); // (lg−min)/(max−min)
-    return agx_detail::contrast(g, norm);
+    const int  sig   = agx_detail::contrast(g, norm);
+    // ⛔⛔ THE OUTSET — the half everyone forgets. AgX INSETS toward the achromatic axis before the log+
+    // sigmoid (that is what tames the hue shifts), and the OUTSET is the inverse that puts the saturation
+    // BACK. Without it every frame comes out visibly washed out — the user's first words on seeing it live
+    // were "the hdr is desaturating a lot", which is exactly the missing-outset signature and not a taste
+    // question. Filament's AgX outset (the inverse of the inset above), as row dot products.
+    const int  orow0 = g.vec3(kk(1.19687900512017), kk(-0.0528968517574562), kk(-0.0529716355144438));
+    const int  orow1 = g.vec3(kk(-0.0980208811401368), kk(1.15190312990417), kk(-0.0980434501171241));
+    const int  orow2 = g.vec3(kk(-0.0990297440797205), kk(-0.0989611768448433), kk(1.15107367264116));
+    const int  outs  = g.vec3(g.dot(sig, orow0), g.dot(sig, orow1), g.dot(sig, orow2));
+    // the outset can push a channel slightly negative on saturated inputs; clamp before the OETF that follows
+    return nodes::clamp(g, outs, k(0.0), k(1.0));
 }
 
 // pbr_neutral — the Khronos PBR Neutral tone mapper (base-colour accuracy: preserves saturated hues, compresses only the
@@ -88,15 +106,15 @@ namespace agx_detail
     const int  offset = g.select(g.binary(KOp::CmpLt, x, ks(x, 0.08)), g.binary(KOp::Sub, x, g.binary(KOp::Mul, ks(x, 6.25), g.binary(KOp::Mul, x, x))), ks(x, 0.04));
     const int  col1   = nd::detail::bin(g, KOp::Sub, color, offset);     // color − offset (vec3 − scalar)
     const int  peak   = g.binary(KOp::Max, g.swizzle(col1, 0), g.binary(KOp::Max, g.swizzle(col1, 1), g.swizzle(col1, 2)));
-    const double startC = 0.8 - 0.04; const double dd = 1.0 - startC;    // 0.76, 0.24
-    // newPeak = 1 − d²/(peak + d − startC)
-    const int  newPeak = g.binary(KOp::Sub, ks(peak, 1.0), g.binary(KOp::Div, ks(peak, dd * dd), g.binary(KOp::Sub, g.binary(KOp::Add, peak, ks(peak, dd)), ks(peak, startC))));
-    const int  scaled  = nd::detail::bin(g, KOp::Mul, col1, g.binary(KOp::Div, newPeak, peak)); // color · newPeak/peak
-    // g = 1 − 1/(0.15·(peak − newPeak) + 1)
-    const int  gg      = g.binary(KOp::Sub, ks(peak, 1.0), g.binary(KOp::Div, ks(peak, 1.0), g.binary(KOp::Add, g.binary(KOp::Mul, ks(peak, 0.15), g.binary(KOp::Sub, peak, newPeak)), ks(peak, 1.0))));
-    const int  npv     = g.vec3(newPeak, newPeak, newPeak);
-    const int  compressed = g.ternary(KOp::Mix, scaled, npv, g.splat(gg, 3)); // mix(scaled, newPeak, g)
-    return g.select(g.binary(KOp::CmpLt, peak, ks(peak, startC)), col1, compressed);
+    const double start_c = 0.8 - 0.04; const double dd = 1.0 - start_c;    // 0.76, 0.24
+    // new_peak = 1 − d²/(peak + d − start_c)
+    const int  new_peak = g.binary(KOp::Sub, ks(peak, 1.0), g.binary(KOp::Div, ks(peak, dd * dd), g.binary(KOp::Sub, g.binary(KOp::Add, peak, ks(peak, dd)), ks(peak, start_c))));
+    const int  scaled  = nd::detail::bin(g, KOp::Mul, col1, g.binary(KOp::Div, new_peak, peak)); // color · new_peak/peak
+    // g = 1 − 1/(0.15·(peak − new_peak) + 1)
+    const int  gg      = g.binary(KOp::Sub, ks(peak, 1.0), g.binary(KOp::Div, ks(peak, 1.0), g.binary(KOp::Add, g.binary(KOp::Mul, ks(peak, 0.15), g.binary(KOp::Sub, peak, new_peak)), ks(peak, 1.0))));
+    const int  npv     = g.vec3(new_peak, new_peak, new_peak);
+    const int  compressed = g.ternary(KOp::Mix, scaled, npv, g.splat(gg, 3)); // mix(scaled, new_peak, g)
+    return g.select(g.binary(KOp::CmpLt, peak, ks(peak, start_c)), col1, compressed);
 }
 
 // ── B13-c: OUTPUT ENCODES ────────────────────────────────────────────────────────────────────────────────────────────────

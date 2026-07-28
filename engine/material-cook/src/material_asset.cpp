@@ -8,6 +8,7 @@
 
 #include <crd/kir/ckir_material.hpp>
 #include <crd/kir/ckir_nodes.hpp>
+#include <crd/kir/ckir_post.hpp> // 38-G1: the post/tonemap family (post-context ops)
 #include <crd/kir/ckir_shape.hpp> // REN-38 audit: the cook refuses a shape-invalid graph by name
 
 #include <toml++/toml.hpp>
@@ -43,6 +44,11 @@ struct OpEntry
 // a slot's width is part of what an author (and a node editor) must know to wire it correctly.
 const OpEntry kOps[] = {
     {"aastep", 2U, 0U, 0, 0, {1, 1, 0, 0, 0, 0, 0}},
+    // ── ⭐⭐ 38-G1: the POST/TONEMAP family (ckir_post.hpp). ⛔ POST-CONTEXT ONLY: a material describes
+    // SURFACE RESPONSE (ADR-0102, enforced below) — tonemapping is a FRAME operation, so these ops cook only
+    // through `cook_post_graph`, never `cook_material`. One registry, two legality contexts — the same split
+    // that keeps materials out of the lighting model keeps them out of the display transform.
+    {"agx", 1U, 0U, 0, 0, {3, 0, 0, 0, 0, 0, 0}},
     {"absval", 1U, 0U, 0, 0, {1, 0, 0, 0, 0, 0, 0}},
     {"acos", 1U, 0U, 0, 0, {1, 0, 0, 0, 0, 0, 0}},
     {"add", 2U, 0U, 0, 0, {1, 1, 0, 0, 0, 0, 0}},
@@ -52,6 +58,7 @@ const OpEntry kOps[] = {
     {"burn", 3U, 0U, 0, 0, {3, 3, 1, 0, 0, 0, 0}},
     {"ceil", 1U, 0U, 0, 0, {1, 0, 0, 0, 0, 0, 0}},
     {"checkerboard", 5U, 0U, 0, 0, {3, 3, 2, 2, 2, 0, 0}},
+    {"contrast_curve", 1U, 0U, 0, 0, {1, 0, 0, 0, 0, 0, 0}}, // 38-G1: the AgX look's sigmoid (post-only)
     {"clamp", 3U, 0U, 0, 0, {1, 1, 1, 0, 0, 0, 0}},
     {"clamp01", 1U, 0U, 0, 0, {1, 0, 0, 0, 0, 0, 0}},
     {"combine2", 2U, 0U, 0, 0, {1, 1, 0, 0, 0, 0, 0}},
@@ -93,6 +100,9 @@ const OpEntry kOps[] = {
     {"logical_not", 1U, 0U, 0, 0, {1, 0, 0, 0, 0, 0, 0}},
     {"logical_or", 2U, 0U, 0, 0, {1, 1, 0, 0, 0, 0, 0}},
     {"logical_xor", 2U, 0U, 0, 0, {1, 1, 0, 0, 0, 0, 0}},
+    {"ev100", 1U, 0U, 0, 0, {1, 0, 0, 0, 0, 0, 0}},           // 38-G1: average luminance -> EV100 (post-only)
+    {"exposure_scale", 1U, 0U, 0, 0, {1, 0, 0, 0, 0, 0, 0}},   // 38-G1: EV100 -> linear exposure factor (post-only)
+    {"gamut_compress", 2U, 0U, 0, 0, {3, 1, 0, 0, 0, 0, 0}},   // 38-G1 (post-only)
     {"luminance", 2U, 0U, 0, 0, {3, 3, 0, 0, 0, 0, 0}},
     {"magnitude", 1U, 0U, 0, 0, {3, 0, 0, 0, 0, 0, 0}},
     {"mask", 3U, 0U, 0, 0, {4, 4, 1, 0, 0, 0, 0}},
@@ -128,7 +138,10 @@ const OpEntry kOps[] = {
     // coordinates are ATTRIBUTES, not wires — a binding index is topology, not a value an instance overrides.
     {"sample2d", 4U, 0xEU, 0, 15, {2, 0, 0, 0, 0, 0, 0}},
     {"saturate", 2U, 0U, 0, 0, {3, 1, 0, 0, 0, 0, 0}},
+    {"pbr_neutral", 1U, 0U, 0, 0, {3, 0, 0, 0, 0, 0, 0}},     // 38-G1: Khronos PBR Neutral tonemap (post-only)
+    {"pq_encode", 1U, 0U, 0, 0, {3, 0, 0, 0, 0, 0, 0}},        // 38-G1: ST.2084 HDR10 encode (post-only)
     {"screen", 3U, 0U, 0, 0, {3, 3, 1, 0, 0, 0, 0}},
+    {"srgb_encode", 1U, 0U, 0, 0, {3, 0, 0, 0, 0, 0, 0}},      // 38-G1: the sRGB OETF (post-only)
     {"sign", 1U, 0U, 0, 0, {1, 0, 0, 0, 0, 0, 0}},
     {"sin", 1U, 0U, 0, 0, {1, 0, 0, 0, 0, 0, 0}},
     {"smoothstep", 3U, 0U, 0, 0, {1, 1, 1, 0, 0, 0, 0}},
@@ -255,6 +268,16 @@ const OpEntry kOps[] = {
         return g.tex_sample(tex, samp, in[0]);
     }
     if (op_is(op, "saturate")) { return crd::kir::nodes::saturate(g, in[0], in[1]); }
+    // 38-G1: the POST/TONEMAP family — legal only under the POST context (`cook_post_graph`); `cook_material`
+    // refuses them by name below, the same way it refuses lighting ops.
+    if (op_is(op, "agx")) { return crd::kir::post::agx(g, in[0]); }
+    if (op_is(op, "contrast_curve")) { return crd::kir::post::agx_detail::contrast(g, in[0]); }
+    if (op_is(op, "ev100")) { return crd::kir::post::ev100_from_luminance(g, in[0]); }
+    if (op_is(op, "exposure_scale")) { return crd::kir::post::exposure_from_ev100(g, in[0]); }
+    if (op_is(op, "gamut_compress")) { return crd::kir::post::gamut_compress(g, in[0], in[1]); }
+    if (op_is(op, "pbr_neutral")) { return crd::kir::post::pbr_neutral(g, in[0]); }
+    if (op_is(op, "pq_encode")) { return crd::kir::post::pq_encode(g, in[0]); }
+    if (op_is(op, "srgb_encode")) { return crd::kir::post::srgb_encode(g, in[0]); }
     if (op_is(op, "screen")) { return crd::kir::nodes::screen(g, in[0], in[1], in[2]); }
     if (op_is(op, "sign")) { return crd::kir::nodes::sign(g, in[0]); }
     if (op_is(op, "sin")) { return crd::kir::nodes::sin(g, in[0]); }
@@ -297,6 +320,24 @@ void set_where(crd::containers::String* w, std::string_view v)
            || op == "tonemap";
 }
 
+// ── ⭐⭐ 38-G1: the POST-ONLY family — frame operations, not surface response. `cook_material` refuses them
+// exactly as it refuses lighting ops (ADR-0102, two-sided); `cook_post_graph` is their one legal context.
+[[nodiscard]] bool is_post_op(std::string_view op) noexcept
+{
+    return op == "agx" || op == "contrast_curve" || op == "ev100" || op == "exposure_scale"
+           || op == "gamut_compress" || op == "pbr_neutral" || op == "pq_encode" || op == "srgb_encode";
+}
+
+// ── and the ops a POST graph must NOT reach: surface/geometry readers. A display transform that sampled a
+// normal or a vertex colour would be a material wearing a post costume — the same coupling, reversed.
+[[nodiscard]] bool is_surface_reader_op(std::string_view op) noexcept
+{
+    // `texcoord` stays LEGAL: in a fullscreen pass it is the SCREEN coordinate, exactly what a post graph
+    // samples its input by — refusing it would make every post asset inexpressible.
+    return op == "geomcolor" || op == "normal" || op == "tangent" || op == "bitangent" || op == "position"
+           || op == "facingratio";
+}
+
 } // namespace
 
 
@@ -320,7 +361,7 @@ void read_value(const toml::node& n, double* v, crd::u32& comps)
 }
 } // namespace
 
-MaterialCookError parse_material_toml(crd::containers::StringView toml_text, MaterialDesc& out,
+MaterialCookError parse_material_core(crd::containers::StringView toml_text, MaterialDesc& out,
                                       crd::containers::String* where)
 {
     // NON-THROWING parse (TOML_EXCEPTIONS=0, the frame-cook pattern). A thrown parse_error unwinding
@@ -458,7 +499,24 @@ MaterialCookError parse_material_toml(crd::containers::StringView toml_text, Mat
         get("opacity", out.surface.opacity);
     }
 
+    return MaterialCookError::Ok; // context validation is the FACE's job (material vs post)
+}
+
+MaterialCookError parse_material_toml(crd::containers::StringView toml_text, MaterialDesc& out,
+                                      crd::containers::String* where)
+{
+    const MaterialCookError e = parse_material_core(toml_text, out, where);
+    if (e != MaterialCookError::Ok) { return e; }
     return validate_material(out, where);
+}
+
+// 38-G1: the POST face — the same grammar, the OTHER legality. `cook_post_graph` enforces the post rules
+// (post-only ops legal, surface readers refused, a named "output" required); running the MATERIAL validator
+// here would refuse every tonemap by design.
+MaterialCookError parse_post_toml(crd::containers::StringView toml_text, MaterialDesc& out,
+                                  crd::containers::String* where)
+{
+    return parse_material_core(toml_text, out, where);
 }
 
 // ── VALIDATE ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -492,6 +550,10 @@ MaterialCookError validate_material(const MaterialDesc& desc, crd::containers::S
         const MatNodeDesc& n  = desc.nodes[i];
         const std::string_view opv(n.op.c_str(), n.op.size());
         if (is_lighting_op(opv)) { set_where(where, std::string_view(n.name.c_str(), n.name.size())); return MaterialCookError::ForbiddenLighting; }
+        // 38-G1: the display transform is a FRAME operation — a material carrying `agx`/`srgb_encode` couples
+        // every surface to the output encoding, the mirror image of the lighting coupling above. Same error:
+        // the asset names an op this CONTEXT may not use, and the message points at the node.
+        if (is_post_op(opv)) { set_where(where, std::string_view(n.name.c_str(), n.name.size())); return MaterialCookError::ForbiddenLighting; }
         const crd::i32 oi = find_op(crd::containers::StringView(n.op.c_str(), n.op.size()));
         if (oi < 0)
         {
@@ -712,6 +774,88 @@ crd::containers::String emit_material_toml(const MaterialDesc& desc, crd::memory
 }
 
 // ── COOK ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+// ── ⭐⭐ 38-G1: the POST cook — see the header contract. Deliberately WITHOUT the material walker's
+// param/instance machinery (a display transform is frame-authored, not instanced); a post graph that needs a
+// tunable takes it as a wired literal today and a declared uniform when the vocabulary grows one.
+int cook_post_graph(const MaterialDesc& desc, crd::kir::KGraph& g, crd::containers::String* where)
+{
+    const auto fail = [&](std::string_view what) {
+        if (where != nullptr)
+        {
+            where->clear();
+            where->append(what.data(), what.size());
+        }
+        return -1;
+    };
+    if (desc.nodes.size() == 0U) { return fail("empty"); }
+    const crd::kir::Shape sh1 = crd::kir::make_shape({1});
+    crd::containers::Array<int> built(crd::memory::default_allocator());
+    built.resize(static_cast<crd::u32>(desc.nodes.size()), -1);
+    int out_node = -1;
+    for (crd::usize i = 0; i < desc.nodes.size(); ++i)
+    {
+        const MatNodeDesc&     n = desc.nodes[i];
+        const std::string_view opv(n.op.c_str(), n.op.size());
+        // the TWO-SIDED legality, post face: lighting ops stay out (a post pass shades nothing), and surface
+        // readers stay out (a display transform that sampled a normal would be a material in a post costume)
+        if (is_lighting_op(opv)) { return fail(std::string_view(n.name.c_str(), n.name.size())); }
+        if (is_surface_reader_op(opv)) { return fail(std::string_view(n.name.c_str(), n.name.size())); }
+        const crd::i32 oi = find_op(crd::containers::StringView(n.op.c_str(), n.op.size()));
+        if (oi < 0) { return fail(opv); }
+        const OpEntry& oe = kOps[static_cast<crd::usize>(oi)];
+        if (n.inputs.size() != oe.arity) { return fail(std::string_view(n.name.c_str(), n.name.size())); }
+        int in[kMaxNodeInputs] = {};
+        for (crd::usize k = 0; k < n.inputs.size(); ++k)
+        {
+            const MatInput& mi = n.inputs[k];
+            if ((oe.attr_mask >> k) & 1U) // a compile-time attribute rides through as its integer
+            {
+                in[k] = static_cast<int>(mi.value[0]);
+                continue;
+            }
+            if (mi.kind == MatInputKind::Node)
+            {
+                int found = -1;
+                for (crd::usize p = 0; p < i; ++p)
+                {
+                    if (desc.nodes[p].name.size() == mi.name.size()
+                        && std::memcmp(desc.nodes[p].name.c_str(), mi.name.c_str(), mi.name.size()) == 0)
+                    {
+                        found = built[static_cast<crd::u32>(p)];
+                        break;
+                    }
+                }
+                if (found < 0) { return fail(std::string_view(mi.name.c_str(), mi.name.size())); }
+                in[k] = found;
+            }
+            else // literal (Param has no post meaning yet — a param input is a refusal, not a silent default)
+            {
+                if (mi.kind == MatInputKind::Param) { return fail(std::string_view(n.name.c_str(), n.name.size())); }
+                const int c0 = g.constant(mi.value[0], sh1, crd::kir::DType::F32);
+                if (mi.comps <= 1U) { in[k] = c0; }
+                else
+                {
+                    const int c1 = g.constant(mi.value[1], sh1, crd::kir::DType::F32);
+                    const int c2 = g.constant(mi.value[2], sh1, crd::kir::DType::F32);
+                    if (mi.comps == 2U) { in[k] = g.vec2(c0, c1); }
+                    else if (mi.comps == 3U) { in[k] = g.vec3(c0, c1, c2); }
+                    else { in[k] = g.vec4(c0, c1, c2, g.constant(mi.value[3], sh1, crd::kir::DType::F32)); }
+                }
+            }
+        }
+        const int r = material_build_op(g, crd::containers::StringView(n.op.c_str(), n.op.size()),
+                                        static_cast<const int*>(in), static_cast<crd::u32>(n.inputs.size()));
+        if (r < 0) { return fail(std::string_view(n.name.c_str(), n.name.size())); }
+        built[static_cast<crd::u32>(i)] = r;
+        if (n.name.size() == 6U && std::memcmp(n.name.c_str(), "output", 6U) == 0) { out_node = r; }
+    }
+    // ⛔ the OUTPUT is named, never inferred: "the last node" changes meaning under a reorder that alters
+    // nothing else, which is exactly the silent-drift shape every vocabulary here refuses.
+    if (out_node < 0) { return fail("output"); }
+    return out_node;
+}
+
 int cook_material(const MaterialDesc& desc, crd::kir::KGraph& g, int struct_id, crd::containers::StringView instance,
                   crd::kir::ShapeIssue* shape_issue)
 {
@@ -856,6 +1000,11 @@ int cook_material(const MaterialDesc& desc, crd::kir::KGraph& g, int struct_id, 
     return surface;
 }
 
+bool material_op_post_only(crd::u32 i) noexcept
+{
+    if (i >= material_op_count()) { return false; }
+    return is_post_op(std::string_view(kOps[i].name));
+}
 crd::u32    material_op_count() noexcept { return static_cast<crd::u32>(sizeof(kOps) / sizeof(kOps[0])); }
 const char* material_op_name(crd::u32 i) noexcept { return i < material_op_count() ? kOps[i].name : nullptr; }
 crd::u32    material_op_arity(crd::u32 i) noexcept { return i < material_op_count() ? kOps[i].arity : 0U; }

@@ -167,6 +167,20 @@ struct SceneExtractor final : crd::scene::IAabbExtractor
 
 } // namespace
 
+// C4996-safe env read (the engine's `mf_getenv` pattern): a FIXED, documented dev knob, not a security
+// surface. The sandbox honours `CRD_ASSETS_DIR` so a shipped `assets/**` tree shadows the embedded pack.
+[[nodiscard]] inline const char* sandbox_getenv(const char* name) noexcept
+{
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
+    return std::getenv(name);
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+}
+
 int main(int argc, char** argv)
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0); // unbuffered so log lines survive a crash
@@ -181,6 +195,10 @@ int main(int argc, char** argv)
     crd::gpu::PresentMode present_mode   = crd::gpu::PresentMode::Fifo;
     bool                  force_readback = false;
     bool                  want_shadows   = true;
+    // Validation is the right dev DEFAULT, but its CPU cost is real (descriptor tracking dominates at high draw
+    // counts) and a SHIPPED app never runs it — a perf number with validation on measures a config nothing
+    // ships (the gates-ran-unshipped-config scar). `--no-validation` is the honest arm for any speed claim.
+    bool                  want_validation = true;
     for (int i = 1; i < argc; ++i)
     {
         if (std::strcmp(argv[i], "--headless") == 0) { headless = true; }
@@ -190,6 +208,7 @@ int main(int argc, char** argv)
         // REN-3.2-b: A/B the shadows. If an object looks unlit with shadows ON and STILL looks unlit with them
         // OFF, the cause is its NORMALS (ndl == 0 gives the same flat ambient as vis == 0), not the shadow map.
         else if (std::strcmp(argv[i], "--no-shadows") == 0) { want_shadows = false; }
+        else if (std::strcmp(argv[i], "--no-validation") == 0) { want_validation = false; }
         else if (std::strcmp(argv[i], "--present") == 0 && i + 1 < argc)
         {
             ++i;
@@ -234,7 +253,7 @@ int main(int argc, char** argv)
     crd::gpu::GpuContextConfig gpu_cfg;
     gpu_cfg.backend           = crd::gpu::GpuBackend::Vulkan;
     gpu_cfg.headless          = false;
-    gpu_cfg.enable_validation = !headless;
+    gpu_cfg.enable_validation = !headless && want_validation;
     auto gpu_context          = crd::gpu::create_vulkan_gpu_context(gpu_cfg);
     auto* vk = gpu_context != nullptr ? static_cast<crd::gpu::VulkanGpuContext*>(gpu_context.get()) : nullptr;
     if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
@@ -334,7 +353,9 @@ int main(int argc, char** argv)
                 const crd::usize stride = crd::resources::kMeshVertexStride;
                 const crd::usize vc     = mr->vertices.size() / stride;
                 double           sumlen = 0.0;
-                double           cx = 0.0, cy = 0.0, cz = 0.0;
+                double           cx = 0.0;
+                double           cy = 0.0;
+                double           cz = 0.0;
                 for (crd::usize v = 0; v < vc; ++v)
                 {
                     const auto* f = reinterpret_cast<const crd::f32*>(mr->vertices.data() + v * stride);
@@ -489,6 +510,14 @@ int main(int argc, char** argv)
 
     auto scene_renderer_ptr = std::make_unique<crd::scenerender::SceneRenderer>(&scene_alloc);
     auto& scene_renderer    = *scene_renderer_ptr;
+    // ⛔ 38-G1: the asset root MUST install BEFORE `init_programs` — every default (materials, lighting,
+    // vertex programs, post graphs) resolves disk-first AT COOK TIME. Installing it after meant the cooked
+    // programs came from the embedded pack and the shipped assets only governed the frame graphs.
+    if (const char* aroot = sandbox_getenv("CRD_ASSETS_DIR"); aroot != nullptr && aroot[0] != 0)
+    {
+        const bool root_ok = scene_renderer.set_asset_root(aroot);
+        CRD_LOG_INFO(g_log_sandbox, "asset root '{}' -> {}", aroot, root_ok ? "installed" : "REJECTED");
+    }
     const bool scene_ready = scene_renderer.init(*raster, rm) && scene_renderer.init_programs(*vk)
                              && cells.size() > 0U;
     if (!scene_ready) { CRD_LOG_WARN(g_log_sandbox, "Scene renderer unavailable — falling back to overlay-only"); }
@@ -583,6 +612,16 @@ int main(int argc, char** argv)
             (void)ctx; // the target is the same imported canvas; ctx.raster() is already in recording mode
         },
         &overlay_ctx);
+
+    // ── ⭐⭐ 38-G1 IN THE APP: the frame is an ASSET NAME, not text this file carries. Each mode installs a
+    // shipped `assets/frame/*.frame.toml` whose post pass names a shipped `assets/post/*.crdp` display
+    // transform. Switching the tonemap edits NOTHING here — it selects a different authored frame.
+    // ⛔ 38-G1: WITHOUT AN ASSET ROOT the renderer only ever sees the embedded pack — every shipped
+    // `assets/**` file is invisible and "edit the asset, see the frame change" is a claim nothing tests.
+    // `CRD_ASSETS_DIR` is how ctest points at the tree; the app honours the same variable.
+    const char* const post_frames[2] = {"frame/forward_csm_srgb.frame.toml", "frame/forward_csm_agx.frame.toml"};
+    int               post_mode      = 1; // 0 = sRGB only · 1 = AgX
+    int               post_mode_live = -1;
 
     crd::scenerender::RenderStats last_draw{};
     // REN-8: the frame's phase breakdown. `render` already reports its own gpu/cpu split; these cover the REST
@@ -695,6 +734,14 @@ int main(int argc, char** argv)
         // the DESTROYED target for exactly one frame — which is a use-after-free that crashes on a fullscreen
         // toggle. Ordering, not just freshness, is what makes this correct.
         overlay_ctx.target = canvas.get();
+        // 38-G1: the tonemap is a NAME. Reinstalling the graph is the whole switch.
+        if (scene_ready && post_mode != post_mode_live)
+        {
+            const bool ok = scene_renderer.set_frame_graph_asset(post_frames[post_mode == 1 ? 1 : 0]);
+            CRD_LOG_INFO(g_log_sandbox, "38-G1 frame '{}' -> {}", post_frames[post_mode == 1 ? 1 : 0],
+                         ok ? "installed" : "REJECTED");
+            post_mode_live = post_mode;
+        }
         if (scene_ready)
         {
             last_sync         = scene_renderer.sync(world);
@@ -703,6 +750,28 @@ int main(int argc, char** argv)
             last_draw = scene_renderer.render(*canvas, vp, crd::math::Vec3f{0.35F, 1.0F, 0.25F},
                                               crd::gpu::ClearColor{0.09F, 0.10F, 0.13F, 1.0F}, bvh);
             phase.render = ms_between(t_sync, now_ms());
+            // 38-G1 perf probe: the phase board, once a second, so a headless run can be MEASURED rather
+            // than guessed at (the ImGui panel is invisible to a log).
+            if (frame % 20U == 0U)
+            {
+                CRD_LOG_INFO(g_log_sandbox,
+                             "perf: sync {:.2f} (extract {:.2f} upload {:.2f} palette {:.2f}) render {:.2f} | "
+                             "gpu {:.3f} ms ({} passes) cpu {:.3f} | draws {} inst {}",
+                             phase.sync, last_sync.extract_ms, last_sync.upload_ms, last_sync.palette_ms,
+                             phase.render, last_draw.gpu_ms, last_draw.timed_passes, last_draw.cpu_ms,
+                             last_draw.draws, last_draw.drawn_instances);
+                // 38-G1 perf: the PER-PASS GPU board — "gpu 8.4 ms" is a number, this is an attribution.
+                if (const crd::gpu::IFrameGraph* dfg = scene_renderer.debug_frame_graph();
+                    dfg != nullptr && dfg->gpu_timing_available())
+                {
+                    for (crd::u32 pi = 0; pi < dfg->pass_count(); ++pi)
+                    {
+                        CRD_LOG_INFO(g_log_sandbox, "  pass[{}] {} {:.3f} ms", pi,
+                                     dfg->pass_name(pi) != nullptr ? dfg->pass_name(pi) : "?",
+                                     dfg->pass_gpu_ms(pi));
+                    }
+                }
+            }
             if (last_draw.draws == 0U) // everything culled (or nothing loadable): still present a cleared frame
             {
                 raster->clear(*canvas, crd::gpu::ClearColor{0.09F, 0.10F, 0.13F, 1.0F});
@@ -739,6 +808,15 @@ int main(int argc, char** argv)
         {
             ImGui::Begin("Cerid Sandbox — GEO-7");
             ImGui::Text("frame %u  |  %ux%u", frame, surface->width(), surface->height());
+            // ⭐⭐ 38-G1: the DISPLAY TRANSFORM, live. Each radio installs an authored frame whose post pass
+            // names a different shipped `.crdp` graph — the pixels change because an ASSET changed.
+            ImGui::Separator();
+            ImGui::Text("38-G1 tonemap (authored .crdp assets):");
+            ImGui::RadioButton("sRGB only", &post_mode, 0);
+            ImGui::SameLine();
+            ImGui::RadioButton("AgX", &post_mode, 1);
+            ImGui::Text("  frame asset: %s", post_frames[post_mode == 1 ? 1 : 0]);
+            ImGui::Separator();
             ImGui::Text("instances: %u drawn / %u culled / %u total", last_draw.drawn_instances,
                         last_draw.culled_instances, last_sync.total_instances);
             ImGui::Text("draws: %u (one per mesh group; %u groups)", last_draw.draws, last_sync.groups);
@@ -822,17 +900,21 @@ int main(int argc, char** argv)
         if (app.window().input().state().was_key_pressed(crd::platform::Key::Escape)) { app.close(); }
     }
 
-    // Teardown order: ImGui backend (drains the device) → GLFW platform half → context → present surface →
-    // canvas/program (before the raster context) → raster → gpu context. jobs/perf mirror their bring-up.
+    // Teardown order — two rules, both scars:
+    //   ⛔ the SURFACE dies first: its destructor is the vkDeviceWaitIdle that drains the frames in flight.
+    //   ⛔ the SCENE RENDERER dies before draw/imgui: its frame graph's descriptor pools hold the LAST frame's
+    //     sets, and those sets reference the draw system's buffers — destroying a buffer a live set references
+    //     is a validation error (VUID-vkDestroyBuffer-buffer-00922) and a real hazard one driver over.
+    // jobs/perf mirror their bring-up.
     crd::jobs::shutdown();
     crd::perf::uninstall_jobs_adapter();
     crd::perf::shutdown();
+    surface.reset();            // vkDeviceWaitIdle — every frame in flight completes here
+    scene_renderer_ptr.reset(); // the frame graph + its descriptor pools die BEFORE any buffer they referenced
     crd::draw::shutdown();
     imgui_backend.reset();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
-    scene_renderer_ptr.reset(); // the scene's GPU buffers/programs die BEFORE the raster context and device
-    surface.reset();
     canvas.reset();
     raster.reset();
     gpu_context.reset();

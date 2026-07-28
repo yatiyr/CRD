@@ -177,6 +177,10 @@ struct FgImageDesc
     // ── ⭐ REN-38-B2. Appended at the END (a reordered field silently reinterprets every cooked graph). ──
     FgImageKind   kind    = FgImageKind::Tex2D;
     crd::u32      depth   = 1; // Tex3D only — the slice count
+    // ⭐⭐ 38-G1: a COLOUR transient that a geometry pass renders into needs its own DEPTH ATTACHMENT. The
+    // graph creates a companion depth image and hands it to the target's depth slot, so an intermediate scene
+    // buffer is depth-tested exactly like the swapchain canvas. Without it the pass draws with no depth test.
+    bool          depth_buffer = false;
     // ⛔ A MIP CHAIN, not a mip COUNT that someone remembers to honour. Bloom's down/up chain, SSR's hi-Z and the
     // prefiltered environment map are all "one resource, N levels, each level written by one pass and read by the
     // next" — without this they must be N SEPARATE resources, which defeats the aliaser and makes the chain's

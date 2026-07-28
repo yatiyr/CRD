@@ -7,7 +7,23 @@
 
 ## Current focus — Phase 3.1.6 **v17 GPU compute (CKIR)** — on the **GPU-program-system detour** (D-007+D-008 MERGED)
 
-> ### ⏩ SESSION HANDOFF (2026-07-27, fourth window) — READ THIS FIRST on re-entry
+> ### ⏩ SESSION HANDOFF (2026-07-28) — READ THIS FIRST on re-entry
+> **38-G1 IS CLOSED LIVE** (`docs/sessions/2026-07-28-38g1-live-close-perf.md`): every default the renderer
+> cooks resolves DISK-FIRST (materials · lighting · vertex incl. per-cascade shadow via desc stamping · frames
+> · post) with the builtin pack as fallback — override proven with BOTH arms (valid R/B-swap renders; broken
+> file fails BY NAME, and that arm found + fixed an unchecked negative-surface AV in `build_fs_for_pass`).
+> The live app runs at **119 fps / 8.4 ms loop, ZERO validation errors** (was 53 fps at session start):
+> batched uploads (`begin/end_upload_batch`, one submit, no host wait — sync 8.66→0.38 ms; llvmpipe caught the
+> buffer-destroy-mid-batch SEGFAULT → dtor drain hook), present-ring contract explicit
+> (`IPresentSurface::wait_idle`), companion-depth transition/retire fixed, teardown order fixed, debug-utils
+> image naming. **Next up: REN-39 INDEXED PULL — row 142 in `docs/detours/D-007-gpu-program-system.md`,
+> sliced 39-A1/A2 (index-buffer capability + `draw_storage_multi_indexed_depth`) → 39-B1/B2
+> (`KBuiltin::InstanceIndex` both emitters + vertex-cook `indexed = true` with oracle/shape-checker mirror)
+> → 39-C1/C2 (renderer switch, pixel-parity gate vs pull, measured close with bench board).** The frame is
+> measured VERTEX-bound (cascade3 3.3 ms + forward 3.7 ms on a 4070 Ti SUPER; map-size probe moved nothing);
+> expected 3–6× vertex-work cut, both backends. Watch: DX12 RT ANY-HIT gate flaked once (see session log).
+>
+> ### Prior handoff (2026-07-27, fourth window)
 > **THE ENTIRE 38-F BAND IS CLOSED (F1–F16), user-directed "fully finish 38-F, no gaps no deferrals".**
 > Next: **38-G — port every technique we have built as assets** (the technique library rows). Full detail:
 > Part 3 of `docs/sessions/2026-07-27-ren38-authored-programs.md`. Highlights:

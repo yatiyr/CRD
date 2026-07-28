@@ -81,6 +81,10 @@ inline constexpr crd::u32 kLightSectionWords  = 16U;  // one record: position@0 
 // past the instance section read garbage transforms, and their verdicts polluted the indirect-args atomic).
 // [101..103] are the new pad. Every existing index is unchanged — the append-only discipline.
 inline constexpr crd::u32 kHdrInstanceCount   = 100U;
+// ⭐⭐ 38-G1 perf: the INSTANCE CAPACITY — the stride between the per-cascade visible lists that follow the
+// camera's. Cascade c reads its list at `visible_off + (1 + c) * this`. Takes one of the [101..103] pad words,
+// so every existing index is unchanged (the append-only discipline this header has always followed).
+inline constexpr crd::u32 kHdrInstanceCapacity = 101U;
 inline constexpr crd::u32 kHeaderWords        = 120U;
 inline constexpr crd::u32 kHdrCsmSplits       = 28U; // 4 floats
 inline constexpr crd::u32 kHdrCsmLightVp      = 32U; // 4 x 16 floats
@@ -141,6 +145,11 @@ struct MeshGroup
     crd::u32 vertices_off = 0;
     crd::u32 instances_off = 0;
     crd::u32 visible_off = 0;
+    // ⭐⭐ 38-G1 perf: the CASCADE visible lists live right after the camera's, one `capacity` block each.
+    // Cascade c's list is at `visible_off + (1 + c) * capacity`. Shadow passes were drawing the CAMERA's list
+    // four times — cascade 0 covers a few metres of a 110-unit field, so most of that vertex work was
+    // transformed and then clipped. Measured cost of the waste: 8 ms of GPU, 130 fps -> 53.
+    crd::u32 cascade_visible_count[kMaxCascades] = {};
     crd::u32 capacity = 0;           // instance slots the buffer holds
     crd::u32 region_base = 0;        // REN-38: this group's word base inside the ONE scene buffer (0 = unassigned)
     bool     geometry_uploaded = false;
@@ -174,6 +183,11 @@ struct SyncStats
     crd::u32 dirty_runs        = 0; // chunk runs re-extracted this sync
     crd::u64 uploaded_bytes    = 0; // instance-payload bytes uploaded (the partial-re-upload gate metric)
     crd::u32 meshes_pending    = 0; // MeshRenderers whose mesh resource is not loadable yet
+    // 38-G1 perf: where the CPU milliseconds of sync() actually go. A single "sync 8.5 ms" number cannot be
+    // optimized — the split names the hotspot instead of inviting a guess.
+    double   extract_ms        = 0.0; // the ECS walks (signature + update/rebuild + animators)
+    double   upload_ms         = 0.0; // geometry + instance-payload storage uploads
+    double   palette_ms        = 0.0; // skinned palette sampling + its upload
 };
 
 struct RenderStats
@@ -250,6 +264,11 @@ public:
     // `builtin_asset_text`) name programs the host cooks from the authored stage declarations. ⛔ Returns false
     // and KEEPS the previous graph on any parse/validation failure — never a half-installed frame.
     [[nodiscard]] bool set_frame_graph_toml(const char* toml_text);
+    // ⭐⭐ 38-G1: install a frame BY ASSET NAME — `"frame/forward_csm_agx.frame.toml"` — resolved through the
+    // SAME disk-first path every other asset uses (a shipped file under the asset root shadows the built-in
+    // pack). ⛔ This, not a TOML string an app pastes into C++, is how an application selects a frame: the
+    // moment the text lives in a caller, the frame stops being editable content and becomes code again.
+    [[nodiscard]] bool set_frame_graph_asset(const char* asset_name);
     // ── ⭐ REN-38-F15: DISK-FIRST asset loading. ──
     // A file under `dir` shadows the embedded copy for every authored asset this renderer cooks (frame graphs,
     // stage declarations, materials) — editing `assets/` then changes the frame without a rebuild. ⛔ A disk
@@ -264,6 +283,10 @@ public:
     // REN-38: the ENGINE-FILLED vertex axis of the variant identity (folded from the live .crdv; 0 before
     // init_programs). The D5 row overclaimed this once; the accessor is what the gate asserts against.
     [[nodiscard]] crd::u32 debug_variant_vertex() const noexcept;
+
+    // 38-G1 perf: the OWNED frame graph, read-only — the per-pass GPU board (`pass_name`/`pass_gpu_ms`) is
+    // what turns "gpu 8.4 ms" into an attribution. Null until the first owner-path render.
+    [[nodiscard]] const crd::gpu::IFrameGraph* debug_frame_graph() const noexcept;
     // The `pcf_taps` option value handed to the shadow technique (1 | 4 | 8 | 16). A DECLARED option, so each
     // choice cooks to its own fully-unrolled variant rather than a dynamic loop.
     void set_pcf_taps(crd::u32 taps) noexcept;

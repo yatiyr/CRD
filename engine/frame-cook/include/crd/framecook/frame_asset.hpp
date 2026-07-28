@@ -170,6 +170,12 @@ struct FrameResourceDesc
     // ── ⭐ REN-38-B2: SHAPE. Appended at the END. ──
     crd::gpu::FgImageKind   kind_2d = crd::gpu::FgImageKind::Tex2D; // `dimension = "2d"|"3d"|"cube"|"cube_array"`
     crd::u32                depth   = 1U;  // 3d only
+    // ⭐⭐ 38-G1: does this COLOUR transient carry a DEPTH ATTACHMENT? A geometry pass drawing into an
+    // intermediate target (the scene buffer a post chain reads) needs one exactly as much as the swapchain
+    // canvas does — without it the pass is not depth-tested and the frame renders with broken occlusion,
+    // which is a WRONG image rather than a missing one. ⛔ Not the same as `depth` above (the 3-D slice
+    // count); a render target's depth buffer is a different question and gets a different word.
+    bool                    depth_buffer = false;
     crd::u32                mips    = 1U;  // the chain length; 0 ⇒ "full chain" is REJECTED, never guessed
     // ── ⭐ REN-38-B3: a STRUCTURED buffer's shape. `size_bytes` is derived (stride × count) when both are given,
     // so an author states elements — which is what they actually have — rather than doing the multiplication.

@@ -371,6 +371,10 @@ struct VertexProgramDesc
     // region base from `sbuf[rebase_table + DrawIndex]` and rebases EVERY storage load by it — one scene
     // buffer, per-group regions, cross-group multi-draw. 0 keeps the historical absolute layout.
     crd::u32                               rebase_table = 0U;
+    // ⭐⭐ 38-G1 perf: the header word holding the INSTANCE CAPACITY (the stride between the per-cascade
+    // visible lists). Non-zero on a LIGHT_VP stage makes it read cascade `cascade`'s own list instead of the
+    // camera's — the per-cascade shadow cull. 0 keeps the historical single-list behaviour.
+    crd::u32                               instance_capacity_word = 0U;
     ExpandDesc                             expand;
 
     explicit VertexProgramDesc(crd::memory::IAllocator* a)

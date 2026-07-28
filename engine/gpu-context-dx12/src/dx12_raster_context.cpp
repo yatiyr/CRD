@@ -4,6 +4,7 @@
 // whole clear path; the texture→readback copy honours the 256-byte row-pitch alignment D3D12 demands (GetCopyableFootprints).
 // The shader DRAW path (a graphics PSO from a VS+FS DXIL pair + DrawInstanced) appends in C4-b.
 
+#include <crd/log/log_macros.hpp>
 #include <crd/gpu/dx12_raster_context.hpp>
 
 #include <crd/gpu/dx12_ray_tracing_context.hpp> // REN-38-A9: dx12_scene_tlas — the TLAS behind a portable AS handle
@@ -22,6 +23,10 @@
 
 #include <cstring> // std::memcpy — the program owns a copy of the VS/FS DXIL to rebuild PSOs at other sample counts
 #include <memory>
+
+// REN-38: the ENGINE LOGGER, not fprintf. This channel carries the root-signature refusals whose SILENCE
+// cost the entire DX12 scene family (t3[1024] swallowing the atlas t4 — a bare nullptr said nothing).
+CRD_DEFINE_LOG_CHANNEL(g_log_dx12raster, "Dx12Raster", crd::log::LogLevel::Info)
 
 namespace crd::gpu
 {
@@ -1423,10 +1428,10 @@ public:
         samp_range.BaseShaderRegister                = 2; // s2
         samp_range.RegisterSpace                     = 0;
         samp_range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-        D3D12_DESCRIPTOR_RANGE bindless_range{}; // B2-d: t3[kBindlessMax] (bindless texture array)
+        D3D12_DESCRIPTOR_RANGE bindless_range{}; // B2-d: t16[kBindlessMax] (bindless texture array — above the fixed slots)
         bindless_range.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         bindless_range.NumDescriptors                    = kBindlessMax;
-        bindless_range.BaseShaderRegister                = 3; // t3
+        bindless_range.BaseShaderRegister                = 16; // t16 — above the fixed slots (t1 single, t2 free, t4 atlas); t3-base swallowed t4 and DX12 refuses overlapping ranges
         bindless_range.RegisterSpace                     = 0;
         bindless_range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
         // REN-38: t4 = the SHADOW ATLAS's own register + s5 = its comparison sampler — the pair that ends the
@@ -1466,11 +1471,17 @@ public:
         rsd.Flags         = D3D12_ROOT_SIGNATURE_FLAG_NONE;
         ComPtr<ID3DBlob> sig;
         ComPtr<ID3DBlob> err;
-        if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err))) { return nullptr; }
+        if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err)))
+        {
+            CRD_LOG_ERROR(g_log_dx12raster, "root signature serialize FAILED: {}",
+                          err != nullptr ? static_cast<const char*>(err->GetBufferPointer()) : "?");
+            return nullptr;
+        }
         ComPtr<ID3D12RootSignature> root;
         if (FAILED(m_device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(),
                                                  IID_PPV_ARGS(&root))))
         {
+            std::fprintf(stderr, "RSIG create FAILED\n");
             return nullptr;
         }
 

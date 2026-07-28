@@ -495,6 +495,8 @@ VertexCookError parse_vertex_toml(crd::containers::StringView toml_text, VertexP
     // ⭐⭐ REN-38: `rebase_table = <word>` — the DRAW-TABLE offset. Non-zero makes the pull VS read its region
     // base from `sbuf[rebase_table + DrawIndex]` and rebase every load by it (the scene-buffer consolidation).
     out.rebase_table = static_cast<crd::u32>(root["rebase_table"].value_or<int64_t>(0));
+    // 38-G1: the per-cascade visible-list stride word (see VertexProgramDesc::instance_capacity_word)
+    out.instance_capacity_word = static_cast<crd::u32>(root["instance_capacity_word"].value_or<int64_t>(0));
 
     if (const auto* nt = root["node"].as_array())
     {
@@ -2227,7 +2229,16 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
     const int li    = c.sub(vid, c.mul(ii, idxc));
     const int vidx  = c.loadu(c.add(c.hdru(desc.header.index_off), li));
     const int vbase = c.add(c.hdru(desc.header.vertex_off), c.mul(vidx, c.ku(desc.vertex_stride)));
-    const int slot  = c.loadu(c.add(c.hdru(desc.header.visible_off), ii));
+    // ⭐⭐ 38-G1 perf: a LIGHT_VP (cascade) pass reads ITS OWN visible list. The renderer lays them out right
+    // after the camera's — cascade c at `visible_off + (1 + c) * instance_capacity` — and this stage knows its
+    // cascade at COOK time, so the offset is a compile-time constant and no uniform selects it. Shadow passes
+    // were reading the CAMERA's list, drawing every camera-visible instance into all four cascades; cascade 0
+    // covers a few metres of a 110-unit field, so nearly all of it was transformed and then clipped away.
+    const int vis_base = desc.transform == VertexTransform::LightVp && desc.instance_capacity_word != 0U
+                             ? c.add(c.hdru(desc.header.visible_off),
+                                     c.mul(c.hdru(desc.instance_capacity_word), c.ku(1U + desc.cascade)))
+                             : c.hdru(desc.header.visible_off);
+    const int slot  = c.loadu(c.add(vis_base, ii));
     const int ibase = c.add(c.hdru(desc.header.instance_off), c.mul(slot, c.ku(desc.instance.stride)));
 
     crd::containers::Array<AttrVals> vals(crd::memory::default_allocator());

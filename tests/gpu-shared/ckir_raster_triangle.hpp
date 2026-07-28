@@ -558,7 +558,7 @@ inline void build_ocean_frame_fft_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe, 
     const auto unit3 = [&](int vv) { return b3(kir::KOp::Div, vv, g.unary(kir::KOp::Sqrt, g.dot(vv, vv))); };
 
     // TWO cascade fields in a bindless array (index 0 = big SWELL, index 1 = fine CHOP), each RGBA8: R,G=normal.xz · B=height · A=foam.
-    const int tex  = g.texture(0, 3, kir::DType::F32, kir::TexDim::Tex2D, false, false, false, /*array_count=*/8);
+    const int tex  = g.texture(0, 16, kir::DType::F32, kir::TexDim::Tex2D, false, false, false, /*array_count=*/8);
     const int samp = g.sampler(0, 2);
     const int csw  = g.constant(0.0, sh, kir::DType::U32); // swell cascade index
     const int cch  = g.constant(1.0, sh, kir::DType::U32); // chop cascade index
@@ -1272,7 +1272,7 @@ inline void build_two_texture_composite_fs(crd::kir::KGraph& g, crd::kir::KEntry
     // writes the array at 3 and leaves 1 alone, so declaring the array at 1 makes the pipeline access a
     // descriptor nothing ever wrote (VUID-vkCmdDraw-None-08114). `array_count = 8` matches `kBindlessMax` — the
     // layout declares a fixed-size array, so a shorter declaration is a different type, not a subset.
-    const int  tex  = g.texture(0, 3, kir::DType::F32, kir::TexDim::Tex2D, false, false, false, /*array_count=*/8);
+    const int  tex  = g.texture(0, 16, kir::DType::F32, kir::TexDim::Tex2D, false, false, false, /*array_count=*/8);
     const int  samp = g.sampler(0, 2);
     const int  c0   = g.tex_sample_at(tex, samp, uv, ku(0U));
     const int  c1   = g.tex_sample_at(tex, samp, uv, ku(1U));
@@ -1538,7 +1538,7 @@ inline void build_bindless_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
     namespace kir = crd::kir;
     const auto sh    = kir::make_shape({1});
     const int  uv    = g.stage_in(kir::KType::vec(kir::DType::F32, 2), 0, kir::Interp::Smooth);
-    const int  tex   = g.texture(0, 3, kir::DType::F32, kir::TexDim::Tex2D, false, false, false, /*array_count=*/8);
+    const int  tex   = g.texture(0, 16, kir::DType::F32, kir::TexDim::Tex2D, false, false, false, /*array_count=*/8);
     const int  samp  = g.sampler(0, 2);
     const int  hf    = g.constant(0.5, sh, kir::DType::F32);
     const int  lt    = g.binary(kir::KOp::CmpLt, g.swizzle(uv, 0), hf);

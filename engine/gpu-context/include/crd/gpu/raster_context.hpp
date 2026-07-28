@@ -272,6 +272,14 @@ public:
     [[nodiscard]] virtual bool resize(crd::u32 width, crd::u32 height) = 0;
 
     [[nodiscard]] virtual crd::u64 frame_count() const noexcept = 0; // frames successfully presented
+
+    // ⭐⭐ 38-G1 perf: THE PIPELINING CONTRACT, explicit. `present()` no longer drains the frame it submitted —
+    // a ring keeps up to two presents in flight (that deferral removed a ~7 ms per-frame stall in the app), so
+    // a resource a present referenced (the blit source, an overlay texture) must stay alive until the surface
+    // drains. The surface's DESTRUCTOR and `resize()` always drain; a client tearing down its own targets
+    // while the surface lives calls THIS first. Default is a no-op: a backend whose present is synchronous
+    // already satisfies the contract. Appended at END (vtable-stable).
+    virtual void wait_idle() {}
 };
 
 class IRasterContext
@@ -989,6 +997,20 @@ public:
             else { draw_storage_depth_load(target, program, compare, storage, vertex_counts[i]); }
         }
     }
+
+    // ── ⭐⭐ 38-G1 perf: BATCHED UPLOADS. Appended at END. ─────────────────────────────────────────────────
+    // `upload_storage` is contractually synchronous — staged copy, submit, WAIT — which is correct for a test
+    // that reads the buffer back on the next line and catastrophic for a frame: the live scene issued ~50
+    // uploads per frame at one queue-idle each (measured: 8.3 ms of a 16 ms frame was upload waits).
+    // Between `begin_upload_batch()` and `end_upload_batch()`, uploads on a supporting backend instead land in
+    // a persistent staging ring and record into ONE transfer command buffer; end submits it ONCE, with no host
+    // wait — same-queue submission order sequences the copies before the frame's draws.
+    // THE CONTRACT HOLDS EVERYWHERE ELSE: any synchronous verb (a draw, a dispatch, a readback) FLUSHES an
+    // open batch first, so upload-then-read code observes exactly what it always did, just without paying a
+    // wait per upload. The default implementations are no-ops: a backend without the fast path simply keeps
+    // its synchronous uploads — semantics identical, speed unchanged.
+    virtual void begin_upload_batch() {}
+    virtual void end_upload_batch() {}
 };
 
 // ⭐ REN-38-A9: a BUILT acceleration structure, behind one portable handle.

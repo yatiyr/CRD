@@ -241,6 +241,11 @@ struct SceneSurfaceCtx
     int  tint     = -1; // vec4 per-instance colour varying
     int  uv       = -1; // vec2 texture coordinate varying
     bool textured = false;
+    // ⭐⭐ 38-G1 (user-directed): the DISK-resolVED material text — F15, exactly as the flat material already
+    // does. ⛔ Null falls back to the embedded copy, but the resolution MUST be attempted: a shipped
+    // `assets/material/scene.crdm` that the renderer silently ignored made "override any default" a half-truth
+    // — the files existed, were drift-gated, and did nothing.
+    const crd::containers::String* disk_text = nullptr;
 };
 
 // ── ⭐⭐ REN-38-C4: THE SCENE MATERIAL IS AN AUTHORED `.crdm`. ────────────────────────
@@ -443,7 +448,8 @@ int scene_build_surface(crd::kir::KGraph& g, int struct_id, const crd::kir::cook
     auto* c = static_cast<SceneSurfaceCtx*>(user);
     crd::matcook::MaterialDesc desc(crd::memory::default_allocator());
     crd::containers::String    where(crd::memory::default_allocator());
-    const char*                text = (c != nullptr && c->textured) ? kSceneMaterialTextured : kSceneMaterial;
+    const char* text = (c != nullptr && c->textured) ? kSceneMaterialTextured : kSceneMaterial;
+    if (c != nullptr && c->disk_text != nullptr) { text = c->disk_text->c_str(); }
     if (crd::matcook::parse_material_toml(crd::containers::StringView(text), desc, &where)
         != crd::matcook::MaterialCookError::Ok)
     {
@@ -479,6 +485,9 @@ struct SceneShaderConfig
     crd::u32                              map_size  = 2048U;   // shadow atlas edge, for the PCF texel step
     crd::u32                              cascades  = kMaxCascades;
     crd::u32                              pcf_taps  = 4U;
+    // 38-G1 (user-directed): the DISK-resolved material text (F15). Null = the embedded default. Set by
+    // `cook_fs`, which is the one place with access to the asset resolution.
+    const crd::containers::String*        material_text = nullptr;
 };
 
 // Resolve the technique's DECLARED bindings into node ids, in ABI order.
@@ -556,6 +565,7 @@ struct SceneShaderConfig
     Gx         c(g);
 
     SceneSurfaceCtx ctx;
+    ctx.disk_text = cfg.material_text; // 38-G1: a shipped .crdm SHADOWS the embedded default
     ck::SurfaceInputs in;
     // The varyings the cooked VS supplies. A depth-only variant reads none of them - lowering removes the
     // interpolant fetches along with the surface, which is exactly the collapse described above.
@@ -863,6 +873,107 @@ inputs = ["@corner", 2.0, 1.0, "y_a"]
 name   = "clip"
 op     = "combine4"
 inputs = ["x", "y", 0.5, 1.0]
+)";
+
+// ── ⭐⭐ 38-G1b: the POST fullscreen VS — the visbuffer pair PLUS a UV varying (locations map the corner to
+// [0,1]²), so an authored post graph's `texcoord` reads the screen coordinate. Same 6-vertex expansion.
+constexpr const char* kPostFullscreenVs = R"(
+schema   = 1
+name     = "crd://vertex/post_fullscreen"
+position = "node:clip"
+
+[expand]
+verts_per_instance = 3
+
+[[node]]
+name   = "x"
+op     = "ifequal"
+inputs = ["@corner", 1.0, 3.0, -1.0]
+
+[[node]]
+name   = "y"
+op     = "ifequal"
+inputs = ["@corner", 2.0, 3.0, -1.0]
+
+[[node]]
+name   = "clip"
+op     = "combine4"
+inputs = ["x", "y", 0.0, 1.0]
+
+[[node]]
+name   = "u_half"
+op     = "multiply"
+inputs = ["x", 0.5]
+
+[[node]]
+name   = "u01"
+op     = "add"
+inputs = ["u_half", 0.5]
+
+[[node]]
+name   = "v_half"
+op     = "multiply"
+inputs = ["y", 0.5]
+
+[[node]]
+name   = "v01"
+op     = "add"
+inputs = ["v_half", 0.5]
+
+[[varying]]
+name       = "uv"
+location   = 0
+interp     = "smooth"
+source     = ["node:u01", "node:v01"]
+node_comps = [1, 1]
+)";
+
+// 38-G1b: the AUTHORED tonemap — sample the pass input, AgX, sRGB-encode. The whole display transform as data.
+constexpr const char* kPostTonemapAgx = R"(
+schema = 1
+name   = "crd://post/tonemap_agx"
+
+[[node]]
+name   = "uv"
+op     = "texcoord"
+inputs = [0]
+
+[[node]]
+name   = "scene"
+op     = "sample2d"
+inputs = ["uv", 0, 1, 2]
+
+[[node]]
+name   = "mapped"
+op     = "agx"
+inputs = ["scene"]
+
+[[node]]
+name   = "output"
+op     = "srgb_encode"
+inputs = ["mapped"]
+)";
+
+// 38-G1b: the sRGB-ONLY variant — the gate's EXACTNESS half (the OETF is a spec formula the test recomputes
+// independently, which a copied AgX polynomial could not honestly provide).
+constexpr const char* kPostSrgbOnly = R"(
+schema = 1
+name   = "crd://post/srgb_only"
+
+[[node]]
+name   = "uv"
+op     = "texcoord"
+inputs = [0]
+
+[[node]]
+name   = "scene"
+op     = "sample2d"
+inputs = ["uv", 0, 1, 2]
+
+[[node]]
+name   = "output"
+op     = "srgb_encode"
+inputs = ["scene"]
 )";
 
 // The ray-tracing declaration — ONE [rt] contract, cooked once per stage (the stage line is prepended).
@@ -1200,6 +1311,13 @@ struct SceneRenderer::Impl
     // which the query path treats as "no filters apply" rather than as a failure.
     crd::scene::World*              world = nullptr;
     // The group's entity list, for the draw-list filter. Returns null for an out-of-range group.
+    // 38-G1: the GROUP behind draw-list row `i` — index-parallel with the draw list by the same construction
+    // `groups_view` uses (culled groups are skipped in both). Null when the row has no group.
+    crd::containers::Array<MeshGroup*> draw_groups{crd::memory::default_allocator()};
+    [[nodiscard]] const MeshGroup* group_of_draw(crd::u32 i) const noexcept
+    {
+        return i < draw_groups.size() ? draw_groups[i] : nullptr;
+    }
     [[nodiscard]] const crd::containers::Array<crd::scene::EntityId>* group_entities(crd::usize g) const noexcept
     {
         return g < groups_view.size() ? &groups_view[g] : nullptr;
@@ -1235,9 +1353,20 @@ struct SceneRenderer::Impl
                                                  crd::u32 req_cap = 0U, crd::u32* n_reqs = nullptr)
     {
         if (ctx == nullptr) { return nullptr; }
+        // ⭐⭐ 38-G1 (user-directed): THE DEFAULTS ARE ASSETS. The scene material resolves DISK-FIRST exactly
+        // like the frames and vertex programs — a shipped `assets/material/scene[_textured].crdm` SHADOWS the
+        // embedded copy. ⛔ Until this line the constants were used directly and a user's override was silently
+        // ignored; the files existed, were drift-gated, and did nothing. Depth-only passes cook no surface.
+        SceneShaderConfig       rcfg = cfg;
+        crd::containers::String mat_text(alloc);
+        if (cfg.pass == crd::kir::cook::PassType::Forward
+            && asset_text(cfg.textured ? "material/scene_textured.crdm" : "material/scene.crdm", mat_text))
+        {
+            rcfg.material_text = &mat_text;
+        }
         crd::kir::KGraph g(alloc);
         crd::kir::KEntry e;
-        if (!build_scene_fs_cooked(g, e, cfg)) { return nullptr; }
+        if (!build_scene_fs_cooked(g, e, rcfg)) { return nullptr; }
         if (reqs != nullptr && n_reqs != nullptr
             && !crd::vertcook::fs_varying_requirements(g, e, reqs, req_cap, n_reqs, alloc))
         {
@@ -1322,22 +1451,9 @@ struct SceneRenderer::Impl
         return raw;
     }
 
-    // Cook one authored stage (optionally with a prepended stage line) and create its device program.
-    [[nodiscard]] crd::gpu::IGpuProgram* cook_stage(const char* pre, const char* body)
-    {
-        if (ctx == nullptr) { return nullptr; }
-        crd::containers::String t(alloc);
-        if (pre != nullptr) { t.append(pre); }
-        t.append(body);
-        crd::kir::KGraph g(alloc);
-        crd::kir::KEntry e;
-        if (!cook_vs(alloc, t.c_str(), nullptr, g, e)) { return nullptr; }
-        std::unique_ptr<crd::gpu::IGpuProgram> p = ctx->create_program(g, e);
-        if (p == nullptr) { return nullptr; }
-        crd::gpu::IGpuProgram* raw = p.get();
-        adv_stages.push_back(std::move(p));
-        return raw;
-    }
+    // ⛔ 38-G1: `cook_stage(pre, body)` — the variant that took EMBEDDED text — is GONE. Every stage cooks by
+    // NAME through `cook_stage_named`, so the disk copy always wins. A dead text-taking wrapper is exactly the
+    // second path the build_shadow_fs deletion note warns about.
 
     // The FLAT fragment program: the authored flat material through the `unlit` technique, with CONSTANT surface
     // inputs — so the cooked graph contains NO StageIn at all and the 38-D4 contract holds against any VS.
@@ -1438,6 +1554,53 @@ struct SceneRenderer::Impl
         prog_visbuffer = raster->create_raster_program(*vvs, *vfs);
         return prog_visbuffer.get();
     }
+
+    // ── ⭐⭐ 38-G1b: an AUTHORED POST program — the fullscreen VS + a post GRAPH cooked as its FS. The graph
+    // text comes through the POST face (`parse_post_toml` + `cook_post_graph` — tonemap ops legal, surface
+    // readers refused), and the FS entry is minimal by design: one colour out, alpha forced to 1 (a display
+    // transform emits an opaque frame). Cached per name; two names ship embedded (agx · srgb_only).
+    [[nodiscard]] crd::gpu::IRasterProgram* ensure_post_program(crd::containers::StringView name)
+    {
+        const auto name_is = [&](const char* b) {
+            const crd::usize bl = std::strlen(b);
+            return name.size() == bl && std::memcmp(name.data(), b, bl) == 0;
+        };
+        const bool is_agx  = name_is("crd://post/tonemap_agx");
+        const bool is_srgb = name_is("crd://post/srgb_only");
+        if (!is_agx && !is_srgb) { return nullptr; }
+        std::unique_ptr<crd::gpu::IRasterProgram>& slot = is_agx ? prog_post_agx : prog_post_srgb;
+        if (slot != nullptr) { return slot.get(); }
+        if (raster == nullptr || ctx == nullptr) { return nullptr; }
+        crd::gpu::IGpuProgram* pvs = cook_stage_named("vertex/post_fullscreen.crdv");
+        if (pvs == nullptr) { return nullptr; }
+        // ⛔ DISK-FIRST, like every asset here: a shipped `assets/post/*.crdp` SHADOWS the embedded copy, and
+        // the drift gate keeps the two canonically identical — ONE declaration, two homes.
+        crd::containers::String ptext(alloc);
+        if (!asset_text(is_agx ? "post/tonemap_agx.crdp" : "post/srgb_only.crdp", ptext)) { return nullptr; }
+        crd::matcook::MaterialDesc pdesc(alloc);
+        crd::containers::String    where(alloc);
+        if (crd::matcook::parse_post_toml(crd::containers::StringView(ptext.c_str(), ptext.size()), pdesc, &where)
+            != crd::matcook::MaterialCookError::Ok)
+        {
+            return nullptr;
+        }
+        crd::kir::KGraph fg2(alloc);
+        const int        out = crd::matcook::cook_post_graph(pdesc, fg2, &where);
+        if (out < 0) { return nullptr; }
+        const auto sh1  = crd::kir::make_shape({1});
+        const int  onef = fg2.constant(1.0, sh1, crd::kir::DType::F32);
+        crd::kir::KEntry fe;
+        fe.stage  = crd::kir::KStage::Fragment;
+        fe.n_out  = 1;
+        fe.out[0] = {fg2.vec4(fg2.vec_comp(out, 0), fg2.vec_comp(out, 1), fg2.vec_comp(out, 2), onef), 0};
+        std::unique_ptr<crd::gpu::IGpuProgram> pfs = ctx->create_program(fg2, fe);
+        if (pfs == nullptr) { return nullptr; }
+        slot = raster->create_raster_program(*pvs, *pfs);
+        adv_stages.push_back(std::move(pfs));
+        return slot.get();
+    }
+    std::unique_ptr<crd::gpu::IRasterProgram> prog_post_agx;
+    std::unique_ptr<crd::gpu::IRasterProgram> prog_post_srgb;
 
     [[nodiscard]] crd::gpu::IGpuProgram* ensure_cull_kernel()
     {
@@ -1617,6 +1780,20 @@ void SceneRenderer::set_readback_enabled(bool on) noexcept
 // ⛔ A parse or validation failure REFUSES the graph and keeps the previous one — it never half-installs. The
 // caller gates on the return value; silently rendering the old graph while claiming the new one is the exact
 // class of lie the magenta error graph exists to prevent, which is why the failure is a `false`, not a log line.
+// ⭐⭐ 38-G1: the by-NAME face of the above. The text comes from the asset system (disk-first), never from
+// the caller — an app names a frame, it does not carry one.
+bool SceneRenderer::set_frame_graph_asset(const char* asset_name)
+{
+    if (asset_name == nullptr || m_impl == nullptr) { return false; }
+    crd::containers::String text(m_impl->alloc);
+    if (!m_impl->asset_text(asset_name, text))
+    {
+        CRD_LOG_ERROR(g_log_scenerender, "set_frame_graph_asset: no such asset '{}'", asset_name);
+        return false;
+    }
+    return set_frame_graph_toml(text.c_str());
+}
+
 bool SceneRenderer::set_frame_graph_toml(const char* toml_text)
 {
     if (toml_text == nullptr || m_impl == nullptr) { return false; }
@@ -1685,6 +1862,11 @@ bool SceneRenderer::set_asset_root(const char* dir)
     return true;
 }
 
+const crd::gpu::IFrameGraph* SceneRenderer::debug_frame_graph() const noexcept
+{
+    return m_impl != nullptr ? m_impl->frame_graph.get() : nullptr;
+}
+
 crd::u32 SceneRenderer::debug_variant_vertex() const noexcept
 {
     return m_impl != nullptr ? m_impl->vertex_variant : 0U;
@@ -1740,12 +1922,24 @@ cascades    = 4
 
 // The parsed declaration, owned for the process. ⛔ Parsed ONCE and reused: re-parsing per cook would make the
 // technique’s identity depend on when it was cooked rather than on what it says.
+// 38-G1 (user-directed): the DISK text, when the renderer resolved one, wins over the embedded copy — the
+// same F15 shadowing every other default follows. The injection happens ONCE, before first cook (the
+// "parsed once" identity rule holds: whichever text won, it wins for the whole process).
+[[nodiscard]] crd::containers::String& scene_lighting_disk_text()
+{
+    static crd::containers::String text(crd::memory::default_allocator());
+    return text;
+}
 [[nodiscard]] crd::lightcook::LightingDesc& scene_lighting_desc()
 {
     static crd::lightcook::LightingDesc desc = [] {
         crd::lightcook::LightingDesc d(crd::memory::default_allocator());
         crd::containers::String       where(crd::memory::default_allocator());
-        (void)crd::lightcook::parse_lighting_toml(crd::containers::StringView(kSceneLighting), d, &where);
+        const crd::containers::String& disk = scene_lighting_disk_text();
+        (void)crd::lightcook::parse_lighting_toml(
+            disk.size() > 0U ? crd::containers::StringView(disk.c_str(), disk.size())
+                             : crd::containers::StringView(kSceneLighting),
+            d, &where);
         return d;
     }();
     return desc;
@@ -1803,6 +1997,16 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
     // NAMED TECHNIQUE. There is no hand-written fragment shader left in this file. The technique library is the
     // shader-half twin of the built-in frame-graph pack: engine defaults register first, and an app overrides
     // purely by shadowing a name.
+    // 38-G1 (user-directed): resolve the LIGHTING declaration disk-first BEFORE anything cooks — a shipped
+    // `assets/lighting/scene_forward.crdl` shadows the embedded copy, like every other default.
+    {
+        crd::containers::String ltext(m_impl->alloc);
+        if (m_impl->asset_text("lighting/scene_forward.crdl", ltext) && ltext.size() > 0U)
+        {
+            scene_lighting_disk_text().clear();
+            scene_lighting_disk_text().append(ltext.c_str());
+        }
+    }
     crd::kir::technique::register_builtin_techniques(m_impl->techniques);
     // REN-38-E7: the AUTHORED lighting technique, registered after the builtins so an app can shadow
     // it by name exactly as it can shadow a built-in one.
@@ -1818,9 +2022,10 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
     // textured path and the shadowed path ended up disagreeing about what location 2 meant.
     crd::kir::KGraph vg(m_impl->alloc);
     crd::kir::KEntry ve;
+    // ⭐⭐ 38-G1 (user-directed): resolved BY NAME — a shipped `assets/vertex/scene.crdv` shadows the
+    // embedded copy, exactly like the frames, materials and post graphs. The builtin pack is the fallback.
     crd::containers::String vs_scene(m_impl->alloc);
-    vs_scene.append(kVsPrologue);
-    vs_scene.append(kVsVaryings);
+    if (!m_impl->asset_text("vertex/scene.crdv", vs_scene)) { return false; }
     crd::vertcook::VertexProgramDesc scene_desc(m_impl->alloc);
     if (!cook_vs(m_impl->alloc, vs_scene.c_str(), nullptr, vg, ve, &scene_desc)) { return false; }
     // ⭐ REN-38 (the D5 correction closed): `VariantKey::vertex` is ENGINE-FILLED from the LIVE declaration —
@@ -1873,8 +2078,7 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
         (void)std::snprintf(static_cast<char*>(rb_line), sizeof(rb_line), "rebase_table = %u\n",
                             kSceneDrawTableOff);
         vs_rb.append(static_cast<const char*>(rb_line));
-        vs_rb.append(kVsPrologue);
-        vs_rb.append(kVsVaryings);
+        vs_rb.append(vs_scene.c_str()); // the SAME resolved declaration — the twin can never drift from it
         crd::vertcook::VertexProgramDesc rb_desc(m_impl->alloc);
         if (cook_vs(m_impl->alloc, vs_rb.c_str(), nullptr, rvg, rve, &rb_desc)
             && contract_ok(rb_desc, static_cast<const crd::vertcook::VaryingRequirement*>(fwd_reqs), n_fwd_reqs))
@@ -1890,9 +2094,7 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
     crd::kir::KGraph svg(m_impl->alloc);
     crd::kir::KEntry sve;
     crd::containers::String vs_skin(m_impl->alloc);
-    vs_skin.append(kVsPrologue);
-    vs_skin.append(kVsSkin);
-    vs_skin.append(kVsVaryings);
+    if (!m_impl->asset_text("vertex/scene_skinned.crdv", vs_skin)) { return false; }
     crd::vertcook::VertexProgramDesc skin_desc(m_impl->alloc);
     if (!cook_vs(m_impl->alloc, vs_skin.c_str(), nullptr, svg, sve, &skin_desc)) { return false; }
     // The skinned declaration serves the SAME fragment set — the exact pair the 38-D5 scar broke.
@@ -1929,18 +2131,30 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
     if (m_impl->shadow_fs != nullptr)
     {
         bool all_ok = true;
-        for (crd::u32 c = 0; c < kMaxCascades; ++c)
+        // ⭐⭐ 38-G1 (user-directed): the shadow declaration resolves BY NAME (`assets/vertex/shadow.crdv`
+        // shadows the embedded copy). The per-cascade variant is stamped on the PARSED desc, not spliced into
+        // the text — the cascade is the renderer's pass semantics, the vocabulary is the asset's.
+        crd::containers::String shadow_text(m_impl->alloc);
+        if (!m_impl->asset_text("vertex/shadow.crdv", shadow_text)) { all_ok = false; }
+        for (crd::u32 c = 0; all_ok && c < kMaxCascades; ++c)
         {
             crd::kir::KGraph shvg(m_impl->alloc);
             crd::kir::KEntry shve;
+            crd::vertcook::VertexProgramDesc sdesc(m_impl->alloc);
+            crd::containers::String          swhere(m_impl->alloc);
+            if (crd::vertcook::parse_vertex_toml(
+                    crd::containers::StringView(shadow_text.c_str(), shadow_text.size()), sdesc, &swhere)
+                != crd::vertcook::VertexCookError::Ok)
+            {
+                all_ok = false;
+                break;
+            }
             // ⛔ The cascade is a COMPILE-TIME constant, so one storage binding serves every cascade pass:
             // the variant selects the header slice rather than a uniform selecting it per draw.
-            char casc[64];
-            (void)std::snprintf(static_cast<char*>(casc), sizeof(casc), "\ntransform = \"light_vp\"\ncascade = %u\n", c);
-            crd::containers::String vs_shadow(m_impl->alloc);
-            vs_shadow.append(static_cast<const char*>(casc));
-            vs_shadow.append(kVsPrologue);
-            if (!cook_vs(m_impl->alloc, vs_shadow.c_str(), nullptr, shvg, shve)) { all_ok = false; break; }
+            sdesc.transform              = crd::vertcook::VertexTransform::LightVp;
+            sdesc.cascade                = c;
+            sdesc.instance_capacity_word = kHdrInstanceCapacity;
+            if (!crd::vertcook::cook_vertex_program(sdesc, shvg, shve)) { all_ok = false; break; }
             m_impl->shadow_vs[c] = ctx.create_program(shvg, shve);
             if (m_impl->shadow_vs[c] == nullptr) { all_ok = false; break; }
             m_impl->shadow_prog[c] =
@@ -2206,7 +2420,18 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
     m_impl->world = &world; // REN-36.3-b: the draw-list filter needs the archetype it was extracted from
     SyncStats stats;
     Impl&     impl = *m_impl;
+    // ⭐⭐ 38-G1 perf: EVERY per-frame upload from here through render() rides ONE batched transfer submission
+    // (see IRasterContext::begin_upload_batch). Before this, each upload paid its own submit + queue idle —
+    // measured at 8.3 ms of a 16 ms frame, the single largest cost in the loop. The batch is flushed by the
+    // frame graph's execute() (or by ANY synchronous verb via begin_cmd), so ordering is exactly what it was.
+    if (impl.raster != nullptr) { impl.raster->begin_upload_batch(); }
 
+    const auto ms_now = [] {
+        return std::chrono::duration<double, std::milli>(
+                   std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    };
+    const double t0 = ms_now();
     ExtractCtx ctx(impl.alloc);
     ctx.world        = &world;
     ctx.impl         = &impl;
@@ -2254,6 +2479,8 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
         q.for_each_chunk(&pass_animators, &ctx);
     }
 
+    const double t1 = ms_now();
+    stats.extract_ms = t1 - t0;
     // ── GPU: (re)create buffers + upload geometry once + instance payloads by dirty grain ──────────────────────
     for (MeshGroup& group : m_groups)
     {
@@ -2293,7 +2520,8 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
             group.palette_off   = group.instances_off + needed_capacity * kInstanceWords;
             const crd::u32 palette_words = group.skinned ? needed_capacity * group.joint_count * 16U : 0U;
             group.visible_off   = group.palette_off + palette_words;
-            const crd::u32 total_words = group.visible_off + needed_capacity;
+            // 38-G1: + one visible list per cascade (see MeshGroup::cascade_visible_count)
+            const crd::u32 total_words = group.visible_off + needed_capacity * (1U + kMaxCascades);
             group.buffer             = impl.raster->create_storage_buffer(total_words * 4U);
             group.capacity           = needed_capacity;
             group.geometry_uploaded  = false;
@@ -2348,6 +2576,8 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
         }
     }
 
+    const double t2 = ms_now();
+    stats.upload_ms = t2 - t1;
     // ── GEO-8: the skinned palettes — sample every skinned instance's clip, upload the palette section.
     // Animation is ALWAYS dirty by definition: this is per-frame data, deliberately outside the partial-upload
     // accounting the static gate measures.
@@ -2432,7 +2662,8 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
                                           static_cast<crd::u32>(impl.palette_staging.size() * 4U));
     }
 
-    stats.groups = static_cast<crd::u32>(m_groups.size());
+    stats.palette_ms = ms_now() - t2;
+    stats.groups     = static_cast<crd::u32>(m_groups.size());
     return stats;
 }
 
@@ -2500,6 +2731,11 @@ public:
         if (str_is(id, "crd://scene/tess")) { return m_impl.ensure_tess_program(); }
         if (str_is(id, "crd://scene/mesh")) { return m_impl.ensure_mesh_program(); }
         if (str_is(id, "crd://scene/visbuffer")) { return m_impl.ensure_visbuffer_program(); }
+        // ⭐⭐ 38-G1b: the authored POST programs — the technique library's first device-reachable family
+        if (str_is(id, "crd://post/tonemap_agx") || str_is(id, "crd://post/srgb_only"))
+        {
+            return m_impl.ensure_post_program(id);
+        }
         return nullptr;
     }
 
@@ -2569,6 +2805,27 @@ public:
             return true;
         }
         return fill(out, &q);
+    }
+
+    // ⭐⭐ 38-G1 perf: the EXPANSION-INDEX face. A CSM cascade pass asks with its cascade number, and the
+    // answer carries that cascade's OWN vertex count — the count that makes the draw read the per-cascade
+    // visible list the renderer just uploaded. Everything else falls through to the shared answer.
+    [[nodiscard]] bool draw_list_query(const crd::framecook::FrameDrawListDesc& q,
+                                       crd::framecook::DrawListBinding& out, crd::u32 instance) override
+    {
+        if (!draw_list_query(q, out)) { return false; }
+        // 0xFFFFFFFF = NOT an expanded pass (the forward draw) — its counts must stay the camera's.
+        if (!m_impl.shadows_active() || instance >= kMaxCascades) { return true; }
+        // the draw list is index-parallel with the culled groups (the same construction `groups_view` uses)
+        crd::u32 gi = 0U;
+        for (crd::u32 i = 0; i < out.resolved; ++i)
+        {
+            const MeshGroup* g = m_impl.group_of_draw(gi);
+            if (g == nullptr) { break; }
+            out.items[i].vertex_count = g->cascade_visible_count[instance] * g->index_count;
+            ++gi;
+        }
+        return true;
     }
 
     // Shadows on/off is a DECLARED CAPABILITY TIER, not an `if` in this renderer: when it is off the executor
@@ -2702,6 +2959,7 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
     crd::containers::Array<SceneDraw>& draw_list = impl.contrib_draws[contrib];
     draw_list.clear();
     impl.groups_view.clear();
+    impl.draw_groups.clear();
 
     // ── ⭐⭐ REN-38 (scene-buffer consolidation): can THIS frame render its plain groups from the ONE scene
     // buffer as a single multi-draw batch? Requires the rebased program, the single-viewport owner path (a
@@ -2720,7 +2978,7 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         {
             if (group.skinned || group.buffer == nullptr) { continue; }
             group.region_base = total;
-            total += (group.visible_off + group.capacity + 3U) & ~3U;
+            total += (group.visible_off + group.capacity * (1U + kMaxCascades) + 3U) & ~3U;
         }
         if (impl.scene_buf == nullptr || impl.scene_buf_words < total)
         {
@@ -2799,6 +3057,7 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         header[kHdrLightOff] = kHeaderWords - kLightSectionWords;
         // REN-38-F6+: the GPU cull kernel's range guard — the group's TOTAL instance count
         header[kHdrInstanceCount] = static_cast<crd::u32>(group.instances.size());
+        header[kHdrInstanceCapacity] = group.capacity; // 38-G1: the per-cascade visible-list stride
         {
             const crd::u32 lb = header[kHdrLightOff];
             const crd::f32 white[3] = {1.0F, 1.0F, 1.0F};
@@ -2855,6 +3114,35 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
                                               visible_count * 4U);
             stats.uploaded_bytes += sizeof(header) + static_cast<crd::u64>(visible_count) * 4U;
         }
+        // ── ⭐⭐ 38-G1 perf: PER-CASCADE CULLING. Each cascade gets its OWN visible list, tested against THAT
+        // cascade's light clip volume. The shadow passes used to draw the CAMERA's list four times, and
+        // cascade 0 covers a few metres of a 110-unit field — so nearly all of that geometry was pulled,
+        // transformed and then clipped. Measured waste: 8 ms of GPU, 130 fps -> 53 with shadows on.
+        if (impl.shadows_active() && group.buffer != nullptr)
+        {
+            crd::containers::Array<crd::u32> clist(impl.alloc);
+            for (crd::u32 c = 0; c < impl.cascades.count && c < kMaxCascades; ++c)
+            {
+                crd::math::Vec4f cplanes[6];
+                frustum_planes(impl.cascades.light_vp[c], cplanes);
+                clist.clear();
+                // ⛔ Cull from the FULL instance set, not the camera's list: a caster BEHIND the camera still
+                // casts into the frame, and starting from the camera's set would delete exactly those shadows
+                // (the classic "shadows pop when you turn around" bug).
+                for (crd::u32 slot = 0; slot < count; ++slot)
+                {
+                    if (aabb_in_frustum(group.world_bounds[slot], cplanes)) { clist.push_back(slot); }
+                }
+                const auto ccount = static_cast<crd::u32>(clist.size());
+                group.cascade_visible_count[c] = ccount;
+                if (ccount > 0U)
+                {
+                    (void)impl.raster->upload_storage(*group.buffer,
+                                                      (group.visible_off + (1U + c) * group.capacity) * 4U,
+                                                      clist.data(), ccount * 4U);
+                }
+            }
+        }
 
         // REN-2 Half B: a group whose material carries a base-color map draws TEXTURED (samples albedo); else flat.
         // (Groups batch by MESH; the group's representative material drives the map — correct for one-material meshes.
@@ -2901,6 +3189,7 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
             crd::containers::Array<crd::scene::EntityId> ents(impl.alloc);
             for (crd::usize k = 0; k < group.slot_entity.size(); ++k) { ents.push_back(group.slot_entity[k]); }
             impl.groups_view.push_back(static_cast<crd::containers::Array<crd::scene::EntityId>&&>(ents));
+            impl.draw_groups.push_back(&group); // 38-G1: index-parallel, for the per-cascade counts
         }
         ++stats.draws;
         stats.drawn_instances += visible_count;
@@ -2937,6 +3226,13 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
             fg.set_readback_enabled(impl.readback); // re-applied per frame: the graph is created lazily
             fg.reset();
             impl.contrib_used = 0U; // the owner's reset also recycles the contribution arena
+            // ⛔⛔ AND THE RECORDER'S ARENA. `FrameRecorder` hands out one PassRec block per `record()` from a
+            // fixed ring of 32, and `begin_frame()` is what returns them. Nothing called it: the counter
+            // climbed one per frame and the 33rd frame — about half a second in — began failing EVERY record
+            // with BuildRejected, forever. The app froze on its authored frame while every offscreen gate
+            // (one render per test) stayed green. ⛔ A per-frame arena needs a per-frame reset ON THE LIVE
+            // PATH, and only an app that runs for more than 32 frames can prove it.
+            impl.recorder.begin_frame();
         }
         const crd::gpu::FgImage img = fg.import_target(target);
 
@@ -3110,6 +3406,10 @@ bool builtin_asset_text(const char* name, crd::containers::String& out)
     if (is("lighting/scene_forward.crdl")) { out.append(kSceneLighting); return true; }
     // ── REN-38-F6: the advanced-stage declarations + the scene graphs for their families. ──
     if (is("material/flat.crdm")) { out.append(kFlatMaterial); return true; }
+    // 38-G1: the POST family — the fullscreen VS + the two shipped display transforms
+    if (is("vertex/post_fullscreen.crdv")) { out.append(kPostFullscreenVs); return true; }
+    if (is("post/tonemap_agx.crdp")) { out.append(kPostTonemapAgx); return true; }
+    if (is("post/srgb_only.crdp")) { out.append(kPostSrgbOnly); return true; }
     if (is("vertex/tess_corners.crdv")) { out.append(kTessCornersVs); return true; }
     if (is("vertex/tess_hull.crdv")) { out.append(kTessHullVs); return true; }
     if (is("vertex/tess_domain.crdv")) { out.append(kTessDomainVs); return true; }
