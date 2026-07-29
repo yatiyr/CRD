@@ -2437,3 +2437,218 @@ TEST_CASE("REN-38 GATE: 64 consecutive frames all render (the per-frame recorder
     }
     CHECK(covered > 50U);
 }
+
+// ── ⭐⭐ REN-39-C1 GATE: THE RENDERER SWITCH — pull and indexed render BIT-IDENTICAL frames. ─────────────────
+// The same scene (two mesh groups, SHADOWS ON so all four cascade passes + the shadowed forward pass run) is
+// rendered twice: once with `set_indexed_pull(false)` (the proven pull path — the reference) and once with the
+// switch ON. The claim has BOTH halves, because pixels alone cannot distinguish "switched" from "ignored":
+//   (a) the two frames' readback is BIT-IDENTICAL — same shading, different draw verbs (the parity proof);
+//   (b) the INDEXED frame advances `multi_batch_count()` while the pull frame's shadowed draws do NOT (with
+//       shadows on the pull path takes the classic per-draw verbs; only the indexed path records batches) —
+//       the counter probe that fails if the switch silently kept the pull path.
+TEST_CASE("REN-39-C1 GATE: pull and indexed scene frames are bit-identical, and the indexed one batches",
+          "[scene-render][ren39][indexed][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    cfg.enable_validation = true;
+    auto ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    const resources::ResourceId mesh_a = resources::ResourceId::mint_random();
+    const resources::ResourceId mesh_b = resources::ResourceId::mint_random();
+    const TempPack pack_a("sr_idx_a_", mesh_a);
+    const TempPack pack_b("sr_idx_b_", mesh_b);
+    write_mesh_pack(pack_a.path, mesh_a);
+    write_mesh_pack(pack_b.path, mesh_b);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack_a.path.generic()).is_valid());
+    REQUIRE(rm.mount_manifest(pack_b.path.generic()).is_valid());
+
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait(), scene::SpatialBVH{});
+    scene::register_render_components(world);
+    const auto add = [&](const resources::ResourceId& mid, math::Vec3f pos)
+    {
+        const scene::EntityId e = world.spawn();
+        scene::Transform t;
+        t.translation = math::from_raw_vec<units::dim::Length>(pos);
+        t.scale = {2.0F, 2.0F, 2.0F};
+        t.world = math::from_trs(pos, math::Quatf::identity(), {2.0F, 2.0F, 2.0F});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{mid, {}});
+    };
+    add(mesh_a, {-4.0F, 0.0F, 0.0F});
+    add(mesh_b, {4.0F, 0.0F, 0.0F});
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    REQUIRE(renderer.init_programs(*vk));
+    REQUIRE(renderer.set_shadows_enabled(true)); // all four cascades + the shadowed forward pass run
+    REQUIRE(renderer.sync(world).total_instances == 2U);
+
+    const math::Mat4f view = math::look_at(math::Vec3f{0.0F, 6.0F, 16.0F}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Vec3f light{0.3F, 1.0F, 0.2F};
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+
+    // ── the PULL reference frame ──
+    auto ref = raster->create_color_depth_target(256U, 256U);
+    REQUIRE(ref != nullptr);
+    renderer.set_indexed_pull(false);
+    const crd::u64 pull_before = raster->multi_batch_count();
+    const auto r_pull = renderer.render(*ref, proj * view, light, clear, nullptr);
+    CHECK(r_pull.draws == 2U);
+    const crd::u64 pull_batches = raster->multi_batch_count() - pull_before;
+
+    // ── the INDEXED frame ──
+    auto tgt = raster->create_color_depth_target(256U, 256U);
+    REQUIRE(tgt != nullptr);
+    renderer.set_indexed_pull(true);
+    const crd::u64 idx_before = raster->multi_batch_count();
+    const auto r_idx = renderer.render(*tgt, proj * view, light, clear, nullptr);
+    CHECK(r_idx.draws == 2U);
+    const crd::u64 idx_batches = raster->multi_batch_count() - idx_before;
+
+    // (b) the switch ACTUALLY switched: the shadowed pull frame records zero multi batches; the indexed frame
+    // records one per cascade run + the forward runs — the probe "ignored the switch" cannot fake
+    INFO("pull batches=" << pull_batches << " indexed batches=" << idx_batches);
+    CHECK(pull_batches == 0U);
+    CHECK(idx_batches >= 5U);
+
+    // (a) BIT-IDENTICAL pixels over a frame that actually drew
+    crd::u32 diffs = 0U;
+    crd::u32 covered = 0U;
+    for (u32 y = 0; y < 256U; ++y)
+    {
+        for (u32 x = 0; x < 256U; ++x)
+        {
+            const u32 a = ref->read_pixel(x, y);
+            const u32 b = tgt->read_pixel(x, y);
+            if (a != b)
+            {
+                ++diffs;
+            }
+            if ((b & 0x00FFFFFFU) != 0U)
+            {
+                ++covered;
+            }
+        }
+    }
+    INFO("diffs=" << diffs << " covered=" << covered);
+    CHECK(diffs == 0U);
+    CHECK(covered > 500U);
+}
+
+#ifdef _WIN32 // the D3D12 backend exists only on Windows (the F17 guard rule)
+// ── ⭐⭐ REN-39-C1 GATE (DX12): the same parity claim on the other backend. ─────────────────────────────────
+// Identical shape to the Vulkan gate: pull reference vs indexed frame, BIT-IDENTICAL pixels. With shadows
+// active the batch-count probe discriminates exactly as on Vulkan (pull shadowed = classic verbs, 0 batches;
+// indexed = cascade + forward batches). If this rig's DX12 shadow set fails to build, the gate still asserts
+// pixel parity (stated by INFO) — the switch logic is shared renderer code; the DX12-specific halves (verbs,
+// t0 SRV seam, kIndexedDrawStates walk) are exactly what the pixel comparison exercises.
+TEST_CASE("REN-39-C1 GATE (DX12): pull and indexed scene frames are bit-identical",
+          "[scene-render][ren39][indexed][gpu][dx12]")
+{
+    auto gctx = gpu::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
+    auto raster = gpu::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+
+    const resources::ResourceId mesh_a = resources::ResourceId::mint_random();
+    const resources::ResourceId mesh_b = resources::ResourceId::mint_random();
+    const TempPack pack_a("sr_idxdx_a_", mesh_a);
+    const TempPack pack_b("sr_idxdx_b_", mesh_b);
+    write_mesh_pack(pack_a.path, mesh_a);
+    write_mesh_pack(pack_b.path, mesh_b);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack_a.path.generic()).is_valid());
+    REQUIRE(rm.mount_manifest(pack_b.path.generic()).is_valid());
+
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait(), scene::SpatialBVH{});
+    scene::register_render_components(world);
+    const auto add = [&](const resources::ResourceId& mid, math::Vec3f pos)
+    {
+        const scene::EntityId e = world.spawn();
+        scene::Transform t;
+        t.translation = math::from_raw_vec<units::dim::Length>(pos);
+        t.scale = {2.0F, 2.0F, 2.0F};
+        t.world = math::from_trs(pos, math::Quatf::identity(), {2.0F, 2.0F, 2.0F});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{mid, {}});
+    };
+    add(mesh_a, {-4.0F, 0.0F, 0.0F});
+    add(mesh_b, {4.0F, 0.0F, 0.0F});
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    if (!renderer.init_programs(*gctx))
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
+    const bool shadows = renderer.set_shadows_enabled(true);
+    INFO("dx12 shadow set active=" << shadows);
+    REQUIRE(renderer.sync(world).total_instances == 2U);
+
+    const math::Mat4f view = math::look_at(math::Vec3f{0.0F, 6.0F, 16.0F}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Vec3f light{0.3F, 1.0F, 0.2F};
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+
+    auto ref = raster->create_color_depth_target(256U, 256U);
+    REQUIRE(ref != nullptr);
+    renderer.set_indexed_pull(false);
+    const crd::u64 pull_before = raster->multi_batch_count();
+    CHECK(renderer.render(*ref, proj * view, light, clear, nullptr).draws == 2U);
+    const crd::u64 pull_batches = raster->multi_batch_count() - pull_before;
+
+    auto tgt = raster->create_color_depth_target(256U, 256U);
+    REQUIRE(tgt != nullptr);
+    renderer.set_indexed_pull(true);
+    const crd::u64 idx_before = raster->multi_batch_count();
+    CHECK(renderer.render(*tgt, proj * view, light, clear, nullptr).draws == 2U);
+    const crd::u64 idx_batches = raster->multi_batch_count() - idx_before;
+
+    INFO("pull batches=" << pull_batches << " indexed batches=" << idx_batches);
+    if (shadows)
+    {
+        CHECK(pull_batches == 0U); // shadowed pull = classic verbs only
+        CHECK(idx_batches >= 5U);  // 4 cascade runs + the forward runs, all indexed batches
+    }
+
+    crd::u32 diffs = 0U;
+    crd::u32 covered = 0U;
+    for (u32 y = 0; y < 256U; ++y)
+    {
+        for (u32 x = 0; x < 256U; ++x)
+        {
+            const u32 a = ref->read_pixel(x, y);
+            const u32 b = tgt->read_pixel(x, y);
+            if (a != b)
+            {
+                ++diffs;
+            }
+            if ((b & 0x00FFFFFFU) != 0U)
+            {
+                ++covered;
+            }
+        }
+    }
+    INFO("diffs=" << diffs << " covered=" << covered);
+    CHECK(diffs == 0U);
+    CHECK(covered > 500U);
+}
+#endif // _WIN32 (the REN-39-C1 DX12 parity gate)

@@ -1606,3 +1606,123 @@ emit_header = 5000
 )";
     CHECK(err_of(wild_hdr) == vc::VertexCookError::BadTask);
 }
+
+// ── ⭐⭐ REN-39-B2 GATE: the INDEXED pull mode — the load-set diff is EXACTLY the documented one. ────────────
+// `indexed = true` re-addresses the pull chain for an indexed draw: the per-vertex `indices[]` load is GONE
+// (the IA did it — VertexIndex arrives as the index VALUE) and the `vid / index_count` division is GONE (the
+// instance rides InstanceIndex). The gate cooks the SAME declaration both ways and asserts the diff by graph
+// STRUCTURE, plus the identity/round-trip/refusal contracts. ⛔ STATED, NOT ASSUMED: the vertex stage has no
+// CPU oracle (eval_cpu has no Builtin/StorageLoad arms), so numerical parity is proven ON DEVICE by the
+// pull-vs-indexed bit-identical pixel gate in the Vulkan suite — the proven pull mode IS the reference.
+TEST_CASE("REN-39-B2: `indexed = true` drops exactly the index load and the instance division", "[vertex-cook][ren39]")
+{
+    memory::TlsfAllocator alloc(16U << 20U);
+
+    containers::String pull_toml(&alloc);
+    pull_toml.append(kScene);
+    containers::String idx_toml(&alloc);
+    idx_toml.append("indexed = true\n");
+    idx_toml.append(kScene);
+
+    Cooked pull(&alloc);
+    cook_text(&alloc, pull_toml.c_str(), pull);
+    REQUIRE(pull.ok);
+    Cooked idx(&alloc);
+    cook_text(&alloc, idx_toml.c_str(), idx);
+    REQUIRE(idx.ok);
+    CHECK(kir::entry_valid(pull.g, pull.ve));
+    CHECK(kir::entry_valid(idx.g, idx.ve));
+
+    // the DOCUMENTED diff, by structure: the division is gone, InstanceIndex appears, VertexIndex stays
+    CHECK(has_op(pull.g, kir::KOp::Div));
+    CHECK_FALSE(has_op(idx.g, kir::KOp::Div));
+    CHECK_FALSE(reads_builtin(pull.g, kir::KBuiltin::InstanceIndex));
+    CHECK(reads_builtin(idx.g, kir::KBuiltin::InstanceIndex));
+    CHECK(reads_builtin(pull.g, kir::KBuiltin::VertexIndex));
+    CHECK(reads_builtin(idx.g, kir::KBuiltin::VertexIndex));
+
+    // …and EXACTLY THREE storage loads disappear: the per-vertex index fetch AND the two header words only it
+    // referenced — `index_count` (the divisor) and `index_off` (the section base). The indexed chain reads
+    // neither: the IA owns the section and InstanceIndex owns the instance.
+    const auto count_loads = [](const kir::KGraph& g)
+    {
+        int n = 0;
+        for (int i = 0; i < g.size(); ++i)
+        {
+            if (g.node(i).op == kir::KOp::StorageLoad)
+            {
+                ++n;
+            }
+        }
+        return n;
+    };
+    CHECK(count_loads(idx.g) == count_loads(pull.g) - 3);
+}
+
+TEST_CASE("REN-39-B2: `indexed` is cooked identity, survives the round-trip, and composes with rebase",
+          "[vertex-cook][ren39]")
+{
+    memory::TlsfAllocator alloc(16U << 20U);
+
+    vc::VertexProgramDesc desc(&alloc);
+    containers::String where(&alloc);
+    REQUIRE(vc::parse_vertex_toml(containers::StringView(kScene), desc, &where) == vc::VertexCookError::Ok);
+
+    // ── layout identity: pull and indexed cooks of ONE asset are DIFFERENT programs ──
+    const crd::u64 id_pull = vc::vertex_layout_id(desc);
+    desc.indexed = true;
+    const crd::u64 id_idx = vc::vertex_layout_id(desc);
+    CHECK(id_pull != id_idx);
+
+    // ⛔⛔ the identity fix this slice surfaced: rebase_table and instance_capacity_word change EVERY load
+    // address and were NOT hashed — a rebased and an absolute cook of one asset COLLIDED to one variant key.
+    desc.rebase_table = 120U;
+    const crd::u64 id_rebase = vc::vertex_layout_id(desc);
+    CHECK(id_rebase != id_idx);
+    desc.instance_capacity_word = 99U;
+    CHECK(vc::vertex_layout_id(desc) != id_rebase);
+
+    // ── the FIELD-SURVIVAL round-trip (parse → emit → parse), covering the two fields the emitter DROPPED ──
+    desc.cascade = 2U;
+    const containers::String out = vc::emit_vertex_toml(desc, &alloc);
+    vc::VertexProgramDesc back(&alloc);
+    REQUIRE(vc::parse_vertex_toml(containers::StringView(out.c_str(), out.size()), back, &where) ==
+            vc::VertexCookError::Ok);
+    CHECK(back.indexed);
+    CHECK(back.rebase_table == 120U);
+    CHECK(back.instance_capacity_word == 99U);
+    CHECK(back.cascade == 2U);
+
+    // ── `indexed` composes UNCHANGED with the rebase chain: DrawIndex + rebased loads + no division ──
+    Cooked reb(&alloc);
+    {
+        containers::String t(&alloc);
+        t.append("indexed = true\nrebase_table = 120\n");
+        t.append(kScene);
+        cook_text(&alloc, t.c_str(), reb);
+    }
+    REQUIRE(reb.ok);
+    CHECK(reads_builtin(reb.g, kir::KBuiltin::DrawIndex));
+    CHECK(reads_builtin(reb.g, kir::KBuiltin::InstanceIndex));
+    CHECK_FALSE(has_op(reb.g, kir::KOp::Div));
+
+    // ── refusals: `indexed` on a procedural or non-vertex stage is REFUSED BY NAME ──
+    {
+        containers::String t(&alloc);
+        t.append("indexed = true\nstage = \"mesh\"\n");
+        t.append(kScene);
+        vc::VertexProgramDesc d(&alloc);
+        CHECK(vc::parse_vertex_toml(containers::StringView(t.c_str(), t.size()), d, &where) ==
+              vc::VertexCookError::BadIndexed);
+    }
+    {
+        containers::String t(&alloc);
+        t.append("indexed = true\nposition  = \"node:p\"\n");
+        t.append(kScene);
+        t.append("\n[[node]]\nname   = \"p\"\nop     = \"combine4\"\ninputs = [\"@corner\", \"@corner\", "
+                 "\"@corner\", \"@corner\"]\n");
+        vc::VertexProgramDesc d(&alloc);
+        CHECK(vc::parse_vertex_toml(containers::StringView(t.c_str(), t.size()), d, &where) ==
+              vc::VertexCookError::BadIndexed);
+    }
+}

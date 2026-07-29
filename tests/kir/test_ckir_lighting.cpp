@@ -1675,6 +1675,7 @@ void ragx(const double col[3], double out[3])
     const double c0[3] = {0.842479062253094, 0.0784335999999992, 0.0792237451477643};
     const double c1[3] = {0.0423282422610123, 0.878468636469772, 0.0791661274605434};
     const double c2[3] = {0.0423756549057051, 0.0784336, 0.879142973793104};
+    double sig[3];
     for (int r = 0; r < 3; ++r)
     {
         const double v   = c0[r] * col[0] + c1[r] * col[1] + c2[r] * col[2];
@@ -1682,7 +1683,19 @@ void ragx(const double col[3], double out[3])
         double       lg  = crd::math::log2(vp);
         const double m0v = lg > -12.47393 ? lg : -12.47393;
         lg               = m0v < 4.026069 ? m0v : 4.026069;
-        out[r]           = ragx_contrast((lg - (-12.47393)) / (4.026069 - (-12.47393)));
+        sig[r] = ragx_contrast((lg - (-12.47393)) / (4.026069 - (-12.47393)));
+    }
+    // 38-G1: the OUTSET (Filament's inverse inset — the saturation restore) + the pre-OETF clamp, exactly as
+    // `post::agx` ships. The reference had modelled the PRE-outset AgX, and only a 34-test kir subset ran at
+    // that close — this test was red from the outset landing until the next FULL kir run caught it.
+    const double o0[3] = {1.19687900512017, -0.0528968517574562, -0.0529716355144438};
+    const double o1[3] = {-0.0980208811401368, 1.15190312990417, -0.0980434501171241};
+    const double o2[3] = {-0.0990297440797205, -0.0989611768448433, 1.15107367264116};
+    const double rows[3][3] = {{o0[0], o0[1], o0[2]}, {o1[0], o1[1], o1[2]}, {o2[0], o2[1], o2[2]}};
+    for (int r = 0; r < 3; ++r)
+    {
+        const double v = rows[r][0] * sig[0] + rows[r][1] * sig[1] + rows[r][2] * sig[2];
+        out[r] = rclamp01(v);
     }
 }
 double rmin2(double a, double b) { return a < b ? a : b; }

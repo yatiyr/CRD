@@ -35,6 +35,14 @@ crd::u32 weld_exact(ImportedMesh& mesh, crd::memory::IAllocator* alloc);
 // Degenerate (zero-area) faces contribute nothing. Tangents, if present, are dropped (regenerate after).
 void generate_normals(ImportedMesh& mesh, crd::memory::IAllocator* alloc, crd::f32 smooth_angle_rad);
 
+// Recompute per-vertex normals IN PLACE without touching topology: no weld, no split, no reorder — vertex count,
+// vertex order and indices are preserved, so every position-parallel attribute (skin joints/weights above all) stays
+// valid. Smooth-everything by construction (a crease needs a vertex split, which this variant must never perform);
+// accumulation is position-identity based (seam-duplicated vertices share one neighborhood), angle-weighted, and
+// canonically sorted before summing (bit-identical under face reordering). This is the ONLY normal generator legal for
+// skinned meshes — `generate_normals` rebuilds the vertex arrays and would desync the per-vertex joint mapping.
+void generate_normals_smooth_inplace(ImportedMesh& mesh, crd::memory::IAllocator* alloc);
+
 // Generate the MikkTSpace-compatible per-vertex tangent frame into `mesh.tangent` (xyz = tangent, w = bitangent sign
 // ±1). Requires indexed geometry + per-vertex normals + uv0. Vertices spanning BOTH UV orientations are DUPLICATED per
 // handedness (the mirror-seam split; indices are rewritten). Corners with degenerate UVs contribute nothing; a vertex

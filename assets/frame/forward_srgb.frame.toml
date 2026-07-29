@@ -1,0 +1,37 @@
+# forward_srgb.frame.toml — the SHADOWS-OFF tier of the sRGB-only forward frame. See forward_agx.frame.toml
+# for the tier rule; the only difference is the post pass's shader line.
+
+schema = 1
+name   = "crd://frame/forward_srgb"
+
+[[resource]]
+name    = "scene_hdr"
+kind    = "transient_image"
+format  = "RGBA16F"
+scale   = 1.0
+sampled = true
+depth_buffer = true
+
+[[draw_list]]
+name = "visible_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "material"
+
+[[pass]]
+name          = "forward"
+kind          = "raster.geometry"
+draw_list     = "visible_geometry"
+writes        = ["scene_hdr"]
+technique     = "standard_forward"
+material_pass = "Forward"
+clear_color   = [0.09, 0.10, 0.13, 1.0]
+clear_depth   = 0.0
+depth         = "GreaterEqual"   # reverse-Z
+
+[[pass]]
+name   = "post"
+kind   = "raster.fullscreen"
+reads  = ["scene_hdr"]
+writes = ["@output"]
+shader = "crd://post/srgb_only"

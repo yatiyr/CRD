@@ -158,6 +158,34 @@ void record_pass(g::IFrameContext& ctx, void* user)
             if (sb == nullptr) { continue; }
             g::IRasterProgram* prog = p->program;
             if (!p->program_is_instance && it.program != nullptr) { prog = it.program; }
+            // ⭐⭐ REN-39-C1: an INDEXED-PULL item records through the indexed depth-only multi — a run of
+            // consecutive indexed items sharing this program+buffer becomes ONE ExecuteIndirect (a classic
+            // verb would misaddress every vertex of an indexed program; see DrawItem::index_count).
+            if (it.index_count > 0U)
+            {
+                g::IRasterContext::IndexedDraw idraws[crd::framecook::kMaxDrawItems];
+                crd::u32 run = 0U;
+                while (i + run < p->draws.count() && run < crd::framecook::kMaxDrawItems)
+                {
+                    const DrawItem nx = p->draws.at(i + run);
+                    g::IRasterProgram* nprog = p->program;
+                    if (!p->program_is_instance && nx.program != nullptr)
+                    {
+                        nprog = nx.program;
+                    }
+                    if (nx.index_count == 0U || nprog != prog || ctx.buffer(p->storage_of[i + run]) != sb)
+                    {
+                        break;
+                    }
+                    idraws[run] = {nx.index_count, nx.instance_count, nx.first_index};
+                    ++run;
+                }
+                r.draw_storage_multi_indexed_depth_only(*t, *prog, d.clear_depth, d.depth, *sb, 0U,
+                                                        static_cast<const g::IRasterContext::IndexedDraw*>(idraws), run,
+                                                        i != 0U);
+                i += run - 1U; // the loop's ++i consumes the last item of the run
+                continue;
+            }
             if (i == 0U) { r.draw_storage_depth_only(*t, *prog, d.clear_depth, d.depth, *sb, it.vertex_count); }
             else         { r.draw_storage_depth_only_load(*t, *prog, d.depth, *sb, it.vertex_count); }
         }
@@ -223,7 +251,31 @@ void record_pass(g::IFrameContext& ctx, void* user)
             // textured+shadowed shape — the base-colour map AND the atlas, one draw. Before this arm the item
             // texture simply WON and the atlas was dropped, which is how "textured monuments lose their shadows"
             // survived the executor even after the renderer stopped nulling the map.
-            if (it.texture != nullptr && pass_tex != nullptr && p->sampled_is_depth)
+            // ⭐⭐ REN-39-C1: an INDEXED-PULL item with per-draw texture state takes the indexed SAMPLED verb —
+            // ONE verb, the shape chosen by nullability (map at 1/2, atlas at 4/5), exactly the classic arms
+            // below map onto. A classic verb would misaddress every vertex of an indexed program.
+            if (it.index_count > 0U && (tex != nullptr || depth_tex))
+            {
+                const bool combined = it.texture != nullptr && pass_tex != nullptr && p->sampled_is_depth;
+                g::ITexture* map = nullptr;
+                g::ITexture* atl = nullptr;
+                if (combined)
+                {
+                    map = it.texture;
+                    atl = pass_tex;
+                }
+                else if (depth_tex)
+                {
+                    atl = tex;
+                }
+                else
+                {
+                    map = tex;
+                }
+                r.draw_storage_indexed_sampled_depth(*t, *prog, clear, d.clear_depth, d.depth, *sb, 0U, it.index_count,
+                                                     it.instance_count, it.first_index, map, atl, !first);
+            }
+            else if (it.texture != nullptr && pass_tex != nullptr && p->sampled_is_depth)
             {
                 if (first) { r.draw_storage_textured_shadowed_depth(*t, *prog, clear, d.clear_depth, d.depth, *sb, *it.texture, *pass_tex, it.vertex_count); }
                 else       { r.draw_storage_textured_shadowed_depth_load(*t, *prog, d.depth, *sb, *it.texture, *pass_tex, it.vertex_count); }
@@ -242,7 +294,7 @@ void record_pass(g::IFrameContext& ctx, void* user)
             {
                 // how long is the run of batchable items starting HERE? (same program, same storage, no
                 // texture, same INDEXED-ness — an indexed item may never merge with a non-indexed one: their
-                // programs disagree about what a load address means)
+                // programs disagree about what a load address means. ⭐ REN-39-C1: same INDEXED-PULL-ness too.)
                 crd::u32 run = 1U;
                 if (batchable_pass && it.texture == nullptr)
                 {
@@ -251,18 +303,35 @@ void record_pass(g::IFrameContext& ctx, void* user)
                         const DrawItem& nx = p->draws.at(i + run);
                         g::IRasterProgram* nprog = p->program;
                         if (!p->program_is_instance && nx.program != nullptr) { nprog = nx.program; }
-                        if (nx.storage == nullptr || nx.texture != nullptr || nprog != prog
-                            || nx.indexed != it.indexed || ctx.buffer(p->storage_of[i + run]) != sb)
+                        if (nx.storage == nullptr || nx.texture != nullptr || nprog != prog ||
+                            nx.indexed != it.indexed || (nx.index_count > 0U) != (it.index_count > 0U) ||
+                            ctx.buffer(p->storage_of[i + run]) != sb)
                         {
                             break;
                         }
                         ++run;
                     }
                 }
+                // ⭐⭐ REN-39-C1: an INDEXED-PULL run is ONE indexed indirect command — the DrawIndex contract
+                // rides the same push/root-constant channel, so a rebased indexed item works even as a run of
+                // one (the multi verb pushes the row exactly as the non-indexed multi does).
+                if (it.index_count > 0U)
+                {
+                    g::IRasterContext::IndexedDraw idraws[crd::framecook::kMaxDrawItems];
+                    for (crd::u32 k = 0; k < run; ++k)
+                    {
+                        const DrawItem nk = p->draws.at(i + k);
+                        idraws[k] = {nk.index_count, nk.instance_count, nk.first_index};
+                    }
+                    r.draw_storage_multi_indexed_depth(*t, *prog, clear, d.clear_depth, d.depth, *sb, 0U,
+                                                       static_cast<const g::IRasterContext::IndexedDraw*>(idraws), run,
+                                                       i, !first);
+                    i += run - 1U; // the loop's ++i consumes the last item of the run
+                }
                 // ⭐⭐ REN-38: an INDEXED item goes through the multi verb even ALONE — its program rebases
                 // every load by table[DrawIndex], and only the multi verb pushes the row (a classic verb would
                 // leave the push stale and the draw would read another group's region).
-                if (run > 1U || it.indexed)
+                else if (run > 1U || it.indexed)
                 {
                     crd::u32 counts[crd::framecook::kMaxDrawItems];
                     for (crd::u32 k = 0; k < run; ++k) { counts[k] = p->draws.at(i + k).vertex_count; }
@@ -830,6 +899,18 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
 
     // ── passes ──
     recs.reserve(plan.size()); // ⛔ exact, up front — see the dangling-pointer note above
+    // ⭐⭐ REN-39 (the gizmo fix): the host's overlay is INSERTED after the LAST geometry pass, onto that
+    // pass's own target — live depth, pre-tonemap. Passes execute in DECLARATION order, so an overlay merely
+    // APPENDED after a frame with a post chain lands after the display transform, depth-testing against the
+    // output's never-written depth (the exact "gizmo looks weird" the sandbox showed under the AgX frame).
+    crd::i64 last_geom_ii = -1;
+    for (crd::usize gi = 0; gi < plan.size(); ++gi)
+    {
+        if (desc.passes[plan[gi].pass].kind == FramePassKind::RasterGeometry)
+        {
+            last_geom_ii = static_cast<crd::i64>(gi);
+        }
+    }
     for (crd::usize ii = 0; ii < plan.size(); ++ii)
     {
         const FramePassDesc& d = desc.passes[plan[ii].pass];
@@ -1182,6 +1263,28 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             pb.present(*surf);
         }
         pb.execute(&record_pass, &recs[ii]);
+        // REN-39 (the gizmo fix): the application overlay composites onto the SCENE image, right here —
+        // after the last geometry pass, before whatever reads it (the post chain). See IFrameGraphHost.
+        if (static_cast<crd::i64>(ii) == last_geom_ii)
+        {
+            g::FgExecuteFn ov_fn   = nullptr;
+            void*          ov_user = nullptr;
+            if (host.overlay_pass(&ov_fn, &ov_user, recs[ii].target) && ov_fn != nullptr)
+            {
+                fgraph->add_pass("overlay").read_writes(recs[ii].target).execute(ov_fn, ov_user);
+            }
+        }
+    }
+    // a frame with NO geometry pass (a fullscreen/compute-only graph) keeps the historical behaviour: the
+    // overlay composites over the final output
+    if (last_geom_ii < 0)
+    {
+        g::FgExecuteFn ov_fn   = nullptr;
+        void*          ov_user = nullptr;
+        if (host.overlay_pass(&ov_fn, &ov_user, out_handle) && ov_fn != nullptr)
+        {
+            fgraph->add_pass("overlay").read_writes(out_handle).execute(ov_fn, ov_user);
+        }
     }
 
     return true;

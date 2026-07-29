@@ -1358,8 +1358,11 @@ inline bool emit_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory::I
     {                    // (writes visible cross-invocation) + `pixel_interlock_ordered` when ROV. VS (GEO-1 vertex
                          // pulling): READONLY — the vertex stage only ever fetches.
         if (!is_vertex && entry.interlock) { s.append("layout(pixel_interlock_ordered) in;\n"); }
-        s.append(is_vertex ? "layout(set = 0, binding = 0, std430) readonly buffer StorageBuf { uint data[]; } sbuf;\n"
-                           : "layout(set = 0, binding = 0, std430) coherent buffer StorageBuf { uint data[]; } sbuf;\n");
+        // ⭐⭐ REN-39-C1: an INDEXED program pair binds storage READ-ONLY on both halves — the FS keeps the
+        // promise the DX12 twin's t0 SRV enforces structurally (and the SPIR-V carries NonWritable).
+        s.append(is_vertex || entry.storage_read_only
+                     ? "layout(set = 0, binding = 0, std430) readonly buffer StorageBuf { uint data[]; } sbuf;\n"
+                     : "layout(set = 0, binding = 0, std430) coherent buffer StorageBuf { uint data[]; } sbuf;\n");
     }
     for (int i = 0; i < n; ++i) // B2: separable texture + sampler bindings — `uniform texture2D tex_S_B` / `uniform sampler samp_S_B`
     {

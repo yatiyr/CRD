@@ -18,7 +18,11 @@
 
 namespace crd::gpu
 {
-class VulkanGpuContext;
+// ⛔ REN-39-D1: `IGpuContext`, not `VulkanGpuContext`. crd-draw only ever calls `create_program(KGraph, KEntry)`
+// — the ADR-0103 currency, declared on the INTERFACE — so the Vulkan typing was a historical accident that made
+// the whole debug-draw suite unreachable from any second backend. Naming the interface is what lets the same
+// overlay run on DX12.
+class IGpuContext;
 class IRasterContext;
 } // namespace crd::gpu
 
@@ -32,7 +36,7 @@ struct InitConfig
     crd::u32 max_triangles_per_frame = 32768;
 };
 
-[[nodiscard]] bool init(crd::gpu::VulkanGpuContext& ctx, crd::gpu::IRasterContext& raster,
+[[nodiscard]] bool init(crd::gpu::IGpuContext& ctx, crd::gpu::IRasterContext& raster,
                         const InitConfig& config = {}) noexcept;
 
 void shutdown() noexcept;

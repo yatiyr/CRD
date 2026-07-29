@@ -5,23 +5,21 @@
 // The shader DRAW is C4-b. A non-square target (100x64) forces a padded readback row pitch (400 -> 512) so the 256-byte
 // D3D12 alignment is genuinely exercised.
 
-#include <crd/gpu/dx12_raster_context.hpp>
-
-#include <crd/gpu/dx12_context.hpp> // C4-b: create_dx12_gpu_context, compile_hlsl_to_dxil, Dx12GpuProgram
+#include <crd/containers/string_view.hpp>
 #include <crd/gpu/dx12_compute_context.hpp> // B4: the compute cull that writes the indirect-dispatch args
+#include <crd/gpu/dx12_context.hpp>         // C4-b: create_dx12_gpu_context, compile_hlsl_to_dxil, Dx12GpuProgram
+#include <crd/gpu/dx12_raster_context.hpp>
+#include <crd/gpu/frame_graph.hpp> // REN-39-A1: the frame-mode indexed-draw arm records through a graph
 #include <crd/gpu/raster_context.hpp>
-
-#include <crd/kir/ckir.hpp> // C4-b: KGraph/KEntry/KStage — the create_program(KGraph) seam
+#include <crd/kir/ckir.hpp>           // C4-b: KGraph/KEntry/KStage — the create_program(KGraph) seam
 #include <crd/kir/ckir_hlsl.hpp>      // B4: emit_compute_kernel_hlsl (the cull kernel)
 #include <crd/kir/ckir_visbuffer.hpp> // B4: build_meshlet_cull
-#include <crd/containers/string_view.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
-#include <ckir_raster_triangle.hpp> // B3-e: the SHARED, backend-neutral CKIR triangle (identical on Vulkan + DX12)
-#include <ckir_oit_test.hpp>        // B17: the SHARED order-independent-transparency shaders + CPU oracle (WBOIT/...)
-#include <win32_test_window.hpp>    // RET-2: the isolated real-window helper for the present gate
-
 #include <catch2/catch_test_macros.hpp>
+#include <ckir_oit_test.hpp>        // B17: the SHARED order-independent-transparency shaders + CPU oracle (WBOIT/...)
+#include <ckir_raster_triangle.hpp> // B3-e: the SHARED, backend-neutral CKIR triangle (identical on Vulkan + DX12)
+#include <win32_test_window.hpp>    // RET-2: the isolated real-window helper for the present gate
 
 namespace g = crd::gpu;
 
@@ -3022,4 +3020,318 @@ TEST_CASE("GEO-7: draw_storage_depth -- near occludes far on the storage-pull pa
     const crd::u32 away2   = target->read_pixel(4U, dim / 2U); // covered by the FIRST pass only
     CHECK(((centre2 >> 8U) & 0xFFU) > 200U); // the near green triangle won the loaded depth at the centre
     CHECK((away2 & 0xFFU) > 200U);           // the first pass's red SURVIVED the load draw — nothing cleared
+}
+
+// ── ⭐⭐ REN-39-A1 GATE (DX12): the scene buffer serves as its OWN index buffer. ─────────────────────────────
+// The DX12 half of the Vulkan gate, with the SAME dichotomy: the probe VS renders IFF VertexIndex carries the
+// index VALUES {4,5,6} fetched by the IA from byte 384 of the storage buffer — a non-indexed draw of 3 vertices
+// (VertexIndex ∈ {0,1,2}) collapses every corner to the degenerate (2,2) and draws NOTHING. The draw brackets
+// the buffer UNORDERED_ACCESS → INDEX_BUFFER|NPSR|PSR → UNORDERED_ACCESS (the state-walk contract).
+// ⛔ STATED, NOT HIDDEN: this arm is PROCEDURAL (no storage read in the shader) — a u0 UAV read is illegal in
+// the index-state combo, so the ONE-buffer pull+index proof on DX12 lands with 39-B2's read-only (t-register)
+// storage seam; 39-C1's pixel-parity gate then covers it. The Vulkan gate proves the one-buffer coexistence NOW.
+TEST_CASE("REN-39-A1 GATE (DX12): storage buffer binds as its own index buffer, indexed draw fetches real indices",
+          "[dx12][raster][gpu][ren39][indexed]")
+{
+    namespace kir = crd::kir;
+
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
+    auto raster = g::create_dx12_raster_context();
+    if (raster == nullptr || !raster->valid())
+    {
+        WARN("no D3D12 raster device; skipping");
+        return;
+    }
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+
+    kir::KGraph vg(&alloc);
+    kir::KEntry ve;
+    crd::gputest::build_indexed_probe_vs(vg, ve); // renders IFF VertexIndex ∈ {4,5,6} — the index-value probe
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_triangle_fs(fg, fe);
+    auto vs = gctx->create_program(vg, ve);
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping REN-39-A1 DX12 gate");
+        return;
+    }
+    auto fs = gctx->create_program(fg, fe);
+    REQUIRE(fs != nullptr);
+    auto program = raster->create_raster_program(*vs, *fs);
+    REQUIRE(program != nullptr);
+    REQUIRE(program->valid());
+
+    // 396 bytes EXACTLY (96 record words + 3 index words) — the overrun refusal depends on the tight size
+    auto sb = raster->create_storage_buffer(396U);
+    REQUIRE(sb != nullptr);
+    const crd::u32 idx[3] = {4U, 5U, 6U};
+    REQUIRE(raster->upload_storage(*sb, 384U, static_cast<const void*>(idx), sizeof(idx)));
+
+    constexpr crd::u32 dim = 64U;
+
+    // ── the NON-indexed control: VertexIndex ∈ {0,1,2} → every corner at (2,2) → NOTHING renders ──
+    auto miss = raster->create_color_depth_target(dim, dim);
+    REQUIRE(miss != nullptr);
+    raster->draw_storage_depth(*miss, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 0.0F, g::DepthCompare::Always,
+                               *sb, 3U);
+    CHECK((miss->read_pixel(dim / 2U, dim / 2U) & 0x00FFFFFFU) == 0U);
+
+    // ── the INDEXED draw: the IA fetches {4,5,6} from byte 384 → the triangle appears ──
+    auto hit = raster->create_color_depth_target(dim, dim);
+    REQUIRE(hit != nullptr);
+    raster->draw_storage_indexed_depth(*hit, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 0.0F,
+                                       g::DepthCompare::Always, *sb, 384U, 3U, 1U, false);
+    CHECK((hit->read_pixel(dim / 2U, dim / 2U) & 0xFFU) >= 250U); // red centre — the index values arrived
+    CHECK((hit->read_pixel(1U, 1U) & 0x00FFFFFFU) == 0U);         // corner stays the clear
+
+    // ── refusals keep pixels: a GREEN clear that RAN would repaint the target — prove it did not ──
+    raster->draw_storage_indexed_depth(*hit, *program, g::ClearColor{0.0F, 1.0F, 0.0F, 1.0F}, 0.0F,
+                                       g::DepthCompare::Always, *sb, 382U, 3U, 1U, false); // misaligned offset
+    raster->draw_storage_indexed_depth(*hit, *program, g::ClearColor{0.0F, 1.0F, 0.0F, 1.0F}, 0.0F,
+                                       g::DepthCompare::Always, *sb, 384U, 4U, 1U, false); // 384+16 > 396: overrun
+    CHECK((hit->read_pixel(dim / 2U, dim / 2U) & 0xFFU) >= 250U); // still red — both draws were REFUSED
+
+    // ── the FRAME-MODE arm: clear + LOAD continuation through a graph (the record_scene_indexed path,
+    //    with the frame_transition state pair bracketing each draw) ──
+    auto ftgt = raster->create_color_depth_target(dim, dim);
+    REQUIRE(ftgt != nullptr);
+    {
+        auto fgraph = raster->create_frame_graph();
+        REQUIRE(fgraph != nullptr);
+        struct IndexedPass
+        {
+            g::FgImage img{};
+            g::IRasterProgram* prog = nullptr;
+            g::IStorageBuffer* sb = nullptr;
+        } st;
+        st.img = fgraph->import_target(*ftgt);
+        st.prog = program.get();
+        st.sb = sb.get();
+        fgraph->add_pass("indexed").writes(st.img).execute(
+            [](g::IFrameContext& ctx, void* user)
+            {
+                auto* u = static_cast<IndexedPass*>(user);
+                ctx.raster().draw_storage_indexed_depth(*ctx.image(u->img), *u->prog,
+                                                        g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 0.0F,
+                                                        g::DepthCompare::Always, *u->sb, 384U, 3U, 1U, false);
+                // the LOAD continuation — draw N>0 of a pass must not wipe draw 0
+                ctx.raster().draw_storage_indexed_depth(*ctx.image(u->img), *u->prog, g::ClearColor{}, 0.0F,
+                                                        g::DepthCompare::Always, *u->sb, 384U, 3U, 1U, true);
+            },
+            &st);
+        REQUIRE(fgraph->build());
+        fgraph->execute();
+    }
+    CHECK((ftgt->read_pixel(dim / 2U, dim / 2U) & 0xFFU) >= 250U);
+    CHECK((ftgt->read_pixel(1U, 1U) & 0x00FFFFFFU) == 0U);
+}
+
+// ── ⭐⭐ REN-39-A2 GATE (DX12): INDEXED MULTI-DRAW — N indexed draws, ONE ExecuteIndirect. ───────────────────
+// The DX12 half of the Vulkan A2 gate: (a) the batched frame's readback is BIT-IDENTICAL to a frame of classic
+// per-draw indexed calls, and (b) `multi_batch_count()` advanced by EXACTLY ONE. The probe VS is PROCEDURAL
+// (the 39-A1 rule — no storage read in index state before the 39-B2 read-only seam) with two index ranges:
+// {4,5,6} → the big centred triangle, {8,9,10} → the left-edge spike, both probed on the horizontal MIDLINE
+// (orientation-invariant — the F16 y-flip lesson). Different `first_index` per command proves the routing.
+TEST_CASE("REN-39-A2 GATE (DX12): indexed multi-draw batches N indexed draws into ONE ExecuteIndirect",
+          "[dx12][raster][gpu][ren39][indexed][multidraw]")
+{
+    namespace kir = crd::kir;
+
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
+    auto raster = g::create_dx12_raster_context();
+    if (raster == nullptr || !raster->valid())
+    {
+        WARN("no D3D12 raster device; skipping");
+        return;
+    }
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+
+    kir::KGraph vg(&alloc);
+    kir::KEntry ve;
+    crd::gputest::build_indexed_probe2_vs(vg, ve);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_triangle_fs(fg, fe);
+    auto vs = gctx->create_program(vg, ve);
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping REN-39-A2 DX12 gate");
+        return;
+    }
+    auto fs = gctx->create_program(fg, fe);
+    REQUIRE(fs != nullptr);
+    auto program = raster->create_raster_program(*vs, *fs);
+    REQUIRE(program != nullptr);
+    REQUIRE(program->valid());
+
+    // the 6-index section {4,5,6, 8,9,10} at byte 384 (records unused by the procedural VS) = 408 bytes
+    auto sb = raster->create_storage_buffer(408U);
+    REQUIRE(sb != nullptr);
+    const crd::u32 idx[6] = {4U, 5U, 6U, 8U, 9U, 10U};
+    REQUIRE(raster->upload_storage(*sb, 384U, static_cast<const void*>(idx), sizeof(idx)));
+
+    constexpr crd::u32 dim = 64U;
+    struct MultiIdxState
+    {
+        g::FgImage img{};
+        g::IRasterProgram* prog = nullptr;
+        g::IStorageBuffer* sb = nullptr;
+        const g::IRasterContext::IndexedDraw* draws = nullptr;
+    };
+    const g::IRasterContext::IndexedDraw draws[2] = {{3U, 1U, 0U}, {3U, 1U, 3U}};
+
+    // ── the CLASSIC reference: a frame of per-draw indexed calls through the graph ──
+    auto ref = raster->create_color_depth_target(dim, dim);
+    REQUIRE(ref != nullptr);
+    {
+        auto fgraph = raster->create_frame_graph();
+        REQUIRE(fgraph != nullptr);
+        MultiIdxState st;
+        st.img = fgraph->import_target(*ref);
+        st.prog = program.get();
+        st.sb = sb.get();
+        fgraph->add_pass("classic").writes(st.img).execute(
+            [](g::IFrameContext& ctx, void* user)
+            {
+                auto* u = static_cast<MultiIdxState*>(user);
+                ctx.raster().draw_storage_indexed_depth(*ctx.image(u->img), *u->prog,
+                                                        g::ClearColor{0.05F, 0.0F, 0.0F, 1.0F}, 0.0F,
+                                                        g::DepthCompare::Always, *u->sb, 384U, 3U, 1U, false);
+                ctx.raster().draw_storage_indexed_depth(*ctx.image(u->img), *u->prog, g::ClearColor{}, 0.0F,
+                                                        g::DepthCompare::Always, *u->sb, 384U + 12U, 3U, 1U, true);
+            },
+            &st);
+        REQUIRE(fgraph->build());
+        fgraph->execute();
+    }
+
+    // ── the BATCHED frame: ONE indexed multi-draw over the same two commands ──
+    auto tgt = raster->create_color_depth_target(dim, dim);
+    REQUIRE(tgt != nullptr);
+    const crd::u64 batches_before = raster->multi_batch_count();
+    {
+        auto fgraph = raster->create_frame_graph();
+        REQUIRE(fgraph != nullptr);
+        MultiIdxState st;
+        st.img = fgraph->import_target(*tgt);
+        st.prog = program.get();
+        st.sb = sb.get();
+        st.draws = static_cast<const g::IRasterContext::IndexedDraw*>(draws);
+        fgraph->add_pass("batched").writes(st.img).execute(
+            [](g::IFrameContext& ctx, void* user)
+            {
+                auto* u = static_cast<MultiIdxState*>(user);
+                ctx.raster().draw_storage_multi_indexed_depth(
+                    *ctx.image(u->img), *u->prog, g::ClearColor{0.05F, 0.0F, 0.0F, 1.0F}, 0.0F, g::DepthCompare::Always,
+                    *u->sb, 384U, u->draws, 2U, 0U, false);
+            },
+            &st);
+        REQUIRE(fgraph->build());
+        fgraph->execute();
+    }
+    // (b) EXACTLY one batch was recorded — the count assert that "looped" cannot fake
+    CHECK(raster->multi_batch_count() == batches_before + 1U);
+
+    // both commands' geometry present, MIDLINE probes: centre = big triangle, left edge = spike, right = clear
+    CHECK((tgt->read_pixel(dim / 2U, dim / 2U) & 0xFFU) >= 250U);
+    CHECK((tgt->read_pixel(8U, dim / 2U) & 0xFFU) >= 250U);
+    CHECK((tgt->read_pixel(60U, dim / 2U) & 0xFFU) <= 20U);
+
+    // (a) bit-identical pixels, over a frame that actually drew
+    crd::u32 diffs = 0U;
+    crd::u32 covered = 0U;
+    for (crd::u32 y = 0; y < dim; ++y)
+    {
+        for (crd::u32 x = 0; x < dim; ++x)
+        {
+            const crd::u32 a = ref->read_pixel(x, y);
+            const crd::u32 b = tgt->read_pixel(x, y);
+            if (a != b)
+            {
+                ++diffs;
+            }
+            if ((b & 0xFFU) >= 250U)
+            {
+                ++covered;
+            }
+        }
+    }
+    CHECK(diffs == 0U);
+    CHECK(covered > 100U); // a blank==blank match proves nothing
+}
+
+// ── ⭐⭐ REN-39-B1 GATE (DX12): InstanceIndex — the SAME columns from the SAME asset as the Vulkan gate. ─────
+// SV_InstanceID excludes StartInstanceLocation; the verb always draws with StartInstance = 0, so the sequence
+// here must equal Vulkan's gl_InstanceIndex sequence EXACTLY — identical probe asserts are the proof.
+TEST_CASE("REN-39-B1 GATE (DX12): InstanceIndex sequences instances 0..N-1 through the indexed draw",
+          "[dx12][raster][gpu][ren39][indexed][instance]")
+{
+    namespace kir = crd::kir;
+
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
+    auto raster = g::create_dx12_raster_context();
+    if (raster == nullptr || !raster->valid())
+    {
+        WARN("no D3D12 raster device; skipping");
+        return;
+    }
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+
+    kir::KGraph vg(&alloc);
+    kir::KEntry ve;
+    crd::gputest::build_indexed_instance_vs(vg, ve);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_triangle_fs(fg, fe);
+    auto vs = gctx->create_program(vg, ve);
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping REN-39-B1 DX12 gate");
+        return;
+    }
+    auto fs = gctx->create_program(fg, fe);
+    REQUIRE(fs != nullptr);
+    auto program = raster->create_raster_program(*vs, *fs);
+    REQUIRE(program != nullptr);
+    REQUIRE(program->valid());
+
+    auto sb = raster->create_storage_buffer(396U);
+    REQUIRE(sb != nullptr);
+    const crd::u32 idx[3] = {4U, 5U, 6U};
+    REQUIRE(raster->upload_storage(*sb, 384U, static_cast<const void*>(idx), sizeof(idx)));
+
+    auto four = raster->create_color_depth_target(64U, 64U);
+    REQUIRE(four != nullptr);
+    raster->draw_storage_indexed_depth(*four, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 0.0F,
+                                       g::DepthCompare::Always, *sb, 384U, 3U, 4U, false);
+    CHECK((four->read_pixel(8U, 32U) & 0xFFU) >= 250U);      // instance 0
+    CHECK((four->read_pixel(24U, 32U) & 0xFFU) >= 250U);     // instance 1
+    CHECK((four->read_pixel(40U, 32U) & 0xFFU) >= 250U);     // instance 2
+    CHECK((four->read_pixel(56U, 32U) & 0xFFU) >= 250U);     // instance 3
+    CHECK((four->read_pixel(16U, 32U) & 0x00FFFFFFU) == 0U); // between columns — the clear
+
+    auto two = raster->create_color_depth_target(64U, 64U);
+    REQUIRE(two != nullptr);
+    raster->draw_storage_indexed_depth(*two, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 0.0F,
+                                       g::DepthCompare::Always, *sb, 384U, 3U, 2U, false);
+    CHECK((two->read_pixel(8U, 32U) & 0xFFU) >= 250U);
+    CHECK((two->read_pixel(24U, 32U) & 0xFFU) >= 250U);
+    CHECK((two->read_pixel(40U, 32U) & 0x00FFFFFFU) == 0U);
+    CHECK((two->read_pixel(56U, 32U) & 0x00FFFFFFU) == 0U);
 }

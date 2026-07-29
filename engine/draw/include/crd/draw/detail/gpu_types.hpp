@@ -16,7 +16,7 @@
 
 namespace crd::gpu
 {
-class VulkanGpuContext;
+class IGpuContext;
 } // namespace crd::gpu
 
 namespace crd::draw::detail
@@ -26,7 +26,7 @@ namespace crd::draw::detail
 // through the singleton accessor.
 struct RendererState
 {
-    crd::gpu::VulkanGpuContext* ctx    = nullptr;
+    crd::gpu::IGpuContext*      ctx    = nullptr;
     crd::gpu::IRasterContext*   raster = nullptr;
     InitConfig                  config{};
 
@@ -41,7 +41,14 @@ struct RendererState
     std::unique_ptr<crd::gpu::IRasterProgram> tri_prog;
     std::unique_ptr<crd::gpu::IRasterProgram> grid_prog;
 
-    std::unique_ptr<crd::gpu::IStorageBuffer> storage; // 32-word header + the largest bin's instances
+    // ⛔ REN-39 (the overlay-corruption fix): TWO buffers, each uploaded ONCE per submission. The old single
+    // buffer re-uploaded the same instance region per depth-variant bucket between draws — but uploads complete
+    // BEFORE the frame's command buffer executes (the 38-G1 batch contract), so every bucket's draw read the
+    // LAST bucket's bytes (dashed lines, vanishing solids). Now: `storage` = header + ALL triangle buckets,
+    // `line_storage` = header + ALL line buckets, packed contiguously; each bucket draws its RANGE via
+    // `draw_overlay_range`'s first-vertex offset. The grid reads only the header (either buffer serves).
+    std::unique_ptr<crd::gpu::IStorageBuffer> storage;      // 32-word header + tri buckets, packed
+    std::unique_ptr<crd::gpu::IStorageBuffer> line_storage; // 32-word header + line buckets, packed
 
     crd::containers::Array<crd::u32> scratch{crd::memory::default_allocator()}; // per-submit packing scratch
 

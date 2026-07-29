@@ -1011,6 +1011,188 @@ public:
     // its synchronous uploads — semantics identical, speed unchanged.
     virtual void begin_upload_batch() {}
     virtual void end_upload_batch() {}
+
+    // ── ⭐⭐ REN-39-A1: the INDEXED storage draw — post-transform vertex REUSE for the pull idiom. ────────────
+    // The frame is MEASURED vertex-bound (2026-07-28 board: cascade3 3.27 ms + forward 3.70 ms, map-size probe
+    // moved nothing): the pull idiom draws NON-INDEXED (`vertex_count = visible × index_count`), so every
+    // triangle corner re-pulls and re-transforms with ZERO post-transform reuse. This verb draws INDEXED against
+    // the SAME storage buffer: `index_offset_bytes` (4-aligned) locates the u32 index section INSIDE `storage`
+    // (`vkCmdBindIndexBuffer` / an IBV at that offset — zero data duplication), `index_count` indices feed the
+    // IA, and the VS receives the INDEX VALUE as `VertexIndex` — the per-vertex `indices[]` load disappears too.
+    // `instance_count` instances; the VS finds its instance via `InstanceIndex`.
+    //
+    // ⛔ NO firstInstance AND NO base-vertex parameter, BY CONSTRUCTION: Vulkan's `gl_InstanceIndex` INCLUDES
+    // firstInstance while DX12's `SV_InstanceID` does NOT, so any offset carried there would make the two
+    // backends read DIFFERENT instances. Both are always 0 in every backend; a per-draw instance-list base rides
+    // the DrawIndex channel / draw table (39-A2), where both backends agree.
+    //
+    // ⛔ STORAGE BINDS READ-ONLY DURING AN INDEXED DRAW — a DECLARED contract, not a convention: DX12 must move
+    // the buffer to INDEX_BUFFER | shader-read states for the IA fetch, and those cannot combine with
+    // UNORDERED_ACCESS. A program that STORES to storage uses the non-indexed verbs; the indexed vertex-cook
+    // mode refuses StorageStore (39-B2).
+    //
+    // The default is a NO-OP, visibly: a non-indexed fallback would misaddress EVERY vertex (an indexed-mode
+    // program's pull chain assumes index-value VertexIndex), which is the silently-wrong shape this engine
+    // refuses. `load_target` false ⇒ clear colour+depth; true ⇒ both LOAD (the standard first/continuing split).
+    // Appended at END (vtable-stable, D135).
+    virtual void draw_storage_indexed_depth(IRasterTarget& /*target*/, IRasterProgram& /*program*/,
+                                            ClearColor /*clear*/, float /*clear_depth*/, DepthCompare /*compare*/,
+                                            IStorageBuffer& /*storage*/, crd::u32 /*index_offset_bytes*/,
+                                            crd::u32 /*index_count*/, crd::u32 /*instance_count*/, bool /*load_target*/)
+    {
+    }
+
+    // ── ⭐⭐ REN-39-A2: INDEXED MULTI-DRAW — N indexed draws in ONE device command. Appended at END. ──────────
+    // The indexed twin of `draw_storage_multi_depth`: ONE descriptor set, ONE state block, ONE index-buffer bind
+    // (`index_offset_bytes` locates the u32 index section; each draw's `first_index` addresses WITHIN it), and
+    // ONE `vkCmdDrawIndexedIndirect` / `ExecuteIndirect` over `count` commands. The DrawIndex contract is
+    // UNCHANGED from the non-indexed verb: command i executes with `DrawIndex == first_draw_index + i`, which is
+    // how a program finds its record (buffer base, material index, instance-list base) in the shared storage.
+    //
+    // ⛔ `IndexedDraw` carries THREE fields ON PURPOSE — the hardware args' other two (base-vertex,
+    // first-instance) are DELIBERATELY UNREPRESENTABLE: VK's `gl_InstanceIndex` includes firstInstance and
+    // DX12's `SV_InstanceID` does not, so a verb that let a caller set them would let the two backends read
+    // DIFFERENT instances. Both are 0 in every backend, always; per-draw bases ride the DrawIndex'd draw table.
+    //
+    // ⛔ The default falls back to a LOOP of classic indexed draws WITHOUT the index channel — correct only for
+    // programs that do not read DrawIndex (the same documented shape as `draw_storage_multi_depth`'s fallback).
+    // Both real backends override; a stub feeding an index-reading program draws record 0 repeatedly — visibly
+    // wrong rather than silently absent. Batches count via the SAME `multi_batch_count()` counter.
+    struct IndexedDraw
+    {
+        crd::u32 index_count;    // indices this command consumes
+        crd::u32 instance_count; // the caller's per-draw visible count
+        crd::u32 first_index;    // start within the bound index section (in INDICES, not bytes)
+    };
+    virtual void draw_storage_multi_indexed_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
+                                                  float clear_depth, DepthCompare compare, IStorageBuffer& storage,
+                                                  crd::u32 index_offset_bytes, const IndexedDraw* draws, crd::u32 count,
+                                                  crd::u32 /*first_draw_index*/, bool load_target)
+    {
+        if (draws == nullptr)
+        {
+            return;
+        }
+        for (crd::u32 i = 0; i < count; ++i)
+        {
+            draw_storage_indexed_depth(target, program, clear, clear_depth, compare, storage,
+                                       index_offset_bytes + draws[i].first_index * 4U, draws[i].index_count,
+                                       draws[i].instance_count, load_target || i > 0U);
+        }
+    }
+
+    // ── ⭐⭐ REN-39-C1: INDEXED DEPTH-ONLY MULTI-DRAW — the shadow-cascade pass, indexed. Appended at END. ────
+    // The cascade passes are HALF the measured vertex cost (cascade3 alone 3.27 ms), all of it the non-indexed
+    // pull re-shading every corner into a depth map. One index-buffer bind, N DRAW_INDEXED commands, NO colour
+    // attachment — the depth-only shape `draw_storage_depth_only` established, with the A2 verb's per-draw
+    // `IndexedDraw` contract (first_index addresses within the bound section; base-vertex/first-instance are
+    // unrepresentable). ⛔ The default is a NO-OP, visibly: a colour-binding fallback would violate the pass
+    // shape and a non-indexed one would misaddress every vertex — a backend without this produces NO shadow
+    // map, never a wrong one.
+    virtual void draw_storage_multi_indexed_depth_only(IRasterTarget& /*target*/, IRasterProgram& /*program*/,
+                                                       float /*clear_depth*/, DepthCompare /*compare*/,
+                                                       IStorageBuffer& /*storage*/, crd::u32 /*index_offset_bytes*/,
+                                                       const IndexedDraw* /*draws*/, crd::u32 /*count*/,
+                                                       bool /*load_target*/)
+    {
+    }
+
+    // ── ⭐⭐ REN-39-C1: the INDEXED SAMPLED scene draw — one verb, four shapes by NULLABILITY. Appended at END.
+    // The forward pass's per-group texture state breaks batching, so its textured / shadowed / combined items
+    // draw one at a time — this is their indexed form. `texture` non-null binds the base-colour map at
+    // bindings 1/2 (t1/s2) through the FILTERING sampler; `atlas` non-null binds the shadow atlas at ITS OWN
+    // 4/5 (t4/s5) through the COMPARISON sampler; both null is the plain indexed single. ⛔ No sampler
+    // ambiguity is possible — each pointer has exactly one sampler semantics, which is why one verb with two
+    // nullables is safe where one verb with a sampler ENUM would not be. `first_index` addresses within the
+    // section at `index_offset_bytes` (the multi contract, so a caller uses ONE addressing convention).
+    // Default: a NO-OP, visibly (a pull fallback would misaddress; a texture-dropping fallback would silently
+    // unshadow) — both real backends override.
+    virtual void draw_storage_indexed_sampled_depth(IRasterTarget& /*target*/, IRasterProgram& /*program*/,
+                                                    ClearColor /*clear*/, float /*clear_depth*/,
+                                                    DepthCompare /*compare*/, IStorageBuffer& /*storage*/,
+                                                    crd::u32 /*index_offset_bytes*/, crd::u32 /*index_count*/,
+                                                    crd::u32 /*instance_count*/, crd::u32 /*first_index*/,
+                                                    ITexture* /*texture*/, ITexture* /*atlas*/, bool /*load_target*/)
+    {
+    }
+
+    // ⭐ REN-39 (the overlay-corruption fix): `draw_overlay` with a FIRST-VERTEX offset, so ONE packed upload can
+    // serve every depth-variant bucket of a submission. The old per-bucket workflow re-uploaded the SAME instance
+    // region between draws — but uploads complete BEFORE the frame's command buffer executes (the 38-G1 batch
+    // contract, and the synchronous path equally), so every bucket's draw read the LAST bucket's bytes: dashed
+    // lines, vanishing solids, non-deterministic per frame. With this verb the caller packs all buckets ONCE and
+    // selects a bucket's range per draw — `first_vertex` lands in the expand VS's `VertexIndex`, whose
+    // instance = vid / verts_per_instance addressing makes the offset pick the bucket's first record (both
+    // backends: gl_VertexIndex and SV_VertexID include the draw's first-vertex). Default (no override): the
+    // zero-offset call chains to `draw_overlay`; a nonzero offset is REFUSED rather than drawn wrong. At END.
+    [[nodiscard]] virtual bool draw_overlay_range(IRasterTarget& target, IRasterProgram& program,
+                                                  IStorageBuffer& storage, DepthCompare compare,
+                                                  crd::u32 first_vertex, crd::u32 vertex_count)
+    {
+        return first_vertex == 0U && draw_overlay(target, program, storage, compare, vertex_count);
+    }
+
+    // ── ⭐⭐ REN-39-D1: WHICH WAY IS +Y IN CLIP SPACE. Appended at END. ───────────────────────────────────────
+    // Vulkan's NDC has +Y pointing DOWN the framebuffer; D3D12's points UP. For ordinary rendering this is
+    // invisible — a render target and the fullscreen pass that consumes it flip together, so the screen comes out
+    // identical on both. It becomes VISIBLE the moment a shader turns a CLIP position back into a TEXTURE
+    // coordinate, because `uv = ndc*0.5 + 0.5` bakes one convention in: the same formula reads the MIRRORED row
+    // on the other backend.
+    //
+    // ⛔ THE SCAR THIS ENCODES. Shadow mapping is exactly that operation, and it read as "DX12's shadows are
+    // wrong" for a whole session: the cascade fit, the culling, the per-slice DSVs, the barriers, the indexed
+    // draw path, the emitters and the atlas contents were all measured CORRECT, because none of them was wrong.
+    // Proof was one line: flipping V made DX12 match Vulkan to 0.83% (from 12.94%). Every future clip-derived UV
+    // — SSR, TAA reprojection, planar reflections, DDGI — has the same hazard, so the answer is a DECLARED
+    // backend fact rather than a fix at each call site.
+    //
+    // ⛔ A TECHNIQUE MUST NEVER READ THIS. Authors write one portable formula; the ENGINE folds the convention
+    // into the matrix it supplies (see the `csm_light_vp` binding in scene_renderer.cpp). That is the same
+    // "the technique declares WHAT, the engine decides WHERE" seam the binding resolver already is.
+    [[nodiscard]] virtual bool ndc_y_points_down() const noexcept { return true; } // Vulkan's convention
+
+    // ── ⭐⭐ REN-40-A: THE GPU-WRITTEN DRAW — args AND count sourced from device memory. Appended at END. ─────
+    // The verb declares the INTENT: *execute up to `max_draws` indexed indirect commands from `args`, taking the
+    // ACTUAL count from a u32 in `count_buf`*. Nothing about the caller's data touches the CPU: a compute pass
+    // writes both buffers, and the device decides how many commands run — which is the whole point at a million
+    // instances, because an empty batch then costs NOTHING rather than a zero-instance command each.
+    //
+    // ⛔⛔⛔ THE STANDING RULE THIS VERB EXISTS UNDER: use every ability of every API, incorporated into the
+    // general context; where a backend lacks one, fall back to THAT BACKEND'S equivalent — but always do the
+    // best it can. Never pick the lowest common denominator "for portability". Both backends have the real
+    // mechanism (`vkCmdDrawIndexedIndirectCount`, core since Vulkan 1.2 and we target 1.3; `ExecuteIndirect`'s
+    // `pCountBuffer`, D3D12 since 1.0), so BOTH use it. `indirect_count_supported()` is the declared capability;
+    // the DEFAULT below is the NAMED fallback — clamp to `max_draws` and rely on zero-instance commands — for a
+    // device that reports it missing. A step-down nobody can observe is how "portable" becomes "slow everywhere".
+    //
+    // ⛔ `args` is an array of the API's indexed-indirect command struct, which is BINARY-IDENTICAL across the
+    // two (`VkDrawIndexedIndirectCommand` == `D3D12_DRAW_INDEXED_ARGUMENTS`: index_count, instance_count,
+    // first_index, base_vertex, first_instance), so ONE GPU-written buffer feeds both backends unchanged.
+    // ⛔ base_vertex/first_instance must be written 0 by the producer — `IndexedDraw` above documents why
+    // (VK folds firstInstance into gl_InstanceIndex, DX12's SV_InstanceID does not). A GPU-driven producer
+    // addresses its per-batch region through DrawIndex + the draw table instead.
+    // ⛔⛔ THE COMMAND LAYOUT IS A BACKEND FACT — DECLARE IT, do not assume it matches.
+    // The ARGS STRUCTS are binary-identical (`VkDrawIndexedIndirectCommand` == `D3D12_DRAW_INDEXED_ARGUMENTS`:
+    // index_count, instance_count, first_index, base_vertex, first_instance), and it is tempting to conclude one
+    // GPU-written buffer feeds both unchanged. IT DOES NOT. This engine's D3D12 command signature PREPENDS a
+    // root constant carrying DrawIndex — and D3D12 requires the draw argument to be LAST in a signature — so the
+    // D3D12 command is [u32 draw_index][5×u32 args] at a 24-byte stride, while Vulkan's is [5×u32 args] at 20.
+    // Same fields, different ORDER and STRIDE.
+    // ⛔ Levelling one backend down to the other's layout would cost DX12 its DrawIndex channel (which is how a
+    // rebased program finds its region) — so the layout is EXPOSED and the GPU producer writes each backend's
+    // own form: args at `base + i*stride + arg_offset`, and where `arg_offset != 0` the leading u32 is the
+    // command's DrawIndex. This is the standing rule applied to data layout, not just to verbs.
+    [[nodiscard]] virtual crd::u32 indirect_command_stride() const noexcept { return 20U; }
+    [[nodiscard]] virtual crd::u32 indirect_command_arg_offset() const noexcept { return 0U; }
+
+    [[nodiscard]] virtual bool indirect_count_supported() const noexcept { return false; }
+    virtual void draw_storage_multi_indexed_depth_only_indirect(
+        IRasterTarget& /*target*/, IRasterProgram& /*program*/, float /*clear_depth*/, DepthCompare /*compare*/,
+        IStorageBuffer& /*storage*/, crd::u32 /*index_offset_bytes*/, IStorageBuffer& /*args*/,
+        crd::u32 /*args_offset_bytes*/, IStorageBuffer* /*count_buf*/, crd::u32 /*count_offset_bytes*/,
+        crd::u32 /*max_draws*/, bool /*load_target*/)
+    {
+    }
 };
 
 // ⭐ REN-38-A9: a BUILT acceleration structure, behind one portable handle.

@@ -31,10 +31,18 @@ name   = "edge0"
 op     = "subtract"
 inputs = [1.0, "fade"]
 
+# ⛔⛔ ARGUMENT ORDER IS **MaterialX**, NOT GLSL: `smoothstep(in, low, high)` — the value FIRST, then the range.
+# (`ckir_nodes.hpp`: MaterialX smoothstep(in,low,high) == GLSL smoothstep(low,high,in).) This node read
+# `["edge0", 1.0, "d"]` — GLSL order — which cooked to `smoothstep(1.0, d, edge0)`: a REVERSED, value-dependent
+# range whose result is ~0.65 at the line's centre and 0 past |cy| > edge0. Live that made every debug line render
+# NARROWER and TRANSLUCENT, and — because the reversed range divides by (1 - d) — fragments whose interpolated
+# |cy| landed just PAST 1 (the quad's outer edge, one side only, by the top-left fill rule) clamped the other way
+# and came out FULLY OPAQUE: a 1-pixel, full-alpha, intermittent sliver hugging the edge. That sliver is the
+# "dotted jittery line beside the gizmo". Nothing was drawn twice; one quad was shaded wrong.
 [[node]]
 name   = "aa"
 op     = "smoothstep"
-inputs = ["edge0", 1.0, "d"]
+inputs = ["d", "edge0", 1.0]
 
 [[node]]
 name   = "alpha"

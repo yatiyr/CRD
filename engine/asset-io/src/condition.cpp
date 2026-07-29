@@ -379,6 +379,104 @@ void generate_normals(ImportedMesh& mesh, crd::memory::IAllocator* alloc, crd::f
     orient_outward_if_closed(mesh, alloc);
 }
 
+void generate_normals_smooth_inplace(ImportedMesh& mesh, crd::memory::IAllocator* alloc)
+{
+    const crd::u32 nf = mesh.triangle_count();
+    const crd::u32 vc = static_cast<crd::u32>(mesh.positions.size());
+    if (nf == 0U || vc == 0U) { return; }
+
+    // 1. face normals (unit; zero for degenerate faces — they contribute nothing)
+    crd::containers::Array<V3> face_n(alloc);
+    face_n.reserve(nf);
+    for (crd::u32 f = 0; f < nf; ++f)
+    {
+        const V3& a = mesh.positions[mesh.indices[f * 3U + 0U]];
+        const V3& b = mesh.positions[mesh.indices[f * 3U + 1U]];
+        const V3& c = mesh.positions[mesh.indices[f * 3U + 2U]];
+        V3        n = cross(sub(b, a), sub(c, a));
+        if (!normalize_into(n)) { n = V3{0.0F, 0.0F, 0.0F}; }
+        face_n.push_back(n);
+    }
+
+    // 2. position identity over the VERTEX array. Seam-duplicated vertices (UV/color splits) must share ONE
+    // smooth neighborhood or the seam shows up as a shading discontinuity on an otherwise smooth surface.
+    crd::containers::HashMap<PosKey, crd::u32, PosKeyHash> pos_ids(alloc);
+    pos_ids.reserve(vc);
+    crd::containers::Array<crd::u32> vid(alloc); // vertex → position-id
+    vid.reserve(vc);
+    crd::u32 n_pos = 0U;
+    for (crd::u32 v = 0; v < vc; ++v)
+    {
+        PosKey key{};
+        std::memcpy(key.p, &mesh.positions[v], 12);
+        if (const crd::u32* found = pos_ids.find(key)) { vid.push_back(*found); }
+        else
+        {
+            pos_ids.insert(key, n_pos);
+            vid.push_back(n_pos);
+            ++n_pos;
+        }
+    }
+
+    // 3. CSR corner adjacency: position-id → corners touching it
+    crd::containers::Array<crd::u32> counts(alloc);
+    counts.resize(n_pos, 0U);
+    for (crd::u32 c = 0; c < nf * 3U; ++c) { ++counts[vid[mesh.indices[c]]]; }
+    crd::containers::Array<crd::u32> offsets(alloc);
+    offsets.resize(n_pos + 1U, 0U);
+    for (crd::u32 p = 0; p < n_pos; ++p) { offsets[p + 1U] = offsets[p] + counts[p]; }
+    crd::containers::Array<crd::u32> bucket(alloc);
+    bucket.resize(nf * 3U, 0U);
+    {
+        crd::containers::Array<crd::u32> cursor(alloc);
+        cursor.resize(n_pos, 0U);
+        for (crd::u32 c = 0; c < nf * 3U; ++c)
+        {
+            const crd::u32 p               = vid[mesh.indices[c]];
+            bucket[offsets[p] + cursor[p]] = c;
+            ++cursor[p];
+        }
+    }
+
+    // 4. per position: angle-weighted sum of every adjacent face normal (smooth-everything — no crease, because a
+    // crease needs a vertex SPLIT and splitting is exactly what this variant must never do), canonically sorted
+    // before summing so face-order permutations stay bit-identical.
+    crd::containers::Array<V3> pos_n(alloc);
+    pos_n.reserve(n_pos);
+    crd::containers::Array<V3> contrib(alloc);
+    for (crd::u32 p = 0; p < n_pos; ++p)
+    {
+        contrib.clear();
+        const crd::u32 begin = offsets[p];
+        const crd::u32 end   = offsets[p + 1U];
+        for (crd::u32 k = begin; k < end; ++k)
+        {
+            const crd::u32 c = bucket[k];
+            const crd::u32 g = c / 3U;
+            const V3&      ng = face_n[g];
+            if (ng.x == 0.0F && ng.y == 0.0F && ng.z == 0.0F) { continue; } // degenerate face
+            const crd::u32 l = c % 3U;
+            const V3&      a = mesh.positions[mesh.indices[g * 3U + l]];
+            const V3&      b = mesh.positions[mesh.indices[g * 3U + ((l + 1U) % 3U)]];
+            const V3&      d = mesh.positions[mesh.indices[g * 3U + ((l + 2U) % 3U)]];
+            const crd::f32 w = wedge_angle(a, b, d);
+            if (w <= 0.0F) { continue; }
+            contrib.push_back(scaled(ng, w));
+        }
+        sort_span_canonical(contrib.data(), static_cast<crd::u32>(contrib.size()));
+        V3 sum = sum_span(contrib.data(), static_cast<crd::u32>(contrib.size()));
+        if (!normalize_into(sum)) { sum = V3{0.0F, 1.0F, 0.0F}; } // all-degenerate island: any unit vector, fixed
+        pos_n.push_back(sum);
+    }
+
+    // 5. write per-vertex — positions, indices and every parallel attribute (joints, weights, uv) are UNTOUCHED
+    mesh.normals.clear();
+    mesh.normals.reserve(vc);
+    for (crd::u32 v = 0; v < vc; ++v) { mesh.normals.push_back(pos_n[vid[v]]); }
+    // decide orientation from geometry, not from the winding we assumed (index swaps are per-corner — skin-safe)
+    orient_outward_if_closed(mesh, alloc);
+}
+
 // ── MikkTSpace-compatible tangents ──────────────────────────────────────────────────────────────────────────────────────
 
 bool generate_tangents(ImportedMesh& mesh, crd::memory::IAllocator* alloc)

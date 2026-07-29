@@ -497,6 +497,9 @@ VertexCookError parse_vertex_toml(crd::containers::StringView toml_text, VertexP
     out.rebase_table = static_cast<crd::u32>(root["rebase_table"].value_or<int64_t>(0));
     // 38-G1: the per-cascade visible-list stride word (see VertexProgramDesc::instance_capacity_word)
     out.instance_capacity_word = static_cast<crd::u32>(root["instance_capacity_word"].value_or<int64_t>(0));
+    // ⭐⭐ REN-39-B2: `indexed = true` — the INDEXED pull mode (VertexIndex arrives as the index VALUE; the
+    // instance rides InstanceIndex). See VertexProgramDesc::indexed.
+    out.indexed = root["indexed"].value_or(false);
 
     if (const auto* nt = root["node"].as_array())
     {
@@ -669,6 +672,15 @@ VertexCookError validate_vertex_program(const VertexProgramDesc& desc, crd::cont
 {
     if (desc.attrs.size() > kMaxAttributes) { return VertexCookError::TooManyAttributes; }
     if (desc.varyings.size() > kMaxVaryings) { return VertexCookError::TooManyVaryings; }
+    // ⭐⭐ REN-39-B2: `indexed` belongs to the VERTEX-RECORD pull only. A procedural stage's vertex ids are
+    // EXPANSION indices (vid / verts_per_instance) and an advanced stage decomposes its own — an indexed draw
+    // would feed either one mesh-index values it would silently mis-decompose. Checked FIRST so the refusal is
+    // deterministic regardless of what else the declaration got wrong.
+    if (desc.indexed && (desc.stage != StageKind::Vertex || !desc.position_node.empty()))
+    {
+        set_where(where, "indexed");
+        return VertexCookError::BadIndexed;
+    }
 
     bool has_position = false;
     const auto check_attrs = [&](const crd::containers::Array<VertexAttrDesc>& a, crd::u32 stride) {
@@ -1268,6 +1280,13 @@ crd::u64 vertex_layout_id(const VertexProgramDesc& desc) noexcept
     }
     const crd::u32* hw = &desc.header.index_count;
     for (crd::u32 i = 0; i < sizeof(VertexHeaderMap) / sizeof(crd::u32); ++i) { hash_u64(h, hw[i]); }
+    // ⛔⛔ REN-39-B2 identity fixes, found wiring `indexed`: rebase_table and instance_capacity_word change
+    // EVERY load address and were NOT hashed — a rebased and an absolute cook of one asset collided to one
+    // variant key, the exact dedup COLLISION this function's own comment names. `indexed` joins for the same
+    // reason: pull and indexed cooks of one declaration are different programs.
+    hash_u64(h, desc.rebase_table);
+    hash_u64(h, desc.instance_capacity_word);
+    hash_u64(h, desc.indexed ? 1ULL : 0ULL);
     return h;
 }
 
@@ -1331,6 +1350,27 @@ crd::containers::String emit_vertex_toml(const VertexProgramDesc& desc, crd::mem
     app(o, "\"\ncascade   = ");
     app_u32(o, desc.cascade);
     app(o, "\n");
+    // ⛔⛔ REN-39-B2 field-survival fixes, found wiring `indexed`: the emitter DROPPED `rebase_table` and
+    // `instance_capacity_word` — parse → emit → parse lost them, so a saved rebased declaration came back
+    // ABSOLUTE and a per-cascade one came back reading the CAMERA's list (the blob-v3 disease, TOML side; the
+    // drift gate could not see it because both sides dropped the field — the byte-identity blindness scar).
+    // Root keys, so they precede every table (the scoping scar).
+    if (desc.rebase_table != 0U)
+    {
+        app(o, "rebase_table = ");
+        app_u32(o, desc.rebase_table);
+        app(o, "\n");
+    }
+    if (desc.instance_capacity_word != 0U)
+    {
+        app(o, "instance_capacity_word = ");
+        app_u32(o, desc.instance_capacity_word);
+        app(o, "\n");
+    }
+    if (desc.indexed)
+    {
+        app(o, "indexed = true\n");
+    } // REN-39-B2: the indexed pull mode
     if (!desc.displace.empty())
     {
         app(o, "displace  = ");
@@ -2223,11 +2263,25 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
 
     // ── the pull address. One draw covers N instances of one mesh, so the vertex id carries both: the instance
     // is the quotient and the local index the remainder. (The GEO-1 idiom, scaled to instancing.)
-    const int vid   = g.cast(g.builtin(crd::kir::KBuiltin::VertexIndex), DType::U32);
-    const int idxc  = c.hdru(desc.header.index_count);
-    const int ii    = c.dvd(vid, idxc);
-    const int li    = c.sub(vid, c.mul(ii, idxc));
-    const int vidx  = c.loadu(c.add(c.hdru(desc.header.index_off), li));
+    // ⭐⭐ REN-39-B2 `indexed`: the IA fetched `indices[]` through the bound index section, so VertexIndex
+    // ARRIVES as the index value (`vidx = vid` — the per-vertex index load is GONE) and the instance rides
+    // InstanceIndex (the division is GONE). Everything downstream — vertex base, visible slot, morphs, skin,
+    // rebase — addresses off the SAME vidx/instance values, so both modes compose identically by construction.
+    const int vid = g.cast(g.builtin(crd::kir::KBuiltin::VertexIndex), DType::U32);
+    int ii;
+    int vidx;
+    if (desc.indexed)
+    {
+        vidx = vid;
+        ii = g.cast(g.builtin(crd::kir::KBuiltin::InstanceIndex), DType::U32);
+    }
+    else
+    {
+        const int idxc = c.hdru(desc.header.index_count);
+        ii = c.dvd(vid, idxc);
+        const int li = c.sub(vid, c.mul(ii, idxc));
+        vidx = c.loadu(c.add(c.hdru(desc.header.index_off), li));
+    }
     const int vbase = c.add(c.hdru(desc.header.vertex_off), c.mul(vidx, c.ku(desc.vertex_stride)));
     // ⭐⭐ 38-G1 perf: a LIGHT_VP (cascade) pass reads ITS OWN visible list. The renderer lays them out right
     // after the camera's — cascade c at `visible_off + (1 + c) * instance_capacity` — and this stage knows its
@@ -2590,6 +2644,9 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
         ve.stage = crd::kir::KStage::Vertex;
         break;
     }
+    // ⭐⭐ REN-39-C1: an indexed program binds storage READ-ONLY (its draw holds the DX12 buffer in
+    // INDEX_BUFFER | shader-read states) — the emitters key the t0-SRV / `readonly` declaration on this.
+    ve.storage_read_only = desc.indexed;
     ve.position = g.vec4(clip[0], clip[1], clip[2], clip[3]);
     ve.n_out    = 0;
     for (crd::usize i = 0; i < desc.varyings.size(); ++i)
@@ -2707,6 +2764,8 @@ const char* vertex_cook_error_text(VertexCookError e) noexcept
     case VertexCookError::BadCull:           return "a culling workgroup outside 1..256";
     case VertexCookError::BadExpand:         return "an expansion contract a procedural input cannot resolve against";
     case VertexCookError::BadPositionNode:   return "a position node that does not exist, is not vec4, or is not a vertex stage";
+    case VertexCookError::BadIndexed:
+        return "`indexed` on a procedural or non-vertex stage (its vertex ids are not mesh indices)";
     }
     return "unknown error";
 }

@@ -762,6 +762,13 @@ struct KEntry
     // The asset declares the pairing (`[mesh] payload = true`); the emitters then declare the fixed 4-field
     // struct on both backends. False = a standalone mesh (an MS with a payload input needs an AS in front).
     bool mesh_payload_in = false;
+    // ── ⭐⭐ REN-39-C1 (appended at END — KEntry is cook-serialized). This program binds the storage buffer
+    // READ-ONLY. Set on BOTH halves of an INDEXED program pair (the indexed vertex cook and its fragment
+    // twin): during an indexed draw DX12 holds the buffer in INDEX_BUFFER | shader-read states, which cannot
+    // combine with UNORDERED_ACCESS — so the HLSL emitter declares `ByteAddressBuffer : register(t0)` instead
+    // of the RW u0 form, and the GLSL emitter marks the SSBO `readonly`. A store-carrying entry with this flag
+    // is refused by entry_valid: read-only is a promise, not a hint.
+    bool storage_read_only = false;
     [[nodiscard]] bool is_kernel() const noexcept { return kernel_body_count > 0; }
     [[nodiscard]] bool is_mesh() const noexcept { return stage == KStage::Mesh && mesh_vertices > 0U; }
     [[nodiscard]] bool is_task() const noexcept { return stage == KStage::Task && task_emit >= 0; }
@@ -2070,6 +2077,12 @@ private:
         if (g.node(e.storage_write_value).type != KType::make_scalar(DType::U32)) { return fail("storage write value must be uint"); }
     }
     if (e.interlock && e.stage != KStage::Fragment) { return fail("only a fragment stage can use `interlock`"); }
+    // REN-39-C1: read-only is a PROMISE (DX12 binds the buffer in shader-read states during an indexed draw) —
+    // an entry that stores through it would be undefined, so the combination is refused, never trusted.
+    if (e.storage_read_only && (e.storage_write_index >= 0 || e.storage_write_value >= 0))
+    {
+        return fail("`storage_read_only` cannot coexist with a storage write");
+    }
 
     // B4: a MESH entry emits `mesh_primitives` triangles; `mesh_prim` is the uvec3 of LOCAL vertex indices for primitive tid.
     if (e.stage == KStage::Mesh)

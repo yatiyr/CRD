@@ -65,7 +65,7 @@ namespace
 
 // v3 (GEO-8 showcase): PRIM entries now CARRY the authored material id (the "GEO-3/4 wires it" placeholder paid
 // off — consumers reading the MESH artifact alone see its material). v2 (GEO-6): reads flow through CookIO.
-constexpr crd::u32 kWave1HandlerVersion = 3U;
+constexpr crd::u32 kWave1HandlerVersion = 4U; // v4: skinned meshes without source normals get in-place generated ones
 constexpr crd::u32 kWave1VertexStride   = 48U; // float3 pos + float3 norm + float2 uv + float4 tan (ADR-0043)
 
 crd::containers::String sanitize_name(const char* name, crd::memory::IAllocator* alloc, const char* fallback = "mesh")
@@ -192,6 +192,16 @@ crd::containers::Array<crd::u8> build_wave1_artifact(crd::assetio::ImportedMesh&
             crd::assetio::generate_normals(mesh, alloc, options.smooth_angle_deg * pi / 180.0F);
         }
         if (mesh.has_uv0() && mesh.has_normals()) { (void)crd::assetio::generate_tangents(mesh, alloc); }
+    }
+    // ⛔ REN-39: "fully authored" was a LIE for a skinned mesh with NO source normals (the Khronos Fox ships
+    // POSITION/UV/JOINTS/WEIGHTS and nothing else). Zero normals cook through, the forward BRDF computes
+    // normalize(0) = NaN, and the whole character renders PURE BLACK — the old fixed-function ambient floor is
+    // what used to mask it. Generate normals IN PLACE: no weld, no split, no reorder, so the per-vertex joint
+    // mapping the GEO-8 rule protects stays intact. (Tangents stay untouched: `generate_tangents` mirror-seam
+    // splits, which is exactly the desync the rule forbids.)
+    if (mesh.has_skin() && !mesh.has_normals())
+    {
+        crd::assetio::generate_normals_smooth_inplace(mesh, alloc);
     }
 
     const crd::u32 vc = static_cast<crd::u32>(mesh.positions.size());

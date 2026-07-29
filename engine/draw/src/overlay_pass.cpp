@@ -103,56 +103,47 @@ bool submit_overlay(crd::gpu::IRasterTarget& target, const RenderBuffer& buffer,
     const auto triangles = buffer.triangles();
     if (lines.size() == 0U && triangles.size() == 0U && !config.grid.enabled) { return true; }
 
-    // ONE header upload serves every draw in this submission (the instance region re-uploads per bin batch).
-    pack_header(s.scratch, config);
-    if (!s.raster->upload_storage(*s.storage, 0U, s.scratch.data(), kHeaderWords * 4U))
-    {
-        CRD_LOG_ERROR(g_log_overlay, "draw-buffer header upload refused -- skipping overlay");
-        return false;
-    }
-
-    bool ok = true;
-
-    // ── the grid: under everything (the rhi original drew it first) ──────────────────────────────────────────────
-    if (config.grid.enabled)
-    {
-        ok = s.raster->draw_overlay(target, *s.grid_prog, *s.storage, crd::gpu::DepthCompare::Always, 6U) && ok;
-    }
-
-    // ── bin by (primitive, variant); XRay lands in BOTH Test (full color) and GreaterDimmed (dimmed) ─────────────
+    // ⛔ REN-39: ONE upload per buffer per submission, ALL buckets packed contiguously, each bucket drawn as a
+    // RANGE (`draw_overlay_range`'s first-vertex offset). The old scheme re-uploaded the SAME instance region
+    // between the bucket draws — but uploads complete BEFORE the frame's command buffer executes a single draw
+    // (the 38-G1 batch contract; the synchronous path equally), so every bucket rendered from the LAST bucket's
+    // bytes: dashed lines, vanishing solids, a different corruption every frame. Upload-then-draw interleaving
+    // on ONE region is not a slow path — it is a WRONG one.
     const crd::gpu::DepthCompare compare_of[kVariantCount] = {config.depth_test, crd::gpu::DepthCompare::Always,
                                                               complement(config.depth_test)};
 
-    // Triangles, then lines — each variant in compose-on-top order. Instances pack into the scratch tail and
-    // upload at the instance region (word 32); batches over the configured cap keep unbounded counts rendering.
-    const auto draw_bins = [&](bool is_tri) {
-        const crd::u32 words_per = is_tri ? kTriInstanceWords : kLineInstanceWords;
-        const crd::u32 cap       = is_tri ? s.config.max_triangles_per_frame : s.config.max_lines_per_frame;
-        const crd::u32 verts_per = is_tri ? 3U : 6U;
-        auto&          prog      = is_tri ? *s.tri_prog : *s.line_prog;
+    bool ok = true;
+
+    // Pack `is_tri`'s three buckets after the shared header and upload ONCE; record each bucket's instance range.
+    struct BucketRange
+    {
+        crd::u32 first = 0U; // first instance
+        crd::u32 count = 0U;
+    };
+    BucketRange ranges[2][kVariantCount]; // [is_tri][variant]
+
+    const auto pack_and_upload = [&](bool is_tri) {
+        auto&            storage = is_tri ? *s.storage : *s.line_storage;
+        const crd::u32   cap     = is_tri ? s.config.max_triangles_per_frame : s.config.max_lines_per_frame;
         const crd::usize count   = is_tri ? triangles.size() : lines.size();
 
+        pack_header(s.scratch, config); // both buffers carry the header — the VS reads it at words 0..31
+        crd::u32 packed  = 0U;
+        crd::u32 dropped = 0U;
         for (crd::u32 v = 0; v < kVariantCount; ++v)
         {
-            const bool dim = (v == kVariantGreaterDimmed);
-            s.scratch.clear();
-            crd::u32 in_batch = 0U;
-            const auto flush  = [&]() {
-                if (in_batch == 0U) { return; }
-                if (!s.raster->upload_storage(*s.storage, kHeaderWords * 4U, s.scratch.data(),
-                                              static_cast<crd::u32>(s.scratch.size() * 4U))
-                    || !s.raster->draw_overlay(target, prog, *s.storage, compare_of[v], in_batch * verts_per))
-                {
-                    ok = false;
-                }
-                s.scratch.clear();
-                in_batch = 0U;
-            };
+            const bool dim          = (v == kVariantGreaterDimmed);
+            ranges[is_tri ? 1 : 0][v].first = packed;
             for (crd::usize i = 0; i < count; ++i)
             {
-                const auto      m       = is_tri ? triangles[i].flags.depth() : lines[i].flags.depth();
-                const bool      in_this = variant_of(m) == v || (m == DepthMode::XRay && v == kVariantGreaterDimmed);
+                const auto m       = is_tri ? triangles[i].flags.depth() : lines[i].flags.depth();
+                const bool in_this = variant_of(m) == v || (m == DepthMode::XRay && v == kVariantGreaterDimmed);
                 if (!in_this) { continue; }
+                if (packed == cap) // never silent: a clamped overlay says so (the no-silent-caps rule)
+                {
+                    ++dropped;
+                    continue;
+                }
                 if (is_tri)
                 {
                     const auto& t = triangles[i];
@@ -171,15 +162,49 @@ bool submit_overlay(crd::gpu::IRasterTarget& target, const RenderBuffer& buffer,
                     s.scratch.push_back(l.flags.raw);
                     s.scratch.push_back(fbits(l.width));
                 }
-                ++in_batch;
-                if (in_batch == cap) { flush(); }
+                ++packed;
             }
-            flush();
+            ranges[is_tri ? 1 : 0][v].count = packed - ranges[is_tri ? 1 : 0][v].first;
         }
-        (void)words_per;
+        if (dropped > 0U)
+        {
+            CRD_LOG_WARN(g_log_overlay, "overlay {} bin over its per-frame cap ({}) -- {} instance(s) dropped",
+                         is_tri ? "triangle" : "line", cap, dropped);
+        }
+        if (s.scratch.size() == static_cast<crd::usize>(kHeaderWords) && !config.grid.enabled) { return; }
+        if (!s.raster->upload_storage(storage, 0U, s.scratch.data(), static_cast<crd::u32>(s.scratch.size() * 4U)))
+        {
+            CRD_LOG_ERROR(g_log_overlay, "draw-buffer upload refused -- skipping {} bins", is_tri ? "tri" : "line");
+            for (crd::u32 v = 0; v < kVariantCount; ++v) { ranges[is_tri ? 1 : 0][v].count = 0U; }
+            ok = false;
+        }
     };
-    draw_bins(true);  // solid triangles
-    draw_bins(false); // AA lines on top
+    pack_and_upload(true);
+    pack_and_upload(false);
+
+    // ── the draws, AFTER every upload landed: grid first (under the primitives), then triangles, then lines,
+    // each variant in compose-on-top order. The grid depth-tests like any world-anchored geometry — `Always`
+    // here is what let it ghost through the scene.
+    if (config.grid.enabled)
+    {
+        ok = s.raster->draw_overlay(target, *s.grid_prog, *s.storage, config.depth_test, 6U) && ok;
+    }
+    for (crd::u32 v = 0; v < kVariantCount; ++v)
+    {
+        const BucketRange& r = ranges[1][v];
+        if (r.count == 0U) { continue; }
+        ok = s.raster->draw_overlay_range(target, *s.tri_prog, *s.storage, compare_of[v], r.first * 3U,
+                                          r.count * 3U)
+             && ok;
+    }
+    for (crd::u32 v = 0; v < kVariantCount; ++v)
+    {
+        const BucketRange& r = ranges[0][v];
+        if (r.count == 0U) { continue; }
+        ok = s.raster->draw_overlay_range(target, *s.line_prog, *s.line_storage, compare_of[v], r.first * 6U,
+                                          r.count * 6U)
+             && ok;
+    }
 
     return ok;
 }

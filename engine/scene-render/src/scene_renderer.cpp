@@ -172,6 +172,220 @@ clear_depth   = 0.0
 depth         = "GreaterEqual"   # reverse-Z
 )CRDFG";
 
+// ── ⭐⭐ REN-39 fix (the tonemap toggle): the POST-CHAIN frames JOIN THE BUILTIN PACK. ────────────────────────
+// They had been DISK-ONLY: without `CRD_ASSETS_DIR` the sandbox's AgX/sRGB switch hit "no such asset", logged
+// an error nobody watches, and the frame silently stayed the default — "changing tonemapping does nothing".
+// They were also OUTSIDE the drift gate's list, which is exactly how a disk-only default stays invisible. Both
+// fixed: embedded here (a disk copy SHADOWS these, like every default) and drift-gated. `scene_hdr` is
+// RGBA16F — the second half of the same fix: an RGBA8 intermediate clamped + quantized the scene to LDR
+// BEFORE the display transform, so even an installed tonemap barely changed the image.
+constexpr const char* kBuiltinForwardCsmAgx = R"CRDFG(
+schema = 1
+name   = "crd://frame/forward_csm_agx"
+requires = ["shadows"]
+fallback = "crd://frame/forward_agx"
+
+[[resource]]
+name    = "shadow_atlas"
+kind    = "transient_image"
+format  = "D32Float"
+width   = 2048
+height  = 2048
+layers  = 4
+sampled = true
+
+[[resource]]
+name    = "scene_hdr"
+kind    = "transient_image"
+format  = "RGBA16F"
+scale   = 1.0
+sampled = true
+depth_buffer = true
+
+[[draw_list]]
+name = "shadow_casters"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "front_to_back"
+
+[[draw_list]]
+name = "visible_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "material"
+
+[[pass]]
+name          = "csm_cascade"
+kind          = "raster.depth_only"
+draw_list     = "shadow_casters"
+for_each      = "light.0.cascades"
+writes        = ["shadow_atlas[$index]"]
+material_pass = "Shadow"
+clear_depth   = 1.0
+depth         = "LessEqual"
+
+[[pass]]
+name          = "forward"
+kind          = "raster.geometry"
+draw_list     = "visible_geometry"
+reads         = ["shadow_atlas"]
+writes        = ["scene_hdr"]
+technique     = "forward_csm"
+material_pass = "Forward"
+clear_color   = [0.09, 0.10, 0.13, 1.0]
+clear_depth   = 0.0
+depth         = "GreaterEqual"
+
+[[pass]]
+name   = "post"
+kind   = "raster.fullscreen"
+reads  = ["scene_hdr"]
+writes = ["@output"]
+shader = "crd://post/tonemap_agx"
+)CRDFG";
+
+constexpr const char* kBuiltinForwardCsmSrgb = R"CRDFG(
+schema = 1
+name   = "crd://frame/forward_csm_srgb"
+requires = ["shadows"]
+fallback = "crd://frame/forward_srgb"
+
+[[resource]]
+name    = "shadow_atlas"
+kind    = "transient_image"
+format  = "D32Float"
+width   = 2048
+height  = 2048
+layers  = 4
+sampled = true
+
+[[resource]]
+name    = "scene_hdr"
+kind    = "transient_image"
+format  = "RGBA16F"
+scale   = 1.0
+sampled = true
+depth_buffer = true
+
+[[draw_list]]
+name = "shadow_casters"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "front_to_back"
+
+[[draw_list]]
+name = "visible_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "material"
+
+[[pass]]
+name          = "csm_cascade"
+kind          = "raster.depth_only"
+draw_list     = "shadow_casters"
+for_each      = "light.0.cascades"
+writes        = ["shadow_atlas[$index]"]
+material_pass = "Shadow"
+clear_depth   = 1.0
+depth         = "LessEqual"
+
+[[pass]]
+name          = "forward"
+kind          = "raster.geometry"
+draw_list     = "visible_geometry"
+reads         = ["shadow_atlas"]
+writes        = ["scene_hdr"]
+technique     = "forward_csm"
+material_pass = "Forward"
+clear_color   = [0.09, 0.10, 0.13, 1.0]
+clear_depth   = 0.0
+depth         = "GreaterEqual"
+
+[[pass]]
+name   = "post"
+kind   = "raster.fullscreen"
+reads  = ["scene_hdr"]
+writes = ["@output"]
+shader = "crd://post/srgb_only"
+)CRDFG";
+
+// The SHADOWS-OFF tiers of the tonemapped pair (REN-35's rule applied to 38-G1's frames): same HDR
+// intermediate, same display transform, no atlas and no cascade passes. `forward_csm_agx/srgb` name these as
+// their `fallback`, so a shadow-less host steps down instead of failing to record and presenting BLACK.
+constexpr const char* kBuiltinForwardAgx = R"CRDFG(
+schema = 1
+name   = "crd://frame/forward_agx"
+
+[[resource]]
+name    = "scene_hdr"
+kind    = "transient_image"
+format  = "RGBA16F"
+scale   = 1.0
+sampled = true
+depth_buffer = true
+
+[[draw_list]]
+name = "visible_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "material"
+
+[[pass]]
+name          = "forward"
+kind          = "raster.geometry"
+draw_list     = "visible_geometry"
+writes        = ["scene_hdr"]
+technique     = "standard_forward"
+material_pass = "Forward"
+clear_color   = [0.09, 0.10, 0.13, 1.0]
+clear_depth   = 0.0
+depth         = "GreaterEqual"
+
+[[pass]]
+name   = "post"
+kind   = "raster.fullscreen"
+reads  = ["scene_hdr"]
+writes = ["@output"]
+shader = "crd://post/tonemap_agx"
+)CRDFG";
+
+constexpr const char* kBuiltinForwardSrgb = R"CRDFG(
+schema = 1
+name   = "crd://frame/forward_srgb"
+
+[[resource]]
+name    = "scene_hdr"
+kind    = "transient_image"
+format  = "RGBA16F"
+scale   = 1.0
+sampled = true
+depth_buffer = true
+
+[[draw_list]]
+name = "visible_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "material"
+
+[[pass]]
+name          = "forward"
+kind          = "raster.geometry"
+draw_list     = "visible_geometry"
+writes        = ["scene_hdr"]
+technique     = "standard_forward"
+material_pass = "Forward"
+clear_color   = [0.09, 0.10, 0.13, 1.0]
+clear_depth   = 0.0
+depth         = "GreaterEqual"
+
+[[pass]]
+name   = "post"
+kind   = "raster.fullscreen"
+reads  = ["scene_hdr"]
+writes = ["@output"]
+shader = "crd://post/srgb_only"
+)CRDFG";
+
 // ── the CKIR forward pass ──────────────────────────────────────────────────────────────────────────────────────────
 // The RET-6 builder scaffolding, self-contained (crd-scene-render does not depend on crd-draw): the u32 storage
 // buffer at set 0 / binding 0 (KOp::StorageLoad), floats as bit patterns via int_bits_to_float.
@@ -488,6 +702,14 @@ struct SceneShaderConfig
     // 38-G1 (user-directed): the DISK-resolved material text (F15). Null = the embedded default. Set by
     // `cook_fs`, which is the one place with access to the asset resolution.
     const crd::containers::String*        material_text = nullptr;
+    // ⭐⭐ REN-39-C1: cook the READ-ONLY twin — the FS half of an INDEXED program pair. The flag rides the
+    // KEntry into the emitters (DX12 t0 SRV / GLSL `readonly`) AND into the content hash, so the twin dedups
+    // separately from its u0 sibling instead of colliding with it.
+    bool storage_read_only = false;
+    // ⭐⭐ REN-39-D1: the backend's CLIP-SPACE Y direction, folded into the `csm_light_vp` binding below so the
+    // TECHNIQUE never has to know it (see IRasterContext::ndc_y_points_down). It changes the emitted GRAPH, so
+    // the content hash separates the two cooks automatically — no extra hash term needed.
+    bool flip_clip_y = false;
 };
 
 // Resolve the technique's DECLARED bindings into node ids, in ABI order.
@@ -527,14 +749,28 @@ struct SceneShaderConfig
         {
             // The header stores each cascade's light_vp COLUMN-MAJOR: column j at word base + j*4. `g.mat4` takes
             // four vec4 COLUMNS, so the layouts line up directly — no transpose, and no place for one to hide.
+            //
+            // ⛔⛔ REN-39-D1 — THE CLIP-Y CONVENTION LIVES HERE, NOT IN THE TECHNIQUE. The atlas is RASTERIZED
+            // through this same matrix, and the two APIs disagree about which way +Y runs down a render target
+            // (Vulkan down, D3D12 up). So on D3D12 the atlas is stored vertically MIRRORED relative to Vulkan,
+            // while the technique's portable `v = ndc.y*0.5 + 0.5` is identical on both — every shadow lookup
+            // read the wrong row. It is invisible on screen (a colour target and the fullscreen pass that
+            // consumes it flip TOGETHER) and it survived a full audit of the fit, the culling, the per-slice
+            // DSVs, the barriers, the indexed draw path and both emitters, because none of those was wrong.
+            //
+            // Negating the matrix's Y ROW here flips `lp.y` for the FS ONLY — the shadow VS keeps reading the
+            // raw header matrix, so what is RASTERIZED is untouched and only the LOOKUP is corrected. The
+            // technique stays one portable formula, which is the whole point of the binding seam.
+            const bool fy = cfg.flip_clip_y;
             for (crd::u32 ci = 0; ci < b.count; ++ci)
             {
                 const crd::u32 base = kHdrCsmLightVp + (ci * 16U);
                 int            col[4];
                 for (crd::u32 j = 0; j < 4U; ++j)
                 {
-                    col[j] = g.vec4(c.hdrf(base + (j * 4U) + 0U), c.hdrf(base + (j * 4U) + 1U),
-                                    c.hdrf(base + (j * 4U) + 2U), c.hdrf(base + (j * 4U) + 3U));
+                    const int y = c.hdrf(base + (j * 4U) + 1U);
+                    col[j]      = g.vec4(c.hdrf(base + (j * 4U) + 0U), fy ? c.sub(c.kf(0.0), y) : y,
+                                         c.hdrf(base + (j * 4U) + 2U), c.hdrf(base + (j * 4U) + 3U));
                 }
                 out.push_back(g.mat4(col[0], col[1], col[2], col[3]));
             }
@@ -1191,6 +1427,12 @@ struct SceneDraw
     // ⭐⭐ REN-38: this draw's program rebases every load by `table[DrawIndex]` — the executor must record it
     // through the multi verb (which pushes the row) even alone; a classic verb would leave the push stale.
     bool                      rebased = false;
+    // ⭐⭐ REN-39-C1: the INDEXED-PULL fields (0 = the classic pull draw). `first_index` is the ABSOLUTE u32
+    // word of the group's index section (private buffer: `indices_off`; consolidated: `region_base +
+    // indices_off`) — the executor binds the index view at offset 0, one convention for both layouts.
+    crd::u32 index_count = 0U;
+    crd::u32 instance_count = 0U;
+    crd::u32 first_index = 0U;
 };
 
 // ── the Impl ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1273,8 +1515,26 @@ struct SceneRenderer::Impl
     crd::gpu::IGpuProgram*                    vs_shadowed = nullptr;
     crd::gpu::IGpuProgram*                    fs_shadowed = nullptr; // borrowed from `fs_programs`
     std::unique_ptr<crd::gpu::IRasterProgram> program_shadowed;
+    // ── ⭐⭐ REN-39-C1: the INDEXED program set — the SAME declarations cooked `indexed = true` over the
+    // READ-ONLY fragment twins, one per variant the draw-list can pick. ⛔ ALL-OR-NOTHING: `use_indexed` is
+    // finalized at the end of init_programs and honoured only when EVERY twin whose base cooked also cooked —
+    // a cascade pass draws every item with ONE instance program, so a frame may never mix addressing modes.
+    // The parity gate flips `use_indexed` to prove pull and indexed render bit-identical frames.
+    bool use_indexed = true;
+    std::unique_ptr<crd::gpu::IGpuProgram> vs_idx;
+    std::unique_ptr<crd::gpu::IRasterProgram> program_idx;
+    std::unique_ptr<crd::gpu::IGpuProgram> vs_rebased_idx;
+    std::unique_ptr<crd::gpu::IRasterProgram> program_rebased_idx;
+    std::unique_ptr<crd::gpu::IGpuProgram> vs_skinned_idx;
+    std::unique_ptr<crd::gpu::IRasterProgram> program_skinned_idx;
+    std::unique_ptr<crd::gpu::IRasterProgram> program_textured_idx;
+    std::unique_ptr<crd::gpu::IRasterProgram> program_shadowed_idx;
+    std::unique_ptr<crd::gpu::IRasterProgram> program_textured_shadowed_idx;
+    std::unique_ptr<crd::gpu::IGpuProgram> shadow_vs_idx[kMaxCascades];
+    std::unique_ptr<crd::gpu::IRasterProgram> shadow_prog_idx[kMaxCascades];
     SceneRenderer::FramePassFn             overlay_fn   = nullptr; // the grid/gizmo/debug pass, in OUR graph
     void*                                  overlay_user = nullptr;
+    crd::gpu::FgImage                      overlay_img{}; // REN-39: the image the woven overlay pass declared
     // REN-37.8: when non-null, `render()` RECORDS into this caller-owned graph and does not reset/build/execute.
     // Borrowed for the duration of one `contribute()` call and cleared immediately after — it must never outlive
     // the caller's graph.
@@ -1341,6 +1601,50 @@ struct SceneRenderer::Impl
     crd::containers::Array<std::unique_ptr<crd::gpu::IGpuProgram>> fs_programs;
     crd::u32                                                       variants_cooked = 0U;
 
+    // ── REN-39 (the shadows-off black frame): FALLBACK GRAPHS RESOLVE BY NAME. ──
+    // A frame's `fallback` names an ASSET (`crd://frame/<x>` → `frame/<x>.frame.toml`, disk-first like every
+    // other default); until now the host ignored the name and always answered the parsed `forward_basic`, so a
+    // tonemapped frame could never step down to its tonemapped shadows-off tier. Parsed once, cached by name.
+    crd::containers::Array<crd::containers::String>                         fb_frame_names;
+    crd::containers::Array<std::unique_ptr<crd::framecook::FrameGraphDesc>> fb_frame_descs;
+    crd::u64                                                                stepdown_logged = 0U;
+
+    [[nodiscard]] const crd::framecook::FrameGraphDesc* resolve_frame_asset(crd::containers::StringView crd_name)
+    {
+        for (crd::usize i = 0; i < fb_frame_names.size(); ++i)
+        {
+            const crd::containers::String& n = fb_frame_names[i];
+            if (crd::containers::StringView(n.c_str(), n.size()) == crd_name) { return fb_frame_descs[i].get(); }
+        }
+        constexpr crd::containers::StringView prefix("crd://frame/");
+        if (crd_name.size() <= prefix.size()
+            || std::memcmp(crd_name.data(), prefix.data(), prefix.size()) != 0)
+        {
+            return nullptr;
+        }
+        crd::containers::String rel(alloc);
+        rel.append("frame/");
+        rel.append(crd_name.data() + prefix.size(), crd_name.size() - prefix.size());
+        rel.append(".frame.toml");
+        crd::containers::String text(alloc);
+        if (!asset_text(rel.c_str(), text)) { return nullptr; }
+        auto d = std::make_unique<crd::framecook::FrameGraphDesc>(alloc);
+        crd::containers::String where(alloc);
+        if (crd::framecook::parse_frame_toml(crd::containers::StringView(text.c_str(), text.size()), *d, &where)
+            != crd::framecook::FrameCookError::Ok)
+        {
+            CRD_LOG_ERROR(g_log_scenerender, "fallback frame '{}' failed to parse at '{}'", rel.c_str(),
+                          where.c_str());
+            return nullptr;
+        }
+        const crd::framecook::FrameGraphDesc* raw = d.get();
+        crd::containers::String               name_copy(alloc);
+        name_copy.append(crd_name.data(), crd_name.size());
+        fb_frame_names.push_back(static_cast<crd::containers::String&&>(name_copy));
+        fb_frame_descs.push_back(std::move(d));
+        return raw;
+    }
+
     // Cook `cfg`, hash the lowered graph, and return the cached program when one already matches. Null on a cook
     // or compile failure — never a silently-wrong program.
     // ⭐⭐ REN-38 audit (the LIVE half of 38-D4): `reqs`/`n_reqs` (optional, cap `req_cap`) receive the varying
@@ -1358,6 +1662,9 @@ struct SceneRenderer::Impl
         // embedded copy. ⛔ Until this line the constants were used directly and a user's override was silently
         // ignored; the files existed, were drift-gated, and did nothing. Depth-only passes cook no surface.
         SceneShaderConfig       rcfg = cfg;
+        // ⭐⭐ REN-39-D1: the backend's clip-Y convention is stamped HERE, at the ONE place every scene FS is
+        // cooked, so no call site can forget it and no authored technique has to know it exists.
+        rcfg.flip_clip_y = raster != nullptr && !raster->ndc_y_points_down();
         crd::containers::String mat_text(alloc);
         if (cfg.pass == crd::kir::cook::PassType::Forward
             && asset_text(cfg.textured ? "material/scene_textured.crdm" : "material/scene.crdm", mat_text))
@@ -1367,6 +1674,9 @@ struct SceneRenderer::Impl
         crd::kir::KGraph g(alloc);
         crd::kir::KEntry e;
         if (!build_scene_fs_cooked(g, e, rcfg)) { return nullptr; }
+        // REN-39-C1: the read-only promise is entry state — it feeds the emitters AND the content hash below,
+        // so the indexed pair's FS twin is a distinct deduped program, never a collision with its u0 sibling.
+        e.storage_read_only = rcfg.storage_read_only;
         if (reqs != nullptr && n_reqs != nullptr
             && !crd::vertcook::fs_varying_requirements(g, e, reqs, req_cap, n_reqs, alloc))
         {
@@ -1649,7 +1959,7 @@ struct SceneRenderer::Impl
         : alloc(a), skeleton_cache(a), clip_cache(a), pose_scratch(a), world_scratch(a), palette_scratch(a),
           palette_staging(a), group_of_mesh(a), material_color(a), material_texture(a), entity_slot(a),
           contrib_draws(a), frame(a), fallback(a), recorder(a), groups_view(a), fs_hashes(a), fs_programs(a),
-          techniques(a), adv_stages(a)
+          fb_frame_names(a), fb_frame_descs(a), techniques(a), adv_stages(a)
     {
         // The built-in pack, parsed once. ⛔ If the EMBEDDED default fails to parse the renderer must not fall
         // back to hand-built passes — there would then be two rendering paths and only one of them authored.
@@ -2201,7 +2511,188 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
         // a shadow atlas nothing samples — pure cost, zero pixels changed.
         m_impl->shadow_programs_ok = all_ok && m_impl->program_shadowed != nullptr;
     }
+
+    // ── ⭐⭐ REN-39-C1: THE INDEXED PROGRAM SET — the SAME resolved declarations cooked `indexed = true` (one
+    // prefix line, so a twin can never drift from its source) over the READ-ONLY fragment twins (the flag rides
+    // the KEntry into the emitters and the content hash). ⛔ ALL-OR-NOTHING: a cascade pass draws every item
+    // with ONE instance program, so a frame may never mix addressing modes — if any twin whose base cooked
+    // fails, the switch turns OFF, logged, and the renderer keeps the proven pull path.
+    if (m_impl->use_indexed && m_impl->program != nullptr)
+    {
+        bool ok = true;
+        const auto cook_vs_text =
+            [&](const char* prefix, const crd::containers::String& base, std::unique_ptr<crd::gpu::IGpuProgram>& out_vs)
+        {
+            crd::kir::KGraph ig(m_impl->alloc);
+            crd::kir::KEntry ie;
+            crd::containers::String t(m_impl->alloc);
+            t.append(prefix);
+            t.append(base.c_str());
+            if (!cook_vs(m_impl->alloc, t.c_str(), nullptr, ig, ie))
+            {
+                return false;
+            }
+            out_vs = ctx.create_program(ig, ie);
+            return out_vs != nullptr;
+        };
+        // the READ-ONLY fragment twins. The varying sets are IDENTICAL to their u0 siblings (the flag only
+        // re-addresses the storage declaration), so the 38-D4 contract verified above covers them.
+        SceneShaderConfig rocfg = fcfg;
+        rocfg.storage_read_only = true;
+        crd::gpu::IGpuProgram* fs_flat_ro = m_impl->cook_fs(rocfg);
+        ok = fs_flat_ro != nullptr;
+        crd::gpu::IGpuProgram* fs_tex_ro = nullptr;
+        if (ok && m_impl->fs_textured != nullptr)
+        {
+            SceneShaderConfig rt = rocfg;
+            rt.textured = true;
+            fs_tex_ro = m_impl->cook_fs(rt);
+            ok = fs_tex_ro != nullptr;
+        }
+        crd::gpu::IGpuProgram* fs_sh_ro = nullptr;
+        crd::gpu::IGpuProgram* fs_tsh_ro = nullptr;
+        if (ok && m_impl->fs_shadowed != nullptr && csm != nullptr)
+        {
+            SceneShaderConfig rs;
+            rs.pass = crd::kir::cook::PassType::Forward;
+            rs.tech = csm;
+            rs.map_size = m_impl->csm.map_size;
+            rs.cascades = m_impl->csm.cascade_count;
+            rs.pcf_taps = m_impl->pcf_taps;
+            rs.storage_read_only = true;
+            fs_sh_ro = m_impl->cook_fs(rs);
+            ok = fs_sh_ro != nullptr;
+            if (ok && m_impl->fs_textured_shadowed != nullptr)
+            {
+                SceneShaderConfig rts = rs;
+                rts.textured = true;
+                fs_tsh_ro = m_impl->cook_fs(rts);
+                ok = fs_tsh_ro != nullptr;
+            }
+        }
+        // the indexed VERTEX twins + their raster pairs
+        if (ok)
+        {
+            ok = cook_vs_text("indexed = true\n", vs_scene, m_impl->vs_idx);
+        }
+        if (ok)
+        {
+            m_impl->program_idx = m_impl->raster->create_raster_program(*m_impl->vs_idx, *fs_flat_ro);
+            ok = m_impl->program_idx != nullptr;
+        }
+        if (ok && m_impl->program_rebased != nullptr)
+        {
+            char rbl[80];
+            (void)std::snprintf(static_cast<char*>(rbl), sizeof(rbl), "indexed = true\nrebase_table = %u\n",
+                                kSceneDrawTableOff);
+            ok = cook_vs_text(static_cast<const char*>(rbl), vs_scene, m_impl->vs_rebased_idx);
+            if (ok)
+            {
+                m_impl->program_rebased_idx =
+                    m_impl->raster->create_raster_program(*m_impl->vs_rebased_idx, *fs_flat_ro);
+                ok = m_impl->program_rebased_idx != nullptr;
+            }
+        }
+        if (ok && m_impl->program_skinned != nullptr)
+        {
+            ok = cook_vs_text("indexed = true\n", vs_skin, m_impl->vs_skinned_idx);
+            if (ok)
+            {
+                m_impl->program_skinned_idx =
+                    m_impl->raster->create_raster_program(*m_impl->vs_skinned_idx, *fs_flat_ro);
+                ok = m_impl->program_skinned_idx != nullptr;
+            }
+        }
+        if (ok && m_impl->program_textured != nullptr && fs_tex_ro != nullptr)
+        {
+            m_impl->program_textured_idx = m_impl->raster->create_raster_program(*m_impl->vs_idx, *fs_tex_ro);
+            ok = m_impl->program_textured_idx != nullptr;
+        }
+        if (ok && m_impl->program_shadowed != nullptr && fs_sh_ro != nullptr)
+        {
+            m_impl->program_shadowed_idx = m_impl->raster->create_raster_program(*m_impl->vs_idx, *fs_sh_ro);
+            ok = m_impl->program_shadowed_idx != nullptr;
+        }
+        if (ok && m_impl->program_textured_shadowed != nullptr && fs_tsh_ro != nullptr)
+        {
+            m_impl->program_textured_shadowed_idx = m_impl->raster->create_raster_program(*m_impl->vs_idx, *fs_tsh_ro);
+            ok = m_impl->program_textured_shadowed_idx != nullptr;
+        }
+        // the shadow CASCADE twins — the same parsed declaration, `indexed` stamped beside cascade (the 38-G1
+        // stamping rule: the variant is the renderer's pass semantics, the vocabulary is the asset's)
+        if (ok && m_impl->shadow_programs_ok)
+        {
+            SceneShaderConfig rd;
+            rd.pass = crd::kir::cook::PassType::Shadow;
+            rd.storage_read_only = true;
+            crd::gpu::IGpuProgram* sfs_ro = m_impl->cook_fs(rd);
+            crd::containers::String sh_text(m_impl->alloc);
+            ok = sfs_ro != nullptr && m_impl->asset_text("vertex/shadow.crdv", sh_text);
+            for (crd::u32 c = 0; ok && c < kMaxCascades; ++c)
+            {
+                crd::kir::KGraph sg(m_impl->alloc);
+                crd::kir::KEntry se;
+                crd::vertcook::VertexProgramDesc sdesc(m_impl->alloc);
+                crd::containers::String sw(m_impl->alloc);
+                ok = crd::vertcook::parse_vertex_toml(crd::containers::StringView(sh_text.c_str(), sh_text.size()),
+                                                      sdesc, &sw) == crd::vertcook::VertexCookError::Ok;
+                if (!ok)
+                {
+                    break;
+                }
+                sdesc.transform = crd::vertcook::VertexTransform::LightVp;
+                sdesc.cascade = c;
+                sdesc.instance_capacity_word = kHdrInstanceCapacity;
+                sdesc.indexed = true;
+                ok = crd::vertcook::cook_vertex_program(sdesc, sg, se);
+                if (!ok)
+                {
+                    break;
+                }
+                m_impl->shadow_vs_idx[c] = ctx.create_program(sg, se);
+                ok = m_impl->shadow_vs_idx[c] != nullptr;
+                if (!ok)
+                {
+                    break;
+                }
+                m_impl->shadow_prog_idx[c] = m_impl->raster->create_raster_program(*m_impl->shadow_vs_idx[c], *sfs_ro);
+                ok = m_impl->shadow_prog_idx[c] != nullptr;
+            }
+        }
+        if (!ok)
+        {
+            CRD_LOG_ERROR(g_log_scenerender,
+                          "REN-39: indexed program set incomplete — keeping the pull path (all-or-nothing)");
+            m_impl->use_indexed = false;
+            // ⛔ drop the PARTIAL set — a later set_indexed_pull(true) over half a set would mix addressing
+            // modes inside one cascade pass, the exact hazard all-or-nothing exists to prevent
+            m_impl->program_idx.reset();
+            m_impl->program_rebased_idx.reset();
+            m_impl->program_skinned_idx.reset();
+            m_impl->program_textured_idx.reset();
+            m_impl->program_shadowed_idx.reset();
+            m_impl->program_textured_shadowed_idx.reset();
+            for (crd::u32 c = 0; c < kMaxCascades; ++c)
+            {
+                m_impl->shadow_prog_idx[c].reset();
+            }
+        }
+    }
     return m_impl->program != nullptr;
+}
+
+// REN-39-C1: the indexed-pull switch (see the header). Honoured only while the indexed set exists — flipping ON
+// after a failed/skipped cook keeps the pull path (the fill chain null-checks the twin it picks).
+void SceneRenderer::set_indexed_pull(bool on) noexcept
+{
+    m_impl->use_indexed = on;
+}
+
+// REN-39 (the gizmo fix): resolve the woven overlay pass's DECLARED image for the app callback (see header).
+crd::gpu::IRasterTarget* SceneRenderer::overlay_target(crd::gpu::IFrameContext& ctx) const noexcept
+{
+    if (m_impl == nullptr || !m_impl->overlay_img.valid()) { return nullptr; }
+    return ctx.image(m_impl->overlay_img);
 }
 
 namespace
@@ -2823,6 +3314,12 @@ public:
             const MeshGroup* g = m_impl.group_of_draw(gi);
             if (g == nullptr) { break; }
             out.items[i].vertex_count = g->cascade_visible_count[instance] * g->index_count;
+            // REN-39-C1: an indexed item's per-cascade count rides `instance_count` (the vertex_count above is
+            // the pull twin's spelling of the SAME number — both stay correct, whichever mode the frame runs)
+            if (out.items[i].index_count > 0U)
+            {
+                out.items[i].instance_count = g->cascade_visible_count[instance];
+            }
             ++gi;
         }
         return true;
@@ -2835,9 +3332,27 @@ public:
         return str_is(name, "shadows") ? m_impl.shadows_active() : false;
     }
 
-    [[nodiscard]] const crd::framecook::FrameGraphDesc* fallback_graph(crd::containers::StringView) override
+    // ⭐⭐ REN-39 (the gizmo fix): the overlay is WOVEN into the recording by the recorder — after the last
+    // geometry pass, onto the SCENE image (live depth, pre-tonemap) — instead of appended after the whole
+    // graph, where a post chain left it depth-testing a never-written buffer and escaping the tonemap. The
+    // declared image is stashed so the app's callback can resolve it via `overlay_target(ctx)` — drawing a
+    // captured raw target renders an image the graph never barriered.
+    [[nodiscard]] bool overlay_pass(crd::gpu::FgExecuteFn* fn, void** user, crd::gpu::FgImage target) override
     {
-        return &m_impl.fallback;
+        if (m_impl.overlay_fn == nullptr) { return false; }
+        *fn                = m_impl.overlay_fn;
+        *user              = m_impl.overlay_user;
+        m_impl.overlay_img = target;
+        return true;
+    }
+
+    // REN-39: the NAME is honored — `fallback` is an asset reference, resolved disk-first like every other
+    // default. The parsed `forward_basic` stays as the last-resort floor when the name does not resolve (the
+    // pre-existing behavior), so a broken fallback still degrades loudly instead of erroring silently.
+    [[nodiscard]] const crd::framecook::FrameGraphDesc* fallback_graph(crd::containers::StringView name) override
+    {
+        const crd::framecook::FrameGraphDesc* fb = m_impl.resolve_frame_asset(name);
+        return fb != nullptr ? fb : &m_impl.fallback;
     }
 
     // How many cascades THIS FRAME. Scene state, so the host owns it — and 0 is a REPORTED failure upstream, not
@@ -2850,9 +3365,19 @@ public:
     // ⛔ Each cascade has its OWN program: the cascade index is baked as a compile-time constant so the VS reads
     // its own light_vp slice from the shared header. Returning the same program for every instance would render
     // all four slices from cascade 0 — identical slices, which is exactly what the REN-3.2 gate rejects.
+    // ⭐⭐ REN-39-C1: under the indexed switch the cascade programs are the INDEXED twins — the items carry
+    // index fields exactly when `use_indexed` survived init (all-or-nothing), so program and items always agree.
     [[nodiscard]] crd::gpu::IRasterProgram* instance_program(crd::containers::StringView, crd::u32 index) override
     {
-        return index < kMaxCascades ? m_impl.shadow_prog[index].get() : nullptr;
+        if (index >= kMaxCascades)
+        {
+            return nullptr;
+        }
+        if (m_impl.use_indexed && m_impl.shadow_prog_idx[index] != nullptr)
+        {
+            return m_impl.shadow_prog_idx[index].get();
+        }
+        return m_impl.shadow_prog[index].get();
     }
 
 private:
@@ -2878,6 +3403,10 @@ private:
             it.indexed      = d.rebased; // REN-38: must record through the multi verb (it pushes the row)
             it.vertex_count = d.vertex_count;
             it.texture      = d.base_color; // beats the pass's sampled read (REN-37.10)
+            // REN-39-C1: the indexed-pull fields ride through — index_count > 0 routes the indexed verbs
+            it.index_count = d.index_count;
+            it.instance_count = d.instance_count;
+            it.first_index = d.first_index;
             out.items[out.resolved++] = it;
         }
         return true;
@@ -3118,7 +3647,16 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         // cascade's light clip volume. The shadow passes used to draw the CAMERA's list four times, and
         // cascade 0 covers a few metres of a 110-unit field — so nearly all of that geometry was pulled,
         // transformed and then clipped. Measured waste: 8 ms of GPU, 130 fps -> 53 with shadows on.
-        if (impl.shadows_active() && group.buffer != nullptr)
+        // ⛔⛔ REN-39-D1: THE CASCADE LISTS MUST LAND IN THE BUFFER THE CASCADE DRAW ACTUALLY BINDS. A
+        // consolidated group draws REBASED over `scene_buf` (`d.buffer = impl.scene_buf` below), and its region
+        // already reserves the per-cascade blocks (`region_base` sizing above counts `1 + kMaxCascades` lists).
+        // Uploading them to the group's PRIVATE buffer instead left every cascade pass pulling whatever happened
+        // to sit at that region of the scene buffer: the atlas held a handful of stale instances rather than the
+        // scene, so most casters threw NO shadow at all and the few that did landed nowhere near their caster.
+        // It reads as "the shadows are in completely wrong places" and points at neither the fit nor the bias.
+        crd::gpu::IStorageBuffer* const cdst      = use_region ? impl.scene_buf.get() : group.buffer.get();
+        const crd::u32                  cdst_base = use_region ? group.region_base : 0U;
+        if (impl.shadows_active() && cdst != nullptr)
         {
             crd::containers::Array<crd::u32> clist(impl.alloc);
             for (crd::u32 c = 0; c < impl.cascades.count && c < kMaxCascades; ++c)
@@ -3137,9 +3675,9 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
                 group.cascade_visible_count[c] = ccount;
                 if (ccount > 0U)
                 {
-                    (void)impl.raster->upload_storage(*group.buffer,
-                                                      (group.visible_off + (1U + c) * group.capacity) * 4U,
-                                                      clist.data(), ccount * 4U);
+                    (void)impl.raster->upload_storage(
+                        *cdst, (cdst_base + group.visible_off + (1U + c) * group.capacity) * 4U, clist.data(),
+                        ccount * 4U);
                 }
             }
         }
@@ -3180,6 +3718,47 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
             if (draw_list.size() < crd::framecook::kMaxDrawItems)
             {
                 draw_table[draw_list.size()] = group.region_base;
+            }
+        }
+        // ── ⭐⭐ REN-39-C1: THE INDEXED-PULL SWITCH. The chosen program is replaced by its indexed twin (the
+        // set is all-or-nothing, so every twin the chain can pick exists when `use_indexed` survived init) and
+        // the draw carries the indexed fields: index_count per instance, the visible count, and the ABSOLUTE
+        // word of this group's index section (private buffer: indices_off; region: region_base + indices_off).
+        if (impl.use_indexed)
+        {
+            crd::gpu::IRasterProgram* iprog = nullptr;
+            if (d.rebased)
+            {
+                iprog = impl.program_rebased_idx.get();
+            }
+            else if (group.skinned)
+            {
+                // mirror the pull path's fallback (a skinned group without its program draws flat) so EVERY
+                // item stays indexed — a cascade pass may never receive a mixed-mode list
+                iprog = impl.program_skinned_idx != nullptr ? impl.program_skinned_idx.get() : impl.program_idx.get();
+            }
+            else if (want_shadow && base_color != nullptr)
+            {
+                iprog = impl.program_textured_shadowed_idx.get();
+            }
+            else if (want_shadow)
+            {
+                iprog = impl.program_shadowed_idx.get();
+            }
+            else if (base_color != nullptr)
+            {
+                iprog = impl.program_textured_idx.get();
+            }
+            else
+            {
+                iprog = impl.program_idx.get();
+            }
+            if (iprog != nullptr)
+            {
+                d.program = iprog;
+                d.index_count = group.index_count;
+                d.instance_count = visible_count;
+                d.first_index = (d.rebased ? group.region_base : 0U) + group.indices_off;
             }
         }
         draw_list.push_back(d);
@@ -3249,27 +3828,62 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         SceneHost host(impl, target, clear, draw_list, img);
         crd::framecook::FrameExecError  ferr = crd::framecook::FrameExecError::Ok;
         crd::containers::String         fwhere(impl.alloc);
-        // REN-38-F6: an EXPLICITLY installed graph (set_frame_graph_toml) is the frame, full stop — the
-        // shadows-tier step-down applies only to the built-in forward pair, whose capability contract it is.
-        const bool use_frame = impl.frame_overridden || impl.shadows_active();
-        const crd::framecook::FrameGraphDesc& authored = use_frame ? impl.frame : impl.fallback;
-        if (!impl.frame_ok || !impl.recorder.record(authored, fg, *impl.raster, host, &ferr, &fwhere))
+        // ~~REN-38-F6: an EXPLICITLY installed graph (set_frame_graph_toml) is the frame, full stop~~ —
+        // SUPERSEDED (REN-39): the graph's own DECLARED capability tier is part of the asset's contract, so it
+        // applies to EVERY installed frame, not just the built-in pair. When a `requires` capability is missing,
+        // the recording path steps down to the graph the asset's `fallback` NAMES — resolved through the same
+        // disk-first asset system — and REPORTS it. (Before this, installing `forward_csm_agx` with shadows off
+        // failed to record every frame — `for_each` answered 0 cascades — and the app presented BLACK.)
+        const crd::framecook::FrameGraphDesc* authored = &impl.frame;
+        {
+            const crd::containers::String* missing = nullptr;
+            for (crd::usize ci = 0; ci < authored->requires_caps.size(); ++ci)
+            {
+                const crd::containers::String& cap = authored->requires_caps[ci];
+                if (!host.capability(crd::containers::StringView(cap.c_str(), cap.size())))
+                {
+                    missing = &cap;
+                    break;
+                }
+            }
+            if (missing != nullptr && !authored->fallback.empty())
+            {
+                const crd::framecook::FrameGraphDesc* fb = impl.resolve_frame_asset(
+                    crd::containers::StringView(authored->fallback.c_str(), authored->fallback.size()));
+                if (fb != nullptr)
+                {
+                    // reported ONCE per transition, not once per frame — the step-down is state, not an event
+                    crd::u64 key = 1469598103934665603ULL;
+                    for (const char* p = fb->name.c_str(); *p != '\0'; ++p)
+                    {
+                        key = (key ^ static_cast<crd::u64>(*p)) * 1099511628211ULL;
+                    }
+                    if (impl.stepdown_logged != key)
+                    {
+                        impl.stepdown_logged = key;
+                        CRD_LOG_WARN(g_log_scenerender,
+                                     "frame '{}' requires '{}' the host lacks — stepped down to '{}'",
+                                     authored->name.c_str(), missing->c_str(), fb->name.c_str());
+                    }
+                    authored = fb;
+                }
+            }
+            else if (missing == nullptr) { impl.stepdown_logged = 0U; }
+        }
+        if (!impl.frame_ok || !impl.recorder.record(*authored, fg, *impl.raster, host, &ferr, &fwhere))
         {
             // ⛔ REPORTED, never a silent black frame. A graph that fails to record must say which pass, which
             // resource, and why — that is the whole point of the named rejections.
             CRD_LOG_ERROR(g_log_scenerender, "authored frame graph '{}' failed to record: {} (at '{}')",
-                          authored.name.c_str(), crd::framecook::frame_exec_error_text(ferr), fwhere.c_str());
+                          authored->name.c_str(), crd::framecook::frame_exec_error_text(ferr), fwhere.c_str());
             return stats;
         }
 
         // ⛔ THE OVERLAY IS NOT A RENDERING TECHNIQUE. The grid, gizmos and editor chrome are an APPLICATION
-        // callback — Unity's Renderer Features are C# for the same reason its render graph is data. It is still a
-        // PASS IN THIS GRAPH (one submission, ordered, barriered): `read_writes` is what says it composites ON
-        // TOP of the scene rather than replacing it, which would let the scheduler alias the scene's output away.
-        if (impl.overlay_fn != nullptr)
-        {
-            fg.add_pass("overlay").read_writes(img).execute(impl.overlay_fn, impl.overlay_user);
-        }
+        // callback — still a PASS IN THIS GRAPH (one submission, ordered, barriered). ⭐⭐ REN-39: it is now
+        // WOVEN IN by the recorder (SceneHost::overlay_pass) directly after the last geometry pass, onto the
+        // SCENE image — appending it here put it AFTER a frame's post chain, where it depth-tested the output's
+        // never-written depth buffer and escaped the display transform (the sandbox's "weird gizmo").
         // ⛔ Only the OWNER builds and executes. A contributor that built here would submit a partial frame and
         // reset the graph out from under the viewports that had not recorded yet.
         const bool built_ok = owns_graph ? fg.build() : false;
@@ -3381,6 +3995,11 @@ bool builtin_asset_text(const char* name, crd::containers::String& out)
     const auto is = [&](const char* k) { return n == crd::containers::StringView(k); };
     if (is("frame/forward_csm.frame.toml")) { out.append(kBuiltinForwardCsm); return true; }
     if (is("frame/forward_basic.frame.toml")) { out.append(kBuiltinForwardBasic); return true; }
+    // REN-39 fix: the post-chain frames are DEFAULTS, so they live in the pack (disk copies shadow them)
+    if (is("frame/forward_csm_agx.frame.toml")) { out.append(kBuiltinForwardCsmAgx); return true; }
+    if (is("frame/forward_csm_srgb.frame.toml")) { out.append(kBuiltinForwardCsmSrgb); return true; }
+    if (is("frame/forward_agx.frame.toml")) { out.append(kBuiltinForwardAgx); return true; }
+    if (is("frame/forward_srgb.frame.toml")) { out.append(kBuiltinForwardSrgb); return true; }
     if (is("material/scene.crdm")) { out.append(kSceneMaterial); return true; }
     if (is("material/scene_textured.crdm")) { out.append(kSceneMaterialTextured); return true; }
     if (is("vertex/scene.crdv"))

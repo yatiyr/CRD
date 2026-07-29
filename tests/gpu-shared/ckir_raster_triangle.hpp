@@ -98,6 +98,93 @@ inline void build_solid_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe, double r, 
     fe.out[0] = {col, 0};
 }
 
+// ⭐⭐ REN-39-A1 VERTEX entry: the INDEX-VALUE probe. The triangle corners are keyed to VertexIndex ∈ {4,5,6};
+// EVERY other value collapses to (2,2) — offscreen AND zero-area (all three vertices identical). So the triangle
+// renders IFF the index values {4,5,6} actually arrived from a bound index buffer: a non-indexed draw of 3
+// vertices (VertexIndex ∈ {0,1,2}) produces NOTHING. This is the gate's dichotomy — it needs no storage read, so
+// it runs on DX12 before the 39-B2 read-only storage seam lands.
+inline void build_indexed_probe_vs(crd::kir::KGraph& g, crd::kir::KEntry& ve)
+{
+    namespace kir = crd::kir;
+    const auto sh = kir::make_shape({1});
+    const auto f = [&](double v)
+    {
+        return g.constant(v, sh, kir::DType::F32);
+    };
+    const int vid = g.builtin(kir::KBuiltin::VertexIndex);
+    const auto eqi = [&](int v)
+    {
+        return g.binary(kir::KOp::CmpEq, vid, g.constant(static_cast<double>(v), sh, kir::DType::I32));
+    };
+    const int x = g.select(eqi(4), f(0.0), g.select(eqi(5), f(0.8), g.select(eqi(6), f(-0.8), f(2.0))));
+    const int y = g.select(eqi(4), f(-0.8), g.select(eqi(5), f(0.8), g.select(eqi(6), f(0.8), f(2.0))));
+    ve.stage = kir::KStage::Vertex;
+    ve.position = g.vec4(x, y, f(0.0), f(1.0));
+    ve.n_out = 0;
+}
+
+// ⭐⭐ REN-39-A2 VERTEX entry: the TWO-RANGE index probe. VertexIndex ∈ {4,5,6} → the big centred triangle;
+// VertexIndex ∈ {8,9,10} → a LEFT-EDGE SPIKE, symmetric about y = 0 so a horizontal-MIDLINE probe hits it on
+// BOTH backends (the F16 lesson: D3D flips NDC y vs Vulkan, so corner probes lie); everything else collapses to
+// (2,2) (offscreen, zero-area). Two draws with different `first_index` over the section {4,5,6, 8,9,10}
+// therefore light TWO disjoint midline probes — proving each command's first_index routed independently, with
+// no storage read (DX12-legal before the 39-B2 read-only seam).
+inline void build_indexed_probe2_vs(crd::kir::KGraph& g, crd::kir::KEntry& ve)
+{
+    namespace kir = crd::kir;
+    const auto sh = kir::make_shape({1});
+    const auto f = [&](double v)
+    {
+        return g.constant(v, sh, kir::DType::F32);
+    };
+    const int vid = g.builtin(kir::KBuiltin::VertexIndex);
+    const auto eqi = [&](int v)
+    {
+        return g.binary(kir::KOp::CmpEq, vid, g.constant(static_cast<double>(v), sh, kir::DType::I32));
+    };
+    const int x = g.select(
+        eqi(4), f(0.0),
+        g.select(eqi(5), f(0.8),
+                 g.select(eqi(6), f(-0.8),
+                          g.select(eqi(8), f(-0.95), g.select(eqi(9), f(-0.95), g.select(eqi(10), f(-0.5), f(2.0)))))));
+    const int y = g.select(
+        eqi(4), f(-0.8),
+        g.select(eqi(5), f(0.8),
+                 g.select(eqi(6), f(0.8),
+                          g.select(eqi(8), f(-0.95), g.select(eqi(9), f(0.95), g.select(eqi(10), f(0.0), f(2.0)))))));
+    ve.stage = kir::KStage::Vertex;
+    ve.position = g.vec4(x, y, f(0.0), f(1.0));
+    ve.n_out = 0;
+}
+
+// ⭐⭐ REN-39-B1 VERTEX entry: the INSTANCE-SEQUENCE probe. Index values {4,5,6} shape a narrow triangle
+// (symmetric about y = 0 — midline probes, the F16 y-flip lesson) and InstanceIndex PLACES it: instance i's
+// column centre is x = -0.75 + i·0.5, so instances 0..3 land at pixel columns 8/24/40/56 of a 64-wide target.
+// The pixels ARE the sequence: if a backend's instance id carried an extra base (the VK-includes-firstInstance
+// divergence this band normalizes away) every column would SHIFT; if instancing failed, columns > 0 stay dark.
+// Identical asserts on Vulkan + DX12 = the identical-sequence proof the 39-B1 row demands.
+inline void build_indexed_instance_vs(crd::kir::KGraph& g, crd::kir::KEntry& ve)
+{
+    namespace kir = crd::kir;
+    const auto sh = kir::make_shape({1});
+    const auto f = [&](double v)
+    {
+        return g.constant(v, sh, kir::DType::F32);
+    };
+    const int vid = g.builtin(kir::KBuiltin::VertexIndex);
+    const int iid = g.cast(g.builtin(kir::KBuiltin::InstanceIndex), kir::DType::F32);
+    const auto eqi = [&](int v)
+    {
+        return g.binary(kir::KOp::CmpEq, vid, g.constant(static_cast<double>(v), sh, kir::DType::I32));
+    };
+    const int ox = g.select(eqi(4), f(0.0), g.select(eqi(5), f(0.2), g.select(eqi(6), f(-0.2), f(4.0))));
+    const int oy = g.select(eqi(4), f(-0.5), g.select(eqi(5), f(0.5), g.select(eqi(6), f(0.5), f(4.0))));
+    const int xc = g.binary(kir::KOp::Add, f(-0.75), g.binary(kir::KOp::Mul, iid, f(0.5)));
+    ve.stage = kir::KStage::Vertex;
+    ve.position = g.vec4(g.binary(kir::KOp::Add, xc, ox), oy, f(0.0), f(1.0));
+    ve.n_out = 0;
+}
+
 // FRAGMENT entry: a constant red colour attachment at location 0 (no interpolant input — matches the VS above).
 inline void build_triangle_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
 {

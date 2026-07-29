@@ -130,6 +130,31 @@ TEST_CASE("REN-38-F7: the AUTHORED draw suite cooks, honours the varying contrac
         kir::GlslKernel gf(&alloc);
         REQUIRE(kir::emit_stage_glsl(fg, fe, &alloc, gf));
         CHECK(contains(gf.source, "smoothstep")); // the 1-pixel AA falloff
+
+        // ⛔⛔ PRESENCE IS NOT CORRECTNESS — and this exact `contains("smoothstep")` check is what let the bug
+        // below ship. `smoothstep`'s arguments are MaterialX-ordered in a `.crdm` (`in, low, high`), GLSL-ordered
+        // in the emitted shader (`low, high, in`); the material declared them GLSL-style, so the cooked call came
+        // out as `smoothstep(1.0, d, edge0)` — a REVERSED range whose value depends on the very quantity it is
+        // meant to bound. Live: every debug line rendered narrow and translucent, and fragments whose interpolated
+        // |cy| landed just past 1 clamped the other way to FULL opacity — the 1-pixel, intermittent "dotted line
+        // beside the gizmo". So gate the OPERAND ROLES on the graph, not the spelling:
+        //   x    (KNode::c) must be the ABS of the quad coordinate — the value being tested
+        //   low  (KNode::a) must be the SUB (1 - fade)            — the ramp's start
+        // A rotation of the three inputs moves the abs out of `c` and this fails immediately.
+        {
+            int n_ss = 0;
+            for (crd::usize i = 0; i < fg.serial_nodes().size(); ++i)
+            {
+                const kir::KNode& nd = fg.serial_nodes()[i];
+                if (nd.op != kir::KOp::Smoothstep) { continue; }
+                ++n_ss;
+                REQUIRE(nd.a >= 0);
+                REQUIRE(nd.c >= 0);
+                CHECK(fg.node(nd.c).op == kir::KOp::Abs); // the VALUE rides the third operand
+                CHECK(fg.node(nd.a).op == kir::KOp::Sub); // the RANGE START rides the first
+            }
+            CHECK(n_ss == 1); // exactly one AA falloff in the line material
+        }
     }
     {
         kir::KGraph fg(&alloc);

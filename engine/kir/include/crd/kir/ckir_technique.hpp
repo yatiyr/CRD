@@ -546,17 +546,55 @@ inline constexpr crd::u32 kCsmMaxCascades = 4U;
     auto n_taps = static_cast<int>(tc.option(kCsmOptPcfTaps, 4.0));
     if (n_taps != 1 && n_taps != 4 && n_taps != 8 && n_taps != 16) { n_taps = 4; }
 
-    const int wp  = tc.fixed[kTiWorldPos];
-    const int wp4 = g.vec4(g.swizzle(wp, 0), g.swizzle(wp, 1), g.swizzle(wp, 2), kf(1.0));
+    const int wp = tc.fixed[kTiWorldPos]; // the projected position is built PER CASCADE (normal offset, below)
 
     // ── cascade selection by CONTAINMENT (scar 1) ──
     int uvs[kCsmMaxCascades][3];
     int inside[kCsmMaxCascades];
+    // ⛔⛔ SCAR 3 — THE BIAS MUST BE SCALE-INVARIANT. Each cascade's ortho maps a DIFFERENT world depth span onto
+    // the same [0,1], and `caster_extrusion` inflates that span further, so one constant in normalized depth is a
+    // wildly different distance in each cascade (measured here: 0.2 world units in cascade 1, 2.9 in cascade 3 —
+    // larger than the casters themselves). Shadows then detach from small objects entirely and survive only for
+    // big ones, which reads as "the shadows are in completely wrong places" and points at neither the fit nor the
+    // atlas. The bias is therefore expressed in SHADOW TEXELS and converted per cascade, both factors recovered
+    // from the cascade's own matrix so no new binding can drift out of agreement with it:
+    //   ortho_rh_zo puts 1/radius in c0.x and −1/(far−near) in c2.z, so
+    //   texel_world = 2 / (map_size · c0.x)   and   1/depth_range = −c2.z.
+    //
+    // ⛔⛔ SCAR 4 — A DEPTH BIAS ALONE CANNOT SAVE A NEAR-EDGE-ON SURFACE. The depth a receiver gains across one
+    // shadow texel is `texel_world · tan θ`, and tan θ diverges as the surface turns edge-on to the light — so
+    // the depth bias a grazing face needs is UNBOUNDED, while any cap large enough to cover it peter-pans
+    // everything else. Capping at 72° still leaves the surface 31% lit, which is exactly where the sandbox's
+    // cube showed fine diagonal striping at the texel frequency.
+    // The fix is NORMAL OFFSET: move the LOOKUP off the surface along its own normal, ~2 texels at grazing and
+    // nothing head-on (∝ sin θ). It is bounded, it is perpendicular to the light rather than along it (so it
+    // does not detach contact shadows the way depth bias does), and it is applied PER CASCADE in world units —
+    // which is why it lives inside this loop, before the projection, using that cascade's own texel size.
+    const int nrm     = tc.fixed[kTiNormal];
+    const int ltrav   = tc.fixed[kTiLightDir]; // the direction the light TRAVELS
+    const int ltoward = g.vec3(sub(kf(0.0), g.swizzle(ltrav, 0)), sub(kf(0.0), g.swizzle(ltrav, 1)),
+                               sub(kf(0.0), g.swizzle(ltrav, 2)));
+    const int ndl     = mxf(g.dot(nrm, g.normalize(ltoward)), kf(0.0));
+    const int sin_t   = g.unary(KOp::Sqrt, mxf(sub(kf(1.0), mul(ndl, ndl)), kf(0.0)));
+
+    int bias_scale[kCsmMaxCascades];
     for (crd::u32 ci = 0; ci < n_casc; ++ci)
     {
         const int vp = tc.binding(kCsmBindLightVp0 + static_cast<int>(ci));
         if (vp < 0) { return -1; }
-        const int lp = g.mat_mul_vec(vp, wp4);
+        // the matrix columns, as vectors (constant-folds to a single header word each)
+        const int col_x = g.mat_mul_vec(vp, g.vec4(kf(1.0), kf(0.0), kf(0.0), kf(0.0)));
+        const int col_z = g.mat_mul_vec(vp, g.vec4(kf(0.0), kf(0.0), kf(1.0), kf(0.0)));
+        const int inv_radius = mxf(g.swizzle(col_x, 0), kf(1.0e-9));
+        const int inv_range  = sub(kf(0.0), g.swizzle(col_z, 2));
+        const int texel_w    = dvd(kf(2.0), mul(msz, inv_radius)); // world units per shadow texel, THIS cascade
+        bias_scale[ci]       = mul(texel_w, inv_range);
+        // the normal-offset sample position, in WORLD units of this cascade's texel
+        const int nofs = mul(texel_w, mul(kf(2.5), sin_t));
+        const int wpo  = g.vec4(add(g.swizzle(wp, 0), mul(g.swizzle(nrm, 0), nofs)),
+                                add(g.swizzle(wp, 1), mul(g.swizzle(nrm, 1), nofs)),
+                                add(g.swizzle(wp, 2), mul(g.swizzle(nrm, 2), nofs)), kf(1.0));
+        const int lp = g.mat_mul_vec(vp, wpo);
         const int iw = dvd(kf(1.0), mxf(g.swizzle(lp, 3), kf(1.0e-6)));
         uvs[ci][0]   = add(mul(mul(g.swizzle(lp, 0), iw), kf(0.5)), kf(0.5));
         uvs[ci][1]   = add(mul(mul(g.swizzle(lp, 1), iw), kf(0.5)), kf(0.5));
@@ -577,6 +615,7 @@ inline constexpr crd::u32 kCsmMaxCascades = 4U;
     int su  = uvs[0][0];
     int sv  = uvs[0][1];
     int sz  = uvs[0][2];
+    int bsc = bias_scale[0];
     int any = inside[0];
     for (crd::u32 ci = n_casc; ci-- > 1U;)
     {
@@ -585,6 +624,7 @@ inline constexpr crd::u32 kCsmMaxCascades = 4U;
         su  = g.select(hit, uvs[ci][0], su);
         sv  = g.select(hit, uvs[ci][1], sv);
         sz  = g.select(hit, uvs[ci][2], sz);
+        bsc = g.select(hit, bias_scale[ci], bsc); // ⛔ the bias rides the SELECTED cascade, like the UV
         any = mxf(any, inside[ci]);
     }
     {
@@ -593,17 +633,19 @@ inline constexpr crd::u32 kCsmMaxCascades = 4U;
         su  = g.select(hit0, uvs[0][0], su);
         sv  = g.select(hit0, uvs[0][1], sv);
         sz  = g.select(hit0, uvs[0][2], sz);
+        bsc = g.select(hit0, bias_scale[0], bsc);
     }
 
-    // ⛔ SLOPE-SCALED depth bias. A constant bias either acnes on slopes or peter-pans on flats; scaling it by
-    // (1 - N.L) puts the bias where the geometry grazes the light, which is exactly where the depth quantum spans
-    // the most world distance. Both failure modes read as "shadows look wrong" without pointing at bias.
-    const int nrm   = tc.fixed[kTiNormal];
-    const int ltrav = tc.fixed[kTiLightDir];       // the direction the light TRAVELS
-    const int ltoward = g.vec3(sub(kf(0.0), g.swizzle(ltrav, 0)), sub(kf(0.0), g.swizzle(ltrav, 1)),
-                               sub(kf(0.0), g.swizzle(ltrav, 2)));
-    const int ndl  = mxf(g.dot(nrm, g.normalize(ltoward)), kf(0.0));
-    const int bias = add(kf(0.0015), mul(kf(0.0045), sub(kf(1.0), ndl)));
+    // ── the DEPTH bias, now a JUNIOR partner to the normal offset above. ──────────────────────────────────────
+    // With the lookup already moved ~2.5 texels off the surface along its normal, this only has to cover depth
+    // QUANTIZATION plus the residual slope across the ±0.5-texel PCF footprint — so it stays small and cannot
+    // peter-pan. ⛔ It is still expressed in TEXELS (converted per cascade by `bsc`) and its slope term is a real
+    // tan θ, not the `(1 − N·L)` proxy, which understates badly where it matters (at 60° it reads 0.5 against a
+    // true slope of 1.73). The cap is what forced the normal offset to exist: tan θ is unbounded at grazing, and
+    // no cap can be both large enough for an edge-on face and small enough not to detach everything else.
+    const int ndl_safe = mxf(ndl, kf(0.1));
+    const int slope    = g.binary(KOp::Min, dvd(sin_t, ndl_safe), kf(2.0));
+    const int bias     = mul(bsc, add(kf(1.0), mul(kf(1.0), slope)));
     const int ref  = sub(sz, bias);
 
     // ── PCF. The tap count is a DECLARED option, so each choice cooks to its own variant with the loop fully
@@ -622,7 +664,7 @@ inline constexpr crd::u32 kCsmMaxCascades = 4U;
     else if (n_taps == 16) { taps = kTaps16; }
 
     const int tsz = dvd(kf(1.0), mxf(msz, kf(1.0)));
-    int       occ = kf(0.0);
+    int occ = kf(0.0);
     for (int t = 0; t < n_taps; ++t)
     {
         const int tu = add(su, mul(kf(taps[t][0]), tsz));

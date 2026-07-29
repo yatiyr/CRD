@@ -34,12 +34,15 @@ namespace
 {
 bool g_overlay_enabled = true;
 
-[[nodiscard]] crd::u32 draw_buffer_bytes(const InitConfig& cfg) noexcept
+// REN-39: per-buffer sizing — `storage` carries the triangle buckets, `line_storage` the line buckets (see
+// gpu_types.hpp). Each is header + its OWN packed instances; the old shared-region scheme is the corruption bug.
+[[nodiscard]] crd::u32 tri_buffer_bytes(const InitConfig& cfg) noexcept
 {
-    const crd::u32 line_words = cfg.max_lines_per_frame * kLineInstanceWords;
-    const crd::u32 tri_words  = cfg.max_triangles_per_frame * kTriInstanceWords;
-    const crd::u32 inst_words = line_words > tri_words ? line_words : tri_words;
-    return (kHeaderWords + inst_words) * 4U;
+    return (kHeaderWords + cfg.max_triangles_per_frame * kTriInstanceWords) * 4U;
+}
+[[nodiscard]] crd::u32 line_buffer_bytes(const InitConfig& cfg) noexcept
+{
+    return (kHeaderWords + cfg.max_lines_per_frame * kLineInstanceWords) * 4U;
 }
 
 // The `MaterialTemplate` adapter for the authored draw materials (the scene renderer's exact pattern).
@@ -50,7 +53,7 @@ int draw_material_surface(crd::kir::KGraph& g, int struct_id, const crd::kir::co
 }
 } // namespace
 
-bool init(crd::gpu::VulkanGpuContext& ctx, crd::gpu::IRasterContext& raster, const InitConfig& config) noexcept
+bool init(crd::gpu::IGpuContext& ctx, crd::gpu::IRasterContext& raster, const InitConfig& config) noexcept
 {
     auto& s = detail::renderer_state();
     if (s.initialised)
@@ -127,10 +130,12 @@ bool init(crd::gpu::VulkanGpuContext& ctx, crd::gpu::IRasterContext& raster, con
         return false;
     }
 
-    s.storage = raster.create_storage_buffer(draw_buffer_bytes(config));
-    if (s.storage == nullptr)
+    s.storage      = raster.create_storage_buffer(tri_buffer_bytes(config));
+    s.line_storage = raster.create_storage_buffer(line_buffer_bytes(config));
+    if (s.storage == nullptr || s.line_storage == nullptr)
     {
-        CRD_LOG_ERROR(g_log_draw, "draw::init: draw-buffer creation failed ({} bytes)", draw_buffer_bytes(config));
+        CRD_LOG_ERROR(g_log_draw, "draw::init: draw-buffer creation failed ({} + {} bytes)",
+                      tri_buffer_bytes(config), line_buffer_bytes(config));
         shutdown();
         return false;
     }
@@ -139,8 +144,8 @@ bool init(crd::gpu::VulkanGpuContext& ctx, crd::gpu::IRasterContext& raster, con
     s.raster      = &raster;
     s.config      = config;
     s.initialised = true;
-    CRD_LOG_INFO(g_log_draw, "draw renderer initialised on gpu-context (draw buffer {} KiB)",
-                 draw_buffer_bytes(config) / 1024U);
+    CRD_LOG_INFO(g_log_draw, "draw renderer initialised on gpu-context (draw buffers {} + {} KiB)",
+                 tri_buffer_bytes(config) / 1024U, line_buffer_bytes(config) / 1024U);
     return true;
 }
 
@@ -148,6 +153,7 @@ void shutdown() noexcept
 {
     auto& s = detail::renderer_state();
     s.storage.reset();
+    s.line_storage.reset();
     s.line_prog.reset();
     s.tri_prog.reset();
     s.grid_prog.reset();
@@ -169,3 +175,4 @@ bool is_overlay_enabled() noexcept { return g_overlay_enabled; }
 void set_overlay_enabled(bool enabled) noexcept { g_overlay_enabled = enabled; }
 
 } // namespace crd::draw
+

@@ -68,8 +68,11 @@ struct ImportedMesh
     crd::i32 source_mesh = -1;
     // GEO-8 (appended): the per-vertex SKIN attributes (glTF JOINTS_0/WEIGHTS_0) — 4 joint indices + 4 weights
     // per vertex, or empty. Joint indices are SKIN-LOCAL (into ImportedSkin::joints); weights as authored
-    // (normalized-sum warned at cook, never silently renormalized). A skinned mesh is FULLY AUTHORED — the
-    // conditioning chain (weld/normals/tangents) must never touch it (welding would desync the joint mapping).
+    // (normalized-sum warned at cook, never silently renormalized). ~~A skinned mesh is FULLY AUTHORED — the
+    // conditioning chain must never touch it~~ SUPERSEDED (REN-39): the TOPOLOGY-CHANGING chain (weld / splitting
+    // normals / tangents) must never touch it — but a skinned mesh with NO source normals (the Khronos Fox) still
+    // needs them, and `generate_normals_smooth_inplace` is the one legal generator: it preserves vertex count,
+    // order and indices, so the joint mapping stays valid.
     crd::containers::Array<crd::u16> joints0;  // 4 per vertex
     crd::containers::Array<crd::f32> weights0; // 4 per vertex
 

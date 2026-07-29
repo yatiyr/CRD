@@ -17,6 +17,7 @@ target_link_libraries(crd-sandbox PRIVATE
     crd-imgui                # RET-5: ImGuiGpuBackend (render) + the vendored ImGui_ImplGlfw (input)
     crd-gpu-context          # ADR-0105: the ONE graphics layer
     crd-gpu-context-vulkan
+    crd-gpu-context-dx12     # REN-39-D2: `--backend dx12` runs the SAME sandbox on D3D12
     crd-kir                  # the CKIR canvas scene (KGraph → create_program)
     crd-anim                 # GEO-8: SKEL/ANIM loaders (the animated ring)
     crd-timeline             # GEO-9: the camera-shot timeline (rational-time automation drives the crane move)
@@ -34,6 +35,37 @@ target_link_libraries(crd-sandbox PRIVATE
 )
 target_compile_definitions(crd-sandbox PRIVATE CRD_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 crd_enable_default_pch(crd-sandbox)
+
+# ── crd-gizmo-probe ─────────────────────────────────────────────────────────
+# REN-39: the axis triad, CLOSE UP — a second, small sandbox whose only subject is the debug-draw overlay, on the
+# SAME path (authored frame graph + authored techniques through SceneRenderer, overlay woven in as a pass). It
+# lives in this directory on purpose: both executables land in the same build folder, so `executable_dir()`
+# resolves the SAME cooked demo pack and neither needs its own cook step.
+add_executable(crd-gizmo-probe
+    src/gizmo_probe.cpp
+)
+target_include_directories(crd-gizmo-probe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(crd-gizmo-probe PRIVATE
+    crd-app
+    crd-draw
+    crd-gpu-context
+    crd-gpu-context-vulkan
+    crd-gpu-context-dx12    # REN-39-D1: `--backend dx12` runs the SAME probe on the second backend
+    crd-kir
+    crd-scene
+    crd-scene-render
+    crd-resources
+    crd-geometry-spatial
+    crd-jobs
+    crd-log
+    crd-memory
+    glfw
+)
+target_compile_definitions(crd-gizmo-probe PRIVATE
+    CRD_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    CRD_DEMO_ASSETS_REL_PACK="assets/cooked/demo_assets.crdr"
+)
+crd_enable_default_pch(crd-gizmo-probe)
 
 # ── cook-demo-assets ────────────────────────────────────────────────────────
 # Cooks committed glTF/PNG demo assets from assets/source/ into a single PACK
@@ -76,6 +108,7 @@ add_custom_command(
 
 add_custom_target(cook-demo-assets DEPENDS "${DEMO_ASSETS_PACK}")
 add_dependencies(crd-sandbox cook-demo-assets)
+add_dependencies(crd-gizmo-probe cook-demo-assets)
 
 # RET-6 (ADR-0105): the crd-draw cooked-GLSL shader pack is RETIRED — draw shaders are CKIR graphs compiled at
 # init; nothing to cook or copy.

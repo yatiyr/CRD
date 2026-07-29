@@ -40,6 +40,16 @@ struct DrawItem
     // `table[DrawIndex]`, so it MUST be recorded through the multi verb (which pushes the row) even as a
     // run of one; a classic verb would leave the push stale and the draw would read another region.
     bool               indexed = false;
+    // ── ⭐⭐ REN-39-C1 (appended at END): the INDEXED-PULL fields. `index_count > 0` marks an item whose
+    // program was cooked `indexed = true`: it records through the indexed verbs — `index_count` indices per
+    // instance, `instance_count` instances, `first_index` = the ABSOLUTE u32 word of its index section (the
+    // executor binds the buffer's index view at offset 0, so one convention serves private buffers AND the
+    // consolidated scene buffer). `vertex_count` is ignored for such an item. ⛔ An indexed-pull item may
+    // never record through a classic verb: its program addresses by index-value VertexIndex + InstanceIndex,
+    // and a non-indexed draw would misaddress every vertex — visibly, but wrongly.
+    crd::u32 index_count = 0U;
+    crd::u32 instance_count = 0U;
+    crd::u32 first_index = 0U;
 };
 
 inline constexpr crd::u32 kMaxDrawItems = 256; // stated cap; `resolved` reports what was actually filled
@@ -190,6 +200,23 @@ public:
     // (`UnresolvedResource`) — a UI pass that silently sampled nothing would render a transparent overlay, which
     // looks exactly like "the UI is disabled".
     [[nodiscard]] virtual crd::gpu::ITexture* texture(crd::containers::StringView /*name*/) { return nullptr; }
+
+    // ── ⭐⭐ REN-39 (the sandbox gizmo fix): the APPLICATION OVERLAY, woven into the recording. ──
+    // The overlay (grid · gizmos · editor chrome) used to be APPENDED to the graph after every authored pass —
+    // which broke the moment a frame gained a POST pass: passes execute in DECLARATION order, so the appended
+    // overlay landed AFTER the display transform, compositing UN-tonemapped chrome onto the final image while
+    // depth-testing against the OUTPUT's never-written depth buffer (the scene's depth lives with the HDR
+    // transient). The recorder now asks the HOST for the overlay and inserts it as a pass DIRECTLY AFTER the
+    // last geometry pass, `read_writes` on THAT pass's target — live depth, pre-tonemap, correct for every
+    // authored frame with no asset change. ⛔ `target` is the DECLARED image, and the overlay callback MUST
+    // draw into `ctx.image(target)` — a callback that draws a captured raw pointer renders an image the graph
+    // never barriered (the exact layout-validation storm the first weave produced). Return false (the default)
+    // for no overlay. Appended at END (D135).
+    [[nodiscard]] virtual bool overlay_pass(crd::gpu::FgExecuteFn* /*fn*/, void** /*user*/,
+                                            crd::gpu::FgImage /*target*/)
+    {
+        return false;
+    }
 };
 
 // ── WHY a graph failed. Reported, never swallowed. ───────────────────────────────────────────────────────────

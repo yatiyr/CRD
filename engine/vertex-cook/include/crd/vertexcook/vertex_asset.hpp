@@ -376,6 +376,16 @@ struct VertexProgramDesc
     // camera's — the per-cascade shadow cull. 0 keeps the historical single-list behaviour.
     crd::u32                               instance_capacity_word = 0U;
     ExpandDesc                             expand;
+    // ── ⭐⭐ REN-39-B2: the INDEXED pull mode (appended at the END). ──
+    // `indexed = true` re-addresses the pull chain for an INDEXED draw (`draw_storage_indexed_depth` /
+    // `draw_storage_multi_indexed_depth`): the IA fetched `indices[]` through the bound index section, so
+    // VertexIndex ARRIVES as the index value — the per-vertex index load is GONE (`vidx = VertexIndex`) — and
+    // the instance rides `InstanceIndex` — the `vid / index_count` division is GONE. Everything downstream
+    // (vertex base, visible slot, morphs, skinning, `rebase_table`, per-cascade lists) addresses off the SAME
+    // vidx/instance values and composes UNCHANGED. Vertex-record pull stages only: a procedural
+    // (`position_node`) or non-Vertex stage declaration with `indexed` is REFUSED (BadIndexed) — their vertex
+    // ids are expansion indices, not mesh indices, and an indexed draw would silently mis-decompose them.
+    bool indexed = false;
 
     explicit VertexProgramDesc(crd::memory::IAllocator* a)
         : name(a), attrs(a), instance(a), morph(a), nodes(a), displace(a), varyings(a), position_node(a)
@@ -391,35 +401,37 @@ enum class VertexCookError : crd::u8
     ParseFailed,
     BadSchema,
     MissingName,
-    DuplicateName,      // two attributes, nodes or varyings share a name
-    AttrOutOfRecord,    // an attribute reads past the declared stride — pulls the NEXT vertex's data
-    BadComponentCount,  // comps outside 1..4
+    DuplicateName,     // two attributes, nodes or varyings share a name
+    AttrOutOfRecord,   // an attribute reads past the declared stride — pulls the NEXT vertex's data
+    BadComponentCount, // comps outside 1..4
     TooManyAttributes,
-    TooManyVaryings,    // more than CKIR carries
-    DuplicateLocation,  // two varyings at one location — one silently wins
-    UnknownSource,      // a varying names an attribute/instance field/node that does not exist
-    EmptySource,        // a varying with no terms is a zero-width interpolant
-    VaryingTooWide,     // the concatenated terms exceed 4 components
-    UnknownOp,          // a displacement node names an operation the registry does not have
+    TooManyVaryings,   // more than CKIR carries
+    DuplicateLocation, // two varyings at one location — one silently wins
+    UnknownSource,     // a varying names an attribute/instance field/node that does not exist
+    EmptySource,       // a varying with no terms is a zero-width interpolant
+    VaryingTooWide,    // the concatenated terms exceed 4 components
+    UnknownOp,         // a displacement node names an operation the registry does not have
     WrongArity,
-    NodeCycle,          // declaration-order DAG, as in `.crdm`
-    AttrNotConstant,    // a compile-time argument was wired
+    NodeCycle,       // declaration-order DAG, as in `.crdm`
+    AttrNotConstant, // a compile-time argument was wired
     AttrOutOfRange,
-    BadSkin,            // influences/stride/scheme disagree
+    BadSkin, // influences/stride/scheme disagree
     BadMorph,
-    BadTransform,       // LightVp with a cascade the header cannot hold
-    NoPosition,         // no attribute of kind Position — nothing to project
-    ContractMismatch,   // 38-D4: the fragment side asked for a varying this VS does not emit
-    NodeWidthMismatch,  // a varying's declared node width is not what the displacement graph built
-    BadStage,           // a stage name the cooker does not have
-    BadTess,            // a patch size or tess level that cannot tessellate
-    BadMesh,            // a meshlet budget outside what a mesh pipeline can promise
-    BadTask,            // an amplification factor of zero launches nothing
-    BadRt,              // a ray payload width the three stages could not agree on
-    BadCull,            // a culling workgroup that cannot cover the instance list
+    BadTransform,      // LightVp with a cascade the header cannot hold
+    NoPosition,        // no attribute of kind Position — nothing to project
+    ContractMismatch,  // 38-D4: the fragment side asked for a varying this VS does not emit
+    NodeWidthMismatch, // a varying's declared node width is not what the displacement graph built
+    BadStage,          // a stage name the cooker does not have
+    BadTess,           // a patch size or tess level that cannot tessellate
+    BadMesh,           // a meshlet budget outside what a mesh pipeline can promise
+    BadTask,           // an amplification factor of zero launches nothing
+    BadRt,             // a ray payload width the three stages could not agree on
+    BadCull,           // a culling workgroup that cannot cover the instance list
     // REN-38-F7 (appended — the value is part of the reporting contract)
-    BadExpand,          // an expansion whose indices cannot decompose, or a record term outside it
-    BadPositionNode,    // `position = "node:…"` names no node, a non-vec4 node, or a non-vertex stage
+    BadExpand,       // an expansion whose indices cannot decompose, or a record term outside it
+    BadPositionNode, // `position = "node:…"` names no node, a non-vec4 node, or a non-vertex stage
+    // REN-39-B2 (appended)
+    BadIndexed, // `indexed = true` on a procedural or non-Vertex stage — their vertex ids are not mesh indices
 };
 
 [[nodiscard]] const char* vertex_cook_error_text(VertexCookError err) noexcept;

@@ -546,3 +546,100 @@ TEST_CASE("assetio: generated normals point OUTWARD on a genus-1 torus, BOTH win
         CHECK(outward_ok == total);
     }
 }
+
+// ── REN-39: the IN-PLACE smooth generator — the ONLY normal generator legal for skinned meshes ─────────────────────────
+// The scar this pins: the Khronos Fox ships POSITION/UV/JOINTS/WEIGHTS and NO normals, and the "skinned meshes are
+// fully authored" rule skipped the whole conditioning chain — zero normals cooked through, the forward BRDF computed
+// normalize(0) = NaN, and every fox rendered PURE BLACK (the old fixed-function ambient floor is what used to mask it).
+// The fix must not weld, split or reorder (that desyncs the per-vertex joint mapping), so the contract under test is:
+//   1. topology + every position-parallel attribute are BIT-UNTOUCHED (positions, uv, joints, weights, counts)
+//   2. every produced normal is unit length
+//   3. seam-DUPLICATED vertices (same position, different uv — the fox's texture seams) get the IDENTICAL normal
+//   4. the result is analytic where symmetry decides it (octahedron => radial normals)
+//   5. bit-identical under face reordering (the conditioning chain's determinism DNA)
+TEST_CASE("assetio: generate_normals_smooth_inplace -- skinned-safe, seam-shared, analytic, deterministic",
+          "[assetio][condition][normals][skin]")
+{
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+
+    // a unit octahedron (closed, radial symmetry) with vertex 6 a SEAM DUPLICATE of vertex 0 (+X, different uv)
+    const auto build = [&](bool permuted) {
+        aio::ImportedMesh m(&alloc);
+        const V3 verts[7] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}, {1, 0, 0}};
+        for (crd::u32 v = 0; v < 7U; ++v)
+        {
+            m.positions.push_back(verts[v]);
+            m.uv0.push_back(V2{static_cast<float>(v) * 0.125F, v == 6U ? 1.0F : 0.0F});
+            for (crd::u32 k = 0; k < 4U; ++k)
+            {
+                m.joints0.push_back(static_cast<crd::u16>(v + k));
+                m.weights0.push_back(0.4F - 0.1F * static_cast<float>(k));
+            }
+        }
+        // outward CCW; the two −Y-side faces reference the duplicate (6) instead of 0
+        const crd::u32 faces[8][3] = {{0, 2, 4}, {2, 1, 4}, {1, 3, 4}, {3, 6, 4},
+                                      {2, 0, 5}, {1, 2, 5}, {3, 1, 5}, {6, 3, 5}};
+        for (crd::u32 f = 0; f < 8U; ++f)
+        {
+            const crd::u32 fi = permuted ? 7U - f : f; // reversed face order — same mesh
+            for (crd::u32 k = 0; k < 3U; ++k) { m.indices.push_back(faces[fi][k]); }
+        }
+        return m;
+    };
+
+    aio::ImportedMesh m = build(false);
+    REQUIRE(m.has_skin());
+    REQUIRE(!m.has_normals());
+
+    // snapshot every array the contract says must not move
+    crd::containers::Array<V3>       pos_before(&alloc);
+    crd::containers::Array<V2>       uv_before(&alloc);
+    crd::containers::Array<crd::u16> joints_before(&alloc);
+    crd::containers::Array<crd::f32> weights_before(&alloc);
+    for (const V3& p : m.positions) { pos_before.push_back(p); }
+    for (const V2& t : m.uv0) { uv_before.push_back(t); }
+    for (crd::u16 j : m.joints0) { joints_before.push_back(j); }
+    for (crd::f32 w : m.weights0) { weights_before.push_back(w); }
+
+    aio::generate_normals_smooth_inplace(m, &alloc);
+
+    // 1. topology + parallel attributes untouched
+    REQUIRE(m.positions.size() == 7U);
+    REQUIRE(m.indices.size() == 24U);
+    REQUIRE(m.has_skin());
+    for (crd::u32 v = 0; v < 7U; ++v)
+    {
+        CHECK(std::memcmp(&m.positions[v], &pos_before[v], sizeof(V3)) == 0);
+        CHECK(std::memcmp(&m.uv0[v], &uv_before[v], sizeof(V2)) == 0);
+    }
+    for (crd::u32 i = 0; i < 28U; ++i)
+    {
+        CHECK(m.joints0[i] == joints_before[i]);
+        CHECK(m.weights0[i] == weights_before[i]);
+    }
+
+    // 2 + 4. unit, and radial by symmetry (the octahedron's angle-weighted smooth normal IS the vertex direction)
+    REQUIRE(m.has_normals());
+    for (crd::u32 v = 0; v < 7U; ++v)
+    {
+        const V3&   n   = m.normals[v];
+        const float len = std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
+        CHECK(std::abs(len - 1.0F) < 1.0e-5F);
+        const V3&   p = m.positions[v];
+        const float d = n.x * p.x + n.y * p.y + n.z * p.z; // |p| == 1 for every octahedron vertex
+        INFO("vertex " << v);
+        CHECK(d > 0.999F);
+    }
+
+    // 3. the seam duplicate shades identically to its position twin — BITWISE
+    CHECK(std::memcmp(m.normals.data(), &m.normals[6], sizeof(V3)) == 0);
+
+    // 5. bit-identical under face reordering
+    aio::ImportedMesh mp = build(true);
+    aio::generate_normals_smooth_inplace(mp, &alloc);
+    REQUIRE(mp.normals.size() == 7U);
+    for (crd::u32 v = 0; v < 7U; ++v)
+    {
+        CHECK(std::memcmp(&m.normals[v], &mp.normals[v], sizeof(V3)) == 0);
+    }
+}

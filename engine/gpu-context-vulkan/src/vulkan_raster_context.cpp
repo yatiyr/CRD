@@ -1161,6 +1161,14 @@ public:
         }
         if (m_multi_args != VK_NULL_HANDLE) { vkDestroyBuffer(m_device, m_multi_args, nullptr); } // REN-38 multi-draw ring
         if (m_multi_mem != VK_NULL_HANDLE) { vkFreeMemory(m_device, m_multi_mem, nullptr); }
+        if (m_multi_idx_args != VK_NULL_HANDLE)
+        {
+            vkDestroyBuffer(m_device, m_multi_idx_args, nullptr);
+        } // REN-39-A2 indexed ring
+        if (m_multi_idx_mem != VK_NULL_HANDLE)
+        {
+            vkFreeMemory(m_device, m_multi_idx_mem, nullptr);
+        }
         if (m_default_sampler != VK_NULL_HANDLE) { vkDestroySampler(m_device, m_default_sampler, nullptr); }
         for (crd::u32 i = 0; i < m_sampler_n; ++i) { vkDestroySampler(m_device, m_sampler_obj[i], nullptr); }
         if (m_cmp_sampler != VK_NULL_HANDLE) { vkDestroySampler(m_device, m_cmp_sampler, nullptr); }
@@ -1271,9 +1279,11 @@ public:
     {
         if (size_bytes == 0U) { return nullptr; }
         BufferBundle buf;
+        // ⭐ REN-39-A1: INDEX_BUFFER too — a storage buffer serves as its OWN index buffer (the indexed scene
+        // draws bind its u32 index section directly; usage flags cannot be added after creation). Costs nothing.
         if (!make_buffer(size_bytes,
-                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT
-                             | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                             VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, buf))
         {
             return nullptr;
@@ -1323,9 +1333,11 @@ public:
         {
             VulkanStorageBuffer* sb = m_live_storage[i];
             BufferBundle         moved;
+            // ⛔ REN-39-A1: the usage set MUST mirror create_storage_buffer's — a relocation that dropped
+            // INDEX_BUFFER would silently strip the buffer's index role (the new-role-joins-every-walk lesson).
             if (!make_buffer(sb->size_bytes(),
-                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT
-                                 | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, moved))
             {
                 continue; // no room to relocate this one — the pass degrades gracefully, never destructively
@@ -1437,6 +1449,22 @@ public:
         VkCommandBuffer cmd = begin_cmd();
         if (cmd != VK_NULL_HANDLE)
         {
+            // ⛔⛔ REN-39 (the jittery gizmo ghost): the WAR barrier the BATCH path has always had, and this path
+            // FORGOT. With frames in flight, the previous frame's draws may still be READING this buffer on the
+            // GPU when this copy executes — waiting on our OWN fence afterwards orders nothing about them, and a
+            // copy racing a shader read is undefined for the READER: the in-flight frame's vertex shader observed
+            // torn header words and its overlay lines landed shifted/garbled, differently every frame. Invisible
+            // under --readback (serialized frames) and to core validation; only a LIVE capture showed it.
+            VkMemoryBarrier war{};
+            war.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            war.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT
+                                | VK_ACCESS_INDEX_READ_BIT;
+            war.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            vkCmdPipelineBarrier(cmd,
+                                 VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                                     | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT
+                                     | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1U, &war, 0, nullptr, 0, nullptr);
             VkBufferCopy region{};
             region.srcOffset = 0;
             region.dstOffset = byte_offset;
@@ -3357,6 +3385,133 @@ public:
         end_and_wait(cmd);
     }
 
+    // ── ⭐⭐ REN-39-A1: the INDEXED storage draw (see IRasterContext) — the scene buffer serves as its OWN
+    // index buffer. `index_offset_bytes` locates the u32 index section (the INDEX_BUFFER usage bit is granted
+    // at creation); the VS receives the INDEX VALUE as VertexIndex. firstIndex, vertexOffset and firstInstance
+    // are ALWAYS 0 — the SV_InstanceID normalization: an offset would make the backends read different
+    // instances, so the offset channel is the draw table, never the draw call.
+    void draw_storage_indexed_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color,
+                                    float clear_depth, DepthCompare compare, IStorageBuffer& storage,
+                                    crd::u32 index_offset_bytes, crd::u32 index_count, crd::u32 instance_count,
+                                    bool load_target) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        auto& s = static_cast<VulkanStorageBuffer&>(storage);
+        if (!m_api.valid() || !p.valid() || m_desc_pool == VK_NULL_HANDLE)
+        {
+            return;
+        }
+        // a 4-aligned, in-range u32 index section or the draw is REFUSED — never a partial IA fetch
+        if ((index_offset_bytes & 3U) != 0U || index_count == 0U || instance_count == 0U ||
+            static_cast<crd::u64>(index_offset_bytes) + static_cast<crd::u64>(index_count) * 4U > s.size_bytes())
+        {
+            return;
+        }
+        if (frame_recording())
+        {
+            record_scene_indexed(t, p, s, !load_target, clear_color, clear_depth, compare, index_offset_bytes,
+                                 index_count, instance_count);
+            return;
+        }
+        if (!t.has_depth())
+        {
+            return;
+        } // the sync rig draws depth targets; frame mode handles depthless
+
+        // the storage descriptor at set 0 / binding 0 (the draw_storage seam — VERTEX+FRAGMENT visible)
+        vkResetDescriptorPool(m_device, m_desc_pool, 0);
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool = m_desc_pool;
+        dsai.descriptorSetCount = 1U;
+        dsai.pSetLayouts = &m_storage_set_layout;
+        VkDescriptorSet dset = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS)
+        {
+            return;
+        }
+        VkDescriptorBufferInfo dbi{s.buf(), 0, VK_WHOLE_SIZE};
+        VkWriteDescriptorSet wr{};
+        wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wr.dstSet = dset;
+        wr.dstBinding = 0U;
+        wr.descriptorCount = 1U;
+        wr.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        wr.pBufferInfo = &dbi;
+        vkUpdateDescriptorSets(m_device, 1U, &wr, 0U, nullptr);
+
+        VkCommandBuffer cmd = begin_cmd();
+        if (cmd == VK_NULL_HANDLE)
+        {
+            return;
+        }
+
+        if (load_target)
+        {
+            // preserve the previous draw's colour: TRANSFER_SRC (post-readback) → COLOR_ATTACHMENT
+            transition(cmd, t.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                       VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        }
+        else
+        {
+            transition(cmd, t.image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
+                       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+            transition_depth(cmd, t.depth_image());
+        }
+
+        VkRenderingAttachmentInfo att{};
+        att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att.imageView = t.view();
+        att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        att.loadOp = load_target ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        if (!load_target)
+        {
+            att.clearValue.color = {{clear_color.r, clear_color.g, clear_color.b, clear_color.a}};
+        }
+
+        VkRenderingAttachmentInfo dep{};
+        dep.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        dep.imageView = t.depth_view();
+        dep.imageLayout = t.depth_attach_layout();
+        dep.loadOp = load_target ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        dep.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        if (!load_target)
+        {
+            dep.clearValue.depthStencil.depth = clear_depth;
+        }
+
+        VkRenderingInfo ri{};
+        ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent = {t.width(), t.height()};
+        ri.layerCount = 1U;
+        ri.colorAttachmentCount = 1U;
+        ri.pColorAttachments = &att;
+        ri.pDepthAttachment = &dep;
+        // REN-38-F11: a stencil-capable target binds the SAME image as the stencil attachment
+        if (t.has_stencil())
+        {
+            dep.clearValue.depthStencil.stencil = 0U;
+            ri.pStencilAttachment = &dep;
+        }
+        vkCmdBeginRendering(cmd, &ri);
+
+        set_draw_state(cmd, t.width(), t.height(), 1U, true, to_vk_compare(compare));
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        vkCmdBindIndexBuffer(cmd, s.buf(), index_offset_bytes, VK_INDEX_TYPE_UINT32);
+        const VkShaderStageFlagBits stages[2] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
+        const VkShaderEXT objs[2] = {p.vs(), p.fs()};
+        m_api.bind(cmd, 2U, stages, objs);
+        vkCmdDrawIndexed(cmd, index_count, instance_count, 0U, 0, 0U);
+        vkCmdEndRendering(cmd);
+
+        copy_colour_to_readback(cmd, t);
+        end_and_wait(cmd);
+    }
+
     // REN-3.1: the DEPTH-ONLY (shadow) pass — render storage-pulled geometry writing ONLY depth into `target`'s
     // depth attachment, no colour attachment bound. For a frame-graph `D32Float`+`sampled` transient this PRODUCES a
     // shadow map on the device, which a later pass samples through the comparison sampler. Frame-graph recording is
@@ -3673,8 +3828,404 @@ public:
         const VkShaderStageFlagBits stages[2] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
         const VkShaderEXT           objs[2]   = {p.vs(), p.fs()};
         m_api.bind(cmd, 2U, stages, objs);
-        vkCmdDrawIndirect(cmd, m_multi_args, offset, n, sizeof(VkDrawIndirectCommand));
+        // ⛔ REN-39-A2 catch: drawCount > 1 REQUIRES the core multiDrawIndirect feature (VUID-…-02718) — this
+        // command had issued drawCount = N without it since 38-4 shipped (found under the A2 gate's capture).
+        // Feature absent ⇒ a per-draw loop INSIDE the one pass, re-pushing DrawIndex per command — the contract
+        // holds on every device; only the single-command win needs the feature.
+        if (m_ctx->multi_draw_indirect())
+        {
+            vkCmdDrawIndirect(cmd, m_multi_args, offset, n, sizeof(VkDrawIndirectCommand));
+        }
+        else
+        {
+            for (crd::u32 i = 0; i < n; ++i)
+            {
+                const crd::u32 di = first_draw_index + i;
+                vkCmdPushConstants(cmd, p.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0U, 4U, &di);
+                vkCmdDraw(cmd, vertex_counts[i], 1U, 0U, 0U);
+            }
+        }
         ++m_multi_batches;
+        vkCmdEndRendering(cmd);
+    }
+
+    // ── ⭐⭐ REN-39-A2: INDEXED MULTI-DRAW (see IRasterContext) — ONE vkCmdDrawIndexedIndirect over N commands,
+    // the scene buffer bound ONCE as its own index buffer. The DrawIndex channel is unchanged (push constant =
+    // first_draw_index, gl_DrawID counts commands); firstInstance/vertexOffset are ALWAYS 0 in the ring entries
+    // (the SV_InstanceID normalization — the divergent fields are not even representable in IndexedDraw).
+    void draw_storage_multi_indexed_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color,
+                                          float clear_depth, DepthCompare compare, IStorageBuffer& storage,
+                                          crd::u32 index_offset_bytes, const IndexedDraw* draws, crd::u32 count,
+                                          crd::u32 first_draw_index, bool load_target) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        auto& s = static_cast<VulkanStorageBuffer&>(storage);
+        if (!m_api.valid() || !p.valid() || count == 0U || draws == nullptr)
+        {
+            return;
+        }
+        if ((index_offset_bytes & 3U) != 0U || index_offset_bytes >= s.size_bytes())
+        {
+            return;
+        }
+        const crd::u32 n = count < kMultiMax ? count : kMultiMax;
+        // every command's index range must sit inside the buffer's index section — REFUSED whole, never partial
+        const crd::u64 section_words = (static_cast<crd::u64>(s.size_bytes()) - index_offset_bytes) / 4U;
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            if (draws[i].index_count == 0U ||
+                static_cast<crd::u64>(draws[i].first_index) + draws[i].index_count > section_words)
+            {
+                return;
+            }
+        }
+        if (!frame_recording() || !ensure_multi_idx_args())
+        {
+            // the sync fallback serves only index-channel-free programs (the interface documents this shape) —
+            // a loop of classic indexed draws, exactly like the non-indexed multi's fallback
+            for (crd::u32 i = 0; i < n; ++i)
+            {
+                draw_storage_indexed_depth(target, program, clear_color, clear_depth, compare, storage,
+                                           index_offset_bytes + draws[i].first_index * 4U, draws[i].index_count,
+                                           draws[i].instance_count, load_target || i > 0U);
+            }
+            return;
+        }
+
+        VkCommandBuffer cmd = m_frame_rec.cmd;
+        VkDescriptorSet dset = frame_alloc_storage_set(s);
+        if (dset == VK_NULL_HANDLE)
+        {
+            return;
+        }
+        // write this batch's chunk of the INDEXED args ring
+        const crd::u32 chunk = m_multi_idx_cursor % kMultiChunks;
+        m_multi_idx_cursor = (m_multi_idx_cursor + 1U) % kMultiChunks;
+        const VkDeviceSize offset = static_cast<VkDeviceSize>(chunk) * kMultiMax * sizeof(VkDrawIndexedIndirectCommand);
+        auto* args = reinterpret_cast<VkDrawIndexedIndirectCommand*>(static_cast<char*>(m_multi_idx_map) + offset);
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            args[i] = VkDrawIndexedIndirectCommand{draws[i].index_count, draws[i].instance_count, draws[i].first_index,
+                                                   0, 0U};
+        }
+
+        frame_self_barrier_if_needed(t);
+        VkRenderingAttachmentInfo att{};
+        att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att.imageView = t.view();
+        att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        att.loadOp = load_target ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        if (!load_target)
+        {
+            att.clearValue.color = {{clear_color.r, clear_color.g, clear_color.b, clear_color.a}};
+        }
+        VkRenderingAttachmentInfo dep{};
+        dep.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        dep.imageView = t.depth_view();
+        dep.imageLayout = t.depth_attach_layout();
+        dep.loadOp = load_target ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        dep.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        if (!load_target)
+        {
+            dep.clearValue.depthStencil.depth = clear_depth;
+        }
+        VkRenderingInfo ri{};
+        ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent = {t.width(), t.height()};
+        ri.layerCount = 1U;
+        ri.colorAttachmentCount = 1U;
+        ri.pColorAttachments = &att;
+        // ⭐ REN-38-A6: depth is OPTIONAL — a colour transient has none; the pass simply is not depth-tested.
+        ri.pDepthAttachment = t.has_depth() ? &dep : nullptr;
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t.width(), t.height(), 1U, t.has_depth(), to_vk_compare(compare));
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        vkCmdPushConstants(cmd, p.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0U, 4U, &first_draw_index);
+        vkCmdBindIndexBuffer(cmd, s.buf(), index_offset_bytes, VK_INDEX_TYPE_UINT32);
+        const VkShaderStageFlagBits stages[2] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
+        const VkShaderEXT objs[2] = {p.vs(), p.fs()};
+        m_api.bind(cmd, 2U, stages, objs);
+        // drawCount > 1 requires the core multiDrawIndirect feature (VUID-…-02718; found by THIS verb's gate).
+        // Feature absent ⇒ a per-draw indexed loop INSIDE the one pass, re-pushing DrawIndex per command — the
+        // contract holds on every device; only the single-command win needs the feature.
+        if (m_ctx->multi_draw_indirect())
+        {
+            vkCmdDrawIndexedIndirect(cmd, m_multi_idx_args, offset, n, sizeof(VkDrawIndexedIndirectCommand));
+        }
+        else
+        {
+            for (crd::u32 i = 0; i < n; ++i)
+            {
+                const crd::u32 di = first_draw_index + i;
+                vkCmdPushConstants(cmd, p.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0U, 4U, &di);
+                vkCmdDrawIndexed(cmd, draws[i].index_count, draws[i].instance_count, draws[i].first_index, 0, 0U);
+            }
+        }
+        ++m_multi_batches;
+        vkCmdEndRendering(cmd);
+    }
+
+    // ── ⭐⭐ REN-39-C1: INDEXED DEPTH-ONLY MULTI-DRAW (see IRasterContext) — the cascade pass's indexed form.
+    // The depth-only rendering shape record_depth_only established (NO colour attachment; set_draw_state with
+    // 0 colour attachments), the A2 verb's ring + per-draw IndexedDraw contract. Frame-recording only: the
+    // executor is the consumer, and a sync arm would be a second shape with no caller.
+    void draw_storage_multi_indexed_depth_only(IRasterTarget& target, IRasterProgram& program, float clear_depth,
+                                               DepthCompare compare, IStorageBuffer& storage,
+                                               crd::u32 index_offset_bytes, const IndexedDraw* draws, crd::u32 count,
+                                               bool load_target) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        auto& s = static_cast<VulkanStorageBuffer&>(storage);
+        if (!m_api.valid() || !p.valid() || count == 0U || draws == nullptr || !frame_recording())
+        {
+            return;
+        }
+        if ((index_offset_bytes & 3U) != 0U || index_offset_bytes >= s.size_bytes() || !t.has_depth())
+        {
+            return;
+        }
+        const crd::u32 n = count < kMultiMax ? count : kMultiMax;
+        const crd::u64 section_words = (static_cast<crd::u64>(s.size_bytes()) - index_offset_bytes) / 4U;
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            if (draws[i].index_count == 0U ||
+                static_cast<crd::u64>(draws[i].first_index) + draws[i].index_count > section_words)
+            {
+                return;
+            }
+        }
+        VkCommandBuffer cmd = m_frame_rec.cmd;
+        VkDescriptorSet dset = frame_alloc_storage_set(s);
+        if (dset == VK_NULL_HANDLE)
+        {
+            return;
+        }
+
+        const bool one_cmd = m_ctx->multi_draw_indirect() && ensure_multi_idx_args();
+        VkDeviceSize offset = 0U;
+        if (one_cmd)
+        {
+            const crd::u32 chunk = m_multi_idx_cursor % kMultiChunks;
+            m_multi_idx_cursor = (m_multi_idx_cursor + 1U) % kMultiChunks;
+            offset = static_cast<VkDeviceSize>(chunk) * kMultiMax * sizeof(VkDrawIndexedIndirectCommand);
+            auto* args = reinterpret_cast<VkDrawIndexedIndirectCommand*>(static_cast<char*>(m_multi_idx_map) + offset);
+            for (crd::u32 i = 0; i < n; ++i)
+            {
+                args[i] = VkDrawIndexedIndirectCommand{draws[i].index_count, draws[i].instance_count,
+                                                       draws[i].first_index, 0, 0U};
+            }
+        }
+
+        VkRenderingAttachmentInfo dep{};
+        dep.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        dep.imageView = t.depth_view();
+        dep.imageLayout = t.depth_attach_layout();
+        dep.loadOp = load_target ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        dep.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        if (!load_target)
+        {
+            dep.clearValue.depthStencil.depth = clear_depth;
+        }
+        VkRenderingInfo ri{};
+        ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent = {t.width(), t.height()};
+        ri.layerCount = 1U;
+        ri.colorAttachmentCount = 0U; // ⛔ the whole point: NO colour attachment is bound
+        ri.pColorAttachments = nullptr;
+        ri.pDepthAttachment = &dep;
+        if (t.has_stencil())
+        {
+            dep.clearValue.depthStencil.stencil = 0U;
+            ri.pStencilAttachment = &dep;
+        }
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t.width(), t.height(), 1U, true, to_vk_compare(compare), 0U);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        vkCmdBindIndexBuffer(cmd, s.buf(), index_offset_bytes, VK_INDEX_TYPE_UINT32);
+        const VkShaderStageFlagBits stages[2] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
+        const VkShaderEXT objs[2] = {p.vs(), p.fs()};
+        m_api.bind(cmd, 2U, stages, objs);
+        if (one_cmd)
+        {
+            vkCmdDrawIndexedIndirect(cmd, m_multi_idx_args, offset, n, sizeof(VkDrawIndexedIndirectCommand));
+        }
+        else
+        {
+            for (crd::u32 i = 0; i < n; ++i)
+            {
+                vkCmdDrawIndexed(cmd, draws[i].index_count, draws[i].instance_count, draws[i].first_index, 0, 0U);
+            }
+        }
+        ++m_multi_batches;
+        vkCmdEndRendering(cmd);
+    }
+
+    // ── ⭐⭐ REN-40-A: THE GPU-WRITTEN DRAW (see IRasterContext for the contract + the standing rule). ────────
+    // Vulkan does this natively: `vkCmdDrawIndexedIndirectCount` is CORE since 1.2 and this context creates a
+    // 1.3 instance, so the count path is unconditional here — no extension probe, no fallback taken in practice.
+    // ⛔ Both buffers must be in INDIRECT_COMMAND_READ when the draw executes; the producer pass is responsible
+    // for that barrier (the frame graph emits it from the declared read), which is why this body does not.
+    // ⛔ Vulkan needs no leading constant (DrawIndex arrives as gl_DrawIDARB), so the command IS the plain
+    // 20-byte VkDrawIndexedIndirectCommand with the args at offset 0.
+    [[nodiscard]] crd::u32 indirect_command_stride() const noexcept override
+    {
+        return static_cast<crd::u32>(sizeof(VkDrawIndexedIndirectCommand));
+    }
+    [[nodiscard]] crd::u32 indirect_command_arg_offset() const noexcept override { return 0U; }
+    [[nodiscard]] bool indirect_count_supported() const noexcept override { return true; }
+
+    void draw_storage_multi_indexed_depth_only_indirect(IRasterTarget& target, IRasterProgram& program,
+                                                        float clear_depth, DepthCompare compare,
+                                                        IStorageBuffer& storage, crd::u32 index_offset_bytes,
+                                                        IStorageBuffer& args, crd::u32 args_offset_bytes,
+                                                        IStorageBuffer* count_buf, crd::u32 count_offset_bytes,
+                                                        crd::u32 max_draws, bool load_target) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        auto& s = static_cast<VulkanStorageBuffer&>(storage);
+        auto& a = static_cast<VulkanStorageBuffer&>(args);
+        if (!m_api.valid() || !p.valid() || max_draws == 0U || !frame_recording()) { return; }
+        if ((index_offset_bytes & 3U) != 0U || index_offset_bytes >= s.size_bytes() || !t.has_depth()) { return; }
+        // the args region must actually hold `max_draws` commands — REFUSED whole, never partially drawn
+        const crd::u64 need = static_cast<crd::u64>(args_offset_bytes)
+                              + static_cast<crd::u64>(max_draws) * sizeof(VkDrawIndexedIndirectCommand);
+        if ((args_offset_bytes & 3U) != 0U || need > a.size_bytes()) { return; }
+        auto* cb = static_cast<VulkanStorageBuffer*>(count_buf);
+        if (cb != nullptr && (static_cast<crd::u64>(count_offset_bytes) + 4ULL > cb->size_bytes()
+                              || (count_offset_bytes & 3U) != 0U))
+        {
+            return;
+        }
+
+        VkCommandBuffer cmd  = m_frame_rec.cmd;
+        VkDescriptorSet dset = frame_alloc_storage_set(s);
+        if (dset == VK_NULL_HANDLE) { return; }
+
+        VkRenderingAttachmentInfo dep{};
+        dep.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        dep.imageView   = t.depth_view();
+        dep.imageLayout = t.depth_attach_layout();
+        dep.loadOp      = load_target ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        dep.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+        if (!load_target) { dep.clearValue.depthStencil.depth = clear_depth; }
+        VkRenderingInfo ri{};
+        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent    = {t.width(), t.height()};
+        ri.layerCount           = 1U;
+        ri.colorAttachmentCount = 0U; // depth-only, like its CPU-args sibling
+        ri.pColorAttachments    = nullptr;
+        ri.pDepthAttachment     = &dep;
+        if (t.has_stencil())
+        {
+            dep.clearValue.depthStencil.stencil = 0U;
+            ri.pStencilAttachment               = &dep;
+        }
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t.width(), t.height(), 1U, true, to_vk_compare(compare), 0U);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        vkCmdBindIndexBuffer(cmd, s.buf(), index_offset_bytes, VK_INDEX_TYPE_UINT32);
+        const VkShaderStageFlagBits stages[2] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
+        const VkShaderEXT           objs[2]   = {p.vs(), p.fs()};
+        m_api.bind(cmd, 2U, stages, objs);
+        if (cb != nullptr)
+        {
+            vkCmdDrawIndexedIndirectCount(cmd, a.buf(), args_offset_bytes, cb->buf(), count_offset_bytes,
+                                          max_draws, sizeof(VkDrawIndexedIndirectCommand));
+        }
+        else // no count buffer requested: every slot executes, empties costing a zero-instance command
+        {
+            vkCmdDrawIndexedIndirect(cmd, a.buf(), args_offset_bytes, max_draws,
+                                     sizeof(VkDrawIndexedIndirectCommand));
+        }
+        ++m_multi_batches;
+        vkCmdEndRendering(cmd);
+    }
+
+    // ── ⭐⭐ REN-39-C1: the INDEXED SAMPLED scene draw (see IRasterContext) — record_scene_textured's descriptor
+    // shape (storage 0 · map 1/2 filtering · atlas 4/5 comparison, each by NULLABILITY) with the index bind and
+    // an indexed draw. Frame-recording only, like its siblings' record bodies — the executor is the consumer.
+    void draw_storage_indexed_sampled_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color,
+                                            float clear_depth, DepthCompare compare, IStorageBuffer& storage,
+                                            crd::u32 index_offset_bytes, crd::u32 index_count, crd::u32 instance_count,
+                                            crd::u32 first_index, ITexture* texture, ITexture* atlas,
+                                            bool load_target) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        auto& s = static_cast<VulkanStorageBuffer&>(storage);
+        if (!m_api.valid() || !p.valid() || !frame_recording())
+        {
+            return;
+        }
+        if ((index_offset_bytes & 3U) != 0U || index_count == 0U || instance_count == 0U ||
+            static_cast<crd::u64>(index_offset_bytes) + (static_cast<crd::u64>(first_index) + index_count) * 4U >
+                s.size_bytes())
+        {
+            return;
+        }
+        VkCommandBuffer cmd = m_frame_rec.cmd;
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool = m_frame_rec.pool;
+        dsai.descriptorSetCount = 1U;
+        dsai.pSetLayouts = &m_storage_set_layout;
+        VkDescriptorSet dset = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS)
+        {
+            return;
+        }
+        auto* tex = static_cast<VulkanTexture*>(texture);
+        auto* atl = static_cast<VulkanTexture*>(atlas);
+        write_scene_textured(m_device, dset, s.buf(), tex != nullptr ? tex->view() : VK_NULL_HANDLE,
+                             tex != nullptr ? active_sampler() : VK_NULL_HANDLE,
+                             atl != nullptr ? atl->view() : VK_NULL_HANDLE,
+                             atl != nullptr ? m_cmp_sampler : VK_NULL_HANDLE);
+        frame_self_barrier_if_needed(t);
+
+        VkRenderingAttachmentInfo att{};
+        att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att.imageView = t.view();
+        att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        att.loadOp = load_target ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        if (!load_target)
+        {
+            att.clearValue.color = {{clear_color.r, clear_color.g, clear_color.b, clear_color.a}};
+        }
+        VkRenderingAttachmentInfo dep{};
+        dep.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        dep.imageView = t.depth_view();
+        dep.imageLayout = t.depth_attach_layout();
+        dep.loadOp = load_target ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        dep.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        if (!load_target)
+        {
+            dep.clearValue.depthStencil.depth = clear_depth;
+        }
+        VkRenderingInfo ri{};
+        ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent = {t.width(), t.height()};
+        ri.layerCount = 1U;
+        ri.colorAttachmentCount = 1U;
+        ri.pColorAttachments = &att;
+        ri.pDepthAttachment = t.has_depth() ? &dep : nullptr; // ⭐ REN-38-A6: depth is OPTIONAL
+        if (ri.pDepthAttachment != nullptr && t.has_stencil())
+        {
+            dep.clearValue.depthStencil.stencil = 0U;
+            ri.pStencilAttachment = &dep;
+        }
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t.width(), t.height(), 1U, t.has_depth(), to_vk_compare(compare));
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        vkCmdBindIndexBuffer(cmd, s.buf(), index_offset_bytes, VK_INDEX_TYPE_UINT32);
+        const VkShaderStageFlagBits stages[2] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
+        const VkShaderEXT objs[2] = {p.vs(), p.fs()};
+        m_api.bind(cmd, 2U, stages, objs);
+        vkCmdDrawIndexed(cmd, index_count, instance_count, first_index, 0, 0U);
         vkCmdEndRendering(cmd);
     }
 
@@ -3687,6 +4238,14 @@ public:
     [[nodiscard]] bool draw_overlay(IRasterTarget& target, IRasterProgram& program, IStorageBuffer& storage,
                                     DepthCompare compare, crd::u32 vertex_count) override
     {
+        return draw_overlay_range(target, program, storage, compare, 0U, vertex_count);
+    }
+
+    // REN-39: the ranged twin — the whole body, with `first_vertex` reaching vkCmdDraw (see raster_context.hpp).
+    [[nodiscard]] bool draw_overlay_range(IRasterTarget& target, IRasterProgram& program, IStorageBuffer& storage,
+                                          DepthCompare compare, crd::u32 first_vertex,
+                                          crd::u32 vertex_count) override
+    {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
         auto& s = static_cast<VulkanStorageBuffer&>(storage);
@@ -3695,7 +4254,7 @@ public:
             return false;
         }
 
-        if (frame_recording()) { return record_overlay(t, p, s, compare, vertex_count); }
+        if (frame_recording()) { return record_overlay(t, p, s, compare, first_vertex, vertex_count); }
 
         // the storage descriptor at set 0 / binding 0 (the draw_storage seam — VERTEX+FRAGMENT visible)
         vkResetDescriptorPool(m_device, m_desc_pool, 0);
@@ -3766,7 +4325,7 @@ public:
                  VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD};
         m_api.set_color_blend_equation(cmd, 0U, 1U, eq);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
-        bind_and_draw(cmd, p, vertex_count);
+        bind_and_draw(cmd, p, vertex_count, first_vertex);
         vkCmdEndRendering(cmd);
 
         copy_colour_to_readback(cmd, t); // read_pixel stays valid + the layout returns to TRANSFER_SRC for chaining
@@ -3898,6 +4457,68 @@ public:
         set_draw_state(cmd, t.width(), t.height(), 1U, t.has_depth(), to_vk_compare(compare));
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
         bind_and_draw(cmd, p, vertex_count);
+        vkCmdEndRendering(cmd);
+    }
+
+    // ⭐⭐ REN-39-A1: the frame-mode INDEXED scene draw — record_scene with the scene buffer ALSO bound as the
+    // index buffer (`vkCmdBindIndexBuffer` at the section offset) and vkCmdDrawIndexed. firstIndex/vertexOffset/
+    // firstInstance stay 0 (the SV_InstanceID normalization — see the interface).
+    void record_scene_indexed(VulkanRasterTarget& t, VulkanRasterProgram& p, VulkanStorageBuffer& s, bool clear,
+                              ClearColor clear_color, float clear_depth, DepthCompare compare,
+                              crd::u32 index_offset_bytes, crd::u32 index_count, crd::u32 instance_count)
+    {
+        VkCommandBuffer cmd = m_frame_rec.cmd;
+        VkDescriptorSet dset = frame_alloc_storage_set(s);
+        if (dset == VK_NULL_HANDLE)
+        {
+            return;
+        }
+        frame_self_barrier_if_needed(t);
+
+        VkRenderingAttachmentInfo att{};
+        att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att.imageView = t.view();
+        att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        att.loadOp = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+        att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        if (clear)
+        {
+            att.clearValue.color = {{clear_color.r, clear_color.g, clear_color.b, clear_color.a}};
+        }
+
+        VkRenderingAttachmentInfo dep{};
+        dep.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        dep.imageView = t.depth_view();
+        dep.imageLayout = t.depth_attach_layout();
+        dep.loadOp = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+        dep.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        if (clear)
+        {
+            dep.clearValue.depthStencil.depth = clear_depth;
+        }
+
+        VkRenderingInfo ri{};
+        ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent = {t.width(), t.height()};
+        ri.layerCount = 1U;
+        ri.colorAttachmentCount = 1U;
+        ri.pColorAttachments = &att;
+        // ⭐ REN-38-A6: depth is OPTIONAL — a colour transient has none; the pass simply is not depth-tested.
+        ri.pDepthAttachment = t.has_depth() ? &dep : nullptr;
+        // REN-38-F11: a stencil-capable target binds the SAME image as the stencil attachment
+        if (ri.pDepthAttachment != nullptr && t.has_stencil())
+        {
+            dep.clearValue.depthStencil.stencil = 0U;
+            ri.pStencilAttachment = &dep;
+        }
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t.width(), t.height(), 1U, t.has_depth(), to_vk_compare(compare));
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        vkCmdBindIndexBuffer(cmd, s.buf(), index_offset_bytes, VK_INDEX_TYPE_UINT32);
+        const VkShaderStageFlagBits stages[2] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
+        const VkShaderEXT objs[2] = {p.vs(), p.fs()};
+        m_api.bind(cmd, 2U, stages, objs);
+        vkCmdDrawIndexed(cmd, index_count, instance_count, 0U, 0, 0U);
         vkCmdEndRendering(cmd);
     }
 
@@ -4165,7 +4786,7 @@ public:
 
     // The frame-mode body of draw_overlay: LOAD + alpha-blend + read-only depth, into the shared cmd.
     [[nodiscard]] bool record_overlay(VulkanRasterTarget& t, VulkanRasterProgram& p, VulkanStorageBuffer& s,
-                                      DepthCompare compare, crd::u32 vertex_count)
+                                      DepthCompare compare, crd::u32 first_vertex, crd::u32 vertex_count)
     {
         VkCommandBuffer cmd  = m_frame_rec.cmd;
         VkDescriptorSet dset = frame_alloc_storage_set(s);
@@ -4213,7 +4834,7 @@ public:
                  VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD};
         m_api.set_color_blend_equation(cmd, 0U, 1U, eq);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
-        bind_and_draw(cmd, p, vertex_count);
+        bind_and_draw(cmd, p, vertex_count, first_vertex);
         vkCmdEndRendering(cmd);
         return true;
     }
@@ -5476,12 +6097,13 @@ private:
         ri.pColorAttachments    = &att;
         return ri;
     }
-    void bind_and_draw(VkCommandBuffer cmd, const VulkanRasterProgram& p, crd::u32 vertex_count) const
+    void bind_and_draw(VkCommandBuffer cmd, const VulkanRasterProgram& p, crd::u32 vertex_count,
+                       crd::u32 first_vertex = 0U) const
     {
         const VkShaderStageFlagBits stages[2] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
         const VkShaderEXT           objs[2]   = {p.vs(), p.fs()};
         m_api.bind(cmd, 2U, stages, objs);
-        vkCmdDraw(cmd, vertex_count, 1U, 0U, 0U);
+        vkCmdDraw(cmd, vertex_count, 1U, first_vertex, 0U);
     }
     void copy_colour_to_readback(VkCommandBuffer cmd, VulkanRasterTarget& t)
     {
@@ -5800,14 +6422,17 @@ private:
         b.cmd = alloc_cmd();
         if (b.cmd == VK_NULL_HANDLE) { return; }
         // the WAR barrier: the PREVIOUS frame may still be reading the destination buffers on the GPU —
-        // submission order alone does not order execution, this barrier does.
+        // submission order alone does not order execution, this barrier does. ⭐ REN-39-A1: INDEX_READ at
+        // VERTEX_INPUT joins both batch barriers — a storage buffer is also an INDEX buffer now, and a read
+        // access missing from this mask is a race the barrier silently does not order.
         VkMemoryBarrier war{};
         war.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-        war.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+        war.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_INDEX_READ_BIT;
         war.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         vkCmdPipelineBarrier(b.cmd,
-                             VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-                                 | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+                             VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT |
+                                 VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1U, &war, 0, nullptr, 0, nullptr);
         b.used       = 0U;
         m_batch_open = true;
@@ -5818,14 +6443,16 @@ private:
         if (!m_batch_open) { return; }
         m_batch_open   = false; // before any call that could re-enter (begin_cmd flushes)
         UploadBatch& b = m_upload[m_upload_slot];
-        // make every copy visible to every consumer stage — one barrier for the whole batch
+        // make every copy visible to every consumer stage — one barrier for the whole batch (⭐ REN-39-A1:
+        // including the IA's INDEX fetch, now that a storage buffer serves as its own index buffer)
         VkMemoryBarrier vis{};
         vis.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
         vis.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        vis.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+        vis.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_INDEX_READ_BIT;
         vkCmdPipelineBarrier(b.cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-                                 | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+                             VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT |
+                                 VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
                              0, 1U, &vis, 0, nullptr, 0, nullptr);
         vkEndCommandBuffer(b.cmd);
         VkSubmitInfo si{};
@@ -6164,6 +6791,56 @@ private:
         {
             if (m_multi_args != VK_NULL_HANDLE) { vkDestroyBuffer(m_device, m_multi_args, nullptr); m_multi_args = VK_NULL_HANDLE; }
             if (m_multi_mem != VK_NULL_HANDLE) { vkFreeMemory(m_device, m_multi_mem, nullptr); m_multi_mem = VK_NULL_HANDLE; }
+            return false;
+        }
+        return true;
+    }
+
+    // ⭐⭐ REN-39-A2: the INDEXED args ring — same shape, same wrap-tolerance reasoning, 20-byte
+    // VkDrawIndexedIndirectCommand stride. A second ring rather than a shared one so neither command type's
+    // chunk arithmetic depends on the other's stride.
+    VkBuffer m_multi_idx_args = VK_NULL_HANDLE;
+    VkDeviceMemory m_multi_idx_mem = VK_NULL_HANDLE;
+    void* m_multi_idx_map = nullptr;
+    crd::u32 m_multi_idx_cursor = 0U;
+
+    [[nodiscard]] bool ensure_multi_idx_args()
+    {
+        if (m_multi_idx_args != VK_NULL_HANDLE)
+        {
+            return true;
+        }
+        VkBufferCreateInfo bci{};
+        bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bci.size = static_cast<VkDeviceSize>(kMultiChunks) * kMultiMax * sizeof(VkDrawIndexedIndirectCommand);
+        bci.usage = VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+        bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        if (vkCreateBuffer(m_device, &bci, nullptr, &m_multi_idx_args) != VK_SUCCESS)
+        {
+            return false;
+        }
+        VkMemoryRequirements mr{};
+        vkGetBufferMemoryRequirements(m_device, m_multi_idx_args, &mr);
+        VkMemoryAllocateInfo mai{};
+        mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        mai.allocationSize = mr.size;
+        mai.memoryTypeIndex =
+            find_memory_type(m_ctx->vk_physical_device(), mr.memoryTypeBits,
+                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        if (vkAllocateMemory(m_device, &mai, nullptr, &m_multi_idx_mem) != VK_SUCCESS ||
+            vkBindBufferMemory(m_device, m_multi_idx_args, m_multi_idx_mem, 0) != VK_SUCCESS ||
+            vkMapMemory(m_device, m_multi_idx_mem, 0, VK_WHOLE_SIZE, 0, &m_multi_idx_map) != VK_SUCCESS)
+        {
+            if (m_multi_idx_args != VK_NULL_HANDLE)
+            {
+                vkDestroyBuffer(m_device, m_multi_idx_args, nullptr);
+                m_multi_idx_args = VK_NULL_HANDLE;
+            }
+            if (m_multi_idx_mem != VK_NULL_HANDLE)
+            {
+                vkFreeMemory(m_device, m_multi_idx_mem, nullptr);
+                m_multi_idx_mem = VK_NULL_HANDLE;
+            }
             return false;
         }
         return true;
@@ -6729,8 +7406,11 @@ public:
         // consumes as draw/dispatch ARGUMENTS, and Vulkan refuses `vkCmdDispatchIndirect` on a buffer created
         // without this flag — which cannot be added afterwards. Declaring it on every transient costs nothing
         // (usage flags are not an allocation) and removes a creation-time decision the graph could get wrong.
-        bci.usage       = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT
-                          | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+        // ⭐ REN-39-A1: INDEX_BUFFER by the same rule — a GPU-driven pass that WRITES an index list into a
+        // transient (meshlet index generation) must be able to bind it for an indexed draw.
+        bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                    VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
         // ⛔⛔ REN-38-A14: CONCURRENT across the graphics + compute families when they differ. A buffer an
         // async-compute pass WRITES and a graphics pass READS crosses a queue family, and an EXCLUSIVE buffer
         // requires an explicit OWNERSHIP TRANSFER (a release barrier on one queue paired with an acquire on the
@@ -7673,7 +8353,21 @@ void layout_src(VkImageLayout layout, VkAccessFlags& access, VkPipelineStageFlag
     case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL:
         access = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         stage  = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT; break;
-    default: access = 0; stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT; break; // UNDEFINED
+    default:
+        // ⛔⛔ REN-39 (the LIVE-only gizmo ghost): UNDEFINED is NOT "no ordering needed". A transient's memory is
+        // REUSED every frame, and with kFramesInFlight > 1 the PREVIOUS frame's commands may still be reading it
+        // (the post pass samples scene_hdr in the fragment stage) when this frame's first-touch transition
+        // discards and rewrites it. TOP_OF_PIPE here meant "don't wait" — the two frames' GPU work overlapped on
+        // the SAME memory, and the display showed a mix of frame N and N+1 (a dashed ghost beside every moving
+        // overlay line). Invisible to core validation AND to the screenshot arm (its CPU readback serializes
+        // frames); only a LIVE window capture showed it. The acquire needs an EXECUTION dependency (access = 0 —
+        // contents are discarded, no cache flush) on every stage that could still be touching reused transient
+        // memory: raster attachments, depth tests, fragment sampling, and transfer.
+        access = 0;
+        stage  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT
+                 | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                 | VK_PIPELINE_STAGE_TRANSFER_BIT;
+        break;
     }
 }
 
@@ -7849,23 +8543,50 @@ void VulkanFrameGraph::execute()
             if (graph_owned(n)) // REN-2: an RTT image — render into it (COLOR_ATTACHMENT), then a later pass SAMPLES it
             {
                 auto& tt = static_cast<VulkanRasterTarget&>(*n.target);
-                if (writes && live_layout(n) != want_w)
+                if (writes)
                 {
-                    img_barrier(tt.image(), VK_IMAGE_ASPECT_COLOR_BIT, live_layout(n), want_w, acc_w, stg_w);
-                    live_layout(n) = want_w;
+                    if (live_layout(n) != want_w)
+                    {
+                        img_barrier(tt.image(), VK_IMAGE_ASPECT_COLOR_BIT, live_layout(n), want_w, acc_w, stg_w);
+                        live_layout(n) = want_w;
+                    }
+                    else
+                    {
+                        // ⛔⛔ REN-39 (the dotted gizmo): WRITE-AFTER-WRITE on a TRANSIENT. A second pass
+                        // attachment-writing an image already in COLOR_ATTACHMENT got NO barrier here — the
+                        // layouts matched, so the transition test was silent — and the two passes' rasterization
+                        // RACED: the forward pass's fragments landed over the woven overlay's nondeterministically
+                        // every frame. The IMPORTED branch below has carried exactly this ordering barrier all
+                        // along ("already an attachment: a WRITE→READ|WRITE cross-pass ordering barrier"); this
+                        // is its transient twin. Same-layout barrier = pure ordering, which is the point.
+                        img_barrier(tt.image(), VK_IMAGE_ASPECT_COLOR_BIT, want_w, want_w, acc_w, stg_w);
+                    }
+                    // 38-G1: a colour transient with a COMPANION depth (`depth_buffer = true`) — the graph owns
+                    // that image too, so the graph transitions it. ⛔ Without this the companion stayed UNDEFINED
+                    // forever (VUID-vkCmdBeginRendering-pRenderingInfo-09588 on every scene_hdr pass in the app).
+                    if (tt.has_depth())
+                    {
+                        if (live_depth_layout(n) != VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
+                        {
+                            img_barrier(tt.depth_image(), VK_IMAGE_ASPECT_DEPTH_BIT, live_depth_layout(n),
+                                        VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+                                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT);
+                            live_depth_layout(n) = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+                        }
+                        else
+                        {
+                            // the companion's WAW/WAR twin: the prior pass's depth writes order before this
+                            // pass's depth test (the woven overlay READS the scene depth it loads)
+                            img_barrier(tt.depth_image(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                                        VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                                        VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+                                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT);
+                        }
+                    }
                 }
-                // 38-G1: a colour transient with a COMPANION depth (`depth_buffer = true`) — the graph owns that
-                // image too, so the graph transitions it. ⛔ Without this the companion stayed UNDEFINED forever
-                // (VUID-vkCmdBeginRendering-pRenderingInfo-09588 on every scene_hdr pass in the app).
-                if (writes && tt.has_depth() && live_depth_layout(n) != VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
-                {
-                    img_barrier(tt.depth_image(), VK_IMAGE_ASPECT_DEPTH_BIT, live_depth_layout(n),
-                                VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                                VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
-                                VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT);
-                    live_depth_layout(n) = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-                }
-                else if (!writes && live_layout(n) != want_r)
+                else if (live_layout(n) != want_r)
                 {
                     // the RTT barrier: the render pass's writes complete → this pass samples (or copies) it
                     img_barrier(tt.image(), VK_IMAGE_ASPECT_COLOR_BIT, live_layout(n), want_r, acc_r, stg_r);

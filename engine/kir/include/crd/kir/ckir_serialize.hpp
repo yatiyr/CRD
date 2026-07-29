@@ -33,7 +33,7 @@ namespace crd::kir
 inline constexpr crd::u32 kShaderGraphFourCC =
     (static_cast<crd::u32>('K')) | (static_cast<crd::u32>('G') << 8U) | (static_cast<crd::u32>('P') << 16U) | (static_cast<crd::u32>('H') << 24U);
 // v2 = the canonical padding-free records (v1 was the raw-POD blast; a v1 blob is cleanly rejected ⇒ recook).
-inline constexpr crd::u32 kShaderGraphVersion = 3U; // v3: KEntry += mesh_payload_in (REN-38-F6+)
+inline constexpr crd::u32 kShaderGraphVersion = 4U; // v4: KEntry += storage_read_only (REN-39-C1); v3: mesh_payload_in
 
 static_assert(std::is_trivially_copyable_v<KNode>, "KNode must be trivially copyable to pool-serialize");
 static_assert(std::is_trivially_copyable_v<KStmt>, "KStmt must be trivially copyable");
@@ -271,6 +271,7 @@ inline void write_entry(ByteArray& b, const KEntry& e)
     put_i32(b, e.tess_inner);                                     // 4
     put_i32(b, e.tess_outer);                                     // 4
     put_bool(b, e.mesh_payload_in);                               // 1  => 173 (v3, REN-38-F6+)
+    put_bool(b, e.storage_read_only);                             // 1  => 174 (v4, REN-39-C1)
 }
 inline KEntry read_entry(Cursor& c)
 {
@@ -304,7 +305,8 @@ inline KEntry read_entry(Cursor& c)
     e.tess_patch_size = c.u32v();
     e.tess_inner      = c.i32v();
     e.tess_outer      = c.i32v();
-    e.mesh_payload_in = c.boolv(); // v3 (REN-38-F6+)
+    e.mesh_payload_in = c.boolv();   // v3 (REN-38-F6+)
+    e.storage_read_only = c.boolv(); // v4 (REN-39-C1)
     return e;
 }
 } // namespace serial_detail

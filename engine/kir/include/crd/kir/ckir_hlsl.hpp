@@ -1145,9 +1145,20 @@ inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::I
     }
     if (fs_uses_storage) // B1-f: the storage buffer at u0 / set 0-binding 0 (matches draw_storage's root UAV / descriptor).
     {                    // ROV (RasterizerOrdered) when FS interlock — DXIL serialises overlapping-pixel access automatically.
-        s.append("[[vk::binding(0, 0)]] ");
-        s.append((!is_vertex && entry.interlock) ? "RasterizerOrderedStructuredBuffer<uint>" : "RWStructuredBuffer<uint>");
-        s.append(" sbuf : register(u0);\n");
+        // ⭐⭐ REN-39-C1: an INDEXED program pair binds storage READ-ONLY — during an indexed draw DX12 holds
+        // the buffer in INDEX_BUFFER | shader-read states (UNORDERED_ACCESS cannot combine), so the declaration
+        // is an SRV at t0 and the draw binds the read-only table. entry_valid already refused any store.
+        if (entry.storage_read_only)
+        {
+            s.append("[[vk::binding(0, 0)]] StructuredBuffer<uint> sbuf : register(t0);\n");
+        }
+        else
+        {
+            s.append("[[vk::binding(0, 0)]] ");
+            s.append((!is_vertex && entry.interlock) ? "RasterizerOrderedStructuredBuffer<uint>"
+                                                     : "RWStructuredBuffer<uint>");
+            s.append(" sbuf : register(u0);\n");
+        }
     }
     for (int i = 0; i < n; ++i) // REN-38: the DrawIndex root constant (b7) — one uint, varied per command by ExecuteIndirect
     {

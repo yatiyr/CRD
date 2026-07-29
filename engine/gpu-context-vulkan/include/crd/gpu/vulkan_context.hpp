@@ -116,6 +116,14 @@ public:
     // `headless_surface()` additionally reports VK_EXT_headless_surface (a swapchain without a window). Appended at END.
     [[nodiscard]] virtual bool present_capable() const noexcept  = 0;
     [[nodiscard]] virtual bool headless_surface() const noexcept = 0;
+
+    // ⛔ REN-39-A2: ONE vkCmdDraw(Indexed)Indirect with drawCount > 1 requires the CORE `multiDrawIndirect`
+    // feature (VUID-…-drawCount-02718) — universal on desktop drivers AND llvmpipe, but a capability all the
+    // same: the raster context's multi verbs fall back to a per-draw loop when it is absent, never an illegal
+    // command. Found by the A2 gate's ValidationCapture — the 38-4 non-indexed multi had been issuing
+    // drawCount = N without it since it shipped (its gate captures pixels, not validation). Appended at END
+    // (vtable-stable, D135).
+    [[nodiscard]] virtual bool multi_draw_indirect() const noexcept { return false; }
 };
 
 // Create a headless Vulkan compute context per `config` (config.backend must be Vulkan). Returns nullptr on failure

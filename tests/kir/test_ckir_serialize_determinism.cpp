@@ -187,3 +187,27 @@ TEST_CASE("D-007 D1: the canonical blob still round-trips (deserialize -> re-ser
     CHECK(blob2.size() == blob.size());
     CHECK(first_diff(blob2, blob) == -1);
 }
+
+// ⭐ REN-39-C1: the v4 KEntry field SURVIVES the blob — the field-survival assertion the blob-v3 scar demands
+// (a field dropped by writer AND reader round-trips "byte-identically"; only asserting the parsed VALUE sees it).
+TEST_CASE("REN-39-C1: KEntry::storage_read_only survives serialize -> deserialize (v4)", "[kir][serialize][ren39]")
+{
+    crd::memory::TlsfAllocator a(8U << 20U);
+    kir::KGraph g(&a);
+    kir::KEntry e = build_scale(g, 2.0);
+    e.storage_read_only = true;
+    const auto blob = kir::serialize_graph(g, e, &a);
+
+    kir::KGraph g2(&a);
+    kir::KEntry e2;
+    REQUIRE(kir::deserialize_graph(crd::containers::ConstSpan<crd::u8>(blob.data(), blob.size()), g2, e2));
+    CHECK(e2.storage_read_only); // the ON case survives...
+
+    kir::KGraph g3(&a);
+    kir::KEntry e3 = build_scale(g3, 2.0);
+    const auto blob_off = kir::serialize_graph(g3, e3, &a);
+    kir::KGraph g4(&a);
+    kir::KEntry e4;
+    REQUIRE(kir::deserialize_graph(crd::containers::ConstSpan<crd::u8>(blob_off.data(), blob_off.size()), g4, e4));
+    CHECK_FALSE(e4.storage_read_only); // ...and OFF stays off (the dichotomy)
+}

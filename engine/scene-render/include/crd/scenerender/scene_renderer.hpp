@@ -228,6 +228,14 @@ public:
     // silent default-off would turn those gates green-on-nothing.
     void set_readback_enabled(bool on) noexcept;
 
+    // ── ⭐⭐ REN-39-C1: the INDEXED-PULL switch. ON (the default) draws every scene pass INDEXED against the
+    // storage buffer's own index sections — the measured 3–6× vertex-work cut (the frame was vertex-bound:
+    // the non-indexed pull re-shaded every triangle corner with zero post-transform reuse). OFF keeps the
+    // classic pull path. Exists as a RUNTIME switch so the parity gate can render the SAME scene both ways and
+    // assert bit-identical frames — the pull path is the indexed path's reference. Call before init_programs
+    // to skip cooking the indexed set entirely, or after it to flip per frame (both sets stay resident).
+    void set_indexed_pull(bool on) noexcept;
+
     // ⛔ HARD RULE (AGENTS.md): EVERY render pass goes through our own frame-graph machinery. An overlay — the
     // infinite grid, gizmos, debug viz, editor chrome — is a RENDER PASS, so it belongs in the frame's graph as
     // a pass, not as a separate `draw_*` sequence with its own submit.
@@ -241,6 +249,14 @@ public:
     // (`crd::draw::submit_overlay`, …) works unchanged from inside it.
     using FramePassFn = void (*)(crd::gpu::IFrameContext& ctx, void* user);
     void set_overlay_pass(FramePassFn fn, void* user) noexcept;
+
+    // ── ⭐⭐ REN-39 (the gizmo fix): THE OVERLAY'S TARGET IS THE FRAME'S DECISION, NOT THE APP'S. ──
+    // The woven overlay pass declares the SCENE image (a frame with a post chain routes the scene through an
+    // HDR transient — the canvas the app captured is the POST pass's output, whose depth the scene never
+    // wrote). The callback resolves its target HERE, per frame; null falls back to the app's own target (a
+    // graph shape with no resolvable scene image). Drawing a captured raw pointer instead renders an image
+    // the graph never barriered — a layout-validation storm and chrome that escapes the display transform.
+    [[nodiscard]] crd::gpu::IRasterTarget* overlay_target(crd::gpu::IFrameContext& ctx) const noexcept;
 
     // REN-3.2-b: cascaded shadow maps. Rendering cascades costs one extra full pass over the draw list PER
     // CASCADE, so this is OFF by default — a consumer that does not want shadows must not pay for them. Returns

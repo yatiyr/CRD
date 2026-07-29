@@ -16,6 +16,8 @@
 namespace crd::gpu
 {
 class VulkanGpuContext;
+class IGpuContext;
+class IRasterContext;
 class IPresentSurface;
 } // namespace crd::gpu
 
@@ -28,6 +30,11 @@ public:
     // Initializes ImGui_ImplVulkan against `ctx`'s device + `surface`'s swapchain parameters (image count + color
     // format, dynamic rendering). `valid()` reports success — a failed init leaves a safe inert object.
     ImGuiGpuBackend(crd::gpu::VulkanGpuContext& ctx, const crd::gpu::IPresentSurface& surface);
+    // ⭐⭐ REN-39-D2: the DX12 twin. Takes the INTERFACE pair (`IGpuContext` names the backend; the raster
+    // context owns the D3D12 device + queue ImGui needs) so an app selects its backend at runtime and this class
+    // stays the one ImGui seam. `valid()` is still the only success signal.
+    ImGuiGpuBackend(crd::gpu::IGpuContext& ctx, crd::gpu::IRasterContext& raster,
+                    const crd::gpu::IPresentSurface& surface);
     ~ImGuiGpuBackend();
 
     ImGuiGpuBackend(const ImGuiGpuBackend&)            = delete;
@@ -49,9 +56,10 @@ public:
     static void overlay_thunk(void* backend_cmd, void* user);
 
 private:
-    void* m_device          = nullptr; // VkDevice (opaque here — the header stays Vulkan-include-free)
-    void* m_descriptor_pool = nullptr; // VkDescriptorPool
+    void* m_device          = nullptr; // VkDevice / ID3D12Device (opaque — the header stays backend-include-free)
+    void* m_descriptor_pool = nullptr; // VkDescriptorPool / ID3D12DescriptorHeap (the SRV heap ImGui draws from)
     bool  m_attached        = false;
+    bool  m_is_dx12         = false;   // which ImGui_Impl* owns `m_attached`
 };
 
 } // namespace crd::imgui

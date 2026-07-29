@@ -17,6 +17,8 @@
 #include <crd/draw/renderer.hpp>
 #include <crd/draw/shapes.hpp>
 #include <crd/gpu/context.hpp>
+#include <crd/gpu/dx12_context.hpp>        // REN-39-D2: `--backend dx12` — the sandbox on the second backend
+#include <crd/gpu/dx12_raster_context.hpp>
 #include <crd/gpu/raster_context.hpp>
 #include <crd/gpu/vulkan_context.hpp>
 #include <crd/gpu/vulkan_raster_context.hpp>
@@ -199,16 +201,67 @@ int main(int argc, char** argv)
     // counts) and a SHIPPED app never runs it — a perf number with validation on measures a config nothing
     // ships (the gates-ran-unshipped-config scar). `--no-validation` is the honest arm for any speed claim.
     bool                  want_validation = true;
+    bool                  want_dx12       = false; // REN-39-D2: `--backend dx12` — the SAME sandbox, D3D12
+    bool want_pull_draws = false; // REN-39-C2: the A/B baseline arm (indexed is the default)
+    const char* screenshot_path = nullptr; // REN-39: dump the canvas at ~2.5 s and exit
+    crd::f64    screenshot_at_s = 2.5;     // `--screenshot-at`: pick the moment in the camera loop
+    // ⭐⭐ REN-40: the scene SIZE is a knob so the scaling curve is measured, not argued. `--instances N` is a
+    // TOTAL (rounded to the enclosing square grid); `--foxes N` sets the SKINNED ring.
+    crd::u32    grid_side  = 100U; // 100×100 = the historical 10k
+    crd::u32    fox_count  = 24U;
     for (int i = 1; i < argc; ++i)
     {
         if (std::strcmp(argv[i], "--headless") == 0) { headless = true; }
+        else if (std::strcmp(argv[i], "--instances") == 0 && i + 1 < argc)
+        {
+            const long v = std::strtol(argv[++i], nullptr, 10);
+            if (v > 0)
+            {
+                // round-to-nearest without the (x + 0.5) cast the tidy gate rejects: walk the floor up while
+                // the next side still fits the requested total
+                auto s = static_cast<crd::u32>(crd::math::sqrt(static_cast<crd::f32>(v)));
+                while (static_cast<long>(s + 1U) * static_cast<long>(s + 1U) <= v) { ++s; }
+                if (s < 1U) { s = 1U; }
+                grid_side = s;
+            }
+        }
+        else if (std::strcmp(argv[i], "--foxes") == 0 && i + 1 < argc)
+        {
+            const long v = std::strtol(argv[++i], nullptr, 10);
+            fox_count    = v > 0 ? static_cast<crd::u32>(v) : 0U;
+        }
         // REN-8: A/B the per-frame readback copy. Run-to-run fps varies by ~10 on this host, so a claim like
         // "removing the readback made it faster" is only honest if BOTH arms are measured on the same build.
         else if (std::strcmp(argv[i], "--readback") == 0) { force_readback = true; }
         // REN-3.2-b: A/B the shadows. If an object looks unlit with shadows ON and STILL looks unlit with them
         // OFF, the cause is its NORMALS (ndl == 0 gives the same flat ambient as vis == 0), not the shadow map.
         else if (std::strcmp(argv[i], "--no-shadows") == 0) { want_shadows = false; }
+        // ⭐⭐ REN-39-C2: A/B the draw path. INDEXED is the default (post-transform vertex reuse — the frame was
+        // measured VERTEX-bound); `--pull-draws` keeps the classic pull so the before/after board measures BOTH
+        // arms on the SAME build (the readback A/B rule, one flag over).
+        else if (std::strcmp(argv[i], "--pull-draws") == 0)
+        {
+            want_pull_draws = true;
+        }
+        // REN-39: "what does the user SEE", as a file — the presented canvas at ~2.5 s, then exit.
+        else if (std::strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) { screenshot_path = argv[++i]; }
+        // `--screenshot-at <sec>`: capture at a chosen point of the 20 s camera loop (e.g. the low close pass)
+        else if (std::strcmp(argv[i], "--screenshot-at") == 0 && i + 1 < argc)
+        {
+            char*          end = nullptr;
+            const crd::f64 v   = std::strtod(argv[i + 1], &end);
+            if (end != argv[i + 1] && v > 0.0)
+            {
+                screenshot_at_s = v;
+                ++i;
+            }
+        }
         else if (std::strcmp(argv[i], "--no-validation") == 0) { want_validation = false; }
+        else if (std::strcmp(argv[i], "--backend") == 0 && i + 1 < argc)
+        {
+            ++i;
+            want_dx12 = std::strcmp(argv[i], "dx12") == 0;
+        }
         else if (std::strcmp(argv[i], "--present") == 0 && i + 1 < argc)
         {
             ++i;
@@ -250,25 +303,44 @@ int main(int argc, char** argv)
     }
 
     // THE ONE GRAPHICS LAYER: windowed context → raster context → present surface. Nothing rhi anywhere.
-    crd::gpu::GpuContextConfig gpu_cfg;
-    gpu_cfg.backend           = crd::gpu::GpuBackend::Vulkan;
-    gpu_cfg.headless          = false;
-    gpu_cfg.enable_validation = !headless && want_validation;
-    auto gpu_context          = crd::gpu::create_vulkan_gpu_context(gpu_cfg);
-    auto* vk = gpu_context != nullptr ? static_cast<crd::gpu::VulkanGpuContext*>(gpu_context.get()) : nullptr;
-    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    // ⭐⭐ REN-39-D2: EITHER backend. Everything past these two factory calls is the portable interface — which is
+    // the whole claim of ADR-0105, and now the sandbox is what proves it rather than asserts it.
+    std::unique_ptr<crd::gpu::IGpuContext>    gpu_context;
+    std::unique_ptr<crd::gpu::IRasterContext> raster;
+    if (want_dx12)
     {
-        CRD_LOG_ERROR(g_log_sandbox, "GPU bootstrap failed — no graphics-capable Vulkan device / shader objects");
+        gpu_context = crd::gpu::create_dx12_gpu_context();
+        if (gpu_context == nullptr || !gpu_context->valid())
+        {
+            CRD_LOG_ERROR(g_log_sandbox, "DX12 GPU bootstrap failed");
+            crd::log::shutdown();
+            return 1;
+        }
+        raster = crd::gpu::create_dx12_raster_context();
+    }
+    else
+    {
+        crd::gpu::GpuContextConfig gpu_cfg;
+        gpu_cfg.backend           = crd::gpu::GpuBackend::Vulkan;
+        gpu_cfg.headless          = false;
+        gpu_cfg.enable_validation = !headless && want_validation;
+        gpu_context               = crd::gpu::create_vulkan_gpu_context(gpu_cfg);
+        auto* vkc = gpu_context != nullptr ? static_cast<crd::gpu::VulkanGpuContext*>(gpu_context.get()) : nullptr;
+        if (vkc == nullptr || !vkc->graphics_capable() || !vkc->shader_object())
+        {
+            CRD_LOG_ERROR(g_log_sandbox, "GPU bootstrap failed — no graphics-capable Vulkan device / shader objects");
+            crd::log::shutdown();
+            return 1;
+        }
+        raster = crd::gpu::create_vulkan_raster_context(*vkc);
+    }
+    if (raster == nullptr || !raster->valid())
+    {
+        CRD_LOG_ERROR(g_log_sandbox, "Raster context unavailable");
         crd::log::shutdown();
         return 1;
     }
-    auto raster = crd::gpu::create_vulkan_raster_context(*vk);
-    if (raster == nullptr || !vk->present_capable())
-    {
-        CRD_LOG_ERROR(g_log_sandbox, "Raster context / present capability unavailable");
-        crd::log::shutdown();
-        return 1;
-    }
+    CRD_LOG_INFO(g_log_sandbox, "backend: {}", want_dx12 ? "DX12" : "Vulkan");
     const auto fb    = app.window().framebuffer_size();
     crd::u32   win_w = fb.width > 0 ? static_cast<crd::u32>(fb.width) : 1280U;
     crd::u32   win_h = fb.height > 0 ? static_cast<crd::u32>(fb.height) : 720U;
@@ -281,7 +353,14 @@ int main(int argc, char** argv)
     }
 
     // ── the GEO-7 scene: the build-time-cooked PACK → World → SceneRenderer ─────────────────────────────────────
-    crd::memory::TlsfAllocator scene_alloc(256U << 20U);
+    // ⭐⭐ REN-40: the arena SCALES WITH THE SCENE. At 1M instances the CPU-side scene alone wants ~300 MB (the
+    // World's Transform + MeshRenderer components, the renderer's InstanceGpu payload, per-slot world AABBs, the
+    // camera visible list and FOUR cascade lists) — a fixed 256 MB asserted "out of memory" before the first
+    // frame. Budget per instance, generously, rather than tuning a constant per scene size.
+    const crd::u64 inst_total  = static_cast<crd::u64>(grid_side) * grid_side + fox_count;
+    const crd::u64 arena_bytes = (192ULL << 20U) + inst_total * 512ULL;
+    crd::memory::TlsfAllocator scene_alloc(static_cast<crd::usize>(arena_bytes));
+    CRD_LOG_INFO(g_log_sandbox, "scene arena: {} MiB for {} instances", arena_bytes >> 20U, inst_total);
 
     // GEO-9: the camera-shot timeline (automation-driven crane move, sampled per frame in rational time)
     const crd::timeline::TimelineResource camera_timeline = build_camera_timeline(&scene_alloc);
@@ -324,7 +403,10 @@ int main(int argc, char** argv)
 
     // 10,000 instances on a 100×100 grid, meshes cycled, each normalized to ~1.5 units from its cooked bounds,
     // each carrying its own AUTHORED material (the PRIM chunk's material id — GEO-3 stage 4's wiring, live)
-    constexpr crd::u32 side = 100U;
+    // ⭐⭐ REN-40: the grid SIDE and the skinned ring COUNT are knobs, so the scaling curve can be MEASURED
+    // (`--instances 1000000` → a 1000×1000 grid) instead of argued about. Spacing shrinks with the side so the
+    // field keeps its world extent and the cascade fit stays comparable across counts.
+    const crd::u32 side = grid_side;
     struct Cell
     {
         crd::scene::EntityId entity;
@@ -410,8 +492,10 @@ int main(int argc, char** argv)
                 crd::resources::ResourceId material{};
                 if (mesh->primitives.size() > 0U) { material = mesh->primitives[0].material_id; }
 
-                const crd::f32 x = (static_cast<crd::f32>(gx) - 49.5F) * 2.0F;
-                const crd::f32 z = (static_cast<crd::f32>(gz) - 49.5F) * 2.0F;
+                const crd::f32 half = (static_cast<crd::f32>(side) - 1.0F) * 0.5F;
+                const crd::f32 sp   = 2.0F; // FIXED SPACING: the world GROWS with the count, so a
+                const crd::f32 x    = (static_cast<crd::f32>(gx) - half) * sp; // 1M => 2000 units
+                const crd::f32 z    = (static_cast<crd::f32>(gz) - half) * sp;
 
                 const crd::scene::EntityId e = world.spawn();
                 crd::scene::Transform      t;
@@ -428,7 +512,7 @@ int main(int argc, char** argv)
     crd::containers::Array<crd::scene::EntityId> animated(&scene_alloc);
     if (skinned_meshes.size() > 0U && pack_skeletons.size() > 0U)
     {
-        constexpr crd::u32 ring_count = 24U;
+        const crd::u32 ring_count = fox_count;
         auto handle = rm.load_sync<crd::resources::MeshResource>(skinned_meshes[0]);
         const auto* mesh = handle.get();
         crd::f32    scale = 1.0F;
@@ -518,7 +602,7 @@ int main(int argc, char** argv)
         const bool root_ok = scene_renderer.set_asset_root(aroot);
         CRD_LOG_INFO(g_log_sandbox, "asset root '{}' -> {}", aroot, root_ok ? "installed" : "REJECTED");
     }
-    const bool scene_ready = scene_renderer.init(*raster, rm) && scene_renderer.init_programs(*vk)
+    const bool scene_ready = scene_renderer.init(*raster, rm) && scene_renderer.init_programs(*gpu_context)
                              && cells.size() > 0U;
     if (!scene_ready) { CRD_LOG_WARN(g_log_sandbox, "Scene renderer unavailable — falling back to overlay-only"); }
 
@@ -536,7 +620,11 @@ int main(int argc, char** argv)
     ImGui::CreateContext();
     ImGui::StyleColorsDark();
     ImGui_ImplGlfw_InitForVulkan(static_cast<GLFWwindow*>(app.window().native_handle()), true);
-    auto imgui_backend = std::make_unique<crd::imgui::ImGuiGpuBackend>(*vk, *surface);
+    // REN-39-D2: the ImGui render half now has a DX12 twin — same class, backend chosen by which ctor runs.
+    auto imgui_backend =
+        want_dx12 ? std::make_unique<crd::imgui::ImGuiGpuBackend>(*gpu_context, *raster, *surface)
+                  : std::make_unique<crd::imgui::ImGuiGpuBackend>(
+                        *static_cast<crd::gpu::VulkanGpuContext*>(gpu_context.get()), *surface);
     if (!imgui_backend->valid())
     {
         CRD_LOG_ERROR(g_log_sandbox, "ImGui gpu backend init failed");
@@ -545,12 +633,12 @@ int main(int argc, char** argv)
     }
 
     // RET-6 pt 4: the debug-draw overlay (axis triad + the infinite grid) composes over the scene
-    const bool draw_ready = crd::draw::init(*vk, *raster);
+    const bool draw_ready = crd::draw::init(*gpu_context, *raster);
     if (!draw_ready) { CRD_LOG_WARN(g_log_sandbox, "crd-draw init failed -- continuing without the draw overlay"); }
     crd::draw::RenderBuffer draw_buf(crd::memory::default_allocator());
     if (draw_ready) // the RET-6 debug-draw suite over the real scene depth (wire shapes + the translucent slab)
     {
-        crd::draw::axis_triad_to(draw_buf, crd::math::Mat4f::identity(), 2.0F, 3.0F);
+        crd::draw::axis_triad_to(draw_buf, crd::math::Mat4f::identity(), 3.0F, 5.0F);
         crd::draw::sphere_wire_to(draw_buf, {13.0F, 1.5F, 0.0F}, 1.5F, crd::draw::kCyan);
         crd::math::Mat4f box_world = crd::math::Mat4f::identity();
         box_world.c3               = {-13.0F, 1.0F, 0.5F, 1.0F};
@@ -577,7 +665,11 @@ int main(int argc, char** argv)
     crd::scenerender::SyncStats   last_sync{};
     // REN-8: the sandbox PRESENTS, it never reads pixels back — so skip the per-frame full-target host copy the
     // frame graph does for `read_pixel`. Measured cost of leaving it on: a 7.1 ms stall behind 1.8 ms of passes.
-    scene_renderer.set_readback_enabled(force_readback);
+    scene_renderer.set_readback_enabled(force_readback || screenshot_path != nullptr);
+    if (want_pull_draws)
+    {
+        scene_renderer.set_indexed_pull(false);
+    } // REN-39-C2: the A/B baseline arm
 
     // REN-3.2-b: cascaded shadow maps. `set_shadows_enabled` returns whether they actually became ACTIVE (the
     // cascade shaders had to compile), so a silent "on but not really" is impossible to miss here.
@@ -598,18 +690,23 @@ int main(int argc, char** argv)
     // frame's one command buffer instead of each doing its own submit+wait.
     struct OverlayCtx
     {
-        crd::draw::RenderBuffer*     buf    = nullptr;
-        crd::gpu::IRasterTarget*     target = nullptr;
-        crd::draw::OverlayPassConfig cfg{};
-    } overlay_ctx{&draw_buf, canvas.get(), {}};
+        crd::draw::RenderBuffer*          buf      = nullptr;
+        crd::gpu::IRasterTarget*          target   = nullptr;
+        crd::scenerender::SceneRenderer*  renderer = nullptr; // REN-39: resolves the DECLARED overlay image
+        crd::draw::OverlayPassConfig      cfg{};
+    } overlay_ctx{&draw_buf, canvas.get(), &scene_renderer, {}};
     scene_renderer.set_overlay_pass(
         [](crd::gpu::IFrameContext& ctx, void* user) {
             auto* o = static_cast<OverlayCtx*>(user);
-            if (!crd::draw::submit_overlay(*o->target, *o->buf, o->cfg))
+            // ⭐⭐ REN-39 (the gizmo fix): the overlay draws the image ITS PASS DECLARED — under a post-chain
+            // frame that is the scene's HDR transient (live depth, pre-tonemap), not the captured canvas.
+            // Drawing the raw canvas here rendered an image the graph never barriered.
+            crd::gpu::IRasterTarget* t = o->renderer != nullptr ? o->renderer->overlay_target(ctx) : nullptr;
+            if (t == nullptr) { t = o->target; } // no resolvable scene image ⇒ the app's own canvas
+            if (!crd::draw::submit_overlay(*t, *o->buf, o->cfg))
             {
                 CRD_LOG_WARN(g_log_sandbox, "draw overlay submission refused");
             }
-            (void)ctx; // the target is the same imported canvas; ctx.raster() is already in recording mode
         },
         &overlay_ctx);
 
@@ -734,6 +831,20 @@ int main(int argc, char** argv)
         // the DESTROYED target for exactly one frame — which is a use-after-free that crashes on a fullscreen
         // toggle. Ordering, not just freshness, is what makes this correct.
         overlay_ctx.target = canvas.get();
+        // ⛔ REN-39: the overlay CONFIG must also be current BEFORE render() — the woven overlay pass records
+        // INSIDE it. Refreshing the config after the render call fed the pass the PREVIOUS frame's view_proj,
+        // so every overlay line lagged the camera by one frame (a ghost beside each line, live only).
+        if (draw_ready)
+        {
+            overlay_ctx.cfg.view_proj   = vp;
+            overlay_ctx.cfg.viewport_px = {static_cast<crd::f32>(surface->width()),
+                                           static_cast<crd::f32>(surface->height())};
+            overlay_ctx.cfg.time_s      = static_cast<crd::f32>(tsec);
+            overlay_ctx.cfg.depth_test  = crd::gpu::DepthCompare::GreaterEqual; // the canvas HAS depth: grid occludes
+            overlay_ctx.cfg.grid.enabled    = true;
+            overlay_ctx.cfg.grid.camera_pos = eye;
+            overlay_ctx.cfg.grid.apply_theme();
+        }
         // 38-G1: the tonemap is a NAME. Reinstalling the graph is the whole switch.
         if (scene_ready && post_mode != post_mode_live)
         {
@@ -750,6 +861,45 @@ int main(int argc, char** argv)
             last_draw = scene_renderer.render(*canvas, vp, crd::math::Vec3f{0.35F, 1.0F, 0.25F},
                                               crd::gpu::ClearColor{0.09F, 0.10F, 0.13F, 1.0F}, bvh);
             phase.render = ms_between(t_sync, now_ms());
+            // REN-39: the screenshot arm — dump the PRESENTED canvas (post chain applied) and exit.
+            if (screenshot_path != nullptr && tsec >= screenshot_at_s)
+            {
+                const crd::u32 sw = canvas->width();
+                const crd::u32 sh = canvas->height();
+                const crd::u32 row = ((sw * 3U + 3U) / 4U) * 4U;
+                crd::containers::Array<unsigned char> bmp(crd::memory::default_allocator());
+                bmp.resize(54U + static_cast<crd::usize>(row) * sh, static_cast<unsigned char>(0));
+                const auto p4 = [&](crd::u32 o, crd::u32 v) {
+                    for (crd::u32 k = 0; k < 4U; ++k) { bmp[o + k] = static_cast<unsigned char>((v >> (8U * k)) & 0xFFU); }
+                };
+                bmp[0] = 'B'; bmp[1] = 'M';
+                p4(2U, 54U + row * sh); p4(10U, 54U); p4(14U, 40U); p4(18U, sw); p4(22U, sh);
+                bmp[26] = 1U; bmp[28] = 24U; p4(34U, row * sh);
+                for (crd::u32 y = 0; y < sh; ++y)
+                {
+                    for (crd::u32 x = 0; x < sw; ++x)
+                    {
+                        const crd::u32   px = canvas->read_pixel(x, y); // 0xAABBGGRR
+                        const crd::usize o  = 54U + static_cast<crd::usize>(sh - 1U - y) * row + static_cast<crd::usize>(x) * 3U;
+                        bmp[o]      = static_cast<unsigned char>((px >> 16U) & 0xFFU); // B
+                        bmp[o + 1U] = static_cast<unsigned char>((px >> 8U) & 0xFFU);  // G
+                        bmp[o + 2U] = static_cast<unsigned char>(px & 0xFFU);          // R
+                    }
+                }
+                std::FILE* f = nullptr;
+#ifdef _WIN32
+                (void)fopen_s(&f, screenshot_path, "wb");
+#else
+                f = std::fopen(screenshot_path, "wb");
+#endif
+                if (f != nullptr)
+                {
+                    (void)std::fwrite(bmp.data(), 1U, bmp.size(), f);
+                    (void)std::fclose(f);
+                    CRD_LOG_INFO(g_log_sandbox, "screenshot -> {} ({}x{})", screenshot_path, sw, sh);
+                }
+                app.close();
+            }
             // 38-G1 perf probe: the phase board, once a second, so a headless run can be MEASURED rather
             // than guessed at (the ImGui panel is invisible to a log).
             if (frame % 20U == 0U)
@@ -779,24 +929,7 @@ int main(int argc, char** argv)
         }
         else { raster->clear(*canvas, crd::gpu::ClearColor{0.09F, 0.10F, 0.13F, 1.0F}); }
 
-        // ⛔ HARD RULE: the infinite grid is a RENDER PASS, so it runs INSIDE the scene's frame graph (registered
-        // via set_overlay_pass, recorded into the same command buffer, one submission). Its config is refreshed
-        // here each frame; the recording itself happens when the graph executes the "overlay" pass above.
-        if (draw_ready)
-        {
-            // ⛔ REFRESH THE TARGET EVERY FRAME. `canvas` is RECREATED on resize (fullscreen toggle), so a
-            // pointer captured once at setup dangles the moment the window changes size — the overlay pass then
-            // renders into freed image views and the process dies with an "Invalid VkImageView" a long way from
-            // the cause. Nothing in the frame graph can catch this: it is a raw pointer the pass callback owns.
-            overlay_ctx.cfg.view_proj   = vp;
-            overlay_ctx.cfg.viewport_px = {static_cast<crd::f32>(surface->width()),
-                                           static_cast<crd::f32>(surface->height())};
-            overlay_ctx.cfg.time_s      = static_cast<crd::f32>(tsec);
-            overlay_ctx.cfg.depth_test  = crd::gpu::DepthCompare::GreaterEqual; // the canvas HAS depth: grid occludes
-            overlay_ctx.cfg.grid.enabled    = true;
-            overlay_ctx.cfg.grid.camera_pos = eye;
-            overlay_ctx.cfg.grid.apply_theme();
-        }
+        // (the overlay config refresh moved ABOVE render() — the woven pass records inside it)
         const auto t_after_scene = now_ms();
 
         const auto t_after_overlay = now_ms();

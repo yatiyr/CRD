@@ -854,10 +854,14 @@ name   = "edge0"
 op     = "subtract"
 inputs = [1.0, "fade"]
 
+# NOTE: MaterialX operand order -- smoothstep(in, low, high), the VALUE first. Writing it GLSL-style
+# cooked to `smoothstep(1.0, d, edge0)`: a reversed range that rendered every debug line narrow and
+# translucent, with a full-alpha 1px sliver hugging one edge (the "dotted line beside the gizmo").
+# The full scar is written up in assets/material/draw_line.crdm.
 [[node]]
 name   = "aa"
 op     = "smoothstep"
-inputs = ["edge0", 1.0, "d"]
+inputs = ["d", "edge0", 1.0]
 
 [[node]]
 name   = "alpha"

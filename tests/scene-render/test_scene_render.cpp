@@ -406,6 +406,13 @@ TEST_CASE("REN-38 DRIFT GATE: every shipped authored asset matches the built-in 
     };
     check_frame("frame/forward_csm.frame.toml");
     check_frame("frame/forward_basic.frame.toml");
+    // REN-39 fix: the post-chain frames were DISK-ONLY and outside this list — which is precisely how "the
+    // tonemap toggle does nothing" shipped: without an asset root they resolved to NOTHING, silently.
+    check_frame("frame/forward_csm_agx.frame.toml");
+    check_frame("frame/forward_csm_srgb.frame.toml");
+    // REN-39: the SHADOWS-OFF tiers the tonemapped pair steps down to (their `fallback` targets)
+    check_frame("frame/forward_agx.frame.toml");
+    check_frame("frame/forward_srgb.frame.toml");
     // REN-38-F6: the advanced-family scene graphs
     check_frame("frame/scene_tess.frame.toml");
     check_frame("frame/scene_mesh.frame.toml");

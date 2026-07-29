@@ -8,6 +8,11 @@
 
 schema = 1
 name   = "crd://frame/forward_csm_agx"
+# ⭐ SHADOWS ON/OFF is a DECLARED CAPABILITY TIER with a named fallback (REN-35's rule), not an `if` in the
+# renderer. A host without shadows steps down to `forward_agx` — same HDR intermediate, same display transform,
+# no atlas and no cascade passes — and the step-down is REPORTED, never silent.
+requires = ["shadows"]
+fallback = "crd://frame/forward_agx"
 
 [[resource]]
 name    = "shadow_atlas"
@@ -22,7 +27,9 @@ sampled = true
 [[resource]]
 name    = "scene_hdr"
 kind    = "transient_image"
-format  = "RGBA8Unorm"
+# REN-39 fix: a REAL HDR intermediate. RGBA8 quantized + clamped the scene to LDR BEFORE the display
+# transform, so switching tonemaps operated on an already-flattened image and looked like a no-op.
+format  = "RGBA16F"
 scale   = 1.0
 sampled = true
 # the scene is DEPTH-TESTED into this target exactly as it would be into the window — without a depth

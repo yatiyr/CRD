@@ -15,6 +15,10 @@ add_library(crd-imgui-vendor OBJECT
     ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
 )
+# REN-39-D2: the D3D12 render backend joins on Windows — ImGui on the second backend (the sandbox's panel).
+if(WIN32)
+    target_sources(crd-imgui-vendor PRIVATE ${imgui_SOURCE_DIR}/backends/imgui_impl_dx12.cpp)
+endif()
 
 target_include_directories(crd-imgui-vendor SYSTEM PRIVATE
     "${imgui_SOURCE_DIR}"
@@ -84,6 +88,7 @@ target_link_libraries(crd-imgui
         crd-config             # settings.toml load/save
         crd-gpu-context        # RET-5: ImGuiGpuBackend — the render backend on the ONE graphics layer
         crd-gpu-context-vulkan # RET-5
+        $<$<BOOL:${WIN32}>:crd-gpu-context-dx12> # REN-39-D2: the DX12 ImGui half + its handle accessors
         crd-platform
         crd-log
         crd-units  # v0d-6: unit_preferences_inspector consumes UnitPreferences

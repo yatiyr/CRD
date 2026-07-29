@@ -23,4 +23,12 @@ namespace crd::gpu
 [[nodiscard]] std::unique_ptr<IRasterContext>
 create_dx12_raster_context(crd::memory::IAllocator* alloc = crd::memory::default_allocator());
 
+// ⭐ REN-39-D2: the DX12 twin of `vulkan_present_*` — the handful of native handles a BACKEND-AWARE consumer
+// (the ImGui render backend, and nothing else) needs, handed over as opaque pointers so no caller has to include
+// d3d12.h. Same posture as the Vulkan accessors: narrow, named, and the only door out of the abstraction.
+[[nodiscard]] void*    dx12_device_raw(IRasterContext& raster) noexcept;         // ID3D12Device*
+[[nodiscard]] void*    dx12_graphics_queue_raw(IRasterContext& raster) noexcept; // ID3D12CommandQueue*
+[[nodiscard]] crd::u32 dx12_present_image_count(const IPresentSurface& surface) noexcept;
+[[nodiscard]] crd::u32 dx12_present_color_format_raw(const IPresentSurface& surface) noexcept; // DXGI_FORMAT
+
 } // namespace crd::gpu

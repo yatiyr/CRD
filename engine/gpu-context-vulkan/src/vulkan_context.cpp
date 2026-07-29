@@ -91,6 +91,7 @@ public:
     [[nodiscard]] bool     shader_object() const noexcept override { return m_shader_object; }
     [[nodiscard]] bool     mesh_shader() const noexcept override { return m_mesh_shader; } // B4: VK_EXT_mesh_shader + meshShader
     [[nodiscard]] bool     task_shader() const noexcept override { return m_task_shader; }    // REN-38: + taskShader (amplification)
+    [[nodiscard]] bool multi_draw_indirect() const noexcept override { return m_multi_draw_indirect; } // REN-39-A2
     [[nodiscard]] bool     partially_bound() const noexcept override { return m_partially_bound; } // REN-38: bindless heap
     [[nodiscard]] bool     ray_query() const noexcept override { return m_ray_query; } // B9/RT: VK_KHR_ray_query + acceleration_structure
     [[nodiscard]] bool     opacity_micromap() const noexcept override { return m_opacity_micromap; } // FA-1
@@ -489,6 +490,16 @@ private:
         // C2-c: a WINDOWED context matches what rhi-vulkan's own device enables so the renderer runs on the adopted
         // device unchanged — fillModeNonSolid (wireframe) here + synchronization2 in the feature chain below.
         if (m_windowed) { enabled_feats.fillModeNonSolid = avail_feats.fillModeNonSolid; }
+        // ⛔ REN-39-A2: ONE vkCmdDraw(Indexed)Indirect with drawCount > 1 REQUIRES this core feature
+        // (VUID-…-drawCount-02718). The 38-4 non-indexed multi-draw had issued drawCount = N WITHOUT it since it
+        // shipped — a lenient driver ran it while emitting a validation error nobody captured (the 38-4 gate
+        // asserts pixels + batch count, not validation); the REN-39-A2 gate runs under a ValidationCapture and
+        // surfaced it. Graphics-only; the raster context loops per-draw when the device does not offer it.
+        if (m_graphics_family != UINT32_MAX)
+        {
+            enabled_feats.multiDrawIndirect = avail_feats.multiDrawIndirect;
+        }
+        m_multi_draw_indirect = m_graphics_family != UINT32_MAX && avail_feats.multiDrawIndirect == VK_TRUE;
 
         // Queues: the async-compute queue, plus a GRAPHICS queue for IRasterContext when the families differ (NVIDIA has
         // a dedicated compute family, so this is two distinct families → two VkDeviceQueueCreateInfo).
@@ -828,6 +839,7 @@ private:
     bool             m_bindless              = false; // B2-d: non-uniform sampled-image array indexing enabled
     bool             m_mesh_shader           = false; // B4: VK_EXT_mesh_shader + meshShader feature enabled
     bool             m_task_shader           = false; // REN-38: + taskShader (amplification) — enabled when offered
+    bool m_multi_draw_indirect = false;               // REN-39-A2: core multiDrawIndirect — drawCount > 1 legality
     bool             m_partially_bound       = false; // REN-38: descriptorBindingPartiallyBound — the bindless heap flag
     bool             m_ray_query             = false; // B9/RT: VK_KHR_ray_query + acceleration_structure + BDA enabled
     bool             m_opacity_micromap      = false; // FA-1: VK_EXT_opacity_micromap
