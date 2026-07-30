@@ -124,6 +124,11 @@ public:
     // drawCount = N without it since it shipped (its gate captures pixels, not validation). Appended at END
     // (vtable-stable, D135).
     [[nodiscard]] virtual bool multi_draw_indirect() const noexcept { return false; }
+    // ⭐⭐ REN-40-A: VkPhysicalDeviceVulkan12Features::drawIndirectCount — the DEVICE-SIDE draw count.
+    // ⛔ vkCmdDrawIndexedIndirectCount is CORE since Vulkan 1.2 and STILL feature-gated: the entry point
+    // exists unconditionally, but calling it without this bit enabled is VUID-...-None-04445. Queried and
+    // reported, never assumed — the REN-40-A gate caught a hardcoded "supported" that was simply false.
+    [[nodiscard]] virtual bool draw_indirect_count() const noexcept { return false; }
 };
 
 // Create a headless Vulkan compute context per `config` (config.backend must be Vulkan). Returns nullptr on failure

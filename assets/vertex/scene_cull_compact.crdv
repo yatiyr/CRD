@@ -1,0 +1,78 @@
+# ⭐⭐ REN-40-A: THE COMPACTING CULL — the producer half of the GPU-driven draw, as an AUTHORED asset.
+#
+# Per instance it runs the SAME positive-vertex AABB test the CPU's `aabb_in_frustum` runs, over the SAME world
+# box, against planes extracted from the SAME matrix by the same Gribb–Hartmann rows, in the SAME evaluation
+# order — so GPU/CPU parity is a DERIVATION, not a hope. That matters because a cull is a PERFORMANCE change:
+# any pixel it moves is a bug, and a cull that silently drops geometry reads as "fast".
+#
+# ⛔ IT CULLS AN AABB, NEVER THE TRANSFORM'S TRANSLATION. `scene_cull.crdv` (the 38-F15 flag form) tests the
+# instance's world POSITION — a point test, which disagrees with the CPU for anything larger than a texel and
+# drops geometry whose origin is off-screen while its body is not. `bounds_off` names the header word holding
+# the per-instance world-AABB section (6 floats: min.xyz, max.xyz) so both tests read ONE truth.
+#
+# ⛔ WHY `view_proj` COVERS THE CASCADES TOO. A cascade's `light_vp` is just another view-projection; the host
+# dispatches this SAME kernel once per view with that view's matrix in the header slot, so camera and all four
+# cascades share one authored kernel rather than five hand-written ones.
+#
+# ⚠ COMPACTION IS PER-SURVIVOR TODAY, AND THAT IS DELIBERATE. The wave-scalarized form (ballot the survivors →
+# the lowest active lane claims the subgroup's whole count in ONE value-returning atomic → each lane derives
+# `base + its exclusive prefix`) is ~32× fewer atomics and is where this must end up. It was implemented first
+# and the parity gate REJECTED it: the count was right (117 == 117) but eight slots were never written — exactly
+# one subgroup's worth, the tail of workgroup 0's second subgroup, the `~ballot` phantom-lane class this repo
+# already carries a scar for. Correct first; the gate now stands guard over the optimisation.
+stage  = "cull"
+schema = 1
+name   = "crd://vertex/scene_cull_compact"
+
+[header]
+index_count    = 0
+index_off      = 2
+vertex_off     = 3
+instance_off   = 4
+visible_off    = 5
+view_proj      = 6
+light_vp       = 32
+instance_count = 100
+
+[vertex]
+stride = 12
+
+[[attribute]]
+name   = "position"
+offset = 0
+comps  = 3
+kind   = "position"
+
+[instance]
+stride    = 20
+transform = 0
+
+[[instance_attribute]]
+name   = "color"
+offset = 16
+comps  = 4
+kind   = "value"
+
+[cull]
+frustum      = true
+compact      = true
+workgroup    = 64
+# ⭐⭐ WHICH VIEW this dispatch culls, and therefore WHICH visible list it fills:
+#   view 0 = the camera, view c+1 = cascade c — `visible_off + view_index * capacity`, the CPU layout VERBATIM.
+# ⛔ That is why NOT ONE VERTEX PROGRAM CHANGES between the CPU and GPU cull paths: every VS keeps reading its
+# list from exactly where it always did. The host stamps `view_index` per dispatch, so five views share ONE
+# authored kernel instead of five hand-written ones.
+view_index    = 0
+capacity_word = 101
+# The header word holding the per-instance world-AABB section (6 floats each) — `kHdrBoundsOff`.
+# ⛔⛔ THIS NUMBER WAS 104 AND EVERYTHING LOOKED FINE. 104 is where the LIGHT RECORD starts, so the kernel read a
+# light field as the bounds base and tested boxes made of colour and direction bits. Nothing failed: the frame
+# rendered, the counts came back plausible, and the AABBs themselves were bit-identical on the device — because
+# the boxes were uploaded correctly and simply never read. Only comparing the device's per-view SURVIVOR COUNTS
+# against the CPU's (1918 vs 1377 on the camera) showed it. The host now VALIDATES this against `kHdrBoundsOff`
+# at cook time and refuses the kernel on disagreement, so the next wrong number is a loud failure.
+bounds_off   = 102
+# stamped per backend by the host — Vulkan's 20/0 shown; D3D12 gets 24/4
+draw_stride  = 20
+draw_arg_off = 0
+draw_index   = 0

@@ -485,6 +485,22 @@ VertexCookError parse_vertex_toml(crd::containers::StringView toml_text, VertexP
         out.cull.frustum   = (*cu)["frustum"].value_or<bool>(true);
         out.cull.workgroup = static_cast<crd::u32>((*cu)["workgroup"].value_or<int64_t>(64));
         out.cull.args_off  = static_cast<crd::u32>((*cu)["args_off"].value_or<int64_t>(0));
+        // ⭐⭐ REN-40-A: the COMPACTING cull (see CullDesc) — a compacted visible list + a real indexed-indirect
+        // draw command, with the command LAYOUT stamped per backend by the host that cooks it.
+        out.cull.compact      = (*cu)["compact"].value_or<bool>(false);
+        out.cull.reset        = (*cu)["reset"].value_or<bool>(false);
+        out.cull.bounds_off   = static_cast<crd::u32>((*cu)["bounds_off"].value_or<int64_t>(0));
+        out.cull.draw_stride  = static_cast<crd::u32>((*cu)["draw_stride"].value_or<int64_t>(20));
+        out.cull.draw_arg_off = static_cast<crd::u32>((*cu)["draw_arg_off"].value_or<int64_t>(0));
+        out.cull.draw_index   = static_cast<crd::u32>((*cu)["draw_index"].value_or<int64_t>(0));
+        out.cull.index_count  = static_cast<crd::u32>((*cu)["index_count"].value_or<int64_t>(0));
+        out.cull.first_index  = static_cast<crd::u32>((*cu)["first_index"].value_or<int64_t>(0));
+        out.cull.view_index    = static_cast<crd::u32>((*cu)["view_index"].value_or<int64_t>(0));
+        out.cull.capacity_word = static_cast<crd::u32>((*cu)["capacity_word"].value_or<int64_t>(101));
+        out.cull.views         = static_cast<crd::u32>((*cu)["views"].value_or<int64_t>(1));
+        out.cull.frustum_off   = static_cast<crd::u32>((*cu)["frustum_off"].value_or<int64_t>(0));
+        out.cull.base_word     = static_cast<crd::u32>((*cu)["base_word"].value_or<int64_t>(
+            static_cast<int64_t>(kCullNoBaseWord)));
     }
 
     const auto tr = root["transform"].value_or<std::string_view>("view_proj");
@@ -1287,6 +1303,22 @@ crd::u64 vertex_layout_id(const VertexProgramDesc& desc) noexcept
     hash_u64(h, desc.rebase_table);
     hash_u64(h, desc.instance_capacity_word);
     hash_u64(h, desc.indexed ? 1ULL : 0ULL);
+    // ⛔⛔ REN-40-A joins for the SAME reason rebase_table/indexed did: each changes the emitted addresses or the
+    // command bytes, so two cull cooks differing only here are DIFFERENT programs — omitting them would collide
+    // a Vulkan-layout cook with a D3D12-layout one under a single variant key.
+    hash_u64(h, desc.cull.compact ? 1ULL : 0ULL);
+    hash_u64(h, desc.cull.reset ? 1ULL : 0ULL);
+    hash_u64(h, desc.cull.bounds_off);
+    hash_u64(h, desc.cull.draw_stride);
+    hash_u64(h, desc.cull.draw_arg_off);
+    hash_u64(h, desc.cull.draw_index);
+    hash_u64(h, desc.cull.index_count);
+    hash_u64(h, desc.cull.first_index);
+    hash_u64(h, desc.cull.view_index);
+    hash_u64(h, desc.cull.capacity_word);
+    hash_u64(h, desc.cull.views);
+    hash_u64(h, desc.cull.frustum_off);
+    hash_u64(h, desc.cull.base_word);
     return h;
 }
 
@@ -1430,6 +1462,32 @@ crd::containers::String emit_vertex_toml(const VertexProgramDesc& desc, crd::mem
         app_u32(o, desc.cull.workgroup);
         app(o, "\nargs_off  = ");
         app_u32(o, desc.cull.args_off);
+        app(o, "\ncompact      = ");
+        app(o, desc.cull.compact ? "true" : "false");
+        app(o, "\nreset        = ");
+        app(o, desc.cull.reset ? "true" : "false");
+        app(o, "\nbounds_off   = ");
+        app_u32(o, desc.cull.bounds_off);
+        app(o, "\ndraw_stride  = ");
+        app_u32(o, desc.cull.draw_stride);
+        app(o, "\ndraw_arg_off = ");
+        app_u32(o, desc.cull.draw_arg_off);
+        app(o, "\ndraw_index   = ");
+        app_u32(o, desc.cull.draw_index);
+        app(o, "\nindex_count  = ");
+        app_u32(o, desc.cull.index_count);
+        app(o, "\nfirst_index  = ");
+        app_u32(o, desc.cull.first_index);
+        app(o, "\nview_index   = ");
+        app_u32(o, desc.cull.view_index);
+        app(o, "\ncapacity_word = ");
+        app_u32(o, desc.cull.capacity_word);
+        app(o, "\nviews        = ");
+        app_u32(o, desc.cull.views);
+        app(o, "\nfrustum_off  = ");
+        app_u32(o, desc.cull.frustum_off);
+        app(o, "\nbase_word    = ");
+        app_u32(o, desc.cull.base_word);
         app(o, "\n");
         break;
     case StageKind::RayGen:
@@ -1849,6 +1907,207 @@ namespace
     ve.kernel_body_count = g.stmt_count() - mk;
     return ve.kernel_body_count > 0;
 }
+
+
+
+// ── ⭐⭐ REN-40-A: THE COMMAND RESET — the other half of the GPU-driven draw, as its own authored pass. ───────
+// `instance_count` is an ATOMIC ACCUMULATOR, so it cannot also be its own initializer: the 38-F15 in-kernel
+// reset (thread 0 zeroes, barrier, everyone adds) is correct ONLY at groups_x = 1 and races silently above it.
+// One thread here lays down the command's CONSTANT fields; the frame graph orders this BEFORE the cull by the
+// declared write→read edge on the args buffer, so ordering is a property of the GRAPH, not of a comment.
+//
+// ⛔ THE LAYOUT IS THE BACKEND'S (see CullDesc): the five draw args go at `draw_arg_off`, and where that offset
+// is non-zero the leading u32 is D3D12's DrawIndex root constant. index_count / first_index come from DECLARED
+// header words, so the command describes the same geometry the draw will index.
+[[nodiscard]] bool cook_cull_reset(const VertexProgramDesc& desc, KGraph& g, crd::kir::KEntry& ve)
+{
+    Vx        c(g);
+    const int mk  = g.kernel_stmt_mark();
+    const int lid = g.cast(g.builtin(crd::kir::KBuiltin::LocalInvocationIndex), DType::U32);
+    const int wgi = g.cast(g.builtin(crd::kir::KBuiltin::WorkgroupIndex), DType::U32);
+    const int gid = c.add(c.mul(wgi, c.ku(desc.cull.workgroup)), lid);
+
+    const int  inbuf = g.buffer_decl(DType::U32, 0, 0, true); // same one-resource shape as the cull
+    const int  argsb = g.buffer_decl(DType::U32, 0, 1, true);
+    // ⛔⛔ THE GROUP'S BASE, from the args buffer's params block — see `CullDesc::base_word`. A consolidated
+    // group's header is at `region_base`, not word 0, and reading word 0 handed EVERY group group 0's header.
+    const int  base  = desc.cull.base_word == kCullNoBaseWord ? c.ku(0U)
+                                                             : g.buffer_load(argsb, c.ku(desc.cull.base_word));
+    const auto blu   = [&](int idx) { return g.buffer_load(inbuf, c.add(base, idx)); };
+
+    const int only = g.stmt_if_begin(g.binary(KOp::CmpEq, gid, c.ku(0U)));
+    // ⭐⭐ ALL VIEWS IN ONE PASS, unrolled at cook time. View v's command sits `v * stride` bytes along, so the
+    // camera and every cascade get their constants and a zeroed accumulator from a single dispatch.
+    const crd::u32 stride_w = desc.cull.draw_stride / 4U;
+    const crd::u32 views    = desc.cull.views < 1U ? 1U : desc.cull.views;
+    for (crd::u32 v = 0; v < views; ++v)
+    {
+        const crd::u32 cw = v * stride_w;                       // this view's command, in words
+        const crd::u32 aw = cw + desc.cull.draw_arg_off / 4U;   // ...and its 5 draw args inside it
+        // D3D12's signature prepends the DrawIndex root constant; Vulkan's command starts at the args
+        if (desc.cull.draw_arg_off != 0U)
+        {
+            g.stmt_buffer_store(argsb, c.ku(cw), c.ku(desc.cull.draw_index));
+        }
+        g.stmt_buffer_store(argsb, c.ku(aw + 0U), blu(c.ku(desc.header.index_count))); // index_count
+        g.stmt_buffer_store(argsb, c.ku(aw + 1U), c.ku(0U));                        // instance_count: THE counter
+        // ⛔ ABSOLUTE, because the draw consumes it as an index-buffer offset into the bound buffer while the
+        // header stores it region-relative — the same `base + value` rule every section offset follows here.
+        g.stmt_buffer_store(argsb, c.ku(aw + 2U), c.add(base, blu(c.ku(desc.header.index_off)))); // first_index
+        // ⛔ base_vertex and first_instance are ALWAYS ZERO — `IRasterContext::IndexedDraw` documents why:
+        // Vulkan folds firstInstance into gl_InstanceIndex and D3D12's SV_InstanceID does not, so a non-zero
+        // value would make the two backends read DIFFERENT instances. A GPU-driven producer addresses its
+        // per-batch region through DrawIndex + the draw table instead.
+        g.stmt_buffer_store(argsb, c.ku(aw + 3U), c.ku(0U));
+        g.stmt_buffer_store(argsb, c.ku(aw + 4U), c.ku(0U));
+    }
+    g.stmt_if_end(only);
+
+    ve.stage             = crd::kir::KStage::Compute;
+    ve.local_size[0]     = desc.cull.workgroup;
+    ve.kernel_body_begin = mk;
+    ve.kernel_body_count = g.stmt_count() - mk;
+    return ve.kernel_body_count > 0;
+}
+
+// ── ⭐⭐ REN-40-A: THE COMPACTING CULL KERNEL — the producer half of the GPU-driven draw. ────────────────────
+// Per instance: the SAME positive-vertex AABB test the CPU's `aabb_in_frustum` runs, over the SAME world box,
+// against planes extracted from the SAME matrix by the same Gribb-Hartmann rows, in the SAME evaluation order.
+// Parity is therefore a DERIVATION, not a hope - and that matters because a cull is a PERFORMANCE change: any
+// pixel it moves is a bug, not a tradeoff.
+//
+// ⛔ AN AABB, NEVER THE TRANSLATION. The 38-F15 flag variant culls the instance transform's translation - a
+// POINT test, which disagrees with the CPU for anything larger than a texel and drops geometry whose origin is
+// off-screen while its body is not. The world bounds ride a DECLARED header word so both tests read one truth.
+//
+// ⛔ COMPACTION IS WAVE-SCALARIZED. The naive form is one atomic per survivor: at a million instances that is a
+// million serialized increments on one cache line. Here each subgroup BALLOTS its survivors, the lowest active
+// lane contributes the subgroup's whole count in a single value-returning atomic, and every lane derives its
+// slot from `base + its exclusive prefix`. All three ops are INTEGER (ballot / popcount / prefix), so this stays
+// inside the determinism mandate.
+// ⚠ Non-leader lanes still ISSUE the atomic with a zero addend (the value, not a branch, is what makes them
+// harmless) - that keeps the wave base readable without carrying a temp out of an `If`, which the
+// if-block-temp-materialize scar forbids. Whether the zero-addends cost measurable traffic is a BOARD question,
+// not a guess; the shared-memory workgroup reduction is the next step if the board says so.
+//
+// ⛔ THE COMMAND'S instance_count IS ACCUMULATED, NOT WRITTEN. The constant fields (index_count, first_index,
+// the DrawIndex where the backend's layout carries one) are laid down by a separate RESET pass in the same
+// authored frame graph - one atomic accumulator cannot also be its own initializer once the dispatch spans more
+// than one workgroup, which is exactly the limit the 38-F15 in-kernel reset carries.
+[[nodiscard]] bool cook_cull_compact(const VertexProgramDesc& desc, KGraph& g, crd::kir::KEntry& ve)
+{
+    Vx        c(g);
+    const int mk  = g.kernel_stmt_mark();
+    const int lid = g.cast(g.builtin(crd::kir::KBuiltin::LocalInvocationIndex), DType::U32);
+    const int wgi = g.cast(g.builtin(crd::kir::KBuiltin::WorkgroupIndex), DType::U32);
+    const int gid = c.add(c.mul(wgi, c.ku(desc.cull.workgroup)), lid);
+
+    // ⛔ ONE resource for the scene: the kernel READS the header/bounds from it and WRITES the visible list
+    // back into it, at exactly the region the CPU cull filled. Two bindings of the same buffer (one RO, one RW)
+    // is illegal on D3D12 — a resource cannot sit in UNORDERED_ACCESS and a shader-read state at once — so it is
+    // declared writable ONCE and read through the same declaration.
+    const int  inbuf = g.buffer_decl(DType::U32, 0, 0, true);
+    const int  argsb = g.buffer_decl(DType::U32, 0, 1, true);
+    // ⛔⛔ THE GROUP'S BASE — see `CullDesc::base_word` and the reset kernel's note. Every header read and every
+    // section offset read OUT of the header is relative to it.
+    const int  base  = desc.cull.base_word == kCullNoBaseWord ? c.ku(0U)
+                                                              : g.buffer_load(argsb, c.ku(desc.cull.base_word));
+    const auto blu   = [&](int idx) { return g.buffer_load(inbuf, c.add(base, idx)); };
+    const auto blf   = [&](int idx) { return g.int_bits_to_float(g.cast(blu(idx), DType::I32)); };
+
+    // the instance's WORLD AABB: 6 floats (min.xyz, max.xyz) at bounds_off + gid*6
+    const int brec = c.add(c.add(base, blu(c.ku(desc.cull.bounds_off))), c.mul(gid, c.ku(6U)));
+    const int bmin[3] = {blf(c.add(brec, c.ku(0U))), blf(c.add(brec, c.ku(1U))), blf(c.add(brec, c.ku(2U)))};
+    const int bmax[3] = {blf(c.add(brec, c.ku(3U))), blf(c.add(brec, c.ku(4U))), blf(c.add(brec, c.ku(5U)))};
+
+    // the view-projection, column-major in the header: row i = (m[0*4+i], m[1*4+i], m[2*4+i], m[3*4+i])
+    // ⛔⛔ THE VIEW'S OWN CLIP MATRIX, not the camera's. `frustum_off == 0` means the camera (`header.view_proj`);
+    // a cascade dispatch is stamped with `light_vp + c*16`. Reading the camera matrix for every view produced four
+    // cascade lists identical to the camera's, an atlas covering the wrong volume, and a frame with NO SHADOWS —
+    // with every count matching. See `CullDesc::frustum_off`.
+    const crd::u32 vpw = desc.cull.frustum_off != 0U ? desc.cull.frustum_off : desc.header.view_proj;
+    int vp[16];
+    for (crd::u32 e = 0; e < 16U; ++e) { vp[e] = blf(c.ku(vpw + e)); }
+    int r0[4];
+    int r1[4];
+    int r2[4];
+    int r3[4];
+    for (crd::u32 j = 0; j < 4U; ++j)
+    {
+        r0[j] = vp[j * 4U + 0U];
+        r1[j] = vp[j * 4U + 1U];
+        r2[j] = vp[j * 4U + 2U];
+        r3[j] = vp[j * 4U + 3U];
+    }
+    // Gribb-Hartmann for a [0,1] clip volume: L = r3+r0 - R = r3-r0 - B = r3+r1 - T = r3-r1 - N = r2 - F = r3-r2.
+    // ⛔ The NEAR plane is r2 ALONE. The [-1,1] (OpenGL) form `r3+r2` puts it a full depth range behind and culls
+    // nothing there. This mirrors `frustum_planes` in scene_renderer.cpp term for term - that is the parity.
+    int planes[6][4];
+    for (crd::u32 k = 0; k < 4U; ++k)
+    {
+        planes[0][k] = c.add(r3[k], r0[k]);
+        planes[1][k] = c.sub(r3[k], r0[k]);
+        planes[2][k] = c.add(r3[k], r1[k]);
+        planes[3][k] = c.sub(r3[k], r1[k]);
+        planes[4][k] = r2[k];
+        planes[5][k] = c.sub(r3[k], r2[k]);
+    }
+    // the POSITIVE-VERTEX test, plane by plane, in the CPU's evaluation order
+    int inside = c.ku(1U);
+    for (crd::u32 p = 0; p < 6U; ++p)
+    {
+        int pv[3];
+        for (crd::u32 a = 0; a < 3U; ++a)
+        {
+            const int ge = g.binary(KOp::CmpGe, planes[p][a], c.kf(0.0));
+            pv[a]        = g.select(ge, bmax[a], bmin[a]);
+        }
+        int d = c.mul(planes[p][0], pv[0]);
+        d     = c.add(d, c.mul(planes[p][1], pv[1]));
+        d     = c.add(d, c.mul(planes[p][2], pv[2]));
+        d     = c.add(d, planes[p][3]);
+        const int ok = g.cast(g.binary(KOp::CmpGe, d, c.kf(0.0)), DType::U32);
+        inside       = c.mul(inside, ok);
+    }
+    // ⛔ the RANGE GUARD (a declared header word): threads past the instance section read garbage bounds and
+    // their verdicts polluted the counter - the 38-F15 finding, 16 marked of 8 visible.
+    const int n_inst = blu(c.ku(desc.header.instance_count));
+    const int in_rng = g.binary(KOp::CmpLt, gid, n_inst);
+    const int vis    = g.select(in_rng, inside, c.ku(0U));
+
+    // ── the claim: each survivor reserves its own slot ──
+    // ⛔⛔ THIS IS THE CORRECT FORM, NOT YET THE FAST ONE, AND THE DIFFERENCE IS DELIBERATE. The wave-scalarized
+    // version (ballot the survivors → the lowest active lane contributes the subgroup's whole count in ONE
+    // value-returning atomic → each lane derives `base + its exclusive prefix`) is ~32× fewer atomics and is
+    // where this must end up. It was implemented first and the parity gate REJECTED it: the count was right
+    // (117 == 117) but eight slots were never written — exactly one subgroup's worth of survivors, the tail of
+    // workgroup 0's second subgroup. That is the `~ballot` phantom-lane failure class this repo already has a
+    // scar for (the llvmpipe campaign), so the base a non-leader lane broadcasts is not trustworthy here yet.
+    // ⛔ Shipping the fast-but-wrong form behind a green-looking count would be exactly the disguised failure the
+    // top rule forbids — a cull that silently drops geometry reads as "fast". Correct first, then optimise with
+    // the gate already standing guard over it.
+    const int cnt_idx = c.ku(desc.cull.draw_arg_off / 4U + 1U); // instance_count = the command's 2nd u32
+    // the OLD counter value IS this survivor's slot in the compacted list
+    const int list_index = g.atomic_add_fetch(argsb, cnt_idx, vis); // survivors add 1, culled lanes add 0
+
+    // ⭐⭐ WRITE WHERE THE CPU WROTE. `visible_off + view_index * capacity` is the CPU layout verbatim — camera
+    // at view 0, cascade c at view c+1 — so every vertex program keeps reading its list from where it always
+    // did and NOT ONE SHADER CHANGES. The GPU/CPU switch becomes purely "who fills this, and how the count
+    // reaches the draw", which is the only difference that should ever have existed.
+    const int list_base   = c.add(c.add(base, blu(c.ku(desc.header.visible_off))),
+                                  c.mul(c.ku(desc.cull.view_index), blu(c.ku(desc.cull.capacity_word))));
+    const int instance_id = gid;
+    const int keep        = g.stmt_if_begin(g.binary(KOp::CmpNe, vis, c.ku(0U)));
+    g.stmt_buffer_store(inbuf, c.add(list_base, list_index), instance_id);
+    g.stmt_if_end(keep);
+
+    ve.stage             = crd::kir::KStage::Compute;
+    ve.local_size[0]     = desc.cull.workgroup;
+    ve.kernel_body_begin = mk;
+    ve.kernel_body_count = g.stmt_count() - mk;
+    return ve.kernel_body_count > 0;
+}
+
 } // namespace
 
 namespace
@@ -1973,7 +2232,15 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
     {
         return cook_rt(desc, g, ve);
     }
-    if (desc.stage == StageKind::Cull) { return cook_cull(desc, g, ve); }
+    if (desc.stage == StageKind::Cull)
+    {
+        // ⭐⭐ REN-40-A: `compact = true` selects the GPU-DRIVEN producer (compacted list + indirect
+        // command); the flag form stays for the 38-F15 chain that consumes per-instance verdicts.
+        // ⭐⭐ REN-40-A: three authored variants of ONE stage — the 38-F15 FLAG form, the COMPACTING
+        // producer, and its RESET partner. `reset` wins because a reset kernel culls nothing.
+        if (desc.cull.reset) { return cook_cull_reset(desc, g, ve); }
+        return desc.cull.compact ? cook_cull_compact(desc, g, ve) : cook_cull(desc, g, ve);
+    }
     // ⛔⛔ A HULL STAGE DOES NOT PULL. It runs per CONTROL POINT of an already-assembled patch, so
     // `KBuiltin::VertexIndex` is not legal in it — `entry_valid` refuses the graph, correctly, because a hull
     // shader fetching by vertex index is reading something the stage does not have. Its whole job in the

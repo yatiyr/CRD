@@ -93,6 +93,7 @@ public:
     [[nodiscard]] bool     task_shader() const noexcept override { return m_task_shader; }    // REN-38: + taskShader (amplification)
     [[nodiscard]] bool multi_draw_indirect() const noexcept override { return m_multi_draw_indirect; } // REN-39-A2
     [[nodiscard]] bool     partially_bound() const noexcept override { return m_partially_bound; } // REN-38: bindless heap
+    [[nodiscard]] bool     draw_indirect_count() const noexcept override { return m_draw_indirect_count; }
     [[nodiscard]] bool     ray_query() const noexcept override { return m_ray_query; } // B9/RT: VK_KHR_ray_query + acceleration_structure
     [[nodiscard]] bool     opacity_micromap() const noexcept override { return m_opacity_micromap; } // FA-1
     [[nodiscard]] bool     rt_pipeline() const noexcept override { return m_rt_pipeline; }           // FA-2
@@ -344,6 +345,7 @@ private:
         bool has_cm1       = false;
         bool has_cm2       = false;
         bool has_shobj     = false;
+        bool has_dic       = false; // REN-40-A: device-side draw COUNT
         bool has_swapchain = false;
         bool has_vrs       = false;
         bool has_conserv   = false;
@@ -378,6 +380,7 @@ private:
             if (std::strcmp(exts[i].extensionName, "VK_NV_cooperative_vector") == 0) { has_coopvec = true; }
             if (std::strcmp(exts[i].extensionName, "VK_NV_shader_subgroup_partitioned") == 0) { has_sgpart = true; }
             if (std::strcmp(exts[i].extensionName, VK_EXT_SHADER_OBJECT_EXTENSION_NAME) == 0) { has_shobj = true; }
+            if (std::strcmp(exts[i].extensionName, "VK_KHR_draw_indirect_count") == 0) { has_dic = true; }
             if (std::strcmp(exts[i].extensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME) == 0) { has_swapchain = true; }
             if (std::strcmp(exts[i].extensionName, VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME) == 0) { has_vrs = true; }
             if (std::strcmp(exts[i].extensionName, VK_EXT_CONSERVATIVE_RASTERIZATION_EXTENSION_NAME) == 0) { has_conserv = true; }
@@ -618,6 +621,19 @@ private:
             vkGetPhysicalDeviceFeatures2(m_physical, &f2s);
             sdp.pNext = nullptr; // keep only the queried bit; chained below when TRUE
         }
+        // ⭐⭐ REN-40-A: `drawIndirectCount` — the DEVICE-SIDE DRAW COUNT, which is what lets a cull kernel decide
+        // how many indirect commands run so an empty batch costs NOTHING instead of a zero-instance command.
+        // ⛔ `vkCmdDrawIndexedIndirectCount` is CORE since Vulkan 1.2 and it is STILL GATED: the command exists
+        // unconditionally but calling it ungated is VUID-…-None-04445. The gate caught exactly that — a hardcoded
+        // `indirect_count_supported() → true` was a LIE on a device where nothing had been requested.
+        // ⛔⛔ TWO ways to satisfy 04445, and only ONE of them composes here. The feature bit lives solely in
+        // `VkPhysicalDeviceVulkan12Features`, and chaining that struct is MUTUALLY EXCLUSIVE with the individual
+        // promoted structs this device already needs (`…DescriptorIndexingFeatures` for bindless,
+        // `…BufferDeviceAddressFeatures` for RT/DGC) — VUID-VkDeviceCreateInfo-pNext-02830, which validation
+        // reported the moment the sandbox ran. So we take the OTHER way: enable `VK_KHR_draw_indirect_count`, whose
+        // presence satisfies 04445 with no feature struct at all and therefore no aggregation conflict.
+        m_draw_indirect_count = has_dic && m_graphics_family != UINT32_MAX;
+
         // B2-d: BINDLESS — non-uniform sampled-image array indexing (Vulkan 1.2 core descriptor indexing). Query the bit,
         // enable only what the bindless texture path needs. Graphics-capable only (keeps the compute device minimal).
         VkPhysicalDeviceDescriptorIndexingFeatures descidx{};
@@ -743,6 +759,7 @@ private:
         if (m_bindless) { descidx.pNext = chain; chain = &descidx; }
         // REN-38: gl_DrawID for the batched scene VS — chained whenever the device offers it
         if (sdp.shaderDrawParameters == VK_TRUE) { sdp.pNext = chain; chain = &sdp; }
+        // REN-40-A: the device-side draw COUNT — core command, feature-gated bit (see the query above)
         if (m_windowed) { sync2.pNext = chain; chain = &sync2; }
         if (m_shader_object) { sho.pNext = chain; chain = &sho; }
         if (m_mesh_shader) { mesh.pNext = chain; chain = &mesh; maint4.pNext = chain; chain = &maint4; }
@@ -773,6 +790,8 @@ private:
         // RET-2: swapchain enablement follows AVAILABILITY (given the instance enabled VK_KHR_surface) — a headless
         // context presents to a headless surface, a windowed one to a window; one extension, both paths.
         if (m_surface_ext && has_swapchain) { devexts[ndevext++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME; }
+        // REN-40-A: the extension form of the device-side draw count (see the 02830 note above).
+        if (m_draw_indirect_count) { devexts[ndevext++] = "VK_KHR_draw_indirect_count"; }
         if (m_fragment_shading_rate) { devexts[ndevext++] = VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME; }
         if (m_conservative_raster)
         {
@@ -841,6 +860,10 @@ private:
     bool             m_task_shader           = false; // REN-38: + taskShader (amplification) — enabled when offered
     bool m_multi_draw_indirect = false;               // REN-39-A2: core multiDrawIndirect — drawCount > 1 legality
     bool             m_partially_bound       = false; // REN-38: descriptorBindingPartiallyBound — the bindless heap flag
+    // ⭐⭐ REN-40-A: VkPhysicalDeviceVulkan12Features::drawIndirectCount — the device-side draw COUNT.
+    // The command is CORE since 1.2 but calling it needs this bit ENABLED, so it is queried and reported
+    // rather than assumed (a hardcoded "supported" is how a step-down becomes invisible).
+    bool             m_draw_indirect_count   = false;
     bool             m_ray_query             = false; // B9/RT: VK_KHR_ray_query + acceleration_structure + BDA enabled
     bool             m_opacity_micromap      = false; // FA-1: VK_EXT_opacity_micromap
     bool             m_rt_pipeline           = false; // FA-2: VK_KHR_ray_tracing_pipeline

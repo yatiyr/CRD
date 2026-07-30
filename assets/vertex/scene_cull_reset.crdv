@@ -1,0 +1,48 @@
+# ⭐⭐ REN-40-A: THE COMMAND RESET — the first half of the GPU-driven draw, as an AUTHORED asset.
+#
+# `instance_count` in the indexed-indirect command is an ATOMIC ACCUMULATOR that the cull kernel adds into, so it
+# cannot also be its own initializer: a reset inside the cull is correct only at groups_x = 1 and races silently
+# above it. This one-thread kernel lays down the command's CONSTANT fields, and the frame graph orders it BEFORE
+# the cull by the declared write→read edge on `cull_args` — the ordering is a property of the GRAPH, not a comment.
+#
+# ⛔ THE COMMAND LAYOUT IS THE BACKEND'S. `draw_stride` / `draw_arg_off` are STAMPED by the host from
+# `IRasterContext::indirect_command_stride()` / `indirect_command_arg_offset()`: Vulkan writes a 20-byte command
+# with the args at 0; D3D12 writes 24 bytes with the args at 4 behind a DrawIndex root constant (its command
+# signature prepends one, and D3D12 requires the draw argument LAST). Same fields, different order and stride —
+# the values below are the VULKAN defaults and are overwritten per backend at cook time.
+stage  = "cull"
+schema = 1
+name   = "crd://vertex/scene_cull_reset"
+
+[header]
+index_count    = 0
+index_off      = 2
+vertex_off     = 3
+instance_off   = 4
+visible_off    = 5
+view_proj      = 6
+light_vp       = 32
+instance_count = 100
+
+[vertex]
+stride = 12
+
+[[attribute]]
+name   = "position"
+offset = 0
+comps  = 3
+kind   = "position"
+
+[instance]
+stride    = 20
+transform = 0
+
+[cull]
+frustum      = false
+reset        = true
+workgroup    = 64
+view_index    = 0
+capacity_word = 101
+draw_stride  = 20
+draw_arg_off = 0
+draw_index   = 0

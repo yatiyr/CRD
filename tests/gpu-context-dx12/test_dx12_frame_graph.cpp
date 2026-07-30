@@ -25,6 +25,7 @@
 
 #include <ckir_oit_test.hpp>        // REN-38-A12: the shared WBOIT accumulate + composite shaders
 #include <ckir_raster_triangle.hpp> // REN-2: the shared triangle (offscreen) + textured/sample (compose) CKIR builders
+#include <ckir_vertex_pull.hpp>     // REN-40-A: the GEO-1 pull VS the indirect-count gate draws with
 #include <win32_test_window.hpp>    // REN-38-A5: a REAL window — DXGI has no headless surface
 
 #include <catch2/catch_test_macros.hpp>
@@ -3892,4 +3893,292 @@ TEST_CASE("REN-38-F6+ GATE (DX12): a FETCH mesh stage renders the buffer's geome
     CHECK(one_r == 0U);
     CHECK(two_l != 0U); // ...count 2: the buffer word ALONE lit the second quad
     CHECK(two_r != 0U);
+}
+
+// ⭐⭐ REN-40-A GATE: the GPU-WRITTEN DRAW — args AND count sourced from device memory, and the COUNT BUFFER
+// actually gates how many commands execute.
+//
+// ⛔ THE POINT OF THE COUNT ARM. `ExecuteIndirect` / `vkCmdDrawIndexedIndirectCount` both accept a device-side
+// count so a cull kernel decides how many commands run; an empty batch then costs NOTHING instead of a
+// zero-instance command each. A verb that merely IGNORED the count buffer would still draw a plausible frame,
+// which is why this gate drives the SAME args twice and changes only the count word: 1 must draw ONE command,
+// 2 must draw BOTH. Anything that passes both arms identically is not honouring the count.
+//
+// ⛔ The verb is DEPTH-ONLY (no colour attachment), so depth is converted to something `read_pixel` can see:
+// clear depth to 1.0 → the indirect pass writes 0.5 wherever a command rasterized (a constant-depth FS, so the
+// two commands differ only in WHERE they cover) → a full-screen triangle at z = 0.75 with GREATER passes
+// exactly where 0.5 was written. Colour therefore appears precisely where a command drew.
+// ⭐⭐ REN-40-A GATE (DX12): the GEOMETRY indirect draw — the forward pass's shape, args AND count from device
+// memory. ⛔ The DX12 half matters most here: its command is [u32 draw_index][5×u32 args] at a 24-byte stride
+// while Vulkan's is [5×u32] at 20, so a gate that only ran on Vulkan would prove nothing about the layout the
+// GPU producer must write for THIS backend (`indirect_command_stride()` / `_arg_offset()` are what it reads).
+TEST_CASE("REN-40-A GATE (DX12): the geometry indirect draw takes its args AND its count from device memory",
+          "[dx12][raster][frame-graph][ren40][indirect][gpu]")
+{
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto rasterp = g::create_dx12_raster_context();
+    REQUIRE(rasterp != nullptr);
+    auto& raster = *rasterp;
+    REQUIRE(raster.indirect_count_supported());
+
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    crd::kir::KGraph           vg(&alloc);
+    crd::kir::KEntry           ve;
+    crd::gputest::build_vertex_pull_vs(vg, ve);
+    auto             vs = gctx->create_program(vg, ve);
+    crd::kir::KGraph cgraph(&alloc);
+    crd::kir::KEntry cfe;
+    crd::gputest::build_triangle_fs(cgraph, cfe);
+    auto cfs = gctx->create_program(cgraph, cfe);
+    REQUIRE(vs != nullptr);
+    REQUIRE(cfs != nullptr);
+    auto prog = raster.create_raster_program(*vs, *cfs);
+    REQUIRE(prog != nullptr);
+
+    constexpr crd::u32 idx_off = 768U;
+    auto               sb      = raster.create_storage_buffer(816U);
+    REQUIRE(sb != nullptr);
+    float rec[16U * 12U];
+    for (crd::u32 r = 0; r < 16U; ++r)
+    {
+        rec[r * 12U + 0U] = 2.0F;
+        rec[r * 12U + 1U] = 2.0F;
+        for (crd::u32 w = 2U; w < 12U; ++w) { rec[r * 12U + w] = 0.0F; }
+    }
+    const auto put = [&](crd::u32 r, float x, float y, float z) {
+        rec[r * 12U + 0U] = x;
+        rec[r * 12U + 1U] = y;
+        rec[r * 12U + 2U] = z;
+    };
+    put(4U, 0.0F, -0.8F, 0.5F);
+    put(5U, 0.8F, 0.8F, 0.5F);
+    put(6U, -0.8F, 0.8F, 0.5F);
+    put(8U, -0.95F, -0.35F, 0.5F); // symmetric about y = 0 — the midline probe hits it under BOTH clip-Y rules
+    put(9U, -0.55F, 0.0F, 0.5F);
+    put(10U, -0.95F, 0.35F, 0.5F);
+    REQUIRE(raster.upload_storage(*sb, 0U, static_cast<const void*>(rec), sizeof(rec)));
+    const crd::u32 idx[6] = {4U, 5U, 6U, 8U, 9U, 10U};
+    REQUIRE(raster.upload_storage(*sb, idx_off, static_cast<const void*>(idx), sizeof(idx)));
+
+    const crd::u32 stride  = raster.indirect_command_stride();
+    const crd::u32 arg_off = raster.indirect_command_arg_offset();
+    auto           args_sb = raster.create_storage_buffer(2U * stride);
+    auto           cnt_sb  = raster.create_storage_buffer(4U);
+    REQUIRE(args_sb != nullptr);
+    REQUIRE(cnt_sb != nullptr);
+    crd::containers::Array<crd::u8> args_bytes(&alloc);
+    args_bytes.resize(2U * stride, static_cast<crd::u8>(0));
+    for (crd::u32 i = 0; i < 2U; ++i)
+    {
+        const crd::u32 cmd[5] = {3U, 1U, i * 3U, 0U, 0U};
+        std::memcpy(args_bytes.data() + i * stride + arg_off, static_cast<const void*>(cmd), sizeof(cmd));
+        if (arg_off != 0U) { std::memcpy(args_bytes.data() + i * stride, static_cast<const void*>(&i), 4U); }
+    }
+    REQUIRE(raster.upload_storage(*args_sb, 0U, args_bytes.data(), static_cast<crd::u32>(args_bytes.size())));
+
+    struct GeoState
+    {
+        g::FgImage         img{};
+        g::IRasterProgram* prog = nullptr;
+        g::IStorageBuffer* sb   = nullptr;
+        g::IStorageBuffer* args = nullptr;
+        g::IStorageBuffer* cnt  = nullptr;
+    };
+    const auto run = [&](crd::u32 count_value, crd::u32& centre, crd::u32& left, crd::u32& right) {
+        REQUIRE(raster.upload_storage(*cnt_sb, 0U, static_cast<const void*>(&count_value), 4U));
+        auto tgt = raster.create_color_depth_target(64U, 64U);
+        REQUIRE(tgt != nullptr);
+        auto fgraph = raster.create_frame_graph();
+        REQUIRE(fgraph != nullptr);
+        GeoState st;
+        st.img  = fgraph->import_target(*tgt);
+        st.prog = prog.get();
+        st.sb   = sb.get();
+        st.args = args_sb.get();
+        st.cnt  = cnt_sb.get();
+        fgraph->add_pass("geo-indirect-count")
+            .writes(st.img)
+            .execute(
+                [](g::IFrameContext& ctx, void* user) {
+                    auto* u = static_cast<GeoState*>(user);
+                    ctx.raster().draw_storage_multi_indexed_indirect(
+                        *ctx.image(u->img), *u->prog, g::ClearColor{0.02F, 0.0F, 0.0F, 1.0F}, 0.0F,
+                        g::DepthCompare::Always, *u->sb, 768U, nullptr, nullptr, *u->args, 0U, u->cnt, 0U, 2U,
+                        false);
+                },
+                &st);
+        REQUIRE(fgraph->build());
+        fgraph->execute();
+        centre = tgt->read_pixel(32U, 32U) & 0xFFU;
+        left   = tgt->read_pixel(6U, 32U) & 0xFFU;
+        right  = tgt->read_pixel(61U, 32U) & 0xFFU;
+    };
+
+    crd::u32 c1 = 0U;
+    crd::u32 l1 = 0U;
+    crd::u32 r1 = 0U;
+    run(1U, c1, l1, r1);
+    crd::u32 c2 = 0U;
+    crd::u32 l2 = 0U;
+    crd::u32 r2 = 0U;
+    run(2U, c2, l2, r2);
+
+    CHECK(c1 >= 250U);
+    CHECK(l1 <= 20U);
+    CHECK(c2 >= 250U);
+    CHECK(l2 >= 250U);
+    CHECK(l2 > l1); // the arm that catches a verb ignoring the count
+    CHECK(r1 <= 20U);
+    CHECK(r2 <= 20U);
+}
+
+TEST_CASE("REN-40-A GATE (DX12): indirect draw takes its args AND its count from device memory",
+          "[dx12][raster][frame-graph][ren40][indirect][gpu]")
+{
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto rasterp = g::create_dx12_raster_context();
+    REQUIRE(rasterp != nullptr);
+    auto& raster = *rasterp;
+    // D3D12 has taken a pCountBuffer on ExecuteIndirect since 12.0 - no feature bit, unlike Vulkan's
+    // drawIndirectCount. The DECLARED capability is what both gates assert, not the mechanism.
+    REQUIRE(raster.indirect_count_supported());
+
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    crd::kir::KGraph vg(&alloc);
+    crd::kir::KEntry ve;
+    crd::gputest::build_vertex_pull_vs(vg, ve); // position = record at VertexIndex * 12 words
+    auto vs = gctx->create_program(vg, ve);
+    crd::kir::KGraph cgraph(&alloc);
+    crd::kir::KEntry cfe;
+    crd::gputest::build_triangle_fs(cgraph, cfe); // writes colour
+    auto cfs = gctx->create_program(cgraph, cfe);
+    crd::kir::KGraph dgraph(&alloc);
+    crd::kir::KEntry dfe;
+    crd::gputest::build_depth_only_const_fs(dgraph, dfe, 0.5); // n_out = 0 - legal with zero colour attachments
+    auto dfs = gctx->create_program(dgraph, dfe);
+    REQUIRE(vs != nullptr);
+    REQUIRE(cfs != nullptr);
+    REQUIRE(dfs != nullptr);
+    auto prog_colour = raster.create_raster_program(*vs, *cfs);
+    auto prog_depth  = raster.create_raster_program(*vs, *dfs);
+    REQUIRE(prog_colour != nullptr);
+    REQUIRE(prog_depth != nullptr);
+
+    // 16 records (768 B) + a 12-index section at 768 = 816 B
+    constexpr crd::u32 idx_off = 768U;
+    auto               sb      = raster.create_storage_buffer(816U);
+    REQUIRE(sb != nullptr);
+    float rec[16U * 12U];
+    for (crd::u32 r = 0; r < 16U; ++r)
+    {
+        rec[r * 12U + 0U] = 2.0F; // offscreen by default
+        rec[r * 12U + 1U] = 2.0F;
+        for (crd::u32 w = 2U; w < 12U; ++w) { rec[r * 12U + w] = 0.0F; }
+    }
+    const auto put = [&](crd::u32 r, float x, float y, float z) {
+        rec[r * 12U + 0U] = x;
+        rec[r * 12U + 1U] = y;
+        rec[r * 12U + 2U] = z;
+    };
+    put(4U, 0.0F, -0.8F, 0.0F); // command 0: the big centred triangle
+    put(5U, 0.8F, 0.8F, 0.0F);
+    put(6U, -0.8F, 0.8F, 0.0F);
+    put(8U, -0.95F, -0.35F, 0.0F); // command 1: the LEFT-EDGE spike, symmetric about y = 0 so a horizontal
+    put(9U, -0.55F, 0.0F, 0.0F);   // midline probe hits it on BOTH backends (the F16 orientation lesson)
+    put(10U, -0.95F, 0.35F, 0.0F);
+    put(12U, -3.0F, -1.0F, 0.75F); // the resolve triangle: covers the whole viewport at z = 0.75
+    put(13U, 3.0F, -1.0F, 0.75F);
+    put(14U, 0.0F, 3.0F, 0.75F);
+    REQUIRE(raster.upload_storage(*sb, 0U, static_cast<const void*>(rec), sizeof(rec)));
+    const crd::u32 idx[12] = {4U, 5U, 6U, 8U, 9U, 10U, 0U, 1U, 2U, 12U, 13U, 14U};
+    REQUIRE(raster.upload_storage(*sb, idx_off, static_cast<const void*>(idx), sizeof(idx)));
+
+    // -- the ARGS buffer, written in THIS BACKEND'S declared command layout (REN-40-A). Vulkan: 20-byte
+    // commands, args at offset 0. D3D12: 24-byte, args at 4, the leading u32 carrying DrawIndex. --
+    const crd::u32 stride  = raster.indirect_command_stride();
+    const crd::u32 arg_off = raster.indirect_command_arg_offset();
+    auto           args_sb = raster.create_storage_buffer(2U * stride);
+    auto           cnt_sb  = raster.create_storage_buffer(4U);
+    REQUIRE(args_sb != nullptr);
+    REQUIRE(cnt_sb != nullptr);
+    crd::containers::Array<crd::u8> args_bytes(&alloc);
+    args_bytes.resize(2U * stride, static_cast<crd::u8>(0));
+    for (crd::u32 i = 0; i < 2U; ++i)
+    {
+        const crd::u32 cmd[5] = {3U, 1U, i * 3U, 0U, 0U}; // index_count, instance_count, first_index, 0, 0
+        std::memcpy(args_bytes.data() + i * stride + arg_off, static_cast<const void*>(cmd), sizeof(cmd));
+        if (arg_off != 0U) { std::memcpy(args_bytes.data() + i * stride, static_cast<const void*>(&i), 4U); }
+    }
+    REQUIRE(raster.upload_storage(*args_sb, 0U, args_bytes.data(), static_cast<crd::u32>(args_bytes.size())));
+
+    struct IndState
+    {
+        g::FgImage         img{};
+        g::IRasterProgram* colour = nullptr;
+        g::IRasterProgram* depth  = nullptr;
+        g::IStorageBuffer* sb     = nullptr;
+        g::IStorageBuffer* args   = nullptr;
+        g::IStorageBuffer* cnt    = nullptr;
+    };
+    const auto run = [&](crd::u32 count_value, crd::u32& centre, crd::u32& left, crd::u32& right) {
+        REQUIRE(raster.upload_storage(*cnt_sb, 0U, static_cast<const void*>(&count_value), 4U));
+        auto tgt = raster.create_color_depth_target(64U, 64U);
+        REQUIRE(tgt != nullptr);
+        auto fgraph = raster.create_frame_graph();
+        REQUIRE(fgraph != nullptr);
+        IndState st;
+        st.img    = fgraph->import_target(*tgt);
+        st.colour = prog_colour.get();
+        st.depth  = prog_depth.get();
+        st.sb     = sb.get();
+        st.args   = args_sb.get();
+        st.cnt    = cnt_sb.get();
+        fgraph->add_pass("indirect-count")
+            .writes(st.img)
+            .execute(
+                [](g::IFrameContext& ctx, void* user) {
+                    auto* u = static_cast<IndState*>(user);
+                    auto& r = ctx.raster();
+                    // (1) clear colour + depth (offscreen geometry: indices [6..8] collapse to (2,2))
+                    r.draw_storage_indexed_depth(*ctx.image(u->img), *u->colour,
+                                                 g::ClearColor{0.02F, 0.0F, 0.0F, 1.0F}, 1.0F,
+                                                 g::DepthCompare::Always, *u->sb, 768U + 24U, 3U, 1U, false);
+                    // (2) THE VERB UNDER TEST - args and count both from device memory
+                    r.draw_storage_multi_indexed_depth_only_indirect(
+                        *ctx.image(u->img), *u->depth, 1.0F, g::DepthCompare::Always, *u->sb, 768U, *u->args, 0U,
+                        u->cnt, 0U, 2U, true);
+                    // (3) resolve: full-screen at z = 0.75, GREATER => colour only where 0.5 was written
+                    r.draw_storage_indexed_depth(*ctx.image(u->img), *u->colour, g::ClearColor{}, 0.0F,
+                                                 g::DepthCompare::Greater, *u->sb, 768U + 36U, 3U, 1U, true);
+                },
+                &st);
+        REQUIRE(fgraph->build());
+        fgraph->execute();
+        centre = tgt->read_pixel(32U, 32U) & 0xFFU;
+        left   = tgt->read_pixel(6U, 32U) & 0xFFU;
+        right  = tgt->read_pixel(61U, 32U) & 0xFFU;
+    };
+
+    crd::u32 c1 = 0U;
+    crd::u32 l1 = 0U;
+    crd::u32 r1 = 0U;
+    run(1U, c1, l1, r1);
+    crd::u32 c2 = 0U;
+    crd::u32 l2 = 0U;
+    crd::u32 r2 = 0U;
+    run(2U, c2, l2, r2);
+
+    // count = 1 => ONLY command 0 executed: the centre is lit, the left-edge spike is NOT
+    CHECK(c1 >= 250U);
+    CHECK(l1 <= 20U);
+    // count = 2 => BOTH executed
+    CHECK(c2 >= 250U);
+    CHECK(l2 >= 250U);
+    // the arm that catches a verb IGNORING the count: the two runs MUST differ at the spike
+    CHECK(l2 > l1);
+    // outside both commands, at both counts - the dim clear only
+    CHECK(r1 <= 20U);
+    CHECK(r2 <= 20U);
 }

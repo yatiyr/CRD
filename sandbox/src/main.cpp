@@ -203,6 +203,11 @@ int main(int argc, char** argv)
     bool                  want_validation = true;
     bool                  want_dx12       = false; // REN-39-D2: `--backend dx12` — the SAME sandbox, D3D12
     bool want_pull_draws = false; // REN-39-C2: the A/B baseline arm (indexed is the default)
+    bool want_gpu_cull   = false; // REN-40-A: the device-side cull arm (CPU cull is the default)
+    bool want_no_bvh     = false; // REN-40-A: drop the CPU cull's BVH broad phase (attribution)
+    bool want_verify     = false; // REN-40-A: run the CPU cull too, for the count comparison
+    const char* frame_override = nullptr; // REN-40-A: install this authored frame graph by name
+    crd::f64    fixed_dt_ms    = 0.0;     // REN-40-A: >0 ⇒ deterministic clock (frame counter × dt)
     const char* screenshot_path = nullptr; // REN-39: dump the canvas at ~2.5 s and exit
     crd::f64    screenshot_at_s = 2.5;     // `--screenshot-at`: pick the moment in the camera loop
     // ⭐⭐ REN-40: the scene SIZE is a knob so the scaling curve is measured, not argued. `--instances N` is a
@@ -242,6 +247,29 @@ int main(int argc, char** argv)
         else if (std::strcmp(argv[i], "--pull-draws") == 0)
         {
             want_pull_draws = true;
+        }
+        // ⭐⭐ REN-40-A: `--gpu-cull` runs the frustum cull (camera + every cascade) ON THE DEVICE through the
+        // authored `forward_csm_gpu` graph. ⛔ Default OFF so the A/B measures BOTH arms on ONE build.
+        else if (std::strcmp(argv[i], "--gpu-cull") == 0) { want_gpu_cull = true; }
+        // ⛔ `--gpu-cull-verify` keeps the CPU cull running beside the device one so the two verdicts can be
+        // compared in ONE frame. It gives up the speedup on purpose — it is the correctness arm, not the fast one.
+        else if (std::strcmp(argv[i], "--gpu-cull-verify") == 0) { want_gpu_cull = want_verify = true; }
+        // ⛔ REN-40-A: `--no-bvh` drops the CPU cull's BVH BROAD PHASE. The device cull brute-forces every
+        // instance, so this is how a GPU-vs-CPU count disagreement is attributed: if it vanishes here, the broad
+        // phase was the one dropping geometry, not the kernel.
+        else if (std::strcmp(argv[i], "--no-bvh") == 0) { want_no_bvh = true; }
+        // ⛔ REN-40-A: `--frame <asset>` installs an authored frame graph BY NAME, independent of every other
+        // switch. It is how "is the ASSET wrong?" gets separated from "is the FEATURE wrong?" — the two questions
+        // a combined flag makes indistinguishable.
+        else if (std::strcmp(argv[i], "--frame") == 0 && i + 1 < argc) { frame_override = argv[++i]; }
+        // ⛔⛔ REN-40-A: `--fixed-dt <ms>` drives the clock from the FRAME COUNTER, not the wall clock.
+        // Without it two runs of the same scene land on DIFFERENT camera poses at the same `--screenshot-at`
+        // (the frame rate differs), so an A/B pixel comparison measures the camera, not the change. Two images
+        // that differ by half a duck's width read exactly like a lighting regression — that misreading cost real
+        // time here. With a fixed dt the run is deterministic and the two arms are comparable pixel for pixel.
+        else if (std::strcmp(argv[i], "--fixed-dt") == 0 && i + 1 < argc)
+        {
+            fixed_dt_ms = std::strtod(argv[++i], nullptr);
         }
         // REN-39: "what does the user SEE", as a file — the presented canvas at ~2.5 s, then exit.
         else if (std::strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) { screenshot_path = argv[++i]; }
@@ -670,6 +698,16 @@ int main(int argc, char** argv)
     {
         scene_renderer.set_indexed_pull(false);
     } // REN-39-C2: the A/B baseline arm
+    // ⭐⭐ REN-40-A: the device-side cull, plus the authored graph that declares its passes. ⛔ Both together —
+    // the flag alone would leave the renderer expecting GPU-written commands that no pass ever writes.
+    if (want_gpu_cull)
+    {
+        scene_renderer.set_gpu_cull(true);
+        if (want_verify) { scene_renderer.set_gpu_cull_verify(true); }
+        // the GRAPH arrives through `post_frames` below — see the note there
+        CRD_LOG_INFO(g_log_sandbox, "GPU cull: ON (device-side frustum cull, camera + every cascade){}",
+                     want_verify ? " + CPU verify arm" : "");
+    }
 
     // REN-3.2-b: cascaded shadow maps. `set_shadows_enabled` returns whether they actually became ACTIVE (the
     // cascade shaders had to compile), so a silent "on but not really" is impossible to miss here.
@@ -716,7 +754,19 @@ int main(int argc, char** argv)
     // ⛔ 38-G1: WITHOUT AN ASSET ROOT the renderer only ever sees the embedded pack — every shipped
     // `assets/**` file is invisible and "edit the asset, see the frame change" is a claim nothing tests.
     // `CRD_ASSETS_DIR` is how ctest points at the tree; the app honours the same variable.
-    const char* const post_frames[2] = {"frame/forward_csm_srgb.frame.toml", "frame/forward_csm_agx.frame.toml"};
+    // ⛔⛔ REN-40-A: the post-mode table IS the frame the run installs, re-installed whenever the tonemap
+    // toggles — so a graph installed once at startup is silently REPLACED on the first frame. That is exactly what
+    // swallowed the whole device-side cull: it reported "installed", then `forward_csm_agx` (no compute passes)
+    // took over and every command stayed at the reset's zero. The switch belongs HERE, in the table the toggle
+    // reads, not in a one-shot install racing it.
+    const char* const gpu_frame        = want_gpu_cull ? "frame/forward_csm_gpu.frame.toml" : nullptr;
+    const char* const frame_0           = frame_override != nullptr ? frame_override
+                                          : gpu_frame != nullptr   ? gpu_frame
+                                                                   : "frame/forward_csm_srgb.frame.toml";
+    const char* const frame_1           = frame_override != nullptr ? frame_override
+                                          : gpu_frame != nullptr   ? gpu_frame
+                                                                   : "frame/forward_csm_agx.frame.toml";
+    const char* const post_frames[2] = {frame_0, frame_1};
     int               post_mode      = 1; // 0 = sRGB only · 1 = AgX
     int               post_mode_live = -1;
 
@@ -758,8 +808,12 @@ int main(int argc, char** argv)
             }
         }
 
+        // ⛔ the DETERMINISTIC clock when `--fixed-dt` is given — see the flag's note. `frames` counts presented
+        // frames, so the same frame index always carries the same camera pose and the same animation phase.
         const crd::f64 tsec =
-            std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - smoke_start_time).count();
+            fixed_dt_ms > 0.0
+                ? static_cast<crd::f64>(frames_with_present) * (fixed_dt_ms / 1000.0)
+                : std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - smoke_start_time).count();
 
         // GEO-8: advance the animated ring's playheads (declared writes — palettes re-sample each sync)
         {
@@ -859,7 +913,8 @@ int main(int argc, char** argv)
             const auto t_sync = now_ms();
             phase.sync        = ms_between(t_frame_begin, t_sync);
             last_draw = scene_renderer.render(*canvas, vp, crd::math::Vec3f{0.35F, 1.0F, 0.25F},
-                                              crd::gpu::ClearColor{0.09F, 0.10F, 0.13F, 1.0F}, bvh);
+                                              crd::gpu::ClearColor{0.09F, 0.10F, 0.13F, 1.0F},
+                                              want_no_bvh ? nullptr : bvh);
             phase.render = ms_between(t_sync, now_ms());
             // REN-39: the screenshot arm — dump the PRESENTED canvas (post chain applied) and exit.
             if (screenshot_path != nullptr && tsec >= screenshot_at_s)
@@ -897,6 +952,27 @@ int main(int argc, char** argv)
                     (void)std::fwrite(bmp.data(), 1U, bmp.size(), f);
                     (void)std::fclose(f);
                     CRD_LOG_INFO(g_log_sandbox, "screenshot -> {} ({}x{})", screenshot_path, sw, sh);
+                    // ⭐⭐ REN-40-A: say out loud WHAT THE DEVICE DREW. A GPU cull hides its own count by
+                    // construction, so a silently-empty cull and a fast one are indistinguishable from a log that
+                    // only prints fps — this prints the per-view survivor counts the indirect commands carry.
+                    if (want_gpu_cull)
+                    {
+                        crd::scenerender::SceneRenderer::GpuCullCounts gc{};
+                        if (scene_renderer.read_gpu_cull_counts(gc))
+                        {
+                            for (crd::u32 v = 0; v < gc.views; ++v)
+                            {
+                                CRD_LOG_INFO(g_log_sandbox,
+                                             "gpu-cull view {}: gpu={} cpu={} {} | index_count={} first_index={} ({} groups)",
+                                             v, gc.instances[v], gc.cpu_instances[v],
+                                             gc.instances[v] == gc.cpu_instances[v] ? "MATCH" : "*** MISMATCH ***",
+                                             gc.indices[v], gc.first_index[v], gc.groups);
+                            }
+                            CRD_LOG_INFO(g_log_sandbox, "gpu-cull bounds: {}/{} instance AABBs DIFFER on device",
+                                         gc.bounds_mismatch, gc.bounds_checked);
+                        }
+                        else { CRD_LOG_WARN(g_log_sandbox, "gpu-cull: readback unavailable"); }
+                    }
                 }
                 app.close();
             }
@@ -906,10 +982,15 @@ int main(int argc, char** argv)
             {
                 CRD_LOG_INFO(g_log_sandbox,
                              "perf: sync {:.2f} (extract {:.2f} upload {:.2f} palette {:.2f}) render {:.2f} | "
-                             "gpu {:.3f} ms ({} passes) cpu {:.3f} | draws {} inst {}",
+                             "gpu {:.3f} ms ({} passes) cpu {:.3f} | draws {} inst {}{}",
                              phase.sync, last_sync.extract_ms, last_sync.upload_ms, last_sync.palette_ms,
                              phase.render, last_draw.gpu_ms, last_draw.timed_passes, last_draw.cpu_ms,
-                             last_draw.draws, last_draw.drawn_instances);
+                             last_draw.draws, last_draw.drawn_instances,
+                             // ⛔ Under the device cull the CPU never learns the count, so a bare `inst 0` reads
+                             // as "nothing was drawn". Say WHY it is 0 — `read_gpu_cull_counts()` is the authority.
+                             scene_renderer.gpu_cull() && !scene_renderer.gpu_cull_verify()
+                                 ? " (device-driven: the CPU never learns the count)"
+                                 : "");
                 // 38-G1 perf: the PER-PASS GPU board — "gpu 8.4 ms" is a number, this is an attribution.
                 if (const crd::gpu::IFrameGraph* dfg = scene_renderer.debug_frame_graph();
                     dfg != nullptr && dfg->gpu_timing_available())

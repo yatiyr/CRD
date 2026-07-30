@@ -1432,6 +1432,11 @@ struct SceneDraw
     // indices_off`) — the executor binds the index view at offset 0, one convention for both layouts.
     crd::u32 index_count = 0U;
     crd::u32 instance_count = 0U;
+    // ⭐⭐ REN-40-A: this draw's GPU-written command (per group), the byte offset of THIS VIEW's command inside
+    // it, and the cull dispatch width for the group's instance count.
+    crd::gpu::IStorageBuffer* cull_args = nullptr;
+    crd::u32                  cull_args_offset = 0U;
+    crd::u32                  cull_groups = 0U;
     crd::u32 first_index = 0U;
 };
 
@@ -1521,6 +1526,15 @@ struct SceneRenderer::Impl
     // a cascade pass draws every item with ONE instance program, so a frame may never mix addressing modes.
     // The parity gate flips `use_indexed` to prove pull and indexed render bit-identical frames.
     bool use_indexed = true;
+    // ⭐⭐ REN-40-A: the GPU-driven cull switch (default OFF — see set_gpu_cull) plus the device-side command
+    // buffer it produces. ⛔ ONE args buffer for the whole frame, laid out [view][group] at the BACKEND'S
+    // command stride, so a draw finds its command at `(view * n_groups + group) * stride` and the two APIs'
+    // differing layouts never leak into the renderer's arithmetic.
+    bool                                      gpu_cull_on = false;
+    // REN-40-A: run the CPU cull TOO, only so its verdict can be compared (a gate mode — see the header).
+    bool                                      gpu_cull_verify = false;
+    std::unique_ptr<crd::gpu::IStorageBuffer> cull_args;
+    crd::u32                                  cull_args_groups = 0U;
     std::unique_ptr<crd::gpu::IGpuProgram> vs_idx;
     std::unique_ptr<crd::gpu::IRasterProgram> program_idx;
     std::unique_ptr<crd::gpu::IGpuProgram> vs_rebased_idx;
@@ -1710,6 +1724,12 @@ struct SceneRenderer::Impl
     std::unique_ptr<crd::gpu::IRasterProgram> prog_visbuffer;
     crd::gpu::IGpuProgram*                    kern_cull = nullptr; // borrowed from adv_stages
     crd::gpu::IGpuProgram*                    kern_cull_mark = nullptr; // borrowed from adv_stages
+    // ⭐⭐ REN-40-A: the GPU-DRIVEN pair — the compacting cull and its command RESET, both authored assets.
+    // ⛔ ONE variant PER VIEW: `view_index` picks which visible list the kernel fills and `draw_arg_off` picks
+    // which command it accumulates into, and BOTH are cook-time constants — so five views are five programs from
+    // one authored asset, exactly as the four cascade shadow VS variants already are.
+    crd::gpu::IGpuProgram*                    kern_cull_view[1U + kMaxCascades]{};
+    crd::gpu::IGpuProgram*                    kern_cull_reset   = nullptr; // borrowed from adv_stages
     crd::gpu::IGpuProgram*                    kern_rt[4] = {nullptr, nullptr, nullptr, nullptr}; // rg/ms/ch/ah
     crd::gpu::IGpuProgram*                    flat_fs   = nullptr; // borrowed from adv_stages
     // The scene TLAS, provided by whoever owns the geometry's device form (B4: the graph names it, the HOST
@@ -1912,6 +1932,89 @@ struct SceneRenderer::Impl
     std::unique_ptr<crd::gpu::IRasterProgram> prog_post_agx;
     std::unique_ptr<crd::gpu::IRasterProgram> prog_post_srgb;
 
+    // ⭐⭐ REN-40-A: cook a CULL asset with THIS BACKEND'S indirect-command layout STAMPED onto the parsed desc.
+    // ⛔ The asset carries the Vulkan form (20-byte command, args at 0) as its written default; D3D12 needs 24
+    // with the args at 4 behind a DrawIndex root constant. Stamping the DESC — never editing the text — is the
+    // same discipline the per-cascade shadow variant uses: the variant is the renderer's pass semantics, the
+    // vocabulary is the asset's. A kernel that assumed one layout would write garbage commands on the other
+    // backend, which is the clip-space-Y failure shape again.
+    [[nodiscard]] crd::gpu::IGpuProgram* cook_cull_stage_named(const char* asset_name, crd::u32 view)
+    {
+        if (ctx == nullptr || raster == nullptr) { return nullptr; }
+        crd::containers::String t(alloc);
+        if (!asset_text(asset_name, t)) { return nullptr; }
+        crd::vertcook::VertexProgramDesc desc(alloc);
+        crd::containers::String          where(alloc);
+        if (crd::vertcook::parse_vertex_toml(crd::containers::StringView(t.c_str(), t.size()), desc, &where)
+            != crd::vertcook::VertexCookError::Ok)
+        {
+            return nullptr;
+        }
+        desc.cull.draw_stride  = raster->indirect_command_stride();
+        // ⛔ view v's command sits `v * stride` along, so its 5 args start at `arg_off + v * stride`. Baking the
+        // VIEW into the offset is what lets one authored asset produce every view's kernel.
+        // ⛔ The commands start AFTER the params block (`kCullArgsHeaderWords`), whose word 0 carries the group's
+        // buffer base. Every consumer of an args offset adds the same constant: the cook stamp here, the draw
+        // items in `fill()`, the cascade expansion, and the counts readback.
+        desc.cull.draw_arg_off = (kCullArgsHeaderWords * 4U) + raster->indirect_command_arg_offset()
+                                 + view * raster->indirect_command_stride();
+        desc.cull.base_word    = 0U; // params word 0
+        // ⛔⛔ THE DECLARED HEADER WORDS MUST BE THE ENGINE'S HEADER WORDS. An asset naming word 104 for the
+        // bounds section (the light record's first word) produced a kernel that tested boxes built from a light
+        // colour: it rendered, it reported plausible counts, and the AABBs on the device were bit-identical to
+        // the CPU's — because they were never read. A cook-time REFUSAL is the only place this is cheap to catch.
+        // ⛔ `bounds_off` only matters to a COMPACTING kernel — the reset never reads a box, and demanding the
+        // word from an asset that has no use for it would be a false failure (the first run of this check was
+        // exactly that).
+        const bool bounds_ok = !desc.cull.compact || desc.cull.bounds_off == kHdrBoundsOff;
+        if (!bounds_ok || desc.cull.capacity_word != kHdrInstanceCapacity
+            || desc.header.instance_count != kHdrInstanceCount || desc.header.view_proj != 6U
+            || desc.header.light_vp != kHdrCsmLightVp || desc.header.visible_off != 5U
+            || desc.header.index_off != 2U)
+        {
+            CRD_LOG_ERROR(g_log_scenerender,
+                          "cull asset '{}' declares header words the engine does not use: bounds_off={} (want {}), "
+                          "capacity_word={} (want {}), instance_count={} (want {}), view_proj={} (want 6), "
+                          "light_vp={} (want {}), visible_off={} (want 5)",
+                          asset_name, desc.cull.bounds_off, kHdrBoundsOff, desc.cull.capacity_word,
+                          kHdrInstanceCapacity, desc.header.instance_count, kHdrInstanceCount,
+                          desc.header.view_proj, desc.header.light_vp, kHdrCsmLightVp, desc.header.visible_off);
+            return nullptr;
+        }
+        desc.cull.view_index   = view;
+        desc.cull.views        = 1U + kMaxCascades;
+        // ⛔⛔ AND ITS OWN FRUSTUM. View 0 is the camera (`frustum_off == 0` → `header.view_proj`); view c+1 is
+        // cascade c, whose clip matrix sits at `light_vp + c*16` — the SAME words `frustum_planes(cascades.light_vp[c])`
+        // feeds the CPU cull, which is what makes the two paths comparable at all. Leaving this at 0 made every
+        // cascade dispatch cull against the CAMERA: four identical lists, an atlas covering the wrong volume, and a
+        // frame with NO SHADOWS while every count matched.
+        desc.cull.frustum_off  = view == 0U ? 0U : desc.header.light_vp + ((view - 1U) * 16U);
+        crd::kir::KGraph g(alloc);
+        crd::kir::KEntry e;
+        if (!crd::vertcook::cook_vertex_program(desc, g, e)) { return nullptr; }
+        std::unique_ptr<crd::gpu::IGpuProgram> p = ctx->create_program(g, e);
+        if (p == nullptr) { return nullptr; }
+        crd::gpu::IGpuProgram* raw = p.get();
+        adv_stages.push_back(std::move(p));
+        return raw;
+    }
+
+    [[nodiscard]] crd::gpu::IGpuProgram* ensure_cull_view_kernel(crd::u32 view)
+    {
+        if (view > kMaxCascades) { return nullptr; }
+        if (kern_cull_view[view] != nullptr) { return kern_cull_view[view]; }
+        kern_cull_view[view] = cook_cull_stage_named("vertex/scene_cull_compact.crdv", view);
+        return kern_cull_view[view];
+    }
+
+    // The RESET lays down every view's constants in one dispatch, so its own `view` stamp is 0.
+    [[nodiscard]] crd::gpu::IGpuProgram* ensure_cull_reset_kernel()
+    {
+        if (kern_cull_reset != nullptr) { return kern_cull_reset; }
+        kern_cull_reset = cook_cull_stage_named("vertex/scene_cull_reset.crdv", 0U);
+        return kern_cull_reset;
+    }
+
     [[nodiscard]] crd::gpu::IGpuProgram* ensure_cull_kernel()
     {
         if (kern_cull != nullptr) { return kern_cull; }
@@ -2110,15 +2213,21 @@ bool SceneRenderer::set_frame_graph_toml(const char* toml_text)
     Impl&                          impl = *m_impl;
     crd::framecook::FrameGraphDesc d(impl.alloc);
     crd::containers::String        where(impl.alloc);
-    if (crd::framecook::parse_frame_toml(crd::containers::StringView(toml_text), d, &where)
-        != crd::framecook::FrameCookError::Ok)
+    // ⛔ REN-40-A: report the REASON, not just the place. `where` is empty for every whole-file error (a bad
+    // resource `kind`, a missing key), so the old message read "parse failed at ''" — a diagnostic that tells the
+    // author nothing at the exact moment they need it most. The cook layer already carries an error STRING; use it.
+    if (const auto perr = crd::framecook::parse_frame_toml(crd::containers::StringView(toml_text), d, &where);
+        perr != crd::framecook::FrameCookError::Ok)
     {
-        CRD_LOG_ERROR(g_log_scenerender, "set_frame_graph_toml: parse failed at '{}'", where.c_str());
+        CRD_LOG_ERROR(g_log_scenerender, "set_frame_graph_toml: parse failed: {} (at '{}')",
+                      crd::framecook::frame_cook_error_text(perr), where.c_str());
         return false;
     }
-    if (crd::framecook::validate_frame_graph(d, &where) != crd::framecook::FrameCookError::Ok)
+    if (const auto verr = crd::framecook::validate_frame_graph(d, &where);
+        verr != crd::framecook::FrameCookError::Ok)
     {
-        CRD_LOG_ERROR(g_log_scenerender, "set_frame_graph_toml: validation failed at '{}'", where.c_str());
+        CRD_LOG_ERROR(g_log_scenerender, "set_frame_graph_toml: validation failed: {} (at '{}')",
+                      crd::framecook::frame_cook_error_text(verr), where.c_str());
         return false;
     }
     impl.frame            = static_cast<crd::framecook::FrameGraphDesc&&>(d);
@@ -2688,6 +2797,81 @@ void SceneRenderer::set_indexed_pull(bool on) noexcept
     m_impl->use_indexed = on;
 }
 
+// ⭐⭐ REN-40-A: the GPU-driven cull switch. ⛔ It requires the INDEXED path — a GPU-written command IS an
+// indexed-indirect command, and the classic pull draw has no count field to source from device memory.
+void SceneRenderer::set_gpu_cull(bool on) noexcept
+{
+    m_impl->gpu_cull_on = on;
+}
+
+bool SceneRenderer::gpu_cull() const noexcept
+{
+    return m_impl->gpu_cull_on && m_impl->use_indexed;
+}
+
+void SceneRenderer::set_gpu_cull_verify(bool on) noexcept { m_impl->gpu_cull_verify = on; }
+bool SceneRenderer::gpu_cull_verify() const noexcept { return m_impl->gpu_cull_verify; }
+
+// ⭐⭐ REN-40-A: the device's own verdict, read back. See `GpuCullCounts` for why this is part of the feature.
+bool SceneRenderer::read_gpu_cull_counts(GpuCullCounts& out) const
+{
+    out = GpuCullCounts{};
+    const Impl& impl = *m_impl;
+    if (impl.raster == nullptr) { return false; }
+    const crd::u32 stride_w = impl.raster->indirect_command_stride() / 4U;
+    const crd::u32 argw     = kCullArgsHeaderWords + (impl.raster->indirect_command_arg_offset() / 4U);
+    out.views               = 1U + kMaxCascades;
+    bool any                = false;
+    for (crd::usize gi = 0; gi < impl.draw_groups.size(); ++gi)
+    {
+        MeshGroup* g = impl.draw_groups[gi];
+        if (g == nullptr || g->cull_args == nullptr) { continue; }
+        if (!impl.raster->download_storage(*g->cull_args)) { continue; }
+        // ⛔ `read_u32` reads the HOST MIRROR — without the download above it answers whatever was last uploaded,
+        // which is a confident zero. That mistake made this gate report an empty cull on a cull that worked.
+        for (crd::u32 v = 0; v < out.views; ++v)
+        {
+            const crd::u32 aw = (v * stride_w) + argw;
+            out.instances[v] += g->cull_args->read_u32(aw + 1U);
+            if (!any)
+            {
+                out.indices[v]     = g->cull_args->read_u32(aw + 0U);
+                out.first_index[v] = g->cull_args->read_u32(aw + 2U);
+            }
+        }
+        // ⭐⭐ and the INPUT, for the first group we can read: the device's copy of the world AABBs against the
+        // CPU's. See `GpuCullCounts::bounds_mismatch`.
+        if (out.bounds_checked == 0U && g->buffer != nullptr && g->world_bounds.size() > 0U
+            && impl.raster->download_storage(*g->buffer))
+        {
+            const crd::u32 base = (g->region_base != 0U ? g->region_base : 0U) + g->bounds_off;
+            const auto     n    = static_cast<crd::u32>(g->world_bounds.size());
+            for (crd::u32 i = 0; i < n; ++i)
+            {
+                const crd::f32 want[6] = {g->world_bounds[i].min.x, g->world_bounds[i].min.y,
+                                          g->world_bounds[i].min.z, g->world_bounds[i].max.x,
+                                          g->world_bounds[i].max.y, g->world_bounds[i].max.z};
+                bool           same    = true;
+                for (crd::u32 k = 0; k < 6U; ++k)
+                {
+                    const crd::u32 w = g->buffer->read_u32(base + (i * 6U) + k);
+                    crd::f32       f = 0.0F;
+                    std::memcpy(&f, &w, 4U);
+                    if (f != want[k]) { same = false; }
+                }
+                ++out.bounds_checked;
+                if (!same) { ++out.bounds_mismatch; }
+            }
+        }
+        // the CPU's verdict for the SAME group, this frame — see `GpuCullCounts::cpu_instances`
+        out.cpu_instances[0] += g->visible_count_cpu;
+        for (crd::u32 c = 0; c < kMaxCascades; ++c) { out.cpu_instances[1U + c] += g->cascade_visible_count[c]; }
+        any = true;
+        ++out.groups;
+    }
+    return any;
+}
+
 // REN-39 (the gizmo fix): resolve the woven overlay pass's DECLARED image for the app callback (see header).
 crd::gpu::IRasterTarget* SceneRenderer::overlay_target(crd::gpu::IFrameContext& ctx) const noexcept
 {
@@ -2720,6 +2904,33 @@ struct ExtractCtx
 };
 
 // resolve-or-create the group for a mesh id (loads the mesh resource; null on load failure)
+// ⭐⭐ REN-40-A: push a RANGE of per-instance world AABBs into the group buffer's bounds section.
+// ⛔ Six floats per instance (min.xyz, max.xyz) — the SAME box `aabb_in_frustum` reads on the CPU, so the GPU
+// cull is testing one truth rather than a re-derivation. Called on exactly the grain the instance payload uses,
+// because bounds that lag their transforms would cull against last frame's positions — geometry popping in and
+// out for a frame, which reads as a culling bug and is really a staleness bug.
+void upload_bounds_range(SceneRenderer::Impl& impl, MeshGroup& group, crd::u32 first, crd::u32 n,
+                         SyncStats& stats)
+{
+    if (n == 0U || group.buffer == nullptr || impl.raster == nullptr) { return; }
+    if (first + n > group.world_bounds.size()) { return; }
+    crd::containers::Array<crd::f32> tmp(impl.alloc);
+    tmp.resize(static_cast<crd::usize>(n) * 6U, 0.0F);
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        const auto& b = group.world_bounds[first + i];
+        tmp[static_cast<crd::usize>(i) * 6U + 0U] = b.min.x;
+        tmp[static_cast<crd::usize>(i) * 6U + 1U] = b.min.y;
+        tmp[static_cast<crd::usize>(i) * 6U + 2U] = b.min.z;
+        tmp[static_cast<crd::usize>(i) * 6U + 3U] = b.max.x;
+        tmp[static_cast<crd::usize>(i) * 6U + 4U] = b.max.y;
+        tmp[static_cast<crd::usize>(i) * 6U + 5U] = b.max.z;
+    }
+    const crd::u32 bytes = n * 6U * 4U;
+    (void)impl.raster->upload_storage(*group.buffer, (group.bounds_off + first * 6U) * 4U, tmp.data(), bytes);
+    stats.uploaded_bytes += bytes;
+}
+
 [[nodiscard]] crd::i64 group_for_mesh(ExtractCtx& ctx, const crd::resources::ResourceId& mesh_id)
 {
     if (const crd::u32* found = ctx.impl->group_of_mesh.find(mesh_id)) { return static_cast<crd::i64>(*found); }
@@ -3012,8 +3223,18 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
             const crd::u32 palette_words = group.skinned ? needed_capacity * group.joint_count * 16U : 0U;
             group.visible_off   = group.palette_off + palette_words;
             // 38-G1: + one visible list per cascade (see MeshGroup::cascade_visible_count)
-            const crd::u32 total_words = group.visible_off + needed_capacity * (1U + kMaxCascades);
+            // ⭐⭐ REN-40-A: + the per-instance WORLD AABB section (6 floats each) the GPU cull tests. It lives
+            // in the SAME buffer as everything else so a cull dispatch binds ONE resource, and it is uploaded on
+            // the same dirty grain as the instances beside it. ⛔ The GPU must cull the BOX, not the transform's
+            // translation: a point test disagrees with `aabb_in_frustum` for anything larger than a texel.
+            group.bounds_off    = group.visible_off + needed_capacity * (1U + kMaxCascades);
+            const crd::u32 total_words = group.bounds_off + needed_capacity * 6U;
             group.buffer             = impl.raster->create_storage_buffer(total_words * 4U);
+            // ⭐⭐ REN-40-A: and its indirect commands — (1 + cascades) of them at the backend's stride.
+                group.cull_args = impl.raster->create_storage_buffer(
+                (kCullArgsHeaderWords * 4U)
+                + ((1U + kMaxCascades) * impl.raster->indirect_command_stride()));
+            group.cull_base_uploaded = 0xFFFFFFFFU; // force the params write on the next frame
             group.capacity           = needed_capacity;
             group.geometry_uploaded  = false;
         }
@@ -3050,6 +3271,9 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
             const crd::u32 bytes = count * static_cast<crd::u32>(sizeof(InstanceGpu));
             (void)impl.raster->upload_storage(*group.buffer, group.instances_off * 4U, group.instances.data(), bytes);
             stats.uploaded_bytes += bytes;
+            // ⭐⭐ REN-40-A: the world AABBs ride the SAME grain as the instances they describe — a bounds
+            // section that could go stale against its transforms would cull against last frame's positions.
+            upload_bounds_range(impl, group, 0U, count, stats);
             for (ChunkRun& run : group.runs) { run.dirty = false; }
             continue;
         }
@@ -3064,6 +3288,7 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
                                               (group.instances_off + run.first * kInstanceWords) * 4U,
                                               group.instances.data() + run.first, bytes);
             stats.uploaded_bytes += bytes;
+            upload_bounds_range(impl, group, run.first, run.count, stats); // REN-40-A, same grain
         }
     }
 
@@ -3235,6 +3460,16 @@ public:
     {
         if (str_is(id, "crd://scene/cull")) { return m_impl.ensure_cull_kernel(); }
         if (str_is(id, "crd://scene/cull_mark")) { return m_impl.ensure_cull_mark_kernel(); }
+        // ⭐⭐ REN-40-A: the GPU-driven pair the `scene_gpu_cull` frame graph names
+        // ⛔ ONE authored asset, FIVE named views — the suffix IS the view index, so the frame asset declares
+        // `crd://scene/cull_view0` .. `cull_view4` and the renderer cooks the matching variant. Explicit beats a
+        // new `for_each` expansion here: five passes that a reader can count are worth more than machinery.
+        if (str_is(id, "crd://scene/cull_view0")) { return m_impl.ensure_cull_view_kernel(0U); }
+        if (str_is(id, "crd://scene/cull_view1")) { return m_impl.ensure_cull_view_kernel(1U); }
+        if (str_is(id, "crd://scene/cull_view2")) { return m_impl.ensure_cull_view_kernel(2U); }
+        if (str_is(id, "crd://scene/cull_view3")) { return m_impl.ensure_cull_view_kernel(3U); }
+        if (str_is(id, "crd://scene/cull_view4")) { return m_impl.ensure_cull_view_kernel(4U); }
+        if (str_is(id, "crd://scene/cull_reset")) { return m_impl.ensure_cull_reset_kernel(); }
         if (str_is(id, "crd://scene/rt/raygen")) { return m_impl.ensure_rt_kernel(0U); }
         if (str_is(id, "crd://scene/rt/miss")) { return m_impl.ensure_rt_kernel(1U); }
         if (str_is(id, "crd://scene/rt/chit")) { return m_impl.ensure_rt_kernel(2U); }
@@ -3256,6 +3491,14 @@ public:
         if (str_is(name, "instances"))
         {
             return m_draws.size() > 0U ? m_draws[0].buffer : nullptr;
+        }
+        // ⭐⭐ REN-40-A: the GPU-driven commands. ⛔ A compute pass walking a DRAW LIST binds each item's OWN
+        // args (DrawItem::args) — this resolver only answers the graph's declared-resource question so the pass
+        // can express the read/write EDGE that orders reset before cull and cull before the draws. Returning the
+        // first group's buffer is enough for that: the edge is per-RESOURCE-NAME, the binding is per-item.
+        if (str_is(name, "cull_args"))
+        {
+            return m_draws.size() > 0U ? m_draws[0].cull_args : nullptr;
         }
         if (str_is(name, "cull_flags")) { return m_impl.ensure_scratch(m_impl.buf_cull_flags); }
         if (str_is(name, "cull_marks")) { return m_impl.ensure_scratch(m_impl.buf_cull_marks); }
@@ -3319,6 +3562,14 @@ public:
             if (out.items[i].index_count > 0U)
             {
                 out.items[i].instance_count = g->cascade_visible_count[instance];
+            }
+            // ⭐⭐ REN-40-A: cascade c reads VIEW c+1's command (view 0 is the camera), so the item's args offset
+            // moves along by one command stride per cascade. ⛔ The stride is the BACKEND'S — 20 B on Vulkan,
+            // 24 B on D3D12 — so it is asked for, never assumed.
+            if (out.items[i].args != nullptr && m_impl.raster != nullptr)
+            {
+                out.items[i].args_offset = (kCullArgsHeaderWords * 4U)
+                                           + (1U + instance) * m_impl.raster->indirect_command_stride();
             }
             ++gi;
         }
@@ -3407,6 +3658,16 @@ private:
             it.index_count = d.index_count;
             it.instance_count = d.instance_count;
             it.first_index = d.first_index;
+            // ⭐⭐ REN-40-A: under the GPU cull the command lives in DEVICE memory. `args` routes this item to
+            // the indirect verb (`instance_count` above is then never read — it is stale by construction), and
+            // `dispatch_groups` is what a COMPUTE pass walking this same list uses as its grid.
+            // ⛔ Only for INDEXED items: a GPU-written command IS an indexed-indirect command.
+            if (m_impl.gpu_cull_on && d.index_count > 0U && d.cull_args != nullptr)
+            {
+                it.args            = d.cull_args;
+                it.args_offset     = (kCullArgsHeaderWords * 4U) + d.cull_args_offset;
+                it.dispatch_groups = d.cull_groups;
+            }
             out.items[out.resolved++] = it;
         }
         return true;
@@ -3545,7 +3806,18 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         const auto count = static_cast<crd::u32>(group.instances.size());
         if (count == 0U || group.buffer == nullptr) { continue; }
 
-        if (use_bvh)
+        // ⭐⭐ REN-40-A: UNDER THE DEVICE CULL THE CPU DOES NOT CULL AT ALL. This is the performance the slice
+        // exists for: at 1M instances the camera test plus four cascade tests are 5M `aabb_in_frustum` calls and
+        // the visible-list uploads that follow them measured ~160 ms of a 337 ms frame. Skipping them is only
+        // legal because EVERY consumer of the result is now GPU-driven — the draws take their counts from device
+        // memory (`DrawItem::args`) — which is why `set_gpu_cull` requires the indexed path.
+        // ⛔ The header still uploads, and so do the bounds: the kernel reads both. What stops is the CPU's own
+        // verdict, not the data the device needs to reach its own.
+        if (impl.gpu_cull_on && !impl.gpu_cull_verify)
+        {
+            group.visible.clear();
+        }
+        else if (use_bvh)
         {
             for (const crd::scene::EntityId e : candidates)
             {
@@ -3566,8 +3838,13 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         }
 
         const auto visible_count = static_cast<crd::u32>(group.visible.size());
+        group.visible_count_cpu  = visible_count; // REN-40-A: the reference the device cull is compared against
         stats.culled_instances += count - visible_count;
-        if (visible_count == 0U) { continue; }
+        // ⛔⛔ UNDER THE DEVICE CULL AN EMPTY CPU LIST IS THE NORMAL CASE, NOT A REASON TO SKIP. This `continue`
+        // is what drops the group's HEADER upload — and the cull kernel reads the header for the bounds offset,
+        // the instance count and the visible-list stride, so skipping it would hand the kernel last frame's
+        // header (or none at all) and the device would cull against stale data.
+        if (visible_count == 0U && !impl.gpu_cull_on) { continue; }
 
         // per-frame uploads: the 32-word header + the visible list
         crd::u32 header[kHeaderWords] = {};
@@ -3587,6 +3864,7 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         // REN-38-F6+: the GPU cull kernel's range guard — the group's TOTAL instance count
         header[kHdrInstanceCount] = static_cast<crd::u32>(group.instances.size());
         header[kHdrInstanceCapacity] = group.capacity; // 38-G1: the per-cascade visible-list stride
+        header[kHdrBoundsOff]        = group.bounds_off; // REN-40-A: the GPU cull's world-AABB section
         {
             const crd::u32 lb = header[kHdrLightOff];
             const crd::f32 white[3] = {1.0F, 1.0F, 1.0F};
@@ -3622,8 +3900,13 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         {
             const crd::u32 rb = group.region_base;
             (void)impl.raster->upload_storage(*impl.scene_buf, rb * 4U, header, sizeof(header));
-            (void)impl.raster->upload_storage(*impl.scene_buf, (rb + group.visible_off) * 4U,
-                                              group.visible.data(), visible_count * 4U);
+            // ⛔ 0 words means the DEVICE fills this list (see the gpu_cull note above) — `data()` on an empty
+            // array is null, and handing a null pointer to an upload is not a "harmless no-op" contract to lean on.
+            if (visible_count > 0U)
+            {
+                (void)impl.raster->upload_storage(*impl.scene_buf, (rb + group.visible_off) * 4U,
+                                                  group.visible.data(), visible_count * 4U);
+            }
             const crd::u32 inst_bytes = static_cast<crd::u32>(group.instances.size())
                                         * static_cast<crd::u32>(sizeof(InstanceGpu));
             (void)impl.raster->upload_storage(*impl.scene_buf, (rb + group.instances_off) * 4U,
@@ -3639,8 +3922,11 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         else
         {
             (void)impl.raster->upload_storage(*group.buffer, 0U, header, sizeof(header));
-            (void)impl.raster->upload_storage(*group.buffer, group.visible_off * 4U, group.visible.data(),
-                                              visible_count * 4U);
+            if (visible_count > 0U) // see the null-data note in the region branch
+            {
+                (void)impl.raster->upload_storage(*group.buffer, group.visible_off * 4U, group.visible.data(),
+                                                  visible_count * 4U);
+            }
             stats.uploaded_bytes += sizeof(header) + static_cast<crd::u64>(visible_count) * 4U;
         }
         // ── ⭐⭐ 38-G1 perf: PER-CASCADE CULLING. Each cascade gets its OWN visible list, tested against THAT
@@ -3656,7 +3942,20 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         // It reads as "the shadows are in completely wrong places" and points at neither the fit nor the bias.
         crd::gpu::IStorageBuffer* const cdst      = use_region ? impl.scene_buf.get() : group.buffer.get();
         const crd::u32                  cdst_base = use_region ? group.region_base : 0U;
-        if (impl.shadows_active() && cdst != nullptr)
+        // ⭐⭐ REN-40-A: hand the cull kernels this group's BASE. `cdst_base` is already exactly the number the
+        // per-cascade list uploads use, so the kernel and the CPU cull agree by construction rather than by two
+        // parallel derivations. ⛔ Written only when it CHANGES — a per-frame per-group upload is the shape that
+        // measured 8.3 ms/frame in the queue-idle scar.
+        if (group.cull_args != nullptr && group.cull_base_uploaded != cdst_base)
+        {
+            const crd::u32 params[kCullArgsHeaderWords] = {cdst_base, 0U, 0U, 0U};
+            if (impl.raster->upload_storage(*group.cull_args, 0U, params, sizeof(params)))
+            {
+                group.cull_base_uploaded = cdst_base;
+                stats.uploaded_bytes += sizeof(params);
+            }
+        }
+        if (impl.shadows_active() && cdst != nullptr && (!impl.gpu_cull_on || impl.gpu_cull_verify))
         {
             crd::containers::Array<crd::u32> clist(impl.alloc);
             for (crd::u32 c = 0; c < impl.cascades.count && c < kMaxCascades; ++c)
@@ -3706,6 +4005,10 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         SceneDraw d;
         d.program      = program;
         d.buffer       = group.buffer.get();
+        // ⭐⭐ REN-40-A: the group's GPU-written commands + the cull grid for its instance count. The VIEW offset
+        // is applied per pass by the expansion index; view 0 (the camera) is the default here.
+        d.cull_args    = group.cull_args.get();
+        d.cull_groups  = (count + 63U) / 64U; // the authored cull kernel's workgroup is 64
         d.base_color   = base_color;
         d.vertex_count = visible_count * group.index_count;
         if (use_region)
@@ -3887,6 +4190,17 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         // ⛔ Only the OWNER builds and executes. A contributor that built here would submit a partial frame and
         // reset the graph out from under the viewports that had not recorded yet.
         const bool built_ok = owns_graph ? fg.build() : false;
+        // ⛔⛔ A GRAPH THAT FAILS TO BUILD RENDERS NOTHING AND USED TO SAY NOTHING. `record()` has named
+        // rejections for every way an ASSET can be wrong, but the DEVICE build — the topological sort, the
+        // transient allocations, the barrier schedule — returned a bare `false` that nobody reported. The frame
+        // then showed the previous contents of the canvas: a plausible picture, missing exactly the passes that
+        // mattered, with a clean log. That cost a long hunt through the cull path for a failure that was one
+        // layer below it.
+        if (owns_graph && !built_ok)
+        {
+            CRD_LOG_ERROR(g_log_scenerender, "frame graph '{}' failed to BUILD ({} passes) — nothing was drawn",
+                          authored != nullptr ? authored->name.c_str() : "<programmatic>", fg.pass_count());
+        }
         if (owns_graph && built_ok)
         {
             fg.execute();

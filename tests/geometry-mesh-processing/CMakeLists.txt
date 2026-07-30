@@ -1,7 +1,9 @@
 add_executable(crd-geometry-mesh-processing-tests
     test_half_edge_mesh.cpp
+    test_attribute_quadric.cpp # REN-40-C1: Hoppe attribute quadrics (the LOD chain's error metric)
     test_quadric.cpp
     test_qem_decimate.cpp
+    test_qem_decimate_attr.cpp # REN-40-C1: decimation that keeps its UVs
     test_loop_subdivide.cpp
     test_isotropic_remesh.cpp
     test_fill_holes.cpp

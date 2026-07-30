@@ -161,6 +161,18 @@ void record_pass(g::IFrameContext& ctx, void* user)
             // ⭐⭐ REN-39-C1: an INDEXED-PULL item records through the indexed depth-only multi — a run of
             // consecutive indexed items sharing this program+buffer becomes ONE ExecuteIndirect (a classic
             // verb would misaddress every vertex of an indexed program; see DrawItem::index_count).
+            // ⭐⭐ REN-40-A: a GPU-DRIVEN item's command lives in DEVICE MEMORY — a compute pass wrote its
+            // index_count / instance_count / first_index and the CPU never learned the count. It records through
+            // the indirect verb, one command, args sourced from the buffer.
+            // ⛔ It must NEVER fall through to the CPU-args verb below: `it.instance_count` is stale by
+            // construction there, and drawing last frame's count is the kind of wrong that still renders.
+            if (it.args != nullptr && it.index_count > 0U)
+            {
+                r.draw_storage_multi_indexed_depth_only_indirect(*t, *prog, d.clear_depth, d.depth, *sb, 0U,
+                                                                 *it.args, it.args_offset, nullptr, 0U, 1U,
+                                                                 i != 0U);
+                continue;
+            }
             if (it.index_count > 0U)
             {
                 g::IRasterContext::IndexedDraw idraws[crd::framecook::kMaxDrawItems];
@@ -173,7 +185,10 @@ void record_pass(g::IFrameContext& ctx, void* user)
                     {
                         nprog = nx.program;
                     }
-                    if (nx.index_count == 0U || nprog != prog || ctx.buffer(p->storage_of[i + run]) != sb)
+                    // ⛔ REN-40-A: a GPU-driven item never joins a CPU-args run — its count is not knowable
+                    // here, so batching it would silently substitute a stale one.
+                    if (nx.index_count == 0U || nx.args != nullptr || nprog != prog
+                        || ctx.buffer(p->storage_of[i + run]) != sb)
                     {
                         break;
                     }
@@ -254,6 +269,19 @@ void record_pass(g::IFrameContext& ctx, void* user)
             // ⭐⭐ REN-39-C1: an INDEXED-PULL item with per-draw texture state takes the indexed SAMPLED verb —
             // ONE verb, the shape chosen by nullability (map at 1/2, atlas at 4/5), exactly the classic arms
             // below map onto. A classic verb would misaddress every vertex of an indexed program.
+            // ⭐⭐ REN-40-A: a GPU-DRIVEN item's count lives in DEVICE MEMORY — the same routing the depth-only
+            // case does, for the geometry half. ⛔ It must never fall through to a CPU-count verb: under the
+            // device cull the CPU never learns the count, so `it.instance_count` is 0 by construction and the
+            // whole camera view would silently vanish. Textures follow the classic arms exactly (map, atlas).
+            if (it.args != nullptr && it.index_count > 0U)
+            {
+                const bool   combined = it.texture != nullptr && pass_tex != nullptr && p->sampled_is_depth;
+                g::ITexture* map      = combined ? it.texture : (depth_tex ? nullptr : tex);
+                g::ITexture* atl      = combined ? pass_tex : (depth_tex ? tex : nullptr);
+                r.draw_storage_multi_indexed_indirect(*t, *prog, clear, d.clear_depth, d.depth, *sb, 0U, map, atl,
+                                                      *it.args, it.args_offset, nullptr, 0U, 1U, !first);
+                continue;
+            }
             if (it.index_count > 0U && (tex != nullptr || depth_tex))
             {
                 const bool combined = it.texture != nullptr && pass_tex != nullptr && p->sampled_is_depth;
@@ -303,7 +331,9 @@ void record_pass(g::IFrameContext& ctx, void* user)
                         const DrawItem& nx = p->draws.at(i + run);
                         g::IRasterProgram* nprog = p->program;
                         if (!p->program_is_instance && nx.program != nullptr) { nprog = nx.program; }
-                        if (nx.storage == nullptr || nx.texture != nullptr || nprog != prog ||
+                        // ⛔ REN-40-A: a GPU-driven item never joins a CPU-count run — the same rule the
+                        // depth-only run follows, for the same reason (its count is not knowable here).
+                        if (nx.storage == nullptr || nx.texture != nullptr || nx.args != nullptr || nprog != prog ||
                             nx.indexed != it.indexed || (nx.index_count > 0U) != (it.index_count > 0U) ||
                             ctx.buffer(p->storage_of[i + run]) != sb)
                         {
@@ -419,6 +449,34 @@ void record_pass(g::IFrameContext& ctx, void* user)
             bufs[nb++] = sb;
         }
         if (nb == 0U) { return; }
+        // ⭐⭐ REN-40-A: a compute pass that declares a DRAW LIST dispatches ONCE PER ITEM, binding that item's
+        // own storage buffer at slot 0 — the exact symmetry the raster passes already have (they iterate the
+        // list too; recording only the first silently produced a shadow map with one object in it). This is what
+        // lets ONE authored cull kernel cover every mesh group without the asset naming any of them.
+        // ⛔ The grid comes from the ITEM (`dispatch_groups`), because the pass cannot know a group's instance
+        // count and a fixed grid either under-covers the big groups or wastes work on the small ones.
+        if (p->draws.count() > 0U)
+        {
+            for (crd::u32 di = 0; di < p->draws.count(); ++di)
+            {
+                const DrawItem it = p->draws.at(di);
+                g::IStorageBuffer* sb = ctx.buffer(p->storage_of[di]);
+                if (sb == nullptr || it.dispatch_groups == 0U) { continue; }
+                g::IStorageBuffer* ibufs[kMaxPassReads]{};
+                crd::u32           inb = 0U;
+                // ⛔⛔ THE ITEM'S OWN buffers, and ONLY those. The pass-level `reads`/`writes` on a draw-list
+                // compute pass exist to state the ORDER — they resolve to whichever group answered the resource
+                // name first, so binding them here would hand every item AFTER the first a pointer into group 0's
+                // memory. A kernel with a third binding would then compact the wrong group's instances, silently
+                // and persistently. The graph owns the ordering; the ITEM owns the data.
+                ibufs[inb++] = sb;                                    // slot 0: THIS group's scene buffer
+                if (it.args != nullptr) { ibufs[inb++] = it.args; }    // slot 1: its indirect command
+                g::IGpuProgram* kern = p->kernel_program;
+                r.dispatch_kernel(*kern, it.dispatch_groups, 1U, 1U,
+                                  static_cast<g::IStorageBuffer* const*>(ibufs), inb);
+            }
+            break;
+        }
         r.dispatch_kernel(*p->kernel_program, p->groups[0], p->groups[1], p->groups[2],
                           static_cast<g::IStorageBuffer* const*>(bufs), nb);
         break;
@@ -1106,6 +1164,9 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             dev_kind = g::FgPassKind::Transfer;
         }
         g::IFramePassBuilder&       pb          = fgraph->add_pass(d.name.c_str(), dev_kind);
+        // the buffer handles THIS pass declares as writes — see the draw-list note below
+        g::FgBuffer write_bufs[kMaxPassReads]{};
+        crd::u32    n_write_bufs = 0U;
         // REN-38-A14: pass the asset's QUEUE REQUEST through. The graph decides whether it can honour it and
         // reports the answer in `last_async_pass_count()` — the executor never claims it on the graph's behalf.
         if (d.queue == FrameQueue::Async) { pb.queue(g::FgQueue::Async); }
@@ -1130,6 +1191,7 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
                     continue;
                 }
                 pb.writes(buffers[bi]);
+                if (n_write_bufs < kMaxPassReads) { write_bufs[n_write_bufs++] = buffers[bi]; }
                 // REN-38-B3: a pass that WRITES a counter buffer is the pass that appends into it, so it is the
                 // pass whose reset must precede. Collected here, issued at the top of the body.
                 if (wk == FrameResourceKind::CounterBuffer && rec.n_counters < kMaxPassReads)
@@ -1210,7 +1272,19 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             const DrawItem it = rec.draws.at(di);
             if (it.storage == nullptr) { continue; }
             rec.storage_of[di] = fgraph->import_storage(*it.storage);
-            pb.reads(rec.storage_of[di]);
+            // ⛔⛔ NOT IF THIS PASS ALREADY DECLARED IT A WRITE. A GPU-driven cull pass walks this same draw list
+            // to find the buffers it COMPACTS INTO — `writes = ["instances"]` — and adding a read of the very
+            // same handle makes the pass both a writer and a reader of it. Two such passes then each depend on
+            // the other's write and the device graph is a CYCLE: `build()` returns false, NOTHING is recorded,
+            // and (before the report one layer up) the canvas kept its previous contents — a plausible frame
+            // missing exactly the passes that mattered. The write declaration already carries the ordering and
+            // the barrier; the read adds nothing but the cycle.
+            bool already_written = false;
+            for (crd::u32 wb = 0; wb < n_write_bufs; ++wb)
+            {
+                if (write_bufs[wb] == rec.storage_of[di]) { already_written = true; break; }
+            }
+            if (!already_written) { pb.reads(rec.storage_of[di]); }
             if (di == 0U) { rec.storage = rec.storage_of[0]; }
         }
         // ── REN-38-A2: a COMPUTE pass's kernel bindings are its declared BUFFER reads then writes, in that order.

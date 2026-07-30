@@ -584,6 +584,7 @@ add_subdirectory(engine/perf-ui)  # D-003 v0g -- ImGui frontend for crd-perf; ne
 # RET-8 (ADR-0105, 2026-07-23): crd-rhi · crd-rhi-vulkan · crd-renderer · crd-shader · crd-shader-vulkan are
 # DELETED — gpu-context IS the graphics layer. Their capabilities were absorbed across RET-2..7 (present ·
 # resources · allocator/capture · ImGui · draw · consumers); the parity audit lives in D-007 rows 89-96.
+add_subdirectory(engine/lod) # REN-40-C1: the LOD chain builder (resources x mesh-processing seam)
 add_subdirectory(engine/meshgen)
 add_subdirectory(engine/gpu-context)          # ADR-0099 v17-i-a: backend-agnostic GPU context foundation
 add_subdirectory(engine/gpu-context-vulkan)   # ADR-0099 v17-i-a: headless Vulkan compute context

@@ -50,6 +50,7 @@
 // added at slice close on first typed-surface consumer.
 // ---------------------------------------------------------------------------
 
+#include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
 #include <crd/geometry/mesh_processing/half_edge_mesh.hpp>
@@ -110,5 +111,34 @@ template <crd::math::MathScalar T>
 HalfEdgeMesh<T> qem_decimate(const HalfEdgeMesh<T>&         input,
                               const QemDecimateOptions<T>&  opts,
                               QemDecimateReport*            out_report = nullptr);
+
+// ── ⭐⭐ REN-40-C1: DECIMATION THAT KEEPS ITS APPEARANCE ATTRIBUTES ────────────
+// The same algorithm, driven by an `AttributeQuadric<T, M>` instead of a bare
+// `Quadric<T>` (see attribute_quadric.hpp for the metric and why it is the one
+// that belongs here).
+//
+// ⛔⛔ WITHOUT THIS AN LOD CHAIN SWIMS. A position-only metric happily picks the
+// collapse that leaves the SURFACE where it was and drags the TEXTURE across it:
+// the silhouette stays right and the texture slides as the level changes. Fixing
+// the attributes up AFTER the collapse cannot help, because the collapse was
+// already CHOSEN without regard to the distortion it causes. The attributes have
+// to be in the error being minimised, and here they are.
+//
+// `attrs_in`  : `M` values per INPUT vertex (input slot space; the function
+//               remaps them itself).
+// `attrs_out` : receives `M` values per OUTPUT vertex, in the SAME order
+//               `HalfEdgeMesh::to_indexed` gives the positions — so the caller
+//               reads one consistent vertex stream and never has to reconstruct
+//               a correspondence.
+//
+// Instantiated for `M = 2` (the UV pair). ⛔ NORMALS AND TANGENTS ARE NOT
+// CHANNELS: an interpolated normal of a simplified surface is the normal of a
+// surface that no longer exists. Re-derive them from the decimated geometry.
+template <crd::math::MathScalar T, crd::u32 M>
+HalfEdgeMesh<T> qem_decimate_attr(const HalfEdgeMesh<T>&       input,
+                                   const T*                     attrs_in,
+                                   const QemDecimateOptions<T>& opts,
+                                   crd::containers::Array<T>*   attrs_out,
+                                   QemDecimateReport*           out_report = nullptr);
 
 } // namespace crd::geometry::mesh_processing

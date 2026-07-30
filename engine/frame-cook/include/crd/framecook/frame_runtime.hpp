@@ -50,6 +50,21 @@ struct DrawItem
     crd::u32 index_count = 0U;
     crd::u32 instance_count = 0U;
     crd::u32 first_index = 0U;
+    // ── ⭐⭐ REN-40-A (appended at END): the GPU-DRIVEN item. `args != nullptr` means the draw's command —
+    // index_count, instance_count, first_index — was WRITTEN BY A COMPUTE PASS and the CPU never learned the
+    // count, so this item records through `draw_storage_multi_indexed_depth_only_indirect` instead of the
+    // CPU-args verb. `instance_count` above is then meaningless and MUST NOT be read: a host that fell back to
+    // it would draw last frame's count, which is the kind of wrong that still renders.
+    // ⛔ `args_offset` is in BYTES and already carries the backend's command stride — the two APIs disagree
+    // (Vulkan 20 B with args at 0, D3D12 24 B with args at 4 behind a DrawIndex root constant), so the producer
+    // computes it from `IRasterContext::indirect_command_stride()` rather than assuming either.
+    crd::gpu::IStorageBuffer* args        = nullptr;
+    crd::u32                  args_offset = 0U;
+    // ⭐⭐ REN-40-A: the DISPATCH width for a COMPUTE pass that walks this draw list — ceil(instances / wg).
+    // ⛔ The host supplies it because only the host knows this group's instance count; a fixed `params.groups_x`
+    // large enough for the biggest group would over-dispatch every smaller one (harmless, thanks to the kernel's
+    // range guard, and wasteful at a million instances — which is the whole thing we are here to fix).
+    crd::u32                  dispatch_groups = 0U;
 };
 
 inline constexpr crd::u32 kMaxDrawItems = 256; // stated cap; `resolved` reports what was actually filled

@@ -51,6 +51,7 @@
 #include <crd/core/types.hpp>
 #include <crd/geometry/mesh_processing/half_edge_mesh.hpp>
 #include <crd/geometry/mesh_processing/qem_decimate.hpp>
+#include <crd/geometry/mesh_processing/attribute_quadric.hpp>
 #include <crd/geometry/mesh_processing/quadric.hpp>
 #include <crd/math/scalar.hpp>
 #include <crd/math/vec.hpp>
@@ -119,21 +120,56 @@ std::optional<std::array<T, 4>> face_plane(const HalfEdgeMesh<T>& mesh, crd::u32
     return std::array<T, 4>{a, b, c, d};
 }
 
-template <crd::math::MathScalar T>
-void compute_initial_quadrics(const HalfEdgeMesh<T>&              mesh,
-                               crd::containers::Array<Quadric<T>>& vertex_q,
-                               T                                   boundary_weight)
+// ⭐⭐ REN-40-C1: the quadric is now an ATTRIBUTE quadric with `M` channels, and
+// `M = 0` is the historical path BIT FOR BIT (see attribute_quadric.hpp — the
+// reduction is gated, not assumed). `attrs` is `mesh.vertex_pool_size() * M`
+// values in OUTPUT slot space, or null when M == 0.
+//
+// ⛔ THE ATTRIBUTE HAS TO BE IN THE ERROR, NOT FIXED UP AFTER IT. A position-only
+// metric will pick the collapse that leaves the surface where it was and drags
+// the texture across it — the silhouette stays right and the texture swims as the
+// LOD changes, which is the one artefact an LOD chain must not have.
+template <crd::math::MathScalar T, crd::u32 M>
+void compute_initial_quadrics(const HalfEdgeMesh<T>&                          mesh,
+                               crd::containers::Array<AttributeQuadric<T, M>>& vertex_q,
+                               T                                               boundary_weight,
+                               const T*                                        attrs)
 {
-    vertex_q.resize(mesh.vertex_pool_size(), Quadric<T>::zero());
+    vertex_q.resize(mesh.vertex_pool_size(), AttributeQuadric<T, M>::zero());
 
-    // Pass 1: interior face quadrics.
+    // Pass 1: interior face quadrics (+ the per-channel linear models).
     for (crd::u32 f = 0; f < mesh.face_pool_size(); ++f)
     {
         if (!mesh.face_alive(f)) { continue; }
         const auto plane = face_plane(mesh, f);
         if (!plane) { continue; }
-        const auto face_q = Quadric<T>::from_plane((*plane)[0], (*plane)[1], (*plane)[2], (*plane)[3]);
-        mesh.for_each_face_he(f, [&](crd::u32 h) { vertex_q[mesh.he(h).origin] += face_q; });
+        AttributeGradient<T> grad[M > 0U ? M : 1U]{};
+        crd::u32             corner[3]  = {k_null_vertex, k_null_vertex, k_null_vertex};
+        crd::u32             n_corner   = 0U;
+        mesh.for_each_face_he(f, [&](crd::u32 h) {
+            if (n_corner < 3U) { corner[n_corner] = mesh.he(h).origin; }
+            ++n_corner;
+        });
+        if constexpr (M > 0U)
+        {
+            // a non-triangle (or a face we could not read three corners from) gets
+            // the geometric term only — a wrong linear model is worse than none
+            if (n_corner == 3U && attrs != nullptr)
+            {
+                const auto& p1 = mesh.vertex(corner[0]).position;
+                const auto& p2 = mesh.vertex(corner[1]).position;
+                const auto& p3 = mesh.vertex(corner[2]).position;
+                for (crd::u32 j = 0; j < M; ++j)
+                {
+                    grad[j] = plane_gradient(p1, p2, p3, attrs[(corner[0] * M) + j], attrs[(corner[1] * M) + j],
+                                             attrs[(corner[2] * M) + j]);
+                }
+            }
+        }
+        mesh.for_each_face_he(f, [&](crd::u32 h) {
+            accumulate_face<T, M>(vertex_q[mesh.he(h).origin], (*plane)[0], (*plane)[1], (*plane)[2], (*plane)[3],
+                                  grad, T{1});
+        });
     }
 
     // Pass 2: Garland 1998 boundary-preservation quadrics.
@@ -165,9 +201,13 @@ void compute_initial_quadrics(const HalfEdgeMesh<T>&              mesh,
         const T b       = n_b_raw.y * inv_len;
         const T c       = n_b_raw.z * inv_len;
         const T d       = -(a * pa.x + b * pa.y + c * pa.z);
+        // ⛔ GEOMETRIC HALF ONLY, and no weight bump. A boundary plane constrains
+        // WHERE the silhouette may go; it says nothing about the attribute field,
+        // and counting it in `weight` would dilute the channel normalisation with
+        // a face that carries no attribute model.
         const auto boundary_q = Quadric<T>::from_plane(a, b, c, d) * boundary_weight;
-        vertex_q[v_a] += boundary_q;
-        vertex_q[v_b] += boundary_q;
+        vertex_q[v_a].geom += boundary_q;
+        vertex_q[v_b].geom += boundary_q;
     }
 }
 
@@ -246,12 +286,12 @@ struct EdgeCost
     bool               singular_fallback; // optimal_position returned nullopt
 };
 
-template <crd::math::MathScalar T>
-std::optional<EdgeCost<T>> evaluate_edge(const HalfEdgeMesh<T>&                    mesh,
-                                          const crd::containers::Array<Quadric<T>>& vertex_q,
-                                          const crd::containers::Array<crd::u8>&    is_locked,
-                                          crd::u32                                  h,
-                                          T                                         singular_det_epsilon)
+template <crd::math::MathScalar T, crd::u32 M>
+std::optional<EdgeCost<T>> evaluate_edge(const HalfEdgeMesh<T>&                               mesh,
+                                          const crd::containers::Array<AttributeQuadric<T, M>>& vertex_q,
+                                          const crd::containers::Array<crd::u8>&               is_locked,
+                                          crd::u32                                             h,
+                                          T                                                    singular_det_epsilon)
 {
     const crd::u32 a = mesh.he(h).origin;
     const crd::u32 b = mesh.he_dest(h);
@@ -261,6 +301,10 @@ std::optional<EdgeCost<T>> evaluate_edge(const HalfEdgeMesh<T>&                 
     if (la && lb) { return std::nullopt; }
 
     const auto combined_q = vertex_q[a] + vertex_q[b];
+    // ⭐ the FOLD is what keeps the rest of this function unchanged: eliminating
+    // the attribute unknowns analytically leaves an ordinary 4x4 quadric, so the
+    // 3x3 solve, the singular fallback and the determinism contract all carry over.
+    const Quadric<T> folded = fold(combined_q);
     EdgeCost<T> ec{};
     if (la)
     {
@@ -274,7 +318,7 @@ std::optional<EdgeCost<T>> evaluate_edge(const HalfEdgeMesh<T>&                 
     }
     else
     {
-        const auto opt = optimal_position(combined_q, singular_det_epsilon);
+        const auto opt = optimal_position(folded, singular_det_epsilon);
         if (opt)
         {
             ec.v_opt             = *opt;
@@ -290,7 +334,7 @@ std::optional<EdgeCost<T>> evaluate_edge(const HalfEdgeMesh<T>&                 
             ec.singular_fallback = true;
         }
     }
-    ec.cost = evaluate(combined_q, ec.v_opt);
+    ec.cost = evaluate(folded, ec.v_opt);
     return ec;
 }
 
@@ -313,10 +357,16 @@ void push_edge(crd::containers::Array<HeapEntry<T>>& heap,
 
 } // anonymous namespace
 
-template <crd::math::MathScalar T>
-HalfEdgeMesh<T> qem_decimate(const HalfEdgeMesh<T>&         input,
-                              const QemDecimateOptions<T>&  opts,
-                              QemDecimateReport*            out_report)
+// The one implementation. `attrs_in` is `M` values per INPUT vertex (null when
+// M == 0); `attrs_out`, when non-null, receives `M` values per OUTPUT vertex in
+// the mesh's own `to_indexed` order - the same order its positions come out in,
+// so a caller never has to guess a correspondence.
+template <crd::math::MathScalar T, crd::u32 M>
+HalfEdgeMesh<T> qem_decimate_impl(const HalfEdgeMesh<T>&            input,
+                                   const QemDecimateOptions<T>&      opts,
+                                   const T*                          attrs_in,
+                                   crd::containers::Array<T>*        attrs_out,
+                                   QemDecimateReport*                out_report)
 {
     QemDecimateReport report{};
     auto              report_out = [&] {
@@ -371,9 +421,33 @@ HalfEdgeMesh<T> qem_decimate(const HalfEdgeMesh<T>&         input,
         return output;
     }
 
+    // The attribute array must be seeded in OUTPUT slot space. `build_from`
+    // renumbered the vertices, so feeding the caller's INPUT-ordered array
+    // straight in would attach every vertex's attributes to a DIFFERENT vertex -
+    // silently, and the result would still be a valid-looking mesh.
+    crd::containers::Array<T> attrs(out_alloc);
+    if constexpr (M > 0U)
+    {
+        attrs.resize(static_cast<crd::usize>(output.vertex_pool_size()) * M, T{0});
+        if (attrs_in != nullptr)
+        {
+            crd::containers::Array<crd::math::Vec3<T>> pos_r(out_alloc);
+            crd::containers::Array<crd::u32>           idx_r(out_alloc);
+            crd::containers::Array<crd::u32>           remap_in(out_alloc);
+            input.to_indexed(pos_r, idx_r, &remap_in);
+            for (crd::u32 v_in = 0; v_in < remap_in.size(); ++v_in)
+            {
+                const crd::u32 v_out = remap_in[v_in];
+                if (v_out == k_null_vertex || v_out >= output.vertex_pool_size()) { continue; }
+                for (crd::u32 j = 0; j < M; ++j) { attrs[(v_out * M) + j] = attrs_in[(v_in * M) + j]; }
+            }
+        }
+    }
+
     // Per-vertex quadrics.
-    crd::containers::Array<Quadric<T>> vertex_q(out_alloc);
-    compute_initial_quadrics(output, vertex_q, opts.boundary_weight);
+    crd::containers::Array<AttributeQuadric<T, M>> vertex_q(out_alloc);
+    compute_initial_quadrics<T, M>(output, vertex_q, opts.boundary_weight,
+                                   attrs.empty() ? nullptr : attrs.data());
 
     // Per-vertex locked flag (in input slot space, which == output slot
     // space because to_indexed/build_from preserve vertex IDs by slot
@@ -414,7 +488,7 @@ HalfEdgeMesh<T> qem_decimate(const HalfEdgeMesh<T>&         input,
         if (!output.he_alive(h)) { continue; }
         if (output.he_is_boundary(h)) { continue; }
         if (h != canonical_he(output, h)) { continue; }
-        const auto cand = evaluate_edge(output, vertex_q, is_locked, h, opts.singular_det_epsilon);
+        const auto cand = evaluate_edge<T, M>(output, vertex_q, is_locked, h, opts.singular_det_epsilon);
         if (!cand) { continue; }
         if (cand->singular_fallback) { ++report.singular_fallbacks; }
         push_edge(heap, edge_generation, cand->cost, h);
@@ -448,7 +522,7 @@ HalfEdgeMesh<T> qem_decimate(const HalfEdgeMesh<T>&         input,
         const crd::u32 h = entry.he_canonical;
 
         // Re-evaluate (quadrics or locks may have shifted since push).
-        const auto cand = evaluate_edge(output, vertex_q, is_locked, h, opts.singular_det_epsilon);
+        const auto cand = evaluate_edge<T, M>(output, vertex_q, is_locked, h, opts.singular_det_epsilon);
         if (!cand) { continue; }
 
         // Capture topology around the collapse BEFORE applying.
@@ -474,12 +548,21 @@ HalfEdgeMesh<T> qem_decimate(const HalfEdgeMesh<T>&         input,
 
         // Update quadric for kept vertex.
         vertex_q[a] = vertex_q[a] + vertex_q[b];
+        // ...and its attributes, from the SAME minimisation that produced the
+        // position - not a lerp, not a copy of one endpoint. The stationary value
+        // of the merged quadric is exactly what the metric just paid for.
+        if constexpr (M > 0U)
+        {
+            T merged[M]{};
+            attributes_at(vertex_q[a], cand->v_opt, merged);
+            for (crd::u32 j = 0; j < M; ++j) { attrs[(a * M) + j] = merged[j]; }
+        }
 
         // Re-evaluate every edge in a's new 1-ring.
         output.for_each_outgoing_he(a, [&](crd::u32 ho) {
             if (output.he_is_boundary(ho)) { return; }
             const crd::u32 c = canonical_he(output, ho);
-            const auto     new_cand = evaluate_edge(output, vertex_q, is_locked, c, opts.singular_det_epsilon);
+            const auto     new_cand = evaluate_edge<T, M>(output, vertex_q, is_locked, c, opts.singular_det_epsilon);
             if (!new_cand) { return; }
             if (new_cand->singular_fallback) { ++report.singular_fallbacks; }
             push_edge(heap, edge_generation, new_cand->cost, c);
@@ -493,8 +576,48 @@ HalfEdgeMesh<T> qem_decimate(const HalfEdgeMesh<T>&         input,
     {
         report.status = QemDecimateStatus::TargetUnreachable;
     }
+    // Hand back the surviving attributes in the SAME order `to_indexed` gives the
+    // positions, so the caller reads one consistent vertex stream.
+    if constexpr (M > 0U)
+    {
+        if (attrs_out != nullptr)
+        {
+            crd::containers::Array<crd::math::Vec3<T>> pos_f(out_alloc);
+            crd::containers::Array<crd::u32>           idx_f(out_alloc);
+            crd::containers::Array<crd::u32>           remap_out(out_alloc);
+            output.to_indexed(pos_f, idx_f, &remap_out);
+            attrs_out->clear();
+            attrs_out->resize(pos_f.size() * M, T{0});
+            for (crd::u32 v_slot = 0; v_slot < remap_out.size(); ++v_slot)
+            {
+                const crd::u32 v_new = remap_out[v_slot];
+                if (v_new == k_null_vertex || v_new >= pos_f.size()) { continue; }
+                for (crd::u32 j = 0; j < M; ++j) { (*attrs_out)[(v_new * M) + j] = attrs[(v_slot * M) + j]; }
+            }
+        }
+    }
     report_out();
     return output;
+}
+
+// -- the public entry points ------------------------------------------------
+// The historical, position-only form. `M = 0` is the attribute path with zero
+// channels and is BIT-IDENTICAL to what this function did before attributes
+// existed (attribute_quadric.hpp's reduction gate is what makes that a fact
+// rather than an intention).
+template <crd::math::MathScalar T>
+HalfEdgeMesh<T> qem_decimate(const HalfEdgeMesh<T>& input, const QemDecimateOptions<T>& opts,
+                              QemDecimateReport* out_report)
+{
+    return qem_decimate_impl<T, 0U>(input, opts, nullptr, nullptr, out_report);
+}
+
+template <crd::math::MathScalar T, crd::u32 M>
+HalfEdgeMesh<T> qem_decimate_attr(const HalfEdgeMesh<T>& input, const T* attrs_in,
+                                   const QemDecimateOptions<T>& opts, crd::containers::Array<T>* attrs_out,
+                                   QemDecimateReport* out_report)
+{
+    return qem_decimate_impl<T, M>(input, opts, attrs_in, attrs_out, out_report);
 }
 
 // ---------------------------------------------------------------------------
@@ -507,5 +630,17 @@ template HalfEdgeMesh<crd::f32> qem_decimate<crd::f32>(const HalfEdgeMesh<crd::f
 template HalfEdgeMesh<crd::f64> qem_decimate<crd::f64>(const HalfEdgeMesh<crd::f64>&,
                                                        const QemDecimateOptions<crd::f64>&,
                                                        QemDecimateReport*);
+// REN-40-C1: M = 2 is the UV pair - the channels an LOD chain must not distort.
+// Normals and tangents are RE-DERIVED from the decimated surface rather than
+// carried, because an interpolated normal of a simplified surface is the normal
+// of a surface that no longer exists.
+template HalfEdgeMesh<crd::f32> qem_decimate_attr<crd::f32, 2U>(const HalfEdgeMesh<crd::f32>&, const crd::f32*,
+                                                                const QemDecimateOptions<crd::f32>&,
+                                                                crd::containers::Array<crd::f32>*,
+                                                                QemDecimateReport*);
+template HalfEdgeMesh<crd::f64> qem_decimate_attr<crd::f64, 2U>(const HalfEdgeMesh<crd::f64>&, const crd::f64*,
+                                                                const QemDecimateOptions<crd::f64>&,
+                                                                crd::containers::Array<crd::f64>*,
+                                                                QemDecimateReport*);
 
 } // namespace crd::geometry::mesh_processing

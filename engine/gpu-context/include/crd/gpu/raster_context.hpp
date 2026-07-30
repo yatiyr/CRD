@@ -1193,6 +1193,27 @@ public:
         crd::u32 /*max_draws*/, bool /*load_target*/)
     {
     }
+
+    // ── ⭐⭐ REN-40-A: the GEOMETRY half of the same idea — colour + depth, count from device memory. ──────────
+    // ⛔⛔ WITHOUT THIS THE CULL SAVES NOTHING ON THE CAMERA VIEW. The shadow half alone lets the cascade draws
+    // take their counts from the device, but the FORWARD pass still needed a CPU-known `instance_count` — so the
+    // CPU had to keep running the camera cull and keep uploading its visible list, which is the bulk of the work
+    // the slice exists to remove (measured ~160 ms of a 337 ms frame at 1M instances). A cull that only the
+    // shadow passes can consume is a cull the frame still pays for twice.
+    // ⛔ `map` / `atlas` are the SAME two nullable texture slots `draw_storage_indexed_sampled_depth` takes —
+    // base colour at 1/2 and the shadow atlas at 4/5 — because this verb replaces exactly that call for a
+    // GPU-driven item, and a shape that dropped one of them would silently unshadow the textured groups (the
+    // REN-38 "textured monuments lose their shadows" failure, one layer further along). Everything else follows
+    // the depth-only sibling: args from `args`, count from `count_buf` where the device has the ability, clamped
+    // to `max_draws` where it does not.
+    virtual void draw_storage_multi_indexed_indirect(
+        IRasterTarget& /*target*/, IRasterProgram& /*program*/, ClearColor /*clear*/, float /*clear_depth*/,
+        DepthCompare /*compare*/, IStorageBuffer& /*storage*/, crd::u32 /*index_offset_bytes*/, ITexture* /*map*/,
+        ITexture* /*atlas*/, IStorageBuffer& /*args*/, crd::u32 /*args_offset_bytes*/,
+        IStorageBuffer* /*count_buf*/, crd::u32 /*count_offset_bytes*/, crd::u32 /*max_draws*/,
+        bool /*load_target*/)
+    {
+    }
 };
 
 // ⭐ REN-38-A9: a BUILT acceleration structure, behind one portable handle.

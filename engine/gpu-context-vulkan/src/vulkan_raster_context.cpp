@@ -1283,7 +1283,8 @@ public:
         // draws bind its u32 index section directly; usage flags cannot be added after creation). Costs nothing.
         if (!make_buffer(size_bytes,
                          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                             VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                             VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
+                             VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, buf))
         {
             return nullptr;
@@ -1335,9 +1336,12 @@ public:
             BufferBundle         moved;
             // ⛔ REN-39-A1: the usage set MUST mirror create_storage_buffer's — a relocation that dropped
             // INDEX_BUFFER would silently strip the buffer's index role (the new-role-joins-every-walk lesson).
+            // ⛔ REN-40-A: INDIRECT_BUFFER joins for the same reason — a relocated args/count buffer that lost
+            // it would fail the indirect draw's usage VU, which is precisely the role it was created for.
             if (!make_buffer(sb->size_bytes(),
                              VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
+                                 VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, moved))
             {
                 continue; // no room to relocate this one — the pass degrades gracefully, never destructively
@@ -4075,7 +4079,10 @@ public:
         return static_cast<crd::u32>(sizeof(VkDrawIndexedIndirectCommand));
     }
     [[nodiscard]] crd::u32 indirect_command_arg_offset() const noexcept override { return 0U; }
-    [[nodiscard]] bool indirect_count_supported() const noexcept override { return true; }
+    [[nodiscard]] bool indirect_count_supported() const noexcept override
+    {
+        return m_ctx != nullptr && m_ctx->draw_indirect_count();
+    }
 
     void draw_storage_multi_indexed_depth_only_indirect(IRasterTarget& target, IRasterProgram& program,
                                                         float clear_depth, DepthCompare compare,
@@ -4226,6 +4233,96 @@ public:
         const VkShaderEXT objs[2] = {p.vs(), p.fs()};
         m_api.bind(cmd, 2U, stages, objs);
         vkCmdDrawIndexed(cmd, index_count, instance_count, first_index, 0, 0U);
+        vkCmdEndRendering(cmd);
+    }
+
+    // ── ⭐⭐ REN-40-A: the GEOMETRY half of the GPU-written draw. See IRasterContext for the contract. ─────────
+    // A term-for-term mirror of `draw_storage_indexed_sampled_depth` above with ONE difference: the draw
+    // parameters come from `args` and the COUNT from `count_buf`, so nothing about what is drawn touches the CPU.
+    // ⛔ The two texture slots are kept EXACTLY as that verb binds them (base colour at 1/2, atlas at 4/5) —
+    // dropping either would unshadow or untexture every GPU-driven group while still rendering.
+    void draw_storage_multi_indexed_indirect(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color,
+                                             float clear_depth, DepthCompare compare, IStorageBuffer& storage,
+                                             crd::u32 index_offset_bytes, ITexture* map, ITexture* atlas,
+                                             IStorageBuffer& args, crd::u32 args_offset_bytes,
+                                             IStorageBuffer* count_buf, crd::u32 count_offset_bytes,
+                                             crd::u32 max_draws, bool load_target) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        auto& s = static_cast<VulkanStorageBuffer&>(storage);
+        auto& a = static_cast<VulkanStorageBuffer&>(args);
+        if (!m_api.valid() || !p.valid() || max_draws == 0U || !frame_recording()) { return; }
+        if ((index_offset_bytes & 3U) != 0U || index_offset_bytes >= s.size_bytes()) { return; }
+        // the args region must actually hold `max_draws` commands — REFUSED whole, never partially drawn
+        const crd::u64 need = static_cast<crd::u64>(args_offset_bytes)
+                              + static_cast<crd::u64>(max_draws) * sizeof(VkDrawIndexedIndirectCommand);
+        if ((args_offset_bytes & 3U) != 0U || need > a.size_bytes()) { return; }
+        auto* cb = static_cast<VulkanStorageBuffer*>(count_buf);
+        if (cb != nullptr && (static_cast<crd::u64>(count_offset_bytes) + 4ULL > cb->size_bytes()
+                              || (count_offset_bytes & 3U) != 0U))
+        {
+            return;
+        }
+        VkCommandBuffer             cmd = m_frame_rec.cmd;
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool     = m_frame_rec.pool;
+        dsai.descriptorSetCount = 1U;
+        dsai.pSetLayouts        = &m_storage_set_layout;
+        VkDescriptorSet dset    = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return; }
+        auto* tex = static_cast<VulkanTexture*>(map);
+        auto* atl = static_cast<VulkanTexture*>(atlas);
+        write_scene_textured(m_device, dset, s.buf(), tex != nullptr ? tex->view() : VK_NULL_HANDLE,
+                             tex != nullptr ? active_sampler() : VK_NULL_HANDLE,
+                             atl != nullptr ? atl->view() : VK_NULL_HANDLE,
+                             atl != nullptr ? m_cmp_sampler : VK_NULL_HANDLE);
+        frame_self_barrier_if_needed(t);
+
+        VkRenderingAttachmentInfo att{};
+        att.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att.imageView   = t.view();
+        att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        att.loadOp      = load_target ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+        if (!load_target) { att.clearValue.color = {{clear_color.r, clear_color.g, clear_color.b, clear_color.a}}; }
+        VkRenderingAttachmentInfo dep{};
+        dep.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        dep.imageView   = t.depth_view();
+        dep.imageLayout = t.depth_attach_layout();
+        dep.loadOp      = load_target ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        dep.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+        if (!load_target) { dep.clearValue.depthStencil.depth = clear_depth; }
+        VkRenderingInfo ri{};
+        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent    = {t.width(), t.height()};
+        ri.layerCount           = 1U;
+        ri.colorAttachmentCount = 1U;
+        ri.pColorAttachments    = &att;
+        ri.pDepthAttachment     = t.has_depth() ? &dep : nullptr; // REN-38-A6: depth is OPTIONAL
+        if (ri.pDepthAttachment != nullptr && t.has_stencil())
+        {
+            dep.clearValue.depthStencil.stencil = 0U;
+            ri.pStencilAttachment               = &dep;
+        }
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t.width(), t.height(), 1U, t.has_depth(), to_vk_compare(compare));
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        vkCmdBindIndexBuffer(cmd, s.buf(), index_offset_bytes, VK_INDEX_TYPE_UINT32);
+        const VkShaderStageFlagBits stages[2] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
+        const VkShaderEXT           objs[2]   = {p.vs(), p.fs()};
+        m_api.bind(cmd, 2U, stages, objs);
+        if (cb != nullptr)
+        {
+            vkCmdDrawIndexedIndirectCount(cmd, a.buf(), args_offset_bytes, cb->buf(), count_offset_bytes, max_draws,
+                                          sizeof(VkDrawIndexedIndirectCommand));
+        }
+        else // no count buffer: every slot executes, empties costing a zero-instance command
+        {
+            vkCmdDrawIndexedIndirect(cmd, a.buf(), args_offset_bytes, max_draws,
+                                     sizeof(VkDrawIndexedIndirectCommand));
+        }
         vkCmdEndRendering(cmd);
     }
 

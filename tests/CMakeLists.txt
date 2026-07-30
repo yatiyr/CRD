@@ -21,6 +21,7 @@ add_subdirectory(geometry-mesh)
 add_subdirectory(geometry-spatial)
 add_subdirectory(geometry-polygon)
 add_subdirectory(geometry-mesh-processing)
+add_subdirectory(lod) # REN-40-C1: the mesh LOD chain
 add_subdirectory(geometry-delaunay)
 add_subdirectory(geometry-decomposition)
 add_subdirectory(geometry-bvh-gpu)

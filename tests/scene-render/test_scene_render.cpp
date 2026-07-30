@@ -263,7 +263,13 @@ TEST_CASE("scene-render: chunk-grain extraction -- structural sync builds groups
     CHECK(s1.groups == 1U);
     CHECK(s1.total_instances == 100U);
     CHECK(s1.meshes_pending == 0U);
-    CHECK(s1.uploaded_bytes == 100U * sizeof(scenerender::InstanceGpu)); // the full instance payload, once
+    // the full instance payload, once — PLUS the per-instance world AABBs beside it.
+    // ⭐⭐ REN-40-A: the GPU cull tests a BOX, so 6 floats per instance now ride the SAME dirty grain as the
+    // transform they describe. ⛔ Bounds that lagged their instances would cull against LAST frame's positions —
+    // geometry popping for a frame, which reads as a culling bug and is really a staleness bug. Counted here
+    // explicitly rather than loosened to `> 0`: this gate's whole job is that a sync uploads EXACTLY what changed.
+    constexpr crd::usize bounds_bytes = 6U * sizeof(crd::f32);
+    CHECK(s1.uploaded_bytes == 100U * (sizeof(scenerender::InstanceGpu) + bounds_bytes));
 
     // the group's buffer carries the geometry (index_count at the right shape)
     REQUIRE(rig.renderer.mesh_groups().size() == 1U);

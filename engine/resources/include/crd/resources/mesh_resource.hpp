@@ -39,6 +39,21 @@ struct MeshPrimitive
     ResourceId material_id;            // null UUID = no material
 };
 
+// ⭐⭐ REN-40-C1: ONE LEVEL OF THE MESH'S LOD CHAIN.
+// ⛔ A range into the SAME index buffer, with ABSOLUTE vertex indices into the same vertex stream. A decimated
+// level has NEW vertices (`v_opt` is a solved optimum, not one of the endpoints), so each level appends its own
+// vertex block and its indices point at it directly — which is what keeps `base_vertex` unrepresentable, the
+// `IRasterContext::IndexedDraw` contract (Vulkan folds firstInstance into gl_InstanceIndex, D3D12's SV_InstanceID
+// does not, so a non-zero base would make the two backends read different instances).
+// ⛔ POD only — `crd-resources` stays math-module-free; consumers build their own types at the seam.
+struct MeshLod
+{
+    crd::u32 first_index  = 0U;   // u32 index of the level's first index, into MeshResource::indices
+    crd::u32 index_count  = 0U;   // indices in the level (3 per triangle)
+    crd::f32 error        = 0.0F; // the decimator's quadric error at this level, in OBJECT units
+    crd::f32 screen_height = 0.0F; // pick this level while the instance's projected height (px) is BELOW this
+};
+
 struct MeshResource
 {
     crd::containers::Array<crd::u8>       vertices; // interleaved, kMeshVertexStride per vertex
@@ -57,13 +72,20 @@ struct MeshResource
     // 24 bytes). Joint indices are TOPOLOGICAL skeleton indices (the cook remapped them); empty = unskinned.
     crd::containers::Array<crd::u16> skin_joints;  // 4 per vertex
     crd::containers::Array<crd::f32> skin_weights; // 4 per vertex
+
+    // ⭐⭐ REN-40-C1: the LOD CHAIN, coarsest last. EMPTY = a one-level mesh, which is why every existing asset
+    // keeps rendering exactly as it did — the renderer reads `lods[0]` when the chain exists and the whole index
+    // buffer when it does not. Appended at the END (the append-only discipline this struct already follows).
     [[nodiscard]] bool has_skin() const noexcept
     {
         const crd::usize vc = vertices.size() / kMeshVertexStride;
         return vc > 0U && skin_joints.size() == vc * 4U && skin_weights.size() == vc * 4U;
     }
 
-    explicit MeshResource(crd::memory::IAllocator* a) : vertices(a), indices(a), primitives(a) {}
+    crd::containers::Array<MeshLod> lods;
+    [[nodiscard]] bool has_lods() const noexcept { return lods.size() > 1U; }
+
+    explicit MeshResource(crd::memory::IAllocator* a) : vertices(a), indices(a), primitives(a), lods(a) {}
 
     MeshResource(const MeshResource&)            = delete;
     MeshResource& operator=(const MeshResource&) = delete;

@@ -318,11 +318,70 @@ struct RtDesc
 };
 
 // F4 GPU-driven culling: a compute program that tests each instance and writes the surviving indirect args.
+// REN-40-A: `CullDesc::base_word` sentinel — the bound buffer's base IS word 0 (a private per-group buffer).
+inline constexpr crd::u32 kCullNoBaseWord = 0xFFFFFFFFU;
+
 struct CullDesc
 {
     bool     frustum   = true;
     crd::u32 workgroup = 64U;
     crd::u32 args_off  = 0U; // header word holding the indirect-args offset
+    // ── ⭐⭐ REN-40-A: THE COMPACTING CULL — what turns a per-instance FLAG into a GPU-driven draw. ───────────
+    // `compact` swaps the flags output for (a) a COMPACTED visible-index list and (b) a real indexed-indirect
+    // DRAW command whose instance_count the kernel itself accumulates, so the CPU never learns the count and an
+    // empty batch costs nothing. Measured motivation: at 1M instances the CPU cull + list uploads were ~160 ms
+    // of a 337 ms frame (docs/bench/2026-07-29-ren40-million-instance-baseline.md).
+    bool     compact   = false;
+    // ⛔⛔ REN-40-A: the RESET half. `instance_count` is an ATOMIC ACCUMULATOR, so it cannot also be its own
+    // initializer once the dispatch spans more than one workgroup — the 38-F15 in-kernel reset is correct ONLY
+    // at groups_x = 1, and silently races above it. `reset = true` cooks a one-thread kernel that lays down the
+    // command's CONSTANT fields (index_count, instance_count = 0, first_index, base_vertex = 0, first_instance
+    // = 0, plus the leading DrawIndex where the backend's layout carries one) as its OWN authored pass, which
+    // the frame graph orders BEFORE the cull by the declared write→read edge. Two passes, one vocabulary.
+    bool     reset     = false;
+    // The per-instance WORLD AABB section (6 floats: min.xyz, max.xyz) as a header word. ⛔ The bounds are what
+    // make GPU/CPU parity a DERIVATION rather than a hope: the kernel runs the SAME positive-vertex test over
+    // the SAME box the CPU's `aabb_in_frustum` reads. Culling on the transform's translation instead (what the
+    // 38-F15 flag variant does) is a POINT test and silently disagrees for anything larger than a texel.
+    crd::u32 bounds_off = 0U;
+    // ⛔⛔ THE INDIRECT COMMAND LAYOUT IS A BACKEND FACT, stamped at cook time from
+    // `IRasterContext::indirect_command_stride()/_arg_offset()`. Vulkan: 20-byte commands, args at 0. D3D12:
+    // 24-byte, args at 4, the leading u32 carrying DrawIndex (its command signature prepends a root constant and
+    // D3D12 requires the draw argument LAST). Same fields, different ORDER and STRIDE — a kernel that assumed
+    // one layout would write garbage on the other backend, which is the clip-space-Y failure shape again.
+    crd::u32 draw_stride   = 20U;
+    crd::u32 draw_arg_off  = 0U;
+    crd::u32 draw_index    = 0U; // the DrawIndex this command carries (written when draw_arg_off != 0)
+    crd::u32 index_count   = 0U; // indices per instance — the draw command's first field
+    crd::u32 first_index   = 0U; // this batch's index-section base
+    // ⭐⭐ REN-40-A: WHICH VIEW this dispatch culls, and therefore WHICH visible list it fills.
+    // ⛔ The kernel writes into EXACTLY the region the CPU cull wrote — `visible_off + view_index * capacity`,
+    // camera at view 0 and cascade c at view c+1 — so the vertex programs need NO change at all. The only
+    // difference between the CPU and GPU paths becomes WHO fills the list and HOW the count reaches the draw.
+    // That is the whole elegance of the switch: one authored kernel, five dispatches, zero shader churn.
+    crd::u32 view_index    = 0U;
+    crd::u32 capacity_word = 101U; // header word holding the per-view visible-list STRIDE (instance capacity)
+    // ⭐⭐ REN-40-A: how many VIEW commands a RESET lays down (camera + N cascades). One reset pass writing all
+    // of them beats one pass per view: the constant fields are cheap, and an atomic accumulator only needs its
+    // zero to land before any cull adds into it — which the graph's write→read edge already guarantees.
+    crd::u32 views         = 1U;
+    // ⭐⭐ REN-40-A: WHICH FRUSTUM this dispatch tests against, as a header WORD OFFSET.
+    // ⛔⛔ THIS IS THE DIFFERENCE BETWEEN A CULL AND A SHADOW-SHAPED LIE. Every view read the CAMERA's
+    // view-projection at first, so all four cascade dispatches produced the camera's visible set — the cascade
+    // draws then rendered a plausible-looking depth atlas covering the wrong volume, and the frame came back with
+    // NO SHADOWS AT ALL while every count matched and nothing failed. Cascade c's clip matrix lives at
+    // `light_vp + c*16`, so the offset is a COOK-TIME constant like every other view stamp: 0 means "use
+    // `header.view_proj`" (the camera), anything else is the absolute word offset of a 16-float column-major clip
+    // matrix. ⭐ The Y-flip the emitters apply to a light matrix is invariant here — negating the Y row swaps the
+    // TOP and BOTTOM plane expressions, which leaves the six-plane SET (and therefore every AABB verdict) alone.
+    crd::u32 frustum_off   = 0U;
+    // ⭐⭐ REN-40-A: WHERE THE GROUP'S BUFFER BASE LIVES, as a word offset inside the ARGS buffer (binding 1).
+    // ⛔ A consolidated group's header is at `region_base`, not word 0, and its section offsets are
+    // region-RELATIVE — the vertex programs add the base from the draw table via DrawIndex, which a kernel does
+    // not have. So the base is handed to the kernel as data: every header read becomes `base + word` and every
+    // section offset READ OUT of the header becomes `base + value`. `kCullNoBaseWord` = the buffer's base IS 0
+    // (a private per-group buffer), which keeps the non-consolidated path free of the extra load.
+    crd::u32 base_word     = 0xFFFFFFFFU;
 };
 // ⭐ REN-38-F7: the EXPANSION contract of a procedural vertex stage — how a flat VertexIndex decomposes into
 // (instance, corner) and where the per-instance record lives. ⛔ The corner table itself is AUTHORED as `ifequal`

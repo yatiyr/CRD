@@ -7,7 +7,35 @@
 
 ## Current focus — Phase 3.1.6 **v17 GPU compute (CKIR)** — on the **GPU-program-system detour** (D-007+D-008 MERGED)
 
-> ### ⏩ SESSION HANDOFF (2026-07-28) — READ THIS FIRST on re-entry
+> ### ⏩ SESSION HANDOFF (2026-07-30) — READ THIS FIRST on re-entry
+> **REN-40-A IS CLOSED, LIVE AND BIT-IDENTICAL ON BOTH BACKENDS** (row 143, `docs/detours/D-007-gpu-program-system.md`).
+> The frustum cull for the camera AND all four cascades runs ON THE DEVICE, through ONE authored frame graph
+> (`assets/frame/forward_csm_gpu.frame.toml`: `cull_reset` + `cull_view0..4` as `kind = "compute"` passes walking a
+> draw list, then the cascades, the forward pass and the post chain — 13 device passes, one submission). The draws
+> take their counts from device memory on BOTH backends (`draw_storage_multi_indexed_depth_only_indirect` for the
+> cascades, the NEW `draw_storage_multi_indexed_indirect` for the forward pass), so under `set_gpu_cull` **the CPU
+> cull is skipped entirely**. Board (`docs/bench/2026-07-29-ren40-million-instance-baseline.md`): at 1M instances
+> CPU render **281 → 121 ms on Vulkan (2.33×)** and **279 → 117 ms on DX12 (2.38×)**, frame **BIT-IDENTICAL** to the
+> CPU-cull arm (0 of 921600 pixels, both backends), every per-view survivor count read back and asserted EQUAL.
+> GPU unchanged at ~86 ms — that wall is LOD, not culling.
+> **Five defects this slice cost, all invisible to green checks:** (1) the executor added a graph READ of every draw
+> item's pull buffer, so a pass that WROTE `instances` also read it → two such passes CYCLE → `build()` returned a
+> bare `false`, nothing recorded, the canvas kept its previous contents (a device-graph build failure is now
+> REPORTED); (2) no per-view frustum was stamped, so all four cascade dispatches culled against the CAMERA
+> (`CullDesc::frustum_off`); (3) the asset declared `bounds_off = 104` — the LIGHT RECORD — so the kernel tested
+> boxes made of light-colour bits while the frame rendered and the AABBs verified bit-identical (the host now
+> REFUSES a cull asset whose declared header words are not the engine's); (4) a consolidated group's header is at
+> `region_base`, not word 0, and a kernel has no DrawIndex (`CullDesc::base_word` + a params block); (5)
+> `VkPhysicalDeviceVulkan12Features` is mutually exclusive with the individual promoted structs this device needs
+> (VUID-…-02830) → the count ability arrives as the `VK_KHR_draw_indirect_count` EXTENSION.
+> ⛔⛔ **New tools, use them:** `--fixed-dt <ms>` makes the sandbox clock deterministic (frame counter × dt) — WITHOUT
+> IT AN A/B PIXEL COMPARE MEASURES THE CAMERA, and that misreading cost real time here; `--gpu-cull`,
+> `--gpu-cull-verify` (keeps the CPU cull alive for the count comparison — a gate mode), `--frame <asset>`,
+> `--no-bvh`; `SceneRenderer::read_gpu_cull_counts()` reports what the DEVICE decided.
+> **Next up: REN-40-B — the EXTRACT WALK.** `sync` is now the largest CPU term at 1M (77–98 ms, almost all the
+> O(entities) scene walk). Row 143/40-B.
+>
+> ### Prior handoff (2026-07-28)
 > **38-G1 IS CLOSED LIVE** (`docs/sessions/2026-07-28-38g1-live-close-perf.md`): every default the renderer
 > cooks resolves DISK-FIRST (materials · lighting · vertex incl. per-cascade shadow via desc stamping · frames
 > · post) with the builtin pack as fallback — override proven with BOTH arms (valid R/B-swap renders; broken

@@ -85,6 +85,19 @@ inline constexpr crd::u32 kHdrInstanceCount   = 100U;
 // camera's. Cascade c reads its list at `visible_off + (1 + c) * this`. Takes one of the [101..103] pad words,
 // so every existing index is unchanged (the append-only discipline this header has always followed).
 inline constexpr crd::u32 kHdrInstanceCapacity = 101U;
+// ⭐⭐ REN-40-A: the word offset of the per-instance WORLD AABB section (6 floats each) the GPU cull reads.
+// Takes another of the [101..103] pad words, so every existing index is unchanged — the append-only discipline
+// this header has always followed. ⛔ Declared rather than computed in the kernel: the cull and the CPU's
+// `aabb_in_frustum` must read ONE truth, and a shader that derived the offset itself would be a second one.
+inline constexpr crd::u32 kHdrBoundsOff       = 102U;
+// ⭐⭐ REN-40-A: the PARAMS BLOCK at the head of a group's `cull_args` buffer, before the indirect commands.
+// ⛔⛔ IT EXISTS BECAUSE A CONSOLIDATED GROUP'S HEADER IS NOT AT WORD 0. Under REN-38 scene-buffer consolidation
+// a group's region sits at `region_base` and its header offsets are region-RELATIVE — the vertex programs add the
+// base from the draw table via DrawIndex. A cull kernel has no DrawIndex, so without this it read GROUP 0's
+// header for every group: group 0's bounds offset, group 0's instance count, group 0's visible-list stride. The
+// counts came back plausible and WRONG (1918 device vs 1379 CPU on a 2000-instance frame) and no shader failed.
+// Word 0 of the params block carries the group's base; the commands start after it.
+inline constexpr crd::u32 kCullArgsHeaderWords = 4U; // 16 B — keeps the first command 16-byte aligned
 inline constexpr crd::u32 kHeaderWords        = 120U;
 inline constexpr crd::u32 kHdrCsmSplits       = 28U; // 4 floats
 inline constexpr crd::u32 kHdrCsmLightVp      = 32U; // 4 x 16 floats
@@ -141,15 +154,31 @@ struct MeshGroup
     crd::containers::Array<crd::u32>                                visible; // per-frame culled slot list
 
     std::unique_ptr<crd::gpu::IStorageBuffer> buffer;
+    // ⭐⭐ REN-40-A: this group's GPU-written indirect commands — one per view (camera + each cascade), laid out
+    // at the BACKEND'S command stride. ⛔ Per GROUP, not one global buffer: each group has its own storage
+    // buffer, so a multi-draw cannot span groups anyway, and a per-group command keeps the kernel's write offset
+    // a COOK-TIME constant instead of a runtime multiply.
+    std::unique_ptr<crd::gpu::IStorageBuffer> cull_args;
+    // REN-40-A: the base last written into the args params block — so the 4-byte write happens only when it
+    // CHANGES. ⛔ A per-frame `upload_storage` per group is not free: the per-call queue-idle scar measured
+    // 8.3 ms/frame from exactly this shape.
+    crd::u32 cull_base_uploaded = 0xFFFFFFFFU;
     crd::u32 indices_off = 0; // word offsets into `buffer`
     crd::u32 vertices_off = 0;
     crd::u32 instances_off = 0;
     crd::u32 visible_off = 0;
+    // ⭐⭐ REN-40-A: the per-instance WORLD AABB section (6 floats each), right after the visible lists. The GPU
+    // cull kernel reads it through a DECLARED header word so it and the CPU's `aabb_in_frustum` read ONE truth.
+    crd::u32 bounds_off = 0;
     // ⭐⭐ 38-G1 perf: the CASCADE visible lists live right after the camera's, one `capacity` block each.
     // Cascade c's list is at `visible_off + (1 + c) * capacity`. Shadow passes were drawing the CAMERA's list
     // four times — cascade 0 covers a few metres of a 110-unit field, so most of that vertex work was
     // transformed and then clipped. Measured cost of the waste: 8 ms of GPU, 130 fps -> 53.
     crd::u32 cascade_visible_count[kMaxCascades] = {};
+    // ⭐⭐ REN-40-A: the CAMERA's CPU visible count for this frame, kept so the GPU cull's readback can be
+    // compared against it (see `SceneRenderer::GpuCullCounts`). ⛔ Under the GPU cull the CPU list is no longer
+    // what the draws use — but it is still the REFERENCE the device answer has to match, so it stays computed.
+    crd::u32 visible_count_cpu = 0;
     crd::u32 capacity = 0;           // instance slots the buffer holds
     crd::u32 region_base = 0;        // REN-38: this group's word base inside the ONE scene buffer (0 = unassigned)
     bool     geometry_uploaded = false;
@@ -235,6 +264,50 @@ public:
     // assert bit-identical frames — the pull path is the indexed path's reference. Call before init_programs
     // to skip cooking the indexed set entirely, or after it to flip per frame (both sets stay resident).
     void set_indexed_pull(bool on) noexcept;
+
+    // ⭐⭐ REN-40-A: run the frustum cull ON THE DEVICE — the camera and every cascade — instead of on the CPU.
+    // ⛔ DEFAULT OFF, and that is deliberate: it is a PERFORMANCE change, so it ships behind a switch the
+    // parity gate can A/B on one build (the readback-A/B rule). Measured motivation at 1M instances: the CPU
+    // cull + visible-list uploads were ~160 ms of a 337 ms frame
+    // (`docs/bench/2026-07-29-ren40-million-instance-baseline.md`).
+    void set_gpu_cull(bool on) noexcept;
+    [[nodiscard]] bool gpu_cull() const noexcept;
+
+    // ⭐⭐ REN-40-A: keep the CPU cull running ALONGSIDE the device cull, purely so the two verdicts can be
+    // compared (`read_gpu_cull_counts`). ⛔ It costs the whole thing the slice exists to remove, so it is a GATE
+    // mode, never a shipping one — and it exists because the alternative was worse: with the CPU cull skipped
+    // there is no reference in the same frame, and "the counts look plausible" is exactly how a cull that tested
+    // boxes made of light-colour bits survived (see `CullDesc::frustum_off` / the `bounds_off` scar).
+    void set_gpu_cull_verify(bool on) noexcept;
+    [[nodiscard]] bool gpu_cull_verify() const noexcept;
+
+    // ⭐⭐ REN-40-A: WHAT THE DEVICE ACTUALLY DECIDED, read back. A GPU cull hides its own result by design —
+    // nothing on the CPU learns the count — so "fast" and "silently drew nothing" look identical from the outside.
+    // ⛔ That makes this readback part of the FEATURE, not a debugging aid bolted on after: it is how the parity
+    // gate asserts the device's per-view survivor counts EQUAL the CPU cull's, and how a live run can say out loud
+    // what it drew. One `download_storage` per mesh group, so it is a diagnostic call, not a per-frame path.
+    struct GpuCullCounts
+    {
+        crd::u32 views                  = 0U; // 1 (camera) + cascades
+        crd::u32 groups                 = 0U; // mesh groups summed
+        crd::u32 instances[1U + 4U]     = {}; // per view: Σ instance_count over groups — what the draws will run
+        crd::u32 indices[1U + 4U]       = {}; // per view: group 0's index_count (0 here ⇒ the draw renders NOTHING)
+        crd::u32 first_index[1U + 4U]   = {}; // per view: group 0's first_index
+        // ⭐⭐ THE CPU'S ANSWER TO THE SAME QUESTION, from the same frame. The GPU cull is only correct if it
+        // agrees with `aabb_in_frustum` over the same boxes and the same planes — so the comparison ships WITH
+        // the readback rather than living in a test's head. View 0 is the camera's visible count; view c+1 is
+        // cascade c's. ⛔ A cull that drops geometry is not "faster", it is broken, and this is the line that says
+        // which.
+        crd::u32 cpu_instances[1U + 4U] = {};
+        // ⭐⭐ THE INPUT the device tested, checked against the input the CPU tested. A frustum cull is a function
+        // of two things — the matrix and the boxes — so when the counts disagree the only useful next question is
+        // WHICH input differs. `bounds_checked` is how many per-instance AABBs were compared (group 0);
+        // `bounds_mismatch` how many differed bit-for-bit. ⛔ Non-zero here means the kernel is culling STALE
+        // GEOMETRY, which no amount of staring at the plane maths would ever explain.
+        crd::u32 bounds_checked         = 0U;
+        crd::u32 bounds_mismatch        = 0U;
+    };
+    [[nodiscard]] bool read_gpu_cull_counts(GpuCullCounts& out) const;
 
     // ⛔ HARD RULE (AGENTS.md): EVERY render pass goes through our own frame-graph machinery. An overlay — the
     // infinite grid, gizmos, debug viz, editor chrome — is a RENDER PASS, so it belongs in the frame's graph as

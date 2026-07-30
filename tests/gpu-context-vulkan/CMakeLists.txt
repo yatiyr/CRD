@@ -26,6 +26,11 @@ target_link_libraries(crd-gpu-context-vulkan-tests PRIVATE
     crd-cooker               # GEO-1: the wave1 (.stl/.obj/.ply) asset cook handler (the import→cook→draw gate)
     crd-imgui                # RET-5: ImGuiGpuBackend under test (the overlay-present gate)
     crd-draw                 # RET-6: the CKIR draw suite + the GPU half under test (rhi-free since pt 3)
+    # ⭐⭐ REN-40-A: the cull-parity gate calls the RENDERER'S OWN `frustum_planes` / `aabb_in_frustum`.
+    # ⛔ Re-deriving that math in the test would make the gate prove only that two copies agree; the point
+    # is that the GPU kernel matches the code the renderer ACTUALLY culls with.
+    crd-scene-render
+    crd-vertex-cook          # REN-40-A: the authored [cull] asset the gate cooks
     Catch2::Catch2WithMain
 )
 

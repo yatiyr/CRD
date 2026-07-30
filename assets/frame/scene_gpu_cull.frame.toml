@@ -1,0 +1,57 @@
+# ⭐⭐ REN-40-A: THE GPU-DRIVEN CULL, AS AN AUTHORED FRAME GRAPH.
+#
+# ⛔⛔ THE TOP RULE, LIVE: this is the whole point of having our own frame graph. The reset and the cull are two
+# ORDINARY compute passes whose ORDER comes from the DATA — `reset` WRITES `cull_args`, `cull` READS and WRITES
+# it, so the dependency sort places reset first and emits the barrier between them. Nothing here is a hand-built
+# C++ sequence with a comment asking the next person to keep two calls in order.
+#
+# The measured motivation (`docs/bench/2026-07-29-ren40-million-instance-baseline.md`): at 1M instances the CPU
+# frustum cull + visible-list uploads were ~160 ms of a 337 ms frame. Moving both onto the device is what this
+# graph is for.
+#
+# ⛔ ONE KERNEL, FIVE VIEWS. The host dispatches `scene_cull_compact` once per view (camera + 4 cascades) with
+# that view's matrix in the header's `view_proj` slot and that view's index stamped on the desc — a cascade's
+# `light_vp` is just another view-projection. Five authored dispatches beat five hand-written kernels.
+#
+# ⛔⛔ THE COMPACTED LIST IS NOT A SEPARATE RESOURCE. The kernel writes it back into the INSTANCES buffer at
+# `visible_off + view_index * capacity` — exactly where the CPU cull wrote it — so every vertex program keeps
+# reading its list from where it always did and NOT ONE SHADER CHANGES. It also keeps the dispatch to a single
+# scene resource, which D3D12 requires anyway: one buffer cannot be bound UAV and SRV simultaneously.
+#
+# ⛔ `cull_args` is an INDIRECT_ARGS resource, not a plain buffer: the graph must know it ends up feeding
+# `ExecuteIndirect` / `vkCmdDrawIndexedIndirectCount` so it can transition it to the indirect-argument state the
+# draw needs. Declaring the ROLE is what lets the backend pick its own correct barrier.
+schema = 1
+name   = "crd://frame/scene_gpu_cull"
+
+[[resource]]
+name = "instances"
+kind = "external_buffer"
+
+# the indexed-indirect command: [index_count, instance_count, first_index, 0, 0] at the backend's arg offset.
+# `instance_count` is the accumulator the cull adds into; every other field is laid down by `reset`.
+[[resource]]
+name       = "cull_args"
+kind       = "indirect_args"
+size_bytes = 64
+
+[[pass]]
+name   = "cull_reset"
+kind   = "compute"
+kernel = "crd://scene/cull_reset"
+reads  = ["instances"]
+writes = ["cull_args"]
+params = { groups_x = 1 }
+
+# reads `cull_args` (the reset's output) and writes it back — the write→read→write chain is what orders this
+# after `cull_reset` and puts a barrier between them.
+[[pass]]
+name   = "cull"
+kind   = "compute"
+kernel = "crd://scene/cull_compact"
+reads  = ["cull_args"]
+# ⛔ It WRITES `instances` too — the compacted visible list goes back into that buffer at
+# `visible_off + view_index * capacity`. Declaring the write is what makes the graph barrier it before the draw
+# that reads the list; a pass that only declared the read would be ordered correctly and synchronised wrongly.
+writes = ["instances", "cull_args"]
+params = { groups_x = 1 }

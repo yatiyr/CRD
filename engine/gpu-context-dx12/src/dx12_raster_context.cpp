@@ -4011,6 +4011,94 @@ public:
     [[nodiscard]] crd::u32 indirect_command_arg_offset() const noexcept override { return 4U; }
     [[nodiscard]] bool indirect_count_supported() const noexcept override { return true; }
 
+    // ── ⭐⭐ REN-40-A: the GEOMETRY half of the GPU-written draw. See IRasterContext for the contract. ─────────
+    // A term-for-term mirror of `draw_storage_indexed_sampled_depth` with the draw parameters and the COUNT taken
+    // from device memory via `ExecuteIndirect`'s `pCountBuffer` — D3D12's own mechanism, not a levelled-down
+    // emulation. ⛔ Both texture slots are bound exactly as that verb binds them (base colour t1/s2, atlas t4/s5).
+    void draw_storage_multi_indexed_indirect(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
+                                             float clear_depth, DepthCompare compare, IStorageBuffer& storage,
+                                             crd::u32 index_offset_bytes, ITexture* map, ITexture* atlas,
+                                             IStorageBuffer& args, crd::u32 args_offset_bytes,
+                                             IStorageBuffer* count_buf, crd::u32 count_offset_bytes,
+                                             crd::u32 max_draws, bool load_target) override
+    {
+        auto& t = static_cast<Dx12RasterTarget&>(target);
+        auto& p = static_cast<Dx12RasterProgram&>(program);
+        auto& s = static_cast<Dx12StorageBuffer&>(storage);
+        auto& a = static_cast<Dx12StorageBuffer&>(args);
+        if (!m_ok || max_draws == 0U || !frame_recording()) { return; }
+        if ((index_offset_bytes & 3U) != 0U || index_offset_bytes >= s.size_bytes()) { return; }
+        const crd::u64 need = static_cast<crd::u64>(args_offset_bytes)
+                              + static_cast<crd::u64>(max_draws) * kMultiIdxStride;
+        if ((args_offset_bytes & 3U) != 0U || need > a.size_bytes()) { return; }
+        auto* cb = static_cast<Dx12StorageBuffer*>(count_buf);
+        if (cb != nullptr && (static_cast<crd::u64>(count_offset_bytes) + 4ULL > cb->size_bytes()
+                              || (count_offset_bytes & 3U) != 0U))
+        {
+            return;
+        }
+        const bool           depth_on = t.has_depth(); // REN-38-A6: depth is OPTIONAL
+        ID3D12PipelineState* pso =
+            pass_pso(p, 1U, depth_on ? t.dsv_format() : DXGI_FORMAT_UNKNOWN, to_d3d12_compare(compare), false);
+        if (!p.valid() || pso == nullptr || !ensure_multi_indexed(p.root())) { return; }
+
+        frame_transition(s.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kIndexedDrawStates);
+        frame_transition(a.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+        if (cb != nullptr && cb != &a)
+        {
+            frame_transition(cb->buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                             D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+        }
+        const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
+        const D3D12_GPU_DESCRIPTOR_HANDLE ro    = frame_alloc_storage_srv_slot(s); // t0 (REN-39-C1)
+        const D3D12_CPU_DESCRIPTOR_HANDLE rtv   = t.rtv();
+        const D3D12_CPU_DESCRIPTOR_HANDLE dsv   = depth_on ? t.dsv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
+        m_list->OMSetRenderTargets(1, &rtv, FALSE, depth_on ? &dsv : nullptr);
+        if (!load_target)
+        {
+            const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
+            m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
+            if (depth_on) { m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr); }
+        }
+        const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F,
+                                1.0F};
+        const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
+        m_list->RSSetViewports(1, &vp);
+        m_list->RSSetScissorRects(1, &sc);
+        m_list->SetGraphicsRootSignature(p.root());
+        m_list->SetGraphicsRootDescriptorTable(0, table);
+        m_list->SetGraphicsRootDescriptorTable(7, ro);
+        if (map != nullptr)
+        {
+            auto&                             tex       = static_cast<Dx12Texture&>(*map);
+            const D3D12_GPU_DESCRIPTOR_HANDLE srv_table = frame_alloc_srv_slot(tex);
+            D3D12_GPU_DESCRIPTOR_HANDLE       samp_gpu  = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
+            samp_gpu.ptr += static_cast<UINT64>(active_sampler_slot(0U)) * m_sampler_inc; // REN-38-B8
+            m_list->SetGraphicsRootDescriptorTable(1, srv_table);                         // base-colour SRV (t1)
+            m_list->SetGraphicsRootDescriptorTable(2, samp_gpu);                          // sampler (s2)
+        }
+        if (atlas != nullptr)
+        {
+            auto&                             atl         = static_cast<Dx12Texture&>(*atlas);
+            const D3D12_GPU_DESCRIPTOR_HANDLE atlas_table = frame_alloc_srv_slot(atl);
+            D3D12_GPU_DESCRIPTOR_HANDLE       cmp_tbl     = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
+            cmp_tbl.ptr += static_cast<UINT64>(1U) * m_sampler_inc; // the COMPARISON sampler slot
+            m_list->SetGraphicsRootDescriptorTable(4, atlas_table); // shadow atlas (t4)
+            m_list->SetGraphicsRootDescriptorTable(5, cmp_tbl);     // comparison sampler (s5)
+        }
+        m_list->SetPipelineState(pso);
+        apply_stencil_ref();
+        m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        D3D12_INDEX_BUFFER_VIEW ibv{};
+        ibv.BufferLocation = s.buf()->GetGPUVirtualAddress() + index_offset_bytes;
+        ibv.SizeInBytes    = static_cast<UINT>(s.size_bytes() - index_offset_bytes);
+        ibv.Format         = DXGI_FORMAT_R32_UINT;
+        m_list->IASetIndexBuffer(&ibv);
+        m_list->ExecuteIndirect(m_multi_idx_sig.Get(), max_draws, a.buf(), args_offset_bytes,
+                                cb != nullptr ? cb->buf() : nullptr, cb != nullptr ? count_offset_bytes : 0U);
+        ++m_multi_batches;
+    }
+
     void draw_storage_multi_indexed_depth_only_indirect(IRasterTarget& target, IRasterProgram& program,
                                                         float clear_depth, DepthCompare compare,
                                                         IStorageBuffer& storage, crd::u32 index_offset_bytes,

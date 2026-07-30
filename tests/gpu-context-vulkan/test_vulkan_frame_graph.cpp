@@ -17,6 +17,7 @@
 #include <crd/kir/ckir.hpp>
 #include <crd/kir/ckir_glsl.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/scenerender/scene_renderer.hpp> // REN-40-A: the CPU cull the GPU kernel must match
 #include <crd/vertexcook/vertex_asset.hpp> // REN-38-F13: the authored RT stages // REN-38-A9: the host builds the scene the asset names
 
 #include <catch2/catch_test_macros.hpp>
@@ -7210,6 +7211,604 @@ TEST_CASE("REN-39-B2 GATE: pull and indexed cooks of one declaration render bit-
         {
             WARN("[ren39-b2 capture] " << msgs[i].message_text.c_str());
         }
+    }
+    CHECK(capture.error_count() == 0U);
+}
+
+// ⭐⭐ REN-40-A GATE: the GPU-WRITTEN DRAW — args AND count sourced from device memory, and the COUNT BUFFER
+// actually gates how many commands execute.
+//
+// ⛔ THE POINT OF THE COUNT ARM. `ExecuteIndirect` / `vkCmdDrawIndexedIndirectCount` both accept a device-side
+// count so a cull kernel decides how many commands run; an empty batch then costs NOTHING instead of a
+// zero-instance command each. A verb that merely IGNORED the count buffer would still draw a plausible frame,
+// which is why this gate drives the SAME args twice and changes only the count word: 1 must draw ONE command,
+// 2 must draw BOTH. Anything that passes both arms identically is not honouring the count.
+//
+// ⛔ The verb is DEPTH-ONLY (no colour attachment), so depth is converted to something `read_pixel` can see:
+// clear depth to 1.0 → the indirect pass writes 0.5 wherever a command rasterized (a constant-depth FS, so the
+// two commands differ only in WHERE they cover) → a full-screen triangle at z = 0.75 with GREATER passes
+// exactly where 0.5 was written. Colour therefore appears precisely where a command drew.
+TEST_CASE("REN-40-A GATE: indirect draw takes its args AND its count from device memory",
+          "[gpu-context][vulkan][frame-graph][ren40][indirect][gpu]")
+{
+    Rig rig = make_rig();
+    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    auto& raster = *rig.raster;
+    g::ValidationCapture capture(*rig.vk);
+    REQUIRE(raster.indirect_count_supported()); // Vulkan 1.3 => vkCmdDrawIndexedIndirectCount is CORE
+
+    memory::TlsfAllocator alloc(8U << 20U);
+    kir::KGraph vg(&alloc);
+    kir::KEntry ve;
+    gputest::build_vertex_pull_vs(vg, ve); // position = record at VertexIndex * 12 words
+    auto vs = rig.vk->create_program(vg, ve);
+    kir::KGraph cgraph(&alloc);
+    kir::KEntry cfe;
+    gputest::build_triangle_fs(cgraph, cfe); // writes colour
+    auto cfs = rig.vk->create_program(cgraph, cfe);
+    kir::KGraph dgraph(&alloc);
+    kir::KEntry dfe;
+    gputest::build_depth_only_const_fs(dgraph, dfe, 0.5); // n_out = 0 - legal with zero colour attachments
+    auto dfs = rig.vk->create_program(dgraph, dfe);
+    REQUIRE(vs != nullptr);
+    REQUIRE(cfs != nullptr);
+    REQUIRE(dfs != nullptr);
+    auto prog_colour = raster.create_raster_program(*vs, *cfs);
+    auto prog_depth  = raster.create_raster_program(*vs, *dfs);
+    REQUIRE(prog_colour != nullptr);
+    REQUIRE(prog_depth != nullptr);
+
+    // 16 records (768 B) + a 12-index section at 768 = 816 B
+    constexpr crd::u32 idx_off = 768U;
+    auto               sb      = raster.create_storage_buffer(816U);
+    REQUIRE(sb != nullptr);
+    float rec[16U * 12U];
+    for (crd::u32 r = 0; r < 16U; ++r)
+    {
+        rec[r * 12U + 0U] = 2.0F; // offscreen by default
+        rec[r * 12U + 1U] = 2.0F;
+        for (crd::u32 w = 2U; w < 12U; ++w) { rec[r * 12U + w] = 0.0F; }
+    }
+    const auto put = [&](crd::u32 r, float x, float y, float z) {
+        rec[r * 12U + 0U] = x;
+        rec[r * 12U + 1U] = y;
+        rec[r * 12U + 2U] = z;
+    };
+    put(4U, 0.0F, -0.8F, 0.0F); // command 0: the big centred triangle
+    put(5U, 0.8F, 0.8F, 0.0F);
+    put(6U, -0.8F, 0.8F, 0.0F);
+    put(8U, -0.95F, -0.35F, 0.0F); // command 1: the LEFT-EDGE spike, symmetric about y = 0 so a horizontal
+    put(9U, -0.55F, 0.0F, 0.0F);   // midline probe hits it on BOTH backends (the F16 orientation lesson)
+    put(10U, -0.95F, 0.35F, 0.0F);
+    put(12U, -3.0F, -1.0F, 0.75F); // the resolve triangle: covers the whole viewport at z = 0.75
+    put(13U, 3.0F, -1.0F, 0.75F);
+    put(14U, 0.0F, 3.0F, 0.75F);
+    REQUIRE(raster.upload_storage(*sb, 0U, static_cast<const void*>(rec), sizeof(rec)));
+    const crd::u32 idx[12] = {4U, 5U, 6U, 8U, 9U, 10U, 0U, 1U, 2U, 12U, 13U, 14U};
+    REQUIRE(raster.upload_storage(*sb, idx_off, static_cast<const void*>(idx), sizeof(idx)));
+
+    // -- the ARGS buffer, written in THIS BACKEND'S declared command layout (REN-40-A). Vulkan: 20-byte
+    // commands, args at offset 0. D3D12: 24-byte, args at 4, the leading u32 carrying DrawIndex. --
+    const crd::u32 stride  = raster.indirect_command_stride();
+    const crd::u32 arg_off = raster.indirect_command_arg_offset();
+    auto           args_sb = raster.create_storage_buffer(2U * stride);
+    auto           cnt_sb  = raster.create_storage_buffer(4U);
+    REQUIRE(args_sb != nullptr);
+    REQUIRE(cnt_sb != nullptr);
+    crd::containers::Array<crd::u8> args_bytes(&alloc);
+    args_bytes.resize(2U * stride, static_cast<crd::u8>(0));
+    for (crd::u32 i = 0; i < 2U; ++i)
+    {
+        const crd::u32 cmd[5] = {3U, 1U, i * 3U, 0U, 0U}; // index_count, instance_count, first_index, 0, 0
+        std::memcpy(args_bytes.data() + i * stride + arg_off, static_cast<const void*>(cmd), sizeof(cmd));
+        if (arg_off != 0U) { std::memcpy(args_bytes.data() + i * stride, static_cast<const void*>(&i), 4U); }
+    }
+    REQUIRE(raster.upload_storage(*args_sb, 0U, args_bytes.data(), static_cast<crd::u32>(args_bytes.size())));
+
+    struct IndState
+    {
+        g::FgImage         img{};
+        g::IRasterProgram* colour = nullptr;
+        g::IRasterProgram* depth  = nullptr;
+        g::IStorageBuffer* sb     = nullptr;
+        g::IStorageBuffer* args   = nullptr;
+        g::IStorageBuffer* cnt    = nullptr;
+    };
+    const auto run = [&](crd::u32 count_value, crd::u32& centre, crd::u32& left, crd::u32& right) {
+        REQUIRE(raster.upload_storage(*cnt_sb, 0U, static_cast<const void*>(&count_value), 4U));
+        auto tgt = raster.create_color_depth_target(64U, 64U);
+        REQUIRE(tgt != nullptr);
+        auto fgraph = raster.create_frame_graph();
+        REQUIRE(fgraph != nullptr);
+        IndState st;
+        st.img    = fgraph->import_target(*tgt);
+        st.colour = prog_colour.get();
+        st.depth  = prog_depth.get();
+        st.sb     = sb.get();
+        st.args   = args_sb.get();
+        st.cnt    = cnt_sb.get();
+        fgraph->add_pass("indirect-count")
+            .writes(st.img)
+            .execute(
+                [](g::IFrameContext& ctx, void* user) {
+                    auto* u = static_cast<IndState*>(user);
+                    auto& r = ctx.raster();
+                    // (1) clear colour + depth (offscreen geometry: indices [6..8] collapse to (2,2))
+                    r.draw_storage_indexed_depth(*ctx.image(u->img), *u->colour,
+                                                 g::ClearColor{0.02F, 0.0F, 0.0F, 1.0F}, 1.0F,
+                                                 g::DepthCompare::Always, *u->sb, 768U + 24U, 3U, 1U, false);
+                    // (2) THE VERB UNDER TEST - args and count both from device memory
+                    r.draw_storage_multi_indexed_depth_only_indirect(
+                        *ctx.image(u->img), *u->depth, 1.0F, g::DepthCompare::Always, *u->sb, 768U, *u->args, 0U,
+                        u->cnt, 0U, 2U, true);
+                    // (3) resolve: full-screen at z = 0.75, GREATER => colour only where 0.5 was written
+                    r.draw_storage_indexed_depth(*ctx.image(u->img), *u->colour, g::ClearColor{}, 0.0F,
+                                                 g::DepthCompare::Greater, *u->sb, 768U + 36U, 3U, 1U, true);
+                },
+                &st);
+        REQUIRE(fgraph->build());
+        fgraph->execute();
+        centre = tgt->read_pixel(32U, 32U) & 0xFFU;
+        left   = tgt->read_pixel(6U, 32U) & 0xFFU;
+        right  = tgt->read_pixel(61U, 32U) & 0xFFU;
+    };
+
+    crd::u32 c1 = 0U;
+    crd::u32 l1 = 0U;
+    crd::u32 r1 = 0U;
+    run(1U, c1, l1, r1);
+    crd::u32 c2 = 0U;
+    crd::u32 l2 = 0U;
+    crd::u32 r2 = 0U;
+    run(2U, c2, l2, r2);
+
+    // count = 1 => ONLY command 0 executed: the centre is lit, the left-edge spike is NOT
+    CHECK(c1 >= 250U);
+    CHECK(l1 <= 20U);
+    // count = 2 => BOTH executed
+    CHECK(c2 >= 250U);
+    CHECK(l2 >= 250U);
+    // the arm that catches a verb IGNORING the count: the two runs MUST differ at the spike
+    CHECK(l2 > l1);
+    // outside both commands, at both counts - the dim clear only
+    CHECK(r1 <= 20U);
+    CHECK(r2 <= 20U);
+    if (capture.error_count() > 0U)
+    {
+        const auto msgs = capture.messages();
+        for (usize i = 0; i < msgs.size(); ++i)
+        {
+            WARN("[ren40-a capture] " << msgs[i].message_text.c_str());
+        }
+    }
+    CHECK(capture.error_count() == 0U);
+}
+
+// ⭐⭐ REN-40-A GATE: the GEOMETRY indirect draw — colour + depth, args AND count from device memory.
+//
+// ⛔ WHY THIS VERB NEEDS ITS OWN GATE. The depth-only sibling above proves the mechanism; this one proves the
+// GEOMETRY shape, and that shape is what the FORWARD pass uses. Without it the device cull saves nothing on the
+// camera view (the CPU had to keep culling so the forward draw had a count), so a verb that silently drew NOTHING
+// here would read as "the cull removed the geometry" — a plausible, wrong, and very expensive misreading.
+// ⛔ The count arm is the point: run with count = 1 and count = 2 and require the second command's pixels to
+// APPEAR. A verb that ignored `count_buf` and always ran `max_draws` would pass a single-count check.
+TEST_CASE("REN-40-A GATE: the geometry indirect draw takes its args AND its count from device memory",
+          "[gpu-context][vulkan][frame-graph][ren40][indirect][gpu]")
+{
+    Rig rig = make_rig();
+    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    auto& raster = *rig.raster;
+    g::ValidationCapture capture(*rig.vk);
+    REQUIRE(raster.indirect_count_supported());
+
+    memory::TlsfAllocator alloc(8U << 20U);
+    kir::KGraph           vg(&alloc);
+    kir::KEntry           ve;
+    gputest::build_vertex_pull_vs(vg, ve);
+    auto        vs = rig.vk->create_program(vg, ve);
+    kir::KGraph cgraph(&alloc);
+    kir::KEntry cfe;
+    gputest::build_triangle_fs(cgraph, cfe);
+    auto cfs = rig.vk->create_program(cgraph, cfe);
+    REQUIRE(vs != nullptr);
+    REQUIRE(cfs != nullptr);
+    auto prog = raster.create_raster_program(*vs, *cfs);
+    REQUIRE(prog != nullptr);
+
+    constexpr crd::u32 idx_off = 768U;
+    auto               sb      = raster.create_storage_buffer(816U);
+    REQUIRE(sb != nullptr);
+    float rec[16U * 12U];
+    for (crd::u32 r = 0; r < 16U; ++r)
+    {
+        rec[r * 12U + 0U] = 2.0F; // offscreen by default
+        rec[r * 12U + 1U] = 2.0F;
+        for (crd::u32 w = 2U; w < 12U; ++w) { rec[r * 12U + w] = 0.0F; }
+    }
+    const auto put = [&](crd::u32 r, float x, float y, float z) {
+        rec[r * 12U + 0U] = x;
+        rec[r * 12U + 1U] = y;
+        rec[r * 12U + 2U] = z;
+    };
+    put(4U, 0.0F, -0.8F, 0.5F); // command 0: the centred triangle
+    put(5U, 0.8F, 0.8F, 0.5F);
+    put(6U, -0.8F, 0.8F, 0.5F);
+    put(8U, -0.95F, -0.35F, 0.5F); // command 1: the LEFT-EDGE spike, symmetric about y = 0 so a horizontal
+    put(9U, -0.55F, 0.0F, 0.5F);   // midline probe hits it on BOTH clip-space Y conventions
+    put(10U, -0.95F, 0.35F, 0.5F);
+    REQUIRE(raster.upload_storage(*sb, 0U, static_cast<const void*>(rec), sizeof(rec)));
+    const crd::u32 idx[6] = {4U, 5U, 6U, 8U, 9U, 10U};
+    REQUIRE(raster.upload_storage(*sb, idx_off, static_cast<const void*>(idx), sizeof(idx)));
+
+    const crd::u32 stride  = raster.indirect_command_stride();
+    const crd::u32 arg_off = raster.indirect_command_arg_offset();
+    auto           args_sb = raster.create_storage_buffer(2U * stride);
+    auto           cnt_sb  = raster.create_storage_buffer(4U);
+    REQUIRE(args_sb != nullptr);
+    REQUIRE(cnt_sb != nullptr);
+    crd::containers::Array<crd::u8> args_bytes(&alloc);
+    args_bytes.resize(2U * stride, static_cast<crd::u8>(0));
+    for (crd::u32 i = 0; i < 2U; ++i)
+    {
+        const crd::u32 cmd[5] = {3U, 1U, i * 3U, 0U, 0U};
+        std::memcpy(args_bytes.data() + i * stride + arg_off, static_cast<const void*>(cmd), sizeof(cmd));
+        if (arg_off != 0U) { std::memcpy(args_bytes.data() + i * stride, static_cast<const void*>(&i), 4U); }
+    }
+    REQUIRE(raster.upload_storage(*args_sb, 0U, args_bytes.data(), static_cast<crd::u32>(args_bytes.size())));
+
+    struct GeoState
+    {
+        g::FgImage         img{};
+        g::IRasterProgram* prog = nullptr;
+        g::IStorageBuffer* sb   = nullptr;
+        g::IStorageBuffer* args = nullptr;
+        g::IStorageBuffer* cnt  = nullptr;
+    };
+    const auto run = [&](crd::u32 count_value, crd::u32& centre, crd::u32& left, crd::u32& right) {
+        REQUIRE(raster.upload_storage(*cnt_sb, 0U, static_cast<const void*>(&count_value), 4U));
+        auto tgt = raster.create_color_depth_target(64U, 64U);
+        REQUIRE(tgt != nullptr);
+        auto fgraph = raster.create_frame_graph();
+        REQUIRE(fgraph != nullptr);
+        GeoState st;
+        st.img  = fgraph->import_target(*tgt);
+        st.prog = prog.get();
+        st.sb   = sb.get();
+        st.args = args_sb.get();
+        st.cnt  = cnt_sb.get();
+        fgraph->add_pass("geo-indirect-count")
+            .writes(st.img)
+            .execute(
+                [](g::IFrameContext& ctx, void* user) {
+                    auto* u = static_cast<GeoState*>(user);
+                    ctx.raster().draw_storage_multi_indexed_indirect(
+                        *ctx.image(u->img), *u->prog, g::ClearColor{0.02F, 0.0F, 0.0F, 1.0F}, 0.0F,
+                        g::DepthCompare::Always, *u->sb, 768U, nullptr, nullptr, *u->args, 0U, u->cnt, 0U, 2U,
+                        false);
+                },
+                &st);
+        REQUIRE(fgraph->build());
+        fgraph->execute();
+        centre = tgt->read_pixel(32U, 32U) & 0xFFU;
+        left   = tgt->read_pixel(6U, 32U) & 0xFFU;
+        right  = tgt->read_pixel(61U, 32U) & 0xFFU;
+    };
+
+    crd::u32 c1 = 0U;
+    crd::u32 l1 = 0U;
+    crd::u32 r1 = 0U;
+    run(1U, c1, l1, r1);
+    crd::u32 c2 = 0U;
+    crd::u32 l2 = 0U;
+    crd::u32 r2 = 0U;
+    run(2U, c2, l2, r2);
+
+    CHECK(c1 >= 250U); // command 0 drew
+    CHECK(l1 <= 20U);  // command 1 did NOT (count = 1)
+    CHECK(c2 >= 250U);
+    CHECK(l2 >= 250U); // ...and DID at count = 2
+    CHECK(l2 > l1);    // the arm that catches a verb ignoring the count
+    CHECK(r1 <= 20U);  // outside both, the dim clear only
+    CHECK(r2 <= 20U);
+    if (capture.error_count() > 0U)
+    {
+        const auto msgs = capture.messages();
+        for (usize i = 0; i < msgs.size(); ++i) { WARN("[ren40-geo capture] " << msgs[i].message_text.c_str()); }
+    }
+    CHECK(capture.error_count() == 0U);
+}
+
+// ⭐⭐ REN-40-A GATE: the COMPACTING CULL KERNEL agrees with the CPU cull EXACTLY.
+//
+// ⛔ WHY THIS IS THE GATE THAT MATTERS. A cull is a PERFORMANCE change: every pixel it moves is a bug. So this
+// does not check "roughly the same number survived" - it runs the CPU's own `aabb_in_frustum` over the same
+// boxes and the same matrix, and asserts the GPU produced the SAME SET, with the SAME count, exactly.
+// ⛔ It also asserts the count is NOT trivially everything and NOT zero: a kernel that passed everything, or one
+// that wrote nothing, would otherwise sail through as "fast".
+// ⚠ The list is compared as a SET (sorted) because compaction claims subgroup bases in arrival order - the SET
+// is deterministic, the ORDER is not, and the draw is order-independent.
+TEST_CASE("REN-40-A GATE: the compacting cull kernel reproduces the CPU frustum cull exactly",
+          "[gpu-context][vulkan][ren40][cull][compute][gpu]")
+{
+    Rig rig = make_rig();
+    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    auto& raster = *rig.raster;
+    g::ValidationCapture capture(*rig.vk);
+
+    memory::TlsfAllocator alloc(16U << 20U);
+
+    // ── the authored cull asset: the COMPACTING variant, with THIS backend's command layout stamped on it ──
+    crd::containers::String toml(&alloc);
+    toml.append("stage = \"cull\"\nschema = 1\nname = \"crd://vertex/ren40_cull\"\n");
+    toml.append("[header]\ninstance_off = 4\nview_proj = 6\ninstance_count = 100\n");
+    toml.append("[vertex]\nstride = 12\n");
+    toml.append("[[attribute]]\nname = \"position\"\noffset = 0\ncomps = 3\nkind = \"position\"\n");
+    toml.append("[instance]\nstride = 20\ntransform = 0\n");
+    // view 0 = the camera list, at `visible_off + 0 * capacity` — the CPU layout verbatim
+    toml.append("[cull]\nfrustum = true\nworkgroup = 64\ncompact = true\nbounds_off = 104\n");
+    toml.append("view_index = 0\ncapacity_word = 101\n");
+    {
+        char buf[128];
+        (void)std::snprintf(buf, sizeof(buf), "draw_stride = %u\ndraw_arg_off = %u\n",
+                            raster.indirect_command_stride(), raster.indirect_command_arg_offset());
+        toml.append(buf);
+    }
+    crd::vertcook::VertexProgramDesc desc(&alloc);
+    crd::containers::String          where(&alloc);
+    REQUIRE(crd::vertcook::parse_vertex_toml(crd::containers::StringView(toml.c_str()), desc, &where)
+            == crd::vertcook::VertexCookError::Ok);
+    kir::KGraph kg(&alloc);
+    kir::KEntry ke;
+    REQUIRE(crd::vertcook::cook_vertex_program(desc, kg, ke));
+    auto kern = rig.vk->create_program(kg, ke);
+    REQUIRE(kern != nullptr);
+
+    // ── the scene: N instances on a line, boxes of half-extent 0.4, spread so the frustum keeps only some ──
+    constexpr crd::u32 n_boxes = 256U;
+    constexpr crd::u32 bounds_off   = 1024U; // words; the header word `bounds_off` (104) HOLDS this
+    constexpr crd::u32 visible_off  = 512U;  // words; header word 5 HOLDS this — where the cull writes
+    const crd::u32     scene_words  = bounds_off + n_boxes * 6U + 16U;
+
+    auto scene = raster.create_storage_buffer(scene_words * 4U);
+    auto args  = raster.create_storage_buffer(64U);
+    REQUIRE(scene != nullptr);
+    REQUIRE(args != nullptr);
+
+    // a plain orthographic-ish view_proj that keeps |x|,|y| <= w and 0 <= z <= w for a known band
+    crd::math::Mat4f vpm = crd::math::Mat4f::identity();
+    vpm.c0.x = 0.05F; // x in [-20, 20] maps to [-1, 1]
+    vpm.c1.y = 0.05F;
+    vpm.c2.z = 0.01F; // z in [0, 100] maps to [0, 1]
+    vpm.c3.z = 0.0F;
+
+    crd::containers::Array<crd::u32> words(&alloc);
+    words.resize(scene_words, 0U);
+    const auto putf = [&](crd::u32 idx, float v) {
+        crd::u32 bits = 0U;
+        std::memcpy(&bits, static_cast<const void*>(&v), 4U);
+        words[idx] = bits;
+    };
+    // header: view_proj at 6 (column-major), instance_count at 100, bounds_off at 104
+    const float* vpf = reinterpret_cast<const float*>(&vpm);
+    for (crd::u32 e = 0; e < 16U; ++e) { putf(6U + e, vpf[e]); }
+    words[100U] = n_boxes;
+    words[104U] = bounds_off;
+    words[5U]   = visible_off; // the visible-list base the kernel writes into
+    words[101U] = n_boxes;     // the per-view list STRIDE (instance capacity)
+
+    crd::containers::Array<crd::geometry::primitives::AABB3<crd::f32>> boxes(&alloc);
+    for (crd::u32 i = 0; i < n_boxes; ++i)
+    {
+        // march x across the clip band and back out of it; y/z fixed inside
+        const float cx = -40.0F + static_cast<float>(i) * 0.35F;
+        crd::geometry::primitives::AABB3<crd::f32> b;
+        b.min = {cx - 0.4F, -0.4F, 10.0F};
+        b.max = {cx + 0.4F, 0.4F, 10.8F};
+        boxes.push_back(b);
+        const crd::u32 base = bounds_off + i * 6U;
+        putf(base + 0U, b.min.x);
+        putf(base + 1U, b.min.y);
+        putf(base + 2U, b.min.z);
+        putf(base + 3U, b.max.x);
+        putf(base + 4U, b.max.y);
+        putf(base + 5U, b.max.z);
+    }
+    REQUIRE(raster.upload_storage(*scene, 0U, words.data(), static_cast<crd::u32>(words.size() * 4U)));
+    crd::u32 zero_list[n_boxes] = {}; // the list region is zeroed as part of `words` above
+    crd::u32 args0[16] = {}; // the RESET pass's job in the real graph; here the command's constant fields
+    args0[raster.indirect_command_arg_offset() / 4U + 0U] = 36U; // index_count (arbitrary, unused by the cull)
+    args0[raster.indirect_command_arg_offset() / 4U + 1U] = 0U;  // instance_count - THE accumulator
+    REQUIRE(raster.upload_storage(*args, 0U, static_cast<const void*>(args0), sizeof(args0)));
+
+    // ── the CPU reference: the renderer's OWN plane extraction + positive-vertex test ──
+    crd::math::Vec4f planes[6];
+    crd::scenerender::frustum_planes(vpm, planes);
+    crd::containers::Array<crd::u32> cpu(&alloc);
+    for (crd::u32 i = 0; i < n_boxes; ++i)
+    {
+        if (crd::scenerender::aabb_in_frustum(boxes[i], planes)) { cpu.push_back(i); }
+    }
+    // the cull must be doing REAL work: not everything, not nothing
+    CHECK(cpu.size() > 8U);
+    CHECK(cpu.size() < n_boxes - 8U);
+
+    // ── dispatch through OUR frame graph, as a compute pass ──
+    struct CullState
+    {
+        g::FgBuffer        scene{};
+        g::FgBuffer        args{};
+        g::IGpuProgram*    kern = nullptr;
+    };
+    {
+        auto fgraph = raster.create_frame_graph();
+        REQUIRE(fgraph != nullptr);
+        CullState st;
+        st.scene = fgraph->import_storage(*scene);
+        st.args  = fgraph->import_storage(*args);
+        st.kern  = kern.get();
+        fgraph->add_pass("ren40-cull", g::FgPassKind::Compute)
+            .reads(st.scene)
+            .writes(st.args)
+            .execute(
+                [](g::IFrameContext& ctx, void* user) {
+                    auto*                u = static_cast<CullState*>(user);
+                    g::IStorageBuffer*   bufs[2] = {ctx.buffer(u->scene), ctx.buffer(u->args)};
+                    ctx.raster().dispatch_kernel(*u->kern, (n_boxes + 63U) / 64U, 1U, 1U,
+                                                 static_cast<g::IStorageBuffer* const*>(bufs), 2U);
+                },
+                &st);
+        REQUIRE(fgraph->build());
+        fgraph->execute();
+    }
+
+    // ── ⭐⭐ the RESET pass, as its own authored kernel, ordered by the GRAPH ──
+    // ⛔ THE ORDERING IS DATA, NOT A COMMENT: `cull_reset` WRITES the args and `cull` READS+WRITES them, so the
+    // dependency sort places reset first and emits the barrier. This arm re-runs the whole thing with the args
+    // buffer pre-filled with GARBAGE — if the reset did not run, or ran after the cull, the count is wrong.
+    {
+        crd::containers::String rtoml(&alloc);
+        rtoml.append("stage = \"cull\"\nschema = 1\nname = \"crd://vertex/ren40_reset\"\n");
+        rtoml.append("[header]\nindex_count = 0\nindex_off = 2\ninstance_off = 4\nview_proj = 6\n");
+        rtoml.append("instance_count = 100\n");
+        rtoml.append("[vertex]\nstride = 12\n");
+        rtoml.append("[[attribute]]\nname = \"position\"\noffset = 0\ncomps = 3\nkind = \"position\"\n");
+        rtoml.append("[instance]\nstride = 20\ntransform = 0\n");
+        rtoml.append("[cull]\nfrustum = false\nreset = true\nworkgroup = 64\n");
+        {
+            char rb[128];
+            (void)std::snprintf(rb, sizeof(rb), "draw_stride = %u\ndraw_arg_off = %u\ndraw_index = 7\n",
+                                raster.indirect_command_stride(), raster.indirect_command_arg_offset());
+            rtoml.append(rb);
+        }
+        crd::vertcook::VertexProgramDesc rdesc(&alloc);
+        crd::containers::String          rwhere(&alloc);
+        REQUIRE(crd::vertcook::parse_vertex_toml(crd::containers::StringView(rtoml.c_str()), rdesc, &rwhere)
+                == crd::vertcook::VertexCookError::Ok);
+        kir::KGraph rkg(&alloc);
+        kir::KEntry rke;
+        REQUIRE(crd::vertcook::cook_vertex_program(rdesc, rkg, rke));
+        auto rkern = rig.vk->create_program(rkg, rke);
+        REQUIRE(rkern != nullptr);
+
+        // poison the command: a reset that does not run leaves these
+        crd::u32 poison[16];
+        for (crd::u32 i = 0; i < 16U; ++i) { poison[i] = 0xDEADBEEFU; }
+        REQUIRE(raster.upload_storage(*args, 0U, static_cast<const void*>(poison), sizeof(poison)));
+        REQUIRE(raster.upload_storage(*scene, visible_off * 4U, static_cast<const void*>(zero_list),
+                                      sizeof(zero_list)));
+
+        struct TwoPass
+        {
+            g::FgBuffer     scene{};
+                g::FgBuffer     args{};
+            g::IGpuProgram* reset = nullptr;
+            g::IGpuProgram* cull  = nullptr;
+        };
+        auto fg2 = raster.create_frame_graph();
+        REQUIRE(fg2 != nullptr);
+        TwoPass tp;
+        tp.scene = fg2->import_storage(*scene);
+        tp.args  = fg2->import_storage(*args);
+        tp.reset = rkern.get();
+        tp.cull  = kern.get();
+        // ⛔⛔ TWO WRITERS OF ONE RESOURCE KEEP DECLARATION ORDER — that is the graph's stated tie-break and
+        // the only defensible one (reordering two writes would silently change the result). So `cull_reset` is
+        // declared FIRST, exactly as `scene_gpu_cull.frame.toml` lists it. The DATA edge does the rest: `cull`
+        // READS what `cull_reset` WROTE, so the sort places reset first and emits the barrier between them.
+        // ⭐ The graph REFUSED to build when this was declared the other way round — cull-writes-args plus
+        // cull-reads-args made a cycle with reset-writes-args. A frame graph that accepts an ambiguous order and
+        // picks one silently is worse than one that says no.
+        fg2->add_pass("cull_reset", g::FgPassKind::Compute)
+            .reads(tp.scene)
+            .writes(tp.args)
+            .execute(
+                [](g::IFrameContext& ctx, void* user) {
+                    auto*              u       = static_cast<TwoPass*>(user);
+                    g::IStorageBuffer* bufs[2] = {ctx.buffer(u->scene), ctx.buffer(u->args)};
+                    ctx.raster().dispatch_kernel(*u->reset, 1U, 1U, 1U,
+                                                 static_cast<g::IStorageBuffer* const*>(bufs), 2U);
+                },
+                &tp);
+        fg2->add_pass("cull", g::FgPassKind::Compute)
+            .reads(tp.scene)
+            .reads(tp.args)
+            .writes(tp.args)
+            .execute(
+                [](g::IFrameContext& ctx, void* user) {
+                    auto*              u       = static_cast<TwoPass*>(user);
+                    g::IStorageBuffer* bufs[2] = {ctx.buffer(u->scene), ctx.buffer(u->args)};
+                    ctx.raster().dispatch_kernel(*u->cull, (n_boxes + 63U) / 64U, 1U, 1U,
+                                                 static_cast<g::IStorageBuffer* const*>(bufs), 2U);
+                },
+                &tp);
+        REQUIRE(fg2->build());
+        fg2->execute();
+        REQUIRE(raster.download_storage(*args));
+        const crd::u32 aw = raster.indirect_command_arg_offset() / 4U;
+        // the reset laid down the constants and zeroed the accumulator; the cull then counted into it
+        CHECK(args->read_u32(aw + 1U) == static_cast<crd::u32>(cpu.size()));
+        CHECK(args->read_u32(aw + 3U) == 0U); // base_vertex: ALWAYS 0 (the IndexedDraw contract)
+        CHECK(args->read_u32(aw + 4U) == 0U); // first_instance: ALWAYS 0 — VK folds it into gl_InstanceIndex
+        if (raster.indirect_command_arg_offset() != 0U)
+        {
+            CHECK(args->read_u32(0U) == 7U); // D3D12's leading DrawIndex root constant
+        }
+    }
+
+    // ⛔ `read_u32` reflects the HOST-VISIBLE mirror, not device memory — a compute result needs an explicit
+    // `download_storage` first. Without it the gate reads the pre-dispatch zeros and reports a perfectly
+    // confident 0 survivors, which is exactly what it did the first time.
+    REQUIRE(raster.download_storage(*args));
+    REQUIRE(raster.download_storage(*scene));
+
+    // ── the comparison: same COUNT, same SET ──
+    const crd::u32 gpu_count = args->read_u32(raster.indirect_command_arg_offset() / 4U + 1U);
+    CHECK(gpu_count == static_cast<crd::u32>(cpu.size()));
+
+    crd::containers::Array<crd::u32> gpu(&alloc);
+    for (crd::u32 i = 0; i < gpu_count && i < n_boxes; ++i)
+    {
+        gpu.push_back(scene->read_u32(visible_off + i));
+    }
+    // sort both (the ORDER is claim-order, the SET is the contract)
+    const auto sort_u32 = [](crd::containers::Array<crd::u32>& a) {
+        for (crd::usize i = 1; i < a.size(); ++i)
+        {
+            const crd::u32 v = a[i];
+            crd::usize     j = i;
+            while (j > 0 && a[j - 1] > v)
+            {
+                a[j] = a[j - 1];
+                --j;
+            }
+            a[j] = v;
+        }
+    };
+    sort_u32(gpu);
+    REQUIRE(gpu.size() == cpu.size());
+    // ⛔ compare as SETS, and REPORT the symmetric difference — a positional diff on two sorted lists turns one
+    // differing element into a cascade of "mismatches" and hides how big the real disagreement is.
+    crd::u32 only_gpu = 0U;
+    crd::u32 only_cpu = 0U;
+    {
+        crd::usize i = 0;
+        crd::usize j = 0;
+        while (i < gpu.size() && j < cpu.size())
+        {
+            if (gpu[i] == cpu[j]) { ++i; ++j; }
+            else if (gpu[i] < cpu[j]) { ++only_gpu; UNSCOPED_INFO("GPU-only instance " << gpu[i]); ++i; }
+            else { ++only_cpu; UNSCOPED_INFO("CPU-only instance " << cpu[j]); ++j; }
+        }
+        only_gpu += static_cast<crd::u32>(gpu.size() - i);
+        only_cpu += static_cast<crd::u32>(cpu.size() - j);
+    }
+    CHECK(only_gpu == 0U);
+    CHECK(only_cpu == 0U);
+
+    if (capture.error_count() > 0U)
+    {
+        const auto msgs = capture.messages();
+        for (usize i = 0; i < msgs.size(); ++i) { WARN("[ren40-cull capture] " << msgs[i].message_text.c_str()); }
     }
     CHECK(capture.error_count() == 0U);
 }
