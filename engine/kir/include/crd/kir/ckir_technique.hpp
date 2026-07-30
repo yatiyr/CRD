@@ -557,9 +557,23 @@ inline constexpr crd::u32 kCsmMaxCascades = 4U;
     // larger than the casters themselves). Shadows then detach from small objects entirely and survive only for
     // big ones, which reads as "the shadows are in completely wrong places" and points at neither the fit nor the
     // atlas. The bias is therefore expressed in SHADOW TEXELS and converted per cascade, both factors recovered
-    // from the cascade's own matrix so no new binding can drift out of agreement with it:
-    //   ortho_rh_zo puts 1/radius in c0.x and −1/(far−near) in c2.z, so
-    //   texel_world = 2 / (map_size · c0.x)   and   1/depth_range = −c2.z.
+    // from the cascade's own matrix so no new binding can drift out of agreement with it.
+    //
+    // ⛔⛔ SCAR 5 — A MATRIX ELEMENT IS NOT A SCALE (found 2026-07-30; it is why four shadow gates were red).
+    // `light_vp = ortho · light_view`, so its first ROW is (1/radius)·right and its third ROW is
+    // −(1/range)·back: the world→clip scales are the ROW NORMS, and any single element of a row carries a
+    // DIRECTION COSINE with it. The first version of this code read `vp.c0.x` and `−vp.c2.z`, which are
+    // (1/radius)·right.x and (1/range)·back.z — correct only when the light basis happens to be world-aligned.
+    // Measured on the two shadow gates in this repo: a straight-down light gives right = (−1,0,0) and
+    // back = (0,1,0); a light slanted in the XY plane gives right = (0,0,−1) and back.z = 0. So `vp.c0.x` came
+    // out NEGATIVE in one and ZERO in the other — both clamped to the 1e-9 floor, making `texel_w` 1.95e6 world
+    // units and the normal offset **2.2 MILLION** units, which puts every lookup outside every cascade so `any`
+    // falls to 0 and the fallback declares the pixel LIT — and `−vp.c2.z` was 0 in BOTH, making the depth bias
+    // identically zero. The grazing-angle acne this code was written to kill did disappear, because the SHADOW
+    // disappeared with it.
+    // ⭐ The engine already knew the right derivation: `csm.cpp::recover_camera` recovers the camera's
+    // projection scales as ROW LENGTHS (`r0 = |(c0.x, c1.x, c2.x)|`) for exactly this reason. One derivation,
+    // two places — a scale read off a composed matrix is ALWAYS a row norm, never an element.
     //
     // ⛔⛔ SCAR 4 — A DEPTH BIAS ALONE CANNOT SAVE A NEAR-EDGE-ON SURFACE. The depth a receiver gains across one
     // shadow texel is `texel_world · tan θ`, and tan θ diverges as the surface turns edge-on to the light — so
@@ -582,11 +596,16 @@ inline constexpr crd::u32 kCsmMaxCascades = 4U;
     {
         const int vp = tc.binding(kCsmBindLightVp0 + static_cast<int>(ci));
         if (vp < 0) { return -1; }
-        // the matrix columns, as vectors (constant-folds to a single header word each)
+        // the matrix columns, as vectors (each is a mat·unit-vector the backend compiler folds to a column read)
         const int col_x = g.mat_mul_vec(vp, g.vec4(kf(1.0), kf(0.0), kf(0.0), kf(0.0)));
+        const int col_y = g.mat_mul_vec(vp, g.vec4(kf(0.0), kf(1.0), kf(0.0), kf(0.0)));
         const int col_z = g.mat_mul_vec(vp, g.vec4(kf(0.0), kf(0.0), kf(1.0), kf(0.0)));
-        const int inv_radius = mxf(g.swizzle(col_x, 0), kf(1.0e-9));
-        const int inv_range  = sub(kf(0.0), g.swizzle(col_z, 2));
+        // ROWS 0 and 2 of the world→clip matrix (see SCAR 5): |row0| = 1/radius, |row2| = 1/depth_range,
+        // both independent of how the light happens to be oriented.
+        const int row0 = g.vec3(g.swizzle(col_x, 0), g.swizzle(col_y, 0), g.swizzle(col_z, 0));
+        const int row2 = g.vec3(g.swizzle(col_x, 2), g.swizzle(col_y, 2), g.swizzle(col_z, 2));
+        const int inv_radius = mxf(g.vlength(row0), kf(1.0e-9));
+        const int inv_range  = mxf(g.vlength(row2), kf(1.0e-9));
         const int texel_w    = dvd(kf(2.0), mul(msz, inv_radius)); // world units per shadow texel, THIS cascade
         bias_scale[ci]       = mul(texel_w, inv_range);
         // the normal-offset sample position, in WORLD units of this cascade's texel

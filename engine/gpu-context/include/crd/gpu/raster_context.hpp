@@ -1190,7 +1190,7 @@ public:
         IRasterTarget& /*target*/, IRasterProgram& /*program*/, float /*clear_depth*/, DepthCompare /*compare*/,
         IStorageBuffer& /*storage*/, crd::u32 /*index_offset_bytes*/, IStorageBuffer& /*args*/,
         crd::u32 /*args_offset_bytes*/, IStorageBuffer* /*count_buf*/, crd::u32 /*count_offset_bytes*/,
-        crd::u32 /*max_draws*/, bool /*load_target*/)
+        crd::u32 /*max_draws*/, bool /*load_target*/, crd::u32 /*first_draw_index*/ = 0U)
     {
     }
 
@@ -1206,12 +1206,20 @@ public:
     // REN-38 "textured monuments lose their shadows" failure, one layer further along). Everything else follows
     // the depth-only sibling: args from `args`, count from `count_buf` where the device has the ability, clamped
     // to `max_draws` where it does not.
+    // ⛔⛔ REN-40-C2: `first_draw_index` APPENDED — and its absence was a silent, backend-shaped defect.
+    // A rebased program reads `table[DrawIndex]` for its region base AND (since REN-40-C2) its LOD SLOT, and on
+    // Vulkan the row arrives ONLY as a push constant the verb issues. The CPU-args multi verbs have always
+    // pushed it; these indirect twins never did, so every GPU-driven draw read ROW 0 — the right answer for a
+    // single-group frame with base 0, which is exactly why it survived REN-40-A's gates, and the wrong answer
+    // for every group past the first and every LOD slot past 0. The visible symptom was levels 1 and coarser
+    // drawing NOTHING while the device's own commands were provably correct (slot 1: 13 instances,
+    // index_count 9054, first_index 18784).
     virtual void draw_storage_multi_indexed_indirect(
         IRasterTarget& /*target*/, IRasterProgram& /*program*/, ClearColor /*clear*/, float /*clear_depth*/,
         DepthCompare /*compare*/, IStorageBuffer& /*storage*/, crd::u32 /*index_offset_bytes*/, ITexture* /*map*/,
         ITexture* /*atlas*/, IStorageBuffer& /*args*/, crd::u32 /*args_offset_bytes*/,
         IStorageBuffer* /*count_buf*/, crd::u32 /*count_offset_bytes*/, crd::u32 /*max_draws*/,
-        bool /*load_target*/)
+        bool /*load_target*/, crd::u32 /*first_draw_index*/ = 0U)
     {
     }
 };

@@ -382,6 +382,48 @@ struct CullDesc
     // section offset READ OUT of the header becomes `base + value`. `kCullNoBaseWord` = the buffer's base IS 0
     // (a private per-group buffer), which keeps the non-consolidated path free of the extra load.
     crd::u32 base_word     = 0xFFFFFFFFU;
+    // ── ⭐⭐ REN-40-C2: DISCRETE LOD SELECTION, ON THE DEVICE. ───────────────────────────────────────────────
+    // The cull kernel already has everything the decision needs — the instance's world AABB and the view's clip
+    // matrix — so choosing a level is a few more lines in the pass that is already reading them, not a new pass.
+    // Each (view, slot) gets its OWN indirect command and its OWN compacted list, so one instance contributes to
+    // exactly one draw and the whole selection stays a single atomic per survivor.
+    //
+    // `lod_slots` = levels the layout reserves per view. **1 is the historical behaviour byte for byte**, which
+    // is what makes "force everything to level 0 and diff the frame" a real parity gate rather than a hope.
+    crd::u32 lod_slots       = 1U;
+    // Header words: the chain LENGTH, the (first_index, index_count) TABLE, and the per-level screen HEIGHTS.
+    // ⛔ Read from the header rather than baked, because the chain is a property of the MESH and ONE cooked
+    // kernel serves every mesh group in the scene. A cook-time constant here would need a kernel per mesh.
+    crd::u32 lod_count_word  = 0U;
+    crd::u32 lod_table_word  = 0U;
+    crd::u32 lod_height_word = 0U;
+    // ⭐⭐ THE VIEW'S HEIGHT IN PIXELS, as a word offset inside the ARGS params block (beside `base_word`).
+    // ⛔⛔ IT CANNOT BE A COOK-TIME CONSTANT AND IT CANNOT LIVE IN THE HEADER. Not cook-time: the window resizes.
+    // Not the header: the header is per GROUP while this is per VIEW, and the camera's viewport and a cascade's
+    // atlas slice are different sizes — putting it in the header would have every group publish five numbers that
+    // are identical across groups and different across views, i.e. the wrong axis. The params block is already
+    // per (group, dispatch) and already carries `base_word`, so it is the one place with the right shape.
+    // 0 = no pixel height ⇒ selection is disabled and every instance takes slot 0.
+    crd::u32 pixel_height_word = 0U;
+    // ⛔⛔ REN-40-C2: the arg offset WITHIN one command, kept separately from `draw_arg_off` (which is the
+    // ABSOLUTE word of this dispatch's first arg, params block and view stride folded in). Without it a kernel
+    // cannot recover where a COMMAND starts, only where its ARGS start — and the reset needs the command start to
+    // write D3D12's leading DrawIndex root constant. It had been writing that constant at `view * stride` with
+    // the params block NOT added, so view 0's DrawIndex landed on params word 0 — THE GROUP'S REGION BASE — and
+    // every consolidated group's cull then read group 0's header. Vulkan never saw it (its arg offset is 0, so
+    // the store is skipped entirely), which is exactly the shape of a backend-specific silent wrong answer.
+    crd::u32 draw_arg_within = 0U;
+    // ⭐⭐ REN-40-C2 / D3D12: the params-block word holding this group's FIRST DRAW-LIST ROW. D3D12's command
+    // signature prepends a DrawIndex root constant, so the reset must WRITE the row into each command; the
+    // row of (group, slot) is `base_row + slot`, and the base is per GROUP while one cooked kernel serves
+    // every group — so it arrives as data, exactly like `base_word`. 0 = no base row (write slot alone,
+    // the historical behaviour).
+    crd::u32 base_row_word = 0U;
+    // ⭐⭐ REN-40-C2: the header word naming the per-instance LOD-OVERRIDE section (2 words each: the screen
+    // bias as f32 bits, then `min_level | (max_level << 8)`). ⛔ A SECTION beside the world AABBs rather than
+    // extra words on the instance record, because the instance stride is DECLARED by every `.crdv` and read by
+    // every vertex program — only the cull needs this. 0 = no overrides (bias 1, levels unclamped).
+    crd::u32 lod_override_off = 0U;
 };
 // ⭐ REN-38-F7: the EXPANSION contract of a procedural vertex stage — how a flat VertexIndex decomposes into
 // (instance, corner) and where the per-instance record lives. ⛔ The corner table itself is AUTHORED as `ifequal`
@@ -430,6 +472,23 @@ struct VertexProgramDesc
     // region base from `sbuf[rebase_table + DrawIndex]` and rebases EVERY storage load by it — one scene
     // buffer, per-group regions, cross-group multi-draw. 0 keeps the historical absolute layout.
     crd::u32                               rebase_table = 0U;
+    // ── ⭐⭐ REN-40-C2: THE DRAW TABLE IS A PER-DRAW RECORD, not a bare base. ──────────────────────────────────
+    // `rebase_stride` is how many words one row occupies; word 0 stays the region base (every existing reader is
+    // unchanged when the stride is 1), word 1 carries this draw's LOD SLOT.
+    // ⛔⛔ WHY THE SLOT HAS TO ARRIVE THIS WAY. A frame-graph PASS binds ONE program for its whole draw list, so
+    // the slot cannot be a cook-time constant the way the CASCADE is (each cascade already has its own pass and
+    // therefore its own program). It has to be PER DRAW ITEM, and the only per-draw channel a GPU-written
+    // multi-draw has is the draw index. This is the standard GPU-driven indirection and both backends already
+    // carry it: `gl_DrawIDARB` on Vulkan, a command-signature root constant on D3D12 (whose
+    // `D3D12_INDIRECT_ARGUMENT_TYPE_INCREMENTING_CONSTANT` is the same idea formalised). Frontier engines call
+    // the row a "render item" — an atomic (mesh x material x LOD) unit, one indirect draw each.
+    // ⛔ The row stores the SLOT, not the finished list address, because the table is uploaded ONCE and shared by
+    // every pass while the list address depends on the VIEW. `cascade` is cook-time per pass, `slot` is per row,
+    // and the stage combines them — one table serves the camera and every cascade.
+    crd::u32                               rebase_stride = 1U;
+    // How many LOD slots the visible-list layout reserves per view. 1 = the historical single-list-per-view
+    // layout, byte for byte.
+    crd::u32                               lod_slots     = 1U;
     // ⭐⭐ 38-G1 perf: the header word holding the INSTANCE CAPACITY (the stride between the per-cascade
     // visible lists). Non-zero on a LIGHT_VP stage makes it read cascade `cascade`'s own list instead of the
     // camera's — the per-cascade shadow cull. 0 keeps the historical single-list behaviour.

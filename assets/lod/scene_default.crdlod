@@ -1,0 +1,106 @@
+# ⭐⭐ REN-40-C1: THE DEFAULT LOD POLICY — the switch distances, as content.
+#
+# ⛔ WHY THIS IS A FILE. An LOD policy is the most content-dependent thing in the
+# renderer: a rock can drop to 5% of its triangles at 100 px and nobody will ever
+# see it, a character's face cannot. Baking these numbers into C++ makes every one
+# of those judgements an engine edit by someone who is not looking at the asset,
+# and makes them invisible — the only way to learn why a mesh pops would be to read
+# the renderer. So an artist owns this file, and the cook is a consumer of it.
+#
+# ⛔ `ratio` IS OF THE SOURCE MESH, never of the previous level. A chain expressed
+# relative to its predecessor compounds rounding: two assets both asking for "half,
+# then half" end up with different level-2 counts depending on how level 1 happened
+# to round.
+#
+# ⛔ `screen_height` IS THE HEIGHT BELOW WHICH THE NEXT LEVEL TAKES OVER, in pixels
+# of the target being rendered. It is a property of the TARGET, not of the world:
+# the same instance is a different number of pixels in the camera view and in
+# cascade 3, which is exactly why each view carries its own bias (40-C3).
+#
+# ⭐ THE ARITHMETIC THESE NUMBERS ARE AIMED AT (from the 40-A board): at 1M
+# instances the frame spends ~86 ms of GPU drawing ~256k instances at full detail —
+# about 1.5 BILLION triangles across the camera view and four cascades, because the
+# far half of a 2000-unit field pays full vertex cost for sub-pixel coverage. A
+# correctly levelled frame is 10–20M.
+
+schema = 1
+name   = "crd://lod/scene_default"
+
+# Garland 1998 silhouette preservation, held high on purpose: a silhouette that
+# SHRINKS as the level changes is visible from any distance, while interior detail
+# at level 2+ is by definition sub-pixel.
+boundary_weight = 1000.0
+
+# ── ⭐⭐ REN-40-C3: THE PER-VIEW BIAS — [camera, cascade0, cascade1, cascade2, cascade3]. ────────────────────
+# ⛔ THE ERROR IS IN PIXELS OF THE TARGET BEING RENDERED, and the targets are not alike. Cascade 3 covers the far
+# field at roughly 0.18 world-units per texel: it physically CANNOT resolve what the forward pass can, yet it was
+# selecting the SAME level for the SAME instance — so the most expensive pass in the frame drew the finest
+# geometry to fill the coarsest buffer. A bias below 1 makes a view treat an instance as smaller than it looks to
+# the camera, and drop down the chain sooner.
+#
+# The camera stays at 1.0 — it is the reference every threshold above was authored against. The cascades descend
+# with their texel size: cascade 0 is nearly camera-sharp, cascade 3 is a blur.
+# ⛔ A NON-POSITIVE entry is refused back to 1.0 by the parser: a bias of 0 drives the projected height to zero
+# and pins the whole view to the coarsest level, which reads as broken shadows rather than as a typo here.
+view_bias = [1.0, 0.7, 0.45, 0.25, 0.12]
+
+# ── ⭐⭐ REN-40-C4: TRANSITIONS THAT CANNOT BE SEEN. ────────────────────────────────────────────────────────
+# ⛔⛔ WHAT MAKES A LEVEL CHANGE VISIBLE AT A MILLION INSTANCES IS NOT THE CHANGE, IT IS THE SYNCHRONY. Every
+# instance of a mesh shares one switch height, so a camera moving forward flips a whole BAND of them on the same
+# frame — a wave sweeping across the field, which reads as the world rebuilding itself. A per-pixel dissolve does
+# not fix that; it fades a wave instead of cutting one.
+#
+# `hysteresis` is the width of a band, as a fraction of each switch height, inside which every instance gets its
+# OWN boundary (a stable hash of its slot). The population then crosses over a RANGE of distances, so at any
+# instant a handful of instances are changing rather than thousands. ⭐ It costs nothing: the offset is a pure
+# function of the slot, so there is no per-instance history to store and nothing to read-modify-write on a
+# stateless kernel over a million instances — and being stable frame to frame is what stops it becoming crawl.
+# 0 disables it and restores a single shared threshold.
+hysteresis = 0.15
+
+# `dither_band` reserves a narrow band around each threshold for a per-pixel cross-dissolve between the two
+# neighbouring levels. ⛔ DITHER OVER GEOMORPH on purpose: geomorphing needs a NESTED chain (level n+1 a subset
+# of level n), which constrains the simplifier and — decisively — cannot cross the mesh-to-impostor boundary at
+# all, which is the transition most likely to be seen.
+# ⚠ DECLARED AND NOT YET CONSUMED: the selector reads the band, but the paired-level draw and the screen-space
+# dither threshold are not implemented, so today this value changes nothing. Stated here rather than left to be
+# discovered from a value that silently does nothing.
+dither_band = 0.25
+
+# ── HOW MANY LEVELS. This is a CONTENT question, and the answer lives here rather than in the engine: the caps
+# are `kMaxLodLevels` / `kMaxLodSlots` = 8, so a chain may declare up to SEVEN `[[level]]` entries beyond the
+# source. What actually stops a chain earlier is arithmetic, not policy:
+#   · `min_triangles` — a level that would fall below the floor is clamped to it, and a level that then fails to
+#     REDUCE is not appended (it would be a second copy of its predecessor with its own draw call and its own
+#     indirect command). A 6,036-triangle mesh reaches 91 triangles at the last entry below and still clears 64.
+#   · the decimator itself — the link condition and inversion prevention can stop short of a ratio, which is
+#     REPORTED (`levels_short_of_target`) rather than silently accepted.
+#   · memory — every slot costs one visible list per view (camera + 4 cascades), so slots are not free at a
+#     million instances. Six levels is 30 lists; eight would be 40.
+# ⛔ Thresholds must DESCEND and ratios must DESCEND, or selection is ambiguous — and an ambiguous selector
+# OSCILLATES at the boundary, which is exactly the popping this band exists to remove. The parser refuses ties.
+
+# ── level 1: still a close-up mesh, so barely a reduction ────────────────────
+[[level]]
+ratio         = 0.5
+screen_height = 512.0
+
+# ── level 2 ──────────────────────────────────────────────────────────────────
+[[level]]
+ratio         = 0.25
+screen_height = 256.0
+
+# ── level 3 ──────────────────────────────────────────────────────────────────
+[[level]]
+ratio         = 0.10
+screen_height = 128.0
+
+# ── level 4 ──────────────────────────────────────────────────────────────────
+[[level]]
+ratio         = 0.04
+screen_height = 64.0
+
+# ── level 5: the far field, where most of a million instances live ───────────
+[[level]]
+ratio         = 0.015
+screen_height = 24.0

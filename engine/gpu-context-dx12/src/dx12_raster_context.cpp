@@ -4020,8 +4020,17 @@ public:
                                              crd::u32 index_offset_bytes, ITexture* map, ITexture* atlas,
                                              IStorageBuffer& args, crd::u32 args_offset_bytes,
                                              IStorageBuffer* count_buf, crd::u32 count_offset_bytes,
-                                             crd::u32 max_draws, bool load_target) override
+                                             crd::u32 max_draws, bool load_target,
+                                             crd::u32 first_draw_index) override
     {
+        // ⛔⛔ REN-40-C2 / DX12: the row is NOT pushed here — D3D12's command signature prepends a DrawIndex
+        // root constant, so each command carries its OWN row and `ExecuteIndirect` supplies it per draw.
+        // ⚠ THAT MAKES THE ROW THE PRODUCER'S JOB: `scene_cull_reset` writes `draw_index + slot`, and
+        // `CullDesc::draw_index` is currently 0 — correct for the FIRST group only. A multi-group frame under
+        // the device cull therefore needs the group's base row handed to the kernel (the params block, beside
+        // `base_word`). Named here rather than left to be discovered: on Vulkan the same row arrives as a push
+        // constant and is correct for every group.
+        (void)first_draw_index;
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         auto& s = static_cast<Dx12StorageBuffer&>(storage);
@@ -4104,8 +4113,17 @@ public:
                                                         IStorageBuffer& storage, crd::u32 index_offset_bytes,
                                                         IStorageBuffer& args, crd::u32 args_offset_bytes,
                                                         IStorageBuffer* count_buf, crd::u32 count_offset_bytes,
-                                                        crd::u32 max_draws, bool load_target) override
+                                                        crd::u32 max_draws, bool load_target,
+                                             crd::u32 first_draw_index) override
     {
+        // ⛔⛔ REN-40-C2 / DX12: the row is NOT pushed here — D3D12's command signature prepends a DrawIndex
+        // root constant, so each command carries its OWN row and `ExecuteIndirect` supplies it per draw.
+        // ⚠ THAT MAKES THE ROW THE PRODUCER'S JOB: `scene_cull_reset` writes `draw_index + slot`, and
+        // `CullDesc::draw_index` is currently 0 — correct for the FIRST group only. A multi-group frame under
+        // the device cull therefore needs the group's base row handed to the kernel (the params block, beside
+        // `base_word`). Named here rather than left to be discovered: on Vulkan the same row arrives as a push
+        // constant and is correct for every group.
+        (void)first_draw_index;
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         auto& s = static_cast<Dx12StorageBuffer&>(storage);

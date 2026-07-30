@@ -16,6 +16,7 @@ target_link_libraries(crd-scene-render
         crd-math
         crd-geometry-primitives
         crd-scene
+        crd-lod # REN-40-C2: the mesh LOD chain + its authored policy
         crd-resources
         crd-anim           # GEO-8: clip sampling + skin palettes for the skinned draw path
         crd-gpu-context

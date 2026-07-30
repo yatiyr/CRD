@@ -1,0 +1,36 @@
+# ⭐⭐ REN-40-C2 PARITY POLICY — the same chain, and NOTHING ever selects past level 0.
+#
+# ⛔ THIS IS A GATE, NOT A SHIPPING POLICY. It exists so "GPU LOD selection is correct" can be proven the only
+# way a selection change can be proven: build the WHOLE chain, run the WHOLE device path — the (view, slot)
+# commands, the per-slot lists, the per-draw table rows, the reset that reads the LOD table, the selector that
+# computes a projected screen height — and then require the frame to come back **BIT-IDENTICAL** to the arm with
+# no chains at all. Anything that mis-addresses a list, mis-stamps a command, or mis-selects a level moves a
+# pixel, and 0 of 921600 is a statement no amount of "it looks right" can substitute for.
+#
+# The mechanism is the metric, not a switch in C++: `screen_height` is the height BELOW which the next level
+# takes over, so a SUB-PIXEL threshold means "never" — the selector's `px < height[s]` is false for anything
+# large enough to raster at all, and slot 0 wins by the same code path that would otherwise pick slot 3.
+# ⛔ They still DESCEND (0.3 / 0.2 / 0.1) rather than all being zero, because the policy parser REFUSES equal
+# thresholds — an ambiguous selector oscillates at the boundary, which is the popping this band exists to remove.
+# The gate has to go through the real rule, not around it.
+#
+# ⭐ It uses the SHIPPED ratios, deliberately. A policy with no levels would prove only that a one-level chain
+# behaves like no chain; this one builds all three levels, publishes them in the header's LOD table, lays down
+# their commands, and reserves their lists — and still must not change one pixel.
+
+schema = 1
+name   = "crd://lod/parity_lod0"
+
+boundary_weight = 1000.0
+
+[[level]]
+ratio         = 0.5
+screen_height = 0.3
+
+[[level]]
+ratio         = 0.25
+screen_height = 0.2
+
+[[level]]
+ratio         = 0.08
+screen_height = 0.1

@@ -3,6 +3,9 @@
 
 #include <crd/scenerender/scene_renderer.hpp>
 
+#include <crd/lod/lod_asset.hpp>
+#include <crd/lod/lod_chain.hpp>
+
 // REN-38-D5: every vertex program this renderer runs is COOKED FROM A `.crdv`.
 #include <crd/vertexcook/vertex_asset.hpp>
 // REN-38-C4: the scene SURFACE is cooked from an authored `.crdm`, not a C++ builder.
@@ -1402,16 +1405,6 @@ namespace
 constexpr crd::u64 kFnvOffset = 14695981039346656037ULL;
 constexpr crd::u64 kFnvPrime  = 1099511628211ULL;
 
-void hash_bytes(crd::u64& h, const void* data, crd::usize n) noexcept
-{
-    const auto* p = static_cast<const crd::u8*>(data);
-    for (crd::usize i = 0; i < n; ++i)
-    {
-        h ^= p[i];
-        h *= kFnvPrime;
-    }
-}
-
 } // namespace
 
 // ── REN-1: what ONE culled group draws. ─────────────────────────────────────────────────────────────────────
@@ -1438,6 +1431,9 @@ struct SceneDraw
     crd::u32                  cull_args_offset = 0U;
     crd::u32                  cull_groups = 0U;
     crd::u32 first_index = 0U;
+    // ⭐⭐ REN-40-C2: which LOD level this item draws. 0 everywhere until selection ships, and 0 is exactly the
+    // historical behaviour — the row is inert at one slot.
+    crd::u32 lod_slot = 0U;
 };
 
 // ── the Impl ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1487,6 +1483,46 @@ struct SceneRenderer::Impl
     crd::u64 structure_sig = 0;
     bool     has_structure = false;
 
+    // ── ⭐⭐ REN-40-B: THE CHUNK INDEX — why a static frame now costs nothing. ────────────────────────────────
+    // The extract was already chunk-grain and dirty-aware for the UPLOAD, but DISCOVERING the dirt was
+    // O(entities) twice over, and at 1M instances that was 171 ms of a 337 ms frame:
+    //   (1) the structure signature hashed `EntityId[n]` + `MeshRenderer[n]` BYTE BY BYTE for every chunk —
+    //       40 MB of FNV per frame at 1M, to answer a question that only ever changes on spawn/despawn; and
+    //   (2) deciding whether a chunk was stale scanned EVERY group's EVERY run looking for its key, so the
+    //       walk was O(chunks x runs) — quadratic in the scene.
+    // Both are replaced by an index keyed on the chunk (its entity-array pointer, the same key `ChunkRun`
+    // always used): one O(1) probe gives the chunk's recorded Transform version and the exact span of runs it
+    // owns. A chunk whose version has not moved is then skipped WITHOUT TOUCHING ONE ENTITY, so a frame in
+    // which nothing moved costs O(chunks) — a few thousand compares — instead of O(entities).
+    // ⛔ The signature still exists and is still exact; it is just built from O(1) facts per chunk (key, count,
+    // first/last entity id, the MeshRenderer chunk version) instead of from every byte. Insert/move bump the
+    // destination chunk's `version_counter` (archetype_chunk_storage.cpp), and a swap-remove changes the count,
+    // so every structural edit still moves it — including the spawn-and-despawn-in-one-chunk case a count-only
+    // signature would miss, because the spawn bumps the renderer version.
+    struct ChunkEntry
+    {
+        crd::u64 tversion   = 0; // Transform chunk-version at last extract
+        crd::u32 first_run  = 0; // [first_run, first_run + run_count) into `runs`
+        crd::u32 run_count  = 0;
+        crd::u32 entity_count = 0; // guards the incremental write against a structure that moved under us
+    };
+    // One run = the contiguous slot range ONE chunk contributed to ONE group. This is the same grain
+    // `MeshGroup::runs` carried; it moves here so a chunk can reach its runs in O(1) and so the upload walks a
+    // DIRTY LIST rather than every run of every group.
+    struct RunEntry
+    {
+        crd::u32 group = 0;
+        crd::u32 first = 0;
+        crd::u32 count = 0;
+    };
+    crd::containers::HashMap<const crd::scene::EntityId*, crd::u32> chunk_index; // chunk key -> `chunks` slot
+    crd::containers::Array<ChunkEntry> chunks;
+    crd::containers::Array<RunEntry>   runs;
+    crd::containers::Array<crd::u32>   dirty_runs; // indices into `runs`, cleared every sync
+    // ⛔ Reused across frames: `upload_bounds_range` used to allocate a fresh Array per call, which on a
+    // structural frame at 1M is a 24 MB allocation inside the hot loop.
+    crd::containers::Array<crd::f32>   bounds_staging{nullptr};
+
     crd::containers::HashMap<crd::resources::ResourceId, crd::u32> group_of_mesh;
     // material colour cache (linear RGBA); resolved on rebuild
     crd::containers::HashMap<crd::resources::ResourceId, crd::math::Vec4f> material_color;
@@ -1533,6 +1569,18 @@ struct SceneRenderer::Impl
     bool                                      gpu_cull_on = false;
     // REN-40-A: run the CPU cull TOO, only so its verdict can be compared (a gate mode — see the header).
     bool                                      gpu_cull_verify = false;
+    // ⭐⭐ REN-40-C2: the authored LOD policy and whether chains are built at all.
+    // ⛔ DEFAULT OFF, like every other performance switch here, so the A/B runs on
+    // ONE build (the readback-A/B rule).
+    bool                                      lod_enabled = false;
+    // ⭐⭐ REN-40-C2: how many LOD levels the visible-list and command layouts reserve PER VIEW. Fixed for
+    // the renderer's lifetime from the installed policy, because it is baked into every cooked cull kernel
+    // and every buffer size — a value that could change per frame would silently invalidate both.
+    // ⛔ 1 (no policy) is the historical layout byte for byte.
+    crd::u32                                  lod_slots   = 1U;
+    // One-shot: LOD was asked for but the draw path cannot carry a per-draw slot (see the draw builder).
+    bool                                      lod_unaddressable_reported = false;
+    crd::lod::LodPolicy                       lod_policy{};
     std::unique_ptr<crd::gpu::IStorageBuffer> cull_args;
     crd::u32                                  cull_args_groups = 0U;
     std::unique_ptr<crd::gpu::IGpuProgram> vs_idx;
@@ -1956,9 +2004,22 @@ struct SceneRenderer::Impl
         // ⛔ The commands start AFTER the params block (`kCullArgsHeaderWords`), whose word 0 carries the group's
         // buffer base. Every consumer of an args offset adds the same constant: the cook stamp here, the draw
         // items in `fill()`, the cascade expansion, and the counts readback.
+        // ⭐⭐ REN-40-C2: a VIEW now owns `lod_slots` consecutive commands, so its first one is `view * slots`
+        // along and the kernel walks the rest by the slot it selects.
         desc.cull.draw_arg_off = (kCullArgsHeaderWords * 4U) + raster->indirect_command_arg_offset()
-                                 + view * raster->indirect_command_stride();
+                                 + view * lod_slots * raster->indirect_command_stride();
         desc.cull.base_word    = 0U; // params word 0
+        // ⭐⭐ REN-40-C2: the LOD vocabulary, stamped from the ENGINE's header words — never read from the asset
+        // text, for the reason the `bounds_off = 104` scar records: a declared word the host does not validate
+        // renders a plausible frame off the wrong data. These are validated below alongside the rest.
+        desc.cull.lod_slots         = lod_slots;
+        desc.cull.lod_count_word    = kHdrLodCount;
+        desc.cull.lod_table_word    = kHdrLodTable;
+        desc.cull.lod_height_word   = kHdrLodHeight;
+        desc.cull.pixel_height_word = kCullArgsPixelHeight + view;
+        desc.cull.draw_arg_within   = raster->indirect_command_arg_offset();
+        desc.cull.base_row_word     = kCullArgsBaseRow;
+        desc.cull.lod_override_off  = kHdrLodOverrideOff;
         // ⛔⛔ THE DECLARED HEADER WORDS MUST BE THE ENGINE'S HEADER WORDS. An asset naming word 104 for the
         // bounds section (the light record's first word) produced a kernel that tested boxes built from a light
         // colour: it rendered, it reported plausible counts, and the AABBs on the device were bit-identical to
@@ -2060,7 +2121,8 @@ struct SceneRenderer::Impl
 
     explicit Impl(crd::memory::IAllocator* a)
         : alloc(a), skeleton_cache(a), clip_cache(a), pose_scratch(a), world_scratch(a), palette_scratch(a),
-          palette_staging(a), group_of_mesh(a), material_color(a), material_texture(a), entity_slot(a),
+          palette_staging(a), chunk_index(a), chunks(a), runs(a), dirty_runs(a), bounds_staging(a),
+          group_of_mesh(a), material_color(a), material_texture(a), entity_slot(a),
           contrib_draws(a), frame(a), fallback(a), recorder(a), groups_view(a), fs_hashes(a), fs_programs(a),
           fb_frame_names(a), fb_frame_descs(a), techniques(a), adv_stages(a)
     {
@@ -2444,7 +2506,27 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
     // ⭐⭐ 38-G1 (user-directed): resolved BY NAME — a shipped `assets/vertex/scene.crdv` shadows the
     // embedded copy, exactly like the frames, materials and post graphs. The builtin pack is the fallback.
     crd::containers::String vs_scene(m_impl->alloc);
-    if (!m_impl->asset_text("vertex/scene.crdv", vs_scene)) { return false; }
+    {
+        crd::containers::String vs_body(m_impl->alloc);
+        if (!m_impl->asset_text("vertex/scene.crdv", vs_body)) { return false; }
+        // ── ⭐⭐ REN-40-C2: THE DRAW TABLE IS UNIVERSAL. ─────────────────────────────────────────────────────
+        // ⛔⛔ IT HAD TO BECOME UNIVERSAL, and the reason is the defect it fixes. The per-draw LOD SLOT reaches a
+        // vertex program through the draw-table row, and the table used to exist ONLY in the consolidated scene
+        // buffer — which `consolidate` disables whenever shadows are active. So in every shadowed configuration
+        // (i.e. the shipping one, and the one both REN-40 boards were measured in) the stage was cooked WITHOUT
+        // `rebase_table`, had no row to read, computed slot 0, and read slot 0's visible list — which is EMPTY,
+        // because the cull sent those survivors to slots 1..n. **Levels 1 and coarser drew NOTHING**, the frame
+        // still rendered, every count still reconciled, and GPU time DROPPED — so it read as an LOD win.
+        // ⭐ Now every group's buffer carries the table at the SAME word offset the scene buffer's prefix does
+        // (`kSceneDrawTableOff`, right after the header), so ONE constant addresses both layouts and the two
+        // draw paths stop being two paths. A private buffer's row simply carries base 0.
+        char rb[192];
+        (void)std::snprintf(static_cast<char*>(rb), sizeof(rb),
+                            "rebase_table = %u\nrebase_stride = %u\nlod_slots = %u\ninstance_capacity_word = %u\n",
+                            kSceneDrawTableOff, kSceneDrawRowWords, m_impl->lod_slots, kHdrInstanceCapacity);
+        vs_scene.append(static_cast<const char*>(rb));
+        vs_scene.append(vs_body.c_str());
+    }
     crd::vertcook::VertexProgramDesc scene_desc(m_impl->alloc);
     if (!cook_vs(m_impl->alloc, vs_scene.c_str(), nullptr, vg, ve, &scene_desc)) { return false; }
     // ⭐ REN-38 (the D5 correction closed): `VariantKey::vertex` is ENGINE-FILLED from the LIVE declaration —
@@ -2493,10 +2575,12 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
         crd::kir::KGraph rvg(m_impl->alloc);
         crd::kir::KEntry rve;
         crd::containers::String vs_rb(m_impl->alloc);
-        char rb_line[64];
-        (void)std::snprintf(static_cast<char*>(rb_line), sizeof(rb_line), "rebase_table = %u\n",
-                            kSceneDrawTableOff);
-        vs_rb.append(static_cast<const char*>(rb_line));
+        // ⭐⭐ REN-40-C2: NO PREFIX ANY MORE. `vs_scene` itself now carries `rebase_table` / `rebase_stride` /
+        // `lod_slots` / `instance_capacity_word`, because the draw table became UNIVERSAL — every buffer holds
+        // one, so every scene stage rebases. ⛔⛔ Prefixing them a SECOND time here produced a DUPLICATE TOML
+        // KEY: toml++ refused the document, this cook returned null, `program_rebased` stayed null, and
+        // `consolidate` silently turned OFF — two mesh groups stopped batching into one multi-draw. The REN-38
+        // gate caught it as `2 == 1`, which is exactly what that gate exists for.
         vs_rb.append(vs_scene.c_str()); // the SAME resolved declaration — the twin can never drift from it
         crd::vertcook::VertexProgramDesc rb_desc(m_impl->alloc);
         if (cook_vs(m_impl->alloc, vs_rb.c_str(), nullptr, rvg, rve, &rb_desc)
@@ -2573,6 +2657,10 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
             sdesc.transform              = crd::vertcook::VertexTransform::LightVp;
             sdesc.cascade                = c;
             sdesc.instance_capacity_word = kHdrInstanceCapacity;
+            // ⭐⭐ REN-40-C2: the LIST LAYOUT WIDTH. Cascade c's lists are at `(1 + c) * slots + slot`, and
+            // the slot arrives per draw item through the table row — so the stage needs both the width
+            // (cook-time) and the row stride (stamped with `rebase_table`).
+            sdesc.lod_slots              = m_impl->lod_slots;
             if (!crd::vertcook::cook_vertex_program(sdesc, shvg, shve)) { all_ok = false; break; }
             m_impl->shadow_vs[c] = ctx.create_program(shvg, shve);
             if (m_impl->shadow_vs[c] == nullptr) { all_ok = false; break; }
@@ -2691,10 +2779,9 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
         }
         if (ok && m_impl->program_rebased != nullptr)
         {
-            char rbl[80];
-            (void)std::snprintf(static_cast<char*>(rbl), sizeof(rbl), "indexed = true\nrebase_table = %u\n",
-                                kSceneDrawTableOff);
-            ok = cook_vs_text(static_cast<const char*>(rbl), vs_scene, m_impl->vs_rebased_idx);
+            // ⭐⭐ REN-40-C2: only `indexed` is added — the rebase keys already live in `vs_scene` (see above),
+            // and repeating one is a duplicate TOML key that refuses the whole document.
+            ok = cook_vs_text("indexed = true\n", vs_scene, m_impl->vs_rebased_idx);
             if (ok)
             {
                 m_impl->program_rebased_idx =
@@ -2752,6 +2839,7 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
                 sdesc.transform = crd::vertcook::VertexTransform::LightVp;
                 sdesc.cascade = c;
                 sdesc.instance_capacity_word = kHdrInstanceCapacity;
+                sdesc.lod_slots              = m_impl->lod_slots; // REN-40-C2, the indexed twin
                 sdesc.indexed = true;
                 ok = crd::vertcook::cook_vertex_program(sdesc, sg, se);
                 if (!ok)
@@ -2809,6 +2897,60 @@ bool SceneRenderer::gpu_cull() const noexcept
     return m_impl->gpu_cull_on && m_impl->use_indexed;
 }
 
+bool SceneRenderer::set_lod_policy_asset(const char* asset_name)
+{
+    if (asset_name == nullptr || m_impl == nullptr) { return false; }
+    Impl&                   impl = *m_impl;
+    crd::containers::String text(impl.alloc);
+    if (!impl.asset_text(asset_name, text))
+    {
+        CRD_LOG_ERROR(g_log_scenerender, "set_lod_policy_asset: no such asset '{}'", asset_name);
+        return false;
+    }
+    crd::lod::LodPolicy     p{};
+    crd::containers::String where(impl.alloc);
+    const auto              err =
+        crd::lod::parse_lod_toml(crd::containers::StringView(text.c_str(), text.size()), p, &where);
+    if (err != crd::lod::LodCookError::Ok)
+    {
+        // ⛔ NAMED, and nothing installed. A policy that half-applied would leave
+        // chains built to switch distances nobody declared.
+        CRD_LOG_ERROR(g_log_scenerender, "set_lod_policy_asset '{}': {} (at '{}')", asset_name,
+                      crd::lod::lod_cook_error_text(err), where.c_str());
+        return false;
+    }
+    impl.lod_policy  = p;
+    impl.lod_enabled = true;
+    // ⭐⭐ REN-40-C2: the LAYOUT WIDTH comes from the POLICY, which is authored. ⛔ Not `kMaxLodSlots`: every slot
+    // costs one visible list of `capacity` per view (5 views x capacity x 4 B), so reserving eight when the
+    // policy declares four would double the scene buffer for nothing. And not "the deepest chain actually built"
+    // either — the kernels are cooked before any mesh is loaded, so the number has to be knowable up front. The
+    // policy is the one place that knows it and is content rather than code.
+    impl.lod_slots = p.extra_levels + 1U;
+    if (impl.lod_slots > kMaxLodSlots) { impl.lod_slots = kMaxLodSlots; }
+    CRD_LOG_INFO(g_log_scenerender, "LOD policy '{}' installed: {} extra levels ({} slots), identity {:016x}",
+                 asset_name, p.extra_levels, impl.lod_slots, crd::lod::lod_policy_identity(p));
+    return true;
+}
+
+bool SceneRenderer::lod_enabled() const noexcept { return m_impl != nullptr && m_impl->lod_enabled; }
+
+SceneRenderer::LodChainInfo SceneRenderer::lod_chain_info() const noexcept
+{
+    LodChainInfo info{};
+    if (m_impl == nullptr) { return info; }
+    for (const MeshGroup& g : m_groups)
+    {
+        ++info.groups;
+        if (g.lod_count <= 1U) { continue; }
+        ++info.groups_with_lod;
+        if (g.lod_count > info.levels_max) { info.levels_max = g.lod_count; }
+        info.tris_level0 += g.lod_indices[0] / 3U;
+        info.tris_coarsest += g.lod_indices[g.lod_count - 1U] / 3U;
+    }
+    return info;
+}
+
 void SceneRenderer::set_gpu_cull_verify(bool on) noexcept { m_impl->gpu_cull_verify = on; }
 bool SceneRenderer::gpu_cull_verify() const noexcept { return m_impl->gpu_cull_verify; }
 
@@ -2822,21 +2964,46 @@ bool SceneRenderer::read_gpu_cull_counts(GpuCullCounts& out) const
     const crd::u32 argw     = kCullArgsHeaderWords + (impl.raster->indirect_command_arg_offset() / 4U);
     out.views               = 1U + kMaxCascades;
     bool any                = false;
+    // ⛔⛔ REN-40-C2: `draw_groups` is index-parallel with the DRAW LIST, and the list now carries one item per
+    // (group, LOD slot) — so walking it naively counts every group `slots` times and reports a device cull that
+    // "found" four times what the CPU did. Groups are contiguous in the list, so remembering the last pointer is
+    // enough; the SLOT sum below is the real per-view total.
+    const MeshGroup* prev_g = nullptr;
     for (crd::usize gi = 0; gi < impl.draw_groups.size(); ++gi)
     {
         MeshGroup* g = impl.draw_groups[gi];
-        if (g == nullptr || g->cull_args == nullptr) { continue; }
+        if (g == nullptr || g == prev_g || g->cull_args == nullptr) { continue; }
+        prev_g = g;
         if (!impl.raster->download_storage(*g->cull_args)) { continue; }
         // ⛔ `read_u32` reads the HOST MIRROR — without the download above it answers whatever was last uploaded,
         // which is a confident zero. That mistake made this gate report an empty cull on a cull that worked.
         for (crd::u32 v = 0; v < out.views; ++v)
         {
-            const crd::u32 aw = (v * stride_w) + argw;
-            out.instances[v] += g->cull_args->read_u32(aw + 1U);
-            if (!any)
+            // ⭐⭐ A VIEW'S SURVIVORS ARE THE SUM OVER ITS LOD SLOTS — every instance lands in exactly one, so
+            // the sum is what must equal the CPU cull's count for that view. That equality is the ONLY check
+            // that can see a mis-selected level or a doubly-appended survivor: the pixels cannot, because
+            // drawing one instance twice at the same depth is invisible.
+            for (crd::u32 s = 0; s < impl.lod_slots; ++s)
             {
-                out.indices[v]     = g->cull_args->read_u32(aw + 0U);
-                out.first_index[v] = g->cull_args->read_u32(aw + 2U);
+                const crd::u32 aw = ((v * impl.lod_slots + s) * stride_w) + argw;
+                out.instances[v] += g->cull_args->read_u32(aw + 1U);
+                // ⭐⭐ VIEW 0's COMMANDS, SLOT BY SLOT. A per-view TOTAL cannot distinguish "the cull never chose
+                // slot 2" from "slot 2's command is empty" — and those have completely different causes (the
+                // selector vs the reset's LOD-table read). This is the line that separates them.
+                if (v == 0U && s < 8U)
+                {
+                    out.slot_instances[s] += g->cull_args->read_u32(aw + 1U);
+                    if (!any)
+                    {
+                        out.slot_indices[s] = g->cull_args->read_u32(aw + 0U);
+                        out.slot_first[s]   = g->cull_args->read_u32(aw + 2U);
+                    }
+                }
+                if (!any && s == 0U)
+                {
+                    out.indices[v]     = g->cull_args->read_u32(aw + 0U);
+                    out.first_index[v] = g->cull_args->read_u32(aw + 2U);
+                }
             }
         }
         // ⭐⭐ and the INPUT, for the first group we can read: the device's copy of the world AABBs against the
@@ -2891,6 +3058,7 @@ struct ExtractCtx
     crd::scene::ComponentId   transform_id{};
     crd::scene::ComponentId   renderer_id{};
     crd::scene::ComponentId   animator_id{}; // GEO-8
+    crd::scene::ComponentId   lod_override_id{}; // REN-40-C2 (OPTIONAL — absent chunks surface nullptr)
     SyncStats*                stats = nullptr;
 
     // pass 1 outputs
@@ -2903,6 +3071,17 @@ struct ExtractCtx
     explicit ExtractCtx(crd::memory::IAllocator* a) : run_first(a) {}
 };
 
+// ⭐⭐ REN-40-B: fold ONE u64 into the running signature. The old signature hashed every entity id and every
+// MeshRenderer byte in the world every frame; this is the same FNV over 8 bytes per FACT instead.
+inline void hash_u64_into(crd::u64& h, crd::u64 v) noexcept
+{
+    for (crd::u32 i = 0; i < 8U; ++i)
+    {
+        h ^= (v >> (i * 8U)) & 0xFFULL;
+        h *= kFnvPrime;
+    }
+}
+
 // resolve-or-create the group for a mesh id (loads the mesh resource; null on load failure)
 // ⭐⭐ REN-40-A: push a RANGE of per-instance world AABBs into the group buffer's bounds section.
 // ⛔ Six floats per instance (min.xyz, max.xyz) — the SAME box `aabb_in_frustum` reads on the CPU, so the GPU
@@ -2914,7 +3093,9 @@ void upload_bounds_range(SceneRenderer::Impl& impl, MeshGroup& group, crd::u32 f
 {
     if (n == 0U || group.buffer == nullptr || impl.raster == nullptr) { return; }
     if (first + n > group.world_bounds.size()) { return; }
-    crd::containers::Array<crd::f32> tmp(impl.alloc);
+    // ⛔ REN-40-B: a REUSED staging array. This allocated a fresh one per call, so a structural frame at 1M
+    // instances did a 24 MB allocate/free inside the upload loop.
+    crd::containers::Array<crd::f32>& tmp = impl.bounds_staging;
     tmp.resize(static_cast<crd::usize>(n) * 6U, 0.0F);
     for (crd::u32 i = 0; i < n; ++i)
     {
@@ -2929,6 +3110,16 @@ void upload_bounds_range(SceneRenderer::Impl& impl, MeshGroup& group, crd::u32 f
     const crd::u32 bytes = n * 6U * 4U;
     (void)impl.raster->upload_storage(*group.buffer, (group.bounds_off + first * 6U) * 4U, tmp.data(), bytes);
     stats.uploaded_bytes += bytes;
+    // ⭐⭐ REN-40-C2: the per-instance LOD OVERRIDE rides the SAME grain, for the same reason the bounds do — an
+    // override that lagged its entity would select against the previous frame's policy, which reads as a level
+    // popping one frame late rather than as a staleness bug.
+    if (group.lod_override_off != 0U && (first + n) * 2U <= group.lod_override.size())
+    {
+        const crd::u32 ob = n * 2U * 4U;
+        (void)impl.raster->upload_storage(*group.buffer, (group.lod_override_off + first * 2U) * 4U,
+                                          group.lod_override.data() + static_cast<crd::usize>(first) * 2U, ob);
+        stats.uploaded_bytes += ob;
+    }
 }
 
 [[nodiscard]] crd::i64 group_for_mesh(ExtractCtx& ctx, const crd::resources::ResourceId& mesh_id)
@@ -2947,7 +3138,57 @@ void upload_bounds_range(SceneRenderer::Impl& impl, MeshGroup& group, crd::u32 f
     MeshGroup group(ctx.impl->alloc);
     group.mesh_id     = mesh_id;
     group.mesh        = handle; // keeps the payload resident
-    group.index_count = static_cast<crd::u32>(mesh->indices.size() / 4U);
+
+    // ⭐⭐ REN-40-C2: BUILD THE MESH'S LOD CHAIN, ONCE, HERE. The resource is shared
+    // and cached, so the chain is built on first use and every later group that
+    // names the same mesh finds it already there (`build_lod_chain` REFUSES a second
+    // build rather than appending a second chain onto the same streams).
+    // ⛔ Built on the RESOURCE, not on the group: two groups of the same mesh must
+    // not decimate it twice, and the index ranges are properties of the geometry.
+    if (ctx.impl->lod_enabled && mesh->lods.size() == 0U && !mesh->has_skin())
+    {
+        // ⛔ SKINNED MESHES ARE EXCLUDED, deliberately and reportedly: the chain
+        // carries no skin stream, so a decimated level would have no joints or
+        // weights and would collapse to the bind pose. Skinned LOD is 40-F.
+        // ⛔ The const_cast is DELIBERATE and bounded, and it is not hidden: `ResourceHandle::get()` is const
+        // because a resource is SHARED and essentially every consumer must not write it, so the handle
+        // deliberately offers no mutable accessor. This is the one legitimate writer — the chain is appended to
+        // the mesh's OWN streams, EXACTLY ONCE (`build_lod_chain` refuses a second build), on the load path
+        // before any consumer has drawn the mesh. Adding a public `get_mut()` for it would hand every consumer a
+        // write pointer to shared payload to serve one caller; keeping the exception here, named, means a grep
+        // for this cast finds every writer.
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast) — see above: the sole one-time chain builder
+        auto& mutable_mesh = const_cast<crd::resources::MeshResource&>(*mesh);
+        const auto rep     = crd::lod::build_lod_chain(mutable_mesh, ctx.impl->lod_policy, ctx.impl->alloc);
+        if (rep.status != crd::lod::LodBuildStatus::Ok)
+        {
+            // ⛔ REPORTED. A mesh that silently stayed one-level would show up only
+            // as "LOD did nothing" on the fps board, with no thread back to here.
+            CRD_LOG_WARN(g_log_scenerender, "LOD chain REFUSED: status {} (levels built {})",
+                         static_cast<crd::u32>(rep.status), rep.levels_built);
+        }
+        else
+        {
+            CRD_LOG_INFO(g_log_scenerender, "LOD chain: {} levels, {} -> {} tris", rep.levels_built,
+                         rep.triangles[0], rep.triangles[rep.levels_built - 1U]);
+        }
+    }
+
+    // ⛔⛔ `index_count` IS LEVEL 0's, not the whole buffer's. With a chain the index
+    // stream holds every level end to end, and drawing all of it would render every
+    // level on top of itself — a mesh that looks right, costs several times what it
+    // should, and z-fights with its own coarse copy.
+    group.index_count = mesh->lods.size() > 0U
+                            ? mesh->lods[0].index_count
+                            : static_cast<crd::u32>(mesh->indices.size() / 4U);
+    group.lod_count   = static_cast<crd::u32>(mesh->lods.size() < kMaxLodSlots ? mesh->lods.size() : kMaxLodSlots);
+    group.lod_hysteresis = ctx.impl->lod_enabled ? ctx.impl->lod_policy.hysteresis : 0.0F;
+    for (crd::u32 l = 0; l < group.lod_count; ++l)
+    {
+        group.lod_first[l]   = mesh->lods[l].first_index;
+        group.lod_indices[l] = mesh->lods[l].index_count;
+        group.lod_height[l]  = mesh->lods[l].screen_height;
+    }
     ctx.groups->push_back(static_cast<MeshGroup&&>(group));
     const crd::u32 gi = static_cast<crd::u32>(ctx.groups->size() - 1U);
     ctx.impl->group_of_mesh.insert(mesh_id, gi);
@@ -2955,8 +3196,46 @@ void upload_bounds_range(SceneRenderer::Impl& impl, MeshGroup& group, crd::u32 f
 }
 
 // write one instance record + world AABB into a group slot
-void write_slot(MeshGroup& group, crd::u32 slot, const crd::scene::Transform& t, const crd::math::Vec4f& color)
+void write_slot(MeshGroup& group, crd::u32 slot, const crd::scene::Transform& t, const crd::math::Vec4f& color,
+                const crd::scene::MeshLodOverride* ovr)
 {
+    // ⭐⭐ REN-40-C2: the per-entity LOD override, packed for the device. ⛔ `ovr == nullptr` is the COMMON case
+    // (the component is optional and most entities never carry one), and it must cost a constant, not a branch
+    // in the kernel — so the default rides the same two words every other slot writes.
+    {
+        // ⭐⭐ REN-40-C4: HYSTERESIS AS A PER-INSTANCE THRESHOLD JITTER — the transition, without any history.
+        // ⛔⛔ WHAT MAKES A LEVEL CHANGE VISIBLE AT A MILLION INSTANCES IS NOT THE CHANGE, IT IS THE SYNCHRONY.
+        // Every instance of a mesh shares one switch height, so a camera moving forward flips a whole BAND of
+        // them on the same frame: a wave sweeping across the field, which reads as the world rebuilding itself.
+        // A per-pixel dissolve does not fix that — it fades a wave instead of cutting one.
+        // ⭐ Giving each instance its OWN boundary inside a narrow band breaks the synchrony at its source: the
+        // population crosses over a RANGE of distances, so at any instant a handful of instances are changing
+        // instead of thousands. And it costs nothing — no per-instance history, no read-modify-write on a
+        // stateless kernel over a million instances, because the offset is a pure function of the SLOT INDEX
+        // and therefore stable frame to frame, which is what stops it becoming crawling noise.
+        // ⛔ It MULTIPLIES the author's bias rather than replacing it: an entity that asked to stay sharp still
+        // does, it just does not switch on the same frame as its neighbour.
+        crd::f32 jitter = 1.0F;
+        if (group.lod_hysteresis > 0.0F)
+        {
+            // splitmix32 over the slot — deterministic, well-distributed, and no state
+            crd::u32 h = slot * 0x9E3779B9U;
+            h ^= h >> 16U;
+            h *= 0x7FEB352DU;
+            h ^= h >> 15U;
+            h *= 0x846CA68BU;
+            h ^= h >> 16U;
+            const crd::f32 u = static_cast<crd::f32>(h >> 8U) * (1.0F / 16777216.0F); // [0,1)
+            jitter           = 1.0F + (group.lod_hysteresis * (u - 0.5F));
+        }
+        const crd::f32 bias = (ovr != nullptr ? ovr->screen_bias : 1.0F) * jitter;
+        crd::u32       bits = 0U;
+        std::memcpy(&bits, static_cast<const void*>(&bias), 4U);
+        const crd::u32 lo = ovr != nullptr ? (ovr->min_level & 0xFFU) : 0U;
+        const crd::u32 hi = ovr != nullptr ? (ovr->max_level & 0xFFU) : (kMaxLodSlots - 1U);
+        group.lod_override[static_cast<crd::usize>(slot) * 2U + 0U] = bits;
+        group.lod_override[static_cast<crd::usize>(slot) * 2U + 1U] = lo | (hi << 8U);
+    }
     InstanceGpu& rec = group.instances[slot];
     std::memcpy(rec.world, &t.world, sizeof(rec.world)); // Mat4f = 4 packed Vec4 columns = column-major floats
     rec.color[0] = color.x;
@@ -2971,16 +3250,36 @@ void write_slot(MeshGroup& group, crd::u32 slot, const crd::scene::Transform& t,
     group.world_bounds[slot] = crd::geometry::primitives::transform_aabb(t.world, local);
 }
 
-// pass 1: the structure signature + any-dirty detection (no mutation)
+// ⭐⭐ REN-40-B, pass 1: THE STRUCTURE SIGNATURE, IN O(1) PER CHUNK — and the incremental update, fused into
+// the same walk so the common frame touches every chunk exactly once.
+//
+// ⛔ What makes the O(1) signature EXACT rather than merely cheap, case by case:
+//   · spawn / despawn / archetype move  → the destination chunk's `version_counter` for MeshRenderer is bumped
+//     by the insert (archetype_chunk_storage.cpp: both the in-place upsert and the add-component move do it),
+//     and the source chunk's `entity_count` changes under the swap-remove.
+//   · a chunk created or freed          → the visited key SET changes, and the fold is ordered.
+//   · a MeshRenderer rewritten in place (a new mesh id, a new material) → the same version bump. This is
+//     STRICTLY more conservative than the old byte hash: it also fires on a write of an identical value, which
+//     can only cost an extra rebuild, never miss one.
+//   · spawn AND despawn into one chunk in one frame → the count returns to where it was, which a count-only
+//     signature would miss; the renderer version bump catches it, and the first/last entity ids catch a chunk
+//     address that was freed and handed back.
+// ⛔ The Transform version is deliberately NOT in the signature. It moves whenever anything MOVES, and a moving
+// scene must re-extract, not rebuild — folding it in would make every frame structural, which is the 337 ms
+// frame this slice exists to delete.
 void pass_signature(const crd::scene::ChunkView& view, void* ud)
 {
     auto& ctx = *static_cast<ExtractCtx*>(ud);
     const auto* renderers = view.array<const crd::scene::MeshRenderer>(ctx.renderer_id);
     if (renderers == nullptr || view.entity_count == 0U) { return; }
 
-    hash_bytes(ctx.sig, &view.entities, sizeof(view.entities)); // the chunk key (entity-array pointer)
-    hash_bytes(ctx.sig, view.entities, sizeof(crd::scene::EntityId) * view.entity_count);
-    hash_bytes(ctx.sig, renderers, sizeof(crd::scene::MeshRenderer) * view.entity_count);
+    hash_u64_into(ctx.sig, static_cast<crd::u64>(reinterpret_cast<std::uintptr_t>(view.entities)));
+    hash_u64_into(ctx.sig, view.entity_count);
+    hash_u64_into(ctx.sig, view.entities[0].raw);
+    hash_u64_into(ctx.sig, view.entities[view.entity_count - 1U].raw);
+    hash_u64_into(ctx.sig, view.version_of(ctx.renderer_id));
+    ++ctx.stats->chunks_visited;
+    ctx.stats->signature_bytes += 5U * sizeof(crd::u64);
 }
 
 // pass 2a: FULL rebuild — append every instance, group runs per (chunk × group)
@@ -2992,6 +3291,10 @@ void pass_rebuild(const crd::scene::ChunkView& view, void* ud)
     if (transforms == nullptr || renderers == nullptr || view.entity_count == 0U) { return; }
 
     // per-chunk: remember each group's size BEFORE this chunk appends (the run start)
+    // ⭐ REN-40-C2: OPTIONAL — a chunk whose archetype lacks the component surfaces nullptr, which is the
+    // common case and costs one null test per CHUNK rather than anything per entity.
+    const auto* overrides = view.array<const crd::scene::MeshLodOverride>(ctx.lod_override_id);
+
     ctx.run_first.clear();
     for (crd::usize gi = 0; gi < ctx.groups->size(); ++gi)
     {
@@ -3012,84 +3315,97 @@ void pass_rebuild(const crd::scene::ChunkView& view, void* ud)
         group.instances.push_back(InstanceGpu{});
         group.slot_entity.push_back(view.entities[i]);
         group.world_bounds.push_back({});
+        group.lod_override.push_back(0U);
+        group.lod_override.push_back(0U);
         group.slot_skeleton.push_back({});
         group.slot_clip.push_back({});
         group.slot_time.push_back(0.0F);
         if (group.material.is_null()) { group.material = renderers[i].material; } // REN-2 Half B: representative material
-        write_slot(group, slot, transforms[i], ctx.impl->resolve_color(renderers[i].material));
+        write_slot(group, slot, transforms[i], ctx.impl->resolve_color(renderers[i].material),
+                   overrides != nullptr ? &overrides[i] : nullptr);
+        ++ctx.stats->entities_extracted;
         ctx.impl->entity_slot.insert(view.entities[i],
                                      (static_cast<crd::u64>(gi) << 32U) | static_cast<crd::u64>(slot));
     }
 
-    // record this chunk's runs
-    const crd::u64 tversion = view.version_of(ctx.transform_id);
+    // ⭐⭐ REN-40-B: record this chunk's runs CONTIGUOUSLY and index them by the chunk key. The runs a chunk
+    // owns are appended back to back, so one (first_run, run_count) pair reaches all of them — which is what
+    // turns the incremental pass's "is this chunk stale, and where does it live?" from a scan over every run
+    // of every group into a single hash probe.
+    SceneRenderer::Impl& impl = *ctx.impl;
+    const crd::u64 tversion   = view.version_of(ctx.transform_id);
+    SceneRenderer::Impl::ChunkEntry entry;
+    entry.tversion     = tversion;
+    entry.entity_count = view.entity_count;
+    entry.first_run    = static_cast<crd::u32>(impl.runs.size());
     for (crd::usize gi = 0; gi < ctx.groups->size(); ++gi)
     {
         const crd::u32 first = ctx.run_first[gi];
         const auto     now   = static_cast<crd::u32>((*ctx.groups)[gi].instances.size());
         if (now > first)
         {
-            ChunkRun run;
-            run.chunk_key = view.entities;
-            run.version   = tversion;
-            run.first     = first;
-            run.count     = now - first;
-            run.dirty     = true;
-            (*ctx.groups)[gi].runs.push_back(run);
+            SceneRenderer::Impl::RunEntry run;
+            run.group = static_cast<crd::u32>(gi);
+            run.first = first;
+            run.count = now - first;
+            impl.runs.push_back(run);
         }
     }
+    entry.run_count = static_cast<crd::u32>(impl.runs.size()) - entry.first_run;
+    impl.chunk_index.insert(view.entities, static_cast<crd::u32>(impl.chunks.size()));
+    impl.chunks.push_back(entry);
 }
 
-// pass 2b: INCREMENTAL — re-extract only chunks whose Transform version moved (slots unchanged by construction:
-// the structure signature matched)
+// ⭐⭐ REN-40-B, pass 2b: INCREMENTAL — one hash probe decides, and a clean chunk costs NOTHING.
+// ⛔ The whole cost model of the renderer lives in the first six lines: a chunk whose Transform chunk-version
+// has not moved returns before it reads a single Transform, so a static 1M-instance frame is O(chunks).
 void pass_update(const crd::scene::ChunkView& view, void* ud)
 {
     auto& ctx = *static_cast<ExtractCtx*>(ud);
+    SceneRenderer::Impl& impl = *ctx.impl;
+    const crd::u32* slot_of = impl.chunk_index.find(view.entities);
+    if (slot_of == nullptr) { return; } // a chunk the index does not know ⇒ the signature already said rebuild
+    SceneRenderer::Impl::ChunkEntry& entry = impl.chunks[*slot_of];
+
+    const crd::u64 tversion = view.version_of(ctx.transform_id);
+    if (tversion == entry.tversion) { return; } // ← the fast path: nothing in this chunk moved
+    // ⛔ A guard, not an optimisation: if the chunk's population changed, the recorded run spans no longer
+    // describe it and writing through them would scribble on another chunk's slots. The signature will have
+    // ordered a rebuild for this frame; do nothing here rather than write into a stale mapping.
+    if (view.entity_count != entry.entity_count) { return; }
+
     const auto* transforms = view.array<const crd::scene::Transform>(ctx.transform_id);
     const auto* renderers  = view.array<const crd::scene::MeshRenderer>(ctx.renderer_id);
     if (transforms == nullptr || renderers == nullptr || view.entity_count == 0U) { return; }
 
-    const crd::u64 tversion = view.version_of(ctx.transform_id);
+    const auto* overrides = view.array<const crd::scene::MeshLodOverride>(ctx.lod_override_id); // REN-40-C2
 
-    // is any run of this chunk stale?
-    bool stale = false;
-    for (crd::usize gi = 0; gi < ctx.groups->size() && !stale; ++gi)
-    {
-        for (const ChunkRun& run : (*ctx.groups)[gi].runs)
-        {
-            if (run.chunk_key == view.entities && run.version != tversion)
-            {
-                stale = true;
-                break;
-            }
-        }
-    }
-    if (!stale) { return; }
+    entry.tversion = tversion;
+    ++ctx.stats->chunks_reextracted;
+    ctx.stats->runs_visited += entry.run_count;
 
-    // rewrite this chunk's slots group by group, walking entities in visit order (the rebuild's order)
+    // Seed each group's write cursor from THIS chunk's own run, and mark those runs dirty for the upload.
+    // ⛔ `run_first` is indexed by group, so it has to cover every group even though this chunk owns runs in
+    // only a few — an entity whose group has no run here would otherwise index out of range.
     ctx.run_first.clear();
-    for (crd::usize gi = 0; gi < ctx.groups->size(); ++gi)
+    ctx.run_first.resize(ctx.groups->size(), 0U);
+    for (crd::u32 r = 0; r < entry.run_count; ++r)
     {
-        crd::u32 first = 0U;
-        for (ChunkRun& run : (*ctx.groups)[gi].runs)
-        {
-            if (run.chunk_key == view.entities)
-            {
-                first       = run.first;
-                run.version = tversion;
-                run.dirty   = true;
-                ++ctx.stats->dirty_runs;
-            }
-        }
-        ctx.run_first.push_back(first);
+        const crd::u32 ri = entry.first_run + r;
+        const SceneRenderer::Impl::RunEntry& run = impl.runs[ri];
+        ctx.run_first[run.group] = run.first;
+        impl.dirty_runs.push_back(ri);
+        ++ctx.stats->dirty_runs;
     }
     for (crd::u32 i = 0; i < view.entity_count; ++i)
     {
-        const crd::u32* gi_found = ctx.impl->group_of_mesh.find(renderers[i].mesh);
+        const crd::u32* gi_found = impl.group_of_mesh.find(renderers[i].mesh);
         if (gi_found == nullptr) { continue; }
         const crd::usize gi   = *gi_found;
         const crd::u32   slot = ctx.run_first[gi]++;
-        write_slot((*ctx.groups)[gi], slot, transforms[i], ctx.impl->resolve_color(renderers[i].material));
+        write_slot((*ctx.groups)[gi], slot, transforms[i], impl.resolve_color(renderers[i].material),
+                   overrides != nullptr ? &overrides[i] : nullptr);
+        ++ctx.stats->entities_extracted;
     }
 }
 
@@ -3141,6 +3457,7 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
     ctx.transform_id = world.component_id<crd::scene::Transform>();
     ctx.renderer_id  = world.component_id<crd::scene::MeshRenderer>();
     ctx.animator_id  = world.component_id<crd::scene::SkeletonAnimator>();
+    ctx.lod_override_id = world.component_id<crd::scene::MeshLodOverride>();
     ctx.stats        = &stats;
 
     // pass 1: the structure signature
@@ -3149,6 +3466,7 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
         q.for_each_chunk(&pass_signature, &ctx);
     }
 
+    impl.dirty_runs.clear();
     const bool structural = !impl.has_structure || ctx.sig != impl.structure_sig;
     if (structural)
     {
@@ -3158,12 +3476,15 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
             group.instances.clear();
             group.slot_entity.clear();
             group.world_bounds.clear();
-            group.runs.clear();
+            group.lod_override.clear();
             group.slot_skeleton.clear();
             group.slot_clip.clear();
             group.slot_time.clear();
         }
         impl.entity_slot.clear();
+        impl.chunk_index.clear();
+        impl.chunks.clear();
+        impl.runs.clear();
         auto q = world.query<crd::scene::Transform, crd::scene::MeshRenderer>();
         q.for_each_chunk(&pass_rebuild, &ctx);
         impl.structure_sig = ctx.sig;
@@ -3184,8 +3505,13 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
     const double t1 = ms_now();
     stats.extract_ms = t1 - t0;
     // ── GPU: (re)create buffers + upload geometry once + instance payloads by dirty grain ──────────────────────
-    for (MeshGroup& group : m_groups)
+    // `full_uploaded[gi]` records the groups that re-sent their WHOLE payload this frame, so the dirty-run pass
+    // below does not send the same bytes a second time.
+    crd::containers::Array<crd::u8> full_uploaded(impl.alloc);
+    full_uploaded.resize(m_groups.size(), static_cast<crd::u8>(0));
+    for (crd::usize gi = 0; gi < m_groups.size(); ++gi)
     {
+        MeshGroup& group = m_groups[gi];
         const auto count = static_cast<crd::u32>(group.instances.size());
         stats.total_instances += count;
         if (count == 0U) { continue; }
@@ -3214,8 +3540,17 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
 
         if (group.buffer == nullptr || group.capacity < needed_capacity)
         {
-            group.indices_off   = kHeaderWords;
-            group.vertices_off  = group.indices_off + group.index_count;
+            // ⭐⭐ REN-40-C2: after the header AND after this buffer's own copy of the DRAW TABLE — see
+            // `kGroupSectionsOff`. Every buffer carries the table at the same offset, so one cooked
+            // `rebase_table` serves the private and the consolidated layouts alike.
+            group.indices_off   = kGroupSectionsOff;
+            // ⛔⛔ REN-40-C2: THE INDEX SECTION IS EVERY LEVEL, NOT LEVEL 0. `group.index_count` is what a DRAW
+            // consumes (level 0's range); `mesh->indices` holds the whole chain end to end. Sizing the section by
+            // the draw count put the VERTEX section on top of levels 1..n — the coarse levels' indices were
+            // overwritten by vertex floats, and the only symptom would have been a coarse LOD drawing garbage
+            // triangles at a distance, which reads as a decimator bug. Two quantities, deliberately named apart.
+            const auto index_words = static_cast<crd::u32>(mesh->indices.size() / 4U);
+            group.vertices_off  = group.indices_off + index_words;
             group.skin_off      = group.vertices_off + vertex_words;
             const crd::u32 skin_words = group.skinned ? vcount * 6U : 0U;
             group.instances_off = group.skin_off + skin_words;
@@ -3227,13 +3562,22 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
             // in the SAME buffer as everything else so a cull dispatch binds ONE resource, and it is uploaded on
             // the same dirty grain as the instances beside it. ⛔ The GPU must cull the BOX, not the transform's
             // translation: a point test disagrees with `aabb_in_frustum` for anything larger than a texel.
-            group.bounds_off    = group.visible_off + needed_capacity * (1U + kMaxCascades);
-            const crd::u32 total_words = group.bounds_off + needed_capacity * 6U;
+            // ⭐⭐ REN-40-C2: one visible list per (VIEW, LOD SLOT) — an instance lands in exactly one, so its
+            // draw is a contiguous range and the whole selection stays a single atomic per survivor.
+            // ⚠ MEMORY, STATED: this multiplies the visible section by `lod_slots`. At 1M instances and 4 slots
+            // that is 80 MB of lists against 20 MB before. The frontier form (a Count -> prefix-sum -> Scatter
+            // pass trio, as in PLAYERUNKNOWN's GPU-driven instancing) packs every slot of a view into ONE
+            // capacity-sized list and would give it back; it is a NAMED follow-up, not a thing left unsaid.
+            group.bounds_off    = group.visible_off + needed_capacity * (1U + kMaxCascades) * impl.lod_slots;
+            // ⭐⭐ REN-40-C2: the per-instance LOD OVERRIDE section (2 words each) after the bounds — the cull's
+            // second per-instance input, on the same buffer and the same dirty grain.
+            group.lod_override_off = group.bounds_off + needed_capacity * 6U;
+            const crd::u32 total_words = group.lod_override_off + needed_capacity * 2U;
             group.buffer             = impl.raster->create_storage_buffer(total_words * 4U);
-            // ⭐⭐ REN-40-A: and its indirect commands — (1 + cascades) of them at the backend's stride.
+            // ⭐⭐ REN-40-A/C2: and its indirect commands — (1 + cascades) x slots at the backend's stride.
                 group.cull_args = impl.raster->create_storage_buffer(
                 (kCullArgsHeaderWords * 4U)
-                + ((1U + kMaxCascades) * impl.raster->indirect_command_stride()));
+                + ((1U + kMaxCascades) * impl.lod_slots * impl.raster->indirect_command_stride()));
             group.cull_base_uploaded = 0xFFFFFFFFU; // force the params write on the next frame
             group.capacity           = needed_capacity;
             group.geometry_uploaded  = false;
@@ -3274,22 +3618,29 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
             // ⭐⭐ REN-40-A: the world AABBs ride the SAME grain as the instances they describe — a bounds
             // section that could go stale against its transforms would cull against last frame's positions.
             upload_bounds_range(impl, group, 0U, count, stats);
-            for (ChunkRun& run : group.runs) { run.dirty = false; }
+            full_uploaded[gi] = 1U;
             continue;
         }
+    }
 
-        // incremental: upload ONLY the dirty runs' byte ranges (the chunk-grain partial re-upload — the gate)
-        for (ChunkRun& run : group.runs)
-        {
-            if (!run.dirty) { continue; }
-            run.dirty            = false;
-            const crd::u32 bytes = run.count * static_cast<crd::u32>(sizeof(InstanceGpu));
-            (void)impl.raster->upload_storage(*group.buffer,
-                                              (group.instances_off + run.first * kInstanceWords) * 4U,
-                                              group.instances.data() + run.first, bytes);
-            stats.uploaded_bytes += bytes;
-            upload_bounds_range(impl, group, run.first, run.count, stats); // REN-40-A, same grain
-        }
+    // ── ⭐⭐ REN-40-B: the incremental upload walks the DIRTY LIST. ─────────────────────────────────────────
+    // This was `for every group: for every run: if (run.dirty)`, i.e. a full scan of every chunk-run in the
+    // scene to find the handful that moved. `pass_update` now names them as it marks them, so the walk is
+    // proportional to what CHANGED rather than to how much exists.
+    // ⛔ A group that did a FULL payload upload above must not also upload its runs: the bytes are already
+    // there, and re-sending them is exactly the per-call upload cost the batch contract exists to avoid.
+    for (const crd::u32 ri : impl.dirty_runs)
+    {
+        const SceneRenderer::Impl::RunEntry& run = impl.runs[ri];
+        if (run.group >= m_groups.size() || full_uploaded[run.group] != 0U) { continue; }
+        MeshGroup& group = m_groups[run.group];
+        if (group.buffer == nullptr || run.first + run.count > group.instances.size()) { continue; }
+        const crd::u32 bytes = run.count * static_cast<crd::u32>(sizeof(InstanceGpu));
+        (void)impl.raster->upload_storage(*group.buffer,
+                                          (group.instances_off + run.first * kInstanceWords) * 4U,
+                                          group.instances.data() + run.first, bytes);
+        stats.uploaded_bytes += bytes;
+        upload_bounds_range(impl, group, run.first, run.count, stats); // REN-40-A, same grain
     }
 
     const double t2 = ms_now();
@@ -3568,8 +3919,11 @@ public:
             // 24 B on D3D12 — so it is asked for, never assumed.
             if (out.items[i].args != nullptr && m_impl.raster != nullptr)
             {
-                out.items[i].args_offset = (kCullArgsHeaderWords * 4U)
-                                           + (1U + instance) * m_impl.raster->indirect_command_stride();
+                // ⭐⭐ REN-40-C2: view (1 + instance) owns `slots` consecutive commands; this item draws its own
+                // LOD slot inside them.
+                const crd::u32 stride = m_impl.raster->indirect_command_stride();
+                const crd::u32 cmd    = ((1U + instance) * m_impl.lod_slots) + m_item_slot[i];
+                out.items[i].args_offset = (kCullArgsHeaderWords * 4U) + cmd * stride;
             }
             ++gi;
         }
@@ -3651,7 +4005,10 @@ private:
             crd::framecook::DrawItem it;
             it.storage      = d.buffer;
             it.program      = d.program;
-            it.indexed      = d.rebased; // REN-38: must record through the multi verb (it pushes the row)
+            // ⭐⭐ REN-40-C2: EVERY scene item records through the MULTI verb, because every scene program now
+            // rebases by `table[DrawIndex]` — and only the multi verb pushes the row. A classic verb would
+            // leave the push stale and the draw would read another item's base and LOD slot.
+            it.indexed      = true;
             it.vertex_count = d.vertex_count;
             it.texture      = d.base_color; // beats the pass's sampled read (REN-37.10)
             // REN-39-C1: the indexed-pull fields ride through — index_count > 0 routes the indexed verbs
@@ -3665,9 +4022,24 @@ private:
             if (m_impl.gpu_cull_on && d.index_count > 0U && d.cull_args != nullptr)
             {
                 it.args            = d.cull_args;
-                it.args_offset     = (kCullArgsHeaderWords * 4U) + d.cull_args_offset;
-                it.dispatch_groups = d.cull_groups;
+                // ⭐⭐ REN-40-C2: view 0 (the camera) owns commands [0 .. slots), so THIS item's is its slot's.
+                it.args_offset     = (kCullArgsHeaderWords * 4U) + d.cull_args_offset
+                                     + (m_impl.raster != nullptr
+                                            ? d.lod_slot * m_impl.raster->indirect_command_stride()
+                                            : 0U);
+                // ⛔⛔ REN-40-C2: THE CULL DISPATCHES ONCE PER GROUP, NEVER ONCE PER SLOT. A compute pass walking
+                // this list dispatches per ITEM, and the list now carries one item per (group, slot) — so a
+                // 4-slot group would run the same cull four times, and each run would append the SAME survivors
+                // again. The counts would be 4x and **the picture would look correct**, because drawing one
+                // instance four times at the same depth is invisible. It showed up only as GPU time going the
+                // wrong way (86.8 -> 92.7 ms at 1M) and as the device/CPU count comparison disagreeing.
+                // Slot 0's item carries the dispatch; the rest are draw-only.
+                it.dispatch_groups = d.lod_slot == 0U ? d.cull_groups : 0U;
             }
+            // ⛔ The item -> slot map, kept EXACTLY rather than re-derived: the expansion face below moves each
+            // item's args offset to its cascade's command, and a FILTERED draw list makes any counting-based
+            // reconstruction wrong the moment one group is skipped.
+            m_item_slot[out.resolved] = d.lod_slot;
             out.items[out.resolved++] = it;
         }
         return true;
@@ -3710,6 +4082,8 @@ private:
     crd::gpu::IRasterTarget&                 m_target;
     crd::gpu::ClearColor                     m_clear;
     const crd::containers::Array<SceneDraw>& m_draws;
+    // ⭐⭐ REN-40-C2: emitted-item index -> LOD slot. Parallel to `out.items`, filled by `fill()`.
+    mutable crd::u32 m_item_slot[crd::framecook::kMaxDrawItems] = {};
     crd::gpu::FgImage                        m_out;
 };
 
@@ -3768,7 +4142,13 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         {
             if (group.skinned || group.buffer == nullptr) { continue; }
             group.region_base = total;
-            total += (group.visible_off + group.capacity * (1U + kMaxCascades) + 3U) & ~3U;
+            // ⛔⛔ REN-40-C2: the region must cover the WHOLE group image, and it did not — it stopped at
+            // `visible_off + capacity * (1 + cascades)`, which is exactly `bounds_off`, so the per-instance world
+            // AABB section fell OUTSIDE the region and into the next group's header. It survived only because the
+            // GPU cull reads the bounds through `base + header[bounds_off]` and the LAST group has slack behind
+            // it. One derivation, from the group's own layout, so a new section can never be forgotten again.
+            const crd::u32 region_words = group.lod_override_off + group.capacity * 2U;
+            total += (region_words + 3U) & ~3U;
         }
         if (impl.scene_buf == nullptr || impl.scene_buf_words < total)
         {
@@ -3792,7 +4172,8 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
             impl.scene_geom_valid = true;
         }
     }
-    crd::u32 draw_table[crd::framecook::kMaxDrawItems] = {};
+    // ⭐⭐ REN-40-C2: one RECORD per draw-list row — [0] region base, [1] LOD slot.
+    crd::u32 draw_table[crd::framecook::kMaxDrawItems * kSceneDrawRowWords] = {};
     bool     wrote_frame_header = false;
 
     // broad phase: a configured BVH prunes to the frustum's AABB; otherwise every slot is a candidate
@@ -3865,6 +4246,19 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         header[kHdrInstanceCount] = static_cast<crd::u32>(group.instances.size());
         header[kHdrInstanceCapacity] = group.capacity; // 38-G1: the per-cascade visible-list stride
         header[kHdrBoundsOff]        = group.bounds_off; // REN-40-A: the GPU cull's world-AABB section
+        header[kHdrLodOverrideOff]   = group.lod_override_off; // REN-40-C2: the per-instance LOD override
+        // ⭐⭐ REN-40-C2: THE LOD TABLE. `first_index` is published ABSOLUTE (the
+        // group's index section base plus the level's own offset) because that is
+        // what an indexed draw command consumes — the kernel writing a command must
+        // not have to know how the group was laid out.
+        if (group.lod_count > 0U) { header[kHdrLodCount] = group.lod_count; }
+        for (crd::u32 l = 0; l < group.lod_count && l < kMaxLodSlots; ++l)
+        {
+            header[kHdrLodTable + (l * 2U) + 0U] = group.indices_off + group.lod_first[l];
+            header[kHdrLodTable + (l * 2U) + 1U] = group.lod_indices[l];
+            const crd::f32 h                     = group.lod_height[l];
+            std::memcpy(&header[kHdrLodHeight + l], static_cast<const void*>(&h), 4U);
+        }
         {
             const crd::u32 lb = header[kHdrLightOff];
             const crd::f32 white[3] = {1.0F, 1.0F, 1.0F};
@@ -3946,12 +4340,52 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         // per-cascade list uploads use, so the kernel and the CPU cull agree by construction rather than by two
         // parallel derivations. ⛔ Written only when it CHANGES — a per-frame per-group upload is the shape that
         // measured 8.3 ms/frame in the queue-idle scar.
-        if (group.cull_args != nullptr && group.cull_base_uploaded != cdst_base)
+        // ⭐⭐ REN-40-C2: the params block also carries EACH VIEW'S HEIGHT IN PIXELS — the LOD selector's only
+        // runtime input beyond the matrix and the box. The camera's is the render target's height; a cascade's is
+        // its atlas slice's. ⛔ Folded into the SAME change-gated write: a resize or a cascade-size change moves
+        // it, and nothing else does, so the per-frame cost stays zero.
+        if (group.cull_args != nullptr)
         {
-            const crd::u32 params[kCullArgsHeaderWords] = {cdst_base, 0U, 0U, 0U};
-            if (impl.raster->upload_storage(*group.cull_args, 0U, params, sizeof(params)))
+            crd::u32 params[kCullArgsHeaderWords] = {};
+            params[0]                             = cdst_base;
+            // ⭐⭐ REN-40-C3: THE PER-VIEW BIAS FOLDS IN HERE, and that is the whole implementation. The selector
+            // already divides by a per-view pixel height; biasing a view is exactly scaling that number, so the
+            // kernel needs NO change and there is no second place for the two to disagree.
+            // ⛔ Cascade 3 sits at roughly 0.18 world-units per texel — it physically cannot resolve what the
+            // forward pass can — yet it was selecting the same level for the same instance, so the most
+            // expensive pass in the frame drew the finest geometry into the coarsest buffer.
+            const crd::f32 cam_px =
+                static_cast<crd::f32>(target.height()) * (impl.lod_enabled ? impl.lod_policy.view_bias[0] : 1.0F);
+            std::memcpy(&params[kCullArgsPixelHeight], static_cast<const void*>(&cam_px), 4U);
+            for (crd::u32 cv = 0; cv < kMaxCascades; ++cv)
+            {
+                const crd::f32 casc_px = static_cast<crd::f32>(impl.csm.map_size)
+                                         * (impl.lod_enabled ? impl.lod_policy.view_bias[1U + cv] : 1.0F);
+                std::memcpy(&params[kCullArgsPixelHeight + 1U + cv], static_cast<const void*>(&casc_px), 4U);
+            }
+            // ⭐⭐ REN-40-C2 / D3D12: this group's FIRST DRAW-LIST ROW. The rows for this group's (slot) items
+            // start exactly here — the loop below pushes them — and D3D12's reset writes `base_row + slot` into
+            // each command's DrawIndex root constant. ⛔ It joins the change signature: a row that moved because
+            // an earlier group appeared or vanished must re-upload, or every D3D12 draw of this group reads
+            // another group's table row.
+            params[kCullArgsBaseRow] = static_cast<crd::u32>(draw_list.size());
+            crd::u64 sig = cdst_base;
+            sig          = (sig * 1099511628211ULL) ^ static_cast<crd::u64>(target.height());
+            sig          = (sig * 1099511628211ULL) ^ static_cast<crd::u64>(impl.csm.map_size);
+            sig          = (sig * 1099511628211ULL) ^ static_cast<crd::u64>(params[kCullArgsBaseRow]);
+            // ⛔ the BIAS joins the change signature: installing a policy with different per-view biases
+            // must re-upload, or the selector keeps using the previous policy's pixel heights forever.
+            sig          = (sig * 1099511628211ULL) ^ static_cast<crd::u64>(params[kCullArgsPixelHeight]);
+            for (crd::u32 cv = 0; cv < kMaxCascades; ++cv)
+            {
+                sig = (sig * 1099511628211ULL)
+                      ^ static_cast<crd::u64>(params[kCullArgsPixelHeight + 1U + cv]);
+            }
+            if (group.cull_params_sig != sig
+                && impl.raster->upload_storage(*group.cull_args, 0U, params, sizeof(params)))
             {
                 group.cull_base_uploaded = cdst_base;
+                group.cull_params_sig    = sig;
                 stats.uploaded_bytes += sizeof(params);
             }
         }
@@ -4018,10 +4452,7 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
             d.program = impl.program_rebased.get();
             d.buffer  = impl.scene_buf.get();
             d.rebased = true;
-            if (draw_list.size() < crd::framecook::kMaxDrawItems)
-            {
-                draw_table[draw_list.size()] = group.region_base;
-            }
+            // ⭐ REN-40-C2: the table ROW is written per SLOT, where the item is actually pushed (below).
         }
         // ── ⭐⭐ REN-39-C1: THE INDEXED-PULL SWITCH. The chosen program is replaced by its indexed twin (the
         // set is all-or-nothing, so every twin the chain can pick exists when `use_indexed` survived init) and
@@ -4064,24 +4495,71 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
                 d.first_index = (d.rebased ? group.region_base : 0U) + group.indices_off;
             }
         }
-        draw_list.push_back(d);
-        // REN-36.3-b: mirror this group's entities alongside the draw so the asset's component filter has
-        // something to test. Index-parallel with `draw_list` BY CONSTRUCTION — culled groups are skipped in both.
+        // ── ⭐⭐ REN-40-C2: ONE DRAW ITEM PER (GROUP, LOD SLOT) — the "render item" of the frontier GPU-driven
+        // designs, an atomic (mesh x material x level) unit with its own indirect command. ⛔ The slot cannot be
+        // a cook-time constant the way the CASCADE is: a frame-graph pass binds ONE program for its whole list,
+        // so the level has to arrive per DRAW — through the draw table row, the only per-draw channel a
+        // GPU-written multi-draw has. ⛔ Emitted only when the group HAS that level: a command for a level the
+        // mesh does not carry would be an empty draw every frame, and the row would still cost a table slot.
+        // ⛔ Under the CPU cull `lod_slots` is 1 by construction (the policy sizes it and selection is a device
+        // decision), so this loop runs exactly once and the list is what it always was.
+        // ⭐⭐ THE SLOT IS READABLE ON BOTH PATHS NOW. Every buffer carries the draw table at `kSceneDrawTableOff`
+        // (see `kGroupSectionsOff`), so a private-buffer draw reads its row exactly as a consolidated one does —
+        // its row simply carries base 0. Before that the table existed ONLY in the consolidated scene buffer,
+        // `consolidate` is disabled whenever shadows are active, and so in every shadowed frame the stage had no
+        // row, computed slot 0, and read slot 0's visible list — EMPTY, because the cull sent those survivors to
+        // slots 1..n. Levels 1 and coarser drew NOTHING while the frame rendered, every count reconciled, and GPU
+        // time DROPPED — it read as an LOD win. That is why the table stopped being a property of one path.
+        const crd::u32 slots_here =
+            impl.gpu_cull_on ? (group.lod_count > 1U ? impl.lod_slots : 1U) : 1U;
+        for (crd::u32 sl = 0; sl < slots_here; ++sl)
         {
+            if (sl > 0U && sl >= group.lod_count) { break; }
+            SceneDraw ds = d;
+            ds.lod_slot  = sl;
+            if (sl > 0U)
+            {
+                // The CPU-side fields describe the LEVEL. Under the indirect path the device command overrides
+                // them, but a frame that falls back to CPU args must still draw the right range.
+                ds.index_count  = group.lod_indices[sl];
+                ds.first_index  = (ds.rebased ? group.region_base : 0U) + group.indices_off + group.lod_first[sl];
+                ds.vertex_count = 0U; // the coarse levels only ever draw indexed-indirect
+            }
+            if (draw_list.size() < crd::framecook::kMaxDrawItems)
+            {
+                const crd::usize row = draw_list.size() * kSceneDrawRowWords;
+                draw_table[row + 0U] = ds.rebased ? group.region_base : 0U;
+                draw_table[row + 1U] = sl;
+            }
+            draw_list.push_back(ds);
+            // REN-36.3-b: mirror this group's entities alongside the draw so the asset's component filter has
+            // something to test. Index-parallel with `draw_list` BY CONSTRUCTION — culled groups are skipped in
+            // both, and every slot of one group mirrors the SAME entity set.
             crd::containers::Array<crd::scene::EntityId> ents(impl.alloc);
             for (crd::usize k = 0; k < group.slot_entity.size(); ++k) { ents.push_back(group.slot_entity[k]); }
             impl.groups_view.push_back(static_cast<crd::containers::Array<crd::scene::EntityId>&&>(ents));
             impl.draw_groups.push_back(&group); // 38-G1: index-parallel, for the per-cascade counts
+            ++stats.draws;
         }
-        ++stats.draws;
         stats.drawn_instances += visible_count;
     }
 
+    // ⭐⭐ REN-40-C2: ONE canonical table per frame — row i belongs to draw-list item i, which is exactly what the
+    // multi verb pushes as DrawIndex — REPLICATED into every buffer a draw can bind. ⛔ Replicated rather than
+    // shared because a private-buffer draw can only read its OWN buffer, while the row it needs is its position
+    // in the GLOBAL draw list; a per-group table indexed by a global row would be wrong for every group but the
+    // first. It costs 2 KB per group per frame, against the alternative of LOD not working at all outside the
+    // consolidated path — which is what it did.
     if (consolidate && impl.scene_buf != nullptr && wrote_frame_header)
     {
-        // one canonical table write per frame — row i belongs to draw-list item i, the multi verb's contract
         (void)impl.raster->upload_storage(*impl.scene_buf, kSceneDrawTableOff * 4U, draw_table,
                                           sizeof(draw_table));
+    }
+    for (MeshGroup& group : m_groups)
+    {
+        if (group.buffer == nullptr || group.instances.size() == 0U) { continue; }
+        (void)impl.raster->upload_storage(*group.buffer, kSceneDrawTableOff * 4U, draw_table, sizeof(draw_table));
+        stats.uploaded_bytes += sizeof(draw_table);
     }
     if (draw_list.size() == 0U) { return stats; }
 

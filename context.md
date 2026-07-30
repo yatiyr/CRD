@@ -7,7 +7,60 @@
 
 ## Current focus — Phase 3.1.6 **v17 GPU compute (CKIR)** — on the **GPU-program-system detour** (D-007+D-008 MERGED)
 
-> ### ⏩ SESSION HANDOFF (2026-07-30) — READ THIS FIRST on re-entry
+> ### ⏩ SESSION HANDOFF (2026-07-30, LATER WINDOW) — READ THIS FIRST on re-entry
+> **REN-40-B IS CLOSED AND MEASURED. THE FOUR RED SHADOW GATES ARE FIXED AT THE ROOT. 40-C2's DATA HALF IS
+> LANDED; ITS SELECTION HALF NEEDS ONE DECISION (below).**
+>
+> **1. THE SHADOW BLOCKER WAS A REAL SHIPPED BUG, NOT A STALE THRESHOLD.** `crd-scene-render-tests` is now
+> **35/35** (was 28/32 with four shadow gates red). The prior handoff's theory — "the shadows-on and shadows-off
+> arms are two different shaders, re-derive the thresholds" — was wrong, and its cited evidence pointed at a file
+> path that does not exist. Root cause: `body_forward_csm` in `engine/kir/include/crd/kir/ckir_technique.hpp`
+> recovered each cascade's world→clip SCALES by reading MATRIX ELEMENTS (`vp.c0.x`, `−vp.c2.z`) where it needed
+> ROW NORMS. `light_vp = ortho · light_view`, so row 0 is `(1/radius)·right` and row 2 is `−(1/range)·back` — an
+> element carries a direction cosine. Replayed numerically for both gate scenes: a straight-down light gives
+> `right = (−1,0,0)` and a light slanted in XY gives `right = (0,0,−1)`, so `vp.c0.x` came out NEGATIVE in one and
+> ZERO in the other, both clamped to the `1e-9` floor ⇒ `texel_w = 1.95e6` world units and a normal offset of
+> **2.2 MILLION units**; every lookup fell outside every cascade, the containment fallback declared the pixel LIT,
+> and `−vp.c2.z` was 0 in BOTH so the depth bias was identically zero. **The grazing-angle acne REN-39-D3 was
+> written to kill did disappear — because the SHADOW disappeared with it.** Fixed with `g.vlength(row0/row2)`;
+> `csm.cpp::recover_camera` had the correct derivation one file away. No threshold was touched.
+> Memory: [[feedback_matrix_element_is_not_a_scale_use_the_row_norm]].
+> **Also removed:** `kSceneRegionSlack = 8`, whose comment claimed that dropping it "broke four shadow gates".
+> It did not — those gates were red for the reason above; 33/33 pass with the base derived and no slack. Tested,
+> not assumed.
+>
+> **2. REN-40-B IS CLOSED** — board `docs/bench/2026-07-30-ren40b-incremental-extract.md`. `sync` at 1M:
+> **80.2 → 1.11 ms (Vulkan)**, 96.4 → 19.9 ms (DX12); extract itself **171.4 → 0.9 ms**; the device-cull CPU
+> frame **197.6 → 119.1 ms**. A steady frame walks 9,092 chunks, re-extracts **11**, touches **1,203 of
+> 1,000,000** entities (`perf:` now prints `walk <c>c/<re>re/<ent>ent`). Two O(entities) costs deleted: the
+> byte-by-byte structure signature (40 MB of FNV per frame at 1M) and the quadratic per-chunk run scan. Gated by
+> COUNTERS, not timings, and **the gate is proven to bite** (801,456 bytes vs 11,648 on the old walk).
+>
+> **3. ⛔⛔ A BENCHMARK FOOTGUN THAT WOULD HAVE PRODUCED A FALSE BOARD.** The first `--gpu-cull` run reported
+> `gpu 0.344 ms` at ONE MILLION instances. That was an EMPTY CANVAS: `forward_csm_gpu.frame.toml` ships as a
+> FILE, so without `CRD_ASSETS_DIR` the install logs one error line and the run continues with no cull passes and
+> every indirect command at the reset's zero. **`--gpu-cull` and `--lod` now EXIT** when their asset does not
+> install. **Every REN-40 measurement needs `CRD_ASSETS_DIR=<repo>/assets`.**
+>
+> **4. 40-C2: THE DATA HALF IS LANDED, THE SELECTION HALF NEEDS A DECISION.** Nothing ever called
+> `set_lod_policy_asset` — C1's builder was unreachable code. `--lod [asset]` now installs it before the first
+> sync and the run reports what it built (`5/7 groups, max 4 levels, 7104 → 594 tris`). ⛔ It carried a latent
+> BUFFER OVERLAP: the index section was sized by level 0's DRAW count while `mesh->indices` holds the whole
+> chain, so the vertex section sat on top of levels 1..n. Fixed; with chains built the 20k frame is
+> **BIT-IDENTICAL** (0/921600) to the no-chain frame. **The remaining blocker is architectural, and it is a
+> DECISION, not a discovery:** a frame-graph pass binds ONE program for its whole draw list, but each LOD slot's
+> VS must read a different visible list — so "one draw item per (group, view, slot)" cannot carry the slot as a
+> per-item property today. Either (a) `slots` passes per view with cook-time `lod_slot` VS variants, or
+> (b) **widen the draw-table row to two words so the VS reads its list base from `table[DrawIndex]` exactly as it
+> already reads its region base — recommended.** The rest is scoped in the 40-C row.
+>
+> **5. Still open, named:** DX12 `sync` is 19–21 ms at 1M and it is **not** extract (0.64–0.97 ms) — it is
+> `upload_storage` (18.3 ms vs Vulkan's 0.11) for the same 1,203 dirty instances; now DX12's largest CPU term.
+> `sandbox/src/main.cpp` fails `readability-function-size` on `main` (pre-existing at HEAD, verified by stashing);
+> it needs a decomposition, not a suppression. One DX12 sample in three landed on a structural-rebuild frame —
+> whether a rebuild can trigger mid-run is unestablished and worth a look before 40-H.
+>
+> ### Prior handoff (2026-07-30, earlier window)
 > **REN-40-A IS CLOSED, LIVE AND BIT-IDENTICAL ON BOTH BACKENDS** (row 143, `docs/detours/D-007-gpu-program-system.md`).
 > The frustum cull for the camera AND all four cascades runs ON THE DEVICE, through ONE authored frame graph
 > (`assets/frame/forward_csm_gpu.frame.toml`: `cull_reset` + `cull_view0..4` as `kind = "compute"` passes walking a
@@ -32,6 +85,84 @@
 > IT AN A/B PIXEL COMPARE MEASURES THE CAMERA, and that misreading cost real time here; `--gpu-cull`,
 > `--gpu-cull-verify` (keeps the CPU cull alive for the count comparison — a gate mode), `--frame <asset>`,
 > `--no-bvh`; `SceneRenderer::read_gpu_cull_counts()` reports what the DEVICE decided.
+> ### ~~BLOCKER — FOUR SHADOW GATES ARE RED AT HEAD~~ — RESOLVED, see item 1 of the current handoff. The
+> analysis below is PRESERVED AS A SCAR: every experiment it records was sound, and the conclusion it drew from
+> them ("the two arms are different shaders; re-derive the thresholds") was wrong. It never asked what the
+> shader's own bias arithmetic EVALUATED TO, which a numeric replay of the cascade matrices answers in one run.
+> `crd-scene-render-tests`: **28 passed / 4 failed, 787 of 791 assertions** — all four shadow gates in
+> `tests/scene-render/test_scene_render_gpu.cpp` (lines 590, 712, 938, 2007). DETERMINISTIC across runs.
+>
+> **What has been RULED OUT by experiment (do not re-do these):**
+> - **Not the REN-40-C work.** `git stash` of every C1/C2 change to `scene-render` reproduces the same four
+>   failures at committed HEAD (`4f4a691`); restoring them changes nothing.
+> - **Not the header growth.** Setting `kHeaderWords` back to 120 leaves the four failures identical.
+> - **Not the geometry indirect routing.** Disabling the `it.args != nullptr` branch in `frame_runtime.cpp`
+>   leaves them identical (it is inert with the cull off, as designed).
+> - **Not a displaced shadow.** Sampling a 7x7 neighbourhood around the predicted shadow point finds NO darker
+>   pixel — the shadow is ABSENT there, not merely shifted by a texel.
+> - **Not flaky.** Two consecutive runs give byte-identical numbers.
+>
+> **What the numbers actually say.** In the light-direction gate (line 712) the probe reads
+> `lit_at_shadow = 123` (shadows OFF) and `shadowed_at_shadow = 153` (shadows ON) — turning shadows ON made the
+> point **BRIGHTER by 30**. That is not an occlusion failure; occlusion can only darken. The two arms therefore
+> differ in their LIGHTING, which fits a behaviour this repo has already recorded: with shadows active the
+> renderer draws with its SHADOWED PROGRAM and ignores the frame asset's declared technique, so the
+> shadows-off and shadows-on arms are not two renders of one shader, they are two different shaders.
+> The `darker` gates (15 / 15 / 19 against a `> 20` threshold) are the same story one step milder: the patch
+> darkens, just less than a threshold calibrated against the OLD constant-NDC bias.
+>
+> **Which change did it.** `git show 9f41cbf -- engine/kir/include/crd/kir/ckir_technique.hpp` is the REN-39-D3
+> shadow-bias rewrite: constant NDC bias -> scale-invariant texel bias + NORMAL OFFSET
+> (`nofs = texel_w * 2.5 * sinθ`, and `bias = bsc * (1 + slope)`). That change is CORRECT and user-verified
+> (the grazing-angle acne it was written to kill is gone). The four gates encode the pre-fix behaviour.
+>
+> ⛔⛔ **THE NEXT STEP, and the trap to avoid.** Do NOT relax the thresholds to green — that is the disguised
+> failure the top rule forbids. Re-derive them: (1) instrument the gate to print the SELECTED CASCADE, its
+> `texel_w` and the computed `bias`/`nofs` at the probe point, so the expected darkening is a DERIVED number
+> rather than a remembered one; (2) confirm whether the shadows-on / shadows-off arms really are different
+> programs, and if so make the gate compare like with like (both arms shadowed, one with an empty atlas) so it
+> measures OCCLUSION rather than a shader swap; (3) only then set thresholds, from the derivation.
+>
+> ⛔ **How it got in:** the 40-A close reported "144-147/147 gates green" and that run was real — but it happened
+> BEFORE the last two 40-A edits, `crd-scene-render-tests` was never re-run after them, and the full sweep that
+> would have caught it was killed for taking too long. **A module test run before the last edit is not a module
+> test run.**
+>
+> ### REN-40-C1 IS COMPLETE (2026-07-30, later the same session)
+> **The LOD chain's data + generation half is landed and gated**, and the engine gained two genuinely new
+> abilities on the way:
+> - **Attribute quadrics** (`engine/geometry-mesh-processing/.../attribute_quadric.hpp`, Hoppe 1999) +
+>   `qem_decimate_attr<T, M>`. ⛔ A position-only metric picks the collapse that leaves the SURFACE where it was
+>   and drags the TEXTURE across it — repairing UVs afterwards cannot help, the collapse was already CHOSEN.
+>   ⭐ The decomposition keeps the solve 3x3, and **`M = 0` is `Quadric<T>` BIT FOR BIT** (memcmp-gated), which is
+>   what makes the 511-line decimator refactor provably behaviour-preserving.
+> - **`crd-lod`** — a new module holding a seam that fits nowhere else (`crd-resources` is math-module-free;
+>   `crd-geometry-mesh-processing` knows nothing about resources). `MeshResource` grew an append-only chain;
+>   `build_lod_chain` decimates every level FROM THE SOURCE and re-derives normals + tangents;
+>   `.crdlod` is the authored policy (parse / canonical / identity hash, `TOML_EXCEPTIONS=0` per the scar).
+>   Shipped default: `assets/lod/scene_default.crdlod`.
+>
+> ⛔⛔ **Three scars paid for here, all found because the test shape had a CLOSED-FORM answer:**
+> (1) the discriminating UV gate first measured attributes AT THE VERTICES and position-only WON 140x — it was
+> scoring a nearest-vertex lookup, not the LOD; texture swimming lives in the INTERPOLATED field across the
+> triangles, so it now samples barycentrically. (2) the winding convention was ASSUMED — a UV sphere is wound
+> INWARD and every level came back `n = -p`. (3) normals accumulated per INDEX-BUFFER vertex give a UV seam HALF
+> its fan (2/2/12 inverted); welding coincident positions fixed it to 0/0/0.
+>
+> **Gates:** `crd-lod-tests` 8 cases / 8,585 assertions; mesh-processing 86 cases / 1,205 assertions.
+> ⚠ OPEN: `mean n.p` falls 1.00 -> 0.80 -> 0.70 -> 0.41 down the chain. With zero inverted corners that is
+> DECIMATION DRIFT, not orientation — it gets its own measurement, not a threshold picked to pass.
+>
+> **Next up: REN-40-C2 — GPU LOD SELECTION, where the fps lands.** In order: (a) wire `build_lod_chain` into the
+> mesh load path and publish the chain as a LOD TABLE in the group buffer's header (append-only words, and
+> VALIDATE the declared words at cook time — the `bounds_off = 104` scar); (b) the cull kernel computes projected
+> screen height from the world AABB and the view matrix it already reads, picks a slot, appends to the
+> per-(view, slot) list; (c) `cull_args` becomes (1 + cascades) x slots and the reset kernel takes each command's
+> `index_count`/`first_index` FROM the LOD table; (d) one draw item per (group, view, slot). Gate: thresholds
+> forced to level 0 => BIT-IDENTICAL to today (the 40-A A/B harness with `--fixed-dt` is already in place);
+> then the 1M board. After that C3 (per-view bias — cascade 3 still draws everything at full detail) and
+> **REN-40-B**, which 60 fps needs as much as it needs LOD (`sync` alone is 77-98 ms).
+>
 > **Next up: REN-40-B — the EXTRACT WALK.** `sync` is now the largest CPU term at 1M (77–98 ms, almost all the
 > O(entities) scene walk). Row 143/40-B.
 >

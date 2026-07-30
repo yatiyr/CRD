@@ -97,8 +97,40 @@ inline constexpr crd::u32 kHdrBoundsOff       = 102U;
 // header for every group: group 0's bounds offset, group 0's instance count, group 0's visible-list stride. The
 // counts came back plausible and WRONG (1918 device vs 1379 CPU on a 2000-instance frame) and no shader failed.
 // Word 0 of the params block carries the group's base; the commands start after it.
-inline constexpr crd::u32 kCullArgsHeaderWords = 4U; // 16 B — keeps the first command 16-byte aligned
-inline constexpr crd::u32 kHeaderWords        = 120U;
+// ⭐⭐ REN-40-C2: it also carries EACH VIEW'S HEIGHT IN PIXELS (f32 bits), which the LOD selector needs and
+// which has nowhere else to live: it is per VIEW, while the scene header is per GROUP and a cook-time constant
+// cannot survive a window resize. Word 0 is the base; words [1..1+kMaxCascades] are the camera's and each
+// cascade's pixel height; the commands start after the block.
+inline constexpr crd::u32 kCullArgsHeaderWords = 8U; // 32 B — keeps the first command 16-byte aligned
+inline constexpr crd::u32 kCullArgsPixelHeight = 1U; // + view index (words 1..1+kMaxCascades)
+// ⭐⭐ REN-40-C2 / D3D12: THE GROUP'S FIRST DRAW-LIST ROW. D3D12 has no `gl_DrawID`; its command signature
+// prepends a DrawIndex root constant, so each command carries its OWN row and the PRODUCER has to write it.
+// ⛔ `scene_cull_reset` used a cook-time `draw_index` of 0, which is the right row only for the FIRST group —
+// every later group's draws then read group 0's region base and group 0's LOD slot. Vulkan never saw it
+// (there the row is a push constant the verb issues), which is the exact shape of a backend-specific silent
+// wrong answer this repo has been bitten by before. The host writes the row here, beside the base.
+inline constexpr crd::u32 kCullArgsBaseRow    = 6U;
+// ⭐⭐ REN-40-C2: THE LOD TABLE, in the header every pull shader already reads.
+// ⛔ The cull kernel has to answer "which level, and what are its draw parameters"
+// entirely on the device, so the chain has to BE there — not in a side buffer the
+// kernel would need a second binding for, and not as a cook-time constant, because
+// the chain is a property of the MESH and one kernel serves every mesh group.
+// ⛔⛔ APPENDED, and the light section still sits at the END (`header[kHdrLightOff]
+// = kHeaderWords - kLightSectionWords`), so this table has to fit BELOW it. Growing
+// the header without leaving that room would overwrite the light record with LOD
+// entries — the scene would go black and the cause would look like a lighting bug.
+inline constexpr crd::u32 kMaxLodSlots      = 8U;
+inline constexpr crd::u32 kHdrLodCount      = 120U; // levels in the chain (0 or 1 = no chain)
+inline constexpr crd::u32 kHdrLodTable      = 121U; // kMaxLodSlots x (first_index, index_count)
+inline constexpr crd::u32 kHdrLodHeight     = 137U; // kMaxLodSlots x screen height, f32 BITS
+// ⭐⭐ REN-40-C2: the word offset of the per-instance LOD-OVERRIDE section (2 words each: the screen bias as
+// f32 bits, then `min_level | (max_level << 8)`), which the cull kernel reads beside the world AABBs.
+// ⛔ A SECTION, not extra words on the instance record: the instance stride is 20 and every `.crdv` DECLARES
+// it, so growing it would be a silent disagreement with every vertex program in the pack. Only the CULL needs
+// this data, so it lives where the cull's other per-instance input lives.
+inline constexpr crd::u32 kHdrLodOverrideOff = 145U;
+// 146..147 pad; the 16-word light record then occupies 148..163.
+inline constexpr crd::u32 kHeaderWords        = 164U;
 inline constexpr crd::u32 kHdrCsmSplits       = 28U; // 4 floats
 inline constexpr crd::u32 kHdrCsmLightVp      = 32U; // 4 x 16 floats
 // ⭐ REN-37.3: the camera position, appended at 96. `shade_forward`'s `view_dir` was a PLACEHOLDER CONSTANT
@@ -116,8 +148,39 @@ inline constexpr crd::u32 kVertexWords        = 12U; // the cooked 48-byte verte
 // copy serves); [120..375] is the DRAW TABLE (one word per draw-list row: that draw's region base); group
 // regions start at 384 (4-word aligned), each an exact image of the group's historical private buffer, so the
 // region-relative offsets stored in its header keep working under the VS's DrawIndex rebase unchanged.
-inline constexpr crd::u32 kSceneDrawTableOff  = 120U; // == kHeaderWords — the table sits right after the header
-inline constexpr crd::u32 kSceneFirstRegion   = 384U; // 120 header + 256 table + pad to 4-word alignment
+// ⛔ DERIVED, never repeated. This was the literal 120 while `kHeaderWords` was also 120, so the two agreed
+// by coincidence; growing the header for the LOD table would have slid the draw table INTO it and every
+// rebased group would have read a LOD entry as its region base.
+inline constexpr crd::u32 kSceneDrawTableOff  = kHeaderWords; // the table sits right after the header
+// ⭐⭐ REN-40-C2: A DRAW-TABLE ROW IS A RECORD, NOT A WORD. Word 0 stays the region base; word 1 carries the
+// draw's LOD SLOT. ⛔⛔ WHY IT HAS TO LIVE HERE: a frame-graph PASS binds ONE program for its whole draw list, so
+// the slot cannot be a cook-time constant the way the CASCADE is (each cascade already gets its own pass, hence
+// its own program). It must be PER DRAW ITEM, and a GPU-written multi-draw's only per-draw channel is the draw
+// index — which both backends already carry and this engine already uses for the region base (`gl_DrawIDARB` on
+// Vulkan, a command-signature root constant on D3D12, whose `INCREMENTING_CONSTANT` argument type formalises the
+// same idea). This is the standard GPU-driven indirection; frontier engines call the row a "render item" — an
+// atomic (mesh x material x LOD) unit, one indirect draw each.
+// ⛔ The row stores the SLOT rather than a finished list address because the table is uploaded ONCE and shared by
+// every pass, while the address depends on the VIEW. The stage combines a cook-time view with a per-row slot.
+inline constexpr crd::u32 kSceneDrawRowWords  = 2U;
+inline constexpr crd::u32 kSceneDrawRows      = 256U; // draw-list rows the table can describe
+inline constexpr crd::u32 kSceneDrawTableWords = kSceneDrawRows * kSceneDrawRowWords;
+// ⛔⛔ DERIVED TOO. This was the literal 384 (= the old 120-word header + 256), so growing the header for the LOD
+// table slid the draw table forward INTO the first group's region: every rebased group would have read a draw-table
+// row as its geometry and drawn noise, and the frame would still have rendered. Three constants, one arithmetic.
+// ⚠ A 2026-07-30 revision carried an 8-word "slack" here with a comment claiming that removing it "broke four
+// shadow gates". That was a MISATTRIBUTION: those four gates were red for an unrelated reason (the CSM technique
+// read a matrix ELEMENT where it needed a row NORM — see SCAR 5 in `ckir_technique.hpp`), and once that was fixed
+// at the root the derived base with NO slack passes all 33 scene-render gates. Magic constants justified by a
+// correlation nobody re-tested are how a wrong number survives a review, so it is gone rather than preserved.
+inline constexpr crd::u32 kSceneFirstRegion   = ((kSceneDrawTableOff + kSceneDrawTableWords) + 3U) & ~3U;
+// ⭐⭐ REN-40-C2: WHERE A GROUP'S SECTIONS START — after its header AND after its own copy of the draw table.
+// ⛔⛔ EVERY buffer carries the table now, at the SAME offset, which is what lets ONE cooked `rebase_table`
+// address both the consolidated scene buffer and a private per-group one. The private path had no table at all,
+// so a vertex program on it could not read its LOD slot and silently drew level 0's (empty) list — levels 1 and
+// coarser rendered NOTHING while every count still reconciled. In a consolidated region this range is unused
+// padding: the region is an exact image of the private layout, which is precisely why the rebase works.
+inline constexpr crd::u32 kGroupSectionsOff   = kSceneFirstRegion;
 inline constexpr crd::u32 kInstanceWords      = 20U; // world matrix 16 + colour 4
 
 // One per-instance GPU record (kInstanceWords * 4 bytes).
@@ -128,16 +191,11 @@ struct InstanceGpu
 };
 static_assert(sizeof(InstanceGpu) == kInstanceWords * 4U, "GPU layout pinned");
 
-// One chunk's contiguous run inside a group's instance array — the partial-re-upload grain (the ECS is
-// chunk-grain; so is the renderer's dirt).
-struct ChunkRun
-{
-    const void* chunk_key = nullptr; // the chunk's entity array pointer — stable while the structure is stable
-    crd::u64    version   = 0;       // Transform chunk-version at last extract
-    crd::u32    first     = 0;       // slot range [first, first+count) in the group
-    crd::u32    count     = 0;
-    bool        dirty     = false;   // re-extracted this sync → its byte range re-uploads (cleared after upload)
-};
+// ⭐⭐ REN-40-B: the per-(chunk × group) RUN — one chunk's contiguous slot range inside a group's instance
+// array, still the partial-re-upload grain (the ECS is chunk-grain; so is the renderer's dirt). It used to live
+// here as `MeshGroup::runs` and be searched linearly; it now lives in the renderer's CHUNK INDEX
+// (`Impl::RunEntry`), reachable from a chunk key in O(1), because finding the runs of a moved chunk by scanning
+// every run of every group is O(chunks × runs) and that quadratic was most of a 171 ms extract at 1M instances.
 
 // All instances of one cooked mesh — ONE buffer, ONE draw.
 struct MeshGroup
@@ -150,7 +208,8 @@ struct MeshGroup
     crd::containers::Array<InstanceGpu>                             instances;
     crd::containers::Array<crd::scene::EntityId>                    slot_entity;
     crd::containers::Array<crd::geometry::primitives::AABB3<crd::f32>> world_bounds; // per slot — the cull input
-    crd::containers::Array<ChunkRun>                                runs;
+    // per slot: [0] screen bias f32 bits, [1] min_level | (max_level << 8) — the REN-40-C2 override
+    crd::containers::Array<crd::u32>                                lod_override;
     crd::containers::Array<crd::u32>                                visible; // per-frame culled slot list
 
     std::unique_ptr<crd::gpu::IStorageBuffer> buffer;
@@ -163,6 +222,10 @@ struct MeshGroup
     // CHANGES. ⛔ A per-frame `upload_storage` per group is not free: the per-call queue-idle scar measured
     // 8.3 ms/frame from exactly this shape.
     crd::u32 cull_base_uploaded = 0xFFFFFFFFU;
+    // ⭐⭐ REN-40-C2: the params block now carries the per-view PIXEL HEIGHTS beside the base, so the
+    // "only when it changes" test has to cover all of them — a resize that moved the camera's height while
+    // the base stayed put would otherwise leave the selector using the OLD viewport forever.
+    crd::u64 cull_params_sig    = 0xFFFFFFFFFFFFFFFFULL;
     crd::u32 indices_off = 0; // word offsets into `buffer`
     crd::u32 vertices_off = 0;
     crd::u32 instances_off = 0;
@@ -170,6 +233,10 @@ struct MeshGroup
     // ⭐⭐ REN-40-A: the per-instance WORLD AABB section (6 floats each), right after the visible lists. The GPU
     // cull kernel reads it through a DECLARED header word so it and the CPU's `aabb_in_frustum` read ONE truth.
     crd::u32 bounds_off = 0;
+    // ⭐⭐ REN-40-C2: the per-instance LOD OVERRIDE section (2 words each), right after the bounds. Default
+    // (bias 1.0, levels 0..7) for every slot whose entity carries no `MeshLodOverride`, so an entity that
+    // does not care costs one write of a constant and nothing else.
+    crd::u32 lod_override_off = 0;
     // ⭐⭐ 38-G1 perf: the CASCADE visible lists live right after the camera's, one `capacity` block each.
     // Cascade c's list is at `visible_off + (1 + c) * capacity`. Shadow passes were drawing the CAMERA's list
     // four times — cascade 0 covers a few metres of a 110-unit field, so most of that vertex work was
@@ -179,6 +246,15 @@ struct MeshGroup
     // compared against it (see `SceneRenderer::GpuCullCounts`). ⛔ Under the GPU cull the CPU list is no longer
     // what the draws use — but it is still the REFERENCE the device answer has to match, so it stays computed.
     crd::u32 visible_count_cpu = 0;
+    // ⭐⭐ REN-40-C2: the mesh's LOD chain, as this group publishes it. `lod_count <= 1` means a one-level mesh
+    // and the renderer behaves exactly as it did before chains existed.
+    crd::u32 lod_count = 0;
+    crd::u32 lod_first[kMaxLodSlots]  = {}; // first index of each level, RELATIVE to `indices_off`
+    crd::u32 lod_indices[kMaxLodSlots] = {};
+    crd::f32 lod_height[kMaxLodSlots]  = {};
+    // ⭐⭐ REN-40-C4: the policy's hysteresis, mirrored here so `write_slot` can jitter each instance's
+    // switch threshold without reaching back into the renderer's policy on the hot extract path.
+    crd::f32 lod_hysteresis            = 0.0F;
     crd::u32 capacity = 0;           // instance slots the buffer holds
     crd::u32 region_base = 0;        // REN-38: this group's word base inside the ONE scene buffer (0 = unassigned)
     bool     geometry_uploaded = false;
@@ -196,7 +272,7 @@ struct MeshGroup
     crd::containers::Array<crd::f32>                    slot_time;
 
     explicit MeshGroup(crd::memory::IAllocator* a)
-        : instances(a), slot_entity(a), world_bounds(a), runs(a), visible(a), slot_skeleton(a), slot_clip(a),
+        : instances(a), slot_entity(a), world_bounds(a), lod_override(a), visible(a), slot_skeleton(a), slot_clip(a),
           slot_time(a)
     {
     }
@@ -217,6 +293,16 @@ struct SyncStats
     double   extract_ms        = 0.0; // the ECS walks (signature + update/rebuild + animators)
     double   upload_ms         = 0.0; // geometry + instance-payload storage uploads
     double   palette_ms        = 0.0; // skinned palette sampling + its upload
+    // ── ⭐⭐ REN-40-B: THE COMPLEXITY OF THE EXTRACT, COUNTED — not timed. ─────────────────────────────────
+    // ⛔ A millisecond threshold is the wrong gate for an asymptotic claim: it is noisy, it is machine-specific,
+    // and it passes on a debug build only by luck. These four counters make "a static frame costs O(chunks), not
+    // O(entities)" a statement a test can assert EXACTLY, and make a regression to the O(entities) walk
+    // impossible to land silently.
+    crd::u32 chunks_visited     = 0; // chunks the extract walked (the irreducible cost)
+    crd::u32 chunks_reextracted = 0; // of those, the ones whose Transform chunk-version had moved
+    crd::u64 entities_extracted = 0; // per-entity slot writes — 0 on a frame in which nothing moved
+    crd::u64 signature_bytes    = 0; // bytes fed to the structure signature: O(1) per CHUNK, not per entity
+    crd::u64 runs_visited       = 0; // run records examined — O(runs of the dirty chunks), never a full scan
 };
 
 struct RenderStats
@@ -281,6 +367,26 @@ public:
     void set_gpu_cull_verify(bool on) noexcept;
     [[nodiscard]] bool gpu_cull_verify() const noexcept;
 
+    // ⭐⭐ REN-40-C2: install an authored `.crdlod` policy BY NAME and start building
+    // LOD chains. Returns false and changes nothing if the asset is missing or the
+    // policy is refused — a rejected policy must not leave chains half-built with
+    // switch distances nobody declared.
+    // ⛔ Call BEFORE the first sync: chains are built when a mesh first becomes a
+    // group, and `build_lod_chain` refuses a second build on the same resource.
+    [[nodiscard]] bool set_lod_policy_asset(const char* asset_name);
+    [[nodiscard]] bool lod_enabled() const noexcept;
+    // What the chains actually came out as — levels and triangle counts per group,
+    // so a run can say out loud what it built instead of implying it from the fps.
+    struct LodChainInfo
+    {
+        crd::u32 groups          = 0U;
+        crd::u32 groups_with_lod = 0U;
+        crd::u32 levels_max      = 0U;
+        crd::u32 tris_level0     = 0U; // summed over groups
+        crd::u32 tris_coarsest   = 0U;
+    };
+    [[nodiscard]] LodChainInfo lod_chain_info() const noexcept;
+
     // ⭐⭐ REN-40-A: WHAT THE DEVICE ACTUALLY DECIDED, read back. A GPU cull hides its own result by design —
     // nothing on the CPU learns the count — so "fast" and "silently drew nothing" look identical from the outside.
     // ⛔ That makes this readback part of the FEATURE, not a debugging aid bolted on after: it is how the parity
@@ -304,6 +410,12 @@ public:
         // WHICH input differs. `bounds_checked` is how many per-instance AABBs were compared (group 0);
         // `bounds_mismatch` how many differed bit-for-bit. ⛔ Non-zero here means the kernel is culling STALE
         // GEOMETRY, which no amount of staring at the plane maths would ever explain.
+        // ⭐⭐ REN-40-C2: VIEW 0's COMMANDS, SLOT BY SLOT. A per-view total cannot tell "the cull chose slot 2"
+        // from "slot 2's command is empty", and those two have completely different causes — one is the
+        // selector, the other the reset's LOD-table read. Summed over groups, like `instances`.
+        crd::u32 slot_instances[8]      = {};
+        crd::u32 slot_indices[8]        = {};
+        crd::u32 slot_first[8]          = {};
         crd::u32 bounds_checked         = 0U;
         crd::u32 bounds_mismatch        = 0U;
     };

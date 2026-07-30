@@ -4089,7 +4089,8 @@ public:
                                                         IStorageBuffer& storage, crd::u32 index_offset_bytes,
                                                         IStorageBuffer& args, crd::u32 args_offset_bytes,
                                                         IStorageBuffer* count_buf, crd::u32 count_offset_bytes,
-                                                        crd::u32 max_draws, bool load_target) override
+                                                        crd::u32 max_draws, bool load_target,
+                                                        crd::u32 first_draw_index) override
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -4134,6 +4135,13 @@ public:
         vkCmdBeginRendering(cmd, &ri);
         set_draw_state(cmd, t.width(), t.height(), 1U, true, to_vk_compare(compare), 0U);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        // ⛔⛔ REN-40-C2: THE DRAW-INDEX ROW. A rebased program reads `table[DrawIndex]` for its region base and
+        // (since REN-40-C2) its LOD SLOT, and on Vulkan that row arrives ONLY through this push constant —
+        // `gl_DrawID` counts commands WITHIN a multi-draw, so a one-command indirect draw sees 0 and needs the
+        // base. The CPU-args multi verbs have always pushed it; these indirect twins did not, so every
+        // GPU-driven draw read ROW 0 — the right answer for a single group with base 0, which is why it survived
+        // REN-40-A's gates, and the wrong one for every group past the first and every LOD slot past 0.
+        vkCmdPushConstants(cmd, p.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0U, 4U, &first_draw_index);
         vkCmdBindIndexBuffer(cmd, s.buf(), index_offset_bytes, VK_INDEX_TYPE_UINT32);
         const VkShaderStageFlagBits stages[2] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
         const VkShaderEXT           objs[2]   = {p.vs(), p.fs()};
@@ -4246,7 +4254,8 @@ public:
                                              crd::u32 index_offset_bytes, ITexture* map, ITexture* atlas,
                                              IStorageBuffer& args, crd::u32 args_offset_bytes,
                                              IStorageBuffer* count_buf, crd::u32 count_offset_bytes,
-                                             crd::u32 max_draws, bool load_target) override
+                                             crd::u32 max_draws, bool load_target,
+                                             crd::u32 first_draw_index) override
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -4309,6 +4318,13 @@ public:
         vkCmdBeginRendering(cmd, &ri);
         set_draw_state(cmd, t.width(), t.height(), 1U, t.has_depth(), to_vk_compare(compare));
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        // ⛔⛔ REN-40-C2: THE DRAW-INDEX ROW. A rebased program reads `table[DrawIndex]` for its region base and
+        // (since REN-40-C2) its LOD SLOT, and on Vulkan that row arrives ONLY through this push constant —
+        // `gl_DrawID` counts commands WITHIN a multi-draw, so a one-command indirect draw sees 0 and needs the
+        // base. The CPU-args multi verbs have always pushed it; these indirect twins did not, so every
+        // GPU-driven draw read ROW 0 — the right answer for a single group with base 0, which is why it survived
+        // REN-40-A's gates, and the wrong one for every group past the first and every LOD slot past 0.
+        vkCmdPushConstants(cmd, p.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0U, 4U, &first_draw_index);
         vkCmdBindIndexBuffer(cmd, s.buf(), index_offset_bytes, VK_INDEX_TYPE_UINT32);
         const VkShaderStageFlagBits stages[2] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
         const VkShaderEXT           objs[2]   = {p.vs(), p.fs()};

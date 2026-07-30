@@ -42,6 +42,8 @@ inline constexpr crd::u32 kFourCC_Transform = make_serialize_fourcc('X', 'F', 'R
 inline constexpr crd::u32 kFourCC_MeshRenderer = make_serialize_fourcc('M', 'R', 'N', 'D');
 inline constexpr crd::u32 kFourCC_SceneCamera  = make_serialize_fourcc('C', 'A', 'M', 'R');
 inline constexpr crd::u32 kFourCC_SceneLight   = make_serialize_fourcc('L', 'G', 'H', 'T');
+// ⭐⭐ REN-40-C2 (appended, D-007 row 143): the OPTIONAL per-entity LOD override.
+inline constexpr crd::u32 kFourCC_MeshLodOverride = make_serialize_fourcc('M', 'L', 'O', 'D');
 // GEO-8 (appended, D-007 row 73): the skinned-animation driver component.
 inline constexpr crd::u32 kFourCC_SkeletonAnimator = make_serialize_fourcc('S', 'K', 'A', 'N');
 

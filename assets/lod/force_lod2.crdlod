@@ -1,0 +1,29 @@
+# ⭐⭐ REN-40-C2 PROBE POLICY — pin every instance to LEVEL 2, whatever its distance.
+#
+# ⛔ WHY THESE EXIST. "LOD is on and the frame still looks right" is not a check: the levels that are actually
+# WRONG are the ones only a handful of far pixels ever show. Pinning the whole scene to one level and rendering
+# the SAME camera pose makes each level's geometry visible at FULL SIZE, so a level that lost a mesh, drew the
+# wrong index range, or came back inside-out is something you can SEE rather than something you infer from a
+# triangle count. Selection is a metric, so the probe is a metric too — never a debug switch in C++.
+#
+# `screen_height` is the height BELOW which the next level takes over, and the selector keeps the LAST slot whose
+# height still exceeds the projection. A huge threshold therefore means "always past this one"; a sub-pixel one
+# means "never". ⛔ Strictly descending, because the parser refuses ties (an ambiguous selector oscillates, which
+# is the popping this band exists to remove).
+
+schema = 1
+name   = "crd://lod/force_lod2"
+
+boundary_weight = 1000.0
+
+[[level]]
+ratio         = 0.5
+screen_height = 1000000000.0
+
+[[level]]
+ratio         = 0.25
+screen_height = 100000000.0
+
+[[level]]
+ratio         = 0.08
+screen_height = 0.1

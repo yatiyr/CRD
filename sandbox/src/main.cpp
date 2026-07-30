@@ -205,6 +205,18 @@ int main(int argc, char** argv)
     bool want_pull_draws = false; // REN-39-C2: the A/B baseline arm (indexed is the default)
     bool want_gpu_cull   = false; // REN-40-A: the device-side cull arm (CPU cull is the default)
     bool want_no_bvh     = false; // REN-40-A: drop the CPU cull's BVH broad phase (attribution)
+    // ⭐⭐ REN-40-C2: build LOD chains from an authored `.crdlod` policy. ⛔ OFF by default and named on the
+    // command line for the same reason `--gpu-cull` is: it changes what is DRAWN, so the A/B has to run on one
+    // build. `--lod <asset>` overrides the shipped default policy.
+    const char* lod_asset = nullptr;
+    bool        want_lod  = false;
+    // ⭐⭐ REN-40-C2: the LOD SHOWCASE scene (see where it is built) — ONE mesh, a line receding from the camera,
+    // no grid / no monuments / no animated ring. `--instances` is the line's length.
+    bool        want_lod_showcase = false;
+    // ⭐⭐ REN-40-C2: `--lod-override-probe` gives every OTHER showcase instance a `MeshLodOverride` pinned to
+    // the coarsest level — the optional component made visible. Off by default so the forced-level sheets stay
+    // a clean picture of the LEVELS themselves.
+    bool        want_lod_override_probe = false;
     bool want_verify     = false; // REN-40-A: run the CPU cull too, for the count comparison
     const char* frame_override = nullptr; // REN-40-A: install this authored frame graph by name
     crd::f64    fixed_dt_ms    = 0.0;     // REN-40-A: >0 ⇒ deterministic clock (frame counter × dt)
@@ -258,6 +270,15 @@ int main(int argc, char** argv)
         // instance, so this is how a GPU-vs-CPU count disagreement is attributed: if it vanishes here, the broad
         // phase was the one dropping geometry, not the kernel.
         else if (std::strcmp(argv[i], "--no-bvh") == 0) { want_no_bvh = true; }
+        // ⭐⭐ REN-40-C2: `--lod [asset]` turns on discrete LOD chains. The shipped default policy is
+        // `lod/scene_default.crdlod` (0.5 / 0.25 / 0.08 at 512 / 128 / 40 px).
+        else if (std::strcmp(argv[i], "--lod-showcase") == 0) { want_lod_showcase = true; }
+        else if (std::strcmp(argv[i], "--lod-override-probe") == 0) { want_lod_override_probe = true; }
+        else if (std::strcmp(argv[i], "--lod") == 0)
+        {
+            want_lod = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-') { lod_asset = argv[++i]; }
+        }
         // ⛔ REN-40-A: `--frame <asset>` installs an authored frame graph BY NAME, independent of every other
         // switch. It is how "is the ASSET wrong?" gets separated from "is the FEATURE wrong?" — the two questions
         // a combined flag makes indistinguishable.
@@ -495,7 +516,78 @@ int main(int argc, char** argv)
         }
         else { static_meshes.push_back(pack_meshes[mi]); }
     }
-    if (pack_meshes.size() > 0U && static_meshes.size() > 0U)
+    // ── ⭐⭐ REN-40-C2: THE LOD SHOWCASE — a scene built to SEE a level chain, and nothing else. ──────────────
+    // ⛔ WHY IT IS ITS OWN SCENE. The 10k/1M grid is the wrong instrument for judging LOD: it mixes seven meshes,
+    // an animated ring and a monument circle, and every object is a few pixels tall — a coarse level is
+    // literally too small to look at. Two real defects (every level published the NEXT level's switch height,
+    // and 12-triangle cubes decimated to a degenerate 6, so the cubes vanished) survived a bit-identical parity
+    // gate, a device-vs-CPU count gate and an fps board, and were both obvious within seconds of rendering ONE
+    // mesh large. The probe scene is therefore a deliverable, not a debugging aid.
+    //
+    // It is ONE mesh — the highest-triangle one in the pack, the only kind a chain can meaningfully simplify —
+    // repeated along +Z at a fixed spacing, with the camera at the near end looking down the line. That gives
+    // both pictures at once: the NEAREST instance is large enough to judge the geometry, and the line receding
+    // into the distance shows WHERE the switches happen and whether they are stable.
+    if (want_lod_showcase && pack_meshes.size() > 0U && static_meshes.size() > 0U)
+    {
+        crd::resources::ResourceId best{};
+        crd::u32                   best_tris = 0U;
+        for (const auto& mid : static_meshes)
+        {
+            auto h = rm.load_sync<crd::resources::MeshResource>(mid);
+            if (h.state() != crd::resources::LoadState::Ready || h.get() == nullptr) { continue; }
+            const auto tris = static_cast<crd::u32>(h.get()->indices.size() / 12U);
+            if (tris > best_tris)
+            {
+                best_tris = tris;
+                best      = mid;
+            }
+        }
+        auto handle = rm.load_sync<crd::resources::MeshResource>(best);
+        if (handle.state() == crd::resources::LoadState::Ready && handle.get() != nullptr)
+        {
+            const auto* mesh  = handle.get();
+            crd::f32    scale = 1.0F;
+            if (mesh->has_bounds())
+            {
+                const crd::f32 ex = mesh->bounds_max[0] - mesh->bounds_min[0];
+                const crd::f32 ey = mesh->bounds_max[1] - mesh->bounds_min[1];
+                const crd::f32 ez = mesh->bounds_max[2] - mesh->bounds_min[2];
+                crd::f32       m  = ex > ey ? ex : ey;
+                m                 = m > ez ? m : ez;
+                if (m > 1.0e-6F) { scale = 2.0F / m; }
+            }
+            crd::resources::ResourceId material{};
+            if (mesh->primitives.size() > 0U) { material = mesh->primitives[0].material_id; }
+            CRD_LOG_INFO(g_log_sandbox, "LOD showcase: {} instances of the {}-triangle mesh, spaced 3.0 along +Z",
+                         inst_total, best_tris);
+            for (crd::u32 i = 0; i < inst_total; ++i)
+            {
+                const crd::f32             z = static_cast<crd::f32>(i) * 3.0F;
+                const crd::scene::EntityId e = world.spawn();
+                crd::scene::Transform      t;
+                t.translation = crd::math::from_raw_vec<crd::units::dim::Length>(crd::math::Vec3f{0.0F, 0.0F, z});
+                t.scale       = {scale, scale, scale};
+                t.world = crd::math::from_trs(crd::math::Vec3f{0.0F, 0.0F, z}, crd::math::Quatf::identity(), t.scale);
+                world.add_component(e, t);
+                world.add_component(e, crd::scene::MeshRenderer{best, material});
+                // ⭐⭐ REN-40-C2: EVERY OTHER instance carries a per-entity override that PINS it to the coarsest
+                // level. ⛔ It is the probe that makes the optional component provable: a bias or a clamp that did
+                // nothing would leave the line uniform, and a line that alternates fine/coarse down its length is
+                // something you can SEE — the same discipline the forced-level policies use, one scope down.
+                if (want_lod_override_probe && (i & 1U) != 0U)
+                {
+                    crd::scene::MeshLodOverride ov;
+                    ov.screen_bias = 1.0F;
+                    ov.min_level   = 5U; // pinned to the coarsest declared level
+                    ov.max_level   = 7U;
+                    world.add_component(e, ov);
+                }
+                cells.push_back(Cell{e, 0.0F, z, scale});
+            }
+        }
+    }
+    else if (pack_meshes.size() > 0U && static_meshes.size() > 0U)
     {
         for (crd::u32 gz = 0; gz < side; ++gz)
         {
@@ -538,7 +630,9 @@ int main(int argc, char** argv)
     }
     // GEO-8: the animated ring — skinned characters (the Fox) circle the origin, clips cycled, phases staggered
     crd::containers::Array<crd::scene::EntityId> animated(&scene_alloc);
-    if (skinned_meshes.size() > 0U && pack_skeletons.size() > 0U)
+    // ⛔ REN-40-C2: the showcase is ONE mesh and nothing else — a skinned ring and a monument circle in the frame
+    // are exactly the noise that hid the defect.
+    if (!want_lod_showcase && skinned_meshes.size() > 0U && pack_skeletons.size() > 0U)
     {
         const crd::u32 ring_count = fox_count;
         auto handle = rm.load_sync<crd::resources::MeshResource>(skinned_meshes[0]);
@@ -587,7 +681,7 @@ int main(int argc, char** argv)
         crd::f32             x, z, scale;
     };
     crd::containers::Array<Monument> monuments(&scene_alloc);
-    for (crd::usize mi = 0; mi < monument_meshes.size(); ++mi)
+    for (crd::usize mi = 0; mi < (want_lod_showcase ? crd::usize{0} : monument_meshes.size()); ++mi)
     {
         auto handle = rm.load_sync<crd::resources::MeshResource>(monument_meshes[mi]);
         const auto* mesh = handle.get();
@@ -629,6 +723,23 @@ int main(int argc, char** argv)
     {
         const bool root_ok = scene_renderer.set_asset_root(aroot);
         CRD_LOG_INFO(g_log_sandbox, "asset root '{}' -> {}", aroot, root_ok ? "installed" : "REJECTED");
+    }
+    // ⛔⛔ REN-40-C2: the policy installs BEFORE the first sync, because a chain is built the first time a mesh
+    // becomes a group and `build_lod_chain` REFUSES a second build on the same resource. And it REFUSES TO RUN
+    // when asked for and unavailable, for the `--gpu-cull` reason: an arm that silently measures the no-LOD path
+    // is a number that will be quoted as an LOD result.
+    if (want_lod)
+    {
+        const char* const asset = lod_asset != nullptr ? lod_asset : "lod/scene_default.crdlod";
+        if (!scene_renderer.set_lod_policy_asset(asset))
+        {
+            CRD_LOG_ERROR(g_log_sandbox,
+                          "--lod needs '{}', which did not install (set CRD_ASSETS_DIR to the repo's assets/ "
+                          "directory). Refusing to run rather than measure the NO-LOD path as an LOD result.",
+                          asset);
+            crd::log::shutdown();
+            return 2;
+        }
     }
     const bool scene_ready = scene_renderer.init(*raster, rm) && scene_renderer.init_programs(*gpu_context)
                              && cells.size() > 0U;
@@ -690,6 +801,7 @@ int main(int argc, char** argv)
 
     crd::u32   frame               = 0;
     crd::u32   frames_with_present = 0;
+    bool       lod_reported           = false; // REN-40-C2: the chain report is one-shot, not per frame
     crd::scenerender::SyncStats   last_sync{};
     // REN-8: the sandbox PRESENTS, it never reads pixels back — so skip the per-frame full-target host copy the
     // frame graph does for `read_pixel`. Measured cost of leaving it on: a 7.1 ms stall behind 1.8 ms of passes.
@@ -760,12 +872,31 @@ int main(int argc, char** argv)
     // took over and every command stayed at the reset's zero. The switch belongs HERE, in the table the toggle
     // reads, not in a one-shot install racing it.
     const char* const gpu_frame        = want_gpu_cull ? "frame/forward_csm_gpu.frame.toml" : nullptr;
-    const char* const frame_0           = frame_override != nullptr ? frame_override
-                                          : gpu_frame != nullptr   ? gpu_frame
-                                                                   : "frame/forward_csm_srgb.frame.toml";
-    const char* const frame_1           = frame_override != nullptr ? frame_override
-                                          : gpu_frame != nullptr   ? gpu_frame
-                                                                   : "frame/forward_csm_agx.frame.toml";
+    // ⛔⛔ REN-40-B: `--gpu-cull` REFUSES TO RUN WITHOUT ITS GRAPH, and that is a benchmark-integrity rule, not a
+    // convenience. `forward_csm_gpu.frame.toml` ships as a FILE, not in the built-in pack, so without
+    // `CRD_ASSETS_DIR` the install logs one error line and the run continues — with no cull passes, every
+    // indirect command left at the reset's zero, and therefore NOTHING DRAWN. The frame then reports
+    // `gpu 0.34 ms` at one million instances, which reads as a spectacular win and is an empty canvas. A
+    // performance arm that can silently measure an empty frame will eventually be quoted as a result, so it
+    // exits instead.
+    if (gpu_frame != nullptr && scene_ready && !scene_renderer.set_frame_graph_asset(gpu_frame))
+    {
+        CRD_LOG_ERROR(g_log_sandbox,
+                      "--gpu-cull needs '{}', which did not install (set CRD_ASSETS_DIR to the repo's assets/ "
+                      "directory). Refusing to run: without it the device cull does nothing and the frame is EMPTY.",
+                      gpu_frame);
+        crd::log::shutdown();
+        return 2;
+    }
+    // ⛔ An explicit override wins; failing that the device-cull graph; failing that the tonemap's own frame.
+    // Written as a helper rather than nested ternaries so the precedence is a statement, not a parse.
+    const auto pick_frame = [&](const char* def) -> const char* {
+        if (frame_override != nullptr) { return frame_override; }
+        if (gpu_frame != nullptr) { return gpu_frame; }
+        return def;
+    };
+    const char* const frame_0 = pick_frame("frame/forward_csm_srgb.frame.toml");
+    const char* const frame_1 = pick_frame("frame/forward_csm_agx.frame.toml");
     const char* const post_frames[2] = {frame_0, frame_1};
     int               post_mode      = 1; // 0 = sRGB only · 1 = AgX
     int               post_mode_live = -1;
@@ -910,6 +1041,37 @@ int main(int argc, char** argv)
         if (scene_ready)
         {
             last_sync         = scene_renderer.sync(world);
+            // ⭐⭐ REN-40-C2: say out loud what the chains came out as, ONCE. ⛔ "LOD is on" is a claim; the level
+            // count and the triangle counts are the fact, and without them a policy that built NOTHING (a refused
+            // decimation, a skinned mesh, a chain that stopped short of its ratio) is indistinguishable from one
+            // that worked — on the fps board it just looks like LOD did not help.
+            if (scene_renderer.lod_enabled() && !lod_reported)
+            {
+                lod_reported            = true;
+                const auto li           = scene_renderer.lod_chain_info();
+                CRD_LOG_INFO(g_log_sandbox,
+                             "LOD chains: {}/{} groups have one, max {} levels, {} -> {} tris (level 0 -> coarsest)",
+                             li.groups_with_lod, li.groups, li.levels_max, li.tris_level0, li.tris_coarsest);
+                // ⛔⛔ THE TABLE ITSELF, PER GROUP. A summary line cannot tell a chain that built from one that
+                // published the wrong ranges: "5/7 groups have one" was true while every level past 0 drew
+                // NOTHING. The index range and the switch height are what the device actually acts on, so they
+                // are what a run has to be able to print.
+                crd::u32 gidx = 0U;
+                for (const auto& g : scene_renderer.mesh_groups())
+                {
+                    if (g.lod_count == 0U)
+                    {
+                        CRD_LOG_INFO(g_log_sandbox, "  group {}: NO CHAIN (draw {} idx)", gidx, g.index_count);
+                    }
+                    for (crd::u32 l = 0; l < g.lod_count; ++l)
+                    {
+                        CRD_LOG_INFO(g_log_sandbox, "  group {} lod {}: first_index {} count {} ({} tris) at <{} px",
+                                     gidx, l, g.lod_first[l], g.lod_indices[l], g.lod_indices[l] / 3U,
+                                     g.lod_height[l]);
+                    }
+                    ++gidx;
+                }
+            }
             const auto t_sync = now_ms();
             phase.sync        = ms_between(t_frame_begin, t_sync);
             last_draw = scene_renderer.render(*canvas, vp, crd::math::Vec3f{0.35F, 1.0F, 0.25F},
@@ -968,6 +1130,16 @@ int main(int argc, char** argv)
                                              gc.instances[v] == gc.cpu_instances[v] ? "MATCH" : "*** MISMATCH ***",
                                              gc.indices[v], gc.first_index[v], gc.groups);
                             }
+                            // ⭐⭐ REN-40-C2: view 0's commands SLOT BY SLOT — "the cull never chose this level"
+                            // and "this level's command is empty" look identical in a per-view total and have
+                            // completely different causes.
+                            for (crd::u32 sl = 0; sl < 8U; ++sl)
+                            {
+                                if (gc.slot_instances[sl] == 0U && gc.slot_indices[sl] == 0U) { continue; }
+                                CRD_LOG_INFO(g_log_sandbox,
+                                             "gpu-cull view0 slot {}: instances={} index_count={} first_index={}",
+                                             sl, gc.slot_instances[sl], gc.slot_indices[sl], gc.slot_first[sl]);
+                            }
                             CRD_LOG_INFO(g_log_sandbox, "gpu-cull bounds: {}/{} instance AABBs DIFFER on device",
                                          gc.bounds_mismatch, gc.bounds_checked);
                         }
@@ -982,9 +1154,14 @@ int main(int argc, char** argv)
             {
                 CRD_LOG_INFO(g_log_sandbox,
                              "perf: sync {:.2f} (extract {:.2f} upload {:.2f} palette {:.2f}) render {:.2f} | "
+                             // ⭐⭐ REN-40-B: the extract's COMPLEXITY beside its milliseconds. `chunks` is the
+                             // irreducible walk, `re` is how many of them actually moved, `ent` is the per-entity
+                             // work that used to be the whole scene every frame.
+                             "walk {}c/{}re/{}ent | "
                              "gpu {:.3f} ms ({} passes) cpu {:.3f} | draws {} inst {}{}",
                              phase.sync, last_sync.extract_ms, last_sync.upload_ms, last_sync.palette_ms,
-                             phase.render, last_draw.gpu_ms, last_draw.timed_passes, last_draw.cpu_ms,
+                             phase.render, last_sync.chunks_visited, last_sync.chunks_reextracted,
+                             last_sync.entities_extracted, last_draw.gpu_ms, last_draw.timed_passes, last_draw.cpu_ms,
                              last_draw.draws, last_draw.drawn_instances,
                              // ⛔ Under the device cull the CPU never learns the count, so a bare `inst 0` reads
                              // as "nothing was drawn". Say WHY it is 0 — `read_gpu_cull_counts()` is the authority.

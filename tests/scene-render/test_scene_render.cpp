@@ -269,7 +269,13 @@ TEST_CASE("scene-render: chunk-grain extraction -- structural sync builds groups
     // geometry popping for a frame, which reads as a culling bug and is really a staleness bug. Counted here
     // explicitly rather than loosened to `> 0`: this gate's whole job is that a sync uploads EXACTLY what changed.
     constexpr crd::usize bounds_bytes = 6U * sizeof(crd::f32);
-    CHECK(s1.uploaded_bytes == 100U * (sizeof(scenerender::InstanceGpu) + bounds_bytes));
+    // ⭐⭐ REN-40-C2: and the per-instance LOD OVERRIDE (2 words — the screen bias, then the level clamp), which
+    // rides the SAME grain for the SAME reason: an override that lagged its entity would select against the
+    // previous frame's policy. ⛔ Still counted EXACTLY rather than loosened to `> 0`. This assertion is the one
+    // that caught the section being added at all (11200 vs 10400), which is precisely its job — a per-instance
+    // section that appeared without anyone noticing is a per-frame cost nobody budgeted.
+    constexpr crd::usize lod_override_bytes = 2U * sizeof(crd::u32);
+    CHECK(s1.uploaded_bytes == 100U * (sizeof(scenerender::InstanceGpu) + bounds_bytes + lod_override_bytes));
 
     // the group's buffer carries the geometry (index_count at the right shape)
     REQUIRE(rig.renderer.mesh_groups().size() == 1U);
@@ -551,4 +557,133 @@ TEST_CASE("REN-36.3-b: component_id_by_name matches BOTH ABI decorations (MSVC a
                                                    crd::containers::StringView("Renderer")));
     CHECK_FALSE(crd::scene::World::decorated_names(crd::containers::StringView("struct crd::scene::MeshRenderer"),
                                                    crd::containers::StringView("Renderer")));
+}
+
+// ── ⭐⭐ REN-40-B GATE: THE EXTRACT WALK IS O(chunks), NOT O(entities). ──────────────────────────────────────
+// ⛔ This is asserted by COUNTING, not by TIMING. The claim is asymptotic ("a static frame costs nothing"), and
+// a millisecond threshold cannot express that: it is noisy, machine-specific, and on a debug build it passes or
+// fails by luck. The four counters in `SyncStats` make the same claim exact.
+//
+// What each arm forbids, concretely — every one of these was TRUE of the code this slice replaced, and together
+// they were 171 ms of a 337 ms frame at one million instances:
+//   · `signature_bytes < total_instances` — the structure signature used to hash `EntityId[n]` AND
+//     `MeshRenderer[n]` byte by byte for every chunk, EVERY FRAME: 40 bytes per entity, ~40 MB at 1M, to answer
+//     a question that only changes when something spawns or despawns. A per-entity signature cannot consume
+//     fewer than 8 bytes per entity, so this inequality is unreachable for any implementation that reads one.
+//   · `entities_extracted == 0` on a static frame — nothing is re-read when nothing moved.
+//   · `runs_visited == 0` on a static frame — finding a moved chunk's runs used to be a scan over every run of
+//     every group (O(chunks x runs), quadratic in the scene); it is now one hash probe, so a frame with no
+//     dirty chunk examines no runs at all.
+//   · a ONE-entity move re-extracts ONE chunk — the cost tracks what changed, not what exists.
+TEST_CASE("REN-40-B GATE: the extract is O(chunks) -- a static frame re-extracts NOTHING and hashes no entity",
+          "[scene-render][ren40][geo7]")
+{
+    Rig rig;
+    constexpr int n_total = 20000;
+    containers::Array<scene::EntityId> entities(&galloc());
+    for (int i = 0; i < n_total; ++i)
+    {
+        entities.push_back(rig.spawn_cube(static_cast<f32>(i % 100), 0.0F, static_cast<f32>(i) * 0.01F));
+    }
+
+    // ── arm 1: the structural frame pays for everything, once ──
+    const auto s1 = rig.renderer.sync(rig.world);
+    CHECK(s1.structural_rebuild);
+    CHECK(s1.total_instances == static_cast<u32>(n_total));
+    CHECK(s1.entities_extracted == static_cast<u64>(n_total)); // a rebuild DOES touch every entity — that is its job
+    CHECK(s1.chunks_visited > 1U);                        // the scene must really span many chunks...
+    CHECK(s1.chunks_visited < static_cast<u32>(n_total) / 8U); // ...with many entities in each, or the gate is weak
+
+    // ── arm 2: a STATIC frame. This is the whole slice. ──
+    const auto s2 = rig.renderer.sync(rig.world);
+    CHECK_FALSE(s2.structural_rebuild);
+    CHECK(s2.chunks_visited == s1.chunks_visited); // the walk still SEES every chunk (that cost is irreducible)
+    CHECK(s2.chunks_reextracted == 0U);            // ...and re-extracts none of them
+    CHECK(s2.entities_extracted == 0U);            // ⛔ not one entity read
+    CHECK(s2.runs_visited == 0U);                  // ⛔ not one run scanned
+    CHECK(s2.dirty_runs == 0U);
+    CHECK(s2.uploaded_bytes == 0U);
+    // ⛔ THE DISCRIMINATOR: the signature is O(1) per CHUNK. Any per-entity signature fails both of these.
+    CHECK(s2.signature_bytes <= 64U * static_cast<u64>(s2.chunks_visited));
+    CHECK(s2.signature_bytes < static_cast<u64>(s2.total_instances));
+
+    // ── arm 3: move exactly ONE entity — exactly ONE chunk re-extracts ──
+    {
+        scene::Transform t;
+        t.translation = math::from_raw_vec<units::dim::Length>(math::Vec3f{3.0F, 5.0F, 7.0F});
+        t.world       = math::from_trs(math::Vec3f{3.0F, 5.0F, 7.0F}, math::Quatf::identity(),
+                                       math::Vec3f{1, 1, 1});
+        rig.world.add_component(entities[n_total / 2], t);
+    }
+    const auto s3 = rig.renderer.sync(rig.world);
+    CHECK_FALSE(s3.structural_rebuild);
+    CHECK(s3.chunks_reextracted == 1U);
+    CHECK(s3.entities_extracted > 0U);
+    // one chunk's worth, not the world's — the chunk holds `kN / chunks_visited` entities on average
+    CHECK(s3.entities_extracted < static_cast<u64>(n_total) / 4U);
+    CHECK(s3.runs_visited >= 1U);
+    CHECK(s3.dirty_runs >= 1U);
+    CHECK(s3.uploaded_bytes > 0U);
+    CHECK(s3.uploaded_bytes < static_cast<u64>(n_total) * sizeof(scenerender::InstanceGpu) / 4U);
+
+    // and the move actually landed (a gate that measured only counters could pass on a renderer that did nothing)
+    bool found = false;
+    const auto& group = rig.renderer.mesh_groups()[0];
+    for (usize slot = 0; slot < group.slot_entity.size(); ++slot)
+    {
+        if (group.slot_entity[slot] == entities[n_total / 2])
+        {
+            found = true;
+            CHECK(group.instances[slot].world[12] == 3.0F);
+            CHECK(group.instances[slot].world[13] == 5.0F);
+            CHECK(group.instances[slot].world[14] == 7.0F);
+        }
+    }
+    CHECK(found);
+
+    // ── arm 4: a SPAWN is still structural, and the signature still catches it ──
+    (void)rig.spawn_cube(1.0F, 2.0F, 3.0F);
+    const auto s4 = rig.renderer.sync(rig.world);
+    CHECK(s4.structural_rebuild);
+    CHECK(s4.total_instances == static_cast<u32>(n_total) + 1U);
+}
+
+// ⭐⭐ REN-40-B GATE (the SCALING arm): quadruple the scene and the per-frame extract cost must NOT quadruple.
+// ⛔ A single-size measurement cannot tell O(chunks) from O(entities) — both are "small" at one size. Two sizes
+// can: the signature bytes and the re-extracted entity count of a STATIC frame must stay flat in the scene's
+// size, while `chunks_visited` is allowed to grow (that is the irreducible walk).
+TEST_CASE("REN-40-B GATE: 4x the instances does not cost 4x the static-frame extract",
+          "[scene-render][ren40][geo7]")
+{
+    const auto static_frame = [](int n, u32& chunks, u64& sig_bytes, u64& reextracted) {
+        Rig rig;
+        for (int i = 0; i < n; ++i)
+        {
+            (void)rig.spawn_cube(static_cast<f32>(i % 100), 0.0F, static_cast<f32>(i) * 0.01F);
+        }
+        (void)rig.renderer.sync(rig.world);       // the structural frame
+        const auto s = rig.renderer.sync(rig.world); // the static one — what a real frame costs
+        chunks       = s.chunks_visited;
+        sig_bytes    = s.signature_bytes;
+        reextracted  = s.entities_extracted;
+    };
+
+    u32 c1 = 0;
+    u32 c4 = 0;
+    u64 b1 = 0;
+    u64 b4 = 0;
+    u64 r1 = 0;
+    u64 r4 = 0;
+    static_frame(8000, c1, b1, r1);
+    static_frame(32000, c4, b4, r4);
+
+    CHECK(c4 > c1);      // the scene really did get bigger
+    CHECK(r1 == 0U);     // and a static frame re-extracts nothing at EITHER size
+    CHECK(r4 == 0U);
+    // The signature cost tracks CHUNKS, so it grows with the same ~4x the chunk count does — but it stays a
+    // fixed number of bytes PER CHUNK, which is the property. An O(entities) signature would put b4 at
+    // 32000 * 40 = 1.28 MB; this bounds it three orders of magnitude below that.
+    CHECK(b1 == 40U * static_cast<u64>(c1)); // 5 u64 per chunk, exactly — the same constant at both sizes
+    CHECK(b4 == 40U * static_cast<u64>(c4));
+    CHECK(b4 < 40U * 32000U / 50U); // three orders below what a per-entity signature would consume
 }

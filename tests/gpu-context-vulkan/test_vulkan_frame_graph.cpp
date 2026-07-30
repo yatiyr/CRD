@@ -7812,3 +7812,215 @@ TEST_CASE("REN-40-A GATE: the compacting cull kernel reproduces the CPU frustum 
     }
     CHECK(capture.error_count() == 0U);
 }
+
+// ── ⭐⭐ REN-40-C2 GATE: THE LOD SELECTOR, AGAINST A CLOSED-FORM REFERENCE. ──────────────────────────────────
+// ⛔⛔ WHY THIS GATE HAD TO EXIST. Every cheap check of the LOD path passed while coarse levels drew NOTHING:
+// the frame rendered, the device-vs-CPU survivor TOTALS reconciled (the survivors WERE in their lists — nothing
+// read them), and GPU time DROPPED, so it read as a win and produced a benchmark number that had to be
+// withdrawn. What no aggregate could see is WHICH slot each instance landed in. This asserts exactly that.
+//
+// The metric is closed-form, so the reference is arithmetic rather than a second implementation:
+//     px = r · |row1(vp)| · view_pixel_height / max(w_clip, eps)
+// With the ortho-ish matrix below `w == 1` and `|row1| == vp.c1.y`, so `px = r · c1y · H` — a number this test
+// computes per instance in C++ and compares against the slot the DEVICE chose.
+// ⛔ The boxes VARY IN SIZE at a fixed position, so every slot is exercised by the metric itself rather than by
+// a hand-assigned level: a selector that ignored the metric would pile everything into one slot, and the
+// "every slot is non-empty" pre-check makes that impossible to pass.
+TEST_CASE("REN-40-C2 GATE: the cull kernel selects the LOD slot the projected screen height declares",
+          "[gpu-context][vulkan][ren40][lod][cull][compute][gpu]")
+{
+    Rig rig = make_rig();
+    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    auto& raster = *rig.raster;
+    g::ValidationCapture capture(*rig.vk);
+
+    memory::TlsfAllocator alloc(16U << 20U);
+
+    constexpr crd::u32 n_boxes     = 128U;
+    constexpr crd::u32 lod_slots   = 4U;
+    constexpr crd::u32 visible_off = 512U;  // words
+    constexpr crd::u32 bounds_off  = 4096U; // words
+    constexpr crd::u32 ovr_off     = 8192U; // words — the per-instance LOD override section
+    constexpr float    pixel_h     = 1000.0F;
+    // the DECLARED switch heights: level s is chosen while px < heights[s]. Descending, per the policy rule.
+    const float heights[lod_slots] = {3.0e38F, 40.0F, 20.0F, 10.0F};
+
+    crd::containers::String toml(&alloc);
+    toml.append("stage = \"cull\"\nschema = 1\nname = \"crd://vertex/ren40_lodsel\"\n");
+    toml.append("[header]\ninstance_off = 4\nview_proj = 6\ninstance_count = 100\n");
+    toml.append("[vertex]\nstride = 12\n");
+    toml.append("[[attribute]]\nname = \"position\"\noffset = 0\ncomps = 3\nkind = \"position\"\n");
+    toml.append("[instance]\nstride = 20\ntransform = 0\n");
+    toml.append("[cull]\nfrustum = true\nworkgroup = 64\ncompact = true\nbounds_off = 104\n");
+    toml.append("view_index = 0\ncapacity_word = 101\n");
+    toml.append("lod_slots = 4\nlod_count_word = 120\nlod_table_word = 121\nlod_height_word = 137\n");
+    toml.append("pixel_height_word = 1\nlod_override_off = 145\n");
+    {
+        char buf[192];
+        (void)std::snprintf(buf, sizeof(buf), "draw_stride = %u\ndraw_arg_off = %u\ndraw_arg_within = %u\n",
+                            raster.indirect_command_stride(),
+                            (8U * 4U) + raster.indirect_command_arg_offset(), // params block + the arg offset
+                            raster.indirect_command_arg_offset());
+        toml.append(static_cast<const char*>(buf));
+    }
+    crd::vertcook::VertexProgramDesc desc(&alloc);
+    crd::containers::String          where(&alloc);
+    REQUIRE(crd::vertcook::parse_vertex_toml(crd::containers::StringView(toml.c_str()), desc, &where)
+            == crd::vertcook::VertexCookError::Ok);
+    kir::KGraph kg(&alloc);
+    kir::KEntry ke;
+    REQUIRE(crd::vertcook::cook_vertex_program(desc, kg, ke));
+    auto kern = rig.vk->create_program(kg, ke);
+    REQUIRE(kern != nullptr);
+
+    const crd::u32 scene_words = ovr_off + (n_boxes * 2U) + 16U;
+    auto           scene       = raster.create_storage_buffer(scene_words * 4U);
+    auto           args        = raster.create_storage_buffer(((8U + (lod_slots * 8U)) * 4U) + 256U);
+    REQUIRE(scene != nullptr);
+    REQUIRE(args != nullptr);
+
+    crd::math::Mat4f vpm = crd::math::Mat4f::identity();
+    vpm.c0.x             = 0.05F;
+    vpm.c1.y             = 0.05F;
+    vpm.c2.z             = 0.01F;
+
+    crd::containers::Array<crd::u32> words(&alloc);
+    words.resize(scene_words, 0U);
+    const auto putf = [&](crd::u32 idx, float v) {
+        crd::u32 bits = 0U;
+        std::memcpy(static_cast<void*>(&bits), static_cast<const void*>(&v), 4U);
+        words[idx] = bits;
+    };
+    const auto* vpf = reinterpret_cast<const float*>(&vpm);
+    for (crd::u32 e = 0; e < 16U; ++e) { putf(6U + e, vpf[e]); }
+    words[100U] = n_boxes;
+    words[104U] = bounds_off;
+    words[5U]   = visible_off;
+    words[101U] = n_boxes; // the per-(view, slot) list stride
+    words[120U] = lod_slots;
+    words[145U] = ovr_off;
+    for (crd::u32 s = 0; s < lod_slots; ++s)
+    {
+        words[121U + (s * 2U) + 0U] = 1000U + (s * 100U); // first_index (the draw is not exercised here)
+        words[121U + (s * 2U) + 1U] = 300U - (s * 60U);   // index_count
+        putf(137U + s, heights[s]);
+    }
+
+    // ── the scene: one position, VARYING half-extent, so the metric alone spans every slot ──
+    crd::containers::Array<crd::u32> want_slot(&alloc);
+    for (crd::u32 i = 0; i < n_boxes; ++i)
+    {
+        const float h = 0.05F + (static_cast<float>(i) * 0.0045F);
+        crd::geometry::primitives::AABB3<crd::f32> b;
+        b.min               = {-h, -h, 10.0F - h};
+        b.max               = {h, h, 10.0F + h};
+        const crd::u32 base = bounds_off + (i * 6U);
+        putf(base + 0U, b.min.x);
+        putf(base + 1U, b.min.y);
+        putf(base + 2U, b.min.z);
+        putf(base + 3U, b.max.x);
+        putf(base + 4U, b.max.y);
+        putf(base + 5U, b.max.z);
+        // no per-entity override: bias 1.0, levels 0..7 — the same constant the renderer writes for a slot
+        // whose entity carries no `MeshLodOverride`
+        putf(ovr_off + (i * 2U) + 0U, 1.0F);
+        words[ovr_off + (i * 2U) + 1U] = 0U | (7U << 8U);
+
+        // THE REFERENCE, in closed form
+        const float ex = b.max.x - b.min.x;
+        const float ey = b.max.y - b.min.y;
+        const float ez = b.max.z - b.min.z;
+        const float r  = 0.5F * crd::math::sqrt((ex * ex) + (ey * ey) + (ez * ez));
+        const float px = r * vpm.c1.y * pixel_h; // |row1| == c1.y for this matrix; w == 1
+        crd::u32    s  = 0U;
+        for (crd::u32 k = 1; k < lod_slots; ++k)
+        {
+            if (px < heights[k]) { s = k; }
+        }
+        want_slot.push_back(s);
+    }
+    // ⛔ the gate must EXERCISE every slot, or it proves nothing about selection
+    for (crd::u32 s = 0; s < lod_slots; ++s)
+    {
+        crd::u32 c = 0U;
+        for (crd::u32 i = 0; i < n_boxes; ++i) { c += want_slot[i] == s ? 1U : 0U; }
+        INFO("slot " << s << " expects " << c);
+        CHECK(c > 0U);
+    }
+    REQUIRE(raster.upload_storage(*scene, 0U, words.data(), static_cast<crd::u32>(words.size() * 4U)));
+
+    // the params block: [0] base = 0, [1] this view's pixel height
+    crd::u32 params[8] = {};
+    {
+        crd::u32 bits = 0U;
+        std::memcpy(static_cast<void*>(&bits), static_cast<const void*>(&pixel_h), 4U);
+        params[1] = bits;
+    }
+    REQUIRE(raster.upload_storage(*args, 0U, static_cast<const void*>(params), sizeof(params)));
+
+    struct St
+    {
+        g::FgBuffer     scene{};
+        g::FgBuffer     args{};
+        g::IGpuProgram* kern = nullptr;
+    };
+    {
+        auto fgraph = raster.create_frame_graph();
+        REQUIRE(fgraph != nullptr);
+        St st;
+        st.scene = fgraph->import_storage(*scene);
+        st.args  = fgraph->import_storage(*args);
+        st.kern  = kern.get();
+        fgraph->add_pass("ren40-lodsel", g::FgPassKind::Compute)
+            .reads(st.scene)
+            .writes(st.args)
+            .execute(
+                [](g::IFrameContext& ctx, void* user) {
+                    auto*              u       = static_cast<St*>(user);
+                    g::IStorageBuffer* bufs[2] = {ctx.buffer(u->scene), ctx.buffer(u->args)};
+                    ctx.raster().dispatch_kernel(*u->kern, (n_boxes + 63U) / 64U, 1U, 1U,
+                                                 static_cast<g::IStorageBuffer* const*>(bufs), 2U);
+                },
+                &st);
+        REQUIRE(fgraph->build());
+        fgraph->execute();
+    }
+
+    // ── the verdict: PER SLOT, both the COUNT and the SET ──
+    REQUIRE(raster.download_storage(*args));
+    REQUIRE(raster.download_storage(*scene));
+    const crd::u32 stride_w = raster.indirect_command_stride() / 4U;
+    const crd::u32 argw     = 8U + (raster.indirect_command_arg_offset() / 4U);
+    crd::u32       total    = 0U;
+    for (crd::u32 s = 0; s < lod_slots; ++s)
+    {
+        crd::u32 want = 0U;
+        for (crd::u32 i = 0; i < n_boxes; ++i) { want += want_slot[i] == s ? 1U : 0U; }
+        const crd::u32 got = args->read_u32(argw + (s * stride_w) + 1U);
+        INFO("slot " << s);
+        CHECK(got == want);
+        total += got;
+
+        // ...and the LIST holds exactly the instances the reference assigns to this slot, as a SET — the
+        // compaction claims slots in arrival order, which is not deterministic; the SET is. ⛔ Checked by
+        // MEMBERSHIP rather than by sorting: it is order-independent by construction, and it catches a
+        // DUPLICATE (an instance appended twice) which a sorted compare would quietly accept as "present".
+        crd::containers::Array<crd::u32> seen(&alloc);
+        seen.resize(n_boxes, 0U);
+        for (crd::u32 k = 0; k < got; ++k)
+        {
+            const crd::u32 v = scene->read_u32(visible_off + (s * n_boxes) + k);
+            REQUIRE(v < n_boxes);
+            ++seen[v];
+        }
+        for (crd::u32 i = 0; i < n_boxes; ++i)
+        {
+            const crd::u32 expect = want_slot[i] == s ? 1U : 0U;
+            INFO("instance " << i << " slot " << s);
+            CHECK(seen[i] == expect);
+        }
+    }
+    // every surviving instance landed in EXACTLY ONE slot — the property that makes a per-view sum meaningful
+    CHECK(total == n_boxes);
+    CHECK(capture.error_count() == 0U);
+}

@@ -27,6 +27,33 @@ struct MeshRenderer
 };
 static_assert(sizeof(MeshRenderer) == 32, "MeshRenderer layout pinned (SCEN v1 payload)");
 
+// ── ⭐⭐ REN-40-C2: THE PER-ENTITY LOD OVERRIDE — an OPTIONAL component, deliberately. ──────────────────────
+// ⛔ IT IS NOT A FIELD ON `MeshRenderer`, and cannot be: that struct is LAYOUT-PINNED at 32 bytes by the SCEN v1
+// payload above. Riding an optional component instead means an entity that does not care costs NOTHING — no
+// bytes in the common archetype, no branch on the extract path — which is the whole reason the ECS is
+// archetype-shaped.
+//
+// ⛔⛔ THE CHAIN ITSELF IS NOT HERE, AND MUST NOT BE. A level chain is GEOMETRY — index ranges into a mesh's own
+// vertex and index streams — so it belongs to the MESH RESOURCE, where it is built once and shared by every
+// entity that names that mesh. Putting a chain on an entity would decimate the same geometry once per instance.
+// What is genuinely per-entity is the POLICY APPLIED TO that chain, which is this:
+//
+//   · `screen_bias` scales the projected screen height the selector computes. > 1 keeps an entity at finer
+//     levels for longer (a hero prop, a face); < 1 drops it sooner (set dressing nobody looks at).
+//   · `min_level` / `max_level` clamp the selection outright — "this never drops below 1", "this is always
+//     the impostor".
+//
+// ⭐ The selection runs ON THE DEVICE, per instance, so these three values ride the group buffer's per-instance
+// LOD-OVERRIDE SECTION (`kHdrLodOverrideOff`) beside the world AABBs the cull already reads — NOT the instance
+// record, whose 20-word stride is declared by every `.crdv` and read by every vertex program.
+struct MeshLodOverride
+{
+    crd::f32 screen_bias = 1.0F;
+    crd::u32 min_level   = 0U;
+    crd::u32 max_level   = 7U; // kMaxLodSlots - 1
+};
+static_assert(sizeof(MeshLodOverride) == 12, "MeshLodOverride layout pinned (SCEN payload)");
+
 // The glTF camera surface (perspective OR orthographic). `zfar == 0` = infinite projection; `aspect == 0` =
 // "use the viewport's" (both per glTF's optional fields).
 struct SceneCamera
@@ -85,6 +112,7 @@ inline void register_render_components(World& w)
     w.register_component<SceneCamera>(default_serialize_trait<SceneCamera>(kFourCC_SceneCamera));
     w.register_component<SceneLight>(default_serialize_trait<SceneLight>(kFourCC_SceneLight));
     w.register_component<SkeletonAnimator>(default_serialize_trait<SkeletonAnimator>(kFourCC_SkeletonAnimator));
+    w.register_component<MeshLodOverride>(default_serialize_trait<MeshLodOverride>(kFourCC_MeshLodOverride));
 }
 
 } // namespace crd::scene

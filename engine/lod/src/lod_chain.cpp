@@ -5,6 +5,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/geometry/mesh_processing/half_edge_mesh.hpp>
 #include <crd/geometry/mesh_processing/qem_decimate.hpp>
+#include <crd/math/select.hpp> // crd::math::sqrt (IEEE-exact, deterministic)
 #include <crd/math/vec.hpp>
 
 #include <cstring>
@@ -306,7 +307,14 @@ LodBuildReport build_lod_chain(crd::resources::MeshResource& mesh, const LodPoli
     lod0.first_index   = 0U;
     lod0.index_count   = src_indices;
     lod0.error         = 0.0F;
-    lod0.screen_height = (policy.extra_levels > 0U) ? policy.screen_height[0] : 0.0F;
+    // ⛔⛔ THE FIELD IS "PICK THIS LEVEL WHILE px IS BELOW THIS" (MeshLod's own contract), so level 0's value is
+    // "always" — it is the level that applies at any size. It used to hold `policy.screen_height[0]`, which is
+    // the threshold for entering level ONE, and every level below did the same: the whole table was shifted by
+    // one, so a selector asking "should I be at level s?" was handed level s+1's number. Measured, not argued:
+    // a probe policy that pins the scene to level 1 rendered BIT-IDENTICALLY to level 0 (0 of 921600 pixels),
+    // because the level-1 test was reading level 2's threshold. The producer and the consumer disagreed while
+    // both looked reasonable in isolation — which is why the field carries its meaning in a comment right here.
+    lod0.screen_height = 3.0e38F; // effectively +inf; nothing selects "not level 0"
     mesh.lods.push_back(lod0);
     report.levels_built  = 1U;
     report.triangles[0]  = src_indices / 3U;
@@ -365,12 +373,61 @@ LodBuildReport build_lod_chain(crd::resources::MeshResource& mesh, const LodPoli
     const crd::u32 source_faces = source.face_count();
 
     const crd::u32 levels = policy.extra_levels < (kMaxLodLevels - 1U) ? policy.extra_levels : (kMaxLodLevels - 1U);
+    // ⛔⛔ THE TRIANGLE FLOOR — the defect this stops, measured on screen. A ratio applied blindly took the
+    // sandbox's 12-triangle CUBES to SIX, and a closed box cannot be six triangles: "level 1 of a cube" was a
+    // degenerate sliver, so every cube VANISHED the moment it crossed the first threshold. The same blindness in
+    // the other direction gave a 20-triangle icosahedron a 20 -> 20 -> 20 chain — three levels that reduce
+    // nothing and cost a draw each. ⭐ The floor is AUTHORED (`min_triangles`), because what counts as "still a
+    // surface" is a property of the content, not of the engine.
+    const crd::u32 floor_tris = policy.min_triangles;
+    if (source_faces <= floor_tris)
+    {
+        // Already at or below the floor: NO chain. ⛔ Reported as Ok with one level rather than as a failure —
+        // "this mesh is too small to level" is a correct answer, and dressing it as an error would train the
+        // reader to ignore the ones that are not.
+        report.status = LodBuildStatus::Ok;
+        return report;
+    }
+    // the SOURCE's extent, once — the reference the shape test below measures each level against
+    V3 src_lo = pos.empty() ? V3{0.0F, 0.0F, 0.0F} : pos[0];
+    V3 src_hi = src_lo;
+    for (crd::usize v = 1; v < pos.size(); ++v)
+    {
+        src_lo.x = pos[v].x < src_lo.x ? pos[v].x : src_lo.x;
+        src_lo.y = pos[v].y < src_lo.y ? pos[v].y : src_lo.y;
+        src_lo.z = pos[v].z < src_lo.z ? pos[v].z : src_lo.z;
+        src_hi.x = pos[v].x > src_hi.x ? pos[v].x : src_hi.x;
+        src_hi.y = pos[v].y > src_hi.y ? pos[v].y : src_hi.y;
+        src_hi.z = pos[v].z > src_hi.z ? pos[v].z : src_hi.z;
+    }
+    // the SOURCE's summed triangle AREA — the reference the shape test measures each level against.
+    const auto tri_area = [](const crd::containers::Array<V3>& vp, const crd::containers::Array<crd::u32>& ix) {
+        double sum = 0.0;
+        for (crd::usize t = 0; t + 2U < ix.size(); t += 3U)
+        {
+            if (ix[t] >= vp.size() || ix[t + 1U] >= vp.size() || ix[t + 2U] >= vp.size()) { continue; }
+            const V3& a = vp[ix[t]];
+            const V3& b = vp[ix[t + 1U]];
+            const V3& c = vp[ix[t + 2U]];
+            const V3  e1{b.x - a.x, b.y - a.y, b.z - a.z};
+            const V3  e2{c.x - a.x, c.y - a.y, c.z - a.z};
+            const V3  n = crd::math::cross(e1, e2);
+            sum += 0.5 * static_cast<double>(crd::math::sqrt(static_cast<double>((n.x * n.x) + (n.y * n.y) + (n.z * n.z))));
+        }
+        return sum;
+    };
+    const double src_area = tri_area(pos, idx);
+    crd::u32 prev_faces = source_faces;
     for (crd::u32 l = 0; l < levels; ++l)
     {
         // ⛔ Ratios are of the SOURCE, so the chain does not compound rounding
         const crd::f32 ratio  = policy.ratio[l] > 0.0F ? policy.ratio[l] : 0.5F;
-        const auto     target = static_cast<crd::u32>(static_cast<crd::f32>(source_faces) * ratio);
+        auto           target = static_cast<crd::u32>(static_cast<crd::f32>(source_faces) * ratio);
         if (target < 4U) { break; } // below a tetrahedron there is nothing to keep
+        if (target < floor_tris) { target = floor_tris; } // clamp INTO the floor rather than through it
+        // ⛔ A level that does not actually REDUCE is not a level: it is a second copy of its predecessor with
+        // its own draw call, its own indirect command and its own visible list. Stop the chain here instead.
+        if (target >= prev_faces) { break; }
 
         mp::QemDecimateOptions<crd::f32> opts{};
         opts.target_face_count = target;
@@ -390,6 +447,59 @@ LodBuildReport build_lod_chain(crd::resources::MeshResource& mesh, const LodPoli
         crd::containers::Array<crd::u32> lidx(scratch);
         out.to_indexed(lpos, lidx);
         if (lpos.empty() || lidx.empty()) { break; }
+        // ⛔⛔ THE SHAPE TEST — a triangle count is not a quality bar, and this is the measurement that says so.
+        // Measured on the LOD showcase: the 6,036-triangle source decimated to 104 triangles cleared
+        // `min_triangles` comfortably and rendered as a flat SLIVER — every instance in the line collapsed. The
+        // count was fine; the OBJECT was gone. A level that no longer occupies the source's space is not a
+        // coarser version of it, so the chain STOPS here rather than publishing something the selector will
+        // faithfully choose.
+        {
+            V3 lo = lpos[0];
+            V3 hi = lpos[0];
+            for (crd::usize v = 1; v < lpos.size(); ++v)
+            {
+                lo.x = lpos[v].x < lo.x ? lpos[v].x : lo.x;
+                lo.y = lpos[v].y < lo.y ? lpos[v].y : lo.y;
+                lo.z = lpos[v].z < lo.z ? lpos[v].z : lo.z;
+                hi.x = lpos[v].x > hi.x ? lpos[v].x : hi.x;
+                hi.y = lpos[v].y > hi.y ? lpos[v].y : hi.y;
+                hi.z = lpos[v].z > hi.z ? lpos[v].z : hi.z;
+            }
+            const crd::f32 le[3] = {hi.x - lo.x, hi.y - lo.y, hi.z - lo.z};
+            const crd::f32 se[3] = {src_hi.x - src_lo.x, src_hi.y - src_lo.y, src_hi.z - src_lo.z};
+            bool           kept  = true;
+            crd::f32       worst = 1.0F;
+            for (crd::u32 ax = 0; ax < 3U; ++ax)
+            {
+                if (se[ax] > 1.0e-6F)
+                {
+                    const crd::f32 r_ax = le[ax] / se[ax];
+                    if (r_ax < worst) { worst = r_ax; }
+                }
+                // ⛔ A degenerate SOURCE axis (a flat plane) is not a failure — only a level that lost extent
+                // the source HAD is.
+                if (se[ax] > 1.0e-6F && le[ax] < se[ax] * policy.min_extent_ratio) { kept = false; }
+            }
+            // ⛔⛔ AND THE AREA. The extent test alone is NOT sufficient — the 104-triangle level that rendered
+            // as slivers PASSED it, because a few surviving vertices still sat at the source's extremes while
+            // the shell between them was gone. Summed triangle area is what separates "a coarse version of
+            // the object" from "a handful of slivers spanning the same box".
+            const double lvl_area = tri_area(lpos, lidx);
+            if (src_area > 1.0e-9 && lvl_area < src_area * static_cast<double>(policy.min_area_ratio))
+            {
+                kept = false;
+            }
+            if (!kept)
+            {
+                // ⛔ REPORTED WITH ITS NUMBERS, not merely counted — "the chain stopped early" and "the policy
+                // asked for fewer levels" look identical on an fps board and have different fixes.
+                ++report.levels_refused_shape;
+                report.refused_extent_ratio = worst;
+                report.refused_area_ratio =
+                    src_area > 1.0e-9 ? static_cast<crd::f32>(lvl_area / src_area) : 0.0F;
+                break;
+            }
+        }
 
         crd::containers::Array<V3>       lnrm(scratch);
         crd::containers::Array<V3>       ltan(scratch);
@@ -428,10 +538,15 @@ LodBuildReport build_lod_chain(crd::resources::MeshResource& mesh, const LodPoli
         entry.first_index   = first_index;
         entry.index_count   = static_cast<crd::u32>(lidx.size());
         entry.error         = opts.max_error_threshold; // unset here; the reported error rides the report
-        entry.screen_height = policy.screen_height[l + 1U];
+        // ⛔ THIS level's own threshold — `policy.screen_height[l]` is the l-th `[[level]]` entry, and the l-th
+        // entry describes level l+1, which is exactly the level being appended here. (Was `[l + 1U]`: level 1
+        // published level 2's number, and the deepest level published an UNSET zero, so the coarsest level could
+        // never be selected at all.)
+        entry.screen_height = policy.screen_height[l];
         entry.error         = 0.0F;
         mesh.lods.push_back(entry);
         report.triangles[report.levels_built] = static_cast<crd::u32>(lidx.size() / 3U);
+        prev_faces                            = static_cast<crd::u32>(lidx.size() / 3U);
         ++report.levels_built;
     }
 

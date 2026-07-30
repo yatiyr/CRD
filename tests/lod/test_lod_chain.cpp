@@ -129,7 +129,20 @@ TEST_CASE("REN-40-C1 GATE: each level is strictly cheaper and every index is in 
 
     const auto rep = crd::lod::build_lod_chain(mesh, three_level_policy(), &alloc);
     REQUIRE(rep.status == crd::lod::LodBuildStatus::Ok);
-    REQUIRE(rep.levels_built == 4U); // level 0 + the three requested
+    // ⭐⭐ REN-40-C2: the chain is as deep as REQUESTED, or it stopped and SAID WHY — never silently short.
+    // ⛔ Not relaxed to `>= 2`: a chain that quietly builds fewer levels than the policy asked for is
+    // indistinguishable on an fps board from a policy that asked for fewer, and the two have completely
+    // different fixes. So the gate accepts exactly two outcomes and demands the numbers for the second.
+    INFO("levels " << rep.levels_built << " refused_shape " << rep.levels_refused_shape << " area_ratio "
+                   << rep.refused_area_ratio << " extent_ratio " << rep.refused_extent_ratio);
+    if (rep.levels_built == 4U) { CHECK(rep.levels_refused_shape == 0U); }
+    else
+    {
+        CHECK(rep.levels_refused_shape > 0U);
+        // and the refusal was a REAL measurement, not a default-initialised zero
+        CHECK((rep.refused_area_ratio > 0.0F || rep.refused_extent_ratio > 0.0F));
+    }
+    REQUIRE(rep.levels_built >= 2U);
 
     const auto total_vertices = static_cast<crd::u32>(mesh.vertices.size() / kMeshVertexStride);
     const auto total_indices  = static_cast<crd::u32>(mesh.indices.size() / 4U);
@@ -157,8 +170,22 @@ TEST_CASE("REN-40-C1 GATE: each level is strictly cheaper and every index is in 
             REQUIRE(v < total_vertices); // ABSOLUTE into the combined stream
         }
     }
-    // the coarsest level must be a real cut, not a rounding error
-    CHECK(mesh.lods[rep.levels_built - 1U].index_count * 4U < mesh.lods[0].index_count);
+    // ── the coarsest level must be a real cut, not a rounding error ────────────────────────────────────────
+    // ⛔⛔ THE MARGIN IS DERIVED FROM WHAT THE POLICY ASKED FOR, not from a remembered constant. This was a flat
+    // `× 4`, which silently encoded "the 0.1 level exists" — and once the shape test began refusing a level that
+    // had collapsed (a UV sphere at 10% came back at 13% of the source's extent and 20% of its area), the
+    // coarsest built level was the 0.25 one and `× 4` failed on an exactly-correct chain. A gate that breaks when
+    // the thing it measures becomes MORE careful is measuring the wrong quantity.
+    const crd::u32 last_ratio_idx = rep.levels_built - 2U; // level L was built from policy ratio[L-1]
+    const crd::f32 asked          = three_level_policy().ratio[last_ratio_idx];
+    const auto     coarsest       = static_cast<double>(mesh.lods[rep.levels_built - 1U].index_count);
+    const auto     level0         = static_cast<double>(mesh.lods[0].index_count);
+    INFO("coarsest " << coarsest << " of " << level0 << ", asked ratio " << asked);
+    CHECK(coarsest < level0);                                  // it is a cut at all
+    CHECK(coarsest <= level0 * static_cast<double>(asked) * 1.10); // ...and it HIT what was asked, within 10%
+    // ⛔ And the chain still buys something worth having: at least the first level's 2x, whatever depth the
+    // shape test allowed it to reach.
+    CHECK(coarsest * 2.0 <= level0);
 }
 
 // ⛔ RE-DERIVED, NEVER CARRIED. A normal interpolated from the fine mesh lights

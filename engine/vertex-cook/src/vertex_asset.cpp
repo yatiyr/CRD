@@ -501,6 +501,16 @@ VertexCookError parse_vertex_toml(crd::containers::StringView toml_text, VertexP
         out.cull.frustum_off   = static_cast<crd::u32>((*cu)["frustum_off"].value_or<int64_t>(0));
         out.cull.base_word     = static_cast<crd::u32>((*cu)["base_word"].value_or<int64_t>(
             static_cast<int64_t>(kCullNoBaseWord)));
+        // ⭐⭐ REN-40-C2: the LOD selection vocabulary (see CullDesc). Every one of these changes the emitted
+        // addresses, so every one joins the identity hash and the canonical writer below.
+        out.cull.lod_slots         = static_cast<crd::u32>((*cu)["lod_slots"].value_or<int64_t>(1));
+        if (out.cull.lod_slots < 1U) { out.cull.lod_slots = 1U; }
+        out.cull.lod_count_word    = static_cast<crd::u32>((*cu)["lod_count_word"].value_or<int64_t>(0));
+        out.cull.lod_table_word    = static_cast<crd::u32>((*cu)["lod_table_word"].value_or<int64_t>(0));
+        out.cull.lod_height_word   = static_cast<crd::u32>((*cu)["lod_height_word"].value_or<int64_t>(0));
+        out.cull.pixel_height_word = static_cast<crd::u32>((*cu)["pixel_height_word"].value_or<int64_t>(0));
+        out.cull.draw_arg_within   = static_cast<crd::u32>((*cu)["draw_arg_within"].value_or<int64_t>(0));
+        out.cull.base_row_word     = static_cast<crd::u32>((*cu)["base_row_word"].value_or<int64_t>(0));
     }
 
     const auto tr = root["transform"].value_or<std::string_view>("view_proj");
@@ -511,6 +521,11 @@ VertexCookError parse_vertex_toml(crd::containers::StringView toml_text, VertexP
     // ⭐⭐ REN-38: `rebase_table = <word>` — the DRAW-TABLE offset. Non-zero makes the pull VS read its region
     // base from `sbuf[rebase_table + DrawIndex]` and rebase every load by it (the scene-buffer consolidation).
     out.rebase_table = static_cast<crd::u32>(root["rebase_table"].value_or<int64_t>(0));
+    // ⭐⭐ REN-40-C2: the draw-table ROW STRIDE and the LOD slot count (see VertexProgramDesc).
+    out.rebase_stride = static_cast<crd::u32>(root["rebase_stride"].value_or<int64_t>(1));
+    if (out.rebase_stride < 1U) { out.rebase_stride = 1U; }
+    out.lod_slots = static_cast<crd::u32>(root["lod_slots"].value_or<int64_t>(1));
+    if (out.lod_slots < 1U) { out.lod_slots = 1U; }
     // 38-G1: the per-cascade visible-list stride word (see VertexProgramDesc::instance_capacity_word)
     out.instance_capacity_word = static_cast<crd::u32>(root["instance_capacity_word"].value_or<int64_t>(0));
     // ⭐⭐ REN-39-B2: `indexed = true` — the INDEXED pull mode (VertexIndex arrives as the index VALUE; the
@@ -1301,6 +1316,10 @@ crd::u64 vertex_layout_id(const VertexProgramDesc& desc) noexcept
     // variant key, the exact dedup COLLISION this function's own comment names. `indexed` joins for the same
     // reason: pull and indexed cooks of one declaration are different programs.
     hash_u64(h, desc.rebase_table);
+    // ⛔ REN-40-C2 joins for the SAME reason `rebase_table` did: each changes every emitted visible-list
+    // address, so a 1-slot cook and a 4-slot cook of one asset would otherwise collide to one program.
+    hash_u64(h, desc.rebase_stride);
+    hash_u64(h, desc.lod_slots);
     hash_u64(h, desc.instance_capacity_word);
     hash_u64(h, desc.indexed ? 1ULL : 0ULL);
     // ⛔⛔ REN-40-A joins for the SAME reason rebase_table/indexed did: each changes the emitted addresses or the
@@ -1319,6 +1338,17 @@ crd::u64 vertex_layout_id(const VertexProgramDesc& desc) noexcept
     hash_u64(h, desc.cull.views);
     hash_u64(h, desc.cull.frustum_off);
     hash_u64(h, desc.cull.base_word);
+    // ⛔ REN-40-C2: each of these changes which command a survivor accumulates into and which list it lands in.
+    hash_u64(h, desc.cull.lod_slots);
+    hash_u64(h, desc.cull.lod_count_word);
+    hash_u64(h, desc.cull.lod_table_word);
+    hash_u64(h, desc.cull.lod_height_word);
+    hash_u64(h, desc.cull.pixel_height_word);
+    // ⛔ `draw_arg_within` is 0 on Vulkan and 4 on D3D12 and it moves EVERY emitted command address — the exact
+    // shape of the `rebase_table` collision scar, so it hashes. `base_row_word` decides whether the reset writes
+    // a real row or a cook-time constant, which changes what every D3D12 command carries.
+    hash_u64(h, desc.cull.draw_arg_within);
+    hash_u64(h, desc.cull.base_row_word);
     return h;
 }
 
@@ -1387,6 +1417,18 @@ crd::containers::String emit_vertex_toml(const VertexProgramDesc& desc, crd::mem
     // ABSOLUTE and a per-cascade one came back reading the CAMERA's list (the blob-v3 disease, TOML side; the
     // drift gate could not see it because both sides dropped the field — the byte-identity blindness scar).
     // Root keys, so they precede every table (the scoping scar).
+    if (desc.rebase_stride != 1U)
+    {
+        app(o, "rebase_stride = ");
+        app_u32(o, desc.rebase_stride);
+        app(o, "\n");
+    }
+    if (desc.lod_slots != 1U)
+    {
+        app(o, "lod_slots = ");
+        app_u32(o, desc.lod_slots);
+        app(o, "\n");
+    }
     if (desc.rebase_table != 0U)
     {
         app(o, "rebase_table = ");
@@ -1488,6 +1530,24 @@ crd::containers::String emit_vertex_toml(const VertexProgramDesc& desc, crd::mem
         app_u32(o, desc.cull.frustum_off);
         app(o, "\nbase_word    = ");
         app_u32(o, desc.cull.base_word);
+        // ⛔ REN-40-C2 joins the canonical form for the field-SURVIVAL reason the blob-v3 scar records: a field
+        // dropped by BOTH the writer and the reader round-trips "byte-identically" and is silently lost.
+        app(o, "\nlod_slots    = ");
+        app_u32(o, desc.cull.lod_slots);
+        app(o, "\nlod_count_word = ");
+        app_u32(o, desc.cull.lod_count_word);
+        app(o, "\nlod_table_word = ");
+        app_u32(o, desc.cull.lod_table_word);
+        app(o, "\nlod_height_word = ");
+        app_u32(o, desc.cull.lod_height_word);
+        app(o, "\npixel_height_word = ");
+        app_u32(o, desc.cull.pixel_height_word);
+        app(o, "\ndraw_arg_within = ");
+        app_u32(o, desc.cull.draw_arg_within);
+        app(o, "\nbase_row_word = ");
+        app_u32(o, desc.cull.base_row_word);
+        app(o, "\nlod_override_off = ");
+        app_u32(o, desc.cull.lod_override_off);
         app(o, "\n");
         break;
     case StageKind::RayGen:
@@ -1938,28 +1998,65 @@ namespace
     const int only = g.stmt_if_begin(g.binary(KOp::CmpEq, gid, c.ku(0U)));
     // ⭐⭐ ALL VIEWS IN ONE PASS, unrolled at cook time. View v's command sits `v * stride` bytes along, so the
     // camera and every cascade get their constants and a zeroed accumulator from a single dispatch.
+    // ⭐⭐ REN-40-C2: and every LOD SLOT of every view — command (v, s) is at `(v * slots + s) * stride`. Each
+    // slot's command describes a DIFFERENT index range of the same mesh, taken from the header's LOD TABLE.
     const crd::u32 stride_w = desc.cull.draw_stride / 4U;
     const crd::u32 views    = desc.cull.views < 1U ? 1U : desc.cull.views;
+    const crd::u32 slots    = desc.cull.lod_slots < 1U ? 1U : desc.cull.lod_slots;
+    // The chain's LENGTH, once — a mesh with no chain reports 0 and every slot past 0 lays down an EMPTY command.
+    const int lod_n = desc.cull.lod_count_word != 0U ? blu(c.ku(desc.cull.lod_count_word)) : c.ku(0U);
     for (crd::u32 v = 0; v < views; ++v)
     {
-        const crd::u32 cw = v * stride_w;                       // this view's command, in words
-        const crd::u32 aw = cw + desc.cull.draw_arg_off / 4U;   // ...and its 5 draw args inside it
-        // D3D12's signature prepends the DrawIndex root constant; Vulkan's command starts at the args
+      for (crd::u32 s = 0; s < slots; ++s)
+      {
+        // ⛔ The COMMAND's first word, not the args'. `draw_arg_off` is ABSOLUTE (params block + this view's
+        // stride + the arg offset inside a command), so the command base is it MINUS the within-command part.
+        const crd::u32 cmd0 = (desc.cull.draw_arg_off - desc.cull.draw_arg_within) / 4U;
+        const crd::u32 cw   = cmd0 + (v * slots + s) * stride_w;  // this (view, slot) command, in words
+        const crd::u32 aw   = cw + desc.cull.draw_arg_within / 4U; // ...and its 5 draw args inside it
+        // D3D12's signature prepends the DrawIndex root constant; Vulkan's command starts at the args.
+        // ⛔ REN-40-C2: the DrawIndex is the DRAW-LIST ROW, so it is the item's row, not the view's — the host
+        // stamps `draw_index` per cooked variant and the slot walks it by the row stride the host also chose.
         if (desc.cull.draw_arg_off != 0U)
         {
-            g.stmt_buffer_store(argsb, c.ku(cw), c.ku(desc.cull.draw_index));
+            // ⭐⭐ REN-40-C2 / D3D12: THE ROW THIS COMMAND CARRIES. D3D12 has no `gl_DrawID`; its command signature
+            // prepends a DrawIndex root constant, so the row is the PRODUCER's to write. The draw list is
+            // group-major and slot-minor and the SAME list serves every view, so the row of (group, slot) is
+            // `base_row + slot` — view-independent. ⛔ `base_row` arrives as DATA (a params word) because it is per
+            // GROUP while ONE cooked kernel serves every group: a cook-time 0 was the right row only for the FIRST
+            // group, and every later group's draws then read group 0's region base and group 0's LOD slot. Vulkan
+            // never saw it — there the verb pushes the row itself.
+            const int row = desc.cull.base_row_word != 0U
+                                ? c.add(g.buffer_load(argsb, c.ku(desc.cull.base_row_word)), c.ku(s))
+                                : c.ku(desc.cull.draw_index + s);
+            g.stmt_buffer_store(argsb, c.ku(cw), row);
         }
-        g.stmt_buffer_store(argsb, c.ku(aw + 0U), blu(c.ku(desc.header.index_count))); // index_count
-        g.stmt_buffer_store(argsb, c.ku(aw + 1U), c.ku(0U));                        // instance_count: THE counter
+        // ⭐⭐ THE LEVEL'S OWN INDEX RANGE. Slot 0 keeps reading `header.index_count` / `header.index_off` — the
+        // source range — so a mesh WITHOUT a chain, and slot 0 of a mesh WITH one, are bit-for-bit what they
+        // always were. ⛔ A slot past the chain's length lays down index_count = 0: an empty command that draws
+        // nothing, rather than a stale range that would draw the WRONG level's triangles.
+        int ic = blu(c.ku(desc.header.index_count));
+        int fi = c.add(base, blu(c.ku(desc.header.index_off)));
+        if (s > 0U && desc.cull.lod_table_word != 0U)
+        {
+            const int have = g.binary(KOp::CmpLt, c.ku(s), lod_n); // s < chain length
+            const int t_fi = blu(c.ku(desc.cull.lod_table_word + s * 2U + 0U));
+            const int t_ic = blu(c.ku(desc.cull.lod_table_word + s * 2U + 1U));
+            ic = g.select(have, t_ic, c.ku(0U));
+            fi = g.select(have, c.add(base, t_fi), c.add(base, blu(c.ku(desc.header.index_off))));
+        }
+        g.stmt_buffer_store(argsb, c.ku(aw + 0U), ic);       // index_count
+        g.stmt_buffer_store(argsb, c.ku(aw + 1U), c.ku(0U)); // instance_count: THE counter
         // ⛔ ABSOLUTE, because the draw consumes it as an index-buffer offset into the bound buffer while the
         // header stores it region-relative — the same `base + value` rule every section offset follows here.
-        g.stmt_buffer_store(argsb, c.ku(aw + 2U), c.add(base, blu(c.ku(desc.header.index_off)))); // first_index
+        g.stmt_buffer_store(argsb, c.ku(aw + 2U), fi); // first_index
         // ⛔ base_vertex and first_instance are ALWAYS ZERO — `IRasterContext::IndexedDraw` documents why:
         // Vulkan folds firstInstance into gl_InstanceIndex and D3D12's SV_InstanceID does not, so a non-zero
         // value would make the two backends read DIFFERENT instances. A GPU-driven producer addresses its
         // per-batch region through DrawIndex + the draw table instead.
         g.stmt_buffer_store(argsb, c.ku(aw + 3U), c.ku(0U));
         g.stmt_buffer_store(argsb, c.ku(aw + 4U), c.ku(0U));
+      }
     }
     g.stmt_if_end(only);
 
@@ -2086,16 +2183,102 @@ namespace
     // ⛔ Shipping the fast-but-wrong form behind a green-looking count would be exactly the disguised failure the
     // top rule forbids — a cull that silently drops geometry reads as "fast". Correct first, then optimise with
     // the gate already standing guard over it.
-    const int cnt_idx = c.ku(desc.cull.draw_arg_off / 4U + 1U); // instance_count = the command's 2nd u32
+    // ── ⭐⭐ REN-40-C2: WHICH LEVEL. The decision is made HERE because this pass is already holding both of its
+    // inputs — the instance's world AABB and the view's clip matrix — so it costs a handful of instructions in a
+    // dispatch that has already paid for the memory traffic.
+    //
+    // The metric is the PROJECTED SCREEN HEIGHT of the box's bounding sphere, in pixels of THE TARGET BEING
+    // RENDERED:
+    //
+    //     px = r · |row1(vp)| · view_pixel_height / max(w_clip, eps)
+    //
+    // ⭐ ONE FORMULA, BOTH PROJECTION KINDS. For the perspective camera `w` is the view depth and the expression
+    // is the usual `r/distance` foreshortening. For an ORTHO cascade `w == 1` and `|row1| == 1/radius`, which
+    // reduces to `r · H / radius` — exactly the texel-space height of the object in that cascade's slice. A
+    // renderer that special-cased the two would need to know which it had; this one does not.
+    // ⛔⛔ `|row1|` IS THE ROW NORM, NEVER `vp.c1.y`. Reading an element there is the defect SCAR 5 in
+    // `ckir_technique.hpp` records in full: an element carries a direction cosine of a basis you did not choose,
+    // so it goes to zero for a perfectly ordinary light orientation and the metric silently collapses.
+    // ⛔ Thresholds DESCEND (the `.crdlod` parser refuses otherwise), so the coarsest applicable level is the
+    // LAST slot whose declared height still exceeds the projection. Walking ascending and keeping the last match
+    // is that rule, unrolled at cook time with no branch.
+    const crd::u32 slots  = desc.cull.lod_slots < 1U ? 1U : desc.cull.lod_slots;
+    int            lslot  = c.ku(0U);
+    if (slots > 1U && desc.cull.pixel_height_word != 0U && desc.cull.lod_height_word != 0U)
+    {
+        const int cx = c.mul(c.add(bmin[0], bmax[0]), c.kf(0.5));
+        const int cy = c.mul(c.add(bmin[1], bmax[1]), c.kf(0.5));
+        const int cz = c.mul(c.add(bmin[2], bmax[2]), c.kf(0.5));
+        const int ex = c.mul(c.sub(bmax[0], bmin[0]), c.kf(0.5));
+        const int ey = c.mul(c.sub(bmax[1], bmin[1]), c.kf(0.5));
+        const int ez = c.mul(c.sub(bmax[2], bmin[2]), c.kf(0.5));
+        const int r  = g.unary(KOp::Sqrt, c.add(c.add(c.mul(ex, ex), c.mul(ey, ey)), c.mul(ez, ez)));
+        // the clip w of the centre: row 3 dotted with (centre, 1)
+        int wc = r3[3];
+        wc     = c.add(wc, c.mul(r3[0], cx));
+        wc     = c.add(wc, c.mul(r3[1], cy));
+        wc     = c.add(wc, c.mul(r3[2], cz));
+        wc     = g.binary(KOp::Max, wc, c.kf(1.0e-6));
+        const int row1_len =
+            g.unary(KOp::Sqrt, c.add(c.add(c.mul(r1[0], r1[0]), c.mul(r1[1], r1[1])), c.mul(r1[2], r1[2])));
+        // the view's pixel height, from the args params block (f32 bits) — see CullDesc::pixel_height_word
+        const int vpx = g.int_bits_to_float(
+            g.cast(g.buffer_load(argsb, c.ku(desc.cull.pixel_height_word)), DType::I32));
+        int px        = c.dvd(c.mul(c.mul(r, row1_len), vpx), wc);
+        const int nlv = desc.cull.lod_count_word != 0U ? blu(c.ku(desc.cull.lod_count_word)) : c.ku(0U);
+        // ── ⭐⭐ REN-40-C2: THE PER-ENTITY OVERRIDE (`MeshLodOverride`, an OPTIONAL component). ────────────────
+        // Two words per instance beside the world AABBs: the screen BIAS as f32 bits, then
+        // `min_level | (max_level << 8)`. ⛔ Applied as a SCALE ON THE METRIC, not as a slot adjustment — a bias
+        // that nudged the chosen index would jump levels in whole steps and would mean something different for a
+        // 6-level chain than for a 2-level one, while scaling the projected height keeps one meaning: "treat this
+        // entity as though it were this much bigger on screen".
+        int ov_lo = c.ku(0U);
+        int ov_hi = c.ku(slots - 1U);
+        if (desc.cull.lod_override_off != 0U)
+        {
+            const int orec = c.add(c.add(base, blu(c.ku(desc.cull.lod_override_off))), c.mul(gid, c.ku(2U)));
+            const int bias = blf(orec);
+            // ⛔ A zero or negative bias would drive the metric to 0 and pin the entity to the coarsest level by
+            // accident; a slot with no component writes exactly 1.0, so anything else is authored and is clamped
+            // to something usable rather than trusted.
+            px             = c.mul(px, g.binary(KOp::Max, bias, c.kf(1.0e-4)));
+            const int clamp_word = blu(c.add(orec, c.ku(1U)));
+            ov_lo = g.binary(KOp::BitAnd, clamp_word, c.ku(0xFFU));
+            ov_hi = g.binary(KOp::BitAnd, g.binary(KOp::Shr, clamp_word, c.ku(8U)), c.ku(0xFFU));
+        }
+        for (crd::u32 s = 1U; s < slots; ++s)
+        {
+            const int have = g.binary(KOp::CmpLt, c.ku(s), nlv); // the chain actually HAS this level
+            const int h_s  = blf(c.ku(desc.cull.lod_height_word + s));
+            const int take = c.mul(g.cast(have, DType::U32),
+                                   g.cast(g.binary(KOp::CmpLt, px, h_s), DType::U32));
+            lslot = g.select(g.binary(KOp::CmpNe, take, c.ku(0U)), c.ku(s), lslot);
+        }
+        if (desc.cull.lod_override_off != 0U)
+        {
+            // ⛔ The clamp is applied AFTER selection and in this order (max then min) so a nonsensical authored
+            // pair (min > max) resolves to `min` rather than to something outside the chain entirely.
+            lslot = g.binary(KOp::Min, lslot, ov_hi);
+            lslot = g.binary(KOp::Max, lslot, ov_lo);
+            // ...and never past what the chain actually HAS, whatever the author asked for.
+            const int last = g.binary(KOp::Max, c.sub(nlv, c.ku(1U)), c.ku(0U));
+            lslot          = g.binary(KOp::Min, lslot, last);
+        }
+    }
+    // ⭐⭐ ONE COMMAND PER (view, slot). The view is baked into `draw_arg_off`; the slot walks it by whole
+    // commands, so a survivor accumulates into exactly the draw that will render its level.
+    const int cnt_idx = c.add(c.ku(desc.cull.draw_arg_off / 4U + 1U),
+                              c.mul(lslot, c.ku(desc.cull.draw_stride / 4U)));
     // the OLD counter value IS this survivor's slot in the compacted list
     const int list_index = g.atomic_add_fetch(argsb, cnt_idx, vis); // survivors add 1, culled lanes add 0
 
-    // ⭐⭐ WRITE WHERE THE CPU WROTE. `visible_off + view_index * capacity` is the CPU layout verbatim — camera
-    // at view 0, cascade c at view c+1 — so every vertex program keeps reading its list from where it always
-    // did and NOT ONE SHADER CHANGES. The GPU/CPU switch becomes purely "who fills this, and how the count
-    // reaches the draw", which is the only difference that should ever have existed.
+    // ⭐⭐ WRITE WHERE THE CPU WROTE. `visible_off + (view * slots + slot) * capacity` — at `slots == 1` that is
+    // `visible_off + view * capacity`, the CPU layout verbatim (camera at view 0, cascade c at view c+1), so
+    // every vertex program keeps reading its list from where it always did and NOT ONE SHADER CHANGES. The
+    // GPU/CPU switch stays purely "who fills this, and how the count reaches the draw".
+    const int list_slot   = c.add(c.ku(desc.cull.view_index * slots), lslot);
     const int list_base   = c.add(c.add(base, blu(c.ku(desc.header.visible_off))),
-                                  c.mul(c.ku(desc.cull.view_index), blu(c.ku(desc.cull.capacity_word))));
+                                  c.mul(list_slot, blu(c.ku(desc.cull.capacity_word))));
     const int instance_id = gid;
     const int keep        = g.stmt_if_begin(g.binary(KOp::CmpNe, vis, c.ku(0U)));
     g.stmt_buffer_store(inbuf, c.add(list_base, list_index), instance_id);
@@ -2519,13 +2702,25 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
         return emit_procedural_varyings(desc, g, pc, ve, built, g.swizzle(pos, 3));
     }
     Vx c(g);
+    // ⭐⭐ REN-40-C2: this draw's LOD SLOT, from the table row. -1 until a row is read; the vis_base expression
+    // below folds to exactly its historical form when there is no row or the layout reserves one slot.
+    int row_slot = -1;
     if (desc.rebase_table != 0U)
     {
         // ⭐⭐ REN-38: WHICH REGION AM I — the draw table (absolute) holds each draw's region base; DrawIndex
         // picks the row (push constant + gl_DrawID on Vulkan, the root constant on DX12). Set AFTER the table
         // read (the table itself is absolute), BEFORE any other load, so the whole pull chain rebases.
-        const int di = g.cast(g.builtin(crd::kir::KBuiltin::DrawIndex), DType::U32);
-        c.base       = c.loadu(c.add(c.ku(desc.rebase_table), di));
+        // ⭐⭐ REN-40-C2: the row is a RECORD now — word 0 the region base, word 1 the LOD slot — so the row
+        // address is `rebase_table + DrawIndex * rebase_stride`. At stride 1 that is the historical expression
+        // character for character, which is what makes the widening provably inert until slots exist.
+        const int di  = g.cast(g.builtin(crd::kir::KBuiltin::DrawIndex), DType::U32);
+        const int row = desc.rebase_stride == 1U ? di : c.mul(di, c.ku(desc.rebase_stride));
+        c.base        = c.loadu(c.add(c.ku(desc.rebase_table), row));
+        if (desc.rebase_stride >= 2U && desc.lod_slots > 1U)
+        {
+            // ⛔ Read BEFORE `c.base` starts rebasing loads — the table is absolute, the region is not.
+            row_slot = c.loadu(c.add(c.add(c.ku(desc.rebase_table), row), c.ku(1U)));
+        }
     }
 
     // ── the pull address. One draw covers N instances of one mesh, so the vertex id carries both: the instance
@@ -2555,10 +2750,31 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
     // cascade at COOK time, so the offset is a compile-time constant and no uniform selects it. Shadow passes
     // were reading the CAMERA's list, drawing every camera-visible instance into all four cascades; cascade 0
     // covers a few metres of a 110-unit field, so nearly all of it was transformed and then clipped away.
-    const int vis_base = desc.transform == VertexTransform::LightVp && desc.instance_capacity_word != 0U
-                             ? c.add(c.hdru(desc.header.visible_off),
-                                     c.mul(c.hdru(desc.instance_capacity_word), c.ku(1U + desc.cascade)))
-                             : c.hdru(desc.header.visible_off);
+    // ⭐⭐ REN-40-C2: WHICH LIST — `visible_off + capacity * (view * slots + slot)`, where the VIEW is a
+    // cook-time constant (each cascade already has its own pass and therefore its own program) and the SLOT
+    // arrives per draw item through the table row. ⛔ At `lod_slots == 1` this is arithmetically the historical
+    // expression: `view * 1 + 0` is `view`, so a one-slot cook emits the same addresses it always did.
+    const crd::u32 view_i  = desc.transform == VertexTransform::LightVp ? 1U + desc.cascade : 0U;
+    const bool     per_cas = desc.transform == VertexTransform::LightVp && desc.instance_capacity_word != 0U;
+    int vis_base;
+    if (!per_cas && desc.lod_slots <= 1U)
+    {
+        vis_base = c.hdru(desc.header.visible_off); // the camera's single list — untouched
+    }
+    else
+    {
+        const crd::u32 cap_word = desc.instance_capacity_word != 0U ? desc.instance_capacity_word : 0U;
+        if (cap_word == 0U)
+        {
+            vis_base = c.hdru(desc.header.visible_off);
+        }
+        else
+        {
+            int list_index = c.ku(view_i * desc.lod_slots);
+            if (row_slot >= 0) { list_index = c.add(list_index, row_slot); }
+            vis_base = c.add(c.hdru(desc.header.visible_off), c.mul(c.hdru(cap_word), list_index));
+        }
+    }
     const int slot  = c.loadu(c.add(vis_base, ii));
     const int ibase = c.add(c.hdru(desc.header.instance_off), c.mul(slot, c.ku(desc.instance.stride)));
 

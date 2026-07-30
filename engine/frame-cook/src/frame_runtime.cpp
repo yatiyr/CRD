@@ -168,9 +168,11 @@ void record_pass(g::IFrameContext& ctx, void* user)
             // construction there, and drawing last frame's count is the kind of wrong that still renders.
             if (it.args != nullptr && it.index_count > 0U)
             {
+                // ⛔⛔ REN-40-C2: `i` — THE ROW (see the geometry twin below). Without it a rebased cascade draw
+                // reads table row 0: another group's region base and another item's LOD slot.
                 r.draw_storage_multi_indexed_depth_only_indirect(*t, *prog, d.clear_depth, d.depth, *sb, 0U,
                                                                  *it.args, it.args_offset, nullptr, 0U, 1U,
-                                                                 i != 0U);
+                                                                 i != 0U, i);
                 continue;
             }
             if (it.index_count > 0U)
@@ -278,8 +280,11 @@ void record_pass(g::IFrameContext& ctx, void* user)
                 const bool   combined = it.texture != nullptr && pass_tex != nullptr && p->sampled_is_depth;
                 g::ITexture* map      = combined ? it.texture : (depth_tex ? nullptr : tex);
                 g::ITexture* atl      = combined ? pass_tex : (depth_tex ? tex : nullptr);
+                // ⛔⛔ REN-40-C2: `i` — THE ROW. A rebased program reads `table[DrawIndex]` for its region
+                // base and its LOD SLOT; the verb is the only thing that can push it. Omitting it made every
+                // GPU-driven draw read row 0.
                 r.draw_storage_multi_indexed_indirect(*t, *prog, clear, d.clear_depth, d.depth, *sb, 0U, map, atl,
-                                                      *it.args, it.args_offset, nullptr, 0U, 1U, !first);
+                                                      *it.args, it.args_offset, nullptr, 0U, 1U, !first, i);
                 continue;
             }
             if (it.index_count > 0U && (tex != nullptr || depth_tex))
