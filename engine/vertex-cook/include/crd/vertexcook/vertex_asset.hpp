@@ -424,6 +424,16 @@ struct CullDesc
     // extra words on the instance record, because the instance stride is DECLARED by every `.crdv` and read by
     // every vertex program — only the cull needs this. 0 = no overrides (bias 1, levels unclamped).
     crd::u32 lod_override_off = 0U;
+    // ⭐⭐ REN-40-C4: the dither cross-dissolve band, as a fraction of each switch height. When > 0 the kernel
+    // packs alpha into the visible entry's high 8 bits (`(alpha_byte << 24) | instance_id`) and DUAL-WRITES
+    // inside the band — so both adjacent levels draw and the FS discards pixels via a 4x4 Bayer threshold.
+    // 0.0 = no dither, the historical single-write path byte for byte.
+    crd::f32 dither_band = 0.0F;
+    // ⭐⭐ REN-40-G3: HZB OCCLUSION TEST. When true the kernel declares a sampled texture at binding 8 (the HZB)
+    // and samples it at the AABB center's projected UV. Reverse-Z: if the center's z_ndc < HZB value → the object
+    // is farther than the farthest visible surface at that pixel → occluded. The result is multiplied into `vis`
+    // after the frustum test, before LOD selection and compaction.
+    bool     occlusion  = false;
 };
 // ⭐ REN-38-F7: the EXPANSION contract of a procedural vertex stage — how a flat VertexIndex decomposes into
 // (instance, corner) and where the per-instance record lives. ⛔ The corner table itself is AUTHORED as `ifequal`
@@ -504,6 +514,10 @@ struct VertexProgramDesc
     // (`position_node`) or non-Vertex stage declaration with `indexed` is REFUSED (BadIndexed) — their vertex
     // ids are expansion indices, not mesh indices, and an indexed draw would silently mis-decompose them.
     bool indexed = false;
+    // ⭐⭐ REN-40-C4: when > 0 AND `lod_slots > 1`, the visible-list entry is packed:
+    // `(alpha_byte << 24) | instance_id`. The VS masks the entry and outputs fade alpha as a flat f32 varying
+    // at location 4 (Vertex stages only — shadow stages mask but emit no varying).
+    crd::f32 dither_band = 0.0F;
 
     explicit VertexProgramDesc(crd::memory::IAllocator* a)
         : name(a), attrs(a), instance(a), morph(a), nodes(a), displace(a), varyings(a), position_node(a)

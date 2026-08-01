@@ -232,6 +232,13 @@ public:
     {
         return false;
     }
+
+    // ── ⭐ REN-40-E: CASCADE CACHING — skip re-rendering an unchanged instance. Appended at END (D135). ──
+    // When a `for_each` instance writes to a PERSISTENT image and its contents have not changed since the
+    // previous frame, the host returns TRUE here. The runtime keeps the pass in the graph (barrier
+    // correctness) but overrides its clear → LOAD and the recording emits zero draws — the persistent image
+    // retains its history. Default FALSE: every instance renders normally.
+    [[nodiscard]] virtual bool for_each_load(FrameForEach /*kind*/, crd::u32 /*index*/) const { return false; }
 };
 
 // ── WHY a graph failed. Reported, never swallowed. ───────────────────────────────────────────────────────────

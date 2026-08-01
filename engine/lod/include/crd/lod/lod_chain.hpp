@@ -130,6 +130,24 @@ struct LodPolicy
     // which constrains the simplifier and — decisively — CANNOT cross the mesh-to-impostor boundary at all,
     // which is the transition most likely to be seen. 0 disables it.
     crd::f32 dither_band = 0.25F;
+
+    // ── ⭐⭐ REN-40-C5: OCTAHEDRAL IMPOSTORS — the last 5–10×. ───────────────────────────────────────────────
+    // ⛔⛔ THE ARITHMETIC THAT JUSTIFIES IT. 250k far-field instances at the coarsest mesh LOD still draw ~91
+    // tris each = 22.75M tris. With impostor quads: 250k × 2 tris = 500k. 45× savings on geometry that lives
+    // at sub-16 px anyway.
+    //
+    // `impostor_grid` is N: the atlas captures N×N views over the full sphere of directions using an octahedral
+    // mapping (Cigolle 2014, the same mapping DDGI already ships). 0 disables impostors entirely, and NOTHING
+    // changes — the coarsest mesh level remains the last slot, which is the parity arm.
+    // `impostor_tile` is the pixel resolution of each tile in the atlas (default 64).
+    // The atlas texture is `(N * tile)²` RGBA8 (albedo.rgb + coverage.a).
+    //
+    // ⛔ THE IMPOSTOR THRESHOLD IS IMPLICIT: it is the coarsest mesh LOD's `screen_height`. Below that, the
+    // impostor takes over. This is NOT a separate knob because the chain must be continuous — the impostor
+    // picks up exactly where the coarsest mesh level leaves off. An explicit threshold that disagreed with the
+    // chain would either leave a gap (nothing draws) or double-draw (two levels at the same height).
+    crd::u32 impostor_grid = 0U;
+    crd::u32 impostor_tile = 64U;
 };
 
 enum class LodBuildStatus : crd::u8

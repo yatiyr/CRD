@@ -1112,7 +1112,8 @@ public:
                                                     DepthCompare /*compare*/, IStorageBuffer& /*storage*/,
                                                     crd::u32 /*index_offset_bytes*/, crd::u32 /*index_count*/,
                                                     crd::u32 /*instance_count*/, crd::u32 /*first_index*/,
-                                                    ITexture* /*texture*/, ITexture* /*atlas*/, bool /*load_target*/)
+                                                    ITexture* /*texture*/, ITexture* /*atlas*/, bool /*load_target*/,
+                                                    crd::u32 /*first_draw_index*/ = 0U)
     {
     }
 
@@ -1222,6 +1223,19 @@ public:
         bool /*load_target*/, crd::u32 /*first_draw_index*/ = 0U)
     {
     }
+
+    // REN-40-G1: depth prepass support. When set, the NEXT draw verb that begins a render pass will LOAD the depth
+    // attachment instead of clearing it, while still CLEARING the colour attachment normally. The flag is consumed
+    // by the next draw and auto-resets. Context state, same discipline as set_sampler / set_pass_state.
+    virtual void set_next_draw_load_depth(bool /*load*/) {}
+
+    // REN-40-G3: compute dispatch with a SAMPLED TEXTURE. The kernel declares `g.texture(0, kMaxKernelBuffers)`
+    // and `g.sampler(0, kMaxKernelBuffers+1)` — fixed positions after the storage buffers, so ONE layout covers
+    // every sampled-compute kernel. The texture is bound at those positions; the sampler is a device-side NEAREST
+    // CLAMP (the HZB convention — no filtering, no wrap). Appended at END of vtable.
+    virtual void dispatch_kernel_sampled(IGpuProgram& /*kernel*/, crd::u32 /*groups_x*/, crd::u32 /*groups_y*/,
+                                         crd::u32 /*groups_z*/, IStorageBuffer* const* /*buffers*/,
+                                         crd::u32 /*buf_count*/, ITexture& /*tex*/) {}
 };
 
 // ⭐ REN-38-A9: a BUILT acceleration structure, behind one portable handle.
@@ -1271,6 +1285,13 @@ public:
 
     [[nodiscard]] virtual crd::u32 width() const noexcept  = 0;
     [[nodiscard]] virtual crd::u32 height() const noexcept = 0;
+    // ⭐⭐ REN-40-D: whether this texture holds DEPTH — the property the ATLAS SAMPLER is chosen by. A depth
+    // atlas is sampled through the comparison sampler (that is what a shadow lookup is); a MOMENT atlas is a
+    // colour image whose whole point is ordinary filterable sampling, so it takes a linear/clamp sampler at the
+    // same slot. Keyed off the texture rather than off a flag the caller must remember, exactly like the
+    // frame graph's own "the sampler is chosen from the resource format" rule. Defaulted so external
+    // implementations keep compiling; both engine backends override it from their stored format.
+    [[nodiscard]] virtual bool is_depth() const noexcept { return false; }
 };
 
 // B1-f: an opaque fragment-shader storage buffer. `read_u32(i)` returns element i (4-byte words) after a `draw_storage`.

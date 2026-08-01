@@ -492,6 +492,10 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
             };
             // REN-38-F11: the pass-level LOAD flag (mask-then-test pass pairs stack on one target)
             if (p.load_target) { app(o, "load = true\n"); }
+            // REN-40-G1: load depth only (depth-prepass pattern: clear colour, load depth)
+            if (p.load_depth) { app(o, "load_depth = true\n"); }
+            if (!p.shared_depth.empty()) { app(o, "shared_depth = "); app_quoted(o, p.shared_depth); app(o, "\n"); }
+            if (p.depth_as_float) { app(o, "depth_as_float = true\n"); }
             if (!st.depth_write) { app(o, "depth_write = false\n"); }
             if (st.depth_bias != 0.0F) { app(o, "depth_bias = "); app_f64(o, static_cast<double>(st.depth_bias)); app(o, "\n"); }
             if (st.depth_bias_slope != 0.0F)

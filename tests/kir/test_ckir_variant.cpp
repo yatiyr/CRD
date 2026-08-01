@@ -261,13 +261,18 @@ TEST_CASE("REN-37.7: a DECLARED option that the technique actually reads produce
             binds.push_back(g.mat4(col, col, col, col));
         }
         binds.push_back(kf(2048.0));
+        // ⭐⭐ REN-40-D: the PLAIN-sampled atlas the PCSS blocker search reads. ⛔ A comparison sampler cannot
+        // return the stored depth, so the technique declares the same image twice with two samplers — and this
+        // test constructs the binding nodes by hand, so it has to carry the same count the contract does.
+        binds.push_back(g.texture(0, 1, DType::F32, TexDim::Tex2D, true, false, false));
+        binds.push_back(g.sampler(0, 3, false));
         const int ldir = g.vec3(kf(0.0), kf(-1.0), kf(0.0));
         const int lcol = g.vec3(kf(1.0), kf(1.0), kf(1.0));
-        const crd::f64 vals[2] = {4.0, static_cast<crd::f64>(taps)};
+        const crd::f64 vals[5] = {4.0, static_cast<crd::f64>(taps), 0.0, 0.0, 27.0};
         const ck::VariantOptions vo{material::AlphaMode::Opaque, 0.5};
         const bool ok = tq::build_fs_for_pass(flat, csm, ck::PassType::Forward, vo, in, g, e, ldir, lcol,
                                               binds.data(), static_cast<int>(binds.size()),
-                                              static_cast<const crd::f64*>(vals), 2);
+                                              static_cast<const crd::f64*>(vals), 5);
         REQUIRE(ok);
         return tq::graph_content_hash(g, e, &alloc);
     };

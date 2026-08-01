@@ -1726,3 +1726,55 @@ TEST_CASE("REN-39-B2: `indexed` is cooked identity, survives the round-trip, and
               vc::VertexCookError::BadIndexed);
     }
 }
+
+TEST_CASE("REN-40-C4 GATE: dither_band=0 parity and dither spread", "[vertex-cook][ren40]")
+{
+    memory::TlsfAllocator alloc(16U << 20U);
+
+    SECTION("dither_band=0: the VS emits 4 declared varyings, no fade varying")
+    {
+        vc::VertexProgramDesc desc(&alloc);
+        containers::String    where(&alloc);
+        REQUIRE(vc::parse_vertex_toml(containers::StringView(kScene), desc, &where) == vc::VertexCookError::Ok);
+        desc.lod_slots    = 4U;
+        desc.dither_band  = 0.0F;
+        kir::KGraph g(&alloc);
+        kir::KEntry ve{};
+        REQUIRE(vc::cook_vertex_program(desc, g, ve));
+        CHECK(ve.n_out == 4);
+        for (int i = 0; i < ve.n_out; ++i) { CHECK(ve.out[i].location != 4); }
+        CHECK_FALSE(has_op(g, kir::KOp::BitAnd));
+    }
+    SECTION("dither_band=0.25: the VS masks the entry, emits fade at loc 4 Flat")
+    {
+        vc::VertexProgramDesc desc(&alloc);
+        containers::String    where(&alloc);
+        REQUIRE(vc::parse_vertex_toml(containers::StringView(kScene), desc, &where) == vc::VertexCookError::Ok);
+        desc.lod_slots    = 4U;
+        desc.dither_band  = 0.25F;
+        kir::KGraph g(&alloc);
+        kir::KEntry ve{};
+        REQUIRE(vc::cook_vertex_program(desc, g, ve));
+        REQUIRE(ve.n_out == 5);
+        CHECK(ve.out[4].location == 4);
+        CHECK(ve.out[4].interp == kir::Interp::Flat);
+        CHECK(has_op(g, kir::KOp::BitAnd));
+    }
+    SECTION("shadow VS with dither: masks entry but does NOT emit fade varying")
+    {
+        containers::String t(&alloc);
+        t.append("transform = \"light_vp\"\n");
+        t.append(kScene);
+        vc::VertexProgramDesc desc(&alloc);
+        containers::String    where(&alloc);
+        REQUIRE(vc::parse_vertex_toml(containers::StringView(t.c_str(), t.size()), desc, &where)
+                == vc::VertexCookError::Ok);
+        desc.lod_slots   = 4U;
+        desc.dither_band = 0.25F;
+        kir::KGraph g(&alloc);
+        kir::KEntry ve{};
+        REQUIRE(vc::cook_vertex_program(desc, g, ve));
+        CHECK(ve.n_out == 4);
+        for (int i = 0; i < ve.n_out; ++i) { CHECK(ve.out[i].location != 4); }
+    }
+}

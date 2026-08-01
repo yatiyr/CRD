@@ -131,6 +131,21 @@ TEST_CASE("REN-40-C1 GATE: the canonical form round-trips and the identity hash 
         m.extra_levels        = 2U;
         CHECK(crd::lod::lod_policy_identity(m) != base);
     }
+    {
+        crd::lod::LodPolicy m = a;
+        m.dither_band += 0.1F;
+        CHECK(crd::lod::lod_policy_identity(m) != base);
+    }
+    {
+        crd::lod::LodPolicy m = a;
+        m.impostor_grid = 8U;
+        CHECK(crd::lod::lod_policy_identity(m) != base);
+    }
+    {
+        crd::lod::LodPolicy m = a;
+        m.impostor_tile = 32U;
+        CHECK(crd::lod::lod_policy_identity(m) != base);
+    }
 }
 
 // ── ⭐⭐ REN-40-C3 GATE: the PER-VIEW BIAS parses, survives the canonical round-trip, and moves the identity. ──
@@ -183,4 +198,72 @@ TEST_CASE("REN-40-C3 GATE: the per-view LOD bias parses, round-trips and moves t
             == crd::lod::LodCookError::Ok);
     CHECK(bp.view_bias[1] == 1.0F);
     CHECK(bp.view_bias[2] == 1.0F);
+}
+
+TEST_CASE("REN-40-C5 GATE: impostor fields parse, round-trip and move the policy identity",
+          "[lod][ren40][asset]")
+{
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+    crd::containers::String    text(&alloc);
+    text.append("schema = 1\nimpostor_grid = 8\nimpostor_tile = 32\n");
+    text.append("[[level]]\nratio = 0.5\nscreen_height = 512.0\n");
+    text.append("[[level]]\nratio = 0.25\nscreen_height = 128.0\n");
+
+    crd::lod::LodPolicy     p{};
+    crd::containers::String where(&alloc);
+    REQUIRE(crd::lod::parse_lod_toml(crd::containers::StringView(text.c_str()), p, &where)
+            == crd::lod::LodCookError::Ok);
+    CHECK(p.impostor_grid == 8U);
+    CHECK(p.impostor_tile == 32U);
+
+    // it SURVIVES the canonical form (the field-survival scar)
+    crd::containers::String canon(&alloc);
+    crd::lod::write_lod_toml(p, canon);
+    crd::lod::LodPolicy back{};
+    REQUIRE(crd::lod::parse_lod_toml(crd::containers::StringView(canon.c_str()), back, &where)
+            == crd::lod::LodCookError::Ok);
+    CHECK(back.impostor_grid == p.impostor_grid);
+    CHECK(back.impostor_tile == p.impostor_tile);
+
+    // ...and EACH field moves the identity
+    const crd::u64 base = crd::lod::lod_policy_identity(p);
+    {
+        crd::lod::LodPolicy m = p;
+        m.impostor_grid        = 12U;
+        CHECK(crd::lod::lod_policy_identity(m) != base);
+    }
+    {
+        crd::lod::LodPolicy m = p;
+        m.impostor_tile        = 64U;
+        CHECK(crd::lod::lod_policy_identity(m) != base);
+    }
+
+    // grid = 0 disables — a policy with grid 0 and one with grid 8 must NOT collide
+    {
+        crd::lod::LodPolicy m = p;
+        m.impostor_grid        = 0U;
+        CHECK(crd::lod::lod_policy_identity(m) != base);
+    }
+
+    // clamping: grid < 2 → 2, grid > 16 → 16; tile < 8 → 8, tile > 128 → 128
+    {
+        crd::containers::String t(&alloc);
+        t.append("schema = 1\nimpostor_grid = 1\nimpostor_tile = 4\n");
+        t.append("[[level]]\nratio = 0.5\nscreen_height = 512.0\n");
+        crd::lod::LodPolicy cp{};
+        REQUIRE(crd::lod::parse_lod_toml(crd::containers::StringView(t.c_str()), cp, &where)
+                == crd::lod::LodCookError::Ok);
+        CHECK(cp.impostor_grid == 2U);
+        CHECK(cp.impostor_tile == 8U);
+    }
+    {
+        crd::containers::String t(&alloc);
+        t.append("schema = 1\nimpostor_grid = 20\nimpostor_tile = 200\n");
+        t.append("[[level]]\nratio = 0.5\nscreen_height = 512.0\n");
+        crd::lod::LodPolicy cp{};
+        REQUIRE(crd::lod::parse_lod_toml(crd::containers::StringView(t.c_str()), cp, &where)
+                == crd::lod::LodCookError::Ok);
+        CHECK(cp.impostor_grid == 16U);
+        CHECK(cp.impostor_tile == 128U);
+    }
 }

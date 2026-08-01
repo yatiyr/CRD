@@ -87,6 +87,20 @@ LodCookError parse_lod_toml(crd::containers::StringView text, LodPolicy& out, cr
     out.dither_band = static_cast<crd::f32>(root["dither_band"].value_or<double>(0.25));
     if (!(out.hysteresis >= 0.0F) || out.hysteresis > 4.0F) { out.hysteresis = 0.0F; }
     if (!(out.dither_band >= 0.0F) || out.dither_band > 1.0F) { out.dither_band = 0.0F; }
+    // ⭐⭐ REN-40-C5: octahedral impostors. 0 = disabled (the parity arm). Grid clamped to [2, 16] when
+    // non-zero: below 2 there are not enough views to reconstruct a direction, above 16 the atlas is 1024²
+    // per tile (a 64-tile atlas at 64 px/tile is already 4096² and 64 MB — the next step is streaming, not a
+    // bigger atlas). Tile clamped to [8, 128] — below 8 the coverage mask has no resolution, above 128 the
+    // atlas exceeds what a sub-16 px instance can ever sample.
+    out.impostor_grid = static_cast<crd::u32>(root["impostor_grid"].value_or<int64_t>(0));
+    out.impostor_tile = static_cast<crd::u32>(root["impostor_tile"].value_or<int64_t>(64));
+    if (out.impostor_grid != 0U)
+    {
+        if (out.impostor_grid < 2U) { out.impostor_grid = 2U; }
+        if (out.impostor_grid > 16U) { out.impostor_grid = 16U; }
+    }
+    if (out.impostor_tile < 8U) { out.impostor_tile = 8U; }
+    if (out.impostor_tile > 128U) { out.impostor_tile = 128U; }
     // ⭐⭐ REN-40-C3: the PER-VIEW BIAS (see LodPolicy) — `view_bias = [camera, cascade0, cascade1, ...]`.
     // ⛔ Every view defaults to 1.0, and a non-positive entry is REFUSED back to 1.0: a bias of 0 would drive the
     // projected height to zero and pin that whole view to the coarsest level — a shadow map that silently drew
@@ -168,6 +182,10 @@ void write_lod_toml(const LodPolicy& policy, crd::containers::String& out)
     app_f32(out, policy.hysteresis);
     app(out, "\ndither_band = ");
     app_f32(out, policy.dither_band);
+    app(out, "\nimpostor_grid = ");
+    app_f32(out, static_cast<crd::f32>(policy.impostor_grid));
+    app(out, "\nimpostor_tile = ");
+    app_f32(out, static_cast<crd::f32>(policy.impostor_tile));
     app(out, "\nview_bias = [");
     for (crd::u32 vb = 0; vb < kMaxLodLevels; ++vb)
     {
@@ -197,6 +215,8 @@ crd::u64 lod_policy_identity(const LodPolicy& policy) noexcept
     hash_f32(h, policy.min_area_ratio);
     hash_f32(h, policy.hysteresis);
     hash_f32(h, policy.dither_band);
+    hash_u64(h, policy.impostor_grid);
+    hash_u64(h, policy.impostor_tile);
     // ⛔ It changes WHICH LEVEL each view selects, so two policies differing only here are different assets.
     for (crd::u32 vb = 0; vb < kMaxLodLevels; ++vb) { hash_f32(h, policy.view_bias[vb]); }
     for (crd::u32 i = 0; i < policy.extra_levels; ++i)

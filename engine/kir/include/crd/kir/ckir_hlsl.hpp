@@ -166,6 +166,33 @@ inline bool emit_elementwise_hlsl(const KGraph& g, int output, crd::memory::IAll
     return true;
 }
 
+// The bare HLSL matrix spelling: `floatRxC` = R ROWS by C columns. This is the TRANSPOSE of GLSL's `matCxR`
+// (ckir_glsl.hpp) -- the single most dangerous asymmetry in this file. It is also why every matrix construction below
+// is wrapped in `transpose(...)`: HLSL's matrix constructor fills ROW-major, so feeding it our C column-vectors builds
+// the CxR transpose, and one `transpose` puts it back. Verified by the `M * inverse(M) * v == v` GPU test, never by eye.
+inline const char* hmat(int rows, int cols) noexcept
+{
+    switch (rows * 10 + cols)
+    {
+    case 22: return "float2x2"; case 23: return "float2x3"; case 24: return "float2x4";
+    case 32: return "float3x2"; case 33: return "float3x3"; case 34: return "float3x4";
+    case 42: return "float4x2"; case 43: return "float4x3"; case 44: return "float4x4";
+    default: return "float";
+    }
+}
+inline const char* htype(KType t) noexcept
+{
+    if (t.kind == TKind::Mat) { return hmat(t.rows, t.cols); }
+    if (t.kind == TKind::Vec)
+    {
+        if (t.scalar == DType::Bool) { switch (t.rows) { case 2: return "bool2"; case 3: return "bool3"; case 4: return "bool4"; default: break; } }
+        else if (glsl_detail::dt_is_uint(t.scalar)) { switch (t.rows) { case 2: return "uint2"; case 3: return "uint3"; case 4: return "uint4"; default: break; } }
+        else if (glsl_detail::dt_is_int(t.scalar)) { switch (t.rows) { case 2: return "int2"; case 3: return "int3"; case 4: return "int4"; default: break; } }
+        else { switch (t.rows) { case 2: return "float2"; case 3: return "float3"; case 4: return "float4"; default: break; } }
+    }
+    return glsl_detail::ctype(t.scalar);
+}
+
 // B-cmp: emit an IMPERATIVE compute KERNEL (the shared-memory / barrier IR — `KEntry.is_kernel()`) as HLSL (SM6, dxc →
 // DXIL). The exact DX12 mirror of `emit_compute_kernel_glsl` (ckir_glsl.hpp): `[numthreads]` + `RWStructuredBuffer<T> bufN
 // : register(uN)` (all UAV — binding N → uN, matching create_pipeline_from_hlsl's root signature; `readonly` is a neutral
@@ -207,10 +234,21 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
             s.append(" : register(t"); app_uint(s, nd.iidx); s.append(");\n");
         }
     }
+    // REN-40-F: quat/slerp helper functions — the COMPUTE-KERNEL parity of the emit_stage_hlsl scan at ~line 1202.
+    {
+        bool qm = false, qc = false, qr = false, qa = false, qt = false, sl = false;
+        for (int i = 0; i < n; ++i) { switch (g.node(i).op) { case KOp::QuatMul: qm = true; break; case KOp::QuatConj: qc = true; break; case KOp::QuatRotate: qr = true; break; case KOp::QuatAxisAngle: qa = true; break; case KOp::QuatToMat3: qt = true; break; case KOp::Slerp: sl = true; break; default: break; } }
+        if (qm) { s.append("float4 crd_qmul(float4 a,float4 b){return float4(a.w*b.xyz+b.w*a.xyz+cross(a.xyz,b.xyz),a.w*b.w-dot(a.xyz,b.xyz));}\n"); }
+        if (qc) { s.append("float4 crd_qconj(float4 q){return float4(-q.xyz,q.w);}\n"); }
+        if (qr) { s.append("float3 crd_qrot(float4 q,float3 v){float3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}\n"); }
+        if (qa) { s.append("float4 crd_qaa(float3 ax,float an){float h=an*0.5;return float4(ax*sin(h),cos(h));}\n"); }
+        if (qt) { s.append("float3x3 crd_qmat(float4 q){float x=q.x,y=q.y,z=q.z,w=q.w;return float3x3(1.0-2.0*(y*y+z*z),2.0*(x*y-w*z),2.0*(x*z+w*y),2.0*(x*y+w*z),1.0-2.0*(x*x+z*z),2.0*(y*z-w*x),2.0*(x*z-w*y),2.0*(y*z+w*x),1.0-2.0*(x*x+y*y));}\n"); }
+        if (sl) { s.append("float4 crd_slerp(float4 a,float4 b,float t){float d=dot(a,b);float sg=1.0;if(d<0.0){d=-d;sg=-1.0;}if(d>0.9995){return normalize(lerp(a,sg*b,t));}float th=acos(d);float sn=sin(th);return (sin((1.0-t)*th)*a+sin(t*th)*sg*b)/sn;}\n"); }
+    }
     s.append("[numthreads("); app_uint(s, static_cast<int>(entry.local_size[0]));
     s.append(", ");            app_uint(s, static_cast<int>(entry.local_size[1]));
     s.append(", ");            app_uint(s, static_cast<int>(entry.local_size[2]));
-    s.append(")]\nvoid cs_main(uint lidx : SV_GroupIndex, uint3 wgid3 : SV_GroupID) {\n");
+    s.append(")]\nvoid cs_main(uint lidx : SV_GroupIndex, uint3 wgid3 : SV_GroupID, uint3 dtid : SV_DispatchThreadID) {\n");
 
     // DETERMINISM: FLOAT arithmetic materializes as `precise` temps (HLSL `precise` ⇒ no mad-fusion ⇒ bit-matches the CPU
     // oracle) — the same lever as the GLSL kernel emitter. Leaves (raw-UAV loads / consts / builtins) + cast/select/compare/
@@ -248,6 +286,7 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::Builtin:
             if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::LocalInvocationIndex) { s.append("lidx"); }
             else if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::WorkgroupIndex) { s.append("wgid3.x"); }
+            else if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::GlobalInvocationId) { s.append("dtid"); }
             else { ok = false; s.append("0u"); }
             break;
         case KOp::KernelLoopVar: s.append("lv"); app_uint(s, nd.a); break;
@@ -361,6 +400,35 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::QuadSwapX: s.append("QuadReadAcrossX("); pv(pv, nd.a); s.append(")"); break;
         case KOp::QuadSwapY: s.append("QuadReadAcrossY("); pv(pv, nd.a); s.append(")"); break;
         case KOp::QuadSwapDiagonal: s.append("QuadReadAcrossDiagonal("); pv(pv, nd.a); s.append(")"); break;
+        // REN-40-F: VEC / MAT / QUAT ops — the compute-kernel parity of emit_value_stmt_hlsl at ~line 906.
+        case KOp::Vec2: s.append(htype(nd.type)); s.append("("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
+        case KOp::Vec3: s.append(htype(nd.type)); s.append("("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(", "); pv(pv, nd.c); s.append(")"); break;
+        case KOp::VecConcat: s.append(htype(nd.type)); s.append("("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
+        case KOp::VecComp: pv(pv, nd.a); s.append("."); { const char sw[2] = {"xyzw"[nd.iidx], '\0'}; s.append(sw); } break;
+        case KOp::Swizzle: pv(pv, nd.a); s.append("."); { const char xyzw[4] = {'x','y','z','w'}; for (int k = 0; k < nd.comps(); ++k) { const char sw[2] = {xyzw[nd.perm[k]], '\0'}; s.append(sw); } } break;
+        case KOp::Splat: s.append(htype(nd.type)); s.append("("); { for (int k = 0; k < nd.comps(); ++k) { if (k) { s.append(", "); } pv(pv, nd.a); } } s.append(")"); break;
+        case KOp::Dot: s.append("dot("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
+        case KOp::Cross: s.append("cross("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
+        case KOp::Normalize: s.append("normalize("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::VecLen: s.append("length("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::Reflect: s.append("reflect("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
+        case KOp::Refract: s.append("refract("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(", "); pv(pv, nd.c); s.append(")"); break;
+        case KOp::Faceforward: s.append("faceforward("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(", "); pv(pv, nd.c); s.append(")"); break;
+        case KOp::MatVecMul:
+        case KOp::MatMatMul: s.append("mul("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
+        case KOp::MatTranspose: s.append("transpose("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::Determinant: s.append("determinant("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::MatInverse: s.append(nd.type.rows == 2 ? "crd_inv2(" : "crd_inv3("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::OuterProduct: { const int orows = nd.type.rows; s.append(hmat(orows, nd.type.cols)); s.append("("); for (int r = 0; r < orows; ++r) { if (r) { s.append(", "); } pv(pv, nd.a); s.append("."); const char sw[2] = {"xyzw"[r], '\0'}; s.append(sw); s.append(" * "); pv(pv, nd.b); } s.append(")"); break; }
+        case KOp::MatFromCols: { const int mcols = nd.type.cols; const int operand[4] = {nd.a, nd.b, nd.c, nd.d}; s.append("transpose("); s.append(hmat(mcols, nd.type.rows)); s.append("("); for (int k = 0; k < mcols; ++k) { if (k) { s.append(", "); } pv(pv, operand[k]); } s.append("))"); break; }
+        case KOp::VecAny: s.append("any("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::VecAll: s.append("all("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::Slerp: s.append("crd_slerp("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(", "); pv(pv, nd.c); s.append(")"); break;
+        case KOp::QuatMul: s.append("crd_qmul("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
+        case KOp::QuatConj: s.append("crd_qconj("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::QuatRotate: s.append("crd_qrot("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
+        case KOp::QuatAxisAngle: s.append("crd_qaa("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
+        case KOp::QuatToMat3: s.append("crd_qmat("); pv(pv, nd.a); s.append(")"); break;
         default: ok = false; s.append("0"); break;
         }
     };
@@ -372,11 +440,12 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
         if (nd.a >= 0) { self(self, nd.a); }
         if (nd.b >= 0) { self(self, nd.b); }
         if (nd.c >= 0) { self(self, nd.c); }
+        if (nd.d >= 0) { self(self, nd.d); }
         if (!is_inline_op(nd.op) && temped[static_cast<crd::usize>(node)] == 0U)
         {
             temped[static_cast<crd::usize>(node)] = 1U;
             s.append(is_float_dtype(nd.dtype()) ? "  precise " : "  ");
-            s.append(ctype(nd.dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(node)); s.append(" = ");
+            s.append(htype(nd.type)); s.append(" t"); app_uint(s, static_cast<crd::u32>(node)); s.append(" = ");
             rhs(nd);
             s.append(";\n");
         }
@@ -562,35 +631,6 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
     return ok;
 }
 // NOLINTEND(readability-function-size)
-
-// The bare HLSL matrix spelling: `floatRxC` = R ROWS by C columns. This is the TRANSPOSE of GLSL's `matCxR`
-// (ckir_glsl.hpp) -- the single most dangerous asymmetry in this file. It is also why every matrix construction below
-// is wrapped in `transpose(...)`: HLSL's matrix constructor fills ROW-major, so feeding it our C column-vectors builds
-// the CxR transpose, and one `transpose` puts it back. Verified by the `M * inverse(M) * v == v` GPU test, never by eye.
-inline const char* hmat(int rows, int cols) noexcept
-{
-    switch (rows * 10 + cols)
-    {
-    case 22: return "float2x2"; case 23: return "float2x3"; case 24: return "float2x4";
-    case 32: return "float3x2"; case 33: return "float3x3"; case 34: return "float3x4";
-    case 42: return "float4x2"; case 43: return "float4x3"; case 44: return "float4x4";
-    default: return "float";
-    }
-}
-// HLSL type name for a CKIR value type (a comps==4 value is a float4 OR a float2x2 -- only the type knows which).
-// Vectors carry the component scalar: floatN / intN / uintN / boolN (B0-3).
-inline const char* htype(KType t) noexcept
-{
-    if (t.kind == TKind::Mat) { return hmat(t.rows, t.cols); }
-    if (t.kind == TKind::Vec)
-    {
-        if (t.scalar == DType::Bool) { switch (t.rows) { case 2: return "bool2"; case 3: return "bool3"; case 4: return "bool4"; default: break; } }
-        else if (glsl_detail::dt_is_uint(t.scalar)) { switch (t.rows) { case 2: return "uint2"; case 3: return "uint3"; case 4: return "uint4"; default: break; } }
-        else if (glsl_detail::dt_is_int(t.scalar)) { switch (t.rows) { case 2: return "int2"; case 3: return "int3"; case 4: return "int4"; default: break; } }
-        else { switch (t.rows) { case 2: return "float2"; case 3: return "float3"; case 4: return "float4"; default: break; } }
-    }
-    return glsl_detail::ctype(t.scalar);
-}
 
 // FA-2 (portable RT PIPELINE → DXR HLSL): emit a raygen / closest-hit / miss HLSL shader from a KEntry — the DX12 twin of
 // emit_rt_stage_glsl. Raygen: DispatchRaysIndex().x → read a ray → `TraceRay(as0, RAY_FLAG_NONE, …, ray, pl)` → store the payload;

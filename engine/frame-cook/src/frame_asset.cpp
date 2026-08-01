@@ -28,7 +28,7 @@ constexpr crd::u32 kFourCC = (static_cast<crd::u32>('F')) | (static_cast<crd::u3
 // program names, VRS state, conservative, queue, the sampler and the blit filter — plus the new pass-state
 // block. ⛔ The byte-identity gate could not see the loss: a field dropped by BOTH the writer and the reader
 // round-trips "byte-identically", which is why the round-trip gate now asserts FIELD SURVIVAL instead.
-constexpr crd::u32 kBlobVersion = 6U; // v6 (REN-38-F13): + the intersection/callable SBT roles (v5: `load`)
+constexpr crd::u32 kBlobVersion = 7U; // v7 (REN-40-G3): + shared_depth (v6: intersection/callable SBT roles)
 
 using Bytes = crd::containers::Array<crd::u8>;
 
@@ -835,6 +835,11 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
             }
             // REN-38-F11: this pass LOADS its target instead of clearing (mask-then-test pass pairs)
             if (const auto v = (*t)["load"].value<bool>()) { p.load_target = *v; }
+            // REN-40-G1: load DEPTH only (clear colour) — the depth-prepass pattern
+            if (const auto v = (*t)["load_depth"].value<bool>()) { p.load_depth = *v; }
+            // REN-40-G3: a separate depth image used as the depth attachment
+            if (const auto v = (*t)["shared_depth"].value<std::string_view>()) { set_str(p.shared_depth, *v); }
+            if (const auto v = (*t)["depth_as_float"].value<bool>()) { p.depth_as_float = *v; }
             if (const auto v = (*t)["stencil"].value<bool>()) { p.state.stencil_enable = *v; }
             if (const auto v = (*t)["stencil_compare"].value<std::string_view>())
             {
@@ -1076,6 +1081,43 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
         {
             set_where(where, std::string_view(p.name.c_str(), p.name.size()));
             return FrameCookError::LoadNeedsGeometry;
+        }
+        // REN-40-G1: `load_depth` shares the same kind restriction and is mutually exclusive with `load`
+        if (p.load_depth && p.kind != FramePassKind::RasterGeometry)
+        {
+            set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+            return FrameCookError::LoadNeedsGeometry;
+        }
+        if (p.load_depth && p.load_target)
+        {
+            set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+            return FrameCookError::LoadNeedsGeometry;
+        }
+        // REN-40-G3: `shared_depth` is only valid on raster passes and must reference a declared depth resource
+        if (p.shared_depth.size() > 0U)
+        {
+            const bool is_raster = p.kind == FramePassKind::RasterGeometry || p.kind == FramePassKind::RasterMrt
+                                   || p.kind == FramePassKind::RasterDepthOnly;
+            if (!is_raster)
+            {
+                set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                return FrameCookError::UnknownResource;
+            }
+            bool found_depth_res = false;
+            for (crd::usize ri = 0; ri < desc.resources.size(); ++ri)
+            {
+                if (desc.resources[ri].name.size() == p.shared_depth.size()
+                    && std::memcmp(desc.resources[ri].name.c_str(), p.shared_depth.c_str(), p.shared_depth.size()) == 0)
+                {
+                    found_depth_res = crd::gpu::fg_format_has_depth(desc.resources[ri].format);
+                    break;
+                }
+            }
+            if (!found_depth_res)
+            {
+                set_where(where, std::string_view(p.shared_depth.c_str(), p.shared_depth.size()));
+                return FrameCookError::UnknownResource;
+            }
         }
         if (p.kind == FramePassKind::Compute && p.kernel.empty())
         {
@@ -1560,6 +1602,11 @@ crd::containers::Array<crd::u8> cook_frame_graph(const FrameGraphDesc& desc, crd
         put_u8(out, static_cast<crd::u8>(p.state.stencil_pass));
         // v5: the pass-level load flag rides the same record (field-survival gated like the rest)
         put_u8(out, p.load_target ? 1U : 0U);
+        // v6: load-depth-only flag (depth prepass pattern)
+        put_u8(out, p.load_depth ? 1U : 0U);
+        // v7: shared_depth — a separate depth attachment (empty string if none)
+        put_str(out, p.shared_depth);
+        put_u8(out, p.depth_as_float ? 1U : 0U);
     }
 
     // REN-37.6: composition records, appended at the END.
@@ -1749,6 +1796,9 @@ bool read_frame_graph(crd::containers::ConstSpan<crd::u8> bytes, FrameGraphDesc&
         p.state.stencil_depth_fail = static_cast<crd::gpu::StencilOp>(c.u8v());
         p.state.stencil_pass       = static_cast<crd::gpu::StencilOp>(c.u8v());
         p.load_target              = c.u8v() != 0U; // v5
+        p.load_depth               = c.ok ? c.u8v() != 0U : false; // v6
+        if (c.ok) { c.strv(p.shared_depth); } // v7
+        if (c.ok) { p.depth_as_float = c.u8v() != 0U; }
         out.passes.push_back(static_cast<FramePassDesc&&>(p));
     }
 

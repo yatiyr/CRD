@@ -39,7 +39,7 @@ size_bytes = 256
 
 [[resource]]
 name    = "shadow_atlas"
-kind    = "transient_image"
+kind    = "persistent_image"
 format  = "D32Float"
 width   = 2048
 height  = 2048
@@ -49,10 +49,28 @@ sampled = true
 [[resource]]
 name    = "scene_hdr"
 kind    = "transient_image"
-format  = "RGBA16F"
+format  = "R11G11B10F"
 scale   = 1.0
 sampled = true
-depth_buffer = true
+
+# ── ⭐ REN-40-G3: the depth buffer is a FIRST-CLASS resource — readable by the HZB builder, writable ────────
+# by the depth prepass, and shared by the forward+impostor passes as their depth attachment. A companion
+# depth cannot be sampled; a standalone D32Float with `sampled = true` CAN.
+[[resource]]
+name    = "scene_depth"
+kind    = "transient_image"
+format  = "D32Float"
+scale   = 1.0
+sampled = true
+
+# REN-40-G3: half-res min-depth for occlusion culling. The HZB builder reads `scene_depth` and writes the
+# min of each 2×2 block; the occlusion cull pass samples it to reject objects behind the depth prepass output.
+[[resource]]
+name    = "hzb"
+kind    = "transient_image"
+format  = "R32Float"
+scale   = 0.5
+sampled = true
 
 # ── the GPU-driven cull: reset, then one dispatch per view ───────────────────────────────────────────────────
 # ⛔⛔ EVERY cull pass declares `cull_args` as a WRITE ONLY, never also a read — and that is not a shortcut, it is
@@ -63,6 +81,17 @@ depth_buffer = true
 # file first said it. The hazard between consecutive writers is covered by the dispatching verb's own
 # compute-write barrier (SHADER_READ | INDIRECT_COMMAND_READ in the destination mask), so the reader of these
 # commands — the depth-only and forward passes below — sees finished counts.
+# ── ⭐⭐ REN-40-F: GPU skinning — palette computation on the device, BEFORE any cull or draw ─────────────────
+# One compute dispatch per skinned group (workgroup=64, dispatch = ceil(instance_count/64)). Non-skinned groups
+# get dispatch_groups=0 (skipped). Writes the palette section of each group's buffer in place; subsequent VS
+# reads happen through the same `instances` resource.
+[[pass]]
+name      = "gpu_skin"
+kind      = "compute"
+kernel    = "crd://scene/gpu_skin"
+draw_list = "visible_geometry"
+writes    = ["instances"]
+
 [[pass]]
 name      = "cull_reset"
 kind      = "compute"
@@ -129,17 +158,79 @@ material_pass = "Shadow"
 clear_depth   = 1.0
 depth         = "LessEqual"
 
+[[draw_list]]
+name = "impostor_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+
+# REN-40-G1+G3: depth prepass — populate `scene_depth` (the standalone D32Float transient). The forward
+# pass LOADS this depth via `shared_depth`, and the HZB builder reads it as a sampled texture.
+[[pass]]
+name          = "depth_prepass"
+kind          = "raster.depth_only"
+draw_list     = "visible_geometry"
+writes        = ["scene_depth"]
+reads         = ["instances", "cull_args"]
+material_pass = "Shadow"
+clear_depth   = 0.0
+depth         = "GreaterEqual"
+
+# REN-40-G3: HZB builder — half-res MIN reduction of scene_depth. The occlusion cull pass samples this to
+# reject objects behind the depth prepass output. Reverse-Z: MIN = farthest surface in each 2×2 block.
+# `depth_as_float` makes the executor bind a REGULAR sampler (not comparison) so the shader reads the raw
+# stored depth value instead of a 0/1 comparison result.
+[[pass]]
+name           = "hzb_build"
+kind           = "raster.fullscreen"
+reads          = ["scene_depth"]
+writes         = ["hzb"]
+shader         = "crd://scene/hzb_build"
+depth_as_float = true
+
+# ── ⭐ REN-40-G3 PHASE 2: OCCLUSION RE-CULL — same visible set, filtered by the HZB. ──────────────────────
+# The cascade draws and depth prepass have already consumed phase-1's commands. The re-reset zeroes the camera's
+# command; the occlusion cull re-compacts with frustum + HZB → the forward pass draws only non-occluded geometry.
+# ⛔ CASCADE COMMANDS ARE ALSO RESET HERE. That is correct: the cascade draws ran BEFORE the depth prepass, so
+# their commands are fully consumed. Resetting all views keeps ONE reset kernel for both phases.
+[[pass]]
+name      = "occlusion_reset"
+kind      = "compute"
+kernel    = "crd://scene/cull_reset"
+draw_list = "visible_geometry"
+writes    = ["instances", "cull_args"]
+
+[[pass]]
+name      = "occlusion_cull"
+kind      = "compute"
+kernel    = "crd://scene/occlusion_cull"
+draw_list = "visible_geometry"
+reads     = ["hzb"]
+writes    = ["instances", "cull_args"]
+
 [[pass]]
 name          = "forward"
 kind          = "raster.geometry"
 draw_list     = "visible_geometry"
 writes        = ["scene_hdr"]
 reads         = ["shadow_atlas", "instances", "cull_args"]
+shared_depth  = "scene_depth"
 technique     = "forward_csm"
 material_pass = "Forward"
 clear_color   = [0.09, 0.10, 0.13, 1.0]
-clear_depth   = 0.0
 depth         = "GreaterEqual"
+
+# REN-40-C5: the impostor billboard pass draws AFTER the forward pass onto the same target (load = true).
+# Impostors are far-field: they depth-test against the scene and never cast shadows.
+[[pass]]
+name         = "impostor"
+kind         = "raster.geometry"
+draw_list    = "impostor_geometry"
+writes       = ["scene_hdr"]
+reads        = ["instances", "cull_args"]
+shared_depth = "scene_depth"
+shader       = "crd://scene/impostor"
+load         = true
+depth        = "GreaterEqual"
 
 [[pass]]
 name   = "post"

@@ -315,11 +315,27 @@ struct FramePassDesc
     // pass's first draw wiped the first pass's colour, depth AND stencil — which made the whole stencil
     // vocabulary un-authorable as a mask-then-test pass pair (the very thing stencil exists for).
     bool                                          load_target = false;
+    // ── ⭐ REN-40-G1: `load_depth = true` — LOAD depth from the previous pass, CLEAR colour normally. ──
+    // The depth-prepass pattern: a depth-only pass populates the depth buffer, then the geometry pass LOADS that
+    // depth (for hardware early-Z) while still clearing its colour attachment. Mutually exclusive with
+    // `load_target` (which loads BOTH).
+    bool                                          load_depth = false;
+    // ── ⭐ REN-40-G3: `shared_depth` — a SEPARATE depth image used as the depth attachment. ──
+    // A raster pass writes colour into its first `writes` target and depth-tests against THIS image instead of
+    // the target's companion. The depth image is a first-class transient (D32Float, sampled = true) — readable
+    // by an HZB builder, writable by a depth prepass — and the graph barriers it like any other resource.
+    // Empty ⇒ the target's companion (the historical default, byte-unchanged).
+    crd::containers::String                       shared_depth;
+    // ── ⭐ REN-40-G3: `depth_as_float` — read a depth texture as RAW FLOAT, not through a comparison sampler. ──
+    // The HZB builder and SSAO both need the STORED DEPTH VALUE, not a pass/fail comparison. Without this flag
+    // a depth-format read auto-selects the comparison sampler and the shader sees 0/1 instead of depth.
+    bool                                          depth_as_float = false;
     crd::containers::Array<FrameParam>            params;
 
     explicit FramePassDesc(crd::memory::IAllocator* a)
         : name(a), reads(a), writes(a), draw_list(a), view(a), shader(a), kernel(a), raygen(a), miss(a),
-          closest_hit(a), any_hit(a), intersection(a), callable(a), technique(a), blend(a), params(a)
+          closest_hit(a), any_hit(a), intersection(a), callable(a), technique(a), blend(a),
+          shared_depth(a), params(a)
     {
     }
 };

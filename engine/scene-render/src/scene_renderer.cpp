@@ -3,6 +3,7 @@
 
 #include <crd/scenerender/scene_renderer.hpp>
 
+#include <crd/lod/impostor_atlas.hpp>
 #include <crd/lod/lod_asset.hpp>
 #include <crd/lod/lod_chain.hpp>
 
@@ -48,6 +49,12 @@ CRD_DEFINE_LOG_CHANNEL(g_log_scenerender, "SceneRender", crd::log::LogLevel::Inf
 
 namespace
 {
+
+[[nodiscard]] constexpr crd::u32 clamp_u32(crd::u32 v, crd::u32 lo, crd::u32 hi) noexcept
+{
+    if (v < lo) { return lo; }
+    return v > hi ? hi : v;
+}
 
 // ⛔ GENERATED FROM `assets/frame/*.frame.toml` — the BUILT-IN PACK, embedded so the engine has a working
 // default with no filesystem dependency. `set_frame_graph()` overrides it with any text an app loads, which
@@ -245,6 +252,137 @@ kind   = "raster.fullscreen"
 reads  = ["scene_hdr"]
 writes = ["@output"]
 shader = "crd://post/tonemap_agx"
+)CRDFG";
+
+constexpr const char* kBuiltinForwardCsmMoment = R"CRDFG(
+# forward_csm_moment.frame.toml — the FILTERABLE-shadow tier of the default forward renderer (REN-40-D).
+#
+# The same cascaded shadow mapping as `forward_csm`, plus the MOMENT pipeline the `soft = "evsm" | "msm"`
+# technique options resolve from: the depth atlas is CONVERTED to a 4-channel moment atlas and prefiltered with
+# a separable Gaussian, so the forward pass reconstructs soft visibility from ONE bilinear read instead of a
+# per-fragment tap loop. Which moment SPACE the atlas holds (EVSM warps or MSM power moments) is decided by the
+# technique's own `soft_mode` option — the convert shader and the resolve read the same declared axis, so the
+# writer and the reader of this atlas cannot disagree.
+#
+# ⛔ THREE moment images, each written by EXACTLY ONE pass (convert -> x-blur -> y-blur). A ping-pong over two
+# images would give one of them two writers in the same frame; three single-writer images keep every dependency
+# an ordinary read-after-write the graph's sort and barriers already understand, and the transient allocator is
+# free to alias their memory if the schedule allows.
+#
+# The convert pass READS the raw depth atlas. The executor still binds the comparison sampler for a depth read
+# (that contract is format-driven and unchanged) — the convert shader reads the STORED depth through the plain
+# depth sampler that always rides at binding 6, the same seam the PCSS blocker search uses.
+
+schema   = 1
+name     = "crd://frame/forward_csm_moment"
+requires = ["shadows"]
+fallback = "crd://frame/forward_basic"
+
+[[resource]]
+name    = "shadow_atlas"
+kind    = "transient_image"
+format  = "D32Float"
+width   = 2048
+height  = 2048
+layers  = 4
+sampled = true
+
+# the moment chain: convert output, x-blurred, and the final atlas the forward pass reads
+[[resource]]
+name    = "moment_raw"
+kind    = "transient_image"
+format  = "RGBA16F"
+width   = 2048
+height  = 2048
+layers  = 4
+sampled = true
+
+[[resource]]
+name    = "moment_half"
+kind    = "transient_image"
+format  = "RGBA16F"
+width   = 2048
+height  = 2048
+layers  = 4
+sampled = true
+
+[[resource]]
+name    = "moment_atlas"
+kind    = "transient_image"
+format  = "RGBA16F"
+width   = 2048
+height  = 2048
+layers  = 4
+sampled = true
+
+[[draw_list]]
+name = "shadow_casters"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "front_to_back"
+
+[[draw_list]]
+name = "visible_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "material"
+
+[[pass]]
+name          = "csm_cascade"
+kind          = "raster.depth_only"
+draw_list     = "shadow_casters"
+for_each      = "light.0.cascades"
+writes        = ["shadow_atlas[$index]"]
+material_pass = "Shadow"
+clear_depth   = 1.0
+depth         = "LessEqual"
+
+# depth -> moments, one fullscreen pass per cascade slice (the layer is baked per instance program, exactly as
+# the per-cascade shadow VS bakes its index)
+[[pass]]
+name     = "moment_convert"
+kind     = "raster.fullscreen"
+for_each = "light.0.cascades"
+reads    = ["shadow_atlas"]
+writes   = ["moment_raw[$index]"]
+shader   = "crd://shadow/moment_convert"
+
+# the separable prefilter. ⛔ `address = "clamp"` is load-bearing: a wrapped tap at the atlas edge would blend
+# the opposite border into every cascade's rim, and the widest shadows sit exactly at those rims.
+[[pass]]
+name     = "moment_blur_x"
+kind     = "raster.fullscreen"
+for_each = "light.0.cascades"
+reads    = ["moment_raw"]
+writes   = ["moment_half[$index]"]
+shader   = "crd://shadow/moment_blur_x"
+filter   = "linear"
+address  = "clamp"
+
+[[pass]]
+name     = "moment_blur_y"
+kind     = "raster.fullscreen"
+for_each = "light.0.cascades"
+reads    = ["moment_half"]
+writes   = ["moment_atlas[$index]"]
+shader   = "crd://shadow/moment_blur_y"
+filter   = "linear"
+address  = "clamp"
+
+# the forward pass reads the MOMENT atlas — a colour array, so the executor routes it to the atlas binding by
+# its LAYERED-ness and selects the linear/clamp sampler by its format. The technique (`soft_mode >= 2`)
+# reconstructs visibility from the moments; nothing here names a sampler, exactly as before.
+[[pass]]
+name          = "forward"
+kind          = "raster.geometry"
+draw_list     = "visible_geometry"
+reads         = ["moment_atlas"]
+writes        = ["@output"]
+technique     = "forward_csm"
+material_pass = "Forward"
+clear_color   = [0.09, 0.10, 0.13, 1.0]
+clear_depth   = 0.0
+depth         = "GreaterEqual"
 )CRDFG";
 
 constexpr const char* kBuiltinForwardCsmSrgb = R"CRDFG(
@@ -702,6 +840,13 @@ struct SceneShaderConfig
     crd::u32                              map_size  = 2048U;   // shadow atlas edge, for the PCF texel step
     crd::u32                              cascades  = kMaxCascades;
     crd::u32                              pcf_taps  = 4U;
+    // ⭐⭐ REN-40-D: the cascade blend, in percent of a cascade's footprint. 0 = the historical hard select.
+    crd::u32                              blend_pct = 0U;
+    // ⭐⭐ REN-40-D: 0 = fixed-radius PCF, 1 = PCSS; and the light's angular RADIUS in hundredths of a degree.
+    crd::u32                              soft_mode = 0U;
+    crd::u32                              light_angle_x100 = 27U;
+    crd::u32                              soft_max_texels  = 24U;
+    crd::u32                              soft_search_taps = 8U;
     // 38-G1 (user-directed): the DISK-resolved material text (F15). Null = the embedded default. Set by
     // `cook_fs`, which is the one place with access to the asset resolution.
     const crd::containers::String*        material_text = nullptr;
@@ -713,6 +858,9 @@ struct SceneShaderConfig
     // TECHNIQUE never has to know it (see IRasterContext::ndc_y_points_down). It changes the emitted GRAPH, so
     // the content hash separates the two cooks automatically — no extra hash term needed.
     bool flip_clip_y = false;
+    // ⭐⭐ REN-40-C4: the dither cross-dissolve band. When > 0 the FS reads a flat fade varying at location 4
+    // and discards pixels via a 4x4 Bayer threshold.
+    crd::f32 dither_band = 0.0F;
 };
 
 // Resolve the technique's DECLARED bindings into node ids, in ABI order.
@@ -734,6 +882,8 @@ struct SceneShaderConfig
     namespace tq  = crd::kir::technique;
     Gx c(g);
     out.clear();
+    // ⭐ REN-40-D: the atlas image node, remembered so the PCSS binding can REUSE it (see below).
+    crd::i32 atlas_tex = -1;
     for (int i = 0; i < t.n_bindings; ++i)
     {
         const tq::TechniqueBinding& b = t.bindings[i];
@@ -744,9 +894,30 @@ struct SceneShaderConfig
             // ⛔⛔ REN-38: bindings 4/5, NOT 1/2. The material base-colour map lives at 1/2, and when the atlas
             // shared those slots a group could be textured OR shadowed but never both — the REN-3.2-b regression
             // the user saw the moment shadows turned on. A frame singleton gets its own fixed binding.
-            out.push_back(g.texture(0, 4, kir::DType::F32, kir::TexDim::Tex2D, /*arrayed=*/true, /*ms=*/false,
-                                    /*shadow=*/true));
-            out.push_back(g.sampler(0, 5, /*shadow=*/true));
+            // ⭐⭐ REN-40-D: under `soft_mode >= 2` the SAME bindings hold the MOMENT atlas — a COLOUR array
+            // through a LINEAR sampler. The shadow-ness of these nodes must match what the executor binds
+            // (chosen from the resource format), or the cooked shader declares a comparison sampler over a
+            // colour image; deciding it from the same soft_mode option the technique body reads is what keeps
+            // the writer and the reader of this seam in agreement by construction.
+            const bool moments = cfg.soft_mode >= 2U;
+            atlas_tex = g.texture(0, 4, kir::DType::F32, kir::TexDim::Tex2D, /*arrayed=*/true, /*ms=*/false,
+                                  /*shadow=*/!moments);
+            out.push_back(atlas_tex);
+            out.push_back(g.sampler(0, 5, /*shadow=*/!moments));
+        }
+        else if (tq::detail::tech_name_eq(n, "shadow_atlas_depth"))
+        {
+            // ⭐⭐ REN-40-D (PCSS): THE SAME IMAGE, A SECOND SAMPLER. ⛔⛔ THE TEXTURE NODE IS REUSED, NOT REMADE.
+            // The emitters are SEPARABLE (`uniform texture2DArray tex_0_4` + `uniform sampler samp_0_5`), and the
+            // shadow-ness lives in the SAMPLER — which is exactly Vulkan's model and exactly why one image can
+            // serve both. But creating a SECOND texture node at the same (set, binding) emits a SECOND
+            // declaration of `tex_0_4`, and the shader then fails to compile on a redefinition — the graph builds,
+            // the program does not, and `set_shadows_enabled` merely returns false.
+            // ⛔ A blocker search needs the STORED DEPTH, which a comparison sampler cannot return: the
+            // read-the-depth overload does not exist in GLSL. Hence one image, two samplers, both declared.
+            if (atlas_tex < 0) { return false; } // `shadow_atlas` is declared first; this depends on it
+            out.push_back(atlas_tex);
+            out.push_back(g.sampler(0, 6, /*shadow=*/false));
         }
         else if (tq::detail::tech_name_eq(n, "csm_light_vp"))
         {
@@ -832,6 +1003,10 @@ struct SceneShaderConfig
     const ck::VariantOptions   opts{mat::AlphaMode::Opaque, 0.5};
     // B7 lowering is ON: the const-folder used to eat `StorageLoad` (a memory read with a literal index) and
     // rendered this variant black. Fixed at the root in ckir.hpp and pinned by the `[kir][lower][b7]` gate.
+    // ⭐⭐ REN-40-C4: when dither is active the FS must inject a Bayer threshold discard AFTER the technique
+    // outputs are built but BEFORE lowering (lowering needs the FragCoord/discard_cond in the graph to emit
+    // them). So `do_lower` is false when dither is active; we lower manually after the injection.
+    const bool dither_active = cfg.dither_band > 0.0F && cfg.pass == ck::PassType::Forward;
     if (cfg.pass != ck::PassType::Forward || cfg.tech == nullptr)
     {
         // Depth-only / G-buffer: no technique is invoked at all, which is exactly why every opaque material
@@ -842,9 +1017,51 @@ struct SceneShaderConfig
 
     crd::containers::Array<crd::i32> binds(g.serial_nodes().allocator());
     if (!resolve_scene_bindings(g, *cfg.tech, cfg, binds)) { return false; }
-    const crd::f64 option_values[2] = {static_cast<crd::f64>(cfg.cascades), static_cast<crd::f64>(cfg.pcf_taps)};
-    return tq::build_fs_for_pass(tmpl, *cfg.tech, cfg.pass, opts, in, g, fe, ldir, lcol, binds.data(),
-                                 static_cast<int>(binds.size()), option_values, cfg.tech->n_options);
+    const crd::f64 option_values[7] = {static_cast<crd::f64>(cfg.cascades),   static_cast<crd::f64>(cfg.pcf_taps),
+                                       static_cast<crd::f64>(cfg.blend_pct),  static_cast<crd::f64>(cfg.soft_mode),
+                                       static_cast<crd::f64>(cfg.light_angle_x100),
+                                       static_cast<crd::f64>(cfg.soft_max_texels),
+                                       static_cast<crd::f64>(cfg.soft_search_taps)};
+    if (!tq::build_fs_for_pass(tmpl, *cfg.tech, cfg.pass, opts, in, g, fe, ldir, lcol, binds.data(),
+                               static_cast<int>(binds.size()), option_values, cfg.tech->n_options,
+                               /*do_lower=*/!dither_active))
+    {
+        return false;
+    }
+    // ── ⭐⭐ REN-40-C4: BAYER DITHER DISCARD — a 4×4 ordered-dither threshold compared against the flat fade
+    // alpha from the VS (location 4). Every pixel whose fade < threshold is discarded, which produces the
+    // spatially-uniform dissolve pattern that prevents LOD transitions from being visible.
+    if (dither_active)
+    {
+        const int fade = g.stage_in(kir::KType::make_scalar(kir::DType::F32), 4, kir::Interp::Flat);
+        // FragCoord.xy — integer pixel coordinates mod 4, used as the 4×4 Bayer index
+        const int fc  = g.builtin(kir::KBuiltin::FragCoord);
+        const int fcx = g.cast(g.swizzle(fc, 0), kir::DType::I32);
+        const int fcy = g.cast(g.swizzle(fc, 1), kir::DType::I32);
+        const auto ki = [&](int v) { return g.constant(static_cast<double>(v), sh, kir::DType::I32); };
+        const int ix  = g.binary(kir::KOp::BitAnd, fcx, ki(3));
+        const int iy  = g.binary(kir::KOp::BitAnd, fcy, ki(3));
+        // 4×4 Bayer matrix via nested selects — the compiler turns this into a few ALU ops.
+        // Row values (divided by 16): row0=[0,8,2,10], row1=[12,4,14,6], row2=[3,11,1,9], row3=[15,7,13,5]
+        // Each row is a 4-way select on ix; the result is a 4-way select on iy.
+        const auto row = [&](double v0, double v1, double v2, double v3) {
+            const int r01 = g.select(g.binary(kir::KOp::CmpEq, ix, ki(0)), k(v0 / 16.0), k(v1 / 16.0));
+            const int r23 = g.select(g.binary(kir::KOp::CmpEq, ix, ki(2)), k(v2 / 16.0), k(v3 / 16.0));
+            return g.select(g.binary(kir::KOp::CmpLt, ix, ki(2)), r01, r23);
+        };
+        const int r0 = row( 0,  8,  2, 10);
+        const int r1 = row(12,  4, 14,  6);
+        const int r2 = row( 3, 11,  1,  9);
+        const int r3 = row(15,  7, 13,  5);
+        const int r01 = g.select(g.binary(kir::KOp::CmpEq, iy, ki(0)), r0, r1);
+        const int r23 = g.select(g.binary(kir::KOp::CmpEq, iy, ki(2)), r2, r3);
+        const int threshold = g.select(g.binary(kir::KOp::CmpLt, iy, ki(2)), r01, r23);
+        // ⛔ fade < threshold → discard. At fade = 1.0 (fully opaque) the threshold is at most 15/16, so no
+        // pixel is ever discarded. At fade = 0.0 (fully transparent) every pixel is discarded.
+        fe.discard_cond = g.binary(kir::KOp::CmpLt, fade, threshold);
+        kir::lower::lower_entry(g, fe);
+    }
+    return true;
 }
 
 // ── ⭐⭐ REN-38-D5: THE VERTEX PROGRAMS ARE AUTHORED. ─────────────────────────────
@@ -1453,6 +1670,10 @@ struct SceneRenderer::Impl
     // GEO-8: the skinned program pair + the skeleton/clip handle caches + palette scratch
     std::unique_ptr<crd::gpu::IGpuProgram>    vs_skinned;
     std::unique_ptr<crd::gpu::IRasterProgram> program_skinned;
+    // REN-40-F: skinned variants that compose with textures and shadows
+    std::unique_ptr<crd::gpu::IRasterProgram> program_skinned_textured;
+    std::unique_ptr<crd::gpu::IRasterProgram> program_skinned_shadowed;
+    std::unique_ptr<crd::gpu::IRasterProgram> program_skinned_textured_shadowed;
     // REN-2 Half B: the TEXTURED program (samples the material base-color map); the per-material GPU-texture cache
     // is declared next to material_color below (ctor init order). REN-37.2 removed its separate VERTEX program —
     // the textured variant is the same cooked material with `textured = true`, over the one shared VS.
@@ -1479,6 +1700,7 @@ struct SceneRenderer::Impl
     crd::containers::Array<crd::math::Mat4f>      world_scratch{nullptr};
     crd::containers::Array<crd::math::Mat4f>      palette_scratch{nullptr};
     crd::containers::Array<crd::f32>              palette_staging{nullptr};
+    crd::containers::Array<crd::u32>              anim_state_staging{nullptr}; // REN-40-F: per-instance (clip_local_off, time_bits)
 
     crd::u64 structure_sig = 0;
     bool     has_structure = false;
@@ -1539,6 +1761,13 @@ struct SceneRenderer::Impl
     // cascade index is a compile-time constant in the VS).
     CsmConfig                              csm{};
     CsmCascades                            cascades{};
+    crd::math::Mat4f                       prev_light_vp[kMaxCascades]{}; // REN-40-E: previous frame's matrices for cache detection
+    crd::u32                               csm_frame = 0;                // REN-40-E2: frame counter for round-robin far cascade scheduling
+    [[nodiscard]] bool cascade_scheduled(crd::u32 index) const noexcept
+    {
+        if (index < 2U) { return true; }
+        return (csm_frame & 1U) == (index & 1U);
+    }
     // ⛔ Two separate facts, deliberately not merged. `shadow_programs_ok` says the cascade shaders COMPILED;
     // `shadows_requested` says the caller actually wants shadows. Rendering cascades costs a full extra pass
     // over the draw list PER CASCADE, so turning them on merely because the shaders built would make every
@@ -1569,6 +1798,9 @@ struct SceneRenderer::Impl
     bool                                      gpu_cull_on = false;
     // REN-40-A: run the CPU cull TOO, only so its verdict can be compared (a gate mode — see the header).
     bool                                      gpu_cull_verify = false;
+    // ⭐⭐ REN-40-F: GPU skinning — the compute kernel computes the palette on the device.
+    bool                                      gpu_skinning_on = false;
+    crd::gpu::IGpuProgram*                    kern_skin_compute = nullptr;
     // ⭐⭐ REN-40-C2: the authored LOD policy and whether chains are built at all.
     // ⛔ DEFAULT OFF, like every other performance switch here, so the A/B runs on
     // ONE build (the readback-A/B rule).
@@ -1589,6 +1821,9 @@ struct SceneRenderer::Impl
     std::unique_ptr<crd::gpu::IRasterProgram> program_rebased_idx;
     std::unique_ptr<crd::gpu::IGpuProgram> vs_skinned_idx;
     std::unique_ptr<crd::gpu::IRasterProgram> program_skinned_idx;
+    std::unique_ptr<crd::gpu::IRasterProgram> program_skinned_textured_idx;
+    std::unique_ptr<crd::gpu::IRasterProgram> program_skinned_shadowed_idx;
+    std::unique_ptr<crd::gpu::IRasterProgram> program_skinned_textured_shadowed_idx;
     std::unique_ptr<crd::gpu::IRasterProgram> program_textured_idx;
     std::unique_ptr<crd::gpu::IRasterProgram> program_shadowed_idx;
     std::unique_ptr<crd::gpu::IRasterProgram> program_textured_shadowed_idx;
@@ -1636,6 +1871,7 @@ struct SceneRenderer::Impl
     // 38-G1: the GROUP behind draw-list row `i` — index-parallel with the draw list by the same construction
     // `groups_view` uses (culled groups are skipped in both). Null when the row has no group.
     crd::containers::Array<MeshGroup*> draw_groups{crd::memory::default_allocator()};
+    crd::containers::Array<SceneDraw>  impostor_draws{crd::memory::default_allocator()};
     [[nodiscard]] const MeshGroup* group_of_draw(crd::u32 i) const noexcept
     {
         return i < draw_groups.size() ? draw_groups[i] : nullptr;
@@ -1727,6 +1963,8 @@ struct SceneRenderer::Impl
         // ⭐⭐ REN-39-D1: the backend's clip-Y convention is stamped HERE, at the ONE place every scene FS is
         // cooked, so no call site can forget it and no authored technique has to know it exists.
         rcfg.flip_clip_y = raster != nullptr && !raster->ndc_y_points_down();
+        // ⭐⭐ REN-40-C4: dither band stamped here (same discipline as flip_clip_y — no call site can forget).
+        rcfg.dither_band = lod_enabled ? lod_policy.dither_band : 0.0F;
         crd::containers::String mat_text(alloc);
         if (cfg.pass == crd::kir::cook::PassType::Forward
             && asset_text(cfg.textured ? "material/scene_textured.crdm" : "material/scene.crdm", mat_text))
@@ -1762,6 +2000,11 @@ struct SceneRenderer::Impl
     const char*                            forward_technique = "standard_forward";
     const char*                            shadow_technique  = "forward_csm";
     crd::u32                               pcf_taps          = 4U; // the `pcf_taps` option value (1|2|4|8|16)
+    crd::u32                               blend_pct         = 0U; // REN-40-D `cascade_blend_pct` (0..50)
+    crd::u32                               soft_mode         = 0U; // REN-40-D 0 = PCF, 1 = PCSS
+    crd::u32                               light_angle_x100  = 27U; // the sun's angular radius, x100 degrees
+    crd::u32                               soft_max_texels   = 24U; // REN-40-D the penumbra cap, in texels
+    crd::u32                               soft_search_taps  = 8U;  // REN-40-D taps in the blocker search disc
 
     // ── ⭐⭐ REN-38-F6: the ADVANCED-STAGE programs, cooked from the authored declarations above. ──
     // Lazy (a renderer that never runs an advanced graph pays nothing) and CACHED (a program is cooked once).
@@ -1777,7 +2020,8 @@ struct SceneRenderer::Impl
     // which command it accumulates into, and BOTH are cook-time constants — so five views are five programs from
     // one authored asset, exactly as the four cascade shadow VS variants already are.
     crd::gpu::IGpuProgram*                    kern_cull_view[1U + kMaxCascades]{};
-    crd::gpu::IGpuProgram*                    kern_cull_reset   = nullptr; // borrowed from adv_stages
+    crd::gpu::IGpuProgram*                    kern_cull_reset     = nullptr; // borrowed from adv_stages
+    crd::gpu::IGpuProgram*                    kern_occlusion_cull = nullptr; // REN-40-G3: camera re-cull with HZB
     crd::gpu::IGpuProgram*                    kern_rt[4] = {nullptr, nullptr, nullptr, nullptr}; // rg/ms/ch/ah
     crd::gpu::IGpuProgram*                    flat_fs   = nullptr; // borrowed from adv_stages
     // The scene TLAS, provided by whoever owns the geometry's device form (B4: the graph names it, the HOST
@@ -1980,13 +2224,366 @@ struct SceneRenderer::Impl
     std::unique_ptr<crd::gpu::IRasterProgram> prog_post_agx;
     std::unique_ptr<crd::gpu::IRasterProgram> prog_post_srgb;
 
+    // ── ⭐⭐ REN-40-D: the MOMENT-ATLAS program family (crd://shadow/moment_*). ──────────────────────────────
+    // Fullscreen technique-library shaders, cooked per CASCADE because the layer is baked into each instance's
+    // FS (a fullscreen pass has no per-draw channel — the same rule the per-cascade shadow VS follows), and the
+    // blur additionally bakes 1/map_size (there is no header binding on a fullscreen draw to read it from).
+    // kind: 0 = convert, 1 = blur_x, 2 = blur_y.
+    std::unique_ptr<crd::gpu::IRasterProgram> moment_prog[3][kMaxCascades];
+    [[nodiscard]] crd::gpu::IRasterProgram* ensure_moment_program(crd::u32 kind, crd::u32 index)
+    {
+        if (kind >= 3U || index >= kMaxCascades) { return nullptr; }
+        std::unique_ptr<crd::gpu::IRasterProgram>& slot = moment_prog[kind][index];
+        if (slot != nullptr) { return slot.get(); }
+        if (raster == nullptr || ctx == nullptr || soft_mode < 2U) { return nullptr; }
+        crd::gpu::IGpuProgram* pvs = cook_stage_named("vertex/post_fullscreen.crdv");
+        if (pvs == nullptr) { return nullptr; }
+        crd::kir::KGraph fg(alloc);
+        int              out = -1;
+        if (kind == 0U)
+        {
+            out = crd::kir::technique::body_moment_convert(fg, static_cast<int>(soft_mode), index);
+        }
+        else
+        {
+            // ⛔ 1/map_size from the SAME CsmConfig the cascade passes render with — cook AFTER set_csm_config,
+            // which the setter contract already requires for every shadow program.
+            const double inv = 1.0 / static_cast<double>(csm.map_size > 0U ? csm.map_size : 2048U);
+            out = crd::kir::technique::body_moment_blur(fg, kind == 1U, index, inv);
+        }
+        if (out < 0) { return nullptr; }
+        crd::kir::KEntry fe;
+        fe.stage  = crd::kir::KStage::Fragment;
+        fe.n_out  = 1;
+        fe.out[0] = {out, 0};
+        std::unique_ptr<crd::gpu::IGpuProgram> pfs = ctx->create_program(fg, fe);
+        if (pfs == nullptr) { return nullptr; }
+        slot = raster->create_raster_program(*pvs, *pfs);
+        adv_stages.push_back(std::move(pfs));
+        return slot.get();
+    }
+
+    // ── ⭐ REN-40-G3: HZB BUILD program — half-res MIN reduction of scene depth. ────────────────────────────
+    // textureGather fetches the 2×2 bilinear footprint → min of 4 → output. The fullscreen VS is shared.
+    std::unique_ptr<crd::gpu::IRasterProgram> prog_hzb;
+    [[nodiscard]] crd::gpu::IRasterProgram* ensure_hzb_program()
+    {
+        if (prog_hzb != nullptr) { return prog_hzb.get(); }
+        if (raster == nullptr || ctx == nullptr) { return nullptr; }
+        crd::gpu::IGpuProgram* pvs = cook_stage_named("vertex/post_fullscreen.crdv");
+        if (pvs == nullptr) { return nullptr; }
+        crd::kir::KGraph fg(alloc);
+        const int        out = crd::kir::technique::body_hzb_build(fg);
+        if (out < 0) { return nullptr; }
+        const auto sh1  = crd::kir::make_shape({1});
+        const int  onef = fg.constant(1.0, sh1, crd::kir::DType::F32);
+        crd::kir::KEntry fe;
+        fe.stage  = crd::kir::KStage::Fragment;
+        fe.n_out  = 1;
+        fe.out[0] = {fg.vec4(out, out, out, onef), 0};
+        std::unique_ptr<crd::gpu::IGpuProgram> pfs = ctx->create_program(fg, fe);
+        if (pfs == nullptr) { return nullptr; }
+        prog_hzb = raster->create_raster_program(*pvs, *pfs);
+        adv_stages.push_back(std::move(pfs));
+        return prog_hzb.get();
+    }
+
+    // ── ⭐⭐ REN-40-C5: the IMPOSTOR BILLBOARD program — camera-facing quad from the bounding sphere. ─────────
+    // VertexIndex (0-5 from the identity IB) selects the quad corner; InstanceIndex indexes the impostor slot's
+    // visible list. The VS reads the world AABB from the bounds section, builds a camera-facing quad, and
+    // outputs octahedral UVs for the atlas lookup in the FS. The FS is a placeholder (C5.5 replaces it).
+    std::unique_ptr<crd::gpu::IRasterProgram> prog_impostor;
+    [[nodiscard]] crd::gpu::IRasterProgram* ensure_impostor_program()
+    {
+        if (prog_impostor != nullptr) { return prog_impostor.get(); }
+        if (ctx == nullptr || raster == nullptr) { return nullptr; }
+
+        namespace kir = crd::kir;
+        using DType   = kir::DType;
+        using KOp     = kir::KOp;
+        const auto sh = kir::make_shape({1});
+
+        // ── VS: the billboard vertex program ──────────────────────────────────
+        kir::KGraph vg(alloc);
+        kir::KEntry ve;
+
+        const auto kf  = [&](double v) { return vg.constant(v, sh, DType::F32); };
+        const auto ku  = [&](crd::u32 v) { return vg.constant(static_cast<double>(v), sh, DType::U32); };
+        const auto vadd = [&](int a, int b) { return vg.binary(KOp::Add, a, b); };
+        const auto vsub = [&](int a, int b) { return vg.binary(KOp::Sub, a, b); };
+        const auto vmul = [&](int a, int b) { return vg.binary(KOp::Mul, a, b); };
+        const auto vdiv = [&](int a, int b) { return vg.binary(KOp::Div, a, b); };
+        int sbase = -1;
+        const auto sloadu = [&](int idx) {
+            return vg.storage_load(sbase >= 0 ? vadd(sbase, idx) : idx);
+        };
+        const auto sloadf = [&](int idx) {
+            return vg.int_bits_to_float(vg.cast(sloadu(idx), DType::I32));
+        };
+        const auto shdru = [&](crd::u32 w) { return sloadu(ku(w)); };
+        const auto shdrf = [&](crd::u32 w) { return sloadf(ku(w)); };
+
+        // rebase from the IMPOSTOR draw table (separate from the mesh table — see kImpostorTableOff)
+        const int di  = vg.cast(vg.builtin(kir::KBuiltin::DrawIndex), DType::U32);
+        const int row = vmul(di, ku(kSceneDrawRowWords));
+        sbase         = sloadu(vadd(ku(kImpostorTableOff), row));
+        const int row_slot = sloadu(vadd(vadd(ku(kImpostorTableOff), row), ku(1U)));
+
+        // corner from VertexIndex (0-5, the identity IB)
+        // Two CCW triangles: (-1,-1),(1,-1),(1,1), (-1,-1),(1,1),(-1,1)
+        const int vid = vg.cast(vg.builtin(kir::KBuiltin::VertexIndex), DType::U32);
+        const int eq0 = vg.binary(KOp::CmpEq, vid, ku(0U));
+        const int eq1 = vg.binary(KOp::CmpEq, vid, ku(1U));
+        const int eq2 = vg.binary(KOp::CmpEq, vid, ku(2U));
+        const int eq3 = vg.binary(KOp::CmpEq, vid, ku(3U));
+        const int eq4 = vg.binary(KOp::CmpEq, vid, ku(4U));
+        const int cx  = vg.select(eq0, kf(-1.0), vg.select(eq1, kf(1.0), vg.select(eq2, kf(1.0),
+                        vg.select(eq3, kf(-1.0), vg.select(eq4, kf(1.0), kf(-1.0))))));
+        const int cy  = vg.select(eq0, kf(-1.0), vg.select(eq1, kf(-1.0), vg.select(eq2, kf(1.0),
+                        vg.select(eq3, kf(-1.0), vg.select(eq4, kf(1.0), kf(1.0))))));
+
+        // InstanceIndex → visible list → instance_id
+        const int ii  = vg.cast(vg.builtin(kir::KBuiltin::InstanceIndex), DType::U32);
+        const int cap = shdru(kHdrInstanceCapacity);
+        const int vis_base_val = vadd(shdru(5U), vmul(cap, row_slot));
+        const int raw_vis = sloadu(vadd(vis_base_val, ii));
+
+        const bool has_dither = lod_policy.dither_band > 0.0F && lod_slots > 1U;
+        const int instance_id = has_dither
+            ? vg.binary(KOp::BitAnd, raw_vis, ku(0x00FFFFFFU))
+            : raw_vis;
+
+        // world AABB (6 floats at bounds_off + instance_id * 6)
+        const int aabb = vadd(shdru(kHdrBoundsOff), vmul(instance_id, ku(6U)));
+        const int bmin_x = sloadf(vadd(aabb, ku(0U)));
+        const int bmin_y = sloadf(vadd(aabb, ku(1U)));
+        const int bmin_z = sloadf(vadd(aabb, ku(2U)));
+        const int bmax_x = sloadf(vadd(aabb, ku(3U)));
+        const int bmax_y = sloadf(vadd(aabb, ku(4U)));
+        const int bmax_z = sloadf(vadd(aabb, ku(5U)));
+
+        // center and bounding-sphere radius
+        const int half  = kf(0.5);
+        const int cen_x = vmul(vadd(bmin_x, bmax_x), half);
+        const int cen_y = vmul(vadd(bmin_y, bmax_y), half);
+        const int cen_z = vmul(vadd(bmin_z, bmax_z), half);
+        const int ext_x = vmul(vsub(bmax_x, bmin_x), half);
+        const int ext_y = vmul(vsub(bmax_y, bmin_y), half);
+        const int ext_z = vmul(vsub(bmax_z, bmin_z), half);
+        const int r2    = vadd(vadd(vmul(ext_x, ext_x), vmul(ext_y, ext_y)), vmul(ext_z, ext_z));
+        const int rad   = vg.unary(KOp::Sqrt, vadd(r2, kf(1.0e-12)));
+
+        // camera position (header word 96)
+        const int cam_x = shdrf(kHdrCameraPos);
+        const int cam_y = shdrf(kHdrCameraPos + 1U);
+        const int cam_z = shdrf(kHdrCameraPos + 2U);
+
+        // view direction (centre → camera), normalised
+        const int vdx   = vsub(cam_x, cen_x);
+        const int vdy   = vsub(cam_y, cen_y);
+        const int vdz   = vsub(cam_z, cen_z);
+        const int vdl   = vg.unary(KOp::Sqrt, vadd(vadd(vmul(vdx, vdx), vmul(vdy, vdy)),
+                                                    vadd(vmul(vdz, vdz), kf(1.0e-12))));
+        const int fw_x  = vdiv(vdx, vdl);
+        const int fw_y  = vdiv(vdy, vdl);
+        const int fw_z  = vdiv(vdz, vdl);
+
+        // billboard axes: right = normalize(cross((0,1,0), fwd)) = normalize(fwd_z, 0, -fwd_x)
+        const int rx_raw = fw_z;
+        const int rz_raw = vg.unary(KOp::Neg, fw_x);
+        const int rl     = vg.unary(KOp::Sqrt, vadd(vadd(vmul(rx_raw, rx_raw), vmul(rz_raw, rz_raw)), kf(1.0e-12)));
+        const int rx     = vdiv(rx_raw, rl);
+        const int rz     = vdiv(rz_raw, rl);
+        // up = cross(fwd, right) — right.y=0 by construction, so:
+        //   up.x = fw_y*rz,  up.y = fw_z*rx - fw_x*rz,  up.z = -fw_y*rx
+        const int ux = vmul(fw_y, rz);
+        const int uy = vsub(vmul(fw_z, rx), vmul(fw_x, rz));
+        const int uz = vg.unary(KOp::Neg, vmul(fw_y, rx));
+
+        // world pos = centre + cx*radius*right + cy*radius*up
+        const int cr  = vmul(cx, rad);
+        const int cu  = vmul(cy, rad);
+        const int wx  = vadd(cen_x, vadd(vmul(cr, rx), vmul(cu, ux)));
+        const int wy  = vadd(cen_y, vmul(cu, uy));
+        const int wz  = vadd(cen_z, vadd(vmul(cr, rz), vmul(cu, uz)));
+
+        // clip = view_proj * (wx, wy, wz, 1)
+        int vp[16];
+        for (crd::u32 e = 0; e < 16U; ++e) { vp[e] = shdrf(6U + e); }
+        int clip[4];
+        {
+            const int v_arr[4] = {wx, wy, wz, kf(1.0)};
+            for (crd::u32 i = 0; i < 4U; ++i)
+            {
+                int acc = vmul(vp[0U * 4U + i], v_arr[0]);
+                acc     = vadd(acc, vmul(vp[1U * 4U + i], v_arr[1]));
+                acc     = vadd(acc, vmul(vp[2U * 4U + i], v_arr[2]));
+                acc     = vadd(acc, vmul(vp[3U * 4U + i], v_arr[3]));
+                clip[i] = acc;
+            }
+        }
+
+        // octahedral UV: oct_encode(view direction) → [0,1]²
+        const int abs_x  = vg.unary(KOp::Abs, fw_x);
+        const int abs_y  = vg.unary(KOp::Abs, fw_y);
+        const int abs_z  = vg.unary(KOp::Abs, fw_z);
+        const int s_inv  = vdiv(kf(1.0), vadd(vadd(abs_x, abs_y), vadd(abs_z, kf(1.0e-12))));
+        const int px     = vmul(fw_x, s_inv);
+        const int py     = vmul(fw_y, s_inv);
+        const int z_neg  = vg.binary(KOp::CmpLt, fw_z, kf(0.0));
+        const int fold_x = vmul(vsub(kf(1.0), vg.unary(KOp::Abs, py)), vg.unary(KOp::Sign, px));
+        const int fold_y = vmul(vsub(kf(1.0), vg.unary(KOp::Abs, px)), vg.unary(KOp::Sign, py));
+        const int ox     = vg.select(z_neg, fold_x, px);
+        const int oy     = vg.select(z_neg, fold_y, py);
+        const int uv_x   = vmul(vadd(ox, kf(1.0)), half);
+        const int uv_y   = vmul(vadd(oy, kf(1.0)), half);
+
+        // ⭐⭐ REN-40-C5.5: per-vertex ATLAS PIXEL COORDINATES — the varying that makes the impostor
+        // TEXTURED. oct_uv is constant across the quad (one view direction per instance), so passing it
+        // as a smooth varying would sample the same texel at every pixel. Instead, each quad corner maps
+        // to the corresponding corner of its tile: smooth interpolation then gives each fragment its own
+        // texel address in the atlas.
+        const int dims    = shdru(kHdrAtlasDims);
+        const int grid_u  = vg.binary(KOp::Shr, dims, ku(16U));
+        const int tile_u  = vg.binary(KOp::BitAnd, dims, ku(0xFFFFU));
+        const int grid_f  = vg.cast(grid_u, DType::F32);
+        const int tile_f  = vg.cast(tile_u, DType::F32);
+        const int grid_m1 = vsub(grid_f, kf(1.0));
+        const int tile_col = vg.ternary(KOp::Clamp, vg.unary(KOp::Floor, vmul(uv_x, grid_f)),
+                                        kf(0.0), grid_m1);
+        const int tile_row = vg.ternary(KOp::Clamp, vg.unary(KOp::Floor, vmul(uv_y, grid_f)),
+                                        kf(0.0), grid_m1);
+        const int quad_u_v = vmul(vadd(cx, kf(1.0)), half);
+        const int quad_v_v = vmul(vadd(cy, kf(1.0)), half);
+        const int apx_x   = vmul(vadd(tile_col, quad_u_v), tile_f);
+        const int apx_y   = vmul(vadd(tile_row, quad_v_v), tile_f);
+
+        // tint from instance colour (4 floats at instances_off + id*20 + 16)
+        const int ibase = vadd(shdru(4U), vmul(instance_id, ku(kInstanceWords)));
+        const int tint_r = sloadf(vadd(ibase, ku(16U)));
+        const int tint_g = sloadf(vadd(ibase, ku(17U)));
+        const int tint_b = sloadf(vadd(ibase, ku(18U)));
+        const int tint_a = sloadf(vadd(ibase, ku(19U)));
+
+        int fade = kf(1.0);
+        if (has_dither)
+        {
+            const int m255 = ku(0xFFU);
+            fade = vdiv(vg.cast(vg.binary(KOp::BitAnd, vg.binary(KOp::Shr, raw_vis, ku(24U)), m255), DType::F32),
+                        kf(255.0));
+        }
+
+        // atlas base: absolute buffer word offset of the first atlas texel
+        const int atlas_abs   = vadd(sbase, shdru(kHdrAtlasOff));
+        const int atlas_abs_f = vg.int_bits_to_float(vg.cast(atlas_abs, DType::I32));
+
+        ve.stage    = kir::KStage::Vertex;
+        ve.position = vg.vec4(clip[0], clip[1], clip[2], clip[3]);
+        ve.n_out    = 4;
+        ve.out[0]   = {vg.vec2(apx_x, apx_y), 0, kir::Interp::Smooth};
+        ve.out[1]   = {vg.vec4(tint_r, tint_g, tint_b, tint_a), 1, kir::Interp::Flat};
+        ve.out[2]   = {fade, 2, kir::Interp::Flat};
+        ve.out[3]   = {atlas_abs_f, 3, kir::Interp::Flat};
+
+        auto vs_prog = ctx->create_program(vg, ve);
+        if (vs_prog == nullptr) { return nullptr; }
+
+        // ── FS: atlas sample + coverage discard + Bayer dither ────────────────
+        kir::KGraph fg(alloc);
+        kir::KEntry fe;
+        fe.stage = kir::KStage::Fragment;
+        const int si_uv    = fg.stage_in(kir::KType::vec(DType::F32, 2), 0, kir::Interp::Smooth);
+        const int si_tint  = fg.stage_in(kir::KType::vec(DType::F32, 4), 1, kir::Interp::Flat);
+        const int si_fade  = fg.stage_in(kir::KType::make_scalar(DType::F32), 2, kir::Interp::Flat);
+        const int si_abase = fg.stage_in(kir::KType::make_scalar(DType::F32), 3, kir::Interp::Flat);
+        const auto fk  = [&](double v) { return fg.constant(v, sh, DType::F32); };
+        const auto fku = [&](crd::u32 v) { return fg.constant(static_cast<double>(v), sh, DType::U32); };
+        const auto fki = [&](int v) { return fg.constant(static_cast<double>(v), sh, DType::I32); };
+        const auto fadd = [&](int a, int b) { return fg.binary(KOp::Add, a, b); };
+        const auto fmul = [&](int a, int b) { return fg.binary(KOp::Mul, a, b); };
+
+        // recover atlas_base as u32
+        const int abase = fg.cast(fg.float_bits_to_int(si_abase), DType::U32);
+
+        const crd::u32 aw = lod_policy.impostor_grid * lod_policy.impostor_tile;
+        const int aw_u  = fku(aw);
+        const int awm1  = fk(static_cast<double>(aw > 0U ? aw - 1U : 0U));
+
+        // atlas pixel coords (smooth-interpolated from the VS quad corners → per-pixel)
+        const int apx_x_f = fg.swizzle(si_uv, 0);
+        const int apx_y_f = fg.swizzle(si_uv, 1);
+        const int tx_f = fg.ternary(KOp::Clamp, fg.unary(KOp::Floor, apx_x_f), fk(0.0), awm1);
+        const int ty_f = fg.ternary(KOp::Clamp, fg.unary(KOp::Floor, apx_y_f), fk(0.0), awm1);
+        const int tx   = fg.cast(tx_f, DType::U32);
+        const int ty   = fg.cast(ty_f, DType::U32);
+
+        // read RGBA8 texel from the storage buffer (u32 address arithmetic)
+        const int ti    = fg.binary(KOp::Add, abase, fg.binary(KOp::Add, fg.binary(KOp::Mul, ty, aw_u), tx));
+        const int rgba8 = fg.storage_load(ti);
+        const int r255  = fk(1.0 / 255.0);
+        const int tr    = fmul(fg.cast(fg.binary(KOp::BitAnd, rgba8, fku(0xFFU)), DType::F32), r255);
+        const int tg    = fmul(fg.cast(fg.binary(KOp::BitAnd, fg.binary(KOp::Shr, rgba8, fku(8U)), fku(0xFFU)), DType::F32), r255);
+        const int tb    = fmul(fg.cast(fg.binary(KOp::BitAnd, fg.binary(KOp::Shr, rgba8, fku(16U)), fku(0xFFU)), DType::F32), r255);
+        const int ta    = fmul(fg.cast(fg.binary(KOp::Shr, rgba8, fku(24U)), DType::F32), r255);
+
+        // coverage discard: atlas alpha < 0.5 → kill (transparent atlas texel)
+        const int cov_kill = fg.binary(KOp::CmpLt, ta, fk(0.5));
+
+        // tint modulation: albedo × per-instance colour
+        const int out_r = fmul(tr, fg.swizzle(si_tint, 0));
+        const int out_g = fmul(tg, fg.swizzle(si_tint, 1));
+        const int out_b = fmul(tb, fg.swizzle(si_tint, 2));
+        const int out_a = fg.swizzle(si_tint, 3);
+
+        fe.out[0] = {fg.vec4(out_r, out_g, out_b, out_a), 0};
+        fe.n_out  = 1;
+
+        // dither discard: 4×4 Bayer threshold against fade (same pattern as C4.3)
+        if (has_dither)
+        {
+            const int fc  = fg.builtin(kir::KBuiltin::FragCoord);
+            const int fcx = fg.cast(fg.swizzle(fc, 0), DType::I32);
+            const int fcy = fg.cast(fg.swizzle(fc, 1), DType::I32);
+            const int ix  = fg.binary(KOp::BitAnd, fcx, fki(3));
+            const int iy  = fg.binary(KOp::BitAnd, fcy, fki(3));
+            const auto brow = [&](double v0, double v1, double v2, double v3) {
+                const int r01 = fg.select(fg.binary(KOp::CmpEq, ix, fki(0)), fk(v0/16.0), fk(v1/16.0));
+                const int r23 = fg.select(fg.binary(KOp::CmpEq, ix, fki(2)), fk(v2/16.0), fk(v3/16.0));
+                return fg.select(fg.binary(KOp::CmpLt, ix, fki(2)), r01, r23);
+            };
+            const int b0 = brow( 0,  8,  2, 10);
+            const int b1 = brow(12,  4, 14,  6);
+            const int b2 = brow( 3, 11,  1,  9);
+            const int b3 = brow(15,  7, 13,  5);
+            const int br01 = fg.select(fg.binary(KOp::CmpEq, iy, fki(0)), b0, b1);
+            const int br23 = fg.select(fg.binary(KOp::CmpEq, iy, fki(2)), b2, b3);
+            const int threshold = fg.select(fg.binary(KOp::CmpLt, iy, fki(2)), br01, br23);
+            const int dither_kill = fg.binary(KOp::CmpLt, si_fade, threshold);
+            fe.discard_cond = fg.select(cov_kill, cov_kill, dither_kill);
+        }
+        else
+        {
+            fe.discard_cond = cov_kill;
+        }
+
+        kir::lower::lower_entry(fg, fe);
+        auto fs_prog = ctx->create_program(fg, fe);
+        if (fs_prog == nullptr) { return nullptr; }
+
+        prog_impostor = raster->create_raster_program(*vs_prog, *fs_prog);
+        adv_stages.push_back(std::move(vs_prog));
+        adv_stages.push_back(std::move(fs_prog));
+        return prog_impostor.get();
+    }
+
     // ⭐⭐ REN-40-A: cook a CULL asset with THIS BACKEND'S indirect-command layout STAMPED onto the parsed desc.
     // ⛔ The asset carries the Vulkan form (20-byte command, args at 0) as its written default; D3D12 needs 24
     // with the args at 4 behind a DrawIndex root constant. Stamping the DESC — never editing the text — is the
     // same discipline the per-cascade shadow variant uses: the variant is the renderer's pass semantics, the
     // vocabulary is the asset's. A kernel that assumed one layout would write garbage commands on the other
     // backend, which is the clip-space-Y failure shape again.
-    [[nodiscard]] crd::gpu::IGpuProgram* cook_cull_stage_named(const char* asset_name, crd::u32 view)
+    [[nodiscard]] crd::gpu::IGpuProgram* cook_cull_stage_named(const char* asset_name, crd::u32 view,
+                                                              bool occlusion = false)
     {
         if (ctx == nullptr || raster == nullptr) { return nullptr; }
         crd::containers::String t(alloc);
@@ -2020,6 +2617,7 @@ struct SceneRenderer::Impl
         desc.cull.draw_arg_within   = raster->indirect_command_arg_offset();
         desc.cull.base_row_word     = kCullArgsBaseRow;
         desc.cull.lod_override_off  = kHdrLodOverrideOff;
+        desc.cull.dither_band      = lod_enabled ? lod_policy.dither_band : 0.0F;
         // ⛔⛔ THE DECLARED HEADER WORDS MUST BE THE ENGINE'S HEADER WORDS. An asset naming word 104 for the
         // bounds section (the light record's first word) produced a kernel that tested boxes built from a light
         // colour: it rendered, it reported plausible counts, and the AABBs on the device were bit-identical to
@@ -2050,6 +2648,7 @@ struct SceneRenderer::Impl
         // cascade dispatch cull against the CAMERA: four identical lists, an atlas covering the wrong volume, and a
         // frame with NO SHADOWS while every count matched.
         desc.cull.frustum_off  = view == 0U ? 0U : desc.header.light_vp + ((view - 1U) * 16U);
+        desc.cull.occlusion    = occlusion;
         crd::kir::KGraph g(alloc);
         crd::kir::KEntry e;
         if (!crd::vertcook::cook_vertex_program(desc, g, e)) { return nullptr; }
@@ -2076,6 +2675,14 @@ struct SceneRenderer::Impl
         return kern_cull_reset;
     }
 
+    // REN-40-G3: the OCCLUSION RE-CULL — same compacting kernel, camera view only, with the HZB test ON.
+    [[nodiscard]] crd::gpu::IGpuProgram* ensure_occlusion_cull_kernel()
+    {
+        if (kern_occlusion_cull != nullptr) { return kern_occlusion_cull; }
+        kern_occlusion_cull = cook_cull_stage_named("vertex/scene_cull_compact.crdv", 0U, true);
+        return kern_occlusion_cull;
+    }
+
     [[nodiscard]] crd::gpu::IGpuProgram* ensure_cull_kernel()
     {
         if (kern_cull != nullptr) { return kern_cull; }
@@ -2091,6 +2698,186 @@ struct SceneRenderer::Impl
         if (kern_cull_mark != nullptr) { return kern_cull_mark; }
         kern_cull_mark = cook_stage_named("vertex/scene_cull_mark.crdv");
         return kern_cull_mark;
+    }
+
+    // ⭐⭐ REN-40-F: the GPU SKINNING compute kernel — one thread per instance, sequential FK + IBM over joints.
+    // Pre-baked uniform-rate TRS clip data is sampled via NLERP (rotation) and Mix (T/S), then composed through
+    // the parent chain (topological order guarantees parents[j] < j, so a single forward pass suffices). Two
+    // passes: (1) write WORLD matrices to the palette section, (2) multiply by IBM and overwrite.
+    [[nodiscard]] crd::gpu::IGpuProgram* ensure_skin_compute_kernel()
+    {
+        if (kern_skin_compute != nullptr) { return kern_skin_compute; }
+        if (ctx == nullptr) { return nullptr; }
+
+        using namespace crd::kir;
+        KGraph g(alloc);
+        const Shape sh1 = make_shape({1});
+        const auto ku  = [&](crd::u32 v) { return g.constant(static_cast<crd::f64>(v), sh1, DType::U32); };
+        const auto kf  = [&](crd::f32 v) { return g.constant(static_cast<crd::f64>(v), sh1, DType::F32); };
+        const auto add = [&](int a, int b) { return g.binary(KOp::Add, a, b); };
+        const auto sub = [&](int a, int b) { return g.binary(KOp::Sub, a, b); };
+        const auto mul = [&](int a, int b) { return g.binary(KOp::Mul, a, b); };
+
+        const int buf = g.buffer_decl(DType::U32, 0, 0, true);
+        const auto loadu = [&](int idx) { return g.buffer_load(buf, idx); };
+        const auto loadf = [&](int idx) { return g.int_bits_to_float(g.cast(loadu(idx), DType::I32)); };
+        const auto storeu = [&](int idx, int val) { g.stmt_buffer_store(buf, idx, val); };
+        const auto storef = [&](int idx, int val) { storeu(idx, g.cast(g.float_bits_to_int(val), DType::U32)); };
+
+        const auto load_col = [&](int base) -> int {
+            return g.vec4(loadf(base), loadf(add(base, ku(1U))),
+                          loadf(add(base, ku(2U))), loadf(add(base, ku(3U))));
+        };
+        const auto store_col = [&](int base, int col) {
+            storef(base,               g.swizzle(col, 0));
+            storef(add(base, ku(1U)),  g.swizzle(col, 1));
+            storef(add(base, ku(2U)),  g.swizzle(col, 2));
+            storef(add(base, ku(3U)),  g.swizzle(col, 3));
+        };
+
+        const int gid      = g.builtin(KBuiltin::GlobalInvocationId);
+        const int instance = g.swizzle(gid, 0);
+        const int mark     = g.kernel_stmt_mark();
+
+        const int inst_count  = loadu(ku(kHdrInstanceCount));
+        const int skel_off    = loadu(ku(kHdrSkelOff));
+        const int clip_off    = loadu(ku(kHdrClipOff));
+        const int anim_off    = loadu(ku(kHdrAnimStateOff));
+        const int palette_off = loadu(ku(26U));
+        const int jc          = loadu(ku(27U));
+
+        const int in_range = g.binary(KOp::CmpLt, instance, inst_count);
+        const int if_valid = g.stmt_if_begin(in_range);
+
+        const int as_base    = add(anim_off, mul(instance, ku(2U)));
+        const int clip_local = loadu(as_base);
+        const int time       = g.int_bits_to_float(g.cast(loadu(add(as_base, ku(1U))), DType::I32));
+
+        const int cb  = add(clip_off, clip_local);
+        const int fc  = loadu(add(cb, ku(1U)));
+        const int fps = g.int_bits_to_float(g.cast(loadu(add(cb, ku(3U))), DType::I32));
+
+        const int t_frames = mul(time, fps);
+        const int floor_t  = g.unary(KOp::Floor, t_frames);
+        const int frame0   = g.binary(KOp::Mod, g.cast(floor_t, DType::U32), fc);
+        const int alpha    = sub(t_frames, floor_t);
+        const int frame1   = g.binary(KOp::Mod, add(frame0, ku(1U)), fc);
+        const int data_base = add(cb, ku(4U));
+
+        const int jc16     = mul(jc, ku(16U));
+        const int pal_base = add(palette_off, mul(instance, jc16));
+        const int jc10     = mul(jc, ku(10U));
+
+        // ── PASS 1: sample clip + FK → store WORLD matrices to palette ──
+        const int for1 = g.stmt_for_begin(jc);
+        const int j    = g.kernel_loop_var(for1);
+        {
+            const int off0 = add(data_base, add(mul(frame0, jc10), mul(j, ku(10U))));
+            const int off1 = add(data_base, add(mul(frame1, jc10), mul(j, ku(10U))));
+
+            const int T0 = g.vec3(loadf(off0), loadf(add(off0, ku(1U))), loadf(add(off0, ku(2U))));
+            const int R0 = g.vec4(loadf(add(off0, ku(3U))), loadf(add(off0, ku(4U))),
+                                  loadf(add(off0, ku(5U))), loadf(add(off0, ku(6U))));
+            const int S0 = g.vec3(loadf(add(off0, ku(7U))), loadf(add(off0, ku(8U))), loadf(add(off0, ku(9U))));
+
+            const int T1 = g.vec3(loadf(off1), loadf(add(off1, ku(1U))), loadf(add(off1, ku(2U))));
+            const int R1 = g.vec4(loadf(add(off1, ku(3U))), loadf(add(off1, ku(4U))),
+                                  loadf(add(off1, ku(5U))), loadf(add(off1, ku(6U))));
+            const int S1 = g.vec3(loadf(add(off1, ku(7U))), loadf(add(off1, ku(8U))), loadf(add(off1, ku(9U))));
+
+            const int alpha3 = g.splat(alpha, 3);
+            const int T = g.ternary(KOp::Mix, T0, T1, alpha3);
+            const int R = g.nlerp(R0, R1, alpha);
+            const int S = g.ternary(KOp::Mix, S0, S1, alpha3);
+
+            const int zero = kf(0.0F);
+            const int one  = kf(1.0F);
+            const int Sx = g.swizzle(S, 0), Sy = g.swizzle(S, 1), Sz = g.swizzle(S, 2);
+            const int rc0 = g.quat_rotate(R, g.vec3(Sx, zero, zero));
+            const int rc1 = g.quat_rotate(R, g.vec3(zero, Sy, zero));
+            const int rc2 = g.quat_rotate(R, g.vec3(zero, zero, Sz));
+            const int lc0 = g.vec_concat(rc0, zero);
+            const int lc1 = g.vec_concat(rc1, zero);
+            const int lc2 = g.vec_concat(rc2, zero);
+            const int lc3 = g.vec_concat(T, one);
+
+            const int parent_raw = loadu(add(skel_off, j));
+            const int pal_j      = add(pal_base, mul(j, ku(16U)));
+
+            // Store local matrix first (correct for root joints; non-root overwrites below).
+            // This also temps lc0-lc3 and pal_j in the for-loop scope so they're visible
+            // to the conditional if-body that follows.
+            store_col(pal_j, lc0);
+            store_col(add(pal_j, ku(4U)), lc1);
+            store_col(add(pal_j, ku(8U)), lc2);
+            store_col(add(pal_j, ku(12U)), lc3);
+
+            const int is_non_root = g.binary(KOp::CmpNe, parent_raw, ku(0xFFFFFFFFU));
+            const int if_nr = g.stmt_if_begin(is_non_root);
+            {
+                const int pw_base = add(pal_base, mul(parent_raw, ku(16U)));
+                const int pc0 = load_col(pw_base);
+                const int pc1 = load_col(add(pw_base, ku(4U)));
+                const int pc2 = load_col(add(pw_base, ku(8U)));
+                const int pc3 = load_col(add(pw_base, ku(12U)));
+                const int pw  = g.mat4(pc0, pc1, pc2, pc3);
+                const int wc0 = g.mat_mul_vec(pw, lc0);
+                const int wc1 = g.mat_mul_vec(pw, lc1);
+                const int wc2 = g.mat_mul_vec(pw, lc2);
+                const int wc3 = g.mat_mul_vec(pw, lc3);
+                store_col(pal_j, wc0);
+                store_col(add(pal_j, ku(4U)), wc1);
+                store_col(add(pal_j, ku(8U)), wc2);
+                store_col(add(pal_j, ku(12U)), wc3);
+            }
+            g.stmt_if_end(if_nr);
+        }
+        g.stmt_for_end(for1);
+
+        // ── PASS 2: world × IBM → overwrite palette with final skin palette ──
+        // ⛔ Fresh address nodes — the emitter temps arithmetic inside the enclosing for-body, so nodes
+        //    shared with pass-1's for-body would reference an out-of-scope temp name.
+        const int jc16_p2     = mul(jc, ku(16U));
+        const int pal_base_p2 = add(palette_off, mul(instance, jc16_p2));
+        const int for2 = g.stmt_for_begin(jc);
+        const int j2   = g.kernel_loop_var(for2);
+        {
+            const int pal_j2  = add(pal_base_p2, mul(j2, ku(16U)));
+            const int wc0 = load_col(pal_j2);
+            const int wc1 = load_col(add(pal_j2, ku(4U)));
+            const int wc2 = load_col(add(pal_j2, ku(8U)));
+            const int wc3 = load_col(add(pal_j2, ku(12U)));
+            const int w   = g.mat4(wc0, wc1, wc2, wc3);
+
+            const int ibm_base = add(skel_off, add(jc, mul(j2, ku(16U))));
+            const int ic0 = load_col(ibm_base);
+            const int ic1 = load_col(add(ibm_base, ku(4U)));
+            const int ic2 = load_col(add(ibm_base, ku(8U)));
+            const int ic3 = load_col(add(ibm_base, ku(12U)));
+            const int pc0 = g.mat_mul_vec(w, ic0);
+            const int pc1 = g.mat_mul_vec(w, ic1);
+            const int pc2 = g.mat_mul_vec(w, ic2);
+            const int pc3 = g.mat_mul_vec(w, ic3);
+            store_col(pal_j2, pc0);
+            store_col(add(pal_j2, ku(4U)), pc1);
+            store_col(add(pal_j2, ku(8U)), pc2);
+            store_col(add(pal_j2, ku(12U)), pc3);
+        }
+        g.stmt_for_end(for2);
+
+        g.stmt_if_end(if_valid);
+
+        KEntry e{};
+        e.stage             = KStage::Compute;
+        e.local_size[0]     = 64U;
+        e.kernel_body_begin = mark;
+        e.kernel_body_count = g.stmt_count() - mark;
+
+        std::unique_ptr<crd::gpu::IGpuProgram> p = ctx->create_program(g, e);
+        if (p == nullptr) { return nullptr; }
+        kern_skin_compute = p.get();
+        adv_stages.push_back(std::move(p));
+        return kern_skin_compute;
     }
 
     [[nodiscard]] crd::gpu::IGpuProgram* ensure_rt_kernel(crd::u32 which) // 0 rg · 1 ms · 2 ch · 3 ah
@@ -2121,7 +2908,7 @@ struct SceneRenderer::Impl
 
     explicit Impl(crd::memory::IAllocator* a)
         : alloc(a), skeleton_cache(a), clip_cache(a), pose_scratch(a), world_scratch(a), palette_scratch(a),
-          palette_staging(a), chunk_index(a), chunks(a), runs(a), dirty_runs(a), bounds_staging(a),
+          palette_staging(a), anim_state_staging(a), chunk_index(a), chunks(a), runs(a), dirty_runs(a), bounds_staging(a),
           group_of_mesh(a), material_color(a), material_texture(a), entity_slot(a),
           contrib_draws(a), frame(a), fallback(a), recorder(a), groups_view(a), fs_hashes(a), fs_programs(a),
           fb_frame_names(a), fb_frame_descs(a), techniques(a), adv_stages(a)
@@ -2219,6 +3006,57 @@ void SceneRenderer::set_shadow_technique(const char* name) noexcept
     if (name != nullptr) { m_impl->shadow_technique = name; }
 }
 void SceneRenderer::set_pcf_taps(crd::u32 taps) noexcept { m_impl->pcf_taps = taps; }
+// ⭐⭐ REN-40-D: how wide the cascade cross-fade is, in PERCENT of a cascade's footprint. ⛔ 0 cooks the
+// byte-identical hard-select graph this technique has always emitted, which is what makes the parity arm a
+// property of the COOK rather than a tolerance in a test. Call before `init_programs`.
+// ⭐⭐ REN-40-D: the SOFTNESS MODEL. `pcss` searches the map for what is actually blocking each fragment and
+// sets the filter radius from how far away it is, so a contact point stays sharp and the same shadow softens
+// with distance from its caster — the single cue the eye uses to read contact. ⛔ `angle_x100` is the light's
+// angular RADIUS in hundredths of a degree (the sun is ~27), because a directional light has no size, it has an
+// angular diameter — and a penumbra derived from an angle is correct at every cascade scale for free.
+void SceneRenderer::set_soft_shadows(bool pcss, crd::u32 angle_x100) noexcept
+{
+    set_soft_shadows(pcss ? SoftShadow::Pcss : SoftShadow::Off, angle_x100);
+}
+
+// ⭐⭐ REN-40-D: the full axis. ⛔ Evsm/Msm swap the DEFAULT frame graph for the moment tier (and back) — but
+// NEVER an explicitly installed one: an explicit graph is the caller's contract, and silently editing it from a
+// quality setter is exactly the two-homes drift the built-in pack exists to prevent.
+void SceneRenderer::set_soft_shadows(SoftShadow mode, crd::u32 angle_x100) noexcept
+{
+    m_impl->soft_mode        = static_cast<crd::u32>(mode);
+    m_impl->light_angle_x100 = clamp_u32(angle_x100, 1U, 2000U);
+    if (!m_impl->frame_overridden)
+    {
+        const char* text = m_impl->soft_mode >= 2U ? kBuiltinForwardCsmMoment : kBuiltinForwardCsm;
+        crd::framecook::FrameGraphDesc d(m_impl->alloc);
+        if (crd::framecook::parse_frame_toml(crd::containers::StringView(text), d)
+            == crd::framecook::FrameCookError::Ok)
+        {
+            m_impl->frame = std::move(d);
+        }
+    }
+}
+
+// ⛔ Clamped to the DECLARED ranges here rather than trusted, and `search_taps` SNAPS to a table size instead of
+// being rounded: the disc tables are normalised per count, so an unlisted value has no table and silently falling
+// back to a prefix of a larger one would shrink the search radius by sqrt(n/16) — a quieter, worse version of the
+// ring bug this option exists to keep fixed.
+void SceneRenderer::set_soft_shadow_quality(crd::u32 max_texels, crd::u32 search_taps) noexcept
+{
+    m_impl->soft_max_texels = clamp_u32(max_texels, 1U, 256U);
+    // ⛔ SNAPS to a table size rather than rounding: the disc tables are normalised per count, so an unlisted
+    // value has no table, and quietly taking a prefix of a larger one would shrink the search by sqrt(n/16).
+    crd::u32 snapped = 4U;
+    if (search_taps >= 16U) { snapped = 16U; }
+    else if (search_taps >= 8U) { snapped = 8U; }
+    m_impl->soft_search_taps = snapped;
+}
+
+void SceneRenderer::set_cascade_blend_pct(crd::u32 pct) noexcept
+{
+    m_impl->blend_pct = pct > 50U ? 50U : pct;
+}
 
 void SceneRenderer::begin_frame() noexcept { m_impl->contrib_used = 0U; }
 
@@ -2463,9 +3301,15 @@ int body_scene_authored(crd::kir::KGraph& g, const crd::kir::technique::Techniqu
     t.name       = "forward_authored";
     t.body       = &body_scene_authored;
     t.bindings   = crd::kir::technique::kForwardCsmBindings;
-    t.n_bindings = 3;
+    // ⛔⛔ DERIVED, the same fix forward_csm needed twice: hand-counted 3/2 here silently pinned the authored
+    // technique to the pre-40-D contract — the fourth binding (the PCSS depth sampler) never resolved and every
+    // soft/blend option quietly read its default. The body ignores axes it does not consume, and unused binding
+    // nodes are DCE'd, so deriving the full counts costs nothing and stops the lag from ever recurring.
+    t.n_bindings = static_cast<int>(sizeof(crd::kir::technique::kForwardCsmBindings)
+                                    / sizeof(crd::kir::technique::kForwardCsmBindings[0]));
     t.options    = crd::kir::technique::kForwardCsmOptions;
-    t.n_options  = 2;
+    t.n_options  = static_cast<int>(sizeof(crd::kir::technique::kForwardCsmOptions)
+                                    / sizeof(crd::kir::technique::kForwardCsmOptions[0]));
     return t;
 }
 } // namespace
@@ -2520,10 +3364,13 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
         // ⭐ Now every group's buffer carries the table at the SAME word offset the scene buffer's prefix does
         // (`kSceneDrawTableOff`, right after the header), so ONE constant addresses both layouts and the two
         // draw paths stop being two paths. A private buffer's row simply carries base 0.
-        char rb[192];
+        const crd::f32 db = m_impl->lod_enabled ? m_impl->lod_policy.dither_band : 0.0F;
+        char rb[256];
         (void)std::snprintf(static_cast<char*>(rb), sizeof(rb),
-                            "rebase_table = %u\nrebase_stride = %u\nlod_slots = %u\ninstance_capacity_word = %u\n",
-                            kSceneDrawTableOff, kSceneDrawRowWords, m_impl->lod_slots, kHdrInstanceCapacity);
+                            "rebase_table = %u\nrebase_stride = %u\nlod_slots = %u\n"
+                            "instance_capacity_word = %u\ndither_band = %.6f\n",
+                            kSceneDrawTableOff, kSceneDrawRowWords, m_impl->lod_slots, kHdrInstanceCapacity,
+                            static_cast<double>(db));
         vs_scene.append(static_cast<const char*>(rb));
         vs_scene.append(vs_body.c_str());
     }
@@ -2661,6 +3508,7 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
             // the slot arrives per draw item through the table row — so the stage needs both the width
             // (cook-time) and the row stride (stamped with `rebase_table`).
             sdesc.lod_slots              = m_impl->lod_slots;
+            sdesc.dither_band            = m_impl->lod_enabled ? m_impl->lod_policy.dither_band : 0.0F;
             if (!crd::vertcook::cook_vertex_program(sdesc, shvg, shve)) { all_ok = false; break; }
             m_impl->shadow_vs[c] = ctx.create_program(shvg, shve);
             if (m_impl->shadow_vs[c] == nullptr) { all_ok = false; break; }
@@ -2680,6 +3528,11 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
         scfg.map_size = m_impl->csm.map_size;
         scfg.cascades = m_impl->csm.cascade_count;
         scfg.pcf_taps = m_impl->pcf_taps;
+        scfg.blend_pct = m_impl->blend_pct; // REN-40-D
+        scfg.soft_mode = m_impl->soft_mode;
+        scfg.light_angle_x100 = m_impl->light_angle_x100;
+        scfg.soft_max_texels  = m_impl->soft_max_texels;
+        scfg.soft_search_taps = m_impl->soft_search_taps;
         crd::vertcook::VaryingRequirement sh_reqs[crd::vertcook::kMaxVaryings];
         crd::u32                          n_sh_reqs = 0U;
         m_impl->fs_shadowed = m_impl->cook_fs(scfg, sh_reqs, crd::vertcook::kMaxVaryings, &n_sh_reqs);
@@ -2707,6 +3560,25 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
         // ⛔ Shadows need BOTH halves: the cascade writers AND the reader. Having only the writers would render
         // a shadow atlas nothing samples — pure cost, zero pixels changed.
         m_impl->shadow_programs_ok = all_ok && m_impl->program_shadowed != nullptr;
+
+        // REN-40-F: skinned variants under shadows
+        if (m_impl->vs_skinned != nullptr && m_impl->fs_shadowed != nullptr)
+        {
+            m_impl->program_skinned_shadowed =
+                m_impl->raster->create_raster_program(*m_impl->vs_skinned, *m_impl->fs_shadowed);
+        }
+        if (m_impl->vs_skinned != nullptr && m_impl->fs_textured_shadowed != nullptr)
+        {
+            m_impl->program_skinned_textured_shadowed =
+                m_impl->raster->create_raster_program(*m_impl->vs_skinned, *m_impl->fs_textured_shadowed);
+        }
+    }
+
+    // REN-40-F: skinned + textured (shadow-independent)
+    if (m_impl->vs_skinned != nullptr && m_impl->fs_textured != nullptr)
+    {
+        m_impl->program_skinned_textured =
+            m_impl->raster->create_raster_program(*m_impl->vs_skinned, *m_impl->fs_textured);
     }
 
     // ── ⭐⭐ REN-39-C1: THE INDEXED PROGRAM SET — the SAME resolved declarations cooked `indexed = true` (one
@@ -2756,6 +3628,11 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
             rs.map_size = m_impl->csm.map_size;
             rs.cascades = m_impl->csm.cascade_count;
             rs.pcf_taps = m_impl->pcf_taps;
+            rs.blend_pct = m_impl->blend_pct; // REN-40-D
+            rs.soft_mode = m_impl->soft_mode;
+            rs.light_angle_x100 = m_impl->light_angle_x100;
+            rs.soft_max_texels  = m_impl->soft_max_texels;
+            rs.soft_search_taps = m_impl->soft_search_taps;
             rs.storage_read_only = true;
             fs_sh_ro = m_impl->cook_fs(rs);
             ok = fs_sh_ro != nullptr;
@@ -2779,8 +3656,6 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
         }
         if (ok && m_impl->program_rebased != nullptr)
         {
-            // ⭐⭐ REN-40-C2: only `indexed` is added — the rebase keys already live in `vs_scene` (see above),
-            // and repeating one is a duplicate TOML key that refuses the whole document.
             ok = cook_vs_text("indexed = true\n", vs_scene, m_impl->vs_rebased_idx);
             if (ok)
             {
@@ -2798,21 +3673,41 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
                     m_impl->raster->create_raster_program(*m_impl->vs_skinned_idx, *fs_flat_ro);
                 ok = m_impl->program_skinned_idx != nullptr;
             }
+            // REN-40-F: skinned indexed variants for textures and shadows. These are OPTIONAL — a
+            // failure falls back to the base skinned indexed program, never breaks ALL-OR-NOTHING.
+            if (ok && fs_tex_ro != nullptr && m_impl->program_skinned_textured != nullptr)
+            {
+                m_impl->program_skinned_textured_idx =
+                    m_impl->raster->create_raster_program(*m_impl->vs_skinned_idx, *fs_tex_ro);
+            }
+            if (ok && fs_sh_ro != nullptr && m_impl->program_skinned_shadowed != nullptr)
+            {
+                m_impl->program_skinned_shadowed_idx =
+                    m_impl->raster->create_raster_program(*m_impl->vs_skinned_idx, *fs_sh_ro);
+            }
+            if (ok && fs_tsh_ro != nullptr && m_impl->program_skinned_textured_shadowed != nullptr)
+            {
+                m_impl->program_skinned_textured_shadowed_idx =
+                    m_impl->raster->create_raster_program(*m_impl->vs_skinned_idx, *fs_tsh_ro);
+            }
         }
         if (ok && m_impl->program_textured != nullptr && fs_tex_ro != nullptr)
         {
             m_impl->program_textured_idx = m_impl->raster->create_raster_program(*m_impl->vs_idx, *fs_tex_ro);
             ok = m_impl->program_textured_idx != nullptr;
+            if (!ok) { CRD_LOG_ERROR(g_log_scenerender, "REN-39: program_textured_idx create failed"); }
         }
         if (ok && m_impl->program_shadowed != nullptr && fs_sh_ro != nullptr)
         {
             m_impl->program_shadowed_idx = m_impl->raster->create_raster_program(*m_impl->vs_idx, *fs_sh_ro);
             ok = m_impl->program_shadowed_idx != nullptr;
+            if (!ok) { CRD_LOG_ERROR(g_log_scenerender, "REN-39: program_shadowed_idx create failed"); }
         }
         if (ok && m_impl->program_textured_shadowed != nullptr && fs_tsh_ro != nullptr)
         {
             m_impl->program_textured_shadowed_idx = m_impl->raster->create_raster_program(*m_impl->vs_idx, *fs_tsh_ro);
             ok = m_impl->program_textured_shadowed_idx != nullptr;
+            if (!ok) { CRD_LOG_ERROR(g_log_scenerender, "REN-39: program_textured_shadowed_idx create failed"); }
         }
         // the shadow CASCADE twins — the same parsed declaration, `indexed` stamped beside cascade (the 38-G1
         // stamping rule: the variant is the renderer's pass semantics, the vocabulary is the asset's)
@@ -2824,6 +3719,7 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
             crd::gpu::IGpuProgram* sfs_ro = m_impl->cook_fs(rd);
             crd::containers::String sh_text(m_impl->alloc);
             ok = sfs_ro != nullptr && m_impl->asset_text("vertex/shadow.crdv", sh_text);
+            if (!ok) { CRD_LOG_ERROR(g_log_scenerender, "REN-39: shadow FS or vertex text failed"); }
             for (crd::u32 c = 0; ok && c < kMaxCascades; ++c)
             {
                 crd::kir::KGraph sg(m_impl->alloc);
@@ -2840,6 +3736,7 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
                 sdesc.cascade = c;
                 sdesc.instance_capacity_word = kHdrInstanceCapacity;
                 sdesc.lod_slots              = m_impl->lod_slots; // REN-40-C2, the indexed twin
+                sdesc.dither_band            = m_impl->lod_enabled ? m_impl->lod_policy.dither_band : 0.0F;
                 sdesc.indexed = true;
                 ok = crd::vertcook::cook_vertex_program(sdesc, sg, se);
                 if (!ok)
@@ -2854,6 +3751,7 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
                 }
                 m_impl->shadow_prog_idx[c] = m_impl->raster->create_raster_program(*m_impl->shadow_vs_idx[c], *sfs_ro);
                 ok = m_impl->shadow_prog_idx[c] != nullptr;
+                if (!ok) { CRD_LOG_ERROR(g_log_scenerender, "REN-39: shadow_prog_idx create failed"); }
             }
         }
         if (!ok)
@@ -2866,6 +3764,9 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
             m_impl->program_idx.reset();
             m_impl->program_rebased_idx.reset();
             m_impl->program_skinned_idx.reset();
+            m_impl->program_skinned_textured_idx.reset();
+            m_impl->program_skinned_shadowed_idx.reset();
+            m_impl->program_skinned_textured_shadowed_idx.reset();
             m_impl->program_textured_idx.reset();
             m_impl->program_shadowed_idx.reset();
             m_impl->program_textured_shadowed_idx.reset();
@@ -2882,7 +3783,16 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
 // after a failed/skipped cook keeps the pull path (the fill chain null-checks the twin it picks).
 void SceneRenderer::set_indexed_pull(bool on) noexcept
 {
-    m_impl->use_indexed = on;
+    if (m_impl->use_indexed != on)
+    {
+        m_impl->use_indexed = on;
+        for (crd::u32 c = 0; c < kMaxCascades; ++c)
+        {
+            m_impl->prev_light_vp[c] = {};
+            m_impl->cascades.light_vp[c] = {};
+        }
+        m_impl->csm_frame = 0;
+    }
 }
 
 // ⭐⭐ REN-40-A: the GPU-driven cull switch. ⛔ It requires the INDEXED path — a GPU-written command IS an
@@ -2927,9 +3837,14 @@ bool SceneRenderer::set_lod_policy_asset(const char* asset_name)
     // either — the kernels are cooked before any mesh is loaded, so the number has to be knowable up front. The
     // policy is the one place that knows it and is content rather than code.
     impl.lod_slots = p.extra_levels + 1U;
+    // ⭐⭐ REN-40-C5: the impostor adds ONE MORE SLOT at the end of the chain. The cull kernel's LOD selection
+    // naturally routes instances below the coarsest mesh level's switch height into this slot; the draw path
+    // serves it with a billboard program instead of a mesh pull program.
+    if (p.impostor_grid > 0U) { impl.lod_slots += 1U; }
     if (impl.lod_slots > kMaxLodSlots) { impl.lod_slots = kMaxLodSlots; }
-    CRD_LOG_INFO(g_log_scenerender, "LOD policy '{}' installed: {} extra levels ({} slots), identity {:016x}",
-                 asset_name, p.extra_levels, impl.lod_slots, crd::lod::lod_policy_identity(p));
+    CRD_LOG_INFO(g_log_scenerender, "LOD policy '{}' installed: {} extra levels ({} slots{}), identity {:016x}",
+                 asset_name, p.extra_levels, impl.lod_slots,
+                 p.impostor_grid > 0U ? ", impostor" : "", crd::lod::lod_policy_identity(p));
     return true;
 }
 
@@ -2953,6 +3868,9 @@ SceneRenderer::LodChainInfo SceneRenderer::lod_chain_info() const noexcept
 
 void SceneRenderer::set_gpu_cull_verify(bool on) noexcept { m_impl->gpu_cull_verify = on; }
 bool SceneRenderer::gpu_cull_verify() const noexcept { return m_impl->gpu_cull_verify; }
+
+void SceneRenderer::set_gpu_skinning(bool on) noexcept { m_impl->gpu_skinning_on = on; }
+bool SceneRenderer::gpu_skinning() const noexcept { return m_impl->gpu_skinning_on; }
 
 // ⭐⭐ REN-40-A: the device's own verdict, read back. See `GpuCullCounts` for why this is part of the feature.
 bool SceneRenderer::read_gpu_cull_counts(GpuCullCounts& out) const
@@ -3188,6 +4106,22 @@ void upload_bounds_range(SceneRenderer::Impl& impl, MeshGroup& group, crd::u32 f
         group.lod_first[l]   = mesh->lods[l].first_index;
         group.lod_indices[l] = mesh->lods[l].index_count;
         group.lod_height[l]  = mesh->lods[l].screen_height;
+    }
+    // ⭐⭐ REN-40-C5: the IMPOSTOR SLOT — one past the coarsest mesh level. Its switch height is the coarsest
+    // mesh level's threshold (the implicit threshold from the .crdlod doc), and its index range is zero (the
+    // billboard VS generates its own geometry). The cull kernel's unrolled loop treats it as just another level
+    // whose height happens to be the one below which all mesh levels have already been exhausted.
+    if (ctx.impl->lod_policy.impostor_grid > 0U && group.lod_count > 1U)
+    {
+        const crd::u32 imp = group.lod_count;
+        if (imp < kMaxLodSlots)
+        {
+            group.lod_first[imp]   = static_cast<crd::u32>(mesh->indices.size() / 4U);
+            group.lod_indices[imp] = 6U;
+            group.lod_height[imp]  = group.lod_height[group.lod_count - 1U];
+            group.lod_count        = imp + 1U;
+            group.has_impostor     = true;
+        }
     }
     ctx.groups->push_back(static_cast<MeshGroup&&>(group));
     const crd::u32 gi = static_cast<crd::u32>(ctx.groups->size() - 1U);
@@ -3549,7 +4483,8 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
             // the draw count put the VERTEX section on top of levels 1..n — the coarse levels' indices were
             // overwritten by vertex floats, and the only symptom would have been a coarse LOD drawing garbage
             // triangles at a distance, which reads as a decimator bug. Two quantities, deliberately named apart.
-            const auto index_words = static_cast<crd::u32>(mesh->indices.size() / 4U);
+            const auto index_words = static_cast<crd::u32>(mesh->indices.size() / 4U)
+                                     + (group.has_impostor ? 6U : 0U);
             group.vertices_off  = group.indices_off + index_words;
             group.skin_off      = group.vertices_off + vertex_words;
             const crd::u32 skin_words = group.skinned ? vcount * 6U : 0U;
@@ -3572,7 +4507,23 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
             // ⭐⭐ REN-40-C2: the per-instance LOD OVERRIDE section (2 words each) after the bounds — the cull's
             // second per-instance input, on the same buffer and the same dirty grain.
             group.lod_override_off = group.bounds_off + needed_capacity * 6U;
-            const crd::u32 total_words = group.lod_override_off + needed_capacity * 2U;
+            group.atlas_off = group.lod_override_off + needed_capacity * 2U;
+            const crd::u32 atlas_words = group.has_impostor
+                ? (impl.lod_policy.impostor_grid * impl.lod_policy.impostor_tile)
+                  * (impl.lod_policy.impostor_grid * impl.lod_policy.impostor_tile)
+                : 0U;
+            // ⭐⭐ REN-40-F: GPU skinning sections — skeleton data, pre-baked clip, and per-instance anim state.
+            // All three exist only for skinned groups; the kernel reads skeleton + clip (uploaded once) and
+            // anim_state (per frame), and writes the palette section in place.
+            group.skel_off       = group.atlas_off + atlas_words;
+            const crd::u32 skel_words = group.skinned ? group.joint_count * 27U : 0U;
+            group.clip_off       = group.skel_off + skel_words;
+            // clip_words computed later during skeleton upload — sized from the actual pre-baked data.
+            // For the buffer allocation, reserve a generous default (1 clip × 64 frames × jc × 10).
+            const crd::u32 clip_reserve = group.skinned ? (4U + 64U * group.joint_count * 10U) : 0U;
+            group.anim_state_off = group.clip_off + clip_reserve;
+            const crd::u32 anim_state_words = group.skinned ? needed_capacity * 2U : 0U;
+            const crd::u32 total_words = group.anim_state_off + anim_state_words;
             group.buffer             = impl.raster->create_storage_buffer(total_words * 4U);
             // ⭐⭐ REN-40-A/C2: and its indirect commands — (1 + cascades) x slots at the backend's stride.
                 group.cull_args = impl.raster->create_storage_buffer(
@@ -3581,6 +4532,8 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
             group.cull_base_uploaded = 0xFFFFFFFFU; // force the params write on the next frame
             group.capacity           = needed_capacity;
             group.geometry_uploaded  = false;
+            group.skel_uploaded     = false;
+            group.baked_clip_off.clear();
         }
         if (group.buffer == nullptr) { continue; }
 
@@ -3590,6 +4543,23 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
             {
                 (void)impl.raster->upload_storage(*group.buffer, group.indices_off * 4U, mesh->indices.data(),
                                                   static_cast<crd::u32>(mesh->indices.size()));
+                if (group.has_impostor)
+                {
+                    const crd::u32 identity_ib[6] = {0U, 1U, 2U, 3U, 4U, 5U};
+                    const crd::u32 ib_off = group.indices_off + static_cast<crd::u32>(mesh->indices.size() / 4U);
+                    (void)impl.raster->upload_storage(*group.buffer, ib_off * 4U, identity_ib, sizeof(identity_ib));
+                    crd::lod::ImpostorAtlas atlas(impl.alloc);
+                    (void)crd::lod::bake_impostor_atlas(*mesh, impl.lod_policy.impostor_grid,
+                                                        impl.lod_policy.impostor_tile, atlas, impl.alloc);
+                    if (!atlas.pixels.empty())
+                    {
+                        const crd::u32 texel_words = static_cast<crd::u32>(atlas.pixels.size() / 4U);
+                        (void)impl.raster->upload_storage(*group.buffer, group.atlas_off * 4U,
+                                                          atlas.pixels.data(),
+                                                          static_cast<crd::u32>(atlas.pixels.size()));
+                        (void)texel_words;
+                    }
+                }
                 (void)impl.raster->upload_storage(*group.buffer, group.vertices_off * 4U, mesh->vertices.data(),
                                                   static_cast<crd::u32>(mesh->vertices.size()));
                 if (group.skinned) // the packed skin stream: 2 words of u16-pair joints + 4 weight words
@@ -3645,25 +4615,21 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
 
     const double t2 = ms_now();
     stats.upload_ms = t2 - t1;
-    // ── GEO-8: the skinned palettes — sample every skinned instance's clip, upload the palette section.
-    // Animation is ALWAYS dirty by definition: this is per-frame data, deliberately outside the partial-upload
-    // accounting the static gate measures.
-    for (MeshGroup& group : m_groups)
+    // ── GEO-8 / REN-40-F: the skinned palettes.
+    // GPU path: upload skeleton + pre-baked clips once, per-frame anim state only (2 words/instance).
+    // CPU path: the original sample→FK→IBM→palette pipeline, retained for A/B comparison.
+    if (impl.gpu_skinning_on)
     {
-        if (!group.skinned || group.buffer == nullptr || group.instances.size() == 0U) { continue; }
-        const crd::u32 jc    = group.joint_count;
-        const auto     count = static_cast<crd::u32>(group.instances.size());
-        impl.palette_staging.resize(static_cast<crd::usize>(count) * jc * 16U);
-        impl.pose_scratch.resize(jc);
-        impl.world_scratch.resize(jc);
-        impl.palette_scratch.resize(jc);
-
-        for (crd::u32 slot = 0; slot < count; ++slot)
+        for (MeshGroup& group : m_groups)
         {
-            crd::f32* dst = impl.palette_staging.data() + static_cast<crd::usize>(slot) * jc * 16U;
+            if (!group.skinned || group.buffer == nullptr || group.instances.size() == 0U) { continue; }
+            const crd::u32 jc    = group.joint_count;
+            const auto     count = static_cast<crd::u32>(group.instances.size());
+
             const crd::anim::SkeletonResource* skel = nullptr;
-            if (!group.slot_skeleton[slot].is_null())
+            for (crd::u32 slot = 0; slot < count && skel == nullptr; ++slot)
             {
+                if (group.slot_skeleton[slot].is_null()) { continue; }
                 auto* cached = impl.skeleton_cache.find(group.slot_skeleton[slot]);
                 if (cached == nullptr)
                 {
@@ -3677,56 +4643,214 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
                     skel = cached->get();
                 }
             }
-            if (skel == nullptr) // no skeleton → identity palette (bind pose renders)
+            if (skel == nullptr) { continue; }
+
+            // ── ONE-TIME: skeleton data + pre-baked clips ──
+            if (!group.skel_uploaded)
             {
+                // Parents (i32 → u32 bitcast) + inverse_binds + rest_pose = jc × 27 words
+                crd::containers::Array<crd::u32> skel_buf(impl.alloc);
+                skel_buf.resize(static_cast<crd::usize>(jc) * 27U);
                 for (crd::u32 j = 0; j < jc; ++j)
                 {
-                    for (crd::u32 c = 0; c < 16U; ++c)
+                    crd::u32 pu = 0;
+                    std::memcpy(&pu, &skel->parents[j], 4U);
+                    skel_buf[j] = pu;
+                }
+                std::memcpy(skel_buf.data() + jc, skel->inverse_binds.data(),
+                            static_cast<crd::usize>(jc) * 16U * 4U);
+                std::memcpy(skel_buf.data() + jc + static_cast<crd::usize>(jc) * 16U,
+                            skel->rest.data(), static_cast<crd::usize>(jc) * 10U * 4U);
+                (void)impl.raster->upload_storage(*group.buffer, group.skel_off * 4U,
+                                                  skel_buf.data(),
+                                                  static_cast<crd::u32>(skel_buf.size() * 4U));
+
+                // Pre-bake clips at 30 fps: rest-pose clip first (offset 0), then each unique clip
+                crd::containers::Array<crd::u32> clip_buf(impl.alloc);
+                group.baked_clip_off.clear();
+                {
+                    // Rest-pose clip: header(4) + 1 frame × jc × 10 words
+                    crd::u32 jc_u = jc, fc_u = 1U;
+                    clip_buf.push_back(jc_u);
+                    clip_buf.push_back(fc_u);
+                    crd::f32 zero_f = 0.0F;
+                    crd::u32 zero_u = 0;
+                    std::memcpy(&zero_u, &zero_f, 4U);
+                    clip_buf.push_back(zero_u); // duration
+                    clip_buf.push_back(zero_u); // frame_rate
+                    for (crd::u32 j = 0; j < jc; ++j)
                     {
-                        dst[j * 16U + c] = (c % 5U) == 0U ? 1.0F : 0.0F;
+                        const crd::f32* r = skel->rest.data() + static_cast<crd::usize>(j) * crd::anim::kRestFloats;
+                        for (crd::u32 c = 0; c < 10U; ++c)
+                        {
+                            crd::u32 bits = 0;
+                            std::memcpy(&bits, &r[c], 4U);
+                            clip_buf.push_back(bits);
+                        }
                     }
                 }
-                continue;
+
+                impl.pose_scratch.resize(jc);
+                for (crd::u32 slot = 0; slot < count; ++slot)
+                {
+                    if (group.slot_clip[slot].is_null()) { continue; }
+                    if (group.baked_clip_off.find(group.slot_clip[slot]) != nullptr) { continue; }
+
+                    const crd::anim::AnimClipResource* clip = nullptr;
+                    auto* ccached = impl.clip_cache.find(group.slot_clip[slot]);
+                    if (ccached == nullptr)
+                    {
+                        impl.clip_cache.insert(group.slot_clip[slot],
+                                               impl.rm->load_sync<crd::anim::AnimClipResource>(group.slot_clip[slot]));
+                        ccached = impl.clip_cache.find(group.slot_clip[slot]);
+                    }
+                    if (ccached != nullptr) { clip = ccached->get(); }
+                    if (clip == nullptr || clip->duration <= 0.0F) { continue; }
+
+                    const crd::f32 bake_fps = 30.0F;
+                    const crd::u32 frame_count = static_cast<crd::u32>(crd::math::ceil(clip->duration * bake_fps)) + 1U;
+                    group.baked_clip_off.insert(group.slot_clip[slot],
+                                               static_cast<crd::u32>(clip_buf.size()));
+
+                    clip_buf.push_back(jc);
+                    clip_buf.push_back(frame_count);
+                    crd::u32 dur_u = 0, fps_u = 0;
+                    std::memcpy(&dur_u, &clip->duration, 4U);
+                    const crd::f32 frame_rate = static_cast<crd::f32>(frame_count - 1U) / clip->duration;
+                    std::memcpy(&fps_u, &frame_rate, 4U);
+                    clip_buf.push_back(dur_u);
+                    clip_buf.push_back(fps_u);
+
+                    for (crd::u32 f = 0; f < frame_count; ++f)
+                    {
+                        const crd::f32 t = (frame_count > 1U)
+                            ? static_cast<crd::f32>(f) / frame_rate : 0.0F;
+                        crd::anim::sample_clip(*clip, *skel, t,
+                                               {impl.pose_scratch.data(), impl.pose_scratch.size()});
+                        for (crd::u32 j = 0; j < jc; ++j)
+                        {
+                            const auto& p = impl.pose_scratch[j];
+                            crd::f32 trs[10] = {p.translation.x, p.translation.y, p.translation.z,
+                                                p.rotation.x, p.rotation.y, p.rotation.z, p.rotation.w,
+                                                p.scale.x, p.scale.y, p.scale.z};
+                            for (crd::u32 c = 0; c < 10U; ++c)
+                            {
+                                crd::u32 bits = 0;
+                                std::memcpy(&bits, &trs[c], 4U);
+                                clip_buf.push_back(bits);
+                            }
+                        }
+                    }
+                }
+                (void)impl.raster->upload_storage(*group.buffer, group.clip_off * 4U,
+                                                  clip_buf.data(),
+                                                  static_cast<crd::u32>(clip_buf.size() * 4U));
+                group.skel_uploaded = true;
             }
 
-            const crd::anim::AnimClipResource* clip = nullptr;
-            if (!group.slot_clip[slot].is_null())
+            // ── PER-FRAME: upload anim_state (2 words per instance) ──
+            impl.anim_state_staging.resize(static_cast<crd::usize>(count) * 2U);
+            for (crd::u32 slot = 0; slot < count; ++slot)
             {
-                auto* ccached = impl.clip_cache.find(group.slot_clip[slot]);
-                if (ccached == nullptr)
+                crd::u32 clip_local = 0U; // rest-pose clip at word 0
+                if (!group.slot_clip[slot].is_null())
                 {
-                    impl.clip_cache.insert(group.slot_clip[slot],
-                                           impl.rm->load_sync<crd::anim::AnimClipResource>(group.slot_clip[slot]));
-                    ccached = impl.clip_cache.find(group.slot_clip[slot]);
+                    const crd::u32* off = group.baked_clip_off.find(group.slot_clip[slot]);
+                    if (off != nullptr) { clip_local = *off; }
                 }
-                if (ccached != nullptr) { clip = ccached->get(); }
+                impl.anim_state_staging[static_cast<crd::usize>(slot) * 2U] = clip_local;
+                crd::u32 t_bits = 0;
+                std::memcpy(&t_bits, &group.slot_time[slot], 4U);
+                impl.anim_state_staging[static_cast<crd::usize>(slot) * 2U + 1U] = t_bits;
             }
-
-            if (clip != nullptr && clip->duration > 0.0F)
-            {
-                const crd::f32 t = group.slot_time[slot] - clip->duration
-                                       * static_cast<crd::f32>(static_cast<crd::i64>(group.slot_time[slot]
-                                                                                     / clip->duration));
-                crd::anim::sample_clip(*clip, *skel, t, {impl.pose_scratch.data(), impl.pose_scratch.size()});
-            }
-            else // no clip: the rest pose
-            {
-                for (crd::u32 j = 0; j < jc; ++j)
-                {
-                    const crd::f32* r                 = skel->rest.data() + static_cast<crd::usize>(j) * crd::anim::kRestFloats;
-                    impl.pose_scratch[j].translation = {r[0], r[1], r[2]};
-                    impl.pose_scratch[j].rotation    = {r[3], r[4], r[5], r[6]};
-                    impl.pose_scratch[j].scale       = {r[7], r[8], r[9]};
-                }
-            }
-            crd::anim::compute_pose_matrices(*skel, {impl.pose_scratch.data(), impl.pose_scratch.size()},
-                                             {impl.world_scratch.data(), impl.world_scratch.size()});
-            crd::anim::compute_skin_palette(*skel, {impl.world_scratch.data(), impl.world_scratch.size()},
-                                            {impl.palette_scratch.data(), impl.palette_scratch.size()});
-            std::memcpy(dst, impl.palette_scratch.data(), static_cast<crd::usize>(jc) * 64U);
+            (void)impl.raster->upload_storage(*group.buffer, group.anim_state_off * 4U,
+                                              impl.anim_state_staging.data(),
+                                              static_cast<crd::u32>(impl.anim_state_staging.size() * 4U));
         }
-        (void)impl.raster->upload_storage(*group.buffer, group.palette_off * 4U, impl.palette_staging.data(),
-                                          static_cast<crd::u32>(impl.palette_staging.size() * 4U));
+    }
+    else
+    {
+        // ── GEO-8 CPU PATH: sample every skinned instance's clip, upload the palette section ──
+        for (MeshGroup& group : m_groups)
+        {
+            if (!group.skinned || group.buffer == nullptr || group.instances.size() == 0U) { continue; }
+            const crd::u32 jc    = group.joint_count;
+            const auto     count = static_cast<crd::u32>(group.instances.size());
+            impl.palette_staging.resize(static_cast<crd::usize>(count) * jc * 16U);
+            impl.pose_scratch.resize(jc);
+            impl.world_scratch.resize(jc);
+            impl.palette_scratch.resize(jc);
+
+            for (crd::u32 slot = 0; slot < count; ++slot)
+            {
+                crd::f32* dst = impl.palette_staging.data() + static_cast<crd::usize>(slot) * jc * 16U;
+                const crd::anim::SkeletonResource* skel = nullptr;
+                if (!group.slot_skeleton[slot].is_null())
+                {
+                    auto* cached = impl.skeleton_cache.find(group.slot_skeleton[slot]);
+                    if (cached == nullptr)
+                    {
+                        impl.skeleton_cache.insert(
+                            group.slot_skeleton[slot],
+                            impl.rm->load_sync<crd::anim::SkeletonResource>(group.slot_skeleton[slot]));
+                        cached = impl.skeleton_cache.find(group.slot_skeleton[slot]);
+                    }
+                    if (cached != nullptr && cached->get() != nullptr && cached->get()->joint_count() == jc)
+                    {
+                        skel = cached->get();
+                    }
+                }
+                if (skel == nullptr)
+                {
+                    for (crd::u32 j = 0; j < jc; ++j)
+                    {
+                        for (crd::u32 c = 0; c < 16U; ++c)
+                        {
+                            dst[j * 16U + c] = (c % 5U) == 0U ? 1.0F : 0.0F;
+                        }
+                    }
+                    continue;
+                }
+
+                const crd::anim::AnimClipResource* clip = nullptr;
+                if (!group.slot_clip[slot].is_null())
+                {
+                    auto* ccached = impl.clip_cache.find(group.slot_clip[slot]);
+                    if (ccached == nullptr)
+                    {
+                        impl.clip_cache.insert(group.slot_clip[slot],
+                                               impl.rm->load_sync<crd::anim::AnimClipResource>(group.slot_clip[slot]));
+                        ccached = impl.clip_cache.find(group.slot_clip[slot]);
+                    }
+                    if (ccached != nullptr) { clip = ccached->get(); }
+                }
+
+                if (clip != nullptr && clip->duration > 0.0F)
+                {
+                    const crd::f32 t = group.slot_time[slot] - clip->duration
+                                           * static_cast<crd::f32>(static_cast<crd::i64>(group.slot_time[slot]
+                                                                                         / clip->duration));
+                    crd::anim::sample_clip(*clip, *skel, t, {impl.pose_scratch.data(), impl.pose_scratch.size()});
+                }
+                else
+                {
+                    for (crd::u32 j = 0; j < jc; ++j)
+                    {
+                        const crd::f32* r = skel->rest.data() + static_cast<crd::usize>(j) * crd::anim::kRestFloats;
+                        impl.pose_scratch[j].translation = {r[0], r[1], r[2]};
+                        impl.pose_scratch[j].rotation    = {r[3], r[4], r[5], r[6]};
+                        impl.pose_scratch[j].scale       = {r[7], r[8], r[9]};
+                    }
+                }
+                crd::anim::compute_pose_matrices(*skel, {impl.pose_scratch.data(), impl.pose_scratch.size()},
+                                                 {impl.world_scratch.data(), impl.world_scratch.size()});
+                crd::anim::compute_skin_palette(*skel, {impl.world_scratch.data(), impl.world_scratch.size()},
+                                                {impl.palette_scratch.data(), impl.palette_scratch.size()});
+                std::memcpy(dst, impl.palette_scratch.data(), static_cast<crd::usize>(jc) * 64U);
+            }
+            (void)impl.raster->upload_storage(*group.buffer, group.palette_off * 4U, impl.palette_staging.data(),
+                                              static_cast<crd::u32>(impl.palette_staging.size() * 4U));
+        }
     }
 
     stats.palette_ms = ms_now() - t2;
@@ -3798,11 +4922,18 @@ public:
         if (str_is(id, "crd://scene/tess")) { return m_impl.ensure_tess_program(); }
         if (str_is(id, "crd://scene/mesh")) { return m_impl.ensure_mesh_program(); }
         if (str_is(id, "crd://scene/visbuffer")) { return m_impl.ensure_visbuffer_program(); }
+        if (str_is(id, "crd://scene/impostor")) { return m_impl.ensure_impostor_program(); }
+        if (str_is(id, "crd://scene/hzb_build")) { return m_impl.ensure_hzb_program(); }
         // ⭐⭐ 38-G1b: the authored POST programs — the technique library's first device-reachable family
         if (str_is(id, "crd://post/tonemap_agx") || str_is(id, "crd://post/srgb_only"))
         {
             return m_impl.ensure_post_program(id);
         }
+        // ⭐⭐ REN-40-D: the moment-atlas family. The BASE program is instance 0; the for_each expansion asks
+        // `instance_program` for each cascade's own (the layer is baked per instance).
+        if (str_is(id, "crd://shadow/moment_convert")) { return m_impl.ensure_moment_program(0U, 0U); }
+        if (str_is(id, "crd://shadow/moment_blur_x")) { return m_impl.ensure_moment_program(1U, 0U); }
+        if (str_is(id, "crd://shadow/moment_blur_y")) { return m_impl.ensure_moment_program(2U, 0U); }
         return nullptr;
     }
 
@@ -3821,6 +4952,8 @@ public:
         if (str_is(id, "crd://scene/cull_view3")) { return m_impl.ensure_cull_view_kernel(3U); }
         if (str_is(id, "crd://scene/cull_view4")) { return m_impl.ensure_cull_view_kernel(4U); }
         if (str_is(id, "crd://scene/cull_reset")) { return m_impl.ensure_cull_reset_kernel(); }
+        if (str_is(id, "crd://scene/occlusion_cull")) { return m_impl.ensure_occlusion_cull_kernel(); }
+        if (str_is(id, "crd://scene/gpu_skin")) { return m_impl.ensure_skin_compute_kernel(); }
         if (str_is(id, "crd://scene/rt/raygen")) { return m_impl.ensure_rt_kernel(0U); }
         if (str_is(id, "crd://scene/rt/miss")) { return m_impl.ensure_rt_kernel(1U); }
         if (str_is(id, "crd://scene/rt/chit")) { return m_impl.ensure_rt_kernel(2U); }
@@ -3869,6 +5002,7 @@ public:
             out.resolved = 1U;
             return true;
         }
+        if (str_is(name, "impostor_geometry")) { return fill_impostor(out); }
         return fill(out, nullptr);
     }
 
@@ -3888,6 +5022,10 @@ public:
             out.items[0] = crd::framecook::DrawItem{nullptr, vp, 6U, nullptr};
             out.resolved = 1U;
             return true;
+        }
+        if (str_is(crd::containers::StringView(q.name.c_str(), q.name.size()), "impostor_geometry"))
+        {
+            return fill_impostor(out);
         }
         return fill(out, &q);
     }
@@ -3972,17 +5110,40 @@ public:
     // all four slices from cascade 0 — identical slices, which is exactly what the REN-3.2 gate rejects.
     // ⭐⭐ REN-39-C1: under the indexed switch the cascade programs are the INDEXED twins — the items carry
     // index fields exactly when `use_indexed` survived init (all-or-nothing), so program and items always agree.
-    [[nodiscard]] crd::gpu::IRasterProgram* instance_program(crd::containers::StringView, crd::u32 index) override
+    // ⛔⛔ REN-40-D: dispatch by PASS NAME now — the moment graph has FOUR for_each passes, and serving every
+    // one of them the cascade DEPTH program would raster the whole scene into what should be a fullscreen
+    // filter. The name is the pass's identity in the asset, so it is the key here too.
+    [[nodiscard]] crd::gpu::IRasterProgram* instance_program(crd::containers::StringView name, crd::u32 index) override
     {
         if (index >= kMaxCascades)
         {
             return nullptr;
         }
+        if (str_is(name, "moment_convert")) { return m_impl.ensure_moment_program(0U, index); }
+        if (str_is(name, "moment_blur_x")) { return m_impl.ensure_moment_program(1U, index); }
+        if (str_is(name, "moment_blur_y")) { return m_impl.ensure_moment_program(2U, index); }
         if (m_impl.use_indexed && m_impl.shadow_prog_idx[index] != nullptr)
         {
             return m_impl.shadow_prog_idx[index].get();
         }
         return m_impl.shadow_prog[index].get();
+    }
+
+    // REN-40-E1: a cascade whose light_vp has NOT changed since the previous frame is CACHED — the persistent
+    // atlas retains its data and the pass records zero draws (the expansion path skips draw-list resolution).
+    // On the FIRST frame, prev_light_vp is all-zeros and cascades.light_vp carries real values, so every
+    // cascade renders — no explicit first-frame guard needed.
+    // REN-40-E2: far cascades (2, 3) ALTERNATE on a round-robin schedule even when dirty — texel-snapped
+    // cascades at that range make one-frame staleness invisible. Near cascades (0, 1) always update. The
+    // round-robin is disabled on frame 0 (csm_frame == 1 after the first compute) so every cascade populates
+    // the persistent atlas at least once.
+    [[nodiscard]] bool for_each_load(crd::framecook::FrameForEach kind, crd::u32 index) const override
+    {
+        if (kind != crd::framecook::FrameForEach::LightCascades) { return false; }
+        if (index >= kMaxCascades) { return false; }
+        if (m_impl.prev_light_vp[index] == m_impl.cascades.light_vp[index]) { return true; }
+        if (index >= 2U && m_impl.csm_frame > 1U && !m_impl.cascade_scheduled(index)) { return true; }
+        return false;
     }
 
 private:
@@ -3991,6 +5152,36 @@ private:
         crd::usize i = 0;
         while (b[i] != '\0' && i < a.size() && a[i] == b[i]) { ++i; }
         return b[i] == '\0' && i == a.size();
+    }
+
+    // ⭐⭐ REN-40-C5: resolve the IMPOSTOR draw list — one item per group that carries an impostor slot. The items
+    // read the impostor draw table (kImpostorTableOff), NOT the mesh table, because the impostor pass has its own
+    // DrawIndex space. Under the GPU cull the impostor slot's camera command is already filled by the compact kernel.
+    bool fill_impostor(crd::framecook::DrawListBinding& out)
+    {
+        out.resolved = 0U;
+        for (crd::usize i = 0; i < m_impl.impostor_draws.size()
+                                && out.resolved < crd::framecook::kMaxDrawItems; ++i)
+        {
+            const SceneDraw& d = m_impl.impostor_draws[i];
+            if (d.buffer == nullptr || d.program == nullptr) { continue; }
+            crd::framecook::DrawItem it;
+            it.storage        = d.buffer;
+            it.program        = d.program;
+            it.indexed        = true;
+            it.index_count    = d.index_count;
+            it.instance_count = d.instance_count;
+            it.first_index    = d.first_index;
+            if (m_impl.gpu_cull_on && d.index_count > 0U && d.cull_args != nullptr && m_impl.raster != nullptr)
+            {
+                it.args        = d.cull_args;
+                it.args_offset = (kCullArgsHeaderWords * 4U) + d.cull_args_offset
+                                 + d.lod_slot * m_impl.raster->indirect_command_stride();
+                it.dispatch_groups = 0U;
+            }
+            out.items[out.resolved++] = it;
+        }
+        return true;
     }
 
     // Resolve the frame's culled groups into draw items, applying the asset's component filter when there is one.
@@ -4035,6 +5226,13 @@ private:
                 // wrong way (86.8 -> 92.7 ms at 1M) and as the device/CPU count comparison disagreeing.
                 // Slot 0's item carries the dispatch; the rest are draw-only.
                 it.dispatch_groups = d.lod_slot == 0U ? d.cull_groups : 0U;
+            }
+            // ⭐⭐ REN-40-F: when GPU skinning is on, the skin compute pass also walks this list. If the cull
+            // path didn't set dispatch_groups (gpu_cull off, or non-indexed items), set it here so the skin
+            // kernel still dispatches. Non-skinned groups run the kernel's for loops 0 times (jc == 0).
+            if (m_impl.gpu_skinning_on && it.dispatch_groups == 0U && d.cull_groups > 0U && d.lod_slot == 0U)
+            {
+                it.dispatch_groups = d.cull_groups;
             }
             // ⛔ The item -> slot map, kept EXACTLY rather than re-derived: the expansion face below moves each
             // item's args offset to its cascade's command, and a FILTERED draw list makes any counting-based
@@ -4110,7 +5308,12 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
     // fitting reads the frustum shape out of it directly — the camera's separate view/proj are not available
     // here, and reconstructing them would be guesswork. `compute_csm_cascades` only needs the projection's
     // half-extents and the inverse view, both recoverable from view_proj for a standard camera.
-    if (impl.shadows_active()) { impl.cascades = compute_csm_cascades_from_vp(view_proj, light_dir, impl.csm); }
+    if (impl.shadows_active())
+    {
+        for (crd::u32 ci = 0; ci < kMaxCascades; ++ci) { impl.prev_light_vp[ci] = impl.cascades.light_vp[ci]; }
+        impl.cascades = compute_csm_cascades_from_vp(view_proj, light_dir, impl.csm);
+        ++impl.csm_frame;
+    }
     // REN-37.3: the frame-frequency camera position, from the SAME exact reconstruction the cascade fit uses.
     const crd::math::Vec3f eye_ws = camera_position_from_vp(view_proj);
 
@@ -4124,6 +5327,7 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
     draw_list.clear();
     impl.groups_view.clear();
     impl.draw_groups.clear();
+    impl.impostor_draws.clear();
 
     // ── ⭐⭐ REN-38 (scene-buffer consolidation): can THIS frame render its plain groups from the ONE scene
     // buffer as a single multi-draw batch? Requires the rebased program, the single-viewport owner path (a
@@ -4147,7 +5351,9 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
             // AABB section fell OUTSIDE the region and into the next group's header. It survived only because the
             // GPU cull reads the bounds through `base + header[bounds_off]` and the LAST group has slack behind
             // it. One derivation, from the group's own layout, so a new section can never be forgotten again.
-            const crd::u32 region_words = group.lod_override_off + group.capacity * 2U;
+            const crd::u32 atlas_px = group.has_impostor
+                ? impl.lod_policy.impostor_grid * impl.lod_policy.impostor_tile : 0U;
+            const crd::u32 region_words = group.atlas_off + atlas_px * atlas_px;
             total += (region_words + 3U) & ~3U;
         }
         if (impl.scene_buf == nullptr || impl.scene_buf_words < total)
@@ -4165,6 +5371,23 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
                 const auto* mesh = group.mesh.get();
                 (void)impl.raster->upload_storage(*impl.scene_buf, (group.region_base + group.indices_off) * 4U,
                                                   mesh->indices.data(), static_cast<crd::u32>(mesh->indices.size()));
+                if (group.has_impostor)
+                {
+                    const crd::u32 identity_ib[6] = {0U, 1U, 2U, 3U, 4U, 5U};
+                    const crd::u32 ib_off = group.region_base + group.indices_off
+                                            + static_cast<crd::u32>(mesh->indices.size() / 4U);
+                    (void)impl.raster->upload_storage(*impl.scene_buf, ib_off * 4U, identity_ib, sizeof(identity_ib));
+                    crd::lod::ImpostorAtlas atlas(impl.alloc);
+                    (void)crd::lod::bake_impostor_atlas(*mesh, impl.lod_policy.impostor_grid,
+                                                        impl.lod_policy.impostor_tile, atlas, impl.alloc);
+                    if (!atlas.pixels.empty())
+                    {
+                        (void)impl.raster->upload_storage(*impl.scene_buf,
+                                                          (group.region_base + group.atlas_off) * 4U,
+                                                          atlas.pixels.data(),
+                                                          static_cast<crd::u32>(atlas.pixels.size()));
+                    }
+                }
                 (void)impl.raster->upload_storage(*impl.scene_buf, (group.region_base + group.vertices_off) * 4U,
                                                   mesh->vertices.data(),
                                                   static_cast<crd::u32>(mesh->vertices.size()));
@@ -4174,6 +5397,7 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
     }
     // ⭐⭐ REN-40-C2: one RECORD per draw-list row — [0] region base, [1] LOD slot.
     crd::u32 draw_table[crd::framecook::kMaxDrawItems * kSceneDrawRowWords] = {};
+    crd::u32 impostor_table[kImpostorDrawRows * kSceneDrawRowWords]         = {};
     bool     wrote_frame_header = false;
 
     // broad phase: a configured BVH prunes to the frustum's AABB; otherwise every slot is a candidate
@@ -4200,6 +5424,11 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         }
         else if (use_bvh)
         {
+            // REN-40-C4: when dither is active the VS masks the entry with 0x00FFFFFF and reads bits
+            // 24..31 as fade alpha — a bare slot has alpha 0 and discards every pixel (black frame).
+            // Pack 0xFF (fully opaque) so the CPU path renders without a transition.
+            const bool dither_pack = impl.lod_enabled && impl.lod_policy.dither_band > 0.0F
+                                     && impl.lod_slots > 1U;
             for (const crd::scene::EntityId e : candidates)
             {
                 const crd::u64* packed = impl.entity_slot.find(e);
@@ -4207,14 +5436,22 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
                 const auto gi   = static_cast<crd::u32>(*packed >> 32U);
                 const auto slot = static_cast<crd::u32>(*packed & 0xFFFFFFFFU);
                 if (&m_groups[gi] != &group) { continue; }
-                if (aabb_in_frustum(group.world_bounds[slot], planes)) { group.visible.push_back(slot); }
+                if (aabb_in_frustum(group.world_bounds[slot], planes))
+                {
+                    group.visible.push_back(dither_pack ? (0xFFU << 24U) | slot : slot);
+                }
             }
         }
         else
         {
+            const bool dither_pack = impl.lod_enabled && impl.lod_policy.dither_band > 0.0F
+                                     && impl.lod_slots > 1U;
             for (crd::u32 slot = 0; slot < count; ++slot)
             {
-                if (aabb_in_frustum(group.world_bounds[slot], planes)) { group.visible.push_back(slot); }
+                if (aabb_in_frustum(group.world_bounds[slot], planes))
+                {
+                    group.visible.push_back(dither_pack ? (0xFFU << 24U) | slot : slot);
+                }
             }
         }
 
@@ -4247,6 +5484,11 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         header[kHdrInstanceCapacity] = group.capacity; // 38-G1: the per-cascade visible-list stride
         header[kHdrBoundsOff]        = group.bounds_off; // REN-40-A: the GPU cull's world-AABB section
         header[kHdrLodOverrideOff]   = group.lod_override_off; // REN-40-C2: the per-instance LOD override
+        if (group.has_impostor)
+        {
+            header[kHdrAtlasOff]  = group.atlas_off;
+            header[kHdrAtlasDims] = (impl.lod_policy.impostor_grid << 16U) | impl.lod_policy.impostor_tile;
+        }
         // ⭐⭐ REN-40-C2: THE LOD TABLE. `first_index` is published ABSOLUTE (the
         // group's index section base plus the level's own offset) because that is
         // what an indexed draw command consumes — the kernel writing a command must
@@ -4276,6 +5518,11 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         header[25] = group.skin_off;    // GEO-8: the skinned VS's extra sections
         header[26] = group.palette_off;
         header[27] = group.joint_count;
+        // ⭐⭐ REN-40-F: GPU skinning section offsets — the compute kernel reads these to find the skeleton,
+        // pre-baked clip data, and per-instance animation state in the group's buffer.
+        header[kHdrSkelOff]      = group.skel_off;
+        header[kHdrClipOff]      = group.clip_off;
+        header[kHdrAnimStateOff] = group.anim_state_off;
         // REN-3.2-b: the frame's stabilized cascades ride the SAME header every pull shader already reads, so
         // the shadow VS needs no extra binding and the forward FS can select its cascade from the splits.
         std::memcpy(&header[kHdrCsmSplits], impl.cascades.split_far, kMaxCascades * 4U);
@@ -4416,26 +5663,36 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         }
 
         // REN-2 Half B: a group whose material carries a base-color map draws TEXTURED (samples albedo); else flat.
-        // (Groups batch by MESH; the group's representative material drives the map — correct for one-material meshes.
-        // Per-instance material textures are a bindless follow-up. Skinned takes precedence — no textured-skinned yet.)
-        crd::gpu::ITexture*       base_color = group.skinned ? nullptr : impl.resolve_base_color_texture(group.material);
+        crd::gpu::ITexture*       base_color = impl.resolve_base_color_texture(group.material);
         crd::gpu::IRasterProgram* program    = impl.program.get();
         if (group.skinned && impl.program_skinned != nullptr) { program = impl.program_skinned.get(); }
-        // ⭐⭐ REN-38: shadows and albedo COMPOSE now. The atlas moved to its own bindings (4/5), so a textured
-        // group under active shadows takes the COMBINED program and keeps BOTH — the interim either/or that made
-        // textured monuments lose their maps the instant shadows turned on is gone. Skinned still keeps its own
-        // program (a shadowed-skinned variant rides the REN-3.3 material work).
-        const bool want_shadow = impl.shadows_active() && !group.skinned;
-        if (want_shadow && base_color != nullptr && impl.program_textured_shadowed != nullptr)
+        const bool want_shadow = impl.shadows_active();
+        if (group.skinned)
         {
-            program = impl.program_textured_shadowed.get(); // textured AND shadowed — the whole point
+            if (want_shadow && base_color != nullptr && impl.program_skinned_textured_shadowed != nullptr)
+            {
+                program = impl.program_skinned_textured_shadowed.get();
+            }
+            else if (want_shadow && base_color == nullptr && impl.program_skinned_shadowed != nullptr)
+            {
+                program = impl.program_skinned_shadowed.get();
+            }
+            else if (base_color != nullptr && impl.program_skinned_textured != nullptr)
+            {
+                program = impl.program_skinned_textured.get();
+            }
+            else { base_color = nullptr; }
+        }
+        else if (want_shadow && base_color != nullptr && impl.program_textured_shadowed != nullptr)
+        {
+            program = impl.program_textured_shadowed.get();
         }
         else if (want_shadow && base_color == nullptr && impl.program_shadowed != nullptr)
         {
             program = impl.program_shadowed.get();
         }
         else if (base_color != nullptr && impl.program_textured != nullptr) { program = impl.program_textured.get(); }
-        else { base_color = nullptr; } // no textured program available ⇒ the flat path (drop the map)
+        else { base_color = nullptr; }
         SceneDraw d;
         d.program      = program;
         d.buffer       = group.buffer.get();
@@ -4467,9 +5724,22 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
             }
             else if (group.skinned)
             {
-                // mirror the pull path's fallback (a skinned group without its program draws flat) so EVERY
-                // item stays indexed — a cascade pass may never receive a mixed-mode list
-                iprog = impl.program_skinned_idx != nullptr ? impl.program_skinned_idx.get() : impl.program_idx.get();
+                if (want_shadow && base_color != nullptr && impl.program_skinned_textured_shadowed_idx != nullptr)
+                {
+                    iprog = impl.program_skinned_textured_shadowed_idx.get();
+                }
+                else if (want_shadow && base_color == nullptr && impl.program_skinned_shadowed_idx != nullptr)
+                {
+                    iprog = impl.program_skinned_shadowed_idx.get();
+                }
+                else if (base_color != nullptr && impl.program_skinned_textured_idx != nullptr)
+                {
+                    iprog = impl.program_skinned_textured_idx.get();
+                }
+                else
+                {
+                    iprog = impl.program_skinned_idx != nullptr ? impl.program_skinned_idx.get() : impl.program_idx.get();
+                }
             }
             else if (want_shadow && base_color != nullptr)
             {
@@ -4510,11 +5780,17 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         // row, computed slot 0, and read slot 0's visible list — EMPTY, because the cull sent those survivors to
         // slots 1..n. Levels 1 and coarser drew NOTHING while the frame rendered, every count reconciled, and GPU
         // time DROPPED — it read as an LOD win. That is why the table stopped being a property of one path.
-        const crd::u32 slots_here =
-            impl.gpu_cull_on ? (group.lod_count > 1U ? impl.lod_slots : 1U) : 1U;
+        crd::u32 slots_here = 1U;
+        if (impl.gpu_cull_on && group.lod_count > 1U) { slots_here = impl.lod_slots; }
+        // ⭐⭐ REN-40-C5: the impostor slot is the LAST slot when impostor_grid > 0. It draws through its
+        // OWN pass (billboard VS + impostor FS), so the mesh draw list SKIPS it here. The cull kernel still
+        // routes instances into its visible list; the impostor pass reads that list with its own program.
+        const crd::u32 impostor_slot = (impl.lod_policy.impostor_grid > 0U && impl.lod_slots > 1U)
+                                           ? impl.lod_slots - 1U : 0xFFFFFFFFU;
         for (crd::u32 sl = 0; sl < slots_here; ++sl)
         {
             if (sl > 0U && sl >= group.lod_count) { break; }
+            if (sl == impostor_slot) { continue; }
             SceneDraw ds = d;
             ds.lod_slot  = sl;
             if (sl > 0U)
@@ -4541,6 +5817,32 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
             impl.draw_groups.push_back(&group); // 38-G1: index-parallel, for the per-cascade counts
             ++stats.draws;
         }
+        // ⭐⭐ REN-40-C5: emit the IMPOSTOR DRAW for this group into the separate impostor list. One draw per
+        // group with an impostor slot, using the billboard VS + impostor FS and the identity IB. The impostor
+        // draw table is separate from the mesh table (kImpostorTableOff) to avoid DrawIndex collision with
+        // cascade passes that override per-item programs.
+        if (impostor_slot != 0xFFFFFFFFU && group.has_impostor)
+        {
+            crd::gpu::IRasterProgram* imp_prog = impl.ensure_impostor_program();
+            if (imp_prog != nullptr)
+            {
+                SceneDraw ids = d;
+                ids.program    = imp_prog;
+                ids.lod_slot   = impostor_slot;
+                ids.index_count  = group.lod_indices[impostor_slot];
+                ids.first_index  = (ids.rebased ? group.region_base : 0U) + group.indices_off
+                                   + group.lod_first[impostor_slot];
+                ids.vertex_count = 0U;
+                if (impl.impostor_draws.size() < kImpostorDrawRows)
+                {
+                    const crd::usize irow = impl.impostor_draws.size() * kSceneDrawRowWords;
+                    impostor_table[irow + 0U] = ids.rebased ? group.region_base : 0U;
+                    impostor_table[irow + 1U] = impostor_slot;
+                }
+                impl.impostor_draws.push_back(ids);
+                ++stats.draws;
+            }
+        }
         stats.drawn_instances += visible_count;
     }
 
@@ -4554,12 +5856,22 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
     {
         (void)impl.raster->upload_storage(*impl.scene_buf, kSceneDrawTableOff * 4U, draw_table,
                                           sizeof(draw_table));
+        if (impl.impostor_draws.size() > 0U)
+        {
+            (void)impl.raster->upload_storage(*impl.scene_buf, kImpostorTableOff * 4U, impostor_table,
+                                              sizeof(impostor_table));
+        }
     }
     for (MeshGroup& group : m_groups)
     {
         if (group.buffer == nullptr || group.instances.size() == 0U) { continue; }
         (void)impl.raster->upload_storage(*group.buffer, kSceneDrawTableOff * 4U, draw_table, sizeof(draw_table));
-        stats.uploaded_bytes += sizeof(draw_table);
+        if (impl.impostor_draws.size() > 0U)
+        {
+            (void)impl.raster->upload_storage(*group.buffer, kImpostorTableOff * 4U, impostor_table,
+                                              sizeof(impostor_table));
+        }
+        stats.uploaded_bytes += sizeof(draw_table) + sizeof(impostor_table);
     }
     if (draw_list.size() == 0U) { return stats; }
 
@@ -4786,6 +6098,7 @@ bool builtin_asset_text(const char* name, crd::containers::String& out)
     out.clear();
     const auto is = [&](const char* k) { return n == crd::containers::StringView(k); };
     if (is("frame/forward_csm.frame.toml")) { out.append(kBuiltinForwardCsm); return true; }
+    if (is("frame/forward_csm_moment.frame.toml")) { out.append(kBuiltinForwardCsmMoment); return true; }
     if (is("frame/forward_basic.frame.toml")) { out.append(kBuiltinForwardBasic); return true; }
     // REN-39 fix: the post-chain frames are DEFAULTS, so they live in the pack (disk copies shadow them)
     if (is("frame/forward_csm_agx.frame.toml")) { out.append(kBuiltinForwardCsmAgx); return true; }

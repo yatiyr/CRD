@@ -851,6 +851,97 @@ stencil_pass = "replace"
     CHECK(err_of("stencil_write_mask = 300\n") == fc::FrameCookError::BadStencilValue);
 }
 
+TEST_CASE("REN-40-G3: shared_depth and depth_as_float survive parse, cook, read, and emit",
+          "[framecook][ren40]")
+{
+    crd::memory::TlsfAllocator alloc(4U << 20U, nullptr, "frame-v7-test");
+    fc::FrameGraphDesc         d(&alloc);
+    crd::containers::String    where(&alloc);
+
+    constexpr const char* v7_toml = R"(
+schema = 1
+name   = "v7_fields"
+
+[[resource]]
+name    = "scene_depth"
+format  = "D32Float"
+scale   = 1.0
+sampled = true
+
+[[resource]]
+name    = "hzb"
+format  = "R32F"
+scale   = 0.5
+sampled = true
+
+[[resource]]
+name    = "hdr"
+format  = "RGBA16F"
+scale   = 1.0
+sampled = true
+
+[[draw_list]]
+name = "geo"
+
+[[pass]]
+name        = "prepass"
+kind        = "raster.depth_only"
+draw_list   = "geo"
+writes      = ["scene_depth"]
+clear_depth = 0.0
+depth       = "GreaterEqual"
+
+[[pass]]
+name           = "hzb_build"
+kind           = "raster.fullscreen"
+reads          = ["scene_depth"]
+writes         = ["hzb"]
+shader         = "crd://scene/hzb_build"
+depth_as_float = true
+
+[[pass]]
+name         = "forward"
+kind         = "raster.geometry"
+draw_list    = "geo"
+reads        = ["hzb"]
+writes       = ["hdr"]
+shared_depth = "scene_depth"
+depth        = "GreaterEqual"
+
+[[pass]]
+name   = "post"
+kind   = "raster.fullscreen"
+reads  = ["hdr"]
+writes = ["@output"]
+shader = "crd://post/tonemap"
+)";
+    REQUIRE(fc::parse_frame_toml(crd::containers::StringView(v7_toml), d, &where) == fc::FrameCookError::Ok);
+
+    REQUIRE(d.passes.size() == 4U);
+    CHECK_FALSE(d.passes[0].depth_as_float);
+    CHECK(d.passes[1].depth_as_float);
+    CHECK(d.passes[0].shared_depth.empty());
+    CHECK(std::strcmp(d.passes[2].shared_depth.c_str(), "scene_depth") == 0);
+
+    const auto blob = fc::cook_frame_graph(d, &alloc);
+    REQUIRE(blob.size() > 0U);
+    fc::FrameGraphDesc r(&alloc);
+    REQUIRE(fc::read_frame_graph(crd::containers::ConstSpan<crd::u8>(blob.data(), blob.size()), r));
+    REQUIRE(r.passes.size() == 4U);
+    CHECK(r.passes[1].depth_as_float);
+    CHECK_FALSE(r.passes[0].depth_as_float);
+    CHECK(std::strcmp(r.passes[2].shared_depth.c_str(), "scene_depth") == 0);
+    CHECK(r.passes[0].shared_depth.empty());
+
+    const crd::containers::String emitted = fc::emit_frame_toml(d, &alloc);
+    fc::FrameGraphDesc            re(&alloc);
+    REQUIRE(fc::parse_frame_toml(crd::containers::StringView(emitted.c_str(), emitted.size()), re, &where)
+            == fc::FrameCookError::Ok);
+    const auto blob2 = fc::cook_frame_graph(re, &alloc);
+    REQUIRE(blob2.size() == blob.size());
+    CHECK(std::memcmp(blob2.data(), blob.data(), blob.size()) == 0);
+}
+
 TEST_CASE("REN-38: EVERY pass field SURVIVES the cooked blob (the v3 loss regression)", "[framecook][ren38]")
 {
     // ⛔⛔ THE GAP THIS PINS: blob v3 silently DROPPED the RT pipeline's three program names, VRS state,

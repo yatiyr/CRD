@@ -133,9 +133,16 @@ CsmCascades compute_csm_cascades(const crd::math::Mat4f& view, const crd::math::
 
         // The ortho window is centred on the SNAPPED position, so it can only ever slide in whole texels. Depth
         // spans the sphere, pulled back by `caster_extrusion` so geometry behind the slice still casts into it.
+        // REN-40-E3: CASTER TIGHTENING — proportional extrusion so near cascades don't waste draws on geometry
+        // too far behind to cast visible shadows. ⛔ The multiplier is an EVSM constraint: capping at 1×radius
+        // compressed the depth range ~9× for cascade 0, which eliminated the exponential-warp penumbra (c=5.54
+        // is format-derived and cannot adapt per cascade). 8× keeps significant tightening for cascade 0
+        // (~3× tighter range) while preserving enough depth distribution for the Chebyshev bound to produce a
+        // visible soft edge.
+        const float extrusion = crd::math::min(cfg.caster_extrusion, 8.0F * radius);
         const float cz = -c_ls.z; // distance along the light's forward axis
         const crd::math::Mat4f ortho = ortho_rh_zo(snap_x - radius, snap_x + radius, snap_y - radius,
-                                                   snap_y + radius, cz - radius - cfg.caster_extrusion,
+                                                   snap_y + radius, cz - radius - extrusion,
                                                    cz + radius);
 
         out.light_vp[i]    = ortho * view0;

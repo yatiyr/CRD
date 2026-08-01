@@ -880,8 +880,12 @@ private:
 class Dx12Texture final : public ITexture
 {
 public:
-    Dx12Texture(ComPtr<ID3D12Resource> tex, crd::u32 w, crd::u32 h, const D3D12_SHADER_RESOURCE_VIEW_DESC& srv) noexcept
-        : m_tex(std::move(tex)), m_srv(srv), m_w(w), m_h(h)
+    // ⛔ `depth` is an EXPLICIT flag, not inferred from the SRV format: a DX12 depth SRV is R32_FLOAT over an
+    // R32_TYPELESS resource (typed-D32 SRVs fail creation), so the format alone cannot tell a depth atlas from
+    // an ordinary single-channel colour texture — and the atlas SAMPLER is chosen by this answer (REN-40-D).
+    Dx12Texture(ComPtr<ID3D12Resource> tex, crd::u32 w, crd::u32 h, const D3D12_SHADER_RESOURCE_VIEW_DESC& srv,
+                bool depth = false) noexcept
+        : m_tex(std::move(tex)), m_srv(srv), m_w(w), m_h(h), m_depth(depth)
     {
     }
     ~Dx12Texture() override                    = default;
@@ -892,6 +896,7 @@ public:
 
     [[nodiscard]] crd::u32                              width() const noexcept override { return m_w; }
     [[nodiscard]] crd::u32                              height() const noexcept override { return m_h; }
+    [[nodiscard]] bool                                  is_depth() const noexcept override { return m_depth; }
     [[nodiscard]] ID3D12Resource*                       tex() const noexcept { return m_tex.Get(); }
     [[nodiscard]] const D3D12_SHADER_RESOURCE_VIEW_DESC& srv() const noexcept { return m_srv; }
 
@@ -900,6 +905,7 @@ private:
     D3D12_SHADER_RESOURCE_VIEW_DESC m_srv{};
     crd::u32                        m_w = 0;
     crd::u32                        m_h = 0;
+    bool                            m_depth = false;
 };
 
 inline constexpr crd::u32 kMaxGBuffer = 8U; // B5: max deferred G-buffer colour attachments
@@ -1052,7 +1058,17 @@ public:
         // REN-38-B8: slots 0/1 keep their historical meaning (default · comparison); 2..N are the AUTHORED
         // sampler cache. ⛔ Growing the heap rather than reusing slot 0 matters: a shader-visible sampler heap
         // cannot be resized after creation, and overwriting slot 0 would change every OTHER pass's sampling.
-        smh.NumDescriptors = 2 + kSamplerCacheCap;
+        // ⛔⛔ REN-40-D: +1 for the PLAIN depth sampler (s6) at the fixed END slot `2 + kSamplerCacheCap` —
+        // AFTER the authored cache, so none of the existing `2U + i` slot math moves. It exists because a PCSS
+        // blocker search needs the STORED depth, which a comparison sampler cannot return; on Vulkan the same
+        // sampler lives at binding 6. ⛔ Leaving s6 out of this backend while the technique emits it is the
+        // cook-only scar: the program cooks, PSO creation rejects the unbound register, and shadows silently
+        // degrade to off — a defect only a DX12 RUN can see.
+        // ...and +1 again (REN-40-D moments): slot `3 + kSamplerCacheCap` = the LINEAR/CLAMP ATLAS sampler a
+        // COLOUR atlas (the moment atlas) is sampled through at s5 — comparison sampling is meaningless on
+        // moments, and the default s0 sampler WRAPs, which would blend the atlas's opposite edges together at
+        // every cascade border.
+        smh.NumDescriptors = 4 + kSamplerCacheCap;
         smh.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         m_device->CreateDescriptorHeap(&smh, IID_PPV_ARGS(&m_sampler_heap));
         m_sampler_inc = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
@@ -1076,6 +1092,28 @@ public:
             D3D12_CPU_DESCRIPTOR_HANDLE ch = m_sampler_heap->GetCPUDescriptorHandleForHeapStart();
             ch.ptr += static_cast<SIZE_T>(m_sampler_inc);
             m_device->CreateSampler(&cd, ch);
+            // REN-40-D: the PLAIN depth sampler (see the heap-size note) — NEAREST + CLAMP, because a blocker
+            // search wants the depth actually stored in a texel: a filtered read across a shadow edge returns a
+            // depth no blocker has, and WRAP would find "blockers" from the far side of the cascade slice.
+            D3D12_SAMPLER_DESC pd{};
+            pd.Filter   = D3D12_FILTER_MIN_MAG_MIP_POINT;
+            pd.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+            pd.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+            pd.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+            pd.MaxLOD   = D3D12_FLOAT32_MAX;
+            D3D12_CPU_DESCRIPTOR_HANDLE ph = m_sampler_heap->GetCPUDescriptorHandleForHeapStart();
+            ph.ptr += static_cast<SIZE_T>(2U + kSamplerCacheCap) * m_sampler_inc;
+            m_device->CreateSampler(&pd, ph);
+            // REN-40-D: the LINEAR/CLAMP atlas sampler (see the heap-size note) — filterable-atlas reads (s5).
+            D3D12_SAMPLER_DESC ad{};
+            ad.Filter   = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+            ad.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+            ad.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+            ad.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+            ad.MaxLOD   = D3D12_FLOAT32_MAX;
+            D3D12_CPU_DESCRIPTOR_HANDLE ah = m_sampler_heap->GetCPUDescriptorHandleForHeapStart();
+            ah.ptr += static_cast<SIZE_T>(3U + kSamplerCacheCap) * m_sampler_inc;
+            m_device->CreateSampler(&ad, ah);
         }
     }
     ~Dx12RasterContext() override
@@ -1525,10 +1563,18 @@ public:
         ro_range.BaseShaderRegister = 0; // t0 (read-only storage — the indexed pair)
         ro_range.RegisterSpace = 0;
         ro_range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+        // REN-40-D: s6 = the atlas's PLAIN sampler (the PCSS blocker search reads STORED depth through it).
+        D3D12_DESCRIPTOR_RANGE plain_range{};
+        plain_range.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER;
+        plain_range.NumDescriptors                    = 1;
+        plain_range.BaseShaderRegister                = 6; // s6
+        plain_range.RegisterSpace                     = 0;
+        plain_range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
         // param 0 = UAV (u0, storage) · 1 = SRV (t1, texture) · 2 = sampler (s2) · 3 = bindless SRV array (t3[N]) ·
         // 4 = atlas SRV (t4) · 5 = comparison sampler (s5) · 6 = DrawIndex constant (b7) · 7 = read-only storage
-        // SRV (t0, REN-39-C1). Every program carries all of them; a draw sets only the tables its stages use.
-        D3D12_ROOT_PARAMETER param[8]{};
+        // SRV (t0, REN-39-C1) · 8 = the atlas's PLAIN sampler (s6, REN-40-D). Every program carries all of them;
+        // a draw sets only the tables its stages use.
+        D3D12_ROOT_PARAMETER param[9]{};
         param[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[0].DescriptorTable.NumDescriptorRanges = 1; param[0].DescriptorTable.pDescriptorRanges = &uav_range;      param[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL; // GEO-1: + VERTEX (vertex pulling reads u0 in the VS)
         param[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[1].DescriptorTable.NumDescriptorRanges = 1; param[1].DescriptorTable.pDescriptorRanges = &srv_range;      param[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
         param[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; param[2].DescriptorTable.NumDescriptorRanges = 1; param[2].DescriptorTable.pDescriptorRanges = &samp_range;     param[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
@@ -1546,8 +1592,12 @@ public:
         param[7].DescriptorTable.NumDescriptorRanges = 1;
         param[7].DescriptorTable.pDescriptorRanges = &ro_range;
         param[7].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL; // REN-39-C1
+        param[8].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        param[8].DescriptorTable.NumDescriptorRanges = 1;
+        param[8].DescriptorTable.pDescriptorRanges = &plain_range;
+        param[8].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL; // REN-40-D: s6
         D3D12_ROOT_SIGNATURE_DESC rsd{};
-        rsd.NumParameters = 8;
+        rsd.NumParameters = 9;
         rsd.pParameters   = param;
         rsd.Flags         = D3D12_ROOT_SIGNATURE_FLAG_NONE;
         ComPtr<ID3DBlob> sig;
@@ -2705,6 +2755,26 @@ public:
         return 2U + (m_sampler_n - 1U);
     }
 
+    // REN-40-D: the GPU handle of the PLAIN depth sampler's fixed heap slot (see the heap-size note) — the s6
+    // table every atlas-carrying draw binds alongside s5.
+    [[nodiscard]] D3D12_GPU_DESCRIPTOR_HANDLE plain_depth_tbl() const noexcept
+    {
+        D3D12_GPU_DESCRIPTOR_HANDLE h = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
+        h.ptr += static_cast<UINT64>(2U + kSamplerCacheCap) * m_sampler_inc;
+        return h;
+    }
+
+    // ⭐⭐ REN-40-D: the s5 table for an atlas draw, chosen by WHAT THE ATLAS IS — the comparison sampler for a
+    // depth atlas (a shadow lookup), the LINEAR/CLAMP sampler for a colour one (the moment atlas, whose whole
+    // point is ordinary filterable sampling). Keyed off the texture, so no call site can pick wrong.
+    [[nodiscard]] D3D12_GPU_DESCRIPTOR_HANDLE atlas_samp_tbl(const Dx12Texture& atl) const noexcept
+    {
+        const UINT64                slot = atl.is_depth() ? 1U : (3U + kSamplerCacheCap);
+        D3D12_GPU_DESCRIPTOR_HANDLE h    = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
+        h.ptr += slot * m_sampler_inc;
+        return h;
+    }
+
     // The sampler slot a recorded draw binds: the pass's when it declared one, else the historical default for
     // the draw's own kind (0 = filtering, 1 = comparison), which is what every existing gate expects.
     [[nodiscard]] crd::u32 active_sampler_slot(crd::u32 fallback) const noexcept
@@ -3374,10 +3444,10 @@ public:
         m_list->SetGraphicsRootDescriptorTable(2, samp_tbl); // sampler (s2): 0 = filtering, 1 = comparison
         if (atlas != nullptr)
         {
-            D3D12_GPU_DESCRIPTOR_HANDLE cmp_tbl = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
-            cmp_tbl.ptr += static_cast<UINT64>(1U) * m_sampler_inc;    // the COMPARISON sampler slot
-            m_list->SetGraphicsRootDescriptorTable(4, atlas_gpu);      // shadow atlas (t4)
-            m_list->SetGraphicsRootDescriptorTable(5, cmp_tbl);        // comparison sampler (s5)
+            m_list->SetGraphicsRootDescriptorTable(4, atlas_gpu); // shadow atlas (t4)
+            // REN-40-D: s5 keyed by WHAT the atlas is — comparison for depth, LINEAR/CLAMP for moments.
+            m_list->SetGraphicsRootDescriptorTable(5, atlas_samp_tbl(static_cast<Dx12Texture&>(*atlas)));
+            m_list->SetGraphicsRootDescriptorTable(8, plain_depth_tbl()); // plain depth sampler (s6, REN-40-D)
         }
         m_list->SetPipelineState(pso);
         apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
@@ -3526,8 +3596,9 @@ public:
         {
             const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
             m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
-            m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr);
+            if (!m_next_load_depth) { m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr); }
         }
+        m_next_load_depth = false;
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
         const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
         m_list->RSSetViewports(1, &vp);
@@ -3727,11 +3798,12 @@ public:
         {
             const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
             m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
-            if (depth_on)
+            if (depth_on && !m_next_load_depth)
             {
                 m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr);
             }
         }
+        m_next_load_depth = false;
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
         const D3D12_RECT sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
         m_list->RSSetViewports(1, &vp);
@@ -3807,10 +3879,11 @@ public:
         const D3D12_GPU_DESCRIPTOR_HANDLE ro = frame_alloc_storage_srv_slot(s); // t0 (REN-39-C1)
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv = t.dsv();
         m_list->OMSetRenderTargets(0, nullptr, FALSE, &dsv); // ⛔ zero RTVs: depth-only
-        if (!load_target)
+        if (!load_target && !m_next_load_depth)
         {
             m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr);
         }
+        m_next_load_depth = false;
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
         const D3D12_RECT sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
         m_list->RSSetViewports(1, &vp);
@@ -3837,7 +3910,7 @@ public:
                                             float clear_depth, DepthCompare compare, IStorageBuffer& storage,
                                             crd::u32 index_offset_bytes, crd::u32 index_count, crd::u32 instance_count,
                                             crd::u32 first_index, ITexture* texture, ITexture* atlas,
-                                            bool load_target) override
+                                            bool load_target, crd::u32 first_draw_index = 0U) override
     {
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
@@ -3871,11 +3944,12 @@ public:
         {
             const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
             m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
-            if (depth_on)
+            if (depth_on && !m_next_load_depth)
             {
                 m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr);
             }
         }
+        m_next_load_depth = false;
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
         const D3D12_RECT sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
         m_list->RSSetViewports(1, &vp);
@@ -3896,12 +3970,13 @@ public:
         {
             auto& atl = static_cast<Dx12Texture&>(*atlas);
             const D3D12_GPU_DESCRIPTOR_HANDLE atlas_table = frame_alloc_srv_slot(atl);
-            D3D12_GPU_DESCRIPTOR_HANDLE cmp_tbl = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
-            cmp_tbl.ptr += static_cast<UINT64>(1U) * m_sampler_inc; // the COMPARISON sampler slot
             m_list->SetGraphicsRootDescriptorTable(4, atlas_table); // shadow atlas (t4)
-            m_list->SetGraphicsRootDescriptorTable(5, cmp_tbl);     // comparison sampler (s5)
+            // REN-40-D: s5 keyed by WHAT the atlas is — comparison for depth, LINEAR/CLAMP for moments.
+            m_list->SetGraphicsRootDescriptorTable(5, atlas_samp_tbl(atl));
+            m_list->SetGraphicsRootDescriptorTable(8, plain_depth_tbl()); // plain depth sampler (s6, REN-40-D)
         }
         m_list->SetPipelineState(pso);
+        m_list->SetGraphicsRoot32BitConstant(6, first_draw_index, 0);
         apply_stencil_ref();
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         D3D12_INDEX_BUFFER_VIEW ibv{};
@@ -4067,8 +4142,9 @@ public:
         {
             const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
             m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
-            if (depth_on) { m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr); }
+            if (depth_on && !m_next_load_depth) { m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr); }
         }
+        m_next_load_depth = false;
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F,
                                 1.0F};
         const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
@@ -4090,10 +4166,10 @@ public:
         {
             auto&                             atl         = static_cast<Dx12Texture&>(*atlas);
             const D3D12_GPU_DESCRIPTOR_HANDLE atlas_table = frame_alloc_srv_slot(atl);
-            D3D12_GPU_DESCRIPTOR_HANDLE       cmp_tbl     = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
-            cmp_tbl.ptr += static_cast<UINT64>(1U) * m_sampler_inc; // the COMPARISON sampler slot
             m_list->SetGraphicsRootDescriptorTable(4, atlas_table); // shadow atlas (t4)
-            m_list->SetGraphicsRootDescriptorTable(5, cmp_tbl);     // comparison sampler (s5)
+            // REN-40-D: s5 keyed by WHAT the atlas is — comparison for depth, LINEAR/CLAMP for moments.
+            m_list->SetGraphicsRootDescriptorTable(5, atlas_samp_tbl(atl));
+            m_list->SetGraphicsRootDescriptorTable(8, plain_depth_tbl()); // plain depth sampler (s6, REN-40-D)
         }
         m_list->SetPipelineState(pso);
         apply_stencil_ref();
@@ -4154,7 +4230,8 @@ public:
         const D3D12_GPU_DESCRIPTOR_HANDLE ro    = frame_alloc_storage_srv_slot(s); // t0 (REN-39-C1)
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv   = t.dsv();
         m_list->OMSetRenderTargets(0, nullptr, FALSE, &dsv); // ⛔ zero RTVs: depth-only
-        if (!load_target) { m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr); }
+        if (!load_target && !m_next_load_depth) { m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr); }
+        m_next_load_depth = false;
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F,
                                 1.0F};
         const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
@@ -4335,8 +4412,9 @@ public:
         {
             const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
             m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
-            m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr);
+            if (!m_next_load_depth) { m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr); }
         }
+        m_next_load_depth = false;
 
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
         const D3D12_RECT sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
@@ -4702,7 +4780,7 @@ public:
         srv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
         srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         srv.Texture2D.MipLevels     = 1;
-        return std::make_unique<Dx12Texture>(std::move(tex), width, height, srv);
+        return std::make_unique<Dx12Texture>(std::move(tex), width, height, srv, /*depth=*/true);
     }
 
     void draw_shadow(IRasterTarget& target, IRasterProgram& program, ClearColor clear, ITexture& depth,
@@ -4885,6 +4963,69 @@ public:
         return m_rt_pso[m_rt_pso_n - 1U].Get();
     }
 
+    // REN-40-G3: sampled-compute root — UAV table (u0..u7) + SRV table (t8) + static NEAREST/CLAMP sampler (s9).
+    [[nodiscard]] ID3D12RootSignature* sampled_kernel_root()
+    {
+        if (m_sampled_kernel_root != nullptr) { return m_sampled_kernel_root.Get(); }
+        D3D12_DESCRIPTOR_RANGE uav_range{};
+        uav_range.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+        uav_range.NumDescriptors     = kMaxKernelBuffers;
+        uav_range.BaseShaderRegister = 0;
+        D3D12_DESCRIPTOR_RANGE srv_range{};
+        srv_range.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        srv_range.NumDescriptors     = 1;
+        srv_range.BaseShaderRegister = kMaxKernelBuffers; // t8
+        D3D12_ROOT_PARAMETER rp[2]{};
+        rp[0].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        rp[0].DescriptorTable.NumDescriptorRanges = 1;
+        rp[0].DescriptorTable.pDescriptorRanges   = &uav_range;
+        rp[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        rp[1].DescriptorTable.NumDescriptorRanges = 1;
+        rp[1].DescriptorTable.pDescriptorRanges   = &srv_range;
+        D3D12_STATIC_SAMPLER_DESC ss{};
+        ss.Filter           = D3D12_FILTER_MIN_MAG_MIP_POINT;
+        ss.AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        ss.AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        ss.AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        ss.ShaderRegister   = kMaxKernelBuffers + 1U; // s9
+        ss.RegisterSpace    = 0;
+        ss.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        D3D12_ROOT_SIGNATURE_DESC rsd{};
+        rsd.NumParameters     = 2;
+        rsd.pParameters       = rp;
+        rsd.NumStaticSamplers = 1;
+        rsd.pStaticSamplers   = &ss;
+        ComPtr<ID3DBlob> sig;
+        ComPtr<ID3DBlob> err;
+        if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err))) { return nullptr; }
+        if (FAILED(m_device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(),
+                                                 IID_PPV_ARGS(&m_sampled_kernel_root))))
+        {
+            return nullptr;
+        }
+        return m_sampled_kernel_root.Get();
+    }
+
+    [[nodiscard]] ID3D12PipelineState* sampled_kernel_pipeline(const void* dxil, crd::usize size)
+    {
+        for (crd::u32 i = 0; i < m_sampled_pso_n; ++i)
+        {
+            if (m_sampled_pso_key[i] == dxil) { return m_sampled_pso[i].Get(); }
+        }
+        if (m_sampled_pso_n >= kKernelPsoCap) { return nullptr; }
+        ID3D12RootSignature* root = sampled_kernel_root();
+        if (root == nullptr) { return nullptr; }
+        D3D12_COMPUTE_PIPELINE_STATE_DESC pd{};
+        pd.pRootSignature = root;
+        pd.CS             = {dxil, size};
+        ComPtr<ID3D12PipelineState> pso;
+        if (FAILED(m_device->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pso)))) { return nullptr; }
+        m_sampled_pso_key[m_sampled_pso_n] = dxil;
+        m_sampled_pso[m_sampled_pso_n]     = pso;
+        ++m_sampled_pso_n;
+        return m_sampled_pso[m_sampled_pso_n - 1U].Get();
+    }
+
     // A contiguous UAV run from the frame ring for the pass's buffers. Slots past `n` replicate slot 0 so every
     // descriptor the table covers is valid — the same rule every other table in this file follows.
     [[nodiscard]] D3D12_GPU_DESCRIPTOR_HANDLE alloc_kernel_uav_run(IStorageBuffer* const* buffers, crd::u32 n)
@@ -4936,6 +5077,37 @@ public:
         m_list->SetComputeRootDescriptorTable(1, alloc_kernel_uav_run(buffers, n));
         m_list->SetPipelineState(pso);
         apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
+        m_list->Dispatch(gx > 0U ? gx : 1U, gy > 0U ? gy : 1U, gz > 0U ? gz : 1U);
+        uav_write_barrier();
+    }
+
+    // ── ⭐ REN-40-G3: SAMPLED-COMPUTE DISPATCH — the HZB verb (DX12). ──
+    void dispatch_kernel_sampled(IGpuProgram& kernel, crd::u32 gx, crd::u32 gy, crd::u32 gz,
+                                 IStorageBuffer* const* buffers, crd::u32 count, ITexture& tex) override
+    {
+        if (!m_ok || !frame_recording() || buffers == nullptr || count == 0U) { return; }
+        auto* dx_prog = dynamic_cast<Dx12GpuProgram*>(&kernel);
+        if (dx_prog == nullptr) { return; }
+        const auto           code = dx_prog->dxil();
+        ID3D12PipelineState* pso  = sampled_kernel_pipeline(code.data(), code.size());
+        if (pso == nullptr) { return; }
+        const crd::u32 n = count < kMaxKernelBuffers ? count : kMaxKernelBuffers;
+
+        D3D12_GPU_DESCRIPTOR_HANDLE uav_gpu = alloc_kernel_uav_run(buffers, n);
+        auto& dx_tex = static_cast<Dx12Texture&>(tex);
+        const UINT srv_base = m_frame_rec.cursor;
+        D3D12_CPU_DESCRIPTOR_HANDLE srv_cpu = m_frame_rec.heap->GetCPUDescriptorHandleForHeapStart();
+        srv_cpu.ptr += static_cast<SIZE_T>(srv_base) * m_frame_rec.inc;
+        m_device->CreateShaderResourceView(dx_tex.tex(), &dx_tex.srv(), srv_cpu);
+        m_frame_rec.cursor += 1U;
+        D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu = m_frame_rec.heap->GetGPUDescriptorHandleForHeapStart();
+        srv_gpu.ptr += static_cast<UINT64>(srv_base) * m_frame_rec.inc;
+
+        m_list->SetComputeRootSignature(sampled_kernel_root());
+        m_list->SetComputeRootDescriptorTable(0, uav_gpu);
+        m_list->SetComputeRootDescriptorTable(1, srv_gpu);
+        m_list->SetPipelineState(pso);
+        apply_stencil_ref();
         m_list->Dispatch(gx > 0U ? gx : 1U, gy > 0U ? gy : 1U, gz > 0U ? gz : 1U);
         uav_write_barrier();
     }
@@ -6110,6 +6282,10 @@ private:
         m_list->SetGraphicsRootSignature(p.root());
         m_list->SetGraphicsRootDescriptorTable(1, srv_gpu);  // SRV table (t1)
         m_list->SetGraphicsRootDescriptorTable(2, samp_gpu); // sampler table (s2)
+        // REN-40-D: the plain depth sampler rides along UNCONDITIONALLY (s6) — a fullscreen pass reading a
+        // depth resource gets the comparison sampler at s2, but a moment-CONVERT pass needs the STORED depth,
+        // which only a plain sampler can return. The slot is always valid, so binding it costs nothing.
+        m_list->SetGraphicsRootDescriptorTable(8, plain_depth_tbl());
         m_list->SetPipelineState(pso);
         apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -6150,10 +6326,10 @@ private:
         if (atlas != nullptr)
         {
             const D3D12_GPU_DESCRIPTOR_HANDLE atlas_table = frame_alloc_srv_slot(*atlas);
-            D3D12_GPU_DESCRIPTOR_HANDLE       cmp_tbl     = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
-            cmp_tbl.ptr += static_cast<UINT64>(1U) * m_sampler_inc; // the COMPARISON sampler slot
             m_list->SetGraphicsRootDescriptorTable(4, atlas_table); // shadow atlas (t4)
-            m_list->SetGraphicsRootDescriptorTable(5, cmp_tbl);     // comparison sampler (s5)
+            // REN-40-D: s5 keyed by WHAT the atlas is — comparison for depth, LINEAR/CLAMP for moments.
+            m_list->SetGraphicsRootDescriptorTable(5, atlas_samp_tbl(*atlas));
+            m_list->SetGraphicsRootDescriptorTable(8, plain_depth_tbl()); // plain depth sampler (s6, REN-40-D)
         }
         m_list->SetPipelineState(pso);
         apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
@@ -6229,6 +6405,11 @@ private:
     const void*                        m_rt_pso_key[kKernelPsoCap]{};
     ComPtr<ID3D12PipelineState>        m_rt_pso[kKernelPsoCap];
     crd::u32                           m_rt_pso_n = 0U;
+    // REN-40-G3: sampled-compute root signature (UAV table u0..u7 + SRV t8 + static sampler s9) and PSO cache.
+    ComPtr<ID3D12RootSignature>        m_sampled_kernel_root;
+    const void*                        m_sampled_pso_key[kKernelPsoCap]{};
+    ComPtr<ID3D12PipelineState>        m_sampled_pso[kKernelPsoCap];
+    crd::u32                           m_sampled_pso_n = 0U;
     ComPtr<ID3D12CommandSignature>     m_dispatch_sig;          // REN-38-A10: ExecuteIndirect(DISPATCH)
     ComPtr<ID3D12DescriptorHeap>       m_clear_heap;            // REN-38-B3: the NON-shader-visible UAV ClearUint needs
     // REN-38-B8: the authored-sampler cache — heap slots 2..N.
@@ -6246,6 +6427,9 @@ private:
     UINT                               m_srv_inc = 0;           // B2: CBV/SRV/UAV descriptor increment size
     UINT                               m_sampler_inc = 0;       // B2-b: sampler descriptor increment size
     bool                               m_ok            = false;
+    bool                               m_next_load_depth = false; // REN-40-G1: consumed by the next geometry verb
+
+    void set_next_draw_load_depth(bool load) override { m_next_load_depth = load; }
 };
 
 // ── REN-1 pt-2 (D-007 row 98): the DX12 FRAME GRAPH ───────────────────────────────────────────────────────────────
@@ -6374,6 +6558,22 @@ public:
         ImageNode& n = m_images[h.id - 1U];
         if (layer < n.layer_targets.size()) { return n.layer_targets[layer]; }
         return layer == 0U ? n.target : nullptr;
+    }
+
+    // ── ⭐ REN-40-G3: a render target whose COLOUR comes from one image and DEPTH from another. ──
+    [[nodiscard]] IRasterTarget* image_with_depth(FgImage colour, FgImage depth) noexcept override
+    {
+        if (!colour.valid() || colour.id > m_images.size()) { return nullptr; }
+        if (!depth.valid()  || depth.id  > m_images.size()) { return nullptr; }
+        ImageNode& cn = m_images[colour.id - 1U];
+        ImageNode& dn = m_images[depth.id  - 1U];
+        if (cn.shared_depth_target != nullptr) { return cn.shared_depth_target; }
+        const D3D12_PLACED_SUBRESOURCE_FOOTPRINT tfp{};
+        auto* t = new Dx12RasterTarget(cn.resource, nullptr, dn.resource, nullptr,
+                                       cn.rtv_heap, dn.dsv_heap ? dn.dsv_heap : dn.depth_dsv_heap,
+                                       nullptr, tfp, 1U, cn.desc.width, cn.desc.height);
+        cn.shared_depth_target = t;
+        return t;
     }
 
     // ── IFrameGraph ──
@@ -6720,6 +6920,7 @@ private:
         // what makes the frame-start reset harmless for it BY CONSTRUCTION rather than by remembering a skip.
         crd::i32               persist_index = -1;
         bool     no_alias = false; // REN-38-B6: the author PINNED this transient out of the aliaser
+        IRasterTarget* shared_depth_target = nullptr; // REN-40-G3: combined colour+external-depth target
     };
 
     // The two questions that DO need a predicate, each answerable on its own.
@@ -6848,6 +7049,8 @@ private:
                 n.rtv_heap.Reset();
                 n.dsv_heap.Reset();
                 n.resource.Reset();
+                delete n.shared_depth_target;
+                n.shared_depth_target = nullptr;
             }
         }
         for (BufferNode& n : m_buffers)
@@ -7082,7 +7285,12 @@ crd::u32 Dx12FrameGraph::alias_class(bool images)
         crd::i32   chosen = -1;
         for (crd::u32 si = slot_base; !pinned && si < m_slots.size(); ++si)
         {
-            if (m_slots[si].free_after < fp) { chosen = static_cast<crd::i32>(si); break; }
+            // ⛔⛔ THE SLOT MUST FIT AS WELL AS BE FREE. A heap cannot grow after creation, so choosing a freed
+            // slot by LIFETIME alone hands a 64 MB+ε resource a 64 MB heap and `CreatePlacedResource` fails at
+            // offset 0 — the whole graph then refuses to build. Latent for as long as every same-class transient
+            // happened to be the same size; the moment chain (three RGBA16F atlases beside the R32_TYPELESS
+            // depth atlas, whose allocation infos differ by padding) is what finally hit it.
+            if (m_slots[si].free_after < fp && m_slots[si].size >= sz) { chosen = static_cast<crd::i32>(si); break; }
         }
         if (chosen < 0)
         {
@@ -7098,10 +7306,7 @@ crd::u32 Dx12FrameGraph::alias_class(bool images)
             chosen = static_cast<crd::i32>(m_slots.size() - 1U);
             m_physical_bytes += static_cast<crd::u32>(sz);
         }
-        else if (sz > m_slots[static_cast<crd::u32>(chosen)].size)
-        {
-            m_slots[static_cast<crd::u32>(chosen)].size = sz; // (won't happen for equal-size transients; guarded anyway)
-        }
+
         Slot& s      = m_slots[static_cast<crd::u32>(chosen)];
         s.free_after = lp;
 
@@ -7271,7 +7476,7 @@ bool Dx12FrameGraph::materialize_image(ImageNode& n)
                     srv.ViewDimension       = D3D12_SRV_DIMENSION_TEXTURE2D;
                     srv.Texture2D.MipLevels = 1;
                 }
-                n.texture = new Dx12Texture(n.resource, n.desc.width, n.desc.height, srv);
+                n.texture = new Dx12Texture(n.resource, n.desc.width, n.desc.height, srv, n.is_depth);
             }
         }
     }

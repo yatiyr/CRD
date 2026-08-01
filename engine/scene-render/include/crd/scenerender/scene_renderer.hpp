@@ -90,6 +90,11 @@ inline constexpr crd::u32 kHdrInstanceCapacity = 101U;
 // this header has always followed. ⛔ Declared rather than computed in the kernel: the cull and the CPU's
 // `aabb_in_frustum` must read ONE truth, and a shader that derived the offset itself would be a second one.
 inline constexpr crd::u32 kHdrBoundsOff       = 102U;
+// ⭐⭐ REN-40-F: GPU skinning sections — the compute kernel's per-group inputs.
+// Words 103-105, from the [101..119] padding between kHdrBoundsOff and kHdrLodCount.
+inline constexpr crd::u32 kHdrSkelOff         = 103U; // skeleton data: parents + IBMs + rest pose
+inline constexpr crd::u32 kHdrClipOff         = 104U; // pre-baked clip frames
+inline constexpr crd::u32 kHdrAnimStateOff    = 105U; // per-instance (clip_local_off, time) pairs
 // ⭐⭐ REN-40-A: the PARAMS BLOCK at the head of a group's `cull_args` buffer, before the indirect commands.
 // ⛔⛔ IT EXISTS BECAUSE A CONSOLIDATED GROUP'S HEADER IS NOT AT WORD 0. Under REN-38 scene-buffer consolidation
 // a group's region sits at `region_base` and its header offsets are region-RELATIVE — the vertex programs add the
@@ -129,7 +134,10 @@ inline constexpr crd::u32 kHdrLodHeight     = 137U; // kMaxLodSlots x screen hei
 // it, so growing it would be a silent disagreement with every vertex program in the pack. Only the CULL needs
 // this data, so it lives where the cull's other per-instance input lives.
 inline constexpr crd::u32 kHdrLodOverrideOff = 145U;
-// 146..147 pad; the 16-word light record then occupies 148..163.
+// ⭐⭐ REN-40-C5: the impostor atlas section — packed RGBA8 texels in the buffer.
+inline constexpr crd::u32 kHdrAtlasOff       = 146U;
+inline constexpr crd::u32 kHdrAtlasDims      = 147U; // (grid << 16) | tile
+// the 16-word light record then occupies 148..163.
 inline constexpr crd::u32 kHeaderWords        = 164U;
 inline constexpr crd::u32 kHdrCsmSplits       = 28U; // 4 floats
 inline constexpr crd::u32 kHdrCsmLightVp      = 32U; // 4 x 16 floats
@@ -165,6 +173,14 @@ inline constexpr crd::u32 kSceneDrawTableOff  = kHeaderWords; // the table sits 
 inline constexpr crd::u32 kSceneDrawRowWords  = 2U;
 inline constexpr crd::u32 kSceneDrawRows      = 256U; // draw-list rows the table can describe
 inline constexpr crd::u32 kSceneDrawTableWords = kSceneDrawRows * kSceneDrawRowWords;
+// ⭐⭐ REN-40-C5: the IMPOSTOR draw table — separate from the mesh table because the impostor pass has its own
+// draw list and therefore its own DrawIndex space (0..M-1). The mesh table cannot serve both: cascade passes use
+// `program_is_instance = true` (the shadow VS overrides per-item programs), so impostor items drawn through a
+// cascade pass would rasterise an identity IB with a mesh VS — garbage. A dedicated table and draw list is the
+// only correct separation. 64 rows is generous (one per group with an impostor slot).
+inline constexpr crd::u32 kImpostorTableOff    = kSceneDrawTableOff + kSceneDrawTableWords;
+inline constexpr crd::u32 kImpostorDrawRows    = 64U;
+inline constexpr crd::u32 kImpostorTableWords  = kImpostorDrawRows * kSceneDrawRowWords;
 // ⛔⛔ DERIVED TOO. This was the literal 384 (= the old 120-word header + 256), so growing the header for the LOD
 // table slid the draw table forward INTO the first group's region: every rebased group would have read a draw-table
 // row as its geometry and drawn noise, and the frame would still have rendered. Three constants, one arithmetic.
@@ -173,7 +189,7 @@ inline constexpr crd::u32 kSceneDrawTableWords = kSceneDrawRows * kSceneDrawRowW
 // read a matrix ELEMENT where it needed a row NORM — see SCAR 5 in `ckir_technique.hpp`), and once that was fixed
 // at the root the derived base with NO slack passes all 33 scene-render gates. Magic constants justified by a
 // correlation nobody re-tested are how a wrong number survives a review, so it is gone rather than preserved.
-inline constexpr crd::u32 kSceneFirstRegion   = ((kSceneDrawTableOff + kSceneDrawTableWords) + 3U) & ~3U;
+inline constexpr crd::u32 kSceneFirstRegion   = ((kImpostorTableOff + kImpostorTableWords) + 3U) & ~3U;
 // ⭐⭐ REN-40-C2: WHERE A GROUP'S SECTIONS START — after its header AND after its own copy of the draw table.
 // ⛔⛔ EVERY buffer carries the table now, at the SAME offset, which is what lets ONE cooked `rebase_table`
 // address both the consolidated scene buffer and a private per-group one. The private path had no table at all,
@@ -237,6 +253,7 @@ struct MeshGroup
     // (bias 1.0, levels 0..7) for every slot whose entity carries no `MeshLodOverride`, so an entity that
     // does not care costs one write of a constant and nothing else.
     crd::u32 lod_override_off = 0;
+    crd::u32 atlas_off        = 0; // REN-40-C5: word offset of the impostor atlas texels (RGBA8, one u32 each)
     // ⭐⭐ 38-G1 perf: the CASCADE visible lists live right after the camera's, one `capacity` block each.
     // Cascade c's list is at `visible_off + (1 + c) * capacity`. Shadow passes were drawing the CAMERA's list
     // four times — cascade 0 covers a few metres of a 110-unit field, so most of that vertex work was
@@ -258,6 +275,7 @@ struct MeshGroup
     crd::u32 capacity = 0;           // instance slots the buffer holds
     crd::u32 region_base = 0;        // REN-38: this group's word base inside the ONE scene buffer (0 = unassigned)
     bool     geometry_uploaded = false;
+    bool     has_impostor      = false; // REN-40-C5: this group has an impostor slot (the last LOD slot)
 
     // GEO-8: the SKINNED path — groups whose mesh carries the SKNV stream draw through the skinned program:
     // a packed skin stream (6 words/vertex: 2×(u16 pair) joints + 4 weights, uploaded once) and a per-instance
@@ -267,13 +285,19 @@ struct MeshGroup
     crd::u32 joint_count  = 0;
     crd::u32 skin_off     = 0; // word offset of the packed skin stream
     crd::u32 palette_off  = 0; // word offset of the palette section
+    // REN-40-F: GPU skinning sections — uploaded once with geometry, read by the compute kernel.
+    crd::u32 skel_off      = 0; // parents[jc] + inverse_binds[jc*16] + rest_pose[jc*10]
+    crd::u32 clip_off      = 0; // pre-baked uniform-rate TRS frames
+    crd::u32 anim_state_off = 0; // per-instance (clip_local_off, time) — 2 words each, per frame
+    bool     skel_uploaded  = false;
+    crd::containers::HashMap<crd::resources::ResourceId, crd::u32> baked_clip_off; // clip ID → word offset in clip section
     crd::containers::Array<crd::resources::ResourceId> slot_skeleton; // per slot (null = static instance)
     crd::containers::Array<crd::resources::ResourceId> slot_clip;
     crd::containers::Array<crd::f32>                    slot_time;
 
     explicit MeshGroup(crd::memory::IAllocator* a)
-        : instances(a), slot_entity(a), world_bounds(a), lod_override(a), visible(a), slot_skeleton(a), slot_clip(a),
-          slot_time(a)
+        : instances(a), slot_entity(a), world_bounds(a), lod_override(a), visible(a), baked_clip_off(a),
+          slot_skeleton(a), slot_clip(a), slot_time(a)
     {
     }
     MeshGroup(MeshGroup&&) noexcept            = default;
@@ -366,6 +390,13 @@ public:
     // boxes made of light-colour bits survived (see `CullDesc::frustum_off` / the `bounds_off` scar).
     void set_gpu_cull_verify(bool on) noexcept;
     [[nodiscard]] bool gpu_cull_verify() const noexcept;
+
+    // ⭐⭐ REN-40-F: compute the bone palette ON THE DEVICE instead of on the CPU.
+    // Pre-bakes each clip to uniform-rate TRS frames (uploaded once), uploads per-instance
+    // (clip_offset, time) per frame (2 words each), and dispatches a compute kernel that
+    // samples → FK → IBM → writes the palette section. Default OFF.
+    void set_gpu_skinning(bool on) noexcept;
+    [[nodiscard]] bool gpu_skinning() const noexcept;
 
     // ⭐⭐ REN-40-C2: install an authored `.crdlod` policy BY NAME and start building
     // LOD chains. Returns false and changes nothing if the asset is missing or the
@@ -491,6 +522,50 @@ public:
     // The `pcf_taps` option value handed to the shadow technique (1 | 4 | 8 | 16). A DECLARED option, so each
     // choice cooks to its own fully-unrolled variant rather than a dynamic loop.
     void set_pcf_taps(crd::u32 taps) noexcept;
+
+    // ⭐⭐ REN-40-D: the CASCADE CROSS-FADE width, in percent of a cascade's own footprint. Cascades are
+    // fitted as spheres and selected by CONTAINMENT, so a fragment leaves one and enters the next at a hard
+    // line — and the two sides differ in texel size, bias and filter footprint, so that line is VISIBLE as a
+    // step in shadow softness even when both sides are individually correct. In the outer `pct` of a
+    // cascade's footprint the shadow is resolved from BOTH it and the next coarser one and lerped.
+    // ⛔ 0 (the default) cooks the byte-identical hard-select graph — a DECLARED option, so the parity arm is
+    // structural rather than a tolerance. Call before `init_programs`.
+    void set_cascade_blend_pct(crd::u32 pct) noexcept;
+
+    // ⭐⭐ REN-40-D: CONTACT-HARDENING SOFT SHADOWS (PCSS). Fixed-radius PCF gives every shadow the same
+    // softness, so a box resting ON the floor has the same blurry edge as one ten metres above it — and that
+    // edge is the single cue the eye uses to read contact. PCSS searches the map for what is actually blocking
+    // each fragment and sets the filter radius from how far away it is.
+    // ⛔ `angle_x100` is the light's angular RADIUS in hundredths of a degree (the sun is ~27), NOT a "light
+    // size" in some unspecified unit: a directional light has no size, it has an angular diameter, and a
+    // penumbra of `distance · tan(theta)` stays physically correct at every cascade scale. Call before
+    // `init_programs`; OFF by default, and off cooks the byte-identical fixed-radius graph.
+    void set_soft_shadows(bool pcss, crd::u32 angle_x100 = 27U) noexcept;
+
+    // ⭐⭐ REN-40-D: the full softness-model axis. `Off` = fixed-radius PCF; `Pcss` = per-fragment blocker search
+    // (contact hardening); `Evsm` / `Msm` = the FILTERABLE tier — the frame graph gains a moment pipeline
+    // (depth -> 4-channel moments -> separable Gaussian) and the technique reconstructs visibility from ONE
+    // bilinear read. ⛔ Selecting Evsm/Msm swaps the DEFAULT frame graph for `forward_csm_moment` (unless an
+    // explicit graph was installed — an explicit graph is the caller's contract and is never edited from here).
+    // Call before `init_programs`, like every cook-affecting setter.
+    enum class SoftShadow : crd::u8
+    {
+        Off  = 0,
+        Pcss = 1,
+        Evsm = 2,
+        Msm  = 3,
+    };
+    void set_soft_shadows(SoftShadow mode, crd::u32 angle_x100 = 27U) noexcept;
+
+    // ⭐⭐ REN-40-D: the two knobs the blocker search used to hardcode.
+    // `max_texels` bounds BOTH the search and the filter, so they can never disagree about how far a blocker was
+    // looked for — a filter wider than its own search asserts a penumbra from evidence nobody gathered, and the
+    // error grows with blocker distance, which is exactly where the estimate matters. It exists because a
+    // fixed-tap filter bands once its taps spread past a texel; a technique wanting unbounded softness wants a
+    // filterable representation, not a bigger cap.
+    // `search_taps` (4, 8 or 16) is the size of the search DISC — separate from `pcf_taps` because the search
+    // runs once per fragment to produce one number while the filter runs per tap to produce the shadow.
+    void set_soft_shadow_quality(crd::u32 max_texels, crd::u32 search_taps) noexcept;
 
     // Chunk-grain extract + change-driven upload. Call once per frame AFTER transform propagation (world.step).
     SyncStats sync(crd::scene::World& world);

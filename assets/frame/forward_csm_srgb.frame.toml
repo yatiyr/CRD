@@ -14,7 +14,7 @@ fallback = "crd://frame/forward_srgb"
 
 [[resource]]
 name    = "shadow_atlas"
-kind    = "transient_image"
+kind    = "persistent_image"
 format  = "D32Float"
 width   = 2048
 height  = 2048
@@ -46,6 +46,11 @@ all  = ["MeshRenderer", "Transform"]
 cull = "frustum"
 sort = "material"
 
+[[draw_list]]
+name = "impostor_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+
 [[pass]]
 name          = "csm_cascade"
 kind          = "raster.depth_only"
@@ -67,6 +72,15 @@ material_pass = "Forward"
 clear_color   = [0.09, 0.10, 0.13, 1.0]
 clear_depth   = 0.0
 depth         = "GreaterEqual"
+
+[[pass]]
+name      = "impostor"
+kind      = "raster.geometry"
+draw_list = "impostor_geometry"
+writes    = ["scene_hdr"]
+shader    = "crd://scene/impostor"
+load      = true
+depth     = "GreaterEqual"
 
 # ⭐⭐ THE DISPLAY TRANSFORM, AS DATA — the 38-G1 technique-library pass.
 [[pass]]

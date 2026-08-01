@@ -218,6 +218,16 @@ public:
     // `layer == 0` on a non-layered image is exactly `image(handle)`; out of range returns nullptr. Appended at
     // the END of the vtable (the D135 scar: inserting mid-vtable mis-dispatches under win-release LTCG).
     [[nodiscard]] virtual IRasterTarget* image_layer(FgImage handle, crd::u32 layer) noexcept = 0;
+
+    // ── ⭐ REN-40-G3: a render target with EXTERNAL depth — appended at the END (D135). ──
+    // Returns a target whose COLOUR comes from `colour` and DEPTH from `depth` (a D32Float transient declared
+    // as `shared_depth` in the frame asset). The graph creates it on demand. Null when either handle is invalid.
+    // Default: falls back to `image(colour)`, so every existing host compiles unchanged.
+    [[nodiscard]] virtual IRasterTarget* image_with_depth(FgImage colour, FgImage depth) noexcept
+    {
+        (void)depth;
+        return image(colour);
+    }
 };
 
 // A pass records via a C function + user pointer (the gpu-context callback idiom — no std::function heap

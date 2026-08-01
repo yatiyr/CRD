@@ -531,6 +531,7 @@ VertexCookError parse_vertex_toml(crd::containers::StringView toml_text, VertexP
     // ⭐⭐ REN-39-B2: `indexed = true` — the INDEXED pull mode (VertexIndex arrives as the index VALUE; the
     // instance rides InstanceIndex). See VertexProgramDesc::indexed.
     out.indexed = root["indexed"].value_or(false);
+    out.dither_band = static_cast<crd::f32>(root["dither_band"].value_or(0.0));
 
     if (const auto* nt = root["node"].as_array())
     {
@@ -1349,6 +1350,18 @@ crd::u64 vertex_layout_id(const VertexProgramDesc& desc) noexcept
     // a real row or a cook-time constant, which changes what every D3D12 command carries.
     hash_u64(h, desc.cull.draw_arg_within);
     hash_u64(h, desc.cull.base_row_word);
+    // REN-40-C4: dither_band changes whether the kernel packs alpha and dual-writes.
+    {
+        crd::u64 db = 0U;
+        std::memcpy(&db, &desc.cull.dither_band, 4U);
+        hash_u64(h, db);
+    }
+    // REN-40-C4: the VS masks visible entries and emits a fade varying when dither is active.
+    {
+        crd::u64 vdb = 0U;
+        std::memcpy(&vdb, &desc.dither_band, 4U);
+        hash_u64(h, vdb);
+    }
     return h;
 }
 
@@ -1445,6 +1458,13 @@ crd::containers::String emit_vertex_toml(const VertexProgramDesc& desc, crd::mem
     {
         app(o, "indexed = true\n");
     } // REN-39-B2: the indexed pull mode
+    if (desc.dither_band > 0.0F)
+    {
+        char db[64];
+        (void)std::snprintf(static_cast<char*>(db), sizeof(db), "dither_band = %.6f\n",
+                            static_cast<double>(desc.dither_band));
+        app(o, static_cast<const char*>(db));
+    }
     if (!desc.displace.empty())
     {
         app(o, "displace  = ");
@@ -2170,7 +2190,42 @@ namespace
     // their verdicts polluted the counter - the 38-F15 finding, 16 marked of 8 visible.
     const int n_inst = blu(c.ku(desc.header.instance_count));
     const int in_rng = g.binary(KOp::CmpLt, gid, n_inst);
-    const int vis    = g.select(in_rng, inside, c.ku(0U));
+    int       vis    = g.select(in_rng, inside, c.ku(0U));
+
+    // ── ⭐⭐ REN-40-G3: HZB OCCLUSION TEST — the SECOND predicate, after the frustum test. ──────────────────────
+    // The kernel already has the AABB and the VP, so the test is a handful of instructions in a dispatch that has
+    // already paid for the memory traffic. Reverse-Z: z_ndc < hzb_value → behind the farthest visible surface →
+    // OCCLUDED. The test uses the AABB CENTER as a single sample point — conservative enough for the camera view
+    // (large objects rarely have their center occluded), and the HZB is only half-res (one mip), so sampling
+    // multiple texels per object would need a multi-level pyramid the frame graph does not yet carry.
+    if (desc.cull.occlusion)
+    {
+        const int hzb_tex  = g.texture(0, 8, DType::F32, crd::kir::TexDim::Tex2D, false, false, false);
+        const int hzb_samp = g.sampler(0, 9, false);
+        const int cx = c.mul(c.add(bmin[0], bmax[0]), c.kf(0.5));
+        const int cy = c.mul(c.add(bmin[1], bmax[1]), c.kf(0.5));
+        const int cz = c.mul(c.add(bmin[2], bmax[2]), c.kf(0.5));
+        int clip[4];
+        for (crd::u32 i = 0; i < 4U; ++i)
+        {
+            const int* row = i == 0U ? r0 : (i == 1U ? r1 : (i == 2U ? r2 : r3));
+            int d = row[3];
+            d     = c.add(d, c.mul(row[0], cx));
+            d     = c.add(d, c.mul(row[1], cy));
+            d     = c.add(d, c.mul(row[2], cz));
+            clip[i] = d;
+        }
+        const int inv_w = c.dvd(c.kf(1.0), g.binary(KOp::Max, clip[3], c.kf(1.0e-6)));
+        const int ndc_x = c.mul(clip[0], inv_w);
+        const int ndc_y = c.mul(clip[1], inv_w);
+        const int ndc_z = c.mul(clip[2], inv_w);
+        const int u_coord = c.add(c.mul(ndc_x, c.kf(0.5)), c.kf(0.5));
+        const int v_coord = c.add(c.mul(ndc_y, c.kf(0.5)), c.kf(0.5));
+        const int uv      = g.vec2(u_coord, v_coord);
+        const int hzb_val = g.swizzle(g.tex_sample_lod(hzb_tex, hzb_samp, uv, c.kf(0.0)), 0);
+        const int not_occ = g.cast(g.binary(KOp::CmpGe, ndc_z, hzb_val), DType::U32);
+        vis               = c.mul(vis, not_occ);
+    }
 
     // ── the claim: each survivor reserves its own slot ──
     // ⛔⛔ THIS IS THE CORRECT FORM, NOT YET THE FAST ONE, AND THE DIFFERENCE IS DELIBERATE. The wave-scalarized
@@ -2204,6 +2259,7 @@ namespace
     // is that rule, unrolled at cook time with no branch.
     const crd::u32 slots  = desc.cull.lod_slots < 1U ? 1U : desc.cull.lod_slots;
     int            lslot  = c.ku(0U);
+    int            px     = c.kf(0.0); // projected screen height in pixels — set by the LOD selector below
     if (slots > 1U && desc.cull.pixel_height_word != 0U && desc.cull.lod_height_word != 0U)
     {
         const int cx = c.mul(c.add(bmin[0], bmax[0]), c.kf(0.5));
@@ -2224,7 +2280,7 @@ namespace
         // the view's pixel height, from the args params block (f32 bits) — see CullDesc::pixel_height_word
         const int vpx = g.int_bits_to_float(
             g.cast(g.buffer_load(argsb, c.ku(desc.cull.pixel_height_word)), DType::I32));
-        int px        = c.dvd(c.mul(c.mul(r, row1_len), vpx), wc);
+        px            = c.dvd(c.mul(c.mul(r, row1_len), vpx), wc);
         const int nlv = desc.cull.lod_count_word != 0U ? blu(c.ku(desc.cull.lod_count_word)) : c.ku(0U);
         // ── ⭐⭐ REN-40-C2: THE PER-ENTITY OVERRIDE (`MeshLodOverride`, an OPTIONAL component). ────────────────
         // Two words per instance beside the world AABBs: the screen BIAS as f32 bits, then
@@ -2265,6 +2321,48 @@ namespace
             lslot          = g.binary(KOp::Min, lslot, last);
         }
     }
+    // ── ⭐⭐ REN-40-C4: DITHER CROSS-DISSOLVE — dual-write inside the band, alpha-packed visible entries. ──────
+    // When `dither_band > 0` and a surviving instance sits inside the transition band around h[lslot], the kernel
+    // writes the instance into BOTH the coarse slot (lslot, fading in) and the fine slot (lslot-1, fading out),
+    // each with a complementary alpha byte packed into bits [31:24] of the visible entry. Outside the band or
+    // when lslot == 0 (finest level, nothing finer to blend with), one write with alpha 0xFF (fully opaque).
+    // ⛔ When dither_band == 0 the entire block is skipped and the historical bare-gid write runs unchanged.
+    int primary_val = gid; // dither off: bare instance_id
+    int sec_vis     = c.ku(0U); // secondary write visibility (0 = no secondary write)
+    int sec_slot    = c.ku(0U); // secondary slot (safe fallback when no secondary write)
+    int sec_val     = gid;      // secondary packed value
+    if (desc.cull.dither_band > 0.0F && slots > 1U)
+    {
+        // h_selected = h[lslot], loaded DYNAMICALLY after the override clamp so the band check always uses
+        // the clamped level's actual switch height.
+        const int h_selected = blf(c.add(c.ku(desc.cull.lod_height_word), lslot));
+        const crd::f32 band = desc.cull.dither_band;
+        const int has_prev  = g.cast(g.binary(KOp::CmpGt, lslot, c.ku(0U)), DType::U32);
+        const int low_edge  = c.mul(h_selected, c.kf(static_cast<double>(1.0F - band)));
+        const int in_band_px = g.cast(g.binary(KOp::CmpGt, px, low_edge), DType::U32);
+        const int in_band_u = c.mul(has_prev, in_band_px); // 1 when in the dither band, 0 otherwise
+        const int in_band   = g.binary(KOp::CmpNe, in_band_u, c.ku(0U));
+        // t ∈ [0,1]: 0 at the far edge of the band (deep in the coarse level), 1 at the boundary with the
+        // fine level. ⛔ Clamped to avoid precision-edge reads outside [0,255] after the multiply.
+        const int t_num = c.sub(px, low_edge);
+        const int t_den = g.binary(KOp::Max, c.mul(h_selected, c.kf(static_cast<double>(band))), c.kf(1.0e-6));
+        const int t_raw = c.dvd(t_num, t_den);
+        const int t     = g.binary(KOp::Min, g.binary(KOp::Max, t_raw, c.kf(0.0)), c.kf(1.0));
+        // alpha bytes: fine fades out (t → 255 at the boundary), coarse fades in (255 − t → 255 far from it)
+        const int alpha_fine   = g.cast(c.mul(t, c.kf(255.0)), DType::U32);
+        const int alpha_coarse = c.sub(c.ku(255U), alpha_fine);
+        // packed entries: (alpha_byte << 24) | gid
+        const int pack_coarse = g.binary(KOp::BitOr, g.binary(KOp::Shl, alpha_coarse, c.ku(24U)), gid);
+        const int pack_fine   = g.binary(KOp::BitOr, g.binary(KOp::Shl, alpha_fine,   c.ku(24U)), gid);
+        const int pack_opaque = g.binary(KOp::BitOr, c.ku(0xFF000000U), gid);
+        primary_val = g.select(in_band, pack_coarse, pack_opaque);
+        // secondary write: lslot − 1, with complementary alpha (the fine level fading out).
+        // ⛔ When lslot == 0, has_prev is 0, so sec_vis is 0 and the secondary atomic/store never fires.
+        // The fallback sec_slot of 0 keeps the atomic address inside the buffer even when lslot wraps.
+        sec_vis  = c.mul(vis, in_band_u); // 1 only for in-band survivors
+        sec_slot = g.select(g.binary(KOp::CmpNe, has_prev, c.ku(0U)), c.sub(lslot, c.ku(1U)), c.ku(0U));
+        sec_val  = pack_fine;
+    }
     // ⭐⭐ ONE COMMAND PER (view, slot). The view is baked into `draw_arg_off`; the slot walks it by whole
     // commands, so a survivor accumulates into exactly the draw that will render its level.
     const int cnt_idx = c.add(c.ku(desc.cull.draw_arg_off / 4U + 1U),
@@ -2279,10 +2377,23 @@ namespace
     const int list_slot   = c.add(c.ku(desc.cull.view_index * slots), lslot);
     const int list_base   = c.add(c.add(base, blu(c.ku(desc.header.visible_off))),
                                   c.mul(list_slot, blu(c.ku(desc.cull.capacity_word))));
-    const int instance_id = gid;
     const int keep        = g.stmt_if_begin(g.binary(KOp::CmpNe, vis, c.ku(0U)));
-    g.stmt_buffer_store(inbuf, c.add(list_base, list_index), instance_id);
+    g.stmt_buffer_store(inbuf, c.add(list_base, list_index), primary_val);
     g.stmt_if_end(keep);
+
+    // ⭐⭐ REN-40-C4: THE SECONDARY WRITE — the fine level's copy, with the complementary alpha.
+    if (desc.cull.dither_band > 0.0F && slots > 1U)
+    {
+        const int sec_cnt_idx    = c.add(c.ku(desc.cull.draw_arg_off / 4U + 1U),
+                                         c.mul(sec_slot, c.ku(desc.cull.draw_stride / 4U)));
+        const int sec_list_index = g.atomic_add_fetch(argsb, sec_cnt_idx, sec_vis);
+        const int sec_list_slot  = c.add(c.ku(desc.cull.view_index * slots), sec_slot);
+        const int sec_list_base  = c.add(c.add(base, blu(c.ku(desc.header.visible_off))),
+                                         c.mul(sec_list_slot, blu(c.ku(desc.cull.capacity_word))));
+        const int sec_keep       = g.stmt_if_begin(g.binary(KOp::CmpNe, sec_vis, c.ku(0U)));
+        g.stmt_buffer_store(inbuf, c.add(sec_list_base, sec_list_index), sec_val);
+        g.stmt_if_end(sec_keep);
+    }
 
     ve.stage             = crd::kir::KStage::Compute;
     ve.local_size[0]     = desc.cull.workgroup;
@@ -2775,7 +2886,18 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
             vis_base = c.add(c.hdru(desc.header.visible_off), c.mul(c.hdru(cap_word), list_index));
         }
     }
-    const int slot  = c.loadu(c.add(vis_base, ii));
+    const int raw_vis = c.loadu(c.add(vis_base, ii));
+    // ⭐⭐ REN-40-C4: when dither is active the visible entry packs (alpha_byte << 24) | instance_id.
+    // Mask the id; extract the byte; derive fade ∈ [0,1]. The mask is inert when alpha_byte == 0xFF
+    // (fully opaque), so a `dither_band = 0` cook with alpha always 0xFF produces the same slot.
+    const bool has_dither = desc.dither_band > 0.0F && desc.lod_slots > 1U;
+    const int slot  = has_dither ? g.binary(KOp::BitAnd, raw_vis, c.ku(0x00FFFFFFU)) : raw_vis;
+    int fade_alpha  = -1; // −1 = no fade varying to emit
+    if (has_dither && desc.transform != crd::vertcook::VertexTransform::LightVp)
+    {
+        const int alpha_byte = g.binary(KOp::Shr, raw_vis, c.ku(24U));
+        fade_alpha = c.dvd(g.cast(alpha_byte, DType::F32), c.kf(255.0));
+    }
     const int ibase = c.add(c.hdru(desc.header.instance_off), c.mul(slot, c.ku(desc.instance.stride)));
 
     crd::containers::Array<AttrVals> vals(crd::memory::default_allocator());
@@ -3186,6 +3308,13 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
         if (w == 0U || ve.n_out >= crd::kir::kMaxStageOutputs) { return false; }
         ve.out[ve.n_out] = {c.vecn(static_cast<const int*>(comps), w), static_cast<int>(v.location),
                             v.flat ? crd::kir::Interp::Flat : crd::kir::Interp::Smooth};
+        ++ve.n_out;
+    }
+    // ⭐⭐ REN-40-C4: the fade alpha varying at location 4 — flat f32, emitted only when dither is active
+    // and only for non-shadow stages (a shadow FS writes depth only and never reads this varying).
+    if (fade_alpha >= 0 && ve.n_out < crd::kir::kMaxStageOutputs)
+    {
+        ve.out[ve.n_out] = {fade_alpha, 4, crd::kir::Interp::Flat};
         ++ve.n_out;
     }
     // ⛔⛔ A TASK STAGE CARRIES NEITHER A POSITION NOR VARYINGS. It emits a workgroup COUNT; the pull path

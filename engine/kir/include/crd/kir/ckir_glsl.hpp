@@ -702,6 +702,17 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
             s.append("layout(set = 0, binding = "); app_uint(s, nd.iidx); s.append(") uniform accelerationStructureEXT as"); app_uint(s, nd.iidx); s.append(";\n");
         }
     }
+    // REN-40-F: quat/slerp helper functions — the COMPUTE-KERNEL parity of the emit_stage_glsl scan at ~line 1426.
+    {
+        bool qm = false, qc = false, qr = false, qa = false, qt = false, sl = false;
+        for (int i = 0; i < n; ++i) { switch (g.node(i).op) { case KOp::QuatMul: qm = true; break; case KOp::QuatConj: qc = true; break; case KOp::QuatRotate: qr = true; break; case KOp::QuatAxisAngle: qa = true; break; case KOp::QuatToMat3: qt = true; break; case KOp::Slerp: sl = true; break; default: break; } }
+        if (qm) { s.append("vec4 crd_qmul(vec4 a,vec4 b){return vec4(a.w*b.xyz+b.w*a.xyz+cross(a.xyz,b.xyz),a.w*b.w-dot(a.xyz,b.xyz));}\n"); }
+        if (qc) { s.append("vec4 crd_qconj(vec4 q){return vec4(-q.xyz,q.w);}\n"); }
+        if (qr) { s.append("vec3 crd_qrot(vec4 q,vec3 v){vec3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}\n"); }
+        if (qa) { s.append("vec4 crd_qaa(vec3 ax,float an){float h=an*0.5;return vec4(ax*sin(h),cos(h));}\n"); }
+        if (qt) { s.append("mat3 crd_qmat(vec4 q){float x=q.x,y=q.y,z=q.z,w=q.w;return mat3(1.0-2.0*(y*y+z*z),2.0*(x*y+w*z),2.0*(x*z-w*y),2.0*(x*y-w*z),1.0-2.0*(x*x+z*z),2.0*(y*z+w*x),2.0*(x*z+w*y),2.0*(y*z-w*x),1.0-2.0*(x*x+y*y));}\n"); }
+        if (sl) { s.append("vec4 crd_slerp(vec4 a,vec4 b,float t){float d=dot(a,b);float sg=1.0;if(d<0.0){d=-d;sg=-1.0;}if(d>0.9995){return normalize(mix(a,sg*b,t));}float th=acos(d);float sn=sin(th);return (sin((1.0-t)*th)*a+sin(t*th)*sg*b)/sn;}\n"); }
+    }
     s.append("void main() {\n");
 
     // DETERMINISM: every FLOAT arithmetic node materializes as a `precise` temp (SPIR-V NoContraction ⇒ no FMA fusion ⇒
@@ -750,6 +761,7 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::Builtin:
             if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::LocalInvocationIndex) { s.append("gl_LocalInvocationIndex"); }
             else if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::WorkgroupIndex) { s.append("gl_WorkGroupID.x"); }
+            else if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::GlobalInvocationId) { s.append("gl_GlobalInvocationID"); }
             else { ok = false; s.append("0u"); }
             break;
         case KOp::KernelLoopVar: s.append("lv"); app_uint(s, nd.a); break;
@@ -871,6 +883,36 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::QuadSwapX: s.append("subgroupQuadSwapHorizontal("); pv(pv, nd.a); s.append(")"); break;
         case KOp::QuadSwapY: s.append("subgroupQuadSwapVertical("); pv(pv, nd.a); s.append(")"); break;
         case KOp::QuadSwapDiagonal: s.append("subgroupQuadSwapDiagonal("); pv(pv, nd.a); s.append(")"); break;
+        // REN-40-F: VEC / MAT / QUAT ops — the compute-kernel parity of the raster emit_value_stmt switch at ~line 486.
+        // Spellings match exactly so the two paths emit identical GLSL for shared ops.
+        case KOp::Vec2: s.append(vtype(nd.type)); s.append("("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
+        case KOp::Vec3: s.append(vtype(nd.type)); s.append("("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(", "); pv(pv, nd.c); s.append(")"); break;
+        case KOp::VecConcat: s.append(vtype(nd.type)); s.append("("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
+        case KOp::VecComp: pv(pv, nd.a); s.append("."); { const char sw[2] = {"xyzw"[nd.iidx], '\0'}; s.append(sw); } break;
+        case KOp::Swizzle: pv(pv, nd.a); s.append("."); { const char xyzw[4] = {'x','y','z','w'}; for (int k = 0; k < nd.comps(); ++k) { const char sw[2] = {xyzw[nd.perm[k]], '\0'}; s.append(sw); } } break;
+        case KOp::Splat: s.append(vtype(nd.type)); s.append("("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::Dot: s.append("dot("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
+        case KOp::Cross: s.append("cross("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
+        case KOp::Normalize: s.append("normalize("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::VecLen: s.append("length("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::Reflect: s.append("reflect("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
+        case KOp::Refract: s.append("refract("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(", "); pv(pv, nd.c); s.append(")"); break;
+        case KOp::Faceforward: s.append("faceforward("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(", "); pv(pv, nd.c); s.append(")"); break;
+        case KOp::MatVecMul:
+        case KOp::MatMatMul: s.append("("); pv(pv, nd.a); s.append(" * "); pv(pv, nd.b); s.append(")"); break;
+        case KOp::MatTranspose: s.append("transpose("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::Determinant: s.append("determinant("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::MatInverse: s.append("inverse("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::OuterProduct: s.append("outerProduct("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
+        case KOp::MatFromCols: { const int mcols = nd.type.cols; const int operand[4] = {nd.a, nd.b, nd.c, nd.d}; s.append(vtype(nd.type)); s.append("("); for (int k = 0; k < mcols; ++k) { if (k) { s.append(", "); } pv(pv, operand[k]); } s.append(")"); break; }
+        case KOp::VecAny: if (g.node(nd.a).dtype() == DType::Bool) { s.append("any("); pv(pv, nd.a); s.append(")"); } else { s.append("any(notEqual("); pv(pv, nd.a); s.append(", "); s.append(vtype(g.node(nd.a).type)); s.append("(0.0)))"); } break;
+        case KOp::VecAll: if (g.node(nd.a).dtype() == DType::Bool) { s.append("all("); pv(pv, nd.a); s.append(")"); } else { s.append("all(notEqual("); pv(pv, nd.a); s.append(", "); s.append(vtype(g.node(nd.a).type)); s.append("(0.0)))"); } break;
+        case KOp::Slerp: s.append("crd_slerp("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(", "); pv(pv, nd.c); s.append(")"); break;
+        case KOp::QuatMul: s.append("crd_qmul("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
+        case KOp::QuatConj: s.append("crd_qconj("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::QuatRotate: s.append("crd_qrot("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
+        case KOp::QuatAxisAngle: s.append("crd_qaa("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
+        case KOp::QuatToMat3: s.append("crd_qmat("); pv(pv, nd.a); s.append(")"); break;
         default: ok = false; s.append("0"); break;
         }
     };
@@ -883,11 +925,12 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
         if (nd.a >= 0) { self(self, nd.a); }
         if (nd.b >= 0) { self(self, nd.b); }
         if (nd.c >= 0) { self(self, nd.c); }
+        if (nd.d >= 0) { self(self, nd.d); }
         if (!is_inline_op(nd.op) && temped[static_cast<crd::usize>(node)] == 0U)
         {
             temped[static_cast<crd::usize>(node)] = 1U;
             s.append(is_float_dtype(nd.dtype()) ? "  precise " : "  ");
-            s.append(buf_ctype(nd.dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(node)); s.append(" = ");
+            s.append(vtype(nd.type)); s.append(" t"); app_uint(s, static_cast<crd::u32>(node)); s.append(" = ");
             rhs(nd);
             s.append(";\n");
         }

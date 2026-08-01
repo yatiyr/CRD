@@ -515,10 +515,33 @@ inline constexpr int kCsmBindAtlasTex   = 0;
 inline constexpr int kCsmBindAtlasSamp  = 1;
 inline constexpr int kCsmBindLightVp0   = 2; // .. +3
 inline constexpr int kCsmBindMapSize    = 6;
-inline constexpr int kCsmBindCount      = 7;
+inline constexpr int kCsmBindCount      = 9;
 inline constexpr int kCsmOptCascades    = 0;
 inline constexpr int kCsmOptPcfTaps     = 1;
+// ⭐⭐ REN-40-D: the SEAM option. In the outer `cascade_blend` fraction of a cascade's footprint the shadow is
+// resolved from THIS cascade and the next coarser one and lerped, so the two turn into each other instead of
+// meeting at a line. ⛔ A DECLARED option, so `blend = 0` cooks the byte-identical graph it always did — the
+// parity arm is structural, not a threshold.
+inline constexpr int kCsmOptBlend       = 2;
+inline constexpr int kCsmOptSoft        = 3;
+inline constexpr int kCsmOptLightAngle  = 4;
+// ⭐⭐ REN-40-D: the two knobs the blocker search used to hardcode. A scaled filter with a FIXED tap count bands
+// once its taps spread further apart than a texel, so the penumbra has to be bounded — but the bound is a
+// quality/cost trade the CONTENT should make, not a magic number in the compiler. Same for how many taps the
+// search itself spends: the estimate is once per fragment and the filter is per-tap, so they are separate costs
+// and deserve separate dials.
+inline constexpr int kCsmOptSoftMaxTexels  = 5;
+inline constexpr int kCsmOptSoftSearchTaps = 6;
+// the plain-sampled atlas (texture + sampler) — bindings 7/8 in ABI order, after the 7 above
+inline constexpr int kCsmBindAtlasDepthTex  = 7;
+inline constexpr int kCsmBindAtlasDepthSamp = 8;
 inline constexpr crd::u32 kCsmMaxCascades = 4U;
+// ⭐⭐ REN-40-D (moments): the two FORMAT-DERIVED constants the EVSM/MSM tier shares between the CONVERT shader
+// and the technique's RESOLVE — one home, or the atlas and its reader drift apart.
+// c = 5.54 is the largest EVSM exponent whose SQUARE (the m2 channel) still fits fp16 (e^{2·5.54} = 64510 <
+// 65504); 6e-5 is the published (Peters) fp16 quantisation floor for the 4-moment Hamburger reconstruction.
+inline constexpr double kEvsmExponent  = 5.54;
+inline constexpr double kMsmMomentBias = 6.0e-5;
 
 [[nodiscard]] inline int body_forward_csm(KGraph& g, const TechniqueContext& tc, void* /*user*/)
 {
@@ -545,6 +568,31 @@ inline constexpr crd::u32 kCsmMaxCascades = 4U;
     if (n_casc > kCsmMaxCascades) { n_casc = kCsmMaxCascades; }
     auto n_taps = static_cast<int>(tc.option(kCsmOptPcfTaps, 4.0));
     if (n_taps != 1 && n_taps != 4 && n_taps != 8 && n_taps != 16) { n_taps = 4; }
+
+    // ⭐⭐ REN-40-D: the cascade BLEND fraction, clamped. ⛔ 0 means the graph below is emitted exactly as it
+    // was before this option existed — no second sample, no lerp, no extra node — which is what makes
+    // "blend = 0 is bit-identical" a property of the COOK rather than a tolerance in a test.
+    auto blend = static_cast<double>(tc.option(kCsmOptBlend, 0.0)) * 0.01; // the option is a PERCENT
+    if (!(blend > 0.0)) { blend = 0.0; }
+    if (blend > 0.9) { blend = 0.9; }
+    // ⭐⭐ REN-40-D: PCSS. 0 keeps the fixed-radius filter and emits not one extra node.
+    const int  soft_mode = static_cast<int>(tc.option(kCsmOptSoft, 0.0));
+    const double angle_r = static_cast<double>(tc.option(kCsmOptLightAngle, 27.0)) * (0.01 * 3.14159265358979 / 180.0);
+    // tan(x) ~= x + x^3/3 over the range an angular RADIUS can sensibly take, saturated past ~86 deg where the
+    // series stops being a tangent at all and an unbounded penumbra is meaningless anyway.
+    double tan_a = 0.0;
+    if (angle_r > 0.0)
+    {
+        tan_a = angle_r < 1.5 ? (angle_r + (angle_r * angle_r * angle_r / 3.0)) : 1.5;
+    }
+    // ⛔ the penumbra CAP, authored. A fixed-tap filter bands once its taps spread past a texel, so a bound is
+    // real engineering rather than timidity — but the content decides where the trade sits, and a technique that
+    // wants unbounded softness reaches for a filterable representation (the moment atlas), not a bigger number.
+    double max_texels = static_cast<double>(tc.option(kCsmOptSoftMaxTexels, 24.0));
+    if (!(max_texels > 0.0)) { max_texels = 24.0; }
+    if (max_texels > 256.0) { max_texels = 256.0; }
+    auto n_search = static_cast<int>(tc.option(kCsmOptSoftSearchTaps, 8.0));
+    if (n_search != 4 && n_search != 8 && n_search != 16) { n_search = 8; }
 
     const int wp = tc.fixed[kTiWorldPos]; // the projected position is built PER CASCADE (normal offset, below)
 
@@ -592,6 +640,17 @@ inline constexpr crd::u32 kCsmMaxCascades = 4U;
     const int sin_t   = g.unary(KOp::Sqrt, mxf(sub(kf(1.0), mul(ndl, ndl)), kf(0.0)));
 
     int bias_scale[kCsmMaxCascades];
+    // ⭐⭐ REN-40-D: THE RECEIVER PLANE, per cascade — how much this surface's OWN depth changes per texel of
+    // lateral offset, along the light's u and v axes (Isidoro, "Shadow Mapping: GPU-based Tips and Techniques").
+    // ⛔⛔ WITHOUT IT A WIDE FILTER SHADOWS ITSELF, and it does so in a way that reads as a tuning problem rather
+    // than a bug: every tap is compared against the depth at the FRAGMENT, so on any surface not square-on to the
+    // light a tap `k` texels away sits `k · texel · tan(tilt)` deeper than the value it is compared against, and
+    // beyond ~1 texel that exceeds the bias. The blocker search then finds the RECEIVER as its own blocker, and
+    // `avg` tracks the search radius instead of the caster — so the measured penumbra scaled with the CAP rather
+    // than with the caster's height, stayed almost flat across a 5x height change, and grew every time the cap
+    // was raised. The shadows still looked like plausible soft shadows the whole time.
+    int dz_du[kCsmMaxCascades];
+    int dz_dv[kCsmMaxCascades];
     for (crd::u32 ci = 0; ci < n_casc; ++ci)
     {
         const int vp = tc.binding(kCsmBindLightVp0 + static_cast<int>(ci));
@@ -608,6 +667,21 @@ inline constexpr crd::u32 kCsmMaxCascades = 4U;
         const int inv_range  = mxf(g.vlength(row2), kf(1.0e-9));
         const int texel_w    = dvd(kf(2.0), mul(msz, inv_radius)); // world units per shadow texel, THIS cascade
         bias_scale[ci]       = mul(texel_w, inv_range);
+        // ── the receiver plane (see above). The light's own axes are the NORMALISED matrix rows. ──
+        const int row1 = g.vec3(g.swizzle(col_x, 1), g.swizzle(col_y, 1), g.swizzle(col_z, 1));
+        const int xh   = g.normalize(row0);
+        const int yh   = g.normalize(row1);
+        const int zh   = g.normalize(row2);
+        const int nz   = g.dot(nrm, zh);
+        // ⛔ sign-PRESERVING guard. The light's +z may run either way depending on how the cascade was fitted, so
+        // clamping to a positive floor would flip the plane's tilt on half of all fits — the correction would then
+        // ADD the error it exists to remove, which is worse than not correcting at all. 0.05 is ~87 deg of
+        // grazing; past that the normal offset already dominates and an unbounded gradient is pure noise.
+        const int snz    = g.select(g.binary(KOp::CmpGt, nz, kf(0.0)), kf(1.0), kf(-1.0));
+        const int nz_saf = mul(snz, mxf(g.unary(KOp::Abs, nz), kf(0.05)));
+        const int per_tx = mul(texel_w, inv_range); // world->NDC depth, per texel of lateral travel
+        dz_du[ci]        = sub(kf(0.0), mul(dvd(g.dot(nrm, xh), nz_saf), per_tx));
+        dz_dv[ci]        = sub(kf(0.0), mul(dvd(g.dot(nrm, yh), nz_saf), per_tx));
         // the normal-offset sample position, in WORLD units of this cascade's texel
         const int nofs = mul(texel_w, mul(kf(2.5), sin_t));
         const int wpo  = g.vec4(add(g.swizzle(wp, 0), mul(g.swizzle(nrm, 0), nofs)),
@@ -635,7 +709,22 @@ inline constexpr crd::u32 kCsmMaxCascades = 4U;
     int sv  = uvs[0][1];
     int sz  = uvs[0][2];
     int bsc = bias_scale[0];
+    int gdu = dz_du[0]; // the receiver plane rides the SELECTED cascade, exactly like the bias and the UV
+    int gdv = dz_dv[0];
     int any = inside[0];
+    // ⭐⭐ REN-40-D: the COARSER NEIGHBOUR, selected in the SAME walk. Blending needs the cascade this fragment
+    // would fall into next, and the only place that is known cheaply is here — a parallel select chain costs a
+    // handful of nodes and no extra branching, whereas recovering it afterwards would mean repeating the
+    // containment logic and giving the two chances to disagree.
+    const crd::u32 nx0  = n_casc > 1U ? 1U : 0U;
+    int csf_n = kf(static_cast<double>(nx0));
+    int su_n  = uvs[nx0][0];
+    int sv_n  = uvs[nx0][1];
+    int sz_n  = uvs[nx0][2];
+    int bsc_n = bias_scale[nx0];
+    int gdu_n = dz_du[nx0];
+    int gdv_n = dz_dv[nx0];
+    int in_n  = inside[nx0];
     for (crd::u32 ci = n_casc; ci-- > 1U;)
     {
         const int hit = gt(inside[ci], kf(0.5));
@@ -644,7 +733,24 @@ inline constexpr crd::u32 kCsmMaxCascades = 4U;
         sv  = g.select(hit, uvs[ci][1], sv);
         sz  = g.select(hit, uvs[ci][2], sz);
         bsc = g.select(hit, bias_scale[ci], bsc); // ⛔ the bias rides the SELECTED cascade, like the UV
+        gdu = g.select(hit, dz_du[ci], gdu);
+        gdv = g.select(hit, dz_dv[ci], gdv);
         any = mxf(any, inside[ci]);
+        if (blend > 0.0)
+        {
+            // the neighbour is ci+1, CLAMPED at the last cascade — the outermost one has nothing coarser to
+            // blend into, and it is also the one whose edge is the end of the shadowed region, where the
+            // containment fallback (not a blend) is the correct behaviour.
+            const crd::u32 nx = (ci + 1U < n_casc) ? (ci + 1U) : ci;
+            csf_n = g.select(hit, kf(static_cast<double>(nx)), csf_n);
+            su_n  = g.select(hit, uvs[nx][0], su_n);
+            sv_n  = g.select(hit, uvs[nx][1], sv_n);
+            sz_n  = g.select(hit, uvs[nx][2], sz_n);
+            bsc_n = g.select(hit, bias_scale[nx], bsc_n);
+            gdu_n = g.select(hit, dz_du[nx], gdu_n);
+            gdv_n = g.select(hit, dz_dv[nx], gdv_n);
+            in_n  = g.select(hit, inside[nx], in_n);
+        }
     }
     {
         const int hit0 = gt(inside[0], kf(0.5));
@@ -653,6 +759,17 @@ inline constexpr crd::u32 kCsmMaxCascades = 4U;
         sv  = g.select(hit0, uvs[0][1], sv);
         sz  = g.select(hit0, uvs[0][2], sz);
         bsc = g.select(hit0, bias_scale[0], bsc);
+        gdu = g.select(hit0, dz_du[0], gdu);
+        gdv = g.select(hit0, dz_dv[0], gdv);
+        if (blend > 0.0)
+        {
+            csf_n = g.select(hit0, kf(static_cast<double>(nx0)), csf_n);
+            su_n  = g.select(hit0, uvs[nx0][0], su_n);
+            sv_n  = g.select(hit0, uvs[nx0][1], sv_n);
+            sz_n  = g.select(hit0, uvs[nx0][2], sz_n);
+            bsc_n = g.select(hit0, bias_scale[nx0], bsc_n);
+            in_n  = g.select(hit0, inside[nx0], in_n);
+        }
     }
 
     // ── the DEPTH bias, now a JUNIOR partner to the normal offset above. ──────────────────────────────────────
@@ -665,7 +782,6 @@ inline constexpr crd::u32 kCsmMaxCascades = 4U;
     const int ndl_safe = mxf(ndl, kf(0.1));
     const int slope    = g.binary(KOp::Min, dvd(sin_t, ndl_safe), kf(2.0));
     const int bias     = mul(bsc, add(kf(1.0), mul(kf(1.0), slope)));
-    const int ref  = sub(sz, bias);
 
     // ── PCF. The tap count is a DECLARED option, so each choice cooks to its own variant with the loop fully
     // unrolled and no dynamic branch (the "declare the axis, specialize on it, dedup the result" rule).
@@ -683,14 +799,180 @@ inline constexpr crd::u32 kCsmMaxCascades = 4U;
     else if (n_taps == 16) { taps = kTaps16; }
 
     const int tsz = dvd(kf(1.0), mxf(msz, kf(1.0)));
-    int occ = kf(0.0);
-    for (int t = 0; t < n_taps; ++t)
+    // ── ⭐⭐ REN-40-D: soft modes 2 (EVSM) and 3 (MSM) — the FILTERABLE tier. ────────────────────────────────
+    // The atlas bound at 4/5 is the prefiltered MOMENT atlas (a colour array through a LINEAR sampler — the
+    // renderer's binding seam decides that from the same `soft_mode` option this body reads, so the two cannot
+    // disagree). Visibility reconstructs from ONE bilinear read; there is no radius, no search and no tap loop,
+    // which is the entire point of paying for the prefilter.
+    int vis = -1;
+    if (soft_mode >= 2)
     {
-        const int tu = add(su, mul(kf(taps[t][0]), tsz));
-        const int tv = add(sv, mul(kf(taps[t][1]), tsz));
-        occ          = add(occ, g.tex_sample_cmp(tex, samp, g.vec3(tu, tv, csf), ref));
+        const int mom = g.tex_sample(tex, samp, g.vec3(su, sv, csf));
+        if (soft_mode == 3)
+        {
+            vis = lighting::msm_hamburger(g, mom, sz, kf(0.0), kf(kMsmMomentBias));
+        }
+        else
+        {
+            vis = lighting::evsm_shadow(g, mom, sz, kf(kEvsmExponent), kf(kEvsmExponent), kf(1.0e-4), kf(0.25));
+        }
+        // the cascade cross-fade, in moment space — the SAME footprint-driven factor the PCF arm uses, resolving
+        // the neighbour's moments instead of re-filtering. Structure kept parallel to the PCF blend below so a
+        // reader can diff the two arms line by line.
+        if (blend > 0.0)
+        {
+            const int mom_n = g.tex_sample(tex, samp, g.vec3(su_n, sv_n, csf_n));
+            int       vis_n = -1;
+            if (soft_mode == 3)
+            {
+                vis_n = lighting::msm_hamburger(g, mom_n, sz_n, kf(0.0), kf(kMsmMomentBias));
+            }
+            else
+            {
+                vis_n = lighting::evsm_shadow(g, mom_n, sz_n, kf(kEvsmExponent), kf(kEvsmExponent), kf(1.0e-4),
+                                              kf(0.25));
+            }
+            const int eu   = g.unary(KOp::Abs, sub(mul(su, kf(2.0)), kf(1.0)));
+            const int ev   = g.unary(KOp::Abs, sub(mul(sv, kf(2.0)), kf(1.0)));
+            const int edge = g.binary(KOp::Max, eu, ev);
+            int       t01  = dvd(sub(edge, kf(1.0 - blend)), kf(blend));
+            t01            = g.binary(KOp::Min, mxf(t01, kf(0.0)), kf(1.0));
+            t01            = mul(t01, in_n);
+            vis            = add(vis, mul(t01, sub(vis_n, vis)));
+        }
     }
-    int vis = mul(occ, kf(1.0 / static_cast<double>(n_taps)));
+    // ── ⭐⭐ REN-40-D: PCSS — THE FILTER RADIUS BECOMES A MEASUREMENT. ────────────────────────────────────────
+    // Fixed-radius PCF gives every shadow the same softness, so a box resting ON the floor has the same blurry
+    // edge as one ten metres above it — the single cue the eye uses to read contact. PCSS recovers it: search the
+    // map for what is actually BLOCKING this fragment, and set the filter radius from how far away that blocker
+    // is.
+    //
+    // ⛔⛔ THE PENUMBRA IS DERIVED FROM AN ANGLE, NOT FROM A "LIGHT SIZE". A directional light has no size; it has
+    // an angular diameter, and a blocker at world distance d casts a penumbra of `d · tan(theta)`. Expressed in
+    // TEXELS of this cascade that is `(z_recv − z_blk) · tan(theta) / bsc`, because `bsc` is exactly
+    // `texel_world / depth_range` — the same quantity that makes the depth bias scale-invariant. So the penumbra
+    // is correct at every cascade scale for free, and there is no second unit to keep in agreement.
+    // ⛔ The SEARCH radius is bounded by the same physics rather than by a magic constant: the widest penumbra
+    // possible is the one from a blocker at the light's near plane, which is `z_recv · tan(theta) / bsc`.
+    else
+    {
+        int radius = kf(1.0); // in texels; 1 = the historical fixed footprint
+        if (soft_mode == 1 && tan_a > 0.0)
+        {
+            const int dtex  = tc.binding(kCsmBindAtlasDepthTex);
+            const int dsamp = tc.binding(kCsmBindAtlasDepthSamp);
+            if (dtex < 0 || dsamp < 0) { return -1; }
+            const int inv_bsc = dvd(kf(1.0), mxf(bsc, kf(1.0e-9)));
+            const int search  = g.binary(KOp::Min, mul(mul(sz, kf(tan_a)), inv_bsc), kf(max_texels));
+            // ── the blocker search: average the depths that lie BETWEEN the light and this fragment ──
+            // ⛔⛔ A DISC, NOT A RING. This started life as eight taps at EXACTLY ±search — a ring — and a ring never
+            // samples the middle, so the commonest blocker of all (the one directly overhead) is the one it cannot
+            // see. What it averages instead is whatever happens to sit at the search radius, which makes the estimate
+            // depend on the search distance rather than on the blocker distance: the measured penumbra then barely
+            // moved when the caster was lifted (14 px at h=4, 17 px at h=10, where the physics asks for 3× that
+            // spread) and at wide angles it went NON-MONOTONE — wider at h=2 than at h=4. Every arm still looked like
+            // a plausible soft shadow.
+            // The distribution is a VOGEL (golden-angle) spiral: r_i = sqrt((i+½)/N), theta_i = i·GA. It is equal-area
+            // by construction, so each tap carries the same weight of the disc and the mean is unbiased; it is
+            // deterministic, so no per-fragment noise and nothing for a temporal filter to chase; and it is a
+            // compile-time table, so the loop unrolls exactly like the PCF one above.
+            static constexpr double kDisc16[16][2] = {
+                {0.176777, 0.000000},  {-0.225772, 0.206826}, {0.034558, -0.393771}, {0.284571, 0.371173},
+                {-0.522223, -0.092374}, {0.494695, -0.314685}, {-0.165466, 0.615525}, {-0.315561, -0.607594},
+                {0.684642, 0.250030},  {-0.712256, 0.294009}, {0.343354, -0.733729}, {0.253730, 0.808932},
+                {-0.764746, -0.443186}, {0.897134, -0.197232}, {-0.547507, 0.778772}, {-0.126487, -0.976090}};
+            static constexpr double kDisc8[8][2] = {
+                {0.250000, 0.000000},   {-0.319290, 0.292496}, {0.048872, -0.556877}, {0.402444, 0.524918},
+                {-0.738535, -0.130636}, {0.699605, -0.445031}, {-0.234004, 0.870484}, {-0.446271, -0.859268}};
+            static constexpr double kDisc4[4][2] = {
+                {0.353553, 0.000000}, {-0.451544, 0.413652}, {0.069116, -0.787542}, {0.569142, 0.742346}};
+            // ⛔ each table is normalised for ITS OWN count — a prefix of the 16-tap spiral only reaches
+            // sqrt(N/16) of the radius, so slicing one table would quietly shrink the search at low tap counts.
+            const double(*disc)[2] = kDisc8;
+            if (n_search == 4) { disc = kDisc4; }
+            else if (n_search == 16) { disc = kDisc16; }
+            int sum   = kf(0.0);
+            int count = kf(0.0);
+            for (int si = 0; si < n_search; ++si)
+            {
+                const double o[2] = {disc[si][0], disc[si][1]};
+                const int ou   = mul(kf(o[0]), search); // this tap's offset, IN TEXELS
+                const int ov   = mul(kf(o[1]), search);
+                const int su_s = add(su, mul(ou, tsz));
+                const int sv_s = add(sv, mul(ov, tsz));
+                const int d    = g.swizzle(g.tex_sample(dtex, dsamp, g.vec3(su_s, sv_s, csf)), 0);
+                // ⛔ the reference is the RECEIVER PLANE extended to this tap, not the depth at the fragment: the
+                // surface itself is `k · texel · tan(tilt)` deeper out here, and comparing against the fragment's own
+                // depth counts that as a blocker (see the plane note above).
+                const int pz   = add(sz, add(mul(gdu, ou), mul(gdv, ov)));
+                const int is_b = stp(d, sub(pz, bias)); // 1 when this tap is genuinely IN FRONT of the surface
+                // ⛔ accumulate the GAP (plane - blocker), not the raw depth: the penumbra is driven by how far the
+                // blocker is from the surface, and on a tilted receiver the raw depths are spread by the tilt alone —
+                // averaging them and subtracting `sz` once folds that spread straight into the penumbra estimate.
+                sum            = add(sum, mul(is_b, sub(pz, d)));
+                count          = add(count, is_b);
+            }
+            // ⛔ NO BLOCKER ⇒ FULLY LIT, and it must be expressed as a radius of 0 rather than skipped: a divide by a
+            // zero count is a NaN that propagates through the filter and paints the fragment black.
+            const int avg  = dvd(sum, mxf(count, kf(1.0)));       // the mean receiver-to-blocker depth GAP
+            const int pen  = mul(mul(avg, kf(tan_a)), inv_bsc);  // texels
+            const int lit  = stp(count, kf(0.5));                        // 1 when count < 0.5, i.e. none found
+            // ⛔ bounded by the SEARCH as well as by the authored cap: filtering over a region wider than the one
+            // that was searched asserts a penumbra from evidence that was never gathered, and the disagreement grows
+            // with blocker distance — precisely where the estimate is load-bearing.
+            const int cap  = g.binary(KOp::Min, kf(max_texels), search);
+            radius         = g.select(g.binary(KOp::CmpGt, lit, kf(0.5)), kf(0.0),
+                                      g.binary(KOp::Min, mxf(pen, kf(0.5)), cap));
+        }
+        int occ = kf(0.0);
+        for (int t = 0; t < n_taps; ++t)
+        {
+            // ⛔ the same receiver plane as the search. At the historical radius of one texel this is a correction
+            // of a fraction of the bias; at PCSS's radii it is the difference between a soft shadow and a surface
+            // that shadows itself in bands, and the two paths MUST agree about where the surface is or the filter
+            // darkens exactly the fragments the search decided were lit.
+            const int ou = mul(kf(taps[t][0]), radius);
+            const int ov = mul(kf(taps[t][1]), radius);
+            const int tu = add(su, mul(ou, tsz));
+            const int tv = add(sv, mul(ov, tsz));
+            const int rf = sub(add(sz, add(mul(gdu, ou), mul(gdv, ov))), bias);
+            occ          = add(occ, g.tex_sample_cmp(tex, samp, g.vec3(tu, tv, csf), rf));
+        }
+        vis = mul(occ, kf(1.0 / static_cast<double>(n_taps)));
+        // ── ⭐⭐ REN-40-D: THE SEAM, CLOSED. ──────────────────────────────────────────────────────────────────────
+        // Cascades are fitted as SPHERES and selected by CONTAINMENT, so a fragment leaves one and enters the next at
+        // a hard line — and the two sides differ in texel size, in bias and in filter footprint, so the line is
+        // VISIBLE as a step in shadow softness even when both sides are individually correct.
+        // ⛔ The blend factor is driven by how far into the cascade's own footprint the sample sits (`edge` -> 1 at
+        // the border), NOT by view distance: the split distances and the sphere fit are different quantities, and a
+        // distance-driven fade would drift out of agreement with the containment test that actually chose the
+        // cascade — which is scar 2 in a new costume.
+        // ⛔ Gated on the NEIGHBOUR's containment: at the outermost cascade there is nothing coarser, and the correct
+        // behaviour there is the unshadowed fallback, not a blend into a slice that does not contain the point.
+        if (blend > 0.0)
+        {
+            const int bias_n = mul(bsc_n, add(kf(1.0), mul(kf(1.0), slope)));
+            int       occ_n  = kf(0.0);
+            for (int t = 0; t < n_taps; ++t)
+            {
+                const int ou = mul(kf(taps[t][0]), radius);
+                const int ov = mul(kf(taps[t][1]), radius);
+                const int tu = add(su_n, mul(ou, tsz));
+                const int tv = add(sv_n, mul(ov, tsz));
+                const int rf = sub(add(sz_n, add(mul(gdu_n, ou), mul(gdv_n, ov))), bias_n);
+                occ_n        = add(occ_n, g.tex_sample_cmp(tex, samp, g.vec3(tu, tv, csf_n), rf));
+            }
+            const int vis_n = mul(occ_n, kf(1.0 / static_cast<double>(n_taps)));
+            // how far into this cascade's footprint: 0 at the centre, 1 at the border
+            const int eu   = g.unary(KOp::Abs, sub(mul(su, kf(2.0)), kf(1.0)));
+            const int ev   = g.unary(KOp::Abs, sub(mul(sv, kf(2.0)), kf(1.0)));
+            const int edge = g.binary(KOp::Max, eu, ev);
+            int       t01  = dvd(sub(edge, kf(1.0 - blend)), kf(blend));
+            t01            = g.binary(KOp::Min, mxf(t01, kf(0.0)), kf(1.0));
+            t01            = mul(t01, in_n); // only where the neighbour actually contains the point
+            vis            = add(vis, mul(t01, sub(vis_n, vis)));
+        }
+    }
     // scar 2 — the fallback keys off CONTAINMENT, exactly like the selection.
     vis = add(vis, mul(sub(kf(1.0), any), sub(kf(1.0), vis)));
 
@@ -711,10 +993,36 @@ inline constexpr TechniqueBinding kForwardCsmBindings[] = {
     {"shadow_atlas", BindType::Texture2DArrayShadow, BindFrequency::Pass, 1U},
     {"csm_light_vp", BindType::Mat4Array, BindFrequency::Pass, kCsmMaxCascades},
     {"csm_map_size", BindType::Float, BindFrequency::Pass, 1U},
+    // ⭐⭐ REN-40-D (PCSS): THE SAME ATLAS IMAGE THROUGH A PLAIN SAMPLER. ⛔⛔ IT HAS TO BE A SECOND BINDING, and
+    // this repo has already paid for believing otherwise: a blocker search needs the STORED DEPTH, and a
+    // COMPARISON sampler cannot return it — `texture(sampler2DArrayShadow, ...)` yields a comparison RESULT, and
+    // the read-the-depth overload simply does not exist in GLSL. A cook that reached for it produced a graph that
+    // built cleanly and a shader that could never compile. One image, two samplers, both declared.
+    {"shadow_atlas_depth", BindType::Texture2DArray, BindFrequency::Pass, 1U},
 };
 inline constexpr TechniqueOption kForwardCsmOptions[] = {
     {"cascade_count", 1, 4, 4},
     {"pcf_taps", 1, 16, 4},
+    // ⭐⭐ REN-40-D: the cascade BLEND, in PERCENT of a cascade's footprint (an option is an integer axis, and a
+    // fraction of a fraction is what a percent is for). 0 = the hard select this technique has always done, and
+    // it cooks the byte-identical graph — the parity arm is structural.
+    {"cascade_blend_pct", 0, 50, 0},
+    // ⭐⭐ REN-40-D: the SOFTNESS MODEL. 0 = fixed-radius PCF (what this technique has always done and what
+    // `blend = 0` parity is measured against); 1 = PCSS — a blocker search sets the filter radius per fragment,
+    // so a contact point stays sharp and the same shadow softens with distance from its caster.
+    {"soft_mode", 0, 3, 0},
+    // ⭐ THE LIGHT'S ANGULAR RADIUS, in hundredths of a degree. ⛔ An ANGLE, not a "light size" in some
+    // unspecified unit: a directional light has no size, it has an angular diameter, and the penumbra of a
+    // caster at distance d is d·tan(theta) in WORLD units — a physical quantity that stays correct at every
+    // cascade scale. The sun is ~0.27 deg of angular RADIUS, which is the default.
+    {"light_angle_x100", 1, 2000, 27},
+    // ⭐⭐ REN-40-D: the penumbra CAP, in texels of the selected cascade. Both the blocker search and the filter
+    // are bounded by it, so the two can never disagree about how far a blocker was looked for. It was a literal
+    // 24 in two places, which is a quality/cost trade the CONTENT should be making.
+    {"soft_max_texels", 1, 256, 24},
+    // ⭐ how many taps the BLOCKER SEARCH spends. Separate from `pcf_taps` because they are separate costs: the
+    // search runs once per fragment to produce one number, the filter runs per tap to produce the shadow.
+    {"soft_search_taps", 4, 16, 8},
 };
 
 [[nodiscard]] inline Technique forward_csm() noexcept
@@ -723,10 +1031,113 @@ inline constexpr TechniqueOption kForwardCsmOptions[] = {
     t.name       = "forward_csm";
     t.body       = &body_forward_csm;
     t.bindings   = kForwardCsmBindings;
-    t.n_bindings = 3;
+    // ⛔⛔ DERIVED, exactly like `n_options` below — and for the same reason, found the same way. This was a
+    // literal `3`, so declaring a FOURTH binding did nothing: the resolver loops to `n_bindings`, so the new
+    // binding was never resolved, the body's `n_bindings < kCsmBindCount` guard tripped, and every shadow
+    // program silently failed to build — `set_shadows_enabled` just returned false. A count kept in agreement
+    // with an array BY HAND is a fact with two homes, and this header had two of them.
+    t.n_bindings = static_cast<int>(sizeof(kForwardCsmBindings) / sizeof(kForwardCsmBindings[0]));
     t.options    = kForwardCsmOptions;
-    t.n_options  = 2;
+    // ⛔⛔ DERIVED FROM THE ARRAY, never counted by hand. This was a literal `2`, so adding a third DECLARED
+    // option silently did nothing: `TechniqueContext::option` bounds-checks against `n_options` and quietly
+    // returned the DEFAULT for the new axis, so the cook produced the un-blended graph while the renderer,
+    // the option table and the asset all agreed the feature was on. Nothing failed; the pixels simply did not
+    // change. A count that has to be kept in agreement with an array by hand is a fact with two homes.
+    t.n_options  = static_cast<int>(sizeof(kForwardCsmOptions) / sizeof(kForwardCsmOptions[0]));
     return t;
+}
+
+// ── ⭐⭐ REN-40-D: THE MOMENT-ATLAS SHADER FAMILY — depth → filterable moments → separable blur. ─────────────
+// The `soft = "evsm" | "msm"` tier. PCF and PCSS filter a BINARY visibility function, so their softness is
+// bounded by how many comparisons a fragment can afford; a MOMENT map stores enough of the depth DISTRIBUTION
+// that visibility reconstructs from ONE filtered read — softness then costs a prefilter ONCE per atlas instead
+// of N taps per fragment, and hardware bilinear on the atlas is LEGAL (moments are linear in the signal, a
+// depth comparison is not — filtering before comparing is exactly the thing a comparison sampler cannot do).
+//
+// These are fullscreen FS bodies in the technique-library style: C++ KGraph builders behind `crd://shadow/*`
+// names, SELECTED by the authored frame graph exactly as `forward_csm` itself is selected by name — the asset
+// owns the topology (which passes exist, what they read and write), the library owns the mathematics.
+// ⛔ The cascade LAYER is baked per instance program, the same rule the per-cascade shadow VS uses ("the
+// cascade index is baked as a compile-time constant") — a fullscreen pass has no per-draw channel to carry it.
+//
+// EVSM (Lauritzen): the atlas holds (e^{c·d}, e^{2c·d}, −e^{−c·d}, e^{−2c·d}) — the first two moments of BOTH
+// exponential warps; Chebyshev on each, take the min, bleed-reduce. ⛔ c = 5.54 is FORMAT-DERIVED, not taste:
+// the largest exponent whose SQUARE (the m2 channel) still fits fp16 (e^{2·5.54·1} = 64510 < 65504). A bigger c
+// is a hard NaN at d = 1, a smaller one leaks more light — RGBA16F fixes this number.
+// MSM (Peters–Klein): the atlas holds the first four POWER moments (d, d², d³, d⁴); the Hamburger 4-moment
+// reconstruction bounds visibility from them. Its fp16 quantisation floor is the published moment bias 6e-5.
+// the depth→moment CONVERT: read the raw depth atlas layer, emit this soft mode's 4-channel moment vector.
+// `soft_mode` is 2 (EVSM) or 3 (MSM) — the same declared option axis the resolve in `body_forward_csm` reads,
+// so the convert and the resolve cannot disagree about what the atlas holds.
+[[nodiscard]] inline int body_moment_convert(KGraph& g, int soft_mode, crd::u32 layer)
+{
+    const auto sh1 = make_shape({1});
+    const auto kf  = [&](double v) { return g.constant(v, sh1, DType::F32); };
+    const int  uv  = g.stage_in(KType::vec(DType::F32, 2), 0, Interp::Smooth);
+    // the atlas texture at (0,1) — where a fullscreen pass's single read is bound — through the PLAIN depth
+    // sampler at (0,6): the executor binds the COMPARISON sampler at (0,2) for a depth read, and a comparison
+    // sampler cannot return the stored value (the PCSS scar, verbatim).
+    const int tex  = g.texture(0, 1, DType::F32, TexDim::Tex2D, /*arrayed=*/true, /*ms=*/false, /*shadow=*/true);
+    const int samp = g.sampler(0, 6, /*shadow=*/false);
+    const int d    = g.swizzle(g.tex_sample(tex, samp, g.vec3(g.swizzle(uv, 0), g.swizzle(uv, 1),
+                                                              kf(static_cast<double>(layer)))), 0);
+    const auto mul = [&](int a, int b) { return g.binary(KOp::Mul, a, b); };
+    if (soft_mode == 3) // MSM: the four power moments
+    {
+        const int d2 = mul(d, d);
+        return g.vec4(d, d2, mul(d2, d), mul(d2, d2));
+    }
+    // EVSM: both warps and their squares
+    const int wp = g.unary(KOp::Exp, mul(kf(kEvsmExponent), d));
+    const int wn = g.binary(KOp::Sub, kf(0.0), g.unary(KOp::Exp, mul(kf(-kEvsmExponent), d)));
+    return g.vec4(wp, mul(wp, wp), wn, mul(wn, wn));
+}
+
+// one axis of the separable Gaussian prefilter over the moment atlas. σ = 1.8 over 9 unit-spaced taps — wide
+// enough that the reconstruction has a real distribution to work with, narrow enough that the kernel stays
+// inside the guard band a cascade's fit margin provides. `inv_size` = 1/map_size, BAKED: a fullscreen pass has
+// no header binding to read the size from, and the technique-variant rule ("declare the axis, specialize on
+// it") is exactly what a baked constant is.
+[[nodiscard]] inline int body_moment_blur(KGraph& g, bool horizontal, crd::u32 layer, double inv_size)
+{
+    const auto sh1 = make_shape({1});
+    const auto kf  = [&](double v) { return g.constant(v, sh1, DType::F32); };
+    const int  uv  = g.stage_in(KType::vec(DType::F32, 2), 0, Interp::Smooth);
+    // an ordinary COLOUR array read: texture at (0,1), the pass's own declared sampler at (0,2) — the frame
+    // asset says `filter = "linear", address = "clamp"`, and CLAMP is load-bearing (a wrapped tap at the atlas
+    // edge would blend the opposite border into every cascade's rim).
+    const int tex  = g.texture(0, 1, DType::F32, TexDim::Tex2D, /*arrayed=*/true, /*ms=*/false, /*shadow=*/false);
+    const int samp = g.sampler(0, 2, /*shadow=*/false);
+    static constexpr double kW[9] = {0.01897808, 0.05589817, 0.12092091, 0.19211605, 0.22417357,
+                                     0.19211605, 0.12092091, 0.05589817, 0.01897808};
+    const int lay = kf(static_cast<double>(layer));
+    int       acc = -1;
+    for (int i = 0; i < 9; ++i)
+    {
+        const double off = static_cast<double>(i - 4) * inv_size;
+        const int    su  = g.binary(KOp::Add, g.swizzle(uv, 0), kf(horizontal ? off : 0.0));
+        const int    sv  = g.binary(KOp::Add, g.swizzle(uv, 1), kf(horizontal ? 0.0 : off));
+        const int    m   = g.tex_sample(tex, samp, g.vec3(su, sv, lay));
+        const int    w   = nodes::detail::bin(g, KOp::Mul, m, g.splat(kf(kW[i]), 4));
+        acc              = acc < 0 ? w : nodes::detail::bin(g, KOp::Add, acc, w);
+    }
+    return acc;
+}
+
+// REN-40-G3: HZB BUILD — half-res MIN reduction of the scene depth buffer. The fullscreen fragment shader
+// gathers the 2×2 bilinear footprint (textureGather) and outputs the minimum. Reverse-Z: min = farthest
+// surface, so a projected AABB whose closest point (max_z) < HZB value is behind the prepass and culled.
+[[nodiscard]] inline int body_hzb_build(KGraph& g)
+{
+    const auto sh1  = make_shape({1});
+    const int  uv   = g.stage_in(KType::vec(DType::F32, 2), 0, Interp::Smooth);
+    const int  tex  = g.texture(0, 1, DType::F32, TexDim::Tex2D, false, false, false);
+    const int  samp = g.sampler(0, 2, false);
+    const int  comp = g.constant(0.0, sh1, DType::I32);
+    const int  gath = g.tex_gather(tex, samp, uv, comp);
+    const int  m01  = g.binary(KOp::Min, g.swizzle(gath, 0), g.swizzle(gath, 1));
+    const int  m23  = g.binary(KOp::Min, g.swizzle(gath, 2), g.swizzle(gath, 3));
+    return g.binary(KOp::Min, m01, m23);
 }
 
 // Register the engine's built-in techniques. An app calls this FIRST and then defines its own, so shadowing a

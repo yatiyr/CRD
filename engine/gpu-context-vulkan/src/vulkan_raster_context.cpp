@@ -946,6 +946,13 @@ public:
 
     [[nodiscard]] crd::u32           width() const noexcept override { return m_w; }
     [[nodiscard]] crd::u32           height() const noexcept override { return m_h; }
+    // REN-40-D: the atlas SAMPLER is chosen by this — comparison for a depth atlas, linear/clamp for a colour
+    // one (the moment atlas). The bundle is self-describing, so the format answers directly.
+    [[nodiscard]] bool is_depth() const noexcept override
+    {
+        return m_img.format == VK_FORMAT_D32_SFLOAT || m_img.format == VK_FORMAT_D32_SFLOAT_S8_UINT
+               || m_img.format == VK_FORMAT_D24_UNORM_S8_UINT || m_img.format == VK_FORMAT_D16_UNORM;
+    }
     [[nodiscard]] VkImageView        view() const noexcept { return m_img.view; }
     [[nodiscard]] const ImageBundle& bundle() const noexcept { return m_img; } // RET-4 pt 5: self-describing
     void                             set_borrowed() noexcept { m_borrowed = true; } // REN-2: view-only, dtor frees nothing
@@ -1057,7 +1064,7 @@ public:
         // textures (the ocean mesh path displaces from the FFT via SampleIndexedLod). VERTEX+FRAGMENT otherwise (unchanged).
         const VkShaderStageFlags vs_fs = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
                                          | (m_ctx->mesh_shader() ? static_cast<VkShaderStageFlags>(VK_SHADER_STAGE_MESH_BIT_EXT) : 0U);
-        VkDescriptorSetLayoutBinding slb[6]{};
+        VkDescriptorSetLayoutBinding slb[7]{};
         // GEO-1: + VERTEX for vertex pulling. REN-38-F6+: + TESC/TESE and (when the device has them) TASK/MESH —
         // the storage-bound tess/mesh verbs let ANY amplification stage pull real geometry through this binding,
         // and a layout must name every stage that actually accesses it (the A9 scar, one comment down).
@@ -1079,19 +1086,27 @@ public:
         // same layout Frostbite/UE5 use (bindless heap for material maps + fixed slots for frame singletons).
         slb[4].binding = 4U; slb[4].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;  slb[4].descriptorCount = 1U;            slb[4].stageFlags = vs_fs;
         slb[5].binding = 5U; slb[5].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;        slb[5].descriptorCount = 1U;            slb[5].stageFlags = vs_fs;
+        // ⛔⛔ REN-40-D: binding 6 is the atlas's PLAIN sampler — the same image, read for its STORED DEPTH.
+        // A comparison sampler cannot return a depth (GLSL has no such overload), and PCSS's blocker search needs
+        // the actual value, so the technique declares a second sampler over the same texture. Leaving it out of
+        // the LAYOUT is not a compile error and not a hang: the shader still builds, the draw still runs, and the
+        // search reads an UNBOUND descriptor — which returned "blocker found" across the whole open receiver and
+        // darkened every lit surface by half. The pixels looked like a soft shadow, so it read as a tuning
+        // problem; only the scanline dump showed the plateau itself had moved.
+        slb[6].binding = 6U; slb[6].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;        slb[6].descriptorCount = 1U;            slb[6].stageFlags = vs_fs;
         // REN-38: PARTIALLY_BOUND on the heap binding (feature-gated) — unwritten slots are legal as long as no
         // shader reads them, which is what lets a draw write only the textures it registered instead of 1024.
-        VkDescriptorBindingFlags             bind_flags[6]{};
+        VkDescriptorBindingFlags             bind_flags[7]{};
         VkDescriptorSetLayoutBindingFlagsCreateInfo bfci{};
         bfci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
         VkDescriptorSetLayoutCreateInfo slci{};
         slci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        slci.bindingCount = 6U;
+        slci.bindingCount = 7U;
         slci.pBindings    = slb;
         if (m_ctx->partially_bound())
         {
             bind_flags[3]     = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
-            bfci.bindingCount = 6U;
+            bfci.bindingCount = 7U;
             bfci.pBindingFlags = bind_flags;
             slci.pNext        = &bfci;
         }
@@ -1119,7 +1134,7 @@ public:
         cplci.setLayoutCount = 1U;
         cplci.pSetLayouts    = &m_compute_set_layout;
         vkCreatePipelineLayout(m_device, &cplci, nullptr, &m_compute_pipe_layout);
-        VkDescriptorPoolSize        dps[3]{{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4U}, {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 4U * (kBindlessMax + 2U)}, {VK_DESCRIPTOR_TYPE_SAMPLER, 4U * 2U}};
+        VkDescriptorPoolSize        dps[3]{{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4U}, {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 4U * (kBindlessMax + 2U)}, {VK_DESCRIPTOR_TYPE_SAMPLER, 4U * 3U}};
         VkDescriptorPoolCreateInfo  dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         dpci.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
@@ -1143,6 +1158,27 @@ public:
         sci.compareEnable = VK_TRUE;
         sci.compareOp     = VK_COMPARE_OP_LESS_OR_EQUAL;
         vkCreateSampler(m_device, &sci, nullptr, &m_cmp_sampler);
+        // ⭐⭐ REN-40-D: the atlas's PLAIN sampler — NEAREST + CLAMP, not the default bilinear/REPEAT.
+        // A blocker search wants the depth actually STORED in a texel: a filtered read returns the average of four
+        // texels, which across a shadow edge is a depth no blocker has, and the penumbra estimate then follows a
+        // surface that is not there. REPEAT is worse than wrong here — a search radius that steps off a cascade
+        // slice wraps to the far side of the SAME slice and finds a blocker with no geometric relationship to the
+        // receiver, so the widest penumbrae (exactly where the estimate matters) are the ones that corrupt.
+        sci.compareEnable = VK_FALSE;
+        sci.magFilter     = VK_FILTER_NEAREST;
+        sci.minFilter     = VK_FILTER_NEAREST;
+        sci.mipmapMode    = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        sci.addressModeU  = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.addressModeV  = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.addressModeW  = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        vkCreateSampler(m_device, &sci, nullptr, &m_depth_sampler);
+        // REN-40-D (moments): the LINEAR/CLAMP ATLAS sampler — what a COLOUR atlas (the moment atlas) is
+        // sampled through at binding 5. Comparison sampling is meaningless on moments, and the default
+        // sampler WRAPs, which would blend the atlas's opposite edges together at every cascade border.
+        sci.magFilter  = VK_FILTER_LINEAR;
+        sci.minFilter  = VK_FILTER_LINEAR;
+        sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        vkCreateSampler(m_device, &sci, nullptr, &m_atlas_sampler);
     }
     ~VulkanRasterContext() override
     {
@@ -1172,10 +1208,15 @@ public:
         if (m_default_sampler != VK_NULL_HANDLE) { vkDestroySampler(m_device, m_default_sampler, nullptr); }
         for (crd::u32 i = 0; i < m_sampler_n; ++i) { vkDestroySampler(m_device, m_sampler_obj[i], nullptr); }
         if (m_cmp_sampler != VK_NULL_HANDLE) { vkDestroySampler(m_device, m_cmp_sampler, nullptr); }
+        if (m_depth_sampler != VK_NULL_HANDLE) { vkDestroySampler(m_device, m_depth_sampler, nullptr); }
+        if (m_atlas_sampler != VK_NULL_HANDLE) { vkDestroySampler(m_device, m_atlas_sampler, nullptr); }
         if (m_desc_pool != VK_NULL_HANDLE) { vkDestroyDescriptorPool(m_device, m_desc_pool, nullptr); }
         if (m_storage_set_layout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(m_device, m_storage_set_layout, nullptr); }
         for (crd::u32 i = 0; i < m_kernel_n; ++i) { vkDestroyPipeline(m_device, m_kernel_pso[i], nullptr); }
         for (crd::u32 i = 0; i < m_rt_pso_n; ++i) { vkDestroyPipeline(m_device, m_rt_pso[i], nullptr); }
+        for (crd::u32 i = 0; i < m_sampled_pso_n; ++i) { vkDestroyPipeline(m_device, m_sampled_pso[i], nullptr); }
+        if (m_compute_sampled_pipe_layout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(m_device, m_compute_sampled_pipe_layout, nullptr); }
+        if (m_compute_sampled_set_layout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(m_device, m_compute_sampled_set_layout, nullptr); }
         // REN-38-A16: the ray-tracing PIPELINES and their shader binding tables. Each SBT owns a buffer AND its
         // device memory (it is addressed by device address, not bound as a descriptor), so both must go.
         for (crd::u32 i = 0; i < m_rtp_n; ++i)
@@ -3481,7 +3522,8 @@ public:
         dep.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         dep.imageView = t.depth_view();
         dep.imageLayout = t.depth_attach_layout();
-        dep.loadOp = load_target ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        dep.loadOp = (load_target || m_next_load_depth) ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        m_next_load_depth = false;
         dep.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         if (!load_target)
         {
@@ -3681,7 +3723,8 @@ public:
         VkDescriptorSet dset = VK_NULL_HANDLE;
         if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return; }
         // ⛔ the atlas goes ONLY to its own bindings (4/5) — see the note above `write_scene_textured`.
-        write_scene_textured(m_device, dset, s.buf(), VK_NULL_HANDLE, VK_NULL_HANDLE, tex.view(), m_cmp_sampler);
+        write_scene_textured(m_device, dset, s.buf(), VK_NULL_HANDLE, VK_NULL_HANDLE, tex.view(),
+                             atlas_sampler_for(&tex), m_depth_sampler);
         render_dset_depth(t, p, clear_color, clear_depth, compare, dset, vertex_count);
     }
     void draw_storage_shadowed_depth_load(IRasterTarget& target, IRasterProgram& program, DepthCompare compare,
@@ -3737,7 +3780,8 @@ public:
         dsai.pSetLayouts        = &m_storage_set_layout;
         VkDescriptorSet dset = VK_NULL_HANDLE;
         if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return; }
-        write_scene_textured(m_device, dset, s.buf(), tex.view(), active_sampler(), atlas.view(), m_cmp_sampler);
+        write_scene_textured(m_device, dset, s.buf(), tex.view(), active_sampler(), atlas.view(),
+                             atlas_sampler_for(&atlas), m_depth_sampler);
         render_dset_depth(t, p, clear_color, clear_depth, compare, dset, vertex_count);
     }
     void draw_storage_textured_shadowed_depth_load(IRasterTarget& target, IRasterProgram& program,
@@ -3812,7 +3856,8 @@ public:
         dep.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         dep.imageView   = t.depth_view();
         dep.imageLayout = t.depth_attach_layout();
-        dep.loadOp      = load_target ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        dep.loadOp      = (load_target || m_next_load_depth) ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        m_next_load_depth = false;
         dep.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
         if (!load_target) { dep.clearValue.depthStencil.depth = clear_depth; }
         VkRenderingInfo ri{};
@@ -3929,7 +3974,8 @@ public:
         dep.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         dep.imageView = t.depth_view();
         dep.imageLayout = t.depth_attach_layout();
-        dep.loadOp = load_target ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        dep.loadOp = (load_target || m_next_load_depth) ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        m_next_load_depth = false;
         dep.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         if (!load_target)
         {
@@ -4027,7 +4073,8 @@ public:
         dep.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         dep.imageView = t.depth_view();
         dep.imageLayout = t.depth_attach_layout();
-        dep.loadOp = load_target ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        dep.loadOp = (load_target || m_next_load_depth) ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        m_next_load_depth = false;
         dep.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         if (!load_target)
         {
@@ -4117,7 +4164,8 @@ public:
         dep.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         dep.imageView   = t.depth_view();
         dep.imageLayout = t.depth_attach_layout();
-        dep.loadOp      = load_target ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        dep.loadOp      = (load_target || m_next_load_depth) ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        m_next_load_depth = false;
         dep.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
         if (!load_target) { dep.clearValue.depthStencil.depth = clear_depth; }
         VkRenderingInfo ri{};
@@ -4167,7 +4215,7 @@ public:
                                             float clear_depth, DepthCompare compare, IStorageBuffer& storage,
                                             crd::u32 index_offset_bytes, crd::u32 index_count, crd::u32 instance_count,
                                             crd::u32 first_index, ITexture* texture, ITexture* atlas,
-                                            bool load_target) override
+                                            bool load_target, crd::u32 first_draw_index = 0U) override
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -4198,7 +4246,8 @@ public:
         write_scene_textured(m_device, dset, s.buf(), tex != nullptr ? tex->view() : VK_NULL_HANDLE,
                              tex != nullptr ? active_sampler() : VK_NULL_HANDLE,
                              atl != nullptr ? atl->view() : VK_NULL_HANDLE,
-                             atl != nullptr ? m_cmp_sampler : VK_NULL_HANDLE);
+                             atlas_sampler_for(atl),
+                             atl != nullptr ? m_depth_sampler : VK_NULL_HANDLE);
         frame_self_barrier_if_needed(t);
 
         VkRenderingAttachmentInfo att{};
@@ -4215,7 +4264,8 @@ public:
         dep.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         dep.imageView = t.depth_view();
         dep.imageLayout = t.depth_attach_layout();
-        dep.loadOp = load_target ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        dep.loadOp = (load_target || m_next_load_depth) ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        m_next_load_depth = false;
         dep.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         if (!load_target)
         {
@@ -4236,6 +4286,7 @@ public:
         vkCmdBeginRendering(cmd, &ri);
         set_draw_state(cmd, t.width(), t.height(), 1U, t.has_depth(), to_vk_compare(compare));
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        vkCmdPushConstants(cmd, p.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0U, 4U, &first_draw_index);
         vkCmdBindIndexBuffer(cmd, s.buf(), index_offset_bytes, VK_INDEX_TYPE_UINT32);
         const VkShaderStageFlagBits stages[2] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
         const VkShaderEXT objs[2] = {p.vs(), p.fs()};
@@ -4286,7 +4337,8 @@ public:
         write_scene_textured(m_device, dset, s.buf(), tex != nullptr ? tex->view() : VK_NULL_HANDLE,
                              tex != nullptr ? active_sampler() : VK_NULL_HANDLE,
                              atl != nullptr ? atl->view() : VK_NULL_HANDLE,
-                             atl != nullptr ? m_cmp_sampler : VK_NULL_HANDLE);
+                             atlas_sampler_for(atl),
+                             atl != nullptr ? m_depth_sampler : VK_NULL_HANDLE);
         frame_self_barrier_if_needed(t);
 
         VkRenderingAttachmentInfo att{};
@@ -4300,7 +4352,8 @@ public:
         dep.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         dep.imageView   = t.depth_view();
         dep.imageLayout = t.depth_attach_layout();
-        dep.loadOp      = load_target ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        dep.loadOp      = (load_target || m_next_load_depth) ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        m_next_load_depth = false;
         dep.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
         if (!load_target) { dep.clearValue.depthStencil.depth = clear_depth; }
         VkRenderingInfo ri{};
@@ -4648,10 +4701,15 @@ public:
         if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return VK_NULL_HANDLE; }
         VkDescriptorImageInfo img_info{VK_NULL_HANDLE, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkDescriptorImageInfo samp_info{sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
-        VkWriteDescriptorSet  wr[2]{};
+        // REN-40-D: the plain depth sampler rides along UNCONDITIONALLY (binding 6) — a fullscreen pass reading
+        // a depth resource gets the comparison sampler at binding 2, but a moment-CONVERT pass needs the STORED
+        // depth, which only a plain sampler can return. The slot is always valid, so writing it costs nothing.
+        VkDescriptorImageInfo dsm_info{m_depth_sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
+        VkWriteDescriptorSet  wr[3]{};
         wr[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[0].dstSet = dset; wr[0].dstBinding = 1U; wr[0].descriptorCount = 1U; wr[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; wr[0].pImageInfo = &img_info;
         wr[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[1].dstSet = dset; wr[1].dstBinding = 2U; wr[1].descriptorCount = 1U; wr[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;       wr[1].pImageInfo = &samp_info;
-        vkUpdateDescriptorSets(m_device, 2U, wr, 0U, nullptr);
+        wr[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[2].dstSet = dset; wr[2].dstBinding = 6U; wr[2].descriptorCount = 1U; wr[2].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;       wr[2].pImageInfo = &dsm_info;
+        vkUpdateDescriptorSets(m_device, 3U, wr, 0U, nullptr);
         return dset;
     }
 
@@ -4791,20 +4849,31 @@ public:
         vkCmdEndRendering(cmd);
     }
 
+    // ⭐⭐ REN-40-D: the binding-5 sampler for an atlas draw, chosen by WHAT THE ATLAS IS — comparison for a
+    // depth atlas (a shadow lookup), LINEAR/CLAMP for a colour one (the moment atlas, whose whole point is
+    // ordinary filterable sampling). Keyed off the texture, so no call site can pick wrong.
+    [[nodiscard]] VkSampler atlas_sampler_for(const ITexture* atl) const noexcept
+    {
+        if (atl == nullptr) { return VK_NULL_HANDLE; }
+        return atl->is_depth() ? m_cmp_sampler : m_atlas_sampler;
+    }
+
     // REN-2 Half B: write a set with storage(0) + sampled-image(1) + sampler(2) — the TEXTURED scene draw's descriptors
     // (the VS vertex-pulls position+UV from the buffer, the FS samples the material base-color map at UV).
     // REN-38: `atlas_view`/`cmp` non-null ⇒ ALSO write the shadow atlas at binding 4 and the comparison sampler
     // at binding 5 — the combined textured+shadowed draw. Bindings a shader does not statically use may stay
     // unwritten, so the plain textured call keeps passing null for both.
     static void write_scene_textured(VkDevice dev, VkDescriptorSet dset, VkBuffer buf, VkImageView view, VkSampler samp,
-                                     VkImageView atlas_view = VK_NULL_HANDLE, VkSampler cmp = VK_NULL_HANDLE)
+                                     VkImageView atlas_view = VK_NULL_HANDLE, VkSampler cmp = VK_NULL_HANDLE,
+                                     VkSampler depth_samp = VK_NULL_HANDLE)
     {
         VkDescriptorBufferInfo dbi{buf, 0, VK_WHOLE_SIZE};
         VkDescriptorImageInfo  img_info{VK_NULL_HANDLE, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkDescriptorImageInfo  samp_info{samp, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
         VkDescriptorImageInfo  atlas_info{VK_NULL_HANDLE, atlas_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkDescriptorImageInfo  cmp_info{cmp, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
-        VkWriteDescriptorSet   wr[5]{};
+        VkDescriptorImageInfo  dsm_info{depth_samp, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
+        VkWriteDescriptorSet   wr[6]{};
         crd::u32               nw = 0U;
         wr[nw].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[nw].dstSet = dset; wr[nw].dstBinding = 0U; wr[nw].descriptorCount = 1U; wr[nw].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; wr[nw].pBufferInfo = &dbi; ++nw;
         // ⛔ binding 1/2 are the MATERIAL map + its sampler. A null view means this draw has no material map
@@ -4819,6 +4888,14 @@ public:
         {
             wr[nw].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[nw].dstSet = dset; wr[nw].dstBinding = 4U; wr[nw].descriptorCount = 1U; wr[nw].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; wr[nw].pImageInfo = &atlas_info; ++nw;
             wr[nw].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[nw].dstSet = dset; wr[nw].dstBinding = 5U; wr[nw].descriptorCount = 1U; wr[nw].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;       wr[nw].pImageInfo = &cmp_info; ++nw;
+            // ⛔ REN-40-D: binding 6 travels WITH the atlas, unconditionally — the PCSS option is cooked into the
+            // program, so the descriptor set cannot know whether this frame's shader reads it. Writing it only
+            // when soft shadows are on would make the bug come back the moment a soft program shared a set with
+            // a hard one, which is every frame that draws more than one group.
+            if (depth_samp != VK_NULL_HANDLE)
+            {
+                wr[nw].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[nw].dstSet = dset; wr[nw].dstBinding = 6U; wr[nw].descriptorCount = 1U; wr[nw].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;   wr[nw].pImageInfo = &dsm_info; ++nw;
+            }
         }
         vkUpdateDescriptorSets(dev, nw, wr, 0U, nullptr);
     }
@@ -4855,7 +4932,8 @@ public:
         }
         write_scene_textured(m_device, dset, s.buf(), mat_view, mat_samp,
                              atlas != nullptr ? atlas->view() : VK_NULL_HANDLE,
-                             atlas != nullptr ? m_cmp_sampler : VK_NULL_HANDLE);
+                             atlas_sampler_for(atlas),
+                             atlas != nullptr ? m_depth_sampler : VK_NULL_HANDLE);
         frame_self_barrier_if_needed(t);
 
         VkRenderingAttachmentInfo att{};
@@ -5698,6 +5776,64 @@ public:
         kernel_write_barrier(cmd);
     }
 
+    // ── ⭐ REN-40-G3: SAMPLED-COMPUTE DISPATCH — the HZB verb. ──
+    void dispatch_kernel_sampled(IGpuProgram& kernel, crd::u32 gx, crd::u32 gy, crd::u32 gz,
+                                 IStorageBuffer* const* buffers, crd::u32 count, ITexture& tex) override
+    {
+        if (!frame_recording() || buffers == nullptr || count == 0U) { return; }
+        VkDescriptorSetLayout layout = sampled_compute_set_layout();
+        if (layout == VK_NULL_HANDLE) { return; }
+        auto* vk_prog = dynamic_cast<VulkanGpuProgram*>(&kernel);
+        if (vk_prog == nullptr) { return; }
+        VkPipeline pipe = sampled_kernel_pipeline(vk_prog->vk_module());
+        if (pipe == VK_NULL_HANDLE) { return; }
+
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool     = m_frame_rec.pool;
+        dsai.descriptorSetCount = 1U;
+        dsai.pSetLayouts        = &layout;
+        VkDescriptorSet dset = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return; }
+
+        const crd::u32 n = count < kMaxKernelBuffers ? count : kMaxKernelBuffers;
+        VkDescriptorBufferInfo bi[kMaxKernelBuffers]{};
+        VkDescriptorImageInfo  img_info{};
+        img_info.imageView   = static_cast<VulkanTexture&>(tex).view();
+        img_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkDescriptorImageInfo  smp_info{m_depth_sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
+        VkWriteDescriptorSet   wr[kMaxKernelBuffers + 2U]{};
+        for (crd::u32 i = 0; i < kMaxKernelBuffers; ++i)
+        {
+            bi[i] = {vk_buffer_of(*buffers[i < n ? i : 0U]), 0U, VK_WHOLE_SIZE};
+            wr[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            wr[i].dstSet          = dset;
+            wr[i].dstBinding      = i;
+            wr[i].descriptorCount = 1U;
+            wr[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            wr[i].pBufferInfo     = &bi[i];
+        }
+        wr[kMaxKernelBuffers].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wr[kMaxKernelBuffers].dstSet          = dset;
+        wr[kMaxKernelBuffers].dstBinding      = kMaxKernelBuffers;
+        wr[kMaxKernelBuffers].descriptorCount = 1U;
+        wr[kMaxKernelBuffers].descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        wr[kMaxKernelBuffers].pImageInfo      = &img_info;
+        wr[kMaxKernelBuffers + 1U].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wr[kMaxKernelBuffers + 1U].dstSet          = dset;
+        wr[kMaxKernelBuffers + 1U].dstBinding      = kMaxKernelBuffers + 1U;
+        wr[kMaxKernelBuffers + 1U].descriptorCount = 1U;
+        wr[kMaxKernelBuffers + 1U].descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLER;
+        wr[kMaxKernelBuffers + 1U].pImageInfo      = &smp_info;
+        vkUpdateDescriptorSets(m_device, kMaxKernelBuffers + 2U, wr, 0U, nullptr);
+
+        VkCommandBuffer cmd = m_frame_rec.cmd;
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_compute_sampled_pipe_layout, 0U, 1U, &dset, 0U, nullptr);
+        vkCmdDispatch(cmd, gx > 0U ? gx : 1U, gy > 0U ? gy : 1U, gz > 0U ? gz : 1U);
+        kernel_write_barrier(cmd);
+    }
+
     // The RT layout: binding 0 = TLAS, bindings 1..kMaxKernelBuffers = SSBOs. Built once, lazily — a device
     // without ray query never pays for it.
     [[nodiscard]] VkDescriptorSetLayout rt_set_layout()
@@ -5765,6 +5901,76 @@ public:
         m_rt_pso_key[m_rt_pso_n] = module;
         m_rt_pso[m_rt_pso_n]     = pipe;
         ++m_rt_pso_n;
+        return pipe;
+    }
+
+    // REN-40-G3: the SAMPLED-COMPUTE layout — bindings 0..7 = SSBO, binding 8 = SAMPLED_IMAGE, binding 9 = SAMPLER.
+    // Built once, lazily — a frame that never dispatches a sampled kernel never pays for it.
+    [[nodiscard]] VkDescriptorSetLayout sampled_compute_set_layout()
+    {
+        if (m_compute_sampled_set_layout != VK_NULL_HANDLE) { return m_compute_sampled_set_layout; }
+        VkDescriptorSetLayoutBinding lb[kMaxKernelBuffers + 2U]{};
+        for (crd::u32 i = 0; i < kMaxKernelBuffers; ++i)
+        {
+            lb[i].binding         = i;
+            lb[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            lb[i].descriptorCount = 1U;
+            lb[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+        }
+        lb[kMaxKernelBuffers].binding         = kMaxKernelBuffers;
+        lb[kMaxKernelBuffers].descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        lb[kMaxKernelBuffers].descriptorCount = 1U;
+        lb[kMaxKernelBuffers].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+        lb[kMaxKernelBuffers + 1U].binding         = kMaxKernelBuffers + 1U;
+        lb[kMaxKernelBuffers + 1U].descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLER;
+        lb[kMaxKernelBuffers + 1U].descriptorCount = 1U;
+        lb[kMaxKernelBuffers + 1U].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+        VkDescriptorSetLayoutCreateInfo dlci{};
+        dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        dlci.bindingCount = kMaxKernelBuffers + 2U;
+        dlci.pBindings    = lb;
+        if (vkCreateDescriptorSetLayout(m_device, &dlci, nullptr, &m_compute_sampled_set_layout) != VK_SUCCESS)
+        {
+            m_compute_sampled_set_layout = VK_NULL_HANDLE;
+            return VK_NULL_HANDLE;
+        }
+        VkPipelineLayoutCreateInfo plci{};
+        plci.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        plci.setLayoutCount = 1U;
+        plci.pSetLayouts    = &m_compute_sampled_set_layout;
+        if (vkCreatePipelineLayout(m_device, &plci, nullptr, &m_compute_sampled_pipe_layout) != VK_SUCCESS)
+        {
+            vkDestroyDescriptorSetLayout(m_device, m_compute_sampled_set_layout, nullptr);
+            m_compute_sampled_set_layout = VK_NULL_HANDLE;
+            return VK_NULL_HANDLE;
+        }
+        return m_compute_sampled_set_layout;
+    }
+
+    [[nodiscard]] VkPipeline sampled_kernel_pipeline(VkShaderModule module)
+    {
+        for (crd::u32 i = 0; i < m_sampled_pso_n; ++i)
+        {
+            if (m_sampled_pso_key[i] == module) { return m_sampled_pso[i]; }
+        }
+        if (m_sampled_pso_n >= kKernelPsoCap) { return VK_NULL_HANDLE; }
+        VkPipelineShaderStageCreateInfo st{};
+        st.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        st.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+        st.module = module;
+        st.pName  = "main";
+        VkComputePipelineCreateInfo ci{};
+        ci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        ci.stage  = st;
+        ci.layout = m_compute_sampled_pipe_layout;
+        VkPipeline pipe = VK_NULL_HANDLE;
+        if (vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1U, &ci, nullptr, &pipe) != VK_SUCCESS)
+        {
+            return VK_NULL_HANDLE;
+        }
+        m_sampled_pso_key[m_sampled_pso_n] = module;
+        m_sampled_pso[m_sampled_pso_n]     = pipe;
+        ++m_sampled_pso_n;
         return pipe;
     }
 
@@ -6813,6 +7019,12 @@ private:
     VkShaderModule                       m_rt_pso_key[kKernelPsoCap]{};
     VkPipeline                           m_rt_pso[kKernelPsoCap]{};
     crd::u32                             m_rt_pso_n = 0U;
+    // REN-40-G3: the SAMPLED-COMPUTE layout (binding 8 = SAMPLED_IMAGE, binding 9 = SAMPLER) and its pipeline cache.
+    VkDescriptorSetLayout                m_compute_sampled_set_layout  = VK_NULL_HANDLE;
+    VkPipelineLayout                     m_compute_sampled_pipe_layout = VK_NULL_HANDLE;
+    VkShaderModule                       m_sampled_pso_key[kKernelPsoCap]{};
+    VkPipeline                           m_sampled_pso[kKernelPsoCap]{};
+    crd::u32                             m_sampled_pso_n = 0U;
     // REN-38-B8: the authored-sampler cache.
     static constexpr crd::u32 kSamplerCacheCap = 16U;
     SamplerDesc               m_sampler_key[kSamplerCacheCap]{};
@@ -6848,6 +7060,8 @@ private:
     VkDescriptorPool                     m_desc_pool          = VK_NULL_HANDLE; // pool for draw_storage / draw_textured sets
     VkSampler                            m_default_sampler    = VK_NULL_HANDLE; // B2: the default bilinear/repeat sampler
     VkSampler                            m_cmp_sampler        = VK_NULL_HANDLE; // B2-b: comparison sampler (shadow)
+    VkSampler                            m_depth_sampler      = VK_NULL_HANDLE; // REN-40-D: plain NEAREST/CLAMP (PCSS blocker search)
+    VkSampler                            m_atlas_sampler      = VK_NULL_HANDLE; // REN-40-D: LINEAR/CLAMP (moment-atlas reads)
 
     // REN-1: frame-graph RECORDING MODE. When `cmd` is non-null a frame graph is executing: the public draw_*
     // methods RECORD into this shared command buffer + frame descriptor pool (no per-draw submit/readback).
@@ -7131,10 +7345,13 @@ public:
     [[nodiscard]] VkQueue           frame_vk_queue() const noexcept { return m_queue; }
     [[nodiscard]] VulkanGpuContext& frame_ctx() const noexcept { return *m_ctx; }
 
+    void set_next_draw_load_depth(bool load) override { m_next_load_depth = load; }
+
 private:
     // RET-4 pt 5: the live-resource registries the S7 defrag pass walks (resources leave them in their dtors).
     crd::containers::Array<VulkanStorageBuffer*> m_live_storage{crd::memory::default_allocator()};
     crd::containers::Array<VulkanTexture*>       m_live_textures{crd::memory::default_allocator()};
+    bool                                         m_next_load_depth = false; // REN-40-G1: consumed by the next geometry verb
 };
 
 // ── REN-1 (D-007 row 98): the FRAME GRAPH ─────────────────────────────────────────────────────────────────────────
@@ -7279,6 +7496,27 @@ public:
         ImageNode& n = m_images[h.id - 1U];
         if (layer < n.layer_targets.size()) { return n.layer_targets[layer]; }
         return layer == 0U ? n.target : nullptr;
+    }
+
+    // ── ⭐ REN-40-G3: a render target whose COLOUR comes from one image and DEPTH from another. ──
+    [[nodiscard]] IRasterTarget* image_with_depth(FgImage colour, FgImage depth) noexcept override
+    {
+        if (!colour.valid() || colour.id > m_images.size()) { return nullptr; }
+        if (!depth.valid()  || depth.id  > m_images.size()) { return nullptr; }
+        ImageNode& cn = m_images[colour.id - 1U];
+        ImageNode& dn = m_images[depth.id  - 1U];
+        if (cn.shared_depth_target != nullptr) { return cn.shared_depth_target; }
+        ImageBundle cb{};
+        cb.image  = cn.image;
+        cb.view   = cn.view;
+        ImageBundle db{};
+        db.image  = dn.image;
+        db.view   = dn.view;
+        auto* t = new VulkanRasterTarget(m_device, cb, ImageBundle{}, db,
+                                         BufferBundle{}, 1U, cn.desc.width, cn.desc.height);
+        t->set_borrowed();
+        cn.shared_depth_target = t;
+        return t;
     }
 
     // ── IFrameGraph ──
@@ -7695,6 +7933,9 @@ private:
         // makes the frame-start reset below harmless for it BY CONSTRUCTION rather than by remembering a skip.
         crd::i32       persist_index = -1;
         bool     no_alias = false; // REN-38-B6: the author PINNED this transient out of the aliaser
+        // ── ⭐ REN-40-G3: a COMBINED render target (this image's colour + another image's depth). ──
+        // Created on demand by `image_with_depth()`, freed with the node. Null until first request.
+        IRasterTarget* shared_depth_target = nullptr;
     };
 
     // The two questions that DO need a predicate, each answerable on its own.
@@ -7856,6 +8097,8 @@ private:
                 if (n.depth_image != VK_NULL_HANDLE) { vkDestroyImage(m_device, n.depth_image, nullptr); n.depth_image = VK_NULL_HANDLE; }
                 if (n.depth_memory != VK_NULL_HANDLE) { vkFreeMemory(m_device, n.depth_memory, nullptr); n.depth_memory = VK_NULL_HANDLE; }
                 n.depth_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+                delete n.shared_depth_target;
+                n.shared_depth_target = nullptr;
             }
         }
         for (BufferNode& n : m_buffers)
@@ -7971,7 +8214,7 @@ private:
 
     [[nodiscard]] bool materialize_image(ImageNode& n);
     [[nodiscard]] bool build_tail(crd::u32 img_slot_end, crd::containers::Array<crd::u32>& border);
-    
+
     crd::containers::Array<Pass>       m_passes{crd::memory::default_allocator()};
     crd::containers::Array<Slot>       m_slots{crd::memory::default_allocator()};
     Builder m_builder{};
@@ -8401,6 +8644,12 @@ bool VulkanFrameGraph::materialize_image(ImageNode& n)
             ImageBundle sb{};
             sb.image  = n.image;
             sb.view   = n.view;
+            // ⛔⛔ REN-40-D: the FORMAT must ride the borrowed bundle — `atlas_sampler_for` keys the comparison-
+            // vs-linear choice off `is_depth()`, and a bundle left at VK_FORMAT_UNDEFINED answers "colour" for
+            // the DEPTH atlas. The failure is not a crash: `tex_sample_cmp` through a non-comparison sampler
+            // returns the RAW STORED DEPTH as "visibility", so the whole frame renders at roughly half
+            // brightness with a shallow shadow — plausible pixels, wrong physics, found by a scanline dump.
+            sb.format = vci.format;
             auto* tex = new VulkanTexture(m_device, sb, n.desc.width, n.desc.height);
             tex->set_borrowed();
             n.texture = tex;
@@ -8426,7 +8675,16 @@ bool VulkanFrameGraph::build_tail(crd::u32 img_slot_end, crd::containers::Array<
         {
             Slot& s = m_slots[si];
             // REN-38-B6: only IMAGES carry an author-visible pin today; buffers behave exactly as before.
-            if (s.free_after < n.first_pass && (s.type_bits & n.mem_req.memoryTypeBits) != 0U) { chosen = static_cast<crd::i32>(si); break; }
+            // ⛔ AND THE SLOT MUST FIT: buffer slots allocate their memory at creation (unlike image slots,
+            // which size to their largest occupant first), so a freed-but-smaller slot chosen by lifetime alone
+            // would bind a bigger buffer to smaller memory — the DX12 aliaser had exactly this hole and the
+            // moment chain found it.
+            if (s.free_after < n.first_pass && (s.type_bits & n.mem_req.memoryTypeBits) != 0U
+                && s.size >= n.mem_req.size)
+            {
+                chosen = static_cast<crd::i32>(si);
+                break;
+            }
         }
         if (chosen < 0)
         {
@@ -8922,6 +9180,7 @@ void VulkanFrameGraph::retire_transients_to(FrameSlot& slot) noexcept
         if (n.depth_view != VK_NULL_HANDLE) { slot.dead_views.push_back(n.depth_view); n.depth_view = VK_NULL_HANDLE; }
         if (n.depth_image != VK_NULL_HANDLE) { slot.dead_images.push_back(n.depth_image); n.depth_image = VK_NULL_HANDLE; }
         if (n.depth_memory != VK_NULL_HANDLE) { slot.dead_memory.push_back(n.depth_memory); n.depth_memory = VK_NULL_HANDLE; }
+        if (n.shared_depth_target != nullptr) { slot.dead_targets.push_back(n.shared_depth_target); n.shared_depth_target = nullptr; }
     }
     for (BufferNode& n : m_buffers)
     {

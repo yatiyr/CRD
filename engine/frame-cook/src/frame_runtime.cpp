@@ -43,6 +43,7 @@ struct PassRec
     g::FgImage           sampled[kMaxPassReads]{};
     crd::u32             n_sampled        = 0U;
     bool                 sampled_is_depth = false; // of sampled[0] — the shadow-lookup case
+    bool                 sampled_is_array = false; // of sampled[0] — the ATLAS case (REN-40-D: depth OR moments)
     g::FgBuffer          storage{};
     g::IRasterProgram*   program = nullptr;
     crd::u32             vertex_count = 0U;
@@ -84,6 +85,8 @@ struct PassRec
     // program, or every expanded cascade renders with the FIRST cascade's shader — all slices identical, which
     // is exactly the degenerate state the cascade gate exists to reject. Tracked explicitly rather than inferred.
     bool                 program_is_instance = false;
+    bool                 load_override       = false; // REN-40-E: for_each_load → preserve persistent contents
+    g::FgImage           depth_target{};              // REN-40-G3: shared_depth — a separate depth attachment
 };
 
 // ⭐ REN-38-B1: a STABLE key for a persistent image — FNV-1a over the resource NAME. ⛔ Not the declaration
@@ -109,7 +112,9 @@ void record_pass(g::IFrameContext& ctx, void* user)
     // REN-36.3: `shadow_atlas[$index]` renders into ONE SLICE; a plain write renders into the whole image.
     // `image_layer(h, 0)` on a non-layered resource IS `image(h)`, so a for_each pass over a non-layered target
     // needs no special case — one code path serves both shapes.
-    g::IRasterTarget*    t = p->indexed_target ? ctx.image_layer(p->target, p->layer) : ctx.image(p->target);
+    g::IRasterTarget*    t = p->depth_target.valid()
+                             ? ctx.image_with_depth(p->target, p->depth_target)
+                             : (p->indexed_target ? ctx.image_layer(p->target, p->layer) : ctx.image(p->target));
     // ⛔ REN-38-A9/A10: a COMPUTE-SHAPED pass writes buffers, not attachments, so requiring a render target
     // would have made every ray-tracing and GPU-driven-dispatch pass silently do nothing — the exact shape this
     // band keeps finding, one kind further along.
@@ -172,7 +177,7 @@ void record_pass(g::IFrameContext& ctx, void* user)
                 // reads table row 0: another group's region base and another item's LOD slot.
                 r.draw_storage_multi_indexed_depth_only_indirect(*t, *prog, d.clear_depth, d.depth, *sb, 0U,
                                                                  *it.args, it.args_offset, nullptr, 0U, 1U,
-                                                                 i != 0U, i);
+                                                                 i != 0U || p->load_override, i);
                 continue;
             }
             if (it.index_count > 0U)
@@ -199,12 +204,12 @@ void record_pass(g::IFrameContext& ctx, void* user)
                 }
                 r.draw_storage_multi_indexed_depth_only(*t, *prog, d.clear_depth, d.depth, *sb, 0U,
                                                         static_cast<const g::IRasterContext::IndexedDraw*>(idraws), run,
-                                                        i != 0U);
+                                                        i != 0U || p->load_override);
                 i += run - 1U; // the loop's ++i consumes the last item of the run
                 continue;
             }
-            if (i == 0U) { r.draw_storage_depth_only(*t, *prog, d.clear_depth, d.depth, *sb, it.vertex_count); }
-            else         { r.draw_storage_depth_only_load(*t, *prog, d.depth, *sb, it.vertex_count); }
+            if (i == 0U && !p->load_override) { r.draw_storage_depth_only(*t, *prog, d.clear_depth, d.depth, *sb, it.vertex_count); }
+            else                             { r.draw_storage_depth_only_load(*t, *prog, d.depth, *sb, it.vertex_count); }
         }
         break;
     }
@@ -258,12 +263,15 @@ void record_pass(g::IFrameContext& ctx, void* user)
             g::IRasterProgram* prog = p->program;
             if (!p->program_is_instance && it.program != nullptr) { prog = it.program; }
             // REN-38-F11: an authored `load = true` pass NEVER clears — it stacks on the previous pass
-            const bool first = (i == 0U) && !d.load_target;
+            const bool first = (i == 0U) && !d.load_target && !p->load_override;
+            // REN-40-G1: depth prepass — the clearing verb still runs (colour IS cleared), but the backend
+            // loads depth instead of clearing it
+            if (first && d.load_depth) { r.set_next_draw_load_depth(true); }
             // REN-37.10: a draw's OWN texture wins over the pass's sampled read. Without this, a geometry pass
             // that reads the shadow atlas would bind that atlas for every draw and any group carrying an albedo
             // map would silently lose it the instant shadows turned on.
             g::ITexture* tex       = it.texture != nullptr ? it.texture : pass_tex;
-            const bool   depth_tex = it.texture != nullptr ? false : p->sampled_is_depth;
+            const bool   depth_tex = it.texture != nullptr ? false : (p->sampled_is_depth || p->sampled_is_array);
             // ⭐⭐ REN-38: a draw with its OWN texture in a pass that reads a DEPTH resource is the COMBINED
             // textured+shadowed shape — the base-colour map AND the atlas, one draw. Before this arm the item
             // texture simply WON and the atlas was dropped, which is how "textured monuments lose their shadows"
@@ -277,9 +285,16 @@ void record_pass(g::IFrameContext& ctx, void* user)
             // whole camera view would silently vanish. Textures follow the classic arms exactly (map, atlas).
             if (it.args != nullptr && it.index_count > 0U)
             {
-                const bool   combined = it.texture != nullptr && pass_tex != nullptr && p->sampled_is_depth;
-                g::ITexture* map      = combined ? it.texture : (depth_tex ? nullptr : tex);
-                g::ITexture* atl      = combined ? pass_tex : (depth_tex ? tex : nullptr);
+                const bool   combined = it.texture != nullptr && pass_tex != nullptr && (p->sampled_is_depth || p->sampled_is_array);
+                g::ITexture* map      = nullptr;
+                g::ITexture* atl      = nullptr;
+                if (combined)
+                {
+                    map = it.texture;
+                    atl = pass_tex;
+                }
+                else if (depth_tex) { atl = tex; }
+                else { map = tex; }
                 // ⛔⛔ REN-40-C2: `i` — THE ROW. A rebased program reads `table[DrawIndex]` for its region
                 // base and its LOD SLOT; the verb is the only thing that can push it. Omitting it made every
                 // GPU-driven draw read row 0.
@@ -289,7 +304,7 @@ void record_pass(g::IFrameContext& ctx, void* user)
             }
             if (it.index_count > 0U && (tex != nullptr || depth_tex))
             {
-                const bool combined = it.texture != nullptr && pass_tex != nullptr && p->sampled_is_depth;
+                const bool combined = it.texture != nullptr && pass_tex != nullptr && (p->sampled_is_depth || p->sampled_is_array);
                 g::ITexture* map = nullptr;
                 g::ITexture* atl = nullptr;
                 if (combined)
@@ -306,9 +321,9 @@ void record_pass(g::IFrameContext& ctx, void* user)
                     map = tex;
                 }
                 r.draw_storage_indexed_sampled_depth(*t, *prog, clear, d.clear_depth, d.depth, *sb, 0U, it.index_count,
-                                                     it.instance_count, it.first_index, map, atl, !first);
+                                                     it.instance_count, it.first_index, map, atl, !first, i);
             }
-            else if (it.texture != nullptr && pass_tex != nullptr && p->sampled_is_depth)
+            else if (it.texture != nullptr && pass_tex != nullptr && (p->sampled_is_depth || p->sampled_is_array))
             {
                 if (first) { r.draw_storage_textured_shadowed_depth(*t, *prog, clear, d.clear_depth, d.depth, *sb, *it.texture, *pass_tex, it.vertex_count); }
                 else       { r.draw_storage_textured_shadowed_depth_load(*t, *prog, d.depth, *sb, *it.texture, *pass_tex, it.vertex_count); }
@@ -454,6 +469,10 @@ void record_pass(g::IFrameContext& ctx, void* user)
             bufs[nb++] = sb;
         }
         if (nb == 0U) { return; }
+        // REN-40-G3: a compute pass that READS an image dispatches through `dispatch_kernel_sampled`, which
+        // binds the texture at the fixed position after the storage buffers (binding 8 = texture, 9 = sampler).
+        g::ITexture* sampled_tex = nullptr;
+        if (p->n_sampled > 0U) { sampled_tex = ctx.texture(p->sampled[0]); }
         // ⭐⭐ REN-40-A: a compute pass that declares a DRAW LIST dispatches ONCE PER ITEM, binding that item's
         // own storage buffer at slot 0 — the exact symmetry the raster passes already have (they iterate the
         // list too; recording only the first silently produced a shadow map with one object in it). This is what
@@ -469,21 +488,32 @@ void record_pass(g::IFrameContext& ctx, void* user)
                 if (sb == nullptr || it.dispatch_groups == 0U) { continue; }
                 g::IStorageBuffer* ibufs[kMaxPassReads]{};
                 crd::u32           inb = 0U;
-                // ⛔⛔ THE ITEM'S OWN buffers, and ONLY those. The pass-level `reads`/`writes` on a draw-list
-                // compute pass exist to state the ORDER — they resolve to whichever group answered the resource
-                // name first, so binding them here would hand every item AFTER the first a pointer into group 0's
-                // memory. A kernel with a third binding would then compact the wrong group's instances, silently
-                // and persistently. The graph owns the ordering; the ITEM owns the data.
-                ibufs[inb++] = sb;                                    // slot 0: THIS group's scene buffer
-                if (it.args != nullptr) { ibufs[inb++] = it.args; }    // slot 1: its indirect command
+                ibufs[inb++] = sb;
+                if (it.args != nullptr) { ibufs[inb++] = it.args; }
                 g::IGpuProgram* kern = p->kernel_program;
-                r.dispatch_kernel(*kern, it.dispatch_groups, 1U, 1U,
-                                  static_cast<g::IStorageBuffer* const*>(ibufs), inb);
+                if (sampled_tex != nullptr)
+                {
+                    r.dispatch_kernel_sampled(*kern, it.dispatch_groups, 1U, 1U,
+                                              static_cast<g::IStorageBuffer* const*>(ibufs), inb, *sampled_tex);
+                }
+                else
+                {
+                    r.dispatch_kernel(*kern, it.dispatch_groups, 1U, 1U,
+                                      static_cast<g::IStorageBuffer* const*>(ibufs), inb);
+                }
             }
             break;
         }
-        r.dispatch_kernel(*p->kernel_program, p->groups[0], p->groups[1], p->groups[2],
-                          static_cast<g::IStorageBuffer* const*>(bufs), nb);
+        if (sampled_tex != nullptr)
+        {
+            r.dispatch_kernel_sampled(*p->kernel_program, p->groups[0], p->groups[1], p->groups[2],
+                                      static_cast<g::IStorageBuffer* const*>(bufs), nb, *sampled_tex);
+        }
+        else
+        {
+            r.dispatch_kernel(*p->kernel_program, p->groups[0], p->groups[1], p->groups[2],
+                              static_cast<g::IStorageBuffer* const*>(bufs), nb);
+        }
         break;
     }
     // ── ⭐ REN-38-A11: THE VISIBILITY-BUFFER PASS. ──
@@ -889,7 +919,7 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
 
     // ⭐ REN-38-B1: `for_read` is what makes ping-pong work with no new syntax. Everything else ignores it.
     const auto resolve_image = [&](const crd::containers::String& n, g::FgImage& h, bool& is_depth,
-                                   bool for_read = false) -> bool {
+                                   bool for_read = false, bool* is_array = nullptr) -> bool {
         if (name_is(n, "@output")) { h = out_handle; is_depth = false; return true; }
         for (crd::usize i = 0; i < desc.resources.size(); ++i)
         {
@@ -897,6 +927,12 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
                 && std::memcmp(desc.resources[i].name.c_str(), n.c_str(), n.size()) == 0)
             {
                 h = images[i];
+                // ⭐⭐ REN-40-D: LAYERED-ness is reported alongside depth-ness, because ATLAS ROUTING keys on it.
+                // The routing below used depth-ness as a proxy for "this read is the frame's atlas", which held
+                // exactly as long as the only atlas was a depth atlas — a MOMENT atlas is a colour array, and
+                // under the depth proxy it would be routed as a MATERIAL map: any draw carrying its own albedo
+                // would then silently drop its shadows, the REN-37.10 regression in a new costume.
+                if (is_array != nullptr) { *is_array = desc.resources[i].layers > 1U; }
                 // ⭐ REN-38-B1: a READ of a PING-PONG resource resolves to the PREVIOUS frame's image, a write to
                 // this frame's. That is the whole mechanism, and it needs no syntax the author can hold wrong.
                 if (for_read && desc.resources[i].kind == FrameResourceKind::PingPongImage && pingpong[i].valid())
@@ -981,8 +1017,16 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         rec.desc  = &d;
         rec.layer = plan[ii].index;
 
+        // REN-40-E: a cached for_each instance skips draw-list resolution and program checks —
+        // a cached instance has no draws and no program, and those checks would fail. Resolved
+        // FIRST so the guards below can test load_override.
+        if (d.for_each != FrameForEach::None && host.for_each_load(d.for_each, plan[ii].index))
+        {
+            rec.load_override = true;
+        }
+
         DrawListBinding bind{};
-        if (!d.draw_list.empty())
+        if (!d.draw_list.empty() && !rec.load_override)
         {
             // ⛔⛔ ONLY an EXPANDED pass carries its instance to the host. `plan[ii].index` is 0 for BOTH
             // "cascade 0" and "not expanded at all" — and handing 0 to the host made it stamp CASCADE 0's
@@ -1012,7 +1056,7 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
                                         || d.kind == FramePassKind::RasterMrt
                                         || d.kind == FramePassKind::RasterTess || d.kind == FramePassKind::RasterMesh
                                         || d.kind == FramePassKind::RasterDepthOnly;
-            if (draws_geometry && rec.program == nullptr)
+            if (draws_geometry && rec.program == nullptr && !rec.load_override)
             {
                 return fail(FrameExecError::UnresolvedProgram, &d.name);
             }
@@ -1219,6 +1263,18 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
                 first_write        = false;
             }
         }
+        // ── ⭐ REN-40-G3: SHARED DEPTH — resolve the named depth image and register it as a WRITE. ──
+        if (d.shared_depth.size() > 0U)
+        {
+            g::FgImage dh{};
+            bool       d_depth = false;
+            if (!resolve_image(d.shared_depth, dh, d_depth))
+            {
+                return fail(FrameExecError::UnresolvedResource, &d.shared_depth);
+            }
+            pb.writes(dh);
+            rec.depth_target = dh;
+        }
         bool first_read = true;
         for (crd::usize r = 0; r < d.reads.size(); ++r)
         {
@@ -1256,13 +1312,15 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             }
             if (was_accel) { continue; }
             if (was_buffer) { continue; }
-            if (resolve_image(d.reads[r].name, h, is_depth, /*for_read=*/true))
+            bool is_array = false;
+            if (resolve_image(d.reads[r].name, h, is_depth, /*for_read=*/true, &is_array))
             {
                 pb.reads(h);
                 if (rec.n_sampled < kMaxPassReads) { rec.sampled[rec.n_sampled++] = h; }
                 if (first_read)
                 {
-                    rec.sampled_is_depth = is_depth;
+                    rec.sampled_is_depth = is_depth && !d.depth_as_float;
+                    rec.sampled_is_array = is_array;
                     first_read           = false;
                 }
             }

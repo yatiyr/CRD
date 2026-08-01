@@ -62,10 +62,24 @@ hysteresis = 0.15
 # neighbouring levels. ⛔ DITHER OVER GEOMORPH on purpose: geomorphing needs a NESTED chain (level n+1 a subset
 # of level n), which constrains the simplifier and — decisively — cannot cross the mesh-to-impostor boundary at
 # all, which is the transition most likely to be seen.
-# ⚠ DECLARED AND NOT YET CONSUMED: the selector reads the band, but the paired-level draw and the screen-space
-# dither threshold are not implemented, so today this value changes nothing. Stated here rather than left to be
-# discovered from a value that silently does nothing.
+# ⭐ REN-40-C4: NOW CONSUMED. The cull kernel dual-writes inside the band, packing complementary alpha
+# bytes into the visible entry; the VS unpacks fade as a flat f32 varying at location 4; the FS compares
+# against a 4x4 Bayer threshold and discards. 0 disables and restores the historical single-write path.
 dither_band = 0.25
+
+# ── ⭐⭐ REN-40-C5: OCTAHEDRAL IMPOSTORS — the last 5–10×. ────────────────────────────────────────────────────
+# ⛔⛔ THE ARITHMETIC. 250k far-field instances at the coarsest mesh LOD still draw ~91 tris each = 22.75M tris.
+# With impostor quads: 250k × 2 tris = 500k. 45× savings on geometry that lives at sub-16 px anyway.
+#
+# `impostor_grid` is N: the atlas captures N×N views over the full sphere via octahedral mapping. 0 disables
+# impostors entirely — the coarsest mesh level remains the last slot (the parity arm). The atlas texture is
+# `(N * impostor_tile)²` RGBA8 (albedo.rgb + coverage.a).
+#
+# ⛔ THE THRESHOLD IS IMPLICIT: it is the coarsest mesh LOD's `screen_height` (24 px in this policy). Below
+# that, the impostor takes over. NOT a separate knob: the chain must be continuous, and an explicit threshold
+# that disagreed with the coarsest level would either leave a gap or double-draw.
+impostor_grid = 8
+impostor_tile = 64
 
 # ── HOW MANY LEVELS. This is a CONTENT question, and the answer lives here rather than in the engine: the caps
 # are `kMaxLodLevels` / `kMaxLodSlots` = 8, so a chain may declare up to SEVEN `[[level]]` entries beyond the

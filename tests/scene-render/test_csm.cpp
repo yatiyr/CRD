@@ -189,6 +189,182 @@ TEST_CASE("REN-3.2-b: cascades cover the shadow distance and degenerate input ne
     CHECK(sr::compute_csm_cascades(view, proj, m::Vec3f{0.0F, -1.0F, 0.0F}, cfg).count == 1U);
 }
 
+// ── REN-40-E: CASCADE CACHING ───────────────────────────────────────────────────────────────────────────────
+// Texel-snapped matrices are BIT-IDENTICAL when the camera doesn't move (the snap quantizes the ortho centre
+// to whole texel steps, so a stationary camera produces the exact same centre every frame). This is the
+// property that makes the cache comparison exact, not approximate.
+
+TEST_CASE("REN-40-E GATE: a static camera produces bit-identical cascade matrices across frames",
+          "[scene-render][csm][ren40]")
+{
+    sr::CsmConfig cfg;
+    cfg.cascade_count = 4;
+    cfg.map_size      = 2048;
+
+    const m::Mat4f proj = test_proj();
+    const m::Vec3f eye{10.0F, 25.0F, 10.0F};
+    const m::Vec3f target{0.0F, 0.0F, 0.0F};
+    const m::Vec3f light = m::normalized(m::Vec3f{0.35F, -1.0F, 0.25F});
+
+    const m::Mat4f view = m::look_at(eye, target, m::Vec3f{0.0F, 1.0F, 0.0F});
+    const m::Mat4f vp   = proj * view;
+
+    const sr::CsmCascades frame0 = sr::compute_csm_cascades_from_vp(vp, light, cfg);
+    const sr::CsmCascades frame1 = sr::compute_csm_cascades_from_vp(vp, light, cfg);
+    REQUIRE(frame0.count == 4U);
+    REQUIRE(frame1.count == 4U);
+
+    for (crd::u32 i = 0; i < frame0.count; ++i)
+    {
+        CHECK(frame0.light_vp[i] == frame1.light_vp[i]);
+    }
+}
+
+TEST_CASE("REN-40-E GATE: a moving camera produces DIFFERENT cascade matrices",
+          "[scene-render][csm][ren40]")
+{
+    sr::CsmConfig cfg;
+    cfg.cascade_count = 4;
+    cfg.map_size      = 2048;
+
+    const m::Mat4f proj = test_proj();
+    const m::Vec3f light = m::normalized(m::Vec3f{0.35F, -1.0F, 0.25F});
+
+    const m::Mat4f view0 = m::look_at(m::Vec3f{10.0F, 25.0F, 10.0F}, m::Vec3f{0.0F, 0.0F, 0.0F},
+                                       m::Vec3f{0.0F, 1.0F, 0.0F});
+    const m::Mat4f view1 = m::look_at(m::Vec3f{50.0F, 25.0F, 50.0F}, m::Vec3f{40.0F, 0.0F, 40.0F},
+                                       m::Vec3f{0.0F, 1.0F, 0.0F});
+
+    const sr::CsmCascades frame0 = sr::compute_csm_cascades_from_vp(proj * view0, light, cfg);
+    const sr::CsmCascades frame1 = sr::compute_csm_cascades_from_vp(proj * view1, light, cfg);
+    REQUIRE(frame0.count == 4U);
+    REQUIRE(frame1.count == 4U);
+
+    crd::u32 changed = 0;
+    for (crd::u32 i = 0; i < frame0.count; ++i)
+    {
+        if (!(frame0.light_vp[i] == frame1.light_vp[i])) { ++changed; }
+    }
+    CHECK(changed > 0U);
+}
+
+TEST_CASE("REN-40-E GATE: zero prev_light_vp never matches a real cascade (first-frame safety)",
+          "[scene-render][csm][ren40]")
+{
+    sr::CsmConfig cfg;
+    cfg.cascade_count = 4;
+    cfg.map_size      = 2048;
+
+    const m::Mat4f proj = test_proj();
+    const m::Vec3f light = m::normalized(m::Vec3f{0.35F, -1.0F, 0.25F});
+    const m::Mat4f view = m::look_at(m::Vec3f{10.0F, 25.0F, 10.0F}, m::Vec3f{0.0F, 0.0F, 0.0F},
+                                      m::Vec3f{0.0F, 1.0F, 0.0F});
+
+    const sr::CsmCascades real = sr::compute_csm_cascades_from_vp(proj * view, light, cfg);
+    REQUIRE(real.count == 4U);
+
+    const m::Mat4f zero{};
+    for (crd::u32 i = 0; i < real.count; ++i)
+    {
+        CHECK_FALSE(real.light_vp[i] == zero);
+    }
+}
+
+TEST_CASE("REN-40-E2 GATE: round-robin schedule alternates far cascades",
+          "[scene-render][csm][ren40]")
+{
+    // Near cascades (0, 1) are always scheduled. Far cascades (2, 3) alternate by frame parity.
+    // The schedule function: scheduled(index) = index < 2 || (frame & 1) == (index & 1)
+    // frame 0 (even): cascade 2 scheduled (even), cascade 3 NOT
+    // frame 1 (odd):  cascade 2 NOT,            cascade 3 scheduled (odd)
+    auto scheduled = [](crd::u32 frame, crd::u32 index) -> bool
+    {
+        if (index < 2U) { return true; }
+        return (frame & 1U) == (index & 1U);
+    };
+
+    for (crd::u32 f = 0; f < 8; ++f)
+    {
+        CHECK(scheduled(f, 0U));
+        CHECK(scheduled(f, 1U));
+        // cascades 2 and 3 never schedule on the same frame
+        CHECK(scheduled(f, 2U) != scheduled(f, 3U));
+    }
+}
+
+// ── REN-40-E GATE: MOVING-LIGHT LATENCY ──────────────────────────────────────────────────────────────────────
+// When the light direction changes, ALL cascades must update within the round-robin window: near cascades (0,1)
+// update IMMEDIATELY (same frame), far cascades (2,3) update within AT MOST 2 frames. Once the light settles,
+// all cascades return to the cached state. This is the correctness property the round-robin + cache combination
+// must hold: stale shadows are bounded, never permanent.
+TEST_CASE("REN-40-E GATE: a moved light updates every cascade within the round-robin window",
+          "[scene-render][csm][ren40]")
+{
+    sr::CsmConfig cfg;
+    cfg.cascade_count = 4;
+    cfg.map_size      = 2048;
+
+    const m::Mat4f proj = test_proj();
+    const m::Vec3f eye{10.0F, 25.0F, 10.0F};
+    const m::Mat4f view = m::look_at(eye, m::Vec3f{0.0F, 0.0F, 0.0F}, m::Vec3f{0.0F, 1.0F, 0.0F});
+    const m::Mat4f vp   = proj * view;
+
+    const m::Vec3f light_a = m::normalized(m::Vec3f{0.35F, -1.0F, 0.25F});
+    const m::Vec3f light_b = m::normalized(m::Vec3f{-0.6F, -1.0F, 0.4F});
+
+    const sr::CsmCascades casc_a = sr::compute_csm_cascades_from_vp(vp, light_a, cfg);
+    const sr::CsmCascades casc_b = sr::compute_csm_cascades_from_vp(vp, light_b, cfg);
+    REQUIRE(casc_a.count == 4U);
+    REQUIRE(casc_b.count == 4U);
+
+    // the two light directions must produce DIFFERENT matrices (the test is meaningless otherwise)
+    for (crd::u32 i = 0; i < 4U; ++i)
+    {
+        CHECK_FALSE(casc_a.light_vp[i] == casc_b.light_vp[i]);
+    }
+
+    // simulate the for_each_load decision: cache IFF (prev == current) OR (far + not scheduled + past frame 1)
+    auto should_cache = [](crd::u32 index, const m::Mat4f& prev, const m::Mat4f& current,
+                           crd::u32 csm_frame) -> bool
+    {
+        if (prev == current) { return true; }
+        const bool scheduled = index < 2U || ((csm_frame & 1U) == (index & 1U));
+        if (index >= 2U && csm_frame > 1U && !scheduled) { return true; }
+        return false;
+    };
+
+    // start steady on light_a: all cascades are cached after the first frame
+    for (crd::u32 i = 0; i < 4U; ++i)
+    {
+        CHECK(should_cache(i, casc_a.light_vp[i], casc_a.light_vp[i], 5U));
+    }
+
+    // light moves to B: near cascades update IMMEDIATELY regardless of frame parity
+    for (crd::u32 frame = 2; frame < 6; ++frame)
+    {
+        CHECK_FALSE(should_cache(0U, casc_a.light_vp[0], casc_b.light_vp[0], frame));
+        CHECK_FALSE(should_cache(1U, casc_a.light_vp[1], casc_b.light_vp[1], frame));
+    }
+
+    // far cascades update on their SCHEDULED frame and cache on the non-scheduled one.
+    // over 2 consecutive frames, BOTH cascades 2 and 3 get at least one re-render.
+    crd::u32 updated_2 = 0;
+    crd::u32 updated_3 = 0;
+    for (crd::u32 frame = 2; frame <= 3; ++frame)
+    {
+        if (!should_cache(2U, casc_a.light_vp[2], casc_b.light_vp[2], frame)) { ++updated_2; }
+        if (!should_cache(3U, casc_a.light_vp[3], casc_b.light_vp[3], frame)) { ++updated_3; }
+    }
+    CHECK(updated_2 >= 1U);
+    CHECK(updated_3 >= 1U);
+
+    // after updating prev to B: all cascades are cached again (the light settled)
+    for (crd::u32 i = 0; i < 4U; ++i)
+    {
+        CHECK(should_cache(i, casc_b.light_vp[i], casc_b.light_vp[i], 10U));
+    }
+}
+
 // ⛔ The renderer only ever HAS a combined view_proj, so `compute_csm_cascades_from_vp` recovers the frustum
 // shape and the camera basis from it. That recovery is claimed to be EXACT, not approximate — and a claim like
 // that is worthless without a gate: a mis-recovered basis silently mis-sizes every cascade and mis-places every

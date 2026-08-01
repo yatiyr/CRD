@@ -204,6 +204,7 @@ int main(int argc, char** argv)
     bool                  want_dx12       = false; // REN-39-D2: `--backend dx12` — the SAME sandbox, D3D12
     bool want_pull_draws = false; // REN-39-C2: the A/B baseline arm (indexed is the default)
     bool want_gpu_cull   = false; // REN-40-A: the device-side cull arm (CPU cull is the default)
+    bool want_gpu_skin   = false; // REN-40-F: device-side bone palette (CPU palette is the default)
     bool want_no_bvh     = false; // REN-40-A: drop the CPU cull's BVH broad phase (attribution)
     // ⭐⭐ REN-40-C2: build LOD chains from an authored `.crdlod` policy. ⛔ OFF by default and named on the
     // command line for the same reason `--gpu-cull` is: it changes what is DRAWN, so the A/B has to run on one
@@ -266,6 +267,9 @@ int main(int argc, char** argv)
         // ⛔ `--gpu-cull-verify` keeps the CPU cull running beside the device one so the two verdicts can be
         // compared in ONE frame. It gives up the speedup on purpose — it is the correctness arm, not the fast one.
         else if (std::strcmp(argv[i], "--gpu-cull-verify") == 0) { want_gpu_cull = want_verify = true; }
+        // ⭐⭐ REN-40-F: `--gpu-skin` moves the bone palette to the device. ⛔ Requires the GPU frame graph
+        // (the `gpu_skin` compute pass lives there), so it forces the same TOML as `--gpu-cull`.
+        else if (std::strcmp(argv[i], "--gpu-skin") == 0) { want_gpu_skin = true; }
         // ⛔ REN-40-A: `--no-bvh` drops the CPU cull's BVH BROAD PHASE. The device cull brute-forces every
         // instance, so this is how a GPU-vs-CPU count disagreement is attributed: if it vanishes here, the broad
         // phase was the one dropping geometry, not the kernel.
@@ -820,6 +824,11 @@ int main(int argc, char** argv)
         CRD_LOG_INFO(g_log_sandbox, "GPU cull: ON (device-side frustum cull, camera + every cascade){}",
                      want_verify ? " + CPU verify arm" : "");
     }
+    if (want_gpu_skin)
+    {
+        scene_renderer.set_gpu_skinning(true);
+        CRD_LOG_INFO(g_log_sandbox, "GPU skin: ON (device-side bone palette)");
+    }
 
     // REN-3.2-b: cascaded shadow maps. `set_shadows_enabled` returns whether they actually became ACTIVE (the
     // cascade shaders had to compile), so a silent "on but not really" is impossible to miss here.
@@ -871,7 +880,7 @@ int main(int argc, char** argv)
     // swallowed the whole device-side cull: it reported "installed", then `forward_csm_agx` (no compute passes)
     // took over and every command stayed at the reset's zero. The switch belongs HERE, in the table the toggle
     // reads, not in a one-shot install racing it.
-    const char* const gpu_frame        = want_gpu_cull ? "frame/forward_csm_gpu.frame.toml" : nullptr;
+    const char* const gpu_frame        = (want_gpu_cull || want_gpu_skin) ? "frame/forward_csm_gpu.frame.toml" : nullptr;
     // ⛔⛔ REN-40-B: `--gpu-cull` REFUSES TO RUN WITHOUT ITS GRAPH, and that is a benchmark-integrity rule, not a
     // convenience. `forward_csm_gpu.frame.toml` ships as a FILE, not in the built-in pack, so without
     // `CRD_ASSETS_DIR` the install logs one error line and the run continues — with no cull passes, every
@@ -882,8 +891,8 @@ int main(int argc, char** argv)
     if (gpu_frame != nullptr && scene_ready && !scene_renderer.set_frame_graph_asset(gpu_frame))
     {
         CRD_LOG_ERROR(g_log_sandbox,
-                      "--gpu-cull needs '{}', which did not install (set CRD_ASSETS_DIR to the repo's assets/ "
-                      "directory). Refusing to run: without it the device cull does nothing and the frame is EMPTY.",
+                      "--gpu-cull/--gpu-skin needs '{}', which did not install (set CRD_ASSETS_DIR to the repo's "
+                      "assets/ directory). Refusing to run: without it the device passes do nothing and the frame is EMPTY.",
                       gpu_frame);
         crd::log::shutdown();
         return 2;

@@ -29,6 +29,7 @@
 #include <crd/framecook/frame_runtime.hpp>
 #include <crd/framecook/viewport.hpp>   // REN-37.10: registry + scheduler driving the loop
 #include <crd/scenerender/scene_renderer.hpp>
+#include <crd/anim/anim_resources.hpp> // REN-40-F: skeleton + clip builders for the GPU skinning gate
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -102,6 +103,87 @@ void write_mesh_pack(const platform::fs::Path& path, const resources::ResourceId
     e.blob_size   = static_cast<u64>(art_bytes.size());
     entries.push_back(e);
 
+    const resources::ResourceId pack_id = resources::ResourceId::mint_random();
+    {
+        resources::CrdrWriter p1(a, pack_id, resources::kFourCC_PACK);
+        resources::manifest_write(p1, containers::as_const_span(entries), containers::as_const_span(pool));
+        auto b1                = p1.finish();
+        entries[0].blob_offset = static_cast<u64>(b1.size());
+    }
+    resources::CrdrWriter p2(a, pack_id, resources::kFourCC_PACK);
+    resources::manifest_write(p2, containers::as_const_span(entries), containers::as_const_span(pool));
+    auto pack = p2.finish();
+    for (u8 b : art_bytes) { pack.push_back(b); }
+    REQUIRE(platform::fs::write_file_binary(path, containers::as_const_span(pack)));
+}
+
+// ── REN-40-F fixtures ────────────────────────────────────────────────────────────────────────────────────────────
+// A 1-JOINT SKINNED CUBE: the same geometry as `build_cube_mesh_crdr` plus a SKNV chunk that binds every vertex
+// to joint 0 with weight 1.0 — the minimal rig to exercise the GPU skinning pipeline (palette kernel, buffer
+// layout, VS palette read). The animation TRANSLATES the root joint, so the skinned cube MOVES relative to its
+// instance position — a visible, measurable effect on the rendered pixels.
+[[nodiscard]] containers::Array<u8> build_skinned_cube_crdr(const resources::ResourceId& id)
+{
+    auto*                 a = &galloc();
+    containers::Array<u8> verts(a);
+    for (u32 corner = 0; corner < 8U; ++corner)
+    {
+        const f32 x       = (corner & 1U) != 0U ? 0.5F : -0.5F;
+        const f32 y       = (corner & 2U) != 0U ? 0.5F : -0.5F;
+        const f32 z       = (corner & 4U) != 0U ? 0.5F : -0.5F;
+        const f32 rec[12] = {x, y, z, 0, 1, 0, 0, 0, 0, 0, 0, 1};
+        const auto* b     = reinterpret_cast<const u8*>(rec);
+        for (u32 k = 0; k < 48U; ++k) { verts.push_back(b[k]); }
+    }
+    const u32 idx[36] = {0, 2, 1, 1, 2, 3, 4, 5, 6, 5, 7, 6, 0, 1, 4, 1, 5, 4,
+                         2, 6, 3, 3, 6, 7, 0, 4, 2, 2, 4, 6, 1, 3, 5, 3, 7, 5};
+    containers::Array<u8> indices(a);
+    for (u32 v : idx)
+    {
+        const auto* b = reinterpret_cast<const u8*>(&v);
+        for (u32 k = 0; k < 4U; ++k) { indices.push_back(b[k]); }
+    }
+    containers::Array<u8> prim(a);
+    prim.resize(4U + 32U);
+    std::memset(prim.data(), 0, prim.size());
+    const u32 prim_count = 1U;
+    const u32 vc         = 8U;
+    const u32 ic         = 36U;
+    std::memcpy(prim.data(), &prim_count, 4U);
+    std::memcpy(prim.data() + 4U, &vc, 4U);
+    std::memcpy(prim.data() + 8U, &ic, 4U);
+    // SKNV: 24 bytes/vertex — 4x u16 joints + 4x f32 weights; every vertex bound to joint 0
+    containers::Array<u8> skin(a);
+    for (u32 sv = 0; sv < 8U; ++sv)
+    {
+        const u16 joints[4]  = {0, 0, 0, 0};
+        const f32 weights[4] = {1.0F, 0.0F, 0.0F, 0.0F};
+        const auto* jp = reinterpret_cast<const u8*>(joints);
+        for (u32 k = 0; k < 8U; ++k) { skin.push_back(jp[k]); }
+        const auto* wp = reinterpret_cast<const u8*>(weights);
+        for (u32 k = 0; k < 16U; ++k) { skin.push_back(wp[k]); }
+    }
+    resources::CrdrWriter w(a, id, resources::kFourCC_MESH);
+    w.add_chunk(resources::kFourCC_VERT, containers::as_const_span(verts));
+    w.add_chunk(resources::kFourCC_INDX, containers::as_const_span(indices));
+    w.add_chunk(resources::kFourCC_PRIM, containers::as_const_span(prim));
+    w.add_chunk(resources::kFourCC_SKNV, containers::as_const_span(skin));
+    return w.finish();
+}
+
+void write_resource_pack(const platform::fs::Path& path, const resources::ResourceId& id,
+                          u32 fourcc, const containers::Array<u8>& art_bytes)
+{
+    auto* a = &galloc();
+    containers::Array<u8> pool(a);
+    const char name[] = "res";
+    for (char c : name) { pool.push_back(static_cast<u8>(c)); }
+    containers::Array<resources::ManifestEntry> entries(a);
+    resources::ManifestEntry                    e;
+    e.id          = id;
+    e.type_fourcc = fourcc;
+    e.blob_size   = static_cast<u64>(art_bytes.size());
+    entries.push_back(e);
     const resources::ResourceId pack_id = resources::ResourceId::mint_random();
     {
         resources::CrdrWriter p1(a, pack_id, resources::kFourCC_PACK);
@@ -2652,3 +2734,1134 @@ TEST_CASE("REN-39-C1 GATE (DX12): pull and indexed scene frames are bit-identica
     CHECK(covered > 500U);
 }
 #endif // _WIN32 (the REN-39-C1 DX12 parity gate)
+
+// ── ⭐⭐ REN-40-D GATE: THE CASCADE SEAM, AS A DICHOTOMY. ────────────────────────────────────────────────────
+// ⛔⛔ A SEAM CANNOT BE GATED BY "DOES IT LOOK BETTER". Cascades are fitted as SPHERES and selected by
+// CONTAINMENT, so a fragment leaves one and enters the next at a hard line — and the two sides differ in texel
+// size, in depth bias and in filter footprint, so the line shows as a STEP in shadow softness even when both
+// sides are individually correct. The only honest test is a DICHOTOMY on one scene: render a receiver that spans
+// a cascade boundary with the blend OFF and then ON, and require the largest adjacent-pixel jump along a scanline
+// crossing that boundary to FALL. A one-sided "the blended image is smooth" assert would pass on an image with no
+// shadow in it at all, which is why the hard arm has to show the step first.
+//
+// ⛔ And the parity arm is STRUCTURAL, not a tolerance: `cascade_blend_pct = 0` is a DECLARED option that cooks
+// the byte-identical graph the technique always emitted, so the two frames must differ by exactly ZERO pixels.
+TEST_CASE("REN-40-D GATE: cascade cross-fade removes the seam step, and blend=0 is bit-identical (Vulkan)",
+          "[scene-render][ren40][csm][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_csm_blend_", cube_id);
+    write_mesh_pack(pack.path, cube_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+
+    const auto add_cube = [&](math::Vec3f pos, math::Vec3f scale) {
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.translation = math::from_raw_vec<units::dim::Length>(pos);
+        t.scale       = {scale.x, scale.y, scale.z};
+        t.world       = math::from_trs(pos, math::Quatf::identity(), scale);
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{cube_id, {}});
+    };
+    // a LONG receiver running away from the camera, so one scanline crosses several cascade boundaries, and a
+    // row of casters above it so there is shadow on both sides of every boundary
+    add_cube({0.0F, 0.0F, 0.0F}, {6.0F, 0.25F, 90.0F});
+    for (int i = 0; i < 12; ++i)
+    {
+        add_cube({0.0F, 3.0F, -70.0F + (static_cast<f32>(i) * 12.0F)}, {1.6F, 1.6F, 1.6F});
+    }
+
+    constexpr u32 dim    = 256U;
+    auto          target = raster->create_color_depth_target(dim, dim);
+    REQUIRE(target != nullptr);
+    // looking straight down the receiver, so screen-Y IS distance and a vertical scanline crosses the cascades
+    const math::Mat4f view = math::look_at(math::Vec3f{0.0F, 7.0F, 95.0F}, math::Vec3f{0.0F, 0.0F, 0.0F},
+                                           math::Vec3f{0, 1, 0});
+    const math::Mat4f     proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Mat4f     vp   = proj * view;
+    const math::Vec3f     light = math::normalized(math::Vec3f{0.35F, 1.0F, 0.15F});
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+
+    scenerender::CsmConfig ccfg;
+    ccfg.cascade_count = 4;
+    ccfg.map_size      = 1024;
+    ccfg.far_plane     = 200.0F;
+
+    // ⛔⛔ THE METRIC HAS TO ISOLATE THE SEAM, and a plain "largest adjacent step in the frame" does NOT: it is
+    // dominated by the shadow's OWN edge (lit -> shadowed is a ~60-level jump), which is present, correct and
+    // identical in both arms. The first version of this gate measured exactly that and reported 62 -> 62 on a
+    // cross-fade that was demonstrably working.
+    // ⭐ So the seam is located BY THE MECHANISM rather than guessed at: the cross-fade acts only inside the band
+    // around a cascade border, so the rows whose pixels CHANGED between the two arms are, by construction, the
+    // rows the seam runs through. The step is then compared on those rows only — the same pixels, both arms.
+    constexpr u32 grid = dim / 2U;
+    const auto    grab = [&](gpu::IRasterTarget& t, containers::Array<u32>& out) {
+        out.clear();
+        for (u32 y = 0; y < dim; y += 2U)
+        {
+            for (u32 x = 0; x < dim; x += 2U) { out.push_back(t.read_pixel(x, y) & 0xFFU); }
+        }
+    };
+    // the largest vertically-adjacent jump, restricted to a set of rows
+    const auto step_on_rows = [&](const containers::Array<u32>& px, const containers::Array<u8>& rows) {
+        u32 worst = 0U;
+        for (u32 ry = 1; ry < grid; ++ry)
+        {
+            if (rows[ry] == 0U) { continue; }
+            for (u32 rx = 0; rx < grid; ++rx)
+            {
+                const u32 a = px[((ry - 1U) * grid) + rx];
+                const u32 b = px[(ry * grid) + rx];
+                const u32 d = a > b ? a - b : b - a;
+                if (d > worst) { worst = d; }
+            }
+        }
+        return worst;
+    };
+
+    containers::Array<u32> hard_px(&galloc());
+    containers::Array<u32> soft_px(&galloc());
+
+    // ── arm A: the HARD select (blend = 0) ──
+    {
+        scenerender::SceneRenderer r(&galloc());
+        REQUIRE(r.init(*raster, rm));
+        r.set_cascade_blend_pct(0U);
+        REQUIRE(r.init_programs(*vk));
+        r.set_csm_config(ccfg);
+        REQUIRE(r.set_shadows_enabled(true));
+        (void)r.sync(world);
+        REQUIRE(r.render(*target, vp, light, clear, nullptr).draws > 0U);
+        grab(*target, hard_px);
+    }
+
+    // ── arm B: the SAME scene with the cross-fade on ──
+    {
+        scenerender::SceneRenderer r(&galloc());
+        REQUIRE(r.init(*raster, rm));
+        r.set_cascade_blend_pct(30U);
+        REQUIRE(r.init_programs(*vk));
+        r.set_csm_config(ccfg);
+        REQUIRE(r.set_shadows_enabled(true));
+        (void)r.sync(world);
+        REQUIRE(r.render(*target, vp, light, clear, nullptr).draws > 0U);
+        grab(*target, soft_px);
+    }
+
+    // which rows did the cross-fade touch? (widened by one, so the step ACROSS the band is included)
+    containers::Array<u8> rows(&galloc());
+    rows.resize(grid, static_cast<u8>(0));
+    u32 changed = 0U;
+    for (u32 ry = 0; ry < grid; ++ry)
+    {
+        for (u32 rx = 0; rx < grid; ++rx)
+        {
+            if (hard_px[(ry * grid) + rx] != soft_px[(ry * grid) + rx])
+            {
+                ++changed;
+                rows[ry] = 1U;
+                if (ry > 0U) { rows[ry - 1U] = 1U; }
+                if (ry + 1U < grid) { rows[ry + 1U] = 1U; }
+            }
+        }
+    }
+    // ⛔ FIRST: the cross-fade must actually REACH the shader. Without this every "it got smoother" assertion
+    // below is vacuously true — and it caught exactly that: `Technique::n_options` was a hand-written literal
+    // `2`, so the third DECLARED option was silently bounds-checked away and the cook produced the unblended
+    // graph while the renderer, the option table and the asset all agreed the feature was on.
+    INFO("pixels changed by the cross-fade: " << changed);
+    REQUIRE(changed > 0U);
+    // ...and it is a SEAM-LOCAL effect, not a global lighting change
+    CHECK(changed < (grid * grid) / 4U);
+
+    const u32 hard_step = step_on_rows(hard_px, rows);
+    const u32 soft_step = step_on_rows(soft_px, rows);
+    INFO("seam step " << hard_step << " -> " << soft_step);
+    // the hard arm must SHOW a step there, or the soft arm proves nothing (a flat region is trivially smooth)
+    CHECK(hard_step > 4U);
+    // ...and the cross-fade must reduce it
+    CHECK(soft_step < hard_step);
+
+    // ── arm C: PARITY. `blend = 0` is a DECLARED option that cooks the same graph, so this is exact. ──
+    {
+        scenerender::SceneRenderer r(&galloc());
+        REQUIRE(r.init(*raster, rm));
+        r.set_cascade_blend_pct(0U);
+        REQUIRE(r.init_programs(*vk));
+        r.set_csm_config(ccfg);
+        REQUIRE(r.set_shadows_enabled(true));
+        (void)r.sync(world);
+        REQUIRE(r.render(*target, vp, light, clear, nullptr).draws > 0U);
+        u32 idx    = 0U;
+        u32 differ = 0U;
+        for (u32 y = 0; y < dim; y += 2U)
+        {
+            for (u32 x = 0; x < dim; x += 2U)
+            {
+                if (hard_px[idx++] != (target->read_pixel(x, y) & 0xFFU)) { ++differ; }
+            }
+        }
+        CHECK(differ == 0U);
+    }
+}
+
+// ── ⭐⭐ REN-40-D GATE: PCSS CONTACT HARDENING — a TWO-DISTANCE DICHOTOMY. ───────────────────────────────────
+// ⛔⛔ "THE SHADOWS LOOK SOFTER" IS NOT A TEST. Fixed-radius PCF also looks soft, and swapping filters always
+// moves SOME pixels — so "the image changed" proves nothing about contact hardening. The property that actually
+// distinguishes PCSS is a DERIVATIVE: the SAME caster over the SAME receiver must cast a WIDER penumbra when it
+// is FURTHER from it. A fixed radius produces the same width at both heights BY CONSTRUCTION, which is what
+// makes this a dichotomy rather than a preference — and why both filters are measured, not just the new one.
+//
+// ⛔⛔ THE PROBE GEOMETRY IS PART OF THE TEST. An overhead camera with an overhead light puts the caster ON TOP
+// of its own shadow, so the near arm measures a shadow that is mostly HIDDEN and reads as narrower for a reason
+// that has nothing to do with the filter — an earlier version of this probe reported exactly that and looked
+// like a real inversion. The light is slanted 45 deg and the caster kept small, so the shadow clears the
+// caster's own projection at BOTH heights: h*tan(theta) > 2*half_extent holds for h = 4 as well as h = 16.
+//
+// ⛔⛔ AND THE DEFECT THIS GATE EXISTS TO PIN: the blocker search reads the atlas through a PLAIN sampler
+// (binding 6), because a comparison sampler cannot return a stored depth. That binding was missing from the
+// descriptor set LAYOUT — which is not a compile error and not a hang. The search read an UNBOUND descriptor,
+// reported "blocker found" across the whole open receiver, and dimmed every lit surface by half; the result
+// still looked like a plausible soft shadow, so it read as a tuning problem. What exposed it was dumping the
+// scanline as NUMBERS and seeing that the LIT PLATEAU had moved, which no amount of looking had shown.
+TEST_CASE("REN-40-D GATE: PCSS widens the penumbra with blocker distance, PCF does not (Vulkan)",
+          "[scene-render][ren40][csm][pcss][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_pcss_", cube_id);
+    write_mesh_pack(pack.path, cube_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+
+    constexpr u32 dim    = 256U;
+    auto          target = raster->create_color_depth_target(dim, dim);
+    REQUIRE(target != nullptr);
+    // straight down at the receiver, so screen-X IS world-X and the shadow slides along the measured scanline
+    const math::Mat4f view = math::look_at(math::Vec3f{0.0F, 42.0F, 0.01F}, math::Vec3f{0, 0, 0},
+                                           math::Vec3f{0, 1, 0});
+    const math::Mat4f     proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Mat4f     vp   = proj * view;
+    // ⛔ the slant is a CONSTRAINT, not a taste: the shadow must clear the caster's own projection at the NEAR
+    // height (h*tan > caster_half + shadow_half) and still land on screen at the FAR one (h*tan + half < 24 units).
+    const math::Vec3f     light = math::normalized(math::Vec3f{1.7F, 1.0F, 0.0F});
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+
+    scenerender::CsmConfig ccfg;
+    ccfg.cascade_count = 4;
+    ccfg.map_size      = 512;
+    ccfg.far_plane     = 120.0F;
+
+    struct Edge
+    {
+        u32 partial;  // pixels that are neither fully lit nor fully shadowed — the penumbra width
+        u32 contrast; // the lit-to-shadow range actually found, so an EMPTY frame cannot pass as a narrow one
+    };
+
+    // ⛔ The window is centred on the DARKEST pixel rather than on a fixed column, because the shadow MOVES
+    // when the caster rises (that is the whole point of the slanted light) and a fixed window would read the
+    // far arm's empty receiver. And the band is relative to the window's own lit level, not to 255: the
+    // receiver carries a shading gradient across the frame, and a global threshold would count it as penumbra.
+    const auto measure = [&](gpu::IRasterTarget& t) {
+        constexpr u32 x_lo = 4U; // the receiver fills the frame, so only the very edge is excluded
+        constexpr u32 x_hi = 251U;
+        constexpr u32 row  = dim / 2U;
+        u32           core = x_lo;
+        u32           core_v = 255U;
+        for (u32 x = x_lo; x <= x_hi; ++x)
+        {
+            const u32 v = t.read_pixel(x, row) & 0xFFU;
+            if (v < core_v) { core_v = v; core = x; }
+        }
+        const u32 w_lo = core > x_lo + 24U ? core - 24U : x_lo;
+        const u32 w_hi = core + 24U < x_hi ? core + 24U : x_hi;
+        u32       lo   = 255U;
+        u32       hi   = 0U;
+        for (u32 x = w_lo; x <= w_hi; ++x)
+        {
+            const u32 v = t.read_pixel(x, row) & 0xFFU;
+            if (v < lo) { lo = v; }
+            if (v > hi) { hi = v; }
+        }
+        Edge e{0U, hi - lo};
+        if (e.contrast < 40U) { return e; } // no shadow on this line at all
+        const u32 band_lo = lo + (e.contrast * 15U / 100U);
+        const u32 band_hi = lo + (e.contrast * 85U / 100U);
+        for (u32 x = w_lo; x <= w_hi; ++x)
+        {
+            const u32 v = t.read_pixel(x, row) & 0xFFU;
+            if (v > band_lo && v < band_hi) { ++e.partial; }
+        }
+        return e;
+    };
+
+    // one arm: the caster at `height`, rendered with the chosen filter
+    const auto run = [&](f32 height, bool pcss) {
+        scene::World world{&galloc()};
+        world.register_component<scene::Transform>(scene::transform_serialize_trait());
+        scene::register_render_components(world);
+        const auto add_cube = [&](math::Vec3f pos, math::Vec3f scale) {
+            const scene::EntityId e = world.spawn();
+            scene::Transform      t;
+            t.translation = math::from_raw_vec<units::dim::Length>(pos);
+            t.scale       = {scale.x, scale.y, scale.z};
+            t.world       = math::from_trs(pos, math::Quatf::identity(), scale);
+            world.add_component(e, t);
+            world.add_component(e, scene::MeshRenderer{cube_id, {}});
+        };
+        add_cube({0.0F, 0.0F, 0.0F}, {100.0F, 0.25F, 100.0F}); // receiver: fills the frame, so no background
+        // ⛔⛔ THE CASTER MUST BE WIDER THAN THE PENUMBRA IT CASTS. The mesh is a UNIT cube, so `scale` IS the
+        // full extent — a scale of 1 is a half-extent of 0.5, which at this light angle is SMALLER than the far
+        // arm's penumbra radius. Its umbra then vanishes entirely, both arms saturate at "the whole shadow is
+        // partial", and the measured widening collapses to noise while still pointing the right way.
+        // Thin in Y for a different reason: the search must read the caster's TOP, not a slab whose own depth
+        // spans the penumbra it is being used to estimate.
+        add_cube({0.0F, height, 0.0F}, {6.0F, 0.25F, 6.0F});
+
+        scenerender::SceneRenderer r(&galloc());
+        REQUIRE(r.init(*raster, rm));
+        // ⛔ a WIDE light, so the effect is unmistakable at 1024 texels — the real sun's 0.27 deg would move the
+        // penumbra by a fraction of a texel over this height range and the gate would be measuring noise.
+        r.set_soft_shadows(pcss, 100U); // 1.00 degree of angular radius
+        // ⛔⛔ THE CAP IS RAISED SO THIS GATE MEASURES THE PHYSICS AND NOT THE CAP. The shipping default bounds
+        // the penumbra at 24 texels because a 16-tap filter bands once its taps spread further apart than that —
+        // a real cost/quality trade, and the reason the next tier is a filterable representation rather than a
+        // bigger number. But a gate run at the default would be reading that bound in the far arm, would show
+        // the same compression whether or not the derivation was right, and would go on passing if it broke.
+        r.set_soft_shadow_quality(96U, 16U);
+        r.set_pcf_taps(16U);
+        REQUIRE(r.init_programs(*vk));
+        r.set_csm_config(ccfg);
+        REQUIRE(r.set_shadows_enabled(true));
+        (void)r.sync(world);
+        REQUIRE(r.render(*target, vp, light, clear, nullptr).draws > 0U);
+        return measure(*target);
+    };
+
+    const Edge pcf_near  = run(2.0F, false);
+    const Edge pcf_far   = run(10.0F, false);
+    const Edge pcss_near = run(2.0F, true);
+    const Edge pcss_far  = run(10.0F, true);
+
+    INFO("PCF  near " << pcf_near.partial << "/" << pcf_near.contrast << "  far " << pcf_far.partial << "/"
+                      << pcf_far.contrast);
+    INFO("PCSS near " << pcss_near.partial << "/" << pcss_near.contrast << "  far " << pcss_far.partial << "/"
+                      << pcss_far.contrast);
+
+    // ⛔ EVERY arm must have found a real edge, or a zero-vs-zero comparison passes on an empty frame
+    CHECK(pcf_near.contrast >= 40U);
+    CHECK(pcf_far.contrast >= 40U);
+    CHECK(pcss_near.contrast >= 40U);
+    CHECK(pcss_far.contrast >= 40U);
+
+    // ⭐ THE DICHOTOMY: PCSS widens with blocker distance, and it does so PROPORTIONALLY — the penumbra of a
+    // blocker at distance d is d*tan(theta), so a 5x lift must widen it ~5x. Measured across this range the
+    // penumbra runs 2 px -> 14 px, and the same probe run against light angle (1 deg -> 4 deg -> 12 deg at fixed
+    // height) scales it 2 -> 9 -> 25: linear in BOTH terms, which is the property, not the anecdote. The margin
+    // asked for here is a fraction of that and still unreachable for a fixed radius.
+    CHECK(pcss_far.partial > pcss_near.partial + 8U);
+    // ...and the fixed-radius filter does NOT widen (it may wobble by a pixel of rasterisation, never by a factor)
+    CHECK(pcf_far.partial <= pcf_near.partial + 3U);
+    // ...and at CONTACT distance PCSS is no softer than PCF — that is what "contact hardening" MEANS
+    CHECK(pcss_near.partial <= pcf_near.partial + 4U);
+}
+
+#ifdef _WIN32 // the D3D12 backend exists only on Windows (the F17 guard rule)
+// ── ⭐⭐ REN-40-D GATE (DX12): the same contact-hardening dichotomy on the other backend. ────────────────────
+// Identical probe to the Vulkan gate above — its comments carry the full rationale (the geometry constraints,
+// the darkest-pixel window, the derived margins). What THIS twin exists to catch is backend-specific: the
+// blocker search samples the atlas through the PLAIN sampler at register s6, and on D3D12 that register must be
+// covered by the scene ROOT SIGNATURE and fed from its own fixed sampler-heap slot. A missing s6 is not a
+// cook error and not a crash — PSO creation rejects the program, `set_shadows_enabled` reports false, and the
+// frame silently renders unshadowed: exactly the cook-only scar, one register over.
+TEST_CASE("REN-40-D GATE (DX12): PCSS widens the penumbra with blocker distance, PCF does not",
+          "[scene-render][ren40][csm][pcss][gpu][dx12]")
+{
+    auto gctx = gpu::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto raster = gpu::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_pcssdx_", cube_id);
+    write_mesh_pack(pack.path, cube_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+
+    constexpr u32 dim    = 256U;
+    auto          target = raster->create_color_depth_target(dim, dim);
+    REQUIRE(target != nullptr);
+    const math::Mat4f view = math::look_at(math::Vec3f{0.0F, 42.0F, 0.01F}, math::Vec3f{0, 0, 0},
+                                           math::Vec3f{0, 1, 0});
+    const math::Mat4f     proj  = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Mat4f     vp    = proj * view;
+    const math::Vec3f     light = math::normalized(math::Vec3f{1.7F, 1.0F, 0.0F});
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+
+    scenerender::CsmConfig ccfg;
+    ccfg.cascade_count = 4;
+    ccfg.map_size      = 512;
+    ccfg.far_plane     = 120.0F;
+
+    struct Edge
+    {
+        u32 partial;
+        u32 contrast;
+    };
+    const auto measure = [&](gpu::IRasterTarget& t) {
+        constexpr u32 x_lo = 4U;
+        constexpr u32 x_hi = 251U;
+        constexpr u32 row  = dim / 2U;
+        u32           core   = x_lo;
+        u32           core_v = 255U;
+        for (u32 x = x_lo; x <= x_hi; ++x)
+        {
+            const u32 v = t.read_pixel(x, row) & 0xFFU;
+            if (v < core_v) { core_v = v; core = x; }
+        }
+        const u32 w_lo = core > x_lo + 24U ? core - 24U : x_lo;
+        const u32 w_hi = core + 24U < x_hi ? core + 24U : x_hi;
+        u32       lo   = 255U;
+        u32       hi   = 0U;
+        for (u32 x = w_lo; x <= w_hi; ++x)
+        {
+            const u32 v = t.read_pixel(x, row) & 0xFFU;
+            if (v < lo) { lo = v; }
+            if (v > hi) { hi = v; }
+        }
+        Edge e{0U, hi - lo};
+        if (e.contrast < 40U) { return e; }
+        const u32 band_lo = lo + (e.contrast * 15U / 100U);
+        const u32 band_hi = lo + (e.contrast * 85U / 100U);
+        for (u32 x = w_lo; x <= w_hi; ++x)
+        {
+            const u32 v = t.read_pixel(x, row) & 0xFFU;
+            if (v > band_lo && v < band_hi) { ++e.partial; }
+        }
+        return e;
+    };
+
+    const auto run = [&](f32 height, bool pcss) {
+        scene::World world{&galloc()};
+        world.register_component<scene::Transform>(scene::transform_serialize_trait());
+        scene::register_render_components(world);
+        const auto add_cube = [&](math::Vec3f pos, math::Vec3f scale) {
+            const scene::EntityId e = world.spawn();
+            scene::Transform      t;
+            t.translation = math::from_raw_vec<units::dim::Length>(pos);
+            t.scale       = {scale.x, scale.y, scale.z};
+            t.world       = math::from_trs(pos, math::Quatf::identity(), scale);
+            world.add_component(e, t);
+            world.add_component(e, scene::MeshRenderer{cube_id, {}});
+        };
+        add_cube({0.0F, 0.0F, 0.0F}, {100.0F, 0.25F, 100.0F});
+        add_cube({0.0F, height, 0.0F}, {6.0F, 0.25F, 6.0F});
+
+        scenerender::SceneRenderer r(&galloc());
+        REQUIRE(r.init(*raster, rm));
+        r.set_soft_shadows(pcss, 100U);
+        r.set_soft_shadow_quality(96U, 16U);
+        r.set_pcf_taps(16U);
+        if (!r.init_programs(*gctx)) { SKIP("dxc/DXIL unavailable"); }
+        r.set_csm_config(ccfg);
+        // ⛔ REQUIRE, not CHECK-and-continue: false here IS the s6 defect this twin exists to catch — the
+        // program set failed to build and the frame would render unshadowed, making every arm below vacuous.
+        REQUIRE(r.set_shadows_enabled(true));
+        (void)r.sync(world);
+        REQUIRE(r.render(*target, vp, light, clear, nullptr).draws > 0U);
+        return measure(*target);
+    };
+
+    const Edge pcf_near  = run(2.0F, false);
+    const Edge pcf_far   = run(10.0F, false);
+    const Edge pcss_near = run(2.0F, true);
+    const Edge pcss_far  = run(10.0F, true);
+
+    INFO("PCF  near " << pcf_near.partial << "/" << pcf_near.contrast << "  far " << pcf_far.partial << "/"
+                      << pcf_far.contrast);
+    INFO("PCSS near " << pcss_near.partial << "/" << pcss_near.contrast << "  far " << pcss_far.partial << "/"
+                      << pcss_far.contrast);
+
+    CHECK(pcf_near.contrast >= 40U);
+    CHECK(pcf_far.contrast >= 40U);
+    CHECK(pcss_near.contrast >= 40U);
+    CHECK(pcss_far.contrast >= 40U);
+
+    CHECK(pcss_far.partial > pcss_near.partial + 8U);
+    CHECK(pcf_far.partial <= pcf_near.partial + 3U);
+    CHECK(pcss_near.partial <= pcf_near.partial + 4U);
+}
+#endif // _WIN32 (the REN-40-D DX12 PCSS gate)
+
+// ── ⭐⭐ REN-40-D GATE: THE MOMENT TIER (EVSM + MSM) — filterable shadows through the AUTHORED moment graph. ──
+// What runs here is the entire new pipeline: the `forward_csm_moment` frame graph's four for_each passes
+// (cascade depth -> per-slice moment CONVERT -> separable blur X -> blur Y), the by-NAME instance-program
+// dispatch, the colour-array atlas routing (layered-ness, not depth-ness), the LINEAR/CLAMP atlas sampler, and
+// the technique's one-read moment resolve. Three properties, each chosen because a specific defect class fakes
+// the others:
+//   1. THE FLOOR STAYS LIT. An unbound/mis-typed atlas read does not crash — it darkens every lit surface and
+//      still looks like "soft shadows" (the PCSS scar, verbatim). So the open floor's level must MATCH the
+//      PCF arm's within a tolerance, before any softness claim is examined.
+//   2. THE SHADOW IS STILL THERE. A convert or blur pass that silently dropped out (null program, empty draw)
+//      leaves a uniformly-lit frame whose "soft edge" measure is 0/0 — so the dark core must exist.
+//   3. THE EDGE IS SOFTER THAN HARD PCF. The prefilter is the whole point of the tier; its width must show.
+TEST_CASE("REN-40-D GATE: EVSM and MSM moment shadows render soft with a lit floor (Vulkan)",
+          "[scene-render][ren40][csm][moment][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_moment_", cube_id);
+    write_mesh_pack(pack.path, cube_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+
+    constexpr u32 dim    = 256U;
+    auto          target = raster->create_color_depth_target(dim, dim);
+    REQUIRE(target != nullptr);
+    const math::Mat4f view = math::look_at(math::Vec3f{0.0F, 42.0F, 0.01F}, math::Vec3f{0, 0, 0},
+                                           math::Vec3f{0, 1, 0});
+    const math::Mat4f     proj  = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Mat4f     vp    = proj * view;
+    const math::Vec3f     light = math::normalized(math::Vec3f{1.7F, 1.0F, 0.0F});
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+
+    scenerender::CsmConfig ccfg;
+    ccfg.cascade_count = 4;
+    ccfg.map_size      = 512;
+    ccfg.far_plane     = 120.0F;
+
+    struct Probe
+    {
+        u32 partial;  // pixels neither plateau — the edge width
+        u32 contrast; // lit-to-core range found in the window
+        u32 floor;    // the OPEN floor's level, far from the shadow — the unbound-read canary
+    };
+    const auto measure = [&](gpu::IRasterTarget& t) {
+        constexpr u32 row = dim / 2U;
+        u32           core   = 4U;
+        u32           core_v = 255U;
+        for (u32 x = 4U; x <= 251U; ++x)
+        {
+            const u32 v = t.read_pixel(x, row) & 0xFFU;
+            if (v < core_v) { core_v = v; core = x; }
+        }
+        const u32 w_lo = core > 28U ? core - 24U : 4U;
+        const u32 w_hi = core + 24U < 251U ? core + 24U : 251U;
+        u32       lo = 255U;
+        u32       hi = 0U;
+        for (u32 x = w_lo; x <= w_hi; ++x)
+        {
+            const u32 v = t.read_pixel(x, row) & 0xFFU;
+            if (v < lo) { lo = v; }
+            if (v > hi) { hi = v; }
+        }
+        Probe p{0U, hi - lo, 0U};
+        // the open floor: the OPPOSITE side of the frame from the shadow core, same scanline
+        const u32 fx = core >= dim / 2U ? 24U : dim - 24U;
+        p.floor      = t.read_pixel(fx, row) & 0xFFU;
+        if (p.contrast < 40U) { return p; }
+        const u32 blo = lo + (p.contrast * 15U / 100U);
+        const u32 bhi = lo + (p.contrast * 85U / 100U);
+        for (u32 x = w_lo; x <= w_hi; ++x)
+        {
+            const u32 v = t.read_pixel(x, row) & 0xFFU;
+            if (v > blo && v < bhi) { ++p.partial; }
+        }
+        return p;
+    };
+
+    const auto run = [&](scenerender::SceneRenderer::SoftShadow mode) {
+        scene::World world{&galloc()};
+        world.register_component<scene::Transform>(scene::transform_serialize_trait());
+        scene::register_render_components(world);
+        const auto add_cube = [&](math::Vec3f pos, math::Vec3f scale) {
+            const scene::EntityId e = world.spawn();
+            scene::Transform      t;
+            t.translation = math::from_raw_vec<units::dim::Length>(pos);
+            t.scale       = {scale.x, scale.y, scale.z};
+            t.world       = math::from_trs(pos, math::Quatf::identity(), scale);
+            world.add_component(e, t);
+            world.add_component(e, scene::MeshRenderer{cube_id, {}});
+        };
+        add_cube({0.0F, 0.0F, 0.0F}, {100.0F, 0.25F, 100.0F});
+        add_cube({0.0F, 8.0F, 0.0F}, {6.0F, 0.25F, 6.0F});
+
+        scenerender::SceneRenderer r(&galloc());
+        REQUIRE(r.init(*raster, rm));
+        r.set_soft_shadows(mode, 100U);
+        // ⛔ the hard arm runs the SHIPPING 4-tap filter, not 1 tap: a single comparison on a 100-unit receiver
+        // sits in acne territory (faint self-shadow speckle dims the whole floor and the "darkest pixel" the
+        // window centres on is an acne pixel, not the shadow), and the arm then measures its own artefact. The
+        // 4-tap edge is still ~2 px against the prefilter's ~6+, so the dichotomy survives — and the acne-free
+        // floor is asserted BY the moment arms against this arm's floor, which is exactly property 1.
+        r.set_pcf_taps(4U);
+        REQUIRE(r.init_programs(*vk));
+        r.set_csm_config(ccfg);
+        REQUIRE(r.set_shadows_enabled(true));
+        (void)r.sync(world);
+        REQUIRE(r.render(*target, vp, light, clear, nullptr).draws > 0U);
+        return measure(*target);
+    };
+
+    const Probe hard = run(scenerender::SceneRenderer::SoftShadow::Off);
+    const Probe msm  = run(scenerender::SceneRenderer::SoftShadow::Msm);
+    const Probe evsm = run(scenerender::SceneRenderer::SoftShadow::Evsm);
+
+    INFO("hard " << hard.partial << "/" << hard.contrast << " floor " << hard.floor);
+    INFO("msm  " << msm.partial << "/" << msm.contrast << " floor " << msm.floor);
+    INFO("evsm " << evsm.partial << "/" << evsm.contrast << " floor " << evsm.floor);
+
+    // every arm must have found a real shadow (property 2 — a dropped pass leaves contrast ~0)
+    CHECK(hard.contrast >= 40U);
+    CHECK(msm.contrast >= 40U);
+    CHECK(evsm.contrast >= 40U);
+
+    // ⛔ property 1 FIRST: the open floor must not dim — an unbound or mis-sampled atlas darkens EVERYTHING
+    // and the "softness" below would still pass. ±12 covers rounding and the moment tier's slight bleed.
+    const u32 f_lo = hard.floor > 12U ? hard.floor - 12U : 0U;
+    CHECK(msm.floor >= f_lo);
+    CHECK(evsm.floor >= f_lo);
+
+    // property 3: the prefiltered edge is WIDER than the hard edge. ⛔ The margins differ BY PHYSICS, not by
+    // tuning: at the same Gaussian, EVSM's exponential warp RE-SHARPENS the filtered edge (the same property
+    // that makes it leak less light than plain VSM), so its penumbra is genuinely narrower than MSM's — the
+    // measured widths here are hard 1 px, EVSM 3 px, MSM 5 px. Each margin still fails on a dropped blur or
+    // convert pass (equal widths), which is what the property exists to catch.
+    CHECK(msm.partial > hard.partial + 2U);
+    CHECK(evsm.partial > hard.partial + 1U);
+}
+
+#ifdef _WIN32 // the D3D12 backend exists only on Windows (the F17 guard rule)
+// ── ⭐⭐ REN-40-D GATE (DX12): the moment tier on the other backend. ─────────────────────────────────────────
+// The same three properties; what is DX12-specific here is exactly what the twin exists to exercise: the
+// borrowed transient SRV's EXPLICIT depth flag (a DX12 depth SRV is R32_FLOAT, so the format cannot answer),
+// the s5 table chosen by that flag (comparison vs LINEAR/CLAMP), the s6 plain-sampler table on the fullscreen
+// record path the convert shader reads through, and ExecuteIndirect-era root-signature coverage for both.
+TEST_CASE("REN-40-D GATE (DX12): EVSM and MSM moment shadows render soft with a lit floor",
+          "[scene-render][ren40][csm][moment][gpu][dx12]")
+{
+    auto gctx = gpu::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto raster = gpu::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_momentdx_", cube_id);
+    write_mesh_pack(pack.path, cube_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+
+    constexpr u32 dim    = 256U;
+    auto          target = raster->create_color_depth_target(dim, dim);
+    REQUIRE(target != nullptr);
+    const math::Mat4f view = math::look_at(math::Vec3f{0.0F, 42.0F, 0.01F}, math::Vec3f{0, 0, 0},
+                                           math::Vec3f{0, 1, 0});
+    const math::Mat4f     proj  = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Mat4f     vp    = proj * view;
+    const math::Vec3f     light = math::normalized(math::Vec3f{1.7F, 1.0F, 0.0F});
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+
+    scenerender::CsmConfig ccfg;
+    ccfg.cascade_count = 4;
+    ccfg.map_size      = 512;
+    ccfg.far_plane     = 120.0F;
+
+    struct Probe
+    {
+        u32 partial;  // pixels neither plateau — the edge width
+        u32 contrast; // lit-to-core range found in the window
+        u32 floor;    // the OPEN floor's level, far from the shadow — the unbound-read canary
+    };
+    const auto measure = [&](gpu::IRasterTarget& t) {
+        constexpr u32 row = dim / 2U;
+        u32           core   = 4U;
+        u32           core_v = 255U;
+        for (u32 x = 4U; x <= 251U; ++x)
+        {
+            const u32 v = t.read_pixel(x, row) & 0xFFU;
+            if (v < core_v) { core_v = v; core = x; }
+        }
+        const u32 w_lo = core > 28U ? core - 24U : 4U;
+        const u32 w_hi = core + 24U < 251U ? core + 24U : 251U;
+        u32       lo = 255U;
+        u32       hi = 0U;
+        for (u32 x = w_lo; x <= w_hi; ++x)
+        {
+            const u32 v = t.read_pixel(x, row) & 0xFFU;
+            if (v < lo) { lo = v; }
+            if (v > hi) { hi = v; }
+        }
+        Probe p{0U, hi - lo, 0U};
+        // the open floor: the OPPOSITE side of the frame from the shadow core, same scanline
+        const u32 fx = core >= dim / 2U ? 24U : dim - 24U;
+        p.floor      = t.read_pixel(fx, row) & 0xFFU;
+        if (p.contrast < 40U) { return p; }
+        const u32 blo = lo + (p.contrast * 15U / 100U);
+        const u32 bhi = lo + (p.contrast * 85U / 100U);
+        for (u32 x = w_lo; x <= w_hi; ++x)
+        {
+            const u32 v = t.read_pixel(x, row) & 0xFFU;
+            if (v > blo && v < bhi) { ++p.partial; }
+        }
+        return p;
+    };
+
+    const auto run = [&](scenerender::SceneRenderer::SoftShadow mode) {
+        scene::World world{&galloc()};
+        world.register_component<scene::Transform>(scene::transform_serialize_trait());
+        scene::register_render_components(world);
+        const auto add_cube = [&](math::Vec3f pos, math::Vec3f scale) {
+            const scene::EntityId e = world.spawn();
+            scene::Transform      t;
+            t.translation = math::from_raw_vec<units::dim::Length>(pos);
+            t.scale       = {scale.x, scale.y, scale.z};
+            t.world       = math::from_trs(pos, math::Quatf::identity(), scale);
+            world.add_component(e, t);
+            world.add_component(e, scene::MeshRenderer{cube_id, {}});
+        };
+        add_cube({0.0F, 0.0F, 0.0F}, {100.0F, 0.25F, 100.0F});
+        add_cube({0.0F, 8.0F, 0.0F}, {6.0F, 0.25F, 6.0F});
+
+        scenerender::SceneRenderer r(&galloc());
+        REQUIRE(r.init(*raster, rm));
+        r.set_soft_shadows(mode, 100U);
+        // ⛔ the hard arm runs the SHIPPING 4-tap filter, not 1 tap: a single comparison on a 100-unit receiver
+        // sits in acne territory (faint self-shadow speckle dims the whole floor and the "darkest pixel" the
+        // window centres on is an acne pixel, not the shadow), and the arm then measures its own artefact. The
+        // 4-tap edge is still ~2 px against the prefilter's ~6+, so the dichotomy survives — and the acne-free
+        // floor is asserted BY the moment arms against this arm's floor, which is exactly property 1.
+        r.set_pcf_taps(4U);
+        if (!r.init_programs(*gctx)) { SKIP("dxc/DXIL unavailable"); }
+        r.set_csm_config(ccfg);
+        REQUIRE(r.set_shadows_enabled(true));
+        (void)r.sync(world);
+        REQUIRE(r.render(*target, vp, light, clear, nullptr).draws > 0U);
+        return measure(*target);
+    };
+
+    const Probe hard = run(scenerender::SceneRenderer::SoftShadow::Off);
+    const Probe msm  = run(scenerender::SceneRenderer::SoftShadow::Msm);
+    const Probe evsm = run(scenerender::SceneRenderer::SoftShadow::Evsm);
+
+    INFO("hard " << hard.partial << "/" << hard.contrast << " floor " << hard.floor);
+    INFO("msm  " << msm.partial << "/" << msm.contrast << " floor " << msm.floor);
+    INFO("evsm " << evsm.partial << "/" << evsm.contrast << " floor " << evsm.floor);
+
+    // every arm must have found a real shadow (property 2 — a dropped pass leaves contrast ~0)
+    CHECK(hard.contrast >= 40U);
+    CHECK(msm.contrast >= 40U);
+    CHECK(evsm.contrast >= 40U);
+
+    // ⛔ property 1 FIRST: the open floor must not dim — an unbound or mis-sampled atlas darkens EVERYTHING
+    // and the "softness" below would still pass. ±12 covers rounding and the moment tier's slight bleed.
+    const u32 f_lo = hard.floor > 12U ? hard.floor - 12U : 0U;
+    CHECK(msm.floor >= f_lo);
+    CHECK(evsm.floor >= f_lo);
+
+    // property 3: the prefiltered edge is WIDER than the hard edge. ⛔ The margins differ BY PHYSICS, not by
+    // tuning: at the same Gaussian, EVSM's exponential warp RE-SHARPENS the filtered edge (the same property
+    // that makes it leak less light than plain VSM), so its penumbra is genuinely narrower than MSM's — the
+    // measured widths here are hard 1 px, EVSM 3 px, MSM 5 px. Each margin still fails on a dropped blur or
+    // convert pass (equal widths), which is what the property exists to catch.
+    CHECK(msm.partial > hard.partial + 2U);
+    CHECK(evsm.partial > hard.partial + 1U);
+}
+#endif // _WIN32 (the REN-40-D DX12 moment gate)
+
+// ── ⭐⭐ REN-40-F GATE: GPU SKINNING COMPUTE PASS — BIT-IDENTICAL TO CPU PALETTE. ────────────────────────────────
+// The GPU skinning kernel (a CKIR compute pass) pre-bakes clip data to uniform-rate TRS keys on the GPU, computes
+// FK + IBM per instance, and writes the bone palette into the group buffer — the EXACT SAME section the CPU path
+// fills. This gate renders two SKINNED cubes (1-joint rig, distinct animation times on BAKE-FRAME BOUNDARIES) with
+// the CPU palette path, then re-renders with the GPU palette kernel, and asserts BIT-IDENTICAL pixels. The
+// bake-frame alignment eliminates interpolation error (NLERP vs SLERP); identity at alpha=0 is exact.
+//
+// ⛔ The TOML includes the `gpu_skin` compute pass for BOTH arms: when `set_gpu_skinning(false)` the pass is a
+// no-op (dispatch_groups = 0), and sync() fills the palette on the CPU; when true, the kernel dispatches and sync()
+// uploads skeleton/clip/anim_state instead. Same graph, same geometry path, only the palette origin differs.
+
+namespace
+{
+const char kSkinGateBasicToml[] = R"(
+schema = 1
+name   = "crd://frame/skin_gate_basic"
+
+[[resource]]
+name    = "scene_hdr"
+kind    = "transient_image"
+format  = "RGBA8Unorm"
+width   = 256
+height  = 256
+sampled = true
+
+[[draw_list]]
+name = "visible_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "material"
+
+[[pass]]
+name          = "scene"
+kind          = "raster.geometry"
+draw_list     = "visible_geometry"
+writes        = ["scene_hdr"]
+material_pass = "Forward"
+clear_color   = [0.10, 0.30, 0.60, 1.0]
+
+[[pass]]
+name   = "post"
+kind   = "raster.fullscreen"
+reads  = ["scene_hdr"]
+writes = ["@output"]
+shader = "crd://post/srgb_only"
+)";
+
+const char kSkinGateGpuToml[] = R"(
+schema = 1
+name   = "crd://frame/skin_gate_gpu"
+
+[[resource]]
+name = "instances"
+kind = "external_buffer"
+
+[[resource]]
+name    = "scene_hdr"
+kind    = "transient_image"
+format  = "RGBA8Unorm"
+width   = 256
+height  = 256
+sampled = true
+
+[[draw_list]]
+name = "visible_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "material"
+
+[[pass]]
+name      = "gpu_skin"
+kind      = "compute"
+kernel    = "crd://scene/gpu_skin"
+draw_list = "visible_geometry"
+writes    = ["instances"]
+
+[[pass]]
+name          = "scene"
+kind          = "raster.geometry"
+draw_list     = "visible_geometry"
+writes        = ["scene_hdr"]
+reads         = ["instances"]
+material_pass = "Forward"
+clear_color   = [0.10, 0.30, 0.60, 1.0]
+
+[[pass]]
+name   = "post"
+kind   = "raster.fullscreen"
+reads  = ["scene_hdr"]
+writes = ["@output"]
+shader = "crd://post/srgb_only"
+)";
+} // namespace
+
+TEST_CASE("REN-40-F GATE: GPU skinning palette is bit-identical to the CPU palette (Vulkan)",
+          "[scene-render][ren40][skinning][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    // ── resources: skinned mesh + 1-joint skeleton + translation clip ──
+    const resources::ResourceId mesh_id = resources::ResourceId::mint_random();
+    const resources::ResourceId skel_id = resources::ResourceId::mint_random();
+    const resources::ResourceId clip_id = resources::ResourceId::mint_random();
+    const TempPack mesh_pack("sr_skin_m_", mesh_id);
+    const TempPack skel_pack("sr_skin_s_", skel_id);
+    const TempPack clip_pack("sr_skin_c_", clip_id);
+    {
+        auto art = build_skinned_cube_crdr(mesh_id);
+        write_resource_pack(mesh_pack.path, mesh_id, resources::kFourCC_MESH, art);
+    }
+    {
+        anim::SkeletonResource sk(&galloc());
+        sk.parents.push_back(-1);
+        const f32 rest[10] = {0, 0, 0, 0, 0, 0, 1, 1, 1, 1};
+        for (f32 v : rest) { sk.rest.push_back(v); }
+        const f32 ibm[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        for (f32 v : ibm) { sk.inverse_binds.push_back(v); }
+        sk.name_offsets.push_back(0);
+        const char jn[] = "root";
+        for (const char c : jn) { sk.name_pool.push_back(c); }
+        auto art = anim::skeleton_build(sk, skel_id, &galloc());
+        write_resource_pack(skel_pack.path, skel_id, anim::kFourCC_SKEL, art);
+    }
+    {
+        anim::AnimClipResource cl(&galloc());
+        cl.duration = 1.0F;
+        anim::AnimTrack trk{};
+        trk.target     = 0;
+        trk.channel    = static_cast<u8>(anim::AnimChannel::Translation);
+        trk.interp     = 1;
+        trk.components = 3;
+        trk.key_count  = 2;
+        trk.times_off  = 0;
+        trk.values_off = 2;
+        cl.tracks.push_back(trk);
+        const f32 d[8] = {0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 3.0F, 0.0F, 0.0F};
+        for (f32 v : d) { cl.data.push_back(v); }
+        auto art = anim::anim_clip_build(cl, clip_id, &galloc());
+        write_resource_pack(clip_pack.path, clip_id, anim::kFourCC_ANIM, art);
+    }
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    anim::register_anim_loaders(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(mesh_pack.path.generic()).is_valid());
+    REQUIRE(rm.mount_manifest(skel_pack.path.generic()).is_valid());
+    REQUIRE(rm.mount_manifest(clip_pack.path.generic()).is_valid());
+
+    // ── world: two skinned cubes at distinct animation times on bake-frame boundaries ──
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+    const auto add = [&](math::Vec3f pos, f32 anim_time) {
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.translation = math::from_raw_vec<units::dim::Length>(pos);
+        t.scale       = {2.0F, 2.0F, 2.0F};
+        t.world       = math::from_trs(pos, math::Quatf::identity(), {2.0F, 2.0F, 2.0F});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{mesh_id, {}});
+        scene::SkeletonAnimator sa{};
+        sa.skeleton = skel_id;
+        sa.clip     = clip_id;
+        sa.time     = anim_time;
+        sa.speed    = 0.0F;
+        world.add_component(e, sa);
+    };
+    add({-4.0F, 0.0F, 0.0F}, 0.0F);
+    add({ 4.0F, 0.0F, 0.0F}, 0.5F);
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    REQUIRE(renderer.init_programs(*vk));
+    const math::Mat4f     view  = math::look_at(math::Vec3f{0.0F, 6.0F, 16.0F}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f     proj  = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Vec3f     light{0.3F, 1.0F, 0.2F};
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+
+    // ── CPU palette via the basic TOML — the proven reference ──
+    REQUIRE(renderer.set_frame_graph_toml(kSkinGateBasicToml));
+    renderer.set_gpu_skinning(false);
+    REQUIRE(renderer.sync(world).total_instances == 2U);
+    auto ref = raster->create_color_depth_target(256U, 256U);
+    REQUIRE(ref != nullptr);
+    const auto r_cpu = renderer.render(*ref, proj * view, light, clear);
+    CHECK(r_cpu.draws > 0U);
+
+    // ── GPU palette via the GPU TOML with the gpu_skin compute pass ──
+    REQUIRE(renderer.set_frame_graph_toml(kSkinGateGpuToml));
+    renderer.set_gpu_skinning(true);
+    REQUIRE(renderer.sync(world).total_instances == 2U);
+    auto tgt = raster->create_color_depth_target(256U, 256U);
+    REQUIRE(tgt != nullptr);
+    const auto r_gpu = renderer.render(*tgt, proj * view, light, clear);
+    INFO("gpu: draws=" << r_gpu.draws << " timed=" << r_gpu.timed_passes
+         << " gpu_ms=" << r_gpu.gpu_ms << " drawn_inst=" << r_gpu.drawn_instances);
+    CHECK(r_gpu.draws > 0U);
+
+    // ── BIT-IDENTICAL pixels + non-trivial coverage ──
+    u32 diffs   = 0U;
+    u32 covered = 0U;
+    for (u32 y = 0; y < 256U; ++y)
+    {
+        for (u32 x = 0; x < 256U; ++x)
+        {
+            const u32 a = ref->read_pixel(x, y);
+            const u32 b = tgt->read_pixel(x, y);
+            if (a != b) { ++diffs; }
+            if ((b & 0x00FFFFFFU) != 0U) { ++covered; }
+        }
+    }
+    INFO("diffs=" << diffs << " covered=" << covered);
+    CHECK(diffs == 0U);
+    CHECK(covered > 500U);
+}
+
+#ifdef _WIN32
+TEST_CASE("REN-40-F GATE (DX12): GPU skinning palette is bit-identical to the CPU palette",
+          "[scene-render][ren40][skinning][gpu][dx12]")
+{
+    auto gctx = gpu::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
+    auto raster = gpu::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+
+    const resources::ResourceId mesh_id = resources::ResourceId::mint_random();
+    const resources::ResourceId skel_id = resources::ResourceId::mint_random();
+    const resources::ResourceId clip_id = resources::ResourceId::mint_random();
+    const TempPack mesh_pack("sr_skindx_m_", mesh_id);
+    const TempPack skel_pack("sr_skindx_s_", skel_id);
+    const TempPack clip_pack("sr_skindx_c_", clip_id);
+    {
+        auto art = build_skinned_cube_crdr(mesh_id);
+        write_resource_pack(mesh_pack.path, mesh_id, resources::kFourCC_MESH, art);
+    }
+    {
+        anim::SkeletonResource sk(&galloc());
+        sk.parents.push_back(-1);
+        const f32 rest[10] = {0, 0, 0, 0, 0, 0, 1, 1, 1, 1};
+        for (f32 v : rest) { sk.rest.push_back(v); }
+        const f32 ibm[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        for (f32 v : ibm) { sk.inverse_binds.push_back(v); }
+        sk.name_offsets.push_back(0);
+        const char jn[] = "root";
+        for (const char c : jn) { sk.name_pool.push_back(c); }
+        auto art = anim::skeleton_build(sk, skel_id, &galloc());
+        write_resource_pack(skel_pack.path, skel_id, anim::kFourCC_SKEL, art);
+    }
+    {
+        anim::AnimClipResource cl(&galloc());
+        cl.duration = 1.0F;
+        anim::AnimTrack trk{};
+        trk.target     = 0;
+        trk.channel    = static_cast<u8>(anim::AnimChannel::Translation);
+        trk.interp     = 1;
+        trk.components = 3;
+        trk.key_count  = 2;
+        trk.times_off  = 0;
+        trk.values_off = 2;
+        cl.tracks.push_back(trk);
+        const f32 d[8] = {0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 3.0F, 0.0F, 0.0F};
+        for (f32 v : d) { cl.data.push_back(v); }
+        auto art = anim::anim_clip_build(cl, clip_id, &galloc());
+        write_resource_pack(clip_pack.path, clip_id, anim::kFourCC_ANIM, art);
+    }
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    anim::register_anim_loaders(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(mesh_pack.path.generic()).is_valid());
+    REQUIRE(rm.mount_manifest(skel_pack.path.generic()).is_valid());
+    REQUIRE(rm.mount_manifest(clip_pack.path.generic()).is_valid());
+
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+    const auto add = [&](math::Vec3f pos, f32 anim_time) {
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.translation = math::from_raw_vec<units::dim::Length>(pos);
+        t.scale       = {2.0F, 2.0F, 2.0F};
+        t.world       = math::from_trs(pos, math::Quatf::identity(), {2.0F, 2.0F, 2.0F});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{mesh_id, {}});
+        scene::SkeletonAnimator sa{};
+        sa.skeleton = skel_id;
+        sa.clip     = clip_id;
+        sa.time     = anim_time;
+        sa.speed    = 0.0F;
+        world.add_component(e, sa);
+    };
+    add({-4.0F, 0.0F, 0.0F}, 0.0F);
+    add({ 4.0F, 0.0F, 0.0F}, 0.5F);
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    if (!renderer.init_programs(*gctx))
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
+    const math::Mat4f     view  = math::look_at(math::Vec3f{0.0F, 6.0F, 16.0F}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f     proj  = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Vec3f     light{0.3F, 1.0F, 0.2F};
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+
+    // ── CPU palette via the basic TOML — the proven reference ──
+    REQUIRE(renderer.set_frame_graph_toml(kSkinGateBasicToml));
+    renderer.set_gpu_skinning(false);
+    REQUIRE(renderer.sync(world).total_instances == 2U);
+    auto ref = raster->create_color_depth_target(256U, 256U);
+    REQUIRE(ref != nullptr);
+    CHECK(renderer.render(*ref, proj * view, light, clear).draws > 0U);
+
+    // ── GPU palette via the GPU TOML with the gpu_skin compute pass ──
+    REQUIRE(renderer.set_frame_graph_toml(kSkinGateGpuToml));
+    renderer.set_gpu_skinning(true);
+    REQUIRE(renderer.sync(world).total_instances == 2U);
+    auto tgt = raster->create_color_depth_target(256U, 256U);
+    REQUIRE(tgt != nullptr);
+    CHECK(renderer.render(*tgt, proj * view, light, clear).draws > 0U);
+
+    u32 diffs   = 0U;
+    u32 covered = 0U;
+    for (u32 y = 0; y < 256U; ++y)
+    {
+        for (u32 x = 0; x < 256U; ++x)
+        {
+            const u32 a = ref->read_pixel(x, y);
+            const u32 b = tgt->read_pixel(x, y);
+            if (a != b) { ++diffs; }
+            if ((b & 0x00FFFFFFU) != 0U) { ++covered; }
+        }
+    }
+    INFO("diffs=" << diffs << " covered=" << covered);
+    CHECK(diffs == 0U);
+    CHECK(covered > 500U);
+}
+#endif // _WIN32 (the REN-40-F DX12 skinning gate)
