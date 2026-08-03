@@ -193,6 +193,26 @@ inline const char* htype(KType t) noexcept
     return glsl_detail::ctype(t.scalar);
 }
 
+// B2: HLSL texture typing. `Texture<dim><, sampled4>` (e.g. `Texture2D<float4>`); `Sampler[Comparison]State`; the sampled
+// element is the scalar widened to 4 (`float4`/`int4`/`uint4`). Mirror of the GLSL prefix/suffix helpers.
+inline const char* hlsl_tex_dim(const KType& t) noexcept
+{
+    switch (t.tex_dim())
+    {
+    case TexDim::Tex1D:   return t.tex_arrayed() ? "Texture1DArray" : "Texture1D";
+    case TexDim::Tex2D:   if (t.tex_ms()) { return "Texture2DMS"; } return t.tex_arrayed() ? "Texture2DArray" : "Texture2D";
+    case TexDim::Tex3D:   return "Texture3D";
+    case TexDim::TexCube: return t.tex_arrayed() ? "TextureCubeArray" : "TextureCube";
+    }
+    return "Texture2D";
+}
+inline const char* hlsl_tex_elem(DType d) noexcept
+{
+    if (glsl_detail::dt_is_uint(d)) { return "uint4"; }
+    if (glsl_detail::dt_is_int(d)) { return "int4"; }
+    return "float4";
+}
+
 // B-cmp: emit an IMPERATIVE compute KERNEL (the shared-memory / barrier IR — `KEntry.is_kernel()`) as HLSL (SM6, dxc →
 // DXIL). The exact DX12 mirror of `emit_compute_kernel_glsl` (ckir_glsl.hpp): `[numthreads]` + `RWStructuredBuffer<T> bufN
 // : register(uN)` (all UAV — binding N → uN, matching create_pipeline_from_hlsl's root signature; `readonly` is a neutral
@@ -233,6 +253,18 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
             s.append("RaytracingAccelerationStructure as"); app_uint(s, nd.iidx);
             s.append(" : register(t"); app_uint(s, nd.iidx); s.append(");\n");
         }
+        else if (nd.op == KOp::Texture)
+        {
+            s.append(hlsl_tex_dim(nd.type)); s.append("<"); s.append(nd.type.tex_shadow() ? "float" : hlsl_tex_elem(nd.type.scalar)); s.append("> tex_");
+            app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx));
+            s.append(" : register(t"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(");\n");
+        }
+        else if (nd.op == KOp::Sampler)
+        {
+            s.append(nd.type.tex_shadow() ? "SamplerComparisonState" : "SamplerState"); s.append(" samp_");
+            app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx));
+            s.append(" : register(s"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(");\n");
+        }
     }
     // REN-40-F: quat/slerp helper functions — the COMPUTE-KERNEL parity of the emit_stage_hlsl scan at ~line 1202.
     {
@@ -265,7 +297,7 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
         switch (op)
         {
         case KOp::Const: case KOp::Builtin: case KOp::KernelLoopVar: case KOp::BufferLoad: case KOp::SharedLoad:
-        case KOp::BufferDecl: case KOp::SharedDecl: case KOp::Cast: case KOp::Select:
+        case KOp::BufferDecl: case KOp::SharedDecl: case KOp::Texture: case KOp::Sampler: case KOp::Cast: case KOp::Select:
         case KOp::CmpLt: case KOp::CmpLe: case KOp::CmpGt: case KOp::CmpGe: case KOp::CmpEq: case KOp::CmpNe:
         case KOp::BitAnd: case KOp::BitOr: case KOp::BitXor: case KOp::Shl: case KOp::Shr: return true;
         default: return false;
@@ -429,6 +461,37 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::QuatRotate: s.append("crd_qrot("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
         case KOp::QuatAxisAngle: s.append("crd_qaa("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
         case KOp::QuatToMat3: s.append("crd_qmat("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::SampleLod:
+        case KOp::TexSample:
+        case KOp::SampleGrad:
+        case KOp::SampleCmp:
+        case KOp::TexelFetch:
+        case KOp::TexGather:
+        {
+            const KNode& tx = g.node(nd.a);
+            const KNode& sm = g.node(nd.b);
+            const auto tex_dot  = [&]() { s.append("tex_"); app_uint(s, static_cast<crd::u32>(tx.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(tx.iidx)); s.append("."); };
+            const auto samp_ref = [&]() { s.append("samp_"); app_uint(s, static_cast<crd::u32>(sm.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(sm.iidx)); };
+            switch (nd.op) {
+            case KOp::TexSample:  tex_dot(); s.append("Sample(");      samp_ref(); s.append(", "); pv(pv, nd.c); s.append(")"); break;
+            case KOp::SampleLod:  tex_dot(); s.append("SampleLevel("); samp_ref(); s.append(", "); pv(pv, nd.c); s.append(", "); pv(pv, nd.d); s.append(")"); break;
+            case KOp::SampleGrad: tex_dot(); s.append("SampleGrad(");  samp_ref(); s.append(", "); pv(pv, nd.c); s.append(", "); pv(pv, nd.d); s.append(", "); pv(pv, g.ext_operand(nd, 0)); s.append(")"); break;
+            case KOp::SampleCmp:  tex_dot(); s.append("SampleCmp(");   samp_ref(); s.append(", "); pv(pv, nd.c); s.append(", "); pv(pv, nd.d); s.append(")"); break;
+            case KOp::TexelFetch:
+                if (tx.type.tex_ms()) { tex_dot(); s.append("Load("); pv(pv, nd.c); s.append(", "); pv(pv, nd.d); s.append(")"); }
+                else { tex_dot(); s.append("Load(int3("); pv(pv, nd.c); s.append(", "); pv(pv, nd.d); s.append("))"); }
+                break;
+            case KOp::TexGather:
+            {
+                const char* g4[4] = {"GatherRed", "GatherGreen", "GatherBlue", "GatherAlpha"};
+                const int comp = static_cast<int>(g.node(nd.d).cval) & 3;
+                tex_dot(); s.append(g4[comp]); s.append("("); samp_ref(); s.append(", "); pv(pv, nd.c); s.append(")");
+                break;
+            }
+            default: break;
+            }
+            break;
+        }
         default: ok = false; s.append("0"); break;
         }
     };
@@ -448,6 +511,27 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
             s.append(htype(nd.type)); s.append(" t"); app_uint(s, static_cast<crd::u32>(node)); s.append(" = ");
             rhs(nd);
             s.append(";\n");
+        }
+    };
+    const auto hoist_decls = [&](auto&& self_h, int begin, int count) -> void {
+        int i = begin;
+        while (i < begin + count)
+        {
+            const KStmt& st = g.stmt(i);
+            switch (st.kind)
+            {
+            case KStmtKind::BufferStore: case KStmtKind::SharedStore: case KStmtKind::SharedAtomicAdd:
+            case KStmtKind::BufferAtomicAdd: case KStmtKind::BufferAtomicMin:
+                decl(decl, st.index); decl(decl, st.value); ++i; break;
+            case KStmtKind::BufferAtomicAddFetch: case KStmtKind::BufferAtomicExchange:
+                decl(decl, st.index); decl(decl, st.value); ++i; break;
+            case KStmtKind::Materialize: decl(decl, st.value); ++i; break;
+            case KStmtKind::For: i = st.body_begin + st.body_count; break;
+            case KStmtKind::If: decl(decl, st.value); self_h(self_h, st.body_begin, st.body_count); i = st.body_begin + st.body_count; break;
+            case KStmtKind::SpinUntilNonzero: decl(decl, st.index); ++i; break;
+            case KStmtKind::TraceRayCurves: for (int k = 0; k < 8; ++k) { decl(decl, g.stmt_ext_operand(st, k)); } ++i; break;
+            default: ++i; break;
+            }
         }
     };
     const auto emit_body = [&](auto&& self_b, int begin, int count) -> void {
@@ -481,7 +565,7 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
                 ++i;
                 break;
             case KStmtKind::For: decl(decl, st.value); s.append("  for (uint lv"); app_uint(s, i); s.append(" = 0u; lv"); app_uint(s, i); s.append(" < uint("); pv(pv, st.value); s.append("); ++lv"); app_uint(s, i); s.append(") {\n"); self_b(self_b, st.body_begin, st.body_count); s.append("  }\n"); i = st.body_begin + st.body_count; break;
-            case KStmtKind::If: decl(decl, st.value); s.append("  if ("); pv(pv, st.value); s.append(") {\n"); self_b(self_b, st.body_begin, st.body_count); s.append("  }\n"); i = st.body_begin + st.body_count; break;
+            case KStmtKind::If: decl(decl, st.value); hoist_decls(hoist_decls, st.body_begin, st.body_count); s.append("  if ("); pv(pv, st.value); s.append(") {\n"); self_b(self_b, st.body_begin, st.body_count); s.append("  }\n"); i = st.body_begin + st.body_count; break;
             case KStmtKind::SpinUntilNonzero: decl(decl, st.index); s.append("  while (buf"); app_uint(s, g.node(st.target).iidx); s.append(".Load((("); pv(pv, st.index); s.append(")) * 4u) == 0u) { DeviceMemoryBarrier(); }\n"); ++i; break;
             case KStmtKind::SharedAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  { uint oldv_; InterlockedAdd(sh"); app_uint(s, st.target); s.append("["); pv(pv, st.index); s.append("], "); pv(pv, st.value); s.append(", oldv_); }\n"); ++i; break;
             case KStmtKind::BufferAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  buf"); app_uint(s, g.node(st.target).iidx); s.append(".InterlockedAdd((("); pv(pv, st.index); s.append(")) * 4u, "); pv(pv, st.value); s.append(");\n"); ++i; break; // RAW byte-addressed UAV
@@ -813,26 +897,6 @@ inline bool emit_rt_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory
     return true;
 }
 
-// B2: HLSL texture typing. `Texture<dim><, sampled4>` (e.g. `Texture2D<float4>`); `Sampler[Comparison]State`; the sampled
-// element is the scalar widened to 4 (`float4`/`int4`/`uint4`). Mirror of the GLSL prefix/suffix helpers.
-inline const char* hlsl_tex_dim(const KType& t) noexcept
-{
-    switch (t.tex_dim())
-    {
-    case TexDim::Tex1D:   return t.tex_arrayed() ? "Texture1DArray" : "Texture1D";
-    case TexDim::Tex2D:   if (t.tex_ms()) { return "Texture2DMS"; } return t.tex_arrayed() ? "Texture2DArray" : "Texture2D";
-    case TexDim::Tex3D:   return "Texture3D";
-    case TexDim::TexCube: return t.tex_arrayed() ? "TextureCubeArray" : "TextureCube";
-    }
-    return "Texture2D";
-}
-inline const char* hlsl_tex_elem(DType d) noexcept
-{
-    if (glsl_detail::dt_is_uint(d)) { return "uint4"; }
-    if (glsl_detail::dt_is_int(d)) { return "int4"; }
-    return "float4";
-}
-
 // A3: comps-aware VECTOR emitter for HLSL/DX12 (mirror of emit_vec_glsl) — float/float2/3/4 temps, interleaved I/O,
 // HLSL builtins + emitted quaternion helpers. Matrices (comps>4) are deferred (HLSL row-major convention) ⇒ bail cleanly.
 // B3-d: emit the `precise? <htype> tN = ` statement prefix for node `i` (`precise` is float-only). Shared by the HLSL
@@ -1105,20 +1169,27 @@ inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::I
     // against the VS's row 2 and the graphics PSO fails link with E_INVALIDARG — the pixel-side twin of the
     // SV_Position-LAST scar two comments down. (SPIR-V links by explicit vk::location and never cares, which is
     // exactly why only a DX12 render gate could see it.)
+    // ⭐⭐⭐ REN-41 (VARYING CONTRACT): a FRAGMENT declares EVERY StageIn present in the graph — reachable OR not —
+    // one per location. DXIL packs the PS input signature by DECLARATION ORDER and tight-packs components, so a
+    // fragment that reads only a SUBSET of the vertex outputs (e.g. the flat forward FS reads normal/worldpos +
+    // the LOD-dither fade but SKIPS uv) desyncs every later register from the VS and the PSO fails to link. The
+    // renderer INJECTS an (unreachable) StageIn for each varying its paired VS emits but this FS does not read
+    // (`cook_fs`), so the two signatures pack IDENTICALLY. Unreachable = declared-but-unread on the DXIL side,
+    // which is legal; SPIR-V (the GLSL path) pins by vk::location and only ever emits the reachable subset, so
+    // Vulkan is unchanged. This makes any VS/FS varying pairing portable to DX12 by construction — no per-shader
+    // care, the property future scene shaders inherit for free.
     s.append(is_vertex ? "struct VSIn {\n" : "struct PSIn {\n");
     for (crd::u32 loc = 0; loc < 32U; ++loc)
     {
         for (int i = 0; i < n; ++i)
         {
-            if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::StageIn
-                || static_cast<crd::u32>(g.node(i).iidx) != loc)
-            {
-                continue;
-            }
+            if (g.node(i).op != KOp::StageIn || static_cast<crd::u32>(g.node(i).iidx) != loc) { continue; }
+            if (is_vertex && !reach[static_cast<crd::usize>(i)]) { continue; } // a VS input is a real attribute — keep reach
             const KNode& nd = g.node(i);
             s.append("  [[vk::location("); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(")]] ");
             if (!is_vertex) { s.append(hlsl_interp(static_cast<Interp>(nd.dset))); } // B1-c: interp on FS interpolant inputs
             s.append(htype(nd.type)); s.append(" a"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(" : TEXCOORD"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(";\n");
+            break; // ⛔ ONE member per location (injected + real StageIns at a location collapse to one decl)
         }
     }
     for (int i = 0; i < n; ++i)

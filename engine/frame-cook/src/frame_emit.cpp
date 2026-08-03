@@ -297,6 +297,7 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
         if (r.depth_buffer)     { app(o, "depth_buffer = true\n"); }
         if (r.storage)          { app(o, "storage = true\n"); }
         if (r.no_alias)         { app(o, "no_alias = true\n"); } // REN-38-B6
+        if (r.resizable)        { app(o, "resizable = true\n"); } // REN-41: persistent follows the output on resize
         // REN-38-B3: emit STRIDE and COUNT, not the derived `size_bytes`. Re-parsing a counter buffer's
         // size would add its 4-byte counter a SECOND time, so the round trip would grow it every cook.
         if (r.stride != 0U)     { app(o, "stride = ");     app_u32(o, r.stride);     app(o, "\n"); }
@@ -496,6 +497,7 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
             if (p.load_depth) { app(o, "load_depth = true\n"); }
             if (!p.shared_depth.empty()) { app(o, "shared_depth = "); app_quoted(o, p.shared_depth); app(o, "\n"); }
             if (p.depth_as_float) { app(o, "depth_as_float = true\n"); }
+            if (p.untracked_storage) { app(o, "untracked_storage = true\n"); }
             if (!st.depth_write) { app(o, "depth_write = false\n"); }
             if (st.depth_bias != 0.0F) { app(o, "depth_bias = "); app_f64(o, static_cast<double>(st.depth_bias)); app(o, "\n"); }
             if (st.depth_bias_slope != 0.0F)

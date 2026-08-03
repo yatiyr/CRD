@@ -63,14 +63,46 @@ format  = "D32Float"
 scale   = 1.0
 sampled = true
 
+# ⭐⭐ REN-41 (velocity): per-object MOTION VECTORS, written by the depth prepass (now MRT) and sampled by the TAA
+# resolve. Cleared to 0 so a pixel with no mover reprojects from the camera only.
+[[resource]]
+name    = "velocity"
+kind    = "transient_image"
+format  = "RG16F"
+scale   = 1.0
+sampled = true
+
 # REN-40-G3: half-res min-depth for occlusion culling. The HZB builder reads `scene_depth` and writes the
 # min of each 2×2 block; the occlusion cull pass samples it to reject objects behind the depth prepass output.
 [[resource]]
 name    = "hzb"
 kind    = "transient_image"
-format  = "R32Float"
+format  = "R32F"
 scale   = 0.5
 sampled = true
+
+# ── ⭐⭐ REN-41 (TAA): the temporal-AA history + resolve targets. ─────────────────────────────────────────────
+# `taa_history` is PERSISTENT (it carries the accumulated result across frames — the whole point of temporal AA).
+# `scene_taa` is the resolved output this frame reads for display AND the copy stores into history for next frame.
+# `taa_constants` carries the reproject matrix the resolve needs (the renderer uploads it each frame).
+[[resource]]
+name      = "taa_history"
+kind      = "persistent_image"
+format    = "R11G11B10F"
+scale     = 1.0
+resizable = true   # ⭐⭐⭐ REN-41: follow the window; a resize discards history for ONE frame (reconverges invisibly)
+sampled   = true
+
+[[resource]]
+name    = "scene_taa"
+kind    = "transient_image"
+format  = "R11G11B10F"
+scale   = 1.0
+sampled = true
+
+[[resource]]
+name = "taa_constants"
+kind = "external_buffer"
 
 # ── the GPU-driven cull: reset, then one dispatch per view ───────────────────────────────────────────────────
 # ⛔⛔ EVERY cull pass declares `cull_args` as a WRITE ONLY, never also a read — and that is not a shortcut, it is
@@ -85,6 +117,16 @@ sampled = true
 # One compute dispatch per skinned group (workgroup=64, dispatch = ceil(instance_count/64)). Non-skinned groups
 # get dispatch_groups=0 (skipped). Writes the palette section of each group's buffer in place; subsequent VS
 # reads happen through the same `instances` resource.
+# ⭐⭐ REN-41 (velocity, skinned): snapshot LAST frame's bone palette → prev_palette BEFORE gpu_skin overwrites it,
+# so the velocity prepass deforms by the previous pose. Writes "instances" (the group-buffer proxy) so the WAW
+# edge orders it before gpu_skin. No-ops unless GPU skinning is active (kHdrGpuSkinActive).
+[[pass]]
+name      = "palette_snapshot"
+kind      = "compute"
+kernel    = "crd://scene/palette_snapshot"
+draw_list = "visible_geometry"
+writes    = ["instances"]
+
 [[pass]]
 name      = "gpu_skin"
 kind      = "compute"
@@ -148,30 +190,34 @@ cull = "frustum"
 sort = "material"
 
 [[pass]]
-name          = "csm_cascade"
-kind          = "raster.depth_only"
-draw_list     = "shadow_casters"
-for_each      = "light.0.cascades"
-writes        = ["shadow_atlas[$index]"]
-reads         = ["instances", "cull_args"]
-material_pass = "Shadow"
-clear_depth   = 1.0
-depth         = "LessEqual"
+name             = "csm_cascade"
+kind             = "raster.depth_only"
+draw_list        = "shadow_casters"
+for_each         = "light.0.cascades"
+writes           = ["shadow_atlas[$index]"]
+reads            = ["instances", "cull_args"]
+material_pass    = "Shadow"
+clear_depth      = 1.0
+depth            = "LessEqual"
+depth_bias_slope = 1.5
 
 [[draw_list]]
 name = "impostor_geometry"
 all  = ["MeshRenderer", "Transform"]
 cull = "frustum"
 
-# REN-40-G1+G3: depth prepass — populate `scene_depth` (the standalone D32Float transient). The forward
-# pass LOADS this depth via `shared_depth`, and the HZB builder reads it as a sampled texture.
+# REN-40-G1+G3 + ⭐⭐ REN-41 (velocity): depth prepass — now MRT, writing MOTION VECTORS ([velocity]) alongside
+# `scene_depth`. scene_depth is the depth attachment (a depth-format write routes to the depth slot) AND the graph
+# producer the forward `shared_depth` load and the HZB builder order after. The velocity FS carries the SAME LOD
+# dither discard as the forward FS, so prepass depth exists for exactly the pixels the forward keeps.
 [[pass]]
 name          = "depth_prepass"
-kind          = "raster.depth_only"
+kind          = "raster.mrt"
 draw_list     = "visible_geometry"
-writes        = ["scene_depth"]
+writes        = ["velocity", "scene_depth"]
 reads         = ["instances", "cull_args"]
 material_pass = "Shadow"
+clear_color   = [0.0, 0.0, 0.0, 0.0]
 clear_depth   = 0.0
 depth         = "GreaterEqual"
 
@@ -214,6 +260,7 @@ draw_list     = "visible_geometry"
 writes        = ["scene_hdr"]
 reads         = ["shadow_atlas", "instances", "cull_args"]
 shared_depth  = "scene_depth"
+load_depth    = true
 technique     = "forward_csm"
 material_pass = "Forward"
 clear_color   = [0.09, 0.10, 0.13, 1.0]
@@ -232,9 +279,27 @@ shader       = "crd://scene/impostor"
 load         = true
 depth        = "GreaterEqual"
 
+# ── ⭐⭐ REN-41 (TAA): reproject + accumulate. Reads the current colour, the depth (reprojection), and last
+# frame's history; writes the resolved image. `taa_store` copies the resolved image into the persistent history
+# for next frame (a ping-pong can't be read-after-write in one frame, so the persistent+copy pattern is used).
+# ⛔ scene_hdr + scene_depth + taa_history are bound as the bindless heap in DECLARATION ORDER (indices 0/1/2);
+# taa_constants is the b0 constants buffer (draw_bindless_storage).
+[[pass]]
+name   = "taa_resolve"
+kind   = "raster.fullscreen"
+reads  = ["scene_hdr", "scene_depth", "taa_history", "velocity", "taa_constants"]
+writes = ["scene_taa"]
+shader = "crd://scene/taa_resolve"
+
+[[pass]]
+name   = "taa_store"
+kind   = "copy"
+reads  = ["scene_taa"]
+writes = ["taa_history"]
+
 [[pass]]
 name   = "post"
 kind   = "raster.fullscreen"
-reads  = ["scene_hdr"]
+reads  = ["scene_taa"]
 writes = ["@output"]
 shader = "crd://post/tonemap_agx"

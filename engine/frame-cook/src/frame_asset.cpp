@@ -616,6 +616,7 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
                 if (!to_dimension(*dv, r.kind_2d)) { set_where(where, *dv); return FrameCookError::UnknownDimension; }
             }
             r.no_alias   = (*t)["no_alias"].value_or(false); // REN-38-B6
+            r.resizable  = (*t)["resizable"].value_or(false); // REN-41: persistent image follows the output on resize
             r.stride     = static_cast<crd::u32>((*t)["stride"].value_or<int64_t>(0));
             r.count      = static_cast<crd::u32>((*t)["count"].value_or<int64_t>(0));
             r.size_bytes = static_cast<crd::u32>((*t)["size_bytes"].value_or<int64_t>(0));
@@ -840,6 +841,7 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
             // REN-40-G3: a separate depth image used as the depth attachment
             if (const auto v = (*t)["shared_depth"].value<std::string_view>()) { set_str(p.shared_depth, *v); }
             if (const auto v = (*t)["depth_as_float"].value<bool>()) { p.depth_as_float = *v; }
+            if (const auto v = (*t)["untracked_storage"].value<bool>()) { p.untracked_storage = *v; }
             if (const auto v = (*t)["stencil"].value<bool>()) { p.state.stencil_enable = *v; }
             if (const auto v = (*t)["stencil_compare"].value<std::string_view>())
             {
@@ -975,10 +977,12 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
         // ── ⭐ REN-38-B1: what a PERSISTENT / PING-PONG resource may say. ──
         if (r.kind == FrameResourceKind::PersistentImage || r.kind == FrameResourceKind::PingPongImage)
         {
-            // ⛔ An ABSOLUTE size, never `scale` alone. A persistent image is looked up by a STABLE KEY across
-            // frames, and a scale-relative extent changes the moment the output resizes — which recreates the
-            // image and DISCARDS the history, silently, mid-session. The author must state the size they mean.
-            if (r.width == 0U || r.height == 0U)
+            // ⛔ An ABSOLUTE size, never `scale` alone — UNLESS `resizable = true`. A persistent image is looked up
+            // by a STABLE KEY across frames, and a scale-relative extent changes the moment the output resizes,
+            // which recreates the image and DISCARDS the history, silently, mid-session. The author must state the
+            // size they mean — OR explicitly opt into the discard with `resizable` (⭐ REN-41: what a TAA history
+            // buffer WANTS — it follows the window and reconverges in a few frames after a resize).
+            if ((r.width == 0U || r.height == 0U) && !(r.resizable && r.scale > 0.0F))
             {
                 set_where(where, std::string_view(r.name.c_str(), r.name.size()));
                 return FrameCookError::PersistentNeedsSize;
@@ -1427,35 +1431,105 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
         }
     }
 
-    // CYCLE detection — pass A depends on B when A reads something B writes. Kahn's algorithm over the pass DAG.
+    // CYCLE detection — Kahn's algorithm over the pass DAG.
+    // RAW: pass A reads something an EARLIER writer B produces → A depends on B (writer precedes reader).
+    // WAR: pass A reads something a LATER writer B overwrites → B depends on A — but ONLY when the read is
+    //      satisfiable at A (the resource has a frame-start value or an earlier producer); otherwise the "later
+    //      writer" IS the only producer and it is a forward RAW (B precedes A), which is how a real cycle shows.
+    // WAW: pass A writes something pass B also writes AND A < B → B depends on A (declaration order).
     const crd::usize np = desc.passes.size();
     crd::containers::Array<crd::u32> indeg(alloc);
     indeg.resize(np, 0U);
-    crd::containers::Array<crd::u8> edge(alloc); // np*np adjacency (graphs are small; clarity over cleverness)
+    crd::containers::Array<crd::u8> edge(alloc);
     edge.resize(np * np, 0U);
+    const auto add_dep = [&](crd::usize from, crd::usize to) {
+        if (from == to) { return; }
+        if (edge[(from * np) + to] == 0U) { edge[(from * np) + to] = 1U; ++indeg[to]; }
+    };
+    // ── ⭐⭐ REN-41: WHEN "read then a LATER pass writes it" is a WAR (no cycle) vs a forward RAW (a cycle). ──
+    // A read that matches a writer declared AFTER the reader is a legitimate WAR (reader-before-writer, no
+    // dependency edge from writer→reader) ONLY when the resource already HAS A VALUE at that point: it is
+    // host-provided (external buffer / texture / acceleration structure) or CROSS-FRAME (persistent / ping-pong —
+    // TAA history is READ old by taa_resolve and WRITTEN new by the later taa_store), OR some pass WRITES it
+    // BEFORE the reader (the nearest earlier writer is the producer; the later write feeds a subsequent reader —
+    // the two-phase occlusion re-cull writes `instances` / `cull_args` again after the depth prepass read them).
+    // Otherwise it is an UNSATISFIABLE forward reference on a single-frame resource: the writer MUST precede the
+    // reader (a genuine RAW), and when two passes each read what the other writes, that pair is the real cycle the
+    // DependencyCycle gate must catch — which declaration order alone (the previous heuristic) silently allowed.
+    const auto has_frame_start_value = [&](const crd::containers::String& name) -> bool {
+        for (crd::usize i = 0; i < desc.resources.size(); ++i)
+        {
+            if (str_eq(name, std::string_view(desc.resources[i].name.c_str(), desc.resources[i].name.size())))
+            {
+                const FrameResourceKind k = desc.resources[i].kind;
+                return k == FrameResourceKind::ExternalBuffer || k == FrameResourceKind::ExternalTexture
+                       || k == FrameResourceKind::AccelerationStructure || k == FrameResourceKind::PersistentImage
+                       || k == FrameResourceKind::PingPongImage;
+            }
+        }
+        return false; // `@output` and any un-declared name: no frame-start value
+    };
+    const auto written_before = [&](const crd::containers::String& name, crd::usize before) -> bool {
+        for (crd::usize q = 0; q < before; ++q)
+        {
+            for (crd::usize w = 0; w < desc.passes[q].writes.size(); ++w)
+            {
+                if (str_eq(name, std::string_view(desc.passes[q].writes[w].name.c_str(),
+                                                  desc.passes[q].writes[w].name.size())))
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
     for (crd::usize a = 0; a < np; ++a)
     {
         for (crd::usize b = 0; b < np; ++b)
         {
             if (a == b) { continue; }
-            bool dep = false;
-            for (crd::usize r = 0; r < desc.passes[a].reads.size() && !dep; ++r)
+            for (crd::usize r = 0; r < desc.passes[a].reads.size(); ++r)
             {
+                const crd::containers::String& rn = desc.passes[a].reads[r].name;
+                bool                           matched = false;
                 for (crd::usize w = 0; w < desc.passes[b].writes.size(); ++w)
                 {
-                    if (str_eq(desc.passes[a].reads[r].name,
-                               std::string_view(desc.passes[b].writes[w].name.c_str(), desc.passes[b].writes[w].name.size())))
+                    if (str_eq(rn, std::string_view(desc.passes[b].writes[w].name.c_str(),
+                                                    desc.passes[b].writes[w].name.size())))
                     {
-                        dep = true;
+                        matched = true;
+                        break;
+                    }
+                }
+                if (!matched) { continue; }
+                // A LATER writer (b > a) is a legitimate WAR (reader before writer, edge a→b) only when the read
+                // is satisfiable — the resource has a frame-start value or an earlier producer this frame.
+                // Otherwise, and for any EARLIER writer, the writer must precede the reader (edge b→a): an ordinary
+                // RAW, or the forward-reference RAW on a producer-less single-frame resource that surfaces a cycle.
+                const bool war = b > a && (has_frame_start_value(rn) || written_before(rn, a));
+                if (war) { add_dep(a, b); }
+                else     { add_dep(b, a); }
+            }
+        }
+    }
+    for (crd::usize a = 0; a < np; ++a)
+    {
+        for (crd::usize b = a + 1; b < np; ++b)
+        {
+            bool waw = false;
+            for (crd::usize wa = 0; wa < desc.passes[a].writes.size() && !waw; ++wa)
+            {
+                for (crd::usize wb = 0; wb < desc.passes[b].writes.size(); ++wb)
+                {
+                    if (str_eq(desc.passes[a].writes[wa].name,
+                               std::string_view(desc.passes[b].writes[wb].name.c_str(), desc.passes[b].writes[wb].name.size())))
+                    {
+                        waw = true;
                         break;
                     }
                 }
             }
-            if (dep && edge[(b * np) + a] == 0U)
-            {
-                edge[(b * np) + a] = 1U; // b → a
-                ++indeg[a];
-            }
+            if (waw) { add_dep(a, b); } // WAW: later writer b depends on earlier writer a
         }
     }
     crd::containers::Array<crd::u32> queue(alloc);
@@ -1509,6 +1583,7 @@ crd::containers::Array<crd::u8> cook_frame_graph(const FrameGraphDesc& desc, crd
         put_u8(out, r.depth_buffer ? 1U : 0U); // 38-G1
         put_u8(out, r.storage ? 1U : 0U);
         put_u32(out, r.size_bytes);
+        put_u8(out, r.resizable ? 1U : 0U); // REN-41
     }
 
     put_u32(out, static_cast<crd::u32>(desc.draw_lists.size()));
@@ -1607,6 +1682,7 @@ crd::containers::Array<crd::u8> cook_frame_graph(const FrameGraphDesc& desc, crd
         // v7: shared_depth — a separate depth attachment (empty string if none)
         put_str(out, p.shared_depth);
         put_u8(out, p.depth_as_float ? 1U : 0U);
+        put_u8(out, p.untracked_storage ? 1U : 0U);
     }
 
     // REN-37.6: composition records, appended at the END.
@@ -1691,6 +1767,7 @@ bool read_frame_graph(crd::containers::ConstSpan<crd::u8> bytes, FrameGraphDesc&
         r.depth_buffer = c.u8v() != 0U; // 38-G1
         r.storage    = c.u8v() != 0U;
         r.size_bytes = c.u32v();
+        r.resizable  = c.u8v() != 0U; // REN-41
         out.resources.push_back(static_cast<FrameResourceDesc&&>(r));
     }
 
@@ -1799,6 +1876,7 @@ bool read_frame_graph(crd::containers::ConstSpan<crd::u8> bytes, FrameGraphDesc&
         p.load_depth               = c.ok ? c.u8v() != 0U : false; // v6
         if (c.ok) { c.strv(p.shared_depth); } // v7
         if (c.ok) { p.depth_as_float = c.u8v() != 0U; }
+        if (c.ok) { p.untracked_storage = c.u8v() != 0U; }
         out.passes.push_back(static_cast<FramePassDesc&&>(p));
     }
 

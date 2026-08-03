@@ -197,6 +197,7 @@ int main(int argc, char** argv)
     crd::gpu::PresentMode present_mode   = crd::gpu::PresentMode::Fifo;
     bool                  force_readback = false;
     bool                  want_shadows   = true;
+    bool                  want_pcss      = true; // PCSS contact-hardening is the default; --hard-shadows = PCF
     // Validation is the right dev DEFAULT, but its CPU cost is real (descriptor tracking dominates at high draw
     // counts) and a SHIPPED app never runs it — a perf number with validation on measures a config nothing
     // ships (the gates-ran-unshipped-config scar). `--no-validation` is the honest arm for any speed claim.
@@ -254,6 +255,9 @@ int main(int argc, char** argv)
         // REN-3.2-b: A/B the shadows. If an object looks unlit with shadows ON and STILL looks unlit with them
         // OFF, the cause is its NORMALS (ndl == 0 gives the same flat ambient as vis == 0), not the shadow map.
         else if (std::strcmp(argv[i], "--no-shadows") == 0) { want_shadows = false; }
+        // PCSS (contact-hardening soft shadows) is the DEFAULT; `--hard-shadows` keeps fixed-radius PCF so the
+        // A/B measures both arms on one build (the same rule every other quality flag follows here).
+        else if (std::strcmp(argv[i], "--hard-shadows") == 0) { want_pcss = false; }
         // ⭐⭐ REN-39-C2: A/B the draw path. INDEXED is the default (post-transform vertex reuse — the frame was
         // measured VERTEX-bound); `--pull-draws` keeps the classic pull so the before/after board measures BOTH
         // arms on the SAME build (the readback A/B rule, one flag over).
@@ -410,8 +414,11 @@ int main(int argc, char** argv)
     // World's Transform + MeshRenderer components, the renderer's InstanceGpu payload, per-slot world AABBs, the
     // camera visible list and FOUR cascade lists) — a fixed 256 MB asserted "out of memory" before the first
     // frame. Budget per instance, generously, rather than tuning a constant per scene size.
+    // ⭐⭐ REN-41 (velocity): +256 B/instance over the old 512 — the per-instance PREVIOUS world transform is
+    // 64 B (16 floats), and an Array grows by doubling, so its final reallocation transiently holds old+new
+    // (another ~64 B/instance peak). The rest is margin; at 1M this is a ~960 MB arena.
     const crd::u64 inst_total  = static_cast<crd::u64>(grid_side) * grid_side + fox_count;
-    const crd::u64 arena_bytes = (192ULL << 20U) + inst_total * 512ULL;
+    const crd::u64 arena_bytes = (192ULL << 20U) + inst_total * 768ULL;
     crd::memory::TlsfAllocator scene_alloc(static_cast<crd::usize>(arena_bytes));
     CRD_LOG_INFO(g_log_sandbox, "scene arena: {} MiB for {} instances", arena_bytes >> 20U, inst_total);
 
@@ -838,10 +845,16 @@ int main(int argc, char** argv)
         ccfg.map_size      = 2048;
         ccfg.far_plane     = 160.0F; // the sandbox field is ~110 units across; cascades past that buy nothing
         scene_renderer.set_csm_config(ccfg);
+        // PCSS (contact-hardening): a blocker search sets the filter radius per fragment, so contact points
+        // stay sharp and the same shadow softens with caster distance. `--hard-shadows` keeps fixed-radius PCF.
+        if (want_pcss)
+        {
+            scene_renderer.set_soft_shadows(crd::scenerender::SceneRenderer::SoftShadow::Pcss);
+        }
         const bool shadows_on = scene_renderer.set_shadows_enabled(want_shadows);
-        CRD_LOG_INFO(g_log_sandbox, "REN-3.2-b cascaded shadows: {} ({} cascades @ {}px)",
+        CRD_LOG_INFO(g_log_sandbox, "REN-3.2-b cascaded shadows: {} ({} cascades @ {}px{})",
                      shadows_on ? "ON" : "unavailable (cascade shaders failed to build)", ccfg.cascade_count,
-                     ccfg.map_size);
+                     ccfg.map_size, want_pcss ? ", PCSS" : ", PCF");
     }
 
     // ⛔ HARD RULE: the grid goes through OUR frame graph. `record_overlay_pass` runs as a pass of the scene's
@@ -898,14 +911,18 @@ int main(int argc, char** argv)
         return 2;
     }
     // ⛔ An explicit override wins; failing that the device-cull graph; failing that the tonemap's own frame.
+    // ⭐⭐ REN-41: BOTH tonemap arms now carry TAA, and each arm is a DISTINCT frame — 38-G1 makes the display
+    // transform a property of the frame, so the radio switches files. Under `--gpu-cull` those files are the two
+    // device-cull twins (`forward_csm_gpu_srgb` / `forward_csm_gpu`); otherwise the two CPU-path forward frames.
+    // This is why the sRGB radio was inert under `--gpu-cull` before: it mapped BOTH arms to the one gpu frame.
     // Written as a helper rather than nested ternaries so the precedence is a statement, not a parse.
-    const auto pick_frame = [&](const char* def) -> const char* {
+    const auto pick_frame = [&](const char* gpu_variant, const char* def) -> const char* {
         if (frame_override != nullptr) { return frame_override; }
-        if (gpu_frame != nullptr) { return gpu_frame; }
+        if (gpu_frame != nullptr) { return gpu_variant; }
         return def;
     };
-    const char* const frame_0 = pick_frame("frame/forward_csm_srgb.frame.toml");
-    const char* const frame_1 = pick_frame("frame/forward_csm_agx.frame.toml");
+    const char* const frame_0 = pick_frame("frame/forward_csm_gpu_srgb.frame.toml", "frame/forward_csm_srgb.frame.toml");
+    const char* const frame_1 = pick_frame("frame/forward_csm_gpu.frame.toml", "frame/forward_csm_agx.frame.toml");
     const char* const post_frames[2] = {frame_0, frame_1};
     int               post_mode      = 1; // 0 = sRGB only · 1 = AgX
     int               post_mode_live = -1;
@@ -925,6 +942,10 @@ int main(int argc, char** argv)
     // direction. Averages get compared; a lone sample gets believed.
     PhaseMs  phase_sum;
     crd::u64 phase_frames = 0;
+    // ⭐⭐ REN-41 (TAA): the previous frame's UNJITTERED view_proj + whether it exists. The reproject matrix
+    // handed to the renderer is `prev_unjit · inv(cur_jittered)`, so the motion vector carries only real motion.
+    crd::math::Mat4f taa_prev_unjit_vp{};
+    bool             taa_has_prev = false;
     const auto now_ms = [] { return std::chrono::steady_clock::now(); };
     const auto ms_between = [](std::chrono::steady_clock::time_point a, std::chrono::steady_clock::time_point b) {
         return std::chrono::duration<double, std::milli>(b - a).count();
@@ -941,6 +962,10 @@ int main(int argc, char** argv)
         {
             win_w = cur_w;
             win_h = cur_h;
+            // ⭐⭐⭐ REN-41: the resize recreates the `resizable` taa_history at the new size (its old content is
+            // gone). Start TAA FRESH this frame — has_history=false — so the blank buffer is never blended in (no
+            // one-frame flash); the history rebuilds cleanly from the next frame.
+            taa_has_prev = false;
             if (surface->resize(win_w, win_h))
             {
                 canvas = raster->create_color_depth_target(surface->width(), surface->height());
@@ -1016,8 +1041,46 @@ int main(int argc, char** argv)
             crd::math::look_at(eye, crd::math::Vec3f{0.0F, 0.0F, 0.0F}, crd::math::Vec3f{0.0F, 1.0F, 0.0F});
         const float aspect =
             static_cast<float>(surface->width()) / static_cast<float>(surface->height() > 0U ? surface->height() : 1U);
-        const crd::math::Mat4f proj = crd::math::perspective_reverse_z(1.0472F, aspect, 0.1F);
-        const crd::math::Mat4f vp   = proj * view;
+        const crd::math::Mat4f proj_unjit = crd::math::perspective_reverse_z(1.0472F, aspect, 0.1F);
+        crd::math::Mat4f       proj        = proj_unjit;
+        // ── ⭐⭐ REN-41 (TAA): sub-pixel CAMERA JITTER. Each frame the projection is offset by a fraction of a
+        // pixel along a Halton(2,3) sequence, so successive frames sample different sub-pixel positions; the TAA
+        // resolve accumulates them into a supersampled image. The offset is subpixel, and everything downstream
+        // (frustum cull, LOD size, texel-snapped cascades) is invariant to it, so jittering the single vp is safe.
+        // ⛔ Only when a TAA frame graph is active (it owns the resolve that removes the jitter) — otherwise the
+        // image would visibly shimmer with no accumulator to average it.
+        // ⭐⭐ REN-41: TAA is now the DEFAULT for every forward frame the app installs (both tonemap arms, CPU and
+        // device-cull), so jitter is on for the whole default path. A custom `--frame` override may name a graph
+        // WITHOUT a resolve, so jitter is suppressed there (the override owner opts back in by authoring a resolve).
+        const bool taa_on = (frame_override == nullptr);
+        if (taa_on)
+        {
+            const auto halton = [](crd::u32 i, crd::u32 b) {
+                float f = 1.0F, r = 0.0F;
+                while (i > 0U) { f /= static_cast<float>(b); r += f * static_cast<float>(i % b); i /= b; }
+                return r;
+            };
+            const crd::u32 ji = (frame % 8U) + 1U; // 1..8 (index 0 is the origin — skip it)
+            const float    jx = (halton(ji, 2U) - 0.5F) * 2.0F / static_cast<float>(surface->width());
+            const float    jy = (halton(ji, 3U) - 0.5F) * 2.0F / static_cast<float>(surface->height());
+            proj.c2.x += jx;
+            proj.c2.y += jy;
+        }
+        const crd::math::Mat4f vp   = proj * view;         // JITTERED — raster + cull
+        // ⛔⛔ THE REPROJECT MATRIX IS BUILT FROM UNJITTERED PROJECTIONS. Un-jittering the composed `vp` needs the
+        // separate view (the jitter rides `proj` then multiplies through `view`), so it is done HERE where both
+        // matrices exist, not inside the renderer. `R = prev_unjit · inv(cur_jittered)` maps a current pixel —
+        // world reconstructed from the jittered depth — onto last frame's STABLE history grid, so the motion
+        // vector carries only real motion and the sub-pixel jitter cancels instead of shimmering.
+        if (taa_on && scene_ready)
+        {
+            const crd::math::Mat4f vp_unjit = proj_unjit * view;
+            const crd::math::Mat4f R =
+                taa_has_prev ? taa_prev_unjit_vp * crd::math::inverse(vp) : crd::math::Mat4f{};
+            scene_renderer.set_taa_reproj(R, taa_has_prev);
+            taa_prev_unjit_vp = vp_unjit;
+            taa_has_prev      = true;
+        }
 
         const auto t_frame_begin = now_ms();
         // ⛔ BEFORE render(): render() EXECUTES the frame graph, and the overlay runs as a pass inside it. `canvas`

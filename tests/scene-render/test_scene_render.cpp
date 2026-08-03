@@ -8,6 +8,7 @@
 #include <crd/lightcook/lighting_asset.hpp>
 #include <crd/matcook/material_asset.hpp>
 #include <crd/vertexcook/vertex_asset.hpp>
+#include <crd/kir/ckir.hpp> // REN-41 velocity: cook the velocity VS assets (exercise the prev:clip chain)
 #include <crd/math/mat.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
@@ -370,21 +371,20 @@ TEST_CASE("scene-render: frustum planes + AABB test -- in front passes, behind c
     CHECK(fbox.min.z <= at_origin.min.z);
 }
 
-// ── ⭐⭐ REN-38 audit THE DRIFT GATE: the SHIPPED assets and the BUILT-IN pack are ONE declaration. ───────────
-// The renderer's defaults are embedded text (no file IO on the init path) and the same declarations ship as
-// editable files under `assets/`. ⛔ Two copies of one declaration DRIFT — the two-vocabularies disease one
-// level down: an author edits `assets/vertex/scene.crdv`, nothing changes on screen, and the file quietly
-// stops being true. This gate parses BOTH sides and compares their CANONICAL EMITTED form — whitespace-blind,
-// comment-blind, meaning-exact — so a drift in either direction fails by NAME.
+// ── ⭐⭐ REN-41 audit: THE SHIPPED-ASSET COOK GATE — every authored default asset PARSES and validates. ───────
+// Disk is the SINGLE SOURCE now (the in-binary pack was retired), so the old "disk == embedded pack" drift gate
+// has nothing left to diff against. What still matters — and what an app authoring its own pipelines leans on —
+// is that every shipped default declaration COOKS: it parses through its vocabulary, and a frame graph also
+// passes the SAME structural validation the renderer runs before installing one (reads/writes resolve, no
+// cycles, capability tiers well-formed). A broken default fails here by NAME rather than at first render.
 //
 // `CRD_ASSETS_DIR` is set by ctest (the guard lives in ctest, like every cross-config guard); without it the
 // gate SKIPS rather than passing on nothing.
-TEST_CASE("REN-38 DRIFT GATE: every shipped authored asset matches the built-in pack, canonically",
-          "[scene-render][ren38]")
+TEST_CASE("REN-41: every shipped authored default asset cooks (parses + validates)", "[scene-render][ren38][ren41]")
 {
     const char* root = std::getenv("CRD_ASSETS_DIR");
     if (root == nullptr || root[0] == '\0') { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
-    memory::TlsfAllocator alloc(16U << 20U, nullptr, "ren38-drift");
+    memory::TlsfAllocator alloc(16U << 20U, nullptr, "ren41-cook");
 
     const auto read_shipped = [&](const char* rel, containers::String& out) {
         containers::String p(&alloc);
@@ -393,38 +393,31 @@ TEST_CASE("REN-38 DRIFT GATE: every shipped authored asset matches the built-in 
         p.append(rel);
         return platform::fs::read_file_text(platform::fs::Path(containers::StringView(p.c_str(), p.size())), out);
     };
-    const auto builtin = [&](const char* rel, containers::String& out) {
-        return scenerender::builtin_asset_text(rel, out);
-    };
-    const auto same = [&](const containers::String& a, const containers::String& b) {
-        return a.size() == b.size() && std::memcmp(a.c_str(), b.c_str(), a.size()) == 0;
-    };
 
-    // frame graphs: canonical form = the emitted TOML of the parsed declaration.
+    // frame graphs: parse through the frame vocabulary AND pass the structural validation the renderer runs.
     const auto check_frame = [&](const char* rel) {
         INFO(rel);
         containers::String shipped(&alloc);
-        containers::String embedded(&alloc);
         REQUIRE(read_shipped(rel, shipped));
-        REQUIRE(builtin(rel, embedded));
         framecook::FrameGraphDesc a(&alloc);
-        framecook::FrameGraphDesc b(&alloc);
         containers::String        where(&alloc);
         REQUIRE(framecook::parse_frame_toml(containers::StringView(shipped.c_str(), shipped.size()), a, &where)
                 == framecook::FrameCookError::Ok);
-        REQUIRE(framecook::parse_frame_toml(containers::StringView(embedded.c_str(), embedded.size()), b, &where)
-                == framecook::FrameCookError::Ok);
-        CHECK(same(framecook::emit_frame_toml(a, &alloc), framecook::emit_frame_toml(b, &alloc)));
+        CHECK(framecook::validate_frame_graph(a, &where) == framecook::FrameCookError::Ok);
     };
     check_frame("frame/forward_csm.frame.toml");
     check_frame("frame/forward_basic.frame.toml");
-    // REN-39 fix: the post-chain frames were DISK-ONLY and outside this list — which is precisely how "the
-    // tonemap toggle does nothing" shipped: without an asset root they resolved to NOTHING, silently.
+    // the post-chain forward frames (the tonemap arms) — now TAA-carrying defaults
     check_frame("frame/forward_csm_agx.frame.toml");
     check_frame("frame/forward_csm_srgb.frame.toml");
-    // REN-39: the SHADOWS-OFF tiers the tonemapped pair steps down to (their `fallback` targets)
+    // the SHADOWS-OFF tiers the tonemapped pair steps down to (their `fallback` targets)
     check_frame("frame/forward_agx.frame.toml");
     check_frame("frame/forward_srgb.frame.toml");
+    // ⭐⭐ REN-41: the device-cull 1M frames + their TAA — shipped defaults, so they cook here too
+    check_frame("frame/forward_csm_gpu.frame.toml");
+    check_frame("frame/forward_csm_gpu_srgb.frame.toml");
+    // ⭐⭐ REN-41: the motion-vector debug view (the velocity correctness gate's readback surface)
+    check_frame("frame/velocity_debug.frame.toml");
     // REN-38-F6: the advanced-family scene graphs
     check_frame("frame/scene_tess.frame.toml");
     check_frame("frame/scene_mesh.frame.toml");
@@ -435,17 +428,11 @@ TEST_CASE("REN-38 DRIFT GATE: every shipped authored asset matches the built-in 
     const auto check_material = [&](const char* rel) {
         INFO(rel);
         containers::String shipped(&alloc);
-        containers::String embedded(&alloc);
         REQUIRE(read_shipped(rel, shipped));
-        REQUIRE(builtin(rel, embedded));
         matcook::MaterialDesc a(&alloc);
-        matcook::MaterialDesc b(&alloc);
         containers::String    where(&alloc);
-        REQUIRE(matcook::parse_material_toml(containers::StringView(shipped.c_str(), shipped.size()), a, &where)
-                == matcook::MaterialCookError::Ok);
-        REQUIRE(matcook::parse_material_toml(containers::StringView(embedded.c_str(), embedded.size()), b, &where)
-                == matcook::MaterialCookError::Ok);
-        CHECK(same(matcook::emit_material_toml(a, &alloc), matcook::emit_material_toml(b, &alloc)));
+        CHECK(matcook::parse_material_toml(containers::StringView(shipped.c_str(), shipped.size()), a, &where)
+              == matcook::MaterialCookError::Ok);
     };
     check_material("material/scene.crdm");
     check_material("material/scene_textured.crdm");
@@ -453,21 +440,35 @@ TEST_CASE("REN-38 DRIFT GATE: every shipped authored asset matches the built-in 
     const auto check_vertex = [&](const char* rel) {
         INFO(rel);
         containers::String shipped(&alloc);
-        containers::String embedded(&alloc);
         REQUIRE(read_shipped(rel, shipped));
-        REQUIRE(builtin(rel, embedded));
         vertcook::VertexProgramDesc a(&alloc);
-        vertcook::VertexProgramDesc b(&alloc);
         containers::String          where(&alloc);
-        REQUIRE(vertcook::parse_vertex_toml(containers::StringView(shipped.c_str(), shipped.size()), a, &where)
-                == vertcook::VertexCookError::Ok);
-        REQUIRE(vertcook::parse_vertex_toml(containers::StringView(embedded.c_str(), embedded.size()), b, &where)
-                == vertcook::VertexCookError::Ok);
-        CHECK(same(vertcook::emit_vertex_toml(a, &alloc), vertcook::emit_vertex_toml(b, &alloc)));
+        const auto rc = vertcook::parse_vertex_toml(containers::StringView(shipped.c_str(), shipped.size()), a, &where);
+        INFO("rc=" << static_cast<int>(rc) << " where=" << where.c_str());
+        CHECK(rc == vertcook::VertexCookError::Ok);
     };
     check_vertex("vertex/scene.crdv");
     check_vertex("vertex/scene_skinned.crdv");
+    check_vertex("vertex/velocity.crdv");         // REN-41 velocity: matched motion-vector VS (non-skinned)
+    check_vertex("vertex/velocity_skinned.crdv"); // REN-41 velocity: matched motion-vector VS (skinned)
     check_vertex("vertex/shadow.crdv");
+    // ⭐⭐ REN-41 velocity: the velocity VS assets must not just PARSE — the prev:clip chain (re-skin with the
+    // previous palette + previous transform → current view_proj) must COOK to a valid CKIR entry. Parse alone
+    // never builds that graph; this does.
+    const auto cook_ok = [&](const char* rel) {
+        INFO(rel);
+        containers::String shipped(&alloc);
+        REQUIRE(read_shipped(rel, shipped));
+        vertcook::VertexProgramDesc a(&alloc);
+        containers::String          where(&alloc);
+        REQUIRE(vertcook::parse_vertex_toml(containers::StringView(shipped.c_str(), shipped.size()), a, &where)
+                == vertcook::VertexCookError::Ok);
+        crd::kir::KGraph g(&alloc);
+        crd::kir::KEntry ve;
+        CHECK(vertcook::cook_vertex_program(a, g, ve, nullptr));
+    };
+    cook_ok("vertex/velocity.crdv");
+    cook_ok("vertex/velocity_skinned.crdv");
     // REN-38-F6: the advanced-stage declarations
     check_vertex("vertex/tess_corners.crdv");
     check_vertex("vertex/tess_hull.crdv");
@@ -484,21 +485,15 @@ TEST_CASE("REN-38 DRIFT GATE: every shipped authored asset matches the built-in 
     check_vertex("vertex/post_fullscreen.crdv"); // 38-G1: the post fullscreen pair
     check_material("material/flat.crdm");
 
-    // ── 38-G1: the POST graphs — parsed through THEIR face, compared canonically (comment-blind). ──
+    // ── 38-G1: the POST graphs — parsed through THEIR face. ──
     const auto check_post = [&](const char* rel) {
         INFO(rel);
         containers::String shipped(&alloc);
-        containers::String embedded(&alloc);
         REQUIRE(read_shipped(rel, shipped));
-        REQUIRE(builtin(rel, embedded));
         matcook::MaterialDesc a(&alloc);
-        matcook::MaterialDesc b(&alloc);
-        containers::String         where(&alloc);
-        REQUIRE(matcook::parse_post_toml(containers::StringView(shipped.c_str(), shipped.size()), a, &where)
-                == matcook::MaterialCookError::Ok);
-        REQUIRE(matcook::parse_post_toml(containers::StringView(embedded.c_str(), embedded.size()), b, &where)
-                == matcook::MaterialCookError::Ok);
-        CHECK(same(matcook::emit_material_toml(a, &alloc), matcook::emit_material_toml(b, &alloc)));
+        containers::String    where(&alloc);
+        CHECK(matcook::parse_post_toml(containers::StringView(shipped.c_str(), shipped.size()), a, &where)
+              == matcook::MaterialCookError::Ok);
     };
     check_post("post/tonemap_agx.crdp");
     check_post("post/srgb_only.crdp");
@@ -506,17 +501,11 @@ TEST_CASE("REN-38 DRIFT GATE: every shipped authored asset matches the built-in 
     {
         INFO("lighting/scene_forward.crdl");
         containers::String shipped(&alloc);
-        containers::String embedded(&alloc);
         REQUIRE(read_shipped("lighting/scene_forward.crdl", shipped));
-        REQUIRE(builtin("lighting/scene_forward.crdl", embedded));
         lightcook::LightingDesc a(&alloc);
-        lightcook::LightingDesc b(&alloc);
         containers::String      where(&alloc);
-        REQUIRE(lightcook::parse_lighting_toml(containers::StringView(shipped.c_str(), shipped.size()), a, &where)
-                == lightcook::LightingCookError::Ok);
-        REQUIRE(lightcook::parse_lighting_toml(containers::StringView(embedded.c_str(), embedded.size()), b, &where)
-                == lightcook::LightingCookError::Ok);
-        CHECK(same(lightcook::emit_lighting_toml(a, &alloc), lightcook::emit_lighting_toml(b, &alloc)));
+        CHECK(lightcook::parse_lighting_toml(containers::StringView(shipped.c_str(), shipped.size()), a, &where)
+              == lightcook::LightingCookError::Ok);
     }
 }
 

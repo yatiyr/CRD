@@ -252,6 +252,18 @@ void parse_source_term(std::string_view s, VaryingSource& out)
         out.comps = 1U;
         return;
     }
+    if (s == "prev:clip") // ⭐⭐ REN-41 velocity: the previous-frame clip position (4 comps)
+    {
+        out.kind  = VaryingSourceKind::PrevClip;
+        out.comps = 4U;
+        return;
+    }
+    if (s == "clip") // ⭐⭐ REN-41 velocity: the current clip position (4 comps)
+    {
+        out.kind  = VaryingSourceKind::Clip;
+        out.comps = 4U;
+        return;
+    }
     if (starts("world:"))
     {
         out.kind = VaryingSourceKind::World;
@@ -366,6 +378,8 @@ VertexCookError parse_vertex_toml(crd::containers::StringView toml_text, VertexP
         w("joint_count", out.header.joint_count);
         w("morph_off", out.header.morph_off);
         w("morph_weights", out.header.morph_weights);
+        w("prev_world_off", out.header.prev_world_off);     // REN-41 velocity: word holding the prev-transform section offset
+        w("prev_palette_off", out.header.prev_palette_off); // REN-41 velocity: word holding the prev-pose section offset
         w("instance_count", out.header.instance_count);
     }
 
@@ -680,8 +694,10 @@ crd::u32 varying_width(const VertexProgramDesc& desc, crd::u32 varying_index) no
         const VaryingSource& s = v.source[i];
         switch (s.kind)
         {
-        case VaryingSourceKind::ClipW: w += 1U; break;
-        case VaryingSourceKind::Node:  w += s.comps; break;
+        case VaryingSourceKind::ClipW:    w += 1U; break;
+        case VaryingSourceKind::PrevClip: w += 4U; break; // REN-41 velocity
+        case VaryingSourceKind::Clip:     w += 4U; break; // REN-41 velocity
+        case VaryingSourceKind::Node:     w += s.comps; break;
         case VaryingSourceKind::Instance:
         {
             const crd::i32 ai = find_attr(desc.instance.attrs, sv_of(s.name));
@@ -1082,6 +1098,8 @@ VertexCookError validate_vertex_program(const VertexProgramDesc& desc, crd::cont
         {
             const VaryingSource& s = v.source[k];
             if (s.kind == VaryingSourceKind::ClipW) { continue; }
+            // REN-41 velocity: prev:clip / clip are cook-derived (no attribute/instance/node to resolve)
+            if (s.kind == VaryingSourceKind::PrevClip || s.kind == VaryingSourceKind::Clip) { continue; }
             if (s.kind == VaryingSourceKind::Node)
             {
                 if (s.comps < 1U || s.comps > 4U)
@@ -1356,6 +1374,14 @@ crd::u64 vertex_layout_id(const VertexProgramDesc& desc) noexcept
         std::memcpy(&db, &desc.cull.dither_band, 4U);
         hash_u64(h, db);
     }
+    // the shadow-caster screen-size cull: both the threshold and the camera-height word change the graph.
+    {
+        crd::u64 cm = 0U;
+        std::memcpy(&cm, &desc.cull.caster_min_px, 4U);
+        hash_u64(h, cm);
+    }
+    hash_u64(h, desc.cull.cam_pixel_height_word);
+    hash_u64(h, desc.cull.hzb_size_word);
     // REN-40-C4: the VS masks visible entries and emits a fade varying when dither is active.
     {
         crd::u64 vdb = 0U;
@@ -1625,12 +1651,12 @@ crd::containers::String emit_vertex_toml(const VertexProgramDesc& desc, crd::mem
     }
 
     app(o, "\n[header]\n");
-    const char* hk[13] = {"index_count", "index_off",   "vertex_off",  "instance_off",
+    const char* hk[15] = {"index_count", "index_off",   "vertex_off",  "instance_off",
                           "visible_off", "view_proj",   "light_vp",    "skin_off",
                           "palette_off", "joint_count", "morph_off",   "morph_weights",
-                          "instance_count"};
+                          "instance_count", "prev_world_off", "prev_palette_off"}; // REN-41 velocity (POD-walk order)
     const crd::u32* hv = &desc.header.index_count;
-    for (int i = 0; i < 13; ++i)
+    for (int i = 0; i < 15; ++i)
     {
         app(o, hk[i]);
         app(o, " = ");
@@ -1758,6 +1784,8 @@ crd::containers::String emit_vertex_toml(const VertexProgramDesc& desc, crd::mem
             switch (s.kind)
             {
             case VaryingSourceKind::ClipW: app(o, "\"clip.w\""); break;
+            case VaryingSourceKind::PrevClip: app(o, "\"prev:clip\""); break; // REN-41 velocity
+            case VaryingSourceKind::Clip:     app(o, "\"clip\""); break;      // REN-41 velocity
             case VaryingSourceKind::World:
                 app(o, "\"world:");
                 o.append(s.name.c_str());
@@ -2132,8 +2160,19 @@ namespace
     const auto blu   = [&](int idx) { return g.buffer_load(inbuf, c.add(base, idx)); };
     const auto blf   = [&](int idx) { return g.int_bits_to_float(g.cast(blu(idx), DType::I32)); };
 
+    // ⛔⛔ THE RANGE GUARD MUST GUARD THE READS, NOT JUST THE VERDICT. The last workgroup's padding threads
+    // (gid in [instance_count, dispatch_size)) used to read their bounds and override records anyway — and the
+    // override section is the LAST section of a non-skinned, non-impostor group's buffer, so those reads ran
+    // PAST THE BUFFER END (GPU-AV: "access out of bounds ... highest access at [buffer_size + 231]"). On a
+    // pooled suballocation that is another buffer's bytes on a good day and an unmapped page on a bad one.
+    // Clamping the READ INDEX to 0 for out-of-range threads keeps every load in-bounds; their verdict is
+    // already forced to 0 below, so the value read never matters.
+    const int n_inst = blu(c.ku(desc.header.instance_count));
+    const int in_rng = g.binary(KOp::CmpLt, gid, n_inst);
+    const int gid_r  = g.select(in_rng, gid, c.ku(0U)); // the SAFE per-instance read index
+
     // the instance's WORLD AABB: 6 floats (min.xyz, max.xyz) at bounds_off + gid*6
-    const int brec = c.add(c.add(base, blu(c.ku(desc.cull.bounds_off))), c.mul(gid, c.ku(6U)));
+    const int brec = c.add(c.add(base, blu(c.ku(desc.cull.bounds_off))), c.mul(gid_r, c.ku(6U)));
     const int bmin[3] = {blf(c.add(brec, c.ku(0U))), blf(c.add(brec, c.ku(1U))), blf(c.add(brec, c.ku(2U)))};
     const int bmax[3] = {blf(c.add(brec, c.ku(3U))), blf(c.add(brec, c.ku(4U))), blf(c.add(brec, c.ku(5U)))};
 
@@ -2187,10 +2226,64 @@ namespace
         inside       = c.mul(inside, ok);
     }
     // ⛔ the RANGE GUARD (a declared header word): threads past the instance section read garbage bounds and
-    // their verdicts polluted the counter - the 38-F15 finding, 16 marked of 8 visible.
-    const int n_inst = blu(c.ku(desc.header.instance_count));
-    const int in_rng = g.binary(KOp::CmpLt, gid, n_inst);
-    int       vis    = g.select(in_rng, inside, c.ku(0U));
+    // their verdicts polluted the counter - the 38-F15 finding, 16 marked of 8 visible. (`n_inst`/`in_rng`
+    // are hoisted above the bounds read now — the guard covers the READS too, not just this verdict.)
+    int vis = g.select(in_rng, inside, c.ku(0U));
+
+    // ── SCREEN-SIZE CULL (see CullDesc::caster_min_px — the caster threshold on cascade views, the min-draw
+    // threshold on the camera view). The instance's CAMERA-projected height in pixels, the same
+    // `r·|row1|·H / w` metric the LOD selector uses — always against the CAMERA matrix and the camera's pixel
+    // height, because relevance is size ON SCREEN whichever frustum this dispatch culls.
+    int draw_fade8 = -1; // camera view + dither only: 0..255 DRAW-DISTANCE fade, composed into the pack alphas
+    if (desc.cull.caster_min_px > 0.0F && desc.cull.cam_pixel_height_word != 0U)
+    {
+        const int ccx = c.mul(c.add(bmin[0], bmax[0]), c.kf(0.5));
+        const int ccy = c.mul(c.add(bmin[1], bmax[1]), c.kf(0.5));
+        const int ccz = c.mul(c.add(bmin[2], bmax[2]), c.kf(0.5));
+        const int cex = c.mul(c.sub(bmax[0], bmin[0]), c.kf(0.5));
+        const int cey = c.mul(c.sub(bmax[1], bmin[1]), c.kf(0.5));
+        const int cez = c.mul(c.sub(bmax[2], bmin[2]), c.kf(0.5));
+        const int crr = g.unary(KOp::Sqrt, c.add(c.add(c.mul(cex, cex), c.mul(cey, cey)), c.mul(cez, cez)));
+        // the CAMERA's rows 1 and 3 — `header.view_proj`, never this dispatch's cascade matrix
+        int cr1[4];
+        int cr3[4];
+        for (crd::u32 j = 0; j < 4U; ++j)
+        {
+            cr1[j] = blf(c.ku(desc.header.view_proj + j * 4U + 1U));
+            cr3[j] = blf(c.ku(desc.header.view_proj + j * 4U + 3U));
+        }
+        int cwc = cr3[3];
+        cwc     = c.add(cwc, c.mul(cr3[0], ccx));
+        cwc     = c.add(cwc, c.mul(cr3[1], ccy));
+        cwc     = c.add(cwc, c.mul(cr3[2], ccz));
+        cwc     = g.binary(KOp::Max, cwc, c.kf(1.0e-6));
+        // ⛔ |row1| is the ROW NORM, never an element (the SCAR-5 rule)
+        const int cr1_len =
+            g.unary(KOp::Sqrt, c.add(c.add(c.mul(cr1[0], cr1[0]), c.mul(cr1[1], cr1[1])), c.mul(cr1[2], cr1[2])));
+        const int cam_vpx = g.int_bits_to_float(
+            g.cast(g.buffer_load(argsb, c.ku(desc.cull.cam_pixel_height_word)), DType::I32));
+        const int cam_px  = c.dvd(c.mul(c.mul(crr, cr1_len), cam_vpx), cwc);
+        // ⛔ a caster BEHIND the camera has w <= 0; its screen size is meaningless, and dropping it would delete
+        // exactly the off-screen shadows the full-set cull exists to keep — behind-camera casters always pass.
+        const int in_front = g.binary(KOp::CmpGt, cwc, c.kf(1.0e-5));
+        const int big      = g.binary(KOp::CmpGe, cam_px, c.kf(static_cast<double>(desc.cull.caster_min_px)));
+        const int keep     = g.select(in_front, g.cast(big, DType::U32), c.ku(1U));
+        vis                = c.mul(vis, keep);
+        // ── the DITHERED DRAW-DISTANCE FADE (camera view, dither on). A hard cull at the threshold pops, and
+        // everything just ABOVE it is still a sea of few-pixel instances whose only image contribution is
+        // shimmer — the standard open-world answer is to DISSOLVE instances over the last octave before the
+        // cull size (fade 255 at 2× the threshold → 0 at the threshold), through the same Bayer discard the
+        // LOD cross-fade already rides. The far field then thins to clean ground instead of aliasing.
+        if (desc.cull.view_index == 0U && desc.cull.dither_band > 0.0F && desc.cull.lod_slots > 1U)
+        {
+            const double minpx = static_cast<double>(desc.cull.caster_min_px);
+            int f01 = c.dvd(c.sub(cam_px, c.kf(minpx)), c.kf(minpx)); // 0 at min, 1 at 2×min
+            f01     = g.binary(KOp::Min, g.binary(KOp::Max, f01, c.kf(0.0)), c.kf(1.0));
+            // behind-camera instances draw at full alpha, exactly as they always passed the cull above
+            f01        = g.select(in_front, f01, c.kf(1.0));
+            draw_fade8 = g.cast(c.mul(f01, c.kf(255.0)), DType::U32);
+        }
+    }
 
     // ── ⭐⭐ REN-40-G3: HZB OCCLUSION TEST — the SECOND predicate, after the frustum test. ──────────────────────
     // The kernel already has the AABB and the VP, so the test is a handful of instructions in a dispatch that has
@@ -2215,16 +2308,110 @@ namespace
             d     = c.add(d, c.mul(row[2], cz));
             clip[i] = d;
         }
+        // ⛔ CONSERVATIVE ndc_z — maximise ndc_z = clip_z/clip_w over the AABB to find the NEAREST
+        // projected depth. For an infinite-far reverse-Z projection row 2 of VP is (0,0,0,z_near) so
+        // clip_z is constant; the depth encoding is entirely in clip_w. Maximising clip_z alone (the
+        // P-vertex of r2) adds nothing — we must also MINIMISE clip_w (the N-vertex of r3). Without
+        // this the center's ndc_z falls behind the front face rendered in the depth prepass and the
+        // object rejects itself.
+        {
+            int pz = r2[3];
+            for (crd::u32 a = 0; a < 3U; ++a)
+            {
+                const int ge = g.binary(KOp::CmpGe, r2[a], c.kf(0.0));
+                pz = c.add(pz, c.mul(r2[a], g.select(ge, bmax[a], bmin[a])));
+            }
+            clip[2] = pz;
+        }
+        {
+            int nw = r3[3];
+            for (crd::u32 a = 0; a < 3U; ++a)
+            {
+                const int ge = g.binary(KOp::CmpGe, r3[a], c.kf(0.0));
+                nw = c.add(nw, c.mul(r3[a], g.select(ge, bmin[a], bmax[a])));
+            }
+            clip[3] = nw;
+        }
         const int inv_w = c.dvd(c.kf(1.0), g.binary(KOp::Max, clip[3], c.kf(1.0e-6)));
-        const int ndc_x = c.mul(clip[0], inv_w);
-        const int ndc_y = c.mul(clip[1], inv_w);
         const int ndc_z = c.mul(clip[2], inv_w);
-        const int u_coord = c.add(c.mul(ndc_x, c.kf(0.5)), c.kf(0.5));
-        const int v_coord = c.add(c.mul(ndc_y, c.kf(0.5)), c.kf(0.5));
-        const int uv      = g.vec2(u_coord, v_coord);
-        const int hzb_val = g.swizzle(g.tex_sample_lod(hzb_tex, hzb_samp, uv, c.kf(0.0)), 0);
-        const int not_occ = g.cast(g.binary(KOp::CmpGe, ndc_z, hzb_val), DType::U32);
-        vis               = c.mul(vis, not_occ);
+        // ── ⛔⛔ THE TEST MUST BE CONSERVATIVE, AND A CENTER-POINT TEST IS NOT. The first form sampled ONE HZB
+        // texel at the AABB centre's projection: an instance partially covered by a nearer neighbour — its
+        // centre behind the occluder, its edges visible — was rejected WHOLE, and as the camera orbited the
+        // rejection toggled frame to frame: entire close meshes blinking in and out. "Occluded" is a claim
+        // about EVERY texel the instance touches, so it may only be made when the taps cover them all:
+        //   · project all 8 AABB corners → the screen-space rect (any corner behind the near plane ⇒ ACCEPT —
+        //     no screen rect exists to reason about);
+        //   · if the rect spans more than ONE HZB texel per axis ⇒ ACCEPT (its 4 corner taps could miss a
+        //     texel where the instance is visible — precisely the blink). The instances worth occluding at
+        //     scale are the tiny far ones, and those fit;
+        //   · else reject only if the conservative nearest depth is behind the FARTHEST visible depth of ALL
+        //     4 corner taps (min, reverse-Z). Taps are snapped to texel centres so the filter mode cannot
+        //     blend neighbouring texels into a nearer-than-true value (bilinear ≥ min would over-reject).
+        int rect_u0 = c.kf(2.0);  // running min/max of the corners' ndc, seeded outside [-1,1]
+        int rect_u1 = c.kf(-2.0);
+        int rect_v0 = c.kf(2.0);
+        int rect_v1 = c.kf(-2.0);
+        int behind  = c.ku(0U); // 1 when ANY corner is at/behind the near plane
+        for (crd::u32 corner = 0; corner < 8U; ++corner)
+        {
+            const int px_c = (corner & 1U) != 0U ? bmax[0] : bmin[0];
+            const int py_c = (corner & 2U) != 0U ? bmax[1] : bmin[1];
+            const int pz_c = (corner & 4U) != 0U ? bmax[2] : bmin[2];
+            const auto dot_row = [&](const int* row) {
+                int d = row[3];
+                d     = c.add(d, c.mul(row[0], px_c));
+                d     = c.add(d, c.mul(row[1], py_c));
+                d     = c.add(d, c.mul(row[2], pz_c));
+                return d;
+            };
+            const int cw = dot_row(r3);
+            behind       = g.binary(KOp::Max, behind,
+                                    g.cast(g.binary(KOp::CmpLt, cw, c.kf(1.0e-5)), DType::U32));
+            const int iw = c.dvd(c.kf(1.0), g.binary(KOp::Max, cw, c.kf(1.0e-6)));
+            const int nx = c.mul(dot_row(r0), iw);
+            const int ny = c.mul(dot_row(r1), iw);
+            rect_u0      = g.binary(KOp::Min, rect_u0, nx);
+            rect_u1      = g.binary(KOp::Max, rect_u1, nx);
+            rect_v0      = g.binary(KOp::Min, rect_v0, ny);
+            rect_v1      = g.binary(KOp::Max, rect_v1, ny);
+        }
+        const auto to_uv = [&](int ndc) {
+            const int u = c.add(c.mul(ndc, c.kf(0.5)), c.kf(0.5));
+            return g.binary(KOp::Min, g.binary(KOp::Max, u, c.kf(0.0)), c.kf(1.0));
+        };
+        const int u0 = to_uv(rect_u0);
+        const int u1 = to_uv(rect_u1);
+        const int v0 = to_uv(rect_v0);
+        const int v1 = to_uv(rect_v1);
+        // the HZB texel dims from the params block (0 word ⇒ the test never rejects)
+        int testable = c.ku(0U);
+        int hzb_min  = c.kf(0.0);
+        if (desc.cull.hzb_size_word != 0U)
+        {
+            const int hw = g.int_bits_to_float(
+                g.cast(g.buffer_load(argsb, c.ku(desc.cull.hzb_size_word + 0U)), DType::I32));
+            const int hh = g.int_bits_to_float(
+                g.cast(g.buffer_load(argsb, c.ku(desc.cull.hzb_size_word + 1U)), DType::I32));
+            const int span_u = c.mul(c.sub(u1, u0), hw);
+            const int span_v = c.mul(c.sub(v1, v0), hh);
+            const int small  = c.mul(g.cast(g.binary(KOp::CmpLe, span_u, c.kf(1.0)), DType::U32),
+                                     g.cast(g.binary(KOp::CmpLe, span_v, c.kf(1.0)), DType::U32));
+            testable         = c.mul(small, g.select(g.binary(KOp::CmpNe, behind, c.ku(0U)), c.ku(0U), c.ku(1U)));
+            // taps at TEXEL CENTRES — `(floor(u·w) + 0.5) / w` — so the value read is the stored texel exactly
+            const auto tap = [&](int u, int v) {
+                const int tu = c.dvd(c.add(g.unary(KOp::Floor, c.mul(u, hw)), c.kf(0.5)), hw);
+                const int tv = c.dvd(c.add(g.unary(KOp::Floor, c.mul(v, hh)), c.kf(0.5)), hh);
+                return g.swizzle(g.tex_sample_lod(hzb_tex, hzb_samp, g.vec2(tu, tv), c.kf(0.0)), 0);
+            };
+            const int t00 = tap(u0, v0);
+            const int t10 = tap(u1, v0);
+            const int t01 = tap(u0, v1);
+            const int t11 = tap(u1, v1);
+            hzb_min       = g.binary(KOp::Min, g.binary(KOp::Min, t00, t10), g.binary(KOp::Min, t01, t11));
+        }
+        // occluded ⇔ testable AND the nearest depth is behind the farthest visible depth of every covered texel
+        const int occluded = c.mul(testable, g.cast(g.binary(KOp::CmpLt, ndc_z, hzb_min), DType::U32));
+        vis                = c.mul(vis, c.sub(c.ku(1U), occluded));
     }
 
     // ── the claim: each survivor reserves its own slot ──
@@ -2292,7 +2479,9 @@ namespace
         int ov_hi = c.ku(slots - 1U);
         if (desc.cull.lod_override_off != 0U)
         {
-            const int orec = c.add(c.add(base, blu(c.ku(desc.cull.lod_override_off))), c.mul(gid, c.ku(2U)));
+            // ⛔ `gid_r`, not `gid` — the override section can END the buffer, so a padding thread's read here
+            // was the exact out-of-bounds access GPU-AV flagged (see the range-guard note above).
+            const int orec = c.add(c.add(base, blu(c.ku(desc.cull.lod_override_off))), c.mul(gid_r, c.ku(2U)));
             const int bias = blf(orec);
             // ⛔ A zero or negative bias would drive the metric to 0 and pin the entity to the coarsest level by
             // accident; a slot with no component writes exactly 1.0, so anything else is authored and is clamped
@@ -2349,12 +2538,21 @@ namespace
         const int t_raw = c.dvd(t_num, t_den);
         const int t     = g.binary(KOp::Min, g.binary(KOp::Max, t_raw, c.kf(0.0)), c.kf(1.0));
         // alpha bytes: fine fades out (t → 255 at the boundary), coarse fades in (255 − t → 255 far from it)
-        const int alpha_fine   = g.cast(c.mul(t, c.kf(255.0)), DType::U32);
-        const int alpha_coarse = c.sub(c.ku(255U), alpha_fine);
+        int alpha_fine   = g.cast(c.mul(t, c.kf(255.0)), DType::U32);
+        int alpha_coarse = c.sub(c.ku(255U), alpha_fine);
+        int alpha_opaque = c.ku(255U);
+        // the DRAW-DISTANCE fade composes in by MIN — an instance dissolving out of the world caps every
+        // level's alpha, whether it is mid-LOD-transition or not (see the fade note in the screen-size cull).
+        if (draw_fade8 >= 0)
+        {
+            alpha_fine   = g.binary(KOp::Min, alpha_fine, draw_fade8);
+            alpha_coarse = g.binary(KOp::Min, alpha_coarse, draw_fade8);
+            alpha_opaque = draw_fade8;
+        }
         // packed entries: (alpha_byte << 24) | gid
         const int pack_coarse = g.binary(KOp::BitOr, g.binary(KOp::Shl, alpha_coarse, c.ku(24U)), gid);
         const int pack_fine   = g.binary(KOp::BitOr, g.binary(KOp::Shl, alpha_fine,   c.ku(24U)), gid);
-        const int pack_opaque = g.binary(KOp::BitOr, c.ku(0xFF000000U), gid);
+        const int pack_opaque = g.binary(KOp::BitOr, g.binary(KOp::Shl, alpha_opaque, c.ku(24U)), gid);
         primary_val = g.select(in_band, pack_coarse, pack_opaque);
         // secondary write: lslot − 1, with complementary alpha (the fine level fading out).
         // ⛔ When lslot == 0, has_prev is 0, so sec_vis is 0 and the secondary atomic/store never fires.
@@ -2912,6 +3110,17 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
         vals.push_back(a);
     }
 
+    // ⭐⭐ REN-41 (velocity): does any varying want the previous-frame clip? If so, keep the pre-skin object
+    // position and, after the current clip, re-derive it from LAST frame's pose + transform.
+    bool needs_prev = false;
+    for (crd::usize i = 0; i < desc.varyings.size() && !needs_prev; ++i)
+    {
+        for (crd::usize k = 0; k < desc.varyings[i].source.size(); ++k)
+        {
+            if (desc.varyings[i].source[k].kind == VaryingSourceKind::PrevClip) { needs_prev = true; break; }
+        }
+    }
+
     // ── 38-D2 MORPH TARGETS. Applied FIRST, to the raw attribute, because a blend shape is authored against the
     // rest pose — morphing after skinning would deform in the animated frame and the face would slide.
     // ⛔ Layout is VERTEX-MAJOR ((vidx·targets + t)·stride): all of one vertex's deltas are contiguous, so a
@@ -2933,6 +3142,21 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
                 {
                     av.obj[k] = c.add(av.obj[k], c.mul(w, c.loadf(c.add(mb, c.ku(k)))));
                 }
+            }
+        }
+    }
+
+    // ⭐⭐ REN-41 (velocity): snapshot the OBJECT-space position (post-morph, PRE-skin) so the prev chain can
+    // re-skin it with last frame's pose.
+    int prev_obj[3] = {-1, -1, -1};
+    if (needs_prev)
+    {
+        for (crd::usize i = 0; i < desc.attrs.size(); ++i)
+        {
+            if (desc.attrs[i].kind == AttrKind::Position)
+            {
+                for (crd::u32 e = 0; e < 3U; ++e) { prev_obj[e] = vals[i].obj[e]; }
+                break;
             }
         }
     }
@@ -3217,6 +3441,48 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
         c.mul_mat4(static_cast<const int*>(vp), p.wld[0], p.wld[1], p.wld[2], c.kf(1.0), clip);
     }
 
+    // ── ⭐⭐ REN-41 (velocity): THE PREVIOUS-FRAME CLIP. Re-skin `prev_obj` with LAST frame's palette
+    // (`prev_palette_off`), transform by LAST frame's world (`prev_world_off`, the per-instance section), and
+    // project by the CURRENT `view_proj` — so the TAA jitter (baked into view_proj) cancels against the current
+    // clip and the FS motion-vector is pure geometry motion. A static instance has prev_world == world → delta 0.
+    int prev_clip[4] = {-1, -1, -1, -1};
+    if (needs_prev)
+    {
+        if (desc.header.prev_world_off == 0U) { return false; } // a prev:clip varying REQUIRES the section word
+        if (desc.skin.scheme == SkinScheme::DualQuaternion) { return false; } // no consumer; refuse silent-wrong
+        int ppos[3] = {prev_obj[0], prev_obj[1], prev_obj[2]};
+        if (desc.skin.scheme == SkinScheme::LinearBlend)
+        {
+            const int psbase = c.add(c.hdru(desc.header.skin_off), c.mul(vidx, c.ku(desc.skin.stride)));
+            const int ppbase = c.add(
+                c.hdru(desc.header.prev_palette_off),
+                c.mul(slot, c.mul(c.hdru(desc.header.joint_count), c.ku(desc.skin.palette_stride))));
+            int acc[3] = {c.kf(0.0), c.kf(0.0), c.kf(0.0)};
+            for (crd::u32 k = 0; k < desc.skin.influences; ++k)
+            {
+                const int word = c.loadu(c.add(psbase, c.ku(k / 2U)));
+                const int j    = (k % 2U) == 0U ? g.binary(KOp::BitAnd, word, c.ku(0xFFFFU))
+                                                : g.binary(KOp::Shr, word, c.ku(16U));
+                const int wgt  = c.loadf(c.add(psbase, c.ku(desc.skin.weight_off + k)));
+                const int mb   = c.add(ppbase, c.mul(j, c.ku(desc.skin.palette_stride)));
+                int       jm[16];
+                for (crd::u32 e = 0; e < 16U; ++e) { jm[e] = c.loadf(c.add(mb, c.ku(e))); }
+                int out[4];
+                c.mul_mat4(static_cast<const int*>(jm), prev_obj[0], prev_obj[1], prev_obj[2], c.kf(1.0), out);
+                for (crd::u32 e = 0; e < 3U; ++e) { acc[e] = c.add(acc[e], c.mul(out[e], wgt)); }
+            }
+            for (crd::u32 e = 0; e < 3U; ++e) { ppos[e] = acc[e]; }
+        }
+        const int pwbase = c.add(c.hdru(desc.header.prev_world_off), c.mul(slot, c.ku(16U)));
+        int       pm[16];
+        for (crd::u32 e = 0; e < 16U; ++e) { pm[e] = c.loadf(c.add(pwbase, c.ku(e))); }
+        int pwld[4];
+        c.mul_mat4(static_cast<const int*>(pm), ppos[0], ppos[1], ppos[2], c.kf(1.0), pwld);
+        int vp2[16];
+        for (crd::u32 e = 0; e < 16U; ++e) { vp2[e] = c.hdrf(desc.header.view_proj + e); }
+        c.mul_mat4(static_cast<const int*>(vp2), pwld[0], pwld[1], pwld[2], pwld[3], prev_clip);
+    }
+
     // ── the VARYINGS.
     // ── ⭐⭐ REN-38-F1/F2/F5: THE SAME PULL PATH, DECORATED FOR ITS STAGE. ────────────────
     // Tessellation, mesh shading and the visibility buffer all read the SAME vertex record and emit the SAME
@@ -3265,6 +3531,16 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
             if (s.kind == VaryingSourceKind::ClipW)
             {
                 if (w < 4U) { comps[w++] = clip[3]; }
+                continue;
+            }
+            if (s.kind == VaryingSourceKind::PrevClip) // REN-41 velocity: the 4-comp previous-frame clip
+            {
+                for (crd::u32 e = 0; e < 4U && w < 4U; ++e) { comps[w++] = prev_clip[e]; }
+                continue;
+            }
+            if (s.kind == VaryingSourceKind::Clip) // REN-41 velocity: the 4-comp current clip
+            {
+                for (crd::u32 e = 0; e < 4U && w < 4U; ++e) { comps[w++] = clip[e]; }
                 continue;
             }
             if (s.kind == VaryingSourceKind::Node)

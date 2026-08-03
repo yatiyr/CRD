@@ -24,11 +24,41 @@
 namespace crd::lod
 {
 
+// ── ⭐⭐ REN-41: THE MIP PYRAMID LAYOUT. An impostor billboard is drawn only when the object is TINY
+// on screen, so its `tile`-texel view is always heavily MINIFIED — and point/bilinear sampling of a
+// large source into a few pixels aliases (the far-field "black-dot carpet"). A prefiltered mip pyramid
+// is the fix: the FS samples the mip whose texel size matches the screen, so the coverage is averaged
+// rather than undersampled. Mips are generated PER TILE (each octahedral view is a different direction —
+// blending across tile borders would mix unrelated views), so level `m` is `grid × grid` tiles of
+// `tile >> m` texels each, laid out as one `grid*(tile>>m)` square, levels concatenated 0..N-1.
+// ⛔ ONE formula, three consumers: the bake fills it, the renderer sizes the buffer from it, and the FS
+// (cooked with grid/tile as compile-time constants) unrolls its trilinear taps from it. A second copy of
+// this arithmetic anywhere is a silent atlas/reader drift — exactly the class of bug this repo scars over.
+[[nodiscard]] constexpr crd::u32 impostor_num_mips(crd::u32 tile) noexcept
+{
+    crd::u32 n = 0U;
+    for (crd::u32 t = tile; t >= 1U; t >>= 1U) { ++n; if (t == 1U) { break; } }
+    return n == 0U ? 1U : n;
+}
+// texel offset (into the packed RGBA8-per-u32 atlas) of level `m`'s first texel.
+[[nodiscard]] constexpr crd::u32 impostor_level_offset(crd::u32 grid, crd::u32 tile, crd::u32 m) noexcept
+{
+    crd::u32 off = 0U;
+    for (crd::u32 k = 0U; k < m; ++k) { const crd::u32 s = grid * (tile >> k); off += s * s; }
+    return off;
+}
+// total texels across every mip level — the atlas's word count (1 texel = 1 packed u32).
+[[nodiscard]] constexpr crd::u32 impostor_atlas_texels(crd::u32 grid, crd::u32 tile) noexcept
+{
+    return impostor_level_offset(grid, tile, impostor_num_mips(tile));
+}
+
 struct ImpostorAtlas
 {
     crd::u32                    grid = 0U; // N: the atlas is N×N tiles
-    crd::u32                    tile = 0U; // pixels per tile edge
-    crd::containers::Array<crd::u8> pixels; // (grid*tile)² × 4 (RGBA8), row-major, bottom-left origin
+    crd::u32                    tile = 0U; // pixels per tile edge (level 0)
+    crd::u32                    mips = 0U; // level count (impostor_num_mips(tile))
+    crd::containers::Array<crd::u8> pixels; // ALL levels concatenated, RGBA8, row-major, bottom-left origin
 
     explicit ImpostorAtlas(crd::memory::IAllocator* a) : pixels(a) {}
 };

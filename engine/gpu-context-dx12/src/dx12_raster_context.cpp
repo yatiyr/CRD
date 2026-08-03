@@ -482,6 +482,11 @@ public:
     {
         return m_has_stencil ? DXGI_FORMAT_D24_UNORM_S8_UINT : DXGI_FORMAT_D32_FLOAT;
     }
+    [[nodiscard]] DXGI_FORMAT       color_format() const noexcept
+    {
+        if (m_tex == nullptr) { return kColorFormat; }
+        return m_tex->GetDesc().Format;
+    }
     [[nodiscard]] D3D12_CLEAR_FLAGS clear_flags() const noexcept
     {
         return m_has_stencil ? (D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL) : D3D12_CLEAR_FLAG_DEPTH;
@@ -790,11 +795,15 @@ public:
                              | (blend_key << 24U);                       // REN-38-A15: per-RT blend modes
         for (int i = 0; i < m_cache_n; ++i)
         {
-            if (m_cache[i].key == key && m_cache[i].state == st) { return m_cache[i].pso.Get(); }
+            if (m_cache[i].key == key && m_cache[i].rt_fmt == rt_fmt && m_cache[i].state == st)
+            {
+                return m_cache[i].pso.Get();
+            }
         }
         if (m_cache_n >= kPsoCacheCap) { return nullptr; }
-        m_cache[m_cache_n].key   = key;
-        m_cache[m_cache_n].state = st;
+        m_cache[m_cache_n].key    = key;
+        m_cache[m_cache_n].rt_fmt = rt_fmt;
+        m_cache[m_cache_n].state  = st;
         m_cache[m_cache_n].pso =
             m_is_mesh ? build_mesh_pso(m_device2, m_root.Get(), D3D12_SHADER_BYTECODE{m_vs.get(), m_vs_size},
                                        D3D12_SHADER_BYTECODE{m_fs.get(), m_fs_size}, samples, dsv, depth_func, num_rts,
@@ -813,7 +822,8 @@ private:
     static constexpr int kPsoCacheCap = 8;
     struct PsoCacheEntry
     {
-        crd::u32                    key = 0;
+        crd::u32                    key    = 0;
+        DXGI_FORMAT                 rt_fmt = kColorFormat;
         PassRasterState             state{}; // REN-38 audit: exact per-pass state, part of the cache identity
         ComPtr<ID3D12PipelineState> pso;
     };
@@ -1118,6 +1128,7 @@ public:
     }
     ~Dx12RasterContext() override
     {
+        drain_upload_batches(); // wait out any in-flight upload batch before its ring/list ComPtrs release
         if (m_event != nullptr) { CloseHandle(m_event); }
     }
     Dx12RasterContext(const Dx12RasterContext&)            = delete;
@@ -1838,7 +1849,7 @@ public:
         auto& p = static_cast<Dx12RasterProgram&>(program);
         auto& s2 = static_cast<Dx12StorageBuffer&>(storage);
         if (!p.is_tess()) { return; }
-        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
         if (!p.valid() || pso == nullptr) { return; }
         record_plain_topology(t, p, pso, clear, D3D_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST,
                               patch_count * 4U, /*clear=*/true, &s2);
@@ -1851,7 +1862,7 @@ public:
         auto& p = static_cast<Dx12RasterProgram&>(program);
         auto& s2 = static_cast<Dx12StorageBuffer&>(storage);
         if (!p.is_tess()) { return; }
-        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
         if (!p.valid() || pso == nullptr) { return; }
         record_plain_topology(t, p, pso, ClearColor{}, D3D_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST,
                               patch_count * 4U, /*clear=*/false, &s2);
@@ -1863,7 +1874,7 @@ public:
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         if (!p.is_tess()) { return; }
-        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
         if (!p.valid() || pso == nullptr) { return; }
         record_plain_topology(t, p, pso, ClearColor{}, D3D_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST,
                               patch_count * 4U, /*clear=*/false);
@@ -1878,7 +1889,7 @@ public:
         auto& p = static_cast<Dx12RasterProgram&>(program);
         auto& s2 = static_cast<Dx12StorageBuffer&>(storage);
         if (!p.is_mesh()) { return; }
-        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
         if (!p.valid() || pso == nullptr) { return; }
         record_mesh(t, p, pso, clear, group_count, false, 0.0F, nullptr, false, D3D12_SHADING_RATE_1X1,
                     nullptr, nullptr, 0U, /*clear=*/true, &s2);
@@ -1891,7 +1902,7 @@ public:
         auto& p = static_cast<Dx12RasterProgram&>(program);
         auto& s2 = static_cast<Dx12StorageBuffer&>(storage);
         if (!p.is_mesh()) { return; }
-        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
         if (!p.valid() || pso == nullptr) { return; }
         record_mesh(t, p, pso, ClearColor{}, group_count, false, 0.0F, nullptr, false, D3D12_SHADING_RATE_1X1,
                     nullptr, nullptr, 0U, /*clear=*/false, &s2);
@@ -1903,7 +1914,7 @@ public:
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         if (!p.is_mesh()) { return; }
-        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
         if (!p.valid() || pso == nullptr) { return; }
         record_mesh(t, p, pso, ClearColor{}, group_count, false, 0.0F, nullptr, false, D3D12_SHADING_RATE_1X1,
                     nullptr, nullptr, 0U, /*clear=*/false);
@@ -1916,7 +1927,7 @@ public:
         auto&      p  = static_cast<Dx12RasterProgram&>(program);
         if (!p.is_tess()) { return; } // only a VS+HS+DS+PS program can be patch-drawn
         const bool ms = t.multisampled();
-        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
         if (!p.valid() || pso == nullptr) { return; }
         // REN-38-A1d: inside a frame, RECORD — same attachment-and-draw shape as `record_plain` plus the patch
         // topology the tessellator consumes. No allocator/list reset, no transitions, no resolve, no readback.
@@ -1950,7 +1961,7 @@ public:
         {
             transition(t.tex(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_RESOLVE_SOURCE);
             transition(t.resolve(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RESOLVE_DEST);
-            m_list->ResolveSubresource(t.resolve(), 0, t.tex(), 0, kColorFormat);
+            m_list->ResolveSubresource(t.resolve(), 0, t.tex(), 0, t.color_format());
             transition(t.resolve(), D3D12_RESOURCE_STATE_RESOLVE_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE);
         }
         else
@@ -1988,7 +1999,7 @@ public:
         auto&      t   = static_cast<Dx12RasterTarget&>(target);
         auto&      p   = static_cast<Dx12RasterProgram&>(program);
         const bool ms  = t.multisampled();
-        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
         if (!p.valid() || !p.is_mesh() || pso == nullptr) { return; }
         if (frame_recording())
         {
@@ -2019,7 +2030,7 @@ public:
         {
             transition(t.tex(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_RESOLVE_SOURCE);
             transition(t.resolve(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RESOLVE_DEST);
-            m_list->ResolveSubresource(t.resolve(), 0, t.tex(), 0, kColorFormat);
+            m_list->ResolveSubresource(t.resolve(), 0, t.tex(), 0, t.color_format());
             transition(t.resolve(), D3D12_RESOURCE_STATE_RESOLVE_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE);
         }
         else
@@ -2061,7 +2072,7 @@ public:
             draw_mesh(target, program, clear, group_count); // no VRS ⇒ a full-rate mesh draw
             return;
         }
-        ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
         if (!p.valid() || !p.is_mesh() || pso == nullptr) { return; }
         if (frame_recording())
         {
@@ -2117,7 +2128,7 @@ public:
         if (!m_ok || !m_mesh_shader || m_list6 == nullptr || native_args == nullptr) { return; }
         auto&                t   = static_cast<Dx12RasterTarget&>(target);
         auto&                p   = static_cast<Dx12RasterProgram&>(program);
-        ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
         if (!p.valid() || !p.is_mesh() || pso == nullptr) { return; }
         auto* args = static_cast<ID3D12Resource*>(native_args);
         // REN-38-A1c: the GPU-DRIVEN mesh path. ⛔ The args buffer must already be in INDIRECT_ARGUMENT state —
@@ -2188,7 +2199,7 @@ public:
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         if (!t.has_depth()) { return; } // needs a create_color_depth_target
-        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false, 1U, t.color_format());
         if (!p.valid() || !p.is_mesh() || pso == nullptr) { return; }
         const crd::u32 n = count < static_cast<crd::u32>(kBindlessMax) ? count : static_cast<crd::u32>(kBindlessMax);
         // REN-38-A1c: the mesh path with the BINDLESS run from 38-A1a's frame ring + a depth attachment. The
@@ -2366,7 +2377,7 @@ public:
         auto&      t  = static_cast<Dx12RasterTarget&>(target);
         auto&      p  = static_cast<Dx12RasterProgram&>(program);
         const bool ms = t.multisampled();
-        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false); // colour, no depth
+        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format()); // colour, no depth
         if (!p.valid() || pso == nullptr) { return; }
         if (frame_recording()) { record_plain(t, p, pso, clear, false, 0.0F, vertex_count); return; }
 
@@ -2393,7 +2404,7 @@ public:
         {
             transition(t.tex(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_RESOLVE_SOURCE);
             transition(t.resolve(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RESOLVE_DEST);
-            m_list->ResolveSubresource(t.resolve(), 0, t.tex(), 0, kColorFormat);
+            m_list->ResolveSubresource(t.resolve(), 0, t.tex(), 0, t.color_format());
             transition(t.resolve(), D3D12_RESOURCE_STATE_RESOLVE_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE);
         }
         else
@@ -2841,7 +2852,7 @@ public:
         auto& p = static_cast<Dx12RasterProgram&>(program);
         const BlendMode      modes[1] = {blend};
         ID3D12PipelineState* pso      = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U,
-                                                  kColorFormat, static_cast<const BlendMode*>(modes));
+                                                  t.color_format(), static_cast<const BlendMode*>(modes));
         if (!p.valid() || pso == nullptr) { return; }
         record_bindless(t, p, pso, textures, count, ClearColor{}, vertex_count, /*clear=*/false);
     }
@@ -2902,7 +2913,7 @@ public:
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         if (!t.has_depth()) { return; } // needs a create_color_depth_target target
-        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false); // depth-enabled PSO (baked)
+        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false, 1U, t.color_format()); // depth-enabled PSO (baked)
         if (!p.valid() || pso == nullptr) { return; }
         if (frame_recording()) { record_plain(t, p, pso, clear, true, clear_depth, vertex_count); return; }
 
@@ -2952,7 +2963,7 @@ public:
             draw(target, program, clear, vertex_count); // no VRS ⇒ a plain 1x1 draw
             return;
         }
-        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
         if (!p.valid() || pso == nullptr) { return; }
         // REN-38-A1g: inside a frame, RECORD. VRS is DYNAMIC state on DX12, so it is set after the PSO is
         // bound and before the draw; `record_plain_topology` with vertex_count 0 sets up the pass without
@@ -3022,7 +3033,8 @@ public:
         const bool conservative = mode != ConservativeMode::Off && supports_conservative_raster();
         if (!conservative) { draw(target, program, clear, vertex_count); return; } // no conservative raster ⇒ a normal draw
         const bool           ms  = t.multisampled();
-        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, true);
+        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, true,
+                                             1U, t.color_format());
         // REN-38-A1g: conservative raster is BAKED INTO THE PSO on DX12 (unlike Vulkan's dynamic state), so the
         // frame path is exactly `record_plain_topology` with that PSO — nothing extra to set.
         if (frame_recording() && pso != nullptr)
@@ -3055,7 +3067,7 @@ public:
         {
             transition(t.tex(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_RESOLVE_SOURCE);
             transition(t.resolve(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RESOLVE_DEST);
-            m_list->ResolveSubresource(t.resolve(), 0, t.tex(), 0, kColorFormat);
+            m_list->ResolveSubresource(t.resolve(), 0, t.tex(), 0, t.color_format());
             transition(t.resolve(), D3D12_RESOURCE_STATE_RESOLVE_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE);
         }
         else
@@ -3137,6 +3149,9 @@ public:
         if (!m_ok || data == nullptr || size_bytes == 0U) { return false; }
         auto& s = static_cast<Dx12StorageBuffer&>(storage);
         if (static_cast<crd::u64>(byte_offset) + size_bytes > s.size_bytes()) { return false; }
+        // ⭐⭐ inside a batch, the upload is a ring memcpy + one recorded copy — no committed resource, no submit,
+        // no wait. False (ring alloc failed) falls through to the synchronous body below.
+        if (m_batch_open && upload_batched(s, byte_offset, data, size_bytes)) { return true; }
 
         ComPtr<ID3D12Resource> upload = make_upload_buffer(m_device.Get(), size_bytes);
         if (upload == nullptr) { return false; }
@@ -3180,7 +3195,7 @@ public:
         auto&                t   = static_cast<Dx12RasterTarget&>(target);
         auto&                p   = static_cast<Dx12RasterProgram&>(program);
         auto&                s   = static_cast<Dx12StorageBuffer&>(storage);
-        ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false); // single-sample colour
+        ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format()); // single-sample colour
         if (!p.valid() || pso == nullptr) { return; }
 
         // REN-2: in frame-graph recording mode, draw_storage into an RTT transient records color-only (no readback).
@@ -3308,7 +3323,8 @@ public:
         // means DXGI_FORMAT_UNKNOWN for the depth-stencil format, or the pipeline disagrees with the OM state.
         const bool           depth_on = t.has_depth();
         ID3D12PipelineState* pso =
-            pass_pso(p, 1U, depth_on ? kDepthFormat : DXGI_FORMAT_UNKNOWN, to_d3d12_compare(compare), false);
+            pass_pso(p, 1U, depth_on ? kDepthFormat : DXGI_FORMAT_UNKNOWN, to_d3d12_compare(compare), false,
+                     1U, t.color_format());
         if (!p.valid() || pso == nullptr) { return; }
         if (!depth_on && !frame_recording())
         {
@@ -3390,7 +3406,7 @@ public:
         auto& s   = static_cast<Dx12StorageBuffer&>(storage);
         auto& tex = static_cast<Dx12Texture&>(texture);
         if (!t.has_depth()) { return; }
-        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false, 1U, t.color_format());
         if (!p.valid() || pso == nullptr) { return; }
         if (frame_recording())
         {
@@ -3475,7 +3491,7 @@ public:
         auto& s   = static_cast<Dx12StorageBuffer&>(storage);
         auto& tex = static_cast<Dx12Texture&>(texture);
         if (!m_ok || !t.has_depth()) { return; }
-        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false, 1U, t.color_format());
         if (!p.valid() || pso == nullptr) { return; }
         if (frame_recording())
         {
@@ -3504,7 +3520,7 @@ public:
         auto& s   = static_cast<Dx12StorageBuffer&>(storage);
         auto& tex = static_cast<Dx12Texture&>(shadow_atlas);
         if (!m_ok || !t.has_depth()) { return; }
-        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false, 1U, t.color_format());
         if (!p.valid() || pso == nullptr) { return; }
         if (frame_recording())
         {
@@ -3536,7 +3552,7 @@ public:
         auto& tex   = static_cast<Dx12Texture&>(texture);
         auto& atlas = static_cast<Dx12Texture&>(shadow_atlas);
         if (!m_ok || !t.has_depth()) { return; }
-        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false, 1U, t.color_format());
         if (!p.valid() || pso == nullptr) { return; }
         if (frame_recording())
         {
@@ -3560,7 +3576,7 @@ public:
         auto& p = static_cast<Dx12RasterProgram&>(program);
         auto& s = static_cast<Dx12StorageBuffer&>(storage);
         if (!m_ok || count == 0U || vertex_counts == nullptr || !t.has_depth()) { return; }
-        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false, 1U, t.color_format());
         if (!p.valid() || pso == nullptr) { return; }
         const crd::u32 n = count < kMultiMax ? count : kMultiMax;
         if (!frame_recording() || !ensure_multi(p.root()))
@@ -3741,7 +3757,8 @@ public:
         // the 38-G1 DX12 post gate the moment the switch defaulted ON.
         const bool depth_on = t.has_depth();
         ID3D12PipelineState* pso =
-            pass_pso(p, 1U, depth_on ? t.dsv_format() : DXGI_FORMAT_UNKNOWN, to_d3d12_compare(compare), false);
+            pass_pso(p, 1U, depth_on ? t.dsv_format() : DXGI_FORMAT_UNKNOWN, to_d3d12_compare(compare), false,
+                     1U, t.color_format());
         if (!p.valid() || pso == nullptr)
         {
             return;
@@ -3928,7 +3945,8 @@ public:
         // ⭐ REN-38-A6: depth is OPTIONAL (the colour-transient shape) — see the multi-indexed body above.
         const bool depth_on = t.has_depth();
         ID3D12PipelineState* pso =
-            pass_pso(p, 1U, depth_on ? t.dsv_format() : DXGI_FORMAT_UNKNOWN, to_d3d12_compare(compare), false);
+            pass_pso(p, 1U, depth_on ? t.dsv_format() : DXGI_FORMAT_UNKNOWN, to_d3d12_compare(compare), false,
+                     1U, t.color_format());
         if (!p.valid() || pso == nullptr)
         {
             return;
@@ -3998,7 +4016,7 @@ public:
         auto& p = static_cast<Dx12RasterProgram&>(program);
         auto& s = static_cast<Dx12StorageBuffer&>(storage);
         if (!t.has_depth()) { return; }
-        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false, 1U, t.color_format());
         if (!p.valid() || pso == nullptr) { return; }
 
         // REN-1 pt-2: record into the shared open list (LOAD variant — no clears) when a frame graph is executing.
@@ -4123,7 +4141,8 @@ public:
         }
         const bool           depth_on = t.has_depth(); // REN-38-A6: depth is OPTIONAL
         ID3D12PipelineState* pso =
-            pass_pso(p, 1U, depth_on ? t.dsv_format() : DXGI_FORMAT_UNKNOWN, to_d3d12_compare(compare), false);
+            pass_pso(p, 1U, depth_on ? t.dsv_format() : DXGI_FORMAT_UNKNOWN, to_d3d12_compare(compare), false,
+                     1U, t.color_format());
         if (!p.valid() || pso == nullptr || !ensure_multi_indexed(p.root())) { return; }
 
         frame_transition(s.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kIndexedDrawStates);
@@ -4261,6 +4280,158 @@ public:
         ++m_multi_batches;
     }
 
+    // ── ⭐⭐ REN-41: the GPU-DRIVEN MRT DRAW (see IRasterContext). draw_storage_mrt's N-RTV + shared-depth binding
+    // fused with draw_storage_multi_indexed_depth_only_indirect's ExecuteIndirect command path. No textures — a
+    // velocity FS samples nothing. ⛔ PSO params are the CORRECT ones (samples=1, conservative=false, num_rts=n) —
+    // the single-colour indirect verb's proven shape, NOT draw_storage_mrt's (samples=n / conservative=has_depth,
+    // a shape that only ever ran depthless so its miswiring never bit). Frame-recording only.
+    void draw_storage_multi_indexed_mrt_indirect(IRasterTarget* const* targets, crd::u32 target_count,
+                                                 IRasterProgram& program, ClearColor clear, float clear_depth,
+                                                 DepthCompare compare, IStorageBuffer& storage,
+                                                 crd::u32 index_offset_bytes, IStorageBuffer& args,
+                                                 crd::u32 args_offset_bytes, IStorageBuffer* count_buf,
+                                                 crd::u32 count_offset_bytes, crd::u32 max_draws, bool load_target,
+                                                 crd::u32 first_draw_index, const BlendMode* blend) override
+    {
+        // ⛔ REN-40-C2 / DX12: the DrawIndex row is carried PER-COMMAND by the command signature, not pushed here.
+        (void)first_draw_index;
+        auto& p = static_cast<Dx12RasterProgram&>(program);
+        auto& s = static_cast<Dx12StorageBuffer&>(storage);
+        auto& a = static_cast<Dx12StorageBuffer&>(args);
+        if (!m_ok || targets == nullptr || target_count == 0U || max_draws == 0U || !frame_recording()) { return; }
+        if ((index_offset_bytes & 3U) != 0U || index_offset_bytes >= s.size_bytes()) { return; }
+        const crd::u64 need = static_cast<crd::u64>(args_offset_bytes)
+                              + static_cast<crd::u64>(max_draws) * kMultiIdxStride;
+        if ((args_offset_bytes & 3U) != 0U || need > a.size_bytes()) { return; }
+        auto* cb = static_cast<Dx12StorageBuffer*>(count_buf);
+        if (cb != nullptr && (static_cast<crd::u64>(count_offset_bytes) + 4ULL > cb->size_bytes()
+                              || (count_offset_bytes & 3U) != 0U))
+        {
+            return;
+        }
+        const crd::u32 n         = target_count < 8U ? target_count : 8U;
+        auto&          t0        = static_cast<Dx12RasterTarget&>(*targets[0]);
+        const bool     has_depth = t0.has_depth();
+        ID3D12PipelineState* pso = pass_pso(p, 1U, has_depth ? t0.dsv_format() : DXGI_FORMAT_UNKNOWN,
+                                            to_d3d12_compare(compare), /*conservative=*/false, n, t0.color_format(),
+                                            blend);
+        if (!p.valid() || pso == nullptr || !ensure_multi_indexed(p.root())) { return; }
+
+        frame_transition(s.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kIndexedDrawStates);
+        frame_transition(a.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+        if (cb != nullptr && cb != &a)
+        {
+            frame_transition(cb->buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                             D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+        }
+        const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
+        const D3D12_GPU_DESCRIPTOR_HANDLE ro    = frame_alloc_storage_srv_slot(s); // t0 (REN-39-C1)
+        D3D12_CPU_DESCRIPTOR_HANDLE       rtvs[8]{};
+        for (crd::u32 i = 0; i < n; ++i) { rtvs[i] = static_cast<Dx12RasterTarget&>(*targets[i]).rtv(); }
+        const D3D12_CPU_DESCRIPTOR_HANDLE dsv = has_depth ? t0.dsv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
+        m_list->OMSetRenderTargets(n, static_cast<const D3D12_CPU_DESCRIPTOR_HANDLE*>(rtvs), FALSE,
+                                   has_depth ? &dsv : nullptr);
+        if (!load_target)
+        {
+            const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
+            for (crd::u32 i = 0; i < n; ++i) { m_list->ClearRenderTargetView(rtvs[i], rgba, 0, nullptr); }
+            if (has_depth && !m_next_load_depth) { m_list->ClearDepthStencilView(dsv, t0.clear_flags(), clear_depth, 0, 0, nullptr); }
+        }
+        m_next_load_depth = false;
+        const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t0.width()), static_cast<float>(t0.height()), 0.0F,
+                                1.0F};
+        const D3D12_RECT     sc{0, 0, static_cast<LONG>(t0.width()), static_cast<LONG>(t0.height())};
+        m_list->RSSetViewports(1, &vp);
+        m_list->RSSetScissorRects(1, &sc);
+        m_list->SetGraphicsRootSignature(p.root());
+        m_list->SetGraphicsRootDescriptorTable(0, table);
+        m_list->SetGraphicsRootDescriptorTable(7, ro);
+        m_list->SetPipelineState(pso);
+        apply_stencil_ref();
+        m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        D3D12_INDEX_BUFFER_VIEW ibv{};
+        ibv.BufferLocation = s.buf()->GetGPUVirtualAddress() + index_offset_bytes;
+        ibv.SizeInBytes    = static_cast<UINT>(s.size_bytes() - index_offset_bytes);
+        ibv.Format         = DXGI_FORMAT_R32_UINT;
+        m_list->IASetIndexBuffer(&ibv);
+        m_list->ExecuteIndirect(m_multi_idx_sig.Get(), max_draws, a.buf(), args_offset_bytes,
+                                cb != nullptr ? cb->buf() : nullptr, cb != nullptr ? count_offset_bytes : 0U);
+        if (cb != nullptr && cb != &a)
+        {
+            frame_transition(cb->buf(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
+                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        }
+        frame_transition(a.buf(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        frame_transition(s.buf(), kIndexedDrawStates, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ++m_multi_batches;
+    }
+
+    // ── ⭐⭐ REN-41: the CPU-DRIVEN indexed MRT draw (see IRasterContext). draw_storage_indexed_sampled_depth's
+    // standard-root + `SetGraphicsRoot32BitConstant(6, first_draw_index)` row push, with N RTVs from
+    // draw_storage_mrt and no texture slots. Correct PSO params (samples=1, conservative=false, num_rts=n).
+    void draw_storage_indexed_mrt(IRasterTarget* const* targets, crd::u32 target_count, IRasterProgram& program,
+                                  ClearColor clear, float clear_depth, DepthCompare compare, IStorageBuffer& storage,
+                                  crd::u32 index_offset_bytes, crd::u32 index_count, crd::u32 instance_count,
+                                  crd::u32 first_index, crd::u32 first_draw_index, bool load_target,
+                                  const BlendMode* blend) override
+    {
+        auto& p = static_cast<Dx12RasterProgram&>(program);
+        auto& s = static_cast<Dx12StorageBuffer&>(storage);
+        if (!m_ok || targets == nullptr || target_count == 0U || index_count == 0U || instance_count == 0U
+            || !frame_recording())
+        {
+            return;
+        }
+        if ((index_offset_bytes & 3U) != 0U
+            || static_cast<crd::u64>(index_offset_bytes) + (static_cast<crd::u64>(first_index) + index_count) * 4U
+                   > s.size_bytes())
+        {
+            return;
+        }
+        const crd::u32       n         = target_count < 8U ? target_count : 8U;
+        auto&                t0        = static_cast<Dx12RasterTarget&>(*targets[0]);
+        const bool           has_depth = t0.has_depth();
+        ID3D12PipelineState* pso = pass_pso(p, 1U, has_depth ? t0.dsv_format() : DXGI_FORMAT_UNKNOWN,
+                                            to_d3d12_compare(compare), /*conservative=*/false, n, t0.color_format(),
+                                            blend);
+        if (!p.valid() || pso == nullptr) { return; }
+
+        frame_transition(s.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kIndexedDrawStates);
+        const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
+        const D3D12_GPU_DESCRIPTOR_HANDLE ro    = frame_alloc_storage_srv_slot(s); // t0 (REN-39-C1)
+        D3D12_CPU_DESCRIPTOR_HANDLE       rtvs[8]{};
+        for (crd::u32 i = 0; i < n; ++i) { rtvs[i] = static_cast<Dx12RasterTarget&>(*targets[i]).rtv(); }
+        const D3D12_CPU_DESCRIPTOR_HANDLE dsv = has_depth ? t0.dsv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
+        m_list->OMSetRenderTargets(n, static_cast<const D3D12_CPU_DESCRIPTOR_HANDLE*>(rtvs), FALSE,
+                                   has_depth ? &dsv : nullptr);
+        if (!load_target)
+        {
+            const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
+            for (crd::u32 i = 0; i < n; ++i) { m_list->ClearRenderTargetView(rtvs[i], rgba, 0, nullptr); }
+            if (has_depth && !m_next_load_depth) { m_list->ClearDepthStencilView(dsv, t0.clear_flags(), clear_depth, 0, 0, nullptr); }
+        }
+        m_next_load_depth = false;
+        const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t0.width()), static_cast<float>(t0.height()), 0.0F,
+                                1.0F};
+        const D3D12_RECT     sc{0, 0, static_cast<LONG>(t0.width()), static_cast<LONG>(t0.height())};
+        m_list->RSSetViewports(1, &vp);
+        m_list->RSSetScissorRects(1, &sc);
+        m_list->SetGraphicsRootSignature(p.root());
+        m_list->SetGraphicsRootDescriptorTable(0, table);
+        m_list->SetGraphicsRootDescriptorTable(7, ro);
+        m_list->SetPipelineState(pso);
+        m_list->SetGraphicsRoot32BitConstant(6, first_draw_index, 0);
+        apply_stencil_ref();
+        m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        D3D12_INDEX_BUFFER_VIEW ibv{};
+        ibv.BufferLocation = s.buf()->GetGPUVirtualAddress() + index_offset_bytes;
+        ibv.SizeInBytes    = (first_index + index_count) * 4U;
+        ibv.Format         = DXGI_FORMAT_R32_UINT;
+        m_list->IASetIndexBuffer(&ibv);
+        m_list->DrawIndexedInstanced(index_count, instance_count, first_index, 0, 0);
+        frame_transition(s.buf(), kIndexedDrawStates, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+
     [[nodiscard]] bool draw_overlay_range(IRasterTarget& target, IRasterProgram& program, IStorageBuffer& storage,
                                           DepthCompare compare, crd::u32 first_vertex,
                                           crd::u32 vertex_count) override
@@ -4363,7 +4534,8 @@ public:
             return;
         }
         ID3D12PipelineState* pso =
-            pass_pso(p, 1U, t.has_depth() ? t.dsv_format() : DXGI_FORMAT_UNKNOWN, to_d3d12_compare(compare), false);
+            pass_pso(p, 1U, t.has_depth() ? t.dsv_format() : DXGI_FORMAT_UNKNOWN, to_d3d12_compare(compare), false,
+                     1U, t.color_format());
         if (!p.valid() || pso == nullptr)
         {
             return;
@@ -4800,7 +4972,7 @@ public:
         if (!m_ok || m_uav_heap == nullptr || m_sampler_heap == nullptr || count == 0U || textures == nullptr) { return; }
         auto&                t   = static_cast<Dx12RasterTarget&>(target);
         auto&                p   = static_cast<Dx12RasterProgram&>(program);
-        ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
         if (!p.valid() || pso == nullptr) { return; }
         const crd::u32 n = count < static_cast<crd::u32>(kBindlessMax) ? count : static_cast<crd::u32>(kBindlessMax);
         // REN-38-A1a: inside a frame, RECORD — never stomp the global heap or reset the list mid-frame.
@@ -5147,7 +5319,7 @@ public:
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         if (!p.is_mesh()) { return; }
-        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
         if (!p.valid() || pso == nullptr) { return; }
         ID3D12Resource* ab = dx_buffer_of(args);
         if (ab == nullptr) { return; }
@@ -5229,7 +5401,7 @@ public:
         // REN-38-A15: blend is PSO state on DX12, so it goes into `pso_for` (and its cache key) rather than being
         // set dynamically the way Vulkan does it.
         ID3D12PipelineState* pso = pass_pso(p, n, has_depth ? DXGI_FORMAT_D32_FLOAT : DXGI_FORMAT_UNKNOWN,
-                                             to_d3d12_compare(compare), has_depth, n, kColorFormat, blend);
+                                             to_d3d12_compare(compare), has_depth, n, t0.color_format(), blend);
         if (!p.valid() || pso == nullptr) { return; }
 
         D3D12_CPU_DESCRIPTOR_HANDLE rtvs[8]{};
@@ -5484,7 +5656,7 @@ private:
         if (!m_ok || m_uav_heap == nullptr || m_sampler_heap == nullptr) { return; }
         auto&                t   = static_cast<Dx12RasterTarget&>(target);
         auto&                p   = static_cast<Dx12RasterProgram&>(program);
-        ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
         if (!p.valid() || pso == nullptr) { return; }
 
         // REN-2: in frame-graph recording mode, sampling records into the shared list (RTT compose / material forward).
@@ -5844,6 +6016,147 @@ private:
         wait_submitted();
     }
 
+    // ── ⭐⭐ DX12 UPLOAD BATCHING — parity with Vulkan's 38-G1 fast path (the 40-B DX12 upload gap). ──────────────
+    // Before this, every sync-phase upload took the SYNCHRONOUS `upload_storage` body: a fresh
+    // CreateCommittedResource + m_cmd_alloc->Reset() + submit_and_wait PER CALL. At 1M the renderer issues dozens of
+    // uploads per frame, each a full CPU<->GPU flush — measured ~36 ms/frame of upload waits (DX12 ~3x behind
+    // Vulkan). Between begin/end_upload_batch, an upload is instead a ring memcpy + ONE recorded copy; end submits
+    // them ALL ONCE with NO WAIT. The batch uses its OWN allocator+list (never the dedicated pair), so a synchronous
+    // verb's Reset can never discard recorded copies; SAME-QUEUE submission order sequences the copies before the
+    // frame's draws (end runs at the end of sync, before render() submits the frame).
+    void begin_upload_batch() override
+    {
+        if (m_batch_open || !m_ok || m_queue == nullptr || m_fence == nullptr || frame_recording()) { return; }
+        UploadBatch& b = m_upload[m_upload_slot];
+        if (b.submitted) // reclaim the slot from 2 batches ago (its submission has normally long completed)
+        {
+            if (m_fence->GetCompletedValue() < b.fence_val)
+            {
+                m_fence->SetEventOnCompletion(b.fence_val, m_event);
+                WaitForSingleObject(m_event, INFINITE);
+            }
+            b.submitted = false;
+        }
+        if (b.ring == nullptr)
+        {
+            b.ring = make_upload_buffer(m_device.Get(), kUploadRingBytes);
+            if (b.ring == nullptr || FAILED(b.ring->Map(0U, nullptr, reinterpret_cast<void**>(&b.map))))
+            {
+                b.ring.Reset();
+                b.map = nullptr;
+                return; // no ring -> the batch never opens; uploads stay on the synchronous path (correct, slower)
+            }
+            b.cap = kUploadRingBytes;
+        }
+        if (b.list == nullptr)
+        {
+            if (FAILED(m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&b.alloc)))
+                || FAILED(m_device->CreateCommandList(0U, D3D12_COMMAND_LIST_TYPE_DIRECT, b.alloc.Get(), nullptr,
+                                                      IID_PPV_ARGS(&b.list))))
+            {
+                b.list.Reset();
+                b.alloc.Reset();
+                return;
+            }
+        }
+        else
+        {
+            b.alloc->Reset();
+            b.list->Reset(b.alloc.Get(), nullptr);
+        }
+        b.used       = 0U;
+        m_batch_open = true;
+    }
+
+    void end_upload_batch() override
+    {
+        if (!m_batch_open) { return; }
+        m_batch_open   = false;
+        UploadBatch& b = m_upload[m_upload_slot];
+        b.list->Close();
+        ID3D12CommandList* lists[] = {b.list.Get()};
+        m_queue->ExecuteCommandLists(1U, lists);
+        ++m_fence_val;
+        m_queue->Signal(m_fence.Get(), m_fence_val); // ⛔ NO WAIT — that is the entire point
+        b.fence_val   = m_fence_val;
+        b.submitted   = true;
+        m_upload_slot = (m_upload_slot + 1U) % kUploadBatches;
+    }
+
+    // the in-batch append: ring memcpy + one recorded copy (bracketed by the UAV<->COPY_DEST pair the synchronous
+    // path already uses per upload). False falls back to the synchronous path. Grows the ring by doubling on demand.
+    [[nodiscard]] bool upload_batched(Dx12StorageBuffer& s, crd::u32 byte_offset, const void* data,
+                                      crd::u32 size_bytes)
+    {
+        UploadBatch&   b       = m_upload[m_upload_slot];
+        const crd::u32 aligned = (size_bytes + 15U) & ~15U;
+        // ⛔ A single upload bigger than the base ring (the one-time bulk uploads on the FIRST frame — the whole
+        // 1M instance + prev_world arrays) goes to the synchronous path instead of GROWING the ring to hold it:
+        // one big committed-buffer copy is fine as a one-time cost, and it keeps the persistent ring small
+        // (8 MB × 2 slots) instead of ballooning to hundreds of MB for the rest of the session. Steady-state
+        // uploads (the per-run dirty ranges) are all far below this, so they still batch.
+        if (aligned > kUploadRingBytes) { return false; }
+        if (b.used + aligned > b.cap)
+        {
+            // grow: submit this batch, drain THIS slot (its copies reference the current ring), rebuild it bigger,
+            // reopen on the next slot, retry. `b` still names the just-submitted slot after end advances the cursor.
+            const crd::u32 want = (b.cap * 2U > b.used + aligned) ? b.cap * 2U : (b.used + aligned) * 2U;
+            end_upload_batch();
+            if (m_fence->GetCompletedValue() < b.fence_val)
+            {
+                m_fence->SetEventOnCompletion(b.fence_val, m_event);
+                WaitForSingleObject(m_event, INFINITE);
+            }
+            b.submitted = false;
+            b.map       = nullptr;
+            b.ring.Reset();
+            b.ring = make_upload_buffer(m_device.Get(), want);
+            if (b.ring == nullptr || FAILED(b.ring->Map(0U, nullptr, reinterpret_cast<void**>(&b.map))))
+            {
+                b.ring.Reset();
+                b.map = nullptr;
+                b.cap = 0U;
+                return false; // caller falls back to the synchronous path
+            }
+            b.cap = want;
+            begin_upload_batch();
+            if (!m_batch_open) { return false; }
+            return upload_batched(s, byte_offset, data, size_bytes);
+        }
+        std::memcpy(b.map + b.used, data, size_bytes);
+        const auto bar = [&](D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to) {
+            D3D12_RESOURCE_BARRIER rb{};
+            rb.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            rb.Transition.pResource   = s.buf();
+            rb.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            rb.Transition.StateBefore = from;
+            rb.Transition.StateAfter  = to;
+            b.list->ResourceBarrier(1U, &rb);
+        };
+        bar(D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST);
+        b.list->CopyBufferRegion(s.buf(), byte_offset, b.ring.Get(), b.used, size_bytes);
+        bar(D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        b.used += aligned;
+        return true;
+    }
+
+    // Flush + drain every batch (waits their submissions). Called at teardown and before a frame starts recording.
+    void drain_upload_batches()
+    {
+        if (m_batch_open) { end_upload_batch(); }
+        if (m_fence == nullptr) { return; }
+        for (UploadBatch& b : m_upload)
+        {
+            if (!b.submitted) { continue; }
+            if (m_fence->GetCompletedValue() < b.fence_val)
+            {
+                m_fence->SetEventOnCompletion(b.fence_val, m_event);
+                WaitForSingleObject(m_event, INFINITE);
+            }
+            b.submitted = false;
+        }
+    }
+
     // ── REN-1 pt-2 (D-007 row 98): the frame-graph RECORDING MODE ─────────────────────────────────────────────────
     // When a frame graph is executing, the public draw_storage_depth / _load record into ONE shared open command
     // list (m_list, already Reset) with a per-draw slot from the graph's frame descriptor heap — NO per-draw
@@ -5889,6 +6202,7 @@ public:
 
     void frame_rec_begin(ID3D12DescriptorHeap* heap, UINT inc)
     {
+        if (m_batch_open) { end_upload_batch(); } // never carry an open upload batch across a frame boundary
         // ── REN-8: FRAMES IN FLIGHT (the DX12 half). ────────────────────────────────────────────────────────
         // The frame graph records into its OWN ring of allocator+list pairs, swapped in here and restored in
         // frame_rec_end(). The standalone synchronous draw paths keep the context's dedicated pair untouched —
@@ -6241,6 +6555,52 @@ private:
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
     }
 
+    // ⭐⭐ REN-41 (TAA): the DX12 twin of Vulkan's record_bindless_storage — record_bindless PLUS the CONSTANTS
+    // buffer at u0 (root param 0). The two allocators share the frame heap cursor, so storage takes one slot and
+    // the bindless run the next kBindlessMax — non-colliding by construction; each returns its own root handle.
+    void record_bindless_storage(Dx12RasterTarget& t, Dx12RasterProgram& p, ID3D12PipelineState* pso,
+                                 ITexture* const* textures, crd::u32 n, Dx12StorageBuffer& s,
+                                 ClearColor clear_color, crd::u32 vertex_count)
+    {
+        const D3D12_GPU_DESCRIPTOR_HANDLE storage_gpu  = frame_alloc_storage_slot(s);          // u0, param 0
+        const D3D12_GPU_DESCRIPTOR_HANDLE bindless_gpu = frame_alloc_bindless_run(textures, n); // t3[], param 3
+        const D3D12_GPU_DESCRIPTOR_HANDLE samp_gpu     = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
+        const D3D12_CPU_DESCRIPTOR_HANDLE rtv          = t.rtv();
+        m_list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+        const float rgba[4] = {clear_color.r, clear_color.g, clear_color.b, clear_color.a};
+        m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
+        const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
+        const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
+        m_list->RSSetViewports(1, &vp);
+        m_list->RSSetScissorRects(1, &sc);
+        m_list->SetGraphicsRootSignature(p.root());
+        m_list->SetGraphicsRootDescriptorTable(0, storage_gpu);  // u0 constants (the reproject matrix)
+        m_list->SetGraphicsRootDescriptorTable(2, samp_gpu);     // sampler s2
+        m_list->SetGraphicsRootDescriptorTable(3, bindless_gpu); // bindless t3[]
+        m_list->SetPipelineState(pso);
+        apply_stencil_ref();
+        m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        m_list->DrawInstanced(vertex_count, 1, 0, 0);
+    }
+    void draw_bindless_storage(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
+                               ITexture* const* textures, crd::u32 count, IStorageBuffer& constants,
+                               crd::u32 vertex_count) override
+    {
+        if (!m_ok || m_uav_heap == nullptr || m_sampler_heap == nullptr || count == 0U || textures == nullptr
+            || !frame_recording())
+        {
+            return;
+        }
+        auto&                t   = static_cast<Dx12RasterTarget&>(target);
+        auto&                p   = static_cast<Dx12RasterProgram&>(program);
+        auto&                s   = static_cast<Dx12StorageBuffer&>(constants);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U,
+                                            t.color_format());
+        if (!p.valid() || pso == nullptr) { return; }
+        const crd::u32 n = count < static_cast<crd::u32>(kBindlessMax) ? count : static_cast<crd::u32>(kBindlessMax);
+        record_bindless_storage(t, p, pso, textures, n, s, clear, vertex_count);
+    }
+
     // REN-2: the frame-mode body of draw_storage — a COLOR-ONLY render into an RTT transient (no depth, no readback),
     // into the shared list. Pass 1 of render-to-texture; a later pass samples it via record_textured.
     void record_offscreen(Dx12RasterTarget& t, Dx12RasterProgram& p, Dx12StorageBuffer& s, ID3D12PipelineState* pso,
@@ -6358,6 +6718,26 @@ private:
     crd::containers::Array<ComPtr<ID3D12Resource>> m_frame_uploads[kFrameRingSize]{
         crd::containers::Array<ComPtr<ID3D12Resource>>(crd::memory::default_allocator()),
         crd::containers::Array<ComPtr<ID3D12Resource>>(crd::memory::default_allocator())};
+    // ── ⭐⭐ DX12 UPLOAD BATCHING (parity with Vulkan's 38-G1 fast path — the 40-B DX12 upload gap). ──────────────
+    // Each slot owns a PERSISTENT mapped upload ring + its OWN allocator+list, so between begin/end_upload_batch a
+    // storage upload is a ring memcpy + one recorded CopyBufferRegion — no per-call CreateCommittedResource, no
+    // submit-and-wait. Double-buffered so `begin` never stalls on the batch submitted last frame. See the methods.
+    struct UploadBatch
+    {
+        ComPtr<ID3D12Resource>            ring;
+        crd::u8*                          map       = nullptr;
+        ComPtr<ID3D12CommandAllocator>    alloc;
+        ComPtr<ID3D12GraphicsCommandList> list;
+        crd::u64                          fence_val = 0U;
+        crd::u32                          cap       = 0U;
+        crd::u32                          used      = 0U;
+        bool                              submitted = false;
+    };
+    static constexpr crd::u32          kUploadBatches   = 2U;
+    static constexpr crd::u32          kUploadRingBytes = 8U << 20U; // initial; grows by doubling on demand
+    UploadBatch                        m_upload[kUploadBatches];
+    crd::u32                           m_upload_slot = 0U;
+    bool                               m_batch_open  = false;
     ComPtr<ID3D12GraphicsCommandList>  m_list;
     ComPtr<ID3D12GraphicsCommandList5> m_list5; // B1-e: RSSetShadingRate(Image) — null on an old runtime
     ComPtr<ID3D12GraphicsCommandList6> m_list6; // B4: DispatchMesh — null on an old runtime
@@ -6569,9 +6949,10 @@ public:
         ImageNode& dn = m_images[depth.id  - 1U];
         if (cn.shared_depth_target != nullptr) { return cn.shared_depth_target; }
         const D3D12_PLACED_SUBRESOURCE_FOOTPRINT tfp{};
-        auto* t = new Dx12RasterTarget(cn.resource, nullptr, dn.resource, nullptr,
-                                       cn.rtv_heap, dn.dsv_heap ? dn.dsv_heap : dn.depth_dsv_heap,
-                                       nullptr, tfp, 1U, cn.desc.width, cn.desc.height);
+        auto* t = new (std::nothrow) Dx12RasterTarget(cn.resource, nullptr, dn.resource, nullptr, cn.rtv_heap,
+                                                      dn.dsv_heap ? dn.dsv_heap : dn.depth_dsv_heap, nullptr, tfp, 1U,
+                                                      cn.desc.width, cn.desc.height);
+        if (t == nullptr) { return nullptr; } // OOM: the caller's needs_target guard skips the pass
         cn.shared_depth_target = t;
         return t;
     }
@@ -6975,6 +7356,7 @@ private:
         void bind(Dx12FrameGraph* g, crd::usize pass) noexcept { m_g = g; m_pass = pass; }
         IFramePassBuilder& reads(FgImage h) override { add_img(h, FgAccess::Read); return *this; }
         IFramePassBuilder& reads(FgBuffer h) override { add_buf(h, FgAccess::Read); return *this; }
+        IFramePassBuilder& reads_depth(FgImage h) override { add_img(h, FgAccess::DepthRead); return *this; }
         IFramePassBuilder& writes(FgImage h) override { add_img(h, FgAccess::Write); return *this; }
         IFramePassBuilder& writes(FgBuffer h) override { add_buf(h, FgAccess::Write); return *this; }
         IFramePassBuilder& read_writes(FgImage h) override { add_img(h, FgAccess::ReadWrite); return *this; }
@@ -7164,28 +7546,59 @@ bool Dx12FrameGraph::build()
             crd::u32& e = edges[static_cast<crd::usize>(from) * np + to];
             if (e == 0U) { e = 1U; ++indeg[to]; }
         };
-        const auto link = [&](auto accessor) {
+        // ── ⭐⭐ WAR vs forward-reference RAW — the lifetime-aware rule (mirrors frame-cook's DependencyCycle fix;
+        // the plain declaration-order heuristic that shipped here MASKED genuine cycles). A read matching a writer
+        // declared AFTER the reader is a legitimate WAR (reader-before-writer, edge reader→writer) ONLY when the
+        // resource already HAS A VALUE at that point: a PERSISTENT image (TAA history — read old, written new by a
+        // later store), an EXTERNAL buffer (host-provided), OR some pass WRITES it BEFORE the reader (the two-phase
+        // occlusion re-cull rewrites `instances`/`cull_args`). Otherwise the "later writer" is the ONLY producer,
+        // so it must PRECEDE the reader (a forward RAW) — and when two passes each read what the other writes, that
+        // pair is the real cycle build() must reject (the REN-1 cycle gate) and the producer-declared-last case
+        // still runs producer-first (the REN-1 dependency-order gate).
+        const auto link = [&](auto accessor, auto has_value) {
+            const auto written_before = [&](crd::u32 handle, crd::u32 before) {
+                for (crd::u32 q = 0; q < before; ++q)
+                {
+                    for (const Access& aq : accessor(m_passes[q]))
+                    {
+                        if (aq.handle == handle && aq.access != FgAccess::Read && aq.access != FgAccess::DepthRead)
+                        {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            };
             for (crd::u32 w = 0; w < np; ++w)
             {
                 for (const Access& aw : accessor(m_passes[w]))
                 {
-                    if (aw.access == FgAccess::Read) { continue; }
+                    if (aw.access == FgAccess::Read || aw.access == FgAccess::DepthRead) { continue; }
                     for (crd::u32 r = 0; r < np; ++r)
                     {
                         for (const Access& ar : accessor(m_passes[r]))
                         {
                             if (ar.handle != aw.handle) { continue; }
-                            // A pure reader must follow the writer. Two WRITERS of the same resource keep
-                            // declaration order (w < r) — that is the author's stated intent and the only
-                            // defensible tie-break; reordering two writes would silently change the result.
-                            if (ar.access == FgAccess::Read || w < r) { add_edge(w, r); }
+                            const bool r_reads = (ar.access == FgAccess::Read || ar.access == FgAccess::DepthRead);
+                            if (r_reads)
+                            {
+                                if (w < r) { add_edge(w, r); } // RAW: reader after writer
+                                else if (w > r)                // reader declared BEFORE this writer
+                                {
+                                    if (has_value(ar.handle) || written_before(ar.handle, r)) { add_edge(r, w); } // WAR
+                                    else { add_edge(w, r); } // forward-reference RAW → surfaces a cycle
+                                }
+                            }
+                            else if (w < r) { add_edge(w, r); } // WAW: declaration order
                         }
                     }
                 }
             }
         };
-        link([](Pass& p) -> crd::containers::Array<Access>& { return p.img_access; });
-        link([](Pass& p) -> crd::containers::Array<Access>& { return p.buf_access; });
+        link([](Pass& p) -> crd::containers::Array<Access>& { return p.img_access; },
+             [&](crd::u32 h) { return m_images[h - 1U].own == Own::Persistent; });
+        link([](Pass& p) -> crd::containers::Array<Access>& { return p.buf_access; },
+             [&](crd::u32 h) { return !m_buffers[h - 1U].transient; });
 
         for (crd::u32 done = 0; done < np; ++done)
         {
@@ -7217,14 +7630,14 @@ bool Dx12FrameGraph::build()
             ImageNode& n = m_images[a.handle - 1U];
             if (n.first_pass < 0) { n.first_pass = static_cast<crd::i32>(oi); }
             n.last_pass = static_cast<crd::i32>(oi);
-            if (a.access != FgAccess::Read) { n.has_write = true; }
+            if (a.access != FgAccess::Read && a.access != FgAccess::DepthRead) { n.has_write = true; }
         }
         for (const Access& a : m_passes[pi].buf_access)
         {
             BufferNode& n = m_buffers[a.handle - 1U];
             if (n.first_pass < 0) { n.first_pass = static_cast<crd::i32>(oi); }
             n.last_pass = static_cast<crd::i32>(oi);
-            if (a.access != FgAccess::Read) { n.has_write = true; }
+            if (a.access != FgAccess::Read && a.access != FgAccess::DepthRead) { n.has_write = true; }
         }
     }
     for (const ImageNode& n : m_images) { if (aliasable(n) && !n.has_write) { return false; } } // a transient no pass writes
@@ -7512,22 +7925,21 @@ void Dx12FrameGraph::execute()
         {
             ImageNode& n = m_images[a.handle - 1U];
             if (n.target == nullptr) { continue; }
-            const bool writes = (a.access != FgAccess::Read);
+            const bool writes         = (a.access != FgAccess::Read && a.access != FgAccess::DepthRead);
+            const bool depth_reattach = (a.access == FgAccess::DepthRead);
             if (graph_owned(n) && n.is_depth)
             {
-                // REN-3.1: a DEPTH RTT transient — the depth-only pass renders into it (DEPTH_WRITE), a later pass
-                // SAMPLES it (PIXEL_SHADER_RESOURCE). Note the resource was CREATED in DEPTH_WRITE (see the placed-
-                // resource init state), so the first write needs no barrier — only the write→read flip does.
                 auto& dt = static_cast<Dx12RasterTarget&>(*n.target);
-                if (writes && live_state(n) != D3D12_RESOURCE_STATE_DEPTH_WRITE)
+                // ⭐ REN-41 (tidy): writes and depth-reattach both transition to DEPTH_WRITE with an identical
+                // barrier — one branch (previously two clones under different conditions).
+                if ((writes || depth_reattach) && live_state(n) != D3D12_RESOURCE_STATE_DEPTH_WRITE)
                 {
                     m_rc->frame_transition(dt.depth_tex(), live_state(n), D3D12_RESOURCE_STATE_DEPTH_WRITE);
                     live_state(n) = D3D12_RESOURCE_STATE_DEPTH_WRITE;
                     ++m_barrier_count;
                 }
-                else if (!writes && live_state(n) == D3D12_RESOURCE_STATE_DEPTH_WRITE)
+                else if (!writes && !depth_reattach && live_state(n) == D3D12_RESOURCE_STATE_DEPTH_WRITE)
                 {
-                    // the DEPTH RTT barrier: the shadow pass's depth writes complete → this pass samples it
                     m_rc->frame_transition(dt.depth_tex(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
                                            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
                     live_state(n) = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;

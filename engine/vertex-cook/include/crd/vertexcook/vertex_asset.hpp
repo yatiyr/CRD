@@ -89,6 +89,12 @@ struct VertexHeaderMap
     // read garbage transforms, and their verdicts polluted the indirect-args atomic (the VK cull gate caught
     // exactly that — 16 marked of 8 visible).
     crd::u32 instance_count = 1U;
+    // ⭐⭐ REN-41 (velocity): the header WORDS holding the previous-frame SECTION offsets — ALSO appended at the
+    // END (the POD-word-array emit walk + its name table both grow to match). 0 = the asset declares no velocity
+    // (the cook emits no `prev:clip`). prev_world is per-instance (16 words); prev_palette is the skinned previous
+    // pose (0 for a non-skinned group).
+    crd::u32 prev_world_off   = 0U;
+    crd::u32 prev_palette_off = 0U;
 };
 
 // Which matrix this program projects by. ⛔ A SHADOW pass is not "the scene VS with a different matrix" as a
@@ -149,6 +155,10 @@ enum class VaryingSourceKind : crd::u8
     Instance,      // an instance-record attribute
     ClipW,         // the clip w — the view-space distance a cascade selection needs, already computed
     Node,          // a displacement-graph node (38-D3)
+    PrevClip,      // ⭐⭐ REN-41 (velocity): the PREVIOUS-FRAME clip position — `cur_vp · prev_world · skin_prev(pos)`.
+                   // 4 comps. Jitter cancels vs the current clip (both use cur_vp), so the FS delta is object motion.
+    Clip,          // ⭐⭐ REN-41 (velocity): the CURRENT clip position (4 comps) as an interpolant, so the velocity FS
+                   // forms the motion vector from two clips (prev vs cur) with no dependence on the render resolution.
 };
 
 struct VaryingSource
@@ -434,6 +444,19 @@ struct CullDesc
     // is farther than the farthest visible surface at that pixel → occluded. The result is multiplied into `vis`
     // after the frustum test, before LOD selection and compaction.
     bool     occlusion  = false;
+    // ── SCREEN-SIZE CULL (0 = off) — one mechanism, two meanings by view. A CASCADE dispatch drops casters
+    // whose CAMERA-projected height is below the threshold (a 2048px atlas cannot resolve their shadow into
+    // anything but a flickering dot — UE5's "Min Screen Radius For Shadows"). The CAMERA dispatch drops
+    // instances below a ~pixel (sub-pixel geometry contributes nothing but aliasing energy — shimmer, not
+    // image). ⛔ The metric is ALWAYS the camera's — relevance is size ON SCREEN — so the kernel reads the
+    // camera matrix (`header.view_proj`) and the camera's pixel height (`cam_pixel_height_word`) even when
+    // its own frustum is a cascade's.
+    crd::f32 caster_min_px = 0.0F;
+    // the params-block word holding the CAMERA's pixel height (view 0's), for the screen-size cull above.
+    crd::u32 cam_pixel_height_word = 0U;
+    // the params-block word holding the HZB's texel dimensions (w at word, h at word+1, f32 bits) — what makes
+    // the occlusion test CONSERVATIVE. 0 = dims unknown ⇒ the occlusion test never rejects (accept-all).
+    crd::u32 hzb_size_word = 0U;
 };
 // ⭐ REN-38-F7: the EXPANSION contract of a procedural vertex stage — how a flat VertexIndex decomposes into
 // (instance, corner) and where the per-instance record lives. ⛔ The corner table itself is AUTHORED as `ifequal`

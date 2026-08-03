@@ -832,6 +832,17 @@ public:
                                           ITexture* const* /*textures*/, crd::u32 /*count*/,
                                           crd::u32 /*vertex_count*/, BlendMode /*blend*/) {}
 
+    // ── ⭐⭐ REN-41 (TAA): a color-only fullscreen draw binding `count` bindless textures (the array the FS
+    // samples via `KOp::SampleIndexed` at constant indices) PLUS a per-frame CONSTANTS storage buffer at
+    // set 0 / binding 0 (b0). This is the ONLY fullscreen path that delivers per-frame MATRICES to a fragment
+    // shader — the reproject matrix a temporal-AA resolve needs (the engine is SSBO-only; there is no uniform
+    // block). The buffer slot (binding 0) is already fragment-visible in the raster set layout; the existing
+    // bindless verbs simply never wrote it. Default no-op: a backend without the override does not run the pass,
+    // which the executor reports BY NAME rather than drawing a wrong image silently.
+    virtual void draw_bindless_storage(IRasterTarget& /*target*/, IRasterProgram& /*program*/, ClearColor /*clear*/,
+                                       ITexture* const* /*textures*/, crd::u32 /*count*/,
+                                       IStorageBuffer& /*constants*/, crd::u32 /*vertex_count*/) {}
+
     // ── ⭐ REN-38-A16: THE RAY-TRACING PIPELINE, inside the frame. Appended at the END (D135). ──
     // Distinct from 38-A9's inline ray query in the way that matters to the hardware: an inline query is an
     // ordinary dispatch that happens to traverse, while THIS builds a PIPELINE out of separate raygen / miss /
@@ -983,6 +994,9 @@ public:
     // REN-38: how many MULTI-DRAW batches this context has recorded (monotonic). The batching gates assert a
     // DELTA of exactly one batch per bucket — pixels alone cannot distinguish "batched" from "looped".
     [[nodiscard]] virtual crd::u64 multi_batch_count() const noexcept { return 0U; }
+    [[nodiscard]] virtual crd::u64 compute_dispatch_count() const noexcept { return 0U; }
+    virtual void compute_diag(crd::u32 phase) noexcept { (void)phase; }
+    [[nodiscard]] virtual crd::u64 compute_diag_count(crd::u32 phase) const noexcept { (void)phase; return 0U; }
     virtual void draw_storage_multi_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
                                           float clear_depth, DepthCompare compare, IStorageBuffer& storage,
                                           const crd::u32* vertex_counts, crd::u32 count,
@@ -1236,6 +1250,47 @@ public:
     virtual void dispatch_kernel_sampled(IGpuProgram& /*kernel*/, crd::u32 /*groups_x*/, crd::u32 /*groups_y*/,
                                          crd::u32 /*groups_z*/, IStorageBuffer* const* /*buffers*/,
                                          crd::u32 /*buf_count*/, ITexture& /*tex*/) {}
+
+    // ── ⭐⭐ REN-41: THE GPU-DRIVEN MRT DRAW — N colour attachments + depth, count from device memory. At END. ──
+    // The velocity (motion-vector) prepass is a depth prepass that ALSO writes a colour attachment, and the 1M
+    // scene is GPU-cull INDEXED-INDIRECT: its command lives in device memory and the CPU never learns the count.
+    // Neither existing verb spans that: `draw_storage_mrt` is CPU-driven (`vertex_count`), and
+    // `draw_storage_multi_indexed_depth_only_indirect` has no colour attachment. This is their fusion — the MRT
+    // attachment shape of `draw_storage_mrt` (N colour targets; `targets[0]` carries the shared depth via
+    // `image_with_depth`, exactly as `draw_storage_mrt` reads depth off `targets[0]`) with the indexed-indirect
+    // command path of the depth-only-indirect verb (index bind + `first_draw_index` push + count from `count_buf`
+    // where the device supports it, clamp to `max_draws` where it does not).
+    //
+    // ⛔ NO texture slots (unlike `draw_storage_multi_indexed_indirect`): a velocity FS reads only the two
+    // interpolated clips it is handed and samples nothing, so binding a map/atlas would be dead descriptors.
+    // ⛔⛔ THE DRAW-INDEX ROW is handled per backend exactly as the sibling indirect verbs: Vulkan pushes
+    // `first_draw_index` (a one-command indirect draw sees `gl_DrawID == 0`); D3D12 carries it per-command in the
+    // command signature (the producer writes `draw_index + slot`). `blend` follows `draw_storage_mrt` (null =
+    // opaque, which is what a velocity write is). Default is a NO-OP so a backend without it fails VISIBLY.
+    virtual void draw_storage_multi_indexed_mrt_indirect(
+        IRasterTarget* const* /*targets*/, crd::u32 /*target_count*/, IRasterProgram& /*program*/,
+        ClearColor /*clear*/, float /*clear_depth*/, DepthCompare /*compare*/, IStorageBuffer& /*storage*/,
+        crd::u32 /*index_offset_bytes*/, IStorageBuffer& /*args*/, crd::u32 /*args_offset_bytes*/,
+        IStorageBuffer* /*count_buf*/, crd::u32 /*count_offset_bytes*/, crd::u32 /*max_draws*/,
+        bool /*load_target*/, crd::u32 /*first_draw_index*/ = 0U, const BlendMode* /*blend*/ = nullptr)
+    {
+    }
+
+    // ── ⭐⭐ REN-41: the CPU-DRIVEN indexed MRT draw — the velocity prepass on the CPU-CULL frames (the sandbox
+    // default), where the count is CPU-known and there is no device args buffer. ONE indexed draw into N colour
+    // attachments + depth (targets[0] carries the shared depth, exactly like draw_storage_mrt), with
+    // `first_draw_index` pushed so the rebased velocity VS reads its draw-table row (a single indexed draw sees
+    // `gl_DrawID/SV_... == 0`, so it needs the base like every other rebased draw). The executor calls this once
+    // per item — the CPU path is 10k–100k instances, not the million-instance path the indirect verb serves, so a
+    // per-item loop is correct without the batched command ring. Default is a NO-OP so a backend without it fails
+    // VISIBLY (the velocity buffer stays cleared → the resolve reprojects from the camera only). Appended at END.
+    virtual void draw_storage_indexed_mrt(
+        IRasterTarget* const* /*targets*/, crd::u32 /*target_count*/, IRasterProgram& /*program*/, ClearColor /*clear*/,
+        float /*clear_depth*/, DepthCompare /*compare*/, IStorageBuffer& /*storage*/, crd::u32 /*index_offset_bytes*/,
+        crd::u32 /*index_count*/, crd::u32 /*instance_count*/, crd::u32 /*first_index*/, crd::u32 /*first_draw_index*/,
+        bool /*load_target*/, const BlendMode* /*blend*/ = nullptr)
+    {
+    }
 };
 
 // ⭐ REN-38-A9: a BUILT acceleration structure, behind one portable handle.

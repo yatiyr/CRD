@@ -4395,6 +4395,212 @@ public:
         vkCmdEndRendering(cmd);
     }
 
+    // ── ⭐⭐ REN-41: the GPU-DRIVEN MRT DRAW (see IRasterContext). draw_storage_mrt's N-attachment + shared-depth
+    // shape (depth off `targets[0]`, exactly like draw_storage_mrt) fused with the indexed-indirect command path
+    // of draw_storage_multi_indexed_depth_only_indirect (index bind + first_draw_index push + count buffer). No
+    // texture slots — a velocity FS samples nothing. Frame-recording only, like every indirect sibling.
+    void draw_storage_multi_indexed_mrt_indirect(IRasterTarget* const* targets, crd::u32 target_count,
+                                                 IRasterProgram& program, ClearColor clear, float clear_depth,
+                                                 DepthCompare compare, IStorageBuffer& storage,
+                                                 crd::u32 index_offset_bytes, IStorageBuffer& args,
+                                                 crd::u32 args_offset_bytes, IStorageBuffer* count_buf,
+                                                 crd::u32 count_offset_bytes, crd::u32 max_draws, bool load_target,
+                                                 crd::u32 first_draw_index, const BlendMode* blend) override
+    {
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        auto& s = static_cast<VulkanStorageBuffer&>(storage);
+        auto& a = static_cast<VulkanStorageBuffer&>(args);
+        if (!m_api.valid() || !p.valid() || targets == nullptr || target_count == 0U || max_draws == 0U
+            || !frame_recording())
+        {
+            return;
+        }
+        if ((index_offset_bytes & 3U) != 0U || index_offset_bytes >= s.size_bytes()) { return; }
+        // the args region must actually hold `max_draws` commands — REFUSED whole, never partially drawn
+        const crd::u64 need = static_cast<crd::u64>(args_offset_bytes)
+                              + static_cast<crd::u64>(max_draws) * sizeof(VkDrawIndexedIndirectCommand);
+        if ((args_offset_bytes & 3U) != 0U || need > a.size_bytes()) { return; }
+        auto* cb = static_cast<VulkanStorageBuffer*>(count_buf);
+        if (cb != nullptr && (static_cast<crd::u64>(count_offset_bytes) + 4ULL > cb->size_bytes()
+                              || (count_offset_bytes & 3U) != 0U))
+        {
+            return;
+        }
+        const crd::u32 n  = target_count < kMaxGBuffer ? target_count : kMaxGBuffer;
+        auto&          t0 = static_cast<VulkanRasterTarget&>(*targets[0]);
+
+        VkCommandBuffer cmd  = m_frame_rec.cmd;
+        VkDescriptorSet dset = frame_alloc_storage_set(s);
+        if (dset == VK_NULL_HANDLE) { return; }
+        frame_self_barrier_if_needed(t0);
+
+        VkRenderingAttachmentInfo att[kMaxGBuffer]{};
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            auto& ti           = static_cast<VulkanRasterTarget&>(*targets[i]);
+            att[i].sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            att[i].imageView   = ti.view();
+            att[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            att[i].loadOp      = load_target ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+            att[i].storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+            if (!load_target) { att[i].clearValue.color = {{clear.r, clear.g, clear.b, clear.a}}; }
+        }
+        VkRenderingAttachmentInfo dep{};
+        const bool                has_depth = t0.has_depth();
+        if (has_depth)
+        {
+            dep.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            dep.imageView   = t0.depth_view();
+            dep.imageLayout = t0.depth_attach_layout();
+            dep.loadOp = (load_target || m_next_load_depth) ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+            dep.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+            if (!load_target && !m_next_load_depth) { dep.clearValue.depthStencil.depth = clear_depth; }
+        }
+        m_next_load_depth = false;
+        VkRenderingInfo ri{};
+        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent    = {t0.width(), t0.height()};
+        ri.layerCount           = 1U;
+        ri.colorAttachmentCount = n;
+        ri.pColorAttachments    = att;
+        ri.pDepthAttachment     = has_depth ? &dep : nullptr;
+        if (has_depth && t0.has_stencil())
+        {
+            dep.clearValue.depthStencil.stencil = 0U;
+            ri.pStencilAttachment               = &dep;
+        }
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t0.width(), t0.height(), 1U, has_depth, to_vk_compare(compare), n);
+        if (blend != nullptr && m_api.set_color_blend_enable != nullptr && m_api.set_color_blend_equation != nullptr)
+        {
+            VkBool32                en[kMaxGBuffer]{};
+            VkColorBlendEquationEXT eq[kMaxGBuffer]{};
+            bool                    any = false;
+            for (crd::u32 i = 0; i < n; ++i)
+            {
+                en[i] = blend[i] != BlendMode::Opaque ? VK_TRUE : VK_FALSE;
+                eq[i] = blend_equation(blend[i]);
+                any   = any || en[i] == VK_TRUE;
+            }
+            if (any)
+            {
+                m_api.set_color_blend_enable(cmd, 0U, n, static_cast<const VkBool32*>(en));
+                m_api.set_color_blend_equation(cmd, 0U, n, static_cast<const VkColorBlendEquationEXT*>(eq));
+            }
+        }
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        vkCmdPushConstants(cmd, p.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0U, 4U, &first_draw_index);
+        vkCmdBindIndexBuffer(cmd, s.buf(), index_offset_bytes, VK_INDEX_TYPE_UINT32);
+        const VkShaderStageFlagBits stages[2] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
+        const VkShaderEXT           objs[2]   = {p.vs(), p.fs()};
+        m_api.bind(cmd, 2U, stages, objs);
+        if (cb != nullptr)
+        {
+            vkCmdDrawIndexedIndirectCount(cmd, a.buf(), args_offset_bytes, cb->buf(), count_offset_bytes, max_draws,
+                                          sizeof(VkDrawIndexedIndirectCommand));
+        }
+        else // no count buffer: every slot executes, empties costing a zero-instance command
+        {
+            vkCmdDrawIndexedIndirect(cmd, a.buf(), args_offset_bytes, max_draws, sizeof(VkDrawIndexedIndirectCommand));
+        }
+        ++m_multi_batches;
+        vkCmdEndRendering(cmd);
+    }
+
+    // ── ⭐⭐ REN-41: the CPU-DRIVEN indexed MRT draw (see IRasterContext). draw_storage_mrt's N-attachment +
+    // shared-depth binding, ONE vkCmdDrawIndexed, `first_draw_index` pushed for the rebased velocity VS. No
+    // textures. Frame-recording only.
+    void draw_storage_indexed_mrt(IRasterTarget* const* targets, crd::u32 target_count, IRasterProgram& program,
+                                  ClearColor clear, float clear_depth, DepthCompare compare, IStorageBuffer& storage,
+                                  crd::u32 index_offset_bytes, crd::u32 index_count, crd::u32 instance_count,
+                                  crd::u32 first_index, crd::u32 first_draw_index, bool load_target,
+                                  const BlendMode* blend) override
+    {
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        auto& s = static_cast<VulkanStorageBuffer&>(storage);
+        if (!m_api.valid() || !p.valid() || targets == nullptr || target_count == 0U || index_count == 0U
+            || instance_count == 0U || !frame_recording())
+        {
+            return;
+        }
+        if ((index_offset_bytes & 3U) != 0U
+            || static_cast<crd::u64>(index_offset_bytes) + (static_cast<crd::u64>(first_index) + index_count) * 4U
+                   > s.size_bytes())
+        {
+            return;
+        }
+        const crd::u32 n  = target_count < kMaxGBuffer ? target_count : kMaxGBuffer;
+        auto&          t0 = static_cast<VulkanRasterTarget&>(*targets[0]);
+
+        VkCommandBuffer cmd  = m_frame_rec.cmd;
+        VkDescriptorSet dset = frame_alloc_storage_set(s);
+        if (dset == VK_NULL_HANDLE) { return; }
+        frame_self_barrier_if_needed(t0);
+
+        VkRenderingAttachmentInfo att[kMaxGBuffer]{};
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            auto& ti           = static_cast<VulkanRasterTarget&>(*targets[i]);
+            att[i].sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            att[i].imageView   = ti.view();
+            att[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            att[i].loadOp      = load_target ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+            att[i].storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+            if (!load_target) { att[i].clearValue.color = {{clear.r, clear.g, clear.b, clear.a}}; }
+        }
+        VkRenderingAttachmentInfo dep{};
+        const bool                has_depth = t0.has_depth();
+        if (has_depth)
+        {
+            dep.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            dep.imageView   = t0.depth_view();
+            dep.imageLayout = t0.depth_attach_layout();
+            dep.loadOp = (load_target || m_next_load_depth) ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+            dep.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+            if (!load_target && !m_next_load_depth) { dep.clearValue.depthStencil.depth = clear_depth; }
+        }
+        m_next_load_depth = false;
+        VkRenderingInfo ri{};
+        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent    = {t0.width(), t0.height()};
+        ri.layerCount           = 1U;
+        ri.colorAttachmentCount = n;
+        ri.pColorAttachments    = att;
+        ri.pDepthAttachment     = has_depth ? &dep : nullptr;
+        if (has_depth && t0.has_stencil())
+        {
+            dep.clearValue.depthStencil.stencil = 0U;
+            ri.pStencilAttachment               = &dep;
+        }
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t0.width(), t0.height(), 1U, has_depth, to_vk_compare(compare), n);
+        if (blend != nullptr && m_api.set_color_blend_enable != nullptr && m_api.set_color_blend_equation != nullptr)
+        {
+            VkBool32                en[kMaxGBuffer]{};
+            VkColorBlendEquationEXT eq[kMaxGBuffer]{};
+            bool                    any = false;
+            for (crd::u32 i = 0; i < n; ++i)
+            {
+                en[i] = blend[i] != BlendMode::Opaque ? VK_TRUE : VK_FALSE;
+                eq[i] = blend_equation(blend[i]);
+                any   = any || en[i] == VK_TRUE;
+            }
+            if (any)
+            {
+                m_api.set_color_blend_enable(cmd, 0U, n, static_cast<const VkBool32*>(en));
+                m_api.set_color_blend_equation(cmd, 0U, n, static_cast<const VkColorBlendEquationEXT*>(eq));
+            }
+        }
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        vkCmdPushConstants(cmd, p.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0U, 4U, &first_draw_index);
+        vkCmdBindIndexBuffer(cmd, s.buf(), index_offset_bytes, VK_INDEX_TYPE_UINT32);
+        const VkShaderStageFlagBits stages[2] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
+        const VkShaderEXT           objs[2]   = {p.vs(), p.fs()};
+        m_api.bind(cmd, 2U, stages, objs);
+        vkCmdDrawIndexed(cmd, index_count, instance_count, first_index, 0, 0U);
+        vkCmdEndRendering(cmd);
+    }
+
     // RET-6 (ADR-0105): the OVERLAY draw — see IRasterContext::draw_overlay. Composites onto the target's EXISTING
     // contents (color loadOp=LOAD; the target's post-draw layout is TRANSFER_SRC — the RET-2 contract — so the
     // preserving transition is TRANSFER_SRC → COLOR_ATTACHMENT, never UNDEFINED, which would discard). Standard alpha
@@ -4755,6 +4961,44 @@ public:
         VkCommandBuffer cmd  = m_frame_rec.cmd;
         VkDescriptorSet dset = frame_alloc_bindless_set(textures, n);
         if (dset == VK_NULL_HANDLE) { return; }
+        frame_self_barrier_if_needed(t);
+        VkRenderingAttachmentInfo att = colour_clear_attachment(t.view(), clear_color);
+        VkRenderingInfo           ri  = one_colour_rendering(t, att);
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t.width(), t.height(), 1U, false, VK_COMPARE_OP_ALWAYS);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        bind_and_draw(cmd, p, vertex_count);
+        vkCmdEndRendering(cmd);
+    }
+
+    // ⭐⭐ REN-41 (TAA): bindless textures + a CONSTANTS buffer at binding 0. The one descriptor set carries all
+    // three binding classes the resolve reads — the buffer (b0, the reproject matrix), the shared sampler (b2),
+    // and the texture heap (b16). Mirrors record_bindless plus the binding-0 write.
+    void record_bindless_storage(VulkanRasterTarget& t, VulkanRasterProgram& p, ITexture* const* textures,
+                                 crd::u32 n, VulkanStorageBuffer& s, ClearColor clear_color, crd::u32 vertex_count)
+    {
+        VkCommandBuffer             cmd = m_frame_rec.cmd;
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool     = m_frame_rec.pool;
+        dsai.descriptorSetCount = 1U;
+        dsai.pSetLayouts        = &m_storage_set_layout;
+        VkDescriptorSet dset = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return; }
+        const crd::u32        nfill = m_ctx->partially_bound() ? n : kBindlessMax;
+        VkDescriptorImageInfo imgs[kBindlessMax]{};
+        for (crd::u32 i = 0; i < nfill; ++i)
+        {
+            auto& tex = static_cast<VulkanTexture&>(*textures[i < n ? i : 0U]);
+            imgs[i]   = {VK_NULL_HANDLE, tex.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        }
+        VkDescriptorBufferInfo dbi{s.buf(), 0, VK_WHOLE_SIZE};
+        VkDescriptorImageInfo  samp_info{active_sampler(), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
+        VkWriteDescriptorSet   wr[3]{};
+        wr[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[0].dstSet = dset; wr[0].dstBinding = 0U;  wr[0].descriptorCount = 1U;    wr[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; wr[0].pBufferInfo = &dbi;
+        wr[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[1].dstSet = dset; wr[1].dstBinding = 2U;  wr[1].descriptorCount = 1U;    wr[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;        wr[1].pImageInfo  = &samp_info;
+        wr[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[2].dstSet = dset; wr[2].dstBinding = 16U; wr[2].descriptorCount = nfill; wr[2].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;  wr[2].pImageInfo  = imgs;
+        vkUpdateDescriptorSets(m_device, 3U, wr, 0U, nullptr);
         frame_self_barrier_if_needed(t);
         VkRenderingAttachmentInfo att = colour_clear_attachment(t.view(), clear_color);
         VkRenderingInfo           ri  = one_colour_rendering(t, att);
@@ -5467,6 +5711,20 @@ public:
         render_dset(t, p, clear_color, dset, vertex_count);
     }
 
+    // ⭐⭐ REN-41 (TAA): fullscreen bindless textures + a constants buffer at binding 0. Only ever used inside a
+    // frame (the resolve is a frame-graph pass), so the frame-recording path is the whole implementation.
+    void draw_bindless_storage(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color,
+                               ITexture* const* textures, crd::u32 count, IStorageBuffer& constants,
+                               crd::u32 vertex_count) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        auto& s = static_cast<VulkanStorageBuffer&>(constants);
+        if (!m_api.valid() || !p.valid() || count == 0U || textures == nullptr || !frame_recording()) { return; }
+        const crd::u32 n = count < kBindlessMax ? count : kBindlessMax;
+        record_bindless_storage(t, p, textures, n, s, clear_color, vertex_count);
+    }
+
     // B16: draw_bindless INTO A DEPTH TARGET with a depth test — the depth-occluded displaced ocean grid. Same bindless
     // descriptor set (cascade textures, now VS+FS visible); depth attachment + test via render_dset_depth.
     void draw_bindless_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, float clear_depth,
@@ -5657,6 +5915,7 @@ public:
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_compute_pipe_layout, 0U, 1U, &dset, 0U, nullptr);
         vkCmdDispatch(cmd, gx > 0U ? gx : 1U, gy > 0U ? gy : 1U, gz > 0U ? gz : 1U);
+        ++m_compute_dispatches;
 
         kernel_write_barrier(cmd);
     }
@@ -5831,6 +6090,7 @@ public:
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_compute_sampled_pipe_layout, 0U, 1U, &dset, 0U, nullptr);
         vkCmdDispatch(cmd, gx > 0U ? gx : 1U, gy > 0U ? gy : 1U, gz > 0U ? gz : 1U);
+        ++m_compute_dispatches;
         kernel_write_barrier(cmd);
     }
 
@@ -7090,9 +7350,14 @@ private:
     void*          m_multi_map    = nullptr;
     crd::u32       m_multi_cursor = 0U;
     crd::u64       m_multi_batches = 0U;
+    crd::u64       m_compute_dispatches = 0U;
+    crd::u64       m_compute_diag[12]{};
 
 public:
     [[nodiscard]] crd::u64 multi_batch_count() const noexcept override { return m_multi_batches; }
+    [[nodiscard]] crd::u64 compute_dispatch_count() const noexcept override { return m_compute_dispatches; }
+    void compute_diag(crd::u32 phase) noexcept override { if (phase < 12U) ++m_compute_diag[phase]; }
+    [[nodiscard]] crd::u64 compute_diag_count(crd::u32 phase) const noexcept override { return phase < 12U ? m_compute_diag[phase] : 0U; }
 
 private:
     [[nodiscard]] bool ensure_multi_args()
@@ -7512,8 +7777,9 @@ public:
         ImageBundle db{};
         db.image  = dn.image;
         db.view   = dn.view;
-        auto* t = new VulkanRasterTarget(m_device, cb, ImageBundle{}, db,
-                                         BufferBundle{}, 1U, cn.desc.width, cn.desc.height);
+        auto* t = new (std::nothrow) VulkanRasterTarget(m_device, cb, ImageBundle{}, db, BufferBundle{}, 1U,
+                                                        cn.desc.width, cn.desc.height);
+        if (t == nullptr) { return nullptr; } // OOM: the caller's needs_target guard skips the pass
         t->set_borrowed();
         cn.shared_depth_target = t;
         return t;
@@ -7995,6 +8261,7 @@ private:
         IFramePassBuilder& writes(FgBuffer h) override { add_buf(h, FgAccess::Write); return *this; }
         IFramePassBuilder& read_writes(FgImage h) override { add_img(h, FgAccess::ReadWrite); return *this; }
         IFramePassBuilder& read_writes(FgBuffer h) override { add_buf(h, FgAccess::ReadWrite); return *this; }
+        IFramePassBuilder& reads_depth(FgImage h) override { add_img(h, FgAccess::DepthRead); return *this; }
         IFramePassBuilder& execute(FgExecuteFn fn, void* user) override
         {
             m_g->m_passes[m_pass].fn = fn;
@@ -8273,10 +8540,11 @@ bool VulkanFrameGraph::build()
     m_over_budget   = false; // REN-38-B6: a fresh verdict every build
 
     // 1) every pass access must reference an existing resource
-    for (const Pass& p : m_passes)
+    for (crd::usize pi = 0; pi < m_passes.size(); ++pi)
     {
-        for (const Access& a : p.img_access) { if (a.handle == 0U || a.handle > m_images.size()) { return false; } }
-        for (const Access& a : p.buf_access) { if (a.handle == 0U || a.handle > m_buffers.size()) { return false; } }
+        const Pass& p = m_passes[pi];
+        for (const Access& a : p.img_access) { if (a.handle == 0U || a.handle > m_images.size()) { fprintf(stderr, "FG-BUILD-FAIL: pass %zu '%s' img handle %u invalid (images=%zu)\n", pi, p.name, static_cast<unsigned>(a.handle), m_images.size()); return false; } }
+        for (const Access& a : p.buf_access) { if (a.handle == 0U || a.handle > m_buffers.size()) { fprintf(stderr, "FG-BUILD-FAIL: pass %zu '%s' buf handle %u invalid (buffers=%zu)\n", pi, p.name, static_cast<unsigned>(a.handle), m_buffers.size()); return false; } }
     }
 
     // ── 1b) TOPOLOGICAL SORT — the frame graph's actual promise. ────────────────────────────────────────────
@@ -8304,29 +8572,63 @@ bool VulkanFrameGraph::build()
             crd::u32& e = edges[static_cast<crd::usize>(from) * np + to];
             if (e == 0U) { e = 1U; ++indeg[to]; }
         };
-        // writer -> reader for every resource, in BOTH directions of the handle space (images + buffers)
-        const auto link = [&](auto accessor) {
+        // RAW / WAW / WAR edges for every resource, in BOTH directions of the handle space (images + buffers).
+        // RAW (w < r, r reads): r depends on w — the reader needs the writer's output.
+        // WAW (w < r, both write): r depends on w — declaration order is the author's stated intent.
+        // WAR (w > r, r reads): w depends on r — the writer must wait for the reader to finish with the old
+        //   value. ⛔ The old code created edge(w, r) here (reader depends on later writer), which is the
+        //   REVERSE of the correct WAR edge and turns any two-phase write (phase-1 cull → use → phase-2
+        //   occlusion re-cull) into a false CYCLE.
+        // ⛔ WAR is legitimate ONLY when the read is satisfiable at the reader — the resource HAS A VALUE there: a
+        // PERSISTENT image (TAA history — read old, written new by a later store), an EXTERNAL buffer (host-
+        // provided), OR some pass WRITES it BEFORE the reader (the two-phase occlusion re-cull). Otherwise the
+        // "later writer" is the ONLY producer and must PRECEDE the reader (a forward RAW): two passes each reading
+        // what the other writes is then the real cycle build() must reject. The plain declaration-order heuristic
+        // (add_edge(r,w) unconditionally) masked those cycles — mirror the frame-cook DependencyCycle fix here.
+        const auto link = [&](auto accessor, auto has_value) {
+            const auto written_before = [&](crd::u32 handle, crd::u32 before) {
+                for (crd::u32 q = 0; q < before; ++q)
+                {
+                    for (const Access& aq : accessor(m_passes[q]))
+                    {
+                        if (aq.handle == handle && aq.access != FgAccess::Read && aq.access != FgAccess::DepthRead)
+                        {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            };
             for (crd::u32 w = 0; w < np; ++w)
             {
                 for (const Access& aw : accessor(m_passes[w]))
                 {
-                    if (aw.access == FgAccess::Read) { continue; }
+                    if (aw.access == FgAccess::Read || aw.access == FgAccess::DepthRead) { continue; }
                     for (crd::u32 r = 0; r < np; ++r)
                     {
                         for (const Access& ar : accessor(m_passes[r]))
                         {
                             if (ar.handle != aw.handle) { continue; }
-                            // A pure reader must follow the writer. Two WRITERS of the same resource keep
-                            // declaration order (w < r) — that is the author's stated intent and the only
-                            // defensible tie-break; reordering two writes would silently change the result.
-                            if (ar.access == FgAccess::Read || w < r) { add_edge(w, r); }
+                            const bool r_reads = (ar.access == FgAccess::Read || ar.access == FgAccess::DepthRead);
+                            if (r_reads)
+                            {
+                                if (w < r) { add_edge(w, r); } // RAW: reader after writer
+                                else if (w > r)                // reader declared BEFORE this writer
+                                {
+                                    if (has_value(ar.handle) || written_before(ar.handle, r)) { add_edge(r, w); } // WAR
+                                    else { add_edge(w, r); } // forward-reference RAW → surfaces a cycle
+                                }
+                            }
+                            else if (w < r) { add_edge(w, r); } // WAW: declaration order
                         }
                     }
                 }
             }
         };
-        link([](Pass& p) -> crd::containers::Array<Access>& { return p.img_access; });
-        link([](Pass& p) -> crd::containers::Array<Access>& { return p.buf_access; });
+        link([](Pass& p) -> crd::containers::Array<Access>& { return p.img_access; },
+             [&](crd::u32 h) { return m_images[h - 1U].own == Own::Persistent; });
+        link([](Pass& p) -> crd::containers::Array<Access>& { return p.buf_access; },
+             [&](crd::u32 h) { return !m_buffers[h - 1U].transient; });
 
         // Kahn, always taking the LOWEST ready index so the result is deterministic
         for (crd::u32 done = 0; done < np; ++done)
@@ -8336,7 +8638,7 @@ bool VulkanFrameGraph::build()
             {
                 if (indeg[i] == 0U) { pick = i; break; }
             }
-            if (pick == np) { return false; } // ⛔ a dependency CYCLE — never a partial schedule
+            if (pick == np) { fprintf(stderr, "FG-BUILD-FAIL: CYCLE at step %u of %u passes\n", static_cast<unsigned>(done), static_cast<unsigned>(np)); for (crd::u32 x = 0; x < np; ++x) { if (indeg[x] != 0xFFFFFFFFU) { fprintf(stderr, "  stuck pass %u '%s' indeg=%u\n", static_cast<unsigned>(x), m_passes[x].name, static_cast<unsigned>(indeg[x])); } } return false; }
             indeg[pick] = 0xFFFFFFFFU;        // consumed
             m_order.push_back(pick);
             for (crd::u32 t = 0; t < np; ++t)
@@ -8412,15 +8714,17 @@ bool VulkanFrameGraph::build()
     }
     // ⛔ REN-38: a transient no pass writes is a REJECTION — and it now says WHICH one. A bare false here
     // cost a live-app debugging session: the sandbox's whole CSM frame was refused with no reason printed.
-    for (const ImageNode& n : m_images)
+    for (crd::usize ii = 0; ii < m_images.size(); ++ii)
     {
+        const ImageNode& n = m_images[ii];
         if (aliasable(n) && !n.has_write)
         {
+            fprintf(stderr, "FG-BUILD-FAIL: transient image %zu has NO WRITER (slot=%d first=%d last=%d)\n", ii, n.slot, n.first_pass, n.last_pass);
             CRD_LOG_ERROR(g_log_vkraster, "frame graph build REJECTED: transient image slot {} has NO WRITER", n.slot);
             return false;
         }
     }
-    for (const BufferNode& n : m_buffers) { if (n.transient && !n.has_write) { return false; } }
+    for (crd::usize bi = 0; bi < m_buffers.size(); ++bi) { const BufferNode& n = m_buffers[bi]; if (n.transient && !n.has_write) { fprintf(stderr, "FG-BUILD-FAIL: transient buffer %zu has NO WRITER\n", bi); return false; } }
 
     // 3) ALIASING — greedy interval assignment: process transients in first_pass order; reuse a slot whose last
     //    occupant's lifetime ended before this one begins (disjoint ⇒ shared memory). Images then buffers (each a
@@ -8850,6 +9154,19 @@ void VulkanFrameGraph::execute()
     };
 
     // ⛔ walk the DEPENDENCY-SORTED order from build(), not m_passes — see the topo-sort in build().
+    {
+        crd::u32 diag_total = static_cast<crd::u32>(m_order.size());
+        crd::u32 diag_has_fn = 0U;
+        crd::u32 diag_not_async = 0U;
+        for (const crd::u32 pi : m_order)
+        {
+            if (m_passes[pi].fn != nullptr) { ++diag_has_fn; }
+            if (!m_passes[pi].on_async) { ++diag_not_async; }
+        }
+        for (crd::u32 dd = 0; dd < diag_total && dd < 12U; ++dd) { m_rc->compute_diag(5U); }
+        for (crd::u32 dd = 0; dd < diag_has_fn; ++dd) { m_rc->compute_diag(6U); }
+        for (crd::u32 dd = 0; dd < diag_not_async; ++dd) { m_rc->compute_diag(7U); }
+    }
     for (const crd::u32 pass_idx : m_order)
     {
         Pass& p = m_passes[pass_idx];
@@ -8859,7 +9176,8 @@ void VulkanFrameGraph::execute()
         {
             ImageNode& n = m_images[a.handle - 1U];
             if (n.target == nullptr) { continue; }
-            const bool writes = (a.access != FgAccess::Read);
+            const bool writes = (a.access != FgAccess::Read && a.access != FgAccess::DepthRead);
+            const bool depth_reattach = (a.access == FgAccess::DepthRead);
             if (graph_owned(n) && (n.aspect & VK_IMAGE_ASPECT_DEPTH_BIT) != 0U)
             {
                 // REN-3.1: a DEPTH RTT transient — a depth-only pass renders into it (DEPTH_ATTACHMENT_OPTIMAL),
@@ -8877,14 +9195,16 @@ void VulkanFrameGraph::execute()
                 const bool          n_stencil = (n.aspect & VK_IMAGE_ASPECT_STENCIL_BIT) != 0U;
                 const VkImageLayout att_l     = n_stencil ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
                                                           : VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-                if (writes && live_depth_layout(n) != att_l)
+                // ⭐ REN-41 (tidy): writes and depth-reattach both need the DEPTH_ATTACHMENT layout with an
+                // identical barrier — one branch (previously two clones under different conditions).
+                if ((writes || depth_reattach) && live_depth_layout(n) != att_l)
                 {
                     img_barrier(dt.depth_image(), n.aspect, live_depth_layout(n), att_l,
                                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
                                 VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT);
                     live_depth_layout(n) = att_l;
                 }
-                else if (!writes && live_depth_layout(n) == att_l)
+                else if (!writes && !depth_reattach && live_depth_layout(n) == att_l)
                 {
                     // the DEPTH RTT barrier: the shadow pass's depth writes complete → this pass samples it
                     img_barrier(dt.depth_image(), n.aspect, att_l,

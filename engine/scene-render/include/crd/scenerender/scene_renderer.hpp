@@ -58,6 +58,30 @@ class SpatialBVHIndex;
 namespace crd::scenerender
 {
 
+// ⭐⭐ REN-41 (velocity): the ENCODE/DECODE constant shared by the motion-vector DEBUG VIEW and its correctness
+// gate. The `crd://scene/velocity_debug` fullscreen pass writes `out.rg = velocity.xy * this + 0.5` into an RGBA8
+// image; a reader recovers the signed UV motion delta as `(read/255 − 0.5) / this`. ONE home so the shader and
+// the gate can never drift. 1.0 keeps a full-screen mover's delta (~0.2 UV) comfortably inside [0,1] with 0-motion
+// landing at mid-grey (0.5), so either sign of motion is visible and decodable.
+inline constexpr crd::f32 kVelocityDebugScale = 1.0F;
+
+// ── ⭐⭐ REN-41 Stage 4 (S4-0): the CLUSTER buffer layout — the device home for a 40-I packed cluster DAG. ────
+// ONE u32 storage buffer holds a header + the four packed arrays the Nanite mesh shader unpacks. The header keeps
+// `view_proj` at word 6 so it reuses the scene VS's `Gx::mul_view_proj` convention verbatim; the four section
+// offsets (all in u32 words) point past the header. `positions` is f32 stored as u32 bits.
+//   [0] clusters_off  · [1] cluster_count · [2] vertices_off · [3] triangles_off · [4] positions_off · [5] pad
+//   [6..21] view_proj (column-major f32 bits) · [22..23] pad → data begins at kClusterHeaderWords.
+inline constexpr crd::u32 kClusterHdrClustersOff  = 0U;  // word offset of the packed_clusters array (10 u32/cluster)
+inline constexpr crd::u32 kClusterHdrClusterCount = 1U;  // number of clusters (== the mesh-workgroup dispatch count)
+inline constexpr crd::u32 kClusterHdrVerticesOff  = 2U;  // word offset of cluster_vertices (u32 global indices)
+inline constexpr crd::u32 kClusterHdrTrianglesOff = 3U;  // word offset of cluster_triangles_packed (4 u8/u32)
+inline constexpr crd::u32 kClusterHdrPositionsOff = 4U;  // word offset of positions (3 f32 bits / vertex)
+inline constexpr crd::u32 kClusterHeaderWords     = 24U; // header size; the packed arrays follow
+// FIXED meshlet caps → one static mesh-workgroup size + degenerate-primitive culling for the tail. 128/128 keeps
+// the workgroup within every desktop device's mesh limits and matches the 40-I meshlet builder's targets.
+inline constexpr crd::u32 kClusterMaxVerts = 128U;
+inline constexpr crd::u32 kClusterMaxPrims = 128U;
+
 // The per-draw header the pull shaders read from word 0 of the group's storage buffer.
 //   [0..5]   counts + section offsets      [6..21]  camera view_proj      [22..24] light dir
 //   [25..27] skin/palette/joint sections
@@ -95,6 +119,20 @@ inline constexpr crd::u32 kHdrBoundsOff       = 102U;
 inline constexpr crd::u32 kHdrSkelOff         = 103U; // skeleton data: parents + IBMs + rest pose
 inline constexpr crd::u32 kHdrClipOff         = 104U; // pre-baked clip frames
 inline constexpr crd::u32 kHdrAnimStateOff    = 105U; // per-instance (clip_local_off, time) pairs
+// ⭐⭐⭐ REN-41 (Stage 3): a monotonic FRAME INDEX, uploaded every frame. It exists so the LOD cross-dissolve
+// dither can be TEMPORAL (interleaved-gradient-noise offset by the frame) rather than a fixed spatial Bayer — the
+// difference between a crawling checkerboard and a seamless dissolve once TAA averages the two levels. A FREE
+// word (106) in the existing header — kHeaderWords is unchanged, so no section moves.
+inline constexpr crd::u32 kHdrFrameIndex      = 106U;
+// ⭐⭐ REN-41 (velocity / motion vectors): FREE header words carrying the two previous-frame section offsets the
+// velocity prepass reads. Both are region-RELATIVE like every other section offset (the VS rebases by DrawIndex),
+// and both live in the previously-free 107..119 band, so `kHeaderWords` is unchanged and no section moves.
+inline constexpr crd::u32 kHdrPrevWorldOff    = 107U; // per-instance previous world transform (16 words each)
+inline constexpr crd::u32 kHdrPrevPaletteOff  = 108U; // per-instance previous bone palette (skinned; 0 if static)
+// ⭐⭐ REN-41 (velocity, skinned): 1 when GPU skinning is active, else 0. The `palette_snapshot` device pass copies
+// palette_off → prev_palette_off ONLY when this is set — under CPU skinning the renderer already CPU-uploads
+// prev_palette, and an unconditional device copy would clobber that with the current pose (prev == cur, no motion).
+inline constexpr crd::u32 kHdrGpuSkinActive   = 109U;
 // ⭐⭐ REN-40-A: the PARAMS BLOCK at the head of a group's `cull_args` buffer, before the indirect commands.
 // ⛔⛔ IT EXISTS BECAUSE A CONSOLIDATED GROUP'S HEADER IS NOT AT WORD 0. Under REN-38 scene-buffer consolidation
 // a group's region sits at `region_base` and its header offsets are region-RELATIVE — the vertex programs add the
@@ -106,8 +144,13 @@ inline constexpr crd::u32 kHdrAnimStateOff    = 105U; // per-instance (clip_loca
 // which has nowhere else to live: it is per VIEW, while the scene header is per GROUP and a cook-time constant
 // cannot survive a window resize. Word 0 is the base; words [1..1+kMaxCascades] are the camera's and each
 // cascade's pixel height; the commands start after the block.
-inline constexpr crd::u32 kCullArgsHeaderWords = 8U; // 32 B — keeps the first command 16-byte aligned
-inline constexpr crd::u32 kCullArgsPixelHeight = 1U; // + view index (words 1..1+kMaxCascades)
+inline constexpr crd::u32 kCullArgsHeaderWords = 12U; // 48 B — keeps the first command 16-byte aligned
+inline constexpr crd::u32 kCullArgsPixelHeight = 1U;  // + view index (words 1..1+kMaxCascades)
+// The HZB's texel dimensions (f32 bits, words 7/8) — what makes the occlusion test CONSERVATIVE. The kernel
+// may only claim "occluded" for an instance whose screen rect spans ≤ 1 HZB texel (its 4 corner taps then
+// cover every touched texel); anything larger is accepted, because a single-point test rejects instances
+// that are visible at their edges — whole meshes blinking in and out as the camera moves.
+inline constexpr crd::u32 kCullArgsHzbSize     = 7U;  // w at 7, h at 8; 9..11 pad
 // ⭐⭐ REN-40-C2 / D3D12: THE GROUP'S FIRST DRAW-LIST ROW. D3D12 has no `gl_DrawID`; its command signature
 // prepends a DrawIndex root constant, so each command carries its OWN row and the PRODUCER has to write it.
 // ⛔ `scene_cull_reset` used a cook-time `draw_index` of 0, which is the right row only for the FIRST group —
@@ -224,6 +267,11 @@ struct MeshGroup
     crd::containers::Array<InstanceGpu>                             instances;
     crd::containers::Array<crd::scene::EntityId>                    slot_entity;
     crd::containers::Array<crd::geometry::primitives::AABB3<crd::f32>> world_bounds; // per slot — the cull input
+    // ⭐⭐ REN-41 (velocity / motion vectors): the PREVIOUS frame's world transform per slot (16 floats each),
+    // snapshotted in `write_slot` before the current transform overwrites it. The velocity prepass emits
+    // `prev_clip = prev_vp · prev_world · pos`, so a static instance (prev == cur) yields pure camera motion and a
+    // mover carries its transform delta. Uploaded on the SAME dirty grain as the instances it shadows.
+    crd::containers::Array<crd::f32>                                prev_world; // 16 words/slot
     // per slot: [0] screen bias f32 bits, [1] min_level | (max_level << 8) — the REN-40-C2 override
     crd::containers::Array<crd::u32>                                lod_override;
     crd::containers::Array<crd::u32>                                visible; // per-frame culled slot list
@@ -254,6 +302,9 @@ struct MeshGroup
     // does not care costs one write of a constant and nothing else.
     crd::u32 lod_override_off = 0;
     crd::u32 atlas_off        = 0; // REN-40-C5: word offset of the impostor atlas texels (RGBA8, one u32 each)
+    // ⭐⭐ REN-41 (velocity): word offset of the per-instance PREVIOUS-WORLD section (16 floats each). Read by the
+    // velocity prepass to form `prev_clip`. Rides the instance dirty grain so it never goes stale against `world`.
+    crd::u32 prev_world_off   = 0;
     // ⭐⭐ 38-G1 perf: the CASCADE visible lists live right after the camera's, one `capacity` block each.
     // Cascade c's list is at `visible_off + (1 + c) * capacity`. Shadow passes were drawing the CAMERA's list
     // four times — cascade 0 covers a few metres of a 110-unit field, so most of that vertex work was
@@ -285,6 +336,15 @@ struct MeshGroup
     crd::u32 joint_count  = 0;
     crd::u32 skin_off     = 0; // word offset of the packed skin stream
     crd::u32 palette_off  = 0; // word offset of the palette section
+    // ⭐⭐ REN-41 (velocity, skinned): the PREVIOUS frame's bone palette (joint_count 4×4 per slot). Copied from
+    // `palette_off` by the `palette_snapshot` pass BEFORE `gpu_skin` overwrites it, so the velocity prepass can
+    // deform each vertex by last frame's pose and reproject skinned deformation exactly (not just the rigid move).
+    crd::u32 prev_palette_off = 0;
+    // ⭐⭐ REN-41 (velocity, skinned, CPU path): last frame's CPU-computed bone palette. On the CPU-skin path the
+    // device palette_snapshot pass never runs, so the renderer uploads THIS to prev_palette_off each frame BEFORE
+    // the current palette overwrites palette_off — the CPU-skin analog of the GPU snapshot. First frame seeds it
+    // with the current palette (prev == cur → zero velocity on spawn).
+    crd::containers::Array<crd::f32> prev_palette;
     // REN-40-F: GPU skinning sections — uploaded once with geometry, read by the compute kernel.
     crd::u32 skel_off      = 0; // parents[jc] + inverse_binds[jc*16] + rest_pose[jc*10]
     crd::u32 clip_off      = 0; // pre-baked uniform-rate TRS frames
@@ -296,8 +356,8 @@ struct MeshGroup
     crd::containers::Array<crd::f32>                    slot_time;
 
     explicit MeshGroup(crd::memory::IAllocator* a)
-        : instances(a), slot_entity(a), world_bounds(a), lod_override(a), visible(a), baked_clip_off(a),
-          slot_skeleton(a), slot_clip(a), slot_time(a)
+        : instances(a), slot_entity(a), world_bounds(a), prev_world(a), lod_override(a), visible(a),
+          prev_palette(a), baked_clip_off(a), slot_skeleton(a), slot_clip(a), slot_time(a)
     {
     }
     MeshGroup(MeshGroup&&) noexcept            = default;
@@ -449,6 +509,18 @@ public:
         crd::u32 slot_first[8]          = {};
         crd::u32 bounds_checked         = 0U;
         crd::u32 bounds_mismatch        = 0U;
+        crd::u32 header_w0              = 0U; // group buffer word 0 (index_count) on the device
+        crd::u32 header_w2              = 0U; // group buffer word 2 (indices_off) on the device
+        crd::u32 raw_args[16]           = {}; // first 16 words of cull_args on the device
+        crd::u32 args_size              = 0U; // cull_args buffer size in bytes
+        crd::u32 fill_cull_gates        = 0U; // how many times fill()'s GPU cull gate fired
+        crd::u32 fill_dispatch_max      = 0U; // largest dispatch_groups set in fill()
+        crd::u32 fill_total_items       = 0U; // total items produced across all fill() calls
+        crd::u32 fill_index_count_0     = 0U; // d.index_count of the first draw (0 ⇒ gate cannot fire)
+        crd::u32 fill_record_ok        = 0U;
+        crd::u32 fill_build_ok         = 0U;
+        crd::u32 fill_pass_count       = 0U;
+        crd::u32 occ_step              = 0U;
     };
     [[nodiscard]] bool read_gpu_cull_counts(GpuCullCounts& out) const;
 
@@ -492,19 +564,21 @@ public:
 
     // ── ⭐⭐ REN-38-F6: the ADVANCED-GRAPH seams. ──
     // Install a DIFFERENT authored frame graph (a `.frame.toml` text) as this renderer's frame. The shipped
-    // advanced families (`frame/scene_tess|scene_mesh|scene_visbuffer|scene_cull|scene_rt.frame.toml`, via
-    // `builtin_asset_text`) name programs the host cooks from the authored stage declarations. ⛔ Returns false
-    // and KEEPS the previous graph on any parse/validation failure — never a half-installed frame.
+    // advanced families (`frame/scene_tess|scene_mesh|scene_visbuffer|scene_cull|scene_rt.frame.toml`, loaded by
+    // name from the asset root) name programs the host cooks from the authored stage declarations. ⛔ Returns
+    // false and KEEPS the previous graph on any parse/validation failure — never a half-installed frame.
     [[nodiscard]] bool set_frame_graph_toml(const char* toml_text);
     // ⭐⭐ 38-G1: install a frame BY ASSET NAME — `"frame/forward_csm_agx.frame.toml"` — resolved through the
-    // SAME disk-first path every other asset uses (a shipped file under the asset root shadows the built-in
-    // pack). ⛔ This, not a TOML string an app pastes into C++, is how an application selects a frame: the
-    // moment the text lives in a caller, the frame stops being editable content and becomes code again.
+    // SAME asset-root path every other asset uses. ⛔ This, not a TOML string an app pastes into C++, is how an
+    // application selects a frame: the moment the text lives in a caller, the frame stops being editable content
+    // and becomes code again.
     [[nodiscard]] bool set_frame_graph_asset(const char* asset_name);
-    // ── ⭐ REN-38-F15: DISK-FIRST asset loading. ──
-    // A file under `dir` shadows the embedded copy for every authored asset this renderer cooks (frame graphs,
-    // stage declarations, materials) — editing `assets/` then changes the frame without a rebuild. ⛔ A disk
-    // copy that exists but does not parse REFUSES the root (returns false); it never silently falls back.
+    // ── ⭐ REN-38-F15 / REN-41: the ASSET ROOT is the single source of truth. ──
+    // Every authored asset this renderer cooks (frame graphs, stage declarations, materials, lighting) is read
+    // from a file under `dir` — editing `assets/` changes the frame without a rebuild. There is no in-binary
+    // pack; an application authors its OWN pipelines under its OWN root. ⛔ A file that exists but does not parse
+    // REFUSES the root (returns false, nothing half-installed). If the host never calls this, `init` honours the
+    // `CRD_ASSETS_DIR` convention so the shipped default assets still resolve.
     [[nodiscard]] bool set_asset_root(const char* dir);
     // The scene TLAS for `raytrace.*` passes. The graph NAMES an acceleration structure; whoever owns the
     // geometry's device form installs it here (B4: the asset format stays free of engine types).
@@ -528,9 +602,38 @@ public:
     // line — and the two sides differ in texel size, bias and filter footprint, so that line is VISIBLE as a
     // step in shadow softness even when both sides are individually correct. In the outer `pct` of a
     // cascade's footprint the shadow is resolved from BOTH it and the next coarser one and lerped.
-    // ⛔ 0 (the default) cooks the byte-identical hard-select graph — a DECLARED option, so the parity arm is
-    // structural rather than a tolerance. Call before `init_programs`.
+    // ⛔ 0 cooks the byte-identical hard-select graph — a DECLARED option, so the parity arm is
+    // structural rather than a tolerance. Default 15. Call before `init_programs`.
     void set_cascade_blend_pct(crd::u32 pct) noexcept;
+
+    // Shadow distance fade: the outermost cascade smoothly dissolves to fully lit over the last `pct` percent
+    // of its footprint. 0 = the historical hard cutoff; 30 (the default) matches the UE5/Unity/Frostbite norm.
+    // ⛔ 0 emits no extra nodes (bit-identical cook). Call before `init_programs`.
+    void set_shadow_fade_pct(crd::u32 pct) noexcept;
+
+    // Shadow-caster screen-size cull (UE5's "Min Screen Radius For Shadows"): an instance whose CAMERA-projected
+    // height is below `px` pixels never enters a cascade's caster list — at that size the atlas cannot resolve
+    // its shadow into anything but a flickering dot. Applied identically by the CPU cascade cull and the device
+    // cull kernels. Default 16; 0 disables. Call before `set_gpu_cull` graphs cook (it changes the kernels).
+    void set_shadow_caster_min_px(crd::f32 px) noexcept;
+
+    // Minimum CAMERA-projected height, in pixels, below which an instance does not draw AT ALL (camera view +
+    // impostor list; the caster threshold above governs the cascades). Sub-pixel geometry cannot contribute
+    // anything but aliasing energy — a triangle smaller than a pixel is pure shimmer — so every GPU-driven
+    // engine culls it. Default 1.5; 0 disables. Applied by the CPU camera cull and the device kernels alike.
+    void set_min_draw_px(crd::f32 px) noexcept;
+
+    // ⭐⭐ REN-41 (TAA): supply this frame's reproject matrix R = prev_UNJITTERED_vp · inv(cur_JITTERED_vp) and
+    // whether a previous frame exists. The caller owns both projections (it applies the sub-pixel jitter), so it
+    // computes R; the renderer only uploads it for the TAA resolve pass. Call before render() each frame.
+    void set_taa_reproj(const crd::math::Mat4f& reproj, bool has_history) noexcept;
+
+    // REN-40-E2's round-robin far-cascade scheduling (cascades 2-3 alternate updates on even/odd frames).
+    // ⛔ OFF by default: under continuous camera motion it serves a one-frame-STALE matrix every other frame,
+    // which strobes every shadow in the far half of the range — an artifact, not an optimization. The
+    // exact-match matrix cache (40-E1) already skips static cascades for free; enable this only for scenes
+    // whose camera is mostly stationary and whose far-field shadow budget matters more than motion quality.
+    void set_cascade_round_robin(bool on) noexcept;
 
     // ⭐⭐ REN-40-D: CONTACT-HARDENING SOFT SHADOWS (PCSS). Fixed-radius PCF gives every shadow the same
     // softness, so a box resting ON the floor has the same blurry edge as one ten metres above it — and that
@@ -604,16 +707,6 @@ private:
     std::unique_ptr<Impl> m_impl;
     crd::containers::Array<MeshGroup> m_groups;
 };
-
-// ── ⭐ REN-38 audit: the BUILT-IN AUTHORED PACK, exposed. ────────────────────────────────────────────────────
-// The renderer's default assets are embedded TEXT (an engine default an app overrides by name, no file IO on
-// the init path) and the same declarations ship as editable files under `assets/`. ⛔ TWO COPIES OF ONE
-// DECLARATION DRIFT — that is the two-vocabularies disease one level down — so the copies are PINNED: the
-// drift gate parses both sides to their canonical form and refuses a mismatch. This accessor is that gate's
-// seam, and the disk-first loader's fallback source. Names mirror the shipped paths ("frame/forward_csm.frame.toml",
-// "material/scene.crdm", "vertex/scene.crdv", "lighting/scene_forward.crdl", ...). Returns false for a name
-// the pack does not hold.
-[[nodiscard]] bool builtin_asset_text(const char* name, crd::containers::String& out);
 
 // Extract the 6 world-space frustum planes (ax+by+cz+d ≥ 0 = inside) from a view-projection matrix
 // (Gribb–Hartmann; clip z in [0,1] — the Vulkan/reverse-Z convention). Plane order: L R B T N F.

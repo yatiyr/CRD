@@ -1,0 +1,247 @@
+# ⭐⭐ REN-41: the sRGB twin of `forward_csm_gpu` — the device-cull 1M path with TAA, resolved by the PLAIN sRGB
+# transform instead of AgX. Identical in every other respect (six compute cull passes, depth prepass + HZB
+# occlusion re-cull, forward + impostor, TAA resolve + store). This twin exists because 38-G1 makes the tonemap a
+# PROPERTY OF THE FRAME (the `post` shader line) — switching the display transform under `--gpu-cull` means
+# switching to this file. See `forward_csm_gpu` for the full annotated cull/HZB/TAA wiring.
+schema   = 1
+name     = "crd://frame/forward_csm_gpu_srgb"
+requires = ["shadows"]
+fallback = "crd://frame/forward_srgb"
+
+[[resource]]
+name = "instances"
+kind = "external_buffer"
+
+[[resource]]
+name       = "cull_args"
+kind       = "indirect_args"
+size_bytes = 256
+
+[[resource]]
+name    = "shadow_atlas"
+kind    = "persistent_image"
+format  = "D32Float"
+width   = 2048
+height  = 2048
+layers  = 4
+sampled = true
+
+[[resource]]
+name    = "scene_hdr"
+kind    = "transient_image"
+format  = "R11G11B10F"
+scale   = 1.0
+sampled = true
+
+[[resource]]
+name    = "scene_depth"
+kind    = "transient_image"
+format  = "D32Float"
+scale   = 1.0
+sampled = true
+
+# ⭐⭐ REN-41 (velocity): per-object MOTION VECTORS, written by the depth prepass (now MRT) and sampled by the TAA
+# resolve. Object-motion delta in current-camera UV space; a static instance stores 0 (the camera reproject is the
+# resolve's R matrix). Cleared to 0 so a pixel with no mover reprojects from the camera only.
+[[resource]]
+name    = "velocity"
+kind    = "transient_image"
+format  = "RG16F"
+scale   = 1.0
+sampled = true
+
+[[resource]]
+name    = "hzb"
+kind    = "transient_image"
+format  = "R32F"
+scale   = 0.5
+sampled = true
+
+[[resource]]
+name      = "taa_history"
+kind      = "persistent_image"
+format    = "R11G11B10F"
+scale     = 1.0
+resizable = true   # ⭐⭐⭐ REN-41: follow the window; a resize discards history for ONE frame (reconverges invisibly)
+sampled   = true
+
+[[resource]]
+name    = "scene_taa"
+kind    = "transient_image"
+format  = "R11G11B10F"
+scale   = 1.0
+sampled = true
+
+[[resource]]
+name = "taa_constants"
+kind = "external_buffer"
+
+# ⭐⭐ REN-41 (velocity, skinned): snapshot LAST frame's bone palette → prev_palette BEFORE gpu_skin overwrites it,
+# so the velocity prepass deforms by the previous pose. Writes "instances" (the group-buffer proxy) so the WAW
+# edge orders it before gpu_skin. No-ops unless GPU skinning is active (kHdrGpuSkinActive).
+[[pass]]
+name      = "palette_snapshot"
+kind      = "compute"
+kernel    = "crd://scene/palette_snapshot"
+draw_list = "visible_geometry"
+writes    = ["instances"]
+
+[[pass]]
+name      = "gpu_skin"
+kind      = "compute"
+kernel    = "crd://scene/gpu_skin"
+draw_list = "visible_geometry"
+writes    = ["instances"]
+
+[[pass]]
+name      = "cull_reset"
+kind      = "compute"
+kernel    = "crd://scene/cull_reset"
+draw_list = "visible_geometry"
+writes    = ["instances", "cull_args"]
+
+[[pass]]
+name      = "cull_view0"
+kind      = "compute"
+kernel    = "crd://scene/cull_view0"
+draw_list = "visible_geometry"
+writes    = ["instances", "cull_args"]
+
+[[pass]]
+name      = "cull_view1"
+kind      = "compute"
+kernel    = "crd://scene/cull_view1"
+draw_list = "shadow_casters"
+writes    = ["instances", "cull_args"]
+
+[[pass]]
+name      = "cull_view2"
+kind      = "compute"
+kernel    = "crd://scene/cull_view2"
+draw_list = "shadow_casters"
+writes    = ["instances", "cull_args"]
+
+[[pass]]
+name      = "cull_view3"
+kind      = "compute"
+kernel    = "crd://scene/cull_view3"
+draw_list = "shadow_casters"
+writes    = ["instances", "cull_args"]
+
+[[pass]]
+name      = "cull_view4"
+kind      = "compute"
+kernel    = "crd://scene/cull_view4"
+draw_list = "shadow_casters"
+writes    = ["instances", "cull_args"]
+
+[[draw_list]]
+name = "shadow_casters"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "front_to_back"
+
+[[draw_list]]
+name = "visible_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "material"
+
+[[pass]]
+name             = "csm_cascade"
+kind             = "raster.depth_only"
+draw_list        = "shadow_casters"
+for_each         = "light.0.cascades"
+writes           = ["shadow_atlas[$index]"]
+reads            = ["instances", "cull_args"]
+material_pass    = "Shadow"
+clear_depth      = 1.0
+depth            = "LessEqual"
+depth_bias_slope = 1.5
+
+[[draw_list]]
+name = "impostor_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+
+# ⭐⭐ REN-41 (velocity): the depth prepass now writes MOTION VECTORS too (MRT: [velocity] colour + scene_depth).
+# scene_depth is the depth attachment (a depth-format write on an MRT pass routes to the depth slot) AND the
+# graph producer hzb_build/forward order after. The velocity FS carries the SAME LOD dither discard as the forward
+# FS, so prepass depth still exists for exactly the pixels the forward keeps.
+[[pass]]
+name          = "depth_prepass"
+kind          = "raster.mrt"
+draw_list     = "visible_geometry"
+writes        = ["velocity", "scene_depth"]
+reads         = ["instances", "cull_args"]
+material_pass = "Shadow"
+clear_color   = [0.0, 0.0, 0.0, 0.0]
+clear_depth   = 0.0
+depth         = "GreaterEqual"
+
+[[pass]]
+name           = "hzb_build"
+kind           = "raster.fullscreen"
+reads          = ["scene_depth"]
+writes         = ["hzb"]
+shader         = "crd://scene/hzb_build"
+depth_as_float = true
+
+[[pass]]
+name      = "occlusion_reset"
+kind      = "compute"
+kernel    = "crd://scene/cull_reset"
+draw_list = "visible_geometry"
+writes    = ["instances", "cull_args"]
+
+[[pass]]
+name      = "occlusion_cull"
+kind      = "compute"
+kernel    = "crd://scene/occlusion_cull"
+draw_list = "visible_geometry"
+reads     = ["hzb"]
+writes    = ["instances", "cull_args"]
+
+[[pass]]
+name          = "forward"
+kind          = "raster.geometry"
+draw_list     = "visible_geometry"
+writes        = ["scene_hdr"]
+reads         = ["shadow_atlas", "instances", "cull_args"]
+shared_depth  = "scene_depth"
+load_depth    = true
+technique     = "forward_csm"
+material_pass = "Forward"
+clear_color   = [0.09, 0.10, 0.13, 1.0]
+depth         = "GreaterEqual"
+
+[[pass]]
+name         = "impostor"
+kind         = "raster.geometry"
+draw_list    = "impostor_geometry"
+writes       = ["scene_hdr"]
+reads        = ["instances", "cull_args"]
+shared_depth = "scene_depth"
+shader       = "crd://scene/impostor"
+load         = true
+depth        = "GreaterEqual"
+
+[[pass]]
+name   = "taa_resolve"
+kind   = "raster.fullscreen"
+reads  = ["scene_hdr", "scene_depth", "taa_history", "velocity", "taa_constants"]
+writes = ["scene_taa"]
+shader = "crd://scene/taa_resolve"
+
+[[pass]]
+name   = "taa_store"
+kind   = "copy"
+reads  = ["scene_taa"]
+writes = ["taa_history"]
+
+[[pass]]
+name   = "post"
+kind   = "raster.fullscreen"
+reads  = ["scene_taa"]
+writes = ["@output"]
+shader = "crd://post/srgb_only"

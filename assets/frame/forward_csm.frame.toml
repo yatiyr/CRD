@@ -64,14 +64,15 @@ cull = "frustum"
 
 # ── ONE declaration -> N cascade passes ────────────────────────────────────────────────────────────────────
 [[pass]]
-name          = "csm_cascade"
-kind          = "raster.depth_only"
-draw_list     = "shadow_casters"
-for_each      = "light.0.cascades"
-writes        = ["shadow_atlas[$index]"]
-material_pass = "Shadow"   # depth-only: n_out = 0, the surface is never consumed, lowering DCEs all of it
-clear_depth   = 1.0
-depth         = "LessEqual"
+name             = "csm_cascade"
+kind             = "raster.depth_only"
+draw_list        = "shadow_casters"
+for_each         = "light.0.cascades"
+writes           = ["shadow_atlas[$index]"]
+material_pass    = "Shadow"   # depth-only: n_out = 0, the surface is never consumed, lowering DCEs all of it
+clear_depth      = 1.0
+depth            = "LessEqual"
+depth_bias_slope = 1.5
 
 # ── the shadowed forward pass ──────────────────────────────────────────────────────────────────────────────
 # `reads` on a geometry pass is what makes it SHADOWED: the executor binds the atlas and, seeing a depth format,

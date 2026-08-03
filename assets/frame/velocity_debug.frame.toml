@@ -1,0 +1,59 @@
+# velocity_debug.frame.toml — REN-41 motion-vector DEBUG VIEW + the velocity CORRECTNESS gate's readback surface.
+#
+# The depth prepass (raster.mrt) writes per-object MOTION VECTORS into `velocity` EXACTLY as the flagship forward
+# frames do — same per-group program (crd://scene/velocity), same LOD dither discard — so this visualises the
+# SHIPPING velocity, not a re-derivation of it. A fullscreen `velo_encode` pass then samples `velocity` and encodes
+# the signed UV motion delta into the RGBA8 output: out.rg = velocity.xy * kVelocityDebugScale + 0.5, out.b = 0.5.
+# Zero motion → mid-grey (0.5); either sign of motion is visible and decodable (see kVelocityDebugScale).
+#
+# ⛔ `velocity` is cleared to a SENTINEL (0.25, 0.25), NOT to zero — and that is deliberate. A DRAWN static instance
+# writes velocity 0 (encodes to 0.5), while BACKGROUND is never drawn (stays at the sentinel → encodes to 0.75). A
+# frame that cleared to 0 could not tell "the velocity FS ran and correctly produced 0" apart from "nothing drew
+# here", so the gate's static-instance check would be blind. The sentinel is what gives that check teeth.
+
+schema = 1
+name   = "crd://frame/velocity_debug"
+
+# The SAMPLED companion depth the MRT prepass writes alongside velocity (reverse-Z, GreaterEqual). Present so the
+# prepass has a depth attachment; nothing downstream reads it in this debug frame.
+[[resource]]
+name    = "scene_depth"
+kind    = "transient_image"
+format  = "D32Float"
+scale   = 1.0
+sampled = true
+
+# The per-object MOTION VECTORS. RG16F: two signed screen-space UV components. Cleared to the sentinel (see above).
+[[resource]]
+name    = "velocity"
+kind    = "transient_image"
+format  = "RG16F"
+scale   = 1.0
+sampled = true
+
+[[draw_list]]
+name = "visible_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "material"
+
+# ⭐⭐ REN-41 (velocity): the motion-vector prepass — MRT writing [velocity] + the depth attachment, drawn with the
+# per-group velocity program (material_pass = "Shadow" selects program_velocity, exactly as the forward frames do).
+[[pass]]
+name          = "depth_prepass"
+kind          = "raster.mrt"
+draw_list     = "visible_geometry"
+writes        = ["velocity", "scene_depth"]
+material_pass = "Shadow"
+clear_color   = [0.25, 0.25, 0.0, 0.0]
+clear_depth   = 0.0
+depth         = "GreaterEqual"
+
+# ⭐⭐ REN-41 (velocity): encode the signed motion delta into the viewable RGBA8 output. Reads `velocity` (bound as
+# the bindless heap's index 0 — the pass's sole read); the shader does out.rg = velocity.xy * scale + 0.5.
+[[pass]]
+name   = "velo_encode"
+kind   = "raster.fullscreen"
+reads  = ["velocity"]
+writes = ["@output"]
+shader = "crd://scene/velocity_debug"

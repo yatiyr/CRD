@@ -1,0 +1,56 @@
+schema = 1
+name   = "crd://vertex/velocity_skinned"
+
+# ⭐⭐ REN-41 (velocity, path A): the SKINNED velocity vertex program — CLIP-IDENTICAL to crd://vertex/scene_skinned
+# (same linear-blend skinning + transform + view_proj → same depth), emitting only the two clip interpolants. The
+# `prev:clip` term re-skins the object position with the PREVIOUS bone palette (header word 108, kHdrPrevPaletteOff)
+# and the previous instance transform (word 107), projected by the CURRENT view_proj — so the Fox's limb
+# deformation AND its circling motion reproject exactly. Only `position` is declared: the clip depends on nothing
+# else, so normal/uv/tangent are omitted (cheaper, still bit-identical depth).
+[header]
+index_count      = 0
+index_off        = 2
+vertex_off       = 3
+instance_off     = 4
+visible_off      = 5
+view_proj        = 6
+light_vp         = 32
+skin_off         = 25
+palette_off      = 26
+joint_count      = 27
+prev_world_off   = 107
+prev_palette_off = 108
+instance_count   = 100
+
+[vertex]
+stride = 12
+
+[[attribute]]
+name   = "position"
+offset = 0
+comps  = 3
+kind   = "position"
+
+[instance]
+stride    = 20
+transform = 0
+
+[skin]
+scheme         = "linear_blend"
+influences     = 4
+stride         = 6
+joint_words    = 2
+weight_off     = 2
+palette_stride = 16
+
+[[varying]]
+name     = "prev_clip"
+location = 5
+interp   = "smooth"
+source   = ["prev:clip"]
+
+[[varying]]
+name     = "cur_clip"
+location = 6
+interp   = "smooth"
+source   = ["clip"]

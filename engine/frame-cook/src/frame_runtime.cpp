@@ -44,6 +44,10 @@ struct PassRec
     crd::u32             n_sampled        = 0U;
     bool                 sampled_is_depth = false; // of sampled[0] — the shadow-lookup case
     bool                 sampled_is_array = false; // of sampled[0] — the ATLAS case (REN-40-D: depth OR moments)
+    // ⭐⭐ REN-41 (TAA): a fullscreen pass's per-frame CONSTANTS buffer (the reproject matrix). A fullscreen pass
+    // that declares a buffer read which is NOT the indirect-args buffer captures it here; the executor binds it
+    // at set 0/binding 0 via draw_bindless_storage. Invalid for every pass that declares no such read.
+    g::FgBuffer          fs_constants{};
     g::FgBuffer          storage{};
     g::IRasterProgram*   program = nullptr;
     crd::u32             vertex_count = 0U;
@@ -109,12 +113,15 @@ void record_pass(g::IFrameContext& ctx, void* user)
     auto*                p = static_cast<PassRec*>(user);
     const FramePassDesc& d = *p->desc;
     g::IRasterContext&   r = ctx.raster();
+    r.compute_diag(8U);
+    if (d.kind == FramePassKind::Compute) { r.compute_diag(9U); }
     // REN-36.3: `shadow_atlas[$index]` renders into ONE SLICE; a plain write renders into the whole image.
     // `image_layer(h, 0)` on a non-layered resource IS `image(h)`, so a for_each pass over a non-layered target
     // needs no special case — one code path serves both shapes.
-    g::IRasterTarget*    t = p->depth_target.valid()
-                             ? ctx.image_with_depth(p->target, p->depth_target)
-                             : (p->indexed_target ? ctx.image_layer(p->target, p->layer) : ctx.image(p->target));
+    g::IRasterTarget* t = nullptr;
+    if (p->depth_target.valid())   { t = ctx.image_with_depth(p->target, p->depth_target); }
+    else if (p->indexed_target)    { t = ctx.image_layer(p->target, p->layer); }
+    else                           { t = ctx.image(p->target); }
     // ⛔ REN-38-A9/A10: a COMPUTE-SHAPED pass writes buffers, not attachments, so requiring a render target
     // would have made every ray-tracing and GPU-driven-dispatch pass silently do nothing — the exact shape this
     // band keeps finding, one kind further along.
@@ -162,7 +169,11 @@ void record_pass(g::IFrameContext& ctx, void* user)
             g::IStorageBuffer* sb = ctx.buffer(p->storage_of[i]);
             if (sb == nullptr) { continue; }
             g::IRasterProgram* prog = p->program;
-            if (!p->program_is_instance && it.program != nullptr) { prog = it.program; }
+            // ⛔⛔ `program_depth` FIRST. A non-instance depth-only pass (the depth prepass) falling back to the
+            // item's FORWARD program ran a texture-sampling FS in a pass that binds no textures — see the
+            // DrawItem::program_depth note for why that was invisible until the dither discard made it fatal.
+            if (!p->program_is_instance && it.program_depth != nullptr) { prog = it.program_depth; }
+            else if (!p->program_is_instance && it.program != nullptr) { prog = it.program; }
             // ⭐⭐ REN-39-C1: an INDEXED-PULL item records through the indexed depth-only multi — a run of
             // consecutive indexed items sharing this program+buffer becomes ONE ExecuteIndirect (a classic
             // verb would misaddress every vertex of an indexed program; see DrawItem::index_count).
@@ -188,7 +199,8 @@ void record_pass(g::IFrameContext& ctx, void* user)
                 {
                     const DrawItem nx = p->draws.at(i + run);
                     g::IRasterProgram* nprog = p->program;
-                    if (!p->program_is_instance && nx.program != nullptr)
+                    if (!p->program_is_instance && nx.program_depth != nullptr) { nprog = nx.program_depth; }
+                    else if (!p->program_is_instance && nx.program != nullptr)
                     {
                         nprog = nx.program;
                     }
@@ -217,11 +229,16 @@ void record_pass(g::IFrameContext& ctx, void* user)
     {
         // ⭐ REN-38-A1b: N DECLARED WRITES => N COLOUR ATTACHMENTS. This is what makes a DEFERRED G-buffer
         // authorable: `writes = ["albedo", "normal", "material"]` and the executor binds all three.
+        // ⭐⭐ REN-41: when the MRT pass PRODUCES a depth (rec.depth_target — the velocity prepass writes
+        // ["velocity", scene_depth]), the FIRST colour target must arrive with that depth attached. `t` is
+        // exactly that combined target (`image_with_depth(target, depth_target)`, resolved at the top). Without a
+        // depth_target this stays the historical depthless G-buffer / visbuffer MRT.
         g::IRasterTarget* rts[kMaxPassReads]{};
-        crd::u32          nrt = 0U;
+        crd::u32          nrt        = 0U;
+        const bool        with_depth = p->depth_target.valid();
         for (crd::u32 i = 0; i < p->n_writes; ++i)
         {
-            g::IRasterTarget* rt = ctx.image(p->writes_all[i]);
+            g::IRasterTarget* rt = (with_depth && i == 0U) ? t : ctx.image(p->writes_all[i]);
             // ⛔ A write that does not resolve ABORTS the pass rather than shifting every later attachment down a
             // slot — the shader writes SV_Target1 and it would land in attachment 0's image.
             if (rt == nullptr) { return; }
@@ -235,7 +252,32 @@ void record_pass(g::IFrameContext& ctx, void* user)
             g::IStorageBuffer* sb = ctx.buffer(p->storage_of[i]);
             if (sb == nullptr) { continue; }
             g::IRasterProgram* prog = p->program;
-            if (!p->program_is_instance && it.program != nullptr) { prog = it.program; }
+            // ⭐⭐ REN-41: a velocity item binds its OWN per-group program (the velocity VS twin), exactly as the
+            // depth prepass prefers `program_depth`. Falls back to the per-item / pass program otherwise.
+            if (!p->program_is_instance && it.program_velocity != nullptr) { prog = it.program_velocity; }
+            else if (!p->program_is_instance && it.program != nullptr) { prog = it.program; }
+            // ⭐⭐ REN-41: a GPU-DRIVEN item's velocity command lives in DEVICE MEMORY (the same indexed-indirect
+            // command the depth prepass consumes). It records through the MRT-indirect verb — args from the
+            // buffer, count from the device — and must NEVER fall through to the CPU-count verb below, where
+            // `it.vertex_count` is 0 by construction under the device cull and the whole pass would vanish.
+            // ⛔⛔ REN-40-C2: `i` is THE ROW — a rebased program reads table[DrawIndex] for its region base + LOD slot.
+            if (it.args != nullptr && it.index_count > 0U)
+            {
+                r.draw_storage_multi_indexed_mrt_indirect(static_cast<g::IRasterTarget* const*>(rts), nrt, *prog,
+                                                          clear, d.clear_depth, d.depth, *sb, 0U, *it.args,
+                                                          it.args_offset, nullptr, 0U, 1U,
+                                                          i != 0U || p->load_override || d.load_target, i);
+                continue;
+            }
+            // ⭐⭐ REN-41: a CPU-CULL indexed item (count known, no device args) — the velocity prepass on the
+            // non-`gpu` TAA frames. One indexed draw into the MRT, `i` pushed as the draw-table row.
+            if (it.index_count > 0U)
+            {
+                r.draw_storage_indexed_mrt(static_cast<g::IRasterTarget* const*>(rts), nrt, *prog, clear,
+                                           d.clear_depth, d.depth, *sb, 0U, it.index_count, it.instance_count,
+                                           it.first_index, i, i != 0U || p->load_override || d.load_target);
+                continue;
+            }
             r.draw_storage_mrt(static_cast<g::IRasterTarget* const*>(rts), nrt, *prog, clear, d.clear_depth, d.depth,
                                *sb, it.vertex_count);
         }
@@ -437,6 +479,15 @@ void record_pass(g::IFrameContext& ctx, void* user)
                 if (tx == nullptr) { return; }
                 texs[n++] = tx;
             }
+            // ⭐⭐ REN-41 (TAA): a fullscreen pass that ALSO declared a constants buffer binds it at b0 — the only
+            // path a fullscreen FS gets per-frame matrices. Resolve-or-abort, like the textures above.
+            if (p->fs_constants.valid())
+            {
+                g::IStorageBuffer* cbuf = ctx.buffer(p->fs_constants);
+                if (cbuf == nullptr) { return; }
+                r.draw_bindless_storage(*t, *p->program, clear, static_cast<g::ITexture* const*>(texs), n, *cbuf, 3U);
+                break;
+            }
             r.draw_bindless(*t, *p->program, clear, static_cast<g::ITexture* const*>(texs), n, 3U);
             break;
         }
@@ -457,7 +508,9 @@ void record_pass(g::IFrameContext& ctx, void* user)
         // The kernel's storage bindings come from the pass's declared reads and writes, in declaration order, so
         // a kernel never names a slot and the graph still owns the ordering and the barriers. The grid comes from
         // `params` (`groups_x/y/z`), because a dispatch size is a PARAMETER, not topology.
+        r.compute_diag(0U);
         if (p->kernel_program == nullptr) { return; }
+        r.compute_diag(1U);
         g::IStorageBuffer* bufs[kMaxPassReads]{};
         crd::u32           nb = 0U;
         for (crd::u32 i = 0; i < p->n_kernel_bufs && nb < kMaxPassReads; ++i)
@@ -469,6 +522,7 @@ void record_pass(g::IFrameContext& ctx, void* user)
             bufs[nb++] = sb;
         }
         if (nb == 0U) { return; }
+        r.compute_diag(2U);
         // REN-40-G3: a compute pass that READS an image dispatches through `dispatch_kernel_sampled`, which
         // binds the texture at the fixed position after the storage buffers (binding 8 = texture, 9 = sampler).
         g::ITexture* sampled_tex = nullptr;
@@ -481,11 +535,13 @@ void record_pass(g::IFrameContext& ctx, void* user)
         // count and a fixed grid either under-covers the big groups or wastes work on the small ones.
         if (p->draws.count() > 0U)
         {
+            r.compute_diag(3U);
             for (crd::u32 di = 0; di < p->draws.count(); ++di)
             {
                 const DrawItem it = p->draws.at(di);
                 g::IStorageBuffer* sb = ctx.buffer(p->storage_of[di]);
                 if (sb == nullptr || it.dispatch_groups == 0U) { continue; }
+                r.compute_diag(4U);
                 g::IStorageBuffer* ibufs[kMaxPassReads]{};
                 crd::u32           inb = 0U;
                 ibufs[inb++] = sb;
@@ -839,8 +895,12 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         if (r.kind == FrameResourceKind::PersistentImage || r.kind == FrameResourceKind::PingPongImage)
         {
             g::FgImageDesc pid{};
-            pid.width   = r.width;
-            pid.height  = r.height;
+            // ⭐⭐⭐ REN-41: a `resizable` persistent (scale, no absolute size) FOLLOWS THE OUTPUT — sized from the
+            // target every build exactly like a transient. On a resize the desc size changes and the device's
+            // `create_persistent_image` destroys+recreates it (history discarded for one frame, reconverged in a
+            // few) — which is precisely the TAA-history contract. An absolute size still wins when the author gives one.
+            pid.width   = r.width != 0U ? r.width : static_cast<crd::u32>(static_cast<float>(out_target->width()) * r.scale);
+            pid.height  = r.height != 0U ? r.height : static_cast<crd::u32>(static_cast<float>(out_target->height()) * r.scale);
             pid.format  = r.format;
             pid.samples = r.samples;
             pid.sampled = r.sampled;
@@ -1185,10 +1245,54 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         recs.push_back(rec);
     }
 
+    // ── ⭐⭐ REN-41: WHERE THE OVERLAY GOES, now that TAA can sit between the scene and the display. ────────────
+    // The gizmo/grid overlay composites onto the image the FINAL (display) pass READS — its INPUT — right BEFORE
+    // that display pass runs. Without TAA that input is the scene image (the historical case). WITH TAA it is the
+    // RESOLVED image (`scene_taa`), and weaving BEFORE the display pass places the overlay AFTER both the resolve
+    // AND the history-store — so its thin grid lines are neither smeared by TAA nor leaked into next frame's
+    // history (both of which "the grid is blurred" would otherwise show). Fallback (a display pass that writes
+    // @output directly, no sampled input): the historical weave AFTER the last geometry pass.
+    // ⛔ Resolve this from the DESC (pass names + resolve_image), NOT from `recs` — recs[].target/.sampled are
+    // filled INSIDE the execute loop below, so they are empty here. The display pass is the one whose writes
+    // include @output and which SAMPLES a scene image (a post/tonemap pass); its first read is the overlay canvas.
+    crd::i64   overlay_before_ii = -1;           // weave BEFORE this pass (the display pass)
+    const crd::i64 overlay_after_ii = last_geom_ii; // else weave AFTER this one (historical fallback)
+    g::FgImage overlay_target{};
+    for (crd::usize pp = 0; pp < plan.size(); ++pp)
+    {
+        const FramePassDesc& dp = desc.passes[plan[pp].pass];
+        bool writes_output = false;
+        for (crd::usize w = 0; w < dp.writes.size(); ++w)
+        {
+            if (name_is(dp.writes[w].name, "@output")) { writes_output = true; break; }
+        }
+        if (!writes_output || dp.reads.size() == 0U) { continue; }
+        g::FgImage h;
+        bool       is_depth = false;
+        if (resolve_image(dp.reads[0].name, h, is_depth, /*for_read=*/true, nullptr))
+        {
+            overlay_before_ii = static_cast<crd::i64>(pp);
+            overlay_target    = h;
+        }
+        break;
+    }
+
+    const auto weave_overlay = [&]() {
+        g::FgExecuteFn ov_fn   = nullptr;
+        void*          ov_user = nullptr;
+        if (overlay_target.valid() && host.overlay_pass(&ov_fn, &ov_user, overlay_target) && ov_fn != nullptr)
+        {
+            fgraph->add_pass("overlay").read_writes(overlay_target).execute(ov_fn, ov_user);
+        }
+    };
     for (crd::usize ii = 0; ii < plan.size(); ++ii)
     {
         const FramePassDesc& d   = desc.passes[plan[ii].pass];
         PassRec&             rec = recs[ii];
+        // ⛔⛔ The overlay pass must be ADDED TO THE GRAPH BEFORE the display pass's builder is created — this
+        // graph orders passes by add_pass CALL ORDER, so weaving after the display pass's builder existed put the
+        // overlay AFTER the display read (and nothing showed). Weave at the TOP of the display pass's iteration.
+        if (overlay_before_ii >= 0 && static_cast<crd::i64>(ii) == overlay_before_ii) { weave_overlay(); }
 
         bool                        dummy_depth = false;
         // ⛔ The DEVICE pass kind is derived from the AUTHORED one, never assumed. It drives queue placement and
@@ -1253,6 +1357,18 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             if (w_buffer) { continue; }
             if (!resolve_image(d.writes[w].name, h, dummy_depth)) { return fail(FrameExecError::UnresolvedResource, &d.writes[w].name); }
             pb.writes(h);
+            // ── ⭐⭐ REN-41: a DEPTH-format write on an MRT pass is the DEPTH ATTACHMENT, not an extra colour RTV. ──
+            // The velocity prepass writes `["velocity", "scene_depth"]`: velocity is the one colour target and
+            // scene_depth is the depth it PRODUCES. It stays a graph WRITE (`pb.writes` above — so hzb_build and
+            // the forward pass, which read scene_depth, order after this prepass exactly as they did when the
+            // depth-only prepass wrote it) but routes to `rec.depth_target` so `image_with_depth` binds it as
+            // depth. ⛔ Gated to RasterMrt: a `raster.depth_only` pass's SOLE depth write is its PRIMARY target
+            // (rec.target) and `t = image(target)` must keep that shape — re-routing it would leave it targetless.
+            if (dummy_depth && d.kind == FramePassKind::RasterMrt)
+            {
+                rec.depth_target = h;
+                continue;
+            }
             if (rec.n_writes < kMaxPassReads) { rec.writes_all[rec.n_writes++] = h; }
             if (first_write)
             {
@@ -1263,7 +1379,12 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
                 first_write        = false;
             }
         }
-        // ── ⭐ REN-40-G3: SHARED DEPTH — resolve the named depth image and register it as a WRITE. ──
+        // ── ⭐ REN-40-G3: SHARED DEPTH — resolve the named depth image and register it as a READ. ──
+        // ⛔ The forward pass LOADS the prepass depth and continues depth-testing against it, but no later pass
+        // reads the updated depth values — the writes are self-contained. Declaring it as a graph WRITE would
+        // create a backward edge to any earlier pass that reads the same image (hzb_build), causing a CYCLE:
+        //   forward(writes scene_depth) → hzb_build(reads scene_depth) → occlusion_cull → forward.
+        // The execute function transitions the image to DEPTH_ATTACHMENT via rec.depth_target regardless.
         if (d.shared_depth.size() > 0U)
         {
             g::FgImage dh{};
@@ -1272,7 +1393,7 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             {
                 return fail(FrameExecError::UnresolvedResource, &d.shared_depth);
             }
-            pb.writes(dh);
+            pb.reads_depth(dh);
             rec.depth_target = dh;
         }
         bool first_read = true;
@@ -1307,6 +1428,9 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
                 // REN-38-A10: remember WHICH buffer holds the arguments. It is a graph-tracked read like any
                 // other, which is exactly what orders this pass after the cull pass that wrote it.
                 if (rk == FrameResourceKind::IndirectArgs) { rec.args_buf = buffers[bi]; }
+                // ⭐⭐ REN-41 (TAA): a non-args buffer read on a fullscreen pass is its CONSTANTS buffer. Harmless
+                // to record for any kind (only the RasterFullscreen path binds it).
+                else { rec.fs_constants = buffers[bi]; }
                 was_buffer = true;
                 break;
             }
@@ -1335,6 +1459,7 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             const DrawItem it = rec.draws.at(di);
             if (it.storage == nullptr) { continue; }
             rec.storage_of[di] = fgraph->import_storage(*it.storage);
+            if (d.untracked_storage) { if (di == 0U) { rec.storage = rec.storage_of[0]; } continue; }
             // ⛔⛔ NOT IF THIS PASS ALREADY DECLARED IT A WRITE. A GPU-driven cull pass walks this same draw list
             // to find the buffers it COMPACTS INTO — `writes = ["instances"]` — and adding a read of the very
             // same handle makes the pass both a writer and a reader of it. Two such passes then each depend on
@@ -1400,16 +1525,12 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             pb.present(*surf);
         }
         pb.execute(&record_pass, &recs[ii]);
-        // REN-39 (the gizmo fix): the application overlay composites onto the SCENE image, right here —
-        // after the last geometry pass, before whatever reads it (the post chain). See IFrameGraphHost.
-        if (static_cast<crd::i64>(ii) == last_geom_ii)
+        // Fallback path (no post-style display pass reading a scene image): the historical weave AFTER the last
+        // geometry pass, onto its target (populated by this iteration's record-build).
+        if (overlay_before_ii < 0 && static_cast<crd::i64>(ii) == overlay_after_ii)
         {
-            g::FgExecuteFn ov_fn   = nullptr;
-            void*          ov_user = nullptr;
-            if (host.overlay_pass(&ov_fn, &ov_user, recs[ii].target) && ov_fn != nullptr)
-            {
-                fgraph->add_pass("overlay").read_writes(recs[ii].target).execute(ov_fn, ov_user);
-            }
+            overlay_target = recs[static_cast<crd::usize>(ii)].target;
+            weave_overlay();
         }
     }
     // a frame with NO geometry pass (a fullscreen/compute-only graph) keeps the historical behaviour: the

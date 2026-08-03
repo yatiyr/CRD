@@ -701,6 +701,20 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
         {
             s.append("layout(set = 0, binding = "); app_uint(s, nd.iidx); s.append(") uniform accelerationStructureEXT as"); app_uint(s, nd.iidx); s.append(";\n");
         }
+        else if (nd.op == KOp::Texture)
+        {
+            s.append("layout(set = "); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(", binding = "); app_uint(s, static_cast<crd::u32>(nd.iidx));
+            s.append(") uniform "); s.append(glsl_tex_scalar_prefix(nd.type.scalar)); s.append("texture"); s.append(glsl_tex_dim_suffix(nd.type));
+            s.append(" tex_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx));
+            if (nd.type.count > 1U) { s.append("["); app_uint(s, static_cast<crd::u32>(nd.type.count)); s.append("]"); }
+            s.append(";\n");
+        }
+        else if (nd.op == KOp::Sampler)
+        {
+            s.append("layout(set = "); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(", binding = "); app_uint(s, static_cast<crd::u32>(nd.iidx));
+            s.append(") uniform sampler"); if (nd.type.tex_shadow()) { s.append("Shadow"); }
+            s.append(" samp_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(";\n");
+        }
     }
     // REN-40-F: quat/slerp helper functions — the COMPUTE-KERNEL parity of the emit_stage_glsl scan at ~line 1426.
     {
@@ -734,7 +748,7 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
         switch (op)
         {
         case KOp::Const: case KOp::Builtin: case KOp::KernelLoopVar: case KOp::BufferLoad: case KOp::SharedLoad:
-        case KOp::BufferDecl: case KOp::SharedDecl: case KOp::Cast: case KOp::Select:
+        case KOp::BufferDecl: case KOp::SharedDecl: case KOp::Texture: case KOp::Sampler: case KOp::Cast: case KOp::Select:
         case KOp::CmpLt: case KOp::CmpLe: case KOp::CmpGt: case KOp::CmpGe: case KOp::CmpEq: case KOp::CmpNe:
         case KOp::BitAnd: case KOp::BitOr: case KOp::BitXor: case KOp::Shl: case KOp::Shr: return true;
         default: return false;
@@ -913,6 +927,38 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::QuatRotate: s.append("crd_qrot("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
         case KOp::QuatAxisAngle: s.append("crd_qaa("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
         case KOp::QuatToMat3: s.append("crd_qmat("); pv(pv, nd.a); s.append(")"); break;
+        case KOp::SampleLod:
+        case KOp::TexSample:
+        case KOp::SampleGrad:
+        case KOp::SampleCmp:
+        case KOp::TexelFetch:
+        case KOp::TexGather:
+        case KOp::TexSize:
+        {
+            const KNode& tx = g.node(nd.a);
+            const KNode& sm = g.node(nd.b);
+            const auto samp = [&]() {
+                s.append(glsl_tex_scalar_prefix(tx.type.scalar)); s.append("sampler"); s.append(glsl_tex_dim_suffix(tx.type));
+                if (sm.type.tex_shadow()) { s.append("Shadow"); }
+                s.append("(tex_"); app_uint(s, static_cast<crd::u32>(tx.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(tx.iidx));
+                s.append(", samp_"); app_uint(s, static_cast<crd::u32>(sm.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(sm.iidx)); s.append(")");
+            };
+            switch (nd.op) {
+            case KOp::TexSample:  s.append("texture(");     samp(); s.append(", "); pv(pv, nd.c); s.append(")"); break;
+            case KOp::SampleLod:  s.append("textureLod(");  samp(); s.append(", "); pv(pv, nd.c); s.append(", "); pv(pv, nd.d); s.append(")"); break;
+            case KOp::SampleGrad: s.append("textureGrad("); samp(); s.append(", "); pv(pv, nd.c); s.append(", "); pv(pv, nd.d); s.append(", "); pv(pv, g.ext_operand(nd, 0)); s.append(")"); break;
+            case KOp::SampleCmp:
+                s.append("texture("); samp();
+                s.append(tx.type.tex_arrayed() ? ", vec4(" : ", vec3(");
+                pv(pv, nd.c); s.append(", "); pv(pv, nd.d); s.append("))");
+                break;
+            case KOp::TexelFetch: s.append("texelFetch(");  samp(); s.append(", "); pv(pv, nd.c); s.append(", "); pv(pv, nd.d); s.append(")"); break;
+            case KOp::TexGather:  s.append("textureGather("); samp(); s.append(", "); pv(pv, nd.c); s.append(", "); app_ilit(s, g.node(nd.d).cval); s.append(")"); break;
+            case KOp::TexSize:    s.append("textureSize("); samp(); s.append(", "); pv(pv, nd.d); s.append(")"); break;
+            default: break;
+            }
+            break;
+        }
         default: ok = false; s.append("0"); break;
         }
     };
@@ -933,6 +979,33 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
             s.append(vtype(nd.type)); s.append(" t"); app_uint(s, static_cast<crd::u32>(node)); s.append(" = ");
             rhs(nd);
             s.append(";\n");
+        }
+    };
+    // hoist_decls: walk a stmt range and call decl() on every node operand WITHOUT emitting statements. Running
+    // this over an If body BEFORE the opening brace ensures that temps shared across sibling scopes are declared
+    // at the ENCLOSING scope — without this, a temp first used inside `if (A) { ... }` is declared in A's scope and
+    // is invisible to sibling `if (B) { ... }`, making shaderc reject the GLSL (undeclared identifier).
+    // ⛔ Does NOT recurse into FOR bodies: a for-loop introduces a loop variable (`lv<index>`) scoped to the loop;
+    // hoisting nodes that reference it to the enclosing scope emits temps that use an undeclared identifier.
+    const auto hoist_decls = [&](auto&& self_h, int begin, int count) -> void {
+        int i = begin;
+        while (i < begin + count)
+        {
+            const KStmt& st = g.stmt(i);
+            switch (st.kind)
+            {
+            case KStmtKind::BufferStore: case KStmtKind::SharedStore: case KStmtKind::SharedAtomicAdd:
+            case KStmtKind::BufferAtomicAdd: case KStmtKind::BufferAtomicMin:
+                decl(decl, st.index); decl(decl, st.value); ++i; break;
+            case KStmtKind::BufferAtomicAddFetch: case KStmtKind::BufferAtomicExchange:
+                decl(decl, st.index); decl(decl, st.value); ++i; break;
+            case KStmtKind::Materialize: decl(decl, st.value); ++i; break;
+            case KStmtKind::For: i = st.body_begin + st.body_count; break;
+            case KStmtKind::If: decl(decl, st.value); self_h(self_h, st.body_begin, st.body_count); i = st.body_begin + st.body_count; break;
+            case KStmtKind::SpinUntilNonzero: decl(decl, st.index); ++i; break;
+            case KStmtKind::TraceRayCurves: for (int k = 0; k < 8; ++k) { decl(decl, g.stmt_ext_operand(st, k)); } ++i; break;
+            default: ++i; break;
+            }
         }
     };
     const auto emit_body = [&](auto&& self_b, int begin, int count) -> void {
@@ -957,7 +1030,7 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
                 ++i;
                 break;
             case KStmtKind::For: decl(decl, st.value); s.append("  for (uint lv"); app_uint(s, i); s.append(" = 0u; lv"); app_uint(s, i); s.append(" < uint("); pv(pv, st.value); s.append("); ++lv"); app_uint(s, i); s.append(") {\n"); self_b(self_b, st.body_begin, st.body_count); s.append("  }\n"); i = st.body_begin + st.body_count; break;
-            case KStmtKind::If: decl(decl, st.value); s.append("  if ("); pv(pv, st.value); s.append(") {\n"); self_b(self_b, st.body_begin, st.body_count); s.append("  }\n"); i = st.body_begin + st.body_count; break;
+            case KStmtKind::If: decl(decl, st.value); hoist_decls(hoist_decls, st.body_begin, st.body_count); s.append("  if ("); pv(pv, st.value); s.append(") {\n"); self_b(self_b, st.body_begin, st.body_count); s.append("  }\n"); i = st.body_begin + st.body_count; break;
             case KStmtKind::SpinUntilNonzero: decl(decl, st.index); s.append("  while (buf"); app_uint(s, g.node(st.target).iidx); s.append("["); pv(pv, st.index); s.append("] == 0u) { memoryBarrierBuffer(); }\n"); ++i; break;
             case KStmtKind::SharedAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  atomicAdd(sh"); app_uint(s, st.target); s.append("["); pv(pv, st.index); s.append("], "); pv(pv, st.value); s.append(");\n"); ++i; break;
             case KStmtKind::BufferAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  atomicAdd(buf"); app_uint(s, g.node(st.target).iidx); s.append("["); pv(pv, st.index); s.append("], "); pv(pv, st.value); s.append(");\n"); ++i; break;

@@ -255,6 +255,30 @@ inline bool emit_compute_kernel_cuda(const KGraph& g, const KEntry& entry, crd::
             matd[static_cast<crd::usize>(node)] = 1U;
         }
     };
+    // hoist_decls: walk a stmt range and call decl() on every node operand WITHOUT emitting statements. Running
+    // this over an If body BEFORE the opening brace ensures that temps shared across sibling scopes are declared
+    // at the ENCLOSING scope. Does NOT recurse into FOR bodies (loop variables would escape their scope).
+    const auto hoist_decls = [&](auto&& self_h, int begin, int count) -> void {
+        int i = begin;
+        while (i < begin + count)
+        {
+            const KStmt& st = g.stmt(i);
+            switch (st.kind)
+            {
+            case KStmtKind::BufferStore: case KStmtKind::SharedStore: case KStmtKind::SharedAtomicAdd:
+            case KStmtKind::BufferAtomicAdd: case KStmtKind::BufferAtomicMin:
+                decl(decl, st.index); decl(decl, st.value); ++i; break;
+            case KStmtKind::BufferAtomicAddFetch: case KStmtKind::BufferAtomicExchange:
+                decl(decl, st.index); decl(decl, st.value); ++i; break;
+            case KStmtKind::Materialize: decl(decl, st.value); ++i; break;
+            case KStmtKind::For: i = st.body_begin + st.body_count; break;
+            case KStmtKind::If: decl(decl, st.value); self_h(self_h, st.body_begin, st.body_count); i = st.body_begin + st.body_count; break;
+            case KStmtKind::SpinUntilNonzero: decl(decl, st.index); ++i; break;
+            case KStmtKind::TraceRayCurves: for (int k = 0; k < 8; ++k) { decl(decl, g.stmt_ext_operand(st, k)); } ++i; break;
+            default: ++i; break;
+            }
+        }
+    };
     const auto emit_body = [&](auto&& self_b, int begin, int count) -> void {
         int i = begin;
         while (i < begin + count) // a For/If body lives CONTIGUOUSLY after it → recurse then SKIP past it (never re-emit)
@@ -276,7 +300,7 @@ inline bool emit_compute_kernel_cuda(const KGraph& g, const KEntry& entry, crd::
                 ++i;
                 break;
             case KStmtKind::For: decl(decl, st.value); s.append("  for (unsigned lv"); app_uint(s, i); s.append(" = 0u; lv"); app_uint(s, i); s.append(" < (unsigned)("); ev(ev, st.value); s.append("); ++lv"); app_uint(s, i); s.append(") {\n"); self_b(self_b, st.body_begin, st.body_count); s.append("  }\n"); i = st.body_begin + st.body_count; break;
-            case KStmtKind::If: decl(decl, st.value); s.append("  if ("); ev(ev, st.value); s.append(") {\n"); self_b(self_b, st.body_begin, st.body_count); s.append("  }\n"); i = st.body_begin + st.body_count; break;
+            case KStmtKind::If: decl(decl, st.value); hoist_decls(hoist_decls, st.body_begin, st.body_count); s.append("  if ("); ev(ev, st.value); s.append(") {\n"); self_b(self_b, st.body_begin, st.body_count); s.append("  }\n"); i = st.body_begin + st.body_count; break;
             case KStmtKind::SpinUntilNonzero: decl(decl, st.index); s.append("  while (buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("] == 0u) { __nanosleep(64); }\n"); ++i; break; // guarded spin (diagnosable, never deadlocks); volatile re-read, NO per-iter fence
             case KStmtKind::SharedAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  atomicAdd(&sh"); app_uint(s, st.target); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(");\n"); ++i; break;
             case KStmtKind::BufferAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  atomicAdd(&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(");\n"); ++i; break;

@@ -65,6 +65,18 @@ struct DrawItem
     // large enough for the biggest group would over-dispatch every smaller one (harmless, thanks to the kernel's
     // range guard, and wasteful at a million instances — which is the whole thing we are here to fix).
     crd::u32                  dispatch_groups = 0U;
+    // ── (appended at END): this item's DEPTH-ONLY program — what a `raster.depth_only` pass that is NOT a
+    // for_each instance (the depth prepass) must draw with. ⛔⛔ Falling back to `program` there ran the FULL
+    // FORWARD FRAGMENT SHADER in a pass that binds no textures. That was invisible for years because a depth-only
+    // pass has no colour attachments, so the driver dead-coded the FS — until the LOD dither DISCARD gave the FS
+    // a depth-affecting side effect, forcing it to execute and sample never-written descriptors: undefined
+    // behaviour that intermittently killed the device. Null keeps the historical fallback.
+    crd::gpu::IRasterProgram* program_depth = nullptr;
+    // ── ⭐⭐ REN-41 (appended at END): this item's VELOCITY (motion-vector) program — what the MRT velocity
+    // prepass (a `raster.mrt` pass folding a colour write into the depth prepass) draws each group with. Same
+    // per-group selection as `program_depth` (rigid vs skinned twin), but writing the motion vector instead of
+    // colour-only. Null keeps the fallback to `program` (so the field is inert until the renderer populates it).
+    crd::gpu::IRasterProgram* program_velocity = nullptr;
 };
 
 inline constexpr crd::u32 kMaxDrawItems = 256; // stated cap; `resolved` reports what was actually filled

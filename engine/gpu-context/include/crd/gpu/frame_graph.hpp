@@ -66,6 +66,7 @@ enum class FgAccess : crd::u8
     Read = 0,  // sampled / vertex-pulled / read-only attachment
     Write,     // clears + writes a colour/depth attachment or a storage buffer (no prior contents needed)
     ReadWrite, // loads-modifies-stores — a depth-LOAD scene draw, an overlay composite, a compute RMW
+    DepthRead, // REN-40-G3: graph ordering is READ (no backward edges), but layout is DEPTH_ATTACHMENT
 };
 
 // Which queue a pass records onto. Raster/Present = graphics; Compute = the async-compute queue when the
@@ -252,6 +253,7 @@ public:
     virtual IFramePassBuilder& writes(FgBuffer handle)      = 0;
     virtual IFramePassBuilder& read_writes(FgImage handle)  = 0;
     virtual IFramePassBuilder& read_writes(FgBuffer handle) = 0;
+    virtual IFramePassBuilder& reads_depth(FgImage handle)  = 0;
 
     // Attach the recording callback. `user` is passed back to `fn` verbatim.
     virtual IFramePassBuilder& execute(FgExecuteFn fn, void* user) = 0;

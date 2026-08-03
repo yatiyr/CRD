@@ -10,6 +10,14 @@ add_executable(crd-geometry-mesh-processing-tests
     test_repair_manifoldness.cpp
     test_remove_self_intersections.cpp
     test_taubin_smooth.cpp
+    test_meshlet_build.cpp # REN-40-I1: meshlet builder for cluster-DAG LOD
+    test_cluster_group.cpp # REN-40-I2: cluster grouping for cluster-DAG LOD
+    test_dag_build.cpp     # REN-40-I3: cluster-DAG builder
+    test_cluster_bvh.cpp   # REN-40-I4: cluster BVH for GPU traversal
+    test_cluster_dag_cook.cpp # REN-40-I5: cluster DAG cook pipeline
+    test_cluster_select.cpp   # REN-40-I6: cluster LOD selection
+    test_cluster_unpack.cpp   # REN-40-I7: cluster unpack (CPU mesh shader)
+    test_cluster_dag_gate.cpp # REN-40-I8: full pipeline integration gate
 )
 
 target_link_libraries(crd-geometry-mesh-processing-tests PRIVATE

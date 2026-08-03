@@ -1,10 +1,11 @@
-# forward_csm_srgb.frame.toml - forward + cascades + the plain sRGB transform.
+# forward_csm_srgb.frame.toml - forward + cascades + TAA + the plain sRGB transform.
 #
-# 38-G1: the default forward frame PLUS the authored display transform. The only difference from
-# `forward_csm.frame.toml` is the last two things: the forward pass writes an HDR transient instead of the
-# output, and a fullscreen `post` pass names a shipped `.crdp` graph that resolves the frame to the window.
+# 38-G1: the default forward frame PLUS the authored display transform. A fullscreen `post` pass names a shipped
+# `.crdp` graph that resolves the frame to the window. Swapping the tonemap is EDITING THE `shader` LINE BELOW.
 #
-# Swapping the tonemap is EDITING THE `shader` LINE BELOW. No rebuild, no shader variant, no C++ branch.
+# ⭐⭐ REN-41 (TAA IS THE DEFAULT): identical to `forward_csm_agx` except the final display transform — temporal
+# antialiasing is carried the same way (depth prepass → sampled `scene_depth` → jittered camera → resolve). See
+# `forward_csm_agx` for the full annotated TAA wiring.
 
 schema = 1
 name   = "crd://frame/forward_csm_srgb"
@@ -30,9 +31,44 @@ kind    = "transient_image"
 format  = "RGBA16F"
 scale   = 1.0
 sampled = true
-# the scene is DEPTH-TESTED into this target exactly as it would be into the window — without a depth
-# attachment the forward pass draws with broken occlusion, which is a WRONG image, not a missing one.
-depth_buffer = true
+
+# ── ⭐⭐ REN-41 (TAA): a STANDALONE, SAMPLED depth for the resolve's reprojection (a companion depth cannot be
+# sampled). Prepass writes it; forward + impostor share it; the resolve samples it. See forward_csm_agx.
+[[resource]]
+name    = "scene_depth"
+kind    = "transient_image"
+format  = "D32Float"
+scale   = 1.0
+sampled = true
+
+# ⭐⭐ REN-41 (velocity): per-object MOTION VECTORS, written by the depth prepass (now MRT) and sampled by the TAA
+# resolve. Cleared to 0 so a pixel with no mover reprojects from the camera only.
+[[resource]]
+name    = "velocity"
+kind    = "transient_image"
+format  = "RG16F"
+scale   = 1.0
+sampled = true
+
+# ── ⭐⭐ REN-41 (TAA): history (PERSISTENT, fixed-size by engine rule) + resolved output + reproject constants.
+[[resource]]
+name      = "taa_history"
+kind      = "persistent_image"
+format    = "RGBA16F"
+scale     = 1.0
+resizable = true   # ⭐⭐⭐ REN-41: follow the window; a resize discards history for ONE frame (reconverges invisibly)
+sampled   = true
+
+[[resource]]
+name    = "scene_taa"
+kind    = "transient_image"
+format  = "RGBA16F"
+scale   = 1.0
+sampled = true
+
+[[resource]]
+name = "taa_constants"
+kind = "external_buffer"
 
 [[draw_list]]
 name = "shadow_casters"
@@ -52,14 +88,28 @@ all  = ["MeshRenderer", "Transform"]
 cull = "frustum"
 
 [[pass]]
-name          = "csm_cascade"
-kind          = "raster.depth_only"
-draw_list     = "shadow_casters"
-for_each      = "light.0.cascades"
-writes        = ["shadow_atlas[$index]"]
+name             = "csm_cascade"
+kind             = "raster.depth_only"
+draw_list        = "shadow_casters"
+for_each         = "light.0.cascades"
+writes           = ["shadow_atlas[$index]"]
+material_pass    = "Shadow"
+clear_depth      = 1.0
+depth            = "LessEqual"
+depth_bias_slope = 1.5
+
+# ⭐⭐ REN-41: depth prepass — now MRT, writing MOTION VECTORS ([velocity]) alongside the SAMPLED `scene_depth`
+# (the depth-format write routes to the depth slot AND produces scene_depth for the forward `shared_depth` load).
+# The velocity FS carries the SAME LOD dither discard as the forward FS. Reverse-Z: clear depth 0.0, GreaterEqual.
+[[pass]]
+name          = "depth_prepass"
+kind          = "raster.mrt"
+draw_list     = "visible_geometry"
+writes        = ["velocity", "scene_depth"]
 material_pass = "Shadow"
-clear_depth   = 1.0
-depth         = "LessEqual"
+clear_color   = [0.0, 0.0, 0.0, 0.0]
+clear_depth   = 0.0
+depth         = "GreaterEqual"
 
 [[pass]]
 name          = "forward"
@@ -67,25 +117,42 @@ kind          = "raster.geometry"
 draw_list     = "visible_geometry"
 reads         = ["shadow_atlas"]
 writes        = ["scene_hdr"]
+shared_depth  = "scene_depth"
+load_depth    = true
 technique     = "forward_csm"
 material_pass = "Forward"
 clear_color   = [0.09, 0.10, 0.13, 1.0]
-clear_depth   = 0.0
 depth         = "GreaterEqual"
 
 [[pass]]
-name      = "impostor"
-kind      = "raster.geometry"
-draw_list = "impostor_geometry"
-writes    = ["scene_hdr"]
-shader    = "crd://scene/impostor"
-load      = true
-depth     = "GreaterEqual"
+name         = "impostor"
+kind         = "raster.geometry"
+draw_list    = "impostor_geometry"
+writes       = ["scene_hdr"]
+shared_depth = "scene_depth"
+shader       = "crd://scene/impostor"
+load         = true
+depth        = "GreaterEqual"
 
-# ⭐⭐ THE DISPLAY TRANSFORM, AS DATA — the 38-G1 technique-library pass.
+# ── ⭐⭐ REN-41 (TAA): reproject + accumulate, then store. Reads (scene_hdr, scene_depth, taa_history) are bound
+# bindless in DECLARATION ORDER (0/1/2); taa_constants is the b0 buffer. See forward_csm_agx for the full note.
+[[pass]]
+name   = "taa_resolve"
+kind   = "raster.fullscreen"
+reads  = ["scene_hdr", "scene_depth", "taa_history", "velocity", "taa_constants"]
+writes = ["scene_taa"]
+shader = "crd://scene/taa_resolve"
+
+[[pass]]
+name   = "taa_store"
+kind   = "copy"
+reads  = ["scene_taa"]
+writes = ["taa_history"]
+
+# ⭐⭐ THE DISPLAY TRANSFORM, AS DATA — the 38-G1 technique-library pass. Reads the RESOLVED image, not raw HDR.
 [[pass]]
 name   = "post"
 kind   = "raster.fullscreen"
-reads  = ["scene_hdr"]
+reads  = ["scene_taa"]
 writes = ["@output"]
 shader = "crd://post/srgb_only"

@@ -5,9 +5,64 @@
 
 ---
 
-## Current focus — Phase 3.1.6 **v17 GPU compute (CKIR)** — on the **GPU-program-system detour** (D-007+D-008 MERGED)
+## Current focus — Phase 3.1.6 **v17 GPU compute (CKIR)** — **REN-41 VISUAL FRONTIER** (on the D-007 REN band)
 
-> ### ⏩ SESSION HANDOFF (2026-08-01) — READ THIS FIRST on re-entry
+> ### ⏩ SESSION HANDOFF (2026-08-03, later) — READ THIS FIRST on re-entry
+> **REN-41 "Visual Frontier"** — make Cerid's default rendering fully gold-standard / frontier-2026 / no aliasing
+> at 1M. Staged plan + dossier: **`docs/research/2026-08-02-visual-frontier-plan.md`**. Session detail:
+> `docs/sessions/2026-08-03-ren41-velocity-runtime-integration.md` (this one) + `...-velocity-cook-and-assets.md`
+> (the prior cook/asset half). REN-band row/audit: **D-007** REN-41.
+>
+> **DONE + gated: Stages 1–3 + DX12 online (prior sessions) + PER-OBJECT VELOCITY END-TO-END (this session).**
+> Velocity motion vectors now WRITE (depth prepass → MRT) and are CONSUMED (TAA resolve `prev_uv = R_reproject +
+> velocity`) on **both backends** and **all four TAA frames** — steps 0→6 of the dossier, complete:
+> - **2 new GPU verbs, both backends:** `draw_storage_multi_indexed_mrt_indirect` (GPU-cull, device count) +
+>   `draw_storage_indexed_mrt` (CPU-cull, args==null) — N colour + shared depth; executor `RasterMrt` routes by
+>   item shape; a depth-format MRT write routes to the depth attachment as a graph producer.
+> - **scene-render:** `build_velocity_fs_cooked` (object-motion UV delta, NDC±Y, IGN dither discard);
+>   `program_(skinned_)velocity` twins; `DrawItem::program_velocity`; `prev_world`/`prev_palette` snapshots (CPU) +
+>   a device `palette_snapshot` compute pass for `--gpu-skin` (gated by `kHdrGpuSkinActive`); resolve samples
+>   velocity (bindless idx 3).
+> - **Bonus root-cause:** the frame-cook cycle detector's WAR heuristic was masking genuine mutual-RAW cycles on
+>   transients (was pre-existing 1/407 red) — fixed resource-lifetime-aware → **407/407**.
+> - **Verified:** scene-render **53/53 both backends**; sandbox renders correct on Vulkan default, GPU-cull
+>   Vulkan, GPU-cull DX12, `--gpu-skin` (mean-luma 169–170, 0 validation errors, Vulkan/DX12 byte-consistent). All
+>   5 changed `.cpp` tidy-clean (incl. cleanup of ~26 pre-existing committed tidy issues the touched files surfaced).
+>
+> **⛩ STAGE 4 — Nanite cluster-LOD renderer integration: DESIGN PASS OPENED (2026-08-03).** Design contract +
+> reuse audit + 5 de-risked increments: **`docs/design/ren-41-stage4-nanite-cluster-lod.md`**. For HIGH-POLY HERO
+> meshes (triangle-count bound — film/CAD/medical/scanned assets), the complement to 40-C's discrete-LOD+impostors.
+> The 40-I algorithm/data pipeline is CLOSED; this is the RENDERER SEAM. **Reuse is favourable:** the mesh/task
+> stack (`create_task_mesh_program` + `raster.mesh` + a REAL CKIR mesh emitter), the compute-pass vocabulary (the
+> cull kernels), and the frame graph all exist. **⛔ KEY UNKNOWN de-risked FIRST (S4-0):** the shipped
+> `scene_task/meshlet.crdv` are F6 SKELETONS — whether the `.crdv` mesh authoring can express the cluster-unpack
+> BODY (storage reads + per-thread position/prim) is the risk the mesh-body spike answers before anything depends
+> on it. **NEXT CONCRETE ACTION: implement S4-0** (author a real cluster mesh shader that unpacks ONE cluster,
+> gate pixels vs the `unpack_selected_clusters` CPU reference on BOTH backends — mesh-shader scars are SILENT).
+>
+> **✅ BOTH "also open" velocity items CLOSED (2026-08-03, this session).** (1) **Velocity CORRECTNESS gate**
+> — a shipped motion-vector DEBUG VIEW (`crd://frame/velocity_debug` + `crd://scene/velocity_debug`: MRT prepass
+> writes velocity, a fullscreen pass encodes `out.rg = velocity.xy·scale + 0.5` into RGBA8) that the gate DECODES:
+> two cubes (static + mover), a cleared SENTINEL so "drawn-and-wrote-0" (static) is distinguishable from "never
+> drawn" (background), and a controlled +Y mover whose expected screen delta is computed from the same projection
+> the FS uses → **static ≈ 0, mover ≈ expected, both backends**. scene-render **55/55** (was 53), all touched
+> files tidy-clean, ASCII guard green. (2) **1M-with-velocity fps board** `docs/bench/2026-08-03-ren41-velocity-1m-fps.md`
+> (median-of-5, both backends): 1M VK **20.8** / DX12 **7.5**; 100k VK **65.6** / DX12 **19.8**. Velocity is cheap
+> (palette_snapshot 0.03 ms + an RG16F write folded into the depth prepass TAA needed anyway + a ~free resolve tap).
+> ✅ **DX12 UPLOAD GAP ROOT-CAUSED + FIXED (this session).** The board first showed DX12 ~3× behind VK; decomposed
+> to CPU-side `upload_storage` — DX12's synchronous path did a `CreateCommittedResource` + `submit_and_wait` PER
+> CALL (~36 ms/frame at 1M), while Vulkan batches (38-G1). **DX12 never implemented `begin/end_upload_batch`.**
+> Implemented it (double-buffered own-list + persistent mapped ring; big single uploads bypass to synchronous so the
+> ring stays 8 MB). **Steady-state DX12 upload ~36 ms → 0.11 ms (~300×);** DX12 1M **7.5 → 13.1 fps**, 100k **19.8 →
+> 44.5**. 1M now GPU-bound like VK. Scar: `feedback_dx12_upload_needs_batch_not_per_call_submit_wait`.
+> ✅ **BONUS — frame-graph cycle detector fixed (both backends).** Verifying the DX12 fix surfaced REN-1 gates RED on
+> both backends: a prior uncommitted WAR heuristic in the gpu-context frame graph (added for the TAA ping-pong)
+> MASKED genuine cycles — the exact bug the prior session fixed in frame-COOK but left in gpu-context. Ported the
+> lifetime-aware rule (WAR legit only if the resource has a value: persistent/external/earlier-writer) to both
+> `vulkan_/dx12_raster_context.cpp`. All 6 REN-1 gates green both backends; 22-pass frame still builds+renders.
+> Scar: `feedback_frame_graph_war_needs_resource_lifetime_gpu_context_twin`.
+
+> ### ⏩ SESSION HANDOFF (2026-08-01) — historical (REN-40 detail)
 > **REN-40-A through 40-F: ALL CLOSED.** GPU-driven draws (40-A), incremental extract (40-B), LOD chain
 > with attribute quadrics + GPU selection + cross-dissolve + impostors (40-C, C1–C5), soft shadows with
 > PCF/PCSS/EVSM/MSM (40-D), cascade caching + round-robin + caster tightening (40-E), GPU skinning
@@ -23,8 +78,39 @@
 > conditional FK overwrite.
 >
 > **WHERE REN-40 STANDS:** 40-A ✅ · 40-B ✅ · 40-C ✅ (C1–C5) · 40-D ✅ · 40-E ✅ · 40-F ✅
-> · 40-G/H/I ⬜. ⛔ No 1M fps board since LOD started drawing —
-> every earlier fps figure stays WITHDRAWN until 40-H re-measures both backends median-of-5.
+> · 40-G ✅ · 40-I ✅ · 40-H ✅. Boards: `docs/bench/2026-08-02-ren40h-lod-scaling-curve.md` +
+> `docs/bench/2026-08-02-gpu-cull-fix-pcss-caster-cull.md`.
+>
+> **GPU-CULL "REGRESSION" FIXED (2026-08-02): it was DEVICE LOSS, not sync.** The depth prepass drew
+> with the items' FORWARD programs (the executor ignores `material_pass` on non-for_each passes); the
+> driver dead-coded that FS until the dither DISCARD forced it to run → sampled never-written
+> descriptors → intermittent TDR. Fixed with a real depth-only program (`DrawItem::program_depth`,
+> dither-aware Bayer discard so prepass depth matches forward pixels) + cull-kernel padding-thread
+> OOB-read guard + the missing cascade-VS draw-table stamps (both cooks). GPU-AV soak: 0 errors.
+> **GPU-cull+LOD+PCSS median-of-5: 100k = 90.7 fps BOTH backends (2.04× CPU-cull), 1M = 12.4 fps
+> BOTH (3.8×, now GPU-bound ~65 ms).** ⛔ 1M target (≤16.6 ms) still NOT met — next levers:
+> wave-scalarized compaction, VSM (REN-5).
+> Shadow quality shipped same session: shadow distance fade (`shadow_fade_pct` opt, default 30),
+> cascade cross-fade default 15 %, `depth_bias_slope = 1.5` on all csm_cascade passes, PCSS sandbox
+> default (`--hard-shadows` = PCF arm), shadow-caster screen-size cull (`set_shadow_caster_min_px`,
+> default 16 px, CPU + GPU paths from one number).
+> ⛔ Pre-existing in the working tree (previous session, untouched): scene-render tests don't LINK
+> (`builtin_asset_text` deleted with the embedded pack, tests still call it); frame-cook 1/407
+> parser-cycle assertion fails (`frame_asset.cpp` was already modified).
+>
+> **40-I CLUSTER-DAG LOD — CLOSED 2026-08-02:** full Nanite-style algorithm pipeline in
+> `crd-geometry-mesh-processing` — 8 slices (I-1 meshlet builder, I-2 cluster grouping, I-3 DAG
+> builder with monotone-error invariant, I-4 BVH for O(log N) selection, I-5 GPU-packed cook
+> (10 u32/cluster, 8 u32/BVH node), I-6 flat + BVH-accelerated selection with conservative
+> bounding-sphere bounds, I-7 unpack (CPU mesh-shader reference), I-8 integration gate).
+> 56/56 tests green. Renderer integration (CKIR mesh shader graph, frame graph passes) is the
+> next layer; this slice delivers the algorithm + data pipeline.
+>
+> **40-G FRAME TRICKS — CLOSED 2026-08-01:** G1 depth prepass (pixel-identical both backends),
+> G2 R11G11B10F scene_hdr (≤4 channel delta both backends), G3 two-phase occlusion culling
+> plumbing (depth_prepass → HZB build → forward with loaded depth, pixel-identical for unoccluded
+> scene, both backends), G4 visbuffer (gated via F6). Production TOML bugs fixed: R32Float→R32F,
+> depth_prepass cycle removed. 7/7 gate tests green.
 
  **▶▶ PHASE 3 = the FUSED 2D FFT-convolution (THE CRUSH) — BUILT + bit-exact BOTH GPUs (2026-07-13):** `build_fft2d_convolution`
 > (`ckir_fft.hpp`) — 7 dispatches: row FFT → transpose re,im → **on-chip FUSED column conv** (FFT·×H·IFFT·1/(R·C), the column

@@ -219,15 +219,22 @@ ImpostorBakeReport bake_impostor_atlas(const crd::resources::MeshResource& mesh,
     ImpostorBakeReport report{};
     out.grid = grid;
     out.tile = tile;
+    out.mips = 0U;
 
     if (grid == 0U || tile == 0U) { return report; }
 
-    const crd::u32 atlas_w = grid * tile;
-    const crd::u32 atlas_h = grid * tile;
-    const crd::u32 n_pixels = atlas_w * atlas_h;
+    // ⭐⭐ REN-41: the atlas is now a MIP PYRAMID (see impostor_atlas.hpp). Allocate every level up front;
+    // level 0 is baked antialiased (supersampled coverage → fractional alpha), the rest box-downsampled
+    // PER TILE. The albedo is a constant grey, so the only signal that varies is coverage (alpha) — which
+    // is exactly what makes averaging a correct prefilter.
+    out.mips = impostor_num_mips(tile);
+    const crd::u32 total_texels = impostor_atlas_texels(grid, tile);
     out.pixels.clear();
-    out.pixels.resize(static_cast<crd::usize>(n_pixels) * 4U);
+    out.pixels.resize(static_cast<crd::usize>(total_texels) * 4U);
     std::memset(out.pixels.data(), 0, out.pixels.size());
+    // level-0 dimensions for the coverage/report accounting below
+    const crd::u32 atlas_w = grid * tile;
+    const crd::u32 n_pixels = atlas_w * atlas_w;
     report.total_pixels = n_pixels;
 
     const crd::u32 vert_count = static_cast<crd::u32>(mesh.vertices.size() / crd::resources::kMeshVertexStride);
@@ -258,89 +265,116 @@ ImpostorBakeReport bake_impostor_atlas(const crd::resources::MeshResource& mesh,
     if (radius < 1.0e-6F) { radius = 1.0F; }
     const crd::f32 half_extent = radius * 1.05F; // 5% margin for rasterisation
 
+    // ⭐⭐ REN-41: SUPERSAMPLE level 0. Rasterise each tile at `tile*SS` and box-downsample to `tile`, so the
+    // silhouette coverage becomes FRACTIONAL (antialiased) instead of a binary 0/255 edge — the single biggest
+    // per-impostor quality fix. SS=4 → 16 subsamples/texel, enough for a clean edge at impostor scale.
+    constexpr crd::u32 kSS = 4U;
+    const crd::u32     hi  = tile * kSS;
     crd::containers::Array<crd::f32> depth_buf(scratch);
-    depth_buf.resize(static_cast<crd::usize>(tile) * tile);
+    depth_buf.resize(static_cast<crd::usize>(hi) * hi);
+    crd::containers::Array<crd::u8> hi_rgba(scratch);
+    hi_rgba.resize(static_cast<crd::usize>(hi) * hi * 4U);
 
-    // for each octahedral tile
+    const auto lvl_texel = [&](crd::u32 m, crd::u32 tcol, crd::u32 trow, crd::u32 x, crd::u32 y) -> crd::u8* {
+        const crd::u32 tpx  = tile >> m;              // this level's tile edge
+        const crd::u32 dim  = grid * tpx;             // this level's full square edge
+        const crd::u32 gx   = tcol * tpx + x;
+        const crd::u32 gy   = trow * tpx + y;
+        const crd::usize idx = static_cast<crd::usize>(impostor_level_offset(grid, tile, m))
+                               + static_cast<crd::usize>(gy) * dim + gx;
+        return out.pixels.data() + idx * 4U;
+    };
+
     for (crd::u32 ty = 0; ty < grid; ++ty)
     {
         for (crd::u32 tx = 0; tx < grid; ++tx)
         {
-            // octahedral UV → view direction
             const crd::f32 ox = (static_cast<crd::f32>(tx) + 0.5F) / static_cast<crd::f32>(grid) * 2.0F - 1.0F;
             const crd::f32 oy = (static_cast<crd::f32>(ty) + 0.5F) / static_cast<crd::f32>(grid) * 2.0F - 1.0F;
             crd::f32 dx, dy, dz;
             oct_decode_cpu(ox, oy, dx, dy, dz);
             V3 fwd = {dx, dy, dz};
-
             V3 right, up;
             build_basis(fwd, right, up);
 
-            // initialise the tile's depth buffer
-            for (crd::u32 di = 0; di < tile * tile; ++di) { depth_buf[di] = 1.0e30F; }
-
-            // the tile's pixel region in the atlas
-            const crd::u32 base_x = tx * tile;
-            const crd::u32 base_y = ty * tile;
+            for (crd::u32 di = 0; di < hi * hi; ++di) { depth_buf[di] = 1.0e30F; }
+            std::memset(hi_rgba.data(), 0, hi_rgba.size());
 
             Tile t{};
-            t.rgba    = out.pixels.data() + (static_cast<crd::usize>(base_y) * atlas_w + base_x) * 4U;
+            t.rgba    = hi_rgba.data();
             t.depth   = depth_buf.data();
-            t.w       = tile;
-            t.h       = tile;
+            t.w       = hi;
+            t.h       = hi;
             t.covered = 0U;
 
-            // ⛔ The tile's rgba pointer points into the atlas at the tile's top-left corner, but
-            // the rasteriser writes ROW-MAJOR within the tile. We need the tile to be contiguous,
-            // so use a scratch tile and copy out.
-            crd::containers::Array<crd::u8> tile_rgba(scratch);
-            tile_rgba.resize(static_cast<crd::usize>(tile) * tile * 4U);
-            std::memset(tile_rgba.data(), 0, tile_rgba.size());
-            t.rgba = tile_rgba.data();
-
-            // rasterise every triangle
             for (crd::u32 ti = 0; ti < tri_count; ++ti)
             {
                 const crd::u32 i0 = indices[ti * 3U + 0U];
                 const crd::u32 i1 = indices[ti * 3U + 1U];
                 const crd::u32 i2 = indices[ti * 3U + 2U];
                 if (i0 >= vert_count || i1 >= vert_count || i2 >= vert_count) { continue; }
-
                 V3 p0 = v3_sub(read_position(verts, crd::resources::kMeshVertexStride, i0), center);
                 V3 p1 = v3_sub(read_position(verts, crd::resources::kMeshVertexStride, i1), center);
                 V3 p2 = v3_sub(read_position(verts, crd::resources::kMeshVertexStride, i2), center);
-
-                // project onto the (right, up) plane — orthographic from `fwd`
                 crd::f32 proj[3][2];
                 crd::f32 zvals[3];
                 proj[0][0] = v3_dot(p0, right); proj[0][1] = v3_dot(p0, up); zvals[0] = v3_dot(p0, fwd);
                 proj[1][0] = v3_dot(p1, right); proj[1][1] = v3_dot(p1, up); zvals[1] = v3_dot(p1, fwd);
                 proj[2][0] = v3_dot(p2, right); proj[2][1] = v3_dot(p2, up); zvals[2] = v3_dot(p2, fwd);
-
-                // face normal for this triangle
                 V3 edge1 = v3_sub(p1, p0);
                 V3 edge2 = v3_sub(p2, p0);
                 V3 fn    = v3_norm(v3_cross(edge1, edge2));
-
-                // back-face cull: skip triangles facing away from the view direction
                 if (v3_dot(fn, fwd) >= 0.0F) { continue; }
-
                 rasterise_triangle(t, proj, zvals, half_extent);
             }
 
-            // copy the tile into the atlas
-            for (crd::u32 row = 0; row < tile; ++row)
+            // downsample hi → level 0: coverage = mean of the SS×SS block's alpha; rgb = the constant albedo.
+            crd::u32 tile_covered = 0U;
+            for (crd::u32 y = 0; y < tile; ++y)
             {
-                const crd::usize src = static_cast<crd::usize>(row) * tile * 4U;
-                const crd::usize dst = (static_cast<crd::usize>(base_y + row) * atlas_w
-                                        + base_x) * 4U;
-                std::memcpy(out.pixels.data() + dst, tile_rgba.data() + src,
-                            static_cast<crd::usize>(tile) * 4U);
+                for (crd::u32 x = 0; x < tile; ++x)
+                {
+                    crd::u32 asum = 0U;
+                    for (crd::u32 sy = 0; sy < kSS; ++sy)
+                    {
+                        for (crd::u32 sx = 0; sx < kSS; ++sx)
+                        {
+                            const crd::usize si = (static_cast<crd::usize>(y * kSS + sy) * hi + (x * kSS + sx)) * 4U;
+                            asum += hi_rgba[si + 3U];
+                        }
+                    }
+                    const crd::u32 cov = asum / (kSS * kSS); // 0..255 fractional coverage
+                    crd::u8* d = lvl_texel(0U, tx, ty, x, y);
+                    d[0] = 204U; d[1] = 204U; d[2] = 204U; d[3] = static_cast<crd::u8>(cov);
+                    if (cov > 0U) { ++tile_covered; }
+                }
             }
 
-            report.covered_pixels += t.covered;
+            // mips: box 2×2 average of coverage, per tile (no cross-tile bleed — see the header note).
+            for (crd::u32 m = 1U; m < out.mips; ++m)
+            {
+                const crd::u32 tpx = tile >> m;
+                for (crd::u32 y = 0; y < tpx; ++y)
+                {
+                    for (crd::u32 x = 0; x < tpx; ++x)
+                    {
+                        crd::u32 asum = 0U;
+                        for (crd::u32 sy = 0; sy < 2U; ++sy)
+                        {
+                            for (crd::u32 sx = 0; sx < 2U; ++sx)
+                            {
+                                asum += lvl_texel(m - 1U, tx, ty, x * 2U + sx, y * 2U + sy)[3];
+                            }
+                        }
+                        crd::u8* d = lvl_texel(m, tx, ty, x, y);
+                        d[0] = 204U; d[1] = 204U; d[2] = 204U; d[3] = static_cast<crd::u8>(asum / 4U);
+                    }
+                }
+            }
+
+            report.covered_pixels += tile_covered;
             ++report.tiles_baked;
-            if (t.covered == 0U) { ++report.tiles_empty; }
+            if (tile_covered == 0U) { ++report.tiles_empty; }
         }
     }
 

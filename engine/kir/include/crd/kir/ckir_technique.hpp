@@ -532,6 +532,9 @@ inline constexpr int kCsmOptLightAngle  = 4;
 // and deserve separate dials.
 inline constexpr int kCsmOptSoftMaxTexels  = 5;
 inline constexpr int kCsmOptSoftSearchTaps = 6;
+// ⭐⭐ SHADOW DISTANCE FADE: the outermost cascade fades shadow → fully lit over the last `fade_pct` of its
+// footprint, matching UE5/Unity/Frostbite's universal approach. 0 = the historical hard cutoff (bit-identical).
+inline constexpr int kCsmOptFadePct = 7;
 // the plain-sampled atlas (texture + sampler) — bindings 7/8 in ABI order, after the 7 above
 inline constexpr int kCsmBindAtlasDepthTex  = 7;
 inline constexpr int kCsmBindAtlasDepthSamp = 8;
@@ -593,6 +596,9 @@ inline constexpr double kMsmMomentBias = 6.0e-5;
     if (max_texels > 256.0) { max_texels = 256.0; }
     auto n_search = static_cast<int>(tc.option(kCsmOptSoftSearchTaps, 8.0));
     if (n_search != 4 && n_search != 8 && n_search != 16) { n_search = 8; }
+    auto fade_pct = static_cast<double>(tc.option(kCsmOptFadePct, 30.0)) * 0.01;
+    if (!(fade_pct > 0.0)) { fade_pct = 0.0; }
+    if (fade_pct > 0.5) { fade_pct = 0.5; }
 
     const int wp = tc.fixed[kTiWorldPos]; // the projected position is built PER CASCADE (normal offset, below)
 
@@ -976,6 +982,26 @@ inline constexpr double kMsmMomentBias = 6.0e-5;
     // scar 2 — the fallback keys off CONTAINMENT, exactly like the selection.
     vis = add(vis, mul(sub(kf(1.0), any), sub(kf(1.0), vis)));
 
+    // ── SHADOW DISTANCE FADE: the outermost cascade smoothly dissolves to fully lit at its border. ────────────
+    // Without this, shadows snap on/off at the cascade boundary — every major engine (UE5, Unity, Frostbite)
+    // fades over the last 20-30% of the outermost cascade instead.
+    // ⛔ The fade uses the SELECTED cascade's own UV to measure proximity to the border, and applies ONLY when
+    // `csf == n_casc - 1` (the last cascade). For fragments in inner cascades `is_last` is 0 and the multiply
+    // zeroes the correction — no extra nodes emitted when `fade_pct` is 0 (bit-identical).
+    if (fade_pct > 0.0)
+    {
+        const int eu_f = g.unary(KOp::Abs, sub(mul(su, kf(2.0)), kf(1.0)));
+        const int ev_f = g.unary(KOp::Abs, sub(mul(sv, kf(2.0)), kf(1.0)));
+        const int edge_f = g.binary(KOp::Max, eu_f, ev_f);
+        const int is_last = stp(kf(static_cast<double>(n_casc) - 0.5), csf);
+        int fade_t = dvd(sub(edge_f, kf(1.0 - fade_pct)), kf(fade_pct));
+        fade_t = g.binary(KOp::Min, mxf(fade_t, kf(0.0)), kf(1.0));
+        // smoothstep: 3t^2 - 2t^3
+        fade_t = mul(fade_t, mul(fade_t, sub(kf(3.0), mul(kf(2.0), fade_t))));
+        fade_t = mul(fade_t, is_last);
+        vis = add(vis, mul(fade_t, sub(kf(1.0), vis)));
+    }
+
     // Same surface, same BRDF as `standard_forward`, differing ONLY by the visibility term. ⛔ When the shadowed
     // path used a different (toy) shading model, ENABLING SHADOWS MADE PIXELS BRIGHTER — wrong, and invisible to
     // every gate except the one asserting `brighter == 0`.
@@ -1023,6 +1049,9 @@ inline constexpr TechniqueOption kForwardCsmOptions[] = {
     // ⭐ how many taps the BLOCKER SEARCH spends. Separate from `pcf_taps` because they are separate costs: the
     // search runs once per fragment to produce one number, the filter runs per tap to produce the shadow.
     {"soft_search_taps", 4, 16, 8},
+    // ⭐⭐ SHADOW DISTANCE FADE: the outermost cascade fades shadow → fully lit over the last `fade_pct` percent
+    // of its footprint. 0 = the historical hard cutoff; 30 = the UE5/Unity/Frostbite norm.
+    {"shadow_fade_pct", 0, 50, 30},
 };
 
 [[nodiscard]] inline Technique forward_csm() noexcept

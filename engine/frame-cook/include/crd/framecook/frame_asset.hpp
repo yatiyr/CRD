@@ -184,6 +184,13 @@ struct FrameResourceDesc
     // reality is not, and the symptom is another transient's pixels inside this one. An author who knows that
     // needs a way to say so — the alternative is turning aliasing off globally, trading the whole memory win.
     bool                    no_alias = false;
+    // ── ⭐⭐⭐ REN-41: a PERSISTENT/PING-PONG image that FOLLOWS THE OUTPUT (sized by `scale`, recreated on
+    // resize). Normally a persistent image demands an absolute size, because a scale-relative extent would
+    // silently discard the history when the window resizes. `resizable = true` is the author OPTING IN to exactly
+    // that — the right trade for a TAA HISTORY buffer, whose one lost frame on a resize reconverges invisibly.
+    // With it, `scale` alone is legal and the runtime sizes the image from the output every build; the device's
+    // `create_persistent_image` already destroys+recreates on a desc-size change, so resize just works.
+    bool                    resizable = false;
     crd::u32                stride  = 0U;
     crd::u32                count   = 0U;
     crd::u32                size_bytes = 0U; // buffers only
@@ -330,6 +337,12 @@ struct FramePassDesc
     // The HZB builder and SSAO both need the STORED DEPTH VALUE, not a pass/fail comparison. Without this flag
     // a depth-format read auto-selects the comparison sampler and the shader sees 0/1 instead of depth.
     bool                                          depth_as_float = false;
+    // ── ⭐ REN-40-G3: `untracked_storage = true` — do NOT track the draw list's storage buffer in the graph. ──
+    // The depth-prepass in a two-phase occlusion cull reads VERTEX data (static, uploaded once) from the group
+    // buffer, while a later cull pass writes VISIBILITY data (dynamic) in the same buffer. Tracking the read
+    // creates a backward edge (later-writer → earlier-reader) → a graph CYCLE that prevents build(). The vertex
+    // read is safe without tracking because the data was uploaded outside the frame graph.
+    bool                                          untracked_storage = false;
     crd::containers::Array<FrameParam>            params;
 
     explicit FramePassDesc(crd::memory::IAllocator* a)

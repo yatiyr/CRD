@@ -34,8 +34,9 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstring>
-#include <cstdio> // REN-38-F15: per-run temp root stamp
-#include <ctime>  // REN-38-F15: per-run temp root stamp
+#include <cstdio>  // REN-38-F15: per-run temp root stamp
+#include <cstdlib> // REN-41: std::getenv for CRD_ASSETS_DIR (assets are disk-only now)
+#include <ctime>   // REN-38-F15: per-run temp root stamp
 
 using namespace crd;
 
@@ -46,6 +47,50 @@ memory::TlsfAllocator& galloc()
 {
     static memory::TlsfAllocator a(256U << 20U);
     return a;
+}
+
+// ⭐⭐ REN-41: the shipped authored assets are the SINGLE SOURCE — read them from the ctest-provided
+// `CRD_ASSETS_DIR` (there is no in-binary pack any more). Returns false if the root is unset or the file is
+// missing, so a REQUIRE at the call site fails loudly rather than cooking nothing. `_CRT_SECURE_NO_WARNINGS`
+// (set for this target) lets `std::getenv` through on MSVC.
+[[nodiscard]] bool read_shipped_asset(const char* rel, containers::String& out)
+{
+    const char* root = std::getenv("CRD_ASSETS_DIR");
+    if (root == nullptr || root[0] == '\0') { return false; }
+    containers::String p(&galloc());
+    p.append(root);
+    p.append("/");
+    p.append(rel);
+    return platform::fs::read_file_text(platform::fs::Path(containers::StringView(p.c_str(), p.size())), out);
+}
+
+// ⭐⭐ REN-41: a recursive MIRROR of an asset tree. Disk is the single source of truth, so the F15 "an edited
+// asset is live" gate needs a COMPLETE root to point the renderer at — not a one-file overlay over an embedded
+// pack (there is none). Copy the shipped tree; the caller then overwrites the one asset it is testing.
+void copy_tree(const platform::fs::Path& src, const platform::fs::Path& dst)
+{
+    (void)platform::fs::create_directories(dst);
+    containers::Array<platform::fs::Path> entries(&galloc());
+    platform::fs::list_directory(src, entries);
+    for (usize i = 0; i < entries.size(); ++i)
+    {
+        const platform::fs::Path&      e = entries[i];
+        const containers::StringView   g = e.generic();
+        usize                          cut = 0U;
+        bool                           has = false;
+        for (usize k = g.size(); k-- > 0U;) { if (g[k] == '/') { cut = k + 1U; has = true; break; } }
+        const containers::StringView name(g.data() + (has ? cut : 0U), has ? g.size() - cut : g.size());
+        const platform::fs::Path      child = dst / name;
+        if (platform::fs::is_directory(e)) { copy_tree(e, child); }
+        else
+        {
+            containers::Array<u8> bytes(&galloc());
+            if (platform::fs::read_file_binary(e, bytes))
+            {
+                (void)platform::fs::write_file_binary(child, containers::ConstSpan<u8>(bytes.data(), bytes.size()));
+            }
+        }
+    }
 }
 
 // the cube MESH artifact + pack (the CPU test's fixture, duplicated small — both files stay self-contained)
@@ -400,6 +445,12 @@ TEST_CASE("GEO-7 GATE: 10k instances -- chunk-grain sync + BVH/frustum cull + ON
     const math::Mat4f vp   = proj * view;
     const math::Vec3f light{0.4F, 1.0F, 0.2F};
     const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+
+    // ⛔ REN-41: this gate measures FRUSTUM visibility, not the screen-size cull. The renderer now culls
+    // sub-`min_draw_px` instances by default (a frontier "no aliased speck" win), which — with LOD OFF, so no
+    // impostor catches the small ones — legitimately drops the far field below 5000. Turn the pixel cull OFF so
+    // the count reflects the frustum test this case is actually about; the pixel cull has its own coverage.
+    renderer.set_min_draw_px(0.0F);
 
     // plane-only path
     const auto r1 = renderer.render(*target, vp, light, clear, nullptr);
@@ -1388,7 +1439,7 @@ TEST_CASE("REN-38-F6 GATE: TESS, MESH and VISBUFFER families render through auth
     // the quad x1.3, so a pixel between the base edge (NDC 0.6) and the expanded one (0.78) is a pixel ONLY a
     // running domain shader could have coloured — "did anything render" would pass without tessellation.
     {
-        REQUIRE(scenerender::builtin_asset_text("frame/scene_tess.frame.toml", graph));
+        REQUIRE(read_shipped_asset("frame/scene_tess.frame.toml", graph));
         REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
         (void)renderer.render(*target, proj * view, light, clear);
         CHECK((target->read_pixel(64U, 64U) & 0x00FFFFFFU) != 0U);   // inside the base quad
@@ -1400,7 +1451,7 @@ TEST_CASE("REN-38-F6 GATE: TESS, MESH and VISBUFFER families render through auth
     // meshlet grid tiles thin triangles left to right). The claim is the JOIN renders — the amplification
     // COUNTS are the A8 device gates' claim.
     {
-        REQUIRE(scenerender::builtin_asset_text("frame/scene_mesh.frame.toml", graph));
+        REQUIRE(read_shipped_asset("frame/scene_mesh.frame.toml", graph));
         REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
         (void)renderer.render(*target, proj * view, light, clear);
         u32 lit_total = 0;
@@ -1424,7 +1475,7 @@ TEST_CASE("REN-38-F6 GATE: TESS, MESH and VISBUFFER families render through auth
     // Each half-screen triangle carries a DISTINCT primitive id, so the two halves must read back as two
     // DIFFERENT non-background greys — a pixel-true assertion, not a smoke one.
     {
-        REQUIRE(scenerender::builtin_asset_text("frame/scene_visbuffer.frame.toml", graph));
+        REQUIRE(read_shipped_asset("frame/scene_visbuffer.frame.toml", graph));
         REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
         (void)renderer.render(*target, proj * view, light, clear);
         const u32 a = target->read_pixel(96U, 24U) & 0x00FFFFFFU;
@@ -1486,7 +1537,7 @@ TEST_CASE("REN-38-F6 GATE: the authored CULL graph computes real frustum visibil
     const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
 
     containers::String graph(&galloc());
-    REQUIRE(scenerender::builtin_asset_text("frame/scene_cull.frame.toml", graph));
+    REQUIRE(read_shipped_asset("frame/scene_cull.frame.toml", graph));
     REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
     (void)renderer.render(*target, proj * view, math::Vec3f{0.4F, 1.0F, 0.2F}, gpu::ClearColor{0, 0, 0, 1});
 
@@ -1568,7 +1619,7 @@ TEST_CASE("REN-38-F6 GATE: the authored RT PIPELINE graph traces the scene TLAS 
     const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
 
     containers::String graph(&galloc());
-    REQUIRE(scenerender::builtin_asset_text("frame/scene_rt.frame.toml", graph));
+    REQUIRE(read_shipped_asset("frame/scene_rt.frame.toml", graph));
     REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
     (void)renderer.render(*target, proj * view, math::Vec3f{0.4F, 1.0F, 0.2F}, gpu::ClearColor{0, 0, 0, 1});
 
@@ -1631,7 +1682,7 @@ TEST_CASE("REN-38-F6 GATE (DX12): TESS, MESH and VISBUFFER families render throu
 
     // TESSELLATION: the displacement-territory pixel is the claim (see the Vulkan twin for the geometry)
     {
-        REQUIRE(scenerender::builtin_asset_text("frame/scene_tess.frame.toml", graph));
+        REQUIRE(read_shipped_asset("frame/scene_tess.frame.toml", graph));
         REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
         (void)renderer.render(*target, proj * view, light, clear);
         CHECK((target->read_pixel(64U, 64U) & 0x00FFFFFFU) != 0U);
@@ -1641,7 +1692,7 @@ TEST_CASE("REN-38-F6 GATE (DX12): TESS, MESH and VISBUFFER families render throu
 
     // MESH + TASK amplification
     {
-        REQUIRE(scenerender::builtin_asset_text("frame/scene_mesh.frame.toml", graph));
+        REQUIRE(read_shipped_asset("frame/scene_mesh.frame.toml", graph));
         REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
         (void)renderer.render(*target, proj * view, light, clear);
         u32 lit_total = 0;
@@ -1667,7 +1718,7 @@ TEST_CASE("REN-38-F6 GATE (DX12): TESS, MESH and VISBUFFER families render throu
     // probes that straddle it on one backend both land on a single triangle on the other. A midline pair
     // classifies identically under either orientation.
     {
-        REQUIRE(scenerender::builtin_asset_text("frame/scene_visbuffer.frame.toml", graph));
+        REQUIRE(read_shipped_asset("frame/scene_visbuffer.frame.toml", graph));
         REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
         (void)renderer.render(*target, proj * view, light, clear);
         const u32 a = target->read_pixel(98U, 64U) & 0x00FFFFFFU; // NDC (+0.53, ~0) — the y<x triangle
@@ -1720,7 +1771,7 @@ TEST_CASE("REN-38-F6 GATE (DX12): the authored CULL graph computes real frustum 
     const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
 
     containers::String graph(&galloc());
-    REQUIRE(scenerender::builtin_asset_text("frame/scene_cull.frame.toml", graph));
+    REQUIRE(read_shipped_asset("frame/scene_cull.frame.toml", graph));
     REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
     (void)renderer.render(*target, proj * view, math::Vec3f{0.4F, 1.0F, 0.2F}, gpu::ClearColor{0, 0, 0, 1});
 
@@ -1790,7 +1841,7 @@ TEST_CASE("REN-38-F6 GATE (DX12): the authored RT PIPELINE graph traces the scen
     const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
 
     containers::String graph(&galloc());
-    REQUIRE(scenerender::builtin_asset_text("frame/scene_rt.frame.toml", graph));
+    REQUIRE(read_shipped_asset("frame/scene_rt.frame.toml", graph));
     REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
     (void)renderer.render(*target, proj * view, math::Vec3f{0.4F, 1.0F, 0.2F}, gpu::ClearColor{0, 0, 0, 1});
 
@@ -1804,11 +1855,12 @@ TEST_CASE("REN-38-F6 GATE (DX12): the authored RT PIPELINE graph traces the scen
 }
 #endif // _WIN32 (the DX12 twin gates)
 
-// ── ⭐ REN-38-F15 GATE: DISK-FIRST asset loading — a file under the root SHADOWS the embedded pack. ──────────
-// The claim has two halves, and both must be pixel-visible: (1) an EDITED disk declaration changes the frame
-// without a rebuild; (2) a CORRUPT disk declaration fails LOUDLY — it never silently falls back to the
-// embedded copy, because a fallback that renders is indistinguishable from the edit having worked.
-TEST_CASE("REN-38-F15 GATE: a disk asset SHADOWS the embedded pack, and a corrupt one refuses loudly (Vulkan)",
+// ── ⭐ REN-38-F15 / REN-41 GATE: DISK-FIRST asset loading — the asset root is the SINGLE SOURCE. ─────────────
+// The claim has two halves, both pixel-visible: (1) an EDITED disk declaration changes the frame without a
+// rebuild; (2) a CORRUPT disk declaration fails LOUDLY — there is no in-binary pack to silently fall back to, and
+// a fallback that renders would be indistinguishable from the edit having worked. Disk is the only source now, so
+// the temp root is a COMPLETE mirror of the shipped tree with the one asset under test overwritten.
+TEST_CASE("REN-38-F15 GATE: an edited disk asset is live and a corrupt one refuses loudly (Vulkan)",
           "[scene-render][ren38][gpu][vulkan]")
 {
     gpu::GpuContextConfig cfg;
@@ -1837,12 +1889,19 @@ TEST_CASE("REN-38-F15 GATE: a disk asset SHADOWS the embedded pack, and a corrup
                       static_cast<unsigned long long>(std::time(nullptr)));
         root.append(stamp);
     }
+    // ⭐⭐ REN-41: disk is the SINGLE SOURCE — mirror the shipped tree into the temp root so it is COMPLETE
+    // (set_asset_root validates the default frame pair, and the scene_tess frame cooks its stages BY NAME from
+    // the root), THEN overwrite the one declaration under test below. No embedded pack shadows anything now.
+    const char* canon = std::getenv("CRD_ASSETS_DIR");
+    if (canon == nullptr || canon[0] == '\0') { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
+    copy_tree(platform::fs::Path(canon),
+              platform::fs::Path(containers::StringView(root.c_str(), root.size())));
     containers::String vdir(&galloc());
     vdir.append(root.c_str());
     vdir.append("/vertex");
     REQUIRE(platform::fs::create_directories(platform::fs::Path(containers::StringView(vdir.c_str(), vdir.size()))));
     containers::String edited(&galloc());
-    REQUIRE(scenerender::builtin_asset_text("vertex/tess_corners.crdv", edited));
+    REQUIRE(read_shipped_asset("vertex/tess_corners.crdv", edited));
     // widen the corner table: every 0.6 literal becomes 0.9 (the ifequal chains carry them)
     for (usize i = 0; i + 3U <= edited.size(); ++i)
     {
@@ -1877,9 +1936,9 @@ TEST_CASE("REN-38-F15 GATE: a disk asset SHADOWS the embedded pack, and a corrup
     const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
     const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
     containers::String graph(&galloc());
-    REQUIRE(scenerender::builtin_asset_text("frame/scene_tess.frame.toml", graph));
+    REQUIRE(read_shipped_asset("frame/scene_tess.frame.toml", graph));
 
-    // half 1: the DISK copy draws — a pixel the embedded declaration cannot reach lights up
+    // half 1: the EDITED disk copy draws — a pixel the shipped (0.6) declaration cannot reach lights up
     {
         scenerender::SceneRenderer renderer(&galloc());
         REQUIRE(renderer.init(*raster, rm));
@@ -1911,7 +1970,7 @@ TEST_CASE("REN-38-F15 GATE: a disk asset SHADOWS the embedded pack, and a corrup
         const auto r2 = renderer.render(*target, proj * view, math::Vec3f{0.4F, 1.0F, 0.2F}, clear);
         // ⛔ EXECUTION truth, not pixels: a fresh target's readback can recycle the PREVIOUS target's host
         // memory, so a stale image would fake either verdict. A refused cook means the record fails by name
-        // and NO pass executes — and no embedded fallback sneaks in behind the corrupt disk copy.
+        // and NO pass executes — there is no pack to sneak a fallback in behind the corrupt disk copy.
         CHECK(r2.timed_passes == 0U);
     }
 
@@ -2821,14 +2880,17 @@ TEST_CASE("REN-40-D GATE: cascade cross-fade removes the seam step, and blend=0 
             for (u32 x = 0; x < dim; x += 2U) { out.push_back(t.read_pixel(x, y) & 0xFFU); }
         }
     };
-    // the largest vertically-adjacent jump, restricted to a set of rows
-    const auto step_on_rows = [&](const containers::Array<u32>& px, const containers::Array<u8>& rows) {
+    // the largest vertically-adjacent jump, restricted to a per-PIXEL mask. ⛔⛔ Restricting to the CHANGED PIXELS
+    // — not whole rows — is what finally isolates the cascade seam: the shadow's OWN edge is identical in both arms
+    // (never a changed pixel) so it drops out, leaving only the seam discontinuity the cross-fade blends. The old
+    // whole-row form measured 59→59 because a shadow edge sat on a touched row and dominated the max both arms.
+    const auto step_at_mask = [&](const containers::Array<u32>& px, const containers::Array<u8>& mask) {
         u32 worst = 0U;
         for (u32 ry = 1; ry < grid; ++ry)
         {
-            if (rows[ry] == 0U) { continue; }
             for (u32 rx = 0; rx < grid; ++rx)
             {
+                if (mask[(ry * grid) + rx] == 0U && mask[((ry - 1U) * grid) + rx] == 0U) { continue; }
                 const u32 a = px[((ry - 1U) * grid) + rx];
                 const u32 b = px[(ry * grid) + rx];
                 const u32 d = a > b ? a - b : b - a;
@@ -2867,21 +2929,16 @@ TEST_CASE("REN-40-D GATE: cascade cross-fade removes the seam step, and blend=0 
         grab(*target, soft_px);
     }
 
-    // which rows did the cross-fade touch? (widened by one, so the step ACROSS the band is included)
-    containers::Array<u8> rows(&galloc());
-    rows.resize(grid, static_cast<u8>(0));
+    // which PIXELS did the cross-fade touch? Those pixels ARE the cascade seam (the shadow's own edge is identical
+    // in both arms, so it is never marked) — the mask the step metric restricts to below.
+    containers::Array<u8> cmask(&galloc());
+    cmask.resize(grid * grid, static_cast<u8>(0));
     u32 changed = 0U;
     for (u32 ry = 0; ry < grid; ++ry)
     {
         for (u32 rx = 0; rx < grid; ++rx)
         {
-            if (hard_px[(ry * grid) + rx] != soft_px[(ry * grid) + rx])
-            {
-                ++changed;
-                rows[ry] = 1U;
-                if (ry > 0U) { rows[ry - 1U] = 1U; }
-                if (ry + 1U < grid) { rows[ry + 1U] = 1U; }
-            }
+            if (hard_px[(ry * grid) + rx] != soft_px[(ry * grid) + rx]) { cmask[(ry * grid) + rx] = 1U; ++changed; }
         }
     }
     // ⛔ FIRST: the cross-fade must actually REACH the shader. Without this every "it got smoother" assertion
@@ -2893,8 +2950,8 @@ TEST_CASE("REN-40-D GATE: cascade cross-fade removes the seam step, and blend=0 
     // ...and it is a SEAM-LOCAL effect, not a global lighting change
     CHECK(changed < (grid * grid) / 4U);
 
-    const u32 hard_step = step_on_rows(hard_px, rows);
-    const u32 soft_step = step_on_rows(soft_px, rows);
+    const u32 hard_step = step_at_mask(hard_px, cmask);
+    const u32 soft_step = step_at_mask(soft_px, cmask);
     INFO("seam step " << hard_step << " -> " << soft_step);
     // the hard arm must SHOW a step there, or the soft arm proves nothing (a flat region is trivially smooth)
     CHECK(hard_step > 4U);
@@ -3865,3 +3922,998 @@ TEST_CASE("REN-40-F GATE (DX12): GPU skinning palette is bit-identical to the CP
     CHECK(covered > 500U);
 }
 #endif // _WIN32 (the REN-40-F DX12 skinning gate)
+
+// ── ⭐⭐ REN-40-G GATE: THE FRAME TRICKS — DEPTH PREPASS, R11G11B10F, OCCLUSION CULLING. ───────────────────────
+// Each feature has its own A/B arm: one arm renders WITHOUT the feature, one WITH. The gates are:
+//   G1 — depth prepass + shared_depth + load_depth: pixels IDENTICAL (prepass only accelerates, never changes output)
+//   G2 — R11G11B10F intermediate: the packed HDR format produces correct lit output after tonemap
+//   G3 — two-phase occlusion culling: pixels IDENTICAL for an unoccluded scene (the re-cull keeps everything)
+
+namespace
+{
+const char k40gRefBasicToml[] = R"(
+schema = 1
+name   = "crd://frame/test_g1_ref"
+
+[[resource]]
+name    = "scene_hdr"
+kind    = "transient_image"
+format  = "RGBA8Unorm"
+width   = 256
+height  = 256
+sampled = true
+
+[[draw_list]]
+name = "visible_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "material"
+
+[[pass]]
+name          = "forward"
+kind          = "raster.geometry"
+draw_list     = "visible_geometry"
+writes        = ["scene_hdr"]
+material_pass = "Forward"
+clear_color   = [0.10, 0.30, 0.60, 1.0]
+clear_depth   = 0.0
+depth         = "GreaterEqual"
+
+[[pass]]
+name   = "post"
+kind   = "raster.fullscreen"
+reads  = ["scene_hdr"]
+writes = ["@output"]
+shader = "crd://post/srgb_only"
+)";
+
+const char k40gPrepassToml[] = R"(
+schema = 1
+name   = "crd://frame/test_g1_pre"
+
+[[resource]]
+name    = "scene_depth"
+kind    = "transient_image"
+format  = "D32Float"
+width   = 256
+height  = 256
+
+[[resource]]
+name    = "scene_hdr"
+kind    = "transient_image"
+format  = "RGBA8Unorm"
+width   = 256
+height  = 256
+sampled = true
+
+[[draw_list]]
+name = "visible_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "material"
+
+[[pass]]
+name          = "depth_prepass"
+kind          = "raster.depth_only"
+draw_list     = "visible_geometry"
+writes        = ["scene_depth"]
+material_pass = "Shadow"
+clear_depth   = 0.0
+depth         = "GreaterEqual"
+
+[[pass]]
+name          = "forward"
+kind          = "raster.geometry"
+draw_list     = "visible_geometry"
+writes        = ["scene_hdr"]
+shared_depth  = "scene_depth"
+load_depth    = true
+material_pass = "Forward"
+clear_color   = [0.10, 0.30, 0.60, 1.0]
+depth         = "GreaterEqual"
+
+[[pass]]
+name   = "post"
+kind   = "raster.fullscreen"
+reads  = ["scene_hdr"]
+writes = ["@output"]
+shader = "crd://post/srgb_only"
+)";
+
+const char k40gRef16FToml[] = R"(
+schema = 1
+name   = "crd://frame/test_g2_16f"
+
+[[resource]]
+name    = "scene_hdr"
+kind    = "transient_image"
+format  = "RGBA16F"
+width   = 256
+height  = 256
+sampled = true
+
+[[draw_list]]
+name = "visible_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "material"
+
+[[pass]]
+name          = "forward"
+kind          = "raster.geometry"
+draw_list     = "visible_geometry"
+writes        = ["scene_hdr"]
+material_pass = "Forward"
+clear_color   = [0.10, 0.30, 0.60, 1.0]
+clear_depth   = 0.0
+depth         = "GreaterEqual"
+
+[[pass]]
+name   = "post"
+kind   = "raster.fullscreen"
+reads  = ["scene_hdr"]
+writes = ["@output"]
+shader = "crd://post/srgb_only"
+)";
+
+const char k40gHdrR11Toml[] = R"(
+schema = 1
+name   = "crd://frame/test_g2_r11"
+
+[[resource]]
+name    = "scene_hdr"
+kind    = "transient_image"
+format  = "R11G11B10F"
+width   = 256
+height  = 256
+sampled = true
+
+[[draw_list]]
+name = "visible_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "material"
+
+[[pass]]
+name          = "forward"
+kind          = "raster.geometry"
+draw_list     = "visible_geometry"
+writes        = ["scene_hdr"]
+material_pass = "Forward"
+clear_color   = [0.10, 0.30, 0.60, 1.0]
+clear_depth   = 0.0
+depth         = "GreaterEqual"
+
+[[pass]]
+name   = "post"
+kind   = "raster.fullscreen"
+reads  = ["scene_hdr"]
+writes = ["@output"]
+shader = "crd://post/srgb_only"
+)";
+
+const char k40gOccCullToml[] = R"(
+schema = 1
+name   = "crd://frame/test_g3_occ"
+
+[[resource]]
+name = "instances"
+kind = "external_buffer"
+
+[[resource]]
+name       = "cull_args"
+kind       = "indirect_args"
+size_bytes = 256
+
+[[resource]]
+name    = "scene_depth"
+kind    = "transient_image"
+format  = "D32Float"
+width   = 256
+height  = 256
+sampled = true
+
+[[resource]]
+name    = "hzb"
+kind    = "transient_image"
+format  = "R32F"
+width   = 128
+height  = 128
+sampled = true
+
+[[resource]]
+name    = "scene_hdr"
+kind    = "transient_image"
+format  = "RGBA8Unorm"
+width   = 256
+height  = 256
+sampled = true
+
+[[draw_list]]
+name = "visible_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "material"
+
+[[pass]]
+name      = "cull_reset"
+kind      = "compute"
+kernel    = "crd://scene/cull_reset"
+draw_list = "visible_geometry"
+writes    = ["instances", "cull_args"]
+
+[[pass]]
+name      = "cull_view0"
+kind      = "compute"
+kernel    = "crd://scene/cull_view0"
+draw_list = "visible_geometry"
+writes    = ["instances", "cull_args"]
+
+[[pass]]
+name               = "depth_prepass"
+kind               = "raster.depth_only"
+draw_list          = "visible_geometry"
+writes             = ["scene_depth"]
+material_pass      = "Shadow"
+clear_depth        = 0.0
+depth              = "GreaterEqual"
+untracked_storage  = true
+
+[[pass]]
+name           = "hzb_build"
+kind           = "raster.fullscreen"
+reads          = ["scene_depth"]
+writes         = ["hzb"]
+shader         = "crd://scene/hzb_build"
+depth_as_float = true
+
+[[pass]]
+name      = "occlusion_reset"
+kind      = "compute"
+kernel    = "crd://scene/cull_reset"
+draw_list = "visible_geometry"
+writes    = ["instances", "cull_args"]
+
+[[pass]]
+name      = "occlusion_cull"
+kind      = "compute"
+kernel    = "crd://scene/occlusion_cull"
+draw_list = "visible_geometry"
+reads     = ["hzb"]
+writes    = ["instances", "cull_args"]
+
+[[pass]]
+name          = "forward"
+kind          = "raster.geometry"
+draw_list     = "visible_geometry"
+writes        = ["scene_hdr"]
+reads         = ["instances", "cull_args"]
+shared_depth  = "scene_depth"
+load_depth    = true
+material_pass = "Forward"
+clear_color   = [0.10, 0.30, 0.60, 1.0]
+depth         = "GreaterEqual"
+
+[[pass]]
+name   = "post"
+kind   = "raster.fullscreen"
+reads  = ["scene_hdr"]
+writes = ["@output"]
+shader = "crd://post/srgb_only"
+)";
+} // namespace
+
+TEST_CASE("REN-40-G1 GATE: depth prepass with shared_depth is pixel-identical to forward-only (Vulkan)",
+          "[scene-render][ren40][depth-prepass][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_g1_pack_", cube_id);
+    write_mesh_pack(pack.path, cube_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+    for (u32 i = 0; i < 5U; ++i)
+    {
+        const f32             x = (static_cast<f32>(i) - 2.0F) * 2.5F;
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.world = math::from_trs(math::Vec3f{x, 0.0F, 0.0F}, math::Quatf::identity(), math::Vec3f{1, 1, 1});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{cube_id, {}});
+    }
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    REQUIRE(renderer.init_programs(*vk));
+    (void)renderer.sync(world);
+
+    constexpr u32         dim   = 256U;
+    const math::Mat4f     view  = math::look_at(math::Vec3f{0, 4, 12}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f     proj  = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Vec3f     light{0.4F, 1.0F, 0.2F};
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+
+    auto ref = raster->create_color_depth_target(dim, dim);
+    REQUIRE(ref != nullptr);
+    REQUIRE(renderer.set_frame_graph_toml(k40gRefBasicToml));
+    const auto r_ref = renderer.render(*ref, proj * view, light, clear);
+    CHECK(r_ref.draws > 0U);
+
+    auto tgt = raster->create_color_depth_target(dim, dim);
+    REQUIRE(tgt != nullptr);
+    REQUIRE(renderer.set_frame_graph_toml(k40gPrepassToml));
+    const auto r_pre = renderer.render(*tgt, proj * view, light, clear);
+    INFO("ref draws=" << r_ref.draws << " pre draws=" << r_pre.draws
+         << " pre timed=" << r_pre.timed_passes);
+    CHECK(r_pre.draws > 0U);
+
+    u32 diffs   = 0U;
+    u32 covered = 0U;
+    for (u32 y = 0; y < dim; ++y)
+    {
+        for (u32 x = 0; x < dim; ++x)
+        {
+            const u32 a = ref->read_pixel(x, y);
+            const u32 b = tgt->read_pixel(x, y);
+            if (a != b) { ++diffs; }
+            if ((b & 0x00FFFFFFU) != 0U) { ++covered; }
+        }
+    }
+    INFO("diffs=" << diffs << " covered=" << covered);
+    CHECK(diffs == 0U);
+    CHECK(covered > 500U);
+}
+
+TEST_CASE("REN-40-G2 GATE: R11G11B10F scene_hdr produces correct lit output after tonemap (Vulkan)",
+          "[scene-render][ren40][hdr-format][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_g2_pack_", cube_id);
+    write_mesh_pack(pack.path, cube_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+    for (u32 i = 0; i < 3U; ++i)
+    {
+        const f32             x = (static_cast<f32>(i) - 1.0F) * 3.0F;
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.world = math::from_trs(math::Vec3f{x, 0.0F, 0.0F}, math::Quatf::identity(), math::Vec3f{1, 1, 1});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{cube_id, {}});
+    }
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    REQUIRE(renderer.init_programs(*vk));
+    (void)renderer.sync(world);
+
+    constexpr u32         dim   = 256U;
+    const math::Mat4f     view  = math::look_at(math::Vec3f{0, 4, 12}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f     proj  = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Vec3f     light{0.4F, 1.0F, 0.2F};
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+
+    auto ref = raster->create_color_depth_target(dim, dim);
+    REQUIRE(ref != nullptr);
+    REQUIRE(renderer.set_frame_graph_toml(k40gRef16FToml));
+    const auto r_ref = renderer.render(*ref, proj * view, light, clear);
+    CHECK(r_ref.draws > 0U);
+
+    auto tgt = raster->create_color_depth_target(dim, dim);
+    REQUIRE(tgt != nullptr);
+    REQUIRE(renderer.set_frame_graph_toml(k40gHdrR11Toml));
+    const auto r_r11 = renderer.render(*tgt, proj * view, light, clear);
+    INFO("ref draws=" << r_ref.draws << " r11 draws=" << r_r11.draws);
+    CHECK(r_r11.draws > 0U);
+
+    u32 diffs     = 0U;
+    u32 big_diffs = 0U;
+    u32 covered   = 0U;
+    for (u32 y = 0; y < dim; ++y)
+    {
+        for (u32 x = 0; x < dim; ++x)
+        {
+            const u32 a = ref->read_pixel(x, y);
+            const u32 b = tgt->read_pixel(x, y);
+            if (a != b) { ++diffs; }
+            const i32 dr = static_cast<i32>((a >> 16U) & 0xFFU) - static_cast<i32>((b >> 16U) & 0xFFU);
+            const i32 dg = static_cast<i32>((a >> 8U)  & 0xFFU) - static_cast<i32>((b >> 8U)  & 0xFFU);
+            const i32 db = static_cast<i32>(a & 0xFFU)          - static_cast<i32>(b & 0xFFU);
+            const i32 mx = (dr > 0 ? dr : -dr);
+            const i32 my = (dg > 0 ? dg : -dg);
+            const i32 mz = (db > 0 ? db : -db);
+            const i32 mxy   = mx > my ? mx : my;
+            const i32 worst = mxy > mz ? mxy : mz;
+            if (worst > 4) { ++big_diffs; }
+            if ((b & 0x00FFFFFFU) != 0U) { ++covered; }
+        }
+    }
+    INFO("diffs=" << diffs << " big_diffs=" << big_diffs << " covered=" << covered);
+    CHECK(big_diffs == 0U);
+    CHECK(covered > 500U);
+}
+
+TEST_CASE("REN-40-G3 GATE: GPU occlusion culling produces pixel-identical output for unoccluded scene (Vulkan)",
+          "[scene-render][ren40][occlusion][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_g3_pack_", cube_id);
+    write_mesh_pack(pack.path, cube_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+    for (u32 i = 0; i < 8U; ++i)
+    {
+        const f32             x = (static_cast<f32>(i) - 3.5F) * 1.5F;
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.world = math::from_trs(math::Vec3f{x, 0.0F, 0.0F}, math::Quatf::identity(), math::Vec3f{1, 1, 1});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{cube_id, {}});
+    }
+
+    const math::Mat4f     view  = math::look_at(math::Vec3f{0, 8, 20}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f     proj  = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Vec3f     light{0.4F, 1.0F, 0.2F};
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+    constexpr u32         dim   = 256U;
+
+    scenerender::SceneRenderer ref_renderer(&galloc());
+    REQUIRE(ref_renderer.init(*raster, rm));
+    REQUIRE(ref_renderer.init_programs(*vk));
+    (void)ref_renderer.sync(world);
+    auto ref = raster->create_color_depth_target(dim, dim);
+    REQUIRE(ref != nullptr);
+    REQUIRE(ref_renderer.set_frame_graph_toml(k40gRefBasicToml));
+    const auto r_ref = ref_renderer.render(*ref, proj * view, light, clear);
+    INFO("ref draws=" << r_ref.draws);
+    CHECK(r_ref.draws > 0U);
+
+    scenerender::SceneRenderer occ_renderer(&galloc());
+    REQUIRE(occ_renderer.init(*raster, rm));
+    REQUIRE(occ_renderer.init_programs(*vk));
+    occ_renderer.set_gpu_cull(true);
+    occ_renderer.set_gpu_cull_verify(true);
+    (void)occ_renderer.sync(world);
+    auto tgt = raster->create_color_depth_target(dim, dim);
+    REQUIRE(tgt != nullptr);
+    REQUIRE(occ_renderer.set_frame_graph_toml(k40gOccCullToml));
+    const auto r_occ = occ_renderer.render(*tgt, proj * view, light, clear);
+    scenerender::SceneRenderer::GpuCullCounts gc{};
+    const bool gc_ok = occ_renderer.read_gpu_cull_counts(gc);
+    INFO("occ draws=" << r_occ.draws << " drawn_instances=" << r_occ.drawn_instances
+         << " gc_ok=" << gc_ok << " gc_views=" << gc.views
+         << " gc_v0=" << gc.instances[0] << " gc_groups=" << gc.groups
+         << " cpu_vis=" << r_occ.culled_instances
+         << " cpu_v0=" << gc.cpu_instances[0]
+         << " bounds_checked=" << gc.bounds_checked
+         << " bounds_mismatch=" << gc.bounds_mismatch
+         << " slot0_inst=" << gc.slot_instances[0]
+         << " slot0_idx=" << gc.slot_indices[0]
+         << " slot0_fi=" << gc.slot_first[0]
+         << " gpu_cull_effective=" << occ_renderer.gpu_cull()
+         << " hdr_w0=" << gc.header_w0
+         << " hdr_w2=" << gc.header_w2
+         << " args_size=" << gc.args_size);
+    INFO("raw_args[0..15]:"
+         << " " << gc.raw_args[0] << " " << gc.raw_args[1]
+         << " " << gc.raw_args[2] << " " << gc.raw_args[3]
+         << " " << gc.raw_args[4] << " " << gc.raw_args[5]
+         << " " << gc.raw_args[6] << " " << gc.raw_args[7]
+         << " |" << gc.raw_args[8] << " " << gc.raw_args[9]
+         << " " << gc.raw_args[10] << " " << gc.raw_args[11]
+         << " " << gc.raw_args[12] << "| " << gc.raw_args[13]
+         << " " << gc.raw_args[14] << " " << gc.raw_args[15]);
+    INFO("fill: cull_gates=" << gc.fill_cull_gates
+         << " dispatch_max=" << gc.fill_dispatch_max
+         << " total_items=" << gc.fill_total_items
+         << " index_count_0=" << gc.fill_index_count_0
+         << " record_ok=" << gc.fill_record_ok
+         << " build_ok=" << gc.fill_build_ok
+         << " pass_count=" << gc.fill_pass_count
+         << " vk_dispatches=" << raster->compute_dispatch_count()
+         << " fg_order=" << raster->compute_diag_count(5)
+         << " fg_has_fn=" << raster->compute_diag_count(6)
+         << " fg_not_async=" << raster->compute_diag_count(7)
+         << " record_pass_calls=" << raster->compute_diag_count(8)
+         << " record_pass_compute=" << raster->compute_diag_count(9)
+         << " compute[0..4]=" << raster->compute_diag_count(0) << "," << raster->compute_diag_count(1) << ","
+         << raster->compute_diag_count(2) << "," << raster->compute_diag_count(3) << "," << raster->compute_diag_count(4)
+         << " occ_step=" << gc.occ_step);
+    CHECK(r_occ.draws > 0U);
+
+    u32 diffs   = 0U;
+    u32 covered = 0U;
+    for (u32 y = 0; y < dim; ++y)
+    {
+        for (u32 x = 0; x < dim; ++x)
+        {
+            const u32 a = ref->read_pixel(x, y);
+            const u32 b = tgt->read_pixel(x, y);
+            if (a != b) { ++diffs; }
+            if ((b & 0x00FFFFFFU) != 0U) { ++covered; }
+        }
+    }
+    INFO("diffs=" << diffs << " covered=" << covered);
+    CHECK(diffs == 0U);
+    CHECK(covered > 500U);
+}
+
+// ── REN-41 (velocity) CORRECTNESS GATE — the shared body; one TEST_CASE per backend drives it. ───────────────
+// The dossier's remaining "read the velocity buffer" gate. It renders the SHIPPED `velocity_debug` frame (the
+// SHIPPING motion-vector prepass + an encode pass) and DECODES the RG16F motion delta out of the RGBA8 output.
+//
+// Scene: two unit cubes of the SAME mesh (one group). LEFT is STATIC; RIGHT is the MOVER. Frame 1 seeds both
+// instances' prev_world (a fresh slot self-shadows -> zero velocity on spawn, which frame 1 verifies). Then the
+// mover's Transform is pushed +3 world-units in Y and re-synced: bumping the chunk Transform version makes the
+// incremental extract snapshot prev_world = A and set world = B for the mover, while the static instance
+// re-extracts to prev == cur. Frame 2 therefore carries three distinguishable classes:
+//   . BACKGROUND      -> the cleared SENTINEL (0.25, 0.25)  -> encodes ~(191, 191)
+//   . the STATIC cube -> velocity 0 (drawn, and WROTE 0)    -> encodes ~(128, 128)  [!= sentinel => it truly drew]
+//   . the MOVER cube  -> A_uv - B_uv (a pure +Y screen move) -> encodes (128, enc(exp_v))
+// The move is purely in world Y and this camera's view row0 carries no Y term, so u_delta = 0 for EVERY mover
+// fragment (clip.x and w are unchanged by the move) -- which is why "drawn" is classified by R ~= 128 while the
+// signed motion lives entirely in G. exp_v is computed from the SAME projection the velocity FS uses.
+void velocity_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster)
+{
+    const auto absf = [](f32 x) { return x < 0.0F ? -x : x; };
+
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_vel_pack_", cube_id);
+    write_mesh_pack(pack.path, cube_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+
+    const math::Vec3f sscale{2.0F, 2.0F, 2.0F};
+    const math::Vec3f static_pos{-4.5F, 0.0F, 0.0F};
+    const math::Vec3f mover_a{4.5F, 0.0F, 0.0F};
+    const math::Vec3f mover_b{4.5F, 3.0F, 0.0F};
+
+    const scene::EntityId e_static = world.spawn();
+    scene::Transform      t_static;
+    t_static.world = math::from_trs(static_pos, math::Quatf::identity(), sscale);
+    world.add_component(e_static, t_static);
+    world.add_component(e_static, scene::MeshRenderer{cube_id, {}});
+
+    const scene::EntityId e_mover = world.spawn();
+    scene::Transform      t_mover;
+    t_mover.world = math::from_trs(mover_a, math::Quatf::identity(), sscale);
+    world.add_component(e_mover, t_mover);
+    world.add_component(e_mover, scene::MeshRenderer{cube_id, {}});
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(raster, rm));
+    if (!renderer.init_programs(ctx)) { SKIP("shader backend unavailable"); }
+
+    containers::String toml(&galloc());
+    REQUIRE(read_shipped_asset("frame/velocity_debug.frame.toml", toml));
+    REQUIRE(renderer.set_frame_graph_toml(toml.c_str()));
+
+    constexpr u32     dim  = 256U;
+    const math::Mat4f view = math::look_at(math::Vec3f{0, 0, 12}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Mat4f vp   = proj * view;
+    const math::Vec3f     light{0.4F, 1.0F, 0.2F};
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+
+    // decode a channel back to signed UV motion (the inverse of the shader's out = v*scale + 0.5). shift = 0 -> R
+    // (u), 8 -> G (v).
+    const auto decode = [](u32 px, u32 shift) {
+        return (static_cast<f32>((px >> shift) & 0xFFU) / 255.0F - 0.5F) / scenerender::kVelocityDebugScale;
+    };
+    // scan a COLUMN (+-2 px) over all rows; a fragment is "drawn" when its u channel (R) decodes near 0 (a pure-Y
+    // move -> every cube fragment has u = 0, while the 0.25 sentinel background does not). Returns the drawn-pixel
+    // count and the MEAN decoded (u, v) over them (mean averages the small per-fragment perspective spread).
+    const auto scan_column = [&](gpu::IRasterTarget& t, int cx, u32& count, f32& mean_u, f32& mean_v) {
+        f32 su = 0.0F;
+        f32 sv = 0.0F;
+        count = 0U;
+        for (int dx = -2; dx <= 2; ++dx)
+        {
+            const int x = cx + dx;
+            if (x < 0 || x >= static_cast<int>(dim)) { continue; }
+            for (u32 y = 0; y < dim; ++y)
+            {
+                const u32 px = t.read_pixel(static_cast<u32>(x), y);
+                const f32 u  = decode(px, 0U);
+                if (u > -0.10F && u < 0.10F) // a cube fragment (u == 0), not the 0.25 sentinel background
+                {
+                    su += u;
+                    sv += decode(px, 8U);
+                    ++count;
+                }
+            }
+        }
+        mean_u = count > 0U ? su / static_cast<f32>(count) : 0.0F;
+        mean_v = count > 0U ? sv / static_cast<f32>(count) : 0.0F;
+    };
+
+    // expected mover velocity, from the SAME projection the velocity FS uses (clip = view_proj . world . pos; a
+    // cube CENTRE's world.pos is the translation column). vsgn matches build_velocity_fs_cooked: +0.5 on a y-down
+    // backend (Vulkan), -0.5 on y-up (DX12).
+    const f32         vsgn        = raster.ndc_y_points_down() ? 0.5F : -0.5F;
+    const math::Vec4f clip_a      = vp * math::Vec4f{mover_a.x, mover_a.y, mover_a.z, 1.0F};
+    const math::Vec4f clip_b      = vp * math::Vec4f{mover_b.x, mover_b.y, mover_b.z, 1.0F};
+    const f32         exp_u       = (clip_a.x / clip_a.w - clip_b.x / clip_b.w) * 0.5F;
+    const f32         exp_v       = (clip_a.y / clip_a.w - clip_b.y / clip_b.w) * vsgn;
+    const int         col_mover   = static_cast<int>((clip_b.x / clip_b.w * 0.5F + 0.5F) * static_cast<f32>(dim));
+    const math::Vec4f clip_static = vp * math::Vec4f{static_pos.x, static_pos.y, static_pos.z, 1.0F};
+    const int col_static = static_cast<int>((clip_static.x / clip_static.w * 0.5F + 0.5F) * static_cast<f32>(dim));
+
+    // ── FRAME 1: both instances fresh -> zero velocity on spawn (a fresh slot self-shadows; no origin spike). ──
+    (void)renderer.sync(world);
+    auto tgt1 = raster.create_color_depth_target(dim, dim);
+    REQUIRE(tgt1 != nullptr);
+    const auto r1 = renderer.render(*tgt1, vp, light, clear);
+    CHECK(r1.draws > 0U);
+    u32 c1 = 0U;
+    f32 u1 = 0.0F;
+    f32 v1 = 0.0F;
+    scan_column(*tgt1, col_mover, c1, u1, v1);
+    INFO("frame1 mover col=" << col_mover << " drawn=" << c1 << " mean_u=" << u1 << " mean_v=" << v1);
+    CHECK(c1 > 20U);            // the mover is visible
+    CHECK(absf(u1) < 0.03F);    // spawn => no velocity, either axis
+    CHECK(absf(v1) < 0.03F);
+
+    // ── move the mover +3 world-units in Y and re-sync (bumps the chunk Transform version -> the incremental
+    // extract snapshots prev_world = A, sets world = B for the mover; the static instance re-extracts to 0). ──
+    world.get_component_mut<scene::Transform>(e_mover)->world =
+        math::from_trs(mover_b, math::Quatf::identity(), sscale);
+    (void)renderer.sync(world);
+    auto tgt2 = raster.create_color_depth_target(dim, dim);
+    REQUIRE(tgt2 != nullptr);
+    const auto r2 = renderer.render(*tgt2, vp, light, clear);
+    CHECK(r2.draws > 0U);
+
+    // (a) BACKGROUND is the sentinel -> proves the encode pass ran and the clear survived where nothing drew.
+    const u32 bg = tgt2->read_pixel(2U, 2U);
+    INFO("bg R=" << (bg & 0xFFU) << " G=" << ((bg >> 8U) & 0xFFU));
+    CHECK(absf(decode(bg, 0U) - 0.25F) < 0.05F);
+    CHECK(absf(decode(bg, 8U) - 0.25F) < 0.05F);
+
+    // (b) the STATIC cube drew and WROTE ~0 velocity (!= sentinel => the velocity FS genuinely ran for it).
+    u32 cs = 0U;
+    f32 us = 0.0F;
+    f32 vs = 0.0F;
+    scan_column(*tgt2, col_static, cs, us, vs);
+    INFO("frame2 static col=" << col_static << " drawn=" << cs << " mean_u=" << us << " mean_v=" << vs);
+    CHECK(cs > 20U);
+    CHECK(absf(us) < 0.03F);
+    CHECK(absf(vs) < 0.03F);
+
+    // (c) the MOVER carries the expected screen-space motion delta: u ~= 0 (pure-Y move), v ~= exp_v, and clearly
+    // NONZERO (distinct from the static's 0) -- the crux of the gate.
+    u32 cm = 0U;
+    f32 um = 0.0F;
+    f32 vm = 0.0F;
+    scan_column(*tgt2, col_mover, cm, um, vm);
+    INFO("frame2 mover col=" << col_mover << " drawn=" << cm << " mean_u=" << um << " mean_v=" << vm
+                             << " exp_u=" << exp_u << " exp_v=" << exp_v);
+    CHECK(cm > 20U);
+    CHECK(absf(um - exp_u) < 0.04F);
+    CHECK(absf(vm - exp_v) < 0.06F);
+    CHECK(absf(vm) > 0.10F); // motion is present and significant (not the static 0)
+}
+
+TEST_CASE("REN-41 GATE: velocity is zero for static instances and matches the screen delta for movers (Vulkan)",
+          "[scene-render][ren41][velocity][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+    velocity_gate_body(*vk, *raster);
+}
+
+#ifdef _WIN32
+TEST_CASE("REN-40-G1 GATE (DX12): depth prepass with shared_depth is pixel-identical to forward-only",
+          "[scene-render][ren40][depth-prepass][gpu][dx12]")
+{
+    auto gctx = gpu::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
+    auto raster = gpu::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_g1d_pack_", cube_id);
+    write_mesh_pack(pack.path, cube_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+    for (u32 i = 0; i < 5U; ++i)
+    {
+        const f32             x = (static_cast<f32>(i) - 2.0F) * 2.5F;
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.world = math::from_trs(math::Vec3f{x, 0.0F, 0.0F}, math::Quatf::identity(), math::Vec3f{1, 1, 1});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{cube_id, {}});
+    }
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    if (!renderer.init_programs(*gctx))
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
+    (void)renderer.sync(world);
+
+    constexpr u32         dim   = 256U;
+    const math::Mat4f     view  = math::look_at(math::Vec3f{0, 4, 12}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f     proj  = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Vec3f     light{0.4F, 1.0F, 0.2F};
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+
+    auto ref = raster->create_color_depth_target(dim, dim);
+    REQUIRE(ref != nullptr);
+    REQUIRE(renderer.set_frame_graph_toml(k40gRefBasicToml));
+    const auto r_ref = renderer.render(*ref, proj * view, light, clear);
+    CHECK(r_ref.draws > 0U);
+
+    auto tgt = raster->create_color_depth_target(dim, dim);
+    REQUIRE(tgt != nullptr);
+    REQUIRE(renderer.set_frame_graph_toml(k40gPrepassToml));
+    const auto r_pre = renderer.render(*tgt, proj * view, light, clear);
+    CHECK(r_pre.draws > 0U);
+
+    u32 diffs   = 0U;
+    u32 covered = 0U;
+    for (u32 y = 0; y < dim; ++y)
+    {
+        for (u32 x = 0; x < dim; ++x)
+        {
+            const u32 a = ref->read_pixel(x, y);
+            const u32 b = tgt->read_pixel(x, y);
+            if (a != b) { ++diffs; }
+            if ((b & 0x00FFFFFFU) != 0U) { ++covered; }
+        }
+    }
+    INFO("diffs=" << diffs << " covered=" << covered);
+    CHECK(diffs == 0U);
+    CHECK(covered > 500U);
+}
+
+TEST_CASE("REN-40-G2 GATE (DX12): R11G11B10F scene_hdr produces correct lit output after tonemap",
+          "[scene-render][ren40][hdr-format][gpu][dx12]")
+{
+    auto gctx = gpu::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
+    auto raster = gpu::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_g2d_pack_", cube_id);
+    write_mesh_pack(pack.path, cube_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+    for (u32 i = 0; i < 3U; ++i)
+    {
+        const f32             x = (static_cast<f32>(i) - 1.0F) * 3.0F;
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.world = math::from_trs(math::Vec3f{x, 0.0F, 0.0F}, math::Quatf::identity(), math::Vec3f{1, 1, 1});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{cube_id, {}});
+    }
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    if (!renderer.init_programs(*gctx))
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
+    (void)renderer.sync(world);
+
+    constexpr u32         dim   = 256U;
+    const math::Mat4f     view  = math::look_at(math::Vec3f{0, 4, 12}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f     proj  = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Vec3f     light{0.4F, 1.0F, 0.2F};
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+
+    auto ref = raster->create_color_depth_target(dim, dim);
+    REQUIRE(ref != nullptr);
+    REQUIRE(renderer.set_frame_graph_toml(k40gRef16FToml));
+    const auto r_ref = renderer.render(*ref, proj * view, light, clear);
+    CHECK(r_ref.draws > 0U);
+
+    auto tgt = raster->create_color_depth_target(dim, dim);
+    REQUIRE(tgt != nullptr);
+    REQUIRE(renderer.set_frame_graph_toml(k40gHdrR11Toml));
+    const auto r_r11 = renderer.render(*tgt, proj * view, light, clear);
+    CHECK(r_r11.draws > 0U);
+
+    u32 big_diffs = 0U;
+    u32 covered   = 0U;
+    for (u32 y = 0; y < dim; ++y)
+    {
+        for (u32 x = 0; x < dim; ++x)
+        {
+            const u32 a = ref->read_pixel(x, y);
+            const u32 b = tgt->read_pixel(x, y);
+            const i32 dr = static_cast<i32>((a >> 16U) & 0xFFU) - static_cast<i32>((b >> 16U) & 0xFFU);
+            const i32 dg = static_cast<i32>((a >> 8U)  & 0xFFU) - static_cast<i32>((b >> 8U)  & 0xFFU);
+            const i32 db = static_cast<i32>(a & 0xFFU)          - static_cast<i32>(b & 0xFFU);
+            const i32 mx = (dr > 0 ? dr : -dr);
+            const i32 my = (dg > 0 ? dg : -dg);
+            const i32 mz = (db > 0 ? db : -db);
+            const i32 mxy   = mx > my ? mx : my;
+            const i32 worst = mxy > mz ? mxy : mz;
+            if (worst > 4) { ++big_diffs; }
+            if ((b & 0x00FFFFFFU) != 0U) { ++covered; }
+        }
+    }
+    INFO("big_diffs=" << big_diffs << " covered=" << covered);
+    CHECK(big_diffs == 0U);
+    CHECK(covered > 500U);
+}
+
+TEST_CASE("REN-40-G3 GATE (DX12): GPU occlusion culling produces pixel-identical output for unoccluded scene",
+          "[scene-render][ren40][occlusion][gpu][dx12]")
+{
+    auto gctx = gpu::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
+    auto raster = gpu::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_g3d_pack_", cube_id);
+    write_mesh_pack(pack.path, cube_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+    for (u32 i = 0; i < 8U; ++i)
+    {
+        const f32             x = (static_cast<f32>(i) - 3.5F) * 1.5F;
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.world = math::from_trs(math::Vec3f{x, 0.0F, 0.0F}, math::Quatf::identity(), math::Vec3f{1, 1, 1});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{cube_id, {}});
+    }
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    if (!renderer.init_programs(*gctx))
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
+    (void)renderer.sync(world);
+
+    const math::Mat4f     view  = math::look_at(math::Vec3f{0, 8, 20}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f     proj  = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Vec3f     light{0.4F, 1.0F, 0.2F};
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+    constexpr u32         dim   = 256U;
+
+    auto ref = raster->create_color_depth_target(dim, dim);
+    REQUIRE(ref != nullptr);
+    REQUIRE(renderer.set_frame_graph_toml(k40gRefBasicToml));
+    const auto r_ref = renderer.render(*ref, proj * view, light, clear);
+    INFO("ref draws=" << r_ref.draws);
+    CHECK(r_ref.draws > 0U);
+
+    renderer.set_gpu_cull(true);
+    auto tgt = raster->create_color_depth_target(dim, dim);
+    REQUIRE(tgt != nullptr);
+    REQUIRE(renderer.set_frame_graph_toml(k40gOccCullToml));
+    const auto r_occ = renderer.render(*tgt, proj * view, light, clear);
+    INFO("occ draws=" << r_occ.draws);
+    CHECK(r_occ.draws > 0U);
+
+    u32 diffs   = 0U;
+    u32 covered = 0U;
+    for (u32 y = 0; y < dim; ++y)
+    {
+        for (u32 x = 0; x < dim; ++x)
+        {
+            const u32 a = ref->read_pixel(x, y);
+            const u32 b = tgt->read_pixel(x, y);
+            if (a != b) { ++diffs; }
+            if ((b & 0x00FFFFFFU) != 0U) { ++covered; }
+        }
+    }
+    INFO("diffs=" << diffs << " covered=" << covered);
+    CHECK(diffs == 0U);
+    CHECK(covered > 500U);
+}
+
+TEST_CASE("REN-41 GATE (DX12): velocity is zero for static instances and matches the screen delta for movers",
+          "[scene-render][ren41][velocity][gpu][dx12]")
+{
+    auto gctx = gpu::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
+    auto raster = gpu::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+    velocity_gate_body(*gctx, *raster); // init_programs may still SKIP inside if dxc/DXIL is unavailable
+}
+#endif // _WIN32 (the REN-40-G DX12 gates)

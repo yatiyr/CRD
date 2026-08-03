@@ -75,15 +75,20 @@ name = "impostor_geometry"
 all  = ["MeshRenderer", "Transform"]
 cull = "frustum"
 
+# ⛔⛔ NO `depth_bias_slope` HERE (unlike the PCF frames). Moment/variance shadows are FILTERABLE — the smooth
+# moment comparison is inherently acne-resistant (their failure mode is light BLEED, handled by the convert
+# shader's bleed-reduction term, not acne). A slope bias would shift the stored depth and, because EVSM warps it
+# EXPONENTIALLY (e^{c·d}), narrow the EVSM penumbra — measurably re-sharpening the soft edge it exists to widen
+# (REN-40-D gate: 3px → 2px). MSM's polynomial moments barely move, which is exactly how the regression hid.
 [[pass]]
-name          = "csm_cascade"
-kind          = "raster.depth_only"
-draw_list     = "shadow_casters"
-for_each      = "light.0.cascades"
-writes        = ["shadow_atlas[$index]"]
-material_pass = "Shadow"
-clear_depth   = 1.0
-depth         = "LessEqual"
+name             = "csm_cascade"
+kind             = "raster.depth_only"
+draw_list        = "shadow_casters"
+for_each         = "light.0.cascades"
+writes           = ["shadow_atlas[$index]"]
+material_pass    = "Shadow"
+clear_depth      = 1.0
+depth            = "LessEqual"
 
 # depth -> moments, one fullscreen pass per cascade slice (the layer is baked per instance program, exactly as
 # the per-cascade shadow VS bakes its index)

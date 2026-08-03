@@ -278,6 +278,27 @@ inline bool emit_compute_kernel_msl(const KGraph& g, const KEntry& entry, crd::m
             matd[static_cast<crd::usize>(node)] = 1U;
         }
     };
+    const auto hoist_decls = [&](auto&& self_h, int begin, int count) -> void {
+        int i = begin;
+        while (i < begin + count)
+        {
+            const KStmt& st = g.stmt(i);
+            switch (st.kind)
+            {
+            case KStmtKind::BufferStore: case KStmtKind::SharedStore: case KStmtKind::SharedAtomicAdd:
+            case KStmtKind::BufferAtomicAdd: case KStmtKind::BufferAtomicMin:
+                decl(decl, st.index); decl(decl, st.value); ++i; break;
+            case KStmtKind::BufferAtomicAddFetch: case KStmtKind::BufferAtomicExchange:
+                decl(decl, st.index); decl(decl, st.value); ++i; break;
+            case KStmtKind::Materialize: decl(decl, st.value); ++i; break;
+            case KStmtKind::For: i = st.body_begin + st.body_count; break;
+            case KStmtKind::If: decl(decl, st.value); self_h(self_h, st.body_begin, st.body_count); i = st.body_begin + st.body_count; break;
+            case KStmtKind::SpinUntilNonzero: decl(decl, st.index); ++i; break;
+            case KStmtKind::TraceRayCurves: for (int k = 0; k < 8; ++k) { decl(decl, g.stmt_ext_operand(st, k)); } ++i; break;
+            default: ++i; break;
+            }
+        }
+    };
     const auto emit_body = [&](auto&& self_b, int begin, int count) -> void {
         int i = begin;
         while (i < begin + count) // a For/If body lives CONTIGUOUSLY after it → recurse then SKIP past it (never re-emit)
@@ -299,7 +320,7 @@ inline bool emit_compute_kernel_msl(const KGraph& g, const KEntry& entry, crd::m
                 ++i;
                 break;
             case KStmtKind::For: decl(decl, st.value); s.append("  for (uint lv"); app_uint(s, i); s.append(" = 0u; lv"); app_uint(s, i); s.append(" < uint("); ev(ev, st.value); s.append("); ++lv"); app_uint(s, i); s.append(") {\n"); self_b(self_b, st.body_begin, st.body_count); s.append("  }\n"); i = st.body_begin + st.body_count; break;
-            case KStmtKind::If: decl(decl, st.value); s.append("  if ("); ev(ev, st.value); s.append(") {\n"); self_b(self_b, st.body_begin, st.body_count); s.append("  }\n"); i = st.body_begin + st.body_count; break;
+            case KStmtKind::If: decl(decl, st.value); hoist_decls(hoist_decls, st.body_begin, st.body_count); s.append("  if ("); ev(ev, st.value); s.append(") {\n"); self_b(self_b, st.body_begin, st.body_count); s.append("  }\n"); i = st.body_begin + st.body_count; break;
             case KStmtKind::SpinUntilNonzero: decl(decl, st.index); s.append("  while (buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("] == 0u) { threadgroup_barrier(mem_flags::mem_device); }\n"); ++i; break;
             case KStmtKind::SharedAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  atomic_fetch_add_explicit(&sh"); app_uint(s, st.target); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(", memory_order_relaxed);\n"); ++i; break;
             case KStmtKind::BufferAtomicAdd: decl(decl, st.index); decl(decl, st.value); s.append("  atomic_fetch_add_explicit((device atomic_uint*)&buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("], "); ev(ev, st.value); s.append(", memory_order_relaxed);\n"); ++i; break;
