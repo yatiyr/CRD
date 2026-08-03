@@ -823,7 +823,12 @@ int main(int argc, char** argv)
     } // REN-39-C2: the A/B baseline arm
     // ⭐⭐ REN-40-A: the device-side cull, plus the authored graph that declares its passes. ⛔ Both together —
     // the flag alone would leave the renderer expecting GPU-written commands that no pass ever writes.
-    if (want_gpu_cull)
+    // ⛔⛔ REN-40-F FIX: `--gpu-skin` ALSO selects the GPU frame graph (`forward_csm_gpu.toml`, line ~896: the
+    // condition is `want_gpu_cull || want_gpu_skin`), whose forward pass draws from DEVICE-WRITTEN commands the cull
+    // passes emit. That draw path only turns on with `set_gpu_cull(true)` — so `--gpu-skin` WITHOUT it installed the
+    // GPU graph but left the draw reading CPU counts against device-written commands, and the whole frame rendered
+    // as background (0 instances). Any flag that selects the GPU graph must enable the device-command draw path.
+    if (want_gpu_cull || want_gpu_skin)
     {
         scene_renderer.set_gpu_cull(true);
         if (want_verify) { scene_renderer.set_gpu_cull_verify(true); }
@@ -893,7 +898,16 @@ int main(int argc, char** argv)
     // swallowed the whole device-side cull: it reported "installed", then `forward_csm_agx` (no compute passes)
     // took over and every command stayed at the reset's zero. The switch belongs HERE, in the table the toggle
     // reads, not in a one-shot install racing it.
-    const char* const gpu_frame        = (want_gpu_cull || want_gpu_skin) ? "frame/forward_csm_gpu.frame.toml" : nullptr;
+    // ⭐⭐ RAF-9: the app selects its renderer BY CANONICAL ASSET ID (`engine://frame/…`) through the public
+    // registry/resolver — the Gate-9 selector, no relative path or embedded TOML in the caller. `install_frame`
+    // routes an id through `set_frame_graph`; a bare relative name (the `--frame` dev convenience) falls back to the
+    // deprecated `set_frame_graph_asset`, deleted at RAF-12.
+    const auto install_frame = [&](const char* id) -> bool {
+        if (id == nullptr) { return false; }
+        if (std::strstr(id, "://") != nullptr) { return scene_renderer.set_frame_graph(id); }
+        return scene_renderer.set_frame_graph_asset(id);
+    };
+    const char* const gpu_frame        = (want_gpu_cull || want_gpu_skin) ? "engine://frame/forward_csm_gpu" : nullptr;
     // ⛔⛔ REN-40-B: `--gpu-cull` REFUSES TO RUN WITHOUT ITS GRAPH, and that is a benchmark-integrity rule, not a
     // convenience. `forward_csm_gpu.frame.toml` ships as a FILE, not in the built-in pack, so without
     // `CRD_ASSETS_DIR` the install logs one error line and the run continues — with no cull passes, every
@@ -901,7 +915,7 @@ int main(int argc, char** argv)
     // `gpu 0.34 ms` at one million instances, which reads as a spectacular win and is an empty canvas. A
     // performance arm that can silently measure an empty frame will eventually be quoted as a result, so it
     // exits instead.
-    if (gpu_frame != nullptr && scene_ready && !scene_renderer.set_frame_graph_asset(gpu_frame))
+    if (gpu_frame != nullptr && scene_ready && !install_frame(gpu_frame))
     {
         CRD_LOG_ERROR(g_log_sandbox,
                       "--gpu-cull/--gpu-skin needs '{}', which did not install (set CRD_ASSETS_DIR to the repo's "
@@ -921,8 +935,8 @@ int main(int argc, char** argv)
         if (gpu_frame != nullptr) { return gpu_variant; }
         return def;
     };
-    const char* const frame_0 = pick_frame("frame/forward_csm_gpu_srgb.frame.toml", "frame/forward_csm_srgb.frame.toml");
-    const char* const frame_1 = pick_frame("frame/forward_csm_gpu.frame.toml", "frame/forward_csm_agx.frame.toml");
+    const char* const frame_0 = pick_frame("engine://frame/forward_csm_gpu_srgb", "engine://frame/forward_csm_srgb");
+    const char* const frame_1 = pick_frame("engine://frame/forward_csm_gpu", "engine://frame/forward_csm_agx");
     const char* const post_frames[2] = {frame_0, frame_1};
     int               post_mode      = 1; // 0 = sRGB only · 1 = AgX
     int               post_mode_live = -1;
@@ -1105,7 +1119,7 @@ int main(int argc, char** argv)
         // 38-G1: the tonemap is a NAME. Reinstalling the graph is the whole switch.
         if (scene_ready && post_mode != post_mode_live)
         {
-            const bool ok = scene_renderer.set_frame_graph_asset(post_frames[post_mode == 1 ? 1 : 0]);
+            const bool ok = install_frame(post_frames[post_mode == 1 ? 1 : 0]);
             CRD_LOG_INFO(g_log_sandbox, "38-G1 frame '{}' -> {}", post_frames[post_mode == 1 ? 1 : 0],
                          ok ? "installed" : "REJECTED");
             post_mode_live = post_mode;

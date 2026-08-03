@@ -1,5 +1,5 @@
 schema = 1
-name   = "crd://frame/scene_rt"
+name   = "engine://frame/scene_rt"
 
 [[resource]]
 name = "scene_tlas"
@@ -12,10 +12,10 @@ kind = "external_buffer"
 [[pass]]
 name        = "trace"
 kind        = "raytrace.pipeline"
-raygen      = "crd://scene/rt/raygen"
-miss        = "crd://scene/rt/miss"
-closest_hit = "crd://scene/rt/chit"
-any_hit     = "crd://scene/rt/anyhit"
+raygen      = "engine://scene/rt/raygen"
+miss        = "engine://scene/rt/miss"
+closest_hit = "engine://scene/rt/chit"
+any_hit     = "engine://scene/rt/anyhit"
 reads       = ["scene_tlas"]
 writes      = ["hits"]
 params      = { groups_x = 4, groups_y = 1 }

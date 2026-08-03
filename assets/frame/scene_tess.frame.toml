@@ -1,10 +1,10 @@
 schema = 1
-name   = "crd://frame/scene_tess"
+name   = "engine://frame/scene_tess"
 
 [[pass]]
 name        = "displace"
 kind        = "raster.tess"
-shader      = "crd://scene/tess"
+shader      = "engine://scene/tess"
 writes      = ["@output"]
 clear_color = [0.0, 0.0, 0.0, 1.0]
 params      = { patches = 1 }

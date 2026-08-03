@@ -1,7 +1,7 @@
 # velocity_debug.frame.toml — REN-41 motion-vector DEBUG VIEW + the velocity CORRECTNESS gate's readback surface.
 #
 # The depth prepass (raster.mrt) writes per-object MOTION VECTORS into `velocity` EXACTLY as the flagship forward
-# frames do — same per-group program (crd://scene/velocity), same LOD dither discard — so this visualises the
+# frames do — same per-group program (engine://scene/velocity), same LOD dither discard — so this visualises the
 # SHIPPING velocity, not a re-derivation of it. A fullscreen `velo_encode` pass then samples `velocity` and encodes
 # the signed UV motion delta into the RGBA8 output: out.rg = velocity.xy * kVelocityDebugScale + 0.5, out.b = 0.5.
 # Zero motion → mid-grey (0.5); either sign of motion is visible and decodable (see kVelocityDebugScale).
@@ -12,7 +12,7 @@
 # here", so the gate's static-instance check would be blind. The sentinel is what gives that check teeth.
 
 schema = 1
-name   = "crd://frame/velocity_debug"
+name   = "engine://frame/velocity_debug"
 
 # The SAMPLED companion depth the MRT prepass writes alongside velocity (reverse-Z, GreaterEqual). Present so the
 # prepass has a depth attachment; nothing downstream reads it in this debug frame.
@@ -56,4 +56,4 @@ name   = "velo_encode"
 kind   = "raster.fullscreen"
 reads  = ["velocity"]
 writes = ["@output"]
-shader = "crd://scene/velocity_debug"
+shader = "engine://scene/velocity_debug"

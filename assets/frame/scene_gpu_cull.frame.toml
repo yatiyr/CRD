@@ -22,7 +22,7 @@
 # `ExecuteIndirect` / `vkCmdDrawIndexedIndirectCount` so it can transition it to the indirect-argument state the
 # draw needs. Declaring the ROLE is what lets the backend pick its own correct barrier.
 schema = 1
-name   = "crd://frame/scene_gpu_cull"
+name   = "engine://frame/scene_gpu_cull"
 
 [[resource]]
 name = "instances"
@@ -38,7 +38,7 @@ size_bytes = 64
 [[pass]]
 name   = "cull_reset"
 kind   = "compute"
-kernel = "crd://scene/cull_reset"
+kernel = "engine://scene/cull_reset"
 reads  = ["instances"]
 writes = ["cull_args"]
 params = { groups_x = 1 }
@@ -48,7 +48,7 @@ params = { groups_x = 1 }
 [[pass]]
 name   = "cull"
 kind   = "compute"
-kernel = "crd://scene/cull_compact"
+kernel = "engine://scene/cull_compact"
 reads  = ["cull_args"]
 # ⛔ It WRITES `instances` too — the compacted visible list goes back into that buffer at
 # `visible_off + view_index * capacity`. Declaring the write is what makes the graph barrier it before the draw

@@ -29,7 +29,11 @@ using crd::renderasset::DiagnosticList;
 using crd::renderasset::Severity;
 
 inline constexpr u32 kMaxExecutorParams = 12;
-inline constexpr u32 kMaxExecutorSlots = 8;
+// RAF-8: raised 8 → 16 so a fullscreen.raster / scene.raster pass can declare its full read set (up to
+// kMaxBindlessTextures inputs + colour + depth + geometry + constants) as ENUMERATED typed slots — the strict
+// schema validator (executor_registry.cpp) rejects any ref without a matching slot, so variable reads must be
+// bounded named slots, not an open list.
+inline constexpr u32 kMaxExecutorSlots = 16;
 
 // A stable executor id — a hash of the executor name ("scene.raster", …). Records store THIS, not the name.
 struct ExecutorTypeId

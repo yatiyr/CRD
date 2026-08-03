@@ -174,6 +174,44 @@ AssetType infer_type(StringView first_segment) noexcept
     return AssetType::Unknown;
 }
 
+StringView asset_extension(StringView folder) noexcept
+{
+    if (folder == "frame") { return ".frame.toml"; }
+    if (folder == "vertex") { return ".crdv"; }
+    if (folder == "material") { return ".crdm"; }
+    if (folder == "post") { return ".crdp"; }
+    if (folder == "lighting") { return ".crdl"; }
+    if (folder == "technique") { return ".crdt"; }
+    if (folder == "lod") { return ".crdlod"; }
+    return {};
+}
+
+bool on_disk_relative(const AssetRef& ref, String& out)
+{
+    if (!ref.valid())
+    {
+        return false;
+    }
+    const StringView path = ref.path(); // normalized, no scheme — e.g. "frame/forward_csm"
+    usize            slash = path.size();
+    for (usize i = 0; i < path.size(); ++i)
+    {
+        if (path[i] == '/')
+        {
+            slash = i;
+            break;
+        }
+    }
+    const StringView ext = asset_extension(path.substr(0, slash)); // the folder is the first segment
+    if (ext.empty())
+    {
+        return false; // an unknown folder has no on-disk shape — leave `out` untouched
+    }
+    out.append(path.data(), path.size());
+    out.append(ext.data(), ext.size());
+    return true;
+}
+
 AssetId asset_id_of(StringView canonical) noexcept { return AssetId{crd::containers::hash_string(canonical)}; }
 
 AssetRef AssetRef::parse(StringView raw, DiagnosticList& diags, memory::IAllocator* alloc, AssetType type_hint)

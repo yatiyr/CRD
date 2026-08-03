@@ -8,10 +8,10 @@
 # `forward_csm_agx` for the full annotated TAA wiring.
 
 schema = 1
-name   = "crd://frame/forward_csm_srgb"
+name   = "engine://frame/forward_csm_srgb"
 # ⭐ SHADOWS ON/OFF is a DECLARED CAPABILITY TIER with a named fallback (REN-35's rule) — see forward_csm_agx.
 requires = ["shadows"]
-fallback = "crd://frame/forward_srgb"
+fallback = "engine://frame/forward_srgb"
 
 [[resource]]
 name    = "shadow_atlas"
@@ -130,7 +130,7 @@ kind         = "raster.geometry"
 draw_list    = "impostor_geometry"
 writes       = ["scene_hdr"]
 shared_depth = "scene_depth"
-shader       = "crd://scene/impostor"
+shader       = "engine://scene/impostor"
 load         = true
 depth        = "GreaterEqual"
 
@@ -141,7 +141,7 @@ name   = "taa_resolve"
 kind   = "raster.fullscreen"
 reads  = ["scene_hdr", "scene_depth", "taa_history", "velocity", "taa_constants"]
 writes = ["scene_taa"]
-shader = "crd://scene/taa_resolve"
+shader = "engine://scene/taa_resolve"
 
 [[pass]]
 name   = "taa_store"
@@ -155,4 +155,4 @@ name   = "post"
 kind   = "raster.fullscreen"
 reads  = ["scene_taa"]
 writes = ["@output"]
-shader = "crd://post/srgb_only"
+shader = "engine://post/srgb_only"

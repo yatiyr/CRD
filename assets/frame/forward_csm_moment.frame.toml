@@ -17,9 +17,9 @@
 # depth sampler that always rides at binding 6, the same seam the PCSS blocker search uses.
 
 schema   = 1
-name     = "crd://frame/forward_csm_moment"
+name     = "engine://frame/forward_csm_moment"
 requires = ["shadows"]
-fallback = "crd://frame/forward_basic"
+fallback = "engine://frame/forward_basic"
 
 [[resource]]
 name    = "shadow_atlas"
@@ -98,7 +98,7 @@ kind     = "raster.fullscreen"
 for_each = "light.0.cascades"
 reads    = ["shadow_atlas"]
 writes   = ["moment_raw[$index]"]
-shader   = "crd://shadow/moment_convert"
+shader   = "engine://shadow/moment_convert"
 
 # the separable prefilter. ⛔ `address = "clamp"` is load-bearing: a wrapped tap at the atlas edge would blend
 # the opposite border into every cascade's rim, and the widest shadows sit exactly at those rims.
@@ -108,7 +108,7 @@ kind     = "raster.fullscreen"
 for_each = "light.0.cascades"
 reads    = ["moment_raw"]
 writes   = ["moment_half[$index]"]
-shader   = "crd://shadow/moment_blur_x"
+shader   = "engine://shadow/moment_blur_x"
 filter   = "linear"
 address  = "clamp"
 
@@ -118,7 +118,7 @@ kind     = "raster.fullscreen"
 for_each = "light.0.cascades"
 reads    = ["moment_half"]
 writes   = ["moment_atlas[$index]"]
-shader   = "crd://shadow/moment_blur_y"
+shader   = "engine://shadow/moment_blur_y"
 filter   = "linear"
 address  = "clamp"
 
@@ -142,6 +142,6 @@ name      = "impostor"
 kind      = "raster.geometry"
 draw_list = "impostor_geometry"
 writes    = ["@output"]
-shader    = "crd://scene/impostor"
+shader    = "engine://scene/impostor"
 load      = true
 depth     = "GreaterEqual"

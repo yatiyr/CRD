@@ -33,11 +33,14 @@
 #include <crd/resources/openpbr_material.hpp>
 #include <crd/resources/resource_manager.hpp>
 #include <crd/resources/texture_resource.hpp> // REN-2 Half B: the cooked base-color map the forward pass samples
+#include <crd/renderasset/renderasset.hpp> // RAF-9: canonical engine:// asset identity (AssetRef / on_disk_relative)
 #include <crd/scene/query.hpp>
 #include <crd/scene/render_components.hpp>
 #include <crd/scene/spatial_bvh_index.hpp>
 #include <crd/scene/transform.hpp>
 #include <crd/scene/world.hpp>
+
+#include "asset_resolver.hpp" // RAF-9: the file-reading resolver (mount table + platform::fs; render-asset-core stays leaf)
 
 #include <chrono> // REN-8: CPU wall-clock of render(), to compare against the frame graph's GPU timestamps
 #include <cmath>
@@ -588,6 +591,12 @@ struct SceneDraw
 struct SceneRenderer::Impl
 {
     crd::memory::IAllocator*         alloc  = nullptr;
+    // RAF-9: the file-reading asset resolver. `engine://` mounts `asset_root` (kept in sync in set_asset_root/init), so
+    // canonical-id loads resolve to the SAME files the relative-path loads did. `asset_text` delegates here (one read path).
+    AssetResolver                    resolver{alloc};
+    // RAF-9: the program registry (canonical id -> provider). Registered at init (register_default_programs); the host's
+    // program()/kernel() resolve by parsed AssetId through this, replacing the hard-coded str_is chain.
+    ProgramRegistry                  program_registry{alloc};
     crd::gpu::IGpuContext*           ctx    = nullptr;
     crd::gpu::IRasterContext*        raster = nullptr;
     crd::resources::ResourceManager* rm     = nullptr;
@@ -870,24 +879,24 @@ struct SceneRenderer::Impl
             const crd::containers::String& n = fb_frame_names[i];
             if (crd::containers::StringView(n.c_str(), n.size()) == crd_name) { return fb_frame_descs[i].get(); }
         }
-        constexpr crd::containers::StringView prefix("crd://frame/");
-        if (crd_name.size() <= prefix.size()
-            || std::memcmp(crd_name.data(), prefix.data(), prefix.size()) != 0)
+        // RAF-9: resolve the canonical id (crd:// folds to engine://) through the resolver — NO prefix-strip. A frame
+        // fallback names `crd://frame/<x>`; parse it to an AssetRef and read its bytes BY CANONICAL ID.
+        crd::renderasset::DiagnosticList adiags(alloc);
+        const crd::renderasset::AssetRef ref = crd::renderasset::AssetRef::parse(crd_name, adiags, alloc);
+        if (!ref.valid() || ref.type() != crd::renderasset::AssetType::FrameGraph)
         {
             return nullptr;
         }
-        crd::containers::String rel(alloc);
-        rel.append("frame/");
-        rel.append(crd_name.data() + prefix.size(), crd_name.size() - prefix.size());
-        rel.append(".frame.toml");
         crd::containers::String text(alloc);
-        if (!asset_text(rel.c_str(), text)) { return nullptr; }
-        auto d = std::make_unique<crd::framecook::FrameGraphDesc>(alloc);
+        if (!resolver.read_ref(ref, text, adiags)) { return nullptr; }
+        auto                    d = std::make_unique<crd::framecook::FrameGraphDesc>(alloc);
         crd::containers::String where(alloc);
         if (crd::framecook::parse_frame_toml(crd::containers::StringView(text.c_str(), text.size()), *d, &where)
             != crd::framecook::FrameCookError::Ok)
         {
-            CRD_LOG_ERROR(g_log_scenerender, "fallback frame '{}' failed to parse at '{}'", rel.c_str(),
+            crd::containers::String name_c(alloc);
+            name_c.append(crd_name.data(), crd_name.size());
+            CRD_LOG_ERROR(g_log_scenerender, "fallback frame '{}' failed to parse at '{}'", name_c.c_str(),
                           where.c_str());
             return nullptr;
         }
@@ -1077,19 +1086,9 @@ struct SceneRenderer::Impl
     crd::containers::String asset_root; // empty = no assets resolve (init defaults it from CRD_ASSETS_DIR)
     [[nodiscard]] bool asset_text(const char* name, crd::containers::String& out)
     {
-        if (asset_root.size() > 0U)
-        {
-            crd::containers::String p(alloc);
-            p.append(asset_root.c_str());
-            p.append("/");
-            p.append(name);
-            const crd::platform::fs::Path path(crd::containers::StringView(p.c_str(), p.size()));
-            if (crd::platform::fs::exists(path))
-            {
-                return crd::platform::fs::read_file_text(path, out);
-            }
-        }
-        return false;
+        // RAF-9: ONE read path — delegate to the resolver's Engine mount (kept == `asset_root` in set_asset_root/init).
+        // Behaviour is the old `asset_root + "/" + name` disk read, verbatim, so a relative name resolves as before.
+        return resolver.read_relative(crd::containers::StringView(name), out);
     }
 
     // Cook one authored stage BY ASSET NAME (disk-first) and create its device program.
@@ -1310,15 +1309,10 @@ struct SceneRenderer::Impl
     // text comes through the POST face (`parse_post_toml` + `cook_post_graph` — tonemap ops legal, surface
     // readers refused), and the FS entry is minimal by design: one colour out, alpha forced to 1 (a display
     // transform emits an opaque frame). Cached per name; two names ship embedded (agx · srgb_only).
-    [[nodiscard]] crd::gpu::IRasterProgram* ensure_post_program(crd::containers::StringView name)
+    // RAF-9: DISCRIMINATED by a bool (the two post ids — `engine://post/tonemap_agx` / `engine://post/srgb_only` —
+    // register two providers over this one builder), so the builder never re-matches the id string.
+    [[nodiscard]] crd::gpu::IRasterProgram* ensure_post_program(bool is_agx)
     {
-        const auto name_is = [&](const char* b) {
-            const crd::usize bl = std::strlen(b);
-            return name.size() == bl && std::memcmp(name.data(), b, bl) == 0;
-        };
-        const bool is_agx  = name_is("crd://post/tonemap_agx");
-        const bool is_srgb = name_is("crd://post/srgb_only");
-        if (!is_agx && !is_srgb) { return nullptr; }
         std::unique_ptr<crd::gpu::IRasterProgram>& slot = is_agx ? prog_post_agx : prog_post_srgb;
         if (slot != nullptr) { return slot.get(); }
         if (raster == nullptr || ctx == nullptr) { return nullptr; }
@@ -2415,6 +2409,79 @@ struct SceneRenderer::Impl
         }
     }
 
+    // RAF-9: a program/kernel canonical id -> its parsed, FOLDED AssetId. ⛔ Via AssetRef::parse (which folds crd:// to
+    // engine://), NOT raw asset_id_of — so a still-crd:// live frame ref and its engine:// registration hash equal.
+    [[nodiscard]] crd::renderasset::AssetId prog_id(crd::containers::StringView canonical)
+    {
+        crd::renderasset::DiagnosticList diags(alloc);
+        return crd::renderasset::AssetRef::parse(canonical, diags, alloc).id();
+    }
+
+    // RAF-9: register EVERY engine default program/kernel under its canonical engine:// id. Authored programs and the
+    // pure-C++ RuntimeProgram builders (gpu_skin, impostor, TAA, …) are registered the SAME way — a captureless thunk
+    // over the existing ensure_* builder (fn-ptr + `this`), so the host resolves them by id, never a str_is branch.
+    // Idempotent (guarded on the raster count) so a second init_programs does not double-register.
+    void register_default_programs()
+    {
+        if (program_registry.raster_count() > 0U) { return; }
+        // ── raster programs (SceneHost::program) ──
+        program_registry.register_raster(prog_id("engine://scene/tess"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_tess_program(); }, this);
+        program_registry.register_raster(prog_id("engine://scene/mesh"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_mesh_program(); }, this);
+        program_registry.register_raster(prog_id("engine://scene/visbuffer"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_visbuffer_program(); }, this);
+        program_registry.register_raster(prog_id("engine://scene/impostor"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_impostor_program(); }, this);
+        program_registry.register_raster(prog_id("engine://scene/hzb_build"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_hzb_program(); }, this);
+        program_registry.register_raster(prog_id("engine://scene/taa_resolve"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_taa_program(); }, this);
+        program_registry.register_raster(prog_id("engine://scene/velocity_debug"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_velocity_debug_program(); }, this);
+        program_registry.register_raster(prog_id("engine://post/tonemap_agx"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_post_program(true); }, this);
+        program_registry.register_raster(prog_id("engine://post/srgb_only"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_post_program(false); }, this);
+        program_registry.register_raster(prog_id("engine://shadow/moment_convert"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_moment_program(0U, 0U); }, this);
+        program_registry.register_raster(prog_id("engine://shadow/moment_blur_x"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_moment_program(1U, 0U); }, this);
+        program_registry.register_raster(prog_id("engine://shadow/moment_blur_y"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_moment_program(2U, 0U); }, this);
+        // ── kernels (SceneHost::kernel) ──
+        program_registry.register_kernel(prog_id("engine://scene/cull"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_cull_kernel(); }, this);
+        program_registry.register_kernel(prog_id("engine://scene/cull_mark"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_cull_mark_kernel(); }, this);
+        program_registry.register_kernel(prog_id("engine://scene/cull_view0"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_cull_view_kernel(0U); }, this);
+        program_registry.register_kernel(prog_id("engine://scene/cull_view1"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_cull_view_kernel(1U); }, this);
+        program_registry.register_kernel(prog_id("engine://scene/cull_view2"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_cull_view_kernel(2U); }, this);
+        program_registry.register_kernel(prog_id("engine://scene/cull_view3"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_cull_view_kernel(3U); }, this);
+        program_registry.register_kernel(prog_id("engine://scene/cull_view4"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_cull_view_kernel(4U); }, this);
+        program_registry.register_kernel(prog_id("engine://scene/cull_reset"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_cull_reset_kernel(); }, this);
+        program_registry.register_kernel(prog_id("engine://scene/occlusion_cull"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_occlusion_cull_kernel(); }, this);
+        program_registry.register_kernel(prog_id("engine://scene/gpu_skin"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_skin_compute_kernel(); }, this);
+        program_registry.register_kernel(prog_id("engine://scene/palette_snapshot"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_palette_snapshot_kernel(); }, this);
+        program_registry.register_kernel(prog_id("engine://scene/rt/raygen"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_rt_kernel(0U); }, this);
+        program_registry.register_kernel(prog_id("engine://scene/rt/miss"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_rt_kernel(1U); }, this);
+        program_registry.register_kernel(prog_id("engine://scene/rt/chit"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_rt_kernel(2U); }, this);
+        program_registry.register_kernel(prog_id("engine://scene/rt/anyhit"),
+            [](void* u) { return static_cast<Impl*>(u)->ensure_rt_kernel(3U); }, this);
+    }
+
     [[nodiscard]] crd::math::Vec4f resolve_color(const crd::resources::ResourceId& material)
     {
         if (material.is_null()) { return {0.8F, 0.8F, 0.8F, 1.0F}; }
@@ -2648,6 +2715,46 @@ bool SceneRenderer::set_frame_graph_asset(const char* asset_name)
     return set_frame_graph_toml(text.c_str());
 }
 
+bool SceneRenderer::set_frame_graph(const char* canonical_id)
+{
+    if (canonical_id == nullptr || m_impl == nullptr) { return false; }
+    Impl&                            impl = *m_impl;
+    crd::renderasset::DiagnosticList diags(impl.alloc);
+    const crd::renderasset::AssetRef ref =
+        crd::renderasset::AssetRef::parse(crd::containers::StringView(canonical_id), diags, impl.alloc);
+    if (!ref.valid() || ref.type() != crd::renderasset::AssetType::FrameGraph)
+    {
+        CRD_LOG_ERROR(g_log_scenerender, "set_frame_graph: '{}' is not a valid engine://frame/... id", canonical_id);
+        return false;
+    }
+    crd::containers::String text(impl.alloc);
+    if (!impl.resolver.read_ref(ref, text, diags)) // ⛔ a miss already logged a NAMED diagnostic into `diags`
+    {
+        CRD_LOG_ERROR(g_log_scenerender, "set_frame_graph: '{}' did not resolve to an asset (missing default)",
+                      canonical_id);
+        return false;
+    }
+    return set_frame_graph_toml(text.c_str());
+}
+
+bool SceneRenderer::register_raster_program(const char* canonical_id, RasterProgramProvider provider, void* user)
+{
+    if (canonical_id == nullptr || provider == nullptr || m_impl == nullptr) { return false; }
+    const crd::renderasset::AssetId id = m_impl->prog_id(crd::containers::StringView(canonical_id));
+    if (!id.valid()) { return false; }
+    m_impl->program_registry.register_raster(id, provider, user);
+    return true;
+}
+
+bool SceneRenderer::register_kernel_program(const char* canonical_id, KernelProgramProvider provider, void* user)
+{
+    if (canonical_id == nullptr || provider == nullptr || m_impl == nullptr) { return false; }
+    const crd::renderasset::AssetId id = m_impl->prog_id(crd::containers::StringView(canonical_id));
+    if (!id.valid()) { return false; }
+    m_impl->program_registry.register_kernel(id, provider, user);
+    return true;
+}
+
 bool SceneRenderer::set_frame_graph_toml(const char* toml_text)
 {
     if (toml_text == nullptr || m_impl == nullptr) { return false; }
@@ -2693,6 +2800,9 @@ bool SceneRenderer::set_asset_root(const char* dir)
     Impl& impl = *m_impl;
     impl.asset_root.clear();
     impl.asset_root.append(dir);
+    // RAF-9: keep the resolver's Engine mount == asset_root, so canonical-id loads resolve to the SAME files as the
+    // relative-path loads (asset_text delegates here). One source of truth for "where engine:// lives".
+    impl.resolver.set_mount(crd::renderasset::AssetScheme::Engine, crd::containers::StringView(dir));
     crd::containers::String t(impl.alloc);
     crd::containers::String where(impl.alloc);
     const auto reparse = [&](const char* name, crd::framecook::FrameGraphDesc& into) {
@@ -2820,6 +2930,9 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
 {
     if (m_impl->raster == nullptr) { CRD_LOG_ERROR(g_log_scenerender, "init_programs: raster is null"); return false; }
     m_impl->ctx = &ctx;
+    // RAF-9: register every engine default program/kernel under its canonical engine:// id (idempotent). Providers are
+    // lazy thunks over the ensure_* builders, so this is device-independent bookkeeping — the builders cook on demand.
+    m_impl->register_default_programs();
 
     // ⭐⭐ REN-37.2: EVERY fragment program this renderer runs is now COOKED FROM THE MATERIAL and SHADED BY A
     // NAMED TECHNIQUE. There is no hand-written fragment shader left in this file. The technique library is the
@@ -4587,44 +4700,11 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
     return stats;
 }
 
-// REN-1: one culled group's draw (the frame graph records the whole list in ONE submission).
-namespace
-{
-// (SceneDraw is defined above `SceneRenderer::Impl` — the contribution arena holds the per-viewport list.)
-// REN-2 Half B: record ONE scene group — the first clears colour+depth, later groups LOAD; a group whose material
-// carries a base-color map draws through draw_storage_textured_depth (samples albedo), else the flat draw.
-void record_one_group(crd::gpu::IRasterContext& r, crd::gpu::IRasterTarget& t, const SceneDraw& d,
-                      crd::gpu::ClearColor clear, bool first, crd::gpu::ITexture* shadow_atlas)
-{
-    const auto cmp = crd::gpu::DepthCompare::GreaterEqual;
-    // REN-3.2-b: with an atlas bound the group draws SHADOWED (cascade select + PCF). The shadowed and textured
-    // paths are mutually exclusive today because both want the same descriptor slot 1 - combining them needs the
-    // bindless material work in REN-3.3, so shadows take precedence and the albedo map rides that slice.
-    if (shadow_atlas != nullptr)
-    {
-        if (first)
-        {
-            r.draw_storage_shadowed_depth(t, *d.program, clear, 0.0F, cmp, *d.buffer, *shadow_atlas, d.vertex_count);
-        }
-        else
-        {
-            r.draw_storage_shadowed_depth_load(t, *d.program, cmp, *d.buffer, *shadow_atlas, d.vertex_count);
-        }
-    }
-    else if (d.base_color != nullptr)
-    {
-        if (first) { r.draw_storage_textured_depth(t, *d.program, clear, 0.0F, cmp, *d.buffer, *d.base_color, d.vertex_count); }
-        else { r.draw_storage_textured_depth_load(t, *d.program, cmp, *d.buffer, *d.base_color, d.vertex_count); }
-    }
-    else if (first) { r.draw_storage_depth(t, *d.program, clear, 0.0F, cmp, *d.buffer, d.vertex_count); }
-    else { r.draw_storage_depth_load(t, *d.program, cmp, *d.buffer, d.vertex_count); }
-}
-// ⭐ REN-37.10: `record_scene_groups` and the CASCADE pass recorder used to live here. Both are GONE — the
-// executor's `record_pass` drives every geometry and depth-only pass from the AUTHORED graph now, including the
-// first-clears-rest-loads rule and the per-slice cascade target. `record_one_group` above survives only for the
-// synchronous fallback a backend without a frame graph takes.
-
-} // namespace
+// ⭐⭐ RAF-8b: `record_scene_groups`, the CASCADE pass recorder, AND `record_one_group` (the last synchronous draw
+// helper) are ALL GONE. Every geometry / depth-only / cascade pass is driven from the AUTHORED graph through
+// `FrameRecorder::record_pass` → the render-graph executors — including the first-clears-rest-loads rule and the
+// per-slice cascade target. Scene-render holds NO specialized backend draw path: it answers only what a graph cannot
+// know (the target, the resolved draw lists, the cascade count, the per-cascade programs) and drives execution.
 
 // ── REN-37.10: THE HOST. What an authored graph CANNOT know, and only the renderer can answer. ──────────────
 // The split is the whole point of `IFrameGraphHost`: the ASSET declares topology (which passes, what they read
@@ -4646,51 +4726,19 @@ public:
 
     // ⭐⭐ REN-38-F6: the ADVANCED-FAMILY program ids, resolved to programs cooked from the authored
     // declarations. An id the host does not know stays null, which the executor reports BY NAME.
+    // ⭐⭐ RAF-9: resolve a program id through the PUBLIC registry — parse the incoming id (crd:// folds to engine://)
+    // to an AssetId and look it up. No hard-coded str_is chain: an engine default and an app program resolve the same
+    // way. An unregistered id returns nullptr, which the executor reports by name (a clear "no program for id" error).
     [[nodiscard]] crd::gpu::IRasterProgram* program(crd::containers::StringView id) override
     {
-        if (str_is(id, "crd://scene/tess")) { return m_impl.ensure_tess_program(); }
-        if (str_is(id, "crd://scene/mesh")) { return m_impl.ensure_mesh_program(); }
-        if (str_is(id, "crd://scene/visbuffer")) { return m_impl.ensure_visbuffer_program(); }
-        if (str_is(id, "crd://scene/impostor")) { return m_impl.ensure_impostor_program(); }
-        if (str_is(id, "crd://scene/hzb_build")) { return m_impl.ensure_hzb_program(); }
-        if (str_is(id, "crd://scene/taa_resolve")) { return m_impl.ensure_taa_program(); } // REN-41 TAA
-        if (str_is(id, "crd://scene/velocity_debug")) { return m_impl.ensure_velocity_debug_program(); } // REN-41
-        // ⭐⭐ 38-G1b: the authored POST programs — the technique library's first device-reachable family
-        if (str_is(id, "crd://post/tonemap_agx") || str_is(id, "crd://post/srgb_only"))
-        {
-            return m_impl.ensure_post_program(id);
-        }
-        // ⭐⭐ REN-40-D: the moment-atlas family. The BASE program is instance 0; the for_each expansion asks
-        // `instance_program` for each cascade's own (the layer is baked per instance).
-        if (str_is(id, "crd://shadow/moment_convert")) { return m_impl.ensure_moment_program(0U, 0U); }
-        if (str_is(id, "crd://shadow/moment_blur_x")) { return m_impl.ensure_moment_program(1U, 0U); }
-        if (str_is(id, "crd://shadow/moment_blur_y")) { return m_impl.ensure_moment_program(2U, 0U); }
-        return nullptr;
+        return m_impl.program_registry.raster(m_impl.prog_id(id));
     }
 
-    // The single-stage kernels: GPU culling and the four ray-tracing stages.
+    // The single-stage kernels (GPU cull views, gpu-skin, palette snapshot, the four ray-tracing stages) — resolved
+    // through the SAME registry by parsed AssetId.
     [[nodiscard]] crd::gpu::IGpuProgram* kernel(crd::containers::StringView id) override
     {
-        if (str_is(id, "crd://scene/cull")) { return m_impl.ensure_cull_kernel(); }
-        if (str_is(id, "crd://scene/cull_mark")) { return m_impl.ensure_cull_mark_kernel(); }
-        // ⭐⭐ REN-40-A: the GPU-driven pair the `scene_gpu_cull` frame graph names
-        // ⛔ ONE authored asset, FIVE named views — the suffix IS the view index, so the frame asset declares
-        // `crd://scene/cull_view0` .. `cull_view4` and the renderer cooks the matching variant. Explicit beats a
-        // new `for_each` expansion here: five passes that a reader can count are worth more than machinery.
-        if (str_is(id, "crd://scene/cull_view0")) { return m_impl.ensure_cull_view_kernel(0U); }
-        if (str_is(id, "crd://scene/cull_view1")) { return m_impl.ensure_cull_view_kernel(1U); }
-        if (str_is(id, "crd://scene/cull_view2")) { return m_impl.ensure_cull_view_kernel(2U); }
-        if (str_is(id, "crd://scene/cull_view3")) { return m_impl.ensure_cull_view_kernel(3U); }
-        if (str_is(id, "crd://scene/cull_view4")) { return m_impl.ensure_cull_view_kernel(4U); }
-        if (str_is(id, "crd://scene/cull_reset")) { return m_impl.ensure_cull_reset_kernel(); }
-        if (str_is(id, "crd://scene/occlusion_cull")) { return m_impl.ensure_occlusion_cull_kernel(); }
-        if (str_is(id, "crd://scene/gpu_skin")) { return m_impl.ensure_skin_compute_kernel(); }
-        if (str_is(id, "crd://scene/palette_snapshot")) { return m_impl.ensure_palette_snapshot_kernel(); }
-        if (str_is(id, "crd://scene/rt/raygen")) { return m_impl.ensure_rt_kernel(0U); }
-        if (str_is(id, "crd://scene/rt/miss")) { return m_impl.ensure_rt_kernel(1U); }
-        if (str_is(id, "crd://scene/rt/chit")) { return m_impl.ensure_rt_kernel(2U); }
-        if (str_is(id, "crd://scene/rt/anyhit")) { return m_impl.ensure_rt_kernel(3U); }
-        return nullptr;
+        return m_impl.program_registry.kernel(m_impl.prog_id(id));
     }
 
     // B4: the graph NAMES an acceleration structure; the renderer resolves it to the one the host installed
@@ -5832,12 +5880,13 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
             stats.timed_passes = fg.pass_count();
         }
     }
-    else // synchronous fallback (a backend without the frame graph): the GEO-8 first-clears-rest-load loop
+    else
     {
-        for (crd::usize i = 0; i < draw_list.size(); ++i)
-        {
-            record_one_group(*impl.raster, target, draw_list[i], clear, i == 0U, nullptr);
-        }
+        // ⭐⭐ RAF-8b: scene-render has NO specialized backend draw path. EVERY backend provides a frame graph (the
+        // gpu-context contract); one that does not is an UNSUPPORTED configuration, REPORTED here — never a silent
+        // synchronous fallback that re-implemented the first-clears-rest-loads loop the render-graph executors own.
+        CRD_LOG_ERROR(g_log_scenerender, "the raster backend provides no frame graph — the scene cannot be recorded");
+        impl.fill_diag_record_ok = 200U;
     }
     return stats;
 }

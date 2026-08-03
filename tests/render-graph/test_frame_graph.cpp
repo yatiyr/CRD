@@ -111,6 +111,20 @@ private:
     u32 m_h;
 };
 
+// A minimal sampled texture for the device-free record gates: a fullscreen pass that DECLARES an input read resolves
+// it to a real ITexture (a colour, so the executor takes the plain sampled path, not the shadow comparison sampler).
+class FakeTexture final : public crd::gpu::ITexture
+{
+public:
+    FakeTexture(u32 w, u32 h) noexcept : m_w(w), m_h(h) {}
+    [[nodiscard]] u32 width() const noexcept override { return m_w; }
+    [[nodiscard]] u32 height() const noexcept override { return m_h; }
+
+private:
+    u32 m_w;
+    u32 m_h;
+};
+
 int g_sentinel = 0;
 crd::gpu::IRasterProgram* fake_raster() noexcept { return reinterpret_cast<crd::gpu::IRasterProgram*>(&g_sentinel); }
 
@@ -125,7 +139,7 @@ GraphPass fullscreen_pass(u64 name, u64 color_res, u64 input_res)
     p.payload.resources.push_back(ResourceRef{pass_param_id("color"), SlotResourceKind::ColorTarget, SlotAccess::Write, color_res});
     if (input_res != 0U)
     {
-        p.payload.resources.push_back(ResourceRef{pass_param_id("input"), SlotResourceKind::Texture, SlotAccess::Read, input_res});
+        p.payload.resources.push_back(ResourceRef{pass_param_id("input0"), SlotResourceKind::Texture, SlotAccess::Read, input_res});
     }
     return p;
 }
@@ -148,9 +162,9 @@ TEST_CASE("raf7 hand-built and authored graphs record identical commands")
     crd::memory::TlsfAllocator alloc(2U << 20U, nullptr, "raf7-eq");
     DiagnosticList d(&alloc);
     ExecutorRegistry schemas(&alloc);
-    REQUIRE(register_builtin_executors(schemas, d) == 9U);
+    REQUIRE(register_builtin_executors(schemas, d) == 14U);
     GraphExecutorTable records(&alloc);
-    REQUIRE(register_builtin_records(records, d) == 9U);
+    REQUIRE(register_builtin_records(records, d) == 14U);
 
     const u64 rc = pass_param_id("scene_color");
     const u64 ri = pass_param_id("scene_input");
@@ -172,9 +186,10 @@ TEST_CASE("raf7 hand-built and authored graphs record identical commands")
     REQUIRE(compile(b, schemas, 128U, 128U, cb, d));
 
     FakeTarget t(128U, 128U);
+    FakeTexture in_tex(128U, 128U);
     ResourceTable table(&alloc);
     table.bind(ResolvedResource{rc, SlotResourceKind::ColorTarget, &t, nullptr, nullptr});
-    table.bind(ResolvedResource{ri, SlotResourceKind::Texture, &t, nullptr, nullptr});
+    table.bind(ResolvedResource{ri, SlotResourceKind::Texture, nullptr, nullptr, nullptr, &in_tex});
 
     MockEncoder ea(&alloc);
     MockEncoder eb(&alloc);
@@ -190,7 +205,7 @@ TEST_CASE("raf7 multiple packets record in one scope")
     crd::memory::TlsfAllocator alloc(1U << 20U, nullptr, "raf7-multi");
     DiagnosticList d(&alloc);
     ExecutorRegistry schemas(&alloc);
-    REQUIRE(register_builtin_executors(schemas, d) == 9U);
+    REQUIRE(register_builtin_executors(schemas, d) == 14U);
 
     // A custom executor that records TWO draws inside one begin/end scope.
     crd::renderpass::PassExecutorDesc desc;
@@ -203,7 +218,7 @@ TEST_CASE("raf7 multiple packets record in one scope")
     REQUIRE(schemas.register_executor(desc, d));
 
     GraphExecutorTable records(&alloc);
-    REQUIRE(register_builtin_records(records, d) == 9U);
+    REQUIRE(register_builtin_records(records, d) == 14U);
     const PassRecordFn multidraw = [](const PassPayload&, RecordContext& ctx, crd::gpu::ICommandEncoder& e)
     {
         IRasterTarget* color = ctx.color_target(pass_param_id("color"));
@@ -255,7 +270,7 @@ TEST_CASE("raf7 an undeclared resource access is diagnosed")
     crd::memory::TlsfAllocator alloc(1U << 20U, nullptr, "raf7-undeclared");
     DiagnosticList d(&alloc);
     ExecutorRegistry schemas(&alloc);
-    REQUIRE(register_builtin_executors(schemas, d) == 9U);
+    REQUIRE(register_builtin_executors(schemas, d) == 14U);
 
     crd::renderpass::PassExecutorDesc desc;
     desc.id = executor_type_id("test.buggy");
@@ -301,7 +316,7 @@ TEST_CASE("raf7 transient aliasing and persistent pinning")
     crd::memory::TlsfAllocator alloc(2U << 20U, nullptr, "raf7-alias");
     DiagnosticList d(&alloc);
     ExecutorRegistry schemas(&alloc);
-    REQUIRE(register_builtin_executors(schemas, d) == 9U);
+    REQUIRE(register_builtin_executors(schemas, d) == 14U);
 
     // A 4-pass chain: src -> r1 -> r2 -> r3 -> out. r1 dies (last read at pass1) before r3 is born (first write at
     // pass2), so r1 and r3 may ALIAS. r1 and r2 overlap (both touched at pass1), so they may NOT.
@@ -346,7 +361,7 @@ TEST_CASE("raf7 resize recompiles only the size, not the topology")
     crd::memory::TlsfAllocator alloc(2U << 20U, nullptr, "raf7-resize");
     DiagnosticList d(&alloc);
     ExecutorRegistry schemas(&alloc);
-    REQUIRE(register_builtin_executors(schemas, d) == 9U);
+    REQUIRE(register_builtin_executors(schemas, d) == 14U);
 
     const u64 r1 = pass_param_id("r1");
     const u64 out = pass_param_id("out");

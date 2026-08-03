@@ -205,6 +205,10 @@ public:
     [[nodiscard]] virtual crd::u32 height() const noexcept = 0;
     // One texel of the last rendered result, packed little-endian RGBA8 (0xAABBGGRR — R in the low byte).
     [[nodiscard]] virtual crd::u32 read_pixel(crd::u32 x, crd::u32 y) const noexcept = 0;
+    // True if this target carries a BUNDLED depth attachment (a `create_color_depth_target`), so a depth-testing pass
+    // uses it as its own depth-stencil with no separate resource — the way the live scene verbs read depth off the
+    // colour target. Plain colour targets return false (a scene pass into one renders without a depth test).
+    [[nodiscard]] virtual bool has_depth() const noexcept { return false; }
 };
 
 // An opaque assembled raster program: the SHADER-OBJECT form (a linked VS + FS as `VkShaderEXT` + a pipeline layout),

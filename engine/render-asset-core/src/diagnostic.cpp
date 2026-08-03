@@ -66,6 +66,14 @@ StringView diag_code_name(DiagCode code) noexcept
         return "invalid-slot";
     case DiagCode::QueueMismatch:
         return "queue-mismatch";
+    case DiagCode::ExecutionFailed:
+        return "execution-failed";
+    case DiagCode::UnsupportedPassKind:
+        return "unsupported-pass-kind";
+    case DiagCode::UnresolvedForEach:
+        return "unresolved-for-each";
+    case DiagCode::AssetNotFound:
+        return "asset-not-found";
     }
     return "unknown";
 }

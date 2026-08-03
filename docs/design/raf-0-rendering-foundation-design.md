@@ -115,16 +115,18 @@ capability tier, technique options}`. Binding frequencies (§9): `Frame / Pass /
 | Material definition/instance | `material-cook` | `MaterialDesc`/`CookedMaterial`/`RuntimeMaterialDefinition`+`Instance` | surface only; NO lighting |
 | Technique | `technique-cook` | `TechniqueDesc`/`CookedTechnique`/`RuntimeTechnique` | surface+pass contract, phases, options, caps |
 | Render phase | `render-asset-core` | `RenderPhaseId` (stable enum+registry) | authored name → id at cook |
-| Pass executor | `frame-cook` (registry) + consumers register | `ExecutorTypeId` + per-executor schema + payload | built-ins in engine; apps register in C++ |
-| Frame graph | `frame-cook` | `FrameGraphDesc`/`CookedFrameGraph`/`RuntimeFrameGraphTemplate`/`CompiledFrameGraphInstance` | topology only |
+| Pass executor | ~~`frame-cook` (registry)~~ **`crd-render-pass`** (registry) + consumers register | `ExecutorTypeId` + per-executor schema + payload | ⛔ CORRECTED (ADR-0106, RAF-8): the registry is its own leaf module `crd-render-pass`, NOT frame-cook — folding it in rebuilds the giant module §18/§21 forbid. built-ins in engine; apps register in C++ |
+| Frame graph | ~~`frame-cook`~~ **desc/cooked in `frame-cook`; runtime in `crd-render-graph`** | `FrameGraphDesc`/`CookedFrameGraph` (frame-cook) · `FrameGraphTemplate`(=RuntimeFrameGraphTemplate)/`CompiledFrameGraph`(=CompiledFrameGraphInstance) (**`crd-render-graph`**) | ⛔ CORRECTED (ADR-0106, RAF-8): the RUNTIME template + compiled instance live in `crd-render-graph` (the single live runtime); frame-cook keeps the desc + cooked blob + the Cooked→Template **load bridge** (a new acyclic `frame-cook → render-graph` edge). topology only |
 | Canonical GPU commands | `gpu-context` | `RenderingDesc`, `RasterDrawPacket`, `Dispatch/Transfer/Trace*Desc`, `CommandEncoder` | backend-neutral |
 | Backend objects | `gpu-context-vulkan`/`-dx12` | PSO/shader-object/root-sig/descriptors/images | lower the canonical model |
 | Capability + fallback | `gpu-context` + `frame-cook` | `Capability`, `CapabilityExpr`, fallback selection | §12 |
 | Scene orchestration | `scene-render` | (no new asset types) | resolves graph+views+draw-lists, executes |
 
-**One-way module dependency (target):**
-`render-asset-core` ↑ `{shader,material,technique,frame}-cook` ↑ `scene-render` ↑ `gpu-context` ↑ `{vulkan,dx12}`
-(+ `kir` sideways under the cookers). ⛔ Forbidden edges to prove absent at RAF-12: frame-cook→scene ECS;
+**One-way module dependency (target; ADR-0106):**
+`render-asset-core` ↑ `{render-pass, render-graph, gpu-context}`; `render-graph` ↑ `{render-asset-core, render-pass,
+gpu-context}`; `frame-cook` ↑ `{render-graph, gpu-context, ...}` (the RAF-8 load bridge — acyclic: render-graph
+depends on neither frame-cook nor scene) ↑ `scene-render` ↑ `gpu-context` ↑ `{vulkan,dx12}` (+ `kir` sideways under
+the cookers). ⛔ Forbidden edges to prove absent at RAF-12: frame-cook→scene ECS;
 backend→upward; material-cook→renderer runtime; resource registry→Vulkan/DX12; cyclic cooker deps.
 
 ---

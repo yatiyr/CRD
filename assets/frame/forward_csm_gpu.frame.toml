@@ -22,9 +22,9 @@
 # ⛔ `requires = ["shadows"]` and the named fallback are the same capability tier the other CSM frames carry: a
 # device or scene without cascades steps down by NAME and the step-down is REPORTED, never silent.
 schema   = 1
-name     = "crd://frame/forward_csm_gpu"
+name     = "engine://frame/forward_csm_gpu"
 requires = ["shadows"]
-fallback = "crd://frame/forward_agx"
+fallback = "engine://frame/forward_agx"
 
 [[resource]]
 name = "instances"
@@ -123,56 +123,56 @@ kind = "external_buffer"
 [[pass]]
 name      = "palette_snapshot"
 kind      = "compute"
-kernel    = "crd://scene/palette_snapshot"
+kernel    = "engine://scene/palette_snapshot"
 draw_list = "visible_geometry"
 writes    = ["instances"]
 
 [[pass]]
 name      = "gpu_skin"
 kind      = "compute"
-kernel    = "crd://scene/gpu_skin"
+kernel    = "engine://scene/gpu_skin"
 draw_list = "visible_geometry"
 writes    = ["instances"]
 
 [[pass]]
 name      = "cull_reset"
 kind      = "compute"
-kernel    = "crd://scene/cull_reset"
+kernel    = "engine://scene/cull_reset"
 draw_list = "visible_geometry"
 writes    = ["instances", "cull_args"]
 
 [[pass]]
 name      = "cull_view0"
 kind      = "compute"
-kernel    = "crd://scene/cull_view0"
+kernel    = "engine://scene/cull_view0"
 draw_list = "visible_geometry"
 writes    = ["instances", "cull_args"]
 
 [[pass]]
 name      = "cull_view1"
 kind      = "compute"
-kernel    = "crd://scene/cull_view1"
+kernel    = "engine://scene/cull_view1"
 draw_list = "shadow_casters"
 writes    = ["instances", "cull_args"]
 
 [[pass]]
 name      = "cull_view2"
 kind      = "compute"
-kernel    = "crd://scene/cull_view2"
+kernel    = "engine://scene/cull_view2"
 draw_list = "shadow_casters"
 writes    = ["instances", "cull_args"]
 
 [[pass]]
 name      = "cull_view3"
 kind      = "compute"
-kernel    = "crd://scene/cull_view3"
+kernel    = "engine://scene/cull_view3"
 draw_list = "shadow_casters"
 writes    = ["instances", "cull_args"]
 
 [[pass]]
 name      = "cull_view4"
 kind      = "compute"
-kernel    = "crd://scene/cull_view4"
+kernel    = "engine://scene/cull_view4"
 draw_list = "shadow_casters"
 writes    = ["instances", "cull_args"]
 
@@ -230,7 +230,7 @@ name           = "hzb_build"
 kind           = "raster.fullscreen"
 reads          = ["scene_depth"]
 writes         = ["hzb"]
-shader         = "crd://scene/hzb_build"
+shader         = "engine://scene/hzb_build"
 depth_as_float = true
 
 # ── ⭐ REN-40-G3 PHASE 2: OCCLUSION RE-CULL — same visible set, filtered by the HZB. ──────────────────────
@@ -241,14 +241,14 @@ depth_as_float = true
 [[pass]]
 name      = "occlusion_reset"
 kind      = "compute"
-kernel    = "crd://scene/cull_reset"
+kernel    = "engine://scene/cull_reset"
 draw_list = "visible_geometry"
 writes    = ["instances", "cull_args"]
 
 [[pass]]
 name      = "occlusion_cull"
 kind      = "compute"
-kernel    = "crd://scene/occlusion_cull"
+kernel    = "engine://scene/occlusion_cull"
 draw_list = "visible_geometry"
 reads     = ["hzb"]
 writes    = ["instances", "cull_args"]
@@ -275,7 +275,7 @@ draw_list    = "impostor_geometry"
 writes       = ["scene_hdr"]
 reads        = ["instances", "cull_args"]
 shared_depth = "scene_depth"
-shader       = "crd://scene/impostor"
+shader       = "engine://scene/impostor"
 load         = true
 depth        = "GreaterEqual"
 
@@ -289,7 +289,7 @@ name   = "taa_resolve"
 kind   = "raster.fullscreen"
 reads  = ["scene_hdr", "scene_depth", "taa_history", "velocity", "taa_constants"]
 writes = ["scene_taa"]
-shader = "crd://scene/taa_resolve"
+shader = "engine://scene/taa_resolve"
 
 [[pass]]
 name   = "taa_store"
@@ -302,4 +302,4 @@ name   = "post"
 kind   = "raster.fullscreen"
 reads  = ["scene_taa"]
 writes = ["@output"]
-shader = "crd://post/tonemap_agx"
+shader = "engine://post/tonemap_agx"

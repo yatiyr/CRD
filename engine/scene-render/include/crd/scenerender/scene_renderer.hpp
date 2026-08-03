@@ -44,6 +44,8 @@
 namespace crd::gpu
 {
 class IGpuContext;
+class IRasterProgram; // RAF-9: program-registry provider return types
+class IGpuProgram;
 }
 namespace crd::resources
 {
@@ -586,6 +588,23 @@ public:
     // application selects a frame: the moment the text lives in a caller, the frame stops being editable content
     // and becomes code again.
     [[nodiscard]] bool set_frame_graph_asset(const char* asset_name);
+    // ⭐⭐ RAF-9: install a frame BY CANONICAL ASSET ID — `"engine://frame/forward_csm_agx"` — resolved through the
+    // SAME public registry/resolver an app uses (`engine://` mounts the asset root; `crd://` folds to it). This is the
+    // Gate-9 selector: a default is chosen by id, not by a relative path or an embedded TOML. ⛔ A missing/unparseable
+    // id REFUSES (returns false, KEEPS the previous frame) and reports a NAMED diagnostic. `set_frame_graph_asset`
+    // (relative name) remains a thin compatibility wrapper, deleted at RAF-12.
+    [[nodiscard]] bool set_frame_graph(const char* canonical_id);
+    // ⭐⭐ RAF-9: a PROGRAM PROVIDER — the fn-ptr + `void* user` idiom (like FramePassFn), NO std::function. Resolves a
+    // canonical program/kernel id to a device program. Engine defaults register captureless thunks over the internal
+    // builders at `init_programs`; an app registers its OWN under `app://…` the SAME way — so an app frame graph and an
+    // engine default resolve their programs through ONE public registry, with no privileged hidden engine path.
+    using RasterProgramProvider = crd::gpu::IRasterProgram* (*)(void* user);
+    using KernelProgramProvider = crd::gpu::IGpuProgram* (*)(void* user);
+    // Register a raster / compute program under its canonical id (`engine://…` / `app://…`; `crd://` folds to engine).
+    // The id is parsed to an AssetId; `program()`/`kernel()` resolution is a registry lookup, never a hard-coded branch.
+    // Returns false on a malformed id or null provider.
+    [[nodiscard]] bool register_raster_program(const char* canonical_id, RasterProgramProvider provider, void* user);
+    [[nodiscard]] bool register_kernel_program(const char* canonical_id, KernelProgramProvider provider, void* user);
     // ── ⭐ REN-38-F15 / REN-41: the ASSET ROOT is the single source of truth. ──
     // Every authored asset this renderer cooks (frame graphs, stage declarations, materials, lighting) is read
     // from a file under `dir` — editing `assets/` changes the frame without a rebuild. There is no in-binary

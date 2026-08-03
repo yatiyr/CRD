@@ -67,7 +67,7 @@ struct DepthStencilAttachmentDesc
     bool enabled = false;
     LoadOp load = LoadOp::Clear;
     StoreOp store = StoreOp::Store;
-    float clear_depth = 1.0F;
+    float clear_depth = 1.0F; // crd-lint-allow-untagged-physical: normalized device depth [0,1], a raw API scalar
     bool depth_test = true;
     DepthCompare compare = DepthCompare::LessEqual;
 };
@@ -81,6 +81,12 @@ struct RenderingDesc
     FixedArray<ColorAttachmentDesc, kMaxColorAttachments> color;
     DepthStencilAttachmentDesc depth{};
     IRasterTarget* shading_rate_attachment = nullptr; // optional per-tile VRS source (3rd rate source)
+    // ── ⭐ RAF-8: the VISIBILITY-BUFFER scope. The single colour attachment is an R32_UINT id target cleared to an
+    // INTEGER `clear_id` (not a float ClearColor) and each draw writes a per-pixel primitive id — draw_visbuffer /
+    // draw_visbuffer_load, selected by the scope's first-vs-later draw (the same clear-once, load-rest rule). A
+    // colour clear value cannot express an integer background id, so it is DATA on the scope, not a reinterpreted float.
+    bool visbuffer = false;
+    crd::u32 clear_id = 0; // crd-lint-allow-untagged-physical: the R32_UINT visibility background id, a raw API scalar
 };
 
 // ── Resource bindings (the hard-coded "set 0 binding 1 = base colour" convention, now a typed table) ──
@@ -115,6 +121,12 @@ enum class GeometryKind : crd::u8
     Meshlet,         // mesh-shader dispatch; group_count_{x,y,z}
     MeshletIndirect, // DispatchMeshIndirect from native args
     Patches,         // tessellation patch list; patch_count × control_points
+    // ── ⭐ RAF-8: CPU MULTI-DRAW — the live scene BATCHING (draw_storage_multi_depth / _multi_indexed_depth). A run
+    // of consecutive plain/indexed items sharing program+buffer records as ONE verb (one descriptor reset) — the perf
+    // contract the per-draw executor loop must NOT lose (dropping it to N single draws is a measurable regression).
+    // Appended at END (a renumbered kind reinterprets every cooked payload). ──
+    MultiStoragePull, // N vertex counts (multi_counts), one storage buffer
+    MultiIndexed,     // N IndexedDraw records (multi_indexed), one storage buffer
 };
 struct GeometrySource
 {
@@ -124,6 +136,7 @@ struct GeometrySource
     // Indexed — indices live in a storage buffer (the pull buffer itself, at index_offset_bytes).
     IStorageBuffer* index_buffer = nullptr;
     crd::u32 index_offset = 0; // BYTE offset of the index section
+    crd::u32 first_index = 0;  // START within the bound index section, in INDICES (the indexed-sampled scene draw)
     // Indirect / IndirectCount / MeshletIndirect. Two arg conventions: a tracked storage buffer (indexed-indirect
     // + mesh-indirect-buffer) OR a native handle (draw_mesh_indirect from a ComputeBuffer). count_buffer supplies a
     // device-computed draw count (indexed-indirect-count). Offsets are BYTES; max_draws bounds the indirect draws.
@@ -140,6 +153,13 @@ struct GeometrySource
     // Patches
     crd::u32 patch_count = 0;
     crd::u32 control_points = 4; // quad patch by default
+    // ── ⭐ RAF-8: CPU MULTI-DRAW (MultiStoragePull / MultiIndexed). The count arrays are HOST-OWNED (the packet stays
+    // allocation-free — a pointer, like a bindless texture_array), valid for the duration of the draw. `draw_count`
+    // is the run length; `first_draw_index` is the DrawIndex ROW BASE the run rebases every load by (REN-40-C2). ──
+    const crd::u32* multi_counts = nullptr;                     // MultiStoragePull: draw_count vertex counts
+    const IRasterContext::IndexedDraw* multi_indexed = nullptr; // MultiIndexed: draw_count {index_count, inst, first}
+    crd::u32 draw_count = 0;
+    crd::u32 first_draw_index = 0;
 };
 
 // The STRONG draw-command variant (no boolean bag). Must agree with the geometry kind (validated).
@@ -153,6 +173,8 @@ enum class RasterCommandKind : crd::u8
     DispatchMesh,             // Meshlet
     DispatchMeshIndirect,     // MeshletIndirect
     DrawPatches,              // Patches (tessellation)
+    DrawMulti,                // RAF-8: MultiStoragePull (CPU multi-draw batch)
+    DrawMultiIndexed,         // RAF-8: MultiIndexed
 };
 
 // Per-draw raster state — REUSES PassRasterState (depth_write · bias · cull · stencil) + the VRS/conservative axes.
@@ -193,6 +215,10 @@ struct DispatchDesc
     crd::u64 args_offset = 0;
     ResourceBindingTable bindings{};
     bool ray_tracing_pipeline = false; // dispatch_kernel_rt (an RT pipeline via the compute path)
+    // ── ⭐ RAF-8: the INLINE RAY-QUERY dispatch (an authored `raytrace` pass). A Direct dispatch carrying an
+    // acceleration structure binds the TLAS at set 0/binding 0 and the storage buffers at 1..N, then dispatches the
+    // ray-query kernel into the frame's one submission (dispatch_kernel_rt) — NOT a ray-tracing pipeline (no SBT).
+    IAccelerationStructure* acceleration_structure = nullptr;
 };
 
 // ── Transfer (clear/copy/blit/resolve) ──

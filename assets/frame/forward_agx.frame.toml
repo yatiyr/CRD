@@ -7,7 +7,7 @@
 # off (`for_each` answered 0 cascades) and the app presented a BLACK frame.
 
 schema = 1
-name   = "crd://frame/forward_agx"
+name   = "engine://frame/forward_agx"
 
 # the scene lands HERE first, so the post pass has something to read. `scale = 1.0` follows the window.
 [[resource]]
@@ -45,7 +45,7 @@ name      = "impostor"
 kind      = "raster.geometry"
 draw_list = "impostor_geometry"
 writes    = ["scene_hdr"]
-shader    = "crd://scene/impostor"
+shader    = "engine://scene/impostor"
 load      = true
 depth     = "GreaterEqual"
 
@@ -55,4 +55,4 @@ name   = "post"
 kind   = "raster.fullscreen"
 reads  = ["scene_hdr"]
 writes = ["@output"]
-shader = "crd://post/tonemap_agx"
+shader = "engine://post/tonemap_agx"

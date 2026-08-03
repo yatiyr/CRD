@@ -1,10 +1,10 @@
 schema = 1
-name   = "crd://frame/scene_mesh"
+name   = "engine://frame/scene_mesh"
 
 [[pass]]
 name        = "amplify"
 kind        = "raster.mesh"
-shader      = "crd://scene/mesh"
+shader      = "engine://scene/mesh"
 writes      = ["@output"]
 clear_color = [0.0, 0.0, 0.0, 1.0]
 params      = { groups = 2 }

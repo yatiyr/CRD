@@ -16,6 +16,7 @@ add_library(crd-frame-cook
     src/frame_runtime.cpp   # REN-36.2: execute a cooked graph through IFrameGraph
     src/frame_compose.cpp   # REN-37.6: SUBGRAPHS + INJECTION POINTS, flattened away before build()
     src/viewport.cpp        # REN-37.8/37.9: the FRAME-LEVEL graph composer + the budgeted viewport scheduler
+    src/frame_template_bridge.cpp # RAF-8 (ADR-0106): FrameGraphDesc -> render-graph FrameGraphTemplate load bridge
 )
 
 target_include_directories(crd-frame-cook PUBLIC include)
@@ -26,6 +27,10 @@ target_link_libraries(crd-frame-cook
         crd-containers
         crd-memory
         crd-gpu-context
+        crd-render-asset-core # RAF-8: the shared diagnostics + binding vocabulary
+        crd-render-pass       # RAF-8: the executor registry + typed payload the bridge fills
+        crd-render-graph      # RAF-8 (ADR-0106): the single live runtime the bridge targets (ACYCLIC — render-graph
+                              #        does not depend back on frame-cook)
         crd-log          # REN-36.2: a fallback must be REPORTED, never silent
     PRIVATE
         ${_crd_toml_target}

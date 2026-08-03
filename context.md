@@ -16,6 +16,40 @@
 > **Mission constitution (followed verbatim):** `docs/research/2026-08-03-gold-standard-asset-driven-rendering.md`.
 > **Band + 14 slices (RAF-0…RAF-13 ↔ mission §19 Phases 0–13, each gate = its DoD; §22 = the 35-condition close):**
 > D-007 "RAF band". ⛔ Foundation-cleanup ONLY — no new features; no parallel old+new at close.
+>
+> ### ⏩⏩⏩ STATE AT 2026-08-03 (LATER) — RAF-7 FULLY CLOSED (one-submission + all 4 kinds). READ THIS FIRST.
+> **RAF-0…RAF-7 DONE + GREEN + tidy-clean. Nothing committed yet — all commit-ready.** RAF-7's remaining Phase-7 item
+> is CLOSED: `crd::rendergraph::execute_frame` now runs the compiled graph as a real frame in **ONE SUBMISSION** (Gate 7)
+> via a gpu-context `IFrameGraph`, and **all 4 frame-graph-shaped kinds gate through it on Vulkan AND DX12** —
+> `crd-render-graph-gpu-tests` **167 assertions**: 2-pass scene→copy (submit_count==1), MRT (att0=RED/att1=GREEN),
+> bindless (left=tex0/right=tex1), shadow (left-lit/right-shadowed), indexed-indirect (centred triangle). ⛔ The RAF-2-era
+> "coherent transient allocation" story was a **misdiagnosis** (struck in the memory scar): these are ordinary
+> FRAME-RECORDING verbs; the fix was to drive the graph in one-submission frame recording, NOT to add sync scaffolding.
+> Also: fixed a latent DX12 `draw_storage_mrt` PSO miswiring (`samples=1`/`conservative=false`); added graph texture
+> resolution (`ResolvedResource::texture` + `RecordContext::texture`) + `DiagCode::ExecutionFailed`.
+> Session logs: `docs/sessions/2026-08-03-raf-substrate-through-frame-graph.md` (RAF-0…7 substrate) +
+> `docs/sessions/2026-08-03-raf7-one-submission-close.md` (this close). Progress:
+> - **RAF-0** design spec (`docs/design/raf-0-*`). **RAF-1** `crd-render-asset-core` — identity/diagnostics/registry/deps (8/8).
+> - **RAF-2** `command_model.hpp` + `ICommandEncoder` (`command_encoder.cpp`) — the ONE model that collapses all 53 verbs;
+>   **every kind mapped**, **11 GPU-gated both backends** byte-identical to legacy (`crd-gpu-context-*tests` 6/6 hermetic +
+>   2/2 GPU, 1025 assertions). **RAF-3** `cooked.hpp` — CookedHeader/hashes/generational RuntimeSlot (12/12).
+> - **RAF-4** `crd-render-program` — shader+program contract (9/9). **RAF-5** `crd-render-material` — material=surface /
+>   technique=algorithm (7/7). **RAF-6** `crd-render-pass` — pass-executor registry, typed payloads no-void* (5/5).
+> - **RAF-7** `crd-render-graph` — unified frame-graph runtime: architecture device-free (5/5) + **live-GPU ONE-SUBMISSION
+>   both backends** (`crd-render-graph-gpu-tests` 167 assertions — the graph runs on real GPU in one submission via
+>   `execute_frame`, all 4 frame-graph-shaped kinds gated). ⛔ purely additive except the `clear_depth` lint marker in
+>   command_model.hpp + the DX12 MRT PSO one-liner (both legit fixes; sandbox untouched).
+> - **Shared vocab moved to render-asset-core** (`BindingFrequency`/`BindingKind` in `binding.hpp`); command_model aliases it.
+> - Module dep chain (one-way): render-asset-core ← {render-program, render-pass, gpu-context} ← render-material,
+>   render-graph. Every new module is a leaf; every gate is `raf<N>` in ctest.
+>
+> **NEXT ACTION — RAF-7 is CLOSED; next is RAF-8** (scene-render → orchestration; adopt the contract, remove hard-coded
+> slots) · RAF-9 (engine defaults → `engine://` assets) · RAF-10 (app-custom proof) · RAF-11 (hot reload) · RAF-12
+> (DELETE legacy verbs + FramePassKind) · RAF-13 (docs + §22 DoD). ⛔ RAF-8+ modify LIVE code
+> (frame-cook/frame_runtime/scene-render/backends) — migrate one kind at a time, old+new both resolve, `crd-sandbox
+> --smoke-test` both backends at every gate. NOTE for RAF-8: `execute_frame` currently runs the graph ON TOP OF the
+> gpu-context `IFrameGraph` (reusing its barriers/aliasing/readback) — RAF-12 unifies the two frame graphs.
+>
 > **✅ RAF-0 DONE (2026-08-03) — Gate 0 met:** the DESIGN SPEC is `docs/design/raf-0-rendering-foundation-design.md`
 > (measured current-state map: ~57 combinatorial draw verbs in `raster_context.hpp`; 18-kind `FramePassKind`; ~40-field
 > `FramePassDesc`; `crd://` single-namespace + implicit shadowing; desc/cooked/runtime conflation; + the already-GOLD
@@ -75,15 +109,68 @@
 > `ICommandEncoder` (retiring the FramePassKind→verb switch); `RecordContext` enforces declared==recorded.
 > `crd-render-graph-tests` **5/5 (46 assertions)** via ctest (command-capturing MOCK encoder): hand-built==authored ·
 > multiple-packets-in-scope · undeclared-diagnosed · aliasing+persistent · resize-minimal. LLVM-20 tidy-clean; additive.
-> **✅ RAF-7 live-GPU wiring DONE (2026-08-03)** — `crd-render-graph-gpu-tests` **2/2 (39 assertions)** via ctest: the
-> frame graph executes on **Vulkan AND DX12** via `raster.create_command_encoder()` (a 2-pass scene.raster→transfer.copy
-> graph, scheduled, records the canonical model into the REAL encoder → real draw+copy → correct pixels). The RAF-7
-> architecture now runs on hardware through the canonical encoder path.
-> **NEXT ACTION: the ONE bounded item left in Phase 7** — the 4 frame-graph-shaped kinds (MRT · indirect/indirect-count ·
-> comparison-sampler/shadow · bindless) need COHERENT transient-set allocation (`draw_storage_mrt` provably fails with
-> standalone targets; a backend verb/allocation capability, not the encoder). Add that capability + gate the 4 through
-> the graph. Then **RAF-8** (scene-render → orchestration) · RAF-9 (engine defaults → `engine://`) · RAF-10 (app proof) ·
-> RAF-11 (hot reload) · RAF-12 (delete legacy) · RAF-13 (docs + §22 DoD).
+> **✅ RAF-7 FULLY CLOSED (2026-08-03 later)** — `crd::rendergraph::execute_frame` runs the compiled graph as a real
+> frame in **ONE SUBMISSION** (mission Gate 7) via a gpu-context `IFrameGraph` (imports resolved resources, records each
+> pass's RECORD function through a FRAME-RECORDING encoder — barriers/aliasing/readback owned by the frame graph).
+> `crd-render-graph-gpu-tests` **167 assertions, both backends**: 2-pass scene→copy (submit_count==1) + all 4
+> frame-graph-shaped kinds with DISTINGUISHABLE output — **MRT** (att0=RED/att1=GREEN, killing the "attachment 1 black"
+> scar), **bindless** (left=tex0/right=tex1), **shadow** (comparison-sampler left-lit/right-shadowed), **indexed-indirect**
+> (centred triangle; DX12 args carry the DrawIndex root constant, VK a bare VkDrawIndexedIndirectCommand). ⛔ The
+> "coherent transient allocation" premise was a MISDIAGNOSIS — struck in the memory scar; these are ordinary
+> frame-recording verbs and the fix was one-submission execution, not sync scaffolding. Added: graph texture resolution
+> (`ResolvedResource::texture`+`RecordContext::texture`), `DiagCode::ExecutionFailed`; fixed the latent DX12 MRT PSO
+> (`samples=1`/`conservative=false`); added the `clear_depth` lint marker in command_model.hpp.
+> **RAF-8 IN PROGRESS (ADR-0106; split RAF-8a wire-live-runtime / RAF-8b orchestration).** ✅ ADR-0106 (crd-render-graph
+> = the single live runtime; frame-cook load bridge; FramePassKind = adapter deleted RAF-12). ✅ **RAF-8a increments 1-3
+> DONE — the render-graph SCENE.RASTER executor now records the FULL live RasterGeometry vocabulary from a resolved
+> draw list, both backends.** The command model + encoder cover 100% of the live frame's draw semantics (fullscreen
+> family · textured · combined textured+shadowed map@1/2+atlas@4/5 · shadowed · indexed-SAMPLED w/ DrawIndex row ·
+> GPU-driven indexed-indirect w/ row · CPU multi-draw BATCHING run-coalesce · depth-prepass load-depth), AND
+> `record_scene_raster` iterates a per-pass `DrawList` (`RenderDrawItem`/`DrawList`/`DrawListTable`, host pre-resolves →
+> zero ECS leak) selecting every arm as a canonical packet. Generalized `IRasterTarget::has_depth()` (virtual; a scene
+> pass into a bundled-depth target auto-uses it → the multi-item load-vs-clear takes the depth-aware verbs). Gate:
+> `crd-render-graph-gpu-tests` — a `scene.raster` pass driven by a 2-item DrawList (each its own storage, a triangle in
+> a distinct screen third) renders BOTH thirds w/ a background centre gap (two SEPARATE draws, 2nd LOADS), **Vulkan AND
+> DX12 green, one submission.** Also fixed a LATENT regression (last session's fullscreen `input`→`input0` schema
+> rename left the device-free record gates stale — now `input0` + a `FakeTexture`). ✅ **RAF-8a increment 4 = the
+> `FrameGraphDesc→FrameGraphTemplate` LOAD BRIDGE DONE** — `crd::framecook::build_frame_graph_template` (new ACYCLIC
+> frame-cook→render-graph edge) maps every resource → `GraphResource`, 15/19 pass kinds → the 9 built-in executors as
+> DATA (reads/writes→slots · params folded), and EXPANDS for_each via a host `ForEachCountFn`; the 4 amplification/RT
+> kinds + an unresolved for_each are NAMED diagnostics (`UnsupportedPassKind`/`UnresolvedForEach`, never silent). Schema
+> grew scene.raster MRT `color1..3` + sampled `input0..3` + `load_depth`, `color` now OPTIONAL (depth-only cascades) +
+> compute `storage1..3`; fixed `record_scene_raster` reading `load`/`load_depth` as U32 not Bool. **Gate:
+> `crd-frame-cook-tests` 3/3 — a forward_csm frame (4 cascades + prepass + shadowed forward + post + present) bridges →
+> 8 passes → `rg::compile` schedules cascades-before-forward, forward→post→present.** ALL green (raf6/raf7/RAF-8) +
+> LLVM-20 tidy-clean + **sandbox smoke PASS both backends** (real 11-pass frame).
+>
+> ✅ **RAF-8 FLIP COMPLETE incl. THE TAIL (2026-08-03) — EVERY `FramePassKind` records through a render-graph executor.**
+> The forward frame (RAF-8a) + orchestration cleanup (RAF-8b) were already pixel-exact; the TAIL flips the remaining
+> technique kinds: Mesh/Tess→mesh.raster/tess.raster · MeshIndirect→mesh.indirect · Visbuffer→visbuffer.raster ·
+> Composite→fullscreen.raster+load+blend (WBOIT) · RayTrace→raytrace.dispatch (inline query, repurposed) ·
+> RayTracePipeline→raytrace.pipeline · ComputeIndirect→compute.dispatch+`args`. 5 new executors + records (builtins=14),
+> minimal command-model DATA extensions (RenderingDesc.{visbuffer,clear_id}, DispatchDesc.accel), load bridge fully
+> closed (all 18 kinds map). **Gate: DX12 [frame-graph] 32/32 · Vulkan 50/51 · render-graph-gpu 303 · tidy-clean 7
+> files · smoke both backends.** ✅ **REN-38-A13 VRS FIXED (2026-08-04) — it was NOT a driver quirk.** Root cause: the
+> RAF-8a fullscreen flip read the `shading_rate` + `conservative` payload params (declared **Enum**) via `u32_param`
+> (checks the U32 type tag) → the tag mismatched → fell back to 0 (Rate1x1 / Off), so the encoder never called
+> `draw_vrs` and VRS/conservative silently never fired through the executor. (The sync `draw_vrs` tests passed because
+> they bypass the payload; there is NO DX12 A13 test, so nothing else caught it.) Fix: an `enum_param` reader for those
+> two + the sibling `filter` (nearest-blit had the same fault). Vulkan A13 now coarse=2048>fine=1024; both backends
+> [frame-graph] green (VK 51/51, DX12 32/32). ⛔ The sandbox "cascade shaders failed to build" I briefly saw was a
+> HARNESS mistake, NOT a bug: running `crd-sandbox.exe` by hand needs `CRD_ASSETS_DIR=D:\Dev\cerid\assets` (the smoke
+> script sets it) or `scene.crdv` isn't found → overlay-only. WITH it set: cascade shadows ON, 5384/5379 instances both
+> backends — the shipped forward path renders correctly through the flipped executors. Inline switch = fallback RAF-12.
+>
+> ✅ **RAF-9 DONE (2026-08-04) — engine defaults load BY CANONICAL `engine://` ID through a public registry.** Two thin
+> layers over RAF-1's identity: render-asset-core stays a pure leaf (`on_disk_relative` + folder→ext table); scene-render
+> gets the I/O `AssetResolver` (mount `engine://`=asset_root → same files) + a public `ProgramRegistry` (AssetId→provider,
+> fn-ptr+`void*`) that replaces the `str_is(id,"crd://scene/…")` chain and the `crd://frame/` prefix-strip. New
+> `SceneRenderer::set_frame_graph(engine:// id)` + `register_raster/kernel_program`; sandbox selects by id; the 16 frame
+> TOMLs rewritten crd://→engine:// (pixel-neutral). **Gate 9 met:** device-free id-load + PIXEL-EXACT both backends
+> (id-selected == relative, diffs==0) + smoke byte-identical both backends. ⚠️ Pre-existing (NOT RAF-9, stash-proven):
+> REN-39-C1 pull/indexed + REN-40-D moment GPU gates fail from the prior RAF-8 WIP baseline — a separate fix.
+> ⏭ **NEXT:** investigate the 2 pre-existing RAF-8-baseline GPU-gate failures (REN-39-C1 · REN-40-D) → RAF-10 (app-custom
+> renderer proof) · RAF-11 (hot reload) · RAF-12 (delete legacy + unify the two frame graphs) · RAF-13 (docs + §22 DoD).
 >
 > **⏸ S4 (REN-41 Nanite cluster-LOD) is PAUSED after S4-0** — it resumes AFTER RAF lands (the cluster mesh path will
 > ride the new asset/command model). **S4-0 is DONE + green both backends (uncommitted in the tree):** the

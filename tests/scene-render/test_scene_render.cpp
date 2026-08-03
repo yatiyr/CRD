@@ -378,6 +378,32 @@ TEST_CASE("scene-render: frustum planes + AABB test -- in front passes, behind c
 // passes the SAME structural validation the renderer runs before installing one (reads/writes resolve, no
 // cycles, capability tiers well-formed). A broken default fails here by NAME rather than at first render.
 //
+// ⭐⭐ RAF-9 Increment 2: an engine default frame loads BY CANONICAL ENGINE:// ID through the public API — the Gate-9
+// selector (no relative path, no embedded TOML). `crd://` folds to `engine://` (the identical asset resolves); a
+// MISSING id REFUSES with a clear error and keeps the previous frame; a NON-frame id is rejected by type. Device-free:
+// `set_frame_graph` parses + validates only (no GPU). `CRD_ASSETS_DIR` (ctest env) mounts the engine:// root.
+TEST_CASE("RAF-9: an engine default frame loads by canonical engine:// id", "[scene-render][raf9]")
+{
+    const char* root = std::getenv("CRD_ASSETS_DIR");
+    if (root == nullptr || root[0] == '\0') { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
+    memory::TlsfAllocator      alloc(16U << 20U, nullptr, "raf9-id-load");
+    scenerender::SceneRenderer r(&alloc);
+    REQUIRE(r.set_asset_root(root));
+    CHECK(r.set_frame_graph("engine://frame/forward_csm_agx"));          // selected by canonical id
+    CHECK(r.set_frame_graph("crd://frame/forward_csm_agx"));             // the alias folds to engine:// -> same asset
+    CHECK_FALSE(r.set_frame_graph("engine://frame/this_default_absent")); // missing -> clear refusal, not a fallback
+    CHECK_FALSE(r.set_frame_graph("engine://scene/mesh"));               // a program id, not a frame -> rejected by type
+    CHECK(r.set_frame_graph_asset("frame/forward_csm_agx.frame.toml"));  // the deprecated relative wrapper still installs
+    // ⭐ the PUBLIC program registry — an app registers its OWN programs by canonical id the SAME way the engine does
+    // (the RAF-10 seam). A malformed id is refused.
+    CHECK(r.register_raster_program("app://scene/my_shader",
+                                    [](void*) -> gpu::IRasterProgram* { return nullptr; }, nullptr));
+    CHECK(r.register_kernel_program("app://scene/my_kernel", [](void*) -> gpu::IGpuProgram* { return nullptr; },
+                                    nullptr));
+    CHECK_FALSE(r.register_raster_program("no-scheme-here", [](void*) -> gpu::IRasterProgram* { return nullptr; },
+                                          nullptr));
+}
+
 // `CRD_ASSETS_DIR` is set by ctest (the guard lives in ctest, like every cross-config guard); without it the
 // gate SKIPS rather than passing on nothing.
 TEST_CASE("REN-41: every shipped authored default asset cooks (parses + validates)", "[scene-render][ren38][ren41]")

@@ -2,6 +2,7 @@
 add_executable(crd-frame-cook-tests
     test_frame_asset.cpp
     test_viewport.cpp   # REN-37.8/37.9: the frame-level graph composer + the budgeted viewport scheduler
+    test_frame_template_bridge.cpp # RAF-8 (ADR-0106): FrameGraphDesc -> render-graph FrameGraphTemplate
 )
 
 target_link_libraries(crd-frame-cook-tests PRIVATE
@@ -9,6 +10,9 @@ target_link_libraries(crd-frame-cook-tests PRIVATE
     crd-containers
     crd-memory
     crd-frame-cook
+    crd-render-pass       # RAF-8: the executor registry the bridge fills payloads against
+    crd-render-graph      # RAF-8: compile() the bridged template
+    crd-render-asset-core # RAF-8: the diagnostics stream
     Catch2::Catch2WithMain
 )
 

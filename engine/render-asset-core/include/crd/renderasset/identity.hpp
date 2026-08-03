@@ -71,6 +71,12 @@ enum class AssetType : u8
 // Best-effort family from a first path segment ("frame"->FrameGraph, ...).
 [[nodiscard]] AssetType infer_type(StringView first_segment) noexcept;
 
+// The on-disk file extension for a canonical FOLDER (the first path segment): "frame"->".frame.toml",
+// "vertex"->".crdv", "material"->".crdm", "post"->".crdp", "lighting"->".crdl", "technique"->".crdt",
+// "lod"->".crdlod". Empty view for an unknown folder. ⛔ Keyed on the folder STRING, not `AssetType`: the folder is
+// authoritative, `infer_type` has no `post` case, and it maps "light" (not "lighting"). Extend as families are added.
+[[nodiscard]] StringView asset_extension(StringView folder) noexcept;
+
 // Stable, deterministic 64-bit identity. `value == 0` is the reserved invalid id.
 struct AssetId
 {
@@ -123,4 +129,10 @@ private:
     AssetId m_id{};
     bool m_valid = false;
 };
+
+// Map a parsed ref to its on-disk relative path (folder + name + extension): `engine://frame/forward_csm` ->
+// "frame/forward_csm.frame.toml". APPENDS to `out` (caller supplies the target String). Returns false — leaving `out`
+// untouched — for an invalid ref or an unknown folder (no `asset_extension`). ⛔ PURE — no I/O — so render-asset-core
+// stays a leaf module; the file-reading resolver lives in the layer that already owns `platform::fs`.
+[[nodiscard]] bool on_disk_relative(const AssetRef& ref, String& out);
 } // namespace crd::renderasset

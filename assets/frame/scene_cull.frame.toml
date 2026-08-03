@@ -1,5 +1,5 @@
 schema = 1
-name   = "crd://frame/scene_cull"
+name   = "engine://frame/scene_cull"
 
 [[resource]]
 name = "instances"
@@ -21,7 +21,7 @@ kind = "external_buffer"
 [[pass]]
 name   = "cull"
 kind   = "compute"
-kernel = "crd://scene/cull"
+kernel = "engine://scene/cull"
 reads  = ["instances"]
 writes = ["cull_flags", "cull_args"]
 params = { groups_x = 1 }
@@ -29,7 +29,7 @@ params = { groups_x = 1 }
 [[pass]]
 name   = "mark"
 kind   = "compute.indirect"
-kernel = "crd://scene/cull_mark"
+kernel = "engine://scene/cull_mark"
 reads  = ["cull_args", "instances"]
 writes = ["cull_marks"]
 

@@ -22,6 +22,7 @@ target_link_libraries(crd-scene-render
         crd-gpu-context
         crd-kir
         crd-frame-cook     # REN-37.10: the renderer HOSTS an authored frame graph rather than building passes
+        crd-render-asset-core # RAF-9: canonical engine:// asset identity + resolver (AssetRef / on_disk_relative)
         crd-vertex-cook    # REN-38-D5: every vertex program is COOKED FROM A `.crdv`, not compiled in
         crd-material-cook  # REN-38-C4: the scene SURFACE is cooked from an authored `.crdm`
         crd-light-cook     # REN-38-E7: the LIGHTING technique body is an authored declaration

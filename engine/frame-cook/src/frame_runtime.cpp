@@ -3,8 +3,12 @@
 #include <crd/framecook/frame_runtime.hpp>
 
 #include <crd/containers/array.hpp>
+#include <crd/gpu/command_model.hpp>
 #include <crd/log/log.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/renderasset/diagnostic.hpp>
+#include <crd/rendergraph/frame_graph.hpp>
+#include <crd/renderpass/executor_registry.hpp>
 
 #include <cstring>
 
@@ -91,6 +95,11 @@ struct PassRec
     bool                 program_is_instance = false;
     bool                 load_override       = false; // REN-40-E: for_each_load → preserve persistent contents
     g::FgImage           depth_target{};              // REN-40-G3: shared_depth — a separate depth attachment
+    // ⭐⭐ RAF-8a (ADR-0106) the migration adapter: a MIGRATED FramePassKind records through the render-graph executor
+    // instead of the inline switch below. `rec_alloc` backs the per-pass ResourceTable/payload; `records` finds the
+    // executor by id. Both null on a not-yet-migrated pass ⇒ the inline path runs (both resolve during migration).
+    crd::memory::IAllocator*                     rec_alloc = nullptr;
+    const crd::rendergraph::GraphExecutorTable*  records   = nullptr;
 };
 
 // ⭐ REN-38-B1: a STABLE key for a persistent image — FNV-1a over the resource NAME. ⛔ Not the declaration
@@ -106,6 +115,865 @@ struct PassRec
         h *= 16777619U;
     }
     return h;
+}
+
+// ⭐⭐ RAF-8a (ADR-0106) — THE MIGRATION ADAPTER (first kind: fullscreen). Record a fullscreen pass through the
+// render-graph `fullscreen.raster` EXECUTOR (the canonical command model) instead of the inline verbs below — the SAME
+// verbs the RAF-7 encoder==verb gates prove byte-identical. Builds a `ResourceTable`+`PassPayload` from the resolved
+// `PassRec` and calls the registered executor `PassRecordFn` through `create_command_encoder()`. Returns false if the
+// adapter is not wired (⇒ the inline path runs — both resolve during migration; RAF-12 deletes both).
+bool record_fullscreen_via_executor(PassRec* p, g::IFrameContext& ctx, g::IRasterContext& r, g::IRasterTarget* t)
+{
+    namespace rp = crd::renderpass;
+    namespace rg = crd::rendergraph;
+    using SV = crd::containers::StringView;
+    if (p->records == nullptr || p->rec_alloc == nullptr || p->program == nullptr || t == nullptr)
+    {
+        return false;
+    }
+    const rg::PassRecordFn fn = p->records->find(rp::executor_type_id(SV("fullscreen.raster")));
+    if (fn == nullptr)
+    {
+        return false;
+    }
+    auto enc = r.create_command_encoder();
+    if (enc == nullptr)
+    {
+        return false;
+    }
+    const FramePassDesc& d = *p->desc;
+    rp::PassPayload    payload;
+    payload.executor       = rp::executor_type_id(SV("fullscreen.raster"));
+    payload.schema_version = 1U;
+    payload.queue          = rp::QueueKind::Graphics;
+    rg::ResourceTable  table(p->rec_alloc);
+    rg::DiagnosticList diags(p->rec_alloc);
+    // resource_id == the slot-name hash (one resource per slot here) — RecordContext matches ref.resource_id to the
+    // ResolvedResource.name_hash, so the two must agree; using the slot hash for both keeps them consistent.
+    const auto declare = [&](const char* slot, rp::SlotResourceKind kind, rp::SlotAccess access, g::IRasterTarget* tgt,
+                             g::IStorageBuffer* buf, g::ITexture* tex)
+    {
+        const crd::u64 id = rp::pass_param_id(SV(slot));
+        table.bind(rg::ResolvedResource{id, kind, tgt, buf, nullptr, tex});
+        payload.resources.push_back(rp::ResourceRef{id, kind, access, id});
+    };
+    declare("color", rp::SlotResourceKind::ColorTarget, rp::SlotAccess::Write, t, nullptr, nullptr);
+    static const char* const kInputs[8] = {"input0", "input1", "input2", "input3",
+                                           "input4", "input5", "input6", "input7"};
+    for (crd::u32 i = 0; i < p->n_sampled && i < 8U; ++i)
+    {
+        g::ITexture* tx = ctx.texture(p->sampled[i]);
+        if (tx == nullptr)
+        {
+            return true; // resolve-or-abort (the inline path's rule) — the pass is consumed but records nothing
+        }
+        declare(kInputs[i], rp::SlotResourceKind::Texture, rp::SlotAccess::Read, nullptr, nullptr, tx);
+    }
+    if (p->fs_constants.valid())
+    {
+        if (g::IStorageBuffer* cbuf = ctx.buffer(p->fs_constants); cbuf != nullptr)
+        {
+            declare("constants", rp::SlotResourceKind::StorageBuffer, rp::SlotAccess::Read, nullptr, cbuf, nullptr);
+        }
+    }
+    const auto add_param = [&](const char* name, const rp::TypedValue& v)
+    { payload.params.push_back(rp::ParamValue{rp::pass_param_id(SV(name)), v}); };
+    {
+        rp::TypedValue cc;
+        cc.type  = rp::ExecutorParamType::Vec4;
+        cc.v4[0] = d.clear_color[0];
+        cc.v4[1] = d.clear_color[1];
+        cc.v4[2] = d.clear_color[2];
+        cc.v4[3] = d.clear_color[3];
+        add_param("clear_color", cc);
+    }
+    if (d.shading_rate != g::ShadingRate::Rate1x1)
+    {
+        rp::TypedValue e;
+        e.type = rp::ExecutorParamType::Enum;
+        e.e    = static_cast<crd::u32>(d.shading_rate);
+        add_param("shading_rate", e);
+    }
+    if (d.conservative != g::ConservativeMode::Off)
+    {
+        rp::TypedValue e;
+        e.type = rp::ExecutorParamType::Enum;
+        e.e    = static_cast<crd::u32>(d.conservative);
+        add_param("conservative", e);
+    }
+    if (d.depth_as_float)
+    {
+        rp::TypedValue b;
+        b.type = rp::ExecutorParamType::Bool;
+        b.b    = true;
+        add_param("depth_as_float", b);
+    }
+    rg::PassPrograms programs;
+    programs.raster = p->program;
+    rg::RecordContext rctx(payload, table, programs, diags);
+    fn(payload, rctx, *enc);
+    return true;
+}
+
+// ⭐⭐ RAF-8a: the migration adapter for the TRANSFER family (clear · copy · blit · resolve). Same pattern as the
+// fullscreen adapter — build the ResourceTable + payload from the resolved PassRec and call the transfer executor.
+bool record_transfer_via_executor(PassRec* p, g::IFrameContext& ctx, g::IRasterContext& r, g::IRasterTarget* t)
+{
+    namespace rp = crd::renderpass;
+    namespace rg = crd::rendergraph;
+    using SV = crd::containers::StringView;
+    if (p->records == nullptr || p->rec_alloc == nullptr || t == nullptr)
+    {
+        return false;
+    }
+    const FramePassDesc& d = *p->desc;
+    const char*          exec = nullptr;
+    switch (d.kind)
+    {
+    case FramePassKind::Clear:
+        exec = "transfer.clear";
+        break;
+    case FramePassKind::Copy:
+        exec = "transfer.copy";
+        break;
+    case FramePassKind::Blit:
+        exec = "transfer.blit";
+        break;
+    case FramePassKind::Resolve:
+        exec = "transfer.resolve";
+        break;
+    default:
+        return false;
+    }
+    const rg::PassRecordFn fn = p->records->find(rp::executor_type_id(SV(exec)));
+    if (fn == nullptr)
+    {
+        return false;
+    }
+    auto enc = r.create_command_encoder();
+    if (enc == nullptr)
+    {
+        return false;
+    }
+    rp::PassPayload payload;
+    payload.executor       = rp::executor_type_id(SV(exec));
+    payload.schema_version = 1U;
+    payload.queue          = rp::QueueKind::Transfer;
+    rg::ResourceTable  table(p->rec_alloc);
+    rg::DiagnosticList diags(p->rec_alloc);
+    const auto declare = [&](const char* slot, rp::SlotAccess access, g::IRasterTarget* tgt)
+    {
+        const crd::u64 id = rp::pass_param_id(SV(slot));
+        table.bind(rg::ResolvedResource{id, rp::SlotResourceKind::ColorTarget, tgt, nullptr, nullptr, nullptr});
+        payload.resources.push_back(rp::ResourceRef{id, rp::SlotResourceKind::ColorTarget, access, id});
+    };
+    if (d.kind == FramePassKind::Clear)
+    {
+        declare("target", rp::SlotAccess::Write, t);
+        rp::TypedValue cc;
+        cc.type  = rp::ExecutorParamType::Vec4;
+        cc.v4[0] = d.clear_color[0];
+        cc.v4[1] = d.clear_color[1];
+        cc.v4[2] = d.clear_color[2];
+        cc.v4[3] = d.clear_color[3];
+        payload.params.push_back(rp::ParamValue{rp::pass_param_id(SV("clear_color")), cc});
+    }
+    else
+    {
+        // copy / blit / resolve: src → dst. ⛔ resolve-or-abort exactly as the inline path (a missing src leaves a
+        // stale destination that reads back plausible).
+        if (p->n_sampled != 1U)
+        {
+            return true;
+        }
+        g::IRasterTarget* src = ctx.image(p->sampled[0]);
+        if (src == nullptr)
+        {
+            return true;
+        }
+        declare("src", rp::SlotAccess::Read, src);
+        declare("dst", rp::SlotAccess::Write, t);
+        if (d.kind == FramePassKind::Blit)
+        {
+            rp::TypedValue e;
+            e.type = rp::ExecutorParamType::Enum;
+            e.e    = static_cast<crd::u32>(d.filter);
+            payload.params.push_back(rp::ParamValue{rp::pass_param_id(SV("filter")), e});
+        }
+    }
+    rg::PassPrograms  programs; // a transfer pass has no shader
+    rg::RecordContext rctx(payload, table, programs, diags);
+    fn(payload, rctx, *enc);
+    return true;
+}
+
+// ⭐⭐ RAF-8a: the migration adapter for the SCENE families — `scene.raster` covers RasterGeometry (forward · impostor),
+// RasterDepthOnly (shadow cascades · depth prepass) and single-colour RasterMrt (the velocity prepass). It builds a
+// render-graph `DrawList` from `p->draws` (ALREADY host-resolved), binds colour OR depth by kind, and calls the
+// scene.raster executor — the same draw_storage_* verbs the encoder==verb gates prove. A true MRT G-buffer (n_writes>1)
+// keeps the inline path for now (no shipped frame uses one).
+bool record_scene_via_executor(PassRec* p, g::IFrameContext& ctx, g::IRasterContext& r, g::IRasterTarget* t)
+{
+    namespace rp = crd::renderpass;
+    namespace rg = crd::rendergraph;
+    using SV = crd::containers::StringView;
+    if (p->records == nullptr || p->rec_alloc == nullptr || t == nullptr || p->program == nullptr)
+    {
+        return false;
+    }
+    const FramePassDesc&   d          = *p->desc;
+    const bool             depth_only = d.kind == FramePassKind::RasterDepthOnly;
+    // ⛔⛔ THE CASCADE SCAR: a DEPTH-ONLY pass binds NO colour textures — `record_scene_raster` now ignores per-item
+    // maps when there is no colour attachment. Before that, a TEXTURED shadow caster routed down the indexed-SAMPLED
+    // (colour) arm with a null atlas, so the cascade's textured groups vanished from the shadow map and the forward
+    // read "all occluded" → black instances. (Only the untextured casters rendered, which is why it looked total.)
+    if (d.kind == FramePassKind::RasterMrt && p->n_writes > 1U)
+    {
+        return false; // a true multi-colour G-buffer — not yet in the executor; keep the inline MRT path
+    }
+    const rg::PassRecordFn fn = p->records->find(rp::executor_type_id(SV("scene.raster")));
+    if (fn == nullptr)
+    {
+        return false;
+    }
+    auto enc = r.create_command_encoder();
+    if (enc == nullptr)
+    {
+        return false;
+    }
+
+    // 1. build the render-graph DrawList from the resolved DrawItems. The per-item program TWIN is chosen by kind
+    //    (forward · depth-only · velocity); for a for_each INSTANCE pass every item uses the pass program (twin null →
+    //    the executor's default = programs().raster = p->program).
+    rg::DrawList             draws{};
+    crd::containers::Array<rg::RenderDrawItem> items(p->rec_alloc);
+    items.reserve(p->draws.count());
+    for (crd::u32 i = 0; i < p->draws.count(); ++i)
+    {
+        const DrawItem it = p->draws.at(i);
+        if (it.storage == nullptr)
+        {
+            continue;
+        }
+        g::IStorageBuffer* sb = ctx.buffer(p->storage_of[i]);
+        if (sb == nullptr)
+        {
+            continue;
+        }
+        g::IRasterProgram* twin = nullptr;
+        if (!p->program_is_instance)
+        {
+            if (depth_only) { twin = it.program_depth != nullptr ? it.program_depth : it.program; }
+            else if (d.kind == FramePassKind::RasterMrt) { twin = it.program_velocity != nullptr ? it.program_velocity : it.program; }
+            else { twin = it.program; }
+        }
+        rg::RenderDrawItem ri{};
+        ri.storage        = sb;
+        ri.program        = twin;
+        ri.texture        = it.texture;
+        ri.vertex_count   = it.vertex_count;
+        ri.indexed        = it.indexed;
+        ri.index_count    = it.index_count;
+        ri.instance_count = it.instance_count;
+        ri.first_index    = it.first_index;
+        ri.args           = it.args;
+        ri.args_offset    = it.args_offset;
+        items.push_back(ri);
+    }
+    draws.items               = items.data();
+    draws.count               = static_cast<crd::u32>(items.size());
+    draws.pass_texture        = p->n_sampled > 0U ? ctx.texture(p->sampled[0]) : nullptr;
+    // ⛔ only meaningful when a pass texture EXISTS — a depth-only cascade reads nothing (the `sampled_is_*` flags are
+    // stale then), and a true-flag with a null texture routes the cascade's plain draws down the shadow-sample arm.
+    draws.pass_texture_is_depth = draws.pass_texture != nullptr && (p->sampled_is_depth || p->sampled_is_array);
+
+    // 2. payload + resource table: colour OR depth by kind (a depth-only pass has no colour attachment; the executor
+    //    renders depth-only). A colour pass into a color-DEPTH target (`image_with_depth`) uses that bundled depth.
+    rp::PassPayload    payload;
+    payload.executor       = rp::executor_type_id(SV("scene.raster"));
+    payload.schema_version = 1U;
+    payload.queue          = rp::QueueKind::Graphics;
+    rg::ResourceTable  table(p->rec_alloc);
+    rg::DiagnosticList diags(p->rec_alloc);
+    {
+        const char*                slot = depth_only ? "depth" : "color";
+        const rp::SlotResourceKind kind =
+            depth_only ? rp::SlotResourceKind::DepthTarget : rp::SlotResourceKind::ColorTarget;
+        const rp::SlotAccess access = depth_only ? rp::SlotAccess::ReadWrite : rp::SlotAccess::Write;
+        const crd::u64       id     = rp::pass_param_id(SV(slot));
+        table.bind(rg::ResolvedResource{id, kind, t, nullptr, nullptr, nullptr});
+        payload.resources.push_back(rp::ResourceRef{id, kind, access, id});
+    }
+    const auto add_param = [&](const char* name, const rp::TypedValue& v)
+    { payload.params.push_back(rp::ParamValue{rp::pass_param_id(SV(name)), v}); };
+    {
+        rp::TypedValue cc;
+        cc.type  = rp::ExecutorParamType::Vec4;
+        cc.v4[0] = d.clear_color[0];
+        cc.v4[1] = d.clear_color[1];
+        cc.v4[2] = d.clear_color[2];
+        cc.v4[3] = d.clear_color[3];
+        add_param("clear_color", cc);
+    }
+    {
+        rp::TypedValue cd;
+        cd.type = rp::ExecutorParamType::F32;
+        cd.f    = d.clear_depth;
+        add_param("clear_depth", cd);
+    }
+    {
+        rp::TypedValue dc;
+        dc.type = rp::ExecutorParamType::Enum;
+        dc.e    = static_cast<crd::u32>(d.depth);
+        add_param("depth_compare", dc);
+    }
+    if (d.load_target || p->load_override)
+    {
+        rp::TypedValue b;
+        b.type = rp::ExecutorParamType::Bool;
+        b.b    = true;
+        add_param("load", b);
+    }
+    if (d.load_depth)
+    {
+        rp::TypedValue b;
+        b.type = rp::ExecutorParamType::Bool;
+        b.b    = true;
+        add_param("load_depth", b);
+    }
+    rg::PassPrograms programs;
+    programs.raster = p->program; // the default program (the for_each-instance program, or the pass program)
+    rg::RecordContext rctx(payload, table, programs, diags, &draws);
+    fn(payload, rctx, *enc);
+    return true;
+}
+
+// ⭐⭐ RAF-8a: the migration adapter for COMPUTE (the GPU-cull kernels). A compute pass with a draw list dispatches
+// ONCE PER ITEM (this item's storage + indirect args + workgroup count); one without dispatches once over the declared
+// kernel buffers. Both go through the compute.dispatch executor via a DrawList (dispatch_groups on each item).
+bool record_compute_via_executor(PassRec* p, g::IFrameContext& ctx, g::IRasterContext& r)
+{
+    namespace rp = crd::renderpass;
+    namespace rg = crd::rendergraph;
+    using SV = crd::containers::StringView;
+    if (p->records == nullptr || p->rec_alloc == nullptr || p->kernel_program == nullptr)
+    {
+        return false;
+    }
+    // the live precondition: every declared kernel buffer resolves, and there is at least one. A missing buffer ABORTS
+    // (returning false runs the inline path, which aborts identically) rather than shifting every later binding down.
+    g::IStorageBuffer* bufs[kMaxPassReads]{};
+    crd::u32           nb = 0U;
+    for (crd::u32 i = 0; i < p->n_kernel_bufs && nb < kMaxPassReads; ++i)
+    {
+        g::IStorageBuffer* sb = ctx.buffer(p->kernel_bufs[i]);
+        if (sb == nullptr)
+        {
+            return false;
+        }
+        bufs[nb++] = sb;
+    }
+    if (nb == 0U)
+    {
+        return false;
+    }
+    const rg::PassRecordFn fn = p->records->find(rp::executor_type_id(SV("compute.dispatch")));
+    if (fn == nullptr)
+    {
+        return false;
+    }
+    auto enc = r.create_command_encoder();
+    if (enc == nullptr)
+    {
+        return false;
+    }
+    rp::PassPayload payload;
+    payload.executor       = rp::executor_type_id(SV("compute.dispatch"));
+    payload.schema_version = 1U;
+    payload.queue          = rp::QueueKind::Compute;
+    rg::ResourceTable  table(p->rec_alloc);
+    rg::DiagnosticList diags(p->rec_alloc);
+    const auto u32_param = [&](const char* name, crd::u32 v)
+    {
+        rp::TypedValue t;
+        t.type = rp::ExecutorParamType::U32;
+        t.u    = v;
+        payload.params.push_back(rp::ParamValue{rp::pass_param_id(SV(name)), t});
+    };
+    u32_param("groups_x", p->groups[0]);
+    u32_param("groups_y", p->groups[1]);
+    u32_param("groups_z", p->groups[2]);
+    // the kernel buffers → storage · storage1..3 (the single-dispatch binding; also satisfies the required `storage`).
+    static const char* const kStorage[4] = {"storage", "storage1", "storage2", "storage3"};
+    for (crd::u32 i = 0; i < nb && i < 4U; ++i)
+    {
+        const crd::u64 id = rp::pass_param_id(SV(kStorage[i]));
+        table.bind(rg::ResolvedResource{id, rp::SlotResourceKind::StorageBuffer, nullptr, bufs[i], nullptr, nullptr});
+        payload.resources.push_back(rp::ResourceRef{id, rp::SlotResourceKind::StorageBuffer, rp::SlotAccess::ReadWrite, id});
+    }
+    if (p->n_sampled > 0U)
+    {
+        if (g::ITexture* tx = ctx.texture(p->sampled[0]); tx != nullptr)
+        {
+            const crd::u64 id = rp::pass_param_id(SV("sampled"));
+            table.bind(rg::ResolvedResource{id, rp::SlotResourceKind::Texture, nullptr, nullptr, nullptr, tx});
+            payload.resources.push_back(rp::ResourceRef{id, rp::SlotResourceKind::Texture, rp::SlotAccess::Read, id});
+        }
+    }
+    // ⭐ RAF-8: a ComputeIndirect pass takes its workgroup count from `args_buf` (a buffer an earlier pass wrote) — bind
+    // it to the `args` slot so the executor dispatches INDIRECT (dispatch_kernel_indirect). ⛔ resolve-or-abort: a
+    // missing args buffer runs the inline path (which aborts identically), never a stale direct dispatch.
+    if (p->args_buf.valid())
+    {
+        g::IStorageBuffer* args = ctx.buffer(p->args_buf);
+        if (args == nullptr)
+        {
+            return false;
+        }
+        const crd::u64 id = rp::pass_param_id(SV("args"));
+        table.bind(rg::ResolvedResource{id, rp::SlotResourceKind::StorageBuffer, nullptr, args, nullptr, nullptr});
+        payload.resources.push_back(rp::ResourceRef{id, rp::SlotResourceKind::StorageBuffer, rp::SlotAccess::Read, id});
+        u32_param("args_offset", static_cast<crd::u32>(p->args_offset));
+    }
+    // the per-item DRAW LIST (each item: its storage + indirect args + workgroup count).
+    rg::DrawList                               draws{};
+    crd::containers::Array<rg::RenderDrawItem> items(p->rec_alloc);
+    if (p->draws.count() > 0U)
+    {
+        items.reserve(p->draws.count());
+        for (crd::u32 i = 0; i < p->draws.count(); ++i)
+        {
+            const DrawItem it = p->draws.at(i);
+            g::IStorageBuffer* sb = ctx.buffer(p->storage_of[i]);
+            if (sb == nullptr)
+            {
+                continue;
+            }
+            rg::RenderDrawItem ri{};
+            ri.storage         = sb;
+            ri.args            = it.args;
+            ri.dispatch_groups = it.dispatch_groups;
+            items.push_back(ri);
+        }
+        draws.items = items.data();
+        draws.count = static_cast<crd::u32>(items.size());
+    }
+    rg::PassPrograms programs;
+    programs.kernel = p->kernel_program;
+    rg::RecordContext rctx(payload, table, programs, diags, &draws);
+    fn(payload, rctx, *enc);
+    return true;
+}
+
+// Resolve a pass's kernel buffers (the RT / indirect shared shape) to the storage · storage1..3 slots. Returns the
+// count, or -1 if a declared buffer does not resolve OR there are more than the 4 storage slots (⇒ the caller ABORTS to
+// the inline path, which handles both — a missing buffer records nothing, and >4 buffers bind all 8). Matches the
+// compute convention (4 tracked buffers per compute-shaped pass; the bridge caps there too).
+int bind_kernel_storage(PassRec* p, g::IFrameContext& ctx, crd::renderpass::PassPayload& payload,
+                        crd::rendergraph::ResourceTable& table)
+{
+    namespace rp = crd::renderpass;
+    namespace rg = crd::rendergraph;
+    using SV = crd::containers::StringView;
+    static const char* const kStorage[4] = {"storage", "storage1", "storage2", "storage3"};
+    if (p->n_kernel_bufs > 4U)
+    {
+        return -1;
+    }
+    crd::u32 nb = 0U;
+    for (crd::u32 i = 0; i < p->n_kernel_bufs && nb < 4U; ++i)
+    {
+        g::IStorageBuffer* sb = ctx.buffer(p->kernel_bufs[i]);
+        if (sb == nullptr)
+        {
+            return -1;
+        }
+        const crd::u64 id = rp::pass_param_id(SV(kStorage[nb]));
+        table.bind(rg::ResolvedResource{id, rp::SlotResourceKind::StorageBuffer, nullptr, sb, nullptr, nullptr});
+        payload.resources.push_back(
+            rp::ResourceRef{id, rp::SlotResourceKind::StorageBuffer, rp::SlotAccess::ReadWrite, id});
+        ++nb;
+    }
+    return static_cast<int>(nb);
+}
+
+// ⭐⭐ RAF-8: the AMPLIFICATION adapter (mesh.raster / tess.raster). A RasterMesh / RasterTess pass records through the
+// amplification executor: the resolved draw list gives each draw its program + amplification count (+ optional
+// storage-pull buffer), or the declared `amplify_count` drives one PROCEDURAL draw.
+bool record_amplify_via_executor(PassRec* p, g::IFrameContext& ctx, g::IRasterContext& r, g::IRasterTarget* t)
+{
+    namespace rp = crd::renderpass;
+    namespace rg = crd::rendergraph;
+    using SV = crd::containers::StringView;
+    if (p->records == nullptr || p->rec_alloc == nullptr || t == nullptr || p->program == nullptr)
+    {
+        return false;
+    }
+    const FramePassDesc& d    = *p->desc;
+    const bool           mesh = d.kind == FramePassKind::RasterMesh;
+    const char*          exec = mesh ? "mesh.raster" : "tess.raster";
+    const rg::PassRecordFn fn = p->records->find(rp::executor_type_id(SV(exec)));
+    if (fn == nullptr)
+    {
+        return false;
+    }
+    auto enc = r.create_command_encoder();
+    if (enc == nullptr)
+    {
+        return false;
+    }
+    rp::PassPayload payload;
+    payload.executor       = rp::executor_type_id(SV(exec));
+    payload.schema_version = 1U;
+    payload.queue          = rp::QueueKind::Graphics;
+    rg::ResourceTable  table(p->rec_alloc);
+    rg::DiagnosticList diags(p->rec_alloc);
+    {
+        const crd::u64 id = rp::pass_param_id(SV("color"));
+        table.bind(rg::ResolvedResource{id, rp::SlotResourceKind::ColorTarget, t, nullptr, nullptr, nullptr});
+        payload.resources.push_back(rp::ResourceRef{id, rp::SlotResourceKind::ColorTarget, rp::SlotAccess::Write, id});
+    }
+    {
+        rp::TypedValue cc;
+        cc.type  = rp::ExecutorParamType::Vec4;
+        cc.v4[0] = d.clear_color[0];
+        cc.v4[1] = d.clear_color[1];
+        cc.v4[2] = d.clear_color[2];
+        cc.v4[3] = d.clear_color[3];
+        payload.params.push_back(rp::ParamValue{rp::pass_param_id(SV("clear_color")), cc});
+    }
+    if (p->draws.count() == 0U)
+    {
+        rp::TypedValue ac;
+        ac.type = rp::ExecutorParamType::U32;
+        ac.u    = p->amplify_count;
+        payload.params.push_back(rp::ParamValue{rp::pass_param_id(SV("amplify_count")), ac});
+    }
+    // the draw list: per-item program TWIN (the pass program wins for a for_each instance), the amplification COUNT in
+    // `vertex_count`, and an optional storage-pull buffer (the GEO-1 seam).
+    rg::DrawList                               draws{};
+    crd::containers::Array<rg::RenderDrawItem> items(p->rec_alloc);
+    if (p->draws.count() > 0U)
+    {
+        items.reserve(p->draws.count());
+        for (crd::u32 i = 0; i < p->draws.count(); ++i)
+        {
+            const DrawItem     it = p->draws.at(i);
+            rg::RenderDrawItem ri{};
+            ri.program      = p->program_is_instance ? nullptr : it.program;
+            ri.vertex_count = it.vertex_count;
+            ri.storage      = it.storage != nullptr ? ctx.buffer(p->storage_of[i]) : nullptr;
+            items.push_back(ri);
+        }
+        draws.items = items.data();
+        draws.count = static_cast<crd::u32>(items.size());
+    }
+    rg::PassPrograms programs;
+    programs.raster = p->program;
+    rg::RecordContext rctx(payload, table, programs, diags, &draws);
+    fn(payload, rctx, *enc);
+    return true;
+}
+
+// ⭐⭐ RAF-8: the VISIBILITY-BUFFER adapter (visbuffer.raster). Each resolved draw writes its ids into the R32_UINT
+// target; the first clears to `clear_id`, every later one loads (the executor + encoder keep every draw's ids).
+bool record_visbuffer_via_executor(PassRec* p, g::IRasterContext& r, g::IRasterTarget* t)
+{
+    namespace rp = crd::renderpass;
+    namespace rg = crd::rendergraph;
+    using SV = crd::containers::StringView;
+    if (p->records == nullptr || p->rec_alloc == nullptr || t == nullptr || p->program == nullptr)
+    {
+        return false;
+    }
+    const rg::PassRecordFn fn = p->records->find(rp::executor_type_id(SV("visbuffer.raster")));
+    if (fn == nullptr)
+    {
+        return false;
+    }
+    auto enc = r.create_command_encoder();
+    if (enc == nullptr)
+    {
+        return false;
+    }
+    rp::PassPayload payload;
+    payload.executor       = rp::executor_type_id(SV("visbuffer.raster"));
+    payload.schema_version = 1U;
+    payload.queue          = rp::QueueKind::Graphics;
+    rg::ResourceTable  table(p->rec_alloc);
+    rg::DiagnosticList diags(p->rec_alloc);
+    {
+        const crd::u64 id = rp::pass_param_id(SV("color"));
+        table.bind(rg::ResolvedResource{id, rp::SlotResourceKind::ColorTarget, t, nullptr, nullptr, nullptr});
+        payload.resources.push_back(rp::ResourceRef{id, rp::SlotResourceKind::ColorTarget, rp::SlotAccess::Write, id});
+    }
+    {
+        rp::TypedValue ci;
+        ci.type = rp::ExecutorParamType::U32;
+        ci.u    = p->clear_id;
+        payload.params.push_back(rp::ParamValue{rp::pass_param_id(SV("clear_id")), ci});
+    }
+    rg::DrawList                               draws{};
+    crd::containers::Array<rg::RenderDrawItem> items(p->rec_alloc);
+    items.reserve(p->draws.count());
+    for (crd::u32 i = 0; i < p->draws.count(); ++i)
+    {
+        const DrawItem     it = p->draws.at(i);
+        rg::RenderDrawItem ri{};
+        ri.program      = p->program_is_instance ? nullptr : it.program;
+        ri.vertex_count = it.vertex_count;
+        items.push_back(ri);
+    }
+    draws.items = items.data();
+    draws.count = static_cast<crd::u32>(items.size());
+    rg::PassPrograms programs;
+    programs.raster = p->program;
+    rg::RecordContext rctx(payload, table, programs, diags, &draws);
+    fn(payload, rctx, *enc);
+    return true;
+}
+
+// ⭐⭐ RAF-8: the COMPOSITE adapter (fullscreen.raster + load + blend). The pass's sampled reads become the bindless
+// array; `load` + `blend` route the encoder to draw_bindless_blend_load (WBOIT's blend-over-background resolve).
+bool record_composite_via_executor(PassRec* p, g::IFrameContext& ctx, g::IRasterContext& r, g::IRasterTarget* t)
+{
+    namespace rp = crd::renderpass;
+    namespace rg = crd::rendergraph;
+    using SV = crd::containers::StringView;
+    if (p->records == nullptr || p->rec_alloc == nullptr || t == nullptr || p->program == nullptr || p->n_sampled == 0U)
+    {
+        return false;
+    }
+    const rg::PassRecordFn fn = p->records->find(rp::executor_type_id(SV("fullscreen.raster")));
+    if (fn == nullptr)
+    {
+        return false;
+    }
+    auto enc = r.create_command_encoder();
+    if (enc == nullptr)
+    {
+        return false;
+    }
+    rp::PassPayload payload;
+    payload.executor       = rp::executor_type_id(SV("fullscreen.raster"));
+    payload.schema_version = 1U;
+    payload.queue          = rp::QueueKind::Graphics;
+    rg::ResourceTable  table(p->rec_alloc);
+    rg::DiagnosticList diags(p->rec_alloc);
+    {
+        const crd::u64 id = rp::pass_param_id(SV("color"));
+        table.bind(rg::ResolvedResource{id, rp::SlotResourceKind::ColorTarget, t, nullptr, nullptr, nullptr});
+        payload.resources.push_back(rp::ResourceRef{id, rp::SlotResourceKind::ColorTarget, rp::SlotAccess::Write, id});
+    }
+    static const char* const kInputs[8] = {"input0", "input1", "input2", "input3",
+                                            "input4", "input5", "input6", "input7"};
+    for (crd::u32 i = 0; i < p->n_sampled && i < 8U; ++i)
+    {
+        g::ITexture* tx = ctx.texture(p->sampled[i]);
+        if (tx == nullptr)
+        {
+            return true; // ⛔ resolve-or-abort exactly as the inline path — a composite reading the wrong order is worse
+        }
+        const crd::u64 id = rp::pass_param_id(SV(kInputs[i]));
+        table.bind(rg::ResolvedResource{id, rp::SlotResourceKind::Texture, nullptr, nullptr, nullptr, tx});
+        payload.resources.push_back(rp::ResourceRef{id, rp::SlotResourceKind::Texture, rp::SlotAccess::Read, id});
+    }
+    {
+        rp::TypedValue b;
+        b.type = rp::ExecutorParamType::Bool;
+        b.b    = true;
+        payload.params.push_back(rp::ParamValue{rp::pass_param_id(SV("load")), b});
+    }
+    {
+        const FramePassDesc& d  = *p->desc;
+        rp::TypedValue       bm;
+        bm.type = rp::ExecutorParamType::Enum;
+        bm.e    = static_cast<crd::u32>(d.blend.size() > 0U ? d.blend[0] : g::BlendMode::Alpha);
+        payload.params.push_back(rp::ParamValue{rp::pass_param_id(SV("blend")), bm});
+    }
+    rg::PassPrograms programs;
+    programs.raster = p->program;
+    rg::RecordContext rctx(payload, table, programs, diags);
+    fn(payload, rctx, *enc);
+    return true;
+}
+
+// ⭐⭐ RAF-8: the GPU-DRIVEN MESHLET adapter (mesh.indirect). The workgroup count comes from `args_buf` (a cull pass's
+// output) — draw_mesh_indirect_buffer.
+bool record_mesh_indirect_via_executor(PassRec* p, g::IFrameContext& ctx, g::IRasterContext& r, g::IRasterTarget* t)
+{
+    namespace rp = crd::renderpass;
+    namespace rg = crd::rendergraph;
+    using SV = crd::containers::StringView;
+    if (p->records == nullptr || p->rec_alloc == nullptr || t == nullptr || p->program == nullptr)
+    {
+        return false;
+    }
+    g::IStorageBuffer* args = ctx.buffer(p->args_buf);
+    if (args == nullptr)
+    {
+        return false; // the inline path aborts identically on a missing args buffer
+    }
+    const rg::PassRecordFn fn = p->records->find(rp::executor_type_id(SV("mesh.indirect")));
+    if (fn == nullptr)
+    {
+        return false;
+    }
+    auto enc = r.create_command_encoder();
+    if (enc == nullptr)
+    {
+        return false;
+    }
+    const FramePassDesc& d = *p->desc;
+    rp::PassPayload      payload;
+    payload.executor       = rp::executor_type_id(SV("mesh.indirect"));
+    payload.schema_version = 1U;
+    payload.queue          = rp::QueueKind::Graphics;
+    rg::ResourceTable  table(p->rec_alloc);
+    rg::DiagnosticList diags(p->rec_alloc);
+    {
+        const crd::u64 id = rp::pass_param_id(SV("color"));
+        table.bind(rg::ResolvedResource{id, rp::SlotResourceKind::ColorTarget, t, nullptr, nullptr, nullptr});
+        payload.resources.push_back(rp::ResourceRef{id, rp::SlotResourceKind::ColorTarget, rp::SlotAccess::Write, id});
+    }
+    {
+        const crd::u64 id = rp::pass_param_id(SV("args"));
+        table.bind(rg::ResolvedResource{id, rp::SlotResourceKind::StorageBuffer, nullptr, args, nullptr, nullptr});
+        payload.resources.push_back(rp::ResourceRef{id, rp::SlotResourceKind::StorageBuffer, rp::SlotAccess::Read, id});
+    }
+    {
+        rp::TypedValue cc;
+        cc.type  = rp::ExecutorParamType::Vec4;
+        cc.v4[0] = d.clear_color[0];
+        cc.v4[1] = d.clear_color[1];
+        cc.v4[2] = d.clear_color[2];
+        cc.v4[3] = d.clear_color[3];
+        payload.params.push_back(rp::ParamValue{rp::pass_param_id(SV("clear_color")), cc});
+    }
+    {
+        rp::TypedValue ao;
+        ao.type = rp::ExecutorParamType::U32;
+        ao.u    = static_cast<crd::u32>(p->args_offset);
+        payload.params.push_back(rp::ParamValue{rp::pass_param_id(SV("args_offset")), ao});
+    }
+    rg::PassPrograms programs;
+    programs.raster = p->program;
+    rg::RecordContext rctx(payload, table, programs, diags);
+    fn(payload, rctx, *enc);
+    return true;
+}
+
+// ⭐⭐ RAF-8: the RAY-TRACING adapters. RayTrace ⇒ an INLINE RAY QUERY (raytrace.dispatch → dispatch_kernel_rt);
+// RayTracePipeline ⇒ an SBT trace (raytrace.pipeline → trace_rays / _anyhit / _full). Both bind the TLAS + the kernel
+// buffers and abort (⇒ the inline path) if a buffer does not resolve or the pass declares more than 4.
+bool record_raytrace_via_executor(PassRec* p, g::IFrameContext& ctx, g::IRasterContext& r)
+{
+    namespace rp = crd::renderpass;
+    namespace rg = crd::rendergraph;
+    using SV = crd::containers::StringView;
+    if (p->records == nullptr || p->rec_alloc == nullptr || p->kernel_program == nullptr || p->accel == nullptr)
+    {
+        return false;
+    }
+    const rg::PassRecordFn fn = p->records->find(rp::executor_type_id(SV("raytrace.dispatch")));
+    if (fn == nullptr)
+    {
+        return false;
+    }
+    auto enc = r.create_command_encoder();
+    if (enc == nullptr)
+    {
+        return false;
+    }
+    rp::PassPayload payload;
+    payload.executor       = rp::executor_type_id(SV("raytrace.dispatch"));
+    payload.schema_version = 1U;
+    payload.queue          = rp::QueueKind::Compute;
+    rg::ResourceTable  table(p->rec_alloc);
+    rg::DiagnosticList diags(p->rec_alloc);
+    {
+        const crd::u64 id = rp::pass_param_id(SV("accel"));
+        table.bind(rg::ResolvedResource{id, rp::SlotResourceKind::AccelStructure, nullptr, nullptr, p->accel, nullptr});
+        payload.resources.push_back(rp::ResourceRef{id, rp::SlotResourceKind::AccelStructure, rp::SlotAccess::Read, id});
+    }
+    const int nb = bind_kernel_storage(p, ctx, payload, table);
+    if (nb <= 0)
+    {
+        return false; // a missing buffer / >4 buffers / zero buffers ⇒ the inline path (aborts identically)
+    }
+    const auto u32_param = [&](const char* name, crd::u32 v)
+    {
+        rp::TypedValue tv;
+        tv.type = rp::ExecutorParamType::U32;
+        tv.u    = v;
+        payload.params.push_back(rp::ParamValue{rp::pass_param_id(SV(name)), tv});
+    };
+    u32_param("groups_x", p->groups[0]);
+    u32_param("groups_y", p->groups[1]);
+    u32_param("groups_z", p->groups[2]);
+    rg::PassPrograms programs;
+    programs.kernel = p->kernel_program;
+    rg::RecordContext rctx(payload, table, programs, diags);
+    fn(payload, rctx, *enc);
+    return true;
+}
+
+bool record_raytrace_pipeline_via_executor(PassRec* p, g::IFrameContext& ctx, g::IRasterContext& r)
+{
+    namespace rp = crd::renderpass;
+    namespace rg = crd::rendergraph;
+    using SV = crd::containers::StringView;
+    if (p->records == nullptr || p->rec_alloc == nullptr || p->accel == nullptr || p->rt_raygen == nullptr ||
+        p->rt_miss == nullptr || p->rt_chit == nullptr)
+    {
+        return false;
+    }
+    const rg::PassRecordFn fn = p->records->find(rp::executor_type_id(SV("raytrace.pipeline")));
+    if (fn == nullptr)
+    {
+        return false;
+    }
+    auto enc = r.create_command_encoder();
+    if (enc == nullptr)
+    {
+        return false;
+    }
+    rp::PassPayload payload;
+    payload.executor       = rp::executor_type_id(SV("raytrace.pipeline"));
+    payload.schema_version = 1U;
+    payload.queue          = rp::QueueKind::Compute;
+    rg::ResourceTable  table(p->rec_alloc);
+    rg::DiagnosticList diags(p->rec_alloc);
+    {
+        const crd::u64 id = rp::pass_param_id(SV("accel"));
+        table.bind(rg::ResolvedResource{id, rp::SlotResourceKind::AccelStructure, nullptr, nullptr, p->accel, nullptr});
+        payload.resources.push_back(rp::ResourceRef{id, rp::SlotResourceKind::AccelStructure, rp::SlotAccess::Read, id});
+    }
+    const int nb = bind_kernel_storage(p, ctx, payload, table);
+    if (nb < 0)
+    {
+        return false; // a missing buffer / >4 buffers ⇒ the inline path (aborts identically)
+    }
+    {
+        rp::TypedValue gx;
+        gx.type = rp::ExecutorParamType::U32;
+        gx.u    = p->groups[0];
+        payload.params.push_back(rp::ParamValue{rp::pass_param_id(SV("groups_x")), gx});
+        rp::TypedValue gy;
+        gy.type = rp::ExecutorParamType::U32;
+        gy.u    = p->groups[1];
+        payload.params.push_back(rp::ParamValue{rp::pass_param_id(SV("groups_y")), gy});
+    }
+    rg::PassPrograms programs;
+    programs.raygen       = p->rt_raygen;
+    programs.miss         = p->rt_miss;
+    programs.closest_hit  = p->rt_chit;
+    programs.any_hit      = p->rt_anyhit;
+    programs.intersection = p->rt_isect;
+    programs.callable     = p->rt_callable;
+    rg::RecordContext rctx(payload, table, programs, diags);
+    fn(payload, rctx, *enc);
+    return true;
 }
 
 void record_pass(g::IFrameContext& ctx, void* user)
@@ -158,6 +1026,8 @@ void record_pass(g::IFrameContext& ctx, void* user)
     {
     case FramePassKind::RasterDepthOnly:
     {
+        // RAF-8a: MIGRATED — record through the scene.raster executor (depth-only shape); inline fallback if unwired.
+        if (record_scene_via_executor(p, ctx, r, t)) { break; }
         // ⛔ EVERY draw in the list, not just the first. A real scene resolves a draw list to many mesh groups;
         // recording only one silently rendered a shadow map containing a single object. The FIRST draw clears
         // the target, the rest LOAD — clearing per draw would leave only the last group in the map (the
@@ -227,6 +1097,9 @@ void record_pass(g::IFrameContext& ctx, void* user)
     }
     case FramePassKind::RasterMrt:
     {
+        // RAF-8a: MIGRATED for the single-colour MRT (the velocity prepass) — scene.raster handles colour+depth; a
+        // true multi-colour G-buffer (n_writes>1) returns false and takes the inline path below.
+        if (record_scene_via_executor(p, ctx, r, t)) { break; }
         // ⭐ REN-38-A1b: N DECLARED WRITES => N COLOUR ATTACHMENTS. This is what makes a DEFERRED G-buffer
         // authorable: `writes = ["albedo", "normal", "material"]` and the executor binds all three.
         // ⭐⭐ REN-41: when the MRT pass PRODUCES a depth (rec.depth_target — the velocity prepass writes
@@ -285,6 +1158,8 @@ void record_pass(g::IFrameContext& ctx, void* user)
     }
     case FramePassKind::RasterGeometry:
     {
+        // RAF-8a: MIGRATED — record through the scene.raster executor (the colour+draw-list shape); inline fallback.
+        if (record_scene_via_executor(p, ctx, r, t)) { break; }
         // A geometry pass that READS a sampled resource binds it — that is how an authored graph expresses a
         // SHADOWED forward pass without needing a bespoke PassKind: it declares `reads = ["shadow_atlas"]` and
         // the executor picks the comparison sampler because the resource's FORMAT is depth. Same rule the
@@ -439,6 +1314,13 @@ void record_pass(g::IFrameContext& ctx, void* user)
     }
     case FramePassKind::RasterFullscreen:
     {
+        // ⭐⭐ RAF-8a (ADR-0106): MIGRATED — record through the render-graph fullscreen.raster executor. On success
+        // the inline path below is skipped; if the adapter is not wired it returns false and the inline verbs run
+        // (both resolve during migration, gated byte-identical). This whole inline block is deleted at RAF-12.
+        if (record_fullscreen_via_executor(p, ctx, r, t))
+        {
+            break;
+        }
         // ── ⭐ REN-38-A13: PER-PASS RENDER STATE, applied before anything else looks at this pass. ──
         // ⛔ VRS and conservative raster are ATTRIBUTES of a draw, not pass kinds — so they are checked HERE, on
         // the kind that has no other reason to branch, rather than multiplying the kind enum. A fullscreen pass
@@ -502,6 +1384,9 @@ void record_pass(g::IFrameContext& ctx, void* user)
     }
     case FramePassKind::Compute:
     {
+        // RAF-8a: MIGRATED — record through the compute.dispatch executor (per-item draw list OR single dispatch);
+        // inline fallback if unwired.
+        if (record_compute_via_executor(p, ctx, r)) { break; }
         // ⭐ REN-38-A2: THE COMPUTE PASS. Until this it fell through to `break` — an authored compute pass
         // VALIDATED, COOKED, RAN and did NOTHING, with every check green.
         //
@@ -576,6 +1461,8 @@ void record_pass(g::IFrameContext& ctx, void* user)
     // ⛔ The FIRST draw clears the id, every later one LOADS — one image must hold EVERY visible primitive's id.
     case FramePassKind::RasterVisbuffer:
     {
+        // RAF-8: MIGRATED — record through the visbuffer.raster executor (inline fallback if unwired).
+        if (record_visbuffer_via_executor(p, r, t)) { break; }
         for (crd::u32 i = 0; i < p->draws.count(); ++i)
         {
             const DrawItem it = p->draws.at(i);
@@ -590,6 +1477,8 @@ void record_pass(g::IFrameContext& ctx, void* user)
     // ── ⭐ REN-38-A12: THE COMPOSITE PASS — what makes OIT authorable as two ordinary passes. ──
     case FramePassKind::RasterComposite:
     {
+        // RAF-8: MIGRATED — record through the fullscreen.raster executor (load + blend → draw_bindless_blend_load).
+        if (record_composite_via_executor(p, ctx, r, t)) { break; }
         if (p->n_sampled == 0U) { return; }
         g::ITexture* texs[kMaxPassReads]{};
         crd::u32     n = 0U;
@@ -610,6 +1499,8 @@ void record_pass(g::IFrameContext& ctx, void* user)
     // one submission like any other kernel. ⛔ Not a ray-tracing PIPELINE — see the note on `FramePassKind`.
     case FramePassKind::RayTrace:
     {
+        // RAF-8: MIGRATED — record the inline ray query through the raytrace.dispatch executor (inline fallback).
+        if (record_raytrace_via_executor(p, ctx, r)) { break; }
         if (p->kernel_program == nullptr || p->accel == nullptr) { return; }
         g::IStorageBuffer* bufs[kMaxPassReads]{};
         crd::u32           nb = 0U;
@@ -632,6 +1523,8 @@ void record_pass(g::IFrameContext& ctx, void* user)
     // with the image it writes would leave a border unwritten or run rays with no pixel to land in.
     case FramePassKind::RayTracePipeline:
     {
+        // RAF-8: MIGRATED — record the SBT trace through the raytrace.pipeline executor (inline fallback if unwired).
+        if (record_raytrace_pipeline_via_executor(p, ctx, r)) { break; }
         if (p->rt_raygen == nullptr || p->rt_miss == nullptr || p->rt_chit == nullptr || p->accel == nullptr) { return; }
         g::IStorageBuffer* bufs[kMaxPassReads]{};
         crd::u32           nb = 0U;
@@ -666,6 +1559,8 @@ void record_pass(g::IFrameContext& ctx, void* user)
     // is the whole cull→draw loop: culled work never dispatches, and nothing round-trips to the host.
     case FramePassKind::ComputeIndirect:
     {
+        // RAF-8: MIGRATED — record through the compute.dispatch executor (the `args` slot → dispatch_kernel_indirect).
+        if (record_compute_via_executor(p, ctx, r)) { break; }
         if (p->kernel_program == nullptr) { return; }
         g::IStorageBuffer* args = ctx.buffer(p->args_buf);
         if (args == nullptr) { return; }
@@ -684,6 +1579,8 @@ void record_pass(g::IFrameContext& ctx, void* user)
     }
     case FramePassKind::RasterMeshIndirect:
     {
+        // RAF-8: MIGRATED — record through the mesh.indirect executor (draw_mesh_indirect_buffer; inline fallback).
+        if (record_mesh_indirect_via_executor(p, ctx, r, t)) { break; }
         g::IStorageBuffer* args = ctx.buffer(p->args_buf);
         if (args == nullptr || p->program == nullptr) { return; }
         r.draw_mesh_indirect_buffer(*t, *p->program, clear, *args, p->args_offset);
@@ -701,6 +1598,8 @@ void record_pass(g::IFrameContext& ctx, void* user)
     case FramePassKind::RasterTess:
     case FramePassKind::RasterMesh:
     {
+        // RAF-8: MIGRATED — record through the mesh.raster / tess.raster executor (inline fallback if unwired).
+        if (record_amplify_via_executor(p, ctx, r, t)) { break; }
         const bool mesh = (d.kind == FramePassKind::RasterMesh);
         if (p->draws.count() == 0U)
         {
@@ -745,6 +1644,8 @@ void record_pass(g::IFrameContext& ctx, void* user)
     // ── ⭐ REN-38-A6: THE UTILITY PASSES. ──
     case FramePassKind::Clear:
     {
+        // RAF-8a: MIGRATED — record through the transfer.clear executor (falls back to the inline verb if unwired).
+        if (record_transfer_via_executor(p, ctx, r, t)) { break; }
         // A clear needs no shader and no draw list, which is why the `p->program == nullptr` guard at the top of
         // this function would have swallowed it — see the note there.
         r.clear(*t, clear);
@@ -754,6 +1655,8 @@ void record_pass(g::IFrameContext& ctx, void* user)
     case FramePassKind::Blit:
     case FramePassKind::Resolve:
     {
+        // RAF-8a: MIGRATED — record through the transfer.{copy,blit,resolve} executor (inline fallback if unwired).
+        if (record_transfer_via_executor(p, ctx, r, t)) { break; }
         if (p->n_sampled != 1U) { return; }
         g::IRasterTarget* src = ctx.image(p->sampled[0]);
         // ⛔ A source that does not resolve ABORTS. Copying nothing leaves the destination holding whatever it
@@ -794,14 +1697,19 @@ struct FrameRecorder::Impl
     // twice in one frame (the multi-viewport path) sees ONE parity — two viewports must not disagree about which
     // image is history.
     crd::u32                                               frame_parity = 0U;
+    // ⭐⭐ RAF-8a: the render-graph executor registry, built ONCE — the migration adapter routes a migrated pass kind
+    // here (see PassRec::records). Retired with the FramePassKind switch at RAF-12.
+    crd::rendergraph::GraphExecutorTable                   records;
 
-    explicit Impl(crd::memory::IAllocator* a) : alloc(a), blocks(a)
+    explicit Impl(crd::memory::IAllocator* a) : alloc(a), blocks(a), records(a)
     {
         blocks.reserve(FrameRecorder::kMaxRecordingsPerFrame);
         for (crd::u32 i = 0; i < FrameRecorder::kMaxRecordingsPerFrame; ++i)
         {
             blocks.push_back(crd::containers::Array<PassRec>(a));
         }
+        crd::renderasset::DiagnosticList d(a);
+        crd::rendergraph::register_builtin_records(records, d);
     }
 };
 
@@ -1075,6 +1983,8 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         const FramePassDesc& d = desc.passes[plan[ii].pass];
         PassRec              rec{};
         rec.desc  = &d;
+        rec.rec_alloc = m_impl->alloc;      // RAF-8a: the migration adapter's scratch allocator + executor registry
+        rec.records   = &m_impl->records;
         rec.layer = plan[ii].index;
 
         // REN-40-E: a cached for_each instance skips draw-list resolution and program checks —

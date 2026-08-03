@@ -474,7 +474,7 @@ public:
     [[nodiscard]] bool     multisampled() const noexcept { return m_samples > 1U; }
     // The subresource the readback is copied from: the resolved single-sample texture for MSAA, else the colour texture.
     [[nodiscard]] ID3D12Resource* copy_src() const noexcept { return m_samples > 1U ? m_resolve.Get() : m_tex.Get(); }
-    [[nodiscard]] bool            has_depth() const noexcept { return m_depth != nullptr; } // B1-d
+    [[nodiscard]] bool            has_depth() const noexcept override { return m_depth != nullptr; } // B1-d
     [[nodiscard]] ID3D12Resource* depth_tex() const noexcept { return m_depth.Get(); }
     // REN-38-F11: a D24S8 target — the PSO's DSVFormat and every depth clear must then carry the stencil half.
     [[nodiscard]] bool              has_stencil() const noexcept { return m_has_stencil; }
@@ -5445,9 +5445,13 @@ public:
         const crd::u32 n  = count < 8U ? count : 8U;
         const bool     has_depth = t0.has_depth();
         // REN-38-A15: blend is PSO state on DX12, so it goes into `pso_for` (and its cache key) rather than being
-        // set dynamically the way Vulkan does it.
-        ID3D12PipelineState* pso = pass_pso(p, n, has_depth ? DXGI_FORMAT_D32_FLOAT : DXGI_FORMAT_UNKNOWN,
-                                             to_d3d12_compare(compare), has_depth, n, t0.color_format(), blend);
+        // set dynamically the way Vulkan does it. ⛔ RAF-7 fix: samples=1 (the attachments are single-sample) and
+        // conservative=false — matching draw_storage_indexed_mrt / the single-colour indirect verb. This verb
+        // historically passed samples=n / conservative=has_depth, a miswiring that only never bit because MRT ran
+        // depthless (see draw_storage_multi_indexed_mrt_indirect's note); the RAF-7 one-submission MRT gate exercises
+        // it, so it uses the proven shape now.
+        ID3D12PipelineState* pso = pass_pso(p, 1U, has_depth ? DXGI_FORMAT_D32_FLOAT : DXGI_FORMAT_UNKNOWN,
+                                             to_d3d12_compare(compare), false, n, t0.color_format(), blend);
         if (!p.valid() || pso == nullptr) { return; }
 
         D3D12_CPU_DESCRIPTOR_HANDLE rtvs[8]{};

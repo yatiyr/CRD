@@ -2,7 +2,7 @@
 # for the tier rule; the only difference is the post pass's shader line.
 
 schema = 1
-name   = "crd://frame/forward_srgb"
+name   = "engine://frame/forward_srgb"
 
 [[resource]]
 name    = "scene_hdr"
@@ -39,7 +39,7 @@ name      = "impostor"
 kind      = "raster.geometry"
 draw_list = "impostor_geometry"
 writes    = ["scene_hdr"]
-shader    = "crd://scene/impostor"
+shader    = "engine://scene/impostor"
 load      = true
 depth     = "GreaterEqual"
 
@@ -48,4 +48,4 @@ name   = "post"
 kind   = "raster.fullscreen"
 reads  = ["scene_hdr"]
 writes = ["@output"]
-shader = "crd://post/srgb_only"
+shader = "engine://post/srgb_only"

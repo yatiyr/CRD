@@ -66,8 +66,8 @@ TEST_CASE("raf6 built-in executors register and look up by id")
     crd::memory::TlsfAllocator alloc(1U << 20U, nullptr, "raf6-builtins");
     DiagnosticList d(&alloc);
     ExecutorRegistry reg(&alloc);
-    REQUIRE(register_builtin_executors(reg, d) == 9U);
-    REQUIRE(reg.size() == 9U);
+    REQUIRE(register_builtin_executors(reg, d) == 14U);
+    REQUIRE(reg.size() == 14U);
     REQUIRE_FALSE(d.has_errors());
 
     // Lookup is by resolved id (no string at record).
@@ -82,13 +82,13 @@ TEST_CASE("raf6 duplicate executor id is rejected")
     crd::memory::TlsfAllocator alloc(1U << 20U, nullptr, "raf6-dup");
     DiagnosticList d(&alloc);
     ExecutorRegistry reg(&alloc);
-    REQUIRE(register_builtin_executors(reg, d) == 9U);
+    REQUIRE(register_builtin_executors(reg, d) == 14U);
 
     // Re-registering the built-ins now conflicts on every id.
     DiagnosticList d2(&alloc);
     REQUIRE(register_builtin_executors(reg, d2) == 0U);
     REQUIRE(d2.contains(DiagCode::DuplicateExecutor));
-    REQUIRE(reg.size() == 9U);
+    REQUIRE(reg.size() == 14U);
 }
 
 TEST_CASE("raf6 an app registers a custom executor without an engine-enum edit")
@@ -96,7 +96,7 @@ TEST_CASE("raf6 an app registers a custom executor without an engine-enum edit")
     crd::memory::TlsfAllocator alloc(1U << 20U, nullptr, "raf6-app");
     DiagnosticList d(&alloc);
     ExecutorRegistry reg(&alloc);
-    REQUIRE(register_builtin_executors(reg, d) == 9U);
+    REQUIRE(register_builtin_executors(reg, d) == 14U);
 
     // The APP defines its own executor purely by registration — no engine code is touched.
     PassExecutorDesc app;
@@ -107,7 +107,7 @@ TEST_CASE("raf6 an app registers a custom executor without an engine-enum edit")
     app.schema.params.push_back(ParamSpec{pass_param_id("strength"), ExecutorParamType::F32, true});
     app.schema.slots.push_back(ResourceSlotSpec{pass_param_id("color"), SlotResourceKind::ColorTarget, SlotAccess::Write, true});
     REQUIRE(reg.register_executor(app, d));
-    REQUIRE(reg.size() == 10U);
+    REQUIRE(reg.size() == 15U);
 
     // An app PAYLOAD referencing it validates through the SAME registry as engine passes.
     PassPayload p;
@@ -125,7 +125,7 @@ TEST_CASE("raf6 a valid built-in payload passes validation")
     crd::memory::TlsfAllocator alloc(1U << 20U, nullptr, "raf6-valid");
     DiagnosticList d(&alloc);
     ExecutorRegistry reg(&alloc);
-    REQUIRE(register_builtin_executors(reg, d) == 9U);
+    REQUIRE(register_builtin_executors(reg, d) == 14U);
     REQUIRE(validate_payload(reg, valid_scene_payload(), d));
     REQUIRE_FALSE(d.has_errors());
 }
@@ -135,7 +135,7 @@ TEST_CASE("raf6 payload validation rejects every malformed shape")
     crd::memory::TlsfAllocator alloc(1U << 20U, nullptr, "raf6-reject");
     DiagnosticList setup(&alloc);
     ExecutorRegistry reg(&alloc);
-    REQUIRE(register_builtin_executors(reg, setup) == 9U);
+    REQUIRE(register_builtin_executors(reg, setup) == 14U);
 
     SECTION("unknown executor")
     {
@@ -194,11 +194,14 @@ TEST_CASE("raf6 payload validation rejects every malformed shape")
     }
     SECTION("missing required slot")
     {
+        // RAF-8: scene.raster's slots are all OPTIONAL now (color/depth/geometry/inputs — a depth-only or draw-list
+        // pass binds a subset), so a REQUIRED-slot omission is tested on `present`, whose `source` IS required.
         DiagnosticList d(&alloc);
-        PassPayload p = valid_scene_payload();
-        p.resources.clear();
-        p.resources.push_back(ResourceRef{pass_param_id("color"), SlotResourceKind::ColorTarget, SlotAccess::Write, 1U});
-        // geometry (required) omitted
+        PassPayload p;
+        p.executor = executor_type_id("present");
+        p.schema_version = 1U;
+        p.queue = QueueKind::Graphics;
+        // `source` (required) omitted entirely.
         REQUIRE_FALSE(validate_payload(reg, p, d));
         REQUIRE(d.contains(DiagCode::InvalidSlot));
     }

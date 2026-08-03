@@ -1,6 +1,7 @@
 add_executable(crd-render-asset-core-tests
     test_render_asset_core.cpp  # RAF-1 Gate 1
     test_cooked_forms.cpp       # RAF-3 Gate 3 (cooked envelope + generational runtime handle)
+    test_asset_paths.cpp        # RAF-9 Increment 1 (folder->ext map + on_disk_relative)
 )
 
 target_link_libraries(crd-render-asset-core-tests PRIVATE

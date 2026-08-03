@@ -318,7 +318,7 @@ public:
     [[nodiscard]] VkImageView resolve_view() const noexcept { return m_resolve.view; }
     // The image the readback buffer is copied from: the resolve image for MSAA, else the (single-sample) colour image.
     [[nodiscard]] VkImage src_image() const noexcept { return m_samples > 1U ? m_resolve.image : m_color.image; }
-    [[nodiscard]] bool        has_depth() const noexcept { return m_depth.image != VK_NULL_HANDLE; } // B1-d
+    [[nodiscard]] bool has_depth() const noexcept override { return m_depth.image != VK_NULL_HANDLE; } // B1-d
     [[nodiscard]] VkImage     depth_image() const noexcept { return m_depth.image; }
     [[nodiscard]] VkImageView depth_view() const noexcept { return m_depth.view; }
     // REN-38-F11: a D24S8 target. Attachments, layouts AND barriers must then carry BOTH aspects — a depth-only

@@ -27,12 +27,12 @@
 # mistake.
 
 schema   = 1
-name     = "crd://frame/forward_csm"
+name     = "engine://frame/forward_csm"
 # ⭐ SHADOWS ON/OFF is a DECLARED CAPABILITY TIER with a named fallback (REN-35’s rule), not an `if` in the
 # renderer. A host that cannot (or will not) do shadows steps down to `forward_basic` — which has no atlas, no
 # cascade passes and a different technique — and the step-down is REPORTED, never silent.
 requires = ["shadows"]
-fallback = "crd://frame/forward_basic"
+fallback = "engine://frame/forward_basic"
 
 # ── the cascade atlas: one 2D-ARRAY depth image, one slice per cascade ──────────────────────────────────────
 [[resource]]
@@ -94,6 +94,6 @@ name      = "impostor"
 kind      = "raster.geometry"
 draw_list = "impostor_geometry"
 writes    = ["@output"]
-shader    = "crd://scene/impostor"
+shader    = "engine://scene/impostor"
 load      = true
 depth     = "GreaterEqual"

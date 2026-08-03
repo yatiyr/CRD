@@ -65,6 +65,10 @@ enum class DiagCode : u8
     InvalidParam,            // a pass payload param is missing / unknown / type-mismatched vs the executor schema
     InvalidSlot,             // a pass payload resource slot is missing / kind-or-access-mismatched vs the schema
     QueueMismatch,           // a pass payload's queue differs from the executor's declared queue
+    ExecutionFailed,         // device execution of a compiled graph failed (build/record could not complete)
+    UnsupportedPassKind,     // RAF-8: a cooked FramePassKind has no render-graph executor mapping yet (the load bridge)
+    UnresolvedForEach,       // RAF-8: a for_each pass whose instance count the host could not resolve (count 0)
+    AssetNotFound,           // RAF-9: a canonical asset id did not resolve to bytes (no on-disk file under its mount)
 };
 
 // The name IS the stable identity of a code (see enum comment).

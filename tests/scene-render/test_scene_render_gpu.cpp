@@ -2692,6 +2692,87 @@ TEST_CASE("REN-39-C1 GATE: pull and indexed scene frames are bit-identical, and 
     CHECK(covered > 500U);
 }
 
+// ── ⭐⭐ RAF-9 GATE: the engine default selected BY CANONICAL ENGINE:// ID renders BIT-IDENTICALLY to the same
+// default selected by the (deprecated) relative name. This is Gate-9's "representative output unchanged" through the
+// public registry/resolver: `set_frame_graph("engine://frame/forward_csm")` and
+// `set_frame_graph_asset("frame/forward_csm.frame.toml")` resolve the SAME bytes → the SAME cook → every texel equal.
+TEST_CASE("RAF-9 GATE: a default selected by engine:// id renders bit-identically to the relative name",
+          "[scene-render][raf9][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    const char* root = std::getenv("CRD_ASSETS_DIR");
+    if (root == nullptr || root[0] == '\0') { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    const resources::ResourceId mesh_a = resources::ResourceId::mint_random();
+    const TempPack              pack_a("sr_raf9_", mesh_a);
+    write_mesh_pack(pack_a.path, mesh_a);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack_a.path.generic()).is_valid());
+
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait(), scene::SpatialBVH{});
+    scene::register_render_components(world);
+    const scene::EntityId e = world.spawn();
+    scene::Transform      t;
+    t.translation = math::from_raw_vec<units::dim::Length>(math::Vec3f{0.0F, 0.0F, 0.0F});
+    t.scale = {2.0F, 2.0F, 2.0F};
+    t.world = math::from_trs({0.0F, 0.0F, 0.0F}, math::Quatf::identity(), {2.0F, 2.0F, 2.0F});
+    world.add_component(e, t);
+    world.add_component(e, scene::MeshRenderer{mesh_a, {}});
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.set_asset_root(root)); // mount engine:// == the repo assets/ tree
+    REQUIRE(renderer.init(*raster, rm));
+    REQUIRE(renderer.init_programs(*vk));
+    REQUIRE(renderer.set_shadows_enabled(true));
+    REQUIRE(renderer.sync(world).total_instances == 1U);
+
+    const math::Mat4f     view = math::look_at(math::Vec3f{0.0F, 6.0F, 16.0F}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f     proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Vec3f     light{0.3F, 1.0F, 0.2F};
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+
+    const auto render_frame = [&](const char* selector, bool by_id, gpu::IRasterTarget& target) {
+        const bool installed = by_id ? renderer.set_frame_graph(selector) : renderer.set_frame_graph_asset(selector);
+        REQUIRE(installed);
+        return renderer.render(target, proj * view, light, clear, nullptr);
+    };
+
+    auto id_tgt = raster->create_color_depth_target(256U, 256U);
+    auto rel_tgt = raster->create_color_depth_target(256U, 256U);
+    REQUIRE(id_tgt != nullptr);
+    REQUIRE(rel_tgt != nullptr);
+    // ⭐ by CANONICAL ID (the Gate-9 selector) vs by the deprecated relative name — the SAME default.
+    render_frame("engine://frame/forward_csm", true, *id_tgt);
+    render_frame("frame/forward_csm.frame.toml", false, *rel_tgt);
+
+    crd::u32 diffs = 0U;
+    crd::u32 covered = 0U;
+    for (u32 y = 0; y < 256U; ++y)
+    {
+        for (u32 x = 0; x < 256U; ++x)
+        {
+            if (id_tgt->read_pixel(x, y) != rel_tgt->read_pixel(x, y)) { ++diffs; }
+            if ((rel_tgt->read_pixel(x, y) & 0x00FFFFFFU) != 0U) { ++covered; }
+        }
+    }
+    INFO("diffs=" << diffs << " covered=" << covered);
+    CHECK(diffs == 0U);     // every texel equal — id-resolved == relative-resolved
+    CHECK(covered > 500U);  // and it actually drew a shadowed frame, not an empty canvas
+}
+
 #ifdef _WIN32 // the D3D12 backend exists only on Windows (the F17 guard rule)
 // ── ⭐⭐ REN-39-C1 GATE (DX12): the same parity claim on the other backend. ─────────────────────────────────
 // Identical shape to the Vulkan gate: pull reference vs indexed frame, BIT-IDENTICAL pixels. With shadows
@@ -2699,6 +2780,73 @@ TEST_CASE("REN-39-C1 GATE: pull and indexed scene frames are bit-identical, and 
 // indexed = cascade + forward batches). If this rig's DX12 shadow set fails to build, the gate still asserts
 // pixel parity (stated by INFO) — the switch logic is shared renderer code; the DX12-specific halves (verbs,
 // t0 SRV seam, kIndexedDrawStates walk) are exactly what the pixel comparison exercises.
+// ── ⭐⭐ RAF-9 GATE (DX12): the id-vs-relative bit-identity, on the other backend. The resolver/registry are
+// backend-neutral, so DX12 must render the engine:// id-selected default identically to the relative name too. ──
+TEST_CASE("RAF-9 GATE (DX12): a default selected by engine:// id renders bit-identically to the relative name",
+          "[scene-render][raf9][gpu][dx12]")
+{
+    auto gctx = gpu::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    const char* root = std::getenv("CRD_ASSETS_DIR");
+    if (root == nullptr || root[0] == '\0') { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
+    auto raster = gpu::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+
+    const resources::ResourceId mesh_a = resources::ResourceId::mint_random();
+    const TempPack              pack_a("sr_raf9dx_", mesh_a);
+    write_mesh_pack(pack_a.path, mesh_a);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack_a.path.generic()).is_valid());
+
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait(), scene::SpatialBVH{});
+    scene::register_render_components(world);
+    const scene::EntityId e = world.spawn();
+    scene::Transform      t;
+    t.translation = math::from_raw_vec<units::dim::Length>(math::Vec3f{0.0F, 0.0F, 0.0F});
+    t.scale = {2.0F, 2.0F, 2.0F};
+    t.world = math::from_trs({0.0F, 0.0F, 0.0F}, math::Quatf::identity(), {2.0F, 2.0F, 2.0F});
+    world.add_component(e, t);
+    world.add_component(e, scene::MeshRenderer{mesh_a, {}});
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.set_asset_root(root));
+    REQUIRE(renderer.init(*raster, rm));
+    REQUIRE(renderer.init_programs(*gctx));
+    REQUIRE(renderer.set_shadows_enabled(true));
+    REQUIRE(renderer.sync(world).total_instances == 1U);
+
+    const math::Mat4f     view = math::look_at(math::Vec3f{0.0F, 6.0F, 16.0F}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f     proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Vec3f     light{0.3F, 1.0F, 0.2F};
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+    const auto            render_frame = [&](const char* selector, bool by_id, gpu::IRasterTarget& target) {
+        const bool installed = by_id ? renderer.set_frame_graph(selector) : renderer.set_frame_graph_asset(selector);
+        REQUIRE(installed);
+        return renderer.render(target, proj * view, light, clear, nullptr);
+    };
+    auto id_tgt = raster->create_color_depth_target(256U, 256U);
+    auto rel_tgt = raster->create_color_depth_target(256U, 256U);
+    REQUIRE(id_tgt != nullptr);
+    REQUIRE(rel_tgt != nullptr);
+    render_frame("engine://frame/forward_csm", true, *id_tgt);
+    render_frame("frame/forward_csm.frame.toml", false, *rel_tgt);
+    crd::u32 diffs = 0U;
+    crd::u32 covered = 0U;
+    for (u32 y = 0; y < 256U; ++y)
+    {
+        for (u32 x = 0; x < 256U; ++x)
+        {
+            if (id_tgt->read_pixel(x, y) != rel_tgt->read_pixel(x, y)) { ++diffs; }
+            if ((rel_tgt->read_pixel(x, y) & 0x00FFFFFFU) != 0U) { ++covered; }
+        }
+    }
+    INFO("diffs=" << diffs << " covered=" << covered);
+    CHECK(diffs == 0U);
+    CHECK(covered > 500U);
+}
+
 TEST_CASE("REN-39-C1 GATE (DX12): pull and indexed scene frames are bit-identical",
           "[scene-render][ren39][indexed][gpu][dx12]")
 {
