@@ -1884,15 +1884,61 @@ public:
     void draw_mesh_storage(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
                            IStorageBuffer& storage, crd::u32 group_count) override
     {
-        if (!m_ok || !frame_recording() || m_list6 == nullptr) { return; }
-        auto& t = static_cast<Dx12RasterTarget&>(target);
-        auto& p = static_cast<Dx12RasterProgram&>(program);
+        if (!m_ok || !m_mesh_shader || m_list6 == nullptr) { return; }
+        auto& t  = static_cast<Dx12RasterTarget&>(target);
+        auto& p  = static_cast<Dx12RasterProgram&>(program);
         auto& s2 = static_cast<Dx12StorageBuffer&>(storage);
-        if (!p.is_mesh()) { return; }
+        if (!p.is_mesh() || !p.valid()) { return; }
         ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
-        if (!p.valid() || pso == nullptr) { return; }
-        record_mesh(t, p, pso, clear, group_count, false, 0.0F, nullptr, false, D3D12_SHADING_RATE_1X1,
-                    nullptr, nullptr, 0U, /*clear=*/true, &s2);
+        if (pso == nullptr) { return; }
+        if (frame_recording())
+        {
+            record_mesh(t, p, pso, clear, group_count, false, 0.0F, nullptr, false, D3D12_SHADING_RATE_1X1,
+                        nullptr, nullptr, 0U, /*clear=*/true, &s2);
+            return;
+        }
+        // ── ⭐⭐ REN-41 Stage 4: the SYNCHRONOUS mesh+storage draw. `draw_mesh_storage` had only the
+        // frame-recording path, so a direct (gate) call no-op'd — every other draw verb has a synchronous form.
+        // Mirrors the synchronous draw_mesh + binds the storage buffer as a UAV at root param 0 exactly as the
+        // synchronous draw_storage does (m_uav_heap slot 0), then DispatchMesh + copy-to-readback + wait.
+        if (m_uav_heap == nullptr) { return; }
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
+        uav.Format                     = DXGI_FORMAT_UNKNOWN;
+        uav.ViewDimension              = D3D12_UAV_DIMENSION_BUFFER;
+        uav.Buffer.NumElements         = s2.num_elements();
+        uav.Buffer.StructureByteStride = 4;
+        m_device->CreateUnorderedAccessView(s2.buf(), nullptr, &uav, m_uav_heap->GetCPUDescriptorHandleForHeapStart());
+
+        m_cmd_alloc->Reset();
+        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
+        m_list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+        const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
+        m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
+        const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
+        const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
+        m_list->RSSetViewports(1, &vp);
+        m_list->RSSetScissorRects(1, &sc);
+        m_list->SetGraphicsRootSignature(p.root());
+        ID3D12DescriptorHeap* heaps[] = {m_uav_heap.Get()};
+        m_list->SetDescriptorHeaps(1, heaps);
+        m_list->SetGraphicsRootDescriptorTable(0, m_uav_heap->GetGPUDescriptorHandleForHeapStart());
+        m_list->SetPipelineState(pso);
+        apply_stencil_ref();
+        m_list6->DispatchMesh(group_count, 1, 1);
+        transition(t.tex(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        D3D12_TEXTURE_COPY_LOCATION dst{};
+        dst.pResource       = t.readback();
+        dst.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        dst.PlacedFootprint = t.footprint();
+        D3D12_TEXTURE_COPY_LOCATION src{};
+        src.pResource        = t.copy_src();
+        src.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        src.SubresourceIndex = 0;
+        m_list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+        transition(t.tex(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
+        submit_and_wait();
     }
     void draw_mesh_storage_load(IRasterTarget& target, IRasterProgram& program, IStorageBuffer& storage,
                                 crd::u32 group_count) override

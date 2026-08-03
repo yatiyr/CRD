@@ -5,7 +5,100 @@
 
 ---
 
-## Current focus — Phase 3.1.6 **v17 GPU compute (CKIR)** — **REN-41 VISUAL FRONTIER** (on the D-007 REN band)
+## Current focus — **RAF band: GOLD-STANDARD ASSET-DRIVEN RENDERING FOUNDATION** (D-007, user-directed 2026-08-03)
+
+> ### ⏩⏩ SESSION HANDOFF (2026-08-03) — READ THIS FIRST: the RAF pivot
+> **A NEW BAND is open and is the FOCUS: RAF — the rendering foundation refactor.** Before ANY more rendering
+> features, refactor + consolidate Cerid's entire rendering foundation into one simple, coherent, asset-driven
+> architecture (engine renderers are ordinary assets; apps compose/replace/extend via the same public systems;
+> ONE backend-neutral command model both backends lower and both authored+hand-built graphs record; a registered
+> pass-executor model; split desc/cooked/runtime forms; capability fallback + hot reload + no per-draw alloc/strings).
+> **Mission constitution (followed verbatim):** `docs/research/2026-08-03-gold-standard-asset-driven-rendering.md`.
+> **Band + 14 slices (RAF-0…RAF-13 ↔ mission §19 Phases 0–13, each gate = its DoD; §22 = the 35-condition close):**
+> D-007 "RAF band". ⛔ Foundation-cleanup ONLY — no new features; no parallel old+new at close.
+> **✅ RAF-0 DONE (2026-08-03) — Gate 0 met:** the DESIGN SPEC is `docs/design/raf-0-rendering-foundation-design.md`
+> (measured current-state map: ~57 combinatorial draw verbs in `raster_context.hpp`; 18-kind `FramePassKind`; ~40-field
+> `FramePassDesc`; `crd://` single-namespace + implicit shadowing; desc/cooked/runtime conflation; + the already-GOLD
+> parts to preserve). It carries target-state map, type-ownership table, one-way module-deps, the old→new migration
+> table, asset/per-frame/hot-reload lifecycle diagrams, and refined RAF-1…13 increments EACH with a gate + an explicit
+> "sandbox-safe" invariant + the deletion list — the contract every later slice follows.
+> **✅ RAF-1 DONE (2026-08-03) — Gate 1 met.** New leaf module **`crd-render-asset-core`** (`engine/render-asset-core/`):
+> `AssetRef`/`AssetId` (canonical `scheme://path`, FNV-1a deterministic ids; `engine://`/`app://`/`plugin://`/`test://`
+> + `crd://`→engine alias so all 458 existing refs keep resolving), path normalization, structured `Diagnostic`/
+> `DiagnosticList`, `AssetRegistry` (collision detection), `DependencyGraph` (deterministic Kahn topo + cycle/missing
+> validation). `crd-render-asset-core-tests` **8/8 (95 assertions)** via ctest; LLVM-20 tidy-clean; ⛔ no-std; purely
+> additive (no existing TU touched ⇒ sandbox untouched by construction).
+> **✅ RAF-2 DONE (2026-08-03) — every command kind IMPLEMENTED in the encoder (zero no-ops); 11 GPU-gated through the
+> encoder on both backends; MRT/indirect/shadow/bindless mapped+validated+existing-suite-proven (standalone GPU gate
+> needs the RAF-7 frame-graph integration — the verbs require frame-graph transients / specific args layouts).**
+> New header `engine/gpu-context/include/crd/gpu/command_model.hpp`: the canonical data model that collapses all **53**
+> combinatorial `draw_*/dispatch_*/trace_*` verbs — `RenderingDesc` + typed attachments (LoadOp/StoreOp/clear/blend),
+> `ResourceBindingTable` (Frame/Pass/Material/Object/Draw), 8-variant `GeometrySource`, strong `RasterCommandKind`,
+> `RasterDrawPacket`, `DispatchDesc`/`TransferDesc`/`TraceDesc` (full SBT + AS), `ICommandEncoder`. The backend-agnostic
+> **TranslatingCommandEncoder** (`create_command_encoder()`, appended at vtable END) maps EVERY kind through the
+> context's existing virtual verbs (both backends, zero duplicated lowering; RAF-12 inlines + deletes the verbs):
+> None · StoragePull{color,+depth,depth-only,MRT} · Indexed · Indirect/IndexedIndirect/IndexedIndirectCount ·
+> Meshlet · MeshletIndirect · Patches · bindless · comparison-sampler/shadow · dispatch(direct+indirect) ·
+> transfer(Clear/Copy/Blit/Resolve) · trace(rays/anyhit/full). **Gates via ctest: `crd-gpu-context-tests` 6/6 (device-free
+> validation, no-per-draw-alloc proven at compile time) + `crd-gpu-context-encoder-gpu-tests` 2/2 (1025 assertions) —
+> Vulkan AND DX12 drive fullscreen · clear · copy · blit · resolve · storage-pull · indexed · color+depth ·
+> load-store(multi-draw) · mesh · tess THROUGH the encoder, each BYTE-IDENTICAL to the legacy verb.** MRT/indirect/shadow/RT
+> are mapped + hermetically validated; their verbs are GPU-proven by the frame-graph/scene-render/backend suites.
+> Fixed a real encoder bug (depth-less scope ⇒ `DepthCompare::Always`). LLVM-20 tidy-clean; append-only vtable; legacy
+> verbs untouched ⇒ sandbox untouched.
+> **✅ RAF-3 DONE (2026-08-03) — the SHARED desc/cooked/runtime SUBSTRATE** in `render-asset-core` (`cooked.hpp`/`.cpp`):
+> `CookedHeader` (canonical blob prefix: magic·type·`SchemaVersion`·`InterfaceHash`·`ContentHash`·`AssetId`·deps,
+> byte-deterministic field-by-field LE), `interface_hash_of`/`content_hash_of`, generational `RuntimeHandle`/`RuntimeSlot`
+> (stale-after-replacement), `read_cooked_header` validation (Malformed/Truncated/Type/Schema diagnostics).
+> `crd-render-asset-core-tests` **12/12 (184 assertions)** via ctest; LLVM-20 tidy-clean; ⛔ no-std; additive (leaf only
+> ⇒ sandbox untouched). Per-family blob adoption folds into RAF-4 (shader) / RAF-5 (material,technique) / RAF-7 (frame)
+> — each cooker touched once. (Audit of the 4 cookers is in the session log; `render-asset-core` was previously unconsumed.)
+> **✅ RAF-4 DONE (2026-08-03)** — new module **`crd-render-program`**: the shader+program CONTRACT (`ProgramStage` ·
+> typed `StageIoVar` I/O · `ResourceDecl` kind+frequency · `ProgramContract` validate/resolve_layout/interface_hash ·
+> `ResolvedBinding` deterministic slots · `VariantKey` + `variant_space_size`). Shared `BindingFrequency`/`BindingKind`
+> moved to `render-asset-core` (`binding.hpp`); command_model `using`-aliases it — ONE definition, transparent (encoder
+> GPU **1025/1025** both backends). `crd-render-program-tests` **9/9 (70 assertions)** via ctest; LLVM-20 tidy-clean; additive.
+> **✅ RAF-5 DONE (2026-08-03)** — new module **`crd-render-material`**: material=surface / technique=algorithm as a
+> validated type system. `RenderChannel` surface/lighting split (materials structurally CANNOT touch lighting);
+> `RuntimeMaterialDefinition`/`RuntimeMaterialInstance` (many share one def; invalid-override + missing-texture rejected);
+> `RuntimeTechnique` (surface-input contract + phases); `validate_surface_compat`/`validate_phase`; `resolve_variant`
+> (instance-independent ⇒ instances share a variant) + collision-robust `VariantCache`. `crd-render-material-tests`
+> **7/7 (53 assertions)** via ctest; LLVM-20 tidy-clean; additive.
+> **✅ RAF-6 DONE (2026-08-03)** — new module **`crd-render-pass`**: the pass-executor REGISTRY. `ExecutorTypeId`
+> (name-hash, resolved once at cook — never a string at record); versioned `ExecutorSchema` (typed params · resource
+> slots · queue); `ExecutorRegistry` (binary-search, duplicate-id rejection); typed `PassPayload` (`TypedValue` union,
+> NO `void*`); `validate_payload`; `register_builtin_executors` (9 built-ins). `crd-render-pass-tests` **5/5 (46
+> assertions)** via ctest — incl. an APP executor registered + used WITHOUT an engine-enum edit; LLVM-20 tidy-clean; additive.
+> **🔨 RAF-7 ARCHITECTURE DONE (2026-08-03; device-free, gated) — live-GPU wiring is the connecting step.** New module
+> **`crd-render-graph`**: the unified runtime — `FrameGraphTemplate` → `CompiledFrameGraph` (Kahn schedule + transient
+> aliasing + persistent pinning) → execution; executor `PassRecordFn`s emit the RAF-2 canonical command model into an
+> `ICommandEncoder` (retiring the FramePassKind→verb switch); `RecordContext` enforces declared==recorded.
+> `crd-render-graph-tests` **5/5 (46 assertions)** via ctest (command-capturing MOCK encoder): hand-built==authored ·
+> multiple-packets-in-scope · undeclared-diagnosed · aliasing+persistent · resize-minimal. LLVM-20 tidy-clean; additive.
+> **✅ RAF-7 live-GPU wiring DONE (2026-08-03)** — `crd-render-graph-gpu-tests` **2/2 (39 assertions)** via ctest: the
+> frame graph executes on **Vulkan AND DX12** via `raster.create_command_encoder()` (a 2-pass scene.raster→transfer.copy
+> graph, scheduled, records the canonical model into the REAL encoder → real draw+copy → correct pixels). The RAF-7
+> architecture now runs on hardware through the canonical encoder path.
+> **NEXT ACTION: the ONE bounded item left in Phase 7** — the 4 frame-graph-shaped kinds (MRT · indirect/indirect-count ·
+> comparison-sampler/shadow · bindless) need COHERENT transient-set allocation (`draw_storage_mrt` provably fails with
+> standalone targets; a backend verb/allocation capability, not the encoder). Add that capability + gate the 4 through
+> the graph. Then **RAF-8** (scene-render → orchestration) · RAF-9 (engine defaults → `engine://`) · RAF-10 (app proof) ·
+> RAF-11 (hot reload) · RAF-12 (delete legacy) · RAF-13 (docs + §22 DoD).
+>
+> **⏸ S4 (REN-41 Nanite cluster-LOD) is PAUSED after S4-0** — it resumes AFTER RAF lands (the cluster mesh path will
+> ride the new asset/command model). **S4-0 is DONE + green both backends (uncommitted in the tree):** the
+> cluster-unpack mesh shader (`ensure_cluster_mesh_program`, a C++ CKIR builder like gpu_skin) renders on Vulkan AND
+> DX12 and its coverage matches the CPU `unpack_selected_clusters` oracle (IoU ≥ 0.97) — the 2 gates in
+> `test_scene_render_gpu.cpp`, scene-render **57/57**, KIR **262/262**, REN-1 **6/6**. It fixed **3 real engine gaps
+> the RAF band inherits** (all elite, cdb-root-caused): (1) `lower_entry` dropped `mesh_prim`/task nodes as DCE roots
+> → dangling operand → OOB in the mesh emitter (found via `cdbX64.exe`); (2) `draw_mesh_storage` had NO synchronous
+> path on EITHER backend (a direct call silently no-op'd) — added both; (3) the gpu-context frame-graph WAR cycle
+> rule was declaration-order not resource-lifetime-aware (ported the frame-cook fix, both backends). Scars:
+> `feedback_lower_entry_must_root_every_entry_value_node_mesh_prim`, `feedback_draw_mesh_storage_had_no_synchronous_path_both_backends`.
+> ⚠ **S4-0 cleanup still pending before its commit:** clang-tidy on the touched files (interrupted by a tool error),
+> and the design-doc/session-log rows. The S4-0 code + gates are green; only tidy + docs remain.
+
+## Historical focus — Phase 3.1.6 **v17 GPU compute (CKIR)** — **REN-41 VISUAL FRONTIER** (on the D-007 REN band)
 
 > ### ⏩ SESSION HANDOFF (2026-08-03, later) — READ THIS FIRST on re-entry
 > **REN-41 "Visual Frontier"** — make Cerid's default rendering fully gold-standard / frontier-2026 / no aliasing

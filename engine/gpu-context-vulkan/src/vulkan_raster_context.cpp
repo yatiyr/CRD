@@ -2046,12 +2046,57 @@ public:
     void draw_mesh_storage(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color,
                            IStorageBuffer& storage, crd::u32 group_count) override
     {
-        auto& t = static_cast<VulkanRasterTarget&>(target);
-        auto& p = static_cast<VulkanRasterProgram&>(program);
+        auto& t  = static_cast<VulkanRasterTarget&>(target);
+        auto& p  = static_cast<VulkanRasterProgram&>(program);
         auto& s2 = static_cast<VulkanStorageBuffer&>(storage);
         if (!m_api.valid() || m_api.draw_mesh_tasks == nullptr || !p.valid() || !p.is_mesh()) { return; }
-        if (!frame_recording()) { return; }
-        record_mesh(t, p, clear_color, group_count, -1, frame_alloc_storage_set(s2));
+        if (frame_recording()) { record_mesh(t, p, clear_color, group_count, -1, frame_alloc_storage_set(s2)); return; }
+        // ── ⭐⭐ REN-41 Stage 4: the SYNCHRONOUS mesh+storage draw (the gate path). `draw_mesh_storage` had only
+        // the frame-recording path, so a direct call no-op'd — every other draw verb has a synchronous form. This
+        // mirrors the synchronous draw_mesh + binds the storage buffer as the set-0 descriptor exactly as the
+        // synchronous draw_storage does, then DispatchMeshTasks + colour readback.
+        if (m_desc_pool == VK_NULL_HANDLE) { return; }
+        vkResetDescriptorPool(m_device, m_desc_pool, 0);
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool     = m_desc_pool;
+        dsai.descriptorSetCount = 1U;
+        dsai.pSetLayouts        = &m_storage_set_layout;
+        VkDescriptorSet dset = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return; }
+        VkDescriptorBufferInfo dbi{s2.buf(), 0, VK_WHOLE_SIZE};
+        VkWriteDescriptorSet   wr{};
+        wr.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wr.dstSet          = dset;
+        wr.dstBinding      = 0U;
+        wr.descriptorCount = 1U;
+        wr.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        wr.pBufferInfo     = &dbi;
+        vkUpdateDescriptorSets(m_device, 1U, &wr, 0U, nullptr);
+
+        VkCommandBuffer cmd = begin_cmd();
+        if (cmd == VK_NULL_HANDLE) { return; }
+        transition(cmd, t.image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
+                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        VkRenderingAttachmentInfo att = colour_clear_attachment(t.view(), clear_color);
+        VkRenderingInfo           ri  = one_colour_rendering(t, att);
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t.width(), t.height(), 1U, false, VK_COMPARE_OP_ALWAYS, 1U, /*mesh_draw=*/true);
+        const VkShaderStageFlagBits vnull[1] = {VK_SHADER_STAGE_VERTEX_BIT};
+        const VkShaderEXT           vnob[1]  = {VK_NULL_HANDLE};
+        m_api.bind(cmd, 1U, vnull, vnob);
+        const VkShaderStageFlagBits tstage[1] = {VK_SHADER_STAGE_TASK_BIT_EXT};
+        const VkShaderEXT           tobj[1]   = {p.has_task() ? p.task() : VK_NULL_HANDLE};
+        m_api.bind(cmd, 1U, tstage, tobj);
+        const VkShaderStageFlagBits mstages[2] = {VK_SHADER_STAGE_MESH_BIT_EXT, VK_SHADER_STAGE_FRAGMENT_BIT};
+        const VkShaderEXT           mobjs[2]   = {p.vs(), p.fs()};
+        m_api.bind(cmd, 2U, mstages, mobjs);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        m_api.draw_mesh_tasks(cmd, group_count, 1U, 1U);
+        vkCmdEndRendering(cmd);
+        copy_colour_to_readback(cmd, t);
+        end_and_wait(cmd);
     }
     void draw_mesh_storage_load(IRasterTarget& target, IRasterProgram& program, IStorageBuffer& storage,
                                 crd::u32 group_count) override

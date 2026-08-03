@@ -8,6 +8,12 @@ add_subdirectory(test_helpers)
 add_subdirectory(core)
 add_subdirectory(vm)
 add_subdirectory(units)
+add_subdirectory(render-asset-core)  # RAF-1 (D-007 "RAF band"): identity/namespaces/diagnostics/deps Gate 1
+add_subdirectory(gpu-context)        # RAF-2a (D-007 "RAF band"): canonical GPU command model (device-free structural gate)
+add_subdirectory(render-program)     # RAF-4 (D-007 "RAF band"): shader + program contract Gate 4
+add_subdirectory(render-material)    # RAF-5 (D-007 "RAF band"): material + technique contract Gate 5
+add_subdirectory(render-pass)        # RAF-6 (D-007 "RAF band"): pass-executor registry Gate 6
+add_subdirectory(render-graph)       # RAF-7 (D-007 "RAF band"): unified frame-graph runtime Gate 7
 add_subdirectory(time)
 add_subdirectory(perf)
 add_subdirectory(perf-ui)

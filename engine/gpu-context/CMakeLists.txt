@@ -18,7 +18,8 @@ target_include_directories(crd-gpu-context
 target_link_libraries(crd-gpu-context
     PUBLIC
         crd-core
-        crd-containers   # ADR-0100: IComputeContext (span/string_view in the dispatch interface)
+        crd-containers        # ADR-0100: IComputeContext (span/string_view in the dispatch interface)
+        crd-render-asset-core # RAF-4: the SHARED BindingFrequency / BindingKind vocabulary (command_model.hpp)
 )
 
 target_compile_features(crd-gpu-context PUBLIC cxx_std_20)

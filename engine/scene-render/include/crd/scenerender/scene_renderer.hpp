@@ -451,6 +451,19 @@ public:
     void set_gpu_cull_verify(bool on) noexcept;
     [[nodiscard]] bool gpu_cull_verify() const noexcept;
 
+    // ⭐⭐ REN-41 Stage 4: draw a device CLUSTER buffer through the Nanite mesh path. `cluster_buf` holds a header
+    // (`view_proj` at word 6 + the kClusterHdr* section offsets) followed by the four 40-I packed arrays; the mesh
+    // shader unpacks ONE cluster per workgroup (dispatch `cluster_count` workgroups) and, for S4-0, self-selects
+    // the level-0 leaves. This is the direct verb the authored frame-graph `mesh_draw` pass (S4-3) builds on
+    // (`draw_mesh_storage`). No-op on a device without mesh shaders. Requires `init_programs`.
+    void draw_clusters(crd::gpu::IRasterTarget& target, crd::gpu::IStorageBuffer& cluster_buf,
+                       crd::u32 cluster_count, crd::gpu::ClearColor clear);
+
+    // ⭐⭐ REN-41 Stage 4: does this device + backend support the cluster (Nanite) mesh path? True iff the cluster
+    // mesh program COOKS — a device with mesh shaders and a working SPIR-V/DXIL mesh emitter. Backend-agnostic
+    // (no per-backend capability query needed at the call site). Call after `init_programs`.
+    [[nodiscard]] bool supports_clusters();
+
     // ⭐⭐ REN-40-F: compute the bone palette ON THE DEVICE instead of on the CPU.
     // Pre-bakes each clip to uniform-rate TRS frames (uploaded once), uploads per-instance
     // (clip_offset, time) per frame (2 words each), and dispatches a compute kernel that

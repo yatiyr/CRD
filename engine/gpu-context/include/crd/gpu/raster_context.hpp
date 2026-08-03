@@ -19,6 +19,7 @@ namespace crd::gpu
 {
 
 class IGpuProgram; // fwd — a raster program is assembled from VS + FS programs (the ADR-0103 currency)
+class ICommandEncoder; // fwd — RAF-2: the canonical command-model recorder (command_model.hpp); factory below
 
 // A clear / attachment colour, linear 0..1.
 struct ClearColor
@@ -1291,6 +1292,16 @@ public:
         bool /*load_target*/, const BlendMode* /*blend*/ = nullptr)
     {
     }
+
+    // ── RAF-2 (D-007 "RAF band"): the CANONICAL command-model ENCODER factory. ───────────────────────────────────
+    // Returns an ICommandEncoder that records the backend-neutral command model (command_model.hpp) — the ONE data
+    // path that replaces the ~53 combinatorial draw_*/dispatch_*/trace_* verbs above. The default (defined in
+    // command_encoder.cpp) returns a TRANSLATING encoder that lowers each RenderingDesc/RasterDrawPacket/
+    // DispatchDesc/TransferDesc/TraceDesc through the verb implementations already on THIS context — so every
+    // backend gains the encoder with ZERO duplicated lowering and produces byte-identical output to the legacy
+    // path. RAF-12 inlines the verb bodies into per-backend encoders and deletes the verbs; until then the encoder
+    // and the verbs are the SAME lowering reached two ways. ⛔ Appended at the END of the vtable (D135).
+    [[nodiscard]] virtual std::unique_ptr<ICommandEncoder> create_command_encoder();
 };
 
 // ⭐ REN-38-A9: a BUILT acceleration structure, behind one portable handle.

@@ -30,9 +30,12 @@
 #include <crd/framecook/viewport.hpp>   // REN-37.10: registry + scheduler driving the loop
 #include <crd/scenerender/scene_renderer.hpp>
 #include <crd/anim/anim_resources.hpp> // REN-40-F: skeleton + clip builders for the GPU skinning gate
+#include <crd/geometry/mesh_processing/cluster_dag_cook.hpp> // REN-41 Stage 4: the packed cluster DAG
+#include <crd/geometry/mesh_processing/cluster_unpack.hpp>   // REN-41 Stage 4: the CPU unpack oracle
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <crd/math/deterministic.hpp> // REN-41 Stage 4: crd::math sin/cos/floor/ceil/abs (NO std math)
 #include <cstring>
 #include <cstdio>  // REN-38-F15: per-run temp root stamp
 #include <cstdlib> // REN-41: std::getenv for CRD_ASSETS_DIR (assets are disk-only now)
@@ -4670,6 +4673,225 @@ TEST_CASE("REN-41 GATE: velocity is zero for static instances and matches the sc
     velocity_gate_body(*vk, *raster);
 }
 
+// ── REN-41 Stage 4 (S4-0): the CLUSTER-MESH UNPACK GATE — the Nanite mesh shader on a real device. ────────────
+// Generate a grid mesh -> cook_cluster_dag -> render the LEAF clusters through the cluster mesh shader
+// (draw_clusters -> draw_mesh_storage) -> compare the DEVICE coverage against the CPU unpack_selected_clusters
+// oracle. The mesh shader self-selects the level-0 leaves, so the device draws exactly the original mesh; the
+// oracle rasterises the same leaf triangles on the CPU. Parity-by-derivation (the 40-A pattern) proves the mesh
+// emitter emits valid SPIR-V/DXIL AND the unpack (cluster_vertices indirection + 4-u8/u32 packed local indices)
+// is byte-correct, on BOTH backends where mesh-shader defects are otherwise SILENT.
+void cluster_mesh_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster)
+{
+    namespace mp = geometry::mesh_processing;
+    memory::TlsfAllocator alloc(32U << 20U);
+
+    // a UV SPHERE — the same real 3D surface the 40-I gate cooks (a flat/coplanar mesh is a degenerate QEM/BVH
+    // input). `slices` x `stacks` grid of quads → ~2·slices·stacks triangles, enough for several meshlet clusters.
+    constexpr u32          slices = 24U;
+    constexpr u32          stacks = 12U;
+    containers::Array<f32> mpos(&alloc);
+    containers::Array<u32> midx(&alloc);
+    for (u32 s = 0; s <= stacks; ++s)
+    {
+        const f32 phi = 3.14159265F * static_cast<f32>(s) / static_cast<f32>(stacks);
+        const f32 sp  = math::deterministic::sin(phi);
+        const f32 cp  = math::deterministic::cos(phi);
+        for (u32 j = 0; j <= slices; ++j)
+        {
+            const f32 theta = 2.0F * 3.14159265F * static_cast<f32>(j) / static_cast<f32>(slices);
+            mpos.push_back(sp * math::deterministic::cos(theta));
+            mpos.push_back(cp);
+            mpos.push_back(sp * math::deterministic::sin(theta));
+        }
+    }
+    const u32 row = slices + 1U;
+    for (u32 s = 0; s < stacks; ++s)
+    {
+        for (u32 j = 0; j < slices; ++j)
+        {
+            const u32 v0 = s * row + j;
+            midx.push_back(v0);       midx.push_back(v0 + row);      midx.push_back(v0 + row + 1U);
+            midx.push_back(v0);       midx.push_back(v0 + row + 1U); midx.push_back(v0 + 1U);
+        }
+    }
+    const u32 mesh_vcount = static_cast<u32>(mpos.size() / 3U);
+
+    mp::ClusterDagCookResult cdag(&alloc);
+    mp::DagBuildOptions      opts;
+    memory::TlsfAllocator    scratch(32U << 20U);
+    const auto rep = mp::cook_cluster_dag(mpos.data(), mesh_vcount, midx.data(), static_cast<u32>(midx.size()), opts,
+                                          cdag, &scratch);
+    REQUIRE(rep.status == mp::ClusterDagCookStatus::Ok);
+    REQUIRE(cdag.cluster_count > 0U);
+
+    // leaves (level 0) + the CPU oracle triangle soup for exactly those clusters.
+    const u32              nclusters = static_cast<u32>(cdag.packed_clusters.size() / mp::kClusterGpuWords);
+    containers::Array<u32> leaves(&alloc);
+    for (u32 c = 0; c < nclusters; ++c)
+    {
+        if ((cdag.packed_clusters[c * mp::kClusterGpuWords + 2U] >> 16U) == 0U) { leaves.push_back(c); }
+    }
+    REQUIRE(leaves.size() > 0U);
+    mp::ClusterUnpackResult oracle(&alloc);
+    mp::unpack_selected_clusters(cdag.packed_clusters.data(), cdag.cluster_vertices.data(),
+                                 cdag.cluster_triangles_packed.data(), cdag.positions.data(), leaves.data(),
+                                 static_cast<u32>(leaves.size()), oracle);
+    REQUIRE(oracle.triangle_count > 0U);
+
+    constexpr u32     dim  = 200U;
+    const math::Mat4f view = math::look_at(math::Vec3f{0.0F, 0.0F, 4.0F}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Mat4f vp   = proj * view;
+
+    // pack the buffer: header (offsets + view_proj @ word 6, column-major) + the four 40-I arrays.
+    const u32 clusters_off  = scenerender::kClusterHeaderWords;
+    const u32 vertices_off  = clusters_off + cdag.cluster_count * mp::kClusterGpuWords;
+    const u32 triangles_off = vertices_off + static_cast<u32>(cdag.cluster_vertices.size());
+    const u32 positions_off = triangles_off + static_cast<u32>(cdag.cluster_triangles_packed.size());
+    const u32 total_words   = positions_off + static_cast<u32>(cdag.positions.size());
+    containers::Array<u32> buf(&alloc);
+    buf.resize(total_words, 0U);
+    buf[scenerender::kClusterHdrClustersOff]  = clusters_off;
+    buf[scenerender::kClusterHdrClusterCount] = cdag.cluster_count;
+    buf[scenerender::kClusterHdrVerticesOff]  = vertices_off;
+    buf[scenerender::kClusterHdrTrianglesOff] = triangles_off;
+    buf[scenerender::kClusterHdrPositionsOff] = positions_off;
+    std::memcpy(&buf[6U], &vp, 16U * 4U); // view_proj column-major, matching Gx::mul_view_proj (header word 6)
+    for (usize i = 0; i < cdag.packed_clusters.size(); ++i) { buf[clusters_off + i] = cdag.packed_clusters[i]; }
+    for (usize i = 0; i < cdag.cluster_vertices.size(); ++i) { buf[vertices_off + i] = cdag.cluster_vertices[i]; }
+    for (usize i = 0; i < cdag.cluster_triangles_packed.size(); ++i)
+    {
+        buf[triangles_off + i] = cdag.cluster_triangles_packed[i];
+    }
+    for (usize i = 0; i < cdag.positions.size(); ++i)
+    {
+        const f32 v = cdag.positions[i];
+        std::memcpy(&buf[positions_off + i], &v, 4U);
+    }
+
+    resources::ResourceManager rm(&galloc());
+    scenerender::SceneRenderer  renderer(&galloc());
+    REQUIRE(renderer.init(raster, rm));
+    if (!renderer.init_programs(ctx)) { SKIP("shader backend unavailable"); }
+    if (!renderer.supports_clusters()) { SKIP("no mesh-shader support on this device"); }
+
+    auto cbuf = raster.create_storage_buffer(total_words * 4U);
+    REQUIRE(cbuf != nullptr);
+    REQUIRE(raster.upload_storage(*cbuf, 0U, buf.data(), total_words * 4U));
+    auto tgt = raster.create_color_target(dim, dim);
+    REQUIRE(tgt != nullptr);
+    renderer.draw_clusters(*tgt, *cbuf, cdag.cluster_count, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F});
+
+    // device coverage A.
+    containers::Array<u8> cov_a(&alloc);
+    cov_a.resize(static_cast<usize>(dim) * dim, 0U);
+    u32 lit = 0U;
+    for (u32 y = 0; y < dim; ++y)
+    {
+        for (u32 x = 0; x < dim; ++x)
+        {
+            if ((tgt->read_pixel(x, y) & 0x00FFFFFFU) != 0U)
+            {
+                cov_a[static_cast<usize>(y) * dim + x] = 1U;
+                ++lit;
+            }
+        }
+    }
+    INFO("clusters=" << cdag.cluster_count << " leaves=" << leaves.size() << " oracle_tris=" << oracle.triangle_count
+                     << " lit=" << lit);
+    CHECK(lit > 200U); // the mesh shader emitted real geometry (a failed/empty mesh shader lights nothing)
+
+    // CPU oracle coverage: rasterise the leaf triangles for BOTH y-conventions, take the best IoU (the UNPACK is
+    // what is under test here, not the viewport orientation — a y-flip is a separate concern).
+    const auto proj_pt = [&](u32 vidx, f32& sx, f32& sy_down, f32& sy_up, bool& ok) {
+        const math::Vec4f clip = vp * math::Vec4f{oracle.positions[vidx * 3U + 0U], oracle.positions[vidx * 3U + 1U],
+                                                  oracle.positions[vidx * 3U + 2U], 1.0F};
+        ok                     = clip.w > 1.0e-6F;
+        const f32 nx           = ok ? clip.x / clip.w : 0.0F;
+        const f32 ny           = ok ? clip.y / clip.w : 0.0F;
+        sx                     = (nx * 0.5F + 0.5F) * static_cast<f32>(dim);
+        sy_down                = (ny * 0.5F + 0.5F) * static_cast<f32>(dim);
+        sy_up                  = (0.5F - ny * 0.5F) * static_cast<f32>(dim);
+    };
+    const auto rasterise = [&](bool y_up, containers::Array<u8>& cov) {
+        cov.resize(static_cast<usize>(dim) * dim, 0U);
+        for (usize t = 0; t < oracle.triangle_count; ++t)
+        {
+            f32  ax, ad, au, bx, bd, bu, cx, cd, cu;
+            bool oa, ob, oc;
+            proj_pt(oracle.triangles[t * 3U + 0U], ax, ad, au, oa);
+            proj_pt(oracle.triangles[t * 3U + 1U], bx, bd, bu, ob);
+            proj_pt(oracle.triangles[t * 3U + 2U], cx, cd, cu, oc);
+            if (!oa || !ob || !oc) { continue; }
+            const f32 ay = y_up ? au : ad, by = y_up ? bu : bd, cy = y_up ? cu : cd;
+            const f32 area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+            if (math::deterministic::abs(area) < 1.0e-9F) { continue; }
+            const f32  inv  = 1.0F / area;
+            const auto lo3  = [](f32 u, f32 v, f32 w) { f32 m = u; if (v < m) { m = v; } if (w < m) { m = w; } return m; };
+            const auto hi3  = [](f32 u, f32 v, f32 w) { f32 m = u; if (v > m) { m = v; } if (w > m) { m = w; } return m; };
+            const int  cap  = static_cast<int>(dim) - 1;
+            int        lx   = static_cast<int>(math::deterministic::floor(lo3(ax, bx, cx)));
+            int        hx   = static_cast<int>(math::deterministic::ceil(hi3(ax, bx, cx)));
+            int        ly   = static_cast<int>(math::deterministic::floor(lo3(ay, by, cy)));
+            int        hy   = static_cast<int>(math::deterministic::ceil(hi3(ay, by, cy)));
+            if (lx < 0) { lx = 0; }
+            if (ly < 0) { ly = 0; }
+            if (hx > cap) { hx = cap; }
+            if (hy > cap) { hy = cap; }
+            for (int yy = ly; yy <= hy; ++yy)
+            {
+                for (int xx = lx; xx <= hx; ++xx)
+                {
+                    const f32 fx = static_cast<f32>(xx) + 0.5F, fy = static_cast<f32>(yy) + 0.5F;
+                    const f32 w0 = ((bx - ax) * (fy - ay) - (by - ay) * (fx - ax)) * inv;
+                    const f32 w1 = ((cx - bx) * (fy - by) - (cy - by) * (fx - bx)) * inv;
+                    const f32 w2 = ((ax - cx) * (fy - cy) - (ay - cy) * (fx - cx)) * inv;
+                    if ((w0 >= 0.0F && w1 >= 0.0F && w2 >= 0.0F) || (w0 <= 0.0F && w1 <= 0.0F && w2 <= 0.0F))
+                    {
+                        cov[static_cast<usize>(yy) * dim + static_cast<usize>(xx)] = 1U;
+                    }
+                }
+            }
+        }
+    };
+    const auto iou = [&](const containers::Array<u8>& b) {
+        u32 inter = 0U, uni = 0U;
+        for (usize i = 0; i < cov_a.size(); ++i)
+        {
+            const bool a = cov_a[i] != 0U, bb = b[i] != 0U;
+            inter += (a && bb) ? 1U : 0U;
+            uni += (a || bb) ? 1U : 0U;
+        }
+        return uni == 0U ? 0.0F : static_cast<f32>(inter) / static_cast<f32>(uni);
+    };
+    containers::Array<u8> cov_down(&alloc);
+    containers::Array<u8> cov_up(&alloc);
+    rasterise(false, cov_down);
+    rasterise(true, cov_up);
+    const f32 iou_d = iou(cov_down);
+    const f32 iou_u = iou(cov_up);
+    INFO("IoU down=" << iou_d << " up=" << iou_u);
+    CHECK((iou_d > iou_u ? iou_d : iou_u) >= 0.97F);
+}
+
+TEST_CASE("REN-41 GATE: the cluster mesh shader unpacks a packed DAG to match the CPU oracle (Vulkan)",
+          "[scene-render][ren41][cluster][nanite][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object() || !vk->mesh_shader())
+    {
+        SKIP("no Vulkan device with mesh-shader support");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+    cluster_mesh_gate_body(*vk, *raster);
+}
+
 #ifdef _WIN32
 TEST_CASE("REN-40-G1 GATE (DX12): depth prepass with shared_depth is pixel-identical to forward-only",
           "[scene-render][ren40][depth-prepass][gpu][dx12]")
@@ -4915,5 +5137,15 @@ TEST_CASE("REN-41 GATE (DX12): velocity is zero for static instances and matches
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     velocity_gate_body(*gctx, *raster); // init_programs may still SKIP inside if dxc/DXIL is unavailable
+}
+
+TEST_CASE("REN-41 GATE (DX12): the cluster mesh shader unpacks a packed DAG to match the CPU oracle",
+          "[scene-render][ren41][cluster][nanite][gpu][dx12]")
+{
+    auto gctx = gpu::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto raster = gpu::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+    cluster_mesh_gate_body(*gctx, *raster); // SKIPs inside if no mesh-shader support / DXIL unavailable
 }
 #endif // _WIN32 (the REN-40-G DX12 gates)

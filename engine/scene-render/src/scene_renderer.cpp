@@ -3437,6 +3437,23 @@ void SceneRenderer::set_gpu_cull(bool on) noexcept
     m_impl->gpu_cull_on = on;
 }
 
+// ⭐⭐ REN-41 Stage 4 (S4-0): render a device cluster buffer through the Nanite mesh path. One mesh workgroup per
+// packed cluster; the shader unpacks its ≤128 tris and self-selects the leaves. Binds `cluster_buf` at set 0 /
+// binding 0 (what the mesh shader's storage loads read) via `draw_mesh_storage`.
+void SceneRenderer::draw_clusters(crd::gpu::IRasterTarget& target, crd::gpu::IStorageBuffer& cluster_buf,
+                                  crd::u32 cluster_count, crd::gpu::ClearColor clear)
+{
+    if (m_impl->raster == nullptr || cluster_count == 0U) { return; }
+    crd::gpu::IRasterProgram* prog = m_impl->ensure_cluster_mesh_program();
+    if (prog == nullptr) { return; } // no mesh-shader support on this device
+    m_impl->raster->draw_mesh_storage(target, *prog, clear, cluster_buf, cluster_count);
+}
+
+bool SceneRenderer::supports_clusters()
+{
+    return m_impl->ensure_cluster_mesh_program() != nullptr;
+}
+
 bool SceneRenderer::gpu_cull() const noexcept
 {
     return m_impl->gpu_cull_on && m_impl->use_indexed;

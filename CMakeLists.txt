@@ -575,6 +575,11 @@ add_subdirectory(engine/hesap-amg)  # v4k; smoothed-aggregation AMG (LinearOp; o
 # crd-geometry-viz must come AFTER crd-draw (its declaration is below) — moved
 # down to engine/eylem-viz neighbourhood. See the second add_subdirectory below.
 add_subdirectory(engine/containers)
+add_subdirectory(engine/render-asset-core)  # RAF-1 (D-007 "RAF band"): canonical render-asset identity/namespaces/diagnostics/deps (deps: core/containers/memory)
+add_subdirectory(engine/render-program)     # RAF-4 (D-007 "RAF band"): the shader + program contract (deps: render-asset-core)
+add_subdirectory(engine/render-material)    # RAF-5 (D-007 "RAF band"): the material + technique contract (deps: render-asset-core, render-program)
+add_subdirectory(engine/render-pass)        # RAF-6 (D-007 "RAF band"): the pass-executor registry (deps: render-asset-core)
+add_subdirectory(engine/render-graph)       # RAF-7 (D-007 "RAF band"): the unified frame-graph runtime (deps: render-asset-core, render-pass, gpu-context)
 add_subdirectory(engine/log)
 add_subdirectory(engine/platform)
 add_subdirectory(engine/app)

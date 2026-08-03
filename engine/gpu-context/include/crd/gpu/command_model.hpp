@@ -1,0 +1,285 @@
+#pragma once
+
+// crd-gpu-context — the canonical, backend-neutral DECLARATIVE GPU command model (RAF-2, mission §7).
+//
+// ONE data model that expresses every raster/compute/transfer/ray-trace command as VALUES, so no new feature ever
+// needs another `draw_*` method and no pass kind grows a central enum. The ~53 combinatorial verbs on IRasterContext
+// (draw_storage_depth · draw_storage_multi_indexed_mrt_indirect · draw_bindless_depth · trace_rays_anyhit · …) all
+// reduce to: a RENDERING SCOPE (typed attachments with load/store/clear/blend) + a RASTER DRAW PACKET (program +
+// binding table + geometry source + a STRONG command variant + state). Both backends lower these DIRECTLY (RAF-2b),
+// and both authored and hand-built graphs record them (RAF-7) — the clear-vs-load and 1-vs-MRT distinctions are DATA,
+// never separate functions.
+//
+// This header REUSES the existing pass-state vocabulary (ClearColor · BlendMode · DepthCompare · PassRasterState ·
+// SamplerDesc · ShadingRate/Combiner · ConservativeMode) and the opaque resource interfaces from raster_context.hpp —
+// it consolidates onto them, it does not duplicate them. Host-side validation (command_model.cpp) checks structural
+// invariants with NO device, and the packet uses FixedArray inline storage so building/validating one allocates
+// NOTHING (the hot-path contract). See docs/design/raf-0-rendering-foundation-design.md §4.
+
+#include <crd/containers/fixed_array.hpp>
+#include <crd/containers/string_view.hpp>
+#include <crd/core/types.hpp>
+#include <crd/gpu/raster_context.hpp> // ClearColor · BlendMode · DepthCompare · PassRasterState · SamplerDesc · ShadingRate* · ConservativeMode · opaque resources
+#include <crd/renderasset/binding.hpp> // the SHARED BindingFrequency / BindingKind (RAF-4) — one definition, not per layer
+
+namespace crd::gpu
+{
+using crd::containers::FixedArray;
+using crd::containers::StringView;
+
+class IGpuProgram; // compute / RT program (fwd)
+
+// Fixed capacities — bounds the D3D12 root-signature / Vulkan descriptor layout and keeps the packet allocation-free.
+inline constexpr crd::u32 kMaxColorAttachments = 8;  // MRT ceiling (both backends)
+inline constexpr crd::u32 kMaxBindings = 16;         // resource bindings per packet
+inline constexpr crd::u32 kMaxBindlessTextures = 8;  // matches the legacy draw_bindless array capacity
+
+// ── Attachment load/store (the clear-vs-load axis, now DATA not two functions) ──
+enum class LoadOp : crd::u8
+{
+    Load = 0,  // preserve prior contents (the "…_load" verb family)
+    Clear,     // clear to the attachment's clear value (the default first-write)
+    DontCare,  // contents undefined on load (a full-overwrite pass)
+};
+enum class StoreOp : crd::u8
+{
+    Store = 0, // keep the result (the default)
+    DontCare,  // result not needed after the pass (a transient depth buffer)
+};
+
+// One colour attachment. `target` is the concrete image (a frame-graph transient or a standalone target); MRT is just
+// N of these. `blend` replaces the per-attachment blend array threaded through draw_storage_mrt.
+struct ColorAttachmentDesc
+{
+    IRasterTarget* target = nullptr;
+    LoadOp load = LoadOp::Clear;
+    StoreOp store = StoreOp::Store;
+    ClearColor clear{};
+    BlendMode blend = BlendMode::Opaque;
+};
+
+// The depth/stencil attachment. `enabled == false` ⇒ no depth attachment (a colour-only pass). Zero colour
+// attachments + enabled depth ⇒ a DEPTH-ONLY pass (the shadow-map substrate — draw_storage_depth_only). `compare`
+// + `depth_test` fold in the DepthCompare argument the verbs carried; stencil + depth_write live in RasterState.
+struct DepthStencilAttachmentDesc
+{
+    IRasterTarget* target = nullptr;
+    bool enabled = false;
+    LoadOp load = LoadOp::Clear;
+    StoreOp store = StoreOp::Store;
+    float clear_depth = 1.0F;
+    bool depth_test = true;
+    DepthCompare compare = DepthCompare::LessEqual;
+};
+
+// The rendering SCOPE: the attachments + render area a set of draws target. Replaces the "which target verb" axis.
+struct RenderingDesc
+{
+    crd::u32 width = 0;
+    crd::u32 height = 0;
+    crd::u32 sample_count = 1; // MSAA (>1 ⇒ multisample + resolve)
+    FixedArray<ColorAttachmentDesc, kMaxColorAttachments> color;
+    DepthStencilAttachmentDesc depth{};
+    IRasterTarget* shading_rate_attachment = nullptr; // optional per-tile VRS source (3rd rate source)
+};
+
+// ── Resource bindings (the hard-coded "set 0 binding 1 = base colour" convention, now a typed table) ──
+// The cooked program contract resolves NAMES to compact slots (RAF-4); here a binding carries its resolved slot +
+// frequency so the recorder never hard-codes a register. One binding = one resource, by kind.
+// The SHARED binding vocabulary (RAF-4) — defined once in render-asset-core, used by both the program contract and
+// this command model. Aliased into crd::gpu so existing `BindingFrequency::Material` / `BindingKind::…` still resolve.
+using crd::renderasset::BindingFrequency;
+using crd::renderasset::BindingKind;
+struct ResourceBinding
+{
+    BindingFrequency frequency = BindingFrequency::Draw;
+    BindingKind kind = BindingKind::StorageBuffer;
+    crd::u32 slot = 0; // compact resolved slot (from the cooked program contract)
+    // Resource — the field matching `kind` is used; the rest stay null/zero.
+    IStorageBuffer* buffer = nullptr;
+    ITexture* texture = nullptr;
+    ITexture* const* texture_array = nullptr; // BindlessTextureArray
+    crd::u32 array_count = 0;                  // BindlessTextureArray element count
+    SamplerDesc sampler{};                     // Sampler / ComparisonSampler
+};
+using ResourceBindingTable = FixedArray<ResourceBinding, kMaxBindings>;
+
+// ── Geometry source (indexed/indirect/count/mesh/tess as DATA, not verb suffixes) ──
+enum class GeometryKind : crd::u8
+{
+    None = 0,        // no pulled geometry (a fullscreen triangle: vertex_or_index_count = 3)
+    StoragePull,     // vertex-pull from a storage buffer; vertex_or_index_count vertices
+    Indexed,         // indexed pull; vertex_or_index_count indices + index_buffer
+    Indirect,        // args from a native buffer; indirect_draw_count draws
+    IndirectCount,   // args + a device count buffer (GPU decides the draw count)
+    Meshlet,         // mesh-shader dispatch; group_count_{x,y,z}
+    MeshletIndirect, // DispatchMeshIndirect from native args
+    Patches,         // tessellation patch list; patch_count × control_points
+};
+struct GeometrySource
+{
+    GeometryKind kind = GeometryKind::StoragePull;
+    crd::u32 vertex_or_index_count = 0;
+    crd::u32 instance_count = 1;
+    // Indexed — indices live in a storage buffer (the pull buffer itself, at index_offset_bytes).
+    IStorageBuffer* index_buffer = nullptr;
+    crd::u32 index_offset = 0; // BYTE offset of the index section
+    // Indirect / IndirectCount / MeshletIndirect. Two arg conventions: a tracked storage buffer (indexed-indirect
+    // + mesh-indirect-buffer) OR a native handle (draw_mesh_indirect from a ComputeBuffer). count_buffer supplies a
+    // device-computed draw count (indexed-indirect-count). Offsets are BYTES; max_draws bounds the indirect draws.
+    IStorageBuffer* args_buffer = nullptr;
+    crd::u64 args_offset = 0;
+    IStorageBuffer* count_buffer = nullptr;
+    crd::u64 count_offset = 0;
+    crd::u32 max_draws = 1;
+    void* native_args = nullptr; // native-handle convention (ComputeBuffer::native_handle())
+    // Meshlet
+    crd::u32 group_count_x = 1;
+    crd::u32 group_count_y = 1;
+    crd::u32 group_count_z = 1;
+    // Patches
+    crd::u32 patch_count = 0;
+    crd::u32 control_points = 4; // quad patch by default
+};
+
+// The STRONG draw-command variant (no boolean bag). Must agree with the geometry kind (validated).
+enum class RasterCommandKind : crd::u8
+{
+    Draw = 0,                 // non-indexed (None / StoragePull)
+    DrawIndexed,              // Indexed
+    DrawIndirect,             // Indirect
+    DrawIndexedIndirect,      // Indirect + Indexed
+    DrawIndexedIndirectCount, // IndirectCount
+    DispatchMesh,             // Meshlet
+    DispatchMeshIndirect,     // MeshletIndirect
+    DrawPatches,              // Patches (tessellation)
+};
+
+// Per-draw raster state — REUSES PassRasterState (depth_write · bias · cull · stencil) + the VRS/conservative axes.
+// (The depth COMPARE op lives on the depth attachment; depth_write stays here because it is pipeline state.)
+struct RasterState
+{
+    PassRasterState raster{};
+    ShadingRate vrs_pipeline_rate = ShadingRate::Rate1x1;
+    ShadingRateCombiner vrs_primitive_combiner = ShadingRateCombiner::Keep;
+    ConservativeMode conservative = ConservativeMode::Off;
+};
+
+// THE canonical raster draw packet. ONE of these expresses every draw_* verb. Recorded inside a RenderingDesc scope;
+// multiple packets can share one scope (batching). Allocation-free (FixedArray bindings).
+struct RasterDrawPacket
+{
+    IRasterProgram* program = nullptr;
+    RasterCommandKind command = RasterCommandKind::Draw;
+    GeometrySource geometry{};
+    ResourceBindingTable bindings{};
+    RasterState state{};
+};
+
+// ── Compute dispatch (dispatch_kernel · _indirect · _rt · _sampled → one desc) ──
+enum class DispatchKind : crd::u8
+{
+    Direct = 0, // groups_{x,y,z}
+    Indirect,   // indirect_args (native {gx,gy,gz})
+};
+struct DispatchDesc
+{
+    IGpuProgram* kernel = nullptr;
+    DispatchKind kind = DispatchKind::Direct;
+    crd::u32 groups_x = 1;
+    crd::u32 groups_y = 1;
+    crd::u32 groups_z = 1;
+    IStorageBuffer* args_buffer = nullptr; // Indirect: the {gx,gy,gz} args (dispatch_kernel_indirect)
+    crd::u64 args_offset = 0;
+    ResourceBindingTable bindings{};
+    bool ray_tracing_pipeline = false; // dispatch_kernel_rt (an RT pipeline via the compute path)
+};
+
+// ── Transfer (clear/copy/blit/resolve) ──
+enum class TransferKind : crd::u8
+{
+    Clear = 0,
+    Copy,
+    Blit,
+    Resolve,
+};
+struct TransferDesc
+{
+    TransferKind kind = TransferKind::Clear;
+    IRasterTarget* dst = nullptr;
+    IRasterTarget* src = nullptr; // Copy / Blit / Resolve
+    ClearColor clear{};           // Clear
+    SamplerFilter filter = SamplerFilter::Linear; // Blit
+};
+
+// ── Ray tracing (trace_rays · _anyhit · _full → one desc) ──
+// The SBT stage programs + the acceleration structure, as data. The encoder selects the backend verb by which
+// optional stages are present: intersection|callable ⇒ full pipeline; else any_hit ⇒ anyhit; else the base trace.
+struct TraceDesc
+{
+    IGpuProgram* raygen = nullptr;      // required
+    IGpuProgram* miss = nullptr;        // required
+    IGpuProgram* closest_hit = nullptr; // required
+    IGpuProgram* any_hit = nullptr;     // optional (alpha-tested geometry)
+    IGpuProgram* intersection = nullptr;// optional (procedural hit group)
+    IGpuProgram* callable = nullptr;    // optional (SBT callable table)
+    IAccelerationStructure* acceleration_structure = nullptr; // required
+    crd::u32 width = 1;
+    crd::u32 height = 1;
+    crd::u32 depth = 1;
+    ResourceBindingTable bindings{};
+};
+
+// The compact command ENCODER both backends implement (RAF-2b) and both authored + hand-built graphs record into
+// (RAF-7). A rendering scope brackets N draw packets; compute/transfer/trace record outside a scope.
+class ICommandEncoder
+{
+public:
+    ICommandEncoder() = default;
+    virtual ~ICommandEncoder() = default;
+    ICommandEncoder(const ICommandEncoder&) = delete;
+    ICommandEncoder& operator=(const ICommandEncoder&) = delete;
+    ICommandEncoder(ICommandEncoder&&) = delete;
+    ICommandEncoder& operator=(ICommandEncoder&&) = delete;
+
+    virtual void begin_rendering(const RenderingDesc& rendering) = 0;
+    virtual void draw(const RasterDrawPacket& packet) = 0; // must be inside an active rendering scope
+    virtual void end_rendering() = 0;
+
+    virtual void dispatch(const DispatchDesc& dispatch) = 0;
+    virtual void transfer(const TransferDesc& transfer) = 0;
+    virtual void trace_rays(const TraceDesc& trace) = 0;
+};
+
+// ── Host-side validation (RAF-2a, pure CPU — no device) ──
+// Structural invariants a backend must be able to trust before lowering. Deterministic; allocation-free.
+enum class CommandError : crd::u8
+{
+    None = 0,
+    NoAttachments,                     // a rendering scope with neither colour nor depth
+    TooManyColorAttachments,           // > kMaxColorAttachments
+    MismatchedAttachmentSize,          // a colour/depth target differs from the render area
+    ZeroRenderArea,                    // width or height is 0
+    NullProgram,                       // packet/dispatch/trace has no program
+    DuplicateBinding,                  // two bindings share (frequency, slot)
+    ComparisonSamplerWithoutTexture,   // a comparison sampler with no sampled texture to pair with
+    BindlessCountExceeded,             // a bindless array with 0 or > kMaxBindlessTextures elements
+    GeometryCommandMismatch,           // command kind disagrees with geometry kind
+    MissingIndexBuffer,                // an indexed command with no index buffer
+    MissingIndirectArgs,               // an indirect command with no args buffer
+    MissingCountBuffer,                // an indirect-count command with no count buffer
+    MissingAccelerationStructure,     // a trace with no acceleration structure
+    ZeroDraw,                          // zero vertices / indices / groups
+};
+
+[[nodiscard]] StringView command_error_name(CommandError err) noexcept;
+
+// Validate a rendering scope (attachment counts, sizes, render area).
+[[nodiscard]] CommandError validate_rendering(const RenderingDesc& rendering) noexcept;
+// Validate a raster draw packet (program, bindings, geometry/command agreement). Does NOT re-check the scope.
+[[nodiscard]] CommandError validate_packet(const RasterDrawPacket& packet) noexcept;
+// Validate a compute dispatch.
+[[nodiscard]] CommandError validate_dispatch(const DispatchDesc& dispatch) noexcept;
+// Validate a ray-trace (required stages + acceleration structure + non-zero dispatch).
+[[nodiscard]] CommandError validate_trace(const TraceDesc& trace) noexcept;
+} // namespace crd::gpu

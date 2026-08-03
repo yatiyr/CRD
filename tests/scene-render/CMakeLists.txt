@@ -14,6 +14,7 @@ target_link_libraries(crd-scene-render-tests PRIVATE
     crd-platform
     crd-geometry-primitives
     crd-geometry-spatial
+    crd-geometry-mesh-processing # REN-41 Stage 4: cook_cluster_dag + unpack_selected_clusters (the cluster-mesh gate oracle)
     crd-scene
     crd-resources
     crd-scene-render

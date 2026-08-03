@@ -106,16 +106,25 @@ inline void lower(KGraph& g, int* roots, int n_roots) { g.optimize(roots, n_root
 // (verified pixel-identical on both backends in tests/gpu-context-*).
 inline void lower_entry(KGraph& g, KEntry& e)
 {
-    int* slots[kMaxStageOutputs + 6];
+    // ⛔⛔ EVERY entry field that names a live value node is a ROOT — `lower`/DCE renumbers the graph and rewrites
+    // these slots in place, so an OMITTED one is left DANGLING (a stale pre-DCE id the emitter later dereferences,
+    // reading a garbage operand off the end of the compacted graph). `mesh_prim` and the task amplification nodes
+    // (`task_emit`, `task_payload[]`) were missing: a MESH entry whose primitive-index subtree is DISJOINT from
+    // `position` — exactly a real Nanite cluster unpack — had its `mesh_prim` DCE'd out from under it. The F6
+    // skeleton never surfaced it (its trivial `mesh_prim` shared `position`'s subtree, so it survived by accident).
+    int* slots[kMaxStageOutputs + 12];
     int  n = 0;
     if (e.position >= 0) { slots[n++] = &e.position; }
     if (e.frag_depth >= 0) { slots[n++] = &e.frag_depth; }
     if (e.discard_cond >= 0) { slots[n++] = &e.discard_cond; }
     if (e.shading_rate >= 0) { slots[n++] = &e.shading_rate; }
+    if (e.mesh_prim >= 0) { slots[n++] = &e.mesh_prim; }         // B4 MESH: the per-primitive local-index triple
+    if (e.task_emit >= 0) { slots[n++] = &e.task_emit; }         // B4 TASK: the mesh-workgroup amplification count
+    for (crd::u32 k = 0; k < e.n_task_payload; ++k) { if (e.task_payload[k] >= 0) { slots[n++] = &e.task_payload[k]; } }
     if (e.storage_write_index >= 0) { slots[n++] = &e.storage_write_index; }
     if (e.storage_write_value >= 0) { slots[n++] = &e.storage_write_value; }
     for (int k = 0; k < e.n_out; ++k) { slots[n++] = &e.out[k].node; }
-    int roots[kMaxStageOutputs + 6];
+    int roots[kMaxStageOutputs + 12];
     for (int i = 0; i < n; ++i) { roots[i] = *slots[i]; }
     lower(g, roots, n);
     for (int i = 0; i < n; ++i) { *slots[i] = roots[i]; }
