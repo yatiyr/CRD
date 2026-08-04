@@ -19,6 +19,18 @@ namespace crd::kir::post
 namespace detail
 {
 [[nodiscard]] inline int kf(KGraph& g, int like, double v) { return g.constant(v, g.node(like).shape, g.node(like).dtype()); }
+// ⛔⛔ RAF-10: a POST color op receives whatever the graph feeds it, and a post graph pipes the SAMPLER result straight
+// in — so `color` is a SAMPLED vec4, not a vec3. A display transform is an RGB operation, so drop the alpha lane ONCE
+// here (rather than at every call site). Without this, an op's internal vec3 math (a hardcoded `g.vec3(...)`, a `dot`
+// against a vec3 coeff) collides with a vec4 operand and lowers to an invalid `mix(vec4, vec3, …)` / `dot(vec4, vec3)`
+// — the shader will not compile and `create_program` returns null, while the CPU oracle stays green (the classic
+// emitter-vs-oracle gap: a valid graph is NOT a valid shader — see the raster-emitter-lag scar family).
+[[nodiscard]] inline int rgb3(KGraph& g, int color)
+{
+    return g.node(color).comps() >= 4
+               ? g.vec3(g.vec_comp(color, 0), g.vec_comp(color, 1), g.vec_comp(color, 2))
+               : color;
+}
 } // namespace detail
 
 // ── B13-c: EXPOSURE (Frostbite EV100) ────────────────────────────────────────────────────────────────────────────────────
@@ -63,11 +75,9 @@ namespace agx_detail
 {
     const auto k     = [&](double v) { return detail::kf(g, color, v); };
     namespace nd     = nodes;
-    // 38-G1: accept a SAMPLED vec4 too (a post graph feeds the sampler result straight in) — AgX is an RGB
-    // transform, so the alpha lane is dropped here rather than at every call site.
-    const int  rgb   = g.node(color).comps() >= 4
-                           ? g.vec3(g.vec_comp(color, 0), g.vec_comp(color, 1), g.vec_comp(color, 2))
-                           : color;
+    // 38-G1 / RAF-10: accept a SAMPLED vec4 too (a post graph feeds the sampler result straight in). AgX is an RGB
+    // transform, so the alpha lane is dropped here rather than at every call site — the shared post-color guard.
+    const int  rgb   = detail::rgb3(g, color);
     // AgX inset matrix as ROW dot products — identical math to the mat3 multiply, in ops every stage lowers
     // (the raster FS emitter has no MatVecMul arm; a display transform must run exactly there).
     const auto kk    = [&](double v) { return detail::kf(g, rgb, v); };
@@ -98,13 +108,14 @@ namespace agx_detail
 {
     namespace nd  = nodes;
     const auto ks = [&](int like, double v) { return detail::kf(g, like, v); };
-    const int  r   = g.swizzle(color, 0);
-    const int  gc  = g.swizzle(color, 1);
-    const int  b   = g.swizzle(color, 2);
+    const int  rgb = detail::rgb3(g, color);                             // ⛔ RAF-10: drop a sampled vec4's alpha to vec3
+    const int  r   = g.swizzle(rgb, 0);
+    const int  gc  = g.swizzle(rgb, 1);
+    const int  b   = g.swizzle(rgb, 2);
     const int  x   = g.binary(KOp::Min, r, g.binary(KOp::Min, gc, b));   // min channel (scalar)
     // offset = x < 0.08 ? x − 6.25·x² : 0.04
     const int  offset = g.select(g.binary(KOp::CmpLt, x, ks(x, 0.08)), g.binary(KOp::Sub, x, g.binary(KOp::Mul, ks(x, 6.25), g.binary(KOp::Mul, x, x))), ks(x, 0.04));
-    const int  col1   = nd::detail::bin(g, KOp::Sub, color, offset);     // color − offset (vec3 − scalar)
+    const int  col1   = nd::detail::bin(g, KOp::Sub, rgb, offset);       // rgb − offset (vec3 − scalar)
     const int  peak   = g.binary(KOp::Max, g.swizzle(col1, 0), g.binary(KOp::Max, g.swizzle(col1, 1), g.swizzle(col1, 2)));
     const double start_c = 0.8 - 0.04; const double dd = 1.0 - start_c;    // 0.76, 0.24
     // new_peak = 1 − d²/(peak + d − start_c)
@@ -150,10 +161,11 @@ namespace agx_detail
 {
     namespace nd    = nodes;
     const auto k    = [&](int like, double v) { return detail::kf(g, like, v); };
-    const int  luma = g.dot(color, g.vec3(k(color, 0.2126), k(color, 0.7152), k(color, 0.0722))); // Rec.709 luma (scalar)
-    const int  peak = g.binary(KOp::Max, g.swizzle(color, 0), g.binary(KOp::Max, g.swizzle(color, 1), g.swizzle(color, 2)));
+    const int  rgb  = detail::rgb3(g, color);                            // ⛔ RAF-10: drop a sampled vec4's alpha to vec3
+    const int  luma = g.dot(rgb, g.vec3(k(rgb, 0.2126), k(rgb, 0.7152), k(rgb, 0.0722))); // Rec.709 luma (scalar)
+    const int  peak = g.binary(KOp::Max, g.swizzle(rgb, 0), g.binary(KOp::Max, g.swizzle(rgb, 1), g.swizzle(rgb, 2)));
     const int  over = nodes::clamp01(g, g.binary(KOp::Mul, g.binary(KOp::Sub, peak, k(peak, 1.0)), amount)); // how far over gamut, scaled
-    return nd::detail::bin(g, KOp::Add, nd::detail::bin(g, KOp::Mul, color, g.binary(KOp::Sub, k(over, 1.0), over)), nd::detail::bin(g, KOp::Mul, g.splat(luma, 3), over)); // mix(color, luma, over)
+    return nd::detail::bin(g, KOp::Add, nd::detail::bin(g, KOp::Mul, rgb, g.binary(KOp::Sub, k(over, 1.0), over)), nd::detail::bin(g, KOp::Mul, g.splat(luma, 3), over)); // mix(rgb, luma, over)
 }
 
 } // namespace crd::kir::post

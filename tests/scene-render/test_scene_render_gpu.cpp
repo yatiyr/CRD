@@ -28,6 +28,8 @@
 #include <crd/framecook/frame_asset.hpp>
 #include <crd/framecook/frame_runtime.hpp>
 #include <crd/framecook/viewport.hpp>   // REN-37.10: registry + scheduler driving the loop
+#include <crd/kir/ckir.hpp>             // RAF-10: KGraph/KEntry to create_program a cooked post graph on-device
+#include <crd/matcook/material_asset.hpp> // RAF-10: parse_post_toml/cook_post_graph for the CKIR-lowering gate
 #include <crd/scenerender/scene_renderer.hpp>
 #include <crd/anim/anim_resources.hpp> // REN-40-F: skeleton + clip builders for the GPU skinning gate
 #include <crd/geometry/mesh_processing/cluster_dag_cook.hpp> // REN-41 Stage 4: the packed cluster DAG
@@ -2504,6 +2506,98 @@ shader = "%s"
 }
 #endif // _WIN32
 
+// ── ⭐⭐ RAF-10 GATE: every POST tonemap op LOWERS TO A REAL SHADER from a SAMPLED (vec4) input. ──────────────────
+// ⛔⛔ THE SCAR THIS EXISTS FOR: a post graph pipes the sampler result straight into the tonemap, so the op receives a
+// vec4 (RGBA), not a vec3. `agx`/`srgb_encode` handled that; `pbr_neutral`/`saturate`/`gamut_compress` did NOT — their
+// internal vec3 math collided with the vec4 operand and lowered to an invalid `mix(vec4, vec3, …)` / `dot(vec4, vec3)`,
+// so `create_program` returned null (a green CPU oracle, an uncompilable shader — the emitter-vs-oracle gap). The CPU
+// `ckir_post` oracle CANNOT catch this; only a real GPU compile can — hence a device gate on BOTH backends.
+namespace
+{
+// cook a POST `.crdp` (`sample2d` → op → srgb) exactly as `ensure_post_program_named` does, then create the fragment
+// program on the device. Returns false if the op cannot lower to a valid shader.
+[[nodiscard]] bool post_op_lowers(gpu::IGpuContext& ctx, const char* crdp)
+{
+    auto*                     a = &galloc();
+    matcook::MaterialDesc     pdesc(a);
+    containers::String        where(a);
+    if (matcook::parse_post_toml(containers::StringView(crdp), pdesc, &where) != matcook::MaterialCookError::Ok)
+    {
+        return false;
+    }
+    kir::KGraph g(a);
+    const int   out = matcook::cook_post_graph(pdesc, g, &where);
+    if (out < 0) { return false; }
+    const auto  sh1  = kir::make_shape({1});
+    const int   onef = g.constant(1.0, sh1, kir::DType::F32);
+    kir::KEntry fe;
+    fe.stage  = kir::KStage::Fragment;
+    fe.n_out  = 1;
+    fe.out[0] = {g.vec4(g.vec_comp(out, 0), g.vec_comp(out, 1), g.vec_comp(out, 2), onef), 0};
+    return ctx.create_program(g, fe) != nullptr;
+}
+// one authored post asset per op — the SAMPLED vec4 (`scene`) fed straight into the tonemap (the failing shape).
+constexpr const char* kPostSrgb = "schema=1\nname=\"crd://post/t_srgb\"\n"
+    "[[node]]\nname=\"uv\"\nop=\"texcoord\"\ninputs=[0]\n"
+    "[[node]]\nname=\"scene\"\nop=\"sample2d\"\ninputs=[\"uv\",0,1,2]\n"
+    "[[node]]\nname=\"output\"\nop=\"srgb_encode\"\ninputs=[\"scene\"]\n";
+constexpr const char* kPostAgx = "schema=1\nname=\"crd://post/t_agx\"\n"
+    "[[node]]\nname=\"uv\"\nop=\"texcoord\"\ninputs=[0]\n"
+    "[[node]]\nname=\"scene\"\nop=\"sample2d\"\ninputs=[\"uv\",0,1,2]\n"
+    "[[node]]\nname=\"g\"\nop=\"agx\"\ninputs=[\"scene\"]\n"
+    "[[node]]\nname=\"output\"\nop=\"srgb_encode\"\ninputs=[\"g\"]\n";
+constexpr const char* kPostPbr = "schema=1\nname=\"crd://post/t_pbr\"\n"
+    "[[node]]\nname=\"uv\"\nop=\"texcoord\"\ninputs=[0]\n"
+    "[[node]]\nname=\"scene\"\nop=\"sample2d\"\ninputs=[\"uv\",0,1,2]\n"
+    "[[node]]\nname=\"g\"\nop=\"pbr_neutral\"\ninputs=[\"scene\"]\n"
+    "[[node]]\nname=\"output\"\nop=\"srgb_encode\"\ninputs=[\"g\"]\n";
+constexpr const char* kPostSat = "schema=1\nname=\"crd://post/t_sat\"\n"
+    "[[node]]\nname=\"uv\"\nop=\"texcoord\"\ninputs=[0]\n"
+    "[[node]]\nname=\"scene\"\nop=\"sample2d\"\ninputs=[\"uv\",0,1,2]\n"
+    "[[node]]\nname=\"g\"\nop=\"saturate\"\ninputs=[\"scene\",1.4]\n"
+    "[[node]]\nname=\"output\"\nop=\"srgb_encode\"\ninputs=[\"g\"]\n";
+constexpr const char* kPostGamut = "schema=1\nname=\"crd://post/t_gamut\"\n"
+    "[[node]]\nname=\"uv\"\nop=\"texcoord\"\ninputs=[0]\n"
+    "[[node]]\nname=\"scene\"\nop=\"sample2d\"\ninputs=[\"uv\",0,1,2]\n"
+    "[[node]]\nname=\"g\"\nop=\"gamut_compress\"\ninputs=[\"scene\",0.5]\n"
+    "[[node]]\nname=\"output\"\nop=\"srgb_encode\"\ninputs=[\"g\"]\n";
+
+void check_post_ops_lower(gpu::IGpuContext& ctx)
+{
+    CHECK(post_op_lowers(ctx, kPostSrgb));  // controls — always lowered
+    CHECK(post_op_lowers(ctx, kPostAgx));
+    CHECK(post_op_lowers(ctx, kPostPbr));   // RAF-10 fix: vec4-sampled input drops alpha to vec3
+    CHECK(post_op_lowers(ctx, kPostSat));
+    CHECK(post_op_lowers(ctx, kPostGamut));
+}
+} // namespace
+
+TEST_CASE("RAF-10 GATE: every post tonemap op lowers from a sampled vec4 (Vulkan)",
+          "[scene-render][raf10][post][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    check_post_ops_lower(*vk);
+}
+
+#ifdef _WIN32
+TEST_CASE("RAF-10 GATE (DX12): every post tonemap op lowers from a sampled vec4",
+          "[scene-render][raf10][post][gpu][dx12]")
+{
+    auto gctx = gpu::create_dx12_gpu_context();
+    if (gctx == nullptr) { SKIP("no D3D12 device"); }
+    check_post_ops_lower(*gctx);
+}
+#endif // _WIN32
+
 // ── ⭐⭐ REN-38 GATE: THE FRAME LOOP SURVIVES. 64 consecutive renders, every one drawing. ─────────────────
 // ⛔⛔ THE SCAR THIS EXISTS FOR: `FrameRecorder` hands out one PassRec block per `record()` from a ring of
 // 32 and `begin_frame()` is what returns them — and NOTHING CALLED IT. The counter climbed one per frame, so
@@ -2648,23 +2742,25 @@ TEST_CASE("REN-39-C1 GATE: pull and indexed scene frames are bit-identical, and 
     auto ref = raster->create_color_depth_target(256U, 256U);
     REQUIRE(ref != nullptr);
     renderer.set_indexed_pull(false);
-    const crd::u64 pull_before = raster->multi_batch_count();
+    const crd::u64 pull_before = raster->multi_indexed_batch_count();
     const auto r_pull = renderer.render(*ref, proj * view, light, clear, nullptr);
     CHECK(r_pull.draws == 2U);
-    const crd::u64 pull_batches = raster->multi_batch_count() - pull_before;
+    const crd::u64 pull_batches = raster->multi_indexed_batch_count() - pull_before;
 
     // ── the INDEXED frame ──
     auto tgt = raster->create_color_depth_target(256U, 256U);
     REQUIRE(tgt != nullptr);
     renderer.set_indexed_pull(true);
-    const crd::u64 idx_before = raster->multi_batch_count();
+    const crd::u64 idx_before = raster->multi_indexed_batch_count();
     const auto r_idx = renderer.render(*tgt, proj * view, light, clear, nullptr);
     CHECK(r_idx.draws == 2U);
-    const crd::u64 idx_batches = raster->multi_batch_count() - idx_before;
+    const crd::u64 idx_batches = raster->multi_indexed_batch_count() - idx_before;
 
-    // (b) the switch ACTUALLY switched: the shadowed pull frame records zero multi batches; the indexed frame
-    // records one per cascade run + the forward runs — the probe "ignored the switch" cannot fake
-    INFO("pull batches=" << pull_batches << " indexed batches=" << idx_batches);
+    // (b) the switch ACTUALLY switched: the shadowed pull frame records zero INDEX-BUFFER batches (it draws
+    // non-indexed, via draw_storage_multi_depth_only for the cascades); the indexed frame records one indexed batch
+    // per cascade run + the forward runs — the probe "ignored the switch" cannot fake. (Both modes now batch the
+    // cascades — REN-39-C1 fixed the pull depth-only draw — so INDEXED batches, not total, is what tells them apart.)
+    INFO("pull indexed-batches=" << pull_batches << " indexed indexed-batches=" << idx_batches);
     CHECK(pull_batches == 0U);
     CHECK(idx_batches >= 5U);
 
@@ -2903,21 +2999,23 @@ TEST_CASE("REN-39-C1 GATE (DX12): pull and indexed scene frames are bit-identica
     auto ref = raster->create_color_depth_target(256U, 256U);
     REQUIRE(ref != nullptr);
     renderer.set_indexed_pull(false);
-    const crd::u64 pull_before = raster->multi_batch_count();
+    const crd::u64 pull_before = raster->multi_indexed_batch_count();
     CHECK(renderer.render(*ref, proj * view, light, clear, nullptr).draws == 2U);
-    const crd::u64 pull_batches = raster->multi_batch_count() - pull_before;
+    const crd::u64 pull_batches = raster->multi_indexed_batch_count() - pull_before;
 
     auto tgt = raster->create_color_depth_target(256U, 256U);
     REQUIRE(tgt != nullptr);
     renderer.set_indexed_pull(true);
-    const crd::u64 idx_before = raster->multi_batch_count();
+    const crd::u64 idx_before = raster->multi_indexed_batch_count();
     CHECK(renderer.render(*tgt, proj * view, light, clear, nullptr).draws == 2U);
-    const crd::u64 idx_batches = raster->multi_batch_count() - idx_before;
+    const crd::u64 idx_batches = raster->multi_indexed_batch_count() - idx_before;
 
-    INFO("pull batches=" << pull_batches << " indexed batches=" << idx_batches);
+    INFO("pull indexed-batches=" << pull_batches << " indexed indexed-batches=" << idx_batches);
     if (shadows)
     {
-        CHECK(pull_batches == 0U); // shadowed pull = classic verbs only
+        // REN-39-C1: both modes batch the cascades now; the INDEX-BUFFER subset is what tells them apart — pull draws
+        // non-indexed (draw_storage_multi_depth_only), indexed draws with an index buffer.
+        CHECK(pull_batches == 0U); // shadowed pull = non-indexed verbs only
         CHECK(idx_batches >= 5U);  // 4 cascade runs + the forward runs, all indexed batches
     }
 

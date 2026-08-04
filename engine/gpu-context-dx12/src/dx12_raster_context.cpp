@@ -3675,6 +3675,7 @@ public:
     }
 
     [[nodiscard]] crd::u64 multi_batch_count() const noexcept override { return m_multi_batches; }
+    [[nodiscard]] crd::u64 multi_indexed_batch_count() const noexcept override { return m_multi_indexed_batches; }
 
     // lazily build the args ring + the {ROOT_CONSTANT(b7), DRAW} command signature. ⛔ A signature containing a
     // root-constant argument must be created AGAINST the root signature it patches, so the cache is keyed on it
@@ -3885,6 +3886,7 @@ public:
         m_list->ExecuteIndirect(m_multi_idx_sig.Get(), n, m_multi_idx_args.Get(), offset, nullptr, 0);
         frame_transition(s.buf(), kIndexedDrawStates, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         ++m_multi_batches;
+        ++m_multi_indexed_batches; // REN-39-C1: indexed
     }
 
     // ── ⭐⭐ REN-39-C1: INDEXED DEPTH-ONLY MULTI-DRAW (see IRasterContext) — the cascade pass's indexed form.
@@ -3965,6 +3967,7 @@ public:
         m_list->ExecuteIndirect(m_multi_idx_sig.Get(), n, m_multi_idx_args.Get(), offset, nullptr, 0);
         frame_transition(s.buf(), kIndexedDrawStates, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         ++m_multi_batches;
+        ++m_multi_indexed_batches; // REN-39-C1: indexed
     }
 
     // ── ⭐⭐ REN-39-C1: the INDEXED SAMPLED scene draw (see IRasterContext) — record_scene_textured's binding
@@ -4247,6 +4250,7 @@ public:
         m_list->ExecuteIndirect(m_multi_idx_sig.Get(), max_draws, a.buf(), args_offset_bytes,
                                 cb != nullptr ? cb->buf() : nullptr, cb != nullptr ? count_offset_bytes : 0U);
         ++m_multi_batches;
+        ++m_multi_indexed_batches; // REN-39-C1: indexed
     }
 
     void draw_storage_multi_indexed_depth_only_indirect(IRasterTarget& target, IRasterProgram& program,
@@ -4324,6 +4328,7 @@ public:
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         frame_transition(s.buf(), kIndexedDrawStates, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         ++m_multi_batches;
+        ++m_multi_indexed_batches; // REN-39-C1: indexed
     }
 
     // ── ⭐⭐ REN-41: the GPU-DRIVEN MRT DRAW (see IRasterContext). draw_storage_mrt's N-RTV + shared-depth binding
@@ -4410,6 +4415,7 @@ public:
         frame_transition(a.buf(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         frame_transition(s.buf(), kIndexedDrawStates, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         ++m_multi_batches;
+        ++m_multi_indexed_batches; // REN-39-C1: indexed
     }
 
     // ── ⭐⭐ REN-41: the CPU-DRIVEN indexed MRT draw (see IRasterContext). draw_storage_indexed_sampled_depth's
@@ -6804,6 +6810,7 @@ private:
     crd::u8*                           m_multi_map    = nullptr;
     crd::u32                           m_multi_cursor = 0U;
     crd::u64                           m_multi_batches = 0U;
+    crd::u64                           m_multi_indexed_batches = 0U; // REN-39-C1: the index-buffer subset of m_multi_batches
     // ── ⭐⭐ REN-39-A2 INDEXED MULTI-DRAW: the {ROOT_CONSTANT(b7), DRAW_INDEXED} signature + its own args
     // ring. Stride = 4 (DrawIndex constant) + 20 (D3D12_DRAW_INDEXED_ARGUMENTS) = 24 bytes per command. A
     // second ring rather than a shared one so neither command type's chunk arithmetic depends on the other's.

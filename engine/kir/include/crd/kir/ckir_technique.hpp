@@ -1103,11 +1103,15 @@ inline constexpr TechniqueOption kForwardCsmOptions[] = {
     const auto sh1 = make_shape({1});
     const auto kf  = [&](double v) { return g.constant(v, sh1, DType::F32); };
     const int  uv  = g.stage_in(KType::vec(DType::F32, 2), 0, Interp::Smooth);
-    // the atlas texture at (0,1) — where a fullscreen pass's single read is bound — through the PLAIN depth
-    // sampler at (0,6): the executor binds the COMPARISON sampler at (0,2) for a depth read, and a comparison
-    // sampler cannot return the stored value (the PCSS scar, verbatim).
-    const int tex  = g.texture(0, 1, DType::F32, TexDim::Tex2D, /*arrayed=*/true, /*ms=*/false, /*shadow=*/true);
-    const int samp = g.sampler(0, 6, /*shadow=*/false);
+    // ⛔⛔ REN-40-D: this is a FULLSCREEN pass, so its single read rides the fullscreen sampler seam — texture at
+    // (0,1) + PLAIN sampler at (0,2), EXACTLY as `body_hzb_build` and `body_moment_blur` declare. (The scene
+    // forward's PCSS blocker search reads its plain sampler at (0,6), but that seam is bound by the SCENE
+    // executor, not the fullscreen one — a convert copying it left (0,6) unbound and sampled 0 → every moment
+    // shadow rendered black.) The COMPARISON sampler the executor would otherwise bind for a depth read (a
+    // comparison sampler cannot return the stored value — the PCSS scar) is suppressed by the pass's
+    // `depth_as_float = true`, which routes the read through draw_textured's plain sampler at (0,2).
+    const int tex  = g.texture(0, 1, DType::F32, TexDim::Tex2D, /*arrayed=*/true, /*ms=*/false, /*shadow=*/false);
+    const int samp = g.sampler(0, 2, /*shadow=*/false);
     const int d    = g.swizzle(g.tex_sample(tex, samp, g.vec3(g.swizzle(uv, 0), g.swizzle(uv, 1),
                                                               kf(static_cast<double>(layer)))), 0);
     const auto mul = [&](int a, int b) { return g.binary(KOp::Mul, a, b); };

@@ -3943,6 +3943,80 @@ public:
         vkCmdEndRendering(cmd);
     }
 
+    // ⭐⭐ REN-39-C1: the DEPTH-ONLY non-indexed multi-draw — the PULL cascade batch (a run of shadow-cascade items
+    // into depth ALONE). The exact twin of `draw_storage_multi_depth` but with NO colour attachment, the way
+    // `draw_storage_multi_indexed_depth_only` is the depth-only twin of `draw_storage_multi_indexed_depth`.
+    // ⛔⛔ THE GAP THIS FILLS (found by the pull/indexed parity gate): the command encoder routed a MultiStoragePull
+    // into `draw_storage_multi_depth`, which REQUIRES a colour target — so a depth-only pull cascade (`color0 == null`)
+    // drew NOTHING, the atlas was never cleared or written, and every surface self-shadowed to black. Indexed is the
+    // default, so nothing exercised the non-indexed depth-only path until this gate flipped the switch.
+    void draw_storage_multi_depth_only(IRasterTarget& target, IRasterProgram& program, float clear_depth,
+                                       DepthCompare compare, IStorageBuffer& storage, const crd::u32* vertex_counts,
+                                       crd::u32 count, crd::u32 first_draw_index, bool load_target) override
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        auto& s = static_cast<VulkanStorageBuffer&>(storage);
+        if (!m_api.valid() || !p.valid() || count == 0U || vertex_counts == nullptr || !t.has_depth()) { return; }
+        const crd::u32 n = count < kMultiMax ? count : kMultiMax;
+        if (!frame_recording() || !ensure_multi_args())
+        {
+            // the sync fallback serves index-free programs — a per-item loop preserving the clear-once/load-rest rule.
+            for (crd::u32 i = 0; i < n; ++i)
+            {
+                if (i == 0U && !load_target) { draw_storage_depth_only(target, program, clear_depth, compare, storage, vertex_counts[i]); }
+                else { draw_storage_depth_only_load(target, program, compare, storage, vertex_counts[i]); }
+            }
+            return;
+        }
+        VkCommandBuffer cmd  = m_frame_rec.cmd;
+        VkDescriptorSet dset = frame_alloc_storage_set(s);
+        if (dset == VK_NULL_HANDLE) { return; }
+        const crd::u32     chunk  = m_multi_cursor % kMultiChunks;
+        m_multi_cursor            = (m_multi_cursor + 1U) % kMultiChunks;
+        const VkDeviceSize offset = static_cast<VkDeviceSize>(chunk) * kMultiMax * sizeof(VkDrawIndirectCommand);
+        auto* args = reinterpret_cast<VkDrawIndirectCommand*>(static_cast<char*>(m_multi_map) + offset);
+        for (crd::u32 i = 0; i < n; ++i) { args[i] = VkDrawIndirectCommand{vertex_counts[i], 1U, 0U, 0U}; }
+        VkRenderingAttachmentInfo dep{};
+        dep.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        dep.imageView   = t.depth_view();
+        dep.imageLayout = t.depth_attach_layout();
+        dep.loadOp      = (load_target || m_next_load_depth) ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        m_next_load_depth = false;
+        dep.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+        if (!load_target) { dep.clearValue.depthStencil.depth = clear_depth; }
+        VkRenderingInfo ri{};
+        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent    = {t.width(), t.height()};
+        ri.layerCount           = 1U;
+        ri.colorAttachmentCount = 0U; // ⛔ the whole point: NO colour attachment is bound
+        ri.pColorAttachments    = nullptr;
+        ri.pDepthAttachment     = &dep;
+        if (t.has_stencil()) { dep.clearValue.depthStencil.stencil = 0U; ri.pStencilAttachment = &dep; }
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t.width(), t.height(), 1U, true, to_vk_compare(compare), 0U);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        vkCmdPushConstants(cmd, p.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0U, 4U, &first_draw_index);
+        const VkShaderStageFlagBits stages[2] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
+        const VkShaderEXT           objs[2]   = {p.vs(), p.fs()};
+        m_api.bind(cmd, 2U, stages, objs);
+        if (m_ctx->multi_draw_indirect())
+        {
+            vkCmdDrawIndirect(cmd, m_multi_args, offset, n, sizeof(VkDrawIndirectCommand));
+        }
+        else
+        {
+            for (crd::u32 i = 0; i < n; ++i)
+            {
+                const crd::u32 di = first_draw_index + i;
+                vkCmdPushConstants(cmd, p.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0U, 4U, &di);
+                vkCmdDraw(cmd, vertex_counts[i], 1U, 0U, 0U);
+            }
+        }
+        ++m_multi_batches;
+        vkCmdEndRendering(cmd);
+    }
+
     // ── ⭐⭐ REN-39-A2: INDEXED MULTI-DRAW (see IRasterContext) — ONE vkCmdDrawIndexedIndirect over N commands,
     // the scene buffer bound ONCE as its own index buffer. The DrawIndex channel is unchanged (push constant =
     // first_draw_index, gl_DrawID counts commands); firstInstance/vertexOffset are ALWAYS 0 in the ring entries
@@ -4059,6 +4133,7 @@ public:
             }
         }
         ++m_multi_batches;
+        ++m_multi_indexed_batches; // REN-39-C1: this batch used an index buffer (indexed pull)
         vkCmdEndRendering(cmd);
     }
 
@@ -4156,6 +4231,7 @@ public:
             }
         }
         ++m_multi_batches;
+        ++m_multi_indexed_batches; // REN-39-C1: indexed
         vkCmdEndRendering(cmd);
     }
 
@@ -4250,6 +4326,7 @@ public:
                                      sizeof(VkDrawIndexedIndirectCommand));
         }
         ++m_multi_batches;
+        ++m_multi_indexed_batches; // REN-39-C1: indexed
         vkCmdEndRendering(cmd);
     }
 
@@ -4549,6 +4626,7 @@ public:
             vkCmdDrawIndexedIndirect(cmd, a.buf(), args_offset_bytes, max_draws, sizeof(VkDrawIndexedIndirectCommand));
         }
         ++m_multi_batches;
+        ++m_multi_indexed_batches; // REN-39-C1: indexed
         vkCmdEndRendering(cmd);
     }
 
@@ -7395,11 +7473,13 @@ private:
     void*          m_multi_map    = nullptr;
     crd::u32       m_multi_cursor = 0U;
     crd::u64       m_multi_batches = 0U;
+    crd::u64       m_multi_indexed_batches = 0U; // REN-39-C1: the index-buffer subset of m_multi_batches
     crd::u64       m_compute_dispatches = 0U;
     crd::u64       m_compute_diag[12]{};
 
 public:
     [[nodiscard]] crd::u64 multi_batch_count() const noexcept override { return m_multi_batches; }
+    [[nodiscard]] crd::u64 multi_indexed_batch_count() const noexcept override { return m_multi_indexed_batches; }
     [[nodiscard]] crd::u64 compute_dispatch_count() const noexcept override { return m_compute_dispatches; }
     void compute_diag(crd::u32 phase) noexcept override { if (phase < 12U) ++m_compute_diag[phase]; }
     [[nodiscard]] crd::u64 compute_diag_count(crd::u32 phase) const noexcept override { return phase < 12U ? m_compute_diag[phase] : 0U; }

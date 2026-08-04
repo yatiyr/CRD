@@ -999,6 +999,10 @@ public:
     // REN-38: how many MULTI-DRAW batches this context has recorded (monotonic). The batching gates assert a
     // DELTA of exactly one batch per bucket — pixels alone cannot distinguish "batched" from "looped".
     [[nodiscard]] virtual crd::u64 multi_batch_count() const noexcept { return 0U; }
+    // ⭐⭐ REN-39-C1: the subset of `multi_batch_count` that used an INDEX BUFFER (the indexed-pull verbs). Both pull
+    // and indexed cascades batch now (both push the DrawIndex row), so total batches no longer tells the modes apart —
+    // this counter does: indexed pull records these, non-indexed pull records ZERO of them.
+    [[nodiscard]] virtual crd::u64 multi_indexed_batch_count() const noexcept { return 0U; }
     [[nodiscard]] virtual crd::u64 compute_dispatch_count() const noexcept { return 0U; }
     virtual void compute_diag(crd::u32 phase) noexcept { (void)phase; }
     [[nodiscard]] virtual crd::u64 compute_diag_count(crd::u32 phase) const noexcept { (void)phase; return 0U; }
@@ -1014,6 +1018,25 @@ public:
                 draw_storage_depth(target, program, clear, clear_depth, compare, storage, vertex_counts[i]);
             }
             else { draw_storage_depth_load(target, program, compare, storage, vertex_counts[i]); }
+        }
+    }
+    // ⭐⭐ REN-39-C1: the DEPTH-ONLY twin of `draw_storage_multi_depth` (NO colour attachment) — the PULL shadow-cascade
+    // batch. ⛔ THE GAP THIS FILLS: the command encoder routed a depth-only MultiStoragePull into the colour verb
+    // above, which needs a colour target, so a pull cascade (color0 == null) drew NOTHING and the atlas self-shadowed
+    // to black. The default serves index-free programs (clear-once/load-rest); a backend a DrawIndex-reading (rebasing)
+    // program runs on MUST override to push `first_draw_index`, exactly as the colour twin does.
+    virtual void draw_storage_multi_depth_only(IRasterTarget& target, IRasterProgram& program, float clear_depth,
+                                               DepthCompare compare, IStorageBuffer& storage,
+                                               const crd::u32* vertex_counts, crd::u32 count,
+                                               crd::u32 /*first_draw_index*/, bool load_target)
+    {
+        for (crd::u32 i = 0; i < count; ++i)
+        {
+            if (i == 0U && !load_target)
+            {
+                draw_storage_depth_only(target, program, clear_depth, compare, storage, vertex_counts[i]);
+            }
+            else { draw_storage_depth_only_load(target, program, compare, storage, vertex_counts[i]); }
         }
     }
 

@@ -12,9 +12,10 @@
 # an ordinary read-after-write the graph's sort and barriers already understand, and the transient allocator is
 # free to alias their memory if the schedule allows.
 #
-# The convert pass READS the raw depth atlas. The executor still binds the comparison sampler for a depth read
-# (that contract is format-driven and unchanged) — the convert shader reads the STORED depth through the plain
-# depth sampler that always rides at binding 6, the same seam the PCSS blocker search uses.
+# The convert pass READS the raw depth atlas. It is a FULLSCREEN pass, so it rides the fullscreen sampler seam:
+# texture at (0,1) + a PLAIN sampler at (0,2), exactly as the HZB build and the blur passes declare. `depth_as_float`
+# (below) is what makes the fullscreen executor bind a PLAIN sampler there instead of the comparison sampler it
+# would otherwise pick for any depth texture — a comparison sampler cannot return the stored value (the PCSS scar).
 
 schema   = 1
 name     = "engine://frame/forward_csm_moment"
@@ -23,7 +24,7 @@ fallback = "engine://frame/forward_basic"
 
 [[resource]]
 name    = "shadow_atlas"
-kind    = "persistent_image"
+kind    = "transient_image"
 format  = "D32Float"
 width   = 2048
 height  = 2048
@@ -99,6 +100,10 @@ for_each = "light.0.cascades"
 reads    = ["shadow_atlas"]
 writes   = ["moment_raw[$index]"]
 shader   = "engine://shadow/moment_convert"
+# ⛔⛔ REN-40-D: the convert reads the STORED depth (a plain sampler), NOT a comparison result. Without this the
+# fullscreen executor binds a comparison sampler for the depth read (its default for any depth texture) and the
+# convert samples 0/1 instead of the depth → the moments are garbage and every moment shadow renders black.
+depth_as_float = true
 
 # the separable prefilter. ⛔ `address = "clamp"` is load-bearing: a wrapped tap at the atlas edge would blend
 # the opposite border into every cascade's rim, and the widest shadows sit exactly at those rims.

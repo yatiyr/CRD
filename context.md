@@ -56,10 +56,24 @@
 > Vulkan AND DX12 (**61 assertions, both green**). Surfaced+fixed 3 real bugs the never-rendered composition/app-reg
 > path hid: (1) `register_default_programs` idempotency guard `raster_count>0`→dedicated flag (an app pre-registered
 > program blanked ALL engine defaults); (2) `frame_compose::copy_pass_body` dropped `executor` + ~18 REN-38/40 fields +
-> `shared_depth` namespacing on compose; (3) composed graph now re-validated. FLAG: `pbr_neutral`/`saturate` post ops
-> fail CKIR→SPIR-V (latent, pre-existing; app grade uses `agx`). `.crdt`→CKIR technique serializer still a future slice.
+> `shared_depth` namespacing on compose; (3) composed graph now re-validated. Also FIXED a 4th (CKIR): `pbr_neutral`/
+> `saturate`/`gamut_compress` post ops fed a sampled **vec4** produced an invalid `mix(vec4,vec3)` → `create_program`
+> null; shared `post::detail::rgb3` guard (drop alpha to vec3) + width-robust `saturate`; new both-backend device gate.
+> `.crdt`→CKIR technique serializer still a future slice.
 > **✅ RAF-9 DONE (2026-08-04)** — engine defaults load by canonical `engine://` id through the public registry (session:
 > `docs/sessions/2026-08-04-raf9-engine-default-assets.md`).
+>
+> **✅ REN-40-D + REN-39-C1 REGRESSIONS FIXED (2026-08-05)** — the two pre-existing GPU-gate failures the RAF-8 flip
+> introduced, now GREEN both backends; full `crd-scene-render-tests` **64/64 (1394 assertions)**. (1) **REN-40-D**
+> (EVSM/MSM moment shadows rendered pure black on BOTH backends): the RAF-8 `TranslatingCommandEncoder` recognized the
+> per-frame ATLAS by "has a `ComparisonSampler`", which dropped the COLOUR moment atlas (plain linear sampler) to the
+> MAP arm → the technique's slot-4 read was UNBOUND → 0/black. Fix: `shadow_atlas_from`/`map_texture` key off the
+> DECLARED SLOT (`bind_map`=1, `bind_atlas`=4), never the sampler kind — the verb still picks comparison-vs-linear from
+> the texture's own format (`atlas_sampler_for`). Plus two supporting moment fixes: the fullscreen convert reads the
+> depth through its own seam — sampler `(0,6)`→`(0,2)` + plain texture flag (matches HZB/blur), driven by
+> `depth_as_float=true`; and `pass_texture_comparison` (plain sampler for a colour atlas, comparison for a depth one).
+> (2) **REN-39-C1** (indexed-pull vs multi bit-identity) fixed earlier this session via `draw_storage_multi_depth_only`
+> + `multi_indexed_batch_count()`. Scar: [[feedback_command_encoder_recognize_scene_textures_by_slot_not_sampler]].
 >
 > **✅ RAF-0 DONE (2026-08-03) — Gate 0 met:** the DESIGN SPEC is `docs/design/raf-0-rendering-foundation-design.md`
 > (measured current-state map: ~57 combinatorial draw verbs in `raster_context.hpp`; 18-kind `FramePassKind`; ~40-field

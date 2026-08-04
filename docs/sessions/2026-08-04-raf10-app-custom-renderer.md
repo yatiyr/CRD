@@ -65,12 +65,20 @@ unmodelled capability → deterministic step-down to `app_basic` (pixel-identica
   REN-40-D moment) are the SAME pre-existing RAF-8-baseline failures the RAF-9 log documents (unchanged by RAF-10; the
   38-G1 engine post tests are untouched — the `ensure_post_program` refactor is byte-behaviour-preserving).
 
+## CKIR post-op vec4 fix (was flagged, now FIXED)
+
+**`pbr_neutral` / `saturate` / `gamut_compress` failed `create_program`** — root-caused + fixed. A post graph pipes the
+`sample2d` result (a **vec4** RGBA) straight into the tonemap, but those ops did vec3 math against it → the emitter
+produced an invalid `mix(vec4, vec3, …)` / `dot(vec4, vec3)`, which glslang refused (`'mix' : no matching overloaded
+function found`) so `create_program` returned null. The CPU `ckir_post` oracle can't catch it (no emit step) — a
+green-oracle/uncompilable-shader gap. Fix: a shared `crd::kir::post::detail::rgb3(g, color)` guard (the drop-alpha-to-vec3
+`agx` already did inline) applied to `agx`/`pbr_neutral`/`gamut_compress`; `saturate` (in `ckir_nodes`) got a width-robust
+vec4 branch that preserves the alpha lane. The vec3 material path is node-for-node unchanged (CPU bit-exactness gates
+green). New device gate on BOTH backends: `RAF-10 GATE: every post tonemap op lowers from a sampled vec4` create_programs
+each op (`test_scene_render_gpu.cpp`). The app grade now uses `pbr_neutral`, so the RAF-10 app gate also guards it.
+
 ## Flagged (NOT RAF-10 scope, separate slices)
 
-- **`pbr_neutral` / `saturate` post ops fail `create_program`** (CKIR→SPIR-V lowering) — `cook_post_graph` succeeds but
-  the backend refuses the program. Pre-existing latent gap (these ops sit in the op table but were never exercised
-  through a real post cook→build); `agx`/`srgb_encode` build fine, so the app grade uses AgX. A material-cook/CKIR
-  investigation, not a RAF-10 seam defect.
 - Fully `.crdt`-asset-driven techniques (the `.crdt`→CKIR body serializer) remain a future technique-cook slice.
 - The 2 pre-existing RAF-8-baseline GPU-gate failures (REN-39-C1, REN-40-D) still await their own investigation.
 

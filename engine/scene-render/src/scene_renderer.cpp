@@ -3260,8 +3260,7 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
     SceneShaderConfig fcfg;
     fcfg.pass = crd::kir::cook::PassType::Forward;
     fcfg.tech = fwd;
-    m_impl->vs = ctx.create_program(vg, ve);
-    crd::vertcook::VaryingRequirement fwd_reqs[crd::vertcook::kMaxVaryings];
+    m_impl->vs = ctx.create_program(vg, ve);    crd::vertcook::VaryingRequirement fwd_reqs[crd::vertcook::kMaxVaryings];
     crd::u32                          n_fwd_reqs = 0U;
     crd::gpu::IGpuProgram* fs_flat = m_impl->cook_fs(fcfg, fwd_reqs, crd::vertcook::kMaxVaryings, &n_fwd_reqs);
     if (m_impl->vs == nullptr || fs_flat == nullptr) { CRD_LOG_ERROR(g_log_scenerender, "init_programs: program creation failed"); return false; }
@@ -3388,8 +3387,7 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
             sdesc.rebase_table           = kSceneDrawTableOff;
             sdesc.rebase_stride          = kSceneDrawRowWords;
             if (!crd::vertcook::cook_vertex_program(sdesc, shvg, shve)) { all_ok = false; break; }
-            m_impl->shadow_vs[c] = ctx.create_program(shvg, shve);
-            if (m_impl->shadow_vs[c] == nullptr) { all_ok = false; break; }
+            m_impl->shadow_vs[c] = ctx.create_program(shvg, shve);            if (m_impl->shadow_vs[c] == nullptr) { all_ok = false; break; }
             m_impl->shadow_prog[c] =
                 m_impl->raster->create_raster_program(*m_impl->shadow_vs[c], *m_impl->shadow_fs);
             if (m_impl->shadow_prog[c] == nullptr) { all_ok = false; break; }
@@ -3479,8 +3477,7 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
             if (!cook_vs(m_impl->alloc, t.c_str(), nullptr, ig, ie))
             {
                 return false;
-            }
-            out_vs = ctx.create_program(ig, ie);
+            }            out_vs = ctx.create_program(ig, ie);
             return out_vs != nullptr;
         };
         // the READ-ONLY fragment twins. The varying sets are IDENTICAL to their u0 siblings (the flag only
@@ -3698,8 +3695,7 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
                 {
                     break;
                 }
-                m_impl->shadow_vs_idx[c] = ctx.create_program(sg, se);
-                ok = m_impl->shadow_vs_idx[c] != nullptr;
+                m_impl->shadow_vs_idx[c] = ctx.create_program(sg, se);                ok = m_impl->shadow_vs_idx[c] != nullptr;
                 if (!ok)
                 {
                     break;

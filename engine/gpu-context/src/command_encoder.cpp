@@ -41,19 +41,26 @@ const ResourceBinding* find_kind(const ResourceBindingTable& bindings, BindingKi
     return nullptr;
 }
 
-// A depth SampledTexture paired with a ComparisonSampler ⇒ a shadow lookup (the comparison sampler is chosen by the
-// verb identity + ITexture::is_depth(), the engine's rule).
+// The scene binding SLOTS `bind_map`/`bind_atlas` (render-graph) write: a base-colour MAP rides slot 1, the
+// per-frame ATLAS (shadow / moment / variance) rides slot 4. The encoder keys the verb SHAPE off these slots,
+// NOT off the sampler kind.
+inline constexpr crd::u32 kSceneMapSlot   = 1U;
+inline constexpr crd::u32 kSceneAtlasSlot = 4U;
+
+// The per-frame ATLAS — the SampledTexture bound at the atlas slot (4). ⛔⛔ REN-40-D: recognise it by the SLOT,
+// NEVER by "has a ComparisonSampler". A PCF/PCSS atlas is a DEPTH texture read through a comparison sampler; the
+// EVSM/MSM MOMENT atlas is a COLOUR (RGBA16F) texture read through a PLAIN linear sampler — same slot 4, different
+// sampler. Keying atlas recognition off the comparison sampler dropped the colour moment atlas to the MAP arm
+// (`map_texture` grabs any non-depth SampledTexture), so it bound at slot 1 while the technique read slot 4 —
+// UNBOUND, and every moment shadow rendered black. The downstream verb still chooses comparison-vs-linear from the
+// texture's own format (`atlas_sampler_for` → `is_depth()`), so one slot serves both atlas kinds.
 ITexture* shadow_atlas_from(const ResourceBindingTable& bindings) noexcept
 {
-    if (find_kind(bindings, BindingKind::ComparisonSampler) == nullptr)
-    {
-        return nullptr;
-    }
     const crd::u32 n = static_cast<crd::u32>(bindings.size());
     for (crd::u32 i = 0; i < n; ++i)
     {
         if (bindings[i].kind == BindingKind::SampledTexture && bindings[i].texture != nullptr &&
-            bindings[i].texture->is_depth())
+            bindings[i].slot == kSceneAtlasSlot)
         {
             return bindings[i].texture;
         }
@@ -87,15 +94,17 @@ ITexture* plain_sampled_texture(const ResourceBindingTable& bindings) noexcept
     return nullptr;
 }
 
-// The albedo MAP — a non-depth SampledTexture — REGARDLESS of a comparison sampler being present. Unlike
-// plain_sampled_texture, this survives the COMBINED textured+shadowed shape (map@1/2 + atlas@4/5, one scene draw).
+// The albedo MAP — the SampledTexture at the map slot (1). ⛔⛔ REN-40-D: keyed by SLOT, not by `!is_depth()`.
+// The old format test grabbed ANY non-depth SampledTexture, which STOLE the colour EVSM/MSM moment atlas (also a
+// non-depth SampledTexture, but bound at slot 4) into the map arm. Slot-keying survives the COMBINED
+// textured+shadowed shape (map@1 + atlas@4, one scene draw) exactly as before — the map is whatever rides slot 1.
 ITexture* map_texture(const ResourceBindingTable& bindings) noexcept
 {
     const crd::u32 n = static_cast<crd::u32>(bindings.size());
     for (crd::u32 i = 0; i < n; ++i)
     {
         if (bindings[i].kind == BindingKind::SampledTexture && bindings[i].texture != nullptr &&
-            !bindings[i].texture->is_depth())
+            bindings[i].slot == kSceneMapSlot)
         {
             return bindings[i].texture;
         }
@@ -423,7 +432,16 @@ public:
         case GeometryKind::MultiStoragePull:
             // ⭐ RAF-8: the CPU multi-draw BATCH (the scene run of plain items) — ONE verb, N vertex counts, the
             // DrawIndex row base rebased per command. `!clears` is the load flag (the first draw of the scope clears).
-            if (buf != nullptr && color0 != nullptr && g.multi_counts != nullptr && g.draw_count > 0U)
+            if (buf != nullptr && g.multi_counts != nullptr && g.draw_count > 0U && color0 == nullptr && r.depth.enabled
+                && r.depth.target != nullptr)
+            {
+                // ⭐⭐ REN-39-C1: the DEPTH-ONLY batch — a run of pull shadow-cascade items into depth alone. The exact
+                // non-indexed twin of the MultiIndexed depth-only arm below. ⛔ THE GAP: this used to fall to the
+                // colour verb, which needs `color0`, so a depth-only pull cascade drew NOTHING and self-shadowed black.
+                m_ctx.draw_storage_multi_depth_only(*r.depth.target, prog, clear_depth, compare, *buf, g.multi_counts,
+                                                    g.draw_count, g.first_draw_index, !clears);
+            }
+            else if (buf != nullptr && color0 != nullptr && g.multi_counts != nullptr && g.draw_count > 0U)
             {
                 m_ctx.draw_storage_multi_depth(*color0, prog, clear, clear_depth, compare, *buf, g.multi_counts,
                                                g.draw_count, g.first_draw_index, !clears);

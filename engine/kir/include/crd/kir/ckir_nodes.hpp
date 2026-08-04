@@ -204,6 +204,16 @@ inline constexpr double kLumaB = 0.0536895;
 // saturate(in, amount=1, lumacoeffs) = mix(fg=in, bg=luminance(in), amount) = luma*(1-amount) + in*amount (NG_saturate).
 [[nodiscard]] inline int saturate(KGraph& g, int in3, int amount)
 {
+    // ⛔⛔ RAF-10: robust to a SAMPLED vec4 (a post grade pipes the sampler result straight in). Luminance is computed
+    // over RGB and the mix runs on RGB; a vec4 keeps its alpha lane untouched. Without this, `Mix(luminance[vec3],
+    // in[vec4], amount)` lowered to `mix(vec3, vec4, float)` — no GLSL overload → create_program returned null while the
+    // CPU oracle stayed green. The vec3 path is node-for-node the historical one, so every material is byte-unchanged.
+    if (g.node(in3).comps() >= 4)
+    {
+        const int rgb   = g.vec3(g.vec_comp(in3, 0), g.vec_comp(in3, 1), g.vec_comp(in3, 2));
+        const int mixed = detail::tern(g, KOp::Mix, luminance(g, rgb), rgb, amount);
+        return g.vec4(g.vec_comp(mixed, 0), g.vec_comp(mixed, 1), g.vec_comp(mixed, 2), g.vec_comp(in3, 3));
+    }
     return detail::tern(g, KOp::Mix, luminance(g, in3), in3, amount); // Mix(a=luma, b=in, c=amount)
 }
 // rgbtohsv(c) — transcribed from mx_rgbtohsv (branchless Select form; NaN /delta arms are discarded when s<=0).

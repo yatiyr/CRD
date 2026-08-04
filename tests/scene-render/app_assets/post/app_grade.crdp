@@ -2,9 +2,10 @@
 #
 # Resolved by the canonical id `app://post/app_grade` under the app asset tree, cooked into a fullscreen program
 # by the SAME `parse_post_toml` + `cook_post_graph` path the engine's own tonemap uses (see `register_post_asset`
-# / `ensure_post_program_named`). It samples the scene, pushes saturation (a "punchy" look), then applies the sRGB
-# OETF — visibly the app's grade, not the engine's plain sRGB, so it proves an app REPLACES the display transform
-# with no engine rendering-code edit. The app's custom pass executor drives this program (requirement 8).
+# / `ensure_post_program_named`). It samples the scene, applies the Khronos PBR-Neutral tonemap, then the sRGB OETF
+# — visibly the app's grade, not the engine's default, so it proves an app REPLACES the display transform with no
+# engine rendering-code edit. The app's custom pass executor drives this program (requirement 8). `pbr_neutral` also
+# exercises the RAF-10 vec4-sampled-input fix in `crd::kir::post` (a post op fed the sampler's RGBA drops the alpha).
 
 schema = 1
 name   = "app://post/app_grade"
@@ -21,7 +22,7 @@ inputs = ["uv", 0, 1, 2]
 
 [[node]]
 name   = "graded"
-op     = "agx"
+op     = "pbr_neutral"
 inputs = ["scene"]
 
 [[node]]

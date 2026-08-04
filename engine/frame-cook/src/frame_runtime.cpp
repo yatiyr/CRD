@@ -386,6 +386,10 @@ bool record_scene_via_executor(PassRec* p, g::IFrameContext& ctx, g::IRasterCont
     // ⛔ only meaningful when a pass texture EXISTS — a depth-only cascade reads nothing (the `sampled_is_*` flags are
     // stale then), and a true-flag with a null texture routes the cascade's plain draws down the shadow-sample arm.
     draws.pass_texture_is_depth = draws.pass_texture != nullptr && (p->sampled_is_depth || p->sampled_is_array);
+    // ⛔⛔ REN-40-D: the SAMPLER type is DEPTH-ness alone, NOT array-ness. A PCF depth atlas takes a comparison sampler;
+    // a moment/variance COLOUR array takes a plain one. Merging the two into `is_depth` bound a comparison sampler on
+    // the moment array → every moment shadow rendered black.
+    draws.pass_texture_comparison = draws.pass_texture != nullptr && p->sampled_is_depth;
 
     // 2. payload + resource table: colour OR depth by kind (a depth-only pass has no colour attachment; the executor
     //    renders depth-only). A colour pass into a color-DEPTH target (`image_with_depth`) uses that bundled depth.

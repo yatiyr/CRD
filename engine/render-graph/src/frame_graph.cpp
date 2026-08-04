@@ -235,28 +235,32 @@ void bind_map(RasterDrawPacket& pk, ITexture* tex)
 {
     pk.bindings.push_back(ResourceBinding{BindingFrequency::Material, BindingKind::SampledTexture, 1U, nullptr, tex});
 }
-// Bind a shadow ATLAS (a depth SampledTexture + a ComparisonSampler) — the pair the encoder reads as a shadow lookup.
-void bind_atlas(RasterDrawPacket& pk, ITexture* tex)
+// Bind a shadow/moment ATLAS at slot 4/5. ⛔⛔ REN-40-D: the SAMPLER at slot 5 is a COMPARISON sampler for a DEPTH
+// atlas (a PCF shadow lookup) but a PLAIN filtering sampler for a COLOUR-ARRAY atlas (the moment/variance tiers read
+// the stored moments, not a compare result). Binding a comparison sampler where the moment shader declares a plain
+// `sampler2DArray` made the moment sample return garbage → EVERY moment shadow rendered black (the failure mode this
+// distinction exists to prevent; it regressed when RAF-8 flipped the live RasterGeometry sampler selection into here).
+void bind_atlas(RasterDrawPacket& pk, ITexture* tex, bool comparison)
 {
     pk.bindings.push_back(ResourceBinding{BindingFrequency::Material, BindingKind::SampledTexture, 4U, nullptr, tex});
-    ResourceBinding cmp{};
-    cmp.frequency = BindingFrequency::Material;
-    cmp.kind = BindingKind::ComparisonSampler;
-    cmp.slot = 5U;
-    pk.bindings.push_back(cmp);
+    ResourceBinding samp{};
+    samp.frequency = BindingFrequency::Material;
+    samp.kind      = comparison ? BindingKind::ComparisonSampler : BindingKind::Sampler;
+    samp.slot      = 5U;
+    pk.bindings.push_back(samp);
 }
 // Attach the per-item sampled state (map / atlas / combined) exactly as the live RasterGeometry selection does.
 void attach_textures(RasterDrawPacket& pk, ITexture* item_tex, ITexture* pass_tex, ITexture* tex, bool combined,
-                     bool depth_tex)
+                     bool depth_tex, bool comparison)
 {
     if (combined)
     {
         bind_map(pk, item_tex);
-        bind_atlas(pk, pass_tex);
+        bind_atlas(pk, pass_tex, comparison);
     }
     else if (depth_tex)
     {
-        bind_atlas(pk, tex);
+        bind_atlas(pk, tex, comparison);
     }
     else if (tex != nullptr)
     {
@@ -339,6 +343,7 @@ void record_scene_raster(const PassPayload& payload, RecordContext& ctx, IComman
     // `pass_texture`. A DEPTH-ONLY pass (a shadow cascade) reads NOTHING, so `pass_tex == nullptr` — and its plain
     // draws must NOT be routed down the sampled/shadow arm (that binds a null atlas and renders garbage).
     const bool pass_depth = pass_tex != nullptr && draws.pass_texture_is_depth;
+    const bool pass_cmp   = draws.pass_texture_comparison; // REN-40-D: comparison sampler for depth, plain for a moment array
     const bool batchable_pass = pass_tex == nullptr;     // a pass that reads a texture never coalesces runs
 
     for (crd::u32 i = 0; i < draws.count; ++i)
@@ -382,7 +387,7 @@ void record_scene_raster(const PassPayload& payload, RecordContext& ctx, IComman
             p.geometry.max_draws = 1U;
             p.geometry.first_draw_index = i;
             p.bindings.push_back(sbind);
-            attach_textures(p, it.texture, pass_tex, tex, combined, depth_tex);
+            attach_textures(p, it.texture, pass_tex, tex, combined, depth_tex, pass_cmp);
             encoder.draw(p);
             continue;
         }
@@ -398,7 +403,7 @@ void record_scene_raster(const PassPayload& payload, RecordContext& ctx, IComman
             p.geometry.first_index = it.first_index;
             p.geometry.first_draw_index = i;
             p.bindings.push_back(sbind);
-            attach_textures(p, it.texture, pass_tex, tex, combined, depth_tex);
+            attach_textures(p, it.texture, pass_tex, tex, combined, depth_tex, pass_cmp);
             encoder.draw(p);
             continue;
         }
@@ -411,7 +416,7 @@ void record_scene_raster(const PassPayload& payload, RecordContext& ctx, IComman
             p.geometry.kind = GeometryKind::StoragePull;
             p.geometry.vertex_or_index_count = it.vertex_count;
             p.bindings.push_back(sbind);
-            attach_textures(p, it.texture, pass_tex, tex, combined, depth_tex);
+            attach_textures(p, it.texture, pass_tex, tex, combined, depth_tex, pass_cmp);
             encoder.draw(p);
             continue;
         }

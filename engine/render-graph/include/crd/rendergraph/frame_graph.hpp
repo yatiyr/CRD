@@ -83,7 +83,11 @@ struct DrawList
     const RenderDrawItem* items = nullptr;
     u32 count = 0;
     ITexture* pass_texture = nullptr; // the pass's sampled read (e.g. the shadow atlas); null for an untextured pass
-    bool pass_texture_is_depth = false; // depth ⇒ a comparison-sampler (shadow) lookup, not an ordinary sample
+    bool pass_texture_is_depth = false; // depth OR arrayed ⇒ bind at the ATLAS slot (4/5), not the base-colour map slot
+    // ⛔⛔ REN-40-D: the SAMPLER type, split from the routing above. A true DEPTH atlas takes a comparison sampler (PCF);
+    // a COLOUR-ARRAY atlas (moment/variance tiers) takes a PLAIN sampler. Conflating the two made every moment shadow
+    // render black — the executor bound a comparison sampler where the shader declared a plain `sampler2DArray`.
+    bool pass_texture_comparison = false; // true ⇒ comparison (depth/shadow) sampler; false ⇒ plain filtering sampler
 };
 using crd::renderasset::DiagCode;
 using crd::renderasset::DiagnosticList;
