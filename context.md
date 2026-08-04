@@ -43,12 +43,23 @@
 > - Module dep chain (one-way): render-asset-core ← {render-program, render-pass, gpu-context} ← render-material,
 >   render-graph. Every new module is a leaf; every gate is `raf<N>` in ctest.
 >
-> **NEXT ACTION — RAF-7 is CLOSED; next is RAF-8** (scene-render → orchestration; adopt the contract, remove hard-coded
-> slots) · RAF-9 (engine defaults → `engine://` assets) · RAF-10 (app-custom proof) · RAF-11 (hot reload) · RAF-12
-> (DELETE legacy verbs + FramePassKind) · RAF-13 (docs + §22 DoD). ⛔ RAF-8+ modify LIVE code
-> (frame-cook/frame_runtime/scene-render/backends) — migrate one kind at a time, old+new both resolve, `crd-sandbox
-> --smoke-test` both backends at every gate. NOTE for RAF-8: `execute_frame` currently runs the graph ON TOP OF the
-> gpu-context `IFrameGraph` (reusing its barriers/aliasing/readback) — RAF-12 unifies the two frame graphs.
+> **NEXT ACTION — RAF-10 is CLOSED (2026-08-04); next is RAF-11 (hot reload)** · RAF-12 (DELETE legacy verbs +
+> FramePassKind) · RAF-13 (docs + §22 DoD). ⛔ RAF-8+ modify LIVE code (frame-cook/frame_runtime/scene-render/backends)
+> — migrate one kind at a time, old+new both resolve, `crd-sandbox --smoke-test` both backends at every gate.
+>
+> **✅ RAF-10 DONE (2026-08-04) — Gate 10 met (session: `docs/sessions/2026-08-04-raf10-app-custom-renderer.md`).** A
+> public-headers-ONLY app package (`tests/scene-render/test_raf10_app.cpp` + `tests/scene-render/app_assets/`)
+> customises the renderer ten ways with NO engine-rendering edit and NO privileged path — engine default unchanged ·
+> include an engine subgraph · inject a custom pass at an anchor · app material (`set_scene_material`) · app technique
+> (`define_technique`) · app display transform (`register_post_asset`) · fully app-authored graph · custom C++ pass
+> executor (`register_pass_executor` + `FramePassKind::Custom`) · explicit capability fallback (`capability()`) — on
+> Vulkan AND DX12 (**61 assertions, both green**). Surfaced+fixed 3 real bugs the never-rendered composition/app-reg
+> path hid: (1) `register_default_programs` idempotency guard `raster_count>0`→dedicated flag (an app pre-registered
+> program blanked ALL engine defaults); (2) `frame_compose::copy_pass_body` dropped `executor` + ~18 REN-38/40 fields +
+> `shared_depth` namespacing on compose; (3) composed graph now re-validated. FLAG: `pbr_neutral`/`saturate` post ops
+> fail CKIR→SPIR-V (latent, pre-existing; app grade uses `agx`). `.crdt`→CKIR technique serializer still a future slice.
+> **✅ RAF-9 DONE (2026-08-04)** — engine defaults load by canonical `engine://` id through the public registry (session:
+> `docs/sessions/2026-08-04-raf9-engine-default-assets.md`).
 >
 > **✅ RAF-0 DONE (2026-08-03) — Gate 0 met:** the DESIGN SPEC is `docs/design/raf-0-rendering-foundation-design.md`
 > (measured current-state map: ~57 combinatorial draw verbs in `raster_context.hpp`; 18-kind `FramePassKind`; ~40-field

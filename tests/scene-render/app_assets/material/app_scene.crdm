@@ -1,0 +1,62 @@
+# app_scene.crdm — an APPLICATION-authored scene surface (RAF-10 requirement 5).
+#
+# This lives under the APP asset tree (mounted by `set_app_asset_root`), resolved by the canonical id
+# `app://material/app_scene`, and cooked by the SAME material pipeline the engine's own `material/scene.crdm`
+# uses — no engine rendering-code edit, no privileged path. It is structurally the engine surface with one
+# app choice changed (a smoother surface: roughness 0.3 rather than 0.8) so the app material is visibly the
+# app's, and proves the whole cook→shade path runs on an app-supplied `.crdm`.
+
+schema = 1
+name   = "app://material/app_scene"
+
+[[node]]
+name   = "tint"
+op     = "geomcolor"
+inputs = [1]
+
+[[node]]
+name   = "tr"
+op     = "extract"
+inputs = ["tint", 0]
+
+[[node]]
+name   = "tg"
+op     = "extract"
+inputs = ["tint", 1]
+
+[[node]]
+name   = "tb"
+op     = "extract"
+inputs = ["tint", 2]
+
+[[node]]
+name   = "alpha"
+op     = "extract"
+inputs = ["tint", 3]
+
+[[node]]
+name   = "base"
+op     = "combine3"
+inputs = ["tr", "tg", "tb"]
+
+[[node]]
+name   = "nrm"
+op     = "normal"
+inputs = [0]
+
+[[node]]
+name   = "metal"
+op     = "multiply"
+inputs = [0.0, 1.0]
+
+[[node]]
+name   = "rough"
+op     = "multiply"
+inputs = [0.3, 1.0]
+
+[surface]
+base_color = "base"
+normal     = "nrm"
+metallic   = "metal"
+roughness  = "rough"
+opacity    = "alpha"

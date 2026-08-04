@@ -930,8 +930,11 @@ struct SceneRenderer::Impl
         rcfg.flip_clip_y = raster != nullptr && !raster->ndc_y_points_down();
         // ⭐⭐ REN-40-C4: dither band stamped here (same discipline as flip_clip_y — no call site can forget).
         rcfg.dither_band = lod_enabled ? lod_policy.dither_band : 0.0F;
+        // ⭐⭐ RAF-10: the scene material is an OVERRIDABLE id (set_scene_material), resolved through the mount table so
+        // an app://material/… the app authored under its own mount cooks the surface — the single seam that re-shades
+        // the scene with no engine rendering-code edit. Unset ⇒ the shipped engine default, byte-identical to before.
         crd::containers::String mat_text(alloc);
-        if (asset_text(cfg.textured ? "material/scene_textured.crdm" : "material/scene.crdm", mat_text))
+        if (resolve_asset_text(scene_material_name(cfg.textured), mat_text))
         {
             rcfg.material_text = &mat_text;
         }
@@ -1021,6 +1024,14 @@ struct SceneRenderer::Impl
     crd::kir::technique::TechniqueLibrary  techniques{nullptr};
     const char*                            forward_technique = "standard_forward";
     const char*                            shadow_technique  = "forward_csm";
+    // ⭐⭐ RAF-10: app-supplied scene-material ids (empty ⇒ the shipped engine defaults). Set by set_scene_material and
+    // read at the single cook site, so an app://material/… re-surfaces the scene with no engine rendering-code edit.
+    crd::containers::String                scene_material;          // opaque groups
+    crd::containers::String                scene_material_textured; // groups with a base-colour map
+    // ⭐⭐ RAF-10: app-supplied techniques, REPLAYED after the builtins in init_programs so a same-named app technique
+    // WINS (TechniqueLibrary::find is last-match). Held rather than defined immediately because init_programs
+    // (re)registers the builtins on every call — replaying app techniques AFTER is what makes them shadow, not lose.
+    crd::containers::Array<crd::kir::technique::Technique> app_techniques;
     crd::u32                               pcf_taps          = 4U; // the `pcf_taps` option value (1|2|4|8|16)
     crd::u32                               blend_pct         = 15U; // REN-40-D `cascade_blend_pct` (0..50)
     crd::u32                               soft_mode         = 0U; // REN-40-D 0 = PCF, 1 = PCSS
@@ -1089,6 +1100,53 @@ struct SceneRenderer::Impl
         // RAF-9: ONE read path — delegate to the resolver's Engine mount (kept == `asset_root` in set_asset_root/init).
         // Behaviour is the old `asset_root + "/" + name` disk read, verbatim, so a relative name resolves as before.
         return resolver.read_relative(crd::containers::StringView(name), out);
+    }
+    // ⭐⭐ RAF-10: a name that carries a `://` scheme is a CANONICAL id (`app://…`, `engine://…`) resolved through the
+    // mount table; a bare name is engine-relative (the shipped-default path, byte-for-byte as before). An app supplies
+    // its OWN material/post under its OWN mount, so a seam that only ever read the engine mount could not reach it —
+    // the material + post read sites route through here so an authored `app://` asset resolves.
+    [[nodiscard]] static bool name_is_canonical(crd::containers::StringView n) noexcept
+    {
+        for (crd::usize i = 0; i + 2U < n.size(); ++i)
+        {
+            if (n[i] == ':' && n[i + 1U] == '/' && n[i + 2U] == '/') { return true; }
+        }
+        return false;
+    }
+    [[nodiscard]] bool resolve_asset_text(crd::containers::StringView name, crd::containers::String& out)
+    {
+        if (!name_is_canonical(name)) { return resolver.read_relative(name, out); }
+        crd::renderasset::DiagnosticList adiags(alloc);
+        const crd::renderasset::AssetRef ref = crd::renderasset::AssetRef::parse(name, adiags, alloc);
+        if (!ref.valid()) { return false; }
+        return resolver.read_ref(ref, out, adiags);
+    }
+    // ⭐⭐ RAF-10: the scene-material id for this cook (empty override ⇒ the shipped engine default), by the same
+    // `cfg.textured` axis the single read site selects on.
+    [[nodiscard]] crd::containers::StringView scene_material_name(bool textured) const noexcept
+    {
+        const crd::containers::String& s = textured ? scene_material_textured : scene_material;
+        if (!s.empty()) { return crd::containers::StringView(s.c_str(), s.size()); }
+        return textured ? crd::containers::StringView("material/scene_textured.crdm")
+                        : crd::containers::StringView("material/scene.crdm");
+    }
+    // ⭐⭐ RAF-10: the ONE capability predicate — the frame-graph `requires`/`fallback` step-down (SceneHost) and the
+    // public `SceneRenderer::capability` seam both consult THIS, so the answer an app inspects is exactly the answer
+    // the recorder acts on. An unknown name is UNSUPPORTED (false) by rule, so a frame naming a feature this engine
+    // does not model degrades to its declared fallback deterministically rather than mis-rendering.
+    [[nodiscard]] bool capability(crd::containers::StringView name)
+    {
+        using SV = crd::containers::StringView;
+        if (name == SV("shadows")) { return shadows_active(); }
+        crd::gpu::IRasterContext* r = raster;
+        if (r == nullptr) { return false; }
+        if (name == SV("bindless")) { return r->supports_bindless(); }
+        if (name == SV("vrs")) { return r->supports_vrs(); }
+        if (name == SV("conservative_raster")) { return r->supports_conservative_raster(); }
+        if (name == SV("inner_coverage")) { return r->supports_inner_coverage(); }
+        if (name == SV("fragment_interlock")) { return r->supports_fragment_interlock(); }
+        if (name == SV("ray_tracing_pipeline")) { return r->supports_rt_pipeline(); }
+        return false;
     }
 
     // Cook one authored stage BY ASSET NAME (disk-first) and create its device program.
@@ -1311,17 +1369,28 @@ struct SceneRenderer::Impl
     // transform emits an opaque frame). Cached per name; two names ship embedded (agx · srgb_only).
     // RAF-9: DISCRIMINATED by a bool (the two post ids — `engine://post/tonemap_agx` / `engine://post/srgb_only` —
     // register two providers over this one builder), so the builder never re-matches the id string.
+    // ⭐⭐ RAF-9: the engine defaults keep their two cache slots + relative names; RAF-10 generalises the COOK to a
+    // named `.crdp` + a caller-owned cache slot, so an app post asset cooks through the identical path (⛔ no weaker
+    // second cook for apps — the seam IS the engine's own path). `is_agx` fell away: the display transform is entirely
+    // in the `.crdp`, so the name is the only difference the two engine variants ever had.
     [[nodiscard]] crd::gpu::IRasterProgram* ensure_post_program(bool is_agx)
     {
-        std::unique_ptr<crd::gpu::IRasterProgram>& slot = is_agx ? prog_post_agx : prog_post_srgb;
+        return ensure_post_program_named(is_agx ? crd::containers::StringView("post/tonemap_agx.crdp")
+                                                : crd::containers::StringView("post/srgb_only.crdp"),
+                                         is_agx ? prog_post_agx : prog_post_srgb);
+    }
+    [[nodiscard]] crd::gpu::IRasterProgram* ensure_post_program_named(crd::containers::StringView crdp_name,
+                                                                      std::unique_ptr<crd::gpu::IRasterProgram>& slot)
+    {
         if (slot != nullptr) { return slot.get(); }
         if (raster == nullptr || ctx == nullptr) { return nullptr; }
         crd::gpu::IGpuProgram* pvs = cook_stage_named("vertex/post_fullscreen.crdv");
         if (pvs == nullptr) { return nullptr; }
-        // ⛔ DISK-FIRST, like every asset here: a shipped `assets/post/*.crdp` SHADOWS the embedded copy, and
-        // the drift gate keeps the two canonically identical — ONE declaration, two homes.
+        // ⛔ DISK-FIRST, like every asset here: a shipped `assets/post/*.crdp` SHADOWS the embedded copy, and the drift
+        // gate keeps the two canonically identical. RAF-10: a `://` id resolves through the mount table (an app://
+        // post under set_app_asset_root), a bare name through the engine mount — one path, both provenances.
         crd::containers::String ptext(alloc);
-        if (!asset_text(is_agx ? "post/tonemap_agx.crdp" : "post/srgb_only.crdp", ptext)) { return nullptr; }
+        if (!resolve_asset_text(crdp_name, ptext)) { return nullptr; }
         crd::matcook::MaterialDesc pdesc(alloc);
         crd::containers::String    where(alloc);
         if (crd::matcook::parse_post_toml(crd::containers::StringView(ptext.c_str(), ptext.size()), pdesc, &where)
@@ -1346,6 +1415,24 @@ struct SceneRenderer::Impl
     }
     std::unique_ptr<crd::gpu::IRasterProgram> prog_post_agx;
     std::unique_ptr<crd::gpu::IRasterProgram> prog_post_srgb;
+    // ⭐⭐ RAF-10: an APP post asset — a `.crdp` the app authored, cooked lazily into a cached program the SAME way the
+    // engine cooks its own. Heap-owned (unique_ptr elements) so the address handed to the program registry as `user`
+    // stays stable across pushes. The provider thunk (captureless, per the fn-ptr+void* idiom) recovers it and cooks.
+    struct AppPost
+    {
+        Impl*                                     owner = nullptr;
+        crd::containers::String                   crdp;
+        std::unique_ptr<crd::gpu::IRasterProgram> prog;
+        explicit AppPost(crd::memory::IAllocator* a) : crdp(a) {}
+    };
+    crd::containers::Array<std::unique_ptr<AppPost>> app_posts;
+    static crd::gpu::IRasterProgram* app_post_provider(void* user)
+    {
+        auto* ap = static_cast<AppPost*>(user);
+        if (ap == nullptr || ap->owner == nullptr) { return nullptr; }
+        return ap->owner->ensure_post_program_named(crd::containers::StringView(ap->crdp.c_str(), ap->crdp.size()),
+                                                    ap->prog);
+    }
 
     // ── ⭐⭐ REN-40-D: the MOMENT-ATLAS program family (crd://shadow/moment_*). ──────────────────────────────
     // Fullscreen technique-library shaders, cooked per CASCADE because the layer is baked into each instance's
@@ -2398,7 +2485,8 @@ struct SceneRenderer::Impl
           palette_staging(a), anim_state_staging(a), chunk_index(a), chunks(a), runs(a), dirty_runs(a), bounds_staging(a),
           group_of_mesh(a), material_color(a), material_texture(a), entity_slot(a),
           contrib_draws(a), frame(a), fallback(a), recorder(a), groups_view(a), fs_hashes(a), fs_programs(a),
-          fb_frame_names(a), fb_frame_descs(a), techniques(a), adv_stages(a)
+          fb_frame_names(a), fb_frame_descs(a), techniques(a), scene_material(a), scene_material_textured(a),
+          app_techniques(a), adv_stages(a), app_posts(a)
     {
         frame_ok = false; // populated by set_asset_root()
         contrib_draws.reserve(kMaxContributions);
@@ -2420,10 +2508,15 @@ struct SceneRenderer::Impl
     // RAF-9: register EVERY engine default program/kernel under its canonical engine:// id. Authored programs and the
     // pure-C++ RuntimeProgram builders (gpu_skin, impostor, TAA, …) are registered the SAME way — a captureless thunk
     // over the existing ensure_* builder (fn-ptr + `this`), so the host resolves them by id, never a str_is branch.
-    // Idempotent (guarded on the raster count) so a second init_programs does not double-register.
+    // ⛔⛔ RAF-10: idempotent on a DEDICATED flag, NOT on `raster_count() > 0`. An application may pre-register its own
+    // raster program (register_post_asset / register_raster_program) BEFORE init_programs — which made the old
+    // count-guard see a non-empty registry and skip registering EVERY engine default, so the whole scene went black the
+    // instant an app added one program. The flag tracks exactly "have the engine defaults been registered", nothing else.
+    bool default_programs_registered = false;
     void register_default_programs()
     {
-        if (program_registry.raster_count() > 0U) { return; }
+        if (default_programs_registered) { return; }
+        default_programs_registered = true;
         // ── raster programs (SceneHost::program) ──
         program_registry.register_raster(prog_id("engine://scene/tess"),
             [](void* u) { return static_cast<Impl*>(u)->ensure_tess_program(); }, this);
@@ -2755,6 +2848,71 @@ bool SceneRenderer::register_kernel_program(const char* canonical_id, KernelProg
     return true;
 }
 
+bool SceneRenderer::register_pass_executor(const char* canonical_id, PassExecutorFn fn)
+{
+    // ⭐⭐ RAF-10: forward the app's custom executor into the recorder's ONE GraphExecutorTable — the same table the
+    // builtins fill. The id is matched VERBATIM against a `kind = "custom"` pass' `executor =` string (both hashed by
+    // `executor_type_id`), so it is an executor-type name, NOT an AssetId — no `crd://`→`engine://` fold applies. The
+    // `PassExecutorFn` typedef is layout-identical to `crd::rendergraph::PassRecordFn` (same signature), so it threads
+    // straight through. Fails on a null id/fn or a duplicate (the table refuses to shadow an existing executor).
+    if (canonical_id == nullptr || fn == nullptr || m_impl == nullptr) { return false; }
+    return m_impl->recorder.register_pass_executor(crd::containers::StringView(canonical_id), fn);
+}
+
+bool SceneRenderer::set_scene_material(const char* opaque_id, const char* textured_id)
+{
+    // ⭐⭐ RAF-10: point the two scene-material slots at app-authored ids. A null id leaves that slot on its shipped
+    // engine default (so passing only an opaque id is valid); the read site resolves whatever is set through the mount
+    // table, so an `app://material/…` under `set_app_asset_root` re-surfaces the scene with no engine edit.
+    if (m_impl == nullptr || (opaque_id == nullptr && textured_id == nullptr)) { return false; }
+    if (opaque_id != nullptr)
+    {
+        m_impl->scene_material.clear();
+        m_impl->scene_material.append(opaque_id);
+    }
+    if (textured_id != nullptr)
+    {
+        m_impl->scene_material_textured.clear();
+        m_impl->scene_material_textured.append(textured_id);
+    }
+    return true;
+}
+
+bool SceneRenderer::define_technique(const crd::kir::technique::Technique& technique)
+{
+    // ⭐⭐ RAF-10: hold the app's technique for replay after the builtins in init_programs. The struct is copied by
+    // value (its body/bindings/options are app-owned static data that must outlive the renderer, exactly as the
+    // engine's own technique tables are). A malformed technique (no name, or neither a body nor a blob) is refused
+    // here rather than surfacing as a mysterious cook failure later.
+    if (m_impl == nullptr || !technique.valid()) { return false; }
+    m_impl->app_techniques.push_back(technique);
+    return true;
+}
+
+bool SceneRenderer::register_post_asset(const char* canonical_id, const char* crdp_asset_name)
+{
+    // ⭐⭐ RAF-10: an app post/display-transform program. Register a provider (the fn-ptr + `void* user` idiom) for the
+    // canonical id whose `user` is a heap-stable AppPost holding the `.crdp` name; the provider cooks it lazily the
+    // SAME way the engine cooks its own tonemap/sRGB. A frame graph's post pass names the id in `shader = …` and the
+    // program registry resolves it here — no bespoke app cook, no engine rendering-code edit.
+    if (m_impl == nullptr || canonical_id == nullptr || crdp_asset_name == nullptr) { return false; }
+    const crd::renderasset::AssetId id = m_impl->prog_id(crd::containers::StringView(canonical_id));
+    if (!id.valid()) { return false; }
+    auto post   = std::make_unique<Impl::AppPost>(m_impl->alloc);
+    post->owner = m_impl.get();
+    post->crdp.append(crdp_asset_name);
+    Impl::AppPost* raw = post.get();
+    m_impl->app_posts.push_back(std::move(post));
+    m_impl->program_registry.register_raster(id, &Impl::app_post_provider, raw);
+    return true;
+}
+
+bool SceneRenderer::capability(const char* name)
+{
+    if (m_impl == nullptr || name == nullptr) { return false; }
+    return m_impl->capability(crd::containers::StringView(name));
+}
+
 bool SceneRenderer::set_frame_graph_toml(const char* toml_text)
 {
     if (toml_text == nullptr || m_impl == nullptr) { return false; }
@@ -2770,6 +2928,38 @@ bool SceneRenderer::set_frame_graph_toml(const char* toml_text)
         CRD_LOG_ERROR(g_log_scenerender, "set_frame_graph_toml: parse failed: {} (at '{}')",
                       crd::framecook::frame_cook_error_text(perr), where.c_str());
         return false;
+    }
+    // ⭐⭐ RAF-10: EXPAND composition (subgraph `[[include]]` + `[[inject]]` at a declared `[[anchor]]`) BEFORE
+    // validating/installing. `flatten_frame_graph` inlines each included graph (namespaced by `as`, `bind`-rewritten)
+    // and splices each inject at its anchor, then re-validates the flat result. The resolve fn is `resolve_frame_asset`
+    // — the SAME public resolver — so an app graph may include an ENGINE graph (`engine://frame/…`) or another app
+    // graph (`app://frame/…`). ⛔ A graph with NO includes/injects keeps the plain parse+validate path, byte-identical.
+    if (d.includes.size() > 0U || d.injects.size() > 0U)
+    {
+        const auto resolve_sub = [](crd::containers::StringView name, void* user)
+        { return static_cast<Impl*>(user)->resolve_frame_asset(name); };
+        crd::framecook::FrameGraphDesc flat(impl.alloc);
+        if (const auto ferr = crd::framecook::flatten_frame_graph(d, resolve_sub, &impl, flat, &where);
+            ferr != crd::framecook::FrameCookError::Ok)
+        {
+            CRD_LOG_ERROR(g_log_scenerender, "set_frame_graph_toml: compose (include/inject) failed: {} (at '{}')",
+                          crd::framecook::frame_cook_error_text(ferr), where.c_str());
+            return false;
+        }
+        // ⛔ RE-VALIDATE the FLAT result: composition is not a weaker path — the graph an app composed faces the exact
+        // validator a hand-authored one does. (flatten already validates each source, but namespacing/injection produce
+        // a new whole that must stand on its own.)
+        if (const auto verr = crd::framecook::validate_frame_graph(flat, &where);
+            verr != crd::framecook::FrameCookError::Ok)
+        {
+            CRD_LOG_ERROR(g_log_scenerender, "set_frame_graph_toml: composed graph failed validation: {} (at '{}')",
+                          crd::framecook::frame_cook_error_text(verr), where.c_str());
+            return false;
+        }
+        impl.frame            = static_cast<crd::framecook::FrameGraphDesc&&>(flat);
+        impl.frame_ok         = true;
+        impl.frame_overridden = true;
+        return true;
     }
     if (const auto verr = crd::framecook::validate_frame_graph(d, &where);
         verr != crd::framecook::FrameCookError::Ok)
@@ -2829,6 +3019,18 @@ bool SceneRenderer::set_asset_root(const char* dir)
         return false;
     }
     impl.frame_ok = true;
+    return true;
+}
+
+bool SceneRenderer::set_app_asset_root(const char* dir)
+{
+    if (m_impl == nullptr || dir == nullptr) { return false; }
+    // ⭐⭐ RAF-10: mount the APP's own asset tree at `app://`. Symmetric with set_asset_root's Engine mount, but an app
+    // root installs NO engine defaults — the app authors its OWN frames/materials/techniques/post under app://, and
+    // `set_frame_graph("app://frame/…")` + app-registered `app://…` programs resolve through the SAME public
+    // resolver/registry as engine defaults. ⛔ No privileged path: app:// and engine:// are structurally separate
+    // namespaces (an app CANNOT shadow an engine asset — the ids hash differently by scheme).
+    m_impl->resolver.set_mount(crd::renderasset::AssetScheme::App, crd::containers::StringView(dir));
     return true;
 }
 
@@ -2952,6 +3154,13 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
     // REN-38-E7: the AUTHORED lighting technique, registered after the builtins so an app can shadow
     // it by name exactly as it can shadow a built-in one.
     m_impl->techniques.define(scene_authored_technique());
+    // ⭐⭐ RAF-10: replay app-supplied techniques LAST, so a same-named app technique SHADOWS every engine one (find is
+    // last-match). An application adds or overrides shading through the identical mechanism the engine uses for its own
+    // `scene_authored_technique` — no privileged engine-only path, exactly the Gate-10 contract.
+    for (crd::usize i = 0; i < m_impl->app_techniques.size(); ++i)
+    {
+        m_impl->techniques.define(m_impl->app_techniques[i]);
+    }
     const crd::kir::technique::Technique* fwd = m_impl->techniques.find(m_impl->forward_technique);
     const crd::kir::technique::Technique* csm = m_impl->techniques.find(m_impl->shadow_technique);
     // ⛔ A named technique that does not resolve FAILS. Falling back to a default would render a plausible frame
@@ -4853,7 +5062,10 @@ public:
     // steps down to the `fallback` graph, which has no atlas and no cascade passes at all.
     [[nodiscard]] bool capability(crd::containers::StringView name) override
     {
-        return str_is(name, "shadows") ? m_impl.shadows_active() : false;
+        // ⭐⭐ RAF-10: forward to the ONE predicate (Impl::capability) so the step-down the recorder performs and the
+        // answer an app inspects via `SceneRenderer::capability` can never disagree. Shadows on/off is a DECLARED
+        // capability tier there, not an `if` here; device features degrade a frame to its `fallback` deterministically.
+        return m_impl.capability(name);
     }
 
     // ⭐⭐ REN-39 (the gizmo fix): the overlay is WOVEN into the recording by the recorder — after the last

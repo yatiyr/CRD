@@ -1,0 +1,50 @@
+# app_custom.frame.toml — an APP frame that COMPOSES the engine renderer and INJECTS a custom pass.
+#
+# It exercises four RAF-10 requirements at once, all without touching engine rendering code:
+#   * (2) INCLUDE an engine graph as a subgraph — `engine://frame/forward_basic` renders the scene, its `@output`
+#         bound to our HDR intermediate `scene_color`.
+#   * (3) INJECT a pass at a declared ANCHOR — `app_grade` is spliced right after the included scene pass.
+#   * (8) a custom C++ pass EXECUTOR — `kind = "custom"` names `app://executor/grade`, a record fn the app
+#         registered through `register_pass_executor`; the engine resolves it in the SAME table a builtin uses.
+#   * (4) an app DISPLAY TRANSFORM — the custom pass' program is `app://post/app_grade`, an app-authored `.crdp`
+#         (registered via `register_post_asset`); it samples the HDR scene and writes the tonemapped `@output`.
+#
+# The scene→intermediate→transform shape mirrors the engine's own `forward_csm_agx`; the difference is that every
+# new part is the application's, added by asset + registration, not by a rebuild.
+
+schema = 1
+name   = "app://frame/app_custom"
+
+# (2) the engine forward renderer, included as a subgraph; its terminal `@output` is rebound to our intermediate.
+[[include]]
+graph = "engine://frame/forward_basic"
+as    = "scene"
+bind  = { "@output" = "scene_color" }
+
+# the HDR intermediate the included scene renders into, then the custom pass samples. `depth_buffer` gives the
+# included geometry pass a companion depth (it had one when it wrote the real target); `sampled` lets the grade read it.
+[[resource]]
+name         = "scene_color"
+kind         = "transient_image"
+format       = "RGBA16F"
+scale        = 1.0
+sampled      = true
+depth_buffer = true
+
+# (3) a safe extension point after the included scene pass, and the injection that fills it.
+[[anchor]]
+name  = "after_scene"
+after = ["scene.forward"]
+
+[[inject]]
+at   = "after_scene"
+pass = "app_grade"
+
+# (8)+(4) the custom pass: an app executor id + an app program id. It reads the HDR scene and writes the display output.
+[[pass]]
+name     = "app_grade"
+kind     = "custom"
+executor = "app://executor/grade"
+shader   = "app://post/app_grade"
+reads    = ["scene_color"]
+writes   = ["@output"]

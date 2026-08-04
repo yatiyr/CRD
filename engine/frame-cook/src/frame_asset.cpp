@@ -130,6 +130,7 @@ bool to_pass_kind(std::string_view s, FramePassKind& out)
     if (s == "raytrace.pipeline")    { out = FramePassKind::RayTracePipeline;   return true; }
     if (s == "compute.indirect")     { out = FramePassKind::ComputeIndirect;    return true; }
     if (s == "raster.mesh.indirect") { out = FramePassKind::RasterMeshIndirect; return true; }
+    if (s == "custom")               { out = FramePassKind::Custom;             return true; } // RAF-10: app executor by id
     return false;
 }
 // REN-38-A13: the closed sets for per-pass render state. Every miss is a NAMED cook error — a typo that fell
@@ -726,6 +727,7 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
             if (const auto v = (*t)["view"].value<std::string_view>())      { set_str(p.view, *v); }
             if (const auto v = (*t)["shader"].value<std::string_view>())    { set_str(p.shader, *v); }
             if (const auto v = (*t)["kernel"].value<std::string_view>())    { set_str(p.kernel, *v); }
+            if (const auto v = (*t)["executor"].value<std::string_view>())  { set_str(p.executor, *v); } // RAF-10: custom
             if (const auto v = (*t)["raygen"].value<std::string_view>())      { set_str(p.raygen, *v); }
             if (const auto v = (*t)["miss"].value<std::string_view>())        { set_str(p.miss, *v); }
             if (const auto v = (*t)["closest_hit"].value<std::string_view>()) { set_str(p.closest_hit, *v); }
@@ -1238,6 +1240,13 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
         // resource: an ordinary transient buffer is created without the INDIRECT usage flag, so binding one as
         // arguments is invalid on Vulkan and an untransitionable state on D3D12 — and neither flag can be added
         // after creation. Catching the kind here is the only place it can be caught before the device refuses.
+        // ⭐⭐ RAF-10: a CUSTOM pass must NAME its registered executor id — an empty `executor` is a pass with no
+        // mechanic, caught here rather than as a silent no-op at record time (the loud-failure discipline).
+        if (p.kind == FramePassKind::Custom && p.executor.empty())
+        {
+            set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+            return FrameCookError::MissingShader;
+        }
         if (p.kind == FramePassKind::ComputeIndirect || p.kind == FramePassKind::RasterMeshIndirect)
         {
             if (p.kind == FramePassKind::ComputeIndirect && p.kernel.empty())

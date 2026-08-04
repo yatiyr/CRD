@@ -72,6 +72,12 @@ void copy_resource(const FrameResourceDesc& s, FrameResourceDesc& d)
     d.size_bytes = s.size_bytes;
 }
 
+// ⛔⛔ Copy EVERY scalar/struct field of a pass. `name`, `draw_list`, `reads`, `writes` and `shared_depth` are NOT
+// copied here — they are GRAPH-RESOURCE names the caller rewrites through the include's namespace. Everything else
+// (program/technique/executor ids, render state, clear/load/depth attributes, params) is provenance-independent and
+// copied verbatim. ⛔ This list must stay COMPLETE: a field added to `FramePassDesc` but missed here is SILENTLY
+// DROPPED when a graph is included — the exact class of bug RAF-10 found (the `executor` field vanished on compose,
+// so an injected custom pass validated as "a fullscreen pass with no shader"). If you add a pass field, add it here.
 void copy_pass_body(const FramePassDesc& s, FramePassDesc& d)
 {
     d.kind            = s.kind;
@@ -85,8 +91,28 @@ void copy_pass_body(const FramePassDesc& s, FramePassDesc& d)
     d.depth           = s.depth;
     copy_str(d.shader, s.shader);
     copy_str(d.kernel, s.kernel);
+    copy_str(d.executor, s.executor); // ⭐⭐ RAF-10: the custom-pass executor id — dropped here made compose fail
+    copy_str(d.raygen, s.raygen);
+    copy_str(d.miss, s.miss);
+    copy_str(d.closest_hit, s.closest_hit);
+    copy_str(d.any_hit, s.any_hit);
+    copy_str(d.intersection, s.intersection);
+    copy_str(d.callable, s.callable);
     copy_str(d.technique, s.technique);
     copy_str(d.view, s.view);
+    for (crd::usize i = 0; i < s.blend.size(); ++i) { d.blend.push_back(s.blend[i]); }
+    d.shading_rate      = s.shading_rate;
+    d.rate_combiner     = s.rate_combiner;
+    d.conservative      = s.conservative;
+    d.queue             = s.queue;
+    d.has_sampler       = s.has_sampler;
+    d.sampler           = s.sampler;
+    d.filter            = s.filter;
+    d.state             = s.state;
+    d.load_target       = s.load_target;
+    d.load_depth        = s.load_depth;
+    d.depth_as_float    = s.depth_as_float;
+    d.untracked_storage = s.untracked_storage;
     for (crd::usize i = 0; i < s.params.size(); ++i)
     {
         FrameParam p(d.params.allocator());
@@ -141,6 +167,7 @@ void append_graph(const FrameGraphDesc& src, const FrameIncludeDesc* inc, FrameG
         name_of(sp.name, p.name);
         copy_pass_body(sp, p);
         if (sp.draw_list.size() > 0U) { name_of(sp.draw_list, p.draw_list); }
+        if (sp.shared_depth.size() > 0U) { name_of(sp.shared_depth, p.shared_depth); } // a graph-resource name, namespaced
         const auto cp_refs = [&](const crd::containers::Array<FrameResourceRef>& s,
                                  crd::containers::Array<FrameResourceRef>&       t) {
             for (crd::usize k = 0; k < s.size(); ++k)

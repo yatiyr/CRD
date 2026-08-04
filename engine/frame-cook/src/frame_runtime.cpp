@@ -976,6 +976,135 @@ bool record_raytrace_pipeline_via_executor(PassRec* p, g::IFrameContext& ctx, g:
     return true;
 }
 
+// ⭐⭐ RAF-10: the CUSTOM (application-defined) executor adapter. A `kind = "custom"` pass names a REGISTERED executor id
+// (`app://executor/…`); the renderer resolves the app's record fn in the SAME GraphExecutorTable a builtin uses and
+// drives it with a RecordContext built from the pass's DECLARED writes (color0..3) + reads (input0..7 · constants) +
+// params (clear_color + the authored `params`) + the resolved program + draw list. The app's record fn touches ONLY
+// what it declared (RecordContext diagnoses an undeclared slot). ⛔ No engine code NAMES the app's executor — the id is
+// the extension point, so an app adds a pass MECHANIC without editing FramePassKind or any engine file.
+bool record_custom_via_executor(PassRec* p, g::IFrameContext& ctx, g::IRasterContext& r, g::IRasterTarget* t)
+{
+    namespace rp = crd::renderpass;
+    namespace rg = crd::rendergraph;
+    using SV = crd::containers::StringView;
+    if (p->records == nullptr || p->rec_alloc == nullptr || t == nullptr) { return false; }
+    const FramePassDesc& d = *p->desc;
+    if (d.executor.empty()) { return false; }
+    const rp::ExecutorTypeId eid = rp::executor_type_id(SV(d.executor.c_str(), d.executor.size()));
+    const rg::PassRecordFn   fn  = p->records->find(eid);
+    if (fn == nullptr)
+    {
+        // ⛔ a NAMED-but-unregistered executor is a clear error, not a silent no-op — the pass is consumed (return true)
+        // so the inline switch does not then guess a fallback, and the miss is reported by name.
+        CRD_LOG_ERROR(g_log_framecook, "custom pass '{}' names executor '{}' which is not registered",
+                      d.name.c_str(), d.executor.c_str());
+        return true;
+    }
+    auto enc = r.create_command_encoder();
+    if (enc == nullptr) { return false; }
+    rp::PassPayload payload;
+    payload.executor       = eid;
+    payload.schema_version = 1U;
+    payload.queue          = rp::QueueKind::Graphics;
+    rg::ResourceTable  table(p->rec_alloc);
+    rg::DiagnosticList diags(p->rec_alloc);
+    const auto declare = [&](const char* slot, rp::SlotResourceKind kind, rp::SlotAccess access, g::IRasterTarget* tgt,
+                             g::IStorageBuffer* buf, g::ITexture* tex)
+    {
+        const crd::u64 id = rp::pass_param_id(SV(slot));
+        table.bind(rg::ResolvedResource{id, kind, tgt, buf, nullptr, tex});
+        payload.resources.push_back(rp::ResourceRef{id, kind, access, id});
+    };
+    // writes -> color0..3 (color0 == the resolved target t; extra colour writes resolved via ctx.image)
+    static const char* const kColors[4] = {"color", "color1", "color2", "color3"};
+    declare(kColors[0], rp::SlotResourceKind::ColorTarget, rp::SlotAccess::Write, t, nullptr, nullptr);
+    for (crd::u32 w = 1U; w < p->n_writes && w < 4U; ++w)
+    {
+        if (g::IRasterTarget* wt = ctx.image(p->writes_all[w]); wt != nullptr)
+        {
+            declare(kColors[w], rp::SlotResourceKind::ColorTarget, rp::SlotAccess::Write, wt, nullptr, nullptr);
+        }
+    }
+    // reads -> input0..7 (sampled textures) + constants (a buffer read)
+    static const char* const kInputs[8] = {"input0", "input1", "input2", "input3",
+                                            "input4", "input5", "input6", "input7"};
+    for (crd::u32 i = 0; i < p->n_sampled && i < 8U; ++i)
+    {
+        g::ITexture* tx = ctx.texture(p->sampled[i]);
+        if (tx == nullptr) { return true; } // resolve-or-abort (the inline rule): consumed, records nothing
+        declare(kInputs[i], rp::SlotResourceKind::Texture, rp::SlotAccess::Read, nullptr, nullptr, tx);
+    }
+    if (p->fs_constants.valid())
+    {
+        if (g::IStorageBuffer* cbuf = ctx.buffer(p->fs_constants); cbuf != nullptr)
+        {
+            declare("constants", rp::SlotResourceKind::StorageBuffer, rp::SlotAccess::Read, nullptr, cbuf, nullptr);
+        }
+    }
+    const auto add_param = [&](SV name, const rp::TypedValue& v)
+    { payload.params.push_back(rp::ParamValue{rp::pass_param_id(name), v}); };
+    {
+        rp::TypedValue cc;
+        cc.type  = rp::ExecutorParamType::Vec4;
+        cc.v4[0] = d.clear_color[0];
+        cc.v4[1] = d.clear_color[1];
+        cc.v4[2] = d.clear_color[2];
+        cc.v4[3] = d.clear_color[3];
+        add_param(SV("clear_color"), cc);
+    }
+    // the authored `params` -> typed payload params (an app executor reads its own knobs by name).
+    for (crd::usize k = 0; k < d.params.size(); ++k)
+    {
+        const FrameParam& fp = d.params[k];
+        rp::TypedValue     tv;
+        switch (fp.type)
+        {
+        case FrameParamType::Float: tv.type = rp::ExecutorParamType::F32; tv.f = static_cast<float>(fp.v[0]); break;
+        case FrameParamType::Int:   tv.type = rp::ExecutorParamType::U32; tv.u = static_cast<crd::u32>(fp.v[0]); break;
+        case FrameParamType::Bool:  tv.type = rp::ExecutorParamType::Bool; tv.b = fp.v[0] != 0.0; break;
+        case FrameParamType::Vec4:
+            tv.type = rp::ExecutorParamType::Vec4;
+            for (crd::u32 j = 0; j < 4U; ++j) { tv.v4[j] = static_cast<float>(fp.v[j]); }
+            break;
+        }
+        add_param(SV(fp.name.c_str(), fp.name.size()), tv);
+    }
+    // the resolved draw list (a custom SCENE-style executor iterates it; a fullscreen custom leaves it empty).
+    rg::DrawList                               draws{};
+    crd::containers::Array<rg::RenderDrawItem> items(p->rec_alloc);
+    if (p->draws.count() > 0U)
+    {
+        items.reserve(p->draws.count());
+        for (crd::u32 i = 0; i < p->draws.count(); ++i)
+        {
+            const DrawItem it = p->draws.at(i);
+            if (it.storage == nullptr) { continue; }
+            g::IStorageBuffer* sb = ctx.buffer(p->storage_of[i]);
+            if (sb == nullptr) { continue; }
+            rg::RenderDrawItem ri{};
+            ri.storage        = sb;
+            ri.program        = p->program_is_instance ? nullptr : it.program;
+            ri.texture        = it.texture;
+            ri.vertex_count   = it.vertex_count;
+            ri.indexed        = it.indexed;
+            ri.index_count    = it.index_count;
+            ri.instance_count = it.instance_count;
+            ri.first_index    = it.first_index;
+            ri.args           = it.args;
+            ri.args_offset    = it.args_offset;
+            items.push_back(ri);
+        }
+        draws.items = items.data();
+        draws.count = static_cast<crd::u32>(items.size());
+    }
+    rg::PassPrograms programs;
+    programs.raster = p->program;
+    programs.kernel = p->kernel_program;
+    rg::RecordContext rctx(payload, table, programs, diags, &draws);
+    fn(payload, rctx, *enc);
+    return true;
+}
+
 void record_pass(g::IFrameContext& ctx, void* user)
 {
     auto*                p = static_cast<PassRec*>(user);
@@ -1004,7 +1133,7 @@ void record_pass(g::IFrameContext& ctx, void* user)
                                && d.kind != FramePassKind::Blit && d.kind != FramePassKind::Resolve
                                && d.kind != FramePassKind::Compute && d.kind != FramePassKind::Present
                                && d.kind != FramePassKind::RayTrace && d.kind != FramePassKind::ComputeIndirect
-                               && d.kind != FramePassKind::RayTracePipeline;
+                               && d.kind != FramePassKind::RayTracePipeline && d.kind != FramePassKind::Custom;
     if (needs_program && p->program == nullptr) { return; }
 
     // ⭐ REN-38-B3: ZERO this pass's counters FIRST. Recorded here rather than as a separate pass so the reset is
@@ -1672,6 +1801,11 @@ void record_pass(g::IFrameContext& ctx, void* user)
         }
         break;
     }
+    case FramePassKind::Custom:
+        // ⭐⭐ RAF-10: an APPLICATION-DEFINED pass — record through the executor named in `executor`, resolved in the
+        // SAME table a builtin uses. A named-but-unregistered executor is reported by name (record_custom returns true).
+        (void)record_custom_via_executor(p, ctx, r, t);
+        break;
     case FramePassKind::Present:
     default:
         // ⭐ REN-38-A5: a present pass records NO commands. Presenting is acquire → blit → present on the
@@ -1719,6 +1853,21 @@ void FrameRecorder::begin_frame() noexcept
 {
     m_impl->used = 0U;
     ++m_impl->frame_parity; // REN-38-B1: rotate the ping-pong pair, once per frame
+}
+
+bool FrameRecorder::register_pass_executor(crd::containers::StringView id, crd::rendergraph::PassRecordFn fn)
+{
+    // ⭐⭐ RAF-10: an app's custom executor joins the SAME table `register_builtin_records` filled — the id it registers
+    // under is exactly what a `kind = "custom"` pass' `executor =` names, hashed the same way (`executor_type_id`), so
+    // `record_custom_via_executor` resolves it with the identical `find()` a builtin uses. This is the extension seam:
+    // no new FramePassKind, no engine edit — the id IS the mechanic. `register_record` refuses a duplicate (a builtin's
+    // id, or a second registration of the same app id), which surfaces here as `false`.
+    if (m_impl == nullptr || fn == nullptr)
+    {
+        return false;
+    }
+    crd::renderasset::DiagnosticList diags(m_impl->alloc);
+    return m_impl->records.register_record(crd::renderpass::executor_type_id(id), fn, diags);
 }
 
 bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_ref, g::IRasterContext& raster,

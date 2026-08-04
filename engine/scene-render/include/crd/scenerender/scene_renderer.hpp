@@ -46,6 +46,19 @@ namespace crd::gpu
 class IGpuContext;
 class IRasterProgram; // RAF-9: program-registry provider return types
 class IGpuProgram;
+class ICommandEncoder; // RAF-10: the record fn of a custom pass executor takes the canonical encoder
+}
+namespace crd::renderpass
+{
+struct PassPayload; // RAF-10: custom-executor record-fn parameter (the resolved pass payload)
+}
+namespace crd::rendergraph
+{
+class RecordContext; // RAF-10: custom-executor record-fn parameter (the slot/program resolver)
+}
+namespace crd::kir::technique
+{
+struct Technique; // RAF-10: define_technique() argument — an app supplies its own shading technique by struct
 }
 namespace crd::resources
 {
@@ -605,6 +618,41 @@ public:
     // Returns false on a malformed id or null provider.
     [[nodiscard]] bool register_raster_program(const char* canonical_id, RasterProgramProvider provider, void* user);
     [[nodiscard]] bool register_kernel_program(const char* canonical_id, KernelProgramProvider provider, void* user);
+    // ⭐⭐ RAF-10: register an APPLICATION pass EXECUTOR — a custom C++ record fn under a canonical id. A `kind =
+    // "custom"` frame pass naming this id (its `executor = "app://executor/…"`) records through `fn`, which joins the
+    // SAME executor table a builtin pass uses. This is how an app adds a genuinely new pass MECHANIC — recording
+    // arbitrary canonical commands — with NO engine edit: not a new FramePassKind, not a backend virtual, not a central
+    // enum. `fn` receives the resolved (PassPayload, RecordContext, ICommandEncoder); it may touch ONLY the slots the
+    // pass declared (RecordContext diagnoses an undeclared one). Returns false on a null fn or an id already taken (a
+    // builtin executor's id, or a second registration of the same app id). Call before the first `render`.
+    using PassExecutorFn = void (*)(const crd::renderpass::PassPayload& payload, crd::rendergraph::RecordContext& ctx,
+                                    crd::gpu::ICommandEncoder& encoder);
+    [[nodiscard]] bool register_pass_executor(const char* canonical_id, PassExecutorFn fn);
+    // ⭐⭐ RAF-10: supply the SCENE MATERIAL as canonical ids (`app://material/…`). Defaults are the shipped engine
+    // relative names, so unset behaviour is byte-identical. Two ids because a group WITH a base-colour map cooks a
+    // different (textured) surface than one without; pass the same id twice if the app authors one material for both.
+    // An id with a `://` scheme resolves through the mount table (so an app material under `set_app_asset_root`
+    // resolves); a bare relative name stays on the engine mount. Call before `init_programs`. Returns false if impl is
+    // unset or both ids are null. This is the ONE seam that re-surfaces the scene with no engine rendering-code edit.
+    [[nodiscard]] bool set_scene_material(const char* opaque_id, const char* textured_id);
+    // ⭐⭐ RAF-10: register an APPLICATION shading TECHNIQUE — the SAME `crd::kir::technique::Technique` struct the engine
+    // registers its own with. Replayed after the built-ins in `init_programs`, so a same-named app technique SHADOWS the
+    // engine's (the library resolves by last-match). Select it with `set_forward_technique(name)`. The `Technique`'s
+    // `body`/`bindings`/`options` must outlive the renderer (static app data, exactly like the engine's). Call before
+    // `init_programs`. Returns false if impl is unset or the technique is invalid (no name, or neither body nor blob).
+    [[nodiscard]] bool define_technique(const crd::kir::technique::Technique& technique);
+    // ⭐⭐ RAF-10: register an APPLICATION post/display-transform program — a `.crdp` the app authored — under a canonical
+    // id (`app://post/…`). A frame graph's post pass names that id in `shader = …`; the renderer cooks `crdp_asset_name`
+    // (a `://` id resolves through the mount table, a bare name through the engine mount) into a fullscreen program the
+    // SAME way the engine cooks its own tonemap/sRGB. This is how an app REPLACES the tonemap with no engine edit and no
+    // bespoke cook. Call before `init_programs`. Returns false on a null/malformed id or null `crdp_asset_name`.
+    [[nodiscard]] bool register_post_asset(const char* canonical_id, const char* crdp_asset_name);
+    // ⭐⭐ RAF-10: query a capability by name — the SAME predicate the frame-graph `requires`/`fallback` step-down
+    // consults. `"shadows"` reflects the shadow tier; device features (`"bindless"`, `"vrs"`,
+    // `"conservative_raster"`, `"inner_coverage"`, `"fragment_interlock"`, `"ray_tracing_pipeline"`) reflect the
+    // adapter; every other name is UNSUPPORTED (false) by rule. Lets an app make its capability fallback EXPLICIT —
+    // inspect what the device offers and select accordingly — rather than discovering it through a silent step-down.
+    [[nodiscard]] bool capability(const char* name);
     // ── ⭐ REN-38-F15 / REN-41: the ASSET ROOT is the single source of truth. ──
     // Every authored asset this renderer cooks (frame graphs, stage declarations, materials, lighting) is read
     // from a file under `dir` — editing `assets/` changes the frame without a rebuild. There is no in-binary
@@ -612,6 +660,11 @@ public:
     // REFUSES the root (returns false, nothing half-installed). If the host never calls this, `init` honours the
     // `CRD_ASSETS_DIR` convention so the shipped default assets still resolve.
     [[nodiscard]] bool set_asset_root(const char* dir);
+    // ⭐⭐ RAF-10: mount the APPLICATION's own asset tree at `app://` (frames · materials · techniques · post). An app
+    // authors its own content under this root; `set_frame_graph("app://frame/…")` and app-registered `app://…` programs
+    // then resolve through the SAME public resolver/registry as engine defaults — no privileged engine-only path.
+    // ⛔ `app://` and `engine://` are structurally distinct namespaces: an app asset can never SHADOW an engine one.
+    [[nodiscard]] bool set_app_asset_root(const char* dir);
     // The scene TLAS for `raytrace.*` passes. The graph NAMES an acceleration structure; whoever owns the
     // geometry's device form installs it here (B4: the asset format stays free of engine types).
     void set_scene_accel(crd::gpu::IAccelerationStructure* accel) noexcept;

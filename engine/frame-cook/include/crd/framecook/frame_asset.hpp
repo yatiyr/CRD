@@ -81,6 +81,13 @@ enum class FramePassKind : crd::u8
     RayTracePipeline,
     ComputeIndirect,     // a kernel whose WORKGROUP COUNT a buffer holds — the GPU decides how much work follows
     RasterMeshIndirect,  // a meshlet dispatch whose count a buffer holds — the Nanite-style cull→draw loop
+    // ── ⭐⭐ RAF-10: the APPLICATION-DEFINED pass. ⛔ Appended at the END (a renumbered kind reclassifies every cooked
+    // graph). A `kind = "custom"` pass names a registered executor id in its `executor` field (`app://executor/…`); the
+    // renderer resolves it through the SAME public GraphExecutorTable an engine builtin uses, so an app adds a new pass
+    // MECHANIC without editing this enum or touching engine code. The record function is registered at runtime via the
+    // public `SceneRenderer::register_pass_executor(id, fn, user)` seam — the executor id, not a new enum value, is the
+    // extension point. This is the whole reason the enum ⇒ executor-registry migration exists.
+    Custom,
 };
 
 // REN-38-A6: how `kind = "blit"` filters while it rescales.
@@ -257,6 +264,10 @@ struct FramePassDesc
     crd::containers::String                       view;      // "camera.main", "light.0.cascade[$index]"
     crd::containers::String                       shader;    // fullscreen kinds — a cooked CKIR program id
     crd::containers::String                       kernel;    // compute kind — a cooked CKIR kernel id
+    // ⭐⭐ RAF-10: for `kind = "custom"`, the registered EXECUTOR id (`app://executor/…`). The renderer resolves it in
+    // the SAME GraphExecutorTable an engine builtin uses; the record fn is supplied at runtime via
+    // `SceneRenderer::register_pass_executor`. Empty for every non-custom kind.
+    crd::containers::String                       executor;
     // ⭐ REN-38-A16: the three programs a ray-tracing PIPELINE is built from. Named separately rather than as a
     // list because their ROLES are fixed and positional: swapping miss and closest-hit in a list would build a
     // pipeline that traces correctly and shades every hit with the miss shader.

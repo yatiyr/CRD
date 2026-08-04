@@ -1,0 +1,30 @@
+# app_grade.crdp — an APPLICATION-authored display transform (RAF-10 requirement 4).
+#
+# Resolved by the canonical id `app://post/app_grade` under the app asset tree, cooked into a fullscreen program
+# by the SAME `parse_post_toml` + `cook_post_graph` path the engine's own tonemap uses (see `register_post_asset`
+# / `ensure_post_program_named`). It samples the scene, pushes saturation (a "punchy" look), then applies the sRGB
+# OETF — visibly the app's grade, not the engine's plain sRGB, so it proves an app REPLACES the display transform
+# with no engine rendering-code edit. The app's custom pass executor drives this program (requirement 8).
+
+schema = 1
+name   = "app://post/app_grade"
+
+[[node]]
+name   = "uv"
+op     = "texcoord"
+inputs = [0]
+
+[[node]]
+name   = "scene"
+op     = "sample2d"
+inputs = ["uv", 0, 1, 2]
+
+[[node]]
+name   = "graded"
+op     = "agx"
+inputs = ["scene"]
+
+[[node]]
+name   = "output"
+op     = "srgb_encode"
+inputs = ["graded"]

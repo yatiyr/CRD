@@ -16,6 +16,7 @@
 #include <crd/gpu/frame_graph.hpp>
 #include <crd/gpu/program.hpp> // REN-38-A2: IGpuProgram — a compute kernel is a single stage, not a linked pair
 #include <crd/gpu/raster_context.hpp>
+#include <crd/rendergraph/frame_graph.hpp> // ⭐⭐ RAF-10: PassRecordFn — an app registers a custom pass executor here
 
 namespace crd::framecook
 {
@@ -331,6 +332,13 @@ public:
     [[nodiscard]] bool record(const FrameGraphDesc& desc, crd::gpu::IFrameGraph& fg, crd::gpu::IRasterContext& raster,
                               IFrameGraphHost& host, FrameExecError* err = nullptr,
                               crd::containers::String* where = nullptr);
+
+    // ⭐⭐ RAF-10: register an APPLICATION pass executor's record function under a canonical id (e.g. an
+    // `app://executor/…` name a `kind = "custom"` pass names). It joins the SAME GraphExecutorTable a builtin uses, so
+    // an application adds a genuinely new pass MECHANIC — recording arbitrary commands — without editing FramePassKind
+    // or any engine file. `id` is the string a custom pass' `executor =` names (hashed identically here and at record
+    // time). Returns false on a null fn or a duplicate id (the builtin table forbids shadowing an existing executor).
+    [[nodiscard]] bool register_pass_executor(crd::containers::StringView id, crd::rendergraph::PassRecordFn fn);
 
 private:
     struct Impl;
