@@ -69,6 +69,8 @@ enum class DiagCode : u8
     UnsupportedPassKind,     // RAF-8: a cooked FramePassKind has no render-graph executor mapping yet (the load bridge)
     UnresolvedForEach,       // RAF-8: a for_each pass whose instance count the host could not resolve (count 0)
     AssetNotFound,           // RAF-9: a canonical asset id did not resolve to bytes (no on-disk file under its mount)
+    AssetCookFailed,         // RAF-11: a source asset failed to reparse/validate/cook during a (re)load
+    InterfaceIncompatible,   // RAF-11: an interface-change reload was rejected — a mandatory dependent cannot bind it
 };
 
 // The name IS the stable identity of a code (see enum comment).

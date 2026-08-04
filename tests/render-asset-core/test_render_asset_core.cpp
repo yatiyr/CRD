@@ -246,6 +246,86 @@ TEST_CASE("raf1 dependency ordering is deterministic")
     REQUIRE_FALSE(diags.has_errors());
 }
 
+// ── RAF-11 hot-reload rebuild set: the transitive DEPENDENTS of a changed asset, deps-first, changed excluded. ──
+TEST_CASE("raf11 affected_by yields the transitive dependents in rebuild order")
+{
+    crd::memory::TlsfAllocator alloc(1U << 20U, nullptr, "raf11-affected");
+    DiagnosticList diags(&alloc);
+
+    // Same diamond: a (frame) depends on b and c (techniques); b and c each depend on d (a shared module).
+    const AssetId a = asset_id_of("engine://frame/a");
+    const AssetId b = asset_id_of("engine://frame/b");
+    const AssetId c = asset_id_of("engine://frame/c");
+    const AssetId d = asset_id_of("engine://frame/d");
+
+    DependencyGraph g(&alloc);
+    g.add_edge(a, b);
+    g.add_edge(a, c);
+    g.add_edge(b, d);
+    g.add_edge(c, d);
+
+    // Changing the shared module d must rebuild b, c, then a — b and c BEFORE a (a depends on them), d NOT included.
+    Array<AssetId> hit(&alloc);
+    REQUIRE(g.affected_by(d, hit, diags));
+    REQUIRE(hit.size() == 3);
+    REQUIRE(index_of(hit, d) == hit.size()); // the changed asset never appears in its own rebuild set
+    REQUIRE(index_of(hit, b) < index_of(hit, a));
+    REQUIRE(index_of(hit, c) < index_of(hit, a));
+    const AssetId lo = (b < c) ? b : c; // ties broken by ascending id, same as topo_order
+    const AssetId hi = (b < c) ? c : b;
+    REQUIRE(index_of(hit, lo) < index_of(hit, hi));
+
+    // Changing the top frame a affects nobody (nothing depends on it).
+    Array<AssetId> none(&alloc);
+    REQUIRE(g.affected_by(a, none, diags));
+    REQUIRE(none.size() == 0);
+
+    // Changing a mid technique b rebuilds only its one dependent, a.
+    Array<AssetId> one(&alloc);
+    REQUIRE(g.affected_by(b, one, diags));
+    REQUIRE(one.size() == 1);
+    REQUIRE(one[0] == a);
+
+    // An asset the graph never heard of affects nobody (and is not an error).
+    Array<AssetId> unknown(&alloc);
+    REQUIRE(g.affected_by(asset_id_of("engine://frame/z"), unknown, diags));
+    REQUIRE(unknown.size() == 0);
+
+    // Determinism: the rebuild set is independent of edge-insertion order.
+    DependencyGraph g2(&alloc);
+    g2.add_edge(c, d);
+    g2.add_edge(a, b);
+    g2.add_edge(b, d);
+    g2.add_edge(a, c);
+    Array<AssetId> hit2(&alloc);
+    REQUIRE(g2.affected_by(d, hit2, diags));
+    REQUIRE(hit2.size() == hit.size());
+    for (usize i = 0; i < hit.size(); ++i)
+    {
+        REQUIRE(hit[i] == hit2[i]);
+    }
+    REQUIRE_FALSE(diags.has_errors());
+}
+
+// ── A cyclic graph has no rebuild order — affected_by rejects it exactly like topo_order. ──
+TEST_CASE("raf11 affected_by rejects a cyclic graph")
+{
+    crd::memory::TlsfAllocator alloc(1U << 20U, nullptr, "raf11-affected-cycle");
+    DiagnosticList diags(&alloc);
+
+    const AssetId a = asset_id_of("engine://frame/a");
+    const AssetId b = asset_id_of("engine://frame/b");
+
+    DependencyGraph g(&alloc);
+    g.add_edge(a, b);
+    g.add_edge(b, a); // cycle
+
+    Array<AssetId> out(&alloc);
+    REQUIRE_FALSE(g.affected_by(a, out, diags));
+    REQUIRE(out.size() == 0);
+    REQUIRE(diags.contains(DiagCode::CyclicDependency));
+}
+
 // ── Cycle rejection. ──
 TEST_CASE("raf1 dependency cycle is rejected")
 {

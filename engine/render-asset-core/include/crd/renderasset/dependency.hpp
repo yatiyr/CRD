@@ -60,6 +60,16 @@ public:
     // cycle: emits CyclicDependency, clears `out`, returns false.
     bool topo_order(Array<AssetId>& out, DiagnosticList& diags) const;
 
+    // RAF-11 hot-reload REBUILD SET. The transitive DEPENDENTS of `changed` — every
+    // asset that, directly or through a chain, depends on it — in deterministic
+    // topological order (a dependency before its dependent), EXCLUDING `changed`
+    // itself. Recook `changed`, then rebuild `out` in this order and no dependent is
+    // ever rebuilt before something it depends on. Empty when nothing depends on
+    // `changed` (or `changed` is absent/invalid). On a cycle anywhere in the graph:
+    // emits CyclicDependency, clears `out`, returns false (a cyclic graph has no
+    // rebuild order — cycles are rejected at cook time, this is the runtime backstop).
+    bool affected_by(AssetId changed, Array<AssetId>& out, DiagnosticList& diags) const;
+
     // Every referenced dependency id must be present in `registry`; otherwise a
     // MissingDependency diagnostic is emitted per missing id. Returns true iff
     // none are missing.

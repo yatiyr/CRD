@@ -3,6 +3,7 @@ add_executable(crd-scene-render-tests
     test_scene_render_gpu.cpp # GEO-7: the 10k-instance cull+draw gate on a real Vulkan device ([gpu])
     test_csm.cpp              # REN-3.2-b: CPU cascade fitting + the no-swim stabilization gates
     test_raf10_app.cpp        # RAF-10 (D-007): an APPLICATION customises the renderer ten ways, public headers only
+    test_raf11_reload.cpp     # RAF-11 (D-007): dependency-aware hot reload — the reload engine + generations (device-free)
 )
 
 target_link_libraries(crd-scene-render-tests PRIVATE

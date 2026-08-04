@@ -171,6 +171,61 @@ bool DependencyGraph::topo_order(Array<AssetId>& out, DiagnosticList& diags) con
     return true;
 }
 
+bool DependencyGraph::affected_by(AssetId changed, Array<AssetId>& out, DiagnosticList& diags) const
+{
+    out.clear();
+    if (!changed.valid())
+    {
+        return true; // nothing to react to
+    }
+
+    // 1) Reverse reachability: collect every transitive DEPENDENT of `changed`. Frontier-driven so each id is
+    //    processed once; the `affected` set is kept sorted (insert_sorted_unique) so membership is a binary search.
+    //    A node depends on `cur` when `cur` is in its deps list — that is the reverse of an `add_edge(from,to)` edge.
+    Array<AssetId> affected(m_alloc);
+    Array<AssetId> frontier(m_alloc);
+    frontier.push_back(changed);
+    while (frontier.size() > 0)
+    {
+        const AssetId cur = frontier[frontier.size() - 1];
+        frontier.pop_back();
+        for (usize i = 0; i < m_nodes.size(); ++i)
+        {
+            const Node& node = m_nodes[i];
+            if (node.id == changed)
+            {
+                continue; // never fold the changed asset itself into its own dependent set
+            }
+            if (contains_id(node.deps, cur) && !contains_id(affected, node.id))
+            {
+                insert_sorted_unique(affected, node.id);
+                frontier.push_back(node.id);
+            }
+        }
+    }
+    if (affected.size() == 0)
+    {
+        return true; // nothing depends on `changed`
+    }
+
+    // 2) Emit those dependents in the graph's own deterministic deps-first order. Reusing `topo_order` keeps the
+    //    ordering identical to the cook path and rejects a cyclic graph the same way (no rebuild order exists then).
+    Array<AssetId> order(m_alloc);
+    if (!topo_order(order, diags))
+    {
+        out.clear();
+        return false;
+    }
+    for (usize i = 0; i < order.size(); ++i)
+    {
+        if (contains_id(affected, order[i]))
+        {
+            out.push_back(order[i]);
+        }
+    }
+    return true;
+}
+
 bool DependencyGraph::validate_against(const AssetRegistry& registry, DiagnosticList& diags) const
 {
     bool ok = true;

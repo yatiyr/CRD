@@ -74,6 +74,10 @@ StringView diag_code_name(DiagCode code) noexcept
         return "unresolved-for-each";
     case DiagCode::AssetNotFound:
         return "asset-not-found";
+    case DiagCode::AssetCookFailed:
+        return "asset-cook-failed";
+    case DiagCode::InterfaceIncompatible:
+        return "interface-incompatible";
     }
     return "unknown";
 }
