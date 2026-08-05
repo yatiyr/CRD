@@ -9,6 +9,7 @@
 #include <crd/framecook/frame_asset.hpp>   // REN-36.2: the cooked frame-graph asset
 #include <crd/framecook/frame_runtime.hpp> // REN-36.2: executing it through IFrameGraph
 #include <crd/gpu/frame_graph.hpp>
+#include <crd/gpu/command_model.hpp> // RAF-12.4: DispatchDesc for enc_dispatch
 #include <crd/gpu/raster_context.hpp>
 #include <crd/gpu/vulkan_context.hpp>
 #include <crd/gpu/vulkan_raster_context.hpp>
@@ -34,6 +35,27 @@ namespace g = crd::gpu;
 
 namespace
 {
+// ⭐ RAF-12.4 (F2): record a compute dispatch through the canonical command encoder — the `dispatch_kernel` verb it
+// replaces is de-virtualized off IRasterContext into each backend's private method (reached only by the encoder).
+inline void enc_dispatch(g::IRasterContext& r, g::IGpuProgram& kernel, crd::u32 gx, crd::u32 gy, crd::u32 gz,
+                         g::IStorageBuffer* const* bufs, crd::u32 n)
+{
+    auto            enc = r.create_command_encoder();
+    g::DispatchDesc d{};
+    d.kernel   = &kernel;
+    d.kind     = g::DispatchKind::Direct;
+    d.groups_x = gx;
+    d.groups_y = gy;
+    d.groups_z = gz;
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        g::ResourceBinding b{};
+        b.kind   = g::BindingKind::StorageBuffer;
+        b.buffer = bufs[i];
+        d.bindings.push_back(b);
+    }
+    enc->dispatch(d);
+}
 
 // per-pass recording state (carried through FgExecuteFn's void* user)
 struct PassState
@@ -2085,7 +2107,7 @@ TEST_CASE("REN-38-A2 GATE: an authored COMPUTE pass dispatches inside the frame 
         g::IStorageBuffer* sb = ctx.buffer(s->buf);
         if (sb == nullptr) { return; }
         g::IStorageBuffer* bufs[1] = {sb};
-        ctx.raster().dispatch_kernel(*s->prog, 1U, 1U, 1U, static_cast<g::IStorageBuffer* const*>(bufs), 1U);
+        enc_dispatch(ctx.raster(), *s->prog, 1U, 1U, 1U, static_cast<g::IStorageBuffer* const*>(bufs), 1U);
     };
 
     Kern k{kernel.get(), buf};
@@ -7653,7 +7675,7 @@ TEST_CASE("REN-40-A GATE: the compacting cull kernel reproduces the CPU frustum 
                 [](g::IFrameContext& ctx, void* user) {
                     auto*                u = static_cast<CullState*>(user);
                     g::IStorageBuffer*   bufs[2] = {ctx.buffer(u->scene), ctx.buffer(u->args)};
-                    ctx.raster().dispatch_kernel(*u->kern, (n_boxes + 63U) / 64U, 1U, 1U,
+                    enc_dispatch(ctx.raster(), *u->kern, (n_boxes + 63U) / 64U, 1U, 1U,
                                                  static_cast<g::IStorageBuffer* const*>(bufs), 2U);
                 },
                 &st);
@@ -7725,7 +7747,7 @@ TEST_CASE("REN-40-A GATE: the compacting cull kernel reproduces the CPU frustum 
                 [](g::IFrameContext& ctx, void* user) {
                     auto*              u       = static_cast<TwoPass*>(user);
                     g::IStorageBuffer* bufs[2] = {ctx.buffer(u->scene), ctx.buffer(u->args)};
-                    ctx.raster().dispatch_kernel(*u->reset, 1U, 1U, 1U,
+                    enc_dispatch(ctx.raster(), *u->reset, 1U, 1U, 1U,
                                                  static_cast<g::IStorageBuffer* const*>(bufs), 2U);
                 },
                 &tp);
@@ -7737,7 +7759,7 @@ TEST_CASE("REN-40-A GATE: the compacting cull kernel reproduces the CPU frustum 
                 [](g::IFrameContext& ctx, void* user) {
                     auto*              u       = static_cast<TwoPass*>(user);
                     g::IStorageBuffer* bufs[2] = {ctx.buffer(u->scene), ctx.buffer(u->args)};
-                    ctx.raster().dispatch_kernel(*u->cull, (n_boxes + 63U) / 64U, 1U, 1U,
+                    enc_dispatch(ctx.raster(), *u->cull, (n_boxes + 63U) / 64U, 1U, 1U,
                                                  static_cast<g::IStorageBuffer* const*>(bufs), 2U);
                 },
                 &tp);
@@ -7978,7 +8000,7 @@ TEST_CASE("REN-40-C2 GATE: the cull kernel selects the LOD slot the projected sc
                 [](g::IFrameContext& ctx, void* user) {
                     auto*              u       = static_cast<St*>(user);
                     g::IStorageBuffer* bufs[2] = {ctx.buffer(u->scene), ctx.buffer(u->args)};
-                    ctx.raster().dispatch_kernel(*u->kern, (n_boxes + 63U) / 64U, 1U, 1U,
+                    enc_dispatch(ctx.raster(), *u->kern, (n_boxes + 63U) / 64U, 1U, 1U,
                                                  static_cast<g::IStorageBuffer* const*>(bufs), 2U);
                 },
                 &st);

@@ -1157,15 +1157,53 @@ void record_pass(g::IFrameContext& ctx, void* user)
     switch (d.kind)
     {
     case FramePassKind::RasterDepthOnly:
-    case FramePassKind::RasterMrt:
     case FramePassKind::RasterGeometry:
-        // ⭐ RAF-12: the scene.raster executor is the ONE recording path for every scene-draw shape (depth-only ·
-        // colour+depth MRT · colour geometry). `record_scene_via_executor` dispatches by `d.kind` internally, and
-        // the executor registry is wired into every PassRec since the RAF-8 flip — so the inline verb fallbacks
-        // these three cases carried are dead. Deleted. (A true multi-colour G-buffer, n_writes>1, stays
-        // executor-gated: unused by any shipped frame; a future deferred path adds it to the executor, not here.)
+        // ⭐ RAF-12: the scene.raster executor is the ONE recording path for the depth-only and colour-geometry
+        // scene-draw shapes. `record_scene_via_executor` dispatches by `d.kind` internally, and the executor registry
+        // is wired into every PassRec since the RAF-8 flip — so the inline verb fallbacks these cases carried are dead.
         (void)record_scene_via_executor(p, ctx, r, t);
         break;
+    case FramePassKind::RasterMrt:
+    {
+        // ⭐ RAF-12: the scene.raster executor handles the SINGLE-colour MRT (the velocity prepass — colour+depth).
+        if (record_scene_via_executor(p, ctx, r, t)) { break; }
+        // ⛔⛔ RAF-12.2: the executor declines a TRUE multi-colour G-buffer (n_writes>1) — the encoder does not yet
+        // bind N colour attachments, so this inline MRT path is the ONLY coverage. 80c0736 deleted it before that
+        // coverage existed, so every cooked deferred G-buffer rendered NOTHING (REN-38-A4). RAF-12.4-F6 relocates
+        // these storage-MRT verbs onto the encoder WITH the parity gate — until then the inline path stays.
+        // ⭐ REN-38-A1b: N DECLARED WRITES => N COLOUR ATTACHMENTS. ⭐⭐ REN-41: an MRT pass that produces a depth
+        // (the velocity prepass) delivers its FIRST colour target with that depth attached — `t` is exactly that
+        // combined target (image_with_depth, resolved at the top).
+        const g::ClearColor clear{d.clear_color[0], d.clear_color[1], d.clear_color[2], d.clear_color[3]};
+        g::IRasterTarget*   rts[kMaxPassReads]{};
+        crd::u32            nrt        = 0U;
+        const bool          with_depth = p->depth_target.valid();
+        for (crd::u32 i = 0; i < p->n_writes; ++i)
+        {
+            g::IRasterTarget* rt = (with_depth && i == 0U) ? t : ctx.image(p->writes_all[i]);
+            // ⛔ A write that does not resolve ABORTS the pass rather than shifting every later attachment down a slot.
+            if (rt == nullptr) { return; }
+            rts[nrt++] = rt;
+        }
+        if (nrt == 0U) { return; }
+        for (crd::u32 i = 0; i < p->draws.count(); ++i)
+        {
+            const DrawItem it = p->draws.at(i);
+            if (it.storage == nullptr) { continue; }
+            g::IStorageBuffer* sb = ctx.buffer(p->storage_of[i]);
+            if (sb == nullptr) { continue; }
+            g::IRasterProgram* prog = p->program;
+            // ⭐⭐ REN-41: a velocity item binds its OWN per-group program (the velocity VS twin).
+            if (!p->program_is_instance && it.program_velocity != nullptr) { prog = it.program_velocity; }
+            else if (!p->program_is_instance && it.program != nullptr) { prog = it.program; }
+            // A true multi-colour G-buffer is authored with plain vertex draws (the only shape any frame/test uses —
+            // the indexed/indirect MRT verbs had no caller once the velocity prepass moved to the single-colour scene
+            // executor, so they were retired). One vertex draw per item into all N colour attachments.
+            r.draw_storage_mrt(static_cast<g::IRasterTarget* const*>(rts), nrt, *prog, clear, d.clear_depth, d.depth,
+                               *sb, it.vertex_count);
+        }
+        break;
+    }
     case FramePassKind::RasterFullscreen:
         (void)record_fullscreen_via_executor(p, ctx, r, t);
         break;

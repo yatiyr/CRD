@@ -612,23 +612,6 @@ public:
     // Every target must share width/height; the FIRST one's dimensions define the render area. Appended at the
     // END of the vtable (D135). Default is a no-op so a backend without it fails VISIBLY (nothing renders) rather
     // than by silently drawing into attachment 0 only.
-    // ── REN-38-A2: DISPATCH A COMPUTE KERNEL INSIDE THE FRAME GRAPH. ─────────────────────────────────────────
-    // ⛔ `FramePassKind::Compute` was DECLARED BUT NOT IMPLEMENTED: the executor's `record_pass` fell through to
-    // `break`, so a compute pass in an authored asset VALIDATED, COOKED, RAN and rendered NOTHING. Every check
-    // passed and the frame was silently wrong — the worst shape a defect can take in this system.
-    //
-    // Compute lives in `IComputeContext`, which owns its own command buffer and submits independently. That is
-    // exactly what a graph pass must NOT do, so the dispatch is a RASTER-CONTEXT verb: it records into the
-    // FRAME's one command buffer, between the raster passes, ordered and barriered by the same declared
-    // reads/writes as everything else. One submission still means one submission.
-    //
-    // `buffers` are the kernel's storage bindings at set 0, bindings 0..n-1 — the graph resolves them from the
-    // pass's declared reads and writes, so a kernel never names a slot. Appended at the vtable END (D135); the
-    // default is a no-op so a backend without it fails VISIBLY rather than half-running a technique.
-    virtual void dispatch_kernel(IGpuProgram& /*kernel*/, crd::u32 /*groups_x*/, crd::u32 /*groups_y*/,
-                                 crd::u32 /*groups_z*/, IStorageBuffer* const* /*buffers*/, crd::u32 /*count*/)
-    {
-    }
 
     virtual void draw_storage_mrt(IRasterTarget* const* /*targets*/, crd::u32 /*count*/, IRasterProgram& /*program*/,
                                   ClearColor /*clear*/, float /*clear_depth*/, DepthCompare /*compare*/,
@@ -750,21 +733,9 @@ public:
     // wants.
     enum class BlitFilter : crd::u8 { Nearest = 0, Linear };
 
-    // Exact copy. `dst` and `src` must have the SAME extent and format; a mismatch is a NO-OP, never a partial
-    // copy — a half-copied target is indistinguishable from a correctly copied one in a readback of the copied
-    // region, which is exactly the kind of result this engine refuses to produce.
-    virtual void copy_image(IRasterTarget& /*dst*/, IRasterTarget& /*src*/) {}
-
-    // Rescaling copy. `src`'s full extent maps to `dst`'s full extent.
-    // ⛔ DX12's copy engine has NO blit: D3D12 offers CopyResource/CopyTextureRegion (1:1 only) and
-    // ResolveSubresource (MSAA only). The DX12 implementation therefore rescales through a fullscreen DRAW, and
-    // that asymmetry is REAL, not hidden — it is why `blit_image` is its own verb rather than `copy_image` with
-    // an extent argument.
-    virtual void blit_image(IRasterTarget& /*dst*/, IRasterTarget& /*src*/, BlitFilter /*filter*/) {}
-
-    // MSAA resolve: average `src`'s samples into single-sample `dst`. Same extent and a resolve-compatible
-    // format on both sides.
-    virtual void resolve_image(IRasterTarget& /*dst*/, IRasterTarget& /*src*/) {}
+    // ⭐ RAF-12.4 (F1): copy_image / blit_image / resolve_image are no longer public verbs — the exact-copy /
+    // rescaling-blit (DX12 rescales through a fullscreen DRAW; its copy engine has no blit) / MSAA-resolve lowering
+    // moved into each backend's PRIVATE method, reached only by CommandEncoder<Ctx> through a TransferDesc.
 
     // ── ⭐ REN-38-A7 / A8: the CONTINUING tessellation and mesh draws. Appended at the END (D135). ──
     // `draw_tess` and `draw_mesh` both CLEAR. That is right for the single-draw proof they were written for and
@@ -778,39 +749,7 @@ public:
     virtual void draw_tess_load(IRasterTarget& /*target*/, IRasterProgram& /*program*/, crd::u32 /*patch_count*/) {}
     virtual void draw_mesh_load(IRasterTarget& /*target*/, IRasterProgram& /*program*/, crd::u32 /*group_count*/) {}
 
-    // ── ⭐ REN-38-A9: RAY TRACING INSIDE THE FRAME. Appended at the END of the vtable (D135). ──
-    // ⛔ The ray-tracing contexts (`VulkanRayTracingContext` / `Dx12RayTracingContext`) are OFFLINE rigs: every
-    // one of their verbs creates its own buffers, its own descriptor pool, its own pipeline, then submits AND
-    // WAITS. That is right for an oracle comparison and impossible inside a frame — it is the universal port
-    // defect this band keeps meeting, in its most extreme form (the verb owns the whole submission, not merely
-    // the descriptor pool). So an authored ray-tracing PASS cannot call them.
-    //
-    // What it calls instead is this: an INLINE RAY QUERY dispatch, recorded into the frame's command buffer like
-    // any other kernel. `VK_KHR_ray_query` / DXR-1.1 inline `RayQuery<>` need exactly two things a compute
-    // dispatch does not already have — the TLAS bound as a descriptor, and a shader that declares it — and CKIR
-    // already emits both (`KOp::AccelStructDecl` → `accelerationStructureEXT` / `RaytracingAccelerationStructure`).
-    // No shader binding table, no ray-tracing pipeline, one submission.
-    //
-    // ⛔ BINDING CONVENTION, stated here because it is the only place both backends can read it: the TLAS is at
-    // set 0 / binding 0 (t0 on DX12) and the pass's storage buffers follow at bindings 1..N (u1..uN). It matches
-    // `VulkanRayTracingContext::trace_dispatch` exactly, so a kernel written for the offline rig runs unchanged
-    // inside a frame — which is the whole point of having one convention rather than two.
-    virtual void dispatch_kernel_rt(IGpuProgram& /*kernel*/, class IAccelerationStructure& /*as*/, crd::u32 /*groups_x*/,
-                                    crd::u32 /*groups_y*/, crd::u32 /*groups_z*/, IStorageBuffer* const* /*buffers*/,
-                                    crd::u32 /*count*/)
-    {
-    }
 
-    // ── ⭐ REN-38-A10: GPU-DRIVEN DISPATCH. Appended at the END of the vtable (D135). ──
-    // The workgroup count comes from `args` (a buffer some earlier pass WROTE as {x, y, z}) rather than from the
-    // CPU. ⛔ That is the whole point and the reason it needs its own verb: with `dispatch_kernel` the count is a
-    // parameter the CPU had to know, so a cull pass could never actually decide how much work followed it — the
-    // GPU-driven loop was expressible in the device (`dispatch_indirect` exists on the compute context) and NOT
-    // inside a frame graph, which is where a cull pass lives.
-    virtual void dispatch_kernel_indirect(IGpuProgram& /*kernel*/, IStorageBuffer& /*args*/, crd::u64 /*args_offset*/,
-                                          IStorageBuffer* const* /*buffers*/, crd::u32 /*count*/)
-    {
-    }
 
     // REN-38-A10: the mesh half of the same loop — `draw_mesh_indirect` against a graph-tracked buffer rather
     // than a raw backend handle, so an authored pass can name the args buffer a compute pass just wrote.
@@ -848,24 +787,6 @@ public:
                                        ITexture* const* /*textures*/, crd::u32 /*count*/,
                                        IStorageBuffer& /*constants*/, crd::u32 /*vertex_count*/) {}
 
-    // ── ⭐ REN-38-A16: THE RAY-TRACING PIPELINE, inside the frame. Appended at the END (D135). ──
-    // Distinct from 38-A9's inline ray query in the way that matters to the hardware: an inline query is an
-    // ordinary dispatch that happens to traverse, while THIS builds a PIPELINE out of separate raygen / miss /
-    // closest-hit programs and a SHADER BINDING TABLE the traversal hardware indexes into. That is what buys
-    // per-geometry hit shaders — different materials answering the same ray differently — which an inline query
-    // cannot express at all: it has ONE shader and must branch on everything itself.
-    //
-    // ⛔ SAME BINDING CONVENTION AS A9, deliberately: TLAS at set 0 / binding 0 (t0), the pass's buffers at 1..N
-    // (u1..uN). A kernel and a raygen shader should not need two mental models of where their data is.
-    //
-    // ⛔ Recorded into the FRAME's command buffer — not `VulkanRayTracingContext::trace_rays_pipeline`, which
-    // creates its own buffers, its own pool, its own pipeline and then SUBMITS AND WAITS. That verb is an offline
-    // rig; this is a pass.
-    virtual void trace_rays(IGpuProgram& /*raygen*/, IGpuProgram& /*miss*/, IGpuProgram& /*closest_hit*/,
-                            class IAccelerationStructure& /*as*/, crd::u32 /*width*/, crd::u32 /*height*/,
-                            IStorageBuffer* const* /*buffers*/, crd::u32 /*count*/)
-    {
-    }
 
     // Does this backend/adapter offer a ray-tracing PIPELINE (not merely inline ray query)? ⛔ Reported, so an
     // authored graph degrades by DECLARED CAPABILITY (REN-35's rule) instead of rendering a black frame.
@@ -896,29 +817,7 @@ public:
     // inherits its neighbour's bias, cull mode or stencil configuration.
     virtual void set_pass_state(const PassRasterState& /*state*/) {}
 
-    // ── ⭐ REN-38 audit (the full RT hit group): trace with an ANY-HIT stage in the hit group. Appended at the
-    // END (D135) — a NEW verb rather than a parameter on `trace_rays`, because the vtable is append-only and a
-    // defaulted parameter re-types an existing slot. An any-hit is what alpha-tested geometry needs in RT: the
-    // traversal calls it per candidate and `ignoreIntersectionEXT` / `IgnoreHit()` rejects the transparent
-    // texels, so a chain-link fence shadows as a fence rather than as a solid plate. Default: a NO-OP, so a
-    // backend that has not wired it fails VISIBLY (nothing traced) rather than tracing without the any-hit.
-    virtual void trace_rays_anyhit(IGpuProgram& /*raygen*/, IGpuProgram& /*miss*/, IGpuProgram& /*closest_hit*/,
-                                   IGpuProgram& /*any_hit*/, IAccelerationStructure& /*as*/, crd::u32 /*width*/,
-                                   crd::u32 /*height*/, IStorageBuffer* const* /*buffers*/, crd::u32 /*count*/)
-    {
-    }
 
-    // ── ⭐ REN-38-F13: trace with the FULL hit-group + SBT vocabulary. Appended at the END (D135). ──
-    // `intersection` makes the hit group PROCEDURAL (its AABBs only bound the shape — the authored math IS the
-    // geometry); `callable` joins the SBT's fourth table (`executeCallableEXT` / `CallShader` reaches it). Either
-    // may be null; with both null this is exactly `trace_rays`/`trace_rays_anyhit`. Default: a NO-OP, so a
-    // backend that has not wired the last two stages fails VISIBLY (nothing traced), never silently without them.
-    virtual void trace_rays_full(IGpuProgram& /*raygen*/, IGpuProgram& /*miss*/, IGpuProgram& /*closest_hit*/,
-                                 IGpuProgram* /*any_hit*/, IGpuProgram* /*intersection*/, IGpuProgram* /*callable*/,
-                                 IAccelerationStructure& /*as*/, crd::u32 /*width*/, crd::u32 /*height*/,
-                                 IStorageBuffer* const* /*buffers*/, crd::u32 /*count*/)
-    {
-    }
 
     // ── ⭐ REN-38-F6+: STORAGE-BOUND tessellation. Appended at the END (D135). ──
     // `draw_tess` binds nothing, so a tessellation VS could only ever be procedural — the pull idiom (real
@@ -1271,25 +1170,16 @@ public:
     // by the next draw and auto-resets. Context state, same discipline as set_sampler / set_pass_state.
     virtual void set_next_draw_load_depth(bool /*load*/) {}
 
-    // REN-40-G3: compute dispatch with a SAMPLED TEXTURE. The kernel declares `g.texture(0, kMaxKernelBuffers)`
-    // and `g.sampler(0, kMaxKernelBuffers+1)` — fixed positions after the storage buffers, so ONE layout covers
-    // every sampled-compute kernel. The texture is bound at those positions; the sampler is a device-side NEAREST
-    // CLAMP (the HZB convention — no filtering, no wrap). Appended at END of vtable.
-    virtual void dispatch_kernel_sampled(IGpuProgram& /*kernel*/, crd::u32 /*groups_x*/, crd::u32 /*groups_y*/,
-                                         crd::u32 /*groups_z*/, IStorageBuffer* const* /*buffers*/,
-                                         crd::u32 /*buf_count*/, ITexture& /*tex*/) {}
 
 
 
-    // ── RAF-2 (D-007 "RAF band"): the CANONICAL command-model ENCODER factory. ───────────────────────────────────
-    // Returns an ICommandEncoder that records the backend-neutral command model (command_model.hpp) — the ONE data
-    // path that replaces the ~53 combinatorial draw_*/dispatch_*/trace_* verbs above. The default (defined in
-    // command_encoder.cpp) returns a TRANSLATING encoder that lowers each RenderingDesc/RasterDrawPacket/
-    // DispatchDesc/TransferDesc/TraceDesc through the verb implementations already on THIS context — so every
-    // backend gains the encoder with ZERO duplicated lowering and produces byte-identical output to the legacy
-    // path. RAF-12 inlines the verb bodies into per-backend encoders and deletes the verbs; until then the encoder
-    // and the verbs are the SAME lowering reached two ways. ⛔ Appended at the END of the vtable (D135).
-    [[nodiscard]] virtual std::unique_ptr<ICommandEncoder> create_command_encoder();
+    // ── RAF-2/12 (D-007 "RAF band"): the CANONICAL command-model ENCODER factory — THE one recording path. ──────────
+    // Returns an ICommandEncoder that records the backend-neutral command model (command_model.hpp), replacing the ~53
+    // combinatorial draw_*/dispatch_*/trace_* verbs. ⭐ RAF-12.4: PURE VIRTUAL — each backend returns its own
+    // `detail::CommandEncoder<Concrete>` (detail/command_lowering.hpp) so the lowering resolves STATICALLY to that
+    // backend's (Phase B: private) methods. The verbs are being de-virtualized off this interface family-by-family; a
+    // backend's encoder is the ONLY thing that reaches them. ⛔ Appended at the END of the vtable (D135).
+    [[nodiscard]] virtual std::unique_ptr<ICommandEncoder> create_command_encoder() = 0;
 };
 
 // ⭐ REN-38-A9: a BUILT acceleration structure, behind one portable handle.

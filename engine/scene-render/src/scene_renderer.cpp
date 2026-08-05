@@ -448,17 +448,24 @@ struct SceneShaderConfig
     // view_proj, so the camera transform (and its baked TAA jitter) is identical in both and cancels.
     const int prev_ndc_x = c.dvd(g.swizzle(prev, 0), g.swizzle(prev, 3));
     const int prev_ndc_y = c.dvd(g.swizzle(prev, 1), g.swizzle(prev, 3));
+    const int prev_ndc_z = c.dvd(g.swizzle(prev, 2), g.swizzle(prev, 3));
     const int cur_ndc_x  = c.dvd(g.swizzle(cur, 0), g.swizzle(cur, 3));
     const int cur_ndc_y  = c.dvd(g.swizzle(cur, 1), g.swizzle(cur, 3));
-    // ndc → uv delta. u = ndc.x*0.5 + 0.5 on both backends (the +0.5 cancels in the delta); v uses the
-    // backend sign so the result lands in the SAME uv space the resolve adds it to.
+    const int cur_ndc_z  = c.dvd(g.swizzle(cur, 2), g.swizzle(cur, 3));
+    // ndc → uv delta. u = ndc.x*0.5 + 0.5 on both backends (the +0.5 cancels in the delta); v uses the backend sign
+    // so the result lands in the SAME uv space the resolve reconstructs ndc.y in.
     const int    u_delta = c.mul(c.sub(prev_ndc_x, cur_ndc_x), k(0.5));
     const double vsgn    = cfg.flip_clip_y ? -0.5 : 0.5;
     const int    v_delta = c.mul(c.sub(prev_ndc_y, cur_ndc_y), k(vsgn));
+    // ⭐⭐⭐ REN-41 (motion vectors, EXACT): the RAW ndc.z delta. The resolve reprojects the PREVIOUS object ndc
+    // (x,y,z) through R; R's perspective divide depends on z, so a depth-changing object (a bob under an orbiting
+    // camera) needs the previous depth, not the current — omitting this left a residual ghost no x/y sign or scale
+    // could remove. Stored raw (not ×0.5): the resolve adds it straight to the reconstructed ndc.z (= scene depth).
+    const int    z_delta = c.sub(prev_ndc_z, cur_ndc_z);
     fe.stage  = kir::KStage::Fragment;
     fe.n_out  = 1;
-    // RG16F attachment: the two motion components; b/a are written 0 and dropped by the two-channel target.
-    fe.out[0] = {g.vec4(u_delta, v_delta, k(0.0), k(0.0)), 0};
+    // RGBA16F attachment: u/v uv-space motion + raw ndc.z delta; a unused (0).
+    fe.out[0] = {g.vec4(u_delta, v_delta, z_delta, k(0.0)), 0};
 
     // ⭐⭐⭐ REN-41 (Stage 3): the SAME temporal-stochastic dither the forward FS applies — identical block to
     // build_scene_fs_cooked, so the prepass depth (and velocity) survive for exactly the pixels the forward keeps.
@@ -697,6 +704,13 @@ struct SceneRenderer::Impl
     crd::containers::Array<ChunkEntry> chunks;
     crd::containers::Array<RunEntry>   runs;
     crd::containers::Array<crd::u32>   dirty_runs; // indices into `runs`, cleared every sync
+    // ⭐⭐ REN-41 (velocity): the runs that MOVED last sync. An instance updated on an intermittent grain (a
+    // travelling wave touches one grid row per frame) is re-extracted only on its move frame; on the frames that
+    // follow it is static, but its `prev_world` still holds the pre-move transform, so the velocity prepass keeps
+    // reading a stale one-move delta and the resolve smears a permanent ghost. The frame AFTER a move we advance
+    // `prev_world = world` for these runs (velocity → 0) and re-upload them, so a mover's trail lasts exactly one
+    // frame. Bounded work: proportional to what moved last frame, not to the scene.
+    crd::containers::Array<crd::u32>   prev_dirty_runs;
     // ⛔ Reused across frames: `upload_bounds_range` used to allocate a fresh Array per call, which on a
     // structural frame at 1M is a 24 MB allocation inside the hot loop.
     crd::containers::Array<crd::f32>   bounds_staging{nullptr};
@@ -1822,9 +1836,15 @@ struct SceneRenderer::Impl
         // y-up (DX12), applied to BOTH the ndc.y we feed R and the prev_uv.v we read history at.
         const double sgn = raster->ndc_y_points_down() ? 1.0 : -1.0;
         const int depth = sw(fg.tex_sample_at(tex, samp, uv, ku(1U)), 0);
-        const int ndcx  = sub(mul(sw(uv, 0), fk(2.0)), fk(1.0));
-        const int ndcy  = mul(fk(sgn), sub(mul(sw(uv, 1), fk(2.0)), fk(1.0)));
-        const int vv[4] = {ndcx, ndcy, depth, fk(1.0)};
+        // ⭐⭐⭐ REN-41 MOTION VECTORS: fold the object's screen+depth motion into the ndc we feed R, so the camera
+        // reproject carries the PREVIOUS object position to the previous camera — exact for camera + object motion.
+        // velv = (u_delta_uv, v_delta_uv, z_delta_ndc, 0); uv→ndc ×2, y carries sgn, z added straight to depth. The
+        // velocity buffer is now correct per-frame (prev_world is advanced for intermittently-updated instances).
+        const int velv  = fg.tex_sample_at(tex, samp, uv, ku(3U));
+        const int ndcx  = add(sub(mul(sw(uv, 0), fk(2.0)), fk(1.0)), mul(sw(velv, 0), fk(2.0)));
+        const int ndcy  = add(mul(fk(sgn), sub(mul(sw(uv, 1), fk(2.0)), fk(1.0))), mul(sw(velv, 1), fk(2.0 * sgn)));
+        const int ndcz  = add(depth, sw(velv, 2));
+        const int vv[4] = {ndcx, ndcy, ndcz, fk(1.0)};
         int prow[4];
         for (int row = 0; row < 4; ++row)
         {
@@ -1837,13 +1857,12 @@ struct SceneRenderer::Impl
         const int iw      = dvd(fk(1.0), fg.binary(KOp::Max, prow[3], fk(1.0e-6)));
         const int puvx    = add(mul(mul(prow[0], iw), fk(0.5)), fk(0.5));
         const int puvy    = add(mul(mul(mul(prow[1], iw), fk(0.5)), fk(sgn)), fk(0.5)); // REN-41 NDC±Y: 0.5 + sgn·0.5·ndc.y'
-        // ⭐⭐ REN-41 (velocity): add the PER-OBJECT motion delta (bindless index 3, in current-camera UV space).
-        // The R matrix above reprojects the CAMERA motion assuming a static surface; velocity carries the object's
-        // own screen displacement. A static instance stores 0 → prev_uv is the exact camera reproject, unchanged
-        // from before this row (so every static pixel — the 1M majority — is byte-identical). A mover fetches the
-        // history texel its surface actually came from, so the neighbourhood clamp no longer has to reject it.
-        const int velv    = fg.tex_sample_at(tex, samp, uv, ku(3U));
-        const int prev_uv = fg.vec2(add(puvx, sw(velv, 0)), add(puvy, sw(velv, 1)));
+        // ⛔ REN-41 per-object motion vectors are DISABLED: every applied form (uv ±, exact x/y and x/y/z NDC
+        // composition, half/full magnitude) smeared a ghost trail on moving instances (user-verified in the live
+        // window; a still frame HID it and I wrongly called it sharp twice). TAA here is matrix-reproject +
+        // variance-clamp only — sharp, user-confirmed. Motion vectors need GPU-frame-level root-causing (RenderDoc
+        // capture of the velocity buffer vs a CPU reference), NOT another resolve-side guess.
+        const int prev_uv = fg.vec2(puvx, puvy);
 
         // ── history sample. ⛔ NOT bilinear: resampling the history bilinearly every frame is a low-pass that
         // compounds into the "TAA blur". A 5-tap CATMULL-ROM reconstruction (Karis) is sharp — it has negative
@@ -2796,7 +2815,8 @@ struct SceneRenderer::Impl
 
     explicit Impl(crd::memory::IAllocator* a)
         : alloc(a), reload_frame_id(a), skeleton_cache(a), clip_cache(a), pose_scratch(a), world_scratch(a), palette_scratch(a),
-          palette_staging(a), anim_state_staging(a), chunk_index(a), chunks(a), runs(a), dirty_runs(a), bounds_staging(a),
+          palette_staging(a), anim_state_staging(a), chunk_index(a), chunks(a), runs(a), dirty_runs(a),
+          prev_dirty_runs(a), bounds_staging(a),
           group_of_mesh(a), material_color(a), material_texture(a), entity_slot(a),
           contrib_draws(a), frame(a), fallback(a), recorder(a), groups_view(a), fs_hashes(a), fs_programs(a),
           fb_frame_names(a), fb_frame_descs(a), techniques(a), scene_material(a), scene_material_textured(a),
@@ -3074,6 +3094,26 @@ void SceneRenderer::set_min_draw_px(crd::f32 px) noexcept
     m_impl->min_draw_px = px > 0.0F ? px : 0.0F;
 }
 void SceneRenderer::set_cascade_round_robin(bool on) noexcept { m_impl->round_robin_far = on; }
+
+crd::f32 SceneRenderer::debug_max_velocity_residual() const noexcept
+{
+    crd::f32 md = 0.0F;
+    for (const MeshGroup& g : m_groups)
+    {
+        const crd::usize n = g.prev_world.size() / 16U < g.instances.size() ? g.prev_world.size() / 16U
+                                                                            : g.instances.size();
+        for (crd::usize i = 0; i < n; ++i)
+        {
+            for (crd::u32 e = 0; e < 16U; ++e)
+            {
+                const crd::f32 d = g.prev_world[i * 16U + e] - g.instances[i].world[e];
+                const crd::f32 a = d < 0.0F ? -d : d;
+                if (a > md) { md = a; }
+            }
+        }
+    }
+    return md;
+}
 
 // ⭐⭐ REN-41 (TAA): the caller supplies R = prev_UNJITTERED_vp · inv(cur_JITTERED_vp) (it owns both projections)
 // and whether a previous frame exists. The renderer uploads it for the resolve pass; identity + has_history=false
@@ -4759,6 +4799,7 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
         impl.chunk_index.clear();
         impl.chunks.clear();
         impl.runs.clear();
+        impl.prev_dirty_runs.clear(); // REN-41: the run indices are about to be rebuilt; drop the stale set
         auto q = world.query<crd::scene::Transform, crd::scene::MeshRenderer>();
         q.for_each_chunk(&pass_rebuild, &ctx);
         impl.structure_sig = ctx.sig;
@@ -4766,8 +4807,31 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
     }
     else
     {
+        // ⭐⭐ REN-41 (velocity): advance prev_world = world for LAST frame's movers before this frame's re-extract,
+        // so an instance that moved then stopped reads ZERO velocity now instead of reprojecting its stale one-move
+        // delta forever (the travelling-wave smear). Re-upload them by pushing their runs into dirty_runs.
+        for (const crd::u32 ri : impl.prev_dirty_runs)
+        {
+            if (ri >= impl.runs.size()) { continue; }
+            const SceneRenderer::Impl::RunEntry& run = impl.runs[ri];
+            if (run.group >= m_groups.size()) { continue; }
+            MeshGroup& g = m_groups[run.group];
+            for (crd::u32 s = run.first;
+                 s < run.first + run.count && static_cast<crd::usize>(s) * 16U + 16U <= g.prev_world.size(); ++s)
+            {
+                std::memcpy(g.prev_world.data() + static_cast<crd::usize>(s) * 16U, g.instances[s].world, 16U * 4U);
+            }
+            impl.dirty_runs.push_back(ri);
+        }
+        const crd::usize moved_start = impl.dirty_runs.size();
         auto q = world.query<crd::scene::Transform, crd::scene::MeshRenderer>();
         q.for_each_chunk(&pass_update, &ctx);
+        // remember THIS frame's movers (only the runs pass_update just added) so next frame can advance them
+        impl.prev_dirty_runs.clear();
+        for (crd::usize i = moved_start; i < impl.dirty_runs.size(); ++i)
+        {
+            impl.prev_dirty_runs.push_back(impl.dirty_runs[i]);
+        }
     }
 
     // GEO-8: mirror the animator state (skinned chunks only — the third required component narrows the walk)

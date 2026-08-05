@@ -4,6 +4,7 @@
 // whole clear path; the texture→readback copy honours the 256-byte row-pitch alignment D3D12 demands (GetCopyableFootprints).
 // The shader DRAW path (a graphics PSO from a VS+FS DXIL pair + DrawInstanced) appends in C4-b.
 
+#include <crd/gpu/detail/command_lowering.hpp> // RAF-12.4: CommandEncoder<Ctx> — this backend records through its own instantiation
 #include <crd/log/log_macros.hpp>
 #include <crd/gpu/dx12_raster_context.hpp>
 
@@ -989,6 +990,14 @@ private:
 class Dx12RasterContext final : public IRasterContext
 {
 public:
+    // ⭐ RAF-12.4 Phase A: record the canonical command model through this backend's OWN encoder instantiation, so the
+    // verb calls resolve STATICALLY to this context (Phase B de-virtualizes them off IRasterContext into private methods
+    // this template friend reaches). Byte-identical to the base CommandEncoder<IRasterContext>.
+    template <class> friend class detail::CommandEncoder;
+    [[nodiscard]] std::unique_ptr<ICommandEncoder> create_command_encoder() override
+    {
+        return std::make_unique<detail::CommandEncoder<Dx12RasterContext>>(*this);
+    }
     Dx12RasterContext()
     {
         if (FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&m_device)))) { return; }
@@ -2518,7 +2527,7 @@ public:
     }
 
     void trace_rays(IGpuProgram& raygen, IGpuProgram& miss, IGpuProgram& closest_hit, IAccelerationStructure& as,
-                    crd::u32 width, crd::u32 height, IStorageBuffer* const* buffers, crd::u32 count) override
+                    crd::u32 width, crd::u32 height, IStorageBuffer* const* buffers, crd::u32 count)
     {
         trace_rays_impl(raygen, miss, closest_hit, nullptr, as, width, height, buffers, count);
     }
@@ -2527,7 +2536,7 @@ public:
     // traversal calls it per candidate and `IgnoreHit()` rejects the transparent ones.
     void trace_rays_anyhit(IGpuProgram& raygen, IGpuProgram& miss, IGpuProgram& closest_hit, IGpuProgram& any_hit,
                            IAccelerationStructure& as, crd::u32 width, crd::u32 height,
-                           IStorageBuffer* const* buffers, crd::u32 count) override
+                           IStorageBuffer* const* buffers, crd::u32 count)
     {
         trace_rays_impl(raygen, miss, closest_hit, &any_hit, as, width, height, buffers, count);
     }
@@ -2535,7 +2544,7 @@ public:
     // REN-38-F13: the FULL vocabulary — procedural hit groups + the callable table.
     void trace_rays_full(IGpuProgram& raygen, IGpuProgram& miss, IGpuProgram& closest_hit, IGpuProgram* any_hit,
                          IGpuProgram* intersection, IGpuProgram* callable, IAccelerationStructure& as,
-                         crd::u32 width, crd::u32 height, IStorageBuffer* const* buffers, crd::u32 count) override
+                         crd::u32 width, crd::u32 height, IStorageBuffer* const* buffers, crd::u32 count)
     {
         trace_rays_impl(raygen, miss, closest_hit, any_hit, as, width, height, buffers, count, intersection,
                         callable);
@@ -5131,7 +5140,7 @@ public:
     }
 
     void dispatch_kernel_rt(IGpuProgram& kernel, IAccelerationStructure& as, crd::u32 gx, crd::u32 gy, crd::u32 gz,
-                            IStorageBuffer* const* buffers, crd::u32 count) override
+                            IStorageBuffer* const* buffers, crd::u32 count)
     {
         if (!m_ok || !frame_recording() || buffers == nullptr || count == 0U) { return; }
         const crd::u64 tlas_va = dx12_scene_tlas(as);
@@ -5156,7 +5165,7 @@ public:
 
     // ── ⭐ REN-40-G3: SAMPLED-COMPUTE DISPATCH — the HZB verb (DX12). ──
     void dispatch_kernel_sampled(IGpuProgram& kernel, crd::u32 gx, crd::u32 gy, crd::u32 gz,
-                                 IStorageBuffer* const* buffers, crd::u32 count, ITexture& tex) override
+                                 IStorageBuffer* const* buffers, crd::u32 count, ITexture& tex)
     {
         if (!m_ok || !frame_recording() || buffers == nullptr || count == 0U) { return; }
         auto* dx_prog = dynamic_cast<Dx12GpuProgram*>(&kernel);
@@ -5187,7 +5196,7 @@ public:
 
     // ── ⭐ REN-38-A10: GPU-DRIVEN DISPATCH. ──
     void dispatch_kernel_indirect(IGpuProgram& kernel, IStorageBuffer& args, crd::u64 args_offset,
-                                  IStorageBuffer* const* buffers, crd::u32 count) override
+                                  IStorageBuffer* const* buffers, crd::u32 count)
     {
         if (!m_ok || !frame_recording() || buffers == nullptr || count == 0U) { return; }
         auto* dx_prog = dynamic_cast<Dx12GpuProgram*>(&kernel);
@@ -5245,7 +5254,7 @@ public:
     }
 
     void dispatch_kernel(IGpuProgram& kernel, crd::u32 gx, crd::u32 gy, crd::u32 gz, IStorageBuffer* const* buffers,
-                         crd::u32 count) override
+                         crd::u32 count)
     {
         if (!m_ok || !frame_recording() || buffers == nullptr || count == 0U) { return; }
         auto* dx_prog = dynamic_cast<Dx12GpuProgram*>(&kernel);
@@ -5766,7 +5775,7 @@ private:
         return gpu;
     }
 
-    void copy_image(IRasterTarget& dst_t, IRasterTarget& src_t) override
+    void copy_image(IRasterTarget& dst_t, IRasterTarget& src_t)
     {
         if (!m_ok) { return; }
         // ⛔ A MISMATCH IS A NO-OP, never a partial copy — CopyResource requires identical descs, and copying a
@@ -5778,7 +5787,7 @@ private:
         sync_xfer(dst, src, false, BlitFilter::Nearest);
     }
 
-    void resolve_image(IRasterTarget& dst_t, IRasterTarget& src_t) override
+    void resolve_image(IRasterTarget& dst_t, IRasterTarget& src_t)
     {
         if (!m_ok) { return; }
         if (dst_t.width() != src_t.width() || dst_t.height() != src_t.height()) { return; }
@@ -5791,7 +5800,7 @@ private:
         sync_xfer(dst, src, true, BlitFilter::Nearest);
     }
 
-    void blit_image(IRasterTarget& dst_t, IRasterTarget& src_t, BlitFilter filter) override
+    void blit_image(IRasterTarget& dst_t, IRasterTarget& src_t, BlitFilter filter)
     {
         if (!m_ok || !ensure_blit()) { return; }
         auto& dst = static_cast<Dx12RasterTarget&>(dst_t);

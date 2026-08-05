@@ -549,14 +549,34 @@ void record_fullscreen_raster(const PassPayload& payload, RecordContext& ctx, IC
         // declared `depth_as_float` (the HZB / TAA raw-depth read), which samples the stored value through an ordinary
         // sampler — no comparison sampler, so the encoder routes it to draw_textured.
         const bool depth_as_float = bool_param(payload, "depth_as_float", false);
-        p.bindings.push_back(
-            ResourceBinding{BindingFrequency::Material, BindingKind::SampledTexture, 0U, nullptr, texs[0]});
         if (any_depth && !depth_as_float)
         {
-            ResourceBinding cmp{};
-            cmp.frequency = BindingFrequency::Material;
-            cmp.kind = BindingKind::ComparisonSampler;
-            p.bindings.push_back(cmp);
+            // ⛔⛔⛔ REN-40-D / RAF-12.2: a SHADOW lookup must bind the depth read as the ATLAS — texture @ slot 4,
+            // comparison sampler @ slot 5 — because the encoder's `shadow_atlas_from` recognises a shadow atlas by
+            // SLOT (4), NEVER by "has a comparison sampler". Binding at slot 0 (as a plain sampled texture) made
+            // `shadow_atlas_from` miss it, so the encoder fell past draw_shadow to a PROCEDURAL draw and every cooked
+            // fullscreen shadow rendered dark — the RAF-12.2 regression exposed when the inline draw_shadow fallback
+            // was deleted. Mirrors the scene executor's `bind_atlas` so both raster shapes route to draw_shadow.
+            bind_atlas(p, texs[0], /*comparison*/ true);
+        }
+        else if (loads && blend != BlendMode::Opaque)
+        {
+            // ⛔⛔ RAF-12.2: a 1-read COMPOSITE (the WBOIT resolve — load + blend) must reach draw_bindless_blend_load,
+            // which the encoder selects ONLY for a BINDLESS array. A plain SampledTexture routed it to draw_textured,
+            // which CLEARS — erasing the background the OIT resolve blends over (the surviving-background assertion).
+            // Bind as a bindless-array-of-one (same lifetime pattern as the n>1 arm) so the blend-load path fires,
+            // matching the inline `draw_bindless_blend_load(texs, n=1, …)` this executor path replaced.
+            ResourceBinding arr{};
+            arr.frequency     = BindingFrequency::Material;
+            arr.kind          = BindingKind::BindlessTextureArray;
+            arr.texture_array = static_cast<ITexture* const*>(texs);
+            arr.array_count   = 1U;
+            p.bindings.push_back(arr);
+        }
+        else
+        {
+            p.bindings.push_back(
+                ResourceBinding{BindingFrequency::Material, BindingKind::SampledTexture, 0U, nullptr, texs[0]});
         }
     }
     else if (n > 1U)

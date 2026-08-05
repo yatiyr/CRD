@@ -506,6 +506,12 @@ public:
     };
     [[nodiscard]] LodChainInfo lod_chain_info() const noexcept;
 
+    // ⭐⭐ REN-41 (velocity, TEST): the max |prev_world − world| over every instance, in world units. It is the
+    // residual the velocity prepass turns into a motion vector: for a frame where NOTHING moved it MUST be 0, and a
+    // mover's residual must decay to 0 the frame after it stops (the intermittent-update advance). Non-zero on a
+    // static frame is the stale-prev_world smear regressing.
+    [[nodiscard]] crd::f32 debug_max_velocity_residual() const noexcept;
+
     // ⭐⭐ REN-40-A: WHAT THE DEVICE ACTUALLY DECIDED, read back. A GPU cull hides its own result by design —
     // nothing on the CPU learns the count — so "fast" and "silently drew nothing" look identical from the outside.
     // ⛔ That makes this readback part of the FEATURE, not a debugging aid bolted on after: it is how the parity

@@ -68,7 +68,7 @@ sampled = true
 [[resource]]
 name    = "velocity"
 kind    = "transient_image"
-format  = "RG16F"
+format  = "RGBA16F"
 scale   = 1.0
 sampled = true
 

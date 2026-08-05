@@ -4,6 +4,7 @@
 // run's bytes re-upload, nothing else. Plus the frustum helpers' truth table.
 
 #include <crd/framecook/frame_asset.hpp>
+#include <crd/gpu/command_model.hpp> // RAF-12.4: ICommandEncoder complete type (StubRaster::create_command_encoder returns unique_ptr<ICommandEncoder>)
 #include <crd/gpu/raster_context.hpp>
 #include <crd/lightcook/lighting_asset.hpp>
 #include <crd/matcook/material_asset.hpp>
@@ -63,6 +64,9 @@ struct StubRaster final : gpu::IRasterContext
     containers::Array<UploadRecord> uploads{&galloc()};
 
     [[nodiscard]] bool valid() const noexcept override { return true; }
+    // RAF-12.4: create_command_encoder() is pure-virtual now (each real backend returns its own CommandEncoder<Ctx>).
+    // This construction-only stub never records a frame — the Rig tests exercise SceneRenderer set-up/sync, not render.
+    [[nodiscard]] std::unique_ptr<gpu::ICommandEncoder> create_command_encoder() override { return nullptr; }
     [[nodiscard]] std::unique_ptr<gpu::IRasterTarget> create_color_target(u32, u32) override { return nullptr; }
     void clear(gpu::IRasterTarget&, gpu::ClearColor) override {}
     [[nodiscard]] std::unique_ptr<gpu::IRasterProgram> create_raster_program(gpu::IGpuProgram&,
@@ -329,9 +333,48 @@ TEST_CASE("scene-render: THE partial-re-upload gate -- move ONE entity, exactly 
     }
     CHECK(found);
 
-    // an untouched third sync goes back to zero
+    // ⭐⭐ REN-41 velocity: the sync AFTER a move is NOT zero — it re-uploads the moved run once more to advance its
+    // prev_world = world (so the mover's velocity decays to 0 the frame after it stops). Still just the moved run,
+    // never the whole table.
     const auto s3 = rig.renderer.sync(rig.world);
-    CHECK(s3.uploaded_bytes == 0U);
+    CHECK(s3.uploaded_bytes > 0U);
+    CHECK(s3.uploaded_bytes < 500U * sizeof(scenerender::InstanceGpu));
+    // the sync after THAT (the mover is dropped from the advance set) is finally zero
+    const auto s4 = rig.renderer.sync(rig.world);
+    CHECK(s4.uploaded_bytes == 0U);
+}
+
+// ⭐⭐ REN-41 (velocity): prev_world must hold LAST FRAME's world for EVERY instance, not just the ones re-extracted
+// this frame. An instance updated on an intermittent grain (the travelling-wave grid moves one row per frame) moves,
+// then is static for many frames — its prev_world must advance so its velocity decays to 0, or the resolve reprojects
+// a stale one-move delta forever (the permanent smear this test guards against).
+TEST_CASE("REN-41 velocity: a moved-then-static instance reads ZERO velocity the next frame", "[scene-render][ren41]")
+{
+    Rig                                rig;
+    containers::Array<scene::EntityId> entities(&galloc());
+    for (int i = 0; i < 500; ++i) { entities.push_back(rig.spawn_cube(static_cast<f32>(i), 0.0F, 0.0F)); }
+    (void)rig.renderer.sync(rig.world); // frame 0: rebuild — prev_world == world for all (self-shadow)
+    CHECK(rig.renderer.debug_max_velocity_residual() == 0.0F);
+
+    // frame 1: bob ONE entity in Y (0 → 5). Its residual IS the move — that instance genuinely moved this frame.
+    {
+        scene::Transform t;
+        t.translation = math::from_raw_vec<units::dim::Length>(math::Vec3f{123.0F, 5.0F, 0.0F});
+        t.world = math::from_trs(math::Vec3f{123.0F, 5.0F, 0.0F}, math::Quatf::identity(), math::Vec3f{1, 1, 1});
+        rig.world.add_component(entities[123], t);
+    }
+    (void)rig.renderer.sync(rig.world);
+    CHECK(rig.renderer.debug_max_velocity_residual() > 4.0F); // prev.y=0, cur.y=5 → residual≈5 (a real mover)
+
+    // frame 2: DO NOT move it. The advance must set prev_world = world for last frame's mover → residual 0.
+    // ⛔ Without the fix, prev_world stays at y=0 while world.y=5, residual stays 5, and the velocity prepass smears
+    // this instance every frame it is static — the exact bug.
+    (void)rig.renderer.sync(rig.world);
+    CHECK(rig.renderer.debug_max_velocity_residual() == 0.0F);
+
+    // frame 3: still static — stays zero (the mover was dropped from the advance set; no perpetual re-advance).
+    (void)rig.renderer.sync(rig.world);
+    CHECK(rig.renderer.debug_max_velocity_residual() == 0.0F);
 }
 
 TEST_CASE("scene-render: a structural change (spawn) triggers a rebuild", "[scene-render][geo7]")

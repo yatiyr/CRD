@@ -2,6 +2,7 @@
 // dynamic-rendering CLEAR with pixel readback, on a graphics queue from the VulkanGpuContext. Raw Vulkan, no crd-rhi.
 // The shader-object DRAW path (bind VS+FS programs + dynamic state + vkCmdDraw) appends in C1-b.
 
+#include <crd/gpu/detail/command_lowering.hpp> // RAF-12.4: CommandEncoder<Ctx> — this backend records through its own instantiation
 #include <crd/log/log_macros.hpp>
 #include <crd/gpu/vulkan_raster_context.hpp>
 
@@ -1033,6 +1034,14 @@ private:
 class VulkanRasterContext final : public IRasterContext
 {
 public:
+    // ⭐ RAF-12.4 Phase A: record the canonical command model through this backend's OWN encoder instantiation, so the
+    // verb calls resolve STATICALLY to this context (Phase B de-virtualizes them off IRasterContext into private methods
+    // this template friend reaches). Byte-identical to the base CommandEncoder<IRasterContext>.
+    template <class> friend class detail::CommandEncoder;
+    [[nodiscard]] std::unique_ptr<ICommandEncoder> create_command_encoder() override
+    {
+        return std::make_unique<detail::CommandEncoder<VulkanRasterContext>>(*this);
+    }
     [[nodiscard]] crd::u32 gpu_block_count() const noexcept { return m_gpu_alloc->block_count(); } // RET-4 diagnostic
     crd::u32               gpu_compact() noexcept { return m_gpu_alloc->compact(); }               // RET-4 S7 verb
 
@@ -2484,7 +2493,7 @@ public:
     }
 
     void trace_rays(IGpuProgram& raygen, IGpuProgram& miss, IGpuProgram& closest_hit, IAccelerationStructure& as,
-                    crd::u32 width, crd::u32 height, IStorageBuffer* const* buffers, crd::u32 count) override
+                    crd::u32 width, crd::u32 height, IStorageBuffer* const* buffers, crd::u32 count)
     {
         trace_rays_impl(raygen, miss, closest_hit, nullptr, as, width, height, buffers, count);
     }
@@ -2493,7 +2502,7 @@ public:
     // traversal calls it per candidate and `ignoreIntersectionEXT` rejects the transparent ones.
     void trace_rays_anyhit(IGpuProgram& raygen, IGpuProgram& miss, IGpuProgram& closest_hit, IGpuProgram& any_hit,
                            IAccelerationStructure& as, crd::u32 width, crd::u32 height,
-                           IStorageBuffer* const* buffers, crd::u32 count) override
+                           IStorageBuffer* const* buffers, crd::u32 count)
     {
         trace_rays_impl(raygen, miss, closest_hit, &any_hit, as, width, height, buffers, count);
     }
@@ -2501,7 +2510,7 @@ public:
     // REN-38-F13: the FULL vocabulary — procedural hit groups + the callable table.
     void trace_rays_full(IGpuProgram& raygen, IGpuProgram& miss, IGpuProgram& closest_hit, IGpuProgram* any_hit,
                          IGpuProgram* intersection, IGpuProgram* callable, IAccelerationStructure& as,
-                         crd::u32 width, crd::u32 height, IStorageBuffer* const* buffers, crd::u32 count) override
+                         crd::u32 width, crd::u32 height, IStorageBuffer* const* buffers, crd::u32 count)
     {
         trace_rays_impl(raygen, miss, closest_hit, any_hit, as, width, height, buffers, count, intersection,
                         callable);
@@ -5794,7 +5803,7 @@ public:
     // the WRITE happens in the shader, so the memory barrier is issued HERE, after the dispatch, covering
     // shader-write -> everything. Leaving it to the graph would race a later pass that reads the result.
     void dispatch_kernel(IGpuProgram& kernel, crd::u32 gx, crd::u32 gy, crd::u32 gz, IStorageBuffer* const* buffers,
-                         crd::u32 count) override
+                         crd::u32 count)
     {
         if (!frame_recording() || m_compute_set_layout == VK_NULL_HANDLE) { return; }
         auto*      vk_prog = dynamic_cast<VulkanGpuProgram*>(&kernel);
@@ -5865,7 +5874,7 @@ public:
 
     // ── ⭐ REN-38-A10: GPU-DRIVEN DISPATCH. The workgroup count comes from a buffer, not the CPU. ──
     void dispatch_kernel_indirect(IGpuProgram& kernel, IStorageBuffer& args, crd::u64 args_offset,
-                                  IStorageBuffer* const* buffers, crd::u32 count) override
+                                  IStorageBuffer* const* buffers, crd::u32 count)
     {
         if (!frame_recording() || m_compute_set_layout == VK_NULL_HANDLE) { return; }
         auto* vk_prog = dynamic_cast<VulkanGpuProgram*>(&kernel);
@@ -5897,7 +5906,7 @@ public:
     // The TLAS at set 0 / binding 0 and the pass's buffers at 1..N — the SAME convention
     // `VulkanRayTracingContext::trace_dispatch` uses, so a kernel written for the offline rig runs unchanged here.
     void dispatch_kernel_rt(IGpuProgram& kernel, IAccelerationStructure& as, crd::u32 gx, crd::u32 gy, crd::u32 gz,
-                            IStorageBuffer* const* buffers, crd::u32 count) override
+                            IStorageBuffer* const* buffers, crd::u32 count)
     {
         if (!frame_recording() || buffers == nullptr || count == 0U) { return; }
         // The seam is an opaque u64 by design (no private impl leak); VK_DEFINE_NON_DISPATCHABLE_HANDLE makes
@@ -5955,7 +5964,7 @@ public:
 
     // ── ⭐ REN-40-G3: SAMPLED-COMPUTE DISPATCH — the HZB verb. ──
     void dispatch_kernel_sampled(IGpuProgram& kernel, crd::u32 gx, crd::u32 gy, crd::u32 gz,
-                                 IStorageBuffer* const* buffers, crd::u32 count, ITexture& tex) override
+                                 IStorageBuffer* const* buffers, crd::u32 count, ITexture& tex)
     {
         if (!frame_recording() || buffers == nullptr || count == 0U) { return; }
         VkDescriptorSetLayout layout = sampled_compute_set_layout();
@@ -7482,7 +7491,7 @@ public:
         end_and_wait(cmd);
     }
 
-    void copy_image(IRasterTarget& dst, IRasterTarget& src) override
+    void copy_image(IRasterTarget& dst, IRasterTarget& src)
     {
         // ⛔ A MISMATCH IS A NO-OP, never a partial copy: `vkCmdCopyImage` with an extent larger than either
         // image is undefined behaviour, and copying only the overlapping region reads back as a plausible image.
@@ -7496,7 +7505,7 @@ public:
         sync_xfer(dst, src, XferOp::Copy, BlitFilter::Nearest);
     }
 
-    void blit_image(IRasterTarget& dst, IRasterTarget& src, BlitFilter filter) override
+    void blit_image(IRasterTarget& dst, IRasterTarget& src, BlitFilter filter)
     {
         if (frame_recording())
         {
@@ -7507,7 +7516,7 @@ public:
         sync_xfer(dst, src, XferOp::Blit, filter);
     }
 
-    void resolve_image(IRasterTarget& dst, IRasterTarget& src) override
+    void resolve_image(IRasterTarget& dst, IRasterTarget& src)
     {
         if (dst.width() != src.width() || dst.height() != src.height()) { return; }
         // ⛔ A SINGLE-SAMPLE source is REJECTED rather than quietly degraded to a copy: the author asked for a
