@@ -17,8 +17,10 @@
 #include <crd/draw/renderer.hpp>
 #include <crd/draw/shapes.hpp>
 #include <crd/gpu/context.hpp>
-#include <crd/gpu/dx12_context.hpp>        // REN-39-D2: `--backend dx12` — the sandbox on the second backend
+#ifdef _WIN32                              // REN-39-D2: `--backend dx12` — the D3D12 backend is Windows-only
+#include <crd/gpu/dx12_context.hpp>
 #include <crd/gpu/dx12_raster_context.hpp>
+#endif
 #include <crd/gpu/raster_context.hpp>
 #include <crd/gpu/vulkan_context.hpp>
 #include <crd/gpu/vulkan_raster_context.hpp>
@@ -183,6 +185,10 @@ struct SceneExtractor final : crd::scene::IAabbExtractor
 #endif
 }
 
+// The sandbox is the engine's dev/smoke harness: `main` is one linear script — CLI parse, device + window bring-up,
+// scene build, then the render/present loop with the smoke accounting. Splitting it would scatter that one readable
+// flow across helpers that each take the whole world by reference, for no gain in a non-shipped tool. Accepted large.
+// NOLINTNEXTLINE(readability-function-size)
 int main(int argc, char** argv)
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0); // unbuffered so log lines survive a crash
@@ -220,7 +226,7 @@ int main(int argc, char** argv)
     // a clean picture of the LEVELS themselves.
     bool        want_lod_override_probe = false;
     bool want_verify     = false; // REN-40-A: run the CPU cull too, for the count comparison
-    const char* frame_override = nullptr; // REN-40-A: install this authored frame graph by name
+    const char* frame_override = nullptr; // REN-40-A / RAF-12: install this authored frame graph by CANONICAL id (engine://frame/…)
     crd::f64    fixed_dt_ms    = 0.0;     // REN-40-A: >0 ⇒ deterministic clock (frame counter × dt)
     const char* screenshot_path = nullptr; // REN-39: dump the canvas at ~2.5 s and exit
     crd::f64    screenshot_at_s = 2.5;     // `--screenshot-at`: pick the moment in the camera loop
@@ -366,6 +372,7 @@ int main(int argc, char** argv)
     std::unique_ptr<crd::gpu::IRasterContext> raster;
     if (want_dx12)
     {
+#ifdef _WIN32
         gpu_context = crd::gpu::create_dx12_gpu_context();
         if (gpu_context == nullptr || !gpu_context->valid())
         {
@@ -374,6 +381,11 @@ int main(int argc, char** argv)
             return 1;
         }
         raster = crd::gpu::create_dx12_raster_context();
+#else
+        CRD_LOG_ERROR(g_log_sandbox, "--backend dx12 is Windows-only (the D3D12 backend is not built on this platform)");
+        crd::log::shutdown();
+        return 1;
+#endif
     }
     else
     {
@@ -771,10 +783,16 @@ int main(int argc, char** argv)
     ImGui::StyleColorsDark();
     ImGui_ImplGlfw_InitForVulkan(static_cast<GLFWwindow*>(app.window().native_handle()), true);
     // REN-39-D2: the ImGui render half now has a DX12 twin — same class, backend chosen by which ctor runs.
+    // (On non-Windows there is no DX12 backend, so only the Vulkan ctor is reachable — `want_dx12` is forced off above.)
     auto imgui_backend =
+#ifdef _WIN32
         want_dx12 ? std::make_unique<crd::imgui::ImGuiGpuBackend>(*gpu_context, *raster, *surface)
                   : std::make_unique<crd::imgui::ImGuiGpuBackend>(
                         *static_cast<crd::gpu::VulkanGpuContext*>(gpu_context.get()), *surface);
+#else
+        std::make_unique<crd::imgui::ImGuiGpuBackend>(
+            *static_cast<crd::gpu::VulkanGpuContext*>(gpu_context.get()), *surface);
+#endif
     if (!imgui_backend->valid())
     {
         CRD_LOG_ERROR(g_log_sandbox, "ImGui gpu backend init failed");
@@ -898,14 +916,12 @@ int main(int argc, char** argv)
     // swallowed the whole device-side cull: it reported "installed", then `forward_csm_agx` (no compute passes)
     // took over and every command stayed at the reset's zero. The switch belongs HERE, in the table the toggle
     // reads, not in a one-shot install racing it.
-    // ⭐⭐ RAF-9: the app selects its renderer BY CANONICAL ASSET ID (`engine://frame/…`) through the public
-    // registry/resolver — the Gate-9 selector, no relative path or embedded TOML in the caller. `install_frame`
-    // routes an id through `set_frame_graph`; a bare relative name (the `--frame` dev convenience) falls back to the
-    // deprecated `set_frame_graph_asset`, deleted at RAF-12.
+    // ⭐⭐ RAF-9/12: the app selects its renderer BY CANONICAL ASSET ID (`engine://frame/…`) through the public
+    // registry/resolver — the Gate-9 selector, no relative path or embedded TOML in the caller. There is ONE path:
+    // `set_frame_graph(canonical_id)`. (RAF-12 deleted the relative-name wrapper; `--frame` takes a canonical id.)
     const auto install_frame = [&](const char* id) -> bool {
         if (id == nullptr) { return false; }
-        if (std::strstr(id, "://") != nullptr) { return scene_renderer.set_frame_graph(id); }
-        return scene_renderer.set_frame_graph_asset(id);
+        return scene_renderer.set_frame_graph(id);
     };
     const char* const gpu_frame        = (want_gpu_cull || want_gpu_skin) ? "engine://frame/forward_csm_gpu" : nullptr;
     // ⛔⛔ REN-40-B: `--gpu-cull` REFUSES TO RUN WITHOUT ITS GRAPH, and that is a benchmark-integrity rule, not a
@@ -1070,7 +1086,8 @@ int main(int argc, char** argv)
         if (taa_on)
         {
             const auto halton = [](crd::u32 i, crd::u32 b) {
-                float f = 1.0F, r = 0.0F;
+                float f = 1.0F;
+                float r = 0.0F;
                 while (i > 0U) { f /= static_cast<float>(b); r += f * static_cast<float>(i % b); i /= b; }
                 return r;
             };
@@ -1089,9 +1106,9 @@ int main(int argc, char** argv)
         if (taa_on && scene_ready)
         {
             const crd::math::Mat4f vp_unjit = proj_unjit * view;
-            const crd::math::Mat4f R =
+            const crd::math::Mat4f reproj =
                 taa_has_prev ? taa_prev_unjit_vp * crd::math::inverse(vp) : crd::math::Mat4f{};
-            scene_renderer.set_taa_reproj(R, taa_has_prev);
+            scene_renderer.set_taa_reproj(reproj, taa_has_prev);
             taa_prev_unjit_vp = vp_unjit;
             taa_has_prev      = true;
         }

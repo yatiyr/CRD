@@ -17,7 +17,6 @@ target_link_libraries(crd-sandbox PRIVATE
     crd-imgui                # RET-5: ImGuiGpuBackend (render) + the vendored ImGui_ImplGlfw (input)
     crd-gpu-context          # ADR-0105: the ONE graphics layer
     crd-gpu-context-vulkan
-    crd-gpu-context-dx12     # REN-39-D2: `--backend dx12` runs the SAME sandbox on D3D12
     crd-kir                  # the CKIR canvas scene (KGraph → create_program)
     crd-anim                 # GEO-8: SKEL/ANIM loaders (the animated ring)
     crd-timeline             # GEO-9: the camera-shot timeline (rational-time automation drives the crane move)
@@ -50,7 +49,6 @@ target_link_libraries(crd-gizmo-probe PRIVATE
     crd-draw
     crd-gpu-context
     crd-gpu-context-vulkan
-    crd-gpu-context-dx12    # REN-39-D1: `--backend dx12` runs the SAME probe on the second backend
     crd-kir
     crd-scene
     crd-scene-render
@@ -66,6 +64,14 @@ target_compile_definitions(crd-gizmo-probe PRIVATE
     CRD_DEMO_ASSETS_REL_PACK="assets/cooked/demo_assets.crdr"
 )
 crd_enable_default_pch(crd-gizmo-probe)
+
+# REN-39-D / RAF-12: the D3D12 backend (`--backend dx12`) is Windows-only — `crd-gpu-context-dx12` is not built on
+# other platforms, and the sandbox/probe guard their DX12 code paths with `#ifdef _WIN32`. Link it in only on Windows,
+# so both executables build (Vulkan-only) on Linux/macOS.
+if(WIN32)
+    target_link_libraries(crd-sandbox     PRIVATE crd-gpu-context-dx12)
+    target_link_libraries(crd-gizmo-probe PRIVATE crd-gpu-context-dx12)
+endif()
 
 # ── cook-demo-assets ────────────────────────────────────────────────────────
 # Cooks committed glTF/PNG demo assets from assets/source/ into a single PACK

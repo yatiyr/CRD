@@ -4331,158 +4331,7 @@ public:
         ++m_multi_indexed_batches; // REN-39-C1: indexed
     }
 
-    // ── ⭐⭐ REN-41: the GPU-DRIVEN MRT DRAW (see IRasterContext). draw_storage_mrt's N-RTV + shared-depth binding
-    // fused with draw_storage_multi_indexed_depth_only_indirect's ExecuteIndirect command path. No textures — a
-    // velocity FS samples nothing. ⛔ PSO params are the CORRECT ones (samples=1, conservative=false, num_rts=n) —
-    // the single-colour indirect verb's proven shape, NOT draw_storage_mrt's (samples=n / conservative=has_depth,
-    // a shape that only ever ran depthless so its miswiring never bit). Frame-recording only.
-    void draw_storage_multi_indexed_mrt_indirect(IRasterTarget* const* targets, crd::u32 target_count,
-                                                 IRasterProgram& program, ClearColor clear, float clear_depth,
-                                                 DepthCompare compare, IStorageBuffer& storage,
-                                                 crd::u32 index_offset_bytes, IStorageBuffer& args,
-                                                 crd::u32 args_offset_bytes, IStorageBuffer* count_buf,
-                                                 crd::u32 count_offset_bytes, crd::u32 max_draws, bool load_target,
-                                                 crd::u32 first_draw_index, const BlendMode* blend) override
-    {
-        // ⛔ REN-40-C2 / DX12: the DrawIndex row is carried PER-COMMAND by the command signature, not pushed here.
-        (void)first_draw_index;
-        auto& p = static_cast<Dx12RasterProgram&>(program);
-        auto& s = static_cast<Dx12StorageBuffer&>(storage);
-        auto& a = static_cast<Dx12StorageBuffer&>(args);
-        if (!m_ok || targets == nullptr || target_count == 0U || max_draws == 0U || !frame_recording()) { return; }
-        if ((index_offset_bytes & 3U) != 0U || index_offset_bytes >= s.size_bytes()) { return; }
-        const crd::u64 need = static_cast<crd::u64>(args_offset_bytes)
-                              + static_cast<crd::u64>(max_draws) * kMultiIdxStride;
-        if ((args_offset_bytes & 3U) != 0U || need > a.size_bytes()) { return; }
-        auto* cb = static_cast<Dx12StorageBuffer*>(count_buf);
-        if (cb != nullptr && (static_cast<crd::u64>(count_offset_bytes) + 4ULL > cb->size_bytes()
-                              || (count_offset_bytes & 3U) != 0U))
-        {
-            return;
-        }
-        const crd::u32 n         = target_count < 8U ? target_count : 8U;
-        auto&          t0        = static_cast<Dx12RasterTarget&>(*targets[0]);
-        const bool     has_depth = t0.has_depth();
-        ID3D12PipelineState* pso = pass_pso(p, 1U, has_depth ? t0.dsv_format() : DXGI_FORMAT_UNKNOWN,
-                                            to_d3d12_compare(compare), /*conservative=*/false, n, t0.color_format(),
-                                            blend);
-        if (!p.valid() || pso == nullptr || !ensure_multi_indexed(p.root())) { return; }
 
-        frame_transition(s.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kIndexedDrawStates);
-        frame_transition(a.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
-        if (cb != nullptr && cb != &a)
-        {
-            frame_transition(cb->buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                             D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
-        }
-        const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
-        const D3D12_GPU_DESCRIPTOR_HANDLE ro    = frame_alloc_storage_srv_slot(s); // t0 (REN-39-C1)
-        D3D12_CPU_DESCRIPTOR_HANDLE       rtvs[8]{};
-        for (crd::u32 i = 0; i < n; ++i) { rtvs[i] = static_cast<Dx12RasterTarget&>(*targets[i]).rtv(); }
-        const D3D12_CPU_DESCRIPTOR_HANDLE dsv = has_depth ? t0.dsv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
-        m_list->OMSetRenderTargets(n, static_cast<const D3D12_CPU_DESCRIPTOR_HANDLE*>(rtvs), FALSE,
-                                   has_depth ? &dsv : nullptr);
-        if (!load_target)
-        {
-            const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
-            for (crd::u32 i = 0; i < n; ++i) { m_list->ClearRenderTargetView(rtvs[i], rgba, 0, nullptr); }
-            if (has_depth && !m_next_load_depth) { m_list->ClearDepthStencilView(dsv, t0.clear_flags(), clear_depth, 0, 0, nullptr); }
-        }
-        m_next_load_depth = false;
-        const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t0.width()), static_cast<float>(t0.height()), 0.0F,
-                                1.0F};
-        const D3D12_RECT     sc{0, 0, static_cast<LONG>(t0.width()), static_cast<LONG>(t0.height())};
-        m_list->RSSetViewports(1, &vp);
-        m_list->RSSetScissorRects(1, &sc);
-        m_list->SetGraphicsRootSignature(p.root());
-        m_list->SetGraphicsRootDescriptorTable(0, table);
-        m_list->SetGraphicsRootDescriptorTable(7, ro);
-        m_list->SetPipelineState(pso);
-        apply_stencil_ref();
-        m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        D3D12_INDEX_BUFFER_VIEW ibv{};
-        ibv.BufferLocation = s.buf()->GetGPUVirtualAddress() + index_offset_bytes;
-        ibv.SizeInBytes    = static_cast<UINT>(s.size_bytes() - index_offset_bytes);
-        ibv.Format         = DXGI_FORMAT_R32_UINT;
-        m_list->IASetIndexBuffer(&ibv);
-        m_list->ExecuteIndirect(m_multi_idx_sig.Get(), max_draws, a.buf(), args_offset_bytes,
-                                cb != nullptr ? cb->buf() : nullptr, cb != nullptr ? count_offset_bytes : 0U);
-        if (cb != nullptr && cb != &a)
-        {
-            frame_transition(cb->buf(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
-                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        }
-        frame_transition(a.buf(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        frame_transition(s.buf(), kIndexedDrawStates, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        ++m_multi_batches;
-        ++m_multi_indexed_batches; // REN-39-C1: indexed
-    }
-
-    // ── ⭐⭐ REN-41: the CPU-DRIVEN indexed MRT draw (see IRasterContext). draw_storage_indexed_sampled_depth's
-    // standard-root + `SetGraphicsRoot32BitConstant(6, first_draw_index)` row push, with N RTVs from
-    // draw_storage_mrt and no texture slots. Correct PSO params (samples=1, conservative=false, num_rts=n).
-    void draw_storage_indexed_mrt(IRasterTarget* const* targets, crd::u32 target_count, IRasterProgram& program,
-                                  ClearColor clear, float clear_depth, DepthCompare compare, IStorageBuffer& storage,
-                                  crd::u32 index_offset_bytes, crd::u32 index_count, crd::u32 instance_count,
-                                  crd::u32 first_index, crd::u32 first_draw_index, bool load_target,
-                                  const BlendMode* blend) override
-    {
-        auto& p = static_cast<Dx12RasterProgram&>(program);
-        auto& s = static_cast<Dx12StorageBuffer&>(storage);
-        if (!m_ok || targets == nullptr || target_count == 0U || index_count == 0U || instance_count == 0U
-            || !frame_recording())
-        {
-            return;
-        }
-        if ((index_offset_bytes & 3U) != 0U
-            || static_cast<crd::u64>(index_offset_bytes) + (static_cast<crd::u64>(first_index) + index_count) * 4U
-                   > s.size_bytes())
-        {
-            return;
-        }
-        const crd::u32       n         = target_count < 8U ? target_count : 8U;
-        auto&                t0        = static_cast<Dx12RasterTarget&>(*targets[0]);
-        const bool           has_depth = t0.has_depth();
-        ID3D12PipelineState* pso = pass_pso(p, 1U, has_depth ? t0.dsv_format() : DXGI_FORMAT_UNKNOWN,
-                                            to_d3d12_compare(compare), /*conservative=*/false, n, t0.color_format(),
-                                            blend);
-        if (!p.valid() || pso == nullptr) { return; }
-
-        frame_transition(s.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kIndexedDrawStates);
-        const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
-        const D3D12_GPU_DESCRIPTOR_HANDLE ro    = frame_alloc_storage_srv_slot(s); // t0 (REN-39-C1)
-        D3D12_CPU_DESCRIPTOR_HANDLE       rtvs[8]{};
-        for (crd::u32 i = 0; i < n; ++i) { rtvs[i] = static_cast<Dx12RasterTarget&>(*targets[i]).rtv(); }
-        const D3D12_CPU_DESCRIPTOR_HANDLE dsv = has_depth ? t0.dsv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
-        m_list->OMSetRenderTargets(n, static_cast<const D3D12_CPU_DESCRIPTOR_HANDLE*>(rtvs), FALSE,
-                                   has_depth ? &dsv : nullptr);
-        if (!load_target)
-        {
-            const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
-            for (crd::u32 i = 0; i < n; ++i) { m_list->ClearRenderTargetView(rtvs[i], rgba, 0, nullptr); }
-            if (has_depth && !m_next_load_depth) { m_list->ClearDepthStencilView(dsv, t0.clear_flags(), clear_depth, 0, 0, nullptr); }
-        }
-        m_next_load_depth = false;
-        const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t0.width()), static_cast<float>(t0.height()), 0.0F,
-                                1.0F};
-        const D3D12_RECT     sc{0, 0, static_cast<LONG>(t0.width()), static_cast<LONG>(t0.height())};
-        m_list->RSSetViewports(1, &vp);
-        m_list->RSSetScissorRects(1, &sc);
-        m_list->SetGraphicsRootSignature(p.root());
-        m_list->SetGraphicsRootDescriptorTable(0, table);
-        m_list->SetGraphicsRootDescriptorTable(7, ro);
-        m_list->SetPipelineState(pso);
-        m_list->SetGraphicsRoot32BitConstant(6, first_draw_index, 0);
-        apply_stencil_ref();
-        m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        D3D12_INDEX_BUFFER_VIEW ibv{};
-        ibv.BufferLocation = s.buf()->GetGPUVirtualAddress() + index_offset_bytes;
-        ibv.SizeInBytes    = (first_index + index_count) * 4U;
-        ibv.Format         = DXGI_FORMAT_R32_UINT;
-        m_list->IASetIndexBuffer(&ibv);
-        m_list->DrawIndexedInstanced(index_count, instance_count, first_index, 0, 0);
-        frame_transition(s.buf(), kIndexedDrawStates, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    }
 
     [[nodiscard]] bool draw_overlay_range(IRasterTarget& target, IRasterProgram& program, IStorageBuffer& storage,
                                           DepthCompare compare, crd::u32 first_vertex,
@@ -5452,10 +5301,10 @@ public:
         const bool     has_depth = t0.has_depth();
         // REN-38-A15: blend is PSO state on DX12, so it goes into `pso_for` (and its cache key) rather than being
         // set dynamically the way Vulkan does it. ⛔ RAF-7 fix: samples=1 (the attachments are single-sample) and
-        // conservative=false — matching draw_storage_indexed_mrt / the single-colour indirect verb. This verb
-        // historically passed samples=n / conservative=has_depth, a miswiring that only never bit because MRT ran
-        // depthless (see draw_storage_multi_indexed_mrt_indirect's note); the RAF-7 one-submission MRT gate exercises
-        // it, so it uses the proven shape now.
+        // conservative=false. This verb historically passed samples=n / conservative=has_depth, a miswiring that only
+        // never bit because MRT ran depthless; the RAF-7 one-submission MRT gate exercises it, so it uses the proven
+        // shape now. (RAF-12: the indexed/indirect MRT verbs that shared this note are deleted — dead after the
+        // record_pass inline-verb-path removal; a multi-colour G-buffer is executor-gated when one is needed.)
         ID3D12PipelineState* pso = pass_pso(p, 1U, has_depth ? DXGI_FORMAT_D32_FLOAT : DXGI_FORMAT_UNKNOWN,
                                              to_d3d12_compare(compare), false, n, t0.color_format(), blend);
         if (!p.valid() || pso == nullptr) { return; }

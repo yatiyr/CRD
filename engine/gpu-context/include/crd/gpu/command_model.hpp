@@ -4,7 +4,7 @@
 //
 // ONE data model that expresses every raster/compute/transfer/ray-trace command as VALUES, so no new feature ever
 // needs another `draw_*` method and no pass kind grows a central enum. The ~53 combinatorial verbs on IRasterContext
-// (draw_storage_depth · draw_storage_multi_indexed_mrt_indirect · draw_bindless_depth · trace_rays_anyhit · …) all
+// (draw_storage_depth · draw_storage_multi_indexed_depth · draw_bindless_depth · trace_rays_anyhit · …) all
 // reduce to: a RENDERING SCOPE (typed attachments with load/store/clear/blend) + a RASTER DRAW PACKET (program +
 // binding table + geometry source + a STRONG command variant + state). Both backends lower these DIRECTLY (RAF-2b),
 // and both authored and hand-built graphs record them (RAF-7) — the clear-vs-load and 1-vs-MRT distinctions are DATA,

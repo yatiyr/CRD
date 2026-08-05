@@ -223,6 +223,26 @@ CommandError validate_packet(const RasterDrawPacket& packet) noexcept
             return CommandError::ZeroDraw;
         }
         break;
+    case RasterCommandKind::DrawMulti: // ⭐ RAF-8: CPU multi-draw batch — N vertex counts over one storage buffer
+        if (g.kind != GeometryKind::MultiStoragePull)
+        {
+            return CommandError::GeometryCommandMismatch;
+        }
+        if (g.multi_counts == nullptr || g.draw_count == 0)
+        {
+            return CommandError::ZeroDraw;
+        }
+        break;
+    case RasterCommandKind::DrawMultiIndexed: // ⭐ RAF-8: CPU multi-draw batch of N IndexedDraw records
+        if (g.kind != GeometryKind::MultiIndexed)
+        {
+            return CommandError::GeometryCommandMismatch;
+        }
+        if (g.multi_indexed == nullptr || g.draw_count == 0)
+        {
+            return CommandError::ZeroDraw;
+        }
+        break;
     }
 
     return validate_bindings(packet.bindings);

@@ -2306,8 +2306,8 @@ struct SceneRenderer::Impl
             const int y0f = fg.ternary(KOp::Clamp, fg.unary(KOp::Floor, fg.binary(KOp::Sub, ly, fk(0.5))), fk(0.0), dm1);
             const int x1f = fg.ternary(KOp::Clamp, fadd(x0f, fk(1.0)), fk(0.0), dm1);
             const int y1f = fg.ternary(KOp::Clamp, fadd(y0f, fk(1.0)), fk(0.0), dm1);
-            const int wx  = fg.ternary(KOp::Clamp, fg.binary(KOp::Sub, fg.binary(KOp::Sub, lx, fk(0.5)), x0f), fk(0.0), fk(1.0));
-            const int wy  = fg.ternary(KOp::Clamp, fg.binary(KOp::Sub, fg.binary(KOp::Sub, ly, fk(0.5)), y0f), fk(0.0), fk(1.0));
+            const int fracx = fg.ternary(KOp::Clamp, fg.binary(KOp::Sub, fg.binary(KOp::Sub, lx, fk(0.5)), x0f), fk(0.0), fk(1.0));
+            const int fracy = fg.ternary(KOp::Clamp, fg.binary(KOp::Sub, fg.binary(KOp::Sub, ly, fk(0.5)), y0f), fk(0.0), fk(1.0));
             const int dimu = fg.cast(dimf, DType::U32);
             const int x0 = fg.cast(x0f, DType::U32);
             const int y0 = fg.cast(y0f, DType::U32);
@@ -2323,9 +2323,9 @@ struct SceneRenderer::Impl
             const int t11 = texel(x1, y1);
             for (crd::u32 ch = 0; ch < 4U; ++ch)
             {
-                const int top = mix(chan(t00, ch), chan(t10, ch), wx);
-                const int bot = mix(chan(t01, ch), chan(t11, ch), wx);
-                out4[ch] = mix(top, bot, wy);
+                const int top = mix(chan(t00, ch), chan(t10, ch), fracx);
+                const int bot = mix(chan(t01, ch), chan(t11, ch), fracx);
+                out4[ch] = mix(top, bot, fracy);
             }
         };
         int lo4[4];
@@ -3121,18 +3121,6 @@ void SceneRenderer::set_readback_enabled(bool on) noexcept
 // class of lie the magenta error graph exists to prevent, which is why the failure is a `false`, not a log line.
 // ⭐⭐ 38-G1: the by-NAME face of the above. The text comes from the asset system (disk-first), never from
 // the caller — an app names a frame, it does not carry one.
-bool SceneRenderer::set_frame_graph_asset(const char* asset_name)
-{
-    if (asset_name == nullptr || m_impl == nullptr) { return false; }
-    crd::containers::String text(m_impl->alloc);
-    if (!m_impl->asset_text(asset_name, text))
-    {
-        CRD_LOG_ERROR(g_log_scenerender, "set_frame_graph_asset: no such asset '{}'", asset_name);
-        return false;
-    }
-    return set_frame_graph_toml(text.c_str());
-}
-
 bool SceneRenderer::set_frame_graph(const char* canonical_id)
 {
     if (canonical_id == nullptr || m_impl == nullptr) { return false; }

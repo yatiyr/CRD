@@ -393,7 +393,6 @@ TEST_CASE("RAF-9: an engine default frame loads by canonical engine:// id", "[sc
     CHECK(r.set_frame_graph("crd://frame/forward_csm_agx"));             // the alias folds to engine:// -> same asset
     CHECK_FALSE(r.set_frame_graph("engine://frame/this_default_absent")); // missing -> clear refusal, not a fallback
     CHECK_FALSE(r.set_frame_graph("engine://scene/mesh"));               // a program id, not a frame -> rejected by type
-    CHECK(r.set_frame_graph_asset("frame/forward_csm_agx.frame.toml"));  // the deprecated relative wrapper still installs
     // ⭐ the PUBLIC program registry — an app registers its OWN programs by canonical id the SAME way the engine does
     // (the RAF-10 seam). A malformed id is refused.
     CHECK(r.register_raster_program("app://scene/my_shader",

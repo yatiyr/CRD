@@ -36,6 +36,7 @@ const char* from_pass_kind(FramePassKind k)
     case FramePassKind::RayTracePipeline: return "raytrace.pipeline";
     case FramePassKind::ComputeIndirect:  return "compute.indirect";
     case FramePassKind::RasterMeshIndirect: return "raster.mesh.indirect";
+    case FramePassKind::Custom:             return "custom"; // RAF-10: app executor by id (round-trips to Custom)
     }
     return "raster.geometry";
 }

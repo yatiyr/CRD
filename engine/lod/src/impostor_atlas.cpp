@@ -40,13 +40,6 @@ V3 v3_norm(V3 a)
 crd::f32 fabsf_crd(crd::f32 v) { return v < 0.0F ? -v : v; }
 crd::f32 signf_crd(crd::f32 v) { return v >= 0.0F ? 1.0F : -1.0F; }
 
-crd::f32 clampf(crd::f32 v, crd::f32 lo, crd::f32 hi)
-{
-    if (v < lo) { return lo; }
-    if (v > hi) { return hi; }
-    return v;
-}
-
 // Build an orthonormal basis from a view direction `fwd` (camera looks TOWARD `fwd`).
 // Returns right, up, forward as columns of a rotation matrix.
 void build_basis(V3 fwd, V3& right, V3& up)

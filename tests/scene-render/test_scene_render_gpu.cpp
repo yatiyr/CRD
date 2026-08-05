@@ -2138,6 +2138,7 @@ TEST_CASE("RAF-11 GATE: shader/technique/material hot reload re-cooks programs o
     (void)platform::fs::remove_all(platform::fs::Path(containers::StringView(root.c_str(), root.size())));
 }
 
+#ifdef _WIN32 // the D3D12 backend exists only on Windows (the F17 guard rule)
 TEST_CASE("RAF-11 GATE: shader/technique/material hot reload re-cooks programs or keeps last-good (DX12)",
           "[scene-render][raf11][reload][gpu][dx12]")
 {
@@ -2157,6 +2158,7 @@ TEST_CASE("RAF-11 GATE: shader/technique/material hot reload re-cooks programs o
     raf11_run_reload_sequence(renderer, root);
     (void)platform::fs::remove_all(platform::fs::Path(containers::StringView(root.c_str(), root.size())));
 }
+#endif // _WIN32
 
 // ── ⭐⭐ REN-38 GATE: a group is TEXTURED **AND** SHADOWED in the same frame. ────────────────────────────────
 // Until this slice the base-colour map and the shadow atlas fought over descriptor bindings 1/2, so
@@ -2948,11 +2950,11 @@ TEST_CASE("REN-39-C1 GATE: pull and indexed scene frames are bit-identical, and 
     CHECK(covered > 500U);
 }
 
-// ── ⭐⭐ RAF-9 GATE: the engine default selected BY CANONICAL ENGINE:// ID renders BIT-IDENTICALLY to the same
-// default selected by the (deprecated) relative name. This is Gate-9's "representative output unchanged" through the
-// public registry/resolver: `set_frame_graph("engine://frame/forward_csm")` and
-// `set_frame_graph_asset("frame/forward_csm.frame.toml")` resolve the SAME bytes → the SAME cook → every texel equal.
-TEST_CASE("RAF-9 GATE: a default selected by engine:// id renders bit-identically to the relative name",
+// ── ⭐⭐ RAF-9 GATE: the engine default selected BY CANONICAL ENGINE:// ID renders a correct shadowed frame through
+// the public registry/resolver — Gate-9's "representative output" via `set_frame_graph("engine://frame/forward_csm")`.
+// (RAF-12 retired the relative-name wrapper this once A/B'd against; the id path is now the ONLY selector, so the gate
+// asserts the id-selected default draws a shadowed frame — the migration it once compared to is complete.)
+TEST_CASE("RAF-9 GATE: a default selected by engine:// id renders a shadowed frame",
           "[scene-render][raf9][gpu][vulkan]")
 {
     gpu::GpuContextConfig cfg;
@@ -3000,33 +3002,22 @@ TEST_CASE("RAF-9 GATE: a default selected by engine:// id renders bit-identicall
     const math::Vec3f     light{0.3F, 1.0F, 0.2F};
     const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
 
-    const auto render_frame = [&](const char* selector, bool by_id, gpu::IRasterTarget& target) {
-        const bool installed = by_id ? renderer.set_frame_graph(selector) : renderer.set_frame_graph_asset(selector);
-        REQUIRE(installed);
-        return renderer.render(target, proj * view, light, clear, nullptr);
-    };
-
     auto id_tgt = raster->create_color_depth_target(256U, 256U);
-    auto rel_tgt = raster->create_color_depth_target(256U, 256U);
     REQUIRE(id_tgt != nullptr);
-    REQUIRE(rel_tgt != nullptr);
-    // ⭐ by CANONICAL ID (the Gate-9 selector) vs by the deprecated relative name — the SAME default.
-    render_frame("engine://frame/forward_csm", true, *id_tgt);
-    render_frame("frame/forward_csm.frame.toml", false, *rel_tgt);
+    // ⭐ by CANONICAL ID (the Gate-9 selector) — the ONLY frame selector after RAF-12.
+    REQUIRE(renderer.set_frame_graph("engine://frame/forward_csm"));
+    renderer.render(*id_tgt, proj * view, light, clear, nullptr);
 
-    crd::u32 diffs = 0U;
     crd::u32 covered = 0U;
     for (u32 y = 0; y < 256U; ++y)
     {
         for (u32 x = 0; x < 256U; ++x)
         {
-            if (id_tgt->read_pixel(x, y) != rel_tgt->read_pixel(x, y)) { ++diffs; }
-            if ((rel_tgt->read_pixel(x, y) & 0x00FFFFFFU) != 0U) { ++covered; }
+            if ((id_tgt->read_pixel(x, y) & 0x00FFFFFFU) != 0U) { ++covered; }
         }
     }
-    INFO("diffs=" << diffs << " covered=" << covered);
-    CHECK(diffs == 0U);     // every texel equal — id-resolved == relative-resolved
-    CHECK(covered > 500U);  // and it actually drew a shadowed frame, not an empty canvas
+    INFO("covered=" << covered);
+    CHECK(covered > 500U);  // the id-selected default actually drew a shadowed frame, not an empty canvas
 }
 
 #ifdef _WIN32 // the D3D12 backend exists only on Windows (the F17 guard rule)
@@ -3036,9 +3027,9 @@ TEST_CASE("RAF-9 GATE: a default selected by engine:// id renders bit-identicall
 // indexed = cascade + forward batches). If this rig's DX12 shadow set fails to build, the gate still asserts
 // pixel parity (stated by INFO) — the switch logic is shared renderer code; the DX12-specific halves (verbs,
 // t0 SRV seam, kIndexedDrawStates walk) are exactly what the pixel comparison exercises.
-// ── ⭐⭐ RAF-9 GATE (DX12): the id-vs-relative bit-identity, on the other backend. The resolver/registry are
-// backend-neutral, so DX12 must render the engine:// id-selected default identically to the relative name too. ──
-TEST_CASE("RAF-9 GATE (DX12): a default selected by engine:// id renders bit-identically to the relative name",
+// ── ⭐⭐ RAF-9 GATE (DX12): the id-selected default renders a correct shadowed frame on the other backend. The
+// resolver/registry are backend-neutral. (RAF-12 retired the relative-name wrapper this once A/B'd against.) ──
+TEST_CASE("RAF-9 GATE (DX12): a default selected by engine:// id renders a shadowed frame",
           "[scene-render][raf9][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
@@ -3077,29 +3068,19 @@ TEST_CASE("RAF-9 GATE (DX12): a default selected by engine:// id renders bit-ide
     const math::Mat4f     proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
     const math::Vec3f     light{0.3F, 1.0F, 0.2F};
     const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
-    const auto            render_frame = [&](const char* selector, bool by_id, gpu::IRasterTarget& target) {
-        const bool installed = by_id ? renderer.set_frame_graph(selector) : renderer.set_frame_graph_asset(selector);
-        REQUIRE(installed);
-        return renderer.render(target, proj * view, light, clear, nullptr);
-    };
     auto id_tgt = raster->create_color_depth_target(256U, 256U);
-    auto rel_tgt = raster->create_color_depth_target(256U, 256U);
     REQUIRE(id_tgt != nullptr);
-    REQUIRE(rel_tgt != nullptr);
-    render_frame("engine://frame/forward_csm", true, *id_tgt);
-    render_frame("frame/forward_csm.frame.toml", false, *rel_tgt);
-    crd::u32 diffs = 0U;
+    REQUIRE(renderer.set_frame_graph("engine://frame/forward_csm")); // the ONLY frame selector after RAF-12
+    renderer.render(*id_tgt, proj * view, light, clear, nullptr);
     crd::u32 covered = 0U;
     for (u32 y = 0; y < 256U; ++y)
     {
         for (u32 x = 0; x < 256U; ++x)
         {
-            if (id_tgt->read_pixel(x, y) != rel_tgt->read_pixel(x, y)) { ++diffs; }
-            if ((rel_tgt->read_pixel(x, y) & 0x00FFFFFFU) != 0U) { ++covered; }
+            if ((id_tgt->read_pixel(x, y) & 0x00FFFFFFU) != 0U) { ++covered; }
         }
     }
-    INFO("diffs=" << diffs << " covered=" << covered);
-    CHECK(diffs == 0U);
+    INFO("covered=" << covered);
     CHECK(covered > 500U);
 }
 

@@ -596,16 +596,11 @@ public:
     // name from the asset root) name programs the host cooks from the authored stage declarations. ⛔ Returns
     // false and KEEPS the previous graph on any parse/validation failure — never a half-installed frame.
     [[nodiscard]] bool set_frame_graph_toml(const char* toml_text);
-    // ⭐⭐ 38-G1: install a frame BY ASSET NAME — `"frame/forward_csm_agx.frame.toml"` — resolved through the
-    // SAME asset-root path every other asset uses. ⛔ This, not a TOML string an app pastes into C++, is how an
-    // application selects a frame: the moment the text lives in a caller, the frame stops being editable content
-    // and becomes code again.
-    [[nodiscard]] bool set_frame_graph_asset(const char* asset_name);
     // ⭐⭐ RAF-9: install a frame BY CANONICAL ASSET ID — `"engine://frame/forward_csm_agx"` — resolved through the
     // SAME public registry/resolver an app uses (`engine://` mounts the asset root; `crd://` folds to it). This is the
     // Gate-9 selector: a default is chosen by id, not by a relative path or an embedded TOML. ⛔ A missing/unparseable
-    // id REFUSES (returns false, KEEPS the previous frame) and reports a NAMED diagnostic. `set_frame_graph_asset`
-    // (relative name) remains a thin compatibility wrapper, deleted at RAF-12.
+    // id REFUSES (returns false, KEEPS the previous frame) and reports a NAMED diagnostic. (RAF-12 retired the
+    // relative-name `set_frame_graph_asset` wrapper — a frame is selected by canonical id, never a relative path.)
     [[nodiscard]] bool set_frame_graph(const char* canonical_id);
     // ⭐⭐ RAF-11: HOT RELOAD a render asset by canonical id — re-read its source, re-cook it, and (if the cooked
     // content changed) install a new immutable GENERATION at the next frame boundary, rebuilding every dependent in

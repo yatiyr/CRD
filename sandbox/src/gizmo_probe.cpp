@@ -32,8 +32,10 @@
 #include <crd/draw/renderer.hpp>
 #include <crd/draw/shapes.hpp>
 #include <crd/gpu/context.hpp>
-#include <crd/gpu/dx12_context.hpp>        // REN-39-D1: the probe runs on EITHER backend (`--backend dx12`)
+#ifdef _WIN32                              // REN-39-D1: `--backend dx12` — the D3D12 backend is Windows-only
+#include <crd/gpu/dx12_context.hpp>
 #include <crd/gpu/dx12_raster_context.hpp>
+#endif
 #include <crd/gpu/raster_context.hpp>
 #include <crd/gpu/vulkan_context.hpp>
 #include <crd/gpu/vulkan_raster_context.hpp>
@@ -207,7 +209,7 @@ int main(int argc, char** argv)
     crd::f64              smoke_duration_s = 3.0;
     crd::f64              screenshot_at_s  = 2.5;
     const char*           screenshot_path  = nullptr;
-    const char*           frame_asset      = "frame/forward_csm_agx.frame.toml";
+    const char*           frame_asset      = "engine://frame/forward_csm_agx"; // RAF-12: selected by canonical id
     const char*           forward_tech     = nullptr; // `--technique unlit` bypasses the whole BRDF (a bisector)
     crd::gpu::PresentMode present_mode     = crd::gpu::PresentMode::Fifo;
     bool                  want_dx12        = false; // REN-39-D1: `--backend dx12` — the SAME app, second backend
@@ -307,6 +309,7 @@ int main(int argc, char** argv)
     std::unique_ptr<crd::gpu::IRasterContext> raster;
     if (want_dx12)
     {
+#ifdef _WIN32
         gpu_context = crd::gpu::create_dx12_gpu_context();
         if (gpu_context == nullptr || !gpu_context->valid())
         {
@@ -315,6 +318,11 @@ int main(int argc, char** argv)
             return 1;
         }
         raster = crd::gpu::create_dx12_raster_context();
+#else
+        CRD_LOG_ERROR(g_log_gizmo, "--backend dx12 is Windows-only (the D3D12 backend is not built on this platform)");
+        crd::log::shutdown();
+        return 1;
+#endif
     }
     else
     {
@@ -469,7 +477,7 @@ int main(int argc, char** argv)
         CRD_LOG_INFO(g_log_gizmo, "cascaded shadows: {}", shadows_on ? "ON" : "unavailable");
     }
     {
-        const bool ok = renderer.set_frame_graph_asset(frame_asset);
+        const bool ok = renderer.set_frame_graph(frame_asset);
         CRD_LOG_INFO(g_log_gizmo, "frame '{}' -> {}", frame_asset, ok ? "installed" : "REJECTED");
         if (!ok)
         {

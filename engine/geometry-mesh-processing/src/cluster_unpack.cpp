@@ -1,18 +1,9 @@
 #include <crd/geometry/mesh_processing/cluster_unpack.hpp>
 
-#include <cstring>
-
 namespace crd::geometry::mesh_processing
 {
 namespace
 {
-
-crd::f32 bits_to_f32(crd::u32 bits) noexcept
-{
-    crd::f32 v;
-    std::memcpy(&v, &bits, sizeof(v));
-    return v;
-}
 
 crd::u8 unpack_tri_byte(const crd::u32* packed, crd::u32 byte_idx) noexcept
 {
