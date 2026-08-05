@@ -73,36 +73,20 @@ struct StubRaster final : gpu::IRasterContext
                                                                              gpu::IGpuProgram&) override
     {
         return nullptr;
-    }
-    void draw(gpu::IRasterTarget&, gpu::IRasterProgram&, gpu::ClearColor, u32) override {}
-    [[nodiscard]] std::unique_ptr<gpu::IRasterTarget> create_color_target_ms(u32, u32, u32) override
+    }    [[nodiscard]] std::unique_ptr<gpu::IRasterTarget> create_color_target_ms(u32, u32, u32) override
     {
         return nullptr;
     }
     [[nodiscard]] std::unique_ptr<gpu::IRasterTarget> create_color_depth_target(u32, u32) override
     {
         return nullptr;
-    }
-    void draw_depth(gpu::IRasterTarget&, gpu::IRasterProgram&, gpu::ClearColor, float, gpu::DepthCompare,
-                    u32) override
-    {
-    }
-    void draw_vrs(gpu::IRasterTarget&, gpu::IRasterProgram&, gpu::ClearColor, gpu::ShadingRate,
-                  gpu::ShadingRateCombiner, u32) override
-    {
-    }
-    [[nodiscard]] bool supports_vrs() const noexcept override { return false; }
+    }    [[nodiscard]] bool supports_vrs() const noexcept override { return false; }
     [[nodiscard]] std::unique_ptr<gpu::IRasterTarget> create_color_vrs_target(u32, u32, gpu::ShadingRate) override
     {
         return nullptr;
     }
     [[nodiscard]] bool supports_conservative_raster() const noexcept override { return false; }
-    [[nodiscard]] bool supports_inner_coverage() const noexcept override { return false; }
-    void draw_conservative(gpu::IRasterTarget&, gpu::IRasterProgram&, gpu::ClearColor, gpu::ConservativeMode,
-                           u32) override
-    {
-    }
-    [[nodiscard]] std::unique_ptr<gpu::IStorageBuffer> create_storage_buffer(u32 size_bytes) override
+    [[nodiscard]] bool supports_inner_coverage() const noexcept override { return false; }    [[nodiscard]] std::unique_ptr<gpu::IStorageBuffer> create_storage_buffer(u32 size_bytes) override
     {
         return std::make_unique<StubStorage>(size_bytes, &galloc());
     }
@@ -111,23 +95,14 @@ struct StubRaster final : gpu::IRasterContext
     {
     }
     [[nodiscard]] bool supports_fragment_interlock() const noexcept override { return false; }
-    [[nodiscard]] std::unique_ptr<gpu::ITexture> create_texture(u32, u32, const void*) override { return nullptr; }
-    void draw_textured(gpu::IRasterTarget&, gpu::IRasterProgram&, gpu::ClearColor, gpu::ITexture&, u32) override {}
-    [[nodiscard]] std::unique_ptr<gpu::ITexture> create_depth_texture(u32, u32, const float*) override
+    [[nodiscard]] std::unique_ptr<gpu::ITexture> create_texture(u32, u32, const void*) override { return nullptr; }    [[nodiscard]] std::unique_ptr<gpu::ITexture> create_depth_texture(u32, u32, const float*) override
     {
         return nullptr;
-    }
-    void draw_shadow(gpu::IRasterTarget&, gpu::IRasterProgram&, gpu::ClearColor, gpu::ITexture&, u32) override {}
-    [[nodiscard]] std::unique_ptr<gpu::ITexture> create_texture_dim(gpu::TextureKind, u32, u32, u32,
+    }    [[nodiscard]] std::unique_ptr<gpu::ITexture> create_texture_dim(gpu::TextureKind, u32, u32, u32,
                                                                     const void*) override
     {
         return nullptr;
-    }
-    void draw_bindless(gpu::IRasterTarget&, gpu::IRasterProgram&, gpu::ClearColor, gpu::ITexture* const*, u32,
-                       u32) override
-    {
-    }
-    [[nodiscard]] bool supports_bindless() const noexcept override { return false; }
+    }    [[nodiscard]] bool supports_bindless() const noexcept override { return false; }
     [[nodiscard]] std::unique_ptr<gpu::IGBufferTarget> create_gbuffer_target(u32, u32, u32) override
     {
         return nullptr;

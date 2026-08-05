@@ -2359,7 +2359,7 @@ public:
         vkCmdEndRendering(cmd);
     }
 
-    void draw(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, crd::u32 vertex_count) override
+    void draw(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, crd::u32 vertex_count)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -2944,7 +2944,7 @@ public:
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, dst, 0, 0U, nullptr, 1U, &bb, 0U, nullptr);
     }
 
-    void draw_visbuffer_load(IRasterTarget& target, IRasterProgram& program, crd::u32 vertex_count) override
+    void draw_visbuffer_load(IRasterTarget& target, IRasterProgram& program, crd::u32 vertex_count)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -2955,7 +2955,7 @@ public:
     // ⭐ REN-38-A12: the WBOIT composite — fullscreen, bindless, LOAD, BLEND. Recording-only, like every other
     // continuing verb: "read what is already there" is only meaningful while a frame is open.
     void draw_bindless_blend_load(IRasterTarget& target, IRasterProgram& program, ITexture* const* textures,
-                                  crd::u32 count, crd::u32 vertex_count, BlendMode blend) override
+                                  crd::u32 count, crd::u32 vertex_count, BlendMode blend)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -2983,7 +2983,7 @@ public:
         vkCmdEndRendering(cmd);
     }
 
-    void draw_visbuffer(IRasterTarget& target, IRasterProgram& program, crd::u32 clear_id, crd::u32 vertex_count) override
+    void draw_visbuffer(IRasterTarget& target, IRasterProgram& program, crd::u32 clear_id, crd::u32 vertex_count)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -3030,7 +3030,7 @@ public:
     }
 
     void draw_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, float clear_depth,
-                    DepthCompare compare, crd::u32 vertex_count) override
+                    DepthCompare compare, crd::u32 vertex_count)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -3148,7 +3148,7 @@ public:
     }
 
     void draw_vrs(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, ShadingRate pipeline_rate,
-                  ShadingRateCombiner primitive_combiner, crd::u32 vertex_count) override
+                  ShadingRateCombiner primitive_combiner, crd::u32 vertex_count)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -3222,7 +3222,7 @@ public:
     }
 
     void draw_conservative(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, ConservativeMode mode,
-                           crd::u32 vertex_count) override
+                           crd::u32 vertex_count)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -5542,7 +5542,7 @@ public:
     }
 
     void draw_textured(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, ITexture& texture,
-                       crd::u32 vertex_count) override
+                       crd::u32 vertex_count)
     {
         draw_sampled(target, program, clear_color, static_cast<VulkanTexture&>(texture).view(), active_sampler(), // REN-38-B8
                      vertex_count);
@@ -5594,7 +5594,7 @@ public:
     }
 
     void draw_shadow(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, ITexture& depth,
-                     crd::u32 vertex_count) override
+                     crd::u32 vertex_count)
     {
         draw_sampled(target, program, clear_color, static_cast<VulkanTexture&>(depth).view(), m_cmp_sampler, vertex_count);
     }
@@ -5602,7 +5602,7 @@ public:
     [[nodiscard]] bool supports_bindless() const noexcept override { return m_ctx->bindless(); }
 
     void draw_bindless(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color,
-                       ITexture* const* textures, crd::u32 count, crd::u32 vertex_count) override
+                       ITexture* const* textures, crd::u32 count, crd::u32 vertex_count)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -5642,7 +5642,7 @@ public:
     // frame (the resolve is a frame-graph pass), so the frame-recording path is the whole implementation.
     void draw_bindless_storage(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color,
                                ITexture* const* textures, crd::u32 count, IStorageBuffer& constants,
-                               crd::u32 vertex_count) override
+                               crd::u32 vertex_count)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -5655,7 +5655,7 @@ public:
     // B16: draw_bindless INTO A DEPTH TARGET with a depth test — the depth-occluded displaced ocean grid. Same bindless
     // descriptor set (cascade textures, now VS+FS visible); depth attachment + test via render_dset_depth.
     void draw_bindless_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, float clear_depth,
-                             DepthCompare compare, ITexture* const* textures, crd::u32 count, crd::u32 vertex_count) override
+                             DepthCompare compare, ITexture* const* textures, crd::u32 count, crd::u32 vertex_count)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);

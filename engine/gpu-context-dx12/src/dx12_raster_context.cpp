@@ -2426,7 +2426,7 @@ public:
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
     }
 
-    void draw(IRasterTarget& target, IRasterProgram& program, ClearColor clear, crd::u32 vertex_count) override
+    void draw(IRasterTarget& target, IRasterProgram& program, ClearColor clear, crd::u32 vertex_count)
     {
         if (!m_ok) { return; }
         auto&      t  = static_cast<Dx12RasterTarget&>(target);
@@ -2884,7 +2884,7 @@ public:
         return SUCCEEDED(m_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&m_clear_heap)));
     }
 
-    void draw_visbuffer_load(IRasterTarget& target, IRasterProgram& program, crd::u32 vertex_count) override
+    void draw_visbuffer_load(IRasterTarget& target, IRasterProgram& program, crd::u32 vertex_count)
     {
         if (!m_ok || !frame_recording()) { return; }
         auto& t = static_cast<Dx12RasterTarget&>(target);
@@ -2900,7 +2900,7 @@ public:
     // (D3D12 bakes blend state, unlike Vulkan's dynamic equations) and therefore into the PSO CACHE KEY, which
     // 38-A15 already established.
     void draw_bindless_blend_load(IRasterTarget& target, IRasterProgram& program, ITexture* const* textures,
-                                  crd::u32 count, crd::u32 vertex_count, BlendMode blend) override
+                                  crd::u32 count, crd::u32 vertex_count, BlendMode blend)
     {
         if (!m_ok || !frame_recording() || textures == nullptr || count == 0U) { return; }
         auto& t = static_cast<Dx12RasterTarget&>(target);
@@ -2912,7 +2912,7 @@ public:
         record_bindless(t, p, pso, textures, count, ClearColor{}, vertex_count, /*clear=*/false);
     }
 
-    void draw_visbuffer(IRasterTarget& target, IRasterProgram& program, crd::u32 /*clear_id*/, crd::u32 vertex_count) override
+    void draw_visbuffer(IRasterTarget& target, IRasterProgram& program, crd::u32 /*clear_id*/, crd::u32 vertex_count)
     {
         if (!m_ok) { return; }
         auto& t = static_cast<Dx12RasterTarget&>(target);
@@ -2962,7 +2962,7 @@ public:
     }
 
     void draw_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear, float clear_depth,
-                    DepthCompare compare, crd::u32 vertex_count) override
+                    DepthCompare compare, crd::u32 vertex_count)
     {
         if (!m_ok) { return; }
         auto& t = static_cast<Dx12RasterTarget&>(target);
@@ -3008,7 +3008,7 @@ public:
     }
 
     void draw_vrs(IRasterTarget& target, IRasterProgram& program, ClearColor clear, ShadingRate pipeline_rate,
-                  ShadingRateCombiner primitive_combiner, crd::u32 vertex_count) override
+                  ShadingRateCombiner primitive_combiner, crd::u32 vertex_count)
     {
         if (!m_ok) { return; }
         auto& t = static_cast<Dx12RasterTarget&>(target);
@@ -3080,7 +3080,7 @@ public:
     }
 
     void draw_conservative(IRasterTarget& target, IRasterProgram& program, ClearColor clear, ConservativeMode mode,
-                           crd::u32 vertex_count) override
+                           crd::u32 vertex_count)
     {
         if (!m_ok) { return; }
         auto&      t            = static_cast<Dx12RasterTarget&>(target);
@@ -4799,7 +4799,7 @@ public:
     }
 
     void draw_textured(IRasterTarget& target, IRasterProgram& program, ClearColor clear, ITexture& texture,
-                       crd::u32 vertex_count) override
+                       crd::u32 vertex_count)
     {
         draw_sampled(target, program, clear, static_cast<Dx12Texture&>(texture), 0U, vertex_count);
     }
@@ -4866,7 +4866,7 @@ public:
     }
 
     void draw_shadow(IRasterTarget& target, IRasterProgram& program, ClearColor clear, ITexture& depth,
-                     crd::u32 vertex_count) override
+                     crd::u32 vertex_count)
     {
         draw_sampled(target, program, clear, static_cast<Dx12Texture&>(depth), 1U, vertex_count);
     }
@@ -4876,8 +4876,20 @@ public:
         return m_binding_tier >= D3D12_RESOURCE_BINDING_TIER_2;
     }
 
+    // RAF-12.4 F4-depth: DX12 has no native bindless+DEPTH path (Vulkan's draw_bindless_depth renders the ocean's
+    // depth-occluded grid). The pre-RAF-12.4 base default fell back to a DEPTHLESS bindless draw, so DX12 kept that
+    // behaviour; preserve it as a concrete method now the verb is de-virtualized (reached only via the encoder). No DX12
+    // caller exercises it today — the depth-occluded ocean grid gates on Vulkan only.
+    void draw_bindless_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear, float clear_depth,
+                             DepthCompare compare, ITexture* const* textures, crd::u32 count, crd::u32 vertex_count)
+    {
+        (void)clear_depth;
+        (void)compare;
+        draw_bindless(target, program, clear, textures, count, vertex_count);
+    }
+
     void draw_bindless(IRasterTarget& target, IRasterProgram& program, ClearColor clear, ITexture* const* textures,
-                       crd::u32 count, crd::u32 vertex_count) override
+                       crd::u32 count, crd::u32 vertex_count)
     {
         if (!m_ok || m_uav_heap == nullptr || m_sampler_heap == nullptr || count == 0U || textures == nullptr) { return; }
         auto&                t   = static_cast<Dx12RasterTarget&>(target);
@@ -6498,7 +6510,7 @@ private:
     }
     void draw_bindless_storage(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
                                ITexture* const* textures, crd::u32 count, IStorageBuffer& constants,
-                               crd::u32 vertex_count) override
+                               crd::u32 vertex_count)
     {
         if (!m_ok || m_uav_heap == nullptr || m_sampler_heap == nullptr || count == 0U || textures == nullptr
             || !frame_recording())

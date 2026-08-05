@@ -53,6 +53,7 @@
 #include <crd/platform/filesystem.hpp> // D2: create the cook cache dir
 #include <ckir_kernel_dispatch.hpp> // B-cmp: the SHARED both-backend kernel dispatch + oracle-compare harness
 #include <ckir_raster_triangle.hpp> // B3-e: the SHARED, backend-neutral CKIR triangle (identical on Vulkan + DX12)
+#include <verb_packet_helpers.hpp>  // RAF-12.4: crd::gputest::enc_draw* (fullscreen verbs recorded via the encoder)
 #include <ckir_vertex_pull.hpp>     // GEO-1: the vertex-pulling VS (cooked MeshResource stream fetched by VertexIndex)
 #include <crd/cooker/cook_handler.hpp> // GEO-1: the wave1 (.stl/.obj/.ply) cook handler — the import→cook→draw gate
 #include <crd/cooker/cook_io.hpp>      // GEO-6: the declared-input seam every cook reads through
@@ -1718,7 +1719,7 @@ void main() { o = vec4(1.0, 0.0, 0.0, 1.0); }
     auto               target = raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
 
-    raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 3U); // blue clear, draw the triangle
+    crd::gputest::enc_draw(*raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 3U); // blue clear, draw the triangle
 
     // Centre is inside the triangle → RED; a corner is outside → BLUE clear. This is the whole seam end-to-end: IR-free
     // trivial shaders → the Vulkan backend's compiler → IGpuProgram → shader objects → dynamic-rendering draw → readback.
@@ -1776,7 +1777,7 @@ TEST_CASE("D-007 B3-e: IR-authored triangle draws on Vulkan (CKIR graph -> SPIR-
     auto               target = raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
 
-    raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 3U);
 
     const crd::u32 centre = target->read_pixel(dim / 2U, dim / 2U);
     const crd::u32 corner = target->read_pixel(0U, 0U);
@@ -2812,7 +2813,7 @@ TEST_CASE("D-007 B4-vis-4: Vulkan HW-raster visibility buffer writes SV_Primitiv
     constexpr crd::u32 dim    = 64U;
     auto               target = raster->create_visbuffer_target(dim, dim);
     REQUIRE(target != nullptr);
-    raster->draw_visbuffer(*target, *program, 0xFFFFFFFFU, 6U); // clear id = empty; 6 verts = 2 triangles
+    crd::gputest::enc_draw_visbuffer(*raster,*target, *program, 0xFFFFFFFFU, 6U); // clear id = empty; 6 verts = 2 triangles
 
     int n0     = 0;
     int n1     = 0;
@@ -2877,7 +2878,7 @@ TEST_CASE("D-007 B1-a: IR fragment derivatives (dFdx/dFdy of FragCoord.x) draw o
     constexpr crd::u32 dim    = 32U;
     auto               target = raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 3U);
 
     // dFdx(FragCoord.x) == 1 (screen x rises 1/pixel) ⇒ R≈255; dFdy(FragCoord.x) == 0 ⇒ G≈0.
     const crd::u32 centre = target->read_pixel(dim / 2U, dim / 2U);
@@ -2929,7 +2930,7 @@ TEST_CASE("D-007 B1-b: IR fragment discard (alpha-test on FragCoord.x) draws on 
     constexpr crd::u32 dim    = 32U;
     auto               target = raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 3U);
 
     // Both (12,16) and (20,16) are inside the triangle. Right of x=16 ⇒ kept (red); left ⇒ discarded (blue clear shows).
     const crd::u32 kept = target->read_pixel(20U, 16U);
@@ -2983,7 +2984,7 @@ TEST_CASE("D-007 B1-c: IR flat integer interpolant (VS->FS) draws on Vulkan",
     constexpr crd::u32 dim    = 32U;
     auto               target = raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 3U);
 
     // The flat int (200) reached the fragment intact ⇒ R ≈ 200/255 ⇒ unorm8 200.
     const crd::u32 centre = target->read_pixel(dim / 2U, dim / 2U);
@@ -3027,7 +3028,7 @@ TEST_CASE("D-007 B1-c: IR noperspective vs smooth interpolant diverge on a persp
     constexpr crd::u32 dim    = 32U;
     auto               target = raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
 
     // R = perspective-correct (smooth ≈ 0.069 → ~18), G = screen-linear (noperspective ≈ 0.225 → ~57). If `noperspective`
     // were dropped both would interpolate perspective-correct and R == G — so a clear gap is the biting gate.
@@ -3073,7 +3074,7 @@ TEST_CASE("D-007 B1-c: IR centroid interpolation samples inside coverage on an M
     constexpr crd::u32 dim    = 32U;
     auto               target = raster->create_color_target_ms(dim, dim, 4U);
     REQUIRE(target != nullptr); // a null target ⇒ 4x MSAA unsupported for RGBA8 (would be a hard fail on this adapter)
-    raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
 
     // R = centre-sampled (smooth), G = centroid-sampled. Equal (bit-identical) on fully-covered interior pixels; they
     // diverge at partially-covered EDGE pixels (centroid stays inside coverage, centre may extrapolate). If `centroid`
@@ -3132,7 +3133,7 @@ TEST_CASE("D-007 B1-c: IR sample interpolation forces per-sample shading on an M
         REQUIRE(program != nullptr);
         auto target = raster->create_color_target_ms(dim, dim, 4U);
         REQUIRE(target != nullptr);
-        raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 3U);
+        crd::gputest::enc_draw(*raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 3U);
         int n = 0;
         for (crd::u32 y = 0; y < dim; ++y)
         {
@@ -3219,7 +3220,7 @@ TEST_CASE("D-007 B1-d: IR frag-depth write drives the depth test (Vulkan)", "[gp
     auto               target = r.raster->create_color_depth_target(dim, dim);
     REQUIRE(target != nullptr);
     // Clear depth to 0.5, LessEqual: primitive depth is 0 (would pass everywhere) — so any FAIL is the WRITTEN depth.
-    r.raster->draw_depth(*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 0.5F, gpu::DepthCompare::LessEqual,
+    crd::gputest::enc_draw_depth(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 0.5F, gpu::DepthCompare::LessEqual,
                          3U);
 
     const crd::u32 left  = target->read_pixel(4U, dim / 2U);  // depth ≈ 0.14 ≤ 0.5 ⇒ passes ⇒ red
@@ -3257,7 +3258,7 @@ TEST_CASE("D-007 B1-d: IR conservative depth (DepthGreater) frag-depth write (Vu
     constexpr crd::u32 dim    = 32U;
     auto               target = r.raster->create_color_depth_target(dim, dim);
     REQUIRE(target != nullptr);
-    r.raster->draw_depth(*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 0.5F, gpu::DepthCompare::LessEqual,
+    crd::gputest::enc_draw_depth(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 0.5F, gpu::DepthCompare::LessEqual,
                          3U);
     // Conservative depth is a hint for early-Z; the depth test still uses the written value ⇒ same split as the plain case.
     CHECK((target->read_pixel(4U, dim / 2U) & 0xFFU) > 200U);            // left red
@@ -3290,7 +3291,7 @@ TEST_CASE("D-007 B1-d: IR early_fragment_tests forces early-Z (Vulkan)", "[gpu-c
     auto               target = r.raster->create_color_depth_target(dim, dim);
     REQUIRE(target != nullptr);
     // Primitive depth 0 ≤ 0.5 clear (LessEqual) ⇒ the early test passes everywhere ⇒ the whole target is red.
-    r.raster->draw_depth(*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 0.5F, gpu::DepthCompare::LessEqual,
+    crd::gputest::enc_draw_depth(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 0.5F, gpu::DepthCompare::LessEqual,
                          3U);
     const crd::u32 centre = target->read_pixel(dim / 2U, dim / 2U);
     CHECK((centre & 0xFFU) > 200U);         // red (the FS ran and passed the early depth test)
@@ -3325,8 +3326,8 @@ TEST_CASE("D-007 B1-e: per-draw VRS 2x2 coarsens shading (Vulkan)", "[gpu-contex
     auto               t2  = r.raster->create_color_target(dim, dim);
     REQUIRE(t1 != nullptr);
     REQUIRE(t2 != nullptr);
-    r.raster->draw(*t1, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U); // 1x1 baseline
-    r.raster->draw_vrs(*t2, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, gpu::ShadingRate::Rate2x2,
+    crd::gputest::enc_draw(*r.raster,*t1, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U); // 1x1 baseline
+    crd::gputest::enc_draw_vrs(*r.raster,*t2, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, gpu::ShadingRate::Rate2x2,
                        gpu::ShadingRateCombiner::Keep, 3U); // per-draw 2x2
 
     const int n1 = count_equal_even_pairs(*t1, dim);
@@ -3364,7 +3365,7 @@ TEST_CASE("D-007 B1-e: per-primitive VRS out (gl_PrimitiveShadingRateEXT) coarse
     auto               target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
     // pipeline rate 1x1, but the PRIMITIVE rate (2x2) REPLACES it ⇒ the shader-output rate drives the coarsening.
-    r.raster->draw_vrs(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, gpu::ShadingRate::Rate1x1,
+    crd::gputest::enc_draw_vrs(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, gpu::ShadingRate::Rate1x1,
                        gpu::ShadingRateCombiner::Replace, 3U);
 
     const int n = count_equal_even_pairs(*target, dim);
@@ -3436,7 +3437,7 @@ TEST_CASE("D-007 B1-e: attachment (image) VRS 2x2 coarsens shading (Vulkan)", "[
     auto               target = r.raster->create_color_vrs_target(dim, dim, gpu::ShadingRate::Rate2x2);
     REQUIRE(target != nullptr);
     // pipeline 1x1, no primitive rate; the per-tile ATTACHMENT rate (2x2) REPLACES ⇒ coarse blocks.
-    r.raster->draw_vrs(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, gpu::ShadingRate::Rate1x1,
+    crd::gputest::enc_draw_vrs(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, gpu::ShadingRate::Rate1x1,
                        gpu::ShadingRateCombiner::Keep, 3U);
 
     const int n = count_equal_even_pairs(*target, dim);
@@ -3488,8 +3489,8 @@ TEST_CASE("D-007 B1-f: conservative OVERESTIMATE raster covers more pixels (Vulk
     const gpu::ClearColor blue{0.0F, 0.0F, 1.0F, 1.0F};
     REQUIRE(t_norm != nullptr);
     REQUIRE(t_over != nullptr);
-    r.raster->draw_conservative(*t_norm, *program, blue, gpu::ConservativeMode::Off, 3U);          // normal raster
-    r.raster->draw_conservative(*t_over, *program, blue, gpu::ConservativeMode::Overestimate, 3U); // + the edge rim
+    crd::gputest::enc_draw_conservative(*r.raster,*t_norm, *program, blue, gpu::ConservativeMode::Off, 3U);          // normal raster
+    crd::gputest::enc_draw_conservative(*r.raster,*t_over, *program, blue, gpu::ConservativeMode::Overestimate, 3U); // + the edge rim
 
     const int n_norm = count_red(*t_norm, dim);
     const int n_over = count_red(*t_over, dim);
@@ -3526,7 +3527,7 @@ TEST_CASE("D-007 B1-f: inner coverage distinguishes fully-covered from edge pixe
     auto               target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
     // Overestimate generates the edge fragments; inner coverage is 0 there (black) and 1 in the interior (white). Blue clear.
-    r.raster->draw_conservative(*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F},
+    crd::gputest::enc_draw_conservative(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F},
                                 gpu::ConservativeMode::Overestimate, 3U);
 
     int white = 0; // interior, inner coverage 1
@@ -3620,7 +3621,7 @@ TEST_CASE("D-007 B2-a: IR 2D texture sample (left-red/right-green) draws on Vulk
     constexpr crd::u32 dim    = 32U;
     auto               target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    r.raster->draw_textured(*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, *texture, 3U);
+    crd::gputest::enc_draw_textured(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, *texture, 3U);
 
     const crd::u32 left  = target->read_pixel(dim / 4U, dim / 2U);      // UV.x ≈ 0.25 ⇒ left texels ⇒ red
     const crd::u32 right = target->read_pixel(3U * dim / 4U, dim / 2U); // UV.x ≈ 0.75 ⇒ right texels ⇒ green
@@ -3659,7 +3660,7 @@ TEST_CASE("D-007 B2-b: IR sample-op family (Lod/Grad/texelFetch/gather/textureSi
         REQUIRE(program != nullptr);
         auto target = r.raster->create_color_target(dim, dim);
         REQUIRE(target != nullptr);
-        r.raster->draw_textured(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, *texture, 3U);
+        crd::gputest::enc_draw_textured(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, *texture, 3U);
         left  = target->read_pixel(dim / 4U, dim / 2U);
         right = target->read_pixel(3U * dim / 4U, dim / 2U);
     };
@@ -3716,7 +3717,7 @@ TEST_CASE("D-007 B2-b: IR shadow-compare sample (SampleCmp on a depth texture) o
     constexpr crd::u32 dim    = 32U;
     auto               target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    r.raster->draw_shadow(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, *dtex, 3U);
+    crd::gputest::enc_draw_shadow(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, *dtex, 3U);
 
     const crd::u32 left  = target->read_pixel(dim / 4U, dim / 2U);      // uv.x ≈ 0.25 ≤ 0.5 ⇒ pass ⇒ white
     const crd::u32 right = target->read_pixel(3U * dim / 4U, dim / 2U); // uv.x ≈ 0.75 > 0.5 ⇒ fail ⇒ black
@@ -3754,7 +3755,7 @@ TEST_CASE("D-007 B8-f: IR shadow-map foundation + bias stack renders on Vulkan",
     constexpr crd::u32 dim    = 32U;
     auto               target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    r.raster->draw_shadow(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, *dtex, 3U);
+    crd::gputest::enc_draw_shadow(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, *dtex, 3U);
 
     const auto     rc   = [](crd::u32 px) { return static_cast<int>(px & 0xFFU); };
     const crd::u32 left = target->read_pixel(7U, dim / 2U);       // fx≈7.5 → depth≈0.26 ≤ 0.5 → lit → warm
@@ -3793,7 +3794,7 @@ TEST_CASE("D-007 B8-g: IR PCF filtered soft shadows render on Vulkan", "[gpu-con
     constexpr crd::u32 dim    = 32U;
     auto               target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    r.raster->draw_shadow(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, *dtex, 3U);
+    crd::gputest::enc_draw_shadow(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, *dtex, 3U);
 
     const auto     rc   = [](crd::u32 px) { return static_cast<int>(px & 0xFFU); };
     const crd::u32 left = target->read_pixel(6U, dim / 2U);
@@ -3823,7 +3824,7 @@ TEST_CASE("D-007 B2-c: IR texture dimensions (1D/3D/Cube/2DArray/CubeArray) on V
         REQUIRE(program != nullptr);
         auto target = r.raster->create_color_target(dim, dim);
         REQUIRE(target != nullptr);
-        r.raster->draw_textured(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, tex, 3U);
+        crd::gputest::enc_draw_textured(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, tex, 3U);
         const crd::u32 l = target->read_pixel(dim / 4U, dim / 2U);
         const crd::u32 rr = target->read_pixel(3U * dim / 4U, dim / 2U);
         CHECK((l & 0xFFU) > 200U); CHECK(((l >> 8U) & 0xFFU) < 60U);   // left red
@@ -3908,7 +3909,7 @@ TEST_CASE("D-007 B2-d: IR bindless texture array (dynamic index) on Vulkan", "[g
     constexpr crd::u32 dim    = 32U;
     auto               target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    r.raster->draw_bindless(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, texs, 2U, 3U);
+    crd::gputest::enc_draw_bindless(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, texs, 2U, 3U);
 
     const crd::u32 left  = target->read_pixel(dim / 4U, dim / 2U);      // index 0 ⇒ texture[0] = red
     const crd::u32 right = target->read_pixel(3U * dim / 4U, dim / 2U); // index 1 ⇒ texture[1] = green
@@ -4076,7 +4077,7 @@ TEST_CASE("D-007 B6-a: IR MaterialX operator nodes (overlay per-channel branch) 
     REQUIRE(program != nullptr);
     auto target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    r.raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
 
     const auto     ch   = [](crd::u32 px, int c) { return static_cast<int>((px >> (8 * c)) & 0xFFU); };
     const auto     near = [](int got, int want) { return got >= want - 6 && got <= want + 6; };
@@ -4115,7 +4116,7 @@ TEST_CASE("D-007 B6-b: IR MaterialX perlin noise (U32 Bob-Jenkins hash) renders 
     REQUIRE(program != nullptr);
     auto target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    r.raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
 
     // Each column x reads back the grayscale of perlin at that column — must equal the library's own F32 eval, both backends.
     int  bad = 0;
@@ -4157,7 +4158,7 @@ TEST_CASE("D-007 B6-b: IR MaterialX worley (cellular) noise renders on Vulkan",
     REQUIRE(program != nullptr);
     auto target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    r.raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
 
     int  bad = 0;
     bool any = false;
@@ -4198,7 +4199,7 @@ TEST_CASE("D-007 B6-c: IR MaterialX UV place2d (rotate2d: radians/sin/cos) rende
     REQUIRE(program != nullptr);
     auto target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    r.raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
 
     int  bad = 0;
     bool any = false;
@@ -4239,7 +4240,7 @@ TEST_CASE("D-007 B6-d: IR MaterialX NPR gooch_shade (normalize/dot/reflect/mix/p
     REQUIRE(program != nullptr);
     auto target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    r.raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
 
     const auto ch = [](crd::u32 px, int c) { return static_cast<int>((px >> (8 * c)) & 0xFFU); };
     int        bad = 0;
@@ -4281,7 +4282,7 @@ TEST_CASE("D-007 B7-c: IR a LOWERED material (const-fold+DCE+CSE) renders identi
     REQUIRE(program != nullptr);
     auto target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    r.raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
 
     const auto     ch   = [](crd::u32 px, int c) { return static_cast<int>((px >> (8 * c)) & 0xFFU); };
     const auto     near = [](int got, int want) { return got >= want - 6 && got <= want + 6; };
@@ -4318,7 +4319,7 @@ TEST_CASE("D-007 B8-a: IR Cook-Torrance BRDF (GGX + multiscatter) renders on Vul
     REQUIRE(program != nullptr);
     auto target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    r.raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
 
     const auto ch = [](crd::u32 px, int c) { return static_cast<int>((px >> (8 * c)) & 0xFFU); };
     int        bad = 0;
@@ -4360,7 +4361,7 @@ TEST_CASE("D-007 B8-b: IR OpenPBR lobes (clearcoat + sheen layered) render on Vu
     REQUIRE(program != nullptr);
     auto target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    r.raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
 
     const auto ch = [](crd::u32 px, int c) { return static_cast<int>((px >> (8 * c)) & 0xFFU); };
     int        bad = 0;
@@ -4402,7 +4403,7 @@ TEST_CASE("D-007 B8-b: IR thin-film iridescence + transmission (glass) render on
     REQUIRE(program != nullptr);
     auto target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    r.raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
 
     const auto ch = [](crd::u32 px, int c) { return static_cast<int>((px >> (8 * c)) & 0xFFU); };
     int        bad = 0;
@@ -4444,7 +4445,7 @@ TEST_CASE("D-007 B8-c: IR punctual lights (directional + point + spot) render on
     REQUIRE(program != nullptr);
     auto target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    r.raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
 
     const auto ch = [](crd::u32 px, int c) { return static_cast<int>((px >> (8 * c)) & 0xFFU); };
     int        bad = 0;
@@ -4486,7 +4487,7 @@ TEST_CASE("D-007 B8-d: IR area light (LTC diffuse rectangle) renders on Vulkan",
     REQUIRE(program != nullptr);
     auto target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    r.raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
 
     const auto ch = [](crd::u32 px, int c) { return static_cast<int>((px >> (8 * c)) & 0xFFU); };
     int        bad = 0;
@@ -4528,7 +4529,7 @@ TEST_CASE("D-007 B8-d: IR tube area light (LTC line integral) renders on Vulkan"
     REQUIRE(program != nullptr);
     auto target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    r.raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
 
     const auto ch = [](crd::u32 px, int c) { return static_cast<int>((px >> (8 * c)) & 0xFFU); };
     int        bad = 0;
@@ -4570,7 +4571,7 @@ TEST_CASE("D-007 B8-d: IR disk area light (LTC ellipse + SolveCubic) renders on 
     REQUIRE(program != nullptr);
     auto target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    r.raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
 
     const auto ch = [](crd::u32 px, int c) { return static_cast<int>((px >> (8 * c)) & 0xFFU); };
     int        bad = 0;
@@ -4612,7 +4613,7 @@ TEST_CASE("D-007 B8-e: IR image-based lighting (SH irradiance + split-sum specul
     REQUIRE(program != nullptr);
     auto target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    r.raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
 
     const auto ch = [](crd::u32 px, int c) { return static_cast<int>((px >> (8 * c)) & 0xFFU); };
     int        bad = 0;
@@ -4654,7 +4655,7 @@ TEST_CASE("D-007 B8-h: IR cascaded shadow-map selection (split/select/snap/blend
     REQUIRE(program != nullptr);
     auto target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    r.raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
 
     const auto ch = [](crd::u32 px, int c) { return static_cast<int>((px >> (8 * c)) & 0xFFU); };
     int        bad = 0;
@@ -4703,7 +4704,7 @@ TEST_CASE("D-007 B8-i: IR screen-space + translucent shadows (contact / Fourier-
         REQUIRE(program != nullptr);
         auto target = r.raster->create_color_target(dim, dim);
         REQUIRE(target != nullptr);
-        r.raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+        crd::gputest::enc_draw(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
         int bad = 0;
         for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
         {
@@ -4748,7 +4749,7 @@ TEST_CASE("D-007 B8-j: IR skinning (linear-blend + dual-quaternion) renders on V
         REQUIRE(program != nullptr);
         auto target = r.raster->create_color_target(dim, dim);
         REQUIRE(target != nullptr);
-        r.raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+        crd::gputest::enc_draw(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
         int bad = 0;
         for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
         {
@@ -4788,7 +4789,7 @@ TEST_CASE("D-007 B8-k: IR material cook seam (Forward variant renders + GBuffer 
     REQUIRE(program != nullptr);
     auto target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    r.raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
     const auto ch  = [](crd::u32 px, int c) { return static_cast<int>((px >> (8 * c)) & 0xFFU); };
     int        bad = 0;
     for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
@@ -4842,7 +4843,7 @@ TEST_CASE("D-007 B8-l: IR render paths (deferred G-buffer lighting / clustered l
         REQUIRE(program != nullptr);
         auto target = r.raster->create_color_target(dim, dim);
         REQUIRE(target != nullptr);
-        r.raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+        crd::gputest::enc_draw(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
         int bad = 0;
         for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
         {
@@ -4885,7 +4886,7 @@ TEST_CASE("D-007 B8-m: THE CULMINATION -- skinned + textured + lit + IBL + PCF-s
     constexpr crd::u32 dim    = 32U;
     auto               target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    r.raster->draw_shadow(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, *dtex, 3U);
+    crd::gputest::enc_draw_shadow(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, *dtex, 3U);
 
     const auto ch  = [](crd::u32 px, int c) { return static_cast<int>((px >> (8 * c)) & 0xFFU); };
     // LIT region (left, receiver in front of the shadow map → shadow ≈ 1): the composed master pixel = direct + ambient, ±4.
@@ -4940,7 +4941,7 @@ TEST_CASE("D-007 B12: IR screen-space lighting frontier (AO/SSILVB - SSR - SSGI 
         REQUIRE(program != nullptr);
         auto target = r.raster->create_color_target(dim, dim);
         REQUIRE(target != nullptr);
-        r.raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+        crd::gputest::enc_draw(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
         int bad = 0;
         for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
         {
@@ -4990,7 +4991,7 @@ TEST_CASE("D-007 B13 post: IR HDR + TAA + bloom + cinematic + finish (specAA/CA/
         REQUIRE(program != nullptr);
         auto target = r.raster->create_color_target(dim, dim);
         REQUIRE(target != nullptr);
-        r.raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+        crd::gputest::enc_draw(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
         int bad = 0;
         for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
         {
@@ -5030,7 +5031,7 @@ TEST_CASE("D-007 B8-d: IR area light SPECULAR (LTC LUT Minv reconstruction) rend
         REQUIRE(program != nullptr);
         auto target = r.raster->create_color_target(dim, dim);
         REQUIRE(target != nullptr);
-        r.raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+        crd::gputest::enc_draw(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
         const auto ch = [](crd::u32 px, int c) { return static_cast<int>((px >> (8 * c)) & 0xFFU); };
         int        bad = 0;
         bool       any = false;
@@ -8257,7 +8258,7 @@ TEST_CASE("B16-a-4: water_shade RENDERS on Vulkan (bluish body + sun glint)", "[
     REQUIRE(program->valid());
     auto target = raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
 
     const crd::u32 c  = target->read_pixel(dim / 2U, dim / 2U);
     const int      cr = static_cast<int>(c & 0xFFU);
@@ -8607,7 +8608,7 @@ TEST_CASE("B16-a-4: RENDER ocean frames to BMP (open them!)", "[.ocean-frame]")
         REQUIRE(program->valid());
         auto target = raster->create_color_target(rdim, rdim);
         REQUIRE(target != nullptr);
-        raster->draw_bindless(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, texs, 2U, 3U);
+        crd::gputest::enc_draw_bindless(*raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, texs, 2U, 3U);
 
         // read the supersampled frame, then BOX-DOWNFILTER each ss×ss block → one display pixel (reference-quality AA).
         crd::containers::Array<crd::u32> hires(&alloc);
@@ -8726,7 +8727,7 @@ TEST_CASE("B16-a-4: RENDER ocean frames to BMP (open them!)", "[.ocean-frame]")
         auto gtarget = raster->create_color_depth_target(rdim, rdim);
         REQUIRE(gtarget != nullptr);
         const crd::u32 vcount = static_cast<crd::u32>(grid_n) * static_cast<crd::u32>(grid_n) * 6U;
-        raster->draw_bindless_depth(*gtarget, *gprogram, gpu::ClearColor{0.0F, 0.0F, 0.0F, 0.0F}, 1.0F, gpu::DepthCompare::Less,
+        crd::gputest::enc_draw_bindless_depth(*raster,*gtarget, *gprogram, gpu::ClearColor{0.0F, 0.0F, 0.0F, 0.0F}, 1.0F, gpu::DepthCompare::Less,
                                     texs, static_cast<crd::u32>(nc), vcount);
         composite_over_sky(*gtarget, path_geo);
 
@@ -12732,7 +12733,7 @@ TEST_CASE("GEO-3 CLOSE: a textured glTF decomposes (MESH+TXTR+PBRM+SCEN) and REN
     constexpr crd::u32 dim    = 16U;
     auto               target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    r.raster->draw_textured(*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, *texture, 3U);
+    crd::gputest::enc_draw_textured(*r.raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, *texture, 3U);
 
     // 6. the gate: cooked 188 → sRGB decode ≈ 0.503 → × (0.5, 1.0, 0.25) → ≈ (64, 128, 32). The re-derived-box
     //    counterfactual (127 → 0.216) would land at (28, 55, 14) — unconfusable.
@@ -12825,7 +12826,7 @@ TEST_CASE("RET-2: gpu-context PRESENTS -- acquire/blit/present/resize through a 
 
     for (int frame = 0; frame < 3; ++frame) // three full acquire→blit→present cycles
     {
-        raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+        crd::gputest::enc_draw(*raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
         CHECK(surface->present(*target));
         crd::gputest::pump_test_window();
     }
@@ -12834,12 +12835,12 @@ TEST_CASE("RET-2: gpu-context PRESENTS -- acquire/blit/present/resize through a 
     // a mismatched canvas is REFUSED (never a stretched half-frame)
     auto small = raster->create_color_target(sw / 2U, sh / 2U);
     REQUIRE(small != nullptr);
-    raster->draw(*small, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*raster,*small, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
     CHECK(!surface->present(*small));
 
     // resize RECREATES the swapchain (oldSwapchain retire path) and the matching canvas presents again
     REQUIRE(surface->resize(sw, sh));
-    raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
     CHECK(surface->present(*target));
     CHECK(surface->frame_count() == 4U);
 
@@ -13030,7 +13031,7 @@ TEST_CASE("RET-4: storage defrag relocates live buffers and PRESERVES contents (
     REQUIRE(program != nullptr);
     auto target = raster->create_color_target(32U, 32U);
     REQUIRE(target != nullptr);
-    raster->draw_textured(*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, *texture, 3U);
+    crd::gputest::enc_draw_textured(*raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, *texture, 3U);
     const crd::u32 left  = target->read_pixel(8U, 16U);  // the RELOCATED texture samples exactly as before the move
     const crd::u32 right = target->read_pixel(24U, 16U);
     CHECK((left & 0xFFU) > 200U);          // left: red
@@ -13097,7 +13098,7 @@ TEST_CASE("RET-5: ImGui composites through the gpu-context overlay present (Vulk
 
         for (int frame = 0; frame < 3; ++frame) // scene → blit → ImGui overlay → present, three full frames
         {
-            raster->draw(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+            crd::gputest::enc_draw(*raster,*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
             backend.new_frame();
             ImGui::NewFrame();
             ImGui::Begin("cerid");
@@ -13172,7 +13173,7 @@ TEST_CASE("RET-6: draw_overlay composites the CKIR line shader over an existing 
     constexpr crd::u32 dim    = 64U;
     auto               target = raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    raster->draw(*target, *scene, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*raster,*target, *scene, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 3U);
 
     // 2. the OVERLAY program — ⭐⭐ REN-38-F7: cooked from the AUTHORED declarations (`draw_assets.hpp`), the
     // same texts crd-draw's init cooks. The hand-written `ckir_draw.hpp` builders this gate used to exercise
@@ -13315,7 +13316,7 @@ TEST_CASE("RET-6: crd-draw init + submit_overlay compose a RenderBuffer over the
     constexpr crd::u32 dim    = 64U;
     auto               target = raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    raster->draw(*target, *scene, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(*raster,*target, *scene, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 3U);
 
     // the crd-draw GPU half: CKIR programs + the draw buffer, no pack, no resources
     REQUIRE(crd::draw::init(*vk, *raster));

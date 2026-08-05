@@ -26,6 +26,7 @@
 #include <ckir_oit_test.hpp>        // REN-38-A12: the shared WBOIT accumulate + composite shaders
 #include <ckir_raster_triangle.hpp> // REN-2: the shared triangle (offscreen) + textured/sample (compose) CKIR builders
 #include <ckir_vertex_pull.hpp>     // REN-40-A: the GEO-1 pull VS the indirect-count gate draws with
+#include <verb_packet_helpers.hpp>  // RAF-12.4: crd::gputest::enc_draw{,_textured,_shadow,_bindless} (shared)
 #include <win32_test_window.hpp>    // REN-38-A5: a REAL window — DXGI has no headless surface
 
 #include <catch2/catch_test_macros.hpp>
@@ -117,7 +118,7 @@ struct RttCompose
 void record_rtt_compose(g::IFrameContext& ctx, void* user)
 {
     auto* s = static_cast<RttCompose*>(user);
-    ctx.raster().draw_textured(*ctx.image(s->dst), *s->prog, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, *ctx.texture(s->rtt), 3U);
+    crd::gputest::enc_draw_textured(ctx.raster(), *ctx.image(s->dst), *s->prog, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, *ctx.texture(s->rtt), 3U);
 }
 
 } // namespace
@@ -160,8 +161,8 @@ struct ShadowSamplePass
 void record_shadow_sample(g::IFrameContext& ctx, void* user)
 {
     auto* s = static_cast<ShadowSamplePass*>(user);
-    ctx.raster().draw_shadow(*ctx.image(s->dst), *s->prog, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F},
-                             *ctx.texture(s->map), 3U);
+    crd::gputest::enc_draw_shadow(ctx.raster(), *ctx.image(s->dst), *s->prog, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F},
+                                  *ctx.texture(s->map), 3U);
 }
 
 TEST_CASE("REN-1 GATE (DX12): frame graph composes two pull passes in ONE submission, readback bit-matches sync",
@@ -1434,14 +1435,14 @@ TEST_CASE("REN-38-A1a GATE (DX12): a fullscreen pass binds ALL its declared read
     const auto rec_solid = [](g::IFrameContext& ctx, void* user) {
         auto* s = static_cast<Solid*>(user);
         // 38-A1h gave plain `draw` a recording path, so this gate covers A1h as well as A3.
-        ctx.raster().draw(*ctx.image(s->img), *s->prog, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+        crd::gputest::enc_draw(ctx.raster(), *ctx.image(s->img), *s->prog, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
     };
     const auto rec_compose = [](g::IFrameContext& ctx, void* user) {
         auto*        s    = static_cast<Compose*>(user);
         g::ITexture* t[2] = {ctx.texture(s->a), ctx.texture(s->b)};
         if (t[0] == nullptr || t[1] == nullptr) { return; }
-        ctx.raster().draw_bindless(*ctx.image(s->dst), *s->prog, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F},
-                                   static_cast<g::ITexture* const*>(t), 2U, 3U);
+        crd::gputest::enc_draw_bindless(ctx.raster(), *ctx.image(s->dst), *s->prog, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F},
+                                        static_cast<g::ITexture* const*>(t), 2U, 3U);
     };
 
     Solid   s0{gb0, dbuf, red_prog.get()};

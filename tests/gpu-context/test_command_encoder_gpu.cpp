@@ -23,6 +23,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <ckir_raster_triangle.hpp>
+#include <verb_packet_helpers.hpp> // RAF-12.4: crd::gputest::enc_draw (the de-virtualized draw verb, recorded via the encoder)
 #include <ckir_vertex_pull.hpp>
 
 #include <memory>
@@ -63,15 +64,12 @@ bool make_triangle(IGpuContext& gctx, IRasterContext& raster, crd::memory::IAllo
     return true;
 }
 
-// Fullscreen draw through the encoder: expected image + BYTE-IDENTICAL to the legacy attributeless draw verb.
+// Fullscreen (attributeless) draw through the encoder: the triangle over the clear reads back as expected — centre red,
+// corner blue. RAF-12.4: the draw verb is de-virtualized, so the encoder IS the only path (no legacy verb to compare).
 void gate_fullscreen(IRasterContext& raster, IRasterProgram& program)
 {
     constexpr crd::u32 dim = 32U;
     const ClearColor blue{0.0F, 0.0F, 1.0F, 1.0F};
-
-    auto ref = raster.create_color_target(dim, dim);
-    REQUIRE(ref != nullptr);
-    raster.draw(*ref, program, blue, 3U); // legacy path
 
     auto target = raster.create_color_target(dim, dim);
     REQUIRE(target != nullptr);
@@ -101,14 +99,6 @@ void gate_fullscreen(IRasterContext& raster, IRasterProgram& program)
     CHECK(((centre >> 16U) & 0xFFU) <= 5U);
     CHECK((corner & 0xFFU) <= 5U);
     CHECK(((corner >> 16U) & 0xFFU) >= 250U);
-
-    for (crd::u32 y = 0U; y < dim; y += 4U)
-    {
-        for (crd::u32 x = 0U; x < dim; x += 4U)
-        {
-            CHECK(target->read_pixel(x, y) == ref->read_pixel(x, y)); // encoder == legacy verb
-        }
-    }
 }
 
 // Clear through the encoder's transfer(Clear).
@@ -139,7 +129,7 @@ void gate_copy_blit(IRasterContext& raster, IRasterProgram& program)
 
     auto src = raster.create_color_target(dim, dim);
     REQUIRE(src != nullptr);
-    raster.draw(*src, program, blue, 3U); // red triangle over blue clear
+    crd::gputest::enc_draw(raster, *src, program, blue, 3U); // red triangle over blue clear (recorded via the encoder)
 
     auto encoder = raster.create_command_encoder();
 
@@ -184,7 +174,7 @@ void gate_resolve(IRasterContext& raster, IRasterProgram& program)
         WARN("adapter has no 4x MSAA color target; skipping the resolve gate");
         return;
     }
-    raster.draw(*ms, program, ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw(raster, *ms, program, ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 3U);
 
     auto encoder = raster.create_command_encoder();
     auto dst = raster.create_color_target(dim, dim);

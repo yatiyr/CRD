@@ -10,6 +10,7 @@
 #include <crd/framecook/frame_runtime.hpp> // REN-36.2: executing it through IFrameGraph
 #include <crd/gpu/frame_graph.hpp>
 #include <crd/gpu/command_model.hpp> // RAF-12.4: DispatchDesc for enc_dispatch
+#include <verb_packet_helpers.hpp>   // RAF-12.4: gputest::enc_draw{,_textured,_shadow,_bindless}/enc_dispatch (shared)
 #include <crd/gpu/raster_context.hpp>
 #include <crd/gpu/vulkan_context.hpp>
 #include <crd/gpu/vulkan_raster_context.hpp>
@@ -35,27 +36,8 @@ namespace g = crd::gpu;
 
 namespace
 {
-// ⭐ RAF-12.4 (F2): record a compute dispatch through the canonical command encoder — the `dispatch_kernel` verb it
-// replaces is de-virtualized off IRasterContext into each backend's private method (reached only by the encoder).
-inline void enc_dispatch(g::IRasterContext& r, g::IGpuProgram& kernel, crd::u32 gx, crd::u32 gy, crd::u32 gz,
-                         g::IStorageBuffer* const* bufs, crd::u32 n)
-{
-    auto            enc = r.create_command_encoder();
-    g::DispatchDesc d{};
-    d.kernel   = &kernel;
-    d.kind     = g::DispatchKind::Direct;
-    d.groups_x = gx;
-    d.groups_y = gy;
-    d.groups_z = gz;
-    for (crd::u32 i = 0; i < n; ++i)
-    {
-        g::ResourceBinding b{};
-        b.kind   = g::BindingKind::StorageBuffer;
-        b.buffer = bufs[i];
-        d.bindings.push_back(b);
-    }
-    enc->dispatch(d);
-}
+// RAF-12.4: enc_dispatch + the fullscreen verb-packet helpers now live in the SHARED tests/gpu-shared/verb_packet_helpers.hpp
+// (crd::gputest::), driven by both backend suites so the encoder's lowering is proven once.
 
 // per-pass recording state (carried through FgExecuteFn's void* user)
 struct PassState
@@ -100,7 +82,7 @@ struct RttCompose
 void record_rtt_compose(g::IFrameContext& ctx, void* user)
 {
     auto* s = static_cast<RttCompose*>(user);
-    ctx.raster().draw_textured(*ctx.image(s->dst), *s->prog, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, *ctx.texture(s->rtt), 3U);
+    gputest::enc_draw_textured(ctx.raster(), *ctx.image(s->dst), *s->prog, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, *ctx.texture(s->rtt), 3U);
 }
 
 // REN-3.1: pass 1 RENDERS a depth map into a D32Float+sampled transient — no colour attachment at all.
@@ -142,7 +124,7 @@ struct ShadowSamplePass
 void record_shadow_sample(g::IFrameContext& ctx, void* user)
 {
     auto* s = static_cast<ShadowSamplePass*>(user);
-    ctx.raster().draw_shadow(*ctx.image(s->dst), *s->prog, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F},
+    gputest::enc_draw_shadow(ctx.raster(), *ctx.image(s->dst), *s->prog, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F},
                              *ctx.texture(s->map), 3U);
 }
 
@@ -1685,7 +1667,7 @@ TEST_CASE("REN-37.1 DIAG: a vec3 varying transports VS->FS (and survives unmatch
 
         auto dst = raster.create_color_target(dim, dim);
         REQUIRE(dst != nullptr);
-        raster.draw(*dst, *prog, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 3U);
+        gputest::enc_draw(raster, *dst, *prog, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 3U);
 
         const u32 px = dst->read_pixel(dim / 2U, dim / 2U);
         const u32 r  = px & 0xFFU;
@@ -1998,13 +1980,13 @@ TEST_CASE("REN-38-A3 GATE: a fullscreen pass binds ALL its declared reads, in or
     };
     const auto rec_solid = [](g::IFrameContext& ctx, void* user) {
         auto* s = static_cast<Solid*>(user);
-        ctx.raster().draw(*ctx.image(s->img), *s->prog, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+        gputest::enc_draw(ctx.raster(), *ctx.image(s->img), *s->prog, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
     };
     const auto rec_compose = [](g::IFrameContext& ctx, void* user) {
         auto*        s = static_cast<Compose*>(user);
         g::ITexture* t[2] = {ctx.texture(s->a), ctx.texture(s->b)};
         if (t[0] == nullptr || t[1] == nullptr) { return; }
-        ctx.raster().draw_bindless(*ctx.image(s->dst), *s->prog, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F},
+        gputest::enc_draw_bindless(ctx.raster(), *ctx.image(s->dst), *s->prog, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F},
                                    static_cast<g::ITexture* const*>(t), 2U, 3U);
     };
 
@@ -2107,7 +2089,7 @@ TEST_CASE("REN-38-A2 GATE: an authored COMPUTE pass dispatches inside the frame 
         g::IStorageBuffer* sb = ctx.buffer(s->buf);
         if (sb == nullptr) { return; }
         g::IStorageBuffer* bufs[1] = {sb};
-        enc_dispatch(ctx.raster(), *s->prog, 1U, 1U, 1U, static_cast<g::IStorageBuffer* const*>(bufs), 1U);
+        gputest::enc_dispatch(ctx.raster(), *s->prog, 1U, 1U, 1U, static_cast<g::IStorageBuffer* const*>(bufs), 1U);
     };
 
     Kern k{kernel.get(), buf};
@@ -3819,6 +3801,8 @@ TEST_CASE("REN-38-A12 GATE: authored WBOIT composites OVER the background, not t
     memory::TlsfAllocator alloc(16U << 20U);
     if (!raster.supports_bindless()) { SKIP("device does not support bindless texture arrays"); }
 
+    // ONE half-transparent RED quad over the whole screen. Order-independence is B17-a's gate; what THIS row must
+    // show is that the composite READ the background instead of erasing it.
     // ONE half-transparent RED quad over the whole screen. Order-independence is B17-a's gate; what THIS row must
     // show is that the composite READ the background instead of erasing it.
     crd::gputest::WboitScene scene{};
@@ -7675,7 +7659,7 @@ TEST_CASE("REN-40-A GATE: the compacting cull kernel reproduces the CPU frustum 
                 [](g::IFrameContext& ctx, void* user) {
                     auto*                u = static_cast<CullState*>(user);
                     g::IStorageBuffer*   bufs[2] = {ctx.buffer(u->scene), ctx.buffer(u->args)};
-                    enc_dispatch(ctx.raster(), *u->kern, (n_boxes + 63U) / 64U, 1U, 1U,
+                    gputest::enc_dispatch(ctx.raster(), *u->kern, (n_boxes + 63U) / 64U, 1U, 1U,
                                                  static_cast<g::IStorageBuffer* const*>(bufs), 2U);
                 },
                 &st);
@@ -7747,7 +7731,7 @@ TEST_CASE("REN-40-A GATE: the compacting cull kernel reproduces the CPU frustum 
                 [](g::IFrameContext& ctx, void* user) {
                     auto*              u       = static_cast<TwoPass*>(user);
                     g::IStorageBuffer* bufs[2] = {ctx.buffer(u->scene), ctx.buffer(u->args)};
-                    enc_dispatch(ctx.raster(), *u->reset, 1U, 1U, 1U,
+                    gputest::enc_dispatch(ctx.raster(), *u->reset, 1U, 1U, 1U,
                                                  static_cast<g::IStorageBuffer* const*>(bufs), 2U);
                 },
                 &tp);
@@ -7759,7 +7743,7 @@ TEST_CASE("REN-40-A GATE: the compacting cull kernel reproduces the CPU frustum 
                 [](g::IFrameContext& ctx, void* user) {
                     auto*              u       = static_cast<TwoPass*>(user);
                     g::IStorageBuffer* bufs[2] = {ctx.buffer(u->scene), ctx.buffer(u->args)};
-                    enc_dispatch(ctx.raster(), *u->cull, (n_boxes + 63U) / 64U, 1U, 1U,
+                    gputest::enc_dispatch(ctx.raster(), *u->cull, (n_boxes + 63U) / 64U, 1U, 1U,
                                                  static_cast<g::IStorageBuffer* const*>(bufs), 2U);
                 },
                 &tp);
@@ -8000,7 +7984,7 @@ TEST_CASE("REN-40-C2 GATE: the cull kernel selects the LOD slot the projected sc
                 [](g::IFrameContext& ctx, void* user) {
                     auto*              u       = static_cast<St*>(user);
                     g::IStorageBuffer* bufs[2] = {ctx.buffer(u->scene), ctx.buffer(u->args)};
-                    enc_dispatch(ctx.raster(), *u->kern, (n_boxes + 63U) / 64U, 1U, 1U,
+                    gputest::enc_dispatch(ctx.raster(), *u->kern, (n_boxes + 63U) / 64U, 1U, 1U,
                                                  static_cast<g::IStorageBuffer* const*>(bufs), 2U);
                 },
                 &st);

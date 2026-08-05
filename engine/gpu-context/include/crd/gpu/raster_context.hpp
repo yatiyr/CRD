@@ -311,9 +311,6 @@ public:
     [[nodiscard]] virtual std::unique_ptr<IRasterProgram>
     create_raster_program(IGpuProgram& vertex, IGpuProgram& fragment) = 0;
 
-    // Clear `target` to `clear`, then draw `vertex_count` vertices with `program` (attributeless — the VS positions from
-    // its vertex index), via dynamic rendering + shader objects. Result host-readable (`read_pixel`). Synchronous.
-    virtual void draw(IRasterTarget& target, IRasterProgram& program, ClearColor clear, crd::u32 vertex_count) = 0;
 
     // --- B1-c: MSAA render targets (the substrate for `centroid` / `sample` interpolation) --------------------------------
 
@@ -331,10 +328,6 @@ public:
     // COLOUR texel (depth is the test target, not read back). Single-sample.
     [[nodiscard]] virtual std::unique_ptr<IRasterTarget> create_color_depth_target(crd::u32 width, crd::u32 height) = 0;
 
-    // Clear colour to `clear` and depth to `clear_depth`, then draw with the depth test enabled at `compare` (depth write
-    // on). A fragment passes iff `fragment_depth compare stored_depth`. Target must come from `create_color_depth_target`.
-    virtual void draw_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear, float clear_depth,
-                            DepthCompare compare, crd::u32 vertex_count) = 0;
 
     // --- B1-e: variable-rate shading (VRS) — coarse shading, three combinable rate sources ------------------------------
 
@@ -343,12 +336,6 @@ public:
     [[nodiscard]] virtual std::unique_ptr<IRasterTarget> create_color_vrs_target(crd::u32 width, crd::u32 height,
                                                                                  ShadingRate tile_rate) = 0;
 
-    // Clear + draw with VRS. `pipeline_rate` is the per-DRAW rate; `primitive_combiner` says how the shader-output
-    // (per-PRIMITIVE, `KEntry::shading_rate`) rate combines with it (Keep = pipeline wins, Replace = primitive wins). If
-    // `target` came from `create_color_vrs_target`, its per-tile attachment rate then REPLACES the result. On an adapter
-    // without VRS this shades at 1x1 (a correct, if not coarse, result). Result host-readable via `read_pixel`.
-    virtual void draw_vrs(IRasterTarget& target, IRasterProgram& program, ClearColor clear, ShadingRate pipeline_rate,
-                          ShadingRateCombiner primitive_combiner, crd::u32 vertex_count) = 0;
 
     // True iff all three VRS rate sources (pipeline · primitive · attachment) are usable (Vulkan: the feature is enabled;
     // DX12: shading-rate Tier 2). draw_vrs is still callable when false — it just shades at 1x1.
@@ -363,10 +350,6 @@ public:
     // (Vulkan: VK_EXT_conservative_rasterization ⇒ FullyCoveredEXT; DX12: conservative Tier 3, which adds SV_InnerCoverage).
     [[nodiscard]] virtual bool supports_inner_coverage() const noexcept = 0;
 
-    // Clear + draw with conservative rasterization at `mode` (Off = normal). Overestimate covers every touched pixel;
-    // Underestimate feeds the inner-coverage input (`KBuiltin::InnerCoverage`). Falls back to a normal draw when unsupported.
-    virtual void draw_conservative(IRasterTarget& target, IRasterProgram& program, ClearColor clear, ConservativeMode mode,
-                                   crd::u32 vertex_count) = 0;
 
     // --- B1-f: fragment-shader storage buffer + interlock (ROV) ---------------------------------------------------------
 
@@ -398,21 +381,12 @@ public:
     [[nodiscard]] virtual std::unique_ptr<class ITexture>
     create_texture_mipped(crd::u32 width, crd::u32 height, const void* rgba) { return create_texture(width, height, rgba); }
 
-    // Clear + draw with `texture` bound to the fragment shader's texture slot (Vulkan set 0 / binding 1 sampled image +
-    // binding 2 sampler; DX12 t1 SRV + s2 sampler). The program's FS samples it (`KOp::TexSample`) through a default
-    // bilinear/repeat sampler. Result host-readable via `read_pixel`.
-    virtual void draw_textured(IRasterTarget& target, IRasterProgram& program, ClearColor clear, ITexture& texture,
-                               crd::u32 vertex_count) = 0;
 
     // B2-b: a single-channel DEPTH texture for shadow-compare sampling (`KOp::SampleCmp`). `depth` is width*height floats in
     // [0,1], row-major. Sampled via `draw_shadow`'s COMPARISON sampler. nullptr on failure.
     [[nodiscard]] virtual std::unique_ptr<ITexture>
     create_depth_texture(crd::u32 width, crd::u32 height, const float* depth) = 0;
 
-    // B2-b: clear + draw with `depth` bound at the texture slot and a COMPARISON sampler (compareOp LESS_OR_EQUAL) at the
-    // sampler slot. The FS's shadow sample (`KOp::SampleCmp`) returns 1 where `ref <= stored depth`, else 0. Host-readable.
-    virtual void draw_shadow(IRasterTarget& target, IRasterProgram& program, ClearColor clear, ITexture& depth,
-                             crd::u32 vertex_count) = 0;
 
     // B2-c: create a RGBA8 texture of dimension `kind`. `depth_or_layers` = 3D slice count (Tex3D), or array/cube layer
     // count (Cube = 6, Tex2DArray = N, CubeArray = 6*N); ignored (1) for Tex1D/Tex2D. `rgba` is width*height*
@@ -421,27 +395,11 @@ public:
     [[nodiscard]] virtual std::unique_ptr<ITexture>
     create_texture_dim(TextureKind kind, crd::u32 width, crd::u32 height, crd::u32 depth_or_layers, const void* rgba) = 0;
 
-    // B2-d: clear + draw with `count` textures bound as a BINDLESS descriptor ARRAY at set 0 / binding 3 (t3 on DX12). The
-    // FS samples an element chosen by a DYNAMIC per-fragment index (`KOp::SampleIndexed`, authored on a `texture(..., N)`
-    // array binding). `count` must be ≤ 8 (the array capacity). Falls back to a normal draw when bindless is unsupported.
-    virtual void draw_bindless(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
-                               ITexture* const* textures, crd::u32 count, crd::u32 vertex_count) = 0;
 
     // B2-d: true iff dynamic/non-uniform texture-array indexing (bindless) is usable (Vulkan: the descriptor-indexing
     // feature; DX12: resource-binding tier 2+, effectively always). draw_bindless still runs when false (uniform index only).
     [[nodiscard]] virtual bool supports_bindless() const noexcept = 0;
 
-    // B16: like draw_bindless, but into a `create_color_depth_target` with a DEPTH TEST (clear to `clear_depth`, `compare` op) —
-    // for DEPTH-OCCLUDED displaced geometry: the vertex-displaced ocean grid, where a near wave must hide the trough behind it.
-    // The bound cascade textures are VERTEX+FRAGMENT visible, so the VS samples the FFT DISPLACEMENT to move each grid vertex.
-    // Default (backends without the override) falls back to a depthless draw_bindless.
-    virtual void draw_bindless_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear, float clear_depth,
-                                     DepthCompare compare, ITexture* const* textures, crd::u32 count, crd::u32 vertex_count)
-    {
-        (void)clear_depth;
-        (void)compare;
-        draw_bindless(target, program, clear, textures, count, vertex_count);
-    }
 
     // B4: create a MESH+FRAGMENT program (the modern amplification path — the mesh shader generates geometry directly, no vertex
     // input). Default (no mesh-shader support) ⇒ nullptr, so the caller falls back to the vertex-pull path. WebGPU has no mesh
@@ -504,9 +462,6 @@ public:
         return nullptr;
     }
 
-    // B4-vis-4: HW-raster a VS→FS program into a visibility-buffer target, clearing the id to `clear_id`. Default ⇒ no-op.
-    virtual void draw_visbuffer(IRasterTarget& /*target*/, IRasterProgram& /*program*/, crd::u32 /*clear_id*/,
-                                crd::u32 /*vertex_count*/) {}
 
     // B4: GPU-DRIVEN INDIRECT MESHLET DISPATCH — the mesh-workgroup count comes from `native_args` (the backend-native handle
     // of a buffer a compute CULL pass wrote as {groupCountX, 1, 1}; `ComputeBuffer::native_handle()`), consumed by
@@ -758,34 +713,8 @@ public:
     {
     }
 
-    // ── ⭐ REN-38-A11: the CONTINUING visibility-buffer draw. Appended at the END (D135). ──
-    // ⛔ Same rule as `draw_tess_load` / `draw_mesh_load`, and it matters MORE here: a visibility buffer's whole
-    // purpose is that ONE image holds the ids of EVERY visible primitive. A pass that cleared per draw would keep
-    // only the LAST mesh's ids and the deferred materialisation would shade one object over a background of
-    // "nothing" — a picture that looks like aggressive culling rather than a bug.
-    virtual void draw_visbuffer_load(IRasterTarget& /*target*/, IRasterProgram& /*program*/,
-                                     crd::u32 /*vertex_count*/) {}
 
-    // ── ⭐ REN-38-A12: the COMPOSITE draw — fullscreen, N bindless textures, LOAD (not clear), BLENDED. ──
-    // ⛔ This is the verb that makes ORDER-INDEPENDENT TRANSPARENCY authorable as two ordinary passes instead of
-    // a bespoke `draw_wboit` that allocates its own images (the 38-A1f finding). WBOIT's resolve is by definition
-    // `rgb·(1-reveal) + background·reveal`: it must READ what is already in the target and BLEND over it. Every
-    // fullscreen verb before this CLEARED, so the background was gone before the composite ran and the "OIT
-    // technique" could only ever be a single opaque layer.
-    virtual void draw_bindless_blend_load(IRasterTarget& /*target*/, IRasterProgram& /*program*/,
-                                          ITexture* const* /*textures*/, crd::u32 /*count*/,
-                                          crd::u32 /*vertex_count*/, BlendMode /*blend*/) {}
 
-    // ── ⭐⭐ REN-41 (TAA): a color-only fullscreen draw binding `count` bindless textures (the array the FS
-    // samples via `KOp::SampleIndexed` at constant indices) PLUS a per-frame CONSTANTS storage buffer at
-    // set 0 / binding 0 (b0). This is the ONLY fullscreen path that delivers per-frame MATRICES to a fragment
-    // shader — the reproject matrix a temporal-AA resolve needs (the engine is SSBO-only; there is no uniform
-    // block). The buffer slot (binding 0) is already fragment-visible in the raster set layout; the existing
-    // bindless verbs simply never wrote it. Default no-op: a backend without the override does not run the pass,
-    // which the executor reports BY NAME rather than drawing a wrong image silently.
-    virtual void draw_bindless_storage(IRasterTarget& /*target*/, IRasterProgram& /*program*/, ClearColor /*clear*/,
-                                       ITexture* const* /*textures*/, crd::u32 /*count*/,
-                                       IStorageBuffer& /*constants*/, crd::u32 /*vertex_count*/) {}
 
 
     // Does this backend/adapter offer a ray-tracing PIPELINE (not merely inline ray query)? ⛔ Reported, so an

@@ -185,7 +185,11 @@ public:
                 break;
             }
             const RasterState& st = packet.state;
-            if (st.vrs_pipeline_rate != ShadingRate::Rate1x1)
+            // VRS is active when ANY of its three rate sources is: the per-DRAW pipeline rate (!= 1x1), the per-PRIMITIVE
+            // shader-output rate (a non-Keep combiner lets it drive), or a per-TILE shading-rate ATTACHMENT on the scope.
+            // Gating solely on the pipeline rate would drop a 1x1-pipeline draw whose primitive/attachment rate coarsens.
+            if (st.vrs_pipeline_rate != ShadingRate::Rate1x1 ||
+                st.vrs_primitive_combiner != ShadingRateCombiner::Keep || r.shading_rate_attachment != nullptr)
             {
                 m_ctx.draw_vrs(*color0, prog, clear, st.vrs_pipeline_rate, st.vrs_primitive_combiner, count);
                 break;
@@ -205,6 +209,14 @@ public:
                 {
                     m_ctx.draw_bindless_blend_load(*color0, prog, bindless->texture_array, bindless->array_count, count,
                                                    r.color[0].blend);
+                    break;
+                }
+                // A bindless pass with an enabled depth attachment is the DEPTH-OCCLUDED displaced-geometry draw
+                // (draw_bindless_depth — the ocean grid; the target carries the depth buffer, the VS samples the cascades).
+                if (r.depth.enabled)
+                {
+                    m_ctx.draw_bindless_depth(*color0, prog, clear, clear_depth, compare, bindless->texture_array,
+                                              bindless->array_count, count);
                     break;
                 }
                 // ⭐⭐ a fullscreen bindless pass that ALSO binds a constants buffer takes the storage variant (b0) —
@@ -231,7 +243,16 @@ public:
                 m_ctx.draw_textured(*color0, prog, clear, *tex, count);
                 break;
             }
-            m_ctx.draw(*color0, prog, clear, count); // attributeless / procedural
+            // A plain attributeless draw. With an enabled depth attachment it is the DEPTH-TESTED fullscreen draw
+            // (draw_depth — the target carries the depth buffer); otherwise the procedural colour-only draw.
+            if (r.depth.enabled)
+            {
+                m_ctx.draw_depth(*color0, prog, clear, clear_depth, compare, count);
+            }
+            else
+            {
+                m_ctx.draw(*color0, prog, clear, count);
+            }
             break;
         }
 
