@@ -100,8 +100,9 @@ TEST_CASE("REN-40-C5.6 GATE: RGBA8 unpack matches what the baker writes",
     auto report = crd::lod::bake_impostor_atlas(mesh, 4U, 16U, atlas, &alloc);
     REQUIRE(report.covered_pixels > 0U);
 
-    const crd::u32 aw = atlas.grid * atlas.tile;
-    REQUIRE(atlas.pixels.size() == static_cast<crd::usize>(aw * aw * 4U));
+    const crd::u32 aw = atlas.grid * atlas.tile; // level-0 (base) edge — the loop below unpacks level 0, at offset 0
+    // ⭐⭐ REN-41: the buffer spans the whole MIP PYRAMID (impostor_atlas_texels), not just level 0's (grid*tile)^2.
+    REQUIRE(atlas.pixels.size() == static_cast<crd::usize>(crd::lod::impostor_atlas_texels(atlas.grid, atlas.tile)) * 4U);
 
     crd::u32 checked_covered = 0U;
     for (crd::u32 y = 0; y < aw; ++y)
@@ -132,20 +133,24 @@ TEST_CASE("REN-40-C5.6 GATE: RGBA8 unpack matches what the baker writes",
     CHECK(checked_covered == report.covered_pixels);
 }
 
-TEST_CASE("REN-40-C5.6 GATE: atlas section sizing matches (grid*tile)^2 words",
+TEST_CASE("REN-40-C5.6 GATE: atlas buffer sizing matches impostor_atlas_texels (mip pyramid)",
           "[lod][ren40][impostor][gate]")
 {
     for (crd::u32 grid : {2U, 4U, 8U, 16U})
     {
         for (crd::u32 tile : {8U, 16U, 64U, 128U})
         {
-            const crd::u32 aw    = grid * tile;
-            const crd::u32 words = aw * aw;
+            // ⭐⭐ REN-41: the atlas is a MIP PYRAMID — its word count is `impostor_atlas_texels`, the ONE canonical
+            // formula the bake, the renderer's buffer sizing and the FS's tap-unroll all share (impostor_atlas.hpp).
+            // The pre-mip (grid*tile)^2 is only level 0; asserting it (and sizing the arena to it) was the stale drift
+            // that failed the gate and OOM'd the arena on the larger tiles.
+            const crd::u32 words = crd::lod::impostor_atlas_texels(grid, tile);
             const crd::u32 bytes = words * 4U;
-            INFO("grid=" << grid << " tile=" << tile << " atlas_width=" << aw);
-            CHECK(bytes == aw * aw * 4U);
+            INFO("grid=" << grid << " tile=" << tile << " pyramid_words=" << words);
 
-            crd::memory::TlsfAllocator alloc(bytes + (1U << 20U));
+            // Size the arena for the full pyramid plus the supersampled scratch (hi = tile*4 → ~2*(tile*4)^2*4 B)
+            // and allocator overhead — a fixed 8 MiB margin covers even grid=16/tile=128 (a 2048^2 base level).
+            crd::memory::TlsfAllocator alloc(bytes + (8U << 20U));
             crd::resources::MeshResource mesh(&alloc);
             make_tetrahedron(mesh);
             crd::lod::ImpostorAtlas atlas(&alloc);

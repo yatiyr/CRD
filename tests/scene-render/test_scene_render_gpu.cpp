@@ -1998,6 +1998,166 @@ TEST_CASE("REN-38-F15 GATE: an edited disk asset is live and a corrupt one refus
     }
 }
 
+// ── ⭐⭐ RAF-11 GATE: HOT RELOAD of the program-input authored sources on a REAL device. ─────────────────────────────
+// `init_programs` registers the three program-input sources — the vertex/shader body (`vertex/scene.crdv`), the
+// lighting TECHNIQUE (`lighting/scene_forward.crdl`) and the MATERIAL graph (`material/flat.crdm`) — as hot-reloadable
+// (mission §13). Editing a file on disk and calling `SceneRenderer::reload(engine://id)` re-reads it, CPU-validates it
+// with the KIND'S OWN cooker, re-cooks EVERY program from the new sources, and bumps the shared program-input
+// generation — or, on a broken edit, REJECTS the reload and preserves the LAST-GOOD programs (no partial install, no
+// mixed generation). The frame-graph kind is gated device-free in test_raf11_reload.cpp; the program half needs a
+// device because the rebuild genuinely re-cooks GPU programs, and the retired ones go to deferred destruction (Inc4).
+// The three sources share one program-input generation because a single `init_programs` rebuilds the whole program set
+// from all sources — a shader, technique or material edit is one atomic rebuild, and every kind advances that counter.
+// The sequence is backend-agnostic (it only touches source files + the public reload API), so it runs verbatim on
+// BOTH Vulkan and DX12 — the two twins below configure the device and hand a mirror root to this one body.
+namespace
+{
+void raf11_run_reload_sequence(scenerender::SceneRenderer& renderer, const containers::String& root)
+{
+    const auto put = [&](const char* rel, containers::StringView text) {
+        containers::String p(&galloc());
+        p.append(root.c_str());
+        p.push_back('/');
+        p.append(rel);
+        REQUIRE(platform::fs::write_file_text(platform::fs::Path(containers::StringView(p.c_str(), p.size())), text));
+    };
+    const auto svof = [](const containers::String& s) { return containers::StringView(s.c_str(), s.size()); };
+
+    // The shared program-input generation starts at 0 (the initial load is not a reload).
+    CHECK(renderer.asset_generation("engine://material/flat") == 0U);
+    CHECK(renderer.asset_generation("engine://vertex/scene") == 0U);
+    CHECK(renderer.asset_generation("engine://lighting/scene_forward") == 0U);
+
+    // (1) Reload the material with the source UNCHANGED → a byte-identical re-cook is a clean NO-OP: no rebuild, no bump.
+    CHECK(renderer.reload("engine://material/flat"));
+    CHECK(renderer.asset_generation("engine://material/flat") == 0U);
+
+    // (2) MATERIAL PARAM edit — change the base-colour literals. A valid re-cook → the program set rebuilds, gen → 1.
+    put("material/flat.crdm",
+        containers::StringView("schema = 1\nname = \"crd://material/flat\"\n\n[[node]]\nname = \"base\"\n"
+                               "op = \"combine3\"\ninputs = [0.2, 0.6, 0.9]\n\n[[node]]\nname = \"one\"\n"
+                               "op = \"multiply\"\ninputs = [1.0, 1.0]\n\n[surface]\nbase_color = \"base\"\n"
+                               "opacity = \"one\"\n"));
+    CHECK(renderer.reload("engine://material/flat"));
+    CHECK(renderer.asset_generation("engine://material/flat") == 1U);
+
+    // (3) MATERIAL GRAPH edit — change the node GRAPH itself (the opacity node's op multiply→add). Valid → gen → 2.
+    put("material/flat.crdm",
+        containers::StringView("schema = 1\nname = \"crd://material/flat\"\n\n[[node]]\nname = \"base\"\n"
+                               "op = \"combine3\"\ninputs = [0.2, 0.6, 0.9]\n\n[[node]]\nname = \"one\"\n"
+                               "op = \"add\"\ninputs = [0.7, 0.3]\n\n[surface]\nbase_color = \"base\"\n"
+                               "opacity = \"one\"\n"));
+    CHECK(renderer.reload("engine://material/flat"));
+    CHECK(renderer.asset_generation("engine://material/flat") == 2U);
+
+    // (4) TECHNIQUE edit — widen the PCF tap count in the lighting technique (4 → 8). A real technique change that
+    //     re-cooks the fragment program; the shared generation advances (→ 3), observed through the technique id.
+    {
+        containers::String lt(&galloc());
+        REQUIRE(read_shipped_asset("lighting/scene_forward.crdl", lt));
+        bool bumped = false;
+        for (usize i = 0; i + 4U <= lt.size() && !bumped; ++i)
+        {
+            if (std::memcmp(lt.c_str() + i, "taps", 4U) != 0) { continue; }
+            for (usize j = i + 4U; j < lt.size() && lt.c_str()[j] != '\n'; ++j) // the '4' after "taps =" on this line
+            {
+                if (lt.c_str()[j] == '4') { lt.data()[j] = '8'; bumped = true; break; }
+            }
+        }
+        REQUIRE(bumped); // the shipped technique must carry a PCF tap count to widen
+        put("lighting/scene_forward.crdl", svof(lt));
+    }
+    CHECK(renderer.reload("engine://lighting/scene_forward"));
+    CHECK(renderer.asset_generation("engine://lighting/scene_forward") == 3U);
+
+    // (5) SHADER BODY edit — a harmless comment appended to the scene vertex program. The SOURCE bytes change, so it
+    //     re-cooks (the comment is inert to the cooker) and the generation advances (→ 4), observed through the VS id.
+    {
+        containers::String vt(&galloc());
+        REQUIRE(read_shipped_asset("vertex/scene.crdv", vt));
+        vt.append("\n# raf11 hot-reload probe (inert)\n");
+        put("vertex/scene.crdv", svof(vt));
+    }
+    CHECK(renderer.reload("engine://vertex/scene"));
+    CHECK(renderer.asset_generation("engine://vertex/scene") == 4U);
+
+    // (6) BROKEN material → the reload is REJECTED at CPU-validate, before any program is touched. Last-good stands:
+    //     the generation does not move and the live program set is intact.
+    put("material/flat.crdm", containers::StringView("this is not a material {{{ = = =\n"));
+    CHECK_FALSE(renderer.reload("engine://material/flat"));
+    CHECK(renderer.asset_generation("engine://material/flat") == 4U);
+
+    // (7) BROKEN technique and BROKEN shader → also rejected, last-good preserved (the generation holds at 4).
+    put("lighting/scene_forward.crdl", containers::StringView("not a lighting technique\n"));
+    CHECK_FALSE(renderer.reload("engine://lighting/scene_forward"));
+    put("vertex/scene.crdv", containers::StringView("not a vertex program\n"));
+    CHECK_FALSE(renderer.reload("engine://vertex/scene"));
+    CHECK(renderer.asset_generation("engine://vertex/scene") == 4U);
+
+    // (8) An id that was never registered reloadable is REPORTED, never a silent success.
+    CHECK_FALSE(renderer.reload("engine://material/never_registered"));
+}
+
+// Mirror the shipped tree into a fresh, writable temp root (the reload re-reads sources through the ENGINE mount, so
+// the edits below must land on THIS copy, never the read-only checkout). Returns false if CRD_ASSETS_DIR is unset.
+[[nodiscard]] bool raf11_mirror_shipped_root(containers::String& root, const char* tag)
+{
+    const char* canon = std::getenv("CRD_ASSETS_DIR");
+    if (canon == nullptr || canon[0] == '\0') { return false; }
+    root.append(platform::fs::temp_directory().generic());
+    root.append(tag);
+    char stamp[32];
+    std::snprintf(stamp, sizeof(stamp), "%llu", static_cast<unsigned long long>(std::time(nullptr)));
+    root.append(stamp);
+    copy_tree(platform::fs::Path(canon), platform::fs::Path(containers::StringView(root.c_str(), root.size())));
+    return true;
+}
+} // namespace
+
+TEST_CASE("RAF-11 GATE: shader/technique/material hot reload re-cooks programs or keeps last-good (Vulkan)",
+          "[scene-render][raf11][reload][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr) { SKIP("no Vulkan device"); }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    containers::String root(&galloc());
+    if (!raf11_mirror_shipped_root(root, "/crd_raf11_vk_")) { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
+
+    resources::ResourceManager rm(&galloc());
+    scenerender::SceneRenderer  renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    REQUIRE(renderer.set_asset_root(root.c_str())); // read the sources FROM the mirror...
+    REQUIRE(renderer.init_programs(*vk));            // ...and register them reloadable against the mirror
+    raf11_run_reload_sequence(renderer, root);
+    (void)platform::fs::remove_all(platform::fs::Path(containers::StringView(root.c_str(), root.size())));
+}
+
+TEST_CASE("RAF-11 GATE: shader/technique/material hot reload re-cooks programs or keeps last-good (DX12)",
+          "[scene-render][raf11][reload][gpu][dx12]")
+{
+    auto gctx = gpu::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto raster = gpu::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+
+    containers::String root(&galloc());
+    if (!raf11_mirror_shipped_root(root, "/crd_raf11_dx_")) { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
+
+    resources::ResourceManager rm(&galloc());
+    scenerender::SceneRenderer  renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    REQUIRE(renderer.set_asset_root(root.c_str()));
+    if (!renderer.init_programs(*gctx)) { SKIP("dxc/DXIL unavailable"); }
+    raf11_run_reload_sequence(renderer, root);
+    (void)platform::fs::remove_all(platform::fs::Path(containers::StringView(root.c_str(), root.size())));
+}
+
 // ── ⭐⭐ REN-38 GATE: a group is TEXTURED **AND** SHADOWED in the same frame. ────────────────────────────────
 // Until this slice the base-colour map and the shadow atlas fought over descriptor bindings 1/2, so
 // `record_one_group` had to NULL one of them — textured monuments lost their maps the instant shadows turned
@@ -5063,13 +5223,25 @@ void cluster_mesh_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster)
         cov.resize(static_cast<usize>(dim) * dim, 0U);
         for (usize t = 0; t < oracle.triangle_count; ++t)
         {
-            f32  ax, ad, au, bx, bd, bu, cx, cd, cu;
-            bool oa, ob, oc;
+            f32  ax = 0.0F;
+            f32  ad = 0.0F;
+            f32  au = 0.0F;
+            f32  bx = 0.0F;
+            f32  bd = 0.0F;
+            f32  bu = 0.0F;
+            f32  cx = 0.0F;
+            f32  cd = 0.0F;
+            f32  cu = 0.0F;
+            bool oa = false;
+            bool ob = false;
+            bool oc = false;
             proj_pt(oracle.triangles[t * 3U + 0U], ax, ad, au, oa);
             proj_pt(oracle.triangles[t * 3U + 1U], bx, bd, bu, ob);
             proj_pt(oracle.triangles[t * 3U + 2U], cx, cd, cu, oc);
             if (!oa || !ob || !oc) { continue; }
-            const f32 ay = y_up ? au : ad, by = y_up ? bu : bd, cy = y_up ? cu : cd;
+            const f32 ay = y_up ? au : ad;
+            const f32 by = y_up ? bu : bd;
+            const f32 cy = y_up ? cu : cd;
             const f32 area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
             if (math::deterministic::abs(area) < 1.0e-9F) { continue; }
             const f32  inv  = 1.0F / area;
@@ -5088,7 +5260,8 @@ void cluster_mesh_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster)
             {
                 for (int xx = lx; xx <= hx; ++xx)
                 {
-                    const f32 fx = static_cast<f32>(xx) + 0.5F, fy = static_cast<f32>(yy) + 0.5F;
+                    const f32 fx = static_cast<f32>(xx) + 0.5F;
+                    const f32 fy = static_cast<f32>(yy) + 0.5F;
                     const f32 w0 = ((bx - ax) * (fy - ay) - (by - ay) * (fx - ax)) * inv;
                     const f32 w1 = ((cx - bx) * (fy - by) - (cy - by) * (fx - bx)) * inv;
                     const f32 w2 = ((ax - cx) * (fy - cy) - (ay - cy) * (fx - cx)) * inv;
@@ -5101,10 +5274,12 @@ void cluster_mesh_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster)
         }
     };
     const auto iou = [&](const containers::Array<u8>& b) {
-        u32 inter = 0U, uni = 0U;
+        u32 inter = 0U;
+        u32 uni   = 0U;
         for (usize i = 0; i < cov_a.size(); ++i)
         {
-            const bool a = cov_a[i] != 0U, bb = b[i] != 0U;
+            const bool a  = cov_a[i] != 0U;
+            const bool bb = b[i] != 0U;
             inter += (a && bb) ? 1U : 0U;
             uni += (a || bb) ? 1U : 0U;
         }

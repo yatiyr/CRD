@@ -41,6 +41,8 @@
 #include <crd/scene/world.hpp>
 
 #include "asset_resolver.hpp" // RAF-9: the file-reading resolver (mount table + platform::fs; render-asset-core stays leaf)
+#include "reload.hpp"         // RAF-11: the dependency-aware hot-reload engine + deferred GPU release queue
+#include <crd/memory/construct.hpp> // RAF-11: construct<>/destroy<> for the staged FrameGraphDesc
 
 #include <chrono> // REN-8: CPU wall-clock of render(), to compare against the frame graph's GPU timestamps
 #include <cmath>
@@ -597,6 +599,21 @@ struct SceneRenderer::Impl
     // RAF-9: the program registry (canonical id -> provider). Registered at init (register_default_programs); the host's
     // program()/kernel() resolve by parsed AssetId through this, replacing the hard-coded str_is chain.
     ProgramRegistry                  program_registry{alloc};
+    // ⭐⭐ RAF-11: dependency-aware hot reload (mission §13). `reloader` drives the re-cook/rebuild/last-good/atomic
+    // pipeline; `release_queue` frees a retired GPU program only after the presenter's in-flight frames (2) complete —
+    // `render()` ticks it once per frame. The frame-graph is the first reloadable kind: `reload_frame_id` is the
+    // canonical id to re-read, `reload_frame_staged` the desc cooked by `stage` and moved into `frame` by `commit`.
+    RenderAssetReloader              reloader{alloc};
+    DeferredReleaseQueue             release_queue{alloc, 2U};
+    crd::framecook::FrameGraphDesc*  reload_frame_staged = nullptr;
+    crd::renderasset::Generation     reload_frame_gen{};
+    crd::renderasset::InterfaceHash  reload_frame_iface{};
+    crd::renderasset::InterfaceHash  reload_frame_staged_iface{};
+    bool                             reload_frame_registered = false;
+    crd::containers::String          reload_frame_id; // canonical id of the reloadable frame (constructed in Impl ctor)
+    SceneRenderer*                   owner = nullptr; // back-pointer so a source reload can re-run init_programs
+    crd::renderasset::Generation     reload_prog_gen{}; // generation of the program-input sources (shader/technique/material)
+    bool                             sources_registered = false; // register the program-input sources ONCE (init_programs re-runs on reload)
     crd::gpu::IGpuContext*           ctx    = nullptr;
     crd::gpu::IRasterContext*        raster = nullptr;
     crd::resources::ResourceManager* rm     = nullptr;
@@ -906,6 +923,303 @@ struct SceneRenderer::Impl
         fb_frame_names.push_back(static_cast<crd::containers::String&&>(name_copy));
         fb_frame_descs.push_back(std::move(d));
         return raw;
+    }
+
+    // ── ⭐⭐ RAF-11: FRAME-GRAPH HOT RELOAD (mission §13). ─────────────────────────────────────────────────────────
+    // Cook a frame TOML into `out` (parse → compose include/inject → validate; NO install). The SINGLE cook path both
+    // `set_frame_graph_toml` and the reload adapter take, so a reloaded frame faces the exact validator (all 19
+    // rejections) a hand-authored one does. Returns the specific FrameCookError (Ok on success); `where` names the spot.
+    [[nodiscard]] crd::framecook::FrameCookError cook_frame_text(crd::containers::StringView    text,
+                                                                crd::framecook::FrameGraphDesc& desc,
+                                                                crd::containers::String&        where)
+    {
+        using FCE = crd::framecook::FrameCookError;
+        if (const auto e = crd::framecook::parse_frame_toml(text, desc, &where); e != FCE::Ok) { return e; }
+        if (desc.includes.size() > 0U || desc.injects.size() > 0U)
+        {
+            const auto resolve_sub = [](crd::containers::StringView name, void* user)
+            { return static_cast<Impl*>(user)->resolve_frame_asset(name); };
+            crd::framecook::FrameGraphDesc flat(alloc);
+            if (const auto e = crd::framecook::flatten_frame_graph(desc, resolve_sub, this, flat, &where); e != FCE::Ok)
+            {
+                return e;
+            }
+            if (const auto e = crd::framecook::validate_frame_graph(flat, &where); e != FCE::Ok) { return e; }
+            desc = static_cast<crd::framecook::FrameGraphDesc&&>(flat);
+            return FCE::Ok;
+        }
+        return crd::framecook::validate_frame_graph(desc, &where);
+    }
+
+    // The reload adapter (RAF-11 vtable). `stage` re-reads the frame's source via the resolver and re-cooks it into a
+    // heap staging desc; `commit` moves it into `frame` (the render loop records from `frame` LIVE, so the new graph
+    // takes effect at the very next `render`); `discard` drops the staging desc; generation/iface expose the live state.
+    static bool frame_stage(void* user, crd::renderasset::DiagnosticList& diags, crd::renderasset::ContentHash& oc,
+                            crd::renderasset::InterfaceHash& oi)
+    {
+        auto*                            self = static_cast<Impl*>(user);
+        crd::renderasset::DiagnosticList adiags(self->alloc);
+        const crd::renderasset::AssetRef ref = crd::renderasset::AssetRef::parse(
+            crd::containers::StringView(self->reload_frame_id.c_str(), self->reload_frame_id.size()), adiags,
+            self->alloc);
+        crd::containers::String text(self->alloc);
+        if (!ref.valid() || !self->resolver.read_ref(ref, text, adiags))
+        {
+            diags.error(crd::renderasset::DiagCode::AssetNotFound, "reload: frame source did not resolve to bytes");
+            return false;
+        }
+        auto*                   d = crd::memory::construct<crd::framecook::FrameGraphDesc>(*self->alloc, self->alloc);
+        crd::containers::String where(self->alloc);
+        if (const auto e = self->cook_frame_text(crd::containers::StringView(text.c_str(), text.size()), *d, where);
+            e != crd::framecook::FrameCookError::Ok)
+        {
+            crd::memory::destroy(*self->alloc, d);
+            diags.error(crd::renderasset::DiagCode::AssetCookFailed,
+                        crd::containers::StringView(crd::framecook::frame_cook_error_text(e)));
+            return false;
+        }
+        self->reload_frame_staged = d;
+        oc = crd::renderasset::ContentHash{crd::renderasset::content_hash_of(text.c_str(), text.size())};
+        oi = crd::renderasset::InterfaceHash{crd::renderasset::interface_hash_of(text.c_str(), text.size())};
+        self->reload_frame_staged_iface = oi;
+        return true;
+    }
+    static void frame_commit(void* user)
+    {
+        auto* self = static_cast<Impl*>(user);
+        // Install at the frame boundary: the render loop reads `frame` next `render`, so this IS the atomic swap.
+        self->frame               = static_cast<crd::framecook::FrameGraphDesc&&>(*self->reload_frame_staged);
+        crd::memory::destroy(*self->alloc, self->reload_frame_staged);
+        self->reload_frame_staged = nullptr;
+        self->frame_ok            = true;
+        self->reload_frame_iface  = self->reload_frame_staged_iface;
+        self->reload_frame_gen.value += 1;
+    }
+    static void frame_discard(void* user)
+    {
+        auto* self = static_cast<Impl*>(user);
+        crd::memory::destroy(*self->alloc, self->reload_frame_staged);
+        self->reload_frame_staged = nullptr;
+    }
+    static crd::renderasset::Generation    frame_generation(void* user) { return static_cast<Impl*>(user)->reload_frame_gen; }
+    static crd::renderasset::InterfaceHash frame_iface_fn(void* user) { return static_cast<Impl*>(user)->reload_frame_iface; }
+
+    static inline const crd::scenerender::ReloadableVtbl kFrameVtbl{&Impl::frame_stage, &Impl::frame_commit,
+                                                                    &Impl::frame_discard, &Impl::frame_generation,
+                                                                    &Impl::frame_iface_fn};
+
+    // Register the frame installed under `canonical_id` (which we can re-read) as the reloadable frame, seeding the
+    // no-op content/interface hashes from the text it was loaded with. Idempotent (re-installing a frame re-registers).
+    void register_frame_reloadable(crd::containers::StringView canonical_id, crd::containers::StringView text)
+    {
+        reload_frame_id.clear();
+        reload_frame_id.append(canonical_id.data(), canonical_id.size());
+        crd::renderasset::DiagnosticList adiags(alloc);
+        const crd::renderasset::AssetRef ref = crd::renderasset::AssetRef::parse(canonical_id, adiags, alloc);
+        if (!ref.valid())
+        {
+            reload_frame_registered = false;
+            return;
+        }
+        reload_frame_iface =
+            crd::renderasset::InterfaceHash{crd::renderasset::interface_hash_of(text.data(), text.size())};
+        reloader.register_asset(
+            ref.id(), &kFrameVtbl, this,
+            crd::renderasset::ContentHash{crd::renderasset::content_hash_of(text.data(), text.size())});
+        reload_frame_registered = true;
+    }
+
+    // ── ⭐⭐ RAF-11: PROGRAM-INPUT HOT RELOAD (shader body · technique · material). ───────────────────────────────
+    // A shader/technique/material edit rebuilds the GPU programs that use it. This renderer holds ~40 named program
+    // caches, so a reload RETIRES every one to the deferred-release queue (freed after the in-flight window) and clears
+    // the technique library + cook cache, then RE-RUNS `init_programs` — which re-reads every authored source disk-first
+    // and re-cooks fresh. ⛔ Any program added later MUST be retired here too (RAF-12 unifies these caches into one
+    // registry, removing this hand-list). The old programs are freed by the queue, never mid-frame.
+    static void del_raster(void* p, void* /*ctx*/) { delete static_cast<crd::gpu::IRasterProgram*>(p); }
+    static void del_gpu(void* p, void* /*ctx*/) { delete static_cast<crd::gpu::IGpuProgram*>(p); }
+    void        retire_all_programs()
+    {
+        const auto rr = [this](std::unique_ptr<crd::gpu::IRasterProgram>& s)
+        { if (s) { release_queue.retire(s.release(), &Impl::del_raster, nullptr); } };
+        const auto rg = [this](std::unique_ptr<crd::gpu::IGpuProgram>& s)
+        { if (s) { release_queue.retire(s.release(), &Impl::del_gpu, nullptr); } };
+        // scene forward — the shared VS + every FS variant (non-indexed)
+        rg(vs);
+        rg(vs_skinned);
+        rg(vs_rebased);
+        rr(program);
+        rr(program_skinned);
+        rr(program_skinned_textured);
+        rr(program_skinned_shadowed);
+        rr(program_skinned_textured_shadowed);
+        rr(program_textured_shadowed);
+        rr(program_rebased);
+        rr(program_textured);
+        rr(program_shadowed);
+        // the REN-39 indexed twins
+        rg(vs_idx);
+        rg(vs_rebased_idx);
+        rg(vs_skinned_idx);
+        rg(vs_velocity_idx);
+        rg(vs_skinned_velocity_idx);
+        rr(program_idx);
+        rr(program_rebased_idx);
+        rr(program_skinned_idx);
+        rr(program_skinned_textured_idx);
+        rr(program_skinned_shadowed_idx);
+        rr(program_skinned_textured_shadowed_idx);
+        rr(program_textured_idx);
+        rr(program_shadowed_idx);
+        rr(program_textured_shadowed_idx);
+        rr(program_prepass_idx);
+        rr(program_prepass_skinned_idx);
+        rr(program_velocity_idx);
+        rr(program_skinned_velocity_idx);
+        // per-cascade shadow + moment atlas programs
+        for (auto& s : shadow_vs) { rg(s); }
+        for (auto& s : shadow_prog) { rr(s); }
+        for (auto& s : shadow_vs_idx) { rg(s); }
+        for (auto& s : shadow_prog_idx) { rr(s); }
+        for (auto& row : moment_prog)
+        {
+            for (auto& s : row) { rr(s); }
+        }
+        // standalone fullscreen / advanced-topology programs
+        rr(prog_tess);
+        rr(prog_mesh);
+        rr(prog_cluster_mesh);
+        rr(prog_visbuffer);
+        rr(prog_impostor);
+        rr(prog_hzb);
+        rr(prog_velocity_debug);
+        rr(prog_post_agx);
+        rr(prog_post_srgb);
+        rr(prog_taa);
+        // the cook_fs fragment cache (keyed by lowered-graph hash) + linked-program keep-alives
+        for (auto& s : fs_programs) { rg(s); }
+        fs_programs.clear();
+        fs_hashes.clear();
+        for (auto& s : adv_stages) { rg(s); }
+        adv_stages.clear();
+    }
+
+    // Make init_programs RE-RUNNABLE: retire the programs + reset the technique library so the rebuild re-reads and
+    // re-cooks everything from the (possibly edited) authored sources. A no-op on the first init (all caches empty).
+    void prepare_reinit()
+    {
+        retire_all_programs();
+        techniques.clear();
+    }
+
+    // Rebuild all programs from their current sources (a source hot reload). Returns false if the rebuild fails (a bad
+    // source that slipped past the reload's stage validation) — the caller reports it. Requires init_programs to have
+    // run once (owner + ctx set).
+    [[nodiscard]] bool rebuild_programs()
+    {
+        return owner != nullptr && ctx != nullptr && owner->init_programs(*ctx);
+    }
+
+    // A UNIFORM reloadable ADAPTER for a program-input authored source (a `.crdm` material, `.crdv` vertex/shader, or
+    // `.crdl` lighting technique). `stage` re-reads the file and CPU-validates it with the kind's cooker — a malformed
+    // edit is REJECTED here, before any live program is touched (last-good). `commit` re-cooks every program from the
+    // new sources and bumps the shared program-input generation.
+    using SourceValidateFn = bool (*)(Impl* self, crd::containers::StringView text,
+                                      crd::renderasset::DiagnosticList& diags);
+    struct SourceReload
+    {
+        Impl*                   impl = nullptr;
+        crd::containers::String rel;      // the on-disk relative path (e.g. "material/flat.crdm")
+        SourceValidateFn        validate = nullptr;
+        crd::renderasset::ContentHash content{};
+    };
+    static bool src_stage(void* user, crd::renderasset::DiagnosticList& diags, crd::renderasset::ContentHash& oc,
+                          crd::renderasset::InterfaceHash& oi)
+    {
+        auto*                   s = static_cast<SourceReload*>(user);
+        crd::containers::String text(s->impl->alloc);
+        if (!s->impl->asset_text(s->rel.c_str(), text) || text.size() == 0U)
+        {
+            diags.error(crd::renderasset::DiagCode::AssetNotFound, "reload: source did not resolve to bytes");
+            return false;
+        }
+        if (s->validate != nullptr &&
+            !s->validate(s->impl, crd::containers::StringView(text.c_str(), text.size()), diags))
+        {
+            return false; // the kind's cooker rejected the edit → reject the whole reload, live programs untouched
+        }
+        oc = crd::renderasset::ContentHash{crd::renderasset::content_hash_of(text.c_str(), text.size())};
+        oi = crd::renderasset::InterfaceHash{crd::renderasset::interface_hash_of(text.c_str(), text.size())};
+        return true;
+    }
+    static void src_commit(void* user)
+    {
+        auto* s = static_cast<SourceReload*>(user);
+        (void)s->impl->rebuild_programs(); // the source validated in stage, so this succeeds; retires old to the queue
+        s->impl->reload_prog_gen.value += 1;
+    }
+    static void                            src_discard(void* /*user*/) {}
+    static crd::renderasset::Generation    src_generation(void* user)
+    {
+        return static_cast<SourceReload*>(user)->impl->reload_prog_gen;
+    }
+    static crd::renderasset::InterfaceHash src_iface(void* /*user*/) { return crd::renderasset::InterfaceHash{}; }
+    static inline const crd::scenerender::ReloadableVtbl kSourceVtbl{&Impl::src_stage, &Impl::src_commit,
+                                                                     &Impl::src_discard, &Impl::src_generation,
+                                                                     &Impl::src_iface};
+
+    // Per-kind CPU validators (last-good gate): the edit must cook, or the reload is rejected before anything swaps.
+    static bool validate_material(Impl* self, crd::containers::StringView text, crd::renderasset::DiagnosticList& diags)
+    {
+        crd::matcook::MaterialDesc desc(self->alloc);
+        crd::containers::String    where(self->alloc);
+        if (crd::matcook::parse_material_toml(text, desc, &where) != crd::matcook::MaterialCookError::Ok)
+        {
+            diags.error(crd::renderasset::DiagCode::AssetCookFailed, "reload: material failed to cook");
+            return false;
+        }
+        return true;
+    }
+    static bool validate_vertex(Impl* self, crd::containers::StringView text, crd::renderasset::DiagnosticList& diags)
+    {
+        crd::kir::KGraph              g(self->alloc);
+        crd::kir::KEntry              e;
+        crd::vertcook::VertexProgramDesc vd(self->alloc);
+        crd::containers::String       body(self->alloc);
+        body.append(text.data(), text.size());
+        if (!cook_vs(self->alloc, body.c_str(), nullptr, g, e, &vd))
+        {
+            diags.error(crd::renderasset::DiagCode::AssetCookFailed, "reload: vertex program failed to cook");
+            return false;
+        }
+        return true;
+    }
+    static bool validate_lighting(Impl* self, crd::containers::StringView text, crd::renderasset::DiagnosticList& diags)
+    {
+        crd::lightcook::LightingDesc desc(self->alloc);
+        crd::containers::String      where(self->alloc);
+        if (crd::lightcook::parse_lighting_toml(text, desc, &where) != crd::lightcook::LightingCookError::Ok)
+        {
+            diags.error(crd::renderasset::DiagCode::AssetCookFailed, "reload: lighting technique failed to cook");
+            return false;
+        }
+        return true;
+    }
+
+    crd::containers::Array<SourceReload> source_reloads{alloc}; // stable storage for the registered source contexts
+    void register_source_reloadable(crd::containers::StringView canonical_id, const char* rel, SourceValidateFn validate)
+    {
+        crd::renderasset::DiagnosticList adiags(alloc);
+        const crd::renderasset::AssetRef ref = crd::renderasset::AssetRef::parse(canonical_id, adiags, alloc);
+        if (!ref.valid()) { return; }
+        crd::containers::String text(alloc);
+        const crd::renderasset::ContentHash c0 =
+            asset_text(rel, text) ? crd::renderasset::ContentHash{crd::renderasset::content_hash_of(text.c_str(),
+                                                                                                    text.size())}
+                                  : crd::renderasset::ContentHash{};
+        SourceReload sr{this, crd::containers::String(alloc), validate, c0};
+        sr.rel.append(rel, std::strlen(rel));
+        source_reloads.push_back(static_cast<SourceReload&&>(sr));
+        reloader.register_asset(ref.id(), &kSourceVtbl, &source_reloads[source_reloads.size() - 1U], c0);
     }
 
     // Cook `cfg`, hash the lowered graph, and return the cached program when one already matches. Null on a cook
@@ -2481,7 +2795,7 @@ struct SceneRenderer::Impl
     }
 
     explicit Impl(crd::memory::IAllocator* a)
-        : alloc(a), skeleton_cache(a), clip_cache(a), pose_scratch(a), world_scratch(a), palette_scratch(a),
+        : alloc(a), reload_frame_id(a), skeleton_cache(a), clip_cache(a), pose_scratch(a), world_scratch(a), palette_scratch(a),
           palette_staging(a), anim_state_staging(a), chunk_index(a), chunks(a), runs(a), dirty_runs(a), bounds_staging(a),
           group_of_mesh(a), material_color(a), material_texture(a), entity_slot(a),
           contrib_draws(a), frame(a), fallback(a), recorder(a), groups_view(a), fs_hashes(a), fs_programs(a),
@@ -2490,12 +2804,22 @@ struct SceneRenderer::Impl
     {
         frame_ok = false; // populated by set_asset_root()
         contrib_draws.reserve(kMaxContributions);
+        source_reloads.reserve(8U); // ⛔ RAF-11: reserve so register_source_reloadable's &[i] never dangles on realloc
 
         for (crd::u32 i = 0; i < kMaxContributions; ++i)
         {
             contrib_draws.push_back(crd::containers::Array<SceneDraw>(a));
         }
     }
+
+    // ⭐ RAF-11: at shutdown the device is idle and still alive (the renderer holds ctx/raster as non-owning back-
+    // pointers that outlive it), so drain every program a hot reload retired to deferred destruction — otherwise the
+    // .release()'d raw pointers waiting on the in-flight fence would leak. The still-live program members are freed by
+    // their own unique_ptr destructors right after this body runs; no double-free, because a retired program was
+    // .release()'d out of its member (the member is already null).
+    ~Impl() { (void)release_queue.drain_all(); }
+    Impl(const Impl&)            = delete;
+    Impl& operator=(const Impl&) = delete;
 
     // RAF-9: a program/kernel canonical id -> its parsed, FOLDED AssetId. ⛔ Via AssetRef::parse (which folds crd:// to
     // engine://), NOT raw asset_id_of — so a still-crd:// live frame ref and its engine:// registration hash equal.
@@ -2626,6 +2950,7 @@ struct SceneRenderer::Impl
 SceneRenderer::SceneRenderer(crd::memory::IAllocator* alloc)
     : m_impl(std::make_unique<Impl>(alloc)), m_groups(alloc)
 {
+    m_impl->owner = this; // RAF-11: so a source hot reload can re-run init_programs through the Impl adapter
 }
 
 SceneRenderer::~SceneRenderer() = default;
@@ -2827,7 +3152,50 @@ bool SceneRenderer::set_frame_graph(const char* canonical_id)
                       canonical_id);
         return false;
     }
-    return set_frame_graph_toml(text.c_str());
+    if (!set_frame_graph_toml(text.c_str())) { return false; }
+    // ⭐⭐ RAF-11: a frame installed BY ID has a re-readable source, so it is HOT-RELOADABLE. Register it (the id + the
+    // text it loaded with) so `reload("engine://frame/...")` re-reads + re-cooks + reinstalls it at a frame boundary.
+    impl.register_frame_reloadable(crd::containers::StringView(canonical_id),
+                                   crd::containers::StringView(text.c_str(), text.size()));
+    return true;
+}
+
+bool SceneRenderer::reload(const char* canonical_id)
+{
+    if (canonical_id == nullptr || m_impl == nullptr) { return false; }
+    Impl&                            impl = *m_impl;
+    crd::renderasset::DiagnosticList diags(impl.alloc);
+    const crd::renderasset::AssetRef ref =
+        crd::renderasset::AssetRef::parse(crd::containers::StringView(canonical_id), diags, impl.alloc);
+    if (!ref.valid())
+    {
+        CRD_LOG_ERROR(g_log_scenerender, "reload: '{}' is not a valid canonical asset id", canonical_id);
+        return false;
+    }
+    const crd::scenerender::ReloadOutcome out = impl.reloader.reload(ref.id(), diags);
+    if (!out.ok)
+    {
+        // §13: the reload was REJECTED (cook failure / incompatible interface). The previous valid generation stands;
+        // report the failing asset + reason (never a silent last-good). Every diagnostic the engine emitted is logged.
+        for (crd::usize i = 0; i < diags.size(); ++i)
+        {
+            const crd::renderasset::Diagnostic& d = diags[i];
+            CRD_LOG_ERROR(g_log_scenerender, "reload '{}' REJECTED: {} — {}", canonical_id,
+                          crd::renderasset::diag_code_name(d.code).data(), d.message.c_str());
+        }
+        return false;
+    }
+    return true;
+}
+
+crd::u64 SceneRenderer::asset_generation(const char* canonical_id) const
+{
+    if (canonical_id == nullptr || m_impl == nullptr) { return 0U; }
+    crd::renderasset::DiagnosticList diags(m_impl->alloc);
+    const crd::renderasset::AssetRef ref =
+        crd::renderasset::AssetRef::parse(crd::containers::StringView(canonical_id), diags, m_impl->alloc);
+    if (!ref.valid()) { return 0U; }
+    return m_impl->reloader.generation_of(ref.id()).value;
 }
 
 bool SceneRenderer::register_raster_program(const char* canonical_id, RasterProgramProvider provider, void* user)
@@ -2919,54 +3287,15 @@ bool SceneRenderer::set_frame_graph_toml(const char* toml_text)
     Impl&                          impl = *m_impl;
     crd::framecook::FrameGraphDesc d(impl.alloc);
     crd::containers::String        where(impl.alloc);
-    // ⛔ REN-40-A: report the REASON, not just the place. `where` is empty for every whole-file error (a bad
-    // resource `kind`, a missing key), so the old message read "parse failed at ''" — a diagnostic that tells the
-    // author nothing at the exact moment they need it most. The cook layer already carries an error STRING; use it.
-    if (const auto perr = crd::framecook::parse_frame_toml(crd::containers::StringView(toml_text), d, &where);
-        perr != crd::framecook::FrameCookError::Ok)
+    // ⭐⭐ RAF-11: parse → compose (include/inject) → validate through the ONE `cook_frame_text` path (shared with the
+    // hot-reload adapter, so a reloaded frame faces the exact validator). ⛔ REN-40-A: report the REASON (the specific
+    // FrameCookError), not just the place — `where` is empty for whole-file errors, so the error string is the message.
+    if (const auto err = impl.cook_frame_text(crd::containers::StringView(toml_text), d, where);
+        err != crd::framecook::FrameCookError::Ok)
     {
-        CRD_LOG_ERROR(g_log_scenerender, "set_frame_graph_toml: parse failed: {} (at '{}')",
-                      crd::framecook::frame_cook_error_text(perr), where.c_str());
-        return false;
-    }
-    // ⭐⭐ RAF-10: EXPAND composition (subgraph `[[include]]` + `[[inject]]` at a declared `[[anchor]]`) BEFORE
-    // validating/installing. `flatten_frame_graph` inlines each included graph (namespaced by `as`, `bind`-rewritten)
-    // and splices each inject at its anchor, then re-validates the flat result. The resolve fn is `resolve_frame_asset`
-    // — the SAME public resolver — so an app graph may include an ENGINE graph (`engine://frame/…`) or another app
-    // graph (`app://frame/…`). ⛔ A graph with NO includes/injects keeps the plain parse+validate path, byte-identical.
-    if (d.includes.size() > 0U || d.injects.size() > 0U)
-    {
-        const auto resolve_sub = [](crd::containers::StringView name, void* user)
-        { return static_cast<Impl*>(user)->resolve_frame_asset(name); };
-        crd::framecook::FrameGraphDesc flat(impl.alloc);
-        if (const auto ferr = crd::framecook::flatten_frame_graph(d, resolve_sub, &impl, flat, &where);
-            ferr != crd::framecook::FrameCookError::Ok)
-        {
-            CRD_LOG_ERROR(g_log_scenerender, "set_frame_graph_toml: compose (include/inject) failed: {} (at '{}')",
-                          crd::framecook::frame_cook_error_text(ferr), where.c_str());
-            return false;
-        }
-        // ⛔ RE-VALIDATE the FLAT result: composition is not a weaker path — the graph an app composed faces the exact
-        // validator a hand-authored one does. (flatten already validates each source, but namespacing/injection produce
-        // a new whole that must stand on its own.)
-        if (const auto verr = crd::framecook::validate_frame_graph(flat, &where);
-            verr != crd::framecook::FrameCookError::Ok)
-        {
-            CRD_LOG_ERROR(g_log_scenerender, "set_frame_graph_toml: composed graph failed validation: {} (at '{}')",
-                          crd::framecook::frame_cook_error_text(verr), where.c_str());
-            return false;
-        }
-        impl.frame            = static_cast<crd::framecook::FrameGraphDesc&&>(flat);
-        impl.frame_ok         = true;
-        impl.frame_overridden = true;
-        return true;
-    }
-    if (const auto verr = crd::framecook::validate_frame_graph(d, &where);
-        verr != crd::framecook::FrameCookError::Ok)
-    {
-        CRD_LOG_ERROR(g_log_scenerender, "set_frame_graph_toml: validation failed: {} (at '{}')",
-                      crd::framecook::frame_cook_error_text(verr), where.c_str());
-        return false;
+        CRD_LOG_ERROR(g_log_scenerender, "set_frame_graph_toml: cook failed: {} (at '{}')",
+                      crd::framecook::frame_cook_error_text(err), where.c_str());
+        return false; // ⛔ KEEP the previous graph — never a half-installed frame
     }
     impl.frame            = static_cast<crd::framecook::FrameGraphDesc&&>(d);
     impl.frame_ok         = true;
@@ -3132,6 +3461,11 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
 {
     if (m_impl->raster == nullptr) { CRD_LOG_ERROR(g_log_scenerender, "init_programs: raster is null"); return false; }
     m_impl->ctx = &ctx;
+    // ⭐ RAF-11: make init_programs RE-RUNNABLE. A program-input hot reload (shader/technique/material) re-enters here
+    // through Impl::rebuild_programs; retire the live programs to deferred destruction and reset the technique library
+    // first, so the rebuild below re-reads and re-cooks everything from the (edited) authored sources. No-op on the
+    // first init — every cache is empty and there is nothing in flight to retire.
+    m_impl->prepare_reinit();
     // RAF-9: register every engine default program/kernel under its canonical engine:// id (idempotent). Providers are
     // lazy thunks over the ensure_* builders, so this is device-independent bookkeeping — the builders cook on demand.
     m_impl->register_default_programs();
@@ -3728,6 +4062,20 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
                 m_impl->shadow_prog_idx[c].reset();
             }
         }
+    }
+
+    // ⭐ RAF-11: register the program-input authored sources as reloadable — ONCE (init_programs re-runs on every
+    // reload, but re-registration would grow the stable-storage array and dangle the reloader's &source_reloads[i]).
+    // Each `stage` re-reads the file and CPU-validates it with the kind's own cooker (a malformed edit is rejected
+    // before any live program is touched); `commit` re-cooks every program from the new sources. All three share the
+    // program-input generation — a shader, technique, or material edit is a single rebuild of the program set.
+    if (m_impl->program != nullptr && !m_impl->sources_registered)
+    {
+        m_impl->sources_registered = true;
+        m_impl->register_source_reloadable("engine://vertex/scene", "vertex/scene.crdv", &Impl::validate_vertex);
+        m_impl->register_source_reloadable("engine://lighting/scene_forward", "lighting/scene_forward.crdl",
+                                           &Impl::validate_lighting);
+        m_impl->register_source_reloadable("engine://material/flat", "material/flat.crdm", &Impl::validate_material);
     }
     return m_impl->program != nullptr;
 }
@@ -5307,6 +5655,9 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
     // here, and reconstructing them would be guesswork. `compute_csm_cascades` only needs the projection's
     // half-extents and the inverse view, both recoverable from view_proj for a standard camera.
     ++impl.frame_index; // ⭐⭐⭐ REN-41 (Stage 3): advance the temporal LOD-dither seed once per frame
+    // ⭐⭐ RAF-11: advance the deferred-release clock once per frame — a GPU object retired by a hot reload is freed
+    // only after the presenter's in-flight frames that referenced it have completed (kFramesInFlight-deep window).
+    impl.release_queue.begin_frame();
     if (impl.shadows_active())
     {
         for (crd::u32 ci = 0; ci < kMaxCascades; ++ci) { impl.prev_light_vp[ci] = impl.cascades.light_vp[ci]; }

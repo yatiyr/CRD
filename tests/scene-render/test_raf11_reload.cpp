@@ -15,10 +15,13 @@
 #include <crd/framecook/frame_asset.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/memory/construct.hpp>
+#include <crd/platform/filesystem.hpp>          // RAF-11 live gate: edit a frame source on disk between reloads
 #include <crd/renderasset/renderasset.hpp>
+#include <crd/scenerender/scene_renderer.hpp>   // RAF-11 live gate: the public reload() API on the real renderer
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstdlib> // std::getenv
 #include <cstring> // std::strlen
 
 using crd::usize;
@@ -403,4 +406,63 @@ TEST_CASE("raf11 deferred release frees only after the in-flight window", "[raf1
     CHECK(q.drain_all() == 1);
     CHECK(q.pending() == 0);
     CHECK(sink.count == 5);
+}
+
+// ── Inc5: the LIVE integration — `SceneRenderer::reload` re-reads a frame's source FROM DISK, re-cooks it through the
+//    real validator, and installs a new generation (or keeps last-good). A file edit is what a hot-reload watcher
+//    delivers; this drives the public API end-to-end (no device needed for the frame kind — the render loop reads the
+//    installed desc live). ──
+namespace
+{
+void write_text(crd::memory::IAllocator* a, const crd::containers::String& dir, const char* rel, const char* text)
+{
+    crd::containers::String p(a);
+    p.append(dir.c_str(), dir.size());
+    p.push_back('/');
+    p.append(rel, std::strlen(rel));
+    REQUIRE(crd::platform::fs::write_file_text(crd::platform::fs::Path(sv(p)),
+                                               crd::containers::StringView(text, std::strlen(text))));
+}
+} // namespace
+
+TEST_CASE("raf11 SceneRenderer.reload re-reads and re-cooks a frame from disk", "[raf11][reload]")
+{
+    crd::memory::TlsfAllocator alloc(1U << 24U, nullptr, "raf11-live");
+
+    // A private, mutable asset dir under the OS temp — edited between reloads exactly as a file watcher would see.
+    const char*             tmp = std::getenv("TEMP");
+    crd::containers::String dir(&alloc);
+    dir.append(tmp != nullptr ? tmp : ".", std::strlen(tmp != nullptr ? tmp : "."));
+    dir.append("/crd_raf11_reload_gate", 22);
+    (void)crd::platform::fs::remove_all(crd::platform::fs::Path(sv(dir))); // clean slate
+    crd::containers::String frame_dir(&alloc);
+    frame_dir.append(dir.c_str(), dir.size());
+    frame_dir.append("/frame", 6);
+    REQUIRE(crd::platform::fs::create_directories(crd::platform::fs::Path(sv(frame_dir))));
+
+    write_text(&alloc, dir, "frame/reload_gate.frame.toml", kFrameA);
+
+    crd::scenerender::SceneRenderer r(&alloc);
+    REQUIRE(r.set_app_asset_root(dir.c_str()));
+    REQUIRE(r.set_frame_graph("app://frame/reload_gate")); // load A — registers the frame as hot-reloadable
+    CHECK(r.asset_generation("app://frame/reload_gate") == 0U);
+
+    // Reload with the source UNCHANGED → clean no-op, generation stays 0.
+    CHECK(r.reload("app://frame/reload_gate"));
+    CHECK(r.asset_generation("app://frame/reload_gate") == 0U);
+
+    // EDIT the frame source to a different VALID frame → reload installs a new generation.
+    write_text(&alloc, dir, "frame/reload_gate.frame.toml", kFrameB);
+    CHECK(r.reload("app://frame/reload_gate"));
+    CHECK(r.asset_generation("app://frame/reload_gate") == 1U);
+
+    // EDIT to a BROKEN frame → reload REJECTED, LAST-GOOD preserved: the generation and the live frame do not move.
+    write_text(&alloc, dir, "frame/reload_gate.frame.toml", kFrameBroken);
+    CHECK_FALSE(r.reload("app://frame/reload_gate"));
+    CHECK(r.asset_generation("app://frame/reload_gate") == 1U);
+
+    // Reloading an id that is not registered/reloadable is reported, not silent.
+    CHECK_FALSE(r.reload("app://frame/never_registered"));
+
+    (void)crd::platform::fs::remove_all(crd::platform::fs::Path(sv(dir)));
 }

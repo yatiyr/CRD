@@ -252,6 +252,10 @@ public:
 
     void define(const Technique& t) { m_t.push_back(t); }
 
+    // RAF-11: drop every registered technique so the library can be re-populated from scratch on a hot reload
+    // (the builtins + the authored + the app techniques are re-`define`d, so nothing is lost and none duplicate).
+    void clear() { m_t.clear(); }
+
     [[nodiscard]] const Technique* find(const char* name) const
     {
         for (crd::usize i = m_t.size(); i > 0U; --i)

@@ -607,6 +607,17 @@ public:
     // id REFUSES (returns false, KEEPS the previous frame) and reports a NAMED diagnostic. `set_frame_graph_asset`
     // (relative name) remains a thin compatibility wrapper, deleted at RAF-12.
     [[nodiscard]] bool set_frame_graph(const char* canonical_id);
+    // ⭐⭐ RAF-11: HOT RELOAD a render asset by canonical id — re-read its source, re-cook it, and (if the cooked
+    // content changed) install a new immutable GENERATION at the next frame boundary, rebuilding every dependent in
+    // dependency order. On any cook/validate failure — including an interface change a dependent can no longer bind —
+    // the whole set is REJECTED: the previous valid generation of every asset stands (rendering never breaks) and a
+    // NAMED diagnostic reports the failing asset + reason. Retired GPU objects are freed only after the in-flight
+    // frames that referenced them complete. Call at a frame boundary (between `render`s). Returns false if the id is
+    // not registered/reloadable or the reload was rejected; the reason is logged. This is the §13 live-replacement seam.
+    [[nodiscard]] bool reload(const char* canonical_id);
+    // The current runtime GENERATION of a reloadable asset (0 if unknown). Bumps on every successful content change, so
+    // a consumer comparing generations detects that the asset was replaced out from under it (RAF-3 staleness).
+    [[nodiscard]] crd::u64 asset_generation(const char* canonical_id) const;
     // ⭐⭐ RAF-9: a PROGRAM PROVIDER — the fn-ptr + `void* user` idiom (like FramePassFn), NO std::function. Resolves a
     // canonical program/kernel id to a device program. Engine defaults register captureless thunks over the internal
     // builders at `init_programs`; an app registers its OWN under `app://…` the SAME way — so an app frame graph and an

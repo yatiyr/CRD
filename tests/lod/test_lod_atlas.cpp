@@ -76,16 +76,21 @@ TEST_CASE("REN-40-C5 GATE: octahedral encode/decode round-trips to sub-degree ac
     for (const auto& d : dirs)
     {
         float len = std::sqrt(d[0]*d[0] + d[1]*d[1] + d[2]*d[2]);
-        float dx = d[0]/len, dy = d[1]/len, dz = d[2]/len;
+        float dx = d[0]/len;
+        float dy = d[1]/len;
+        float dz = d[2]/len;
 
-        float ox, oy;
+        float ox = 0.0F;
+        float oy = 0.0F;
         crd::lod::oct_encode_cpu(dx, dy, dz, ox, oy);
         CHECK(ox >= -1.0F);
         CHECK(ox <=  1.0F);
         CHECK(oy >= -1.0F);
         CHECK(oy <=  1.0F);
 
-        float rx, ry, rz;
+        float rx = 0.0F;
+        float ry = 0.0F;
+        float rz = 0.0F;
         crd::lod::oct_decode_cpu(ox, oy, rx, ry, rz);
 
         float dot = dx*rx + dy*ry + dz*rz;
@@ -110,7 +115,10 @@ TEST_CASE("REN-40-C5 GATE: atlas baker produces a covered atlas from a tetrahedr
     CHECK(report.covered_pixels > 0U);
     CHECK(atlas.grid == 4U);
     CHECK(atlas.tile == 16U);
-    CHECK(atlas.pixels.size() == static_cast<crd::usize>(64U * 64U * 4U));
+    // ⭐⭐ REN-41: the atlas is a MIP PYRAMID (level 0 = grid*tile square, then box-downsampled levels), so its buffer
+    // is `impostor_atlas_texels` texels across ALL levels — NOT the level-0-only (grid*tile)^2. Use the ONE canonical
+    // formula (impostor_atlas.hpp): a hand-duplicated (grid*tile)^2 here is exactly the atlas/reader drift it warns of.
+    CHECK(atlas.pixels.size() == static_cast<crd::usize>(crd::lod::impostor_atlas_texels(4U, 16U)) * 4U);
 
     // at least HALF the tiles should have coverage (a tetrahedron is visible from almost everywhere)
     CHECK(report.tiles_empty < report.tiles_baked / 2U);

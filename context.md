@@ -43,9 +43,28 @@
 > - Module dep chain (one-way): render-asset-core ← {render-program, render-pass, gpu-context} ← render-material,
 >   render-graph. Every new module is a leaf; every gate is `raf<N>` in ctest.
 >
-> **NEXT ACTION — RAF-10 is CLOSED (2026-08-04); next is RAF-11 (hot reload)** · RAF-12 (DELETE legacy verbs +
-> FramePassKind) · RAF-13 (docs + §22 DoD). ⛔ RAF-8+ modify LIVE code (frame-cook/frame_runtime/scene-render/backends)
-> — migrate one kind at a time, old+new both resolve, `crd-sandbox --smoke-test` both backends at every gate.
+> **NEXT ACTION — RAF-11 is CLOSED (2026-08-05); next is RAF-12 (DELETE legacy verbs + FramePassKind switch + unify
+> the two frame graphs + decompose the ~40 program caches into a per-asset registry)** · RAF-13 (docs + §22 DoD).
+> ⛔ RAF-8+ modify LIVE code (frame-cook/frame_runtime/scene-render/backends) — migrate one kind at a time, old+new
+> both resolve, `crd-sandbox --smoke-test` both backends at every gate.
+>
+> **✅ RAF-11 DONE (2026-08-05) — Gate 11 met (session: `docs/sessions/2026-08-05-raf11-hot-reload.md`).**
+> Dependency-aware HOT RELOAD, all 5 kinds gated. Orchestration over a per-kind fn-ptr+`void*` plug-in driving RAF-3's
+> generation-tagged `RuntimeSlot`: `DependencyGraph::affected_by` (reverse-BFS dependents, deterministic deps-first via
+> topo_order) · `RenderAssetReloader` (no-op-vs-swap by content hash · dependency-ordered rebuild set · interface-change
+> rejection of the WHOLE set · atomic all-or-none commit, last-good on failure) · `DeferredReleaseQueue` (a retired GPU
+> object frees only after `frames_in_flight`=2 `begin_frame()` cycles; shutdown drain). LIVE on `SceneRenderer`:
+> `reload(canonical_id)` + `asset_generation(id)`. **Frame-graph** kind reloadable via `set_frame_graph`; **shader body
+> (`vertex/scene.crdv`) · technique (`lighting/scene_forward.crdl`) · material param+graph (`material/flat.crdm`)** via a
+> `SourceReload` adapter — `init_programs` made RE-RUNNABLE (`prepare_reinit` retires all ~40 programs to the deferred
+> queue + clears techniques; `~Impl` drains at shutdown), each `stage` CPU-validates the edit with the kind's cooker
+> (reject broken before touching live programs = last-good), `commit` re-cooks the set + bumps the shared program-input
+> generation. Gated device-free (`[raf11]`: frame no-op/swap/last-good · module→consumer dependency chain · interface
+> rejection · deferred-release timing) + on a REAL device Vulkan AND DX12 (`[raf11][gpu]`: material param→gen1 · graph→2
+> · technique→3 · shader→4 · each broken→last-good · unregistered id reported). Tidy-clean (fixed 6 pre-existing
+> isolate-declaration violations in the touched GPU test). The three program-input sources SHARE one generation because
+> `init_programs` is monolithic — the reload machinery (fine-grained dep-ordered rebuild + interface rejection) is proven
+> on the generic core; per-program dependency granularity is RAF-12's program-cache decomposition, not a reload gap.
 >
 > **✅ RAF-10 DONE (2026-08-04) — Gate 10 met (session: `docs/sessions/2026-08-04-raf10-app-custom-renderer.md`).** A
 > public-headers-ONLY app package (`tests/scene-render/test_raf10_app.cpp` + `tests/scene-render/app_assets/`)
