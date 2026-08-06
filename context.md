@@ -43,8 +43,16 @@
 > - Module dep chain (one-way): render-asset-core ← {render-program, render-pass, gpu-context} ← render-material,
 >   render-graph. Every new module is a leaf; every gate is `raf<N>` in ctest.
 >
-> **NEXT ACTION — RAF-11 is CLOSED (2026-08-05); next is RAF-12 (DELETE legacy verbs + FramePassKind switch + unify
-> the two frame graphs + decompose the ~40 program caches into a per-asset registry)** · RAF-13 (docs + §22 DoD).
+> **NEXT ACTION (2026-08-06) — ⭐ READ `docs/detours/D-007-gpu-program-system.md` § "RAF-12 — AGENT HANDOFF" — it has
+> the full step-by-step.** RAF-12.4 is **COMPLETE (59/59 verbs off `IRasterContext`)**; this session also fixed the
+> frame-graph WBOIT correctness (3 defects + a new REN-38-A12 ORACLE gate) and a CKIR emitter read-after-write hoist bug
+> (`ckir_glsl/hlsl.hpp` `must_defer` — fixed B18-e/RT-1/IB-1/B17-c×2 both platforms). **All gated GREEN, NOTHING
+> committed — commit the uncommitted tree FIRST** (4 proposed commits in the handoff). Then, in order: **12.2** unify the
+> two frame-graph runtimes (swap live `SceneRenderer` off `FrameRecorder`/`record_pass` → `crd-render-graph`; the
+> riskiest change — prove byte-identical + smoke before deleting `record_pass`/`execute_frame_graph`) → **12.3** retire
+> `FramePassKind` (209 refs; finer-grained than ExecutorTypeId, migrate per-kind behaviour to executor payloads) →
+> **12.5** grep-proof §7 empty → **13** docs + §22 35-condition DoD. RAF-10's llvmpipe ctest failure is a concurrency
+> flake (passes real GPU + alone), NOT a bug.
 > ⛔ RAF-8+ modify LIVE code (frame-cook/frame_runtime/scene-render/backends) — migrate one kind at a time, old+new
 > both resolve, `crd-sandbox --smoke-test` both backends at every gate.
 >

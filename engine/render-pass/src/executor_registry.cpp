@@ -89,6 +89,13 @@ u32 register_builtin_executors(ExecutorRegistry& registry, DiagnosticList& diags
         d.schema.params.push_back(param("load", ExecutorParamType::Bool, false));
         // REN-40-G1: LOAD depth (from a depth prepass) while CLEARING colour — the depth-prepass consumer shape.
         d.schema.params.push_back(param("load_depth", ExecutorParamType::Bool, false));
+        // ⭐ RAF-12.2: PER-ATTACHMENT BLEND for a multi-colour MRT (the WBOIT accumulate: `additive` into accum,
+        // `revealage_multiply` into reveal; a deferred G-buffer leaves them Opaque). blend0 is `color`, blend1..3 pair
+        // color1..3. Optional — absent ⇒ the executor defaults that attachment to Opaque (the single-colour path).
+        d.schema.params.push_back(param("blend0", ExecutorParamType::Enum, false));
+        d.schema.params.push_back(param("blend1", ExecutorParamType::Enum, false));
+        d.schema.params.push_back(param("blend2", ExecutorParamType::Enum, false));
+        d.schema.params.push_back(param("blend3", ExecutorParamType::Enum, false));
         // ⭐ RAF-8: OPTIONAL. A DEPTH-ONLY geometry pass (a shadow cascade, a depth prepass) writes only `depth` — no
         // colour — so `color` cannot be required; the executor renders depth-only when `color` is absent.
         d.schema.slots.push_back(slot("color", SlotResourceKind::ColorTarget, SlotAccess::Write, false));

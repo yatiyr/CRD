@@ -306,6 +306,64 @@ TEST_CASE("RAF-8: an MRT depth-prepass routes the depth write to depth and the c
     CHECK(depth_writes == 1U); // scene_depth
 }
 
+TEST_CASE("RAF-12.2: a TRUE multi-colour MRT emits per-attachment blend params (the WBOIT accumulate shape)",
+          "[framecook][raf12][bridge]")
+{
+    // The WBOIT ACCUMULATE pass writes accum (RGBA16F) + revealage (R16F) — TWO colour attachments — with per-attachment
+    // blend (additive into accum, revealage_multiply into reveal). The bridge must (a) route BOTH as colour writes
+    // (`color` + `color1`) and (b) carry the per-attachment blend as `blend0` / `blend1` params so the scene.raster
+    // executor reproduces it. Without the blend params the pass renders OPAQUE — the exact miss RAF-12.2 closes so the
+    // inline `record_pass` MRT arm can retire. Device-free: this is TOPOLOGY + payload, no GPU.
+    crd::memory::TlsfAllocator alloc(2U << 20U, nullptr, "raf12-mrt-blend");
+    fc::FrameGraphBuilder      builder(&alloc, StringView("wboit"));
+    builder.add_image(StringView("accum"), crd::gpu::FgImageFormat::RGBA16F, 1920U, 1080U, /*sampled*/ true);
+    builder.add_image(StringView("revealage"), crd::gpu::FgImageFormat::R16F, 1920U, 1080U, /*sampled*/ true);
+    const u32 acc = builder.add_pass(StringView("accumulate"), fc::FramePassKind::RasterMrt);
+    builder.pass_writes(acc, StringView("accum"));     // colour 0 -> `color`
+    builder.pass_writes(acc, StringView("revealage")); // colour 1 -> `color1`
+    builder.pass_draw_list(acc, StringView("transparent"));
+    builder.pass_clear_color(acc, 0.0F, 0.0F, 0.0F, 0.0F);
+    builder.desc().passes[acc].blend.push_back(crd::gpu::BlendMode::Additive);          // accum
+    builder.desc().passes[acc].blend.push_back(crd::gpu::BlendMode::RevealageMultiply); // revealage
+
+    crd::renderasset::DiagnosticList diags(&alloc);
+    rp::ExecutorRegistry             schemas(&alloc);
+    REQUIRE(rp::register_builtin_executors(schemas, diags) == 14U);
+    rg::FrameGraphTemplate tmpl(&alloc);
+    REQUIRE(fc::build_frame_graph_template(builder.desc(), four_cascades, nullptr, schemas, tmpl, diags));
+    REQUIRE_FALSE(diags.has_errors());
+    REQUIRE(tmpl.passes().size() == 1U);
+    const rg::GraphPass& p = tmpl.passes()[0];
+
+    // (a) BOTH colour writes present (no depth for the accumulate pass).
+    u32 color_writes = 0U;
+    for (u32 i = 0; i < p.payload.resources.size(); ++i)
+    {
+        if (p.payload.resources[i].kind == rp::SlotResourceKind::ColorTarget
+            && p.payload.resources[i].access == rp::SlotAccess::Write)
+        {
+            ++color_writes;
+        }
+    }
+    CHECK(color_writes == 2U);
+
+    // (b) the per-attachment BLEND params, typed Enum, in colour-attachment order.
+    const auto blend_of = [&](const char* name) -> int
+    {
+        const u64 id = rp::pass_param_id(StringView(name));
+        for (u32 i = 0; i < p.payload.params.size(); ++i)
+        {
+            if (p.payload.params[i].name_hash == id && p.payload.params[i].value.type == rp::ExecutorParamType::Enum)
+            {
+                return static_cast<int>(p.payload.params[i].value.e);
+            }
+        }
+        return -1;
+    };
+    CHECK(blend_of("blend0") == static_cast<int>(crd::gpu::BlendMode::Additive));
+    CHECK(blend_of("blend1") == static_cast<int>(crd::gpu::BlendMode::RevealageMultiply));
+}
+
 TEST_CASE("RAF-8: an unresolved for_each fails the bridge LOUDLY", "[framecook][raf8][bridge]")
 {
     crd::memory::TlsfAllocator alloc(2U << 20U, nullptr, "raf8-foreach");

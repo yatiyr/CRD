@@ -1261,6 +1261,141 @@ void run_scene_drawlist_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContex
     CHECK((color->read_pixel((dim * 3U) / 4U, dim / 2U) & 0xFFU) >= 250U); // right third: item 1 drew
     CHECK((color->read_pixel(dim / 2U, dim / 2U) & 0xFFU) < 32U);          // centre column: background (a real gap)
 }
+// ⭐⭐ RAF-12.2 prereq-0: a sub-1 two-output FS for the MRT BLEND gate. out0 (accum source) and out1 (revealage source)
+// are BELOW 1 so an ADDITIVE accumulation of two overlapping draws (2× = 0.2 / 0.1 / 0.05) is DISTINGUISHABLE from an
+// opaque single write (0.1 / 0.05 / 0.025) — a saturating full-white output would hide the blend.
+void build_mrt_blend_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
+{
+    namespace kir = crd::kir;
+    const auto sh = kir::make_shape({1});
+    const auto kf = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    fe.stage      = kir::KStage::Fragment;
+    fe.n_out      = 2;
+    fe.out[0]     = {g.vec4(kf(0.1), kf(0.05), kf(0.025), kf(1.0)), 0}; // ADDITIVE accum source  (Ci·ai·wi analogue)
+    fe.out[1]     = {g.vec4(kf(0.5), kf(0.5), kf(0.5), kf(0.5)), 1};    // REVEALAGE source: dst·(1-src) each draw
+}
+
+// ⭐⭐ RAF-12.2 prereq-0: the PRODUCTION `scene.raster` executor records a TRUE MULTI-COLOUR MRT (n_writes>1) with
+// PER-ATTACHMENT BLEND — the one live shape `record_scene_raster` historically dropped (it bound only color0, so a real
+// deferred G-buffer / WBOIT ACCUMULATE pass had to keep the inline `record_pass` arm). This drives the REAL scene.raster
+// record fn (not a bespoke test executor) through execute_frame with a resolved DrawList: attachment 0 ADDITIVE (accum,
+// cleared to 0), attachment 1 REVEALAGE_MULTIPLY (reveal, cleared to the multiplicative identity 1 by draw_storage_mrt).
+// TWO overlapping full-screen triangles (one storage buffer, 6 verts) make each blend OBSERVABLE:
+//   · Additive accum  = 0 + s + s          = (0.2, 0.1, 0.05) → RGBA8 ≈ (51, 26, 13); opaque/no-blend would leave (26,13,6)
+//   · Revealage reveal = 1·(1-0.5)·(1-0.5) = 0.25             → R ≈ 64; a ZERO-clear stays 0, an opaque write leaves 128.
+// So a dropped attachment, a missing blend, or a wrong reveal-clear each FAIL loudly — this is the coverage the 12.2 swap
+// depends on before the inline MRT arm can be deleted.
+void run_mrt_blend_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& raster, crd::memory::IAllocator& alloc)
+{
+    namespace kir = crd::kir;
+    using namespace crd::rendergraph;
+    using namespace crd::gpu;
+
+    kir::KGraph vg(&alloc);
+    kir::KEntry ve;
+    crd::gputest::build_vertex_pull_vs(vg, ve);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    build_mrt_blend_fs(fg, fe);
+    auto vs = gctx.create_program(vg, ve);
+    if (vs == nullptr)
+    {
+        WARN("shader compilation unavailable; skipping the MRT blend run");
+        return;
+    }
+    auto fs = gctx.create_program(fg, fe);
+    REQUIRE(fs != nullptr);
+    auto program = raster.create_raster_program(*vs, *fs);
+    REQUIRE(program != nullptr);
+
+    // TWO full-screen triangles (same 3 clip verts twice) in ONE storage buffer ⇒ every pixel covered twice ⇒ the
+    // per-attachment blend accumulates observably. Stride 12 floats/vertex (the GEO-1 pull), position in [0..2].
+    float verts[72] = {0.0F};
+    const auto set   = [&](int i, f32 x, f32 y) { verts[i * 12 + 0] = x; verts[i * 12 + 1] = y; };
+    for (int t = 0; t < 2; ++t)
+    {
+        set(t * 3 + 0, -1.0F, -1.0F);
+        set(t * 3 + 1, 3.0F, -1.0F);
+        set(t * 3 + 2, -1.0F, 3.0F);
+    }
+    auto geo = raster.create_storage_buffer(static_cast<u32>(sizeof(verts)));
+    REQUIRE(geo != nullptr);
+    REQUIRE(raster.upload_storage(*geo, 0U, verts, static_cast<u32>(sizeof(verts))));
+
+    constexpr u32 dim = 32U;
+    auto          c0 = raster.create_color_target(dim, dim); // accum   (Additive, clear 0)
+    auto          c1 = raster.create_color_target(dim, dim); // reveal  (RevealageMultiply, clear-to-1)
+    REQUIRE(c0 != nullptr);
+    REQUIRE(c1 != nullptr);
+
+    DiagnosticList       d(&alloc);
+    rp::ExecutorRegistry schemas(&alloc);
+    REQUIRE(rp::register_builtin_executors(schemas, d) == 14U);
+    GraphExecutorTable records(&alloc);
+    REQUIRE(register_builtin_records(records, d) == 14U);
+
+    const u64 r_c0 = rp::pass_param_id("c0");
+    const u64 r_c1 = rp::pass_param_id("c1");
+    FrameGraphTemplate tmpl(&alloc);
+    tmpl.add_resource(GraphResource{r_c0, rp::SlotResourceKind::ColorTarget, ResourceLifetime::Persistent, 1U});
+    tmpl.add_resource(GraphResource{r_c1, rp::SlotResourceKind::ColorTarget, ResourceLifetime::Persistent, 1U});
+    constexpr u64 pass_hash = 1U;
+    {
+        GraphPass p;
+        p.name_hash              = pass_hash;
+        p.payload.executor       = rp::executor_type_id("scene.raster");
+        p.payload.schema_version = 1U;
+        p.payload.queue          = rp::QueueKind::Graphics;
+        p.payload.params.push_back(rp::ParamValue{rp::pass_param_id("clear_color"), tv_vec4(0.0F, 0.0F, 0.0F, 0.0F)});
+        p.payload.params.push_back(rp::ParamValue{rp::pass_param_id("clear_depth"), tv_f32(1.0F)});   // required by schema
+        p.payload.params.push_back(rp::ParamValue{rp::pass_param_id("depth_compare"), tv_enum(3U)});  // LessEqual (required)
+        p.payload.params.push_back(
+            rp::ParamValue{rp::pass_param_id("blend0"), tv_enum(static_cast<u32>(BlendMode::Additive))});
+        p.payload.params.push_back(
+            rp::ParamValue{rp::pass_param_id("blend1"), tv_enum(static_cast<u32>(BlendMode::RevealageMultiply))});
+        p.payload.resources.push_back(
+            rp::ResourceRef{rp::pass_param_id("color"), rp::SlotResourceKind::ColorTarget, rp::SlotAccess::Write, r_c0});
+        p.payload.resources.push_back(
+            rp::ResourceRef{rp::pass_param_id("color1"), rp::SlotResourceKind::ColorTarget, rp::SlotAccess::Write, r_c1});
+        tmpl.add_pass(p);
+    }
+    CompiledFrameGraph compiled(&alloc);
+    REQUIRE(compile(tmpl, schemas, dim, dim, compiled, d));
+    ResourceTable table(&alloc);
+    table.bind(ResolvedResource{r_c0, rp::SlotResourceKind::ColorTarget, c0.get(), nullptr, nullptr, nullptr});
+    table.bind(ResolvedResource{r_c1, rp::SlotResourceKind::ColorTarget, c1.get(), nullptr, nullptr, nullptr});
+
+    const RenderDrawItem items[1] = {
+        RenderDrawItem{geo.get(), nullptr, nullptr, 6U, false, 0U, 0U, 0U, nullptr, 0U},
+    };
+    DrawList list;
+    list.items = static_cast<const RenderDrawItem*>(items);
+    list.count = 1U;
+    DrawListTable draw_lists(&alloc);
+    draw_lists.bind(pass_hash, list);
+
+    PassPrograms programs;
+    programs.raster = program.get();
+    u32 submit_count = 0U;
+    REQUIRE(execute_frame(compiled, tmpl, records, table, programs, raster, alloc, d, &submit_count, &draw_lists));
+    REQUIRE_FALSE(d.has_errors());
+    CHECK(submit_count == 1U);
+
+    const u32 a = c0->read_pixel(dim / 2U, dim / 2U); // accum (Additive) — TWO overlapping draws accumulate
+    const u32 r = c1->read_pixel(dim / 2U, dim / 2U); // reveal (RevealageMultiply, cleared to 1)
+    // accum: additive 2× of (0.1,0.05,0.025) → (51,26,13). ⛔ R≈51 (not ≈26) is the additive proof; a dropped
+    // attachment-1 or an opaque blend would break one of these three.
+    CHECK((a & 0xFFU) >= 44U);
+    CHECK((a & 0xFFU) <= 58U);          // R ≈ 51 (0.2) — ADDITIVE, not opaque (which would be ≈26)
+    CHECK(((a >> 8U) & 0xFFU) >= 20U);
+    CHECK(((a >> 8U) & 0xFFU) <= 32U);  // G ≈ 26 (0.1)
+    CHECK(((a >> 16U) & 0xFFU) >= 7U);
+    CHECK(((a >> 16U) & 0xFFU) <= 20U); // B ≈ 13 (0.05)
+    // reveal: 1·(1-0.5)·(1-0.5) = 0.25 → R ≈ 64. ⛔ a ZERO-clear would leave 0; an opaque write would leave 128 — the
+    // multiplicative-clear-to-1 + RevealageMultiply blend are BOTH required to land here.
+    CHECK((r & 0xFFU) >= 54U);
+    CHECK((r & 0xFFU) <= 74U); // R ≈ 64 (0.25)
+}
 } // namespace
 
 TEST_CASE("raf7 frame graph executes on the Vulkan device via the command encoder", "[gpu][vulkan][raf7]")
@@ -1285,6 +1420,7 @@ TEST_CASE("raf7 frame graph executes on the Vulkan device via the command encode
     REQUIRE(raster != nullptr);
     run_graph_gpu(*ctx, *raster, alloc);
     run_mrt_gpu(*ctx, *raster, alloc);
+    run_mrt_blend_gpu(*ctx, *raster, alloc);
     run_bindless_gpu(*ctx, *raster, alloc);
     run_shadow_gpu(*ctx, *raster, alloc);
     run_indirect_gpu(*ctx, *raster, alloc, false);
@@ -1309,6 +1445,7 @@ TEST_CASE("raf7 frame graph executes on the D3D12 device via the command encoder
     crd::memory::TlsfAllocator alloc(4U << 20U, nullptr, "raf7-gpu-dx12");
     run_graph_gpu(*gctx, *raster, alloc);
     run_mrt_gpu(*gctx, *raster, alloc);
+    run_mrt_blend_gpu(*gctx, *raster, alloc);
     run_bindless_gpu(*gctx, *raster, alloc);
     run_shadow_gpu(*gctx, *raster, alloc);
     run_indirect_gpu(*gctx, *raster, alloc, true);

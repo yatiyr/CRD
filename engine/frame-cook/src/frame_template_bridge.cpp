@@ -238,6 +238,22 @@ const char* color_slot(crd::u32 i) noexcept
         return "color3";
     }
 }
+// The per-attachment BLEND param names, in colour-attachment order (blend0 pairs `color`, blend1..3 pair color1..3).
+// ⭐ RAF-12.2: a geometry MRT (the WBOIT accumulate) carries per-attachment blend as DATA the scene.raster executor reads.
+const char* blend_slot(crd::u32 i) noexcept
+{
+    switch (i)
+    {
+    case 0:
+        return "blend0";
+    case 1:
+        return "blend1";
+    case 2:
+        return "blend2";
+    default:
+        return "blend3";
+    }
+}
 const char* input_slot(crd::u32 i) noexcept
 {
     switch (i)
@@ -363,6 +379,14 @@ bool map_raster(const FramePassDesc& d, bool fullscreen, rp::PassPayload& pl, co
                       d.name, diags))
         {
             return false;
+        }
+        // ⭐ RAF-12.2: this colour attachment's per-attachment BLEND (fullscreen carries its single composite blend
+        // separately above). Only emit when the pass DECLARED one for this index — an absent entry leaves the executor
+        // on Opaque (the ordinary opaque geometry pass), so the velocity prepass + every existing frame are unchanged.
+        if (!fullscreen && color_i < d.blend.size())
+        {
+            pl.params.push_back(
+                rp::ParamValue{slot_id(blend_slot(color_i)), tv_enum(static_cast<crd::u32>(d.blend[color_i]))});
         }
         ++color_i;
     }

@@ -61,6 +61,18 @@ const DrawList* DrawListTable::find(u64 pass_name_hash) const noexcept
     return nullptr;
 }
 
+const PassPrograms* PassProgramsTable::find(u64 pass_name_hash) const noexcept
+{
+    for (u32 i = 0; i < m_entries.size(); ++i)
+    {
+        if (m_entries[i].pass_name_hash == pass_name_hash)
+        {
+            return &m_entries[i].programs;
+        }
+    }
+    return nullptr;
+}
+
 // ── RecordContext ──
 namespace
 {
@@ -285,6 +297,94 @@ void record_scene_raster(const PassPayload& payload, RecordContext& ctx, IComman
     {
         return;
     }
+
+    // ⭐⭐ RAF-12.2: a TRUE MULTI-COLOUR MRT G-BUFFER (n_writes>1) — a deferred G-buffer, or the WBOIT ACCUMULATE pass
+    // (accum + revealage). This is the ONE live shape the executor path historically did NOT bind (it dropped every
+    // attachment past color0), so the inline `record_pass` MRT arm was its only coverage; closing it here is the
+    // prerequisite for retiring that arm in the 12.2 swap. Gather the extra colour attachments (color1..color3, filled
+    // contiguously by the bridge / a host) and their per-attachment blend (blend0..blend3), then record ONE clearing
+    // storage-pull draw per item into all N attachments. The encoder lowers a >=2-colour StoragePull scope to
+    // draw_storage_mrt, which clears a Multiply / RevealageMultiply attachment to the multiplicative identity 1 (never
+    // the pass clear colour) and applies the per-attachment blend — so `Additive` accum + `RevealageMultiply` reveal
+    // are authorable as one ordinary pass. Depth (when present) RIDES color0 the same way the single-colour path and
+    // the retired inline arm do: draw_storage_mrt keys the depth attachment off color0->has_depth().
+    if (color != nullptr)
+    {
+        IRasterTarget* mrt_color[4] = {color, nullptr, nullptr, nullptr};
+        u32 mrt_n = 1U;
+        static constexpr StringView kExtraColor[3] = {StringView("color1"), StringView("color2"),
+                                                      StringView("color3")};
+        for (u32 k = 0; k < 3U; ++k)
+        {
+            const u64 eslot = pass_param_id(kExtraColor[k]);
+            if (!ctx.has(eslot))
+            {
+                break; // color1..3 are filled in order; the first absent one ends the MRT set (contiguous by construction)
+            }
+            IRasterTarget* const c = ctx.color_target(eslot);
+            if (c == nullptr)
+            {
+                return; // a DECLARED MRT attachment that does not resolve ABORTS — never a partial G-buffer down a slot
+            }
+            mrt_color[mrt_n++] = c;
+        }
+        if (mrt_n >= 2U)
+        {
+            static constexpr StringView kBlendName[4] = {StringView("blend0"), StringView("blend1"),
+                                                         StringView("blend2"), StringView("blend3")};
+            BlendMode mblend[4]{};
+            for (u32 k = 0; k < mrt_n; ++k)
+            {
+                mblend[k] = static_cast<BlendMode>(enum_param(payload, kBlendName[k], static_cast<u32>(BlendMode::Opaque)));
+            }
+            const ClearColor  mclear = clear_from(payload);
+            const TypedValue* mcd = find_param(payload, pass_param_id("clear_depth"));
+            const f32 mclear_depth = (mcd != nullptr && mcd->type == ExecutorParamType::F32) ? mcd->f : 1.0F;
+            const TypedValue* mdcp = find_param(payload, pass_param_id("depth_compare"));
+            const DepthCompare mcmp = (mdcp != nullptr && mdcp->type == ExecutorParamType::Enum)
+                                          ? static_cast<DepthCompare>(mdcp->e)
+                                          : DepthCompare::LessEqual;
+            IRasterProgram* const mdef = ctx.programs().raster;
+            const DrawList        mdraws = ctx.draws();
+            for (crd::u32 i = 0; i < mdraws.count; ++i)
+            {
+                const RenderDrawItem& it = mdraws.items[i];
+                if (it.storage == nullptr)
+                {
+                    continue;
+                }
+                IRasterProgram* const prog = it.program != nullptr ? it.program : mdef;
+                if (prog == nullptr)
+                {
+                    continue;
+                }
+                RenderingDesc mrt;
+                mrt.width = mrt_color[0]->width();
+                mrt.height = mrt_color[0]->height();
+                for (u32 k = 0; k < mrt_n; ++k)
+                {
+                    mrt.color.push_back(
+                        ColorAttachmentDesc{mrt_color[k], LoadOp::Clear, StoreOp::Store, mclear, mblend[k]});
+                }
+                if (depth != nullptr)
+                {
+                    mrt.depth = DepthStencilAttachmentDesc{depth, true, LoadOp::Clear, StoreOp::Store, mclear_depth, true,
+                                                           mcmp};
+                }
+                encoder.begin_rendering(mrt);
+                RasterDrawPacket pk;
+                pk.program = prog;
+                pk.command = RasterCommandKind::Draw;
+                pk.geometry.kind = GeometryKind::StoragePull;
+                pk.geometry.vertex_or_index_count = it.vertex_count;
+                pk.bindings.push_back(ResourceBinding{BindingFrequency::Object, BindingKind::StorageBuffer, 0U, it.storage});
+                encoder.draw(pk);
+                encoder.end_rendering();
+            }
+            return;
+        }
+    }
+
     // The rendering SCOPE. A pass declaring `load = true` STACKS on the previous pass (never clears) — the encoder's
     // `m_first` tracks the clear-once, so every packet below just records in order; and a depth-prepass consumer
     // (`load_depth`) LOADS depth while colour still clears (REN-40-G1).
@@ -1145,7 +1245,7 @@ bool compile(const FrameGraphTemplate& tmpl, const ExecutorRegistry& schemas, u3
 // ── execute ──
 bool execute(const CompiledFrameGraph& compiled, const FrameGraphTemplate& tmpl, const GraphExecutorTable& records,
              const ResourceTable& table, const PassPrograms& programs, ICommandEncoder& encoder, DiagnosticList& diags,
-             const DrawListTable* draw_lists)
+             const DrawListTable* draw_lists, const PassProgramsTable* pass_programs)
 {
     for (u32 pos = 0; pos < compiled.schedule().size(); ++pos)
     {
@@ -1157,7 +1257,10 @@ bool execute(const CompiledFrameGraph& compiled, const FrameGraphTemplate& tmpl,
             return false;
         }
         const DrawList* dl = draw_lists != nullptr ? draw_lists->find(pass.name_hash) : nullptr;
-        RecordContext ctx(pass.payload, table, programs, diags, dl);
+        // ⭐⭐ RAF-12.2-b: this pass's OWN programs (shadow VS / lit program / tonemap FS / cull kernel / RT SBT) if the
+        // host bound them; else the frame-wide `programs` (the single-program tests + the legacy one-program shape).
+        const PassPrograms* pp = pass_programs != nullptr ? pass_programs->find(pass.name_hash) : nullptr;
+        RecordContext ctx(pass.payload, table, pp != nullptr ? *pp : programs, diags, dl);
         fn(pass.payload, ctx, encoder);
         if (!ctx.ok())
         {
@@ -1231,7 +1334,7 @@ const ImportedHandle* find_handle(const Array<ImportedHandle>& hs, u64 name_hash
 bool execute_frame(const CompiledFrameGraph& compiled, const FrameGraphTemplate& tmpl, const GraphExecutorTable& records,
                    const ResourceTable& table, const PassPrograms& programs, IRasterContext& raster,
                    memory::IAllocator& alloc, DiagnosticList& diags, u32* out_submit_count,
-                   const DrawListTable* draw_lists)
+                   const DrawListTable* draw_lists, const PassProgramsTable* pass_programs)
 {
     auto fg = raster.create_frame_graph();
     if (fg == nullptr)
@@ -1330,7 +1433,10 @@ bool execute_frame(const CompiledFrameGraph& compiled, const FrameGraphTemplate&
             else { b.reads(h->img); }
         }
         const DrawList* dl = draw_lists != nullptr ? draw_lists->find(pass.name_hash) : nullptr;
-        closures.push_back(PassClosure{&pass.payload, fn, &table, &programs, encoder.get(), &diags, dl, true});
+        // ⭐⭐ RAF-12.2-b: this pass's OWN programs if the host bound them per pass; else the frame-wide default.
+        const PassPrograms* pp = pass_programs != nullptr ? pass_programs->find(pass.name_hash) : nullptr;
+        closures.push_back(
+            PassClosure{&pass.payload, fn, &table, pp != nullptr ? pp : &programs, encoder.get(), &diags, dl, true});
         b.execute(&run_pass_cb, &closures[closures.size() - 1U]);
     }
 
@@ -1354,4 +1460,119 @@ bool execute_frame(const CompiledFrameGraph& compiled, const FrameGraphTemplate&
     }
     return !diags.has_errors();
 }
+
+// ── RAF-12.2-b: the authored-frame runtime — the ONE generic dispatch + the orchestrator (replaces FrameRecorder) ──
+namespace
+{
+// The ONE authored-pass record callback: the generic dispatch that replaces record_pass + the 11 per-kind wrappers. It
+// resolves the host's FgImage/FgBuffer handles to device pointers at execute time (the only moment a transient exists),
+// applies the pass's device setup, builds the RecordContext, and invokes the pass's registered executor.
+void run_authored_cb(crd::gpu::IFrameContext& fctx, void* user)
+{
+    auto&                     ap = *static_cast<AuthoredPass*>(user);
+    crd::gpu::IRasterContext& r  = fctx.raster();
+    // per-pass DEVICE setup (mirrors the legacy record_pass preamble): compute diagnostics, counter zeroing, this pass's
+    // sampler + raster state (context state, reset to defaults at the pass boundary so a pass never inherits a neighbour).
+    r.compute_diag(8U);
+    if (ap.device_kind == crd::gpu::FgPassKind::Compute) { r.compute_diag(9U); }
+    for (crd::u32 i = 0; i < ap.n_counters; ++i)
+    {
+        if (crd::gpu::IStorageBuffer* cb = fctx.buffer(ap.counters[i]); cb != nullptr) { r.fill_buffer(*cb, 0U, 4U, 0U); }
+    }
+    if (ap.has_sampler) { r.set_sampler(ap.sampler); }
+    r.set_pass_state(ap.state);
+
+    auto enc = r.create_command_encoder();
+    if (enc == nullptr)
+    {
+        ap.ok = false;
+        return;
+    }
+
+    // resolve the payload slots → a ResourceTable of device pointers (a transient resolves NOW, via the frame context).
+    ResourceTable table(ap.alloc);
+    for (crd::u32 i = 0; i < ap.bindings.size(); ++i)
+    {
+        const SlotBinding& b = ap.bindings[i];
+        ResolvedResource   rr{};
+        rr.name_hash = b.name_hash;
+        rr.kind      = b.kind;
+        switch (b.resolve)
+        {
+        case SlotResolve::ImageLayer:
+            rr.target = fctx.image_layer(b.image, b.layer);
+            break;
+        case SlotResolve::ImageWithDepth:
+            rr.target = fctx.image_with_depth(b.image, b.depth);
+            break;
+        case SlotResolve::Texture:
+            rr.texture = fctx.texture(b.image);
+            break;
+        case SlotResolve::Buffer:
+            rr.buffer = fctx.buffer(b.buffer);
+            break;
+        case SlotResolve::Accel:
+            rr.accel = b.accel;
+            break;
+        case SlotResolve::Image:
+        default:
+            rr.target = fctx.image(b.image);
+            break;
+        }
+        table.bind(rr);
+    }
+
+    // resolve the draw/dispatch list (a GPU-cull output's storage/args are transients that resolve only here).
+    Array<RenderDrawItem> items(ap.alloc);
+    items.reserve(ap.draws.size());
+    for (crd::u32 i = 0; i < ap.draws.size(); ++i)
+    {
+        const AuthoredDraw& d = ap.draws[i];
+        // A draw with a DECLARED storage-pull buffer skips if it does not resolve (the legacy scene/compute skip). A
+        // draw with NO storage (a PROCEDURAL amplification item — tess/mesh drawing `amplify_count` from VertexIndex) is
+        // KEPT with a null storage; the amplify executor needs it. `has_storage` per-kind is the recorder's decision.
+        crd::gpu::IStorageBuffer* sb = nullptr;
+        if (d.has_storage)
+        {
+            sb = fctx.buffer(d.storage);
+            if (sb == nullptr) { continue; }
+        }
+        RenderDrawItem ri{};
+        ri.storage         = sb;
+        ri.program         = d.program;
+        ri.texture         = d.texture;
+        ri.vertex_count    = d.vertex_count;
+        ri.indexed         = d.indexed;
+        ri.index_count     = d.index_count;
+        ri.instance_count  = d.instance_count;
+        ri.first_index     = d.first_index;
+        ri.args            = d.args; // a host pointer, used directly (the legacy wrappers used DrawItem.args as-is)
+        ri.args_offset     = d.args_offset;
+        ri.dispatch_groups = d.dispatch_groups;
+        items.push_back(ri);
+    }
+    DrawList dl{};
+    dl.items                   = items.data();
+    dl.count                   = static_cast<crd::u32>(items.size());
+    dl.pass_texture            = ap.has_pass_texture ? fctx.texture(ap.pass_texture) : nullptr;
+    dl.pass_texture_is_depth   = ap.pass_texture_is_depth;
+    dl.pass_texture_comparison = ap.pass_texture_comparison;
+
+    const PassRecordFn fn = ap.records != nullptr ? ap.records->find(ap.executor) : nullptr;
+    if (fn == nullptr)
+    {
+        if (ap.diags != nullptr)
+        {
+            ap.diags->error(DiagCode::UnknownExecutor, "no record function registered for this pass's executor");
+        }
+        ap.ok = false;
+        return;
+    }
+    RecordContext ctx(ap.payload, table, ap.programs, *ap.diags, &dl);
+    fn(ap.payload, ctx, *enc);
+    ap.ok = ctx.ok();
+}
+} // namespace
+
+crd::gpu::FgExecuteFn authored_pass_fn() noexcept { return &run_authored_cb; }
 } // namespace crd::rendergraph

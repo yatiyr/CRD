@@ -21,6 +21,8 @@
 #include <crd/containers/array.hpp>
 #include <crd/core/types.hpp>
 #include <crd/gpu/command_model.hpp>
+#include <crd/gpu/frame_graph.hpp>    // RAF-12.2-b: IFrameGraph / FgImage / FgBuffer / FgPassKind / FgExecuteFn / present
+#include <crd/gpu/raster_context.hpp> // RAF-12.2-b: SamplerDesc / RasterState for the per-pass device setup
 #include <crd/memory/allocator.hpp>
 #include <crd/renderasset/diagnostic.hpp>
 #include <crd/renderpass/executor_registry.hpp>
@@ -213,6 +215,27 @@ private:
     Array<Entry> m_lists;
 };
 
+// ⭐⭐ RAF-12.2-b: the per-pass PROGRAM bindings (indexed by pass name hash) — the authored-frame runtime's counterpart
+// to DrawListTable. A live frame's passes each name their OWN shader/kernel/SBT (the shadow cascade's depth VS, the
+// forward pass's lit program, the tonemap FS, a compute cull kernel, an RT pipeline's SBT), so a SINGLE frame-wide
+// PassPrograms cannot drive them. The host resolves each pass's programs and binds them here by pass; the runtime looks
+// them up per pass and falls back to the frame-wide `programs` argument for a pass with no per-pass entry.
+class PassProgramsTable
+{
+public:
+    explicit PassProgramsTable(memory::IAllocator* alloc) noexcept : m_entries(alloc) {}
+    void bind(u64 pass_name_hash, const PassPrograms& programs) { m_entries.push_back(Entry{pass_name_hash, programs}); }
+    [[nodiscard]] const PassPrograms* find(u64 pass_name_hash) const noexcept;
+
+private:
+    struct Entry
+    {
+        u64 pass_name_hash;
+        PassPrograms programs;
+    };
+    Array<Entry> m_entries;
+};
+
 // The context a pass's record function sees: it may resolve ONLY resources the pass declared (an undeclared slot is
 // diagnosed — the "declared use matches recorded" contract), plus the host-bound program for this pass.
 class RecordContext
@@ -289,7 +312,8 @@ u32 register_builtin_records(GraphExecutorTable& table, DiagnosticList& diags);
 [[nodiscard]] bool execute(const CompiledFrameGraph& compiled, const FrameGraphTemplate& tmpl,
                            const GraphExecutorTable& records, const ResourceTable& table, const PassPrograms& programs,
                            ICommandEncoder& encoder, DiagnosticList& diags,
-                           const DrawListTable* draw_lists = nullptr);
+                           const DrawListTable* draw_lists = nullptr,
+                           const PassProgramsTable* pass_programs = nullptr);
 
 // Execute on a DEVICE in ONE SUBMISSION (mission Gate 7 "one submission where expected"). Unlike `execute` — which
 // records into a caller-supplied encoder and is what the device-free architecture gate drives with a mock — this
@@ -306,5 +330,103 @@ u32 register_builtin_records(GraphExecutorTable& table, DiagnosticList& diags);
                                  const GraphExecutorTable& records, const ResourceTable& table,
                                  const PassPrograms& programs, IRasterContext& raster, memory::IAllocator& alloc,
                                  DiagnosticList& diags, u32* out_submit_count = nullptr,
-                                 const DrawListTable* draw_lists = nullptr);
+                                 const DrawListTable* draw_lists = nullptr,
+                                 const PassProgramsTable* pass_programs = nullptr);
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// RAF-12.2-b: THE AUTHORED-FRAME DISPATCH — the ONE record path every pass runs through, replacing frame-cook's
+// FramePassKind switch + the 11 per-kind wrappers + record_pass.
+//
+// A recorder (frame-cook's FrameRecorder, per the one-way module edge that keeps resource creation on the frame-cook
+// side) resolves each already-for_each-expanded pass into an `AuthoredPass` — the payload + slot bindings (FgImage /
+// FgBuffer handles) + draw list + programs + device setup — and adds it to its frame graph with `authored_pass_fn()`
+// as the pass callback. That ONE callback (`run_authored_cb`) resolves the handles to device pointers at execute time
+// and invokes the pass's registered EXECUTOR. render-graph stays ⊥ frame-cook (identity is graph-name hashes +
+// gpu-context handles); the executor/RecordContext model is render-graph's, so every pass shares one dispatch.
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// HOW the runtime resolves a slot's FgImage to a device target at execute time — a plain image, a LAYER of a layered
+// atlas (a shadow cascade slice), or an image WITH a bundled depth companion (the depth-tested colour target).
+enum class SlotResolve : crd::u8
+{
+    Image = 0,       // fctx.image(image)
+    ImageLayer,      // fctx.image_layer(image, layer)   — a for_each cascade slice
+    ImageWithDepth,  // fctx.image_with_depth(image, depth) — colour target carrying its depth-stencil
+    Texture,         // fctx.texture(image)              — a sampled map / atlas / bindless element
+    Buffer,          // fctx.buffer(buffer)              — a storage buffer
+    Accel,           // the external acceleration structure pointer directly
+};
+
+// A payload slot's physical handle, so the runtime resolves it to a device pointer at execute time (via IFrameContext).
+// `name_hash` is the payload ResourceRef's `resource_id` (so the RecordContext matches slot → ref → this binding).
+struct SlotBinding
+{
+    u64 name_hash = 0;
+    SlotResourceKind kind = SlotResourceKind::ColorTarget;
+    SlotResolve resolve = SlotResolve::Image;
+    crd::gpu::FgImage image{};
+    crd::gpu::FgImage depth{};     // ImageWithDepth: the bundled depth companion
+    crd::gpu::FgBuffer buffer{};
+    IAccelerationStructure* accel = nullptr;
+    crd::u32 layer = 0;            // ImageLayer: which slice
+};
+
+// One draw the runtime resolves at execute time: `storage` is an FgBuffer (the graph-imported vertex-pull buffer,
+// resolved via IFrameContext — a transient produced upstream resolves only now); `program`/`texture`/`args` are real
+// host pointers the host already owns (the DrawItem's own handles, used directly, exactly as the legacy wrappers did).
+struct AuthoredDraw
+{
+    crd::gpu::FgBuffer storage{};
+    IStorageBuffer* args = nullptr;   // the GPU-driven indirect command buffer (host pointer, used directly)
+    IRasterProgram* program = nullptr;
+    ITexture* texture = nullptr;
+    u32 vertex_count = 0;
+    bool indexed = false;
+    u32 index_count = 0;
+    u32 instance_count = 0;
+    u32 first_index = 0;
+    u32 args_offset = 0;
+    u32 dispatch_groups = 0;
+    bool has_storage = false;
+};
+
+inline constexpr crd::u32 kMaxAuthoredCounters = 8U;
+
+// One fully-resolved pass the recorder hands the dispatch. All device handles are FgImage/FgBuffer (resolved at execute
+// time) or real host pointers (programs/textures the recorder already owns). The recorder builds these — including every
+// scar rule of the legacy driver (the graph reads/writes, present, overlay stay on the recorder side) — so the dispatch
+// callback stays a mechanical resolve-and-invoke.
+struct AuthoredPass
+{
+    explicit AuthoredPass(memory::IAllocator* a) noexcept : bindings(a), draws(a) {}
+
+    ExecutorTypeId executor{};                                     // resolved executor id (records store this, not a string)
+    crd::gpu::FgPassKind device_kind = crd::gpu::FgPassKind::Raster;
+    PassPayload payload;                                           // the executor payload (params + slot refs)
+    Array<SlotBinding> bindings;                                   // payload slot → physical handle
+    Array<AuthoredDraw> draws;                                     // the resolved draw/dispatch list (empty ⇒ none)
+    // scene draw-list sampled-read routing (REN-40-D): the pass texture (shadow atlas / moment array), depth-ness and
+    // sampler kind select the atlas/sampler arm inside the scene executor.
+    crd::gpu::FgImage pass_texture{};
+    bool has_pass_texture = false;
+    bool pass_texture_is_depth = false;
+    bool pass_texture_comparison = false;
+    PassPrograms programs;                                         // raster / kernel / RT-SBT (real host pointers)
+    // per-pass DEVICE setup (applied before the executor records), mirroring the legacy record_pass preamble:
+    bool has_sampler = false;
+    crd::gpu::SamplerDesc sampler{};
+    crd::gpu::PassRasterState state{};                             // depth-write / bias / cull / stencil for this pass
+    crd::gpu::FgBuffer counters[kMaxAuthoredCounters];             // counters zeroed first (REN-38-B3)
+    u32 n_counters = 0;
+    // ── runtime-filled (the recorder sets these; the fg callback reads them at execute time) ──
+    const GraphExecutorTable* records = nullptr;                   // executor lookup for this pass's dispatch
+    memory::IAllocator* alloc = nullptr;                           // per-callback scratch (ResourceTable + draw items)
+    DiagnosticList* diags = nullptr;
+    bool ok = true;                                                // set false if the executor touched an undeclared slot
+};
+
+// The ONE generic per-pass record callback (a gpu-context FgExecuteFn) — resolves an `AuthoredPass`'s handles to device
+// pointers at execute time and dispatches its executor. A recorder adds each pass to its frame graph with this as the
+// `execute(fn, &authored_pass)` callback. ONE dispatch — no FramePassKind, no per-kind wrappers.
+[[nodiscard]] crd::gpu::FgExecuteFn authored_pass_fn() noexcept;
 } // namespace crd::rendergraph
