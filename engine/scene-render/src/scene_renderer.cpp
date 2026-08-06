@@ -1048,8 +1048,10 @@ struct SceneRenderer::Impl
     // A shader/technique/material edit rebuilds the GPU programs that use it. This renderer holds ~40 named program
     // caches, so a reload RETIRES every one to the deferred-release queue (freed after the in-flight window) and clears
     // the technique library + cook cache, then RE-RUNS `init_programs` — which re-reads every authored source disk-first
-    // and re-cooks fresh. ⛔ Any program added later MUST be retired here too (RAF-12 unifies these caches into one
-    // registry, removing this hand-list). The old programs are freed by the queue, never mid-frame.
+    // and re-cooks fresh. ⛔ Any program added later MUST be retired here too. This retire-all + full re-init is COARSE
+    // and hand-listed; the dependency-driven Program Registry that replaces it (granular invalidation, stable
+    // program/variant keys, no full-scene reinit for a local edit) is post-RAF band RAH-7 (D-007 §POST-RAF PROGRAMME),
+    // NOT RAF-12 (which closed without it). The old programs are freed by the queue, never mid-frame.
     static void del_raster(void* p, void* /*ctx*/) { delete static_cast<crd::gpu::IRasterProgram*>(p); }
     static void del_gpu(void* p, void* /*ctx*/) { delete static_cast<crd::gpu::IGpuProgram*>(p); }
     void        retire_all_programs()

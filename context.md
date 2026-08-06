@@ -5,9 +5,55 @@
 
 ---
 
-## Current focus — **RAF band: GOLD-STANDARD ASSET-DRIVEN RENDERING FOUNDATION** (D-007, user-directed 2026-08-03)
+## Current focus — **POST-RAF PROGRAMME authored; next executable = RAH-0** (D-007, user-directed 2026-08-07)
 
-> ### ⏩⏩ SESSION HANDOFF (2026-08-03) — READ THIS FIRST: the RAF pivot
+> ### ⏩⏩ HANDOFF (2026-08-07) — RAF CLOSED; the post-RAF roadmap is written. READ THIS FIRST.
+> **RAF band is COMPLETE** (asset-driven render foundation; `FramePassKind` retired, `FramePassDesc` dissolved into a
+> typed param payload, ADR-0106 closed — see the 2026-08-06 session log). The user's master roadmap prompt was applied
+> to **`docs/detours/D-007-gpu-program-system.md`**: stale mid-migration + exit sections struck in place, the RAF-12
+> agent handoff compressed to a landed pointer, and a full **§POST-RAF PROGRAMME** appended (18 bands RAH→EYL, L0–L7
+> maturity model, A/A+R/A+E/B/T classifications, 18 invariants, dependency graph, per-band contracts+DoD+taxonomy,
+> "not-yet-proven" honesty list). Machine-readable registry seeded: **`docs/capabilities/gpu-platform-capabilities.toml`**
+> (registry level = the honest claim; nothing exceeds L5 today — L6 needs CR-D007/D7E). The stale
+> `scene_renderer.cpp` "RAF-12 unifies the caches" comment was struck → forwarded to RAH-7.
+> **UI/2D SUB-PROGRAMME added (2026-08-07):** a second master prompt (`CRD_D007_UI_2D_MASTER_ROADMAP_PROMPT`) was
+> integrated into D-007 §UI/2D SUB-PROGRAMME (U-1..U-19): the five concepts (SceneWorld/UiWorld/CanvasCompositor/
+> UiMaterial+UiEffectGraph/FrameGraph), the UI-vs-sprite rule+table, CanvasDisplayList, mermaid architecture/paint/text
+> diagrams, bands **I2D** (I2D-0..9, incl. CR-D007 bootstrap) + **SPR** (SPR-0..4) + I2D-PQ, and a **D7E reframe** (the
+> editor is assembled from I2D-9 widgets on the I2D UI foundation, not its own UI). Band table now 20 rows; registry
+> seeded to 37 features (existing draw/imgui/platform seams at honest levels; I2D/SPR targets L0/L1). ImGui kept as
+> debug/recovery (§36). No `Sprite`/`UiNode`/`Canvas`/`TextLayout` exists yet — all genuinely new.
+> **NEXT (no code until reviewed, prompt §26/§30.1):** author the **RAH-0 canonical-model audit design note** (inventory
+> every command/resource/pass field; the fixed `input0..7`/`color1..3`/`storage0..3` slot arrays + desc-cap-8 escape
+> hatches; old→target ownership diagram), then RAH-1/2 → RAH-4/5 → RAH-6/7/8 → the **RPL proof-quartet**.
+> **✅ TWO DESIGN GATES DRAFTED IN PARALLEL (2026-08-07, PENDING USER REVIEW) — two forks, seam reconciled:**
+> **RAH-0** = `docs/systems/rah-0-canonical-model-audit.md` (canonical-model audit: renderer-family encodings
+> `RenderingDesc.visbuffer`/`gbuffer`, fixed `input0..7`/`storage0..3` arrays, `GeometrySource.native_args` void*,
+> caps 8/16; breaking-change list per RAH-1..8; no-loss table — only `read_pixel` host-readback *moves* → staging
+> transfer). **I2D-0** = `docs/decisions/0107-ui-2d-architecture.md` (ADR-0107: five concepts, `UiNodeId`≠`EntityId`,
+> CanvasDisplayList→canonical-command seam, 6 lifecycle diagrams). The seam is CONSISTENT (both name RAH-1 typed
+> attachments + RAH-2 resource-table bindless; each cites the other). Registry/README/D-007 pointers wired.
+> **✅ RENDERING TRIM (2026-08-07):** the entire pre-RAF **REN band (REN-1…41)** was DELETED from the master table —
+> REN·A + REN·B superseded rendering, collapsed to a terse "REN band SUPERSEDED → RAF + post-RAF + I2D/SPR" pointer; the
+> completed RAF-0…13 slice rows likewise collapsed to a "RAF ✅ COMPLETE" pointer (detail lives in §RAF — BAND COMPLETE +
+> §POST-RAF PROGRAMME). Also trimmed: the struck Legacy-path prose → one line; the struck EXIT row (deleted); the
+> Exit-criteria section → one line. **KEPT** (user-scoped): MED/OFF/PLG bands, GEO/RET, foundation rows 1-29, AS/GM
+> (completed compute evidence), the B8 lighting table, and the I2D/SPR tracking rows. D-007 1345→1181 lines. **UiWorld =
+> BESPOKE retained store** (ADR-0107; reuses ECS *concepts* only, `UiNodeId`≠`EntityId`); REN·B's Cerid-specific decisions
+> live in D-007 **§U-20** (crd-reflect · crd-font OWN stack · crd-vector · crd-ui · hesap-interp curves · öbek · modal
+> operators · UI-in-world · …). Registry → 39 features. The rendering roadmap is now ONLY the new system.
+> **✅ FOUR PARALLEL TRACKS — EVERY SUB-SLICE IN THE MASTER TABLE (2026-08-07):** the top master subslice table now tracks
+> all **122 post-RAF sub-slices** directly (one ✅/◧/⬜ row each, grouped by track → band), the single source of truth —
+> **A** 3D rendering (RAH→RPL→GVA→LSH→ARG→RTX→MAT→TPR→VFX→TXS→VGE) · **B** UI/2D (I2D+SPR) · **C** compute/science/ML
+> (CGP→HGP→MLR) · **D** platform/media/editor/qual/physics (MED→D7E→PQP→EYL). (The separate bottom "FULL PROGRESS TRACKER"
+> section was folded up into the master table.) Status: ◧ RAH-0 (audit drafted) · ◧ I2D-0 (ADR-0107 drafted) · 120 ⬜. A row
+> ticks ✅ only at its slice GATE (never for a shader/head). RAH is the shared root → true A/B parallelism starts once
+> **RAH-1 (typed attachments) + RAH-2 (resource-table bindless)** land; **RAH-1 = NEXT** for both tracks.
+> **NEXT:** user reviews the design docs → then **RAH-1 (typed attachments)** — the recommended first breaking change
+> (kills the `visbuffer` bool + `gbuffer` target at once; unblocks RPL-2/RPL-3 deferred/visibility + the I2D Canvas). ⛔ No
+> I2D/SPR *code* until I2D-0 is reviewed AND RAH-1/RAH-2 land (the Canvas lowering target). Nothing is committed.
+>
+> ### ⏩⏩ SESSION HANDOFF (2026-08-03) — the RAF pivot (LANDED — kept as history)
 > **A NEW BAND is open and is the FOCUS: RAF — the rendering foundation refactor.** Before ANY more rendering
 > features, refactor + consolidate Cerid's entire rendering foundation into one simple, coherent, asset-driven
 > architecture (engine renderers are ordinary assets; apps compose/replace/extend via the same public systems;

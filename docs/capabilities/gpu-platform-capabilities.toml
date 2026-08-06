@@ -1,0 +1,1000 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Cerid GPU-platform capability registry — the MACHINE-READABLE source of truth for
+# per-feature maturity + evidence (D-007 §POST-RAF PROGRAMME, prompt §2/§25/§30).
+#
+# ⛔ THE REGISTRY LEVEL IS THE HONEST CLAIM. D-007 prose must never exceed it.
+#
+# Maturity (see D-007 §PR-3): L0 catalogued · L1 math/oracle · L2 mechanic · L3 one-backend
+# end-to-end · L4 cross-backend proven · L5 shipped asset · L6 live-authorable (needs CR-D007,
+# NOT yet possible) · L7 production-qualified.
+# Classification (§PR-4): A pure-asset · A+R asset+runtime · A+E asset+executor · B canonical/backend · T tooling.
+#
+# Seeded 2026-08-06 from a code+test audit (NOT prose). Every `[feature.<id>]` carries the full
+# field set even where empty ("" / []), so a future CI generator
+# (docs/generated/gpu-platform-capability-matrix.md — not built yet) can emit the matrix, missing
+# backend coverage, assets-without-tests, claimed-L5+-without-hot-reload/editor, and stale refs.
+#
+# ⚠ Nothing exceeds L5 today: L6 requires a CR-D007 inspection/authoring schema (band D7E, unstarted).
+# ─────────────────────────────────────────────────────────────────────────────
+
+schema = 1
+generated = false            # hand-seeded; a generator will own regeneration later
+audit_date = "2026-08-06"
+
+# ── field contract every feature must carry (documentation; not enforced until CI) ──
+# id, category, subcategory, definition, level, classification, dependencies,
+# ckir_capabilities, command_families, executors, runtime_systems, backend_capabilities,
+# assets, tests_vulkan, tests_dx12, tests_cross_backend, hot_reload_tests,
+# editor_support, quality_perf_gates, fallback, band, status, references, limitations
+
+# ═══════════════════════ SHIPPED + PROVEN (L5) ═══════════════════════
+
+[feature.forward_basic]
+category = "render_pipeline"
+subcategory = "forward"
+definition = "Basic forward renderer: opaque scene raster into color+depth, no shadows."
+level = 5
+classification = "A"
+dependencies = []
+ckir_capabilities = ["vs", "fs", "brdf"]
+command_families = ["raster.draw", "raster.draw_indexed"]
+executors = ["scene.raster", "present"]
+runtime_systems = ["scene draw-list extraction"]
+backend_capabilities = ["dynamic_rendering", "shader_object"]
+assets = ["engine://frame/forward_basic"]
+tests_vulkan = ["scene-render [gpu][vulkan]"]
+tests_dx12 = ["scene-render [gpu][dx12]"]
+tests_cross_backend = ["sandbox --smoke-test 2 both backends"]
+hot_reload_tests = ["RAF-11 frame reload"]
+editor_support = "none"          # L6 gated on D7E
+quality_perf_gates = []
+fallback = ""
+band = "RPL-1"
+status = "shipped"
+references = ["Karis 2013 UE4 split-sum", "Filament"]
+limitations = "no shadows; single light path"
+
+[feature.forward_csm]
+category = "render_pipeline"
+subcategory = "forward"
+definition = "Forward + cascaded shadow maps: for_each cascade depth-only pass into a shadow atlas, then a shadowed forward pass whose lighting is a swappable named technique."
+level = 5
+classification = "A"
+dependencies = ["forward_basic"]
+ckir_capabilities = ["vs", "fs", "brdf", "shadow", "csm"]
+command_families = ["raster.draw_indexed"]
+executors = ["scene.raster"]
+runtime_systems = ["draw-list extraction", "shadow cascade for_each"]
+backend_capabilities = ["dynamic_rendering", "shader_object"]
+assets = ["engine://frame/forward_csm", "engine://technique/forward_csm"]
+tests_vulkan = ["scene-render [gpu][vulkan]"]
+tests_dx12 = ["scene-render [gpu][dx12]"]
+tests_cross_backend = ["sandbox smoke both backends (11-pass frame)"]
+hot_reload_tests = ["RAF-11 frame+technique reload"]
+editor_support = "none"
+quality_perf_gates = []
+fallback = "engine://frame/forward_basic"
+band = "RPL-1"
+status = "shipped"
+references = ["Valient stable CSM", "Lauritzen 2011 SDSM"]
+limitations = "raster shadows only (no RT shadows); coarse program reload (RAH-7 pending)"
+
+[feature.forward_csm_gpu]
+category = "render_pipeline"
+subcategory = "forward"
+definition = "Forward+CSM with GPU-driven frustum culling (compute cull writes indirect draw args consumed by the forward pass)."
+level = 5
+classification = "A+R"
+dependencies = ["forward_csm"]
+ckir_capabilities = ["vs", "fs", "brdf", "shadow", "csm", "compute"]
+command_families = ["compute.dispatch", "raster.draw_indexed_indirect"]
+executors = ["compute.dispatch", "scene.raster"]
+runtime_systems = ["GPU cull command buffers"]
+backend_capabilities = ["dynamic_rendering", "shader_object", "indirect_draw"]
+assets = ["engine://frame/forward_csm_gpu", "engine://frame/forward_csm_gpu_srgb"]
+tests_vulkan = ["scene-render REN-38-F6 cull [gpu][vulkan]"]
+tests_dx12 = ["scene-render [gpu][dx12]"]
+tests_cross_backend = ["sandbox --smoke-test 2 --gpu-cull both backends"]
+hot_reload_tests = ["RAF-11 frame reload"]
+editor_support = "none"
+quality_perf_gates = []
+fallback = "engine://frame/forward_csm"
+band = "RPL-1 / GVA-1"
+status = "shipped"
+references = []
+limitations = "no HZB occlusion cull yet (GVA-1)"
+
+[feature.forward_csm_moment]
+category = "render_pipeline"
+subcategory = "forward"
+definition = "Forward+CSM with moment shadow maps (filterable soft shadows)."
+level = 5
+classification = "A"
+dependencies = ["forward_csm"]
+ckir_capabilities = ["vs", "fs", "brdf", "softshadow", "msm"]
+command_families = ["raster.draw_indexed"]
+executors = ["scene.raster"]
+runtime_systems = ["moment shadow resolve"]
+backend_capabilities = ["dynamic_rendering"]
+assets = ["engine://frame/forward_csm_moment"]
+tests_vulkan = ["scene-render [gpu][vulkan]"]
+tests_dx12 = ["scene-render [gpu][dx12]"]
+tests_cross_backend = []
+hot_reload_tests = ["RAF-11 frame reload"]
+editor_support = "none"
+quality_perf_gates = []
+fallback = "engine://frame/forward_csm"
+band = "RPL-1 / LSH-2"
+status = "shipped"
+references = ["Peters-Klein 2015 MSM"]
+limitations = ""
+
+[feature.tonemap_agx]
+category = "post"
+subcategory = "tonemap"
+definition = "AgX tonemapping as a swappable fullscreen/post pass; re-installed on tonemap toggle."
+level = 5
+classification = "A"
+dependencies = ["forward_basic"]
+ckir_capabilities = ["fs"]
+command_families = ["raster.draw_fullscreen"]
+executors = ["fullscreen.raster"]
+runtime_systems = []
+backend_capabilities = []
+assets = ["engine://frame/forward_agx", "engine://frame/forward_csm_agx"]
+tests_vulkan = ["scene-render [gpu][vulkan]"]
+tests_dx12 = ["scene-render [gpu][dx12]"]
+tests_cross_backend = ["sandbox tonemap toggle re-install"]
+hot_reload_tests = ["frame re-install on toggle"]
+editor_support = "none"
+quality_perf_gates = []
+fallback = "engine://frame/forward_srgb"
+band = "TPR-2"
+status = "shipped"
+references = ["Troy Sobotka AgX"]
+limitations = "no ACES/OpenColorIO yet (TPR-2)"
+
+[feature.tonemap_srgb]
+category = "post"
+subcategory = "tonemap"
+definition = "sRGB output transform as a fullscreen/post pass."
+level = 5
+classification = "A"
+dependencies = ["forward_basic"]
+ckir_capabilities = ["fs"]
+command_families = ["raster.draw_fullscreen"]
+executors = ["fullscreen.raster"]
+runtime_systems = []
+backend_capabilities = []
+assets = ["engine://frame/forward_srgb", "engine://frame/forward_csm_srgb"]
+tests_vulkan = ["scene-render [gpu][vulkan]"]
+tests_dx12 = ["scene-render [gpu][dx12]"]
+tests_cross_backend = ["sandbox smoke both backends"]
+hot_reload_tests = ["frame reload"]
+editor_support = "none"
+quality_perf_gates = []
+fallback = ""
+band = "TPR-2"
+status = "shipped"
+references = []
+limitations = ""
+
+[feature.mesh_shader_frame]
+category = "geometry"
+subcategory = "mesh_task"
+definition = "Task+mesh amplification pipeline rendering through an authored scene frame (meshlet grid)."
+level = 5
+classification = "A+R"
+dependencies = []
+ckir_capabilities = ["task", "mesh", "fs"]
+command_families = ["mesh.dispatch"]
+executors = ["mesh.raster", "mesh.indirect"]
+runtime_systems = ["meshlet data contract"]
+backend_capabilities = ["mesh_shader"]
+assets = ["engine://frame/scene_mesh"]
+tests_vulkan = ["scene-render REN-38-F6 [gpu][vulkan] (pixel-true amplified region)"]
+tests_dx12 = ["scene-render REN-38-F6 (DX12)"]
+tests_cross_backend = ["REN-38-F6 both backends"]
+hot_reload_tests = ["frame reload"]
+editor_support = "none"
+quality_perf_gates = []
+fallback = ""
+band = "GVA-4 / VGE-3"
+status = "shipped"
+references = []
+limitations = "amplification demo; not virtualized-geometry scale (VGE)"
+
+[feature.tessellation_frame]
+category = "geometry"
+subcategory = "tessellation"
+definition = "Hardware tessellation (hull+displacing domain) rendering through an authored scene frame."
+level = 5
+classification = "A+R"
+dependencies = []
+ckir_capabilities = ["tess_control", "tess_eval", "vs", "fs"]
+command_families = ["raster.patch_draw"]
+executors = ["tess.raster"]
+runtime_systems = []
+backend_capabilities = ["tessellation"]
+assets = ["engine://frame/scene_tess"]
+tests_vulkan = ["scene-render REN-38-F6 [gpu][vulkan] (expansion-only pixel)"]
+tests_dx12 = ["scene-render REN-38-F6 (DX12)"]
+tests_cross_backend = ["REN-38-F6 both backends"]
+hot_reload_tests = ["frame reload"]
+editor_support = "none"
+quality_perf_gates = []
+fallback = ""
+band = "GVA-4"
+status = "shipped"
+references = []
+limitations = "no adaptive/crack-free displacement yet (GVA-4)"
+
+[feature.visibility_buffer_frame]
+category = "render_pipeline"
+subcategory = "visibility"
+definition = "Visibility-buffer raster writing distinct primitive IDs, read back as distinct values (id-grading FS)."
+level = 5
+classification = "A+R"
+dependencies = []
+ckir_capabilities = ["vs", "fs"]
+command_families = ["raster.draw"]
+executors = ["visbuffer.raster", "fullscreen.raster"]
+runtime_systems = []
+backend_capabilities = ["dynamic_rendering"]
+assets = ["engine://frame/scene_visbuffer"]
+tests_vulkan = ["scene-render REN-38-F6 [gpu][vulkan] (two ids → two greys)"]
+tests_dx12 = ["scene-render REN-38-F6 (DX12)"]
+tests_cross_backend = ["REN-38-F6 both backends"]
+hot_reload_tests = ["frame reload"]
+editor_support = "none"
+quality_perf_gates = []
+fallback = ""
+band = "RPL-3"
+status = "shipped"
+references = ["Burns-Hunt visibility buffer"]
+limitations = "id+barycentric raster only; no compute material resolve / lighting yet (RPL-3)"
+
+[feature.cluster_mesh_shader]
+category = "geometry"
+subcategory = "virtualized"
+definition = "Cluster mesh shader unpacks a packed DAG to match the CPU oracle (VGE head)."
+level = 4
+classification = "A+R"
+dependencies = ["mesh_shader_frame"]
+ckir_capabilities = ["task", "mesh"]
+command_families = ["mesh.dispatch"]
+executors = ["mesh.raster"]
+runtime_systems = ["cluster DAG cook"]
+backend_capabilities = ["mesh_shader"]
+assets = []
+tests_vulkan = ["scene-render REN-41 [gpu][vulkan]"]
+tests_dx12 = ["scene-render REN-41 (DX12)"]
+tests_cross_backend = ["REN-41 both backends"]
+hot_reload_tests = []
+editor_support = "none"
+quality_perf_gates = []
+fallback = ""
+band = "VGE-0/2/3"
+status = "mechanic-proven"
+limitations = "oracle-match of DAG unpack; not a full stream/cull/raster VGE pipeline"
+
+# ═══════════════════════ RUNTIME CAPABILITIES (proven) ═══════════════════════
+
+[feature.hot_reload_frame]
+category = "runtime"
+subcategory = "hot_reload"
+definition = "Edit an authored frame graph → re-cook → transactional swap (interface-change rejection, last-good)."
+level = 5
+classification = "A+R"
+dependencies = []
+ckir_capabilities = []
+command_families = []
+executors = []
+runtime_systems = ["RenderAssetReloader", "DependencyGraph", "DeferredReleaseQueue"]
+backend_capabilities = []
+assets = []
+tests_vulkan = ["scene-render RAF-11 reload [gpu]"]
+tests_dx12 = ["scene-render RAF-11 reload [gpu]"]
+tests_cross_backend = []
+hot_reload_tests = ["RAF-11 frame reload gate"]
+editor_support = "none"
+quality_perf_gates = []
+fallback = "last-good generation"
+band = "RAF-11"
+status = "shipped"
+limitations = "L6 (editor inspector of the reload) needs D7E-9"
+
+[feature.hot_reload_program]
+category = "runtime"
+subcategory = "hot_reload"
+definition = "Edit a shader/technique/material → rebuild dependent GPU programs."
+level = 5
+classification = "A+R"
+dependencies = ["hot_reload_frame"]
+ckir_capabilities = []
+command_families = []
+executors = []
+runtime_systems = ["retire-all program caches + init_programs re-run (COARSE, hand-listed)"]
+backend_capabilities = []
+assets = []
+tests_vulkan = ["scene-render RAF-11 program reload [gpu]"]
+tests_dx12 = ["scene-render RAF-11 [gpu]"]
+tests_cross_backend = []
+hot_reload_tests = ["RAF-11 shader/technique/material reload"]
+editor_support = "none"
+quality_perf_gates = []
+fallback = "last-good generation"
+band = "RAF-11 → RAH-7"
+status = "shipped-coarse"
+limitations = "COARSE: retires ~40 named caches + full init_programs; hand-maintained list. RAH-7 replaces with a dependency-driven registry (granular invalidation)."
+
+[feature.app_custom_renderer]
+category = "runtime"
+subcategory = "extensibility"
+definition = "An application installs its own frame graph and registers a custom pass executor with no engine edits."
+level = 5
+classification = "A+E"
+dependencies = []
+ckir_capabilities = []
+command_families = []
+executors = ["<app-registered via register_pass_executor>"]
+runtime_systems = ["FrameRecorder register_pass_executor seam"]
+backend_capabilities = []
+assets = ["<app engine://frame + app_assets>"]
+tests_vulkan = ["scene-render RAF-10 GATE [gpu][vulkan][raf10]"]
+tests_dx12 = ["scene-render RAF-10 GATE (DX12) [raf10]"]
+tests_cross_backend = ["RAF-10 both backends (71 assertions, 4 cases)"]
+hot_reload_tests = []
+editor_support = "none"
+quality_perf_gates = []
+fallback = ""
+band = "RAF-10"
+status = "shipped"
+limitations = "custom mechanic is C++ (A+E), not a hot-reloadable data asset — by design"
+
+[feature.pass_instancing_foreach]
+category = "runtime"
+subcategory = "instancing"
+definition = "A pass instanced over a data-driven collection (for_each='light.0.cascades' → writes shadow_atlas[$index])."
+level = 5
+classification = "A"
+dependencies = ["forward_csm"]
+ckir_capabilities = []
+command_families = []
+executors = ["scene.raster"]
+runtime_systems = ["for_each domain resolution"]
+backend_capabilities = []
+assets = ["engine://frame/forward_csm"]
+tests_vulkan = ["scene-render [gpu][vulkan]"]
+tests_dx12 = ["scene-render [gpu][dx12]"]
+tests_cross_backend = []
+hot_reload_tests = ["frame reload"]
+editor_support = "none"
+quality_perf_gates = []
+fallback = ""
+band = "RAF / GVA-0"
+status = "shipped"
+limitations = ""
+
+# ═══════════════════════ MECHANIC-PROVEN, NOT A COMPLETE PIPELINE ═══════════════════════
+
+[feature.mrt_gbuffer_mechanic]
+category = "mechanic"
+subcategory = "attachments"
+definition = "Multiple color targets (color1..3) written through the live GPU frame-graph path — the deferred G-buffer substrate."
+level = 2
+classification = "A"
+dependencies = []
+ckir_capabilities = ["fs"]
+command_families = ["raster.draw"]
+executors = ["scene.raster"]
+runtime_systems = []
+backend_capabilities = ["multiple_render_targets"]
+assets = []
+tests_vulkan = ["render-graph test_frame_graph_gpu (color1 MRT write)"]
+tests_dx12 = ["render-graph test_frame_graph_gpu"]
+tests_cross_backend = []
+hot_reload_tests = []
+editor_support = "none"
+quality_perf_gates = []
+fallback = ""
+band = "RAH-1 → RPL-2"
+status = "mechanic-proven"
+limitations = "MRT write only; no shipped G-buffer+lighting pipeline (deferred_classic). RAH-1 makes G-buffer a typed attachment set, not color1..3 role bits."
+
+[feature.raytrace_pipeline_mechanic]
+category = "mechanic"
+subcategory = "raytracing"
+definition = "raytrace.pipeline SBT trace (raygen/miss/chit/anyhit) records into the frame's one submission."
+level = 3
+classification = "A+E"
+dependencies = []
+ckir_capabilities = ["raygen", "miss", "closest_hit", "any_hit"]
+command_families = ["raytrace.trace_rays"]
+executors = ["raytrace.pipeline"]
+runtime_systems = ["TLAS build"]
+backend_capabilities = ["ray_tracing_pipeline"]
+assets = ["engine://frame/scene_rt"]
+tests_vulkan = ["scene-render scene_rt [gpu][vulkan]"]
+tests_dx12 = [""]
+tests_cross_backend = []
+hot_reload_tests = []
+editor_support = "none"
+quality_perf_gates = []
+fallback = ""
+band = "RAH-4 → RPL-4/5"
+status = "gate-only"
+limitations = "scene_rt traces into a buffer then clears output — a MECHANIC GATE, not a lit RT image renderer. DX12 twin coverage TBD."
+
+[feature.raytrace_inline_mechanic]
+category = "mechanic"
+subcategory = "raytracing"
+definition = "raytrace.dispatch inline ray-query kernel (VK_KHR_ray_query / DXR-1.1 RayQuery) into the frame's one submission."
+level = 2
+classification = "A+E"
+dependencies = []
+ckir_capabilities = ["compute", "ray_query"]
+command_families = ["raytrace.dispatch"]
+executors = ["raytrace.dispatch"]
+runtime_systems = ["TLAS build"]
+backend_capabilities = ["ray_query"]
+assets = []
+tests_vulkan = ["gpu-context-vulkan rayQuery [frame-graph]"]
+tests_dx12 = ["gpu-context-dx12 rayQuery"]
+tests_cross_backend = []
+hot_reload_tests = []
+editor_support = "none"
+quality_perf_gates = []
+fallback = ""
+band = "RAH-4 → RPL-4"
+status = "mechanic-proven"
+limitations = "no shipped hybrid frame consumes it yet (hybrid_rt)"
+
+# ═══════════════════════ RPL PROOF-QUARTET — TARGETS (the honest gap) ═══════════════════════
+
+[feature.forward_plus]
+category = "render_pipeline"
+subcategory = "forward"
+definition = "Forward+ tiled/clustered light culling: compute cull writes per-tile light lists; forward pass reads them."
+level = 1                       # B8-l cluster-cull math ✅ bit-exact CKIR; NO shipped asset renders it
+classification = "A"
+dependencies = ["forward_csm", "mrt_gbuffer_mechanic"]
+ckir_capabilities = ["compute", "fs", "render"]
+command_families = ["compute.dispatch", "raster.draw_indexed"]
+executors = ["compute.dispatch", "scene.raster"]
+runtime_systems = ["light collection", "depth prepass"]
+backend_capabilities = ["compute", "storage_buffer"]
+assets = []                     # TARGET: engine://frame/forward_plus
+tests_vulkan = []               # TARGET: frame_forward_plus_vulkan
+tests_dx12 = []                 # TARGET: frame_forward_plus_dx12
+tests_cross_backend = []
+hot_reload_tests = []
+editor_support = "planned"
+quality_perf_gates = []
+fallback = "engine://frame/forward_csm"
+band = "RPL-1 / LSH-1"
+status = "target"
+references = ["Harada Forward+", "Olsson clustered shading"]
+limitations = "UNPROVEN as a pipeline: L1 math only, no shipped/rendering asset."
+
+[feature.deferred_classic]
+category = "render_pipeline"
+subcategory = "deferred"
+definition = "Classic G-buffer deferred: scene.raster MRT G-buffer + fullscreen/compute lighting."
+level = 2                       # L1 B8-l G-buffer-decode math + L2 MRT mechanic; NO shipped pipeline
+classification = "A"
+dependencies = ["mrt_gbuffer_mechanic", "forward_csm"]
+ckir_capabilities = ["fs", "brdf", "render"]
+command_families = ["raster.draw", "raster.draw_fullscreen"]
+executors = ["scene.raster", "fullscreen.raster"]
+runtime_systems = ["light collection"]
+backend_capabilities = ["multiple_render_targets"]
+assets = []                     # TARGET: engine://frame/deferred
+tests_vulkan = []               # TARGET: frame_deferred_vulkan
+tests_dx12 = []                 # TARGET: frame_deferred_dx12
+tests_cross_backend = []
+hot_reload_tests = []
+editor_support = "planned"
+quality_perf_gates = []
+fallback = "engine://frame/forward_csm"
+band = "RPL-2"
+status = "target"
+references = ["Saito-Takahashi G-buffer", "Hargreaves deferred shading"]
+limitations = "UNPROVEN as a pipeline: MRT mechanic proven, no G-buffer+lighting asset renders."
+
+[feature.hybrid_rt]
+category = "render_pipeline"
+subcategory = "hybrid"
+definition = "Raster primary + RT effects (shadows/reflections/AO/GI) in one frame graph."
+level = 1
+classification = "A+R"
+dependencies = ["forward_csm", "raytrace_pipeline_mechanic", "raytrace_inline_mechanic"]
+ckir_capabilities = ["fs", "ray_query", "closest_hit"]
+command_families = ["raster.draw_indexed", "raytrace.dispatch", "raytrace.trace_rays"]
+executors = ["scene.raster", "raytrace.dispatch", "raytrace.pipeline"]
+runtime_systems = ["TLAS build/refit", "denoise history"]
+backend_capabilities = ["ray_tracing_pipeline", "ray_query"]
+assets = []                     # TARGET: engine://frame/hybrid_rt_*
+tests_vulkan = []
+tests_dx12 = []
+tests_cross_backend = []
+hot_reload_tests = []
+editor_support = "planned"
+quality_perf_gates = []
+fallback = "engine://frame/forward_csm (SS fallback chain)"
+band = "RPL-4 / RTX-1"
+status = "target"
+references = ["UE hybrid RT", "AMD FidelityFX denoisers"]
+limitations = "UNPROVEN: RT mechanics exist, no shipped hybrid frame."
+
+[feature.full_rt_lit]
+category = "render_pipeline"
+subcategory = "raytracing"
+definition = "Lit full-image RT renderer (raygen shades + accumulates to a presented image)."
+level = 1
+classification = "A+R"
+dependencies = ["raytrace_pipeline_mechanic"]
+ckir_capabilities = ["raygen", "closest_hit", "miss", "any_hit", "brdf"]
+command_families = ["raytrace.trace_rays"]
+executors = ["raytrace.pipeline", "fullscreen.raster"]
+runtime_systems = ["TLAS build", "accumulation history"]
+backend_capabilities = ["ray_tracing_pipeline"]
+assets = []                     # TARGET: engine://frame/rt_lit
+tests_vulkan = []
+tests_dx12 = []
+tests_cross_backend = []
+hot_reload_tests = []
+editor_support = "planned"
+quality_perf_gates = ["reference PT comparison (RTX-3)"]
+fallback = "engine://frame/forward_csm"
+band = "RPL-5 / RTX-3 / OFF-*"
+status = "target"
+references = ["Pharr-Jakob-Humphreys PBRT", "OFF-1..9 band"]
+limitations = "UNPROVEN: scene_rt is a mechanic gate; the OFF band holds the reference-PT design."
+
+# ═══════════════════════ UI / 2D SUB-PROGRAMME (bands I2D + SPR) ═══════════════════════
+# Existing in-tree seams at honest levels + I2D/SPR targets at L0/L1 (nothing UI/2D-specific built yet).
+# Full taxonomy lives in D-007 §UI/2D SUB-PROGRAMME.
+
+[feature.platform_windowing_input]
+category = "ui_foundation"
+subcategory = "platform"
+definition = "OS window + input foundation (engine/platform window.hpp + input.hpp: Input/InputEvent/Mouse) the UI input router/windowing build on."
+level = 3
+classification = "A+R"
+dependencies = []
+ckir_capabilities = []
+command_families = []
+executors = []
+runtime_systems = ["engine/platform window + input"]
+backend_capabilities = []
+assets = []
+tests_vulkan = []
+tests_dx12 = []
+tests_cross_backend = []
+hot_reload_tests = []
+editor_support = "none"
+quality_perf_gates = []
+fallback = ""
+band = "pre-I2D (foundation)"
+status = "shipped-basic"
+limitations = "single-window/basic input today; multi-window/docking/per-monitor DPI/touch/pen/gamepad/IME are I2D-8/§20 targets"
+
+[feature.imgui_debug_ui]
+category = "ui_foundation"
+subcategory = "debug_ui"
+definition = "Dear ImGui debug/recovery UI (engine/imgui + perf-ui + draw-imgui). KEPT as debug/recovery, never the product UI."
+level = 5
+classification = "T"
+dependencies = ["platform_windowing_input"]
+ckir_capabilities = []
+command_families = []
+executors = []
+runtime_systems = ["engine/imgui"]
+backend_capabilities = []
+assets = []
+tests_vulkan = ["imgui gpu backend"]
+tests_dx12 = ["imgui gpu backend"]
+tests_cross_backend = []
+hot_reload_tests = []
+editor_support = "is-the-debug-ui"
+quality_perf_gates = []
+fallback = ""
+band = "kept (§36)"
+status = "shipped"
+limitations = "intentionally NOT the product/editor UI foundation; not deleted when I2D lands"
+
+[feature.draw_debug_viz]
+category = "ui_foundation"
+subcategory = "debug_viz"
+definition = "engine/draw debug visualization (DebugLine/DebugText/shapes/overlay_pass) — a SEPARATE debug system, not the Canvas compositor."
+level = 5
+classification = "A+R"
+dependencies = []
+ckir_capabilities = ["vs", "fs"]
+command_families = ["raster.draw"]
+executors = ["fullscreen.raster", "scene.raster"]
+runtime_systems = ["engine/draw"]
+backend_capabilities = []
+assets = []
+tests_vulkan = ["draw [gpu]"]
+tests_dx12 = ["draw [gpu]"]
+tests_cross_backend = []
+hot_reload_tests = []
+editor_support = "none"
+quality_perf_gates = []
+fallback = ""
+band = "existing (parallel to CanvasCompositor)"
+status = "shipped"
+limitations = "debug 3D-world viz + debug text; NOT a 2D UI compositor (canvas_compositor is new)"
+
+[feature.canvas_compositor]
+category = "ui_2d"
+subcategory = "compositor"
+definition = "Backend-neutral CanvasDisplayList + clip/layer/batch compiler → RAF commands; the shared 2D engine for UI + scene sprites."
+level = 0
+classification = "A+R"
+dependencies = ["rah_typed_attachments", "rah_resource_table_bindless"]
+ckir_capabilities = ["vs", "fs"]
+command_families = ["raster.draw", "raster.draw_fullscreen"]
+executors = ["fullscreen.raster", "scene.raster", "compute.dispatch"]
+runtime_systems = ["CanvasCompositor (new)"]
+backend_capabilities = []
+assets = []
+tests_vulkan = []
+tests_dx12 = []
+tests_cross_backend = []
+hot_reload_tests = []
+editor_support = "planned"
+quality_perf_gates = []
+fallback = "CPU reference raster path"
+band = "I2D-1"
+status = "target"
+references = ["Skia", "Rive", "Slug (text)"]
+limitations = "not started; gated on I2D-0 ADR + RAH-1/RAH-2"
+
+[feature.ui_world]
+category = "ui_2d"
+subcategory = "retained_ui"
+definition = "BESPOKE retained UI world (reuses ECS concepts only, NOT crd-scene's impl; UiNodeId != gameplay EntityId; own change-detection/undo/layout-persistence). UiNodeId/UiTree/UiFocusManager/UiInputRouter/UiLayoutEngine/UiStyleEngine/UiAccessibilityTree. Supersedes REN-B 'UI is ECS entities'."
+level = 0
+classification = "A+R"
+dependencies = ["canvas_compositor", "platform_windowing_input"]
+ckir_capabilities = []
+command_families = []
+executors = []
+runtime_systems = ["UiWorld (new)"]
+backend_capabilities = []
+assets = ["engine://ui/document/*"]
+tests_vulkan = []
+tests_dx12 = []
+tests_cross_backend = []
+hot_reload_tests = []
+editor_support = "planned"
+quality_perf_gates = []
+fallback = ""
+band = "I2D-3"
+status = "target"
+limitations = "not started; I2D-0 must lock UiWorld-vs-SceneWorld first"
+
+[feature.text_layout]
+category = "ui_2d"
+subcategory = "text"
+definition = "Staged text: validate→grapheme→script→bidi→fallback→OpenType shape→line-break→layout→glyph-run; adaptive small-coverage/MSDF/vector."
+level = 0
+classification = "A+R"
+dependencies = ["canvas_compositor"]
+ckir_capabilities = ["fs"]
+command_families = ["raster.draw"]
+executors = ["fullscreen.raster"]
+runtime_systems = ["text layout + glyph atlas (new)"]
+backend_capabilities = []
+assets = ["engine://ui/font/*"]
+tests_vulkan = []
+tests_dx12 = []
+tests_cross_backend = []
+hot_reload_tests = []
+editor_support = "planned"
+quality_perf_gates = ["golden text corpus (Turkish first, then multilingual)"]
+fallback = "CPU reference raster path"
+band = "I2D-2 / I2D-6"
+status = "target"
+references = ["HarfBuzz", "Unicode UAX #9/#14/#29", "Chlumsky MSDF"]
+limitations = "not started; Cerid-ownership policy for shaping/font-parsing TBD in I2D-0"
+
+[feature.ui_material]
+category = "ui_2d"
+subcategory = "shading"
+definition = "CKIR-backed per-element UiMaterial with a strict input + effect-metadata contract (bounds/backdrop/layer/cache)."
+level = 0
+classification = "A"
+dependencies = ["canvas_compositor"]
+ckir_capabilities = ["fs"]
+command_families = ["raster.draw"]
+executors = ["fullscreen.raster"]
+runtime_systems = ["UiMaterial cook (reuses MAT/CKIR)"]
+backend_capabilities = []
+assets = ["engine://ui/material/{solid,image,text,glass,outline}"]
+tests_vulkan = []
+tests_dx12 = []
+tests_cross_backend = []
+hot_reload_tests = []
+editor_support = "planned"
+quality_perf_gates = []
+fallback = "engine://ui/material/solid"
+band = "I2D-5"
+status = "target"
+limitations = "not started"
+
+[feature.ui_effect_graph]
+category = "ui_2d"
+subcategory = "compositing"
+definition = "Multi-pass UI effect graph (glass/backdrop-blur/glow/bloom/distortion) compiling to RAF frame-graph work — reuses RAF, no mini scheduler."
+level = 0
+classification = "A+R"
+dependencies = ["canvas_compositor", "ui_material"]
+ckir_capabilities = ["fs", "compute"]
+command_families = ["compute.dispatch", "raster.draw_fullscreen"]
+executors = ["compute.dispatch", "fullscreen.raster"]
+runtime_systems = ["UiEffectGraph → frame-graph compiler"]
+backend_capabilities = []
+assets = ["engine://ui/effect/*"]
+tests_vulkan = []
+tests_dx12 = []
+tests_cross_backend = []
+hot_reload_tests = []
+editor_support = "planned"
+quality_perf_gates = []
+fallback = "single-pass UiMaterial"
+band = "I2D-7"
+status = "target"
+limitations = "not started; needs RAF transient aliasing + backdrop capture"
+
+[feature.ui_style_system]
+category = "ui_2d"
+subcategory = "style"
+definition = "Typed CSS-inspired style: selectors + pseudo-states cooked to compact matchers, design tokens, deterministic cascade, transitions."
+level = 0
+classification = "A"
+dependencies = ["ui_world"]
+ckir_capabilities = []
+command_families = []
+executors = []
+runtime_systems = ["UiStyleEngine (new)"]
+backend_capabilities = []
+assets = ["engine://ui/theme/*", "engine://ui/stylesheet/*"]
+tests_vulkan = []
+tests_dx12 = []
+tests_cross_backend = []
+hot_reload_tests = []
+editor_support = "planned"
+quality_perf_gates = []
+fallback = ""
+band = "I2D-5"
+status = "target"
+limitations = "not started; ⛔ no per-frame string selector matching (cook to matchers)"
+
+[feature.vector_renderer]
+category = "ui_2d"
+subcategory = "vector"
+definition = "GPU compute-first vector renderer (paths/stroke/fill/clip/AA) with an intentional CPU/hybrid fallback+export path."
+level = 0
+classification = "A+R"
+dependencies = ["canvas_compositor"]
+ckir_capabilities = ["compute", "fs"]
+command_families = ["compute.dispatch", "raster.draw"]
+executors = ["compute.dispatch", "fullscreen.raster"]
+runtime_systems = ["vector renderer (reuses CGP-2/3)"]
+backend_capabilities = []
+assets = []
+tests_vulkan = []
+tests_dx12 = []
+tests_cross_backend = []
+hot_reload_tests = []
+editor_support = "planned"
+quality_perf_gates = ["golden-image + cross-backend parity"]
+fallback = "CPU vector path"
+band = "I2D-7"
+status = "target"
+references = ["Loop-Blinn", "Li et al. vector GPU", "Skia compute paths"]
+limitations = "not started; CPU path is a real fallback/export path, not just an oracle"
+
+[feature.crd_d007_shell]
+category = "ui_2d"
+subcategory = "editor"
+definition = "The CR-D007 editor shell (main window/dock/viewport-host/outliner/inspector/asset-list/console/perf-overlay/theme/commands/persistence), then the editor grows inside it."
+level = 0
+classification = "T"
+dependencies = ["ui_world", "text_layout", "canvas_compositor"]
+ckir_capabilities = []
+command_families = []
+executors = []
+runtime_systems = ["CR-D007 app"]
+backend_capabilities = []
+assets = ["engine://ui/document/editor/*"]
+tests_vulkan = []
+tests_dx12 = []
+tests_cross_backend = []
+hot_reload_tests = []
+editor_support = "is-the-editor"
+quality_perf_gates = []
+fallback = "ImGui debug/recovery overlay (kept)"
+band = "I2D-4 → I2D-9 / D7E"
+status = "target"
+references = []
+limitations = "not started; bootstrapped early (§35), then hosts the remaining UI/editor work; D7E domains = I2D-9 widgets"
+
+[feature.sprite_renderer]
+category = "scene_2d"
+subcategory = "sprite"
+definition = "Sprite/atlas platform: instancing, sorting layers, pixel-perfect camera, custom sprite materials, hot reload (Scene not UiWorld)."
+level = 0
+classification = "A+R"
+dependencies = ["canvas_compositor", "rah_resource_table_bindless"]
+ckir_capabilities = ["vs", "fs"]
+command_families = ["raster.draw_indexed_indirect"]
+executors = ["scene.raster"]
+runtime_systems = ["Scene2D + sprite submission (reuses GVA instancing)"]
+backend_capabilities = ["indirect_draw"]
+assets = ["engine://sprite/*", "engine://frame/sprite_*"]
+tests_vulkan = []
+tests_dx12 = []
+tests_cross_backend = []
+hot_reload_tests = []
+editor_support = "planned"
+quality_perf_gates = []
+fallback = ""
+band = "SPR-0"
+status = "target"
+limitations = "not started; ⛔ avoid one draw per sprite"
+
+[feature.tilemap_2d]
+category = "scene_2d"
+subcategory = "tilemap"
+definition = "Chunked/instanced tilemaps (ortho/iso/hex), autotiling, animated tiles, streaming, large-world coords, editor tools."
+level = 0
+classification = "A+R"
+dependencies = ["sprite_renderer"]
+ckir_capabilities = ["vs", "fs"]
+command_families = ["raster.draw_indexed_indirect"]
+executors = ["scene.raster"]
+runtime_systems = ["tilemap chunk store + streaming"]
+backend_capabilities = []
+assets = ["engine://tilemap/*"]
+tests_vulkan = []
+tests_dx12 = []
+tests_cross_backend = []
+hot_reload_tests = []
+editor_support = "planned"
+quality_perf_gates = []
+fallback = ""
+band = "SPR-1"
+status = "target"
+limitations = "not started; ⛔ no entity per static tile"
+
+[feature.lighting_2d]
+category = "scene_2d"
+subcategory = "lighting"
+definition = "2D lighting/shadows renderer assets: unlit→forward→tiled/Forward+ 2D→2.5D height-aware; normal/height maps; polygon/SDF shadows."
+level = 0
+classification = "A+R"
+dependencies = ["sprite_renderer"]
+ckir_capabilities = ["fs", "compute"]
+command_families = ["compute.dispatch", "raster.draw"]
+executors = ["compute.dispatch", "scene.raster"]
+runtime_systems = ["2D light collection (reuses LSH-1 patterns)"]
+backend_capabilities = []
+assets = ["engine://frame/sprite_lit_*"]
+tests_vulkan = []
+tests_dx12 = []
+tests_cross_backend = []
+hot_reload_tests = []
+editor_support = "planned"
+quality_perf_gates = ["light stress test"]
+fallback = "engine://frame/sprite_unlit"
+band = "SPR-3"
+status = "target"
+limitations = "not started; every shipped 2D renderer is a normal engine://frame asset"
+
+# ── RAH prerequisites the UI/2D bands depend on (placeholders so dependency edges resolve) ──
+
+[feature.rah_typed_attachments]
+category = "canonical_model"
+subcategory = "attachments"
+definition = "RAH-1 general typed attachment model (arbitrary color spans, typed clear union, views, multiview, resolve, shading-rate); G-buffer/visibility become typed attachments not boolean modes."
+level = 0
+classification = "B"
+dependencies = []
+ckir_capabilities = []
+command_families = []
+executors = []
+runtime_systems = []
+backend_capabilities = []
+assets = []
+tests_vulkan = []
+tests_dx12 = []
+tests_cross_backend = []
+hot_reload_tests = []
+editor_support = "n/a"
+quality_perf_gates = []
+fallback = ""
+band = "RAH-1"
+status = "target"
+limitations = "not started; today executors use fixed color1..3 role bits (the thing RAH-1 replaces)"
+
+[feature.rah_resource_table_bindless]
+category = "canonical_model"
+subcategory = "bindings"
+definition = "RAH-2 resident global resource-table bindless (compact stable indices + lifetime/residency) replacing the fixed input0..7/storage0..3 arrays + desc-cap-8."
+level = 0
+classification = "B"
+dependencies = []
+ckir_capabilities = []
+command_families = []
+executors = []
+runtime_systems = []
+backend_capabilities = []
+assets = []
+tests_vulkan = []
+tests_dx12 = []
+tests_cross_backend = []
+hot_reload_tests = []
+editor_support = "n/a"
+quality_perf_gates = ["bindless stress exceeds production counts + lifetime tests"]
+fallback = ""
+band = "RAH-2"
+status = "target"
+limitations = "not started; today fixed small arrays + desc cap=8 scar"
+
+# ── REN·B-lineage named modules folded into I2D (D-007 §U-20) ──
+
+[feature.ui_property_system]
+category = "ui_2d"
+subcategory = "reflection"
+definition = "crd-reflect — RNA-class property system: crd-units-typed descriptors, path addressing (node.Component.property), flags (animatable/keyable/undoable/transactional), change notification. One system, seven consumers: inspector/bindings/undo/animation/themes/MCP/CommandSchema."
+level = 0
+classification = "A+R"
+dependencies = ["ui_world"]
+ckir_capabilities = []
+command_families = []
+executors = []
+runtime_systems = ["crd-reflect (new)"]
+backend_capabilities = []
+assets = []
+tests_vulkan = []
+tests_dx12 = []
+tests_cross_backend = []
+hot_reload_tests = []
+editor_support = "planned"
+quality_perf_gates = []
+fallback = ""
+band = "I2D-3 / I2D-8 (was REN-11)"
+status = "target"
+references = ["Blender RNA", "Qt property system"]
+limitations = "not started; the agent-drivable/inspector/binding/undo foundation — a Cerid differentiator"
+
+[feature.crd_font_own_stack]
+category = "ui_2d"
+subcategory = "text"
+definition = "crd-font — Cerid's OWN OpenType/TrueType stack (sfnt/cmap/glyf/CFF/CFF2/GSUB/GPOS/GDEF/kern, variable fonts fvar/gvar/avar, COLR/CPAL color fonts). Zero third-party; FreeType = test oracle only. Resolves I2D-0 text-ownership TBD -> own it (codec doctrine)."
+level = 0
+classification = "A+R"
+dependencies = ["text_layout"]
+ckir_capabilities = []
+command_families = []
+executors = []
+runtime_systems = ["crd-font (new)"]
+backend_capabilities = []
+assets = ["engine://ui/font/*"]
+tests_vulkan = []
+tests_dx12 = []
+tests_cross_backend = []
+hot_reload_tests = []
+editor_support = "planned"
+quality_perf_gates = ["vs FreeType oracle; Unicode UAX test files"]
+fallback = ""
+band = "I2D-2 (was REN-12/14)"
+status = "target"
+references = ["OpenType spec", "HarfBuzz (shaping oracle)", "Unicode UAX-9/14/29"]
+limitations = "not started; own shaping (REN-14) is HarfBuzz-class, HarfBuzz as conformance oracle"
+
