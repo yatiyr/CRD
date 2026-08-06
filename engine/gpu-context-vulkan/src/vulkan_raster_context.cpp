@@ -1864,7 +1864,7 @@ public:
         vkCmdEndRendering(cmd);
     }
 
-    void draw_tess(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, crd::u32 patch_count) override
+    void draw_tess(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, crd::u32 patch_count)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -2012,7 +2012,7 @@ public:
     // a frame the call does nothing, VISIBLY: `draw_tess`/`draw_mesh` remain the synchronous verbs.
     // REN-38-F6+: storage-bound tessellation — frame-graph recording only, like every RT verb.
     void draw_tess_storage(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color,
-                           IStorageBuffer& storage, crd::u32 patch_count) override
+                           IStorageBuffer& storage, crd::u32 patch_count)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -2022,7 +2022,7 @@ public:
         record_tess(t, p, clear_color, patch_count, true, frame_alloc_storage_set(s2));
     }
     void draw_tess_storage_load(IRasterTarget& target, IRasterProgram& program, IStorageBuffer& storage,
-                                crd::u32 patch_count) override
+                                crd::u32 patch_count)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -2032,7 +2032,7 @@ public:
         record_tess(t, p, ClearColor{}, patch_count, false, frame_alloc_storage_set(s2));
     }
 
-    void draw_tess_load(IRasterTarget& target, IRasterProgram& program, crd::u32 patch_count) override
+    void draw_tess_load(IRasterTarget& target, IRasterProgram& program, crd::u32 patch_count)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -2041,7 +2041,7 @@ public:
         record_tess(t, p, ClearColor{}, patch_count, /*clear=*/false);
     }
 
-    void draw_mesh_load(IRasterTarget& target, IRasterProgram& program, crd::u32 group_count) override
+    void draw_mesh_load(IRasterTarget& target, IRasterProgram& program, crd::u32 group_count)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -2053,7 +2053,7 @@ public:
 
     // REN-38-F6+: storage-bound mesh dispatch — frame-graph recording only, like the tess twin above.
     void draw_mesh_storage(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color,
-                           IStorageBuffer& storage, crd::u32 group_count) override
+                           IStorageBuffer& storage, crd::u32 group_count)
     {
         auto& t  = static_cast<VulkanRasterTarget&>(target);
         auto& p  = static_cast<VulkanRasterProgram&>(program);
@@ -2108,7 +2108,7 @@ public:
         end_and_wait(cmd);
     }
     void draw_mesh_storage_load(IRasterTarget& target, IRasterProgram& program, IStorageBuffer& storage,
-                                crd::u32 group_count) override
+                                crd::u32 group_count)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -2119,7 +2119,7 @@ public:
                     DepthCompare::Always, VK_NULL_HANDLE, 0U, /*clear=*/false);
     }
 
-    void draw_mesh(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, crd::u32 group_count) override
+    void draw_mesh(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, crd::u32 group_count)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -2189,7 +2189,7 @@ public:
     // B4: DISPATCH a MESH program with PER-PRIMITIVE VRS. Identical to draw_mesh, but sets the VRS combiner to REPLACE so the
     // mesh's per-primitive `gl_MeshPrimitivesEXT[].gl_PrimitiveShadingRateEXT` output drives the coarse fragment rate (the
     // pipeline rate stays 1×1). A distant/low-detail meshlet can shade itself at a lower rate — a real perf lever.
-    void draw_mesh_vrs(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, crd::u32 group_count) override
+    void draw_mesh_vrs(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, crd::u32 group_count)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -2258,7 +2258,7 @@ public:
     // loop. The args buffer is `compute_usage::indirect` (CONCURRENT-shared across the compute/graphics queues); the compute
     // submit fenced before this raster submit, so its write is visible without an explicit ownership transfer.
     void draw_mesh_indirect(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, void* native_args,
-                            crd::u64 args_offset) override
+                            crd::u64 args_offset)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -3253,7 +3253,7 @@ public:
     }
 
     void draw_storage(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, IStorageBuffer& storage,
-                      crd::u32 vertex_count) override
+                      crd::u32 vertex_count)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -3318,7 +3318,7 @@ public:
     // write ON). No per-draw SSBO readback (scene buffers are consumed by the GPU, downloaded on demand via
     // download_storage); the colour readback keeps the RET-2 post-draw TRANSFER_SRC contract overlays rely on.
     void draw_storage_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, float clear_depth,
-                            DepthCompare compare, IStorageBuffer& storage, crd::u32 vertex_count) override
+                            DepthCompare compare, IStorageBuffer& storage, crd::u32 vertex_count)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -3405,7 +3405,7 @@ public:
     // draw (whose post-draw layout is TRANSFER_SRC — the readback contract), depth LOADs and keeps WRITING (the
     // depth image stays DEPTH_ATTACHMENT_OPTIMAL between draws; submits are serialized by end_and_wait).
     void draw_storage_depth_load(IRasterTarget& target, IRasterProgram& program, DepthCompare compare,
-                                 IStorageBuffer& storage, crd::u32 vertex_count) override
+                                 IStorageBuffer& storage, crd::u32 vertex_count)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -3492,7 +3492,7 @@ public:
     void draw_storage_indexed_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color,
                                     float clear_depth, DepthCompare compare, IStorageBuffer& storage,
                                     crd::u32 index_offset_bytes, crd::u32 index_count, crd::u32 instance_count,
-                                    bool load_target) override
+                                    bool load_target)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -3617,7 +3617,7 @@ public:
     // shadow map on the device, which a later pass samples through the comparison sampler. Frame-graph recording is
     // the intended path; the standalone form exists so the capability is testable without a graph.
     void draw_storage_depth_only(IRasterTarget& target, IRasterProgram& program, float clear_depth,
-                                 DepthCompare compare, IStorageBuffer& storage, crd::u32 vertex_count) override
+                                 DepthCompare compare, IStorageBuffer& storage, crd::u32 vertex_count)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -3685,7 +3685,7 @@ public:
 
     // REN-3.1: the CONTINUING depth-only draw — mesh N>0 of a shadow pass joins the SAME depth map (no clear).
     void draw_storage_depth_only_load(IRasterTarget& target, IRasterProgram& program, DepthCompare compare,
-                                      IStorageBuffer& storage, crd::u32 vertex_count) override
+                                      IStorageBuffer& storage, crd::u32 vertex_count)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -3701,7 +3701,7 @@ public:
     // renders through the depth tail.
     void draw_storage_textured_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color,
                                      float clear_depth, DepthCompare compare, IStorageBuffer& storage, ITexture& texture,
-                                     crd::u32 vertex_count) override
+                                     crd::u32 vertex_count)
     {
         auto& t   = static_cast<VulkanRasterTarget&>(target);
         auto& p   = static_cast<VulkanRasterProgram&>(program);
@@ -3728,7 +3728,7 @@ public:
         render_dset_depth(t, p, clear_color, clear_depth, compare, dset, vertex_count);
     }
     void draw_storage_textured_depth_load(IRasterTarget& target, IRasterProgram& program, DepthCompare compare,
-                                          IStorageBuffer& storage, ITexture& texture, crd::u32 vertex_count) override
+                                          IStorageBuffer& storage, ITexture& texture, crd::u32 vertex_count)
     {
         auto& t   = static_cast<VulkanRasterTarget&>(target);
         auto& p   = static_cast<VulkanRasterProgram&>(program);
@@ -3751,7 +3751,7 @@ public:
     // ── REN-3.2-b: the SHADOWED scene draw — identical to the textured one but binding the COMPARISON sampler.
     void draw_storage_shadowed_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color,
                                      float clear_depth, DepthCompare compare, IStorageBuffer& storage,
-                                     ITexture& shadow_atlas, crd::u32 vertex_count) override
+                                     ITexture& shadow_atlas, crd::u32 vertex_count)
     {
         auto& t   = static_cast<VulkanRasterTarget&>(target);
         auto& p   = static_cast<VulkanRasterProgram&>(program);
@@ -3783,7 +3783,7 @@ public:
     }
     void draw_storage_shadowed_depth_load(IRasterTarget& target, IRasterProgram& program, DepthCompare compare,
                                           IStorageBuffer& storage, ITexture& shadow_atlas,
-                                          crd::u32 vertex_count) override
+                                          crd::u32 vertex_count)
     {
         auto& t   = static_cast<VulkanRasterTarget&>(target);
         auto& p   = static_cast<VulkanRasterProgram&>(program);
@@ -3809,7 +3809,7 @@ public:
     void draw_storage_textured_shadowed_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color,
                                               float clear_depth, DepthCompare compare, IStorageBuffer& storage,
                                               ITexture& texture, ITexture& shadow_atlas,
-                                              crd::u32 vertex_count) override
+                                              crd::u32 vertex_count)
     {
         auto& t     = static_cast<VulkanRasterTarget&>(target);
         auto& p     = static_cast<VulkanRasterProgram&>(program);
@@ -3840,7 +3840,7 @@ public:
     }
     void draw_storage_textured_shadowed_depth_load(IRasterTarget& target, IRasterProgram& program,
                                                    DepthCompare compare, IStorageBuffer& storage, ITexture& texture,
-                                                   ITexture& shadow_atlas, crd::u32 vertex_count) override
+                                                   ITexture& shadow_atlas, crd::u32 vertex_count)
     {
         auto& t     = static_cast<VulkanRasterTarget&>(target);
         auto& p     = static_cast<VulkanRasterProgram&>(program);
@@ -3865,7 +3865,7 @@ public:
     void draw_storage_multi_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color,
                                   float clear_depth, DepthCompare compare, IStorageBuffer& storage,
                                   const crd::u32* vertex_counts, crd::u32 count, crd::u32 first_draw_index,
-                                  bool load_target) override
+                                  bool load_target)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -3961,7 +3961,7 @@ public:
     // default, so nothing exercised the non-indexed depth-only path until this gate flipped the switch.
     void draw_storage_multi_depth_only(IRasterTarget& target, IRasterProgram& program, float clear_depth,
                                        DepthCompare compare, IStorageBuffer& storage, const crd::u32* vertex_counts,
-                                       crd::u32 count, crd::u32 first_draw_index, bool load_target) override
+                                       crd::u32 count, crd::u32 first_draw_index, bool load_target)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -4033,7 +4033,7 @@ public:
     void draw_storage_multi_indexed_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color,
                                           float clear_depth, DepthCompare compare, IStorageBuffer& storage,
                                           crd::u32 index_offset_bytes, const IndexedDraw* draws, crd::u32 count,
-                                          crd::u32 first_draw_index, bool load_target) override
+                                          crd::u32 first_draw_index, bool load_target)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -4153,7 +4153,7 @@ public:
     void draw_storage_multi_indexed_depth_only(IRasterTarget& target, IRasterProgram& program, float clear_depth,
                                                DepthCompare compare, IStorageBuffer& storage,
                                                crd::u32 index_offset_bytes, const IndexedDraw* draws, crd::u32 count,
-                                               bool load_target) override
+                                               bool load_target)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -4267,7 +4267,7 @@ public:
                                                         IStorageBuffer& args, crd::u32 args_offset_bytes,
                                                         IStorageBuffer* count_buf, crd::u32 count_offset_bytes,
                                                         crd::u32 max_draws, bool load_target,
-                                                        crd::u32 first_draw_index) override
+                                                        crd::u32 first_draw_index)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -4346,7 +4346,7 @@ public:
                                             float clear_depth, DepthCompare compare, IStorageBuffer& storage,
                                             crd::u32 index_offset_bytes, crd::u32 index_count, crd::u32 instance_count,
                                             crd::u32 first_index, ITexture* texture, ITexture* atlas,
-                                            bool load_target, crd::u32 first_draw_index = 0U) override
+                                            bool load_target, crd::u32 first_draw_index = 0U)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -4437,7 +4437,7 @@ public:
                                              IStorageBuffer& args, crd::u32 args_offset_bytes,
                                              IStorageBuffer* count_buf, crd::u32 count_offset_bytes,
                                              crd::u32 max_draws, bool load_target,
-                                             crd::u32 first_draw_index) override
+                                             crd::u32 first_draw_index)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -4535,7 +4535,7 @@ public:
     // explicitly disabled — the overlay never modifies the scene's depth, so chained overlay draws all test against
     // the same scene). Single-sample targets only (the overlay canvas contract).
     [[nodiscard]] bool draw_overlay(IRasterTarget& target, IRasterProgram& program, IStorageBuffer& storage,
-                                    DepthCompare compare, crd::u32 vertex_count) override
+                                    DepthCompare compare, crd::u32 vertex_count) // RAF-12.4: reached via friend encoder
     {
         return draw_overlay_range(target, program, storage, compare, 0U, vertex_count);
     }
@@ -4543,7 +4543,7 @@ public:
     // REN-39: the ranged twin — the whole body, with `first_vertex` reaching vkCmdDraw (see raster_context.hpp).
     [[nodiscard]] bool draw_overlay_range(IRasterTarget& target, IRasterProgram& program, IStorageBuffer& storage,
                                           DepthCompare compare, crd::u32 first_vertex,
-                                          crd::u32 vertex_count) override
+                                          crd::u32 vertex_count) // RAF-12.4: reached via friend encoder
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -5691,7 +5691,7 @@ public:
     // workgroups instead of a vertex count. The bindless cascade textures are bound the same way (the mesh shader samples the
     // FFT displacement via SampleIndexedLod). The ocean fast path. No-op if the device lacks mesh shaders.
     void draw_mesh_bindless_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, float clear_depth,
-                                  DepthCompare compare, ITexture* const* textures, crd::u32 count, crd::u32 group_count) override
+                                  DepthCompare compare, ITexture* const* textures, crd::u32 count, crd::u32 group_count)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -5788,6 +5788,10 @@ public:
         case BlendMode::RevealageMultiply:
             return {VK_BLEND_FACTOR_ZERO, VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR, VK_BLEND_OP_ADD,
                     VK_BLEND_FACTOR_ZERO, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD};
+        case BlendMode::RevealComposite: // (1-src.a)·src + src.a·dst — the WBOIT resolve OVER the background (the
+                                         // inverse of Alpha; matches the fused draw_wboit composite exactly)
+            return {VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_OP_ADD,
+                    VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_OP_ADD};
         case BlendMode::Opaque:
         default:
             return {VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD,
@@ -5892,7 +5896,7 @@ public:
 
     // REN-38-A10: the mesh half — an indirect meshlet dispatch whose count a GRAPH-TRACKED buffer holds.
     void draw_mesh_indirect_buffer(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
-                                   IStorageBuffer& args, crd::u64 args_offset) override
+                                   IStorageBuffer& args, crd::u64 args_offset)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -6191,7 +6195,7 @@ public:
 
     void draw_storage_mrt(IRasterTarget* const* targets, crd::u32 count, IRasterProgram& program, ClearColor clear,
                           float clear_depth, DepthCompare compare, IStorageBuffer& storage, crd::u32 vertex_count,
-                          const BlendMode* blend) override
+                          const BlendMode* blend)
     {
         auto& p = static_cast<VulkanRasterProgram&>(program);
         auto& s = static_cast<VulkanStorageBuffer&>(storage);
@@ -6206,7 +6210,15 @@ public:
         VkRenderingAttachmentInfo att[kMaxGBuffer]{};
         for (crd::u32 i = 0; i < n; ++i)
         {
-            att[i] = colour_clear_attachment(static_cast<VulkanRasterTarget&>(*targets[i]).view(), clear);
+            // ⛔ A MULTIPLICATIVE attachment (Multiply / RevealageMultiply — e.g. the WBOIT revealage) MUST clear to
+            // the multiplicative IDENTITY 1, never the pass's clear_color: `dst·(1-src)` starting from 0 stays 0
+            // forever, so the background is NEVER revealed. The fused draw_wboit clears reveal to 1 in its own pass;
+            // the frame-graph MRT path cleared BOTH attachments to the single clear_color [0,0,0,0], which is the
+            // asymmetric-WBOIT bug the 1-quad gate was blind to.
+            const bool mult = blend != nullptr &&
+                              (blend[i] == BlendMode::Multiply || blend[i] == BlendMode::RevealageMultiply);
+            const ClearColor cc = mult ? ClearColor{1.0F, 1.0F, 1.0F, 1.0F} : clear;
+            att[i] = colour_clear_attachment(static_cast<VulkanRasterTarget&>(*targets[i]).view(), cc);
         }
         VkRenderingInfo ri{};
         ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
@@ -6263,7 +6275,7 @@ public:
     }
 
     void draw_gbuffer(IGBufferTarget& target, IRasterProgram& program, ClearColor clear_color,
-                      crd::u32 vertex_count) override
+                      crd::u32 vertex_count) // RAF-12.4: reached via friend encoder
     {
         auto&          t = static_cast<VulkanGBufferTarget&>(target);
         auto&          p = static_cast<VulkanRasterProgram&>(program);
@@ -6302,124 +6314,6 @@ public:
             vkCmdCopyImageToBuffer(cmd, t.image(i), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, t.readback(i), 1U, &region);
         }
         end_and_wait(cmd);
-    }
-
-    // B17-a: WEIGHTED-BLENDED OIT (McGuire-Bavoil 2013). Two internal float targets (accum RGBA16F blended ADDITIVELY,
-    // reveal R16F blended MULTIPLICATIVELY) accumulate ALL transparent fragments in ONE order-independent pass; a full-screen
-    // composite then resolves them over a `background`-cleared target. Contract: see raster_context.hpp. No-op where the
-    // per-attachment blend-equation dynamic state is unavailable.
-    void draw_wboit(IRasterTarget& target, IRasterProgram& transparent, IRasterProgram& composite, ClearColor background,
-                    crd::u32 vertex_count) override
-    {
-        auto& t  = static_cast<VulkanRasterTarget&>(target);
-        auto& tp = static_cast<VulkanRasterProgram&>(transparent);
-        auto& cp = static_cast<VulkanRasterProgram&>(composite);
-        if (!m_api.valid() || !tp.valid() || !cp.valid() || m_desc_pool == VK_NULL_HANDLE
-            || m_api.set_color_blend_equation == nullptr)
-        {
-            return; // per-attachment blend equations unavailable ⇒ graceful no-op
-        }
-        const crd::u32          w      = t.width();
-        const crd::u32          h      = t.height();
-        const VkImageUsageFlags rt_use = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-        ImageBundle             accum{};
-        ImageBundle             reveal{};
-        if (!create_image_bundle(w, h, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_ASPECT_COLOR_BIT,
-                                 rt_use, accum)
-            || !create_image_bundle(w, h, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R16_SFLOAT, VK_IMAGE_ASPECT_COLOR_BIT, rt_use,
-                                    reveal))
-        {
-            destroy_image_bundle(m_device, accum);
-            destroy_image_bundle(m_device, reveal);
-            return;
-        }
-        VkCommandBuffer cmd = begin_cmd();
-        if (cmd == VK_NULL_HANDLE)
-        {
-            destroy_image_bundle(m_device, accum);
-            destroy_image_bundle(m_device, reveal);
-            return;
-        }
-
-        // ---- Pass 1: accumulate (MRT: accum additively, reveal multiplicatively) — draw order irrelevant ------------
-        transition(cmd, accum.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
-                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-        transition(cmd, reveal.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
-                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-        VkRenderingAttachmentInfo att[2]{};
-        att[0] = colour_clear_attachment(accum.view, ClearColor{0.0F, 0.0F, 0.0F, 0.0F});
-        att[1] = colour_clear_attachment(reveal.view, ClearColor{1.0F, 0.0F, 0.0F, 0.0F}); // revealage starts at full 1
-        VkRenderingInfo ri{};
-        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
-        ri.renderArea.extent    = {w, h};
-        ri.layerCount           = 1U;
-        ri.colorAttachmentCount = 2U;
-        ri.pColorAttachments    = att;
-        vkCmdBeginRendering(cmd, &ri);
-        set_draw_state(cmd, w, h, 1U, false, VK_COMPARE_OP_ALWAYS, 2U);
-        const VkBool32 en[2] = {VK_TRUE, VK_TRUE}; // set_draw_state left blend disabled — enable + set both equations
-        m_api.set_color_blend_enable(cmd, 0U, 2U, en);
-        VkColorBlendEquationEXT eq[2]{};
-        eq[0] = {VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD, // accum += weighted premultiplied colour
-                 VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD};
-        eq[1] = {VK_BLEND_FACTOR_ZERO, VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR, VK_BLEND_OP_ADD, // reveal *= (1 - coverage)
-                 VK_BLEND_FACTOR_ZERO, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD};
-        m_api.set_color_blend_equation(cmd, 0U, 2U, eq);
-        bind_and_draw(cmd, tp, vertex_count);
-        vkCmdEndRendering(cmd);
-
-        transition(cmd, accum.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
-                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
-        transition(cmd, reveal.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
-                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
-
-        // ---- Pass 2: composite `rgb·(1-reveal) + background·reveal` into the RGBA8 target --------------------------
-        vkResetDescriptorPool(m_device, m_desc_pool, 0);
-        VkDescriptorSetAllocateInfo dsai{};
-        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        dsai.descriptorPool     = m_desc_pool;
-        dsai.descriptorSetCount = 1U;
-        dsai.pSetLayouts        = &m_storage_set_layout;
-        VkDescriptorSet dset = VK_NULL_HANDLE;
-        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) == VK_SUCCESS)
-        {
-            const crd::u32        nfill = m_ctx->partially_bound() ? 2U : kBindlessMax; // REN-38: [0]=accum, [1]=reveal
-            VkDescriptorImageInfo imgs[kBindlessMax]{};
-            for (crd::u32 i = 0; i < nfill; ++i) // rest replicate accum only on the no-feature fallback
-            {
-                imgs[i] = {VK_NULL_HANDLE, i == 1U ? reveal.view : accum.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-            }
-            VkDescriptorImageInfo samp_info{active_sampler(), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED}; // REN-38-B8
-            VkWriteDescriptorSet  wr[2]{};
-            wr[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[0].dstSet = dset; wr[0].dstBinding = 2U; wr[0].descriptorCount = 1U;            wr[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;       wr[0].pImageInfo = &samp_info;
-            wr[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[1].dstSet = dset; wr[1].dstBinding = 16U; wr[1].descriptorCount = nfill; wr[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; wr[1].pImageInfo = imgs;
-            vkUpdateDescriptorSets(m_device, 2U, wr, 0U, nullptr);
-
-            transition(cmd, t.image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
-                       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-            VkRenderingAttachmentInfo catt = colour_clear_attachment(t.view(), background);
-            VkRenderingInfo           cri  = one_colour_rendering(t, catt);
-            vkCmdBeginRendering(cmd, &cri);
-            set_draw_state(cmd, w, h, 1U, false, VK_COMPARE_OP_ALWAYS, 1U);
-            const VkBool32 cen[1] = {VK_TRUE};
-            m_api.set_color_blend_enable(cmd, 0U, 1U, cen);
-            VkColorBlendEquationEXT ceq[1]{};
-            ceq[0] = {VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_OP_ADD,
-                      VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_OP_ADD};
-            m_api.set_color_blend_equation(cmd, 0U, 1U, ceq);
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, cp.layout(), 0U, 1U, &dset, 0U, nullptr);
-            bind_and_draw(cmd, cp, 3U); // full-screen triangle
-            vkCmdEndRendering(cmd);
-            copy_colour_to_readback(cmd, t);
-        }
-        end_and_wait(cmd);
-        destroy_image_bundle(m_device, accum);
-        destroy_image_bundle(m_device, reveal);
     }
 
 private:

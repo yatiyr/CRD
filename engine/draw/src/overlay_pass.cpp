@@ -9,6 +9,7 @@
 #include <crd/draw/detail/gpu_types.hpp>
 #include <crd/draw/render_buffer.hpp>
 #include <crd/draw/renderer.hpp>
+#include <crd/gpu/command_model.hpp> // RAF-12.4: record the overlay composites through the canonical command encoder
 #include <crd/log/log.hpp>
 
 #include <bit>
@@ -185,25 +186,55 @@ bool submit_overlay(crd::gpu::IRasterTarget& target, const RenderBuffer& buffer,
     // ── the draws, AFTER every upload landed: grid first (under the primitives), then triangles, then lines,
     // each variant in compose-on-top order. The grid depth-tests like any world-anchored geometry — `Always`
     // here is what let it ghost through the scene.
+    //
+    // RAF-12.4: recorded through the canonical command encoder. draw_overlay / draw_overlay_range are no longer
+    // IRasterContext verbs; the encoder lowers the overlay SHAPE — a StoragePull draw with a SINGLE colour
+    // attachment that LOADs and Alpha-blends, plus a read-only depth test carried by `compare` — straight to the
+    // backend's per-draw overlay body. first_vertex>0 selects the ranged twin. One encoder scope per draw is
+    // byte-identical to the chained verb calls (each began/ended its own read-only-depth rendering internally).
+    namespace gpu    = crd::gpu;
+    auto overlay_draw = [&](gpu::IRasterProgram& prog, gpu::IStorageBuffer& buf, gpu::DepthCompare compare,
+                            crd::u32 first_vertex, crd::u32 vertex_count) -> bool
+    {
+        auto enc = s.raster->create_command_encoder();
+        if (enc == nullptr) { return false; }
+        gpu::RenderingDesc       rd{};
+        gpu::ColorAttachmentDesc c{};
+        c.target = &target;
+        c.load   = gpu::LoadOp::Load;     // compose OVER the existing contents (the overlay's LOAD contract)
+        c.blend  = gpu::BlendMode::Alpha; // srcAlpha·(1-srcAlpha) — the encoder's overlay signal
+        rd.color.push_back(c);
+        rd.depth.enabled = (compare != gpu::DepthCompare::Always); // read-only depth test carried by `compare`
+        rd.depth.compare = compare;
+        enc->begin_rendering(rd);
+        gpu::RasterDrawPacket pk{};
+        pk.program                        = &prog;
+        pk.geometry.kind                  = gpu::GeometryKind::StoragePull;
+        pk.geometry.vertex_or_index_count = vertex_count;
+        pk.geometry.first_vertex          = first_vertex;
+        gpu::ResourceBinding sb{};
+        sb.kind   = gpu::BindingKind::StorageBuffer;
+        sb.buffer = &buf;
+        pk.bindings.push_back(sb);
+        enc->draw(pk);
+        enc->end_rendering();
+        return true;
+    };
     if (config.grid.enabled)
     {
-        ok = s.raster->draw_overlay(target, *s.grid_prog, *s.storage, config.depth_test, 6U) && ok;
+        ok = overlay_draw(*s.grid_prog, *s.storage, config.depth_test, 0U, 6U) && ok;
     }
     for (crd::u32 v = 0; v < kVariantCount; ++v)
     {
         const BucketRange& r = ranges[1][v];
         if (r.count == 0U) { continue; }
-        ok = s.raster->draw_overlay_range(target, *s.tri_prog, *s.storage, compare_of[v], r.first * 3U,
-                                          r.count * 3U)
-             && ok;
+        ok = overlay_draw(*s.tri_prog, *s.storage, compare_of[v], r.first * 3U, r.count * 3U) && ok;
     }
     for (crd::u32 v = 0; v < kVariantCount; ++v)
     {
         const BucketRange& r = ranges[0][v];
         if (r.count == 0U) { continue; }
-        ok = s.raster->draw_overlay_range(target, *s.line_prog, *s.line_storage, compare_of[v], r.first * 6U,
-                                          r.count * 6U)
-             && ok;
+        ok = overlay_draw(*s.line_prog, *s.line_storage, compare_of[v], r.first * 6U, r.count * 6U) && ok;
     }
 
     return ok;

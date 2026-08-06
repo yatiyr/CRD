@@ -87,6 +87,12 @@ struct RenderingDesc
     // colour clear value cannot express an integer background id, so it is DATA on the scope, not a reinterpreted float.
     bool visbuffer = false;
     crd::u32 clear_id = 0; // crd-lint-allow-untagged-physical: the R32_UINT visibility background id, a raw API scalar
+    // ── B5 deferred G-BUFFER scope. An IGBufferTarget bundles N (2..8) host-readable RGBA8 colour attachments +
+    // their own per-attachment read_pixel — a DISTINCT target type, not an IRasterTarget, so it rides its own field
+    // rather than the `color` list. When set (with GeometryKind::None), the encoder lowers a plain-vertex draw that
+    // CLEARS all N attachments to `color[0].clear` (a single clear-carrier entry with a null target) and writes the
+    // surface material's N colour outputs via MRT — draw_gbuffer.
+    IGBufferTarget* gbuffer = nullptr;
 };
 
 // ── Resource bindings (the hard-coded "set 0 binding 1 = base colour" convention, now a typed table) ──
@@ -137,6 +143,7 @@ struct GeometrySource
     IStorageBuffer* index_buffer = nullptr;
     crd::u32 index_offset = 0; // BYTE offset of the index section
     crd::u32 first_index = 0;  // START within the bound index section, in INDICES (the indexed-sampled scene draw)
+    crd::u32 first_vertex = 0; // START vertex for a non-indexed StoragePull draw (the ranged debug overlay, draw_overlay_range)
     // Indirect / IndirectCount / MeshletIndirect. Two arg conventions: a tracked storage buffer (indexed-indirect
     // + mesh-indirect-buffer) OR a native handle (draw_mesh_indirect from a ComputeBuffer). count_buffer supplies a
     // device-computed draw count (indexed-indirect-count). Offsets are BYTES; max_draws bounds the indirect draws.

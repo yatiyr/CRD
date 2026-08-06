@@ -163,6 +163,15 @@ public:
         {
         case GeometryKind::None:
         {
+            // B5 deferred G-BUFFER: a plain-vertex MRT draw into the N-attachment IGBufferTarget bundle (a distinct
+            // target type, not an IRasterTarget, so it rides r.gbuffer). draw_gbuffer clears every attachment to the
+            // clear-carrier colour and writes the surface material's N outputs. Checked FIRST — the bundle has no
+            // IRasterTarget color0, so the fullscreen family below would otherwise break out with no draw.
+            if (r.gbuffer != nullptr)
+            {
+                m_ctx.draw_gbuffer(*r.gbuffer, prog, clear, count);
+                break;
+            }
             // The fullscreen family (the live RasterFullscreen precedence): VRS / conservative are draw ATTRIBUTES;
             // then 0 reads → procedural draw, 1 read → textured/shadow, N reads → bindless (+ optional constants).
             if (color0 == nullptr)
@@ -259,6 +268,27 @@ public:
         case GeometryKind::StoragePull:
             if (buf == nullptr)
             {
+                break;
+            }
+            // RET-6 / REN-39: the debug OVERLAY compose draw (draw_overlay / draw_overlay_range). The ONLY StoragePull
+            // draw that alpha-blends over the target — LOAD + srcAlpha·(1-srcAlpha), with a READ-ONLY depth test (the
+            // verb derives the depth attachment from the colour target itself; `compare`==Always ⇒ no test). Recognised
+            // by a SINGLE colour attachment whose blend is Alpha (every draw_storage scene verb is Opaque, and the WBOIT
+            // MRT uses Additive/Reveal, never Alpha); first_vertex>0 selects the ranged twin. Checked FIRST so the
+            // opaque draw_storage_depth arm never claims it.
+            if (color0 != nullptr && r.color.size() == 1 && r.color[0].blend == BlendMode::Alpha)
+            {
+                // draw_overlay{,_range} keep a [[nodiscard]] bool refusal signal (MSAA target / invalid program);
+                // the encoder has no per-draw failure channel, so the discard is DELIBERATE (validated at cook time
+                // and by the overlay pixel gates).
+                if (g.first_vertex > 0U)
+                {
+                    (void)m_ctx.draw_overlay_range(*color0, prog, *buf, compare, g.first_vertex, count);
+                }
+                else
+                {
+                    (void)m_ctx.draw_overlay(*color0, prog, *buf, compare, count);
+                }
                 break;
             }
             if (bindless != nullptr && color0 != nullptr)
@@ -406,7 +436,20 @@ public:
                 // ⭐ RAF-8: a mesh-shader amplification draw. Carrying a STORAGE buffer pulls its meshlets from that
                 // buffer (the GEO-1 seam); with none it is a PROCEDURAL mesh dispatch (draw_mesh). Either way the FIRST
                 // draw of the scope clears, every later one LOADS — a per-draw clear renders only the last meshlet.
-                if (buf != nullptr)
+                const RasterState& mst = packet.state;
+                if (bindless != nullptr && r.depth.enabled)
+                {
+                    // the ocean's mesh-shader DISPLACED grid — a bindless cascade array + depth (draw_mesh_bindless_depth).
+                    m_ctx.draw_mesh_bindless_depth(*color0, prog, clear, clear_depth, compare, bindless->texture_array,
+                                                   bindless->array_count, g.group_count_x);
+                }
+                else if (mst.vrs_pipeline_rate != ShadingRate::Rate1x1 ||
+                         mst.vrs_primitive_combiner != ShadingRateCombiner::Keep || r.shading_rate_attachment != nullptr)
+                {
+                    // per-PRIMITIVE VRS from the mesh shader's shading_rate output (draw_mesh_vrs).
+                    m_ctx.draw_mesh_vrs(*color0, prog, clear, g.group_count_x);
+                }
+                else if (buf != nullptr)
                 {
                     if (clears) { m_ctx.draw_mesh_storage(*color0, prog, clear, *buf, g.group_count_x); }
                     else        { m_ctx.draw_mesh_storage_load(*color0, prog, *buf, g.group_count_x); }

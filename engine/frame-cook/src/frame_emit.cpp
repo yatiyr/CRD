@@ -367,6 +367,7 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
                 case crd::gpu::BlendMode::Additive:           app(o, "additive"); break;
                 case crd::gpu::BlendMode::Multiply:           app(o, "multiply"); break;
                 case crd::gpu::BlendMode::RevealageMultiply:  app(o, "revealage_multiply"); break;
+                case crd::gpu::BlendMode::RevealComposite:    app(o, "reveal_composite"); break;
                 case crd::gpu::BlendMode::Opaque:
                 default:                                      app(o, "opaque"); break;
                 }

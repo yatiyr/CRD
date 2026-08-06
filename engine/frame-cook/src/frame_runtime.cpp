@@ -1186,6 +1186,7 @@ void record_pass(g::IFrameContext& ctx, void* user)
             rts[nrt++] = rt;
         }
         if (nrt == 0U) { return; }
+        auto enc = r.create_command_encoder();
         for (crd::u32 i = 0; i < p->draws.count(); ++i)
         {
             const DrawItem it = p->draws.at(i);
@@ -1196,11 +1197,42 @@ void record_pass(g::IFrameContext& ctx, void* user)
             // ⭐⭐ REN-41: a velocity item binds its OWN per-group program (the velocity VS twin).
             if (!p->program_is_instance && it.program_velocity != nullptr) { prog = it.program_velocity; }
             else if (!p->program_is_instance && it.program != nullptr) { prog = it.program; }
-            // A true multi-colour G-buffer is authored with plain vertex draws (the only shape any frame/test uses —
-            // the indexed/indirect MRT verbs had no caller once the velocity prepass moved to the single-colour scene
-            // executor, so they were retired). One vertex draw per item into all N colour attachments.
-            r.draw_storage_mrt(static_cast<g::IRasterTarget* const*>(rts), nrt, *prog, clear, d.clear_depth, d.depth,
-                               *sb, it.vertex_count);
+            // RAF-12.4-F6: the true multi-colour G-buffer draw, recorded through the ENCODER — a StoragePull packet
+            // into N colour attachments lowers to draw_storage_mrt (now a private backend verb). One CLEARING vertex
+            // draw per item into all N attachments (a fresh scope per item ⇒ each clears — byte-identical to the retired
+            // inline verb call). The indexed/indirect MRT verbs had no caller and were retired.
+            g::RenderingDesc mrt{};
+            for (crd::u32 k = 0; k < nrt; ++k)
+            {
+                g::ColorAttachmentDesc c{};
+                c.target = rts[k];
+                c.load   = g::LoadOp::Clear;
+                c.clear  = clear;
+                // ⛔⛔ REN-38-A15: the PER-ATTACHMENT blend (WBOIT: additive into accum, revealage_multiply into
+                // reveal). The F6 encoder migration dropped it — and the [frame-graph] byte-identical gate is BLIND
+                // to the loss because NO LIVE frame has a blended MRT pass (the velocity prepass is Opaque; WBOIT is
+                // unshipped). Without it an authored WBOIT accumulate pass rendered OPAQUE — each fragment OVERWROTE
+                // instead of accumulating — which is the WBOIT-composite scar's "further discrepancy". The encoder's
+                // draw_storage_mrt arm keys the revealage clear-to-1 off this same per-attachment blend.
+                c.blend = (k < d.blend.size()) ? d.blend[k] : g::BlendMode::Opaque;
+                mrt.color.push_back(c);
+            }
+            mrt.depth.enabled     = true;
+            mrt.depth.target      = rts[0]; // the first target (image_with_depth) carries the depth attachment
+            mrt.depth.load        = g::LoadOp::Clear;
+            mrt.depth.clear_depth = d.clear_depth;
+            mrt.depth.compare     = d.depth;
+            enc->begin_rendering(mrt);
+            g::RasterDrawPacket pk{};
+            pk.program                        = prog;
+            pk.geometry.kind                  = g::GeometryKind::StoragePull;
+            pk.geometry.vertex_or_index_count = it.vertex_count;
+            g::ResourceBinding sbnd{};
+            sbnd.kind   = g::BindingKind::StorageBuffer;
+            sbnd.buffer = sb;
+            pk.bindings.push_back(sbnd);
+            enc->draw(pk);
+            enc->end_rendering();
         }
         break;
     }

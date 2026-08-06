@@ -131,6 +131,10 @@ ComPtr<ID3D12PipelineState> build_graphics_pso(ID3D12Device* dev, ID3D12RootSign
             case BlendMode::RevealageMultiply: // dst * (1 - src.rgb) — the WBOIT revealage equation
                 b.BlendEnable = TRUE; b.SrcBlend = D3D12_BLEND_ZERO; b.DestBlend = D3D12_BLEND_INV_SRC_COLOR;
                 b.SrcBlendAlpha = D3D12_BLEND_ZERO; b.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA; break;
+            case BlendMode::RevealComposite: // (1-src.a)·src + src.a·dst — the WBOIT resolve OVER the background (the
+                                             // inverse of Alpha; matches the fused draw_wboit composite exactly)
+                b.BlendEnable = TRUE; b.SrcBlend = D3D12_BLEND_INV_SRC_ALPHA; b.DestBlend = D3D12_BLEND_SRC_ALPHA;
+                b.SrcBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA; b.DestBlendAlpha = D3D12_BLEND_SRC_ALPHA; break;
             case BlendMode::Opaque:
             default: b.BlendEnable = FALSE; break;
             }
@@ -186,70 +190,6 @@ ComPtr<ID3D12PipelineState> build_graphics_pso(ID3D12Device* dev, ID3D12RootSign
             }
         }
     }
-    ComPtr<ID3D12PipelineState> pso;
-    if (FAILED(dev->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&pso)))) { return nullptr; }
-    return pso;
-}
-
-// B17-a: the WBOIT ACCUMULATION PSO — two render targets with INDEPENDENT blend: RT0 (RGBA16F accum) additive `Σ`
-// (ONE,ONE,ADD); RT1 (R16F revealage) multiplicative `Π(1-a)` (ZERO, INV_SRC_COLOR, ADD). No depth. The transparent VS+PS
-// (whose FS emits BOTH attachments) draw ANY order — the accumulation is commutative.
-inline ComPtr<ID3D12PipelineState> build_wboit_accum_pso(ID3D12Device* dev, ID3D12RootSignature* root,
-                                                         D3D12_SHADER_BYTECODE vs, D3D12_SHADER_BYTECODE ps)
-{
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC pd{};
-    pd.pRootSignature                    = root;
-    pd.VS                                = vs;
-    pd.PS                                = ps;
-    pd.BlendState.IndependentBlendEnable = TRUE; // per-RT blend equations
-    auto& b0                             = pd.BlendState.RenderTarget[0];
-    b0.BlendEnable                       = TRUE;
-    b0.SrcBlend = D3D12_BLEND_ONE;  b0.DestBlend = D3D12_BLEND_ONE;  b0.BlendOp = D3D12_BLEND_OP_ADD;
-    b0.SrcBlendAlpha = D3D12_BLEND_ONE; b0.DestBlendAlpha = D3D12_BLEND_ONE; b0.BlendOpAlpha = D3D12_BLEND_OP_ADD;
-    b0.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-    auto& b1                 = pd.BlendState.RenderTarget[1];
-    b1.BlendEnable           = TRUE;
-    b1.SrcBlend = D3D12_BLEND_ZERO; b1.DestBlend = D3D12_BLEND_INV_SRC_COLOR; b1.BlendOp = D3D12_BLEND_OP_ADD;
-    b1.SrcBlendAlpha = D3D12_BLEND_ZERO; b1.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA; b1.BlendOpAlpha = D3D12_BLEND_OP_ADD;
-    b1.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-    pd.SampleMask                      = 0xFFFFFFFFU;
-    pd.RasterizerState.FillMode        = D3D12_FILL_MODE_SOLID;
-    pd.RasterizerState.CullMode        = D3D12_CULL_MODE_NONE;
-    pd.RasterizerState.DepthClipEnable = TRUE;
-    pd.PrimitiveTopologyType           = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-    pd.NumRenderTargets                = 2;
-    pd.RTVFormats[0]                   = DXGI_FORMAT_R16G16B16A16_FLOAT; // accum
-    pd.RTVFormats[1]                   = DXGI_FORMAT_R16_FLOAT;          // revealage
-    pd.SampleDesc.Count                = 1;
-    pd.DSVFormat                       = DXGI_FORMAT_UNKNOWN;
-    ComPtr<ID3D12PipelineState> pso;
-    if (FAILED(dev->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&pso)))) { return nullptr; }
-    return pso;
-}
-
-// B17-a: the WBOIT COMPOSITE PSO — one RGBA8 target, `avg·(1-reveal) + background·reveal` via `(INV_SRC_ALPHA, SRC_ALPHA)`
-// (the composite FS outputs `vec4(avg, reveal)`, and the target is pre-cleared to `background`).
-inline ComPtr<ID3D12PipelineState> build_wboit_composite_pso(ID3D12Device* dev, ID3D12RootSignature* root,
-                                                             D3D12_SHADER_BYTECODE vs, D3D12_SHADER_BYTECODE ps)
-{
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC pd{};
-    pd.pRootSignature = root;
-    pd.VS             = vs;
-    pd.PS             = ps;
-    auto& b0          = pd.BlendState.RenderTarget[0];
-    b0.BlendEnable    = TRUE;
-    b0.SrcBlend = D3D12_BLEND_INV_SRC_ALPHA; b0.DestBlend = D3D12_BLEND_SRC_ALPHA; b0.BlendOp = D3D12_BLEND_OP_ADD;
-    b0.SrcBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA; b0.DestBlendAlpha = D3D12_BLEND_SRC_ALPHA; b0.BlendOpAlpha = D3D12_BLEND_OP_ADD;
-    b0.RenderTargetWriteMask           = D3D12_COLOR_WRITE_ENABLE_ALL;
-    pd.SampleMask                      = 0xFFFFFFFFU;
-    pd.RasterizerState.FillMode        = D3D12_FILL_MODE_SOLID;
-    pd.RasterizerState.CullMode        = D3D12_CULL_MODE_NONE;
-    pd.RasterizerState.DepthClipEnable = TRUE;
-    pd.PrimitiveTopologyType           = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-    pd.NumRenderTargets                = 1;
-    pd.RTVFormats[0]                   = kColorFormat;
-    pd.SampleDesc.Count                = 1;
-    pd.DSVFormat                       = DXGI_FORMAT_UNKNOWN;
     ComPtr<ID3D12PipelineState> pso;
     if (FAILED(dev->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&pso)))) { return nullptr; }
     return pso;
@@ -755,11 +695,9 @@ public:
     [[nodiscard]] bool                 is_mesh() const noexcept { return m_is_mesh; } // B4: DispatchMesh vs DrawInstanced
     [[nodiscard]] bool                 is_tess() const noexcept { return m_is_tess; } // B4-tess: PATCH-list DrawInstanced
     [[nodiscard]] ID3D12RootSignature* root() const noexcept { return m_root.Get(); }
-    // B17-a: raw VS/PS bytecode + device — draw_wboit builds bespoke blend PSOs (per-RT additive/multiplicative) the cached
-    // pso_for cannot express (it always bakes blend-off).
-    [[nodiscard]] D3D12_SHADER_BYTECODE vs_bytecode() const noexcept { return {m_vs.get(), m_vs_size}; }
-    [[nodiscard]] D3D12_SHADER_BYTECODE ps_bytecode() const noexcept { return {m_fs.get(), m_fs_size}; }
-    [[nodiscard]] ID3D12Device*         device() const noexcept { return m_device; }
+    // (RAF-12.4: the raw vs_bytecode/ps_bytecode/device accessors were deleted with the fused draw_wboit verb — the
+    // only caller. WBOIT's per-RT additive/multiplicative blend is now the frame graph's authored raster.mrt pass,
+    // whose PSO the standard pass_pso path bakes from the per-attachment BlendMode array.)
 
     // The PSO for a target of `samples` samples and depth/conservative config (a graphics PSO bakes ALL of them). The plain
     // 1×/no-depth/non-conservative PSO is prebuilt (also gates valid()); every other combo is built + cached lazily in a
@@ -1851,7 +1789,7 @@ public:
     // every synchronous verb here ends by copying to the readback buffer and returning the target to COMMON.
     // REN-38-F6+: storage-bound tessellation — frame-graph recording only, like every RT verb.
     void draw_tess_storage(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
-                           IStorageBuffer& storage, crd::u32 patch_count) override
+                           IStorageBuffer& storage, crd::u32 patch_count)
     {
         if (!m_ok || !frame_recording()) { return; }
         auto& t = static_cast<Dx12RasterTarget&>(target);
@@ -1864,7 +1802,7 @@ public:
                               patch_count * 4U, /*clear=*/true, &s2);
     }
     void draw_tess_storage_load(IRasterTarget& target, IRasterProgram& program, IStorageBuffer& storage,
-                                crd::u32 patch_count) override
+                                crd::u32 patch_count)
     {
         if (!m_ok || !frame_recording()) { return; }
         auto& t = static_cast<Dx12RasterTarget&>(target);
@@ -1877,7 +1815,7 @@ public:
                               patch_count * 4U, /*clear=*/false, &s2);
     }
 
-    void draw_tess_load(IRasterTarget& target, IRasterProgram& program, crd::u32 patch_count) override
+    void draw_tess_load(IRasterTarget& target, IRasterProgram& program, crd::u32 patch_count)
     {
         if (!m_ok || !frame_recording()) { return; }
         auto& t = static_cast<Dx12RasterTarget&>(target);
@@ -1891,7 +1829,7 @@ public:
 
     // REN-38-F6+: storage-bound mesh dispatch — frame-graph recording only, like the tess twin.
     void draw_mesh_storage(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
-                           IStorageBuffer& storage, crd::u32 group_count) override
+                           IStorageBuffer& storage, crd::u32 group_count)
     {
         if (!m_ok || !m_mesh_shader || m_list6 == nullptr) { return; }
         auto& t  = static_cast<Dx12RasterTarget&>(target);
@@ -1950,7 +1888,7 @@ public:
         submit_and_wait();
     }
     void draw_mesh_storage_load(IRasterTarget& target, IRasterProgram& program, IStorageBuffer& storage,
-                                crd::u32 group_count) override
+                                crd::u32 group_count)
     {
         if (!m_ok || !frame_recording() || m_list6 == nullptr) { return; }
         auto& t = static_cast<Dx12RasterTarget&>(target);
@@ -1963,7 +1901,7 @@ public:
                     nullptr, nullptr, 0U, /*clear=*/false, &s2);
     }
 
-    void draw_mesh_load(IRasterTarget& target, IRasterProgram& program, crd::u32 group_count) override
+    void draw_mesh_load(IRasterTarget& target, IRasterProgram& program, crd::u32 group_count)
     {
         if (!m_ok || !frame_recording() || m_list6 == nullptr) { return; }
         auto& t = static_cast<Dx12RasterTarget&>(target);
@@ -1975,7 +1913,7 @@ public:
                     nullptr, nullptr, 0U, /*clear=*/false);
     }
 
-    void draw_tess(IRasterTarget& target, IRasterProgram& program, ClearColor clear, crd::u32 patch_count) override
+    void draw_tess(IRasterTarget& target, IRasterProgram& program, ClearColor clear, crd::u32 patch_count)
     {
         if (!m_ok) { return; }
         auto&      t  = static_cast<Dx12RasterTarget&>(target);
@@ -2048,7 +1986,7 @@ public:
 
     // Clear `target` and DISPATCH `group_count` mesh workgroups (a mesh program). Colour-only (the mesh-triangle proof); the
     // readback tail is identical to draw() — only the topology-less DispatchMesh replaces IASetPrimitiveTopology+DrawInstanced.
-    void draw_mesh(IRasterTarget& target, IRasterProgram& program, ClearColor clear, crd::u32 group_count) override
+    void draw_mesh(IRasterTarget& target, IRasterProgram& program, ClearColor clear, crd::u32 group_count)
     {
         if (!m_ok || !m_mesh_shader || m_list6 == nullptr) { return; }
         auto&      t   = static_cast<Dx12RasterTarget&>(target);
@@ -2117,7 +2055,7 @@ public:
 
     // B4: DISPATCH a MESH program with PER-PRIMITIVE VRS. Identical to draw_mesh, but sets the shading-rate combiner to OVERRIDE
     // so the mesh's per-primitive SV_ShadingRate output drives the coarse fragment rate (the base rate stays 1×1).
-    void draw_mesh_vrs(IRasterTarget& target, IRasterProgram& program, ClearColor clear, crd::u32 group_count) override
+    void draw_mesh_vrs(IRasterTarget& target, IRasterProgram& program, ClearColor clear, crd::u32 group_count)
     {
         if (!m_ok || !m_mesh_shader || m_list6 == nullptr) { return; }
         auto& t = static_cast<Dx12RasterTarget&>(target);
@@ -2178,7 +2116,7 @@ public:
     // count decided entirely on the GPU. The args buffer decayed to COMMON after the compute submit, so this transitions it to
     // INDIRECT_ARGUMENT freely. Colour-only.
     void draw_mesh_indirect(IRasterTarget& target, IRasterProgram& program, ClearColor clear, void* native_args,
-                            crd::u64 args_offset) override
+                            crd::u64 args_offset)
     {
         if (!m_ok || !m_mesh_shader || m_list6 == nullptr || native_args == nullptr) { return; }
         auto&                t   = static_cast<Dx12RasterTarget&>(target);
@@ -2244,7 +2182,7 @@ public:
     // Combines the bindless-SRV-heap machinery of draw_bindless with the depth target of draw_depth, then DispatchMesh.
     void draw_mesh_bindless_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear, float clear_depth,
                                   DepthCompare compare, ITexture* const* textures, crd::u32 count,
-                                  crd::u32 group_count) override
+                                  crd::u32 group_count)
     {
         if (!m_ok || !m_mesh_shader || m_list6 == nullptr || m_uav_heap == nullptr || m_sampler_heap == nullptr
             || count == 0U || textures == nullptr)
@@ -3244,7 +3182,7 @@ public:
     }
 
     void draw_storage(IRasterTarget& target, IRasterProgram& program, ClearColor clear, IStorageBuffer& storage,
-                      crd::u32 vertex_count) override
+                      crd::u32 vertex_count)
     {
         if (!m_ok || m_uav_heap == nullptr) { return; }
         auto&                t   = static_cast<Dx12RasterTarget&>(target);
@@ -3313,7 +3251,7 @@ public:
     // RTV is bound. For a frame-graph D32Float+sampled transient this PRODUCES a shadow map the next pass samples
     // through its R32_FLOAT SRV (see the R32_TYPELESS rule at create_transient_image).
     void draw_storage_depth_only(IRasterTarget& target, IRasterProgram& program, float clear_depth,
-                                 DepthCompare compare, IStorageBuffer& storage, crd::u32 vertex_count) override
+                                 DepthCompare compare, IStorageBuffer& storage, crd::u32 vertex_count)
     {
         if (!m_ok || m_uav_heap == nullptr) { return; }
         auto& t = static_cast<Dx12RasterTarget&>(target);
@@ -3355,7 +3293,7 @@ public:
 
     // REN-3.1: the CONTINUING depth-only draw — mesh N>0 of a shadow pass joins the SAME depth map (no clear).
     void draw_storage_depth_only_load(IRasterTarget& target, IRasterProgram& program, DepthCompare compare,
-                                      IStorageBuffer& storage, crd::u32 vertex_count) override
+                                      IStorageBuffer& storage, crd::u32 vertex_count)
     {
         if (!m_ok || m_uav_heap == nullptr) { return; }
         auto& t = static_cast<Dx12RasterTarget&>(target);
@@ -3368,7 +3306,7 @@ public:
     }
 
     void draw_storage_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear, float clear_depth,
-                            DepthCompare compare, IStorageBuffer& storage, crd::u32 vertex_count) override
+                            DepthCompare compare, IStorageBuffer& storage, crd::u32 vertex_count)
     {
         if (!m_ok || m_uav_heap == nullptr) { return; }
         auto& t = static_cast<Dx12RasterTarget&>(target);
@@ -3442,7 +3380,7 @@ public:
     // into the frame graph (record_scene_textured); standalone binds storage UAV (slot 0) + the SRV (slot 1) + sampler.
     void draw_storage_textured_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear, float clear_depth,
                                      DepthCompare compare, IStorageBuffer& storage, ITexture& texture,
-                                     crd::u32 vertex_count) override
+                                     crd::u32 vertex_count)
     {
         draw_storage_sampled_depth(target, program, clear, clear_depth, compare, storage, texture, vertex_count, 0U);
     }
@@ -3539,7 +3477,7 @@ public:
         submit_and_wait();
     }
     void draw_storage_textured_depth_load(IRasterTarget& target, IRasterProgram& program, DepthCompare compare,
-                                          IStorageBuffer& storage, ITexture& texture, crd::u32 vertex_count) override
+                                          IStorageBuffer& storage, ITexture& texture, crd::u32 vertex_count)
     {
         auto& t   = static_cast<Dx12RasterTarget&>(target);
         auto& p   = static_cast<Dx12RasterProgram&>(program);
@@ -3559,7 +3497,7 @@ public:
     // ── REN-3.2-b: the SHADOWED scene draw — the textured body with the COMPARISON sampler at slot 1. ──
     void draw_storage_shadowed_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
                                      float clear_depth, DepthCompare compare, IStorageBuffer& storage,
-                                     ITexture& shadow_atlas, crd::u32 vertex_count) override
+                                     ITexture& shadow_atlas, crd::u32 vertex_count)
     {
         // REN-38: the shadowed FS reads the atlas at t4/s5 now — route it through the atlas channel as well.
         auto& atlas = static_cast<Dx12Texture&>(shadow_atlas);
@@ -3568,7 +3506,7 @@ public:
     }
     void draw_storage_shadowed_depth_load(IRasterTarget& target, IRasterProgram& program, DepthCompare compare,
                                           IStorageBuffer& storage, ITexture& shadow_atlas,
-                                          crd::u32 vertex_count) override
+                                          crd::u32 vertex_count)
     {
         auto& t   = static_cast<Dx12RasterTarget&>(target);
         auto& p   = static_cast<Dx12RasterProgram&>(program);
@@ -3591,7 +3529,7 @@ public:
     void draw_storage_textured_shadowed_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
                                               float clear_depth, DepthCompare compare, IStorageBuffer& storage,
                                               ITexture& texture, ITexture& shadow_atlas,
-                                              crd::u32 vertex_count) override
+                                              crd::u32 vertex_count)
     {
         auto& atlas = static_cast<Dx12Texture&>(shadow_atlas);
         draw_storage_sampled_depth(target, program, clear, clear_depth, compare, storage, texture, vertex_count, 0U,
@@ -3599,7 +3537,7 @@ public:
     }
     void draw_storage_textured_shadowed_depth_load(IRasterTarget& target, IRasterProgram& program,
                                                    DepthCompare compare, IStorageBuffer& storage, ITexture& texture,
-                                                   ITexture& shadow_atlas, crd::u32 vertex_count) override
+                                                   ITexture& shadow_atlas, crd::u32 vertex_count)
     {
         auto& t     = static_cast<Dx12RasterTarget&>(target);
         auto& p     = static_cast<Dx12RasterProgram&>(program);
@@ -3622,10 +3560,30 @@ public:
     // draws was per-draw root-table setting + PSO re-binding; this pays them once per BATCH. The command
     // signature {ROOT_CONSTANT(b7), DRAW} varies the DrawIndex per command: command i writes
     // `first_draw_index + i` into b7 before its draw — D3D12's native spelling of gl_DrawID.
+    // RAF-12.4-F6: DX12 had no draw_storage_multi_depth_only override — it used the interface default (a loop over
+    // draw_storage_depth_only / _load). That default is now no-op'd (the interface can no longer call the private F6
+    // verbs), so DX12 needs this concrete loop to keep the depth-only pull shadow-cascade path — byte-identical to the
+    // old default behaviour (its DrawIndex-rebasing gap, documented on the interface verb, is unchanged).
+    void draw_storage_multi_depth_only(IRasterTarget& target, IRasterProgram& program, float clear_depth,
+                                       DepthCompare compare, IStorageBuffer& storage, const crd::u32* vertex_counts,
+                                       crd::u32 count, crd::u32 first_draw_index, bool load_target)
+    {
+        (void)first_draw_index;
+        if (vertex_counts == nullptr) { return; }
+        for (crd::u32 i = 0; i < count; ++i)
+        {
+            if (i == 0U && !load_target)
+            {
+                draw_storage_depth_only(target, program, clear_depth, compare, storage, vertex_counts[i]);
+            }
+            else { draw_storage_depth_only_load(target, program, compare, storage, vertex_counts[i]); }
+        }
+    }
+
     void draw_storage_multi_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
                                   float clear_depth, DepthCompare compare, IStorageBuffer& storage,
                                   const crd::u32* vertex_counts, crd::u32 count, crd::u32 first_draw_index,
-                                  bool load_target) override
+                                  bool load_target)
     {
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
@@ -3795,7 +3753,7 @@ public:
     void draw_storage_multi_indexed_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
                                           float clear_depth, DepthCompare compare, IStorageBuffer& storage,
                                           crd::u32 index_offset_bytes, const IndexedDraw* draws, crd::u32 count,
-                                          crd::u32 first_draw_index, bool load_target) override
+                                          crd::u32 first_draw_index, bool load_target)
     {
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
@@ -3904,7 +3862,7 @@ public:
     void draw_storage_multi_indexed_depth_only(IRasterTarget& target, IRasterProgram& program, float clear_depth,
                                                DepthCompare compare, IStorageBuffer& storage,
                                                crd::u32 index_offset_bytes, const IndexedDraw* draws, crd::u32 count,
-                                               bool load_target) override
+                                               bool load_target)
     {
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
@@ -3985,7 +3943,7 @@ public:
                                             float clear_depth, DepthCompare compare, IStorageBuffer& storage,
                                             crd::u32 index_offset_bytes, crd::u32 index_count, crd::u32 instance_count,
                                             crd::u32 first_index, ITexture* texture, ITexture* atlas,
-                                            bool load_target, crd::u32 first_draw_index = 0U) override
+                                            bool load_target, crd::u32 first_draw_index = 0U)
     {
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
@@ -4067,7 +4025,7 @@ public:
     // GEO-8: the CONTINUING scene draw — draw_storage_depth minus the Clear calls (colour + depth both persist;
     // depth keeps testing AND writing so mesh groups compose through the real depth buffer).
     void draw_storage_depth_load(IRasterTarget& target, IRasterProgram& program, DepthCompare compare,
-                                 IStorageBuffer& storage, crd::u32 vertex_count) override
+                                 IStorageBuffer& storage, crd::u32 vertex_count)
     {
         if (!m_ok || m_uav_heap == nullptr) { return; }
         auto& t = static_cast<Dx12RasterTarget&>(target);
@@ -4137,7 +4095,7 @@ public:
     // Both ride the PSO cache key (PassRasterState + BlendMode are part of it), so this cannot collide with a
     // pass that asked for opaque/depth-writing state.
     [[nodiscard]] bool draw_overlay(IRasterTarget& target, IRasterProgram& program, IStorageBuffer& storage,
-                                    DepthCompare compare, crd::u32 vertex_count) override
+                                    DepthCompare compare, crd::u32 vertex_count) // RAF-12.4: reached via friend encoder
     {
         return draw_overlay_range(target, program, storage, compare, 0U, vertex_count);
     }
@@ -4172,7 +4130,7 @@ public:
                                              IStorageBuffer& args, crd::u32 args_offset_bytes,
                                              IStorageBuffer* count_buf, crd::u32 count_offset_bytes,
                                              crd::u32 max_draws, bool load_target,
-                                             crd::u32 first_draw_index) override
+                                             crd::u32 first_draw_index)
     {
         // ⛔⛔ REN-40-C2 / DX12: the row is NOT pushed here — D3D12's command signature prepends a DrawIndex
         // root constant, so each command carries its OWN row and `ExecuteIndirect` supplies it per draw.
@@ -4268,7 +4226,7 @@ public:
                                                         IStorageBuffer& args, crd::u32 args_offset_bytes,
                                                         IStorageBuffer* count_buf, crd::u32 count_offset_bytes,
                                                         crd::u32 max_draws, bool load_target,
-                                             crd::u32 first_draw_index) override
+                                             crd::u32 first_draw_index)
     {
         // ⛔⛔ REN-40-C2 / DX12: the row is NOT pushed here — D3D12's command signature prepends a DrawIndex
         // root constant, so each command carries its OWN row and `ExecuteIndirect` supplies it per draw.
@@ -4344,7 +4302,7 @@ public:
 
     [[nodiscard]] bool draw_overlay_range(IRasterTarget& target, IRasterProgram& program, IStorageBuffer& storage,
                                           DepthCompare compare, crd::u32 first_vertex,
-                                          crd::u32 vertex_count) override
+                                          crd::u32 vertex_count) // RAF-12.4: reached via friend encoder
     {
         if (!m_ok || m_uav_heap == nullptr || vertex_count == 0U) { return false; }
         auto& t = static_cast<Dx12RasterTarget&>(target);
@@ -4428,7 +4386,7 @@ public:
     // so the only portable offset channel is the draw table, never the draw call.
     void draw_storage_indexed_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear, float clear_depth,
                                     DepthCompare compare, IStorageBuffer& storage, crd::u32 index_offset_bytes,
-                                    crd::u32 index_count, crd::u32 instance_count, bool load_target) override
+                                    crd::u32 index_count, crd::u32 instance_count, bool load_target)
     {
         if (!m_ok || m_uav_heap == nullptr)
         {
@@ -5235,7 +5193,7 @@ public:
     }
 
     void draw_mesh_indirect_buffer(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
-                                   IStorageBuffer& args, crd::u64 args_offset) override
+                                   IStorageBuffer& args, crd::u64 args_offset)
     {
         if (!m_ok || !frame_recording() || !m_mesh_shader || m_list6 == nullptr) { return; }
         auto& t = static_cast<Dx12RasterTarget&>(target);
@@ -5312,7 +5270,7 @@ public:
 
     void draw_storage_mrt(IRasterTarget* const* targets, crd::u32 count, IRasterProgram& program, ClearColor clear,
                           float clear_depth, DepthCompare compare, IStorageBuffer& storage, crd::u32 vertex_count,
-                          const BlendMode* blend) override
+                          const BlendMode* blend)
     {
         if (targets == nullptr || count == 0U || !frame_recording()) { return; }
         auto&          p  = static_cast<Dx12RasterProgram&>(program);
@@ -5336,7 +5294,16 @@ public:
         m_list->OMSetRenderTargets(n, static_cast<const D3D12_CPU_DESCRIPTOR_HANDLE*>(rtvs), FALSE,
                                    has_depth ? &dsv : nullptr);
         const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
-        for (crd::u32 i = 0; i < n; ++i) { m_list->ClearRenderTargetView(rtvs[i], rgba, 0, nullptr); }
+        const float mult_identity[4] = {1.0F, 1.0F, 1.0F, 1.0F};
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            // ⛔ A MULTIPLICATIVE attachment (Multiply / RevealageMultiply — e.g. the WBOIT revealage) MUST clear to
+            // the multiplicative IDENTITY 1, never the pass's clear_color: `dst·(1-src)` from 0 stays 0 forever, so
+            // the background is never revealed. Mirrors the fused draw_wboit reveal-clear and the Vulkan MRT path.
+            const bool mult = blend != nullptr &&
+                              (blend[i] == BlendMode::Multiply || blend[i] == BlendMode::RevealageMultiply);
+            m_list->ClearRenderTargetView(rtvs[i], mult ? mult_identity : rgba, 0, nullptr);
+        }
         if (has_depth) { m_list->ClearDepthStencilView(dsv, t0.clear_flags(), clear_depth, 0, 0, nullptr); }
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t0.width()), static_cast<float>(t0.height()), 0.0F, 1.0F};
         const D3D12_RECT     sc{0, 0, static_cast<LONG>(t0.width()), static_cast<LONG>(t0.height())};
@@ -5398,7 +5365,8 @@ public:
                                                    height);
     }
 
-    void draw_gbuffer(IGBufferTarget& target, IRasterProgram& program, ClearColor clear, crd::u32 vertex_count) override
+    void draw_gbuffer(IGBufferTarget& target, IRasterProgram& program, ClearColor clear,
+                      crd::u32 vertex_count) // RAF-12.4: reached via friend encoder
     {
         if (!m_ok) { return; }
         auto&                t   = static_cast<Dx12GBufferTarget&>(target);
@@ -5439,137 +5407,6 @@ public:
             m_list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
             transition(t.tex(i), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
         }
-        submit_and_wait();
-    }
-
-    // B17-a: WEIGHTED-BLENDED OIT (McGuire-Bavoil 2013) — see raster_context.hpp. Two internal float targets (accum RGBA16F
-    // additive · revealage R16F multiplicative) accumulate ALL transparent fragments in one order-independent pass; a
-    // full-screen composite resolves `avg = accum.rgb/max(accum.a, eps)` over a `background`-cleared RGBA8 target.
-    void draw_wboit(IRasterTarget& target, IRasterProgram& transparent, IRasterProgram& composite, ClearColor background,
-                    crd::u32 vertex_count) override
-    {
-        if (!m_ok || m_uav_heap == nullptr || m_sampler_heap == nullptr) { return; }
-        auto& t  = static_cast<Dx12RasterTarget&>(target);
-        auto& tp = static_cast<Dx12RasterProgram&>(transparent);
-        auto& cp = static_cast<Dx12RasterProgram&>(composite);
-        if (!tp.valid() || !cp.valid()) { return; }
-        const crd::u32 w = t.width();
-        const crd::u32 h = t.height();
-
-        ComPtr<ID3D12PipelineState> accum_pso =
-            build_wboit_accum_pso(tp.device(), tp.root(), tp.vs_bytecode(), tp.ps_bytecode());
-        ComPtr<ID3D12PipelineState> comp_pso =
-            build_wboit_composite_pso(cp.device(), cp.root(), cp.vs_bytecode(), cp.ps_bytecode());
-        if (accum_pso == nullptr || comp_pso == nullptr) { return; }
-
-        // The two internal float targets (render target + shader resource).
-        D3D12_HEAP_PROPERTIES hp{};
-        hp.Type       = D3D12_HEAP_TYPE_DEFAULT;
-        const auto rt = [&](DXGI_FORMAT fmt) -> ComPtr<ID3D12Resource> {
-            D3D12_RESOURCE_DESC rd{};
-            rd.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            rd.Width            = w;
-            rd.Height           = h;
-            rd.DepthOrArraySize = 1;
-            rd.MipLevels        = 1;
-            rd.Format           = fmt;
-            rd.SampleDesc.Count = 1;
-            rd.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            rd.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-            ComPtr<ID3D12Resource> r;
-            if (FAILED(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COMMON,
-                                                         nullptr, IID_PPV_ARGS(&r))))
-            {
-                return nullptr;
-            }
-            return r;
-        };
-        ComPtr<ID3D12Resource> accum  = rt(DXGI_FORMAT_R16G16B16A16_FLOAT);
-        ComPtr<ID3D12Resource> reveal = rt(DXGI_FORMAT_R16_FLOAT);
-        if (accum == nullptr || reveal == nullptr) { return; }
-
-        D3D12_DESCRIPTOR_HEAP_DESC rhd{};
-        rhd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-        rhd.NumDescriptors = 2;
-        ComPtr<ID3D12DescriptorHeap> rtv_heap;
-        if (FAILED(m_device->CreateDescriptorHeap(&rhd, IID_PPV_ARGS(&rtv_heap)))) { return; }
-        const UINT                  rtv_inc = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-        D3D12_CPU_DESCRIPTOR_HANDLE rtv0    = rtv_heap->GetCPUDescriptorHandleForHeapStart();
-        D3D12_CPU_DESCRIPTOR_HANDLE rtv1    = rtv0;
-        rtv1.ptr += rtv_inc;
-        m_device->CreateRenderTargetView(accum.Get(), nullptr, rtv0);
-        m_device->CreateRenderTargetView(reveal.Get(), nullptr, rtv1);
-
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
-
-        // ---- Pass 1: accumulate (accum additively, revealage multiplicatively) ---------------------------------------
-        transition(accum.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
-        transition(reveal.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
-        m_list->OMSetRenderTargets(2, &rtv0, TRUE, nullptr); // the 2 RTVs are contiguous in one heap
-        const float accum_clear[4]  = {0.0F, 0.0F, 0.0F, 0.0F};
-        const float reveal_clear[4] = {1.0F, 1.0F, 1.0F, 1.0F}; // revealage starts at full 1
-        m_list->ClearRenderTargetView(rtv0, accum_clear, 0, nullptr);
-        m_list->ClearRenderTargetView(rtv1, reveal_clear, 0, nullptr);
-        const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(w), static_cast<float>(h), 0.0F, 1.0F};
-        const D3D12_RECT     sc{0, 0, static_cast<LONG>(w), static_cast<LONG>(h)};
-        m_list->RSSetViewports(1, &vp);
-        m_list->RSSetScissorRects(1, &sc);
-        m_list->SetGraphicsRootSignature(tp.root());
-        m_list->SetPipelineState(accum_pso.Get());
-        m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        m_list->DrawInstanced(vertex_count, 1, 0, 0);
-
-        // ---- Pass 2: composite over the `background`-cleared target ---------------------------------------------------
-        transition(accum.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        transition(reveal.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        D3D12_SHADER_RESOURCE_VIEW_DESC srv_a{};
-        srv_a.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
-        srv_a.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        srv_a.Format                  = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        srv_a.Texture2D.MipLevels     = 1;
-        D3D12_SHADER_RESOURCE_VIEW_DESC srv_r = srv_a;
-        srv_r.Format                          = DXGI_FORMAT_R16_FLOAT;
-        for (UINT i = 0; i < kBindlessMax; ++i) // bindless[0]=accum (slot 2), [1]=revealage (slot 3); rest replicate accum
-        {
-            D3D12_CPU_DESCRIPTOR_HANDLE hh = m_uav_heap->GetCPUDescriptorHandleForHeapStart();
-            hh.ptr += static_cast<SIZE_T>(2U + i) * m_srv_inc;
-            if (i == 1U) { m_device->CreateShaderResourceView(reveal.Get(), &srv_r, hh); }
-            else { m_device->CreateShaderResourceView(accum.Get(), &srv_a, hh); }
-        }
-        D3D12_GPU_DESCRIPTOR_HANDLE bindless_gpu = m_uav_heap->GetGPUDescriptorHandleForHeapStart();
-        bindless_gpu.ptr += static_cast<UINT64>(2U) * m_srv_inc;
-
-        transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
-        const D3D12_CPU_DESCRIPTOR_HANDLE trtv = t.rtv();
-        m_list->OMSetRenderTargets(1, &trtv, FALSE, nullptr);
-        const float bg[4] = {background.r, background.g, background.b, background.a};
-        m_list->ClearRenderTargetView(trtv, bg, 0, nullptr);
-        m_list->RSSetViewports(1, &vp);
-        m_list->RSSetScissorRects(1, &sc);
-        m_list->SetGraphicsRootSignature(cp.root());
-        ID3D12DescriptorHeap* heaps[] = {m_uav_heap.Get(), m_sampler_heap.Get()};
-        m_list->SetDescriptorHeaps(2, heaps);
-        m_list->SetGraphicsRootDescriptorTable(2, m_sampler_heap->GetGPUDescriptorHandleForHeapStart()); // sampler s2
-        m_list->SetGraphicsRootDescriptorTable(3, bindless_gpu);                                          // bindless t3[]
-        m_list->SetPipelineState(comp_pso.Get());
-        m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        m_list->DrawInstanced(3, 1, 0, 0); // full-screen triangle
-
-        // ---- Readback ------------------------------------------------------------------------------------------------
-        transition(t.tex(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
-        D3D12_TEXTURE_COPY_LOCATION dst{};
-        dst.pResource       = t.readback();
-        dst.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-        dst.PlacedFootprint = t.footprint();
-        D3D12_TEXTURE_COPY_LOCATION src{};
-        src.pResource        = t.tex();
-        src.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-        src.SubresourceIndex = 0;
-        m_list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
-        transition(t.tex(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
-        transition(accum.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON);
-        transition(reveal.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON);
         submit_and_wait();
     }
 

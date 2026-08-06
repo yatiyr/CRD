@@ -89,12 +89,7 @@ struct StubRaster final : gpu::IRasterContext
     [[nodiscard]] bool supports_inner_coverage() const noexcept override { return false; }    [[nodiscard]] std::unique_ptr<gpu::IStorageBuffer> create_storage_buffer(u32 size_bytes) override
     {
         return std::make_unique<StubStorage>(size_bytes, &galloc());
-    }
-    void draw_storage(gpu::IRasterTarget&, gpu::IRasterProgram&, gpu::ClearColor, gpu::IStorageBuffer&,
-                      u32) override
-    {
-    }
-    [[nodiscard]] bool supports_fragment_interlock() const noexcept override { return false; }
+    }    [[nodiscard]] bool supports_fragment_interlock() const noexcept override { return false; }
     [[nodiscard]] std::unique_ptr<gpu::ITexture> create_texture(u32, u32, const void*) override { return nullptr; }    [[nodiscard]] std::unique_ptr<gpu::ITexture> create_depth_texture(u32, u32, const float*) override
     {
         return nullptr;
@@ -107,8 +102,6 @@ struct StubRaster final : gpu::IRasterContext
     {
         return nullptr;
     }
-    void draw_gbuffer(gpu::IGBufferTarget&, gpu::IRasterProgram&, gpu::ClearColor, u32) override {}
-
     [[nodiscard]] bool upload_storage(gpu::IStorageBuffer& storage, u32 byte_offset, const void* data,
                                       u32 size_bytes) override
     {

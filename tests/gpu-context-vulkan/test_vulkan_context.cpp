@@ -1787,79 +1787,6 @@ TEST_CASE("D-007 B3-e: IR-authored triangle draws on Vulkan (CKIR graph -> SPIR-
     CHECK(((corner >> 16U) & 0xFFU) >= 250U); // B high
 }
 
-// D-007 B17-a: WEIGHTED-BLENDED ORDER-INDEPENDENT TRANSPARENCY (McGuire-Bavoil 2013) on Vulkan. Four translucent full-screen
-// quads accumulate in ONE order-independent pass (RGBA16F additive accum + R16F multiplicative revealage) → a full-screen
-// composite resolves them over an opaque background. The whole frame is uniform (every quad is full-screen), so every texel
-// must equal the CPU oracle (f16-accum + f32-divide model) within a tight LSB tolerance — a real device WBOIT that matches
-// the reference math, the cheap OIT tier. Pairs with the identical DX12 test (one IR, both backends).
-TEST_CASE("D-007 B17-a: IR-authored WBOIT draws on Vulkan (accum/reveal MRT + blend + composite -> pixels)",
-          "[gpu-context][vulkan][gpu][raster][oit]")
-{
-    namespace kir = crd::kir;
-
-    gpu::GpuContextConfig cfg;
-    cfg.backend  = gpu::GpuBackend::Vulkan;
-    cfg.headless = true;
-    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
-    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->shader_object()) { WARN("adapter has no VK_EXT_shader_object; skipping"); return; }
-
-    crd::memory::TlsfAllocator alloc(8U << 20U);
-    auto                       raster = gpu::create_vulkan_raster_context(*vk);
-    REQUIRE(raster != nullptr);
-
-    crd::gputest::WboitScene scene;
-    scene.count         = 4U;
-    scene.background[0]  = 0.10F; scene.background[1] = 0.10F; scene.background[2] = 0.12F;
-    scene.color[0][0] = 0.90F; scene.color[0][1] = 0.15F; scene.color[0][2] = 0.10F; scene.alpha[0] = 0.50F; scene.depth[0] = 0.20F;
-    scene.color[1][0] = 0.15F; scene.color[1][1] = 0.85F; scene.color[1][2] = 0.20F; scene.alpha[1] = 0.40F; scene.depth[1] = 0.55F;
-    scene.color[2][0] = 0.20F; scene.color[2][1] = 0.25F; scene.color[2][2] = 0.90F; scene.alpha[2] = 0.30F; scene.depth[2] = 0.80F;
-    scene.color[3][0] = 0.90F; scene.color[3][1] = 0.85F; scene.color[3][2] = 0.10F; scene.alpha[3] = 0.60F; scene.depth[3] = 0.35F;
-
-    kir::KGraph tvg(&alloc); kir::KEntry tve; crd::gputest::build_wboit_transparent_vs(tvg, tve, scene);
-    kir::KGraph tfg(&alloc); kir::KEntry tfe; crd::gputest::build_wboit_transparent_fs(tfg, tfe);
-    kir::KGraph cvg(&alloc); kir::KEntry cve; crd::gputest::build_wboit_composite_vs(cvg, cve);
-    kir::KGraph cfg2(&alloc); kir::KEntry cfe; crd::gputest::build_wboit_composite_fs(cfg2, cfe);
-
-    auto tvp = ctx->create_program(tvg, tve);
-    auto tfp = ctx->create_program(tfg, tfe);
-    auto cvp = ctx->create_program(cvg, cve);
-    auto cfp = ctx->create_program(cfg2, cfe);
-    REQUIRE(tvp != nullptr); REQUIRE(tfp != nullptr); REQUIRE(cvp != nullptr); REQUIRE(cfp != nullptr);
-
-    auto transparent = raster->create_raster_program(*tvp, *tfp);
-    auto composite   = raster->create_raster_program(*cvp, *cfp);
-    REQUIRE(transparent != nullptr); REQUIRE(transparent->valid());
-    REQUIRE(composite != nullptr);   REQUIRE(composite->valid());
-
-    constexpr crd::u32 dim    = 32U;
-    auto               target = raster->create_color_target(dim, dim);
-    REQUIRE(target != nullptr);
-
-    raster->draw_wboit(*target, *transparent, *composite,
-                       gpu::ClearColor{scene.background[0], scene.background[1], scene.background[2], 1.0F},
-                       scene.count * 6U);
-
-    const crd::u32 expect = crd::gputest::wboit_oracle_pixel(scene);
-    if (target->read_pixel(dim / 2U, dim / 2U) == 0U && expect != 0U)
-    {
-        WARN("draw_wboit produced no output (per-attachment blend equations unavailable?); skipping");
-        return;
-    }
-    crd::u32 worst = 0U;
-    for (crd::u32 y = 0U; y < dim; ++y)
-    {
-        for (crd::u32 x = 0U; x < dim; ++x)
-        {
-            const crd::u32 d = crd::gputest::rgba8_max_channel_diff(target->read_pixel(x, y), expect);
-            if (d > worst) { worst = d; }
-        }
-    }
-    INFO("WBOIT worst per-channel LSB diff vs oracle = " << worst << " (expect 0x" << std::hex << expect << ")");
-    CHECK(worst <= 2U);              // f16 accum + f32 divide + blend rounding
-    CHECK((expect & 0xFFU) > 0x30U); // sanity: red channel is substantial (transparency actually composited, not just the clear)
-}
 
 // D-007 B17-c: the EXACT-REFERENCE A-buffer OIT on Vulkan — deferred per-fragment store + a per-pixel depth SORT + the exact
 // front-to-back `over` composite, authored as two portable CKIR compute kernels. The composite is pure f32 mul/add/sub on a
@@ -2482,7 +2409,7 @@ TEST_CASE("D-007 B4: IR-authored MESH-shader triangle draws on Vulkan (CKIR mesh
     auto               target = raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
 
-    raster->draw_mesh(*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 1U); // one meshlet workgroup
+    crd::gputest::enc_draw_mesh(*raster, *target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 1U); // one meshlet workgroup
 
     const crd::u32 centre = target->read_pixel(dim / 2U, dim / 2U);
     const crd::u32 corner = target->read_pixel(0U, 0U);
@@ -2539,7 +2466,7 @@ TEST_CASE("D-007 B4: Vulkan TASK amplification -- 1 task workgroup emits N mesh 
     constexpr crd::u32 dim    = 64U;
     auto               target = raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    raster->draw_mesh(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.2F, 1.0F}, 1U); // 1 TASK workgroup ⇒ N mesh triangles
+    crd::gputest::enc_draw_mesh(*raster, *target, *program, gpu::ClearColor{0.0F, 0.0F, 0.2F, 1.0F}, 1U); // 1 TASK workgroup ⇒ N mesh triangles
 
     // The N task-amplified triangles sit at clip x = -0.7 + c·0.45; each is coloured payload/255 (red). All N must be present
     // (amplification), and the red intensity must be ≈ payload (the task→mesh payload flowed).
@@ -2599,7 +2526,7 @@ TEST_CASE("D-007 B4: Vulkan TASK multi-field payload -- a 3-uint payload flows t
     constexpr crd::u32 dim    = 64U;
     auto               target = raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    raster->draw_mesh(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.1F, 1.0F}, 1U);
+    crd::gputest::enc_draw_mesh(*raster, *target, *program, gpu::ClearColor{0.0F, 0.0F, 0.1F, 1.0F}, 1U);
 
     const crd::u32 px = target->read_pixel(dim / 2U, dim / 2U); // inside the centred triangle
     CHECK((px & 0xFFU) > pay_r - 6U);           // R ≈ payload v0
@@ -2699,7 +2626,7 @@ TEST_CASE("D-007 B4: Vulkan GPU-driven indirect meshlet dispatch -- a compute cu
     constexpr crd::u32 dim    = 64U;
     auto               target = raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    raster->draw_mesh_indirect(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.1F, 1.0F}, args_dev->native_handle(), 0U);
+    crd::gputest::enc_draw_mesh_indirect(*raster, *target, *program, gpu::ClearColor{0.0F, 0.0F, 0.1F, 1.0F}, args_dev->native_handle(), 0U);
 
     int rendered = 0;
     int culled   = 0;
@@ -2767,7 +2694,7 @@ TEST_CASE("D-007 B4-tess: Vulkan tessellation -- a VS->TCS->TES->FS quad subdivi
     constexpr crd::u32 dim    = 64U;
     auto               target = raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    raster->draw_tess(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.2F, 1.0F}, 1U); // ONE quad patch
+    crd::gputest::enc_draw_tess(*raster, *target, *program, gpu::ClearColor{0.0F, 0.0F, 0.2F, 1.0F}, 1U); // ONE quad patch
 
     // Screen x for a clip x: sx = (x+1)/2·dim. The base quad edge is 0.6 (sx=51); the domain-expanded edge is 0.78 (sx=57).
     CHECK((target->read_pixel(dim / 2U, dim / 2U) & 0xFFU) >= 250U); // centre red — the quad renders
@@ -3403,7 +3330,7 @@ TEST_CASE("D-007 B4: per-primitive VRS from a MESH shader coarsens shading (Vulk
     constexpr crd::u32 dim    = 32U;
     auto               target = r.raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    r.raster->draw_mesh_vrs(*target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 1U);
+    crd::gputest::enc_draw_mesh_vrs(*r.raster, *target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 1U);
 
     const int nmesh = count_equal_even_pairs(*target, dim);
     WARN("[vrs mesh vulkan] n_equal=" << nmesh);
@@ -3578,7 +3505,7 @@ TEST_CASE("D-007 B1-f: fragment interlock RMW counter is deterministic (Vulkan)"
     auto storage = r.raster->create_storage_buffer(dim * dim * 4U);
     REQUIRE(target != nullptr);
     REQUIRE(storage != nullptr);
-    r.raster->draw_storage(*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, *storage, 6U); // two triangles
+    crd::gputest::enc_draw_storage(*r.raster, *target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, *storage, 6U); // two triangles
 
     // The centre pixel is covered by BOTH primitives; interlock serialises the two RMWs ⇒ EXACTLY 2. Corner = background = 0.
     const crd::u32 c_centre = storage->read_u32((dim / 2U) * dim + dim / 2U);
@@ -3946,7 +3873,7 @@ TEST_CASE("D-007 B5-a: IR OpenPBR surface material writes the deferred G-buffer 
     auto               gbuf   = r.raster->create_gbuffer_target(dim, dim, 4U);
     REQUIRE(gbuf != nullptr);
     REQUIRE(gbuf->attachment_count() == 4U);
-    r.raster->draw_gbuffer(*gbuf, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw_gbuffer(*r.raster, *gbuf, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
 
     const auto     ch   = [](crd::u32 px, int c) { return static_cast<int>((px >> (8 * c)) & 0xFFU); };
     const auto     near = [](int got, int want) { return got >= want - 6 && got <= want + 6; };
@@ -3990,7 +3917,7 @@ TEST_CASE("D-007 B5-b: IR full OpenPBR 1.1 slab (coat/fuzz/transmission/thin-fil
     auto               gbuf = r.raster->create_gbuffer_target(dim, dim, 8U);
     REQUIRE(gbuf != nullptr);
     REQUIRE(gbuf->attachment_count() == 8U);
-    r.raster->draw_gbuffer(*gbuf, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw_gbuffer(*r.raster, *gbuf, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
 
     const auto ch   = [&](crd::u32 att, int c) { return static_cast<int>((gbuf->read_pixel(att, dim / 2U, dim / 2U) >> (8 * c)) & 0xFFU); };
     const auto near = [](int got, int want) { return got >= want - 6 && got <= want + 6; };
@@ -4027,7 +3954,7 @@ TEST_CASE("D-007 B5-c: IR shading-model tag (Gooch) + masked alpha domain on Vul
         REQUIRE(program != nullptr);
         auto gbuf = r.raster->create_gbuffer_target(16U, 16U, 4U);
         REQUIRE(gbuf != nullptr);
-        r.raster->draw_gbuffer(*gbuf, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 0.0F}, 3U);
+        crd::gputest::enc_draw_gbuffer(*r.raster, *gbuf, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 0.0F}, 3U);
         const int sm = static_cast<int>((gbuf->read_pixel(3U, 8U, 8U) >> 8U) & 0xFFU);
         WARN("[shading-model vulkan] gbuf3.G=" << sm << " (Gooch=4)");
         CHECK(sm == static_cast<int>(kir::material::ShadingModel::Gooch)); // exact enum value
@@ -4043,7 +3970,7 @@ TEST_CASE("D-007 B5-c: IR shading-model tag (Gooch) + masked alpha domain on Vul
         REQUIRE(program != nullptr);
         auto gbuf = r.raster->create_gbuffer_target(dim, dim, 4U);
         REQUIRE(gbuf != nullptr);
-        r.raster->draw_gbuffer(*gbuf, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 0.0F}, 3U);
+        crd::gputest::enc_draw_gbuffer(*r.raster, *gbuf, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 0.0F}, 3U);
         const int left  = static_cast<int>(gbuf->read_pixel(0U, dim / 4U, dim / 2U) & 0xFFU);      // opacity≈0.25<0.5 ⇒ discarded
         const int right = static_cast<int>(gbuf->read_pixel(0U, 3U * dim / 4U, dim / 2U) & 0xFFU); // opacity≈0.75 ⇒ kept (red)
         WARN("[masked vulkan] left R=" << left << " right R=" << right);
@@ -8753,7 +8680,7 @@ TEST_CASE("B16-a-4: RENDER ocean frames to BMP (open them!)", "[.ocean-frame]")
             REQUIRE(mprogram->valid());
             auto mtarget = raster->create_color_depth_target(rdim, rdim);
             REQUIRE(mtarget != nullptr);
-            raster->draw_mesh_bindless_depth(*mtarget, *mprogram, gpu::ClearColor{0.0F, 0.0F, 0.0F, 0.0F}, 1.0F,
+            crd::gputest::enc_draw_mesh_bindless_depth(*raster, *mtarget, *mprogram, gpu::ClearColor{0.0F, 0.0F, 0.0F, 0.0F}, 1.0F,
                                              gpu::DepthCompare::Less, texs, static_cast<crd::u32>(nc),
                                              static_cast<crd::u32>(mnp * mnp)); // 400 meshlet workgroups
             composite_over_sky(*mtarget, path_mesh);
@@ -12515,7 +12442,7 @@ TEST_CASE("GEO-1: an IMPORTED STL cooks, uploads, and DRAWS via vertex pulling (
     REQUIRE(storage != nullptr);
     REQUIRE(r.raster->upload_storage(*storage, 0U, stream.data(),
                                      static_cast<crd::u32>(stream.size()))); // the NEW vertex-feeding upload
-    r.raster->draw_storage(*target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, *storage, 6U);
+    crd::gputest::enc_draw_storage(*r.raster, *target, *program, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, *storage, 6U);
 
     // 5. the gate: the left half (the imported quad, mm→m scaled to x ∈ [-1,0]) is RED; the right half stays BLUE
     const crd::u32 left  = target->read_pixel(dim / 4U, dim / 2U);
@@ -13242,8 +13169,10 @@ TEST_CASE("RET-6: draw_overlay composites the CKIR line shader over an existing 
     REQUIRE(storage != nullptr);
     REQUIRE(raster->upload_storage(*storage, 0U, words.data(), static_cast<crd::u32>(words.size() * 4U)));
 
-    // 4. COMPOSITE: 6 vertices = 1 line instance, no depth (Always)
-    REQUIRE(raster->draw_overlay(*target, *line, *storage, gpu::DepthCompare::Always, 6U));
+    // 4. COMPOSITE: 6 vertices = 1 line instance, no depth (Always). Recorded through the encoder (RAF-12.4:
+    // draw_overlay is no longer a verb; the StoragePull + single-colour + Alpha-blend shape lowers to it). The
+    // pixel gate below is the real assertion.
+    crd::gputest::enc_draw_overlay(*raster, *target, *line, *storage, gpu::DepthCompare::Always, 6U);
 
     // 5. the pixel gate
     const crd::u32 on_line  = target->read_pixel(32U, 32U); // the line's core -- white over the red triangle

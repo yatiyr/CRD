@@ -47,6 +47,10 @@ enum class BlendMode : crd::u8
     Additive,            // src + dst — particles, emissive accumulation, WBOIT ACCUMULATION
     Multiply,            // src * dst — decals, WBOIT REVEALAGE uses the ONE_MINUS_SRC_COLOR form below
     RevealageMultiply,   // dst * (1 - src.rgb) — the WBOIT revealage equation, which no generic mode expresses
+    RevealComposite,     // (1 - src.a) * src + src.a * dst — the WBOIT resolve composited OVER the background:
+                         // the FS emits (avg, reveal), so this yields `avg·(1-reveal) + background·reveal`. It is the
+                         // INVERSE of Alpha's factors, which no other mode expresses — a symmetric quad hides it, an
+                         // asymmetric multi-layer scene (reveal far from 0.5) exposes it.
 };
 
 enum class DepthCompare : crd::u8
@@ -357,10 +361,6 @@ public:
     // write/read through `draw_storage`. Zero-initialised. nullptr on failure.
     [[nodiscard]] virtual std::unique_ptr<class IStorageBuffer> create_storage_buffer(crd::u32 size_bytes) = 0;
 
-    // Clear + draw with `storage` bound to the fragment shader at set 0 / binding 0 (u0 on DX12). The program's FS may
-    // read/write it (and, if it declared interlock, do so under rasterizer-ordered access). Result host-readable.
-    virtual void draw_storage(IRasterTarget& target, IRasterProgram& program, ClearColor clear, IStorageBuffer& storage,
-                              crd::u32 vertex_count) = 0;
 
     // True iff RASTERIZER-ORDERED fragment-shader storage access (`KEntry::interlock`) is usable (Vulkan:
     // VK_EXT_fragment_shader_interlock pixel-ordered; DX12: ROVs supported). draw_storage still runs a non-ordered write
@@ -409,16 +409,7 @@ public:
         return nullptr;
     }
 
-    // B4: clear `target` and dispatch `group_count` mesh workgroups (a mesh program from create_mesh_program). Colour-only —
-    // the mesh-shader proof. Default (backends without mesh shaders) ⇒ no-op. Result host-readable via `read_pixel`.
-    virtual void draw_mesh(IRasterTarget& /*target*/, IRasterProgram& /*program*/, ClearColor /*clear*/, crd::u32 /*group_count*/) {}
 
-    // B4: like draw_bindless_depth, but the geometry comes from a MESH program — `group_count` meshlet workgroups instead of a
-    // vertex count. The bindless cascade textures are bound for the mesh shader (it samples the FFT displacement). The ocean
-    // fast path. Default (no mesh shaders) ⇒ no-op; the caller uses draw_bindless_depth (vertex-pull) instead.
-    virtual void draw_mesh_bindless_depth(IRasterTarget& /*target*/, IRasterProgram& /*program*/, ClearColor /*clear*/,
-                                          float /*clear_depth*/, DepthCompare /*compare*/, ITexture* const* /*textures*/,
-                                          crd::u32 /*count*/, crd::u32 /*group_count*/) {}
 
     // --- B5: deferred G-buffer (MRT) — a material writes its OpenPBR surface to N colour attachments -------------------
 
@@ -427,9 +418,10 @@ public:
     [[nodiscard]] virtual std::unique_ptr<class IGBufferTarget>
     create_gbuffer_target(crd::u32 width, crd::u32 height, crd::u32 attachments) = 0;
 
-    // Clear all attachments to `clear`, then draw `program` (a surface material with N colour outputs) into the G-buffer via
-    // MRT. Each attachment is host-readable via `IGBufferTarget::read_pixel(attachment, x, y)`. Synchronous.
-    virtual void draw_gbuffer(IGBufferTarget& target, IRasterProgram& program, ClearColor clear, crd::u32 vertex_count) = 0;
+    // draw_gbuffer (clear all attachments, then draw the surface material's N colour outputs via MRT) de-virtualized off
+    // IRasterContext at RAF-12.4 — the command encoder lowers the G-buffer SHAPE (GeometryKind::None + RenderingDesc::
+    // gbuffer set, the clear on the clear-carrier colour entry) to each backend's private draw_gbuffer body. See
+    // detail/command_lowering.hpp (None case) and engine/*/src/*_raster_context.cpp.
 
     // B4: create a TASK→MESH→FRAGMENT program (the amplification path). The task shader runs first, computes how many mesh
     // workgroups to launch (`EmitMeshTasksEXT` / AS `DispatchMesh`) + a single-uint payload the mesh reads (`KBuiltin::TaskPayload`).
@@ -450,9 +442,6 @@ public:
         return nullptr;
     }
 
-    // B4-tess: draw `patch_count` QUAD patches through the tessellator (PATCH_LIST + patch size 4). Default ⇒ no-op.
-    virtual void draw_tess(IRasterTarget& /*target*/, IRasterProgram& /*program*/, ClearColor /*clear*/,
-                           crd::u32 /*patch_count*/) {}
 
     // B4-vis-4: a R32_UINT VISIBILITY-BUFFER target — the HW-raster half of the Nanite split (HW raster wins on big triangles).
     // The fragment shader writes a per-pixel primitive id (KBuiltin::PrimitiveId → SV_PrimitiveId / gl_PrimitiveID), which a
@@ -463,32 +452,14 @@ public:
     }
 
 
-    // B4: GPU-DRIVEN INDIRECT MESHLET DISPATCH — the mesh-workgroup count comes from `native_args` (the backend-native handle
-    // of a buffer a compute CULL pass wrote as {groupCountX, 1, 1}; `ComputeBuffer::native_handle()`), consumed by
-    // vkCmdDrawMeshTasksIndirectEXT / DX12 ExecuteIndirect(DISPATCH_MESH). The culled meshlets never dispatch and the CPU
-    // never learns the count — the Nanite scale loop. Colour-only. Default (no indirect support) ⇒ no-op.
-    virtual void draw_mesh_indirect(IRasterTarget& /*target*/, IRasterProgram& /*program*/, ClearColor /*clear*/,
-                                    void* /*native_args*/, crd::u64 /*args_offset*/) {}
 
-    // B4: dispatch a MESH program with PER-PRIMITIVE VRS — the mesh's `KEntry::shading_rate` output (a distant/low-detail
-    // meshlet shading itself at a coarser fragment rate — `gl_MeshPrimitivesEXT[].gl_PrimitiveShadingRateEXT` / SV_ShadingRate)
-    // drives the coarse rate via a REPLACE combiner. Colour-only. Default (no VRS support) ⇒ falls back to a full-rate draw.
-    virtual void draw_mesh_vrs(IRasterTarget& /*target*/, IRasterProgram& /*program*/, ClearColor /*clear*/,
-                               crd::u32 /*group_count*/) {}
 
-    // --- B17-a: WEIGHTED-BLENDED ORDER-INDEPENDENT TRANSPARENCY (WBOIT, McGuire-Bavoil 2013) -----------------------------
-    //
-    // The cheap single-pass OIT tier: transparency composited WITHOUT a depth sort. Two internal FLOAT render targets are
-    // created per call: an ACCUMULATION buffer (RGBA16F) and a REVEALAGE buffer (R16F). `transparent` is a VS+FS program
-    // whose FS emits TWO colour attachments — location 0 = the weighted premultiplied colour `vec4(rgb*a*w, a*w)` (blended
-    // ADDITIVELY: `Σ`), location 1 = the coverage `a` (blended MULTIPLICATIVELY into revealage: `Π(1-a)`), where `w` is the
-    // depth weight. `vertex_count` transparent-triangle vertices are accumulated in ONE pass, ANY draw order (the OIT
-    // property). Then `composite` (a full-screen VS+FS, `vertex_count`=3) samples accum at bindless index 0 and revealage at
-    // index 1 and resolves `rgb = accum.rgb/max(accum.a, eps)`, output `(rgb, revealage)`, blended over a `background`-cleared
-    // `target` with `(ONE_MINUS_SRC_ALPHA, SRC_ALPHA)` ⇒ `rgb·(1-reveal) + background·reveal`. `target` (RGBA8) is
-    // host-readable after. Default (no float-target / blend-equation support) ⇒ no-op. Appended at END (vtable-stable).
-    virtual void draw_wboit(IRasterTarget& /*target*/, IRasterProgram& /*transparent*/, IRasterProgram& /*composite*/,
-                            ClearColor /*background*/, crd::u32 /*vertex_count*/) {}
+    // B17-a WEIGHTED-BLENDED OIT (McGuire-Bavoil 2013): the fused draw_wboit verb was DELETED at RAF-12.4 — WBOIT is now
+    // TWO authored frame-graph passes (a `raster.mrt` accumulate with per-attachment additive/revealage_multiply blend +
+    // a `raster.composite` resolve blended `RevealComposite` = `{1-srcα, srcα}` over the background), the mission's ONE
+    // rendering path. The fused verb allocated its own accum/revealage images inside the call — a second untracked
+    // allocator the frame graph forbids. Gated per-texel vs the McGuire-Bavoil oracle on an asymmetric 4-layer scene
+    // (REN-38-A12 ORACLE, both backends); the encoder's draw_storage_mrt lowers the accumulate pass.
 
     // --- GEO-1: CPU upload into a storage buffer (VERTEX PULLING — the bindless vertex-feeding path) ---------------------
     //
@@ -524,30 +495,7 @@ public:
     // Returns false when unsupported. Appended at END (vtable-stable).
     [[nodiscard]] virtual bool download_storage(IStorageBuffer& /*storage*/) { return false; }
 
-    // GEO-7 (D-007 row 72): the SCENE-GEOMETRY draw — `draw_storage`'s vertex-pulling seam WITH a real depth pass:
-    // clear colour to `clear` and depth to `clear_depth`, then draw `vertex_count` vertices with the depth test at
-    // `compare` (depth WRITE on — this is the scene pass overlays later test against). `storage` binds at set 0 /
-    // binding 0, VERTEX+FRAGMENT visible (the GEO-1 pulling path: the VS fetches indices/vertices/instances by
-    // `VertexIndex`). Target must come from `create_color_depth_target`. Default (backends without the override)
-    // falls back to the DEPTHLESS draw_storage — the draw_bindless_depth precedent. Appended at END (vtable-stable).
-    virtual void draw_storage_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
-                                    float /*clear_depth*/, DepthCompare /*compare*/, IStorageBuffer& storage,
-                                    crd::u32 vertex_count)
-    {
-        draw_storage(target, program, clear, storage, vertex_count);
-    }
 
-    // GEO-8 showcase fix: the CONTINUING scene-geometry draw — draw_storage_depth WITHOUT the clear: colour and
-    // depth both loadOp=LOAD, depth test at `compare` with WRITE ON, so a multi-group scene composes correctly
-    // (group N occludes/is occluded by groups 0..N-1 through the REAL depth buffer). The frame's FIRST scene draw
-    // uses draw_storage_depth (the clear); every subsequent group uses this. Target must have been drawn at least
-    // once this frame. Default (backends without the override) falls back to the CLEARING variant — last-drawn
-    // wins, visibly wrong but never silently absent. Appended at END (vtable-stable).
-    virtual void draw_storage_depth_load(IRasterTarget& target, IRasterProgram& program, DepthCompare compare,
-                                         IStorageBuffer& storage, crd::u32 vertex_count)
-    {
-        draw_storage_depth(target, program, ClearColor{}, 0.0F, compare, storage, vertex_count);
-    }
 
     // REN-1 (D-007 row 98): create a FRAME GRAPH bound to this context — the async single-submission surface
     // that replaces the synchronous submit+wait+readback-per-draw substrate (see frame_graph.hpp). Passes
@@ -568,105 +516,15 @@ public:
     // END of the vtable (D135). Default is a no-op so a backend without it fails VISIBLY (nothing renders) rather
     // than by silently drawing into attachment 0 only.
 
-    virtual void draw_storage_mrt(IRasterTarget* const* /*targets*/, crd::u32 /*count*/, IRasterProgram& /*program*/,
-                                  ClearColor /*clear*/, float /*clear_depth*/, DepthCompare /*compare*/,
-                                  IStorageBuffer& /*storage*/, crd::u32 /*vertex_count*/,
-                                  const BlendMode* /*blend*/ = nullptr)
-    {
-    }
 
-    // RET-6 (ADR-0105): the OVERLAY draw — compose instanced primitives ONTO an existing target: color loadOp=LOAD
-    // (the previous contents STAY — never cleared), standard alpha blending (srcAlpha · 1−srcAlpha), and a READ-ONLY
-    // depth test at `compare` when the target carries a depth buffer (depth writes are never enabled; on a depthless
-    // target `compare` is ignored). `storage` binds at set 0 / binding 0, VERTEX+FRAGMENT visible — the VS pulls
-    // per-instance records by `VertexIndex` (the GEO-1 vertex-pulling seam), which is what lets ONE program + dynamic
-    // state replace the retiring rhi renderer's six PSOs. The target must have been drawn at least once (its contents
-    // are what the overlay composites over). Multiple overlay draws CHAIN — each composites over the last, the
-    // debug-draw variant order (Test → Always → GreaterDimmed). Returns false when refused (invalid target/program,
-    // an MSAA target, or a backend without the capability) — refusal over a silent wrong draw. Appended at END.
-    [[nodiscard]] virtual bool draw_overlay(IRasterTarget& /*target*/, IRasterProgram& /*program*/,
-                                            IStorageBuffer& /*storage*/, DepthCompare /*compare*/,
-                                            crd::u32 /*vertex_count*/) { return false; }
+    // RET-6 / REN-39: the OVERLAY draw (draw_overlay / draw_overlay_range) de-virtualized off IRasterContext at
+    // RAF-12.4 — the command encoder lowers the overlay SHAPE (a StoragePull draw with a single colour attachment
+    // that LOADs and Alpha-blends + a read-only depth test carried by `compare`) to each backend's private overlay
+    // body. See engine/*/src/*_raster_context.cpp and detail/command_lowering.hpp (StoragePull case).
 
-    // REN-2 (D-007 row 99) Half B: the TEXTURED forward scene draw — draw_storage_depth PLUS a sampled material
-    // texture. `storage` binds at set 0 / binding 0 (the VS vertex-pulls position+UV by VertexIndex, the GEO-1 seam);
-    // `texture` binds at binding 1 + the default sampler at binding 2 (draw_textured's layout), so the FS samples the
-    // material's base-color (albedo) map at the pulled UV instead of a flat colour. Cleared colour+depth, depth test
-    // at `compare` with WRITE on (a multi-group scene composes through the real depth buffer, like draw_storage_depth).
-    // Records into the frame graph in recording mode. Default (backends without the override) DROPS the texture and
-    // falls back to draw_storage_depth — flat-coloured but never absent. Appended at END (vtable-stable).
-    virtual void draw_storage_textured_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
-                                             float /*clear_depth*/, DepthCompare compare, IStorageBuffer& storage,
-                                             class ITexture& /*texture*/, crd::u32 vertex_count)
-    {
-        draw_storage_depth(target, program, clear, 0.0F, compare, storage, vertex_count);
-    }
 
-    // The depth-LOAD companion (the CONTINUING textured scene draw — no clear; colour+depth persist), for group N>0.
-    virtual void draw_storage_textured_depth_load(IRasterTarget& target, IRasterProgram& program, DepthCompare compare,
-                                                  IStorageBuffer& storage, class ITexture& /*texture*/,
-                                                  crd::u32 vertex_count)
-    {
-        draw_storage_depth_load(target, program, compare, storage, vertex_count);
-    }
 
-    // ── REN-3.1 (D-007 row 100): the DEPTH-ONLY pass — the shadow-map substrate. ────────────────────────────────
-    // Renders `storage`-pulled geometry writing ONLY depth: no colour attachment is bound at all (Vulkan
-    // `vkCmdBeginRendering` with colorAttachmentCount = 0 + pDepthAttachment; DX12 `OMSetRenderTargets(0, nullptr,
-    // FALSE, &dsv)`). `target` supplies the depth attachment — for a shadow pass that is a frame-graph `D32Float`
-    // transient declared `sampled`, which a LATER pass then reads through the COMPARISON sampler (`shadow_factor`).
-    // This closes the gap `ckir_lighting.hpp` names: every shadow test until now bound a CPU-UPLOADED depth map
-    // (`create_depth_texture`), because the device could not RENDER one.
-    //
-    // Depth is CLEARED to `clear_depth` and written with compare `compare` (a shadow map is a plain depth render:
-    // clear to the far value, LessEqual/GreaterEqual per the projection's convention). Records into the frame graph
-    // in recording mode, exactly like `draw_storage_depth`.
-    //
-    // ⛔ APPENDED AT END (vtable-stable, D135): inserting a pure-virtual mid-interface shifts every later slot and
-    // silently dispatches to the wrong method under win-release LTCG. The default is a NO-OP rather than a colour
-    // fallback — a backend without a depth-only path must produce NO shadow map, not a wrong one that reads as a
-    // valid (all-lit) shadow term.
-    virtual void draw_storage_depth_only(IRasterTarget& /*target*/, IRasterProgram& /*program*/,
-                                         float /*clear_depth*/, DepthCompare /*compare*/,
-                                         IStorageBuffer& /*storage*/, crd::u32 /*vertex_count*/)
-    {
-    }
 
-    // The depth-LOAD companion — the CONTINUING depth-only draw (no clear; the map so far persists), for mesh N>0
-    // of a shadow pass. ⛔ WITHOUT THIS A MULTI-MESH SHADOW PASS IS BROKEN: every `draw_storage_depth_only` clears,
-    // so drawing a second occluder would WIPE the first one's depth and the shadow map would contain only the last
-    // mesh. Found by the REN-3.1 bench (the depth arm did N clears while the colour arm did 1 clear + N-1 loads,
-    // which showed up as depth-only being *slower* on DX12 — a measurement artefact that turned out to be pointing
-    // at a real missing API). Same clear/load split `draw_storage_depth` / `draw_storage_depth_load` already has.
-    // Appended at END (vtable-stable, D135).
-    virtual void draw_storage_depth_only_load(IRasterTarget& /*target*/, IRasterProgram& /*program*/,
-                                              DepthCompare /*compare*/, IStorageBuffer& /*storage*/,
-                                              crd::u32 /*vertex_count*/)
-    {
-    }
-
-    // ── REN-3.2-b: the SHADOWED scene draw. Appended at the END of the vtable (D135). ──
-    // Identical to `draw_storage_textured_depth` in every respect but ONE: the sampler bound at slot 2 is the
-    // COMPARISON sampler, not the filtering one. The descriptor layout (storage 0 · sampled image 1 · sampler 2)
-    // is unchanged, which is why this needs no new set layout on either backend — a shadow lookup is a normal
-    // texture read whose sampler happens to compare instead of filter.
-    // `shadow_atlas` is the layered depth atlas from REN-3.2-a; the FS selects its cascade via the layer coord.
-    // ⛔ Choosing the comparison sampler from the CALL rather than from the texture keeps it impossible to
-    // sample a shadow map with a filtering sampler by accident — the two draws are different entry points.
-    // The default drops the atlas and draws unshadowed, so a backend that has not implemented it renders a
-    // correct-but-unshadowed image rather than nothing.
-    virtual void draw_storage_shadowed_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
-                                             float /*clear_depth*/, DepthCompare compare, IStorageBuffer& storage,
-                                             class ITexture& /*shadow_atlas*/, crd::u32 vertex_count)
-    {
-        draw_storage_depth(target, program, clear, 0.0F, compare, storage, vertex_count);
-    }
-    virtual void draw_storage_shadowed_depth_load(IRasterTarget& target, IRasterProgram& program,
-                                                  DepthCompare compare, IStorageBuffer& storage,
-                                                  class ITexture& /*shadow_atlas*/, crd::u32 vertex_count)
-    {
-        draw_storage_depth_load(target, program, compare, storage, vertex_count);
-    }
 
     // ── ⭐ REN-38-A6: THE TRANSFER VERBS. Appended at the END of the vtable (D135). ──
     // Moving pixels from one target to another without a shader. Every real frame graph needs these — a
@@ -692,26 +550,9 @@ public:
     // rescaling-blit (DX12 rescales through a fullscreen DRAW; its copy engine has no blit) / MSAA-resolve lowering
     // moved into each backend's PRIVATE method, reached only by CommandEncoder<Ctx> through a TransferDesc.
 
-    // ── ⭐ REN-38-A7 / A8: the CONTINUING tessellation and mesh draws. Appended at the END (D135). ──
-    // `draw_tess` and `draw_mesh` both CLEAR. That is right for the single-draw proof they were written for and
-    // WRONG for a pass that iterates a draw list: ⛔ every draw after the first would wipe the ones before it, so
-    // a scene with three tessellated meshes would render exactly ONE — the last — and look entirely plausible.
-    // This is the multi-pass load-not-clear scar in its tessellation/mesh form, and it is why an authored
-    // `raster.tess` / `raster.mesh` pass needs a continuing verb before it can iterate anything.
-    //
-    // Colour and depth LOAD (previous contents kept); otherwise identical to the clearing verb. The FIRST draw of
-    // a pass uses the clearing form, every later one uses this.
-    virtual void draw_tess_load(IRasterTarget& /*target*/, IRasterProgram& /*program*/, crd::u32 /*patch_count*/) {}
-    virtual void draw_mesh_load(IRasterTarget& /*target*/, IRasterProgram& /*program*/, crd::u32 /*group_count*/) {}
 
 
 
-    // REN-38-A10: the mesh half of the same loop — `draw_mesh_indirect` against a graph-tracked buffer rather
-    // than a raw backend handle, so an authored pass can name the args buffer a compute pass just wrote.
-    virtual void draw_mesh_indirect_buffer(IRasterTarget& /*target*/, IRasterProgram& /*program*/,
-                                           ClearColor /*clear*/, IStorageBuffer& /*args*/, crd::u64 /*args_offset*/)
-    {
-    }
 
 
 
@@ -748,19 +589,6 @@ public:
 
 
 
-    // ── ⭐ REN-38-F6+: STORAGE-BOUND tessellation. Appended at the END (D135). ──
-    // `draw_tess` binds nothing, so a tessellation VS could only ever be procedural — the pull idiom (real
-    // control points from a buffer, the GEO-1 seam) was unreachable for the one pipeline built to displace real
-    // geometry. These bind `storage` at set 0 / binding 0 exactly as `draw_storage` does; the `_load` form is
-    // the multi-draw continuation (the load-not-clear scar, amplification form). Defaults: NO-OPs, visibly.
-    virtual void draw_tess_storage(IRasterTarget& /*target*/, IRasterProgram& /*program*/, ClearColor /*clear*/,
-                                   IStorageBuffer& /*storage*/, crd::u32 /*patch_count*/)
-    {
-    }
-    virtual void draw_tess_storage_load(IRasterTarget& /*target*/, IRasterProgram& /*program*/,
-                                        IStorageBuffer& /*storage*/, crd::u32 /*patch_count*/)
-    {
-    }
 
     // ── ⭐ REN-38-F11: a colour + DEPTH-STENCIL target (D24S8). Appended at the END (D135). ──
     // The F10 pass-state vocabulary declared, cooked and installed every stencil op — and no target carried the
@@ -773,40 +601,7 @@ public:
         return nullptr;
     }
 
-    // ── ⭐ REN-38-F6+: STORAGE-BOUND mesh dispatch. Appended at the END (D135). ──
-    // The mesh twin of `draw_tess_storage`: `draw_mesh` bound nothing, so an authored mesh stage could only ever
-    // GENERATE geometry — the meshlet-fetch idiom (real vertices pulled from the scene buffer by workgroup) was
-    // unreachable. Binds `storage` at set 0 / binding 0 exactly as `draw_storage` does; `_load` continues.
-    virtual void draw_mesh_storage(IRasterTarget& /*target*/, IRasterProgram& /*program*/, ClearColor /*clear*/,
-                                   IStorageBuffer& /*storage*/, crd::u32 /*group_count*/)
-    {
-    }
-    virtual void draw_mesh_storage_load(IRasterTarget& /*target*/, IRasterProgram& /*program*/,
-                                        IStorageBuffer& /*storage*/, crd::u32 /*group_count*/)
-    {
-    }
 
-    // ── ⭐⭐ REN-38: the COMBINED textured+shadowed scene draw. Appended at the END (vtable-stable). ──────
-    // The material base-colour map binds at set 0 bindings 1/2 and the shadow atlas at ITS OWN 4/5 with the
-    // comparison sampler — one draw samples both. Until this verb the two fought over bindings 1/2, so a group
-    // could keep its texture OR its shadow but never both (the REN-3.2-b regression the user saw immediately).
-    // ⛔ The default falls back to the TEXTURED draw: on a backend without the override the group keeps its map
-    // and loses only the shadow — the visually-lesser loss, and the same side of the trade the renderer already
-    // chose. Both real backends override, so the fallback exists only for stubs.
-    virtual void draw_storage_textured_shadowed_depth(IRasterTarget& target, IRasterProgram& program,
-                                                      ClearColor clear, float clear_depth, DepthCompare compare,
-                                                      IStorageBuffer& storage, ITexture& texture,
-                                                      ITexture& /*shadow_atlas*/, crd::u32 vertex_count)
-    {
-        draw_storage_textured_depth(target, program, clear, clear_depth, compare, storage, texture, vertex_count);
-    }
-    virtual void draw_storage_textured_shadowed_depth_load(IRasterTarget& target, IRasterProgram& program,
-                                                           DepthCompare compare, IStorageBuffer& storage,
-                                                           ITexture& texture, ITexture& /*shadow_atlas*/,
-                                                           crd::u32 vertex_count)
-    {
-        draw_storage_textured_depth_load(target, program, compare, storage, texture, vertex_count);
-    }
 
     // ── ⭐⭐ REN-38: MULTI-DRAW — N depth-tested storage draws in ONE device command. Appended at END. ──────
     // The batching measurement (6.1x on Vulkan, 38.8x on DX12 at 64 draws) named the per-draw descriptor
@@ -834,39 +629,6 @@ public:
     [[nodiscard]] virtual crd::u64 compute_dispatch_count() const noexcept { return 0U; }
     virtual void compute_diag(crd::u32 phase) noexcept { (void)phase; }
     [[nodiscard]] virtual crd::u64 compute_diag_count(crd::u32 phase) const noexcept { (void)phase; return 0U; }
-    virtual void draw_storage_multi_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
-                                          float clear_depth, DepthCompare compare, IStorageBuffer& storage,
-                                          const crd::u32* vertex_counts, crd::u32 count,
-                                          crd::u32 /*first_draw_index*/, bool load_target)
-    {
-        for (crd::u32 i = 0; i < count; ++i)
-        {
-            if (i == 0U && !load_target)
-            {
-                draw_storage_depth(target, program, clear, clear_depth, compare, storage, vertex_counts[i]);
-            }
-            else { draw_storage_depth_load(target, program, compare, storage, vertex_counts[i]); }
-        }
-    }
-    // ⭐⭐ REN-39-C1: the DEPTH-ONLY twin of `draw_storage_multi_depth` (NO colour attachment) — the PULL shadow-cascade
-    // batch. ⛔ THE GAP THIS FILLS: the command encoder routed a depth-only MultiStoragePull into the colour verb
-    // above, which needs a colour target, so a pull cascade (color0 == null) drew NOTHING and the atlas self-shadowed
-    // to black. The default serves index-free programs (clear-once/load-rest); a backend a DrawIndex-reading (rebasing)
-    // program runs on MUST override to push `first_draw_index`, exactly as the colour twin does.
-    virtual void draw_storage_multi_depth_only(IRasterTarget& target, IRasterProgram& program, float clear_depth,
-                                               DepthCompare compare, IStorageBuffer& storage,
-                                               const crd::u32* vertex_counts, crd::u32 count,
-                                               crd::u32 /*first_draw_index*/, bool load_target)
-    {
-        for (crd::u32 i = 0; i < count; ++i)
-        {
-            if (i == 0U && !load_target)
-            {
-                draw_storage_depth_only(target, program, clear_depth, compare, storage, vertex_counts[i]);
-            }
-            else { draw_storage_depth_only_load(target, program, compare, storage, vertex_counts[i]); }
-        }
-    }
 
     // ── ⭐⭐ 38-G1 perf: BATCHED UPLOADS. Appended at END. ─────────────────────────────────────────────────
     // `upload_storage` is contractually synchronous — staged copy, submit, WAIT — which is correct for a test
@@ -882,35 +644,6 @@ public:
     virtual void begin_upload_batch() {}
     virtual void end_upload_batch() {}
 
-    // ── ⭐⭐ REN-39-A1: the INDEXED storage draw — post-transform vertex REUSE for the pull idiom. ────────────
-    // The frame is MEASURED vertex-bound (2026-07-28 board: cascade3 3.27 ms + forward 3.70 ms, map-size probe
-    // moved nothing): the pull idiom draws NON-INDEXED (`vertex_count = visible × index_count`), so every
-    // triangle corner re-pulls and re-transforms with ZERO post-transform reuse. This verb draws INDEXED against
-    // the SAME storage buffer: `index_offset_bytes` (4-aligned) locates the u32 index section INSIDE `storage`
-    // (`vkCmdBindIndexBuffer` / an IBV at that offset — zero data duplication), `index_count` indices feed the
-    // IA, and the VS receives the INDEX VALUE as `VertexIndex` — the per-vertex `indices[]` load disappears too.
-    // `instance_count` instances; the VS finds its instance via `InstanceIndex`.
-    //
-    // ⛔ NO firstInstance AND NO base-vertex parameter, BY CONSTRUCTION: Vulkan's `gl_InstanceIndex` INCLUDES
-    // firstInstance while DX12's `SV_InstanceID` does NOT, so any offset carried there would make the two
-    // backends read DIFFERENT instances. Both are always 0 in every backend; a per-draw instance-list base rides
-    // the DrawIndex channel / draw table (39-A2), where both backends agree.
-    //
-    // ⛔ STORAGE BINDS READ-ONLY DURING AN INDEXED DRAW — a DECLARED contract, not a convention: DX12 must move
-    // the buffer to INDEX_BUFFER | shader-read states for the IA fetch, and those cannot combine with
-    // UNORDERED_ACCESS. A program that STORES to storage uses the non-indexed verbs; the indexed vertex-cook
-    // mode refuses StorageStore (39-B2).
-    //
-    // The default is a NO-OP, visibly: a non-indexed fallback would misaddress EVERY vertex (an indexed-mode
-    // program's pull chain assumes index-value VertexIndex), which is the silently-wrong shape this engine
-    // refuses. `load_target` false ⇒ clear colour+depth; true ⇒ both LOAD (the standard first/continuing split).
-    // Appended at END (vtable-stable, D135).
-    virtual void draw_storage_indexed_depth(IRasterTarget& /*target*/, IRasterProgram& /*program*/,
-                                            ClearColor /*clear*/, float /*clear_depth*/, DepthCompare /*compare*/,
-                                            IStorageBuffer& /*storage*/, crd::u32 /*index_offset_bytes*/,
-                                            crd::u32 /*index_count*/, crd::u32 /*instance_count*/, bool /*load_target*/)
-    {
-    }
 
     // ── ⭐⭐ REN-39-A2: INDEXED MULTI-DRAW — N indexed draws in ONE device command. Appended at END. ──────────
     // The indexed twin of `draw_storage_multi_depth`: ONE descriptor set, ONE state block, ONE index-buffer bind
@@ -934,74 +667,8 @@ public:
         crd::u32 instance_count; // the caller's per-draw visible count
         crd::u32 first_index;    // start within the bound index section (in INDICES, not bytes)
     };
-    virtual void draw_storage_multi_indexed_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
-                                                  float clear_depth, DepthCompare compare, IStorageBuffer& storage,
-                                                  crd::u32 index_offset_bytes, const IndexedDraw* draws, crd::u32 count,
-                                                  crd::u32 /*first_draw_index*/, bool load_target)
-    {
-        if (draws == nullptr)
-        {
-            return;
-        }
-        for (crd::u32 i = 0; i < count; ++i)
-        {
-            draw_storage_indexed_depth(target, program, clear, clear_depth, compare, storage,
-                                       index_offset_bytes + draws[i].first_index * 4U, draws[i].index_count,
-                                       draws[i].instance_count, load_target || i > 0U);
-        }
-    }
 
-    // ── ⭐⭐ REN-39-C1: INDEXED DEPTH-ONLY MULTI-DRAW — the shadow-cascade pass, indexed. Appended at END. ────
-    // The cascade passes are HALF the measured vertex cost (cascade3 alone 3.27 ms), all of it the non-indexed
-    // pull re-shading every corner into a depth map. One index-buffer bind, N DRAW_INDEXED commands, NO colour
-    // attachment — the depth-only shape `draw_storage_depth_only` established, with the A2 verb's per-draw
-    // `IndexedDraw` contract (first_index addresses within the bound section; base-vertex/first-instance are
-    // unrepresentable). ⛔ The default is a NO-OP, visibly: a colour-binding fallback would violate the pass
-    // shape and a non-indexed one would misaddress every vertex — a backend without this produces NO shadow
-    // map, never a wrong one.
-    virtual void draw_storage_multi_indexed_depth_only(IRasterTarget& /*target*/, IRasterProgram& /*program*/,
-                                                       float /*clear_depth*/, DepthCompare /*compare*/,
-                                                       IStorageBuffer& /*storage*/, crd::u32 /*index_offset_bytes*/,
-                                                       const IndexedDraw* /*draws*/, crd::u32 /*count*/,
-                                                       bool /*load_target*/)
-    {
-    }
 
-    // ── ⭐⭐ REN-39-C1: the INDEXED SAMPLED scene draw — one verb, four shapes by NULLABILITY. Appended at END.
-    // The forward pass's per-group texture state breaks batching, so its textured / shadowed / combined items
-    // draw one at a time — this is their indexed form. `texture` non-null binds the base-colour map at
-    // bindings 1/2 (t1/s2) through the FILTERING sampler; `atlas` non-null binds the shadow atlas at ITS OWN
-    // 4/5 (t4/s5) through the COMPARISON sampler; both null is the plain indexed single. ⛔ No sampler
-    // ambiguity is possible — each pointer has exactly one sampler semantics, which is why one verb with two
-    // nullables is safe where one verb with a sampler ENUM would not be. `first_index` addresses within the
-    // section at `index_offset_bytes` (the multi contract, so a caller uses ONE addressing convention).
-    // Default: a NO-OP, visibly (a pull fallback would misaddress; a texture-dropping fallback would silently
-    // unshadow) — both real backends override.
-    virtual void draw_storage_indexed_sampled_depth(IRasterTarget& /*target*/, IRasterProgram& /*program*/,
-                                                    ClearColor /*clear*/, float /*clear_depth*/,
-                                                    DepthCompare /*compare*/, IStorageBuffer& /*storage*/,
-                                                    crd::u32 /*index_offset_bytes*/, crd::u32 /*index_count*/,
-                                                    crd::u32 /*instance_count*/, crd::u32 /*first_index*/,
-                                                    ITexture* /*texture*/, ITexture* /*atlas*/, bool /*load_target*/,
-                                                    crd::u32 /*first_draw_index*/ = 0U)
-    {
-    }
-
-    // ⭐ REN-39 (the overlay-corruption fix): `draw_overlay` with a FIRST-VERTEX offset, so ONE packed upload can
-    // serve every depth-variant bucket of a submission. The old per-bucket workflow re-uploaded the SAME instance
-    // region between draws — but uploads complete BEFORE the frame's command buffer executes (the 38-G1 batch
-    // contract, and the synchronous path equally), so every bucket's draw read the LAST bucket's bytes: dashed
-    // lines, vanishing solids, non-deterministic per frame. With this verb the caller packs all buckets ONCE and
-    // selects a bucket's range per draw — `first_vertex` lands in the expand VS's `VertexIndex`, whose
-    // instance = vid / verts_per_instance addressing makes the offset pick the bucket's first record (both
-    // backends: gl_VertexIndex and SV_VertexID include the draw's first-vertex). Default (no override): the
-    // zero-offset call chains to `draw_overlay`; a nonzero offset is REFUSED rather than drawn wrong. At END.
-    [[nodiscard]] virtual bool draw_overlay_range(IRasterTarget& target, IRasterProgram& program,
-                                                  IStorageBuffer& storage, DepthCompare compare,
-                                                  crd::u32 first_vertex, crd::u32 vertex_count)
-    {
-        return first_vertex == 0U && draw_overlay(target, program, storage, compare, vertex_count);
-    }
 
     // ── ⭐⭐ REN-39-D1: WHICH WAY IS +Y IN CLIP SPACE. Appended at END. ───────────────────────────────────────
     // Vulkan's NDC has +Y pointing DOWN the framebuffer; D3D12's points UP. For ordinary rendering this is
@@ -1057,42 +724,7 @@ public:
     [[nodiscard]] virtual crd::u32 indirect_command_arg_offset() const noexcept { return 0U; }
 
     [[nodiscard]] virtual bool indirect_count_supported() const noexcept { return false; }
-    virtual void draw_storage_multi_indexed_depth_only_indirect(
-        IRasterTarget& /*target*/, IRasterProgram& /*program*/, float /*clear_depth*/, DepthCompare /*compare*/,
-        IStorageBuffer& /*storage*/, crd::u32 /*index_offset_bytes*/, IStorageBuffer& /*args*/,
-        crd::u32 /*args_offset_bytes*/, IStorageBuffer* /*count_buf*/, crd::u32 /*count_offset_bytes*/,
-        crd::u32 /*max_draws*/, bool /*load_target*/, crd::u32 /*first_draw_index*/ = 0U)
-    {
-    }
 
-    // ── ⭐⭐ REN-40-A: the GEOMETRY half of the same idea — colour + depth, count from device memory. ──────────
-    // ⛔⛔ WITHOUT THIS THE CULL SAVES NOTHING ON THE CAMERA VIEW. The shadow half alone lets the cascade draws
-    // take their counts from the device, but the FORWARD pass still needed a CPU-known `instance_count` — so the
-    // CPU had to keep running the camera cull and keep uploading its visible list, which is the bulk of the work
-    // the slice exists to remove (measured ~160 ms of a 337 ms frame at 1M instances). A cull that only the
-    // shadow passes can consume is a cull the frame still pays for twice.
-    // ⛔ `map` / `atlas` are the SAME two nullable texture slots `draw_storage_indexed_sampled_depth` takes —
-    // base colour at 1/2 and the shadow atlas at 4/5 — because this verb replaces exactly that call for a
-    // GPU-driven item, and a shape that dropped one of them would silently unshadow the textured groups (the
-    // REN-38 "textured monuments lose their shadows" failure, one layer further along). Everything else follows
-    // the depth-only sibling: args from `args`, count from `count_buf` where the device has the ability, clamped
-    // to `max_draws` where it does not.
-    // ⛔⛔ REN-40-C2: `first_draw_index` APPENDED — and its absence was a silent, backend-shaped defect.
-    // A rebased program reads `table[DrawIndex]` for its region base AND (since REN-40-C2) its LOD SLOT, and on
-    // Vulkan the row arrives ONLY as a push constant the verb issues. The CPU-args multi verbs have always
-    // pushed it; these indirect twins never did, so every GPU-driven draw read ROW 0 — the right answer for a
-    // single-group frame with base 0, which is exactly why it survived REN-40-A's gates, and the wrong answer
-    // for every group past the first and every LOD slot past 0. The visible symptom was levels 1 and coarser
-    // drawing NOTHING while the device's own commands were provably correct (slot 1: 13 instances,
-    // index_count 9054, first_index 18784).
-    virtual void draw_storage_multi_indexed_indirect(
-        IRasterTarget& /*target*/, IRasterProgram& /*program*/, ClearColor /*clear*/, float /*clear_depth*/,
-        DepthCompare /*compare*/, IStorageBuffer& /*storage*/, crd::u32 /*index_offset_bytes*/, ITexture* /*map*/,
-        ITexture* /*atlas*/, IStorageBuffer& /*args*/, crd::u32 /*args_offset_bytes*/,
-        IStorageBuffer* /*count_buf*/, crd::u32 /*count_offset_bytes*/, crd::u32 /*max_draws*/,
-        bool /*load_target*/, crd::u32 /*first_draw_index*/ = 0U)
-    {
-    }
 
     // REN-40-G1: depth prepass support. When set, the NEXT draw verb that begins a render pass will LOAD the depth
     // attachment instead of clearing it, while still CLEARING the colour attachment normally. The flag is consumed

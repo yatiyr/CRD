@@ -297,6 +297,7 @@ bool to_blend(std::string_view s, crd::gpu::BlendMode& out)
     if (s == "additive")           { out = B::Additive;           return true; }
     if (s == "multiply")           { out = B::Multiply;           return true; }
     if (s == "revealage_multiply") { out = B::RevealageMultiply;  return true; }
+    if (s == "reveal_composite")   { out = B::RevealComposite;    return true; }
     return false;
 }
 bool to_sort(std::string_view s, FrameSortMode& out)

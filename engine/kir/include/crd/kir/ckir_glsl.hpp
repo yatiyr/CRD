@@ -718,7 +718,12 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
     }
     // REN-40-F: quat/slerp helper functions — the COMPUTE-KERNEL parity of the emit_stage_glsl scan at ~line 1426.
     {
-        bool qm = false, qc = false, qr = false, qa = false, qt = false, sl = false;
+        bool qm = false;
+        bool qc = false;
+        bool qr = false;
+        bool qa = false;
+        bool qt = false;
+        bool sl = false;
         for (int i = 0; i < n; ++i) { switch (g.node(i).op) { case KOp::QuatMul: qm = true; break; case KOp::QuatConj: qc = true; break; case KOp::QuatRotate: qr = true; break; case KOp::QuatAxisAngle: qa = true; break; case KOp::QuatToMat3: qt = true; break; case KOp::Slerp: sl = true; break; default: break; } }
         if (qm) { s.append("vec4 crd_qmul(vec4 a,vec4 b){return vec4(a.w*b.xyz+b.w*a.xyz+cross(a.xyz,b.xyz),a.w*b.w-dot(a.xyz,b.xyz));}\n"); }
         if (qc) { s.append("vec4 crd_qconj(vec4 q){return vec4(-q.xyz,q.w);}\n"); }
@@ -744,6 +749,35 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
     // temped[] is already 1 and the children are already declared) and makes emission linear in graph size.
     crd::containers::Array<crd::u8> declseen(scratch);
     declseen.resize(static_cast<crd::usize>(n), 0);
+    // ⛔⛔ READ-AFTER-WRITE ORDERING (the B18-e hair-filter scar). A BufferLoad is an INLINE op, so a computed node that
+    // reads one inlines `buf[...]` at its EMISSION point. `hoist_decls` (below) hoists shared temps to the top of an If
+    // scope — but a node that consumes a value the author MATERIALIZED after a loop (the normalise `sum/weight` divisions,
+    // frozen after the accumulation loop) must NOT be hoisted: hoisting inlines the raw `buf[...]` read ABOVE the loop and
+    // reads the pre-loop zeros (colour sums came out 0 while the weight sum — a plain materialized load, not hoisted —
+    // was correct). `materialized` marks the frozen nodes; `consumes_mat` marks anything that transitively depends on one;
+    // `in_hoist` makes `decl` DEFER those to their in-order statement point, where the materialized temp already exists.
+    crd::containers::Array<crd::u8> materialized(scratch);
+    materialized.resize(static_cast<crd::usize>(n), 0);
+    for (int si = 0; si < g.stmt_count(); ++si)
+    {
+        const KStmt& mst = g.stmt(si);
+        if (mst.kind == KStmtKind::Materialize && mst.value >= 0) { materialized[static_cast<crd::usize>(mst.value)] = 1U; }
+    }
+    crd::containers::Array<crd::i8> mat_memo(scratch);
+    mat_memo.resize(static_cast<crd::usize>(n), -1);
+    bool       in_hoist     = false;
+    const auto consumes_mat = [&](auto&& self, int node) -> bool {
+        if (node < 0) { return false; }
+        if (mat_memo[static_cast<crd::usize>(node)] >= 0) { return mat_memo[static_cast<crd::usize>(node)] != 0; }
+        bool         r  = materialized[static_cast<crd::usize>(node)] != 0U;
+        const KNode& nd = g.node(node);
+        if (!r && nd.a >= 0) { r = self(self, nd.a); }
+        if (!r && nd.b >= 0) { r = self(self, nd.b); }
+        if (!r && nd.c >= 0) { r = self(self, nd.c); }
+        if (!r && nd.d >= 0) { r = self(self, nd.d); }
+        mat_memo[static_cast<crd::usize>(node)] = r ? static_cast<crd::i8>(1) : static_cast<crd::i8>(0);
+        return r;
+    };
     const auto is_inline_op = [](KOp op) -> bool {
         switch (op)
         {
@@ -965,6 +999,9 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
     // decl: materialize temps for the arithmetic nodes in a subtree (children first, CSE by node id).
     const auto decl = [&](auto&& self, int node) -> void {
         if (declseen[static_cast<crd::usize>(node)] != 0U) { return; } // DAG memo — see declseen above
+        // ⛔⛔ B18-e: during the hoist pre-pass, DEFER a node that consumes a materialized value to its in-order emission
+        // (do not mark it seen) — hoisting would inline its buffer read above the producing loop/stores.
+        if (in_hoist && consumes_mat(consumes_mat, node)) { return; }
         declseen[static_cast<crd::usize>(node)] = 1U;
         const KNode& nd = g.node(node);
         if (nd.op == KOp::BufferLoad || nd.op == KOp::SharedLoad) { self(self, nd.b); return; } // resource leaf: only the index carries temps
@@ -988,7 +1025,9 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
     // ⛔ Does NOT recurse into FOR bodies: a for-loop introduces a loop variable (`lv<index>`) scoped to the loop;
     // hoisting nodes that reference it to the enclosing scope emits temps that use an undeclared identifier.
     const auto hoist_decls = [&](auto&& self_h, int begin, int count) -> void {
-        int i = begin;
+        const bool ph = in_hoist;
+        in_hoist      = true; // ⛔⛔ B18-e: `decl` DEFERS materialized-consuming nodes while this is set
+        int i         = begin;
         while (i < begin + count)
         {
             const KStmt& st = g.stmt(i);
@@ -996,7 +1035,6 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
             {
             case KStmtKind::BufferStore: case KStmtKind::SharedStore: case KStmtKind::SharedAtomicAdd:
             case KStmtKind::BufferAtomicAdd: case KStmtKind::BufferAtomicMin:
-                decl(decl, st.index); decl(decl, st.value); ++i; break;
             case KStmtKind::BufferAtomicAddFetch: case KStmtKind::BufferAtomicExchange:
                 decl(decl, st.index); decl(decl, st.value); ++i; break;
             case KStmtKind::Materialize: decl(decl, st.value); ++i; break;
@@ -1007,6 +1045,7 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
             default: ++i; break;
             }
         }
+        in_hoist = ph;
     };
     const auto emit_body = [&](auto&& self_b, int begin, int count) -> void {
         int i = begin;

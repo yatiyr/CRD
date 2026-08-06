@@ -19,6 +19,7 @@
 
 #include <crd/anim/pose.hpp>
 #include <crd/geometry/primitives/transform.hpp>
+#include <crd/gpu/command_model.hpp> // RAF-12.4-F5: draw_clusters records draw_mesh_storage through the encoder
 #include <crd/gpu/context.hpp>
 #include <crd/kir/ckir.hpp>
 #include <crd/kir/ckir_cook.hpp>     // REN-37.1: build_fs_for_pass - the material VARIANT cook path
@@ -4140,7 +4141,26 @@ void SceneRenderer::draw_clusters(crd::gpu::IRasterTarget& target, crd::gpu::ISt
     if (m_impl->raster == nullptr || cluster_count == 0U) { return; }
     crd::gpu::IRasterProgram* prog = m_impl->ensure_cluster_mesh_program();
     if (prog == nullptr) { return; } // no mesh-shader support on this device
-    m_impl->raster->draw_mesh_storage(target, *prog, clear, cluster_buf, cluster_count);
+    // RAF-12.4-F5: recorded through the encoder — a Meshlet packet carrying the cluster storage buffer lowers to
+    // draw_mesh_storage (now a private backend verb). Byte-identical to the retired direct verb call.
+    auto                          enc = m_impl->raster->create_command_encoder();
+    crd::gpu::RenderingDesc       rd{};
+    crd::gpu::ColorAttachmentDesc c{};
+    c.target = &target;
+    c.load   = crd::gpu::LoadOp::Clear;
+    c.clear  = clear;
+    rd.color.push_back(c);
+    enc->begin_rendering(rd);
+    crd::gpu::RasterDrawPacket pk{};
+    pk.program                = prog;
+    pk.geometry.kind          = crd::gpu::GeometryKind::Meshlet;
+    pk.geometry.group_count_x = cluster_count;
+    crd::gpu::ResourceBinding b{};
+    b.kind   = crd::gpu::BindingKind::StorageBuffer;
+    b.buffer = &cluster_buf;
+    pk.bindings.push_back(b);
+    enc->draw(pk);
+    enc->end_rendering();
 }
 
 bool SceneRenderer::supports_clusters()

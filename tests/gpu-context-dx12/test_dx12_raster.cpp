@@ -268,68 +268,6 @@ TEST_CASE("D-007 B3-e: IR-authored triangle draws on DX12 (CKIR graph -> DXIL ->
     CHECK(((corner >> 16U) & 0xFFU) >= 250U); // B high
 }
 
-// D-007 B17-a: WEIGHTED-BLENDED OIT (McGuire-Bavoil 2013) on DX12 — the SAME shared CKIR shaders + CPU oracle the Vulkan
-// B17-a test drives. Four translucent full-screen quads accumulate in one order-independent pass (RGBA16F additive accum +
-// R16F multiplicative revealage, INDEPENDENT per-RT blend PSO) → a composite PSO resolves them over an opaque background.
-// Uniform frame ⇒ every texel matches the oracle within a tight LSB tolerance; DX12 == Vulkan (one IR, both backends).
-TEST_CASE("D-007 B17-a: IR-authored WBOIT draws on DX12 (accum/reveal MRT + blend PSO + composite -> pixels)",
-          "[dx12][raster][gpu][oit]")
-{
-    namespace kir = crd::kir;
-
-    auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
-    auto raster = g::create_dx12_raster_context();
-    if (raster == nullptr || !raster->valid()) { WARN("no D3D12 raster device; skipping"); return; }
-    crd::memory::TlsfAllocator alloc(8U << 20U);
-
-    crd::gputest::WboitScene scene;
-    scene.count          = 4U;
-    scene.background[0]  = 0.10F; scene.background[1] = 0.10F; scene.background[2] = 0.12F;
-    scene.color[0][0] = 0.90F; scene.color[0][1] = 0.15F; scene.color[0][2] = 0.10F; scene.alpha[0] = 0.50F; scene.depth[0] = 0.20F;
-    scene.color[1][0] = 0.15F; scene.color[1][1] = 0.85F; scene.color[1][2] = 0.20F; scene.alpha[1] = 0.40F; scene.depth[1] = 0.55F;
-    scene.color[2][0] = 0.20F; scene.color[2][1] = 0.25F; scene.color[2][2] = 0.90F; scene.alpha[2] = 0.30F; scene.depth[2] = 0.80F;
-    scene.color[3][0] = 0.90F; scene.color[3][1] = 0.85F; scene.color[3][2] = 0.10F; scene.alpha[3] = 0.60F; scene.depth[3] = 0.35F;
-
-    kir::KGraph tvg(&alloc); kir::KEntry tve; crd::gputest::build_wboit_transparent_vs(tvg, tve, scene);
-    kir::KGraph tfg(&alloc); kir::KEntry tfe; crd::gputest::build_wboit_transparent_fs(tfg, tfe);
-    kir::KGraph cvg(&alloc); kir::KEntry cve; crd::gputest::build_wboit_composite_vs(cvg, cve);
-    kir::KGraph cfg(&alloc); kir::KEntry cfe; crd::gputest::build_wboit_composite_fs(cfg, cfe);
-
-    auto tvp = gctx->create_program(tvg, tve);
-    if (tvp == nullptr) { WARN("dxc/DXIL unavailable; skipping B17-a DX12 WBOIT"); return; }
-    auto tfp = gctx->create_program(tfg, tfe);
-    auto cvp = gctx->create_program(cvg, cve);
-    auto cfp = gctx->create_program(cfg, cfe);
-    REQUIRE(tfp != nullptr); REQUIRE(cvp != nullptr); REQUIRE(cfp != nullptr);
-
-    auto transparent = raster->create_raster_program(*tvp, *tfp);
-    auto composite   = raster->create_raster_program(*cvp, *cfp);
-    REQUIRE(transparent != nullptr); REQUIRE(transparent->valid());
-    REQUIRE(composite != nullptr);   REQUIRE(composite->valid());
-
-    constexpr crd::u32 dim    = 32U;
-    auto               target = raster->create_color_target(dim, dim);
-    REQUIRE(target != nullptr);
-
-    raster->draw_wboit(*target, *transparent, *composite,
-                       g::ClearColor{scene.background[0], scene.background[1], scene.background[2], 1.0F},
-                       scene.count * 6U);
-
-    const crd::u32 expect = crd::gputest::wboit_oracle_pixel(scene);
-    crd::u32       worst  = 0U;
-    for (crd::u32 y = 0U; y < dim; ++y)
-    {
-        for (crd::u32 x = 0U; x < dim; ++x)
-        {
-            const crd::u32 d = crd::gputest::rgba8_max_channel_diff(target->read_pixel(x, y), expect);
-            if (d > worst) { worst = d; }
-        }
-    }
-    INFO("WBOIT worst per-channel LSB diff vs oracle = " << worst << " (expect 0x" << std::hex << expect << ")");
-    CHECK(worst <= 2U);
-    CHECK((expect & 0xFFU) > 0x30U); // sanity: red channel substantial (transparency actually composited)
-}
 
 // D-007 B17 OIT QUALITY SCOREBOARD (pure CPU): the approximate WBOIT tier vs the EXACT A-buffer reference on the shared
 // scene. WBOIT is a single-pass depth-weighted approximation — it stays in the neighbourhood of the exact sorted composite
@@ -381,7 +319,7 @@ TEST_CASE("D-007 B4: DX12 MESH-shader DispatchMesh renders a triangle (CKIR mesh
     auto               target = raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
 
-    raster->draw_mesh(*target, *program, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 1U); // one meshlet workgroup
+    crd::gputest::enc_draw_mesh(*raster, *target, *program, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 1U); // one meshlet workgroup
 
     const crd::u32 centre = target->read_pixel(dim / 2U, dim / 2U);
     const crd::u32 corner = target->read_pixel(0U, 0U);
@@ -432,7 +370,7 @@ TEST_CASE("D-007 B4: DX12 TASK amplification -- 1 task workgroup emits N mesh tr
     constexpr crd::u32 dim    = 64U;
     auto               target = raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    raster->draw_mesh(*target, *program, g::ClearColor{0.0F, 0.0F, 0.2F, 1.0F}, 1U); // 1 TASK workgroup ⇒ N mesh triangles
+    crd::gputest::enc_draw_mesh(*raster, *target, *program, g::ClearColor{0.0F, 0.0F, 0.2F, 1.0F}, 1U); // 1 TASK workgroup ⇒ N mesh triangles
 
     int lit = 0;
     for (crd::u32 c = 0; c < n_tri; ++c)
@@ -483,7 +421,7 @@ TEST_CASE("D-007 B4: DX12 TASK multi-field payload -- a 3-uint payload flows tas
     constexpr crd::u32 dim    = 64U;
     auto               target = raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    raster->draw_mesh(*target, *program, g::ClearColor{0.0F, 0.0F, 0.1F, 1.0F}, 1U);
+    crd::gputest::enc_draw_mesh(*raster, *target, *program, g::ClearColor{0.0F, 0.0F, 0.1F, 1.0F}, 1U);
 
     const crd::u32 px = target->read_pixel(dim / 2U, dim / 2U); // inside the centred triangle
     CHECK((px & 0xFFU) > pay_r - 6U);          // R ≈ payload v0
@@ -575,7 +513,7 @@ TEST_CASE("D-007 B4: DX12 GPU-driven indirect meshlet dispatch -- a compute cull
     constexpr crd::u32 dim    = 64U;
     auto               target = raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    raster->draw_mesh_indirect(*target, *program, g::ClearColor{0.0F, 0.0F, 0.1F, 1.0F}, args_dev->native_handle(), 0U);
+    crd::gputest::enc_draw_mesh_indirect(*raster, *target, *program, g::ClearColor{0.0F, 0.0F, 0.1F, 1.0F}, args_dev->native_handle(), 0U);
 
     int rendered = 0;
     int culled   = 0;
@@ -622,7 +560,7 @@ TEST_CASE("D-007 B4: per-primitive VRS from a MESH shader coarsens shading (DX12
     constexpr crd::u32 dim    = 32U;
     auto               target = raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    raster->draw_mesh_vrs(*target, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 1U);
+    crd::gputest::enc_draw_mesh_vrs(*raster, *target, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 1U);
 
     const int nmesh = count_equal_even_pairs(*target, dim);
     WARN("[vrs mesh dx12] n_equal=" << nmesh);
@@ -675,7 +613,7 @@ TEST_CASE("D-007 B4-tess: DX12 tessellation -- a VS->HS->DS->PS quad subdivides 
     constexpr crd::u32 dim    = 64U;
     auto               target = raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
-    raster->draw_tess(*target, *program, g::ClearColor{0.0F, 0.0F, 0.2F, 1.0F}, 1U); // ONE quad patch
+    crd::gputest::enc_draw_tess(*raster, *target, *program, g::ClearColor{0.0F, 0.0F, 0.2F, 1.0F}, 1U); // ONE quad patch
 
     // Screen x for a clip x: sx = (x+1)/2·dim. The base quad edge is 0.6 (sx=51); the domain-expanded edge is 0.78 (sx=57).
     CHECK((target->read_pixel(dim / 2U, dim / 2U) & 0xFFU) >= 250U); // centre red — the quad renders
@@ -798,7 +736,7 @@ TEST_CASE("D-007 B4: DX12 ocean meshlets render via draw_mesh_bindless_depth (bi
     constexpr crd::u32 rdim   = 96U;
     auto               target = raster->create_color_depth_target(rdim, rdim);
     REQUIRE(target != nullptr);
-    raster->draw_mesh_bindless_depth(*target, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 0.0F}, 1.0F, g::DepthCompare::Less,
+    crd::gputest::enc_draw_mesh_bindless_depth(*raster, *target, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 0.0F}, 1.0F, g::DepthCompare::Less,
                                      texs, static_cast<crd::u32>(nc), static_cast<crd::u32>(mnp * mnp));
 
     // The ocean surface must have rendered over the black clear — count non-black pixels across the frame.
@@ -1461,7 +1399,7 @@ TEST_CASE("D-007 B1-f: fragment interlock RMW counter is deterministic (DX12)", 
     auto storage = raster->create_storage_buffer(dim * dim * 4U);
     REQUIRE(target != nullptr);
     REQUIRE(storage != nullptr);
-    raster->draw_storage(*target, *program, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, *storage, 6U); // two triangles
+    crd::gputest::enc_draw_storage(*raster, *target, *program, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, *storage, 6U); // two triangles
 
     const crd::u32 c_centre = storage->read_u32((dim / 2U) * dim + dim / 2U);
     const crd::u32 c_corner = storage->read_u32(0U);
@@ -1832,7 +1770,7 @@ TEST_CASE("D-007 B5-a: IR OpenPBR surface material writes the deferred G-buffer 
     auto               gbuf = raster->create_gbuffer_target(dim, dim, 4U);
     REQUIRE(gbuf != nullptr);
     REQUIRE(gbuf->attachment_count() == 4U);
-    raster->draw_gbuffer(*gbuf, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw_gbuffer(*raster, *gbuf, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
 
     const auto     ch   = [](crd::u32 px, int c) { return static_cast<int>((px >> (8 * c)) & 0xFFU); };
     const auto     near = [](int got, int want) { return got >= want - 6 && got <= want + 6; };
@@ -1876,7 +1814,7 @@ TEST_CASE("D-007 B5-b: IR full OpenPBR 1.1 slab (coat/fuzz/transmission/thin-fil
     auto               gbuf = raster->create_gbuffer_target(dim, dim, 8U);
     REQUIRE(gbuf != nullptr);
     REQUIRE(gbuf->attachment_count() == 8U);
-    raster->draw_gbuffer(*gbuf, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+    crd::gputest::enc_draw_gbuffer(*raster, *gbuf, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
 
     const auto ch   = [&](crd::u32 att, int c) { return static_cast<int>((gbuf->read_pixel(att, dim / 2U, dim / 2U) >> (8 * c)) & 0xFFU); };
     const auto near = [](int got, int want) { return got >= want - 6 && got <= want + 6; };
@@ -1916,7 +1854,7 @@ TEST_CASE("D-007 B5-c: IR shading-model tag (Gooch) + masked alpha domain on DX1
         REQUIRE(program != nullptr);
         auto gbuf = raster->create_gbuffer_target(16U, 16U, 4U);
         REQUIRE(gbuf != nullptr);
-        raster->draw_gbuffer(*gbuf, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 0.0F}, 3U);
+        crd::gputest::enc_draw_gbuffer(*raster, *gbuf, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 0.0F}, 3U);
         const int sm = static_cast<int>((gbuf->read_pixel(3U, 8U, 8U) >> 8U) & 0xFFU);
         WARN("[shading-model dx12] gbuf3.G=" << sm << " (Gooch=4)");
         CHECK(sm == static_cast<int>(kir::material::ShadingModel::Gooch));
@@ -1933,7 +1871,7 @@ TEST_CASE("D-007 B5-c: IR shading-model tag (Gooch) + masked alpha domain on DX1
         REQUIRE(program != nullptr);
         auto gbuf = raster->create_gbuffer_target(dim, dim, 4U);
         REQUIRE(gbuf != nullptr);
-        raster->draw_gbuffer(*gbuf, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 0.0F}, 3U);
+        crd::gputest::enc_draw_gbuffer(*raster, *gbuf, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 0.0F}, 3U);
         const int left  = static_cast<int>(gbuf->read_pixel(0U, dim / 4U, dim / 2U) & 0xFFU);
         const int right = static_cast<int>(gbuf->read_pixel(0U, 3U * dim / 4U, dim / 2U) & 0xFFU);
         WARN("[masked dx12] left R=" << left << " right R=" << right);
@@ -3001,7 +2939,7 @@ TEST_CASE("GEO-7: draw_storage_depth -- near occludes far on the storage-pull pa
                                 -3.0F, -1.0F, 0.3F, 0.0F, 3.0F, -1.0F, 0.3F, 0.0F, 0.0F, 3.0F, 0.3F, 0.0F};
     REQUIRE(raster->upload_storage(*storage, 0U, verts, sizeof(verts)));
 
-    raster->draw_storage_depth(*target, *program, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 0.0F,
+    crd::gputest::enc_draw_storage_depth(*raster, *target, *program, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 0.0F,
                                g::DepthCompare::GreaterEqual, *storage, 6U);
 
     const crd::u32 centre = target->read_pixel(dim / 2U, dim / 2U);
@@ -3016,7 +2954,7 @@ TEST_CASE("GEO-7: draw_storage_depth -- near occludes far on the storage-pull pa
     // of the frame — red everywhere the big triangles covered — SURVIVES untouched: it composes, never wipes.
     const crd::f32 near_tri[12] = {-0.2F, -0.2F, 0.9F, 0.0F, 0.2F, -0.2F, 0.9F, 0.0F, 0.0F, 0.2F, 0.9F, 0.0F};
     REQUIRE(raster->upload_storage(*storage, 0U, near_tri, sizeof(near_tri)));
-    raster->draw_storage_depth_load(*target, *program, g::DepthCompare::GreaterEqual, *storage, 3U);
+    crd::gputest::enc_draw_storage_depth_load(*raster, *target, *program, g::DepthCompare::GreaterEqual, *storage, 3U);
     const crd::u32 centre2 = target->read_pixel(dim / 2U, dim / 2U);
     const crd::u32 away2   = target->read_pixel(4U, dim / 2U); // covered by the FIRST pass only
     CHECK(((centre2 >> 8U) & 0xFFU) > 200U); // the near green triangle won the loaded depth at the centre
@@ -3079,22 +3017,22 @@ TEST_CASE("REN-39-A1 GATE (DX12): storage buffer binds as its own index buffer, 
     // ── the NON-indexed control: VertexIndex ∈ {0,1,2} → every corner at (2,2) → NOTHING renders ──
     auto miss = raster->create_color_depth_target(dim, dim);
     REQUIRE(miss != nullptr);
-    raster->draw_storage_depth(*miss, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 0.0F, g::DepthCompare::Always,
+    crd::gputest::enc_draw_storage_depth(*raster, *miss, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 0.0F, g::DepthCompare::Always,
                                *sb, 3U);
     CHECK((miss->read_pixel(dim / 2U, dim / 2U) & 0x00FFFFFFU) == 0U);
 
     // ── the INDEXED draw: the IA fetches {4,5,6} from byte 384 → the triangle appears ──
     auto hit = raster->create_color_depth_target(dim, dim);
     REQUIRE(hit != nullptr);
-    raster->draw_storage_indexed_depth(*hit, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 0.0F,
+    crd::gputest::enc_draw_storage_indexed_depth(*raster, *hit, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 0.0F,
                                        g::DepthCompare::Always, *sb, 384U, 3U, 1U, false);
     CHECK((hit->read_pixel(dim / 2U, dim / 2U) & 0xFFU) >= 250U); // red centre — the index values arrived
     CHECK((hit->read_pixel(1U, 1U) & 0x00FFFFFFU) == 0U);         // corner stays the clear
 
     // ── refusals keep pixels: a GREEN clear that RAN would repaint the target — prove it did not ──
-    raster->draw_storage_indexed_depth(*hit, *program, g::ClearColor{0.0F, 1.0F, 0.0F, 1.0F}, 0.0F,
+    crd::gputest::enc_draw_storage_indexed_depth(*raster, *hit, *program, g::ClearColor{0.0F, 1.0F, 0.0F, 1.0F}, 0.0F,
                                        g::DepthCompare::Always, *sb, 382U, 3U, 1U, false); // misaligned offset
-    raster->draw_storage_indexed_depth(*hit, *program, g::ClearColor{0.0F, 1.0F, 0.0F, 1.0F}, 0.0F,
+    crd::gputest::enc_draw_storage_indexed_depth(*raster, *hit, *program, g::ClearColor{0.0F, 1.0F, 0.0F, 1.0F}, 0.0F,
                                        g::DepthCompare::Always, *sb, 384U, 4U, 1U, false); // 384+16 > 396: overrun
     CHECK((hit->read_pixel(dim / 2U, dim / 2U) & 0xFFU) >= 250U); // still red — both draws were REFUSED
 
@@ -3118,11 +3056,11 @@ TEST_CASE("REN-39-A1 GATE (DX12): storage buffer binds as its own index buffer, 
             [](g::IFrameContext& ctx, void* user)
             {
                 auto* u = static_cast<IndexedPass*>(user);
-                ctx.raster().draw_storage_indexed_depth(*ctx.image(u->img), *u->prog,
+                crd::gputest::enc_draw_storage_indexed_depth(ctx.raster(), *ctx.image(u->img), *u->prog,
                                                         g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 0.0F,
                                                         g::DepthCompare::Always, *u->sb, 384U, 3U, 1U, false);
                 // the LOAD continuation — draw N>0 of a pass must not wipe draw 0
-                ctx.raster().draw_storage_indexed_depth(*ctx.image(u->img), *u->prog, g::ClearColor{}, 0.0F,
+                crd::gputest::enc_draw_storage_indexed_depth(ctx.raster(), *ctx.image(u->img), *u->prog, g::ClearColor{}, 0.0F,
                                                         g::DepthCompare::Always, *u->sb, 384U, 3U, 1U, true);
             },
             &st);
@@ -3206,10 +3144,10 @@ TEST_CASE("REN-39-A2 GATE (DX12): indexed multi-draw batches N indexed draws int
             [](g::IFrameContext& ctx, void* user)
             {
                 auto* u = static_cast<MultiIdxState*>(user);
-                ctx.raster().draw_storage_indexed_depth(*ctx.image(u->img), *u->prog,
+                crd::gputest::enc_draw_storage_indexed_depth(ctx.raster(), *ctx.image(u->img), *u->prog,
                                                         g::ClearColor{0.05F, 0.0F, 0.0F, 1.0F}, 0.0F,
                                                         g::DepthCompare::Always, *u->sb, 384U, 3U, 1U, false);
-                ctx.raster().draw_storage_indexed_depth(*ctx.image(u->img), *u->prog, g::ClearColor{}, 0.0F,
+                crd::gputest::enc_draw_storage_indexed_depth(ctx.raster(), *ctx.image(u->img), *u->prog, g::ClearColor{}, 0.0F,
                                                         g::DepthCompare::Always, *u->sb, 384U + 12U, 3U, 1U, true);
             },
             &st);
@@ -3233,7 +3171,7 @@ TEST_CASE("REN-39-A2 GATE (DX12): indexed multi-draw batches N indexed draws int
             [](g::IFrameContext& ctx, void* user)
             {
                 auto* u = static_cast<MultiIdxState*>(user);
-                ctx.raster().draw_storage_multi_indexed_depth(
+                crd::gputest::enc_draw_storage_multi_indexed_depth(ctx.raster(),
                     *ctx.image(u->img), *u->prog, g::ClearColor{0.05F, 0.0F, 0.0F, 1.0F}, 0.0F, g::DepthCompare::Always,
                     *u->sb, 384U, u->draws, 2U, 0U, false);
             },
@@ -3319,7 +3257,7 @@ TEST_CASE("REN-39-B1 GATE (DX12): InstanceIndex sequences instances 0..N-1 throu
 
     auto four = raster->create_color_depth_target(64U, 64U);
     REQUIRE(four != nullptr);
-    raster->draw_storage_indexed_depth(*four, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 0.0F,
+    crd::gputest::enc_draw_storage_indexed_depth(*raster, *four, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 0.0F,
                                        g::DepthCompare::Always, *sb, 384U, 3U, 4U, false);
     CHECK((four->read_pixel(8U, 32U) & 0xFFU) >= 250U);      // instance 0
     CHECK((four->read_pixel(24U, 32U) & 0xFFU) >= 250U);     // instance 1
@@ -3329,7 +3267,7 @@ TEST_CASE("REN-39-B1 GATE (DX12): InstanceIndex sequences instances 0..N-1 throu
 
     auto two = raster->create_color_depth_target(64U, 64U);
     REQUIRE(two != nullptr);
-    raster->draw_storage_indexed_depth(*two, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 0.0F,
+    crd::gputest::enc_draw_storage_indexed_depth(*raster, *two, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 0.0F,
                                        g::DepthCompare::Always, *sb, 384U, 3U, 2U, false);
     CHECK((two->read_pixel(8U, 32U) & 0xFFU) >= 250U);
     CHECK((two->read_pixel(24U, 32U) & 0xFFU) >= 250U);
