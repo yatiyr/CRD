@@ -304,19 +304,46 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
     // and `in_hoist` makes `decl` DEFER those to their in-order statement point.
     crd::containers::Array<crd::u8> materialized(scratch);
     materialized.resize(static_cast<crd::usize>(n), 0);
+    crd::containers::Array<crd::u8> written_buf(scratch);
+    written_buf.resize(static_cast<crd::usize>(n), 0);
     for (int si = 0; si < g.stmt_count(); ++si)
     {
         const KStmt& mst = g.stmt(si);
         if (mst.kind == KStmtKind::Materialize && mst.value >= 0) { materialized[static_cast<crd::usize>(mst.value)] = 1U; }
+        // ⛔ RT-1: a value-returning statement (inline ray query / value-returning atomic) materialises its result at its
+        // in-order point (no pure rhs form) — mark it so a guarded store's `decl(result)` DEFERS instead of emitting it
+        // as an expression (ok=false). See ckir_glsl.hpp for the full rationale.
+        if ((mst.kind == KStmtKind::TraceRayClosest || mst.kind == KStmtKind::TraceRayHit
+             || mst.kind == KStmtKind::BufferAtomicAddFetch || mst.kind == KStmtKind::BufferAtomicExchange)
+            && mst.result >= 0)
+        {
+            materialized[static_cast<crd::usize>(mst.result)] = 1U;
+        }
+        if ((mst.kind == KStmtKind::BufferStore || mst.kind == KStmtKind::SharedStore
+             || mst.kind == KStmtKind::BufferAtomicAdd || mst.kind == KStmtKind::BufferAtomicMin
+             || mst.kind == KStmtKind::BufferAtomicAddFetch || mst.kind == KStmtKind::BufferAtomicExchange
+             || mst.kind == KStmtKind::SharedAtomicAdd)
+            && mst.target >= 0)
+        {
+            written_buf[static_cast<crd::usize>(mst.target)] = 1U;
+        }
     }
     crd::containers::Array<crd::i8> mat_memo(scratch);
     mat_memo.resize(static_cast<crd::usize>(n), -1);
-    bool       in_hoist     = false;
-    const auto consumes_mat = [&](auto&& self, int node) -> bool {
+    bool in_hoist = false;
+    // must_defer: (1) a materialized value (explicit freeze / value-returning statement result) OR (2) ⛔⛔ a load of a
+    // buffer/shared array WRITTEN in this kernel (read-after-write sensitive) — must emit at its in-order point, never
+    // hoisted above the producing loop/stores (the B18-e / IB-1 zero-output scars). See ckir_glsl.hpp.
+    const auto must_defer = [&](auto&& self, int node) -> bool {
         if (node < 0) { return false; }
         if (mat_memo[static_cast<crd::usize>(node)] >= 0) { return mat_memo[static_cast<crd::usize>(node)] != 0; }
-        bool         r  = materialized[static_cast<crd::usize>(node)] != 0U;
         const KNode& nd = g.node(node);
+        bool         r  = materialized[static_cast<crd::usize>(node)] != 0U;
+        if (!r && (nd.op == KOp::BufferLoad || nd.op == KOp::SharedLoad) && nd.a >= 0
+            && written_buf[static_cast<crd::usize>(nd.a)] != 0U)
+        {
+            r = true;
+        }
         if (!r && nd.a >= 0) { r = self(self, nd.a); }
         if (!r && nd.b >= 0) { r = self(self, nd.b); }
         if (!r && nd.c >= 0) { r = self(self, nd.c); }
@@ -529,7 +556,7 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
     const auto decl = [&](auto&& self, int node) -> void {
         if (declseen[static_cast<crd::usize>(node)] != 0U) { return; } // DAG memo — see declseen above
         // ⛔⛔ B18-e: during the hoist pre-pass, DEFER a node that consumes a materialized value to its in-order emission.
-        if (in_hoist && consumes_mat(consumes_mat, node)) { return; }
+        if (in_hoist && must_defer(must_defer, node)) { return; }
         declseen[static_cast<crd::usize>(node)] = 1U;
         const KNode& nd = g.node(node);
         if (nd.op == KOp::BufferLoad || nd.op == KOp::SharedLoad) { self(self, nd.b); return; } // resource leaf: only the index carries temps

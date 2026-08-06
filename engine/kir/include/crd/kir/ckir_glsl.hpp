@@ -758,19 +758,54 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
     // `in_hoist` makes `decl` DEFER those to their in-order statement point, where the materialized temp already exists.
     crd::containers::Array<crd::u8> materialized(scratch);
     materialized.resize(static_cast<crd::usize>(n), 0);
+    // A buffer/shared resource that is WRITTEN somewhere in this kernel (keyed by its decl node). A load of one is
+    // read-after-write sensitive — see must_defer below.
+    crd::containers::Array<crd::u8> written_buf(scratch);
+    written_buf.resize(static_cast<crd::usize>(n), 0);
     for (int si = 0; si < g.stmt_count(); ++si)
     {
         const KStmt& mst = g.stmt(si);
         if (mst.kind == KStmtKind::Materialize && mst.value >= 0) { materialized[static_cast<crd::usize>(mst.value)] = 1U; }
+        // ⛔ RT-1: a value-returning STATEMENT (an inline ray query, a value-returning atomic) MATERIALISES its result
+        // into a temp AT its in-order point — the result node has NO pure `rhs` form. If a guarded store consumes it,
+        // `hoist_decls` reaches `decl(result)` BEFORE the statement runs (result not yet temped) and tries to emit it
+        // as an expression → `ok=false`, the RT-1 emit failure. Marking the result materialized DEFERS that decl to the
+        // in-order point where the statement's temp already exists (same rule as a Materialize).
+        if ((mst.kind == KStmtKind::TraceRayClosest || mst.kind == KStmtKind::TraceRayHit
+             || mst.kind == KStmtKind::BufferAtomicAddFetch || mst.kind == KStmtKind::BufferAtomicExchange)
+            && mst.result >= 0)
+        {
+            materialized[static_cast<crd::usize>(mst.result)] = 1U;
+        }
+        // Any store/atomic marks its target resource WRITTEN.
+        if ((mst.kind == KStmtKind::BufferStore || mst.kind == KStmtKind::SharedStore
+             || mst.kind == KStmtKind::BufferAtomicAdd || mst.kind == KStmtKind::BufferAtomicMin
+             || mst.kind == KStmtKind::BufferAtomicAddFetch || mst.kind == KStmtKind::BufferAtomicExchange
+             || mst.kind == KStmtKind::SharedAtomicAdd)
+            && mst.target >= 0)
+        {
+            written_buf[static_cast<crd::usize>(mst.target)] = 1U;
+        }
     }
     crd::containers::Array<crd::i8> mat_memo(scratch);
     mat_memo.resize(static_cast<crd::usize>(n), -1);
-    bool       in_hoist     = false;
-    const auto consumes_mat = [&](auto&& self, int node) -> bool {
+    bool in_hoist = false;
+    // must_defer: a node that must NOT be hoisted to a scope top — it is (or transitively reads) a value produced at a
+    // specific in-order point. Two sources: (1) a MATERIALIZED value (explicit freeze or a value-returning statement's
+    // result); (2) ⛔⛔ a LOAD of a buffer/shared array that is WRITTEN in this kernel — read-after-write sensitive, so
+    // hoisting a computation that reads it above the producing loop/stores reads STALE memory (the B18-e colour sums and
+    // the IB-1 path-tracer radiance average both came out zero because their `sum/N` divisions hoisted above the loop
+    // that filled `sum`). Deferring emits them at their in-order statement point, after the writes.
+    const auto must_defer = [&](auto&& self, int node) -> bool {
         if (node < 0) { return false; }
         if (mat_memo[static_cast<crd::usize>(node)] >= 0) { return mat_memo[static_cast<crd::usize>(node)] != 0; }
-        bool         r  = materialized[static_cast<crd::usize>(node)] != 0U;
         const KNode& nd = g.node(node);
+        bool         r  = materialized[static_cast<crd::usize>(node)] != 0U;
+        if (!r && (nd.op == KOp::BufferLoad || nd.op == KOp::SharedLoad) && nd.a >= 0
+            && written_buf[static_cast<crd::usize>(nd.a)] != 0U)
+        {
+            r = true;
+        }
         if (!r && nd.a >= 0) { r = self(self, nd.a); }
         if (!r && nd.b >= 0) { r = self(self, nd.b); }
         if (!r && nd.c >= 0) { r = self(self, nd.c); }
@@ -999,9 +1034,9 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
     // decl: materialize temps for the arithmetic nodes in a subtree (children first, CSE by node id).
     const auto decl = [&](auto&& self, int node) -> void {
         if (declseen[static_cast<crd::usize>(node)] != 0U) { return; } // DAG memo — see declseen above
-        // ⛔⛔ B18-e: during the hoist pre-pass, DEFER a node that consumes a materialized value to its in-order emission
-        // (do not mark it seen) — hoisting would inline its buffer read above the producing loop/stores.
-        if (in_hoist && consumes_mat(consumes_mat, node)) { return; }
+        // ⛔⛔ B18-e / IB-1: during the hoist pre-pass, DEFER a node that reads produced-in-order state (a materialized
+        // value or a written buffer) to its in-order emission — hoisting would read the buffer before its writes.
+        if (in_hoist && must_defer(must_defer, node)) { return; }
         declseen[static_cast<crd::usize>(node)] = 1U;
         const KNode& nd = g.node(node);
         if (nd.op == KOp::BufferLoad || nd.op == KOp::SharedLoad) { self(self, nd.b); return; } // resource leaf: only the index carries temps
