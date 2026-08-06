@@ -2,6 +2,7 @@
 
 #include <cmath>   // std::isfinite / std::floor — classification + exact-integer split (not transcendental)
 #include <cstdio>  // snprintf — timecode text
+#include <cstring> // memcpy — timecode text copy (gcc -Werror=format-truncation workaround, see to_timecode)
 
 namespace crd::time
 {
@@ -177,9 +178,16 @@ bool to_timecode(const RationalTime& t, bool drop_frame, Timecode& out) noexcept
     const crd::i64 mm    = (total / 60) % 60;
     const crd::i64 hh    = total / 3600;
     if (hh > 99) { return false; }
-    std::snprintf(out.text, sizeof(out.text), "%02lld:%02lld:%02lld%c%02lld", static_cast<long long>(hh),
-                  static_cast<long long>(mm), static_cast<long long>(ss), drop_frame ? ';' : ':',
-                  static_cast<long long>(ff));
+    // ⛔ gcc -Werror=format-truncation cannot prove hh∈[0,99] / mm,ss∈[0,59] / ff∈[0,fps) from the i64 TYPE, so it
+    // over-estimates each `%02lld` at up to 17 bytes writing into `text[16]`. Format into a temp sized for that
+    // worst case, then copy the (always ≤ 11-char) result — correct AND silences the diagnostic without widening
+    // the serialized `RationalTime::text` ABI.
+    char      tmp[64];
+    const int n = std::snprintf(static_cast<char*>(tmp), sizeof(tmp), "%02lld:%02lld:%02lld%c%02lld",
+                                static_cast<long long>(hh), static_cast<long long>(mm), static_cast<long long>(ss),
+                                drop_frame ? ';' : ':', static_cast<long long>(ff));
+    if (n < 0 || static_cast<crd::usize>(n) >= sizeof(out.text)) { return false; }
+    std::memcpy(static_cast<void*>(out.text), static_cast<const void*>(tmp), static_cast<crd::usize>(n) + 1U);
     return true;
 }
 

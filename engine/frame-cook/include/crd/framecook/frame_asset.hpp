@@ -15,14 +15,18 @@
 //
 // ⛔ WHAT IS **NOT** HERE, ON PURPOSE. This describes TOPOLOGY and PARAMETERS. It cannot describe LOGIC: there
 // are no expressions, no control flow, no scripting (ADR-0081 — C++ only, no DSL). What a pass computes
-// per-pixel is CKIR; the MECHANIC of a pass ("bind these attachments and iterate a draw list") is a C++
-// `FramePassKind`. That three-way split is what makes "anyone can invent a rendering technique" true without
-// inventing a language: a new technique = a CKIR shader + a graph node, and both are assets.
+// per-pixel is CKIR; the MECHANIC of a pass ("bind these attachments and iterate a draw list") is a REGISTERED
+// pass EXECUTOR named by a stable `crd::renderpass::ExecutorTypeId` (RAF-12.3 — the old central `FramePassKind`
+// enum is retired). That three-way split is what makes "anyone can invent a rendering technique" true without
+// inventing a language: a new technique = a CKIR shader + a graph node, and a new MECHANIC = a registered
+// executor — none of them an engine-enum edit, all of them assets.
 
 #include <crd/gpu/frame_graph.hpp>   // FgImageFormat — the API-neutral format enum the asset reuses
 #include <crd/gpu/raster_context.hpp> // DepthCompare — likewise
+#include <crd/renderpass/executor_registry.hpp> // RAF-12.3: ExecutorTypeId — a pass' cooked MECHANIC
 
 #include <crd/containers/array.hpp>
+#include <crd/containers/hash.hpp>   // RAF-12.3: fnv1a_64 — the constexpr executor-id constants below
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/memory/allocator.hpp>
@@ -32,63 +36,51 @@ namespace crd::framecook
 
 inline constexpr crd::u32 kFrameSchemaVersion = 1U;
 
-// The MECHANIC of a pass — the C++/data boundary. Adding a kind is a deliberate engine change with its own gate,
-// never an escape hatch for expressing arbitrary logic in data.
-enum class FramePassKind : crd::u8
+// ── RAF-12.3: THE PASS MECHANIC IS A REGISTERED EXECUTOR ID, not a central enum. ───────────────────────────────
+// The old `enum class FramePassKind` is retired (mission §7 deletion list; §22 condition 10 — "pass kinds no
+// longer grow through a central engine enum for app extension"). A pass' cooked mechanic is a stable
+// `crd::renderpass::ExecutorTypeId` (a hash of the executor name): one of the engine built-ins below, or an app's
+// own id for a `kind = "custom"` pass. A NEW mechanic is a REGISTERED executor (`SceneRenderer::register_pass_
+// executor`), never an engine-enum edit. Adding one is a deliberate engine change WHEN it is a built-in — with the
+// same gate a new enum value used to carry — but the extension point for applications is the registry, not this file.
+//
+// The handful of variants ONE executor id cannot spell ride as explicit role BITS on the pass (below), because
+// they select the same executor and differ only in how it binds: a DEPTH-ONLY vs. an MRT scene-raster pass, a
+// COMPOSITING (load+blend) vs. a plain fullscreen pass, an INDIRECT vs. a direct compute dispatch. Everything else
+// the id distinguishes outright (a copy is `transfer.copy`, a mesh pass is `mesh.raster`, …).
+namespace detail
 {
-    RasterGeometry = 0,  // iterate a draw list into colour(+depth) attachments
-    RasterDepthOnly,     // iterate a draw list into DEPTH only (REN-3.1 — built)
-    RasterFullscreen,    // one triangle over the target, sampling declared inputs
-    RasterMrt,           // geometry into N colour attachments (deferred G-buffer)
-    Compute,             // dispatch a CKIR kernel over a declared grid
-    Present,             // hand the target to the swapchain
-    // ── ⭐ REN-38-A6: the UTILITY passes every real graph needs and none could express. Appended at the END
-    // of the enum (a renumbered kind silently reclassifies every already-cooked graph). ──
-    // ⛔ Before this row the ONLY way to move pixels was a fullscreen pass with a pass-through shader, paying
-    // for a rasterizer, a descriptor set and a pipeline to do what the copy engine does for free — and an MSAA
-    // resolve was not expressible AT ALL, because copying a multisampled image is illegal, not merely slow.
-    Clear,               // set a target to a constant colour, no draw
-    Copy,                // exact 1:1 image copy (same extent + format)
-    Blit,                // RESCALING copy, filtered — the half-res downsample every post chain starts with
-    Resolve,             // collapse an MSAA image to one sample
-    // ── ⭐ REN-38-A7 / A8: the two GEOMETRY-AMPLIFICATION pass kinds. Appended at the END of the enum. ──
-    // Both existed as DEVICE verbs (38-A1c, 38-A1d) and neither was reachable from an asset, so the entire
-    // amplification half of the hardware — tessellation AND mesh/task shaders — could only be driven by C++.
-    // That is precisely what the top rule forbids: a technique must be a `.frame.toml`, not a call site.
-    RasterTess,          // VS→TCS→TES→FS over PATCHES — the portable displacement path (no mesh-shader HW needed)
-    RasterMesh,          // TASK→MESH→FS — the amplification path; the mesh shader generates geometry, no vertex input
-    // ── ⭐ REN-38-A9 / A10. Appended at the END of the enum. ──
-    // ⛔ `RayTrace` is an INLINE RAY QUERY dispatch, not a ray-tracing PIPELINE. The distinction is real and is
-    // stated here rather than discovered: inline ray query (VK_KHR_ray_query / DXR-1.1 `RayQuery<>`) is an
-    // ordinary compute dispatch with a TLAS descriptor, so it records into the frame's ONE submission like every
-    // other pass. A ray-tracing PIPELINE needs a shader binding table and `vkCmdTraceRays` / `DispatchRays` —
-    // that is `RayTracePipeline` below (38-A16, both backends; the DX12 state-object half was written for it).
-    // ── ⭐ REN-38-A11 / A12. Appended at the END of the enum. ──
-    // ⛔ `RasterVisbuffer` is not `RasterGeometry` with a different format: an R32_UINT target clears with a UINT
-    // clear value, and writing the id through a FLOAT clear reinterprets its BIT PATTERN (id 1 becomes 1.4e-45),
-    // so every pixel reads "background" while the draw looks perfectly healthy. The kind carries that.
-    RasterVisbuffer,     // HW-raster primitive ids into an R32_UINT target — the HW half of the Nanite split
-    // ⛔ `RasterComposite` is `RasterFullscreen` that LOADS and BLENDS instead of clearing. WBOIT's resolve is by
-    // definition `rgb·(1-reveal) + background·reveal` — it must read what is already in the target. Every
-    // fullscreen kind before this cleared, so the background was gone before the composite ran.
-    RasterComposite,     // fullscreen, N bindless reads, LOAD + BLEND over what the target already holds
-    RayTrace,            // an inline-ray-query kernel against a declared acceleration structure
-    // ⭐ REN-38-A16: the ray-tracing PIPELINE. ⛔ A separate kind from `RayTrace`, not a flag on it, because the
-    // two take DIFFERENT INPUTS: an inline query names ONE kernel, while a pipeline names THREE programs
-    // (raygen · miss · closest-hit) that the traversal hardware selects between through a shader binding table.
-    // That is what buys per-geometry hit shaders — different materials answering the same ray differently —
-    // which an inline query cannot express: it has one shader and must branch on everything itself.
-    RayTracePipeline,
-    ComputeIndirect,     // a kernel whose WORKGROUP COUNT a buffer holds — the GPU decides how much work follows
-    RasterMeshIndirect,  // a meshlet dispatch whose count a buffer holds — the Nanite-style cull→draw loop
-    // ── ⭐⭐ RAF-10: the APPLICATION-DEFINED pass. ⛔ Appended at the END (a renumbered kind reclassifies every cooked
-    // graph). A `kind = "custom"` pass names a registered executor id in its `executor` field (`app://executor/…`); the
-    // renderer resolves it through the SAME public GraphExecutorTable an engine builtin uses, so an app adds a new pass
-    // MECHANIC without editing this enum or touching engine code. The record function is registered at runtime via the
-    // public `SceneRenderer::register_pass_executor(id, fn, user)` seam — the executor id, not a new enum value, is the
-    // extension point. This is the whole reason the enum ⇒ executor-registry migration exists.
-    Custom,
-};
+// constexpr FNV-1a of an executor name — the SAME algorithm + constants as `crd::containers::fnv1a_64` (which
+// `crd::renderpass::executor_type_id` runs), so a cook-time id equals a record-time id (gated in test_frame_asset).
+// Spelled inline over `char` rather than calling `fnv1a_64` because the latter's `void*`→`u8*` cast is not a
+// constant expression — a real MSVC constexpr rejection, not a style choice.
+template <crd::usize N>
+[[nodiscard]] constexpr crd::renderpass::ExecutorTypeId exec_id(const char (&s)[N]) noexcept
+{
+    crd::u64 h = 0xcbf29ce484222325ULL; // FNV-1a 64-bit offset basis
+    for (crd::usize i = 0; i < N - 1U; ++i)
+    {
+        h ^= static_cast<crd::u64>(static_cast<crd::u8>(s[i]));
+        h *= 0x00000100000001B3ULL; // FNV-1a 64-bit prime
+    }
+    return crd::renderpass::ExecutorTypeId{h};
+}
+} // namespace detail
+
+inline constexpr crd::renderpass::ExecutorTypeId kExecSceneRaster      = detail::exec_id("scene.raster");
+inline constexpr crd::renderpass::ExecutorTypeId kExecFullscreenRaster = detail::exec_id("fullscreen.raster");
+inline constexpr crd::renderpass::ExecutorTypeId kExecComputeDispatch  = detail::exec_id("compute.dispatch");
+inline constexpr crd::renderpass::ExecutorTypeId kExecTransferClear    = detail::exec_id("transfer.clear");
+inline constexpr crd::renderpass::ExecutorTypeId kExecTransferCopy     = detail::exec_id("transfer.copy");
+inline constexpr crd::renderpass::ExecutorTypeId kExecTransferBlit     = detail::exec_id("transfer.blit");
+inline constexpr crd::renderpass::ExecutorTypeId kExecTransferResolve  = detail::exec_id("transfer.resolve");
+inline constexpr crd::renderpass::ExecutorTypeId kExecRaytraceDispatch = detail::exec_id("raytrace.dispatch");
+inline constexpr crd::renderpass::ExecutorTypeId kExecRaytracePipeline = detail::exec_id("raytrace.pipeline");
+inline constexpr crd::renderpass::ExecutorTypeId kExecTessRaster       = detail::exec_id("tess.raster");
+inline constexpr crd::renderpass::ExecutorTypeId kExecMeshRaster       = detail::exec_id("mesh.raster");
+inline constexpr crd::renderpass::ExecutorTypeId kExecMeshIndirect     = detail::exec_id("mesh.indirect");
+inline constexpr crd::renderpass::ExecutorTypeId kExecVisbufferRaster  = detail::exec_id("visbuffer.raster");
+inline constexpr crd::renderpass::ExecutorTypeId kExecPresent          = detail::exec_id("present");
 
 // REN-38-A6: how `kind = "blit"` filters while it rescales.
 // ⛔ Nearest is not a performance option, it is a CORRECTNESS one: interpolating two ids in a visibility or
@@ -229,17 +221,21 @@ struct FrameResourceRef
     explicit FrameResourceRef(crd::memory::IAllocator* a) : name(a) {}
 };
 
-// A typed pass parameter. Scalars/vectors/booleans ONLY — never an expression. If a graph needs arithmetic, that
-// arithmetic belongs in CKIR (this is the line that keeps a DSL out; see the spec's risk #1).
-enum class FrameParamType : crd::u8 { Float = 0, Int, Bool, Vec4 };
+// A typed pass parameter — the ONE representation of a pass' executor-specific config (RAF-12.3 §7 fold: every
+// single-purpose `FramePassDesc` field became a named typed param, so the runtime reads a payload, not a giant
+// struct). Never an expression — if a graph needs arithmetic, that belongs in CKIR (the line that keeps a DSL out).
+// ⛔ Append new types at the END (the blob stores `type` as a byte). `String` is the program / draw-list / view /
+// technique reference the host resolves; `Enum`/`U32` carry the former enum fields (blend, depth-compare, filter…).
+enum class FrameParamType : crd::u8 { Float = 0, Int, Bool, Vec4, Enum, U32, String };
 
 struct FrameParam
 {
     crd::containers::String name;
     FrameParamType          type = FrameParamType::Float;
-    double                  v[4] = {0.0, 0.0, 0.0, 0.0};
+    double                  v[4] = {0.0, 0.0, 0.0, 0.0};  // Float/Int/Bool/Enum/U32 use v[0]; Vec4 uses v[0..3]
+    crd::containers::String str;                          // String type only (a program / query / resource name)
 
-    explicit FrameParam(crd::memory::IAllocator* a) : name(a) {}
+    explicit FrameParam(crd::memory::IAllocator* a) : name(a), str(a) {}
 };
 
 // `for_each` — one pass declaration, N instantiations, each with its own view and resource slice (user-locked:
@@ -254,115 +250,164 @@ enum class FrameForEach : crd::u8
     ShadowCastingLights // "lights.shadow_casting"
 };
 
+// ── ⭐⭐⭐ RAF-12.3 §7 FOLD: a pass is COMMON GRAPH METADATA + a TYPED NAMED-PARAMETER PAYLOAD (mission §8). ──────────
+// The old ~40 single-purpose fields are GONE. A pass carries only: its name; its MECHANIC (`executor_id`, plus the
+// `executor` string that holds a custom pass' app id); its resource `reads`/`writes`; `for_each` graph-expansion
+// metadata; a queue preference; and the `params` bag — every executor-specific value as a NAMED TYPED param,
+// validated against the executor's schema at cook. Read config with `pass_str`/`pass_f32`/`pass_flag`/`pass_u32`/
+// `pass_vec4`; write it with `set_pass_*`. The canonical param names (one home) are the `kPassParam*` constants below.
 struct FramePassDesc
 {
     crd::containers::String                       name;
-    FramePassKind                                 kind = FramePassKind::RasterGeometry;
+    crd::renderpass::ExecutorTypeId               executor_id = kExecSceneRaster; // the MECHANIC (a kExec* id / app id)
+    crd::containers::String                       executor;   // a CUSTOM pass' app id (round-trip); empty for builtins
     crd::containers::Array<FrameResourceRef>      reads;
     crd::containers::Array<FrameResourceRef>      writes;
-    crd::containers::String                       draw_list; // geometry/depth-only kinds
-    crd::containers::String                       view;      // "camera.main", "light.0.cascade[$index]"
-    crd::containers::String                       shader;    // fullscreen kinds — a cooked CKIR program id
-    crd::containers::String                       kernel;    // compute kind — a cooked CKIR kernel id
-    // ⭐⭐ RAF-10: for `kind = "custom"`, the registered EXECUTOR id (`app://executor/…`). The renderer resolves it in
-    // the SAME GraphExecutorTable an engine builtin uses; the record fn is supplied at runtime via
-    // `SceneRenderer::register_pass_executor`. Empty for every non-custom kind.
-    crd::containers::String                       executor;
-    // ⭐ REN-38-A16: the three programs a ray-tracing PIPELINE is built from. Named separately rather than as a
-    // list because their ROLES are fixed and positional: swapping miss and closest-hit in a list would build a
-    // pipeline that traces correctly and shades every hit with the miss shader.
-    crd::containers::String                       raygen;
-    crd::containers::String                       miss;
-    crd::containers::String                       closest_hit;
-    // ⭐ REN-38 audit (the full hit group): the OPTIONAL any-hit — what alpha-tested geometry needs in RT. The
-    // traversal calls it per candidate and it may IGNORE the hit, so a chain-link fence shadows as a fence
-    // rather than as a solid plate. Empty = no any-hit stage (the historical pipeline, byte-unchanged).
-    crd::containers::String                       any_hit;
-    // ⭐ REN-38-F13: the LAST two SBT roles. `intersection` makes the hit group PROCEDURAL (the BLAS AABBs only
-    // bound the shape — the authored math IS the geometry); `callable` joins the SBT's fourth table. Both
-    // optional; a NAMED one that does not resolve FAILS (the F12 any-hit rule).
-    crd::containers::String                       intersection;
-    crd::containers::String                       callable;
-    // REN-37.2: the LIGHTING TECHNIQUE this pass shades with (a `.crdt` name — "standard_forward",
-    // "forward_csm", "toon"). Empty ⇒ the engine's default. This is the field that makes the top rule reach the
-    // FRAGMENT SHADER: swapping a technique is an asset edit, and the technique's declared PASS-frequency
-    // bindings are verified against this pass's `reads` at cook time (`verify_technique_bindings`).
-    crd::containers::String                       technique;
-    FrameMaterialPass                             material_pass = FrameMaterialPass::None;
-    FrameForEach                                  for_each      = FrameForEach::None;
-    crd::u32                                      for_each_arg  = 0U; // e.g. the light index in light.N.cascades
-    bool                                          has_clear_color = false;
-    float                                         clear_color[4]  = {0.0F, 0.0F, 0.0F, 1.0F};
-    bool                                          has_clear_depth = false;
-    float                                         clear_depth     = 1.0F; // crd-lint-allow-untagged-physical: NDC depth in [0,1] (a normalized-device coordinate, not a length)
-    crd::gpu::DepthCompare                        depth = crd::gpu::DepthCompare::LessEqual;
-    // REN-38-A15: PER-ATTACHMENT BLEND, one entry per declared `writes` (missing entries default to Opaque).
-    // ⛔ A pass could declare N attachments (38-A1b) and N reads (38-A3) but not how they BLEND, so every pass
-    // rendered OPAQUE. WBOIT needs TWO DIFFERENT EQUATIONS ON TWO ATTACHMENTS OF ONE PASS — accumulation additive,
-    // revealage multiplicative — which is exactly what made it un-authorable and forced `draw_wboit` to allocate
-    // its own images. Additive particles, decals and premultiplied UI need it too.
-    crd::containers::Array<crd::gpu::BlendMode>   blend;
-    // ── ⭐ REN-38-A13: PER-PASS RENDER STATE. ──
-    // ⛔ These are ATTRIBUTES, not pass KINDS, and that is a deliberate design call rather than a shortcut. A
-    // shading rate is orthogonal to WHAT a pass draws — a geometry pass, a fullscreen pass and a mesh pass can
-    // each want one — so making "VRS" its own kind would have forced a combinatorial `raster.geometry.vrs`,
-    // `raster.fullscreen.vrs`, `raster.mesh.vrs` … and every future kind would have to be doubled again.
-    // Absent ⇒ the hardware default (1×1, no conservative raster), which is what every existing asset means.
-    crd::gpu::ShadingRate                         shading_rate = crd::gpu::ShadingRate::Rate1x1;
-    crd::gpu::ShadingRateCombiner                 rate_combiner = crd::gpu::ShadingRateCombiner::Keep;
-    crd::gpu::ConservativeMode                    conservative = crd::gpu::ConservativeMode::Off;
-    FrameQueue                                    queue        = FrameQueue::Graphics; // REN-38-A14
-    // ── ⭐ REN-38-B8: HOW this pass SAMPLES its reads. ──
-    // ⛔ Per PASS, not per binding, and that is a deliberate limit rather than an oversight: a pass samples its
-    // inputs one way (a post-process clamps, a material tiles), and per-binding samplers would mean the asset
-    // carries a sampler for every read whether it differs or not. When a technique genuinely needs two, it is two
-    // passes — which the graph already composes. Absent ⇒ the engine default, so every existing asset is
-    // byte-unchanged.
-    bool                                          has_sampler  = false;
-    crd::gpu::SamplerDesc                         sampler{};
-    // REN-38-A6: how a `kind = "blit"` pass filters while it rescales. Ignored by every other kind.
-    FrameBlitFilter                               filter = FrameBlitFilter::Linear;
-    // ── ⭐ REN-38 audit: the PASS-STATE vocabulary (depth-write · depth bias · face cull · stencil). ──
-    // Appended at the END; every default is the backends' historical hardwired behaviour, so every existing
-    // asset is byte-unchanged. Same attribute-not-kind reasoning as the A13 block above. The stencil REFERENCE
-    // riding the asset is deliberate: a portal/outline pass pair must agree on the marked value, and two
-    // passes agreeing through data they both declare is the whole point of authoring.
-    crd::gpu::PassRasterState                     state{};
-    // ── ⭐ REN-38-F11: `load = true` — this pass LOADS its target instead of clearing it. ──
-    // Appended at the END (blob v5). Without it, two raster passes stacked on ONE target re-cleared: the second
-    // pass's first draw wiped the first pass's colour, depth AND stencil — which made the whole stencil
-    // vocabulary un-authorable as a mask-then-test pass pair (the very thing stencil exists for).
-    bool                                          load_target = false;
-    // ── ⭐ REN-40-G1: `load_depth = true` — LOAD depth from the previous pass, CLEAR colour normally. ──
-    // The depth-prepass pattern: a depth-only pass populates the depth buffer, then the geometry pass LOADS that
-    // depth (for hardware early-Z) while still clearing its colour attachment. Mutually exclusive with
-    // `load_target` (which loads BOTH).
-    bool                                          load_depth = false;
-    // ── ⭐ REN-40-G3: `shared_depth` — a SEPARATE depth image used as the depth attachment. ──
-    // A raster pass writes colour into its first `writes` target and depth-tests against THIS image instead of
-    // the target's companion. The depth image is a first-class transient (D32Float, sampled = true) — readable
-    // by an HZB builder, writable by a depth prepass — and the graph barriers it like any other resource.
-    // Empty ⇒ the target's companion (the historical default, byte-unchanged).
-    crd::containers::String                       shared_depth;
-    // ── ⭐ REN-40-G3: `depth_as_float` — read a depth texture as RAW FLOAT, not through a comparison sampler. ──
-    // The HZB builder and SSAO both need the STORED DEPTH VALUE, not a pass/fail comparison. Without this flag
-    // a depth-format read auto-selects the comparison sampler and the shader sees 0/1 instead of depth.
-    bool                                          depth_as_float = false;
-    // ── ⭐ REN-40-G3: `untracked_storage = true` — do NOT track the draw list's storage buffer in the graph. ──
-    // The depth-prepass in a two-phase occlusion cull reads VERTEX data (static, uploaded once) from the group
-    // buffer, while a later cull pass writes VISIBILITY data (dynamic) in the same buffer. Tracking the read
-    // creates a backward edge (later-writer → earlier-reader) → a graph CYCLE that prevents build(). The vertex
-    // read is safe without tracking because the data was uploaded outside the frame graph.
-    bool                                          untracked_storage = false;
+    // graph-expansion metadata (NOT executor-specific): `for_each` expands one declaration into N passes at build.
+    FrameForEach                                  for_each     = FrameForEach::None;
+    crd::u32                                      for_each_arg = 0U;
+    FrameQueue                                    queue        = FrameQueue::Graphics; // QueuePreference (mission §8)
+    // ⭐ EVERY executor-specific value (shader/kernel/draw_list/view/technique, the six RT programs, clear/blend/
+    // depth-compare/material-pass, VRS/conservative/filter, the decomposed sampler + render-state, load/load_depth/
+    // depth_as_float/untracked_storage/shared_depth, and the within-executor role bits) is a named typed param here.
     crd::containers::Array<FrameParam>            params;
 
-    explicit FramePassDesc(crd::memory::IAllocator* a)
-        : name(a), reads(a), writes(a), draw_list(a), view(a), shader(a), kernel(a), raygen(a), miss(a),
-          closest_hit(a), any_hit(a), intersection(a), callable(a), technique(a), blend(a),
-          shared_depth(a), params(a)
-    {
-    }
+    explicit FramePassDesc(crd::memory::IAllocator* a) : name(a), executor(a), reads(a), writes(a), params(a) {}
 };
+
+// ── The canonical folded-param NAMES — ONE home (parser, cooker, emitter, validator, runtime all use these). ──────
+namespace pp
+{
+inline constexpr const char* kShader        = "shader";
+inline constexpr const char* kKernel        = "kernel";
+inline constexpr const char* kDrawList      = "draw_list";
+inline constexpr const char* kView          = "view";
+inline constexpr const char* kTechnique     = "technique";
+inline constexpr const char* kRaygen        = "raygen";
+inline constexpr const char* kMiss          = "miss";
+inline constexpr const char* kClosestHit    = "closest_hit";
+inline constexpr const char* kAnyHit        = "any_hit";
+inline constexpr const char* kIntersection  = "intersection";
+inline constexpr const char* kCallable      = "callable";
+inline constexpr const char* kSharedDepth   = "shared_depth";
+inline constexpr const char* kDepthOnly     = "depth_only";
+inline constexpr const char* kMrt           = "mrt";
+inline constexpr const char* kComposite     = "composite";
+inline constexpr const char* kIndirect      = "indirect";
+inline constexpr const char* kClearColor    = "clear_color";
+inline constexpr const char* kClearDepth    = "clear_depth";
+inline constexpr const char* kDepthCompare  = "depth_compare";
+inline constexpr const char* kMaterialPass  = "material_pass";
+inline constexpr const char* kBlendCount    = "blend_count";
+inline constexpr const char* kShadingRate   = "shading_rate";
+inline constexpr const char* kRateCombiner  = "rate_combiner";
+inline constexpr const char* kConservative  = "conservative";
+inline constexpr const char* kFilter        = "filter";
+inline constexpr const char* kLoad          = "load";
+inline constexpr const char* kLoadDepth     = "load_depth";
+inline constexpr const char* kDepthAsFloat  = "depth_as_float";
+inline constexpr const char* kUntracked     = "untracked_storage";
+inline constexpr const char* kHasSampler    = "has_sampler";
+inline constexpr const char* kSamplerMin    = "sampler_min_filter";
+inline constexpr const char* kSamplerMag    = "sampler_mag_filter";
+inline constexpr const char* kSamplerMip    = "sampler_mip_filter";
+inline constexpr const char* kSamplerAddr   = "sampler_address";
+inline constexpr const char* kSamplerCompare = "sampler_compare";
+inline constexpr const char* kSamplerAniso  = "sampler_anisotropy";
+inline constexpr const char* kSamplerBias   = "sampler_mip_bias";
+inline constexpr const char* kDepthWriteOff = "depth_write_off";
+inline constexpr const char* kDepthBias     = "depth_bias";
+inline constexpr const char* kDepthBiasSlope = "depth_bias_slope";
+inline constexpr const char* kDepthBiasClamp = "depth_bias_clamp";
+inline constexpr const char* kFaceCull      = "face_cull";
+inline constexpr const char* kFrontFace     = "front_face";
+inline constexpr const char* kStencil       = "stencil";
+inline constexpr const char* kStencilCompare = "stencil_compare";
+inline constexpr const char* kStencilRef    = "stencil_ref";
+inline constexpr const char* kStencilReadMask = "stencil_read_mask";
+inline constexpr const char* kStencilWriteMask = "stencil_write_mask";
+inline constexpr const char* kStencilFail   = "stencil_fail";
+inline constexpr const char* kStencilDepthFail = "stencil_depth_fail";
+inline constexpr const char* kStencilPass   = "stencil_pass";
+inline constexpr const char* kBlendSlot[4]  = {"blend0", "blend1", "blend2", "blend3"};
+} // namespace pp
+
+// ── RAF-12.3 §7 FOLD: a pass' executor-specific config is a NAMED TYPED PARAM BAG — no single-purpose struct
+// fields. Typed READ accessors (return the default when the param is absent) + WRITE setters (a setter that would
+// write an empty string / a default is a no-op, so round-trip only emits what was authored). `find_pass_param` is
+// the raw lookup. These are the ONE way the parser, cooker, emitter, validator and runtime touch pass config. ──────
+[[nodiscard]] const FrameParam* find_pass_param(const FramePassDesc& p, crd::containers::StringView name) noexcept;
+[[nodiscard]] bool pass_has(const FramePassDesc& p, crd::containers::StringView name) noexcept;
+[[nodiscard]] crd::containers::StringView pass_str(const FramePassDesc& p, crd::containers::StringView name) noexcept;
+[[nodiscard]] float pass_f32(const FramePassDesc& p, crd::containers::StringView name, float def) noexcept;
+[[nodiscard]] crd::u32 pass_u32(const FramePassDesc& p, crd::containers::StringView name, crd::u32 def) noexcept;
+[[nodiscard]] bool pass_flag(const FramePassDesc& p, crd::containers::StringView name) noexcept; // bool param, absent ⇒ false
+bool pass_vec4(const FramePassDesc& p, crd::containers::StringView name, float out[4]) noexcept; // fills out[4]; returns present (often discarded — the fill is the point)
+
+void set_pass_str(FramePassDesc& p, crd::containers::StringView name, crd::containers::StringView value);  // no-op if empty
+void set_pass_f32(FramePassDesc& p, crd::containers::StringView name, float value);
+void set_pass_u32(FramePassDesc& p, crd::containers::StringView name, crd::u32 value);
+void set_pass_enum(FramePassDesc& p, crd::containers::StringView name, crd::u32 value);
+void set_pass_flag(FramePassDesc& p, crd::containers::StringView name, bool value);                        // adds only if true
+void set_pass_vec4(FramePassDesc& p, crd::containers::StringView name, const float v[4]);
+
+// Reconstruct the cohesive sub-payloads from their decomposed params (defaults where absent). Consumers use these
+// instead of the old `p.sampler` / `p.state` fields. `pass_flag(p, pp::kHasSampler)` says whether the sampler is set.
+[[nodiscard]] crd::gpu::SamplerDesc pass_sampler(const FramePassDesc& p) noexcept;
+[[nodiscard]] crd::gpu::PassRasterState pass_state(const FramePassDesc& p) noexcept;
+
+// Is `name` one of the FOLDED-config param names (a `pp::k*`)? Distinguishes engine config from GENUINE authored
+// params (`groups_x`, `exposure`, `clear_id`, …). The emitter uses it to avoid double-emitting; the custom-pass
+// runtime uses it to forward only authored params into the executor payload. ONE home for the folded-name set.
+[[nodiscard]] bool is_folded_pass_param(crd::containers::StringView name) noexcept;
+
+// ── RAF-12.3: pass-mechanic predicates. The ONE place the old `switch (kind)` becomes an executor-id test. ──────
+[[nodiscard]] inline bool pass_is_scene_raster(const FramePassDesc& p) noexcept { return p.executor_id == kExecSceneRaster; }
+// The plain forward-geometry scene-raster pass (not the depth-only or MRT variant) — the old `RasterGeometry`.
+// Reads the role bits from the param bag (RAF-12.3 §7 fold — no struct fields).
+[[nodiscard]] inline bool pass_is_raster_geometry(const FramePassDesc& p) noexcept
+{
+    return pass_is_scene_raster(p) && !pass_flag(p, crd::containers::StringView(pp::kDepthOnly))
+           && !pass_flag(p, crd::containers::StringView(pp::kMrt));
+}
+[[nodiscard]] inline bool pass_is_fullscreen(const FramePassDesc& p) noexcept { return p.executor_id == kExecFullscreenRaster; }
+[[nodiscard]] inline bool pass_is_compute(const FramePassDesc& p) noexcept { return p.executor_id == kExecComputeDispatch; }
+[[nodiscard]] inline bool pass_is_raytrace_dispatch(const FramePassDesc& p) noexcept { return p.executor_id == kExecRaytraceDispatch; }
+[[nodiscard]] inline bool pass_is_raytrace_pipeline(const FramePassDesc& p) noexcept { return p.executor_id == kExecRaytracePipeline; }
+[[nodiscard]] inline bool pass_is_tess(const FramePassDesc& p) noexcept { return p.executor_id == kExecTessRaster; }
+[[nodiscard]] inline bool pass_is_mesh(const FramePassDesc& p) noexcept { return p.executor_id == kExecMeshRaster; }
+[[nodiscard]] inline bool pass_is_mesh_indirect(const FramePassDesc& p) noexcept { return p.executor_id == kExecMeshIndirect; }
+[[nodiscard]] inline bool pass_is_visbuffer(const FramePassDesc& p) noexcept { return p.executor_id == kExecVisbufferRaster; }
+[[nodiscard]] inline bool pass_is_present(const FramePassDesc& p) noexcept { return p.executor_id == kExecPresent; }
+[[nodiscard]] inline bool pass_is_transfer_clear(const FramePassDesc& p) noexcept { return p.executor_id == kExecTransferClear; }
+[[nodiscard]] inline bool pass_is_transfer_copy(const FramePassDesc& p) noexcept { return p.executor_id == kExecTransferCopy; }
+[[nodiscard]] inline bool pass_is_blit(const FramePassDesc& p) noexcept { return p.executor_id == kExecTransferBlit; }
+[[nodiscard]] inline bool pass_is_transfer_resolve(const FramePassDesc& p) noexcept { return p.executor_id == kExecTransferResolve; }
+[[nodiscard]] inline bool pass_is_transfer(const FramePassDesc& p) noexcept
+{
+    return pass_is_transfer_clear(p) || pass_is_transfer_copy(p) || pass_is_blit(p) || pass_is_transfer_resolve(p);
+}
+// scene/tess/mesh raster — the mechanics that iterate a draw list of geometry (any role).
+[[nodiscard]] inline bool pass_draws_geometry(const FramePassDesc& p) noexcept
+{
+    return pass_is_scene_raster(p) || pass_is_tess(p) || pass_is_mesh(p);
+}
+// compute.dispatch OR inline raytrace.dispatch — the mechanics that bind a CKIR kernel + a storage set + a grid.
+[[nodiscard]] inline bool pass_dispatches_kernel(const FramePassDesc& p) noexcept
+{
+    return pass_is_compute(p) || pass_is_raytrace_dispatch(p);
+}
+// Is `id` one of the 14 engine built-in mechanics? (A custom pass' id is not.) Defined in frame_asset.cpp.
+[[nodiscard]] bool is_builtin_executor(crd::renderpass::ExecutorTypeId id) noexcept;
+// A CUSTOM (app-defined) pass — its executor is not an engine built-in.
+[[nodiscard]] inline bool pass_is_custom(const FramePassDesc& p) noexcept { return !is_builtin_executor(p.executor_id); }
+
+// ── RAF-12.3: the ONE authoring-vocabulary table (mission "one home per fact"). Forward: map a `kind = "..."`
+// string to a pass' `executor_id` + role bits (false ⇒ an unknown kind, a NAMED cook error; a `custom` kind sets
+// an INVALID id — the caller resolves it from the pass' `executor` field). Inverse: the kind string the editor
+// round-trip re-emits from `executor_id` + roles. The two are defined together so they cannot drift. ─────────────
+[[nodiscard]] bool pass_mechanic_from_kind(crd::containers::StringView kind, FramePassDesc& out) noexcept;
+[[nodiscard]] const char* pass_kind_string(const FramePassDesc& p) noexcept;
 
 // ── REN-37.6: SUBGRAPHS — a graph may INCLUDE another by name, with PARAMETER BINDING. ─────────────────────
 // Taken from AMD RPS subprograms. Techniques then COMPOSE instead of being copy-pasted, and — the reason this is
@@ -590,8 +635,11 @@ public:
     void     draw_list_none(crd::u32 list, crd::containers::StringView component);
     void     draw_list_policy(crd::u32 list, FrameCullMode cull, FrameSortMode sort);
 
-    // Passes.
-    crd::u32 add_pass(crd::containers::StringView name, FramePassKind kind);
+    // Passes. `kind` is the same authoring vocabulary as a `.frame.toml` `kind = "..."` ("raster.geometry",
+    // "compute", "raster.mesh.indirect", "custom", …) — RAF-12.3 replaced the `FramePassKind` enum argument. A
+    // "custom" pass then names its app executor with `pass_executor`.
+    crd::u32 add_pass(crd::containers::StringView name, crd::containers::StringView kind);
+    void     pass_executor(crd::u32 pass, crd::containers::StringView executor_id); // RAF-10/12.3: a custom pass' app id
     void     pass_reads(crd::u32 pass, crd::containers::StringView resource, bool indexed = false);
     void     pass_writes(crd::u32 pass, crd::containers::StringView resource, bool indexed = false);
     void     pass_shader(crd::u32 pass, crd::containers::StringView id);

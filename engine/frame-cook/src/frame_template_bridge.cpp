@@ -56,52 +56,25 @@ rp::TypedValue tv_vec4(const float v[4]) noexcept
     t.v4[3] = v[3];
     return t;
 }
+// RAF-12.3 §7 fold: the pass' clear-colour param (default {0,0,0,1}) as a TypedValue — replaces the old clear_color field.
+rp::TypedValue tv_clear(const FramePassDesc& d) noexcept
+{
+    float cc[4] = {0.0F, 0.0F, 0.0F, 1.0F};
+    pass_vec4(d, SV(pp::kClearColor), cc);
+    return tv_vec4(cc);
+}
 
-// Which family a pass kind belongs to — the executor + its queue. Empty name ⇒ no mapping yet (a NAMED diagnostic).
-struct Mapping
+// RAF-12.3: the executor a pass records under is its cooked `executor_id` (no more kind→name table); this derives
+// only the QUEUE its mechanic runs on. Compute + inline raytrace + RT-pipeline go on the compute queue; the four
+// transfer mechanics on the transfer queue; everything else on graphics.
+rp::QueueKind queue_of(const FramePassDesc& d) noexcept
 {
-    const char* executor = nullptr;
-    rp::QueueKind queue = rp::QueueKind::Graphics;
-};
-Mapping map_kind(FramePassKind k) noexcept
-{
-    switch (k)
+    if (pass_is_compute(d) || pass_is_raytrace_dispatch(d) || pass_is_raytrace_pipeline(d))
     {
-    case FramePassKind::RasterGeometry:
-    case FramePassKind::RasterDepthOnly:
-    case FramePassKind::RasterMrt:
-        return {"scene.raster", rp::QueueKind::Graphics};
-    case FramePassKind::RasterVisbuffer:
-        return {"visbuffer.raster", rp::QueueKind::Graphics};
-    case FramePassKind::RasterFullscreen:
-    case FramePassKind::RasterComposite:
-        return {"fullscreen.raster", rp::QueueKind::Graphics};
-    case FramePassKind::Compute:
-    case FramePassKind::ComputeIndirect:
-        return {"compute.dispatch", rp::QueueKind::Compute};
-    case FramePassKind::Clear:
-        return {"transfer.clear", rp::QueueKind::Transfer};
-    case FramePassKind::Copy:
-        return {"transfer.copy", rp::QueueKind::Transfer};
-    case FramePassKind::Blit:
-        return {"transfer.blit", rp::QueueKind::Transfer};
-    case FramePassKind::Resolve:
-        return {"transfer.resolve", rp::QueueKind::Transfer};
-    case FramePassKind::RayTrace:
-        return {"raytrace.dispatch", rp::QueueKind::Compute}; // an INLINE ray query (dispatch_kernel_rt)
-    case FramePassKind::RayTracePipeline:
-        return {"raytrace.pipeline", rp::QueueKind::Compute}; // an SBT trace (trace_rays / _anyhit / _full)
-    case FramePassKind::RasterTess:
-        return {"tess.raster", rp::QueueKind::Graphics};
-    case FramePassKind::RasterMesh:
-        return {"mesh.raster", rp::QueueKind::Graphics};
-    case FramePassKind::RasterMeshIndirect:
-        return {"mesh.indirect", rp::QueueKind::Graphics};
-    case FramePassKind::Present:
-        return {"present", rp::QueueKind::Graphics};
-    default:
-        return {nullptr, rp::QueueKind::Graphics};
+        return rp::QueueKind::Compute;
     }
+    if (pass_is_transfer(d)) { return rp::QueueKind::Transfer; }
+    return rp::QueueKind::Graphics;
 }
 
 // A pass's amplification COUNT (the `groups` of a mesh pass, the `patches` of a tess pass) — the procedural draw count
@@ -305,39 +278,50 @@ bool map_raster(const FramePassDesc& d, bool fullscreen, rp::PassPayload& pl, co
                 DiagnosticList& diags)
 {
     // params: clear colour / depth / compare / load are scene.raster's; fullscreen carries VRS / conservative / blend.
+    // RAF-12.3 §7 fold: read config from the param bag (no struct fields).
+    const crd::u32 nblend = pass_u32(d, SV(pp::kBlendCount), 0U);
+    const auto blend_at = [&](crd::u32 i) {
+        return pass_u32(d, SV(pp::kBlendSlot[i < 4U ? i : 3U]), static_cast<crd::u32>(crd::gpu::BlendMode::Opaque));
+    };
     if (fullscreen)
     {
-        if (d.shading_rate != crd::gpu::ShadingRate::Rate1x1)
+        const auto sr = pass_u32(d, SV(pp::kShadingRate), static_cast<crd::u32>(crd::gpu::ShadingRate::Rate1x1));
+        if (sr != static_cast<crd::u32>(crd::gpu::ShadingRate::Rate1x1))
         {
-            pl.params.push_back(rp::ParamValue{slot_id("shading_rate"), tv_enum(static_cast<crd::u32>(d.shading_rate))});
+            pl.params.push_back(rp::ParamValue{slot_id("shading_rate"), tv_enum(sr)});
         }
-        if (d.conservative != crd::gpu::ConservativeMode::Off)
+        const auto cons = pass_u32(d, SV(pp::kConservative), static_cast<crd::u32>(crd::gpu::ConservativeMode::Off));
+        if (cons != static_cast<crd::u32>(crd::gpu::ConservativeMode::Off))
         {
-            pl.params.push_back(rp::ParamValue{slot_id("conservative"), tv_enum(static_cast<crd::u32>(d.conservative))});
+            pl.params.push_back(rp::ParamValue{slot_id("conservative"), tv_enum(cons)});
         }
-        if (d.depth_as_float)
+        if (pass_flag(d, SV(pp::kDepthAsFloat)))
         {
             pl.params.push_back(rp::ParamValue{slot_id("depth_as_float"), tv_bool(true)});
         }
         // ⭐ RAF-8: the COMPOSITE shape (WBOIT resolve) — LOAD the target + BLEND the bindless draw over it
         // (draw_bindless_blend_load), so the background the OIT resolve reads survives.
-        if (d.kind == FramePassKind::RasterComposite)
+        if (pass_flag(d, SV(pp::kComposite)))
         {
             pl.params.push_back(rp::ParamValue{slot_id("load"), tv_bool(true)});
-            const crd::gpu::BlendMode bm = d.blend.size() > 0U ? d.blend[0] : crd::gpu::BlendMode::Alpha;
-            pl.params.push_back(rp::ParamValue{slot_id("blend"), tv_enum(static_cast<crd::u32>(bm))});
+            const crd::u32 bm = nblend > 0U ? blend_at(0U) : static_cast<crd::u32>(crd::gpu::BlendMode::Alpha);
+            pl.params.push_back(rp::ParamValue{slot_id("blend"), tv_enum(bm)});
         }
     }
     else
     {
-        pl.params.push_back(rp::ParamValue{slot_id("clear_color"), tv_vec4(d.clear_color)});
-        pl.params.push_back(rp::ParamValue{slot_id("clear_depth"), tv_f32(d.clear_depth)});
-        pl.params.push_back(rp::ParamValue{slot_id("depth_compare"), tv_enum(static_cast<crd::u32>(d.depth))});
-        if (d.load_target)
+        float cc[4] = {0.0F, 0.0F, 0.0F, 1.0F};
+        pass_vec4(d, SV(pp::kClearColor), cc);
+        pl.params.push_back(rp::ParamValue{slot_id("clear_color"), tv_vec4(cc)});
+        pl.params.push_back(rp::ParamValue{slot_id("clear_depth"), tv_f32(pass_f32(d, SV(pp::kClearDepth), 1.0F))});
+        pl.params.push_back(rp::ParamValue{slot_id("depth_compare"),
+                                           tv_enum(pass_u32(d, SV(pp::kDepthCompare),
+                                                            static_cast<crd::u32>(crd::gpu::DepthCompare::LessEqual)))});
+        if (pass_flag(d, SV(pp::kLoad)))
         {
             pl.params.push_back(rp::ParamValue{slot_id("load"), tv_bool(true)});
         }
-        if (d.load_depth)
+        if (pass_flag(d, SV(pp::kLoadDepth)))
         {
             pl.params.push_back(rp::ParamValue{slot_id("load_depth"), tv_bool(true)});
         }
@@ -383,19 +367,19 @@ bool map_raster(const FramePassDesc& d, bool fullscreen, rp::PassPayload& pl, co
         // ⭐ RAF-12.2: this colour attachment's per-attachment BLEND (fullscreen carries its single composite blend
         // separately above). Only emit when the pass DECLARED one for this index — an absent entry leaves the executor
         // on Opaque (the ordinary opaque geometry pass), so the velocity prepass + every existing frame are unchanged.
-        if (!fullscreen && color_i < d.blend.size())
+        if (!fullscreen && color_i < nblend)
         {
-            pl.params.push_back(
-                rp::ParamValue{slot_id(blend_slot(color_i)), tv_enum(static_cast<crd::u32>(d.blend[color_i]))});
+            pl.params.push_back(rp::ParamValue{slot_id(blend_slot(color_i)), tv_enum(blend_at(color_i))});
         }
         ++color_i;
     }
     // a separate depth image (REN-40-G3 shared_depth) the pass depth-tests against — only when the pass did not
     // already route a depth WRITE (the forward pass writes colour + depth-tests scene_depth; a prepass writes depth).
-    if (!has_depth && !d.shared_depth.empty())
+    const SV shared_depth = pass_str(d, SV(pp::kSharedDepth));
+    if (!has_depth && !shared_depth.empty())
     {
         if (!push_ref(pl, slot_id("depth"), rp::SlotResourceKind::DepthTarget, rp::SlotAccess::ReadWrite,
-                      name_hash(d.shared_depth), d.name, diags))
+                      rp::pass_param_id(shared_depth), d.name, diags))
         {
             return false;
         }
@@ -499,7 +483,7 @@ bool map_compute(const FramePassDesc& d, const FrameGraphDesc& desc, rp::PassPay
         // `args` slot (dispatch_kernel_indirect), NOT a storage slot. ⛔ Only for a ComputeIndirect pass: a plain
         // Compute pass reading an indirect-args buffer (the gpu-cull `cull` reading `cull_args`) is an ordinary storage
         // read — the DISPATCH args is what makes it the args slot, and only ComputeIndirect dispatches indirectly.
-        if (d.kind == FramePassKind::ComputeIndirect && res_kind(desc, res) == FrameResourceKind::IndirectArgs)
+        if (pass_flag(d, SV(pp::kIndirect)) && res_kind(desc, res) == FrameResourceKind::IndirectArgs)
         {
             if (!push_ref(pl, slot_id("args"), rp::SlotResourceKind::StorageBuffer, rp::SlotAccess::Read, res, d.name,
                           diags))
@@ -520,7 +504,7 @@ bool map_compute(const FramePassDesc& d, const FrameGraphDesc& desc, rp::PassPay
         }
         // an `untracked_storage` read is deliberately NOT tracked (avoids a cull cycle); a buffer read otherwise
         // takes a storage slot for the write-before-read edge.
-        if (!d.untracked_storage)
+        if (!pass_flag(d, SV(pp::kUntracked)))
         {
             if (!put(d.reads[i].name)) { return false; }
         }
@@ -530,9 +514,9 @@ bool map_compute(const FramePassDesc& d, const FrameGraphDesc& desc, rp::PassPay
 
 bool map_transfer(const FramePassDesc& d, rp::PassPayload& pl, DiagnosticList& diags)
 {
-    if (d.kind == FramePassKind::Clear)
+    if (pass_is_transfer_clear(d))
     {
-        pl.params.push_back(rp::ParamValue{slot_id("clear_color"), tv_vec4(d.clear_color)});
+        pl.params.push_back(rp::ParamValue{slot_id("clear_color"), tv_clear(d)});
         if (d.writes.empty())
         {
             diags.emit(crd::renderasset::Severity::Error, DiagCode::InvalidSlot, "a clear pass declares no target",
@@ -543,9 +527,9 @@ bool map_transfer(const FramePassDesc& d, rp::PassPayload& pl, DiagnosticList& d
                         name_hash(d.writes[0].name), d.name, diags);
     }
     // copy / blit / resolve: src -> dst.
-    if (d.kind == FramePassKind::Blit)
+    if (pass_is_blit(d))
     {
-        pl.params.push_back(rp::ParamValue{slot_id("filter"), tv_enum(static_cast<crd::u32>(d.filter))});
+        pl.params.push_back(rp::ParamValue{slot_id("filter"), tv_enum(pass_u32(d, SV(pp::kFilter), static_cast<crd::u32>(crd::framecook::FrameBlitFilter::Linear)))});
     }
     if (d.reads.empty() || d.writes.empty())
     {
@@ -665,7 +649,7 @@ bool map_visbuffer(const FramePassDesc& d, rp::PassPayload& pl, DiagnosticList& 
 // The per-draw amplification counts + storage-pull buffers come from the resolved draw list at record. ──
 bool map_amplify(const FramePassDesc& d, rp::PassPayload& pl, DiagnosticList& diags)
 {
-    pl.params.push_back(rp::ParamValue{slot_id("clear_color"), tv_vec4(d.clear_color)});
+    pl.params.push_back(rp::ParamValue{slot_id("clear_color"), tv_clear(d)});
     const crd::u32 amplify = amplify_count_of(d);
     if (amplify > 0U)
     {
@@ -685,7 +669,7 @@ bool map_amplify(const FramePassDesc& d, rp::PassPayload& pl, DiagnosticList& di
 bool map_mesh_indirect(const FramePassDesc& d, rp::PassPayload& pl, const rg::FrameGraphTemplate& out,
                        DiagnosticList& diags)
 {
-    pl.params.push_back(rp::ParamValue{slot_id("clear_color"), tv_vec4(d.clear_color)});
+    pl.params.push_back(rp::ParamValue{slot_id("clear_color"), tv_clear(d)});
     if (d.writes.empty())
     {
         diags.emit(crd::renderasset::Severity::Error, DiagCode::InvalidSlot, "a mesh-indirect pass declares no colour",
@@ -714,14 +698,18 @@ bool map_mesh_indirect(const FramePassDesc& d, rp::PassPayload& pl, const rg::Fr
 // Declare any resource a pass REFERENCES but the asset did not declare (the `@output` canvas, a host-imported name) as
 // an external persistent target — so every ref in the template resolves to a declared graph resource (compile requires
 // it). Idempotent: only adds names not already present.
-void declare_external(const crd::containers::String& n, rg::FrameGraphTemplate& out)
+void declare_external(crd::containers::StringView n, rg::FrameGraphTemplate& out)
 {
-    const crd::u64 h = name_hash(n);
+    const crd::u64 h = rp::pass_param_id(n); // RAF-12.3 §7 fold: name_hash's StringView path (shared_depth is a param)
     if (out.find_resource(h) != nullptr)
     {
         return;
     }
     out.add_resource(rg::GraphResource{h, rp::SlotResourceKind::ColorTarget, rg::ResourceLifetime::Persistent, 0U});
+}
+void declare_external(const crd::containers::String& n, rg::FrameGraphTemplate& out)
+{
+    declare_external(view_of(n), out);
 }
 
 } // namespace
@@ -743,7 +731,8 @@ bool build_frame_graph_template(const FrameGraphDesc& desc, ForEachCountFn for_e
         const FramePassDesc& d = desc.passes[pi];
         for (crd::usize j = 0; j < d.reads.size(); ++j) { declare_external(d.reads[j].name, out); }
         for (crd::usize j = 0; j < d.writes.size(); ++j) { declare_external(d.writes[j].name, out); }
-        if (!d.shared_depth.empty()) { declare_external(d.shared_depth, out); }
+        const SV sd = pass_str(d, SV(pp::kSharedDepth));
+        if (!sd.empty()) { declare_external(sd, out); }
     }
 
     // 2. Passes -> GraphPasses (for_each expanded into N ordinary passes).
@@ -751,8 +740,9 @@ bool build_frame_graph_template(const FrameGraphDesc& desc, ForEachCountFn for_e
     for (crd::usize pi = 0; pi < desc.passes.size(); ++pi)
     {
         const FramePassDesc& d = desc.passes[pi];
-        const Mapping m = map_kind(d.kind);
-        if (m.executor == nullptr)
+        // RAF-12.3: the bridge maps the engine BUILT-IN mechanics; a custom (app) executor id has no builtin slot
+        // schema here, so it is a NAMED diagnostic (the bridge is a test/tooling path, not the live custom seam).
+        if (!is_builtin_executor(d.executor_id))
         {
             diags.emit(crd::renderasset::Severity::Error, DiagCode::UnsupportedPassKind,
                        "a cooked pass kind has no render-graph executor mapping yet (the load bridge)", view_of(d.name));
@@ -776,55 +766,22 @@ bool build_frame_graph_template(const FrameGraphDesc& desc, ForEachCountFn for_e
             rg::GraphPass gp;
             // a per-instance name so N expanded passes are distinct nodes (name mixes the pass index + instance).
             gp.name_hash = name_hash(d.name) ^ (static_cast<crd::u64>(inst + 1U) * 0x9E3779B97F4A7C15ULL);
-            gp.payload.executor = rp::executor_type_id(SV(m.executor));
+            gp.payload.executor = d.executor_id; // RAF-12.3: the cooked mechanic (no record-time string hash)
             gp.payload.schema_version = 1U;
-            gp.payload.queue = m.queue;
+            gp.payload.queue = queue_of(d);
 
             bool pass_ok = true;
-            switch (d.kind)
-            {
-            case FramePassKind::RasterGeometry:
-            case FramePassKind::RasterDepthOnly:
-            case FramePassKind::RasterMrt:
-                pass_ok = map_raster(d, /*fullscreen*/ false, gp.payload, out, diags);
-                break;
-            case FramePassKind::RasterVisbuffer:
-                pass_ok = map_visbuffer(d, gp.payload, diags);
-                break;
-            case FramePassKind::RasterFullscreen:
-            case FramePassKind::RasterComposite:
-                pass_ok = map_raster(d, /*fullscreen*/ true, gp.payload, out, diags);
-                break;
-            case FramePassKind::Compute:
-            case FramePassKind::ComputeIndirect:
-                pass_ok = map_compute(d, desc, gp.payload, out, diags);
-                break;
-            case FramePassKind::Clear:
-            case FramePassKind::Copy:
-            case FramePassKind::Blit:
-            case FramePassKind::Resolve:
-                pass_ok = map_transfer(d, gp.payload, diags);
-                break;
-            case FramePassKind::Present:
-                pass_ok = map_present(d, gp.payload, diags);
-                break;
-            case FramePassKind::RayTrace:
-                pass_ok = map_rt_common(d, gp.payload, out, /*three_groups*/ true, diags);
-                break;
-            case FramePassKind::RayTracePipeline:
-                pass_ok = map_rt_common(d, gp.payload, out, /*three_groups*/ false, diags);
-                break;
-            case FramePassKind::RasterTess:
-            case FramePassKind::RasterMesh:
-                pass_ok = map_amplify(d, gp.payload, diags);
-                break;
-            case FramePassKind::RasterMeshIndirect:
-                pass_ok = map_mesh_indirect(d, gp.payload, out, diags);
-                break;
-            default:
-                pass_ok = false;
-                break;
-            }
+            if (pass_is_scene_raster(d)) { pass_ok = map_raster(d, /*fullscreen*/ false, gp.payload, out, diags); }
+            else if (pass_is_visbuffer(d)) { pass_ok = map_visbuffer(d, gp.payload, diags); }
+            else if (pass_is_fullscreen(d)) { pass_ok = map_raster(d, /*fullscreen*/ true, gp.payload, out, diags); }
+            else if (pass_is_compute(d)) { pass_ok = map_compute(d, desc, gp.payload, out, diags); }
+            else if (pass_is_transfer(d)) { pass_ok = map_transfer(d, gp.payload, diags); }
+            else if (pass_is_present(d)) { pass_ok = map_present(d, gp.payload, diags); }
+            else if (pass_is_raytrace_dispatch(d)) { pass_ok = map_rt_common(d, gp.payload, out, /*three*/ true, diags); }
+            else if (pass_is_raytrace_pipeline(d)) { pass_ok = map_rt_common(d, gp.payload, out, /*three*/ false, diags); }
+            else if (pass_is_tess(d) || pass_is_mesh(d)) { pass_ok = map_amplify(d, gp.payload, diags); }
+            else if (pass_is_mesh_indirect(d)) { pass_ok = map_mesh_indirect(d, gp.payload, out, diags); }
+            else { pass_ok = false; }
             if (!pass_ok)
             {
                 ok = false;

@@ -260,8 +260,8 @@ TEST_CASE("REN-37.3 binding contract rejects a pass that does not supply a decla
             == fc::FrameCookError::Ok);
     const fc::FramePassDesc* fwd = find_pass(graph, "forward");
     REQUIRE(fwd != nullptr);
-    // the pass carries the technique NAME through parse -> the field the whole contract hangs on
-    CHECK(fwd->technique.size() == 11U);
+    // the pass carries the technique NAME through parse -> the folded param the whole contract hangs on
+    CHECK(fc::pass_str(*fwd, crd::containers::StringView(fc::pp::kTechnique)).size() == 11U);
     CHECK(tc::verify_technique_bindings(tech, graph, *fwd, &where) == tc::TechniqueCookError::Ok);
 
     // Drop the declared RESOURCE read: rejected BY NAME, at cook time, not as a black screen. (Value bindings
@@ -274,7 +274,7 @@ TEST_CASE("REN-37.3 binding contract rejects a pass that does not supply a decla
         fc::FramePassDesc* p = nullptr;
         for (crd::usize i = 0; i < g2.passes.size(); ++i)
         {
-            if (g2.passes[i].technique.size() > 0U) { p = &g2.passes[i]; }
+            if (fc::pass_str(g2.passes[i], crd::containers::StringView(fc::pp::kTechnique)).size() > 0U) { p = &g2.passes[i]; }
         }
         REQUIRE(p != nullptr);
         p->reads.pop_back(); // shadow_atlas — the pass no longer declares the atlas it shades with

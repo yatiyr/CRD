@@ -43,18 +43,43 @@
 > - Module dep chain (one-way): render-asset-core ← {render-program, render-pass, gpu-context} ← render-material,
 >   render-graph. Every new module is a leaf; every gate is `raf<N>` in ctest.
 >
-> **NEXT ACTION (2026-08-06) — ⭐ READ `docs/detours/D-007-gpu-program-system.md` § "RAF-12 — AGENT HANDOFF" — it has
-> the full step-by-step.** RAF-12.4 is **COMPLETE (59/59 verbs off `IRasterContext`)**; this session also fixed the
-> frame-graph WBOIT correctness (3 defects + a new REN-38-A12 ORACLE gate) and a CKIR emitter read-after-write hoist bug
-> (`ckir_glsl/hlsl.hpp` `must_defer` — fixed B18-e/RT-1/IB-1/B17-c×2 both platforms). **All gated GREEN, NOTHING
-> committed — commit the uncommitted tree FIRST** (4 proposed commits in the handoff). Then, in order: **12.2** unify the
-> two frame-graph runtimes (swap live `SceneRenderer` off `FrameRecorder`/`record_pass` → `crd-render-graph`; the
-> riskiest change — prove byte-identical + smoke before deleting `record_pass`/`execute_frame_graph`) → **12.3** retire
-> `FramePassKind` (209 refs; finer-grained than ExecutorTypeId, migrate per-kind behaviour to executor payloads) →
-> **12.5** grep-proof §7 empty → **13** docs + §22 35-condition DoD. RAF-10's llvmpipe ctest failure is a concurrency
-> flake (passes real GPU + alone), NOT a bug.
-> ⛔ RAF-8+ modify LIVE code (frame-cook/frame_runtime/scene-render/backends) — migrate one kind at a time, old+new
-> both resolve, `crd-sandbox --smoke-test` both backends at every gate.
+> **✅ RAF-12.3 DONE + RAF BAND ESSENTIALLY CLOSED (2026-08-06) — session:
+> `docs/sessions/2026-08-06-raf12-3-retire-framepasskind.md`; ADR-0106 CLOSED.** The central `FramePassKind` enum is
+> RETIRED: a pass' cooked mechanic is now `crd::renderpass::ExecutorTypeId executor_id` on `FramePassDesc` + four role
+> bits (`depth_only`/`mrt`/`composite`/`indirect`) for within-executor variants, driven by ONE shared kind-string ↔
+> (executor,roles) table. Constexpr `kExec*` ids are gated == the runtime hash. Blob **v7→v8** (executor id + role byte
+> + the custom `executor` string — fixes a v7 field-drop). Runtime keys off the id (`out.executor = d.executor_id`, NO
+> record-time string hash — §22-18). Migrated parse/cook/blob/validation/`to_authored_pass`/recorder/emit/bridge/
+> compose/`Custom` seam/tests. **Byte-identical to the committed baseline** (stash-verified). Also fixed a pre-existing
+> `crd-time` gcc `-Werror=format-truncation` that blocked the Linux leg.
+> **Gates:** Windows both backends (frame-cook 480 · scene-render 1537/71 · vk 5274 · dx12 1649 · render-graph 343) ·
+> sandbox `--smoke-test 2` both backends PASS (11-pass frame, 5377/5388 instances) · LLVM-20 tidy clean · gcc-debug
+> builds. **⚠ Run GPU renderer tests through ctest (or export `CRD_ASSETS_DIR`) — a bare binary run is a false-red
+> (`init_programs` can't find `vertex/scene.crdv`).**
+> **12.5** (§7 grep): FramePassKind/verbs/`record_pass` gone; `verify_*`/embedded-remnants already absent; functional
+> keepers (typed authoring fields per §8, `crd://`→`engine://` alias, `untracked_storage`) are NAMED decisions in
+> ADR-0106, not gaps. **13** (§22 35-condition DoD): evidenced in the session log; ADR-0106 closed.
+> **✅ RAF-12.3 §7 FOLD DONE (2026-08-06 later) — `FramePassDesc` DISSOLVED into a typed param payload (the exact
+> plan step 2, user-directed).** The giant struct is gone: a pass carries only `name` · `executor_id` · `executor`
+> (custom app id) · `reads` · `writes` · `for_each` · `queue` · `params`. EVERY executor-specific value (shader/kernel/
+> draw_list/view/technique, 6 RT programs, clear/blend/depth-compare/material, VRS/conservative/filter, decomposed
+> sampler+state, load flags, role bits) is a NAMED TYPED param (`FrameParam` gained String/Enum/U32). Read via
+> `pass_str`/`pass_f32`/`pass_u32`/`pass_flag`/`pass_vec4` + `pass_sampler`/`pass_state`; written via `set_pass_*`;
+> names in one `pp::` block; `is_folded_pass_param` is the one home for the folded-name set. Blob **v9**. Config folds
+> CONDITIONALLY (authored-only) so the builder path == the parse path == the emit round-trip (byte-stable). Parser
+> folds locals→params; forks converted runtime/emit/bridge/tests (user-authorized).
+> **ALL GATES GREEN — fresh-compiled and honest (2026-08-06 close):** Linux **gcc `-k 0` FULL build clean** — the
+> authority; it exposed three MSVC-stale-obj false-greens the fold re-introduced (`same_pass_mechanic` read the removed
+> role-bit fields → a SECOND instance of the first-episode stale scar; a `p.technique` technique-cook site the fork's
+> scope missed; a gcc-only `-Werror=shadow` dup `using SV`). All fixed, every Windows target **force-recompiled under
+> vcvars** and re-run: frame-cook **674** (blob round-trip byte-identity holds) · technique-cook **59** · Vulkan **5274**
+> · DX12 **1649** · scene-render **71 cases / 0 skipped** (RAF-10 app-renderer gate, both backends, with app-assets dir)
+> · render-graph **46** · render-graph-gpu **343**; sandbox `--smoke-test 2` **PASS both backends** (11-pass frame,
+> Vk 5382 / DX12 5391 instances); LLVM-20 tidy clean. §7 grep-empty: `FramePassKind` = 0 live refs (comment-only),
+> `FramePassDesc` = 0 single-purpose typed fields.
+> **REMAINING:** NOTHING COMMITTED YET — propose the commit set for the user (they commit; no AI co-author trailer).
+> RAF-13 guides consolidated in `docs/systems/rendering-foundation.md`. RAF-10's llvmpipe ctest failure is a
+> concurrency flake, NOT a bug.
 >
 > **✅ RAF-11 DONE (2026-08-05) — Gate 11 met (session: `docs/sessions/2026-08-05-raf11-hot-reload.md`).**
 > Dependency-aware HOT RELOAD, all 5 kinds gated. Orchestration over a per-kind fn-ptr+`void*` plug-in driving RAF-3's

@@ -379,6 +379,16 @@ folded into the D-008-close full sweep (win-debug/asan/shipping/tidy all green 2
 
 ## ══════ RAF-12 — AGENT HANDOFF (2026-08-06): what is done, what remains, HOW ══════
 
+> ### ✅ UPDATE 2026-08-06 (LATER) — 12.2 + 12.3 + 12.5 DONE; ADR-0106 CLOSED. Read
+> `docs/sessions/2026-08-06-raf12-3-retire-framepasskind.md` FIRST — it supersedes the step list below for 12.2/12.3/12.5.
+> **12.2** (unify the runtimes) shipped in the prior commit (`FrameRecorder` → `AuthoredPass` → `run_authored_cb`;
+> `record_pass` + the 11 wrappers deleted). **12.3** (this session) RETIRED `FramePassKind` → `ExecutorTypeId` +
+> role bits (blob v7→v8), byte-identical to baseline, gated both backends + sandbox smoke + gcc + tidy. **12.5** §7
+> primary items grep-empty (FramePassKind/verbs/record_pass gone); the rest are absent or NAMED functional keepers in
+> ADR-0106. **REMAINING for full 13:** the authoring/frame-graph/material/technique/custom-renderer/custom-executor/
+> hot-reload/backend GUIDES + lifecycle diagrams (a consolidated system-overview doc). The §22 35-condition DoD is
+> evidenced in the session log. NOTHING is committed — propose commits for the user.
+
 > Written for the next agent to resume RAF-12 exactly where this session stopped. Read this whole section before
 > touching anything. Order is fixed: **commit the uncommitted tree → 12.2 → 12.3 → 12.5 → 13.** Every increment is
 > gated byte-identical both backends + one Linux gcc build + sandbox `--smoke-test 2` both backends + LLVM-20 tidy on

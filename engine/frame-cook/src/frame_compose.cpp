@@ -80,45 +80,21 @@ void copy_resource(const FrameResourceDesc& s, FrameResourceDesc& d)
 // so an injected custom pass validated as "a fullscreen pass with no shader"). If you add a pass field, add it here.
 void copy_pass_body(const FramePassDesc& s, FramePassDesc& d)
 {
-    d.kind            = s.kind;
-    d.material_pass   = s.material_pass;
-    d.for_each        = s.for_each;
-    d.for_each_arg    = s.for_each_arg;
-    d.has_clear_color = s.has_clear_color;
-    for (crd::u32 i = 0; i < 4U; ++i) { d.clear_color[i] = s.clear_color[i]; }
-    d.has_clear_depth = s.has_clear_depth;
-    d.clear_depth     = s.clear_depth;
-    d.depth           = s.depth;
-    copy_str(d.shader, s.shader);
-    copy_str(d.kernel, s.kernel);
-    copy_str(d.executor, s.executor); // ⭐⭐ RAF-10: the custom-pass executor id — dropped here made compose fail
-    copy_str(d.raygen, s.raygen);
-    copy_str(d.miss, s.miss);
-    copy_str(d.closest_hit, s.closest_hit);
-    copy_str(d.any_hit, s.any_hit);
-    copy_str(d.intersection, s.intersection);
-    copy_str(d.callable, s.callable);
-    copy_str(d.technique, s.technique);
-    copy_str(d.view, s.view);
-    for (crd::usize i = 0; i < s.blend.size(); ++i) { d.blend.push_back(s.blend[i]); }
-    d.shading_rate      = s.shading_rate;
-    d.rate_combiner     = s.rate_combiner;
-    d.conservative      = s.conservative;
-    d.queue             = s.queue;
-    d.has_sampler       = s.has_sampler;
-    d.sampler           = s.sampler;
-    d.filter            = s.filter;
-    d.state             = s.state;
-    d.load_target       = s.load_target;
-    d.load_depth        = s.load_depth;
-    d.depth_as_float    = s.depth_as_float;
-    d.untracked_storage = s.untracked_storage;
+    // ⭐ RAF-12.3 §7 fold: a pass is common metadata + a typed PARAM BAG. Copy the mechanic + graph metadata; EVERY
+    // executor-specific value rides `params` (copied below, INCLUDING the String payload). `name`/`reads`/`writes`
+    // and the graph-resource-name params (`draw_list`, `shared_depth`) are namespaced by the caller (append_graph).
+    d.executor_id  = s.executor_id;
+    copy_str(d.executor, s.executor); // ⭐⭐ RAF-10: a custom pass' app executor id (round-trip)
+    d.for_each     = s.for_each;
+    d.for_each_arg = s.for_each_arg;
+    d.queue        = s.queue;
     for (crd::usize i = 0; i < s.params.size(); ++i)
     {
         FrameParam p(d.params.allocator());
         copy_str(p.name, s.params[i].name);
         p.type = s.params[i].type;
         for (crd::u32 c = 0; c < 4U; ++c) { p.v[c] = s.params[i].v[c]; }
+        copy_str(p.str, s.params[i].str); // RAF-12.3: the String payload (shader/kernel/draw_list/view/technique/…)
         d.params.push_back(static_cast<FrameParam&&>(p));
     }
 }
@@ -166,8 +142,18 @@ void append_graph(const FrameGraphDesc& src, const FrameIncludeDesc* inc, FrameG
         FramePassDesc        p(alloc);
         name_of(sp.name, p.name);
         copy_pass_body(sp, p);
-        if (sp.draw_list.size() > 0U) { name_of(sp.draw_list, p.draw_list); }
-        if (sp.shared_depth.size() > 0U) { name_of(sp.shared_depth, p.shared_depth); } // a graph-resource name, namespaced
+        // RAF-12.3 §7 fold: `draw_list` + `shared_depth` are graph-resource-name PARAMS now — namespace them in place.
+        const auto ns_param = [&](const char* key) {
+            const FrameParam* fpv = find_pass_param(sp, crd::containers::StringView(key));
+            if (fpv != nullptr && fpv->type == FrameParamType::String && fpv->str.size() > 0U)
+            {
+                crd::containers::String ns(alloc);
+                name_of(fpv->str, ns);
+                set_pass_str(p, crd::containers::StringView(key), crd::containers::StringView(ns.c_str(), ns.size()));
+            }
+        };
+        ns_param(pp::kDrawList);
+        ns_param(pp::kSharedDepth);
         const auto cp_refs = [&](const crd::containers::Array<FrameResourceRef>& s,
                                  crd::containers::Array<FrameResourceRef>&       t) {
             for (crd::usize k = 0; k < s.size(); ++k)

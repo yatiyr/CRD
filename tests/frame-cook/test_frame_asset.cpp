@@ -15,6 +15,29 @@
 #include <cstring>
 
 namespace fc = crd::framecook;
+using SV      = crd::containers::StringView; // RAF-12.3 §7 fold: the folded-param accessors take a StringView key
+
+// ⭐ RAF-12.3 GATE: the constexpr COOK-TIME executor-id constants MUST equal the runtime `executor_type_id(name)`
+// hash — else a pass cooked under one id and recorded under another would silently miss its executor. This is the
+// load-bearing invariant behind replacing the FramePassKind enum with the executor id.
+TEST_CASE("frame-graph pass executor ids match the runtime hash", "[framecook][raf12]")
+{
+    namespace rp = crd::renderpass;
+    CHECK(fc::kExecSceneRaster      == rp::executor_type_id(SV("scene.raster")));
+    CHECK(fc::kExecFullscreenRaster == rp::executor_type_id(SV("fullscreen.raster")));
+    CHECK(fc::kExecComputeDispatch  == rp::executor_type_id(SV("compute.dispatch")));
+    CHECK(fc::kExecTransferClear    == rp::executor_type_id(SV("transfer.clear")));
+    CHECK(fc::kExecTransferCopy     == rp::executor_type_id(SV("transfer.copy")));
+    CHECK(fc::kExecTransferBlit     == rp::executor_type_id(SV("transfer.blit")));
+    CHECK(fc::kExecTransferResolve  == rp::executor_type_id(SV("transfer.resolve")));
+    CHECK(fc::kExecRaytraceDispatch == rp::executor_type_id(SV("raytrace.dispatch")));
+    CHECK(fc::kExecRaytracePipeline == rp::executor_type_id(SV("raytrace.pipeline")));
+    CHECK(fc::kExecTessRaster       == rp::executor_type_id(SV("tess.raster")));
+    CHECK(fc::kExecMeshRaster       == rp::executor_type_id(SV("mesh.raster")));
+    CHECK(fc::kExecMeshIndirect     == rp::executor_type_id(SV("mesh.indirect")));
+    CHECK(fc::kExecVisbufferRaster  == rp::executor_type_id(SV("visbuffer.raster")));
+    CHECK(fc::kExecPresent          == rp::executor_type_id(SV("present")));
+}
 
 namespace
 {
@@ -199,18 +222,19 @@ TEST_CASE("REN-36.1: a valid .frame.toml parses, and every field survives", "[fr
     CHECK(d.draw_lists[1].sort == fc::FrameSortMode::Material);
 
     REQUIRE(d.passes.size() == 3U);
-    CHECK(d.passes[0].kind == fc::FramePassKind::RasterDepthOnly);
+    CHECK(std::strcmp(fc::pass_kind_string(d.passes[0]), "raster.depth_only") == 0); // RAF-12.3: mechanic round-trip
     CHECK(d.passes[0].for_each == fc::FrameForEach::LightCascades); // user-locked answer #2
     CHECK(d.passes[0].for_each_arg == 0U);                          // light.0
     REQUIRE(d.passes[0].writes.size() == 1U);
     CHECK(d.passes[0].writes[0].indexed);                           // shadow_atlas[$index]
-    CHECK(d.passes[0].material_pass == fc::FrameMaterialPass::Shadow);
-    CHECK(d.passes[0].has_clear_depth);
-    CHECK(d.passes[1].has_clear_color);
-    CHECK(d.passes[2].kind == fc::FramePassKind::RasterFullscreen);
-    REQUIRE(d.passes[2].params.size() == 1U);
-    CHECK(std::strcmp(d.passes[2].params[0].name.c_str(), "exposure_ev100") == 0);
-    CHECK(d.passes[2].params[0].v[0] == 13.5);
+    CHECK(static_cast<fc::FrameMaterialPass>(fc::pass_u32(d.passes[0], SV(fc::pp::kMaterialPass), 0U)) == fc::FrameMaterialPass::Shadow);
+    CHECK(fc::pass_has(d.passes[0], SV(fc::pp::kClearDepth)));
+    CHECK(fc::pass_has(d.passes[1], SV(fc::pp::kClearColor)));
+    CHECK(std::strcmp(fc::pass_kind_string(d.passes[2]), "raster.fullscreen") == 0);
+    // RAF-12.3 §7 fold: the pass' config (shader, …) now lives in `params` too, so check the AUTHORED param by name.
+    const fc::FrameParam* exp = fc::find_pass_param(d.passes[2], SV("exposure_ev100"));
+    REQUIRE(exp != nullptr);
+    CHECK(exp->v[0] == 13.5);
 }
 
 TEST_CASE("REN-36.1: the cooked blob ROUND-TRIPS byte-identically (canonical, padding-free)", "[framecook][ren36]")
@@ -231,7 +255,7 @@ TEST_CASE("REN-36.1: the cooked blob ROUND-TRIPS byte-identically (canonical, pa
     CHECK(std::strcmp(back.name.c_str(), "forward_shadowed") == 0);
     CHECK(back.passes[0].for_each == fc::FrameForEach::LightCascades);
     CHECK(back.passes[0].writes[0].indexed);
-    CHECK(back.passes[2].params[0].v[0] == 13.5);
+    { const fc::FrameParam* be = fc::find_pass_param(back.passes[2], SV("exposure_ev100")); REQUIRE(be != nullptr); CHECK(be->v[0] == 13.5); }
 
     // re-cook the DESERIALIZED description: byte-identical ⇒ the encoding is a pure function of the content
     const auto blob2 = fc::cook_frame_graph(back, &alloc);
@@ -407,11 +431,11 @@ TEST_CASE("REN-36.2: emit -> parse -> cook is BYTE-IDENTICAL to the original coo
     CHECK(reloaded.passes[0].for_each == fc::FrameForEach::LightCascades);
     CHECK(reloaded.passes[0].for_each_arg == 0U);
     CHECK(reloaded.passes[0].writes[0].indexed);            // the `[$index]` subscript survived
-    CHECK(reloaded.passes[0].material_pass == fc::FrameMaterialPass::Shadow);
+    CHECK(static_cast<fc::FrameMaterialPass>(fc::pass_u32(reloaded.passes[0], SV(fc::pp::kMaterialPass), 0U)) == fc::FrameMaterialPass::Shadow);
     CHECK(reloaded.resources[0].layers == 4U);
     CHECK(reloaded.resources[1].scale == 1.0F);
     CHECK(reloaded.requires_caps.size() == 1U);             // the capability tier survived
-    CHECK(reloaded.passes[2].params[0].v[0] == 13.5);       // exact float round-trip (17 sig digits)
+    { const fc::FrameParam* re = fc::find_pass_param(reloaded.passes[2], SV("exposure_ev100")); REQUIRE(re != nullptr); CHECK(re->v[0] == 13.5); } // exact float round-trip
     CHECK(reloaded.draw_lists[0].sort == fc::FrameSortMode::FrontToBack);
 }
 
@@ -421,11 +445,11 @@ TEST_CASE("REN-36.2: a PROGRAMMATICALLY built graph also emits and re-parses los
     crd::memory::TlsfAllocator alloc(8U << 20U);
     fc::FrameGraphBuilder      b(&alloc, crd::containers::StringView("built", 5U));
     b.add_image(crd::containers::StringView("hdr", 3U), crd::gpu::FgImageFormat::RGBA16F, 256U, 256U, true);
-    const crd::u32 p0 = b.add_pass(crd::containers::StringView("fill", 4U), fc::FramePassKind::RasterFullscreen);
+    const crd::u32 p0 = b.add_pass(crd::containers::StringView("fill", 4U), crd::containers::StringView("raster.fullscreen"));
     b.pass_shader(p0, crd::containers::StringView("app://sh/fill", 13U));
     b.pass_writes(p0, crd::containers::StringView("hdr", 3U));
     b.pass_clear_color(p0, 0.25F, 0.5F, 0.75F, 1.0F);
-    const crd::u32 p1 = b.add_pass(crd::containers::StringView("post", 4U), fc::FramePassKind::RasterFullscreen);
+    const crd::u32 p1 = b.add_pass(crd::containers::StringView("post", 4U), crd::containers::StringView("raster.fullscreen"));
     b.pass_shader(p1, crd::containers::StringView("app://sh/post", 13U));
     b.pass_reads(p1, crd::containers::StringView("hdr", 3U));
     b.pass_writes(p1, crd::containers::StringView("@output", 7U));
@@ -441,8 +465,10 @@ TEST_CASE("REN-36.2: a PROGRAMMATICALLY built graph also emits and re-parses los
     const auto cooked_back = fc::cook_frame_graph(back, &alloc);
     REQUIRE(cooked_back.size() == cooked.size());
     CHECK(std::memcmp(cooked_back.data(), cooked.data(), cooked.size()) == 0);
-    CHECK(back.passes[0].clear_color[2] == 0.75F);
-    CHECK(back.passes[1].params[0].v[0] == 0.125);
+    float cc_back[4] = {0.0F, 0.0F, 0.0F, 1.0F};
+    fc::pass_vec4(back.passes[0], SV(fc::pp::kClearColor), cc_back);
+    CHECK(cc_back[2] == 0.75F);
+    { const fc::FrameParam* be = fc::find_pass_param(back.passes[1], SV("exposure")); REQUIRE(be != nullptr); CHECK(be->v[0] == 0.125); }
 }
 
 TEST_CASE("REN-36.1: every error code has a human-readable message", "[framecook][ren36]")
@@ -800,7 +826,7 @@ stencil_pass = "replace"
 )";
     REQUIRE(fc::parse_frame_toml(crd::containers::StringView(state_toml), d, &where) == fc::FrameCookError::Ok);
     REQUIRE(d.passes.size() == 2U);
-    const crd::gpu::PassRasterState& s0 = d.passes[0].state;
+    const crd::gpu::PassRasterState s0 = fc::pass_state(d.passes[0]);
     CHECK(s0.depth_write);
     CHECK(s0.depth_bias == 4.0F);
     CHECK(s0.depth_bias_slope == 1.5F);
@@ -808,7 +834,7 @@ stencil_pass = "replace"
     CHECK(s0.face_cull == crd::gpu::FaceCull::Front);
     CHECK(s0.front_face == crd::gpu::FrontFace::Clockwise);
     CHECK_FALSE(s0.stencil_enable);
-    const crd::gpu::PassRasterState& s1 = d.passes[1].state;
+    const crd::gpu::PassRasterState s1 = fc::pass_state(d.passes[1]);
     CHECK_FALSE(s1.depth_write);
     CHECK(s1.stencil_enable);
     CHECK(s1.stencil_compare == crd::gpu::DepthCompare::Always);
@@ -918,20 +944,20 @@ shader = "crd://post/tonemap"
     REQUIRE(fc::parse_frame_toml(crd::containers::StringView(v7_toml), d, &where) == fc::FrameCookError::Ok);
 
     REQUIRE(d.passes.size() == 4U);
-    CHECK_FALSE(d.passes[0].depth_as_float);
-    CHECK(d.passes[1].depth_as_float);
-    CHECK(d.passes[0].shared_depth.empty());
-    CHECK(std::strcmp(d.passes[2].shared_depth.c_str(), "scene_depth") == 0);
+    CHECK_FALSE(fc::pass_flag(d.passes[0], SV(fc::pp::kDepthAsFloat)));
+    CHECK(fc::pass_flag(d.passes[1], SV(fc::pp::kDepthAsFloat)));
+    CHECK(fc::pass_str(d.passes[0], SV(fc::pp::kSharedDepth)).empty());
+    CHECK(std::strcmp(fc::pass_str(d.passes[2], SV(fc::pp::kSharedDepth)).data(), "scene_depth") == 0);
 
     const auto blob = fc::cook_frame_graph(d, &alloc);
     REQUIRE(blob.size() > 0U);
     fc::FrameGraphDesc r(&alloc);
     REQUIRE(fc::read_frame_graph(crd::containers::ConstSpan<crd::u8>(blob.data(), blob.size()), r));
     REQUIRE(r.passes.size() == 4U);
-    CHECK(r.passes[1].depth_as_float);
-    CHECK_FALSE(r.passes[0].depth_as_float);
-    CHECK(std::strcmp(r.passes[2].shared_depth.c_str(), "scene_depth") == 0);
-    CHECK(r.passes[0].shared_depth.empty());
+    CHECK(fc::pass_flag(r.passes[1], SV(fc::pp::kDepthAsFloat)));
+    CHECK_FALSE(fc::pass_flag(r.passes[0], SV(fc::pp::kDepthAsFloat)));
+    CHECK(std::strcmp(fc::pass_str(r.passes[2], SV(fc::pp::kSharedDepth)).data(), "scene_depth") == 0);
+    CHECK(fc::pass_str(r.passes[0], SV(fc::pp::kSharedDepth)).empty());
 
     const crd::containers::String emitted = fc::emit_frame_toml(d, &alloc);
     fc::FrameGraphDesc            re(&alloc);
@@ -1029,23 +1055,17 @@ filter = "nearest"
         const fc::FramePassDesc& a = d.passes[i];
         const fc::FramePassDesc& b = r.passes[i];
         INFO("pass " << i);
-        CHECK(std::strcmp(a.raygen.c_str(), b.raygen.c_str()) == 0);
-        CHECK(std::strcmp(a.miss.c_str(), b.miss.c_str()) == 0);
-        CHECK(std::strcmp(a.closest_hit.c_str(), b.closest_hit.c_str()) == 0);
-        CHECK(std::strcmp(a.any_hit.c_str(), b.any_hit.c_str()) == 0);
-        CHECK(std::strcmp(a.intersection.c_str(), b.intersection.c_str()) == 0); // v6 (REN-38-F13)
-        CHECK(std::strcmp(a.callable.c_str(), b.callable.c_str()) == 0);
-        CHECK(a.shading_rate == b.shading_rate);
-        CHECK(a.rate_combiner == b.rate_combiner);
-        CHECK(a.conservative == b.conservative);
+        // ⭐ RAF-12.3 §7 fold: every executor-specific value (the RT programs, VRS, filter, sampler, render-state,
+        // load flags, …) is a NAMED TYPED param now — so field survival IS param survival. Compare the whole bag.
+        CHECK(a.executor_id == b.executor_id);
         CHECK(a.queue == b.queue);
-        CHECK(a.filter == b.filter);
-        CHECK(a.has_sampler == b.has_sampler);
-        CHECK(a.sampler.address == b.sampler.address);
-        CHECK(a.sampler.anisotropy == b.sampler.anisotropy);
-        CHECK(a.sampler.mip_bias == b.sampler.mip_bias);
-        CHECK(a.sampler.compare == b.sampler.compare);
-        CHECK(a.state == b.state);
-        CHECK(a.load_target == b.load_target); // v5 (REN-38-F11)
+        REQUIRE(a.params.size() == b.params.size());
+        for (crd::usize k = 0; k < a.params.size(); ++k)
+        {
+            CHECK(std::strcmp(a.params[k].name.c_str(), b.params[k].name.c_str()) == 0);
+            CHECK(a.params[k].type == b.params[k].type);
+            CHECK(std::strcmp(a.params[k].str.c_str(), b.params[k].str.c_str()) == 0);
+            for (crd::u32 c = 0; c < 4U; ++c) { CHECK(a.params[k].v[c] == b.params[k].v[c]); }
+        }
     }
 }

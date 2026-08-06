@@ -39,6 +39,19 @@ namespace
 // RAF-12.4: enc_dispatch + the fullscreen verb-packet helpers now live in the SHARED tests/gpu-shared/verb_packet_helpers.hpp
 // (crd::gputest::), driven by both backend suites so the encoder's lowering is proven once.
 
+// RAF-12.3: the pass MECHANIC survives a round trip iff the cooked executor id AND all role bits match. In a helper
+// because `CHECK` cannot decompose a chained `&&`/`==` (Catch2 forbids chained comparisons inside an assertion).
+[[nodiscard]] bool same_pass_mechanic(const framecook::FramePassDesc& a, const framecook::FramePassDesc& b) noexcept
+{
+    namespace fc = crd::framecook;
+    using SVm    = crd::containers::StringView;
+    return a.executor_id == b.executor_id
+           && fc::pass_flag(a, SVm(fc::pp::kDepthOnly)) == fc::pass_flag(b, SVm(fc::pp::kDepthOnly))
+           && fc::pass_flag(a, SVm(fc::pp::kMrt)) == fc::pass_flag(b, SVm(fc::pp::kMrt))
+           && fc::pass_flag(a, SVm(fc::pp::kComposite)) == fc::pass_flag(b, SVm(fc::pp::kComposite))
+           && fc::pass_flag(a, SVm(fc::pp::kIndirect)) == fc::pass_flag(b, SVm(fc::pp::kIndirect));
+}
+
 // per-pass recording state (carried through FgExecuteFn's void* user)
 struct PassState
 {
@@ -1093,14 +1106,14 @@ TEST_CASE("REN-36.2: a PROGRAMMATIC graph renders identically to the authored an
         b.draw_list_all(dl, containers::StringView("MeshRenderer", 12U));
 
         const u32 p0 = b.add_pass(containers::StringView("shadow_depth", 12U),
-                                  crd::framecook::FramePassKind::RasterDepthOnly);
+                                  containers::StringView("raster.depth_only"));
         b.pass_draw_list(p0, containers::StringView("occluders", 9U));
         b.pass_writes(p0, containers::StringView("shadow_map", 10U));
         b.pass_clear_depth(p0, 1.0F);
         b.pass_depth(p0, g::DepthCompare::LessEqual);
 
         const u32 p1 = b.add_pass(containers::StringView("shade", 5U),
-                                  crd::framecook::FramePassKind::RasterFullscreen);
+                                  containers::StringView("raster.fullscreen"));
         b.pass_reads(p1, containers::StringView("shadow_map", 10U));
         b.pass_writes(p1, containers::StringView("@output", 7U));
         b.pass_shader(p1, containers::StringView("test://shaders/shadow_sample", 28U));
@@ -1135,11 +1148,11 @@ TEST_CASE("REN-36.2: a programmatically-built graph is rejected by the SAME vali
     crd::framecook::FrameGraphBuilder b(&alloc, containers::StringView("cyclic", 6U));
     b.add_image(containers::StringView("a", 1U), g::FgImageFormat::RGBA8Unorm, 8U, 8U);
     b.add_image(containers::StringView("b", 1U), g::FgImageFormat::RGBA8Unorm, 8U, 8U);
-    const u32 p0 = b.add_pass(containers::StringView("p0", 2U), crd::framecook::FramePassKind::RasterFullscreen);
+    const u32 p0 = b.add_pass(containers::StringView("p0", 2U), containers::StringView("raster.fullscreen"));
     b.pass_shader(p0, containers::StringView("s", 1U));
     b.pass_reads(p0, containers::StringView("b", 1U));
     b.pass_writes(p0, containers::StringView("a", 1U));
-    const u32 p1 = b.add_pass(containers::StringView("p1", 2U), crd::framecook::FramePassKind::RasterFullscreen);
+    const u32 p1 = b.add_pass(containers::StringView("p1", 2U), containers::StringView("raster.fullscreen"));
     b.pass_shader(p1, containers::StringView("s", 1U));
     b.pass_reads(p1, containers::StringView("a", 1U));
     b.pass_writes(p1, containers::StringView("b", 1U));
@@ -1148,7 +1161,7 @@ TEST_CASE("REN-36.2: a programmatically-built graph is rejected by the SAME vali
 
     // ...and a well-formed one round-trips through the COOKED form too: build -> cook -> read -> validate
     crd::framecook::FrameGraphBuilder ok(&alloc, containers::StringView("ok", 2U));
-    const u32 q = ok.add_pass(containers::StringView("only", 4U), crd::framecook::FramePassKind::RasterFullscreen);
+    const u32 q = ok.add_pass(containers::StringView("only", 4U), containers::StringView("raster.fullscreen"));
     ok.pass_shader(q, containers::StringView("s", 1U));
     ok.pass_writes(q, containers::StringView("@output", 7U));
     REQUIRE(ok.validate() == crd::framecook::FrameCookError::Ok);
@@ -2761,8 +2774,8 @@ filter = "bilinear"
         REQUIRE(b.passes.size() == a.passes.size());
         for (usize i = 0; i < a.passes.size(); ++i)
         {
-            CHECK(b.passes[i].kind == a.passes[i].kind);
-            CHECK(b.passes[i].filter == a.passes[i].filter);
+            CHECK(same_pass_mechanic(a.passes[i], b.passes[i]));
+            CHECK(framecook::pass_u32(b.passes[i], containers::StringView(framecook::pp::kFilter), 0U) == framecook::pass_u32(a.passes[i], containers::StringView(framecook::pp::kFilter), 0U));
         }
     }
 }
@@ -2977,7 +2990,7 @@ params = { groups = 4 }
         REQUIRE(framecook::parse_frame_toml(containers::StringView(text.c_str(), text.size()), b, &where)
                 == framecook::FrameCookError::Ok);
         REQUIRE(b.passes.size() == 1U);
-        CHECK(b.passes[0].kind == framecook::FramePassKind::RasterMesh);
+        CHECK(framecook::pass_is_mesh(b.passes[0]));
     }
 }
 
@@ -3319,7 +3332,7 @@ clear_color = [0.0, 0.0, 0.0, 1.0]
         REQUIRE(b.resources.size() == a.resources.size());
         for (usize i = 0; i < a.resources.size(); ++i) { CHECK(b.resources[i].kind == a.resources[i].kind); }
         REQUIRE(b.passes.size() == a.passes.size());
-        for (usize i = 0; i < a.passes.size(); ++i) { CHECK(b.passes[i].kind == a.passes[i].kind); }
+        for (usize i = 0; i < a.passes.size(); ++i) { CHECK(same_pass_mechanic(a.passes[i], b.passes[i])); }
     }
 }
 
@@ -3690,11 +3703,11 @@ writes = ["@output"]
         REQUIRE(b.passes.size() == a.passes.size());
         for (usize i = 0; i < a.passes.size(); ++i)
         {
-            CHECK(b.passes[i].kind == a.passes[i].kind);
-            REQUIRE(b.passes[i].blend.size() == a.passes[i].blend.size());
-            for (usize k = 0; k < a.passes[i].blend.size(); ++k)
+            CHECK(same_pass_mechanic(a.passes[i], b.passes[i]));
+            REQUIRE(framecook::pass_u32(b.passes[i], containers::StringView(framecook::pp::kBlendCount), 0U) == framecook::pass_u32(a.passes[i], containers::StringView(framecook::pp::kBlendCount), 0U));
+            for (usize k = 0; k < framecook::pass_u32(a.passes[i], containers::StringView(framecook::pp::kBlendCount), 0U) && k < 4U; ++k)
             {
-                CHECK(b.passes[i].blend[k] == a.passes[i].blend[k]);
+                CHECK(framecook::pass_u32(b.passes[i], containers::StringView(framecook::pp::kBlendSlot[k]), 0U) == framecook::pass_u32(a.passes[i], containers::StringView(framecook::pp::kBlendSlot[k]), 0U));
             }
         }
     }
@@ -4175,14 +4188,14 @@ clear_color = [0.0, 0.0, 0.0, 1.0]
         REQUIRE(b.passes.size() == a.passes.size());
         for (usize i = 0; i < a.passes.size(); ++i)
         {
-            CHECK(b.passes[i].kind == a.passes[i].kind);
-            CHECK(b.passes[i].shading_rate == a.passes[i].shading_rate);
-            CHECK(b.passes[i].rate_combiner == a.passes[i].rate_combiner);
-            CHECK(b.passes[i].conservative == a.passes[i].conservative);
+            CHECK(same_pass_mechanic(a.passes[i], b.passes[i]));
+            CHECK(framecook::pass_u32(b.passes[i], containers::StringView(framecook::pp::kShadingRate), 0U) == framecook::pass_u32(a.passes[i], containers::StringView(framecook::pp::kShadingRate), 0U));
+            CHECK(framecook::pass_u32(b.passes[i], containers::StringView(framecook::pp::kRateCombiner), 0U) == framecook::pass_u32(a.passes[i], containers::StringView(framecook::pp::kRateCombiner), 0U));
+            CHECK(framecook::pass_u32(b.passes[i], containers::StringView(framecook::pp::kConservative), 0U) == framecook::pass_u32(a.passes[i], containers::StringView(framecook::pp::kConservative), 0U));
             CHECK(b.passes[i].queue == a.passes[i].queue);
-            CHECK(b.passes[i].raygen == a.passes[i].raygen);
-            CHECK(b.passes[i].miss == a.passes[i].miss);
-            CHECK(b.passes[i].closest_hit == a.passes[i].closest_hit);
+            CHECK(framecook::pass_str(b.passes[i], containers::StringView(framecook::pp::kRaygen)) == framecook::pass_str(a.passes[i], containers::StringView(framecook::pp::kRaygen)));
+            CHECK(framecook::pass_str(b.passes[i], containers::StringView(framecook::pp::kMiss)) == framecook::pass_str(a.passes[i], containers::StringView(framecook::pp::kMiss)));
+            CHECK(framecook::pass_str(b.passes[i], containers::StringView(framecook::pp::kClosestHit)) == framecook::pass_str(a.passes[i], containers::StringView(framecook::pp::kClosestHit)));
         }
     };
     round_trip(kVrsGraph);
@@ -4287,7 +4300,7 @@ TEST_CASE("REN-38-A13 GATE: an authored SHADING RATE actually coarsens shading",
         framecook::FrameGraphDesc plain(&alloc);
         REQUIRE(framecook::parse_frame_toml(containers::StringView(kVrsGraph), plain, &where)
                 == framecook::FrameCookError::Ok);
-        for (usize i = 0; i < plain.passes.size(); ++i) { plain.passes[i].shading_rate = g::ShadingRate::Rate1x1; }
+        for (usize i = 0; i < plain.passes.size(); ++i) { framecook::set_pass_enum(plain.passes[i], containers::StringView(framecook::pp::kShadingRate), static_cast<crd::u32>(g::ShadingRate::Rate1x1)); }
         auto dst2 = raster.create_color_target(dim, dim);
         REQUIRE(dst2 != nullptr);
         StateHost host2(*dst2);
@@ -5245,9 +5258,9 @@ TEST_CASE("REN-38-B8: an authored SAMPLER is settled at COOK time", "[frame-cook
     using E = framecook::FrameCookError;
     REQUIRE(framecook::parse_frame_toml(containers::StringView(kClampGraph), a, &where) == E::Ok);
     REQUIRE(a.passes.size() == 1U);
-    CHECK(a.passes[0].has_sampler);
-    CHECK(a.passes[0].sampler.address == g::SamplerAddress::ClampToEdge);
-    CHECK(a.passes[0].sampler.mag_filter == g::SamplerFilter::Nearest);
+    CHECK(framecook::pass_flag(a.passes[0], containers::StringView(framecook::pp::kHasSampler)));
+    CHECK(framecook::pass_sampler(a.passes[0]).address == g::SamplerAddress::ClampToEdge);
+    CHECK(framecook::pass_sampler(a.passes[0]).mag_filter == g::SamplerFilter::Nearest);
 
     // ⛔ The address set is CLOSED. A typo that fell back to `repeat` would make a post-process wrap its edges —
     // visible only at the screen border, and only on content bright enough to notice.
@@ -5269,9 +5282,9 @@ TEST_CASE("REN-38-B8: an authored SAMPLER is settled at COOK time", "[frame-cook
         framecook::FrameGraphDesc b(&alloc);
         REQUIRE(framecook::parse_frame_toml(containers::StringView(text.c_str(), text.size()), b, &where) == E::Ok);
         REQUIRE(b.passes.size() == 1U);
-        CHECK(b.passes[0].has_sampler);
-        CHECK(b.passes[0].sampler.address == g::SamplerAddress::ClampToEdge);
-        CHECK(b.passes[0].sampler.mag_filter == g::SamplerFilter::Nearest);
+        CHECK(framecook::pass_flag(b.passes[0], containers::StringView(framecook::pp::kHasSampler)));
+        CHECK(framecook::pass_sampler(b.passes[0]).address == g::SamplerAddress::ClampToEdge);
+        CHECK(framecook::pass_sampler(b.passes[0]).mag_filter == g::SamplerFilter::Nearest);
     }
 
     // a pass that declares NOTHING stays on the engine default — every existing asset is byte-unchanged
@@ -5284,7 +5297,7 @@ TEST_CASE("REN-38-B8: an authored SAMPLER is settled at COOK time", "[frame-cook
                                            "writes = [\"@output\"]\n"),
                     d, &where)
                 == E::Ok);
-        CHECK_FALSE(d.passes[0].has_sampler);
+        CHECK_FALSE(framecook::pass_flag(d.passes[0], containers::StringView(framecook::pp::kHasSampler)));
     }
 }
 

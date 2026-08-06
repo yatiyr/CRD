@@ -394,7 +394,7 @@ void cook_gltf_images(const CookContext& ctx, const crd::assetio::ImportedAsset&
 
         // stable id: sidecar "<source>.tex.<idx>_<name>.meta" (index-keyed — names may be empty or collide),
         // minted-or-replayed by CookIO::stable_id (recorded as a dependency edge)
-        char idx_buf[16];
+        char idx_buf[24]; // gcc -Werror=format-truncation: size_t %zu can be 20 digits
         std::snprintf(idx_buf, sizeof(idx_buf), "%zu", ii);
         const crd::containers::String safe_name = sanitize_name(img.name.c_str(), ctx.allocator, "img");
         crd::containers::String       suffix(ctx.allocator);
@@ -472,7 +472,7 @@ void cook_gltf_materials(const CookContext& ctx, const crd::assetio::ImportedAss
         textures.occlusion          = slot_id(mat.occlusion_image);
         textures.emissive           = slot_id(mat.emissive_image);
 
-        char idx_buf[16];
+        char idx_buf[24]; // gcc -Werror=format-truncation: size_t %zu can be 20 digits
         std::snprintf(idx_buf, sizeof(idx_buf), "%zu", mi);
         const crd::containers::String safe_name = sanitize_name(mat.name.c_str(), ctx.allocator, "mtl");
         crd::containers::String       suffix(ctx.allocator);
@@ -623,7 +623,7 @@ void cook_gltf_skeletons(const CookContext& ctx, crd::assetio::ImportedAsset& as
             info.joint_nodes.push_back(skin.joints[old]);
         }
 
-        char idx_buf[16];
+        char idx_buf[24]; // gcc -Werror=format-truncation: size_t %zu can be 20 digits
         std::snprintf(idx_buf, sizeof(idx_buf), "%zu", si);
         crd::containers::String suffix(ctx.allocator);
         suffix.append(".skel.");
@@ -728,8 +728,8 @@ void cook_gltf_animations(const CookContext& ctx, const crd::assetio::ImportedAs
         }
         if (clip.tracks.size() == 0U) { continue; }
 
-        char idx_buf[16];
-        std::snprintf(idx_buf, sizeof(idx_buf), "%zu", ai);
+        char idx_buf[24]; // gcc -Werror=format-truncation: size_t %zu can be 20 digits; size for the worst case
+        std::snprintf(static_cast<char*>(idx_buf), sizeof(idx_buf), "%zu", ai);
         const crd::containers::String safe_name = sanitize_name(anim.name.c_str(), ctx.allocator, "clip");
         crd::containers::String       suffix(ctx.allocator);
         suffix.append(".anim.");

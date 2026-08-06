@@ -5,6 +5,7 @@
 
 #include <toml++/toml.hpp>
 
+#include <algorithm> // RAF-12.3: std::ranges::any_of (is_builtin_executor)
 #include <cstring>
 #include <string_view>
 
@@ -28,7 +29,15 @@ constexpr crd::u32 kFourCC = (static_cast<crd::u32>('F')) | (static_cast<crd::u3
 // program names, VRS state, conservative, queue, the sampler and the blit filter — plus the new pass-state
 // block. ⛔ The byte-identity gate could not see the loss: a field dropped by BOTH the writer and the reader
 // round-trips "byte-identically", which is why the round-trip gate now asserts FIELD SURVIVAL instead.
-constexpr crd::u32 kBlobVersion = 7U; // v7 (REN-40-G3): + shared_depth (v6: intersection/callable SBT roles)
+// v8 (RAF-12.3): the retired `FramePassKind` byte becomes the pass' cooked ExecutorTypeId (u64) + a role-bit byte
+// (depth_only | mrt | composite | indirect), and the CUSTOM pass' app `executor` string now rides the record too
+// (v7 dropped it — the byte-identity-blind field-both-sides-drop class the audit named). A v7 reader stops at the
+// pass kind, so the version bumps.
+// v9 (RAF-12.3 §7 FOLD): the pass record is now COMMON METADATA (name · executor id · custom executor string ·
+// reads · writes · for_each · queue) + a TYPED PARAM BAG (every executor-specific value; each param carries a String
+// payload for program/query/resource references). The ~40 single-purpose per-pass fields and the v8 role byte are
+// GONE. A v8 reader stops at the pass record, so the version bumps.
+constexpr crd::u32 kBlobVersion = 9U;
 
 using Bytes = crd::containers::Array<crd::u8>;
 
@@ -36,6 +45,10 @@ void put_u8(Bytes& b, crd::u8 v) { b.push_back(v); }
 void put_u32(Bytes& b, crd::u32 v)
 {
     for (crd::u32 s = 0; s < 32U; s += 8U) { b.push_back(static_cast<crd::u8>((v >> s) & 0xFFU)); }
+}
+void put_u64(Bytes& b, crd::u64 v)
+{
+    for (crd::u32 s = 0; s < 64U; s += 8U) { b.push_back(static_cast<crd::u8>((v >> s) & 0xFFU)); }
 }
 void put_f32(Bytes& b, float v)
 {
@@ -75,6 +88,14 @@ struct Cursor
         pos += 4U;
         return v;
     }
+    crd::u64 u64v() noexcept
+    {
+        if (!have(8U)) { return 0U; }
+        crd::u64 v = 0;
+        for (crd::u32 i = 0; i < 8U; ++i) { v |= static_cast<crd::u64>(in[pos + i]) << (i * 8U); }
+        pos += 8U;
+        return v;
+    }
     float f32v() noexcept
     {
         const crd::u32 bits = u32v();
@@ -106,33 +127,8 @@ struct Cursor
     }
 };
 
-// ── string → enum. Every miss is a NAMED cook error, never a silent default. ─────────────────────────────────
-bool to_pass_kind(std::string_view s, FramePassKind& out)
-{
-    if (s == "raster.geometry")   { out = FramePassKind::RasterGeometry;   return true; }
-    if (s == "raster.depth_only") { out = FramePassKind::RasterDepthOnly;  return true; }
-    if (s == "raster.fullscreen") { out = FramePassKind::RasterFullscreen; return true; }
-    if (s == "raster.mrt")        { out = FramePassKind::RasterMrt;        return true; }
-    if (s == "compute")           { out = FramePassKind::Compute;          return true; }
-    if (s == "present")           { out = FramePassKind::Present;          return true; }
-    // REN-38-A6: the utility passes.
-    if (s == "clear")             { out = FramePassKind::Clear;            return true; }
-    if (s == "copy")              { out = FramePassKind::Copy;             return true; }
-    if (s == "blit")              { out = FramePassKind::Blit;             return true; }
-    if (s == "resolve")           { out = FramePassKind::Resolve;          return true; }
-    // REN-38-A7 / A8: the amplification kinds.
-    if (s == "raster.tess")       { out = FramePassKind::RasterTess;       return true; }
-    if (s == "raster.mesh")       { out = FramePassKind::RasterMesh;       return true; }
-    // REN-38-A9 / A10: ray tracing and the GPU-driven loop.
-    if (s == "raster.visbuffer")     { out = FramePassKind::RasterVisbuffer;    return true; }
-    if (s == "raster.composite")     { out = FramePassKind::RasterComposite;    return true; }
-    if (s == "raytrace")             { out = FramePassKind::RayTrace;           return true; }
-    if (s == "raytrace.pipeline")    { out = FramePassKind::RayTracePipeline;   return true; }
-    if (s == "compute.indirect")     { out = FramePassKind::ComputeIndirect;    return true; }
-    if (s == "raster.mesh.indirect") { out = FramePassKind::RasterMeshIndirect; return true; }
-    if (s == "custom")               { out = FramePassKind::Custom;             return true; } // RAF-10: app executor by id
-    return false;
-}
+// RAF-12.3: the string ↔ mechanic mapping moved to the shared `kKindTable` + `pass_mechanic_from_kind` /
+// `pass_kind_string` (defined just above `cook_frame_graph`, at namespace scope so the header can declare them).
 // REN-38-A13: the closed sets for per-pass render state. Every miss is a NAMED cook error — a typo that fell
 // back to the default would render at 1×1 while the asset says 2×2, and nothing in the frame would disagree.
 bool to_shading_rate(std::string_view s, crd::gpu::ShadingRate& out)
@@ -696,6 +692,33 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
             const toml::table* t = node.as_table();
             if (t == nullptr) { return FrameCookError::ParseFailed; }
             FramePassDesc p(alloc);
+            // ⭐ RAF-12.3 §7 fold: parse the executor-specific config into LOCALS (preserving the intricate
+            // accumulation of has_sampler / stencil_enable / the blend list), then fold them into `p.params` right
+            // before the push — with conditions that MIRROR the emitter's, so the blob + TOML round-trips stay
+            // byte-stable. No single-purpose fields on `p`.
+            crd::gpu::SamplerDesc          l_sampler{};
+            bool                          l_has_sampler = false;
+            crd::gpu::PassRasterState     l_state{};
+            crd::containers::Array<crd::gpu::BlendMode> l_blend(alloc);
+            float                         l_clear_color[4]  = {0.0F, 0.0F, 0.0F, 1.0F};
+            bool                          l_has_clear_color = false;
+            float                         l_clear_depth     = 1.0F;
+            bool                          l_has_clear_depth = false;
+            crd::gpu::DepthCompare        l_depth    = crd::gpu::DepthCompare::LessEqual;
+            FrameMaterialPass             l_material = FrameMaterialPass::None;
+            crd::gpu::ShadingRate         l_sr       = crd::gpu::ShadingRate::Rate1x1;
+            crd::gpu::ShadingRateCombiner l_rc       = crd::gpu::ShadingRateCombiner::Keep;
+            crd::gpu::ConservativeMode    l_cons     = crd::gpu::ConservativeMode::Off;
+            FrameBlitFilter               l_filter   = FrameBlitFilter::Linear;
+            bool l_load         = false;
+            bool l_load_depth   = false;
+            bool l_depth_as_float = false;
+            bool l_untracked    = false;
+            // RAF-12.3 §7 fold: track authorship of the keys whose fold must be CONDITIONAL (else a builder-built
+            // graph — which never sets them — and an emit→reparse graph differ, breaking the round-trip):
+            // depth_compare / filter fold only when authored; material folds only when non-None.
+            bool l_has_depth    = false;
+            bool l_has_filter   = false;
             const auto pn = (*t)["name"].value<std::string_view>();
             if (!pn || pn->empty()) { return FrameCookError::MissingName; }
             set_str(p.name, *pn);
@@ -704,7 +727,7 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
                 if (str_eq(out.passes[i].name, *pn)) { set_where(where, *pn); return FrameCookError::DuplicateName; }
             }
             const auto kd = (*t)["kind"].value<std::string_view>();
-            if (!kd || !to_pass_kind(*kd, p.kind))
+            if (!kd || !pass_mechanic_from_kind(crd::containers::StringView(kd->data(), kd->size()), p))
             {
                 set_where(where, kd ? *kd : std::string_view{"<missing>"});
                 return FrameCookError::UnknownPassKind;
@@ -724,34 +747,49 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
             };
             refs("reads", p.reads);
             refs("writes", p.writes);
-            if (const auto v = (*t)["draw_list"].value<std::string_view>()) { set_str(p.draw_list, *v); }
-            if (const auto v = (*t)["view"].value<std::string_view>())      { set_str(p.view, *v); }
-            if (const auto v = (*t)["shader"].value<std::string_view>())    { set_str(p.shader, *v); }
-            if (const auto v = (*t)["kernel"].value<std::string_view>())    { set_str(p.kernel, *v); }
+            // RAF-12.3 §7 fold: every program/query/resource reference is a STRING PARAM now (no struct fields).
+            const auto sset = [&](const char* key, const char* toml_key) {
+                if (const auto v = (*t)[toml_key].value<std::string_view>())
+                {
+                    set_pass_str(p, crd::containers::StringView(key), crd::containers::StringView(v->data(), v->size()));
+                }
+            };
+            sset(pp::kDrawList, "draw_list");
+            sset(pp::kView, "view");
+            sset(pp::kShader, "shader");
+            sset(pp::kKernel, "kernel");
             if (const auto v = (*t)["executor"].value<std::string_view>())  { set_str(p.executor, *v); } // RAF-10: custom
-            if (const auto v = (*t)["raygen"].value<std::string_view>())      { set_str(p.raygen, *v); }
-            if (const auto v = (*t)["miss"].value<std::string_view>())        { set_str(p.miss, *v); }
-            if (const auto v = (*t)["closest_hit"].value<std::string_view>()) { set_str(p.closest_hit, *v); }
-            if (const auto v = (*t)["any_hit"].value<std::string_view>())     { set_str(p.any_hit, *v); }
-            if (const auto v = (*t)["intersection"].value<std::string_view>()) { set_str(p.intersection, *v); }
-            if (const auto v = (*t)["callable"].value<std::string_view>())     { set_str(p.callable, *v); }
-            if (const auto v = (*t)["technique"].value<std::string_view>()) { set_str(p.technique, *v); }
+            // RAF-12.3: a `kind = "custom"` pass left its `executor_id` INVALID (the table has no app id); resolve it
+            // from the just-read `executor` field, the same hash a record uses. A builtin's id is already set.
+            if (!p.executor_id.valid() && !p.executor.empty())
+            {
+                p.executor_id = crd::renderpass::executor_type_id(
+                    crd::containers::StringView(p.executor.c_str(), p.executor.size()));
+            }
+            sset(pp::kRaygen, "raygen");
+            sset(pp::kMiss, "miss");
+            sset(pp::kClosestHit, "closest_hit");
+            sset(pp::kAnyHit, "any_hit");
+            sset(pp::kIntersection, "intersection");
+            sset(pp::kCallable, "callable");
+            sset(pp::kTechnique, "technique");
             if (const auto v = (*t)["filter"].value<std::string_view>())
             {
-                if (!to_blit_filter(*v, p.filter)) { set_where(where, *v); return FrameCookError::UnknownFilter; }
+                if (!to_blit_filter(*v, l_filter)) { set_where(where, *v); return FrameCookError::UnknownFilter; }
+                l_has_filter = true;
             }
             // REN-38-A13 / A14: per-pass render state and queue placement.
             if (const auto v = (*t)["shading_rate"].value<std::string_view>())
             {
-                if (!to_shading_rate(*v, p.shading_rate)) { set_where(where, *v); return FrameCookError::UnknownShadingRate; }
+                if (!to_shading_rate(*v, l_sr)) { set_where(where, *v); return FrameCookError::UnknownShadingRate; }
             }
             if (const auto v = (*t)["rate_combiner"].value<std::string_view>())
             {
-                if (!to_rate_combiner(*v, p.rate_combiner)) { set_where(where, *v); return FrameCookError::UnknownRateCombiner; }
+                if (!to_rate_combiner(*v, l_rc)) { set_where(where, *v); return FrameCookError::UnknownRateCombiner; }
             }
             if (const auto v = (*t)["conservative"].value<std::string_view>())
             {
-                if (!to_conservative(*v, p.conservative)) { set_where(where, *v); return FrameCookError::UnknownConservative; }
+                if (!to_conservative(*v, l_cons)) { set_where(where, *v); return FrameCookError::UnknownConservative; }
             }
             if (const auto v = (*t)["queue"].value<std::string_view>())
             {
@@ -766,35 +804,35 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
                 crd::gpu::SamplerFilter sf{};
                 if (to_sampler_filter(*v, sf))
                 {
-                    p.sampler.min_filter = sf;
-                    p.sampler.mag_filter = sf;
-                    p.sampler.mip_filter = sf;
-                    p.has_sampler        = true;
+                    l_sampler.min_filter = sf;
+                    l_sampler.mag_filter = sf;
+                    l_sampler.mip_filter = sf;
+                    l_has_sampler        = true;
                 }
             }
             if (const auto v = (*t)["address"].value<std::string_view>())
             {
-                if (!to_sampler_address(*v, p.sampler.address))
+                if (!to_sampler_address(*v, l_sampler.address))
                 {
                     set_where(where, *v);
                     return FrameCookError::UnknownSamplerAddress;
                 }
-                p.has_sampler = true;
+                l_has_sampler = true;
             }
             if (const auto v = (*t)["anisotropy"].value<int64_t>())
             {
-                p.sampler.anisotropy = static_cast<crd::u32>(*v > 0 ? *v : 1);
-                p.has_sampler        = true;
+                l_sampler.anisotropy = static_cast<crd::u32>(*v > 0 ? *v : 1);
+                l_has_sampler        = true;
             }
             if (const auto v = (*t)["mip_bias"].value<double>())
             {
-                p.sampler.mip_bias = static_cast<float>(*v);
-                p.has_sampler      = true;
+                l_sampler.mip_bias = static_cast<float>(*v);
+                l_has_sampler      = true;
             }
             if (const auto v = (*t)["compare"].value<bool>())
             {
-                p.sampler.compare = *v;
-                p.has_sampler     = true;
+                l_sampler.compare = *v;
+                l_has_sampler     = true;
             }
             if (const auto* barr = (*t)["blend"].as_array())
             {
@@ -803,12 +841,12 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
                     const auto bs = b.value<std::string_view>();
                     crd::gpu::BlendMode bm{};
                     if (!bs || !to_blend(*bs, bm)) { set_where(where, bs ? *bs : ""); return FrameCookError::UnknownBlend; }
-                    p.blend.push_back(bm);
+                    l_blend.push_back(bm);
                 }
             }
             if (const auto v = (*t)["material_pass"].value<std::string_view>())
             {
-                if (!to_material_pass(*v, p.material_pass)) { set_where(where, *v); return FrameCookError::UnknownMaterialPass; }
+                if (!to_material_pass(*v, l_material)) { set_where(where, *v); return FrameCookError::UnknownMaterialPass; }
             }
             if (const auto v = (*t)["for_each"].value<std::string_view>())
             {
@@ -816,89 +854,90 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
             }
             if (const auto v = (*t)["depth"].value<std::string_view>())
             {
-                if (!to_compare(*v, p.depth)) { set_where(where, *v); return FrameCookError::UnknownCompare; }
+                if (!to_compare(*v, l_depth)) { set_where(where, *v); return FrameCookError::UnknownCompare; }
+                l_has_depth = true;
             }
             // ── ⭐ REN-38 audit: the PASS-STATE vocabulary. Every default is the historical hardwired value. ──
-            if (const auto v = (*t)["depth_write"].value<bool>()) { p.state.depth_write = *v; }
-            if (const auto v = (*t)["depth_bias"].value<double>()) { p.state.depth_bias = static_cast<float>(*v); }
+            if (const auto v = (*t)["depth_write"].value<bool>()) { l_state.depth_write = *v; }
+            if (const auto v = (*t)["depth_bias"].value<double>()) { l_state.depth_bias = static_cast<float>(*v); }
             if (const auto v = (*t)["depth_bias_slope"].value<double>())
             {
-                p.state.depth_bias_slope = static_cast<float>(*v);
+                l_state.depth_bias_slope = static_cast<float>(*v);
             }
             if (const auto v = (*t)["depth_bias_clamp"].value<double>())
             {
-                p.state.depth_bias_clamp = static_cast<float>(*v);
+                l_state.depth_bias_clamp = static_cast<float>(*v);
             }
             if (const auto v = (*t)["face_cull"].value<std::string_view>())
             {
-                if (!to_face_cull(*v, p.state.face_cull)) { set_where(where, *v); return FrameCookError::UnknownFaceCull; }
+                if (!to_face_cull(*v, l_state.face_cull)) { set_where(where, *v); return FrameCookError::UnknownFaceCull; }
             }
             if (const auto v = (*t)["front_face"].value<std::string_view>())
             {
-                if (!to_front_face(*v, p.state.front_face)) { set_where(where, *v); return FrameCookError::UnknownFrontFace; }
+                if (!to_front_face(*v, l_state.front_face)) { set_where(where, *v); return FrameCookError::UnknownFrontFace; }
             }
             // REN-38-F11: this pass LOADS its target instead of clearing (mask-then-test pass pairs)
-            if (const auto v = (*t)["load"].value<bool>()) { p.load_target = *v; }
+            if (const auto v = (*t)["load"].value<bool>()) { l_load = *v; }
             // REN-40-G1: load DEPTH only (clear colour) — the depth-prepass pattern
-            if (const auto v = (*t)["load_depth"].value<bool>()) { p.load_depth = *v; }
+            if (const auto v = (*t)["load_depth"].value<bool>()) { l_load_depth = *v; }
             // REN-40-G3: a separate depth image used as the depth attachment
-            if (const auto v = (*t)["shared_depth"].value<std::string_view>()) { set_str(p.shared_depth, *v); }
-            if (const auto v = (*t)["depth_as_float"].value<bool>()) { p.depth_as_float = *v; }
-            if (const auto v = (*t)["untracked_storage"].value<bool>()) { p.untracked_storage = *v; }
-            if (const auto v = (*t)["stencil"].value<bool>()) { p.state.stencil_enable = *v; }
+            if (const auto v = (*t)["shared_depth"].value<std::string_view>()) { set_pass_str(p, crd::containers::StringView(pp::kSharedDepth), crd::containers::StringView(v->data(), v->size())); }
+            if (const auto v = (*t)["depth_as_float"].value<bool>()) { l_depth_as_float = *v; }
+            if (const auto v = (*t)["untracked_storage"].value<bool>()) { l_untracked = *v; }
+            if (const auto v = (*t)["stencil"].value<bool>()) { l_state.stencil_enable = *v; }
             if (const auto v = (*t)["stencil_compare"].value<std::string_view>())
             {
-                if (!to_compare(*v, p.state.stencil_compare)) { set_where(where, *v); return FrameCookError::UnknownCompare; }
-                p.state.stencil_enable = true;
+                if (!to_compare(*v, l_state.stencil_compare)) { set_where(where, *v); return FrameCookError::UnknownCompare; }
+                l_state.stencil_enable = true;
             }
             if (const auto v = (*t)["stencil_ref"].value<int64_t>())
             {
                 // ⛔ Stencil is EIGHT BITS on every backend; a reference of 256 silently truncating to 0 would
                 // make a portal pass mark one value and test another — refused by name instead.
                 if (*v < 0 || *v > 255) { set_where(where, p.name.size() > 0U ? p.name.c_str() : "stencil_ref"); return FrameCookError::BadStencilValue; }
-                p.state.stencil_ref    = static_cast<crd::u32>(*v);
-                p.state.stencil_enable = true;
+                l_state.stencil_ref    = static_cast<crd::u32>(*v);
+                l_state.stencil_enable = true;
             }
             if (const auto v = (*t)["stencil_read_mask"].value<int64_t>())
             {
                 if (*v < 0 || *v > 255) { set_where(where, p.name.size() > 0U ? p.name.c_str() : "stencil_read_mask"); return FrameCookError::BadStencilValue; }
-                p.state.stencil_read_mask = static_cast<crd::u32>(*v);
-                p.state.stencil_enable    = true;
+                l_state.stencil_read_mask = static_cast<crd::u32>(*v);
+                l_state.stencil_enable    = true;
             }
             if (const auto v = (*t)["stencil_write_mask"].value<int64_t>())
             {
                 if (*v < 0 || *v > 255) { set_where(where, p.name.size() > 0U ? p.name.c_str() : "stencil_write_mask"); return FrameCookError::BadStencilValue; }
-                p.state.stencil_write_mask = static_cast<crd::u32>(*v);
-                p.state.stencil_enable     = true;
+                l_state.stencil_write_mask = static_cast<crd::u32>(*v);
+                l_state.stencil_enable     = true;
             }
             if (const auto v = (*t)["stencil_fail"].value<std::string_view>())
             {
-                if (!to_stencil_op(*v, p.state.stencil_fail)) { set_where(where, *v); return FrameCookError::UnknownStencilOp; }
-                p.state.stencil_enable = true;
+                if (!to_stencil_op(*v, l_state.stencil_fail)) { set_where(where, *v); return FrameCookError::UnknownStencilOp; }
+                l_state.stencil_enable = true;
             }
             if (const auto v = (*t)["stencil_depth_fail"].value<std::string_view>())
             {
-                if (!to_stencil_op(*v, p.state.stencil_depth_fail)) { set_where(where, *v); return FrameCookError::UnknownStencilOp; }
-                p.state.stencil_enable = true;
+                if (!to_stencil_op(*v, l_state.stencil_depth_fail)) { set_where(where, *v); return FrameCookError::UnknownStencilOp; }
+                l_state.stencil_enable = true;
             }
             if (const auto v = (*t)["stencil_pass"].value<std::string_view>())
             {
-                if (!to_stencil_op(*v, p.state.stencil_pass)) { set_where(where, *v); return FrameCookError::UnknownStencilOp; }
-                p.state.stencil_enable = true;
+                if (!to_stencil_op(*v, l_state.stencil_pass)) { set_where(where, *v); return FrameCookError::UnknownStencilOp; }
+                l_state.stencil_enable = true;
             }
             if (const auto* cc = (*t)["clear_color"].as_array())
             {
-                p.has_clear_color = true;
+                l_has_clear_color = true;
                 crd::u32 i = 0;
                 for (const auto& c : *cc)
                 {
-                    if (i < 4U) { p.clear_color[i++] = static_cast<float>(c.value_or<double>(0.0)); }
+                    if (i < 4U) { l_clear_color[i++] = static_cast<float>(c.value_or<double>(0.0)); }
                 }
             }
             if (const auto cd = (*t)["clear_depth"].value<double>())
             {
-                p.has_clear_depth = true;
-                p.clear_depth     = static_cast<float>(*cd);
+                l_has_clear_depth = true;
+                l_clear_depth     = static_cast<float>(*cd);
             }
             if (const toml::table* pp = (*t)["params"].as_table())
             {
@@ -916,6 +955,61 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
                     else if (v.is_integer())      { prm.type = FrameParamType::Int;   prm.v[0] = static_cast<double>(v.value_or<int64_t>(0)); }
                     else                          { prm.type = FrameParamType::Float; prm.v[0] = v.value_or<double>(0.0); }
                     p.params.push_back(static_cast<FrameParam&&>(prm));
+                }
+            }
+            // ⭐ RAF-12.3 §7 fold: locals → typed params. Conditions MIRROR the emitter (non-defaults only, except the
+            // always-emitted depth/material/filter which fold to a default the round-trip re-sets identically) so the
+            // blob + TOML round-trips are byte-stable, and `pass_*`/`pass_sampler`/`pass_state` reconstruct exactly.
+            {
+                using SVp = crd::containers::StringView;
+                if (l_has_clear_color) { set_pass_vec4(p, SVp(pp::kClearColor), l_clear_color); }
+                if (l_has_clear_depth) { set_pass_f32(p, SVp(pp::kClearDepth), l_clear_depth); }
+                // CONDITIONAL (round-trip symmetry with the builder + emitter): fold only when authored / non-default.
+                if (l_has_depth) { set_pass_enum(p, SVp(pp::kDepthCompare), static_cast<crd::u32>(l_depth)); }
+                if (l_material != FrameMaterialPass::None) { set_pass_enum(p, SVp(pp::kMaterialPass), static_cast<crd::u32>(l_material)); }
+                if (l_has_filter) { set_pass_enum(p, SVp(pp::kFilter), static_cast<crd::u32>(l_filter)); }
+                if (l_blend.size() > 0U)
+                {
+                    set_pass_u32(p, SVp(pp::kBlendCount), static_cast<crd::u32>(l_blend.size()));
+                    for (crd::usize k = 0; k < l_blend.size() && k < 4U; ++k)
+                    {
+                        set_pass_enum(p, SVp(pp::kBlendSlot[k]), static_cast<crd::u32>(l_blend[k]));
+                    }
+                }
+                if (l_sr != crd::gpu::ShadingRate::Rate1x1) { set_pass_enum(p, SVp(pp::kShadingRate), static_cast<crd::u32>(l_sr)); }
+                if (l_rc != crd::gpu::ShadingRateCombiner::Keep) { set_pass_enum(p, SVp(pp::kRateCombiner), static_cast<crd::u32>(l_rc)); }
+                if (l_cons != crd::gpu::ConservativeMode::Off) { set_pass_enum(p, SVp(pp::kConservative), static_cast<crd::u32>(l_cons)); }
+                set_pass_flag(p, SVp(pp::kLoad), l_load);
+                set_pass_flag(p, SVp(pp::kLoadDepth), l_load_depth);
+                set_pass_flag(p, SVp(pp::kDepthAsFloat), l_depth_as_float);
+                set_pass_flag(p, SVp(pp::kUntracked), l_untracked);
+                if (l_has_sampler)
+                {
+                    set_pass_flag(p, SVp(pp::kHasSampler), true);
+                    set_pass_enum(p, SVp(pp::kSamplerMin), static_cast<crd::u32>(l_sampler.min_filter));
+                    set_pass_enum(p, SVp(pp::kSamplerMag), static_cast<crd::u32>(l_sampler.mag_filter));
+                    set_pass_enum(p, SVp(pp::kSamplerMip), static_cast<crd::u32>(l_sampler.mip_filter));
+                    set_pass_enum(p, SVp(pp::kSamplerAddr), static_cast<crd::u32>(l_sampler.address));
+                    set_pass_flag(p, SVp(pp::kSamplerCompare), l_sampler.compare);
+                    set_pass_u32(p, SVp(pp::kSamplerAniso), l_sampler.anisotropy);
+                    set_pass_f32(p, SVp(pp::kSamplerBias), l_sampler.mip_bias);
+                }
+                if (!l_state.depth_write) { set_pass_flag(p, SVp(pp::kDepthWriteOff), true); }
+                if (l_state.depth_bias != 0.0F) { set_pass_f32(p, SVp(pp::kDepthBias), l_state.depth_bias); }
+                if (l_state.depth_bias_slope != 0.0F) { set_pass_f32(p, SVp(pp::kDepthBiasSlope), l_state.depth_bias_slope); }
+                if (l_state.depth_bias_clamp != 0.0F) { set_pass_f32(p, SVp(pp::kDepthBiasClamp), l_state.depth_bias_clamp); }
+                if (l_state.face_cull != crd::gpu::FaceCull::None) { set_pass_enum(p, SVp(pp::kFaceCull), static_cast<crd::u32>(l_state.face_cull)); }
+                if (l_state.front_face != crd::gpu::FrontFace::CounterClockwise) { set_pass_enum(p, SVp(pp::kFrontFace), static_cast<crd::u32>(l_state.front_face)); }
+                if (l_state.stencil_enable)
+                {
+                    set_pass_flag(p, SVp(pp::kStencil), true);
+                    set_pass_enum(p, SVp(pp::kStencilCompare), static_cast<crd::u32>(l_state.stencil_compare));
+                    set_pass_u32(p, SVp(pp::kStencilRef), l_state.stencil_ref);
+                    if (l_state.stencil_read_mask != 0xFFU) { set_pass_u32(p, SVp(pp::kStencilReadMask), l_state.stencil_read_mask); }
+                    if (l_state.stencil_write_mask != 0xFFU) { set_pass_u32(p, SVp(pp::kStencilWriteMask), l_state.stencil_write_mask); }
+                    set_pass_enum(p, SVp(pp::kStencilFail), static_cast<crd::u32>(l_state.stencil_fail));
+                    set_pass_enum(p, SVp(pp::kStencilDepthFail), static_cast<crd::u32>(l_state.stencil_depth_fail));
+                    set_pass_enum(p, SVp(pp::kStencilPass), static_cast<crd::u32>(l_state.stencil_pass));
                 }
             }
             out.passes.push_back(static_cast<FramePassDesc&&>(p));
@@ -1070,41 +1164,39 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
     for (crd::usize pi = 0; pi < desc.passes.size(); ++pi)
     {
         const FramePassDesc& p = desc.passes[pi];
-        if ((p.kind == FramePassKind::RasterGeometry || p.kind == FramePassKind::RasterDepthOnly
-             || p.kind == FramePassKind::RasterMrt)
-            && p.draw_list.empty())
+        if (pass_is_scene_raster(p) && pass_str(p, crd::containers::StringView(pp::kDrawList)).empty())
         {
             set_where(where, std::string_view(p.name.c_str(), p.name.size()));
             return FrameCookError::MissingDrawList;
         }
-        if (p.kind == FramePassKind::RasterFullscreen && p.shader.empty())
+        if (pass_is_fullscreen(p) && !pass_flag(p, crd::containers::StringView(pp::kComposite)) && pass_str(p, crd::containers::StringView(pp::kShader)).empty())
         {
             set_where(where, std::string_view(p.name.c_str(), p.name.size()));
             return FrameCookError::MissingShader;
         }
-        // REN-38-F11: `load = true` is honoured only by kinds with load draw verbs — anywhere else it would
+        // REN-38-F11: `load = true` is honoured only by the plain geometry pass — anywhere else it would
         // silently clear, which is the exact wrongness the flag exists to prevent.
-        if (p.load_target && p.kind != FramePassKind::RasterGeometry)
+        if (pass_flag(p, crd::containers::StringView(pp::kLoad)) && !pass_is_raster_geometry(p))
         {
             set_where(where, std::string_view(p.name.c_str(), p.name.size()));
             return FrameCookError::LoadNeedsGeometry;
         }
         // REN-40-G1: `load_depth` shares the same kind restriction and is mutually exclusive with `load`
-        if (p.load_depth && p.kind != FramePassKind::RasterGeometry)
+        if (pass_flag(p, crd::containers::StringView(pp::kLoadDepth)) && !pass_is_raster_geometry(p))
         {
             set_where(where, std::string_view(p.name.c_str(), p.name.size()));
             return FrameCookError::LoadNeedsGeometry;
         }
-        if (p.load_depth && p.load_target)
+        if (pass_flag(p, crd::containers::StringView(pp::kLoadDepth)) && pass_flag(p, crd::containers::StringView(pp::kLoad)))
         {
             set_where(where, std::string_view(p.name.c_str(), p.name.size()));
             return FrameCookError::LoadNeedsGeometry;
         }
         // REN-40-G3: `shared_depth` is only valid on raster passes and must reference a declared depth resource
-        if (p.shared_depth.size() > 0U)
+        const crd::containers::StringView shared = pass_str(p, crd::containers::StringView(pp::kSharedDepth));
+        if (shared.size() > 0U)
         {
-            const bool is_raster = p.kind == FramePassKind::RasterGeometry || p.kind == FramePassKind::RasterMrt
-                                   || p.kind == FramePassKind::RasterDepthOnly;
+            const bool is_raster = pass_is_scene_raster(p);
             if (!is_raster)
             {
                 set_where(where, std::string_view(p.name.c_str(), p.name.size()));
@@ -1113,8 +1205,8 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
             bool found_depth_res = false;
             for (crd::usize ri = 0; ri < desc.resources.size(); ++ri)
             {
-                if (desc.resources[ri].name.size() == p.shared_depth.size()
-                    && std::memcmp(desc.resources[ri].name.c_str(), p.shared_depth.c_str(), p.shared_depth.size()) == 0)
+                if (desc.resources[ri].name.size() == shared.size()
+                    && std::memcmp(desc.resources[ri].name.c_str(), shared.data(), shared.size()) == 0)
                 {
                     found_depth_res = crd::gpu::fg_format_has_depth(desc.resources[ri].format);
                     break;
@@ -1122,11 +1214,11 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
             }
             if (!found_depth_res)
             {
-                set_where(where, std::string_view(p.shared_depth.c_str(), p.shared_depth.size()));
+                set_where(where, std::string_view(shared.data(), shared.size()));
                 return FrameCookError::UnknownResource;
             }
         }
-        if (p.kind == FramePassKind::Compute && p.kernel.empty())
+        if (pass_is_compute(p) && !pass_flag(p, crd::containers::StringView(pp::kIndirect)) && pass_str(p, crd::containers::StringView(pp::kKernel)).empty())
         {
             set_where(where, std::string_view(p.name.c_str(), p.name.size()));
             return FrameCookError::MissingShader;
@@ -1134,8 +1226,7 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
         // ── ⭐ REN-38-A14: only COMPUTE-SHAPED work can go on the async-compute queue. ──
         // ⛔ A compute queue cannot rasterise. A raster pass that asked for it would either be silently moved back
         // to graphics (a perf claim the frame never delivered) or submitted somewhere it cannot run. Rejected.
-        if (p.queue == FrameQueue::Async && p.kind != FramePassKind::Compute
-            && p.kind != FramePassKind::ComputeIndirect && p.kind != FramePassKind::RayTrace)
+        if (p.queue == FrameQueue::Async && !(pass_is_compute(p) || pass_is_raytrace_dispatch(p)))
         {
             set_where(where, std::string_view(p.name.c_str(), p.name.size()));
             return FrameCookError::AsyncQueueNeedsCompute;
@@ -1157,9 +1248,9 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
         // ⛔ Its target MUST be R32Uint. A primitive id written into an RGBA8 attachment is quantised to 8 bits
         // per channel, so ids beyond 255 alias onto each other and the deferred materialisation shades the WRONG
         // MESH — a plausible picture with the wrong materials, which is far worse than a black one.
-        if (p.kind == FramePassKind::RasterVisbuffer)
+        if (pass_is_visbuffer(p))
         {
-            if (p.draw_list.empty())
+            if (pass_str(p, crd::containers::StringView(pp::kDrawList)).empty())
             {
                 set_where(where, std::string_view(p.name.c_str(), p.name.size()));
                 return FrameCookError::MissingDrawList;
@@ -1178,14 +1269,14 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
         // ⛔ A composite with no blend is a fullscreen pass that OVERWRITES — which is exactly the bug this kind
         // exists to prevent, and it would look like "the transparency layer is opaque" rather than like a missing
         // declaration. So the blend is REQUIRED, not defaulted.
-        if (p.kind == FramePassKind::RasterComposite)
+        if (pass_is_fullscreen(p) && pass_flag(p, crd::containers::StringView(pp::kComposite)))
         {
-            if (p.shader.empty())
+            if (pass_str(p, crd::containers::StringView(pp::kShader)).empty())
             {
                 set_where(where, std::string_view(p.name.c_str(), p.name.size()));
                 return FrameCookError::MissingShader;
             }
-            if (p.blend.size() == 0U || p.blend[0] == crd::gpu::BlendMode::Opaque)
+            if (pass_u32(p, crd::containers::StringView(pp::kBlendCount), 0U) == 0U || static_cast<crd::gpu::BlendMode>(pass_u32(p, crd::containers::StringView(pp::kBlendSlot[0]), static_cast<crd::u32>(crd::gpu::BlendMode::Opaque))) == crd::gpu::BlendMode::Opaque)
             {
                 set_where(where, std::string_view(p.name.c_str(), p.name.size()));
                 return FrameCookError::CompositeNeedsBlend;
@@ -1198,9 +1289,9 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
         // ── ⭐ REN-38-A16: a ray-tracing PIPELINE needs ALL THREE programs and an acceleration structure. ──
         // ⛔ Two of three is not a degraded pipeline, it is an INVALID state object — and a missing miss shader in
         // particular produces rays that hit nothing and write nothing, which reads as an empty scene.
-        if (p.kind == FramePassKind::RayTracePipeline)
+        if (pass_is_raytrace_pipeline(p))
         {
-            if (p.raygen.empty() || p.miss.empty() || p.closest_hit.empty())
+            if (pass_str(p, crd::containers::StringView(pp::kRaygen)).empty() || pass_str(p, crd::containers::StringView(pp::kMiss)).empty() || pass_str(p, crd::containers::StringView(pp::kClosestHit)).empty())
             {
                 set_where(where, std::string_view(p.name.c_str(), p.name.size()));
                 return FrameCookError::RtPipelineNeedsThree;
@@ -1217,9 +1308,9 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
                 return FrameCookError::RayTraceNeedsAccel;
             }
         }
-        if (p.kind == FramePassKind::RayTrace)
+        if (pass_is_raytrace_dispatch(p))
         {
-            if (p.kernel.empty())
+            if (pass_str(p, crd::containers::StringView(pp::kKernel)).empty())
             {
                 set_where(where, std::string_view(p.name.c_str(), p.name.size()));
                 return FrameCookError::MissingShader;
@@ -1243,19 +1334,19 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
         // after creation. Catching the kind here is the only place it can be caught before the device refuses.
         // ⭐⭐ RAF-10: a CUSTOM pass must NAME its registered executor id — an empty `executor` is a pass with no
         // mechanic, caught here rather than as a silent no-op at record time (the loud-failure discipline).
-        if (p.kind == FramePassKind::Custom && p.executor.empty())
+        if (pass_is_custom(p) && p.executor.empty())
         {
             set_where(where, std::string_view(p.name.c_str(), p.name.size()));
             return FrameCookError::MissingShader;
         }
-        if (p.kind == FramePassKind::ComputeIndirect || p.kind == FramePassKind::RasterMeshIndirect)
+        if ((pass_is_compute(p) && pass_flag(p, crd::containers::StringView(pp::kIndirect))) || pass_is_mesh_indirect(p))
         {
-            if (p.kind == FramePassKind::ComputeIndirect && p.kernel.empty())
+            if (pass_is_compute(p) && pass_flag(p, crd::containers::StringView(pp::kIndirect)) && pass_str(p, crd::containers::StringView(pp::kKernel)).empty())
             {
                 set_where(where, std::string_view(p.name.c_str(), p.name.size()));
                 return FrameCookError::MissingShader;
             }
-            if (p.kind == FramePassKind::RasterMeshIndirect && p.shader.empty())
+            if (pass_is_mesh_indirect(p) && pass_str(p, crd::containers::StringView(pp::kShader)).empty())
             {
                 set_where(where, std::string_view(p.name.c_str(), p.name.size()));
                 return FrameCookError::MissingShader;
@@ -1279,9 +1370,9 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
         // The program is named exactly as a fullscreen pass names one — the HOST decides whether that id resolves
         // to a `create_tess_program` or a `create_mesh_program`, because which stages a cooked program carries is
         // a property of the PROGRAM, not of the graph. What the graph must state is WHAT TO DISPATCH.
-        if (p.kind == FramePassKind::RasterTess || p.kind == FramePassKind::RasterMesh)
+        if (pass_is_tess(p) || pass_is_mesh(p))
         {
-            if (p.shader.empty())
+            if (pass_str(p, crd::containers::StringView(pp::kShader)).empty())
             {
                 set_where(where, std::string_view(p.name.c_str(), p.name.size()));
                 return FrameCookError::MissingShader;
@@ -1290,7 +1381,7 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
             // would dispatch ZERO patches / ZERO workgroups: a black image, no error, and nothing in the asset to
             // point at. `patches` / `groups` are PARAMETERS (a dispatch size is not topology), and a draw list
             // wins when both are present because a scene-driven pass is per-mesh by definition.
-            bool has_count = !p.draw_list.empty();
+            bool has_count = !pass_str(p, crd::containers::StringView(pp::kDrawList)).empty();
             for (crd::usize k = 0; !has_count && k < p.params.size(); ++k)
             {
                 const std::string_view pn(p.params[k].name.c_str(), p.params[k].name.size());
@@ -1306,7 +1397,7 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
         // ⛔ EXACTLY ONE source and EXACTLY ONE destination for copy/blit/resolve. Zero of either has nothing to
         // do; two of either means the executor picks one and the author is never told which. Both are silent, and
         // "the image looks almost right" is the worst possible symptom to debug.
-        if (p.kind == FramePassKind::Copy || p.kind == FramePassKind::Blit || p.kind == FramePassKind::Resolve)
+        if (pass_is_transfer_copy(p) || pass_is_blit(p) || pass_is_transfer_resolve(p))
         {
             if (p.reads.size() != 1U)
             {
@@ -1321,7 +1412,7 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
         }
         // A clear PRODUCES a target and consumes nothing. A declared read would make the dependency sort order
         // this pass AFTER whoever wrote that resource, for no reason — and, worse, would read as intent.
-        if (p.kind == FramePassKind::Clear)
+        if (pass_is_transfer_clear(p))
         {
             if (p.writes.size() == 0U)
             {
@@ -1337,7 +1428,7 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
         // ── ⭐ REN-38-A5: what a PRESENT pass may say. ──
         // A present is a SINK: it consumes one finished canvas and produces nothing. All three rules below reject
         // a graph that would otherwise build, execute and put a wrong (or no) image on screen:
-        if (p.kind == FramePassKind::Present)
+        if (pass_is_present(p))
         {
             // ⛔ EXACTLY ONE read. Zero ⇒ nothing to present and the executor would have to guess `@output`;
             // two ⇒ the executor picks one and the author never learns which. Both are silent.
@@ -1565,6 +1656,246 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
     return FrameCookError::Ok;
 }
 
+// ── RAF-12.3: the ONE authoring-vocabulary table — kind string ↔ (executor id + role bits). Forward + inverse are
+// defined together so they cannot drift; a `custom` pass' mechanic is its `executor` field, not a table row. ──────
+namespace
+{
+struct KindRow
+{
+    const char*                     kind;
+    crd::renderpass::ExecutorTypeId exec;
+    bool                            depth_only;
+    bool                            mrt;
+    bool                            composite;
+    bool                            indirect;
+};
+constexpr KindRow kKindTable[] = {
+    {"raster.geometry",      kExecSceneRaster,      false, false, false, false},
+    {"raster.depth_only",    kExecSceneRaster,      true,  false, false, false},
+    {"raster.mrt",           kExecSceneRaster,      false, true,  false, false},
+    {"raster.fullscreen",    kExecFullscreenRaster, false, false, false, false},
+    {"raster.composite",     kExecFullscreenRaster, false, false, true,  false},
+    {"compute",              kExecComputeDispatch,  false, false, false, false},
+    {"compute.indirect",     kExecComputeDispatch,  false, false, false, true },
+    {"raster.tess",          kExecTessRaster,       false, false, false, false},
+    {"raster.mesh",          kExecMeshRaster,       false, false, false, false},
+    {"raster.visbuffer",     kExecVisbufferRaster,  false, false, false, false},
+    {"raster.mesh.indirect", kExecMeshIndirect,     false, false, false, false},
+    {"raytrace",             kExecRaytraceDispatch, false, false, false, false},
+    {"raytrace.pipeline",    kExecRaytracePipeline, false, false, false, false},
+    {"clear",                kExecTransferClear,    false, false, false, false},
+    {"copy",                 kExecTransferCopy,     false, false, false, false},
+    {"blit",                 kExecTransferBlit,     false, false, false, false},
+    {"resolve",              kExecTransferResolve,  false, false, false, false},
+    {"present",              kExecPresent,          false, false, false, false},
+};
+} // namespace
+
+bool pass_mechanic_from_kind(crd::containers::StringView kind, FramePassDesc& out) noexcept
+{
+    using SV = crd::containers::StringView;
+    // A `custom` pass names its mechanic in `executor`, not here — leave the id INVALID for the caller to resolve.
+    if (kind == SV("custom"))
+    {
+        out.executor_id = crd::renderpass::ExecutorTypeId{};
+        return true;
+    }
+    for (const KindRow& r : kKindTable)
+    {
+        if (kind == SV(r.kind))
+        {
+            out.executor_id = r.exec;
+            // ⭐ RAF-12.3 §7 fold: the within-executor role bits are PARAMS now (set_pass_flag no-ops on false).
+            set_pass_flag(out, SV(pp::kDepthOnly), r.depth_only);
+            set_pass_flag(out, SV(pp::kMrt), r.mrt);
+            set_pass_flag(out, SV(pp::kComposite), r.composite);
+            set_pass_flag(out, SV(pp::kIndirect), r.indirect);
+            return true;
+        }
+    }
+    return false; // an unknown kind ⇒ UnknownPassKind
+}
+
+const char* pass_kind_string(const FramePassDesc& p) noexcept
+{
+    using SV = crd::containers::StringView;
+    const bool depth_only = pass_flag(p, SV(pp::kDepthOnly));
+    const bool mrt        = pass_flag(p, SV(pp::kMrt));
+    const bool composite  = pass_flag(p, SV(pp::kComposite));
+    const bool indirect   = pass_flag(p, SV(pp::kIndirect));
+    for (const KindRow& r : kKindTable)
+    {
+        if (p.executor_id == r.exec && depth_only == r.depth_only && mrt == r.mrt && composite == r.composite
+            && indirect == r.indirect)
+        {
+            return r.kind;
+        }
+    }
+    return "custom"; // an app executor id (or an unmatched combination) round-trips as `custom` + its `executor`
+}
+
+bool is_builtin_executor(crd::renderpass::ExecutorTypeId id) noexcept
+{
+    return std::ranges::any_of(kKindTable, [id](const KindRow& r) { return id == r.exec; });
+}
+
+// ── RAF-12.3 §7 FOLD: the typed named-param accessors + setters (header-declared). The ONE way pass config is
+// read/written now that the single-purpose struct fields are gone. ────────────────────────────────────────────────
+const FrameParam* find_pass_param(const FramePassDesc& p, crd::containers::StringView name) noexcept
+{
+    for (crd::usize i = 0; i < p.params.size(); ++i)
+    {
+        const FrameParam& fp = p.params[i];
+        if (fp.name.size() == name.size() && std::memcmp(fp.name.c_str(), name.data(), name.size()) == 0)
+        {
+            return &p.params[i];
+        }
+    }
+    return nullptr;
+}
+bool pass_has(const FramePassDesc& p, crd::containers::StringView name) noexcept
+{
+    return find_pass_param(p, name) != nullptr;
+}
+crd::containers::StringView pass_str(const FramePassDesc& p, crd::containers::StringView name) noexcept
+{
+    const FrameParam* fp = find_pass_param(p, name);
+    return fp != nullptr ? crd::containers::StringView(fp->str.c_str(), fp->str.size()) : crd::containers::StringView();
+}
+float pass_f32(const FramePassDesc& p, crd::containers::StringView name, float def) noexcept
+{
+    const FrameParam* fp = find_pass_param(p, name);
+    return fp != nullptr ? static_cast<float>(fp->v[0]) : def;
+}
+crd::u32 pass_u32(const FramePassDesc& p, crd::containers::StringView name, crd::u32 def) noexcept
+{
+    const FrameParam* fp = find_pass_param(p, name);
+    return fp != nullptr ? static_cast<crd::u32>(fp->v[0]) : def;
+}
+bool pass_flag(const FramePassDesc& p, crd::containers::StringView name) noexcept
+{
+    const FrameParam* fp = find_pass_param(p, name);
+    return fp != nullptr && fp->v[0] != 0.0;
+}
+bool pass_vec4(const FramePassDesc& p, crd::containers::StringView name, float out[4]) noexcept
+{
+    const FrameParam* fp = find_pass_param(p, name);
+    if (fp == nullptr) { return false; }
+    for (crd::u32 i = 0; i < 4U; ++i) { out[i] = static_cast<float>(fp->v[i]); }
+    return true;
+}
+namespace
+{
+FrameParam& upsert_pass_param(FramePassDesc& p, crd::containers::StringView name)
+{
+    for (crd::usize i = 0; i < p.params.size(); ++i)
+    {
+        if (p.params[i].name.size() == name.size()
+            && std::memcmp(p.params[i].name.c_str(), name.data(), name.size()) == 0)
+        {
+            return p.params[i];
+        }
+    }
+    FrameParam fp(p.params.allocator());
+    set_str(fp.name, std::string_view(name.data(), name.size()));
+    p.params.push_back(static_cast<FrameParam&&>(fp));
+    return p.params[p.params.size() - 1U];
+}
+} // namespace
+void set_pass_str(FramePassDesc& p, crd::containers::StringView name, crd::containers::StringView value)
+{
+    if (value.empty()) { return; }
+    FrameParam& fp = upsert_pass_param(p, name);
+    fp.type        = FrameParamType::String;
+    set_str(fp.str, std::string_view(value.data(), value.size()));
+}
+void set_pass_f32(FramePassDesc& p, crd::containers::StringView name, float value)
+{
+    FrameParam& fp = upsert_pass_param(p, name);
+    fp.type        = FrameParamType::Float;
+    fp.v[0]        = static_cast<double>(value);
+}
+void set_pass_u32(FramePassDesc& p, crd::containers::StringView name, crd::u32 value)
+{
+    FrameParam& fp = upsert_pass_param(p, name);
+    fp.type        = FrameParamType::U32;
+    fp.v[0]        = static_cast<double>(value);
+}
+void set_pass_enum(FramePassDesc& p, crd::containers::StringView name, crd::u32 value)
+{
+    FrameParam& fp = upsert_pass_param(p, name);
+    fp.type        = FrameParamType::Enum;
+    fp.v[0]        = static_cast<double>(value);
+}
+void set_pass_flag(FramePassDesc& p, crd::containers::StringView name, bool value)
+{
+    if (!value) { return; }
+    FrameParam& fp = upsert_pass_param(p, name);
+    fp.type        = FrameParamType::Bool;
+    fp.v[0]        = 1.0;
+}
+void set_pass_vec4(FramePassDesc& p, crd::containers::StringView name, const float v[4])
+{
+    FrameParam& fp = upsert_pass_param(p, name);
+    fp.type        = FrameParamType::Vec4;
+    for (crd::u32 i = 0; i < 4U; ++i) { fp.v[i] = static_cast<double>(v[i]); }
+}
+
+crd::gpu::SamplerDesc pass_sampler(const FramePassDesc& p) noexcept
+{
+    crd::gpu::SamplerDesc s{};
+    using SV = crd::containers::StringView;
+    s.min_filter = static_cast<crd::gpu::SamplerFilter>(pass_u32(p, SV(pp::kSamplerMin), static_cast<crd::u32>(s.min_filter)));
+    s.mag_filter = static_cast<crd::gpu::SamplerFilter>(pass_u32(p, SV(pp::kSamplerMag), static_cast<crd::u32>(s.mag_filter)));
+    s.mip_filter = static_cast<crd::gpu::SamplerFilter>(pass_u32(p, SV(pp::kSamplerMip), static_cast<crd::u32>(s.mip_filter)));
+    s.address    = static_cast<crd::gpu::SamplerAddress>(pass_u32(p, SV(pp::kSamplerAddr), static_cast<crd::u32>(s.address)));
+    s.compare    = pass_flag(p, SV(pp::kSamplerCompare));
+    s.anisotropy = pass_u32(p, SV(pp::kSamplerAniso), s.anisotropy);
+    s.mip_bias   = pass_f32(p, SV(pp::kSamplerBias), s.mip_bias);
+    return s;
+}
+crd::gpu::PassRasterState pass_state(const FramePassDesc& p) noexcept
+{
+    crd::gpu::PassRasterState st{};
+    using SV               = crd::containers::StringView;
+    st.depth_write         = !pass_flag(p, SV(pp::kDepthWriteOff));
+    st.depth_bias          = pass_f32(p, SV(pp::kDepthBias), st.depth_bias);
+    st.depth_bias_slope    = pass_f32(p, SV(pp::kDepthBiasSlope), st.depth_bias_slope);
+    st.depth_bias_clamp    = pass_f32(p, SV(pp::kDepthBiasClamp), st.depth_bias_clamp);
+    st.face_cull           = static_cast<crd::gpu::FaceCull>(pass_u32(p, SV(pp::kFaceCull), static_cast<crd::u32>(st.face_cull)));
+    st.front_face          = static_cast<crd::gpu::FrontFace>(pass_u32(p, SV(pp::kFrontFace), static_cast<crd::u32>(st.front_face)));
+    st.stencil_enable      = pass_flag(p, SV(pp::kStencil));
+    st.stencil_compare     = static_cast<crd::gpu::DepthCompare>(pass_u32(p, SV(pp::kStencilCompare), static_cast<crd::u32>(st.stencil_compare)));
+    st.stencil_ref         = pass_u32(p, SV(pp::kStencilRef), st.stencil_ref);
+    st.stencil_read_mask   = pass_u32(p, SV(pp::kStencilReadMask), st.stencil_read_mask);
+    st.stencil_write_mask  = pass_u32(p, SV(pp::kStencilWriteMask), st.stencil_write_mask);
+    st.stencil_fail        = static_cast<crd::gpu::StencilOp>(pass_u32(p, SV(pp::kStencilFail), static_cast<crd::u32>(st.stencil_fail)));
+    st.stencil_depth_fail  = static_cast<crd::gpu::StencilOp>(pass_u32(p, SV(pp::kStencilDepthFail), static_cast<crd::u32>(st.stencil_depth_fail)));
+    st.stencil_pass        = static_cast<crd::gpu::StencilOp>(pass_u32(p, SV(pp::kStencilPass), static_cast<crd::u32>(st.stencil_pass)));
+    return st;
+}
+
+bool is_folded_pass_param(crd::containers::StringView name) noexcept
+{
+    static const char* const kFolded[] = {
+        pp::kShader,        pp::kKernel,       pp::kDrawList,      pp::kView,          pp::kTechnique,
+        pp::kRaygen,        pp::kMiss,         pp::kClosestHit,    pp::kAnyHit,        pp::kIntersection,
+        pp::kCallable,      pp::kSharedDepth,  pp::kDepthOnly,     pp::kMrt,           pp::kComposite,
+        pp::kIndirect,      pp::kClearColor,   pp::kClearDepth,    pp::kDepthCompare,  pp::kMaterialPass,
+        pp::kBlendCount,    pp::kShadingRate,  pp::kRateCombiner,  pp::kConservative,  pp::kFilter,
+        pp::kLoad,          pp::kLoadDepth,    pp::kDepthAsFloat,  pp::kUntracked,     pp::kHasSampler,
+        pp::kSamplerMin,    pp::kSamplerMag,   pp::kSamplerMip,    pp::kSamplerAddr,   pp::kSamplerCompare,
+        pp::kSamplerAniso,  pp::kSamplerBias,  pp::kDepthWriteOff, pp::kDepthBias,     pp::kDepthBiasSlope,
+        pp::kDepthBiasClamp, pp::kFaceCull,    pp::kFrontFace,     pp::kStencil,       pp::kStencilCompare,
+        pp::kStencilRef,    pp::kStencilReadMask, pp::kStencilWriteMask, pp::kStencilFail, pp::kStencilDepthFail,
+        pp::kStencilPass,   pp::kBlendSlot[0], pp::kBlendSlot[1],  pp::kBlendSlot[2],  pp::kBlendSlot[3]};
+    return std::ranges::any_of(kFolded, [name](const char* f) {
+        const crd::usize fl = std::strlen(f);
+        return name.size() == fl && std::memcmp(name.data(), f, fl) == 0;
+    });
+}
+
+
 crd::containers::Array<crd::u8> cook_frame_graph(const FrameGraphDesc& desc, crd::memory::IAllocator* a)
 {
     Bytes out(a);
@@ -1618,7 +1949,10 @@ crd::containers::Array<crd::u8> cook_frame_graph(const FrameGraphDesc& desc, crd
     {
         const FramePassDesc& p = desc.passes[i];
         put_str(out, p.name);
-        put_u8(out, static_cast<crd::u8>(p.kind));
+        // ⭐ RAF-12.3 (v9): a pass is COMMON METADATA + a typed PARAM BAG. The mechanic is the ExecutorTypeId; every
+        // executor-specific value is a param (name/type/v[4]/str). No single-purpose fields remain.
+        put_u64(out, p.executor_id.value);
+        put_str(out, p.executor); // a CUSTOM pass' app executor id (empty for a builtin)
         const auto put_refs = [&](const crd::containers::Array<FrameResourceRef>& refs) {
             put_u32(out, static_cast<crd::u32>(refs.size()));
             for (crd::usize k = 0; k < refs.size(); ++k)
@@ -1629,70 +1963,17 @@ crd::containers::Array<crd::u8> cook_frame_graph(const FrameGraphDesc& desc, crd
         };
         put_refs(p.reads);
         put_refs(p.writes);
-        put_str(out, p.draw_list);
-        put_str(out, p.view);
-        put_str(out, p.shader);
-        put_str(out, p.kernel);
-        put_str(out, p.technique);
-        put_u32(out, static_cast<crd::u32>(p.blend.size()));
-        for (crd::usize k = 0; k < p.blend.size(); ++k) { put_u8(out, static_cast<crd::u8>(p.blend[k])); }
-        put_u8(out, static_cast<crd::u8>(p.material_pass));
         put_u8(out, static_cast<crd::u8>(p.for_each));
         put_u32(out, p.for_each_arg);
-        put_u8(out, p.has_clear_color ? 1U : 0U);
-        for (crd::u32 c = 0; c < 4U; ++c) { put_f32(out, p.clear_color[c]); }
-        put_u8(out, p.has_clear_depth ? 1U : 0U);
-        put_f32(out, p.clear_depth);
-        put_u8(out, static_cast<crd::u8>(p.depth));
+        put_u8(out, static_cast<crd::u8>(p.queue));
         put_u32(out, static_cast<crd::u32>(p.params.size()));
         for (crd::usize k = 0; k < p.params.size(); ++k)
         {
             put_str(out, p.params[k].name);
             put_u8(out, static_cast<crd::u8>(p.params[k].type));
             for (crd::u32 c = 0; c < 4U; ++c) { put_f64(out, p.params[k].v[c]); }
+            put_str(out, p.params[k].str); // RAF-12.3: the String payload (shader/kernel/draw_list/view/technique/…)
         }
-        // ── v4 (REN-38 audit): the fields v3 dropped, appended at the record's END. ──
-        put_str(out, p.raygen);
-        put_str(out, p.miss);
-        put_str(out, p.closest_hit);
-        put_str(out, p.any_hit);
-        put_str(out, p.intersection); // v6 (REN-38-F13)
-        put_str(out, p.callable);
-        put_u8(out, static_cast<crd::u8>(p.shading_rate));
-        put_u8(out, static_cast<crd::u8>(p.rate_combiner));
-        put_u8(out, static_cast<crd::u8>(p.conservative));
-        put_u8(out, static_cast<crd::u8>(p.queue));
-        put_u8(out, static_cast<crd::u8>(p.filter));
-        put_u8(out, p.has_sampler ? 1U : 0U);
-        put_u8(out, static_cast<crd::u8>(p.sampler.min_filter));
-        put_u8(out, static_cast<crd::u8>(p.sampler.mag_filter));
-        put_u8(out, static_cast<crd::u8>(p.sampler.mip_filter));
-        put_u8(out, static_cast<crd::u8>(p.sampler.address));
-        put_u8(out, p.sampler.compare ? 1U : 0U);
-        put_u32(out, p.sampler.anisotropy);
-        put_f32(out, p.sampler.mip_bias);
-        put_u8(out, p.state.depth_write ? 1U : 0U);
-        put_f32(out, p.state.depth_bias);
-        put_f32(out, p.state.depth_bias_slope);
-        put_f32(out, p.state.depth_bias_clamp);
-        put_u8(out, static_cast<crd::u8>(p.state.face_cull));
-        put_u8(out, static_cast<crd::u8>(p.state.front_face));
-        put_u8(out, p.state.stencil_enable ? 1U : 0U);
-        put_u8(out, static_cast<crd::u8>(p.state.stencil_compare));
-        put_u32(out, p.state.stencil_ref);
-        put_u32(out, p.state.stencil_read_mask);
-        put_u32(out, p.state.stencil_write_mask);
-        put_u8(out, static_cast<crd::u8>(p.state.stencil_fail));
-        put_u8(out, static_cast<crd::u8>(p.state.stencil_depth_fail));
-        put_u8(out, static_cast<crd::u8>(p.state.stencil_pass));
-        // v5: the pass-level load flag rides the same record (field-survival gated like the rest)
-        put_u8(out, p.load_target ? 1U : 0U);
-        // v6: load-depth-only flag (depth prepass pattern)
-        put_u8(out, p.load_depth ? 1U : 0U);
-        // v7: shared_depth — a separate depth attachment (empty string if none)
-        put_str(out, p.shared_depth);
-        put_u8(out, p.depth_as_float ? 1U : 0U);
-        put_u8(out, p.untracked_storage ? 1U : 0U);
     }
 
     // REN-37.6: composition records, appended at the END.
@@ -1811,7 +2092,9 @@ bool read_frame_graph(crd::containers::ConstSpan<crd::u8> bytes, FrameGraphDesc&
     {
         FramePassDesc p(alloc);
         c.strv(p.name);
-        p.kind = static_cast<FramePassKind>(c.u8v());
+        // RAF-12.3 (v9): common metadata + a typed param bag (mirrors the write above).
+        p.executor_id.value = c.u64v();
+        c.strv(p.executor); // a CUSTOM pass' app executor id
         const auto get_refs = [&](crd::containers::Array<FrameResourceRef>& refs) {
             const crd::u32 n = c.u32v();
             for (crd::u32 k = 0; k < n && c.ok; ++k)
@@ -1824,21 +2107,9 @@ bool read_frame_graph(crd::containers::ConstSpan<crd::u8> bytes, FrameGraphDesc&
         };
         get_refs(p.reads);
         get_refs(p.writes);
-        c.strv(p.draw_list);
-        c.strv(p.view);
-        c.strv(p.shader);
-        c.strv(p.kernel);
-        c.strv(p.technique);
-        const crd::u32 nbl = c.u32v();
-        for (crd::u32 k = 0; k < nbl && c.ok; ++k) { p.blend.push_back(static_cast<crd::gpu::BlendMode>(c.u8v())); }
-        p.material_pass   = static_cast<FrameMaterialPass>(c.u8v());
-        p.for_each        = static_cast<FrameForEach>(c.u8v());
-        p.for_each_arg    = c.u32v();
-        p.has_clear_color = c.u8v() != 0U;
-        for (crd::u32 k = 0; k < 4U; ++k) { p.clear_color[k] = c.f32v(); }
-        p.has_clear_depth = c.u8v() != 0U;
-        p.clear_depth     = c.f32v();
-        p.depth           = static_cast<crd::gpu::DepthCompare>(c.u8v());
+        p.for_each     = static_cast<FrameForEach>(c.u8v());
+        p.for_each_arg = c.u32v();
+        p.queue        = static_cast<FrameQueue>(c.u8v());
         const crd::u32 nprm = c.u32v();
         for (crd::u32 k = 0; k < nprm && c.ok; ++k)
         {
@@ -1846,47 +2117,9 @@ bool read_frame_graph(crd::containers::ConstSpan<crd::u8> bytes, FrameGraphDesc&
             c.strv(prm.name);
             prm.type = static_cast<FrameParamType>(c.u8v());
             for (crd::u32 v = 0; v < 4U; ++v) { prm.v[v] = c.f64v(); }
+            c.strv(prm.str); // RAF-12.3: the String payload
             p.params.push_back(static_cast<FrameParam&&>(prm));
         }
-        // ── v4 (REN-38 audit): the fields v3 dropped, appended at the record's END. ──
-        c.strv(p.raygen);
-        c.strv(p.miss);
-        c.strv(p.closest_hit);
-        c.strv(p.any_hit);
-        c.strv(p.intersection); // v6 (REN-38-F13)
-        c.strv(p.callable);
-        p.shading_rate  = static_cast<crd::gpu::ShadingRate>(c.u8v());
-        p.rate_combiner = static_cast<crd::gpu::ShadingRateCombiner>(c.u8v());
-        p.conservative  = static_cast<crd::gpu::ConservativeMode>(c.u8v());
-        p.queue         = static_cast<FrameQueue>(c.u8v());
-        p.filter        = static_cast<FrameBlitFilter>(c.u8v());
-        p.has_sampler   = c.u8v() != 0U;
-        p.sampler.min_filter = static_cast<crd::gpu::SamplerFilter>(c.u8v());
-        p.sampler.mag_filter = static_cast<crd::gpu::SamplerFilter>(c.u8v());
-        p.sampler.mip_filter = static_cast<crd::gpu::SamplerFilter>(c.u8v());
-        p.sampler.address    = static_cast<crd::gpu::SamplerAddress>(c.u8v());
-        p.sampler.compare    = c.u8v() != 0U;
-        p.sampler.anisotropy = c.u32v();
-        p.sampler.mip_bias   = c.f32v();
-        p.state.depth_write        = c.u8v() != 0U;
-        p.state.depth_bias         = c.f32v();
-        p.state.depth_bias_slope   = c.f32v();
-        p.state.depth_bias_clamp   = c.f32v();
-        p.state.face_cull          = static_cast<crd::gpu::FaceCull>(c.u8v());
-        p.state.front_face         = static_cast<crd::gpu::FrontFace>(c.u8v());
-        p.state.stencil_enable     = c.u8v() != 0U;
-        p.state.stencil_compare    = static_cast<crd::gpu::DepthCompare>(c.u8v());
-        p.state.stencil_ref        = c.u32v();
-        p.state.stencil_read_mask  = c.u32v();
-        p.state.stencil_write_mask = c.u32v();
-        p.state.stencil_fail       = static_cast<crd::gpu::StencilOp>(c.u8v());
-        p.state.stencil_depth_fail = static_cast<crd::gpu::StencilOp>(c.u8v());
-        p.state.stencil_pass       = static_cast<crd::gpu::StencilOp>(c.u8v());
-        p.load_target              = c.u8v() != 0U; // v5
-        p.load_depth               = c.ok ? c.u8v() != 0U : false; // v6
-        if (c.ok) { c.strv(p.shared_depth); } // v7
-        if (c.ok) { p.depth_as_float = c.u8v() != 0U; }
-        if (c.ok) { p.untracked_storage = c.u8v() != 0U; }
         out.passes.push_back(static_cast<FramePassDesc&&>(p));
     }
 
@@ -2013,13 +2246,22 @@ void FrameGraphBuilder::draw_list_policy(crd::u32 list, FrameCullMode cull, Fram
     m_desc.draw_lists[list].sort = sort;
 }
 
-crd::u32 FrameGraphBuilder::add_pass(crd::containers::StringView name, FramePassKind kind)
+crd::u32 FrameGraphBuilder::add_pass(crd::containers::StringView name, crd::containers::StringView kind)
 {
     FramePassDesc p(m_alloc);
     bset(p.name, name);
-    p.kind = kind;
+    // RAF-12.3: resolve the authoring `kind` string to the pass' executor_id + role bits (a "custom" kind leaves
+    // the id INVALID until `pass_executor` sets it). An unknown kind leaves the default (scene.raster); the builder
+    // does not stop you assembling an invalid graph any more than a text editor does — `validate()` catches it.
+    (void)pass_mechanic_from_kind(kind, p);
     m_desc.passes.push_back(static_cast<FramePassDesc&&>(p));
     return static_cast<crd::u32>(m_desc.passes.size() - 1U);
+}
+void FrameGraphBuilder::pass_executor(crd::u32 pass, crd::containers::StringView executor_id)
+{
+    FramePassDesc& p = m_desc.passes[pass];
+    bset(p.executor, executor_id);
+    p.executor_id = crd::renderpass::executor_type_id(executor_id);
 }
 void FrameGraphBuilder::pass_reads(crd::u32 pass, crd::containers::StringView resource, bool indexed)
 {
@@ -2035,12 +2277,13 @@ void FrameGraphBuilder::pass_writes(crd::u32 pass, crd::containers::StringView r
     r.indexed = indexed;
     m_desc.passes[pass].writes.push_back(static_cast<FrameResourceRef&&>(r));
 }
-void FrameGraphBuilder::pass_shader(crd::u32 pass, crd::containers::StringView id) { bset(m_desc.passes[pass].shader, id); }
-void FrameGraphBuilder::pass_kernel(crd::u32 pass, crd::containers::StringView id) { bset(m_desc.passes[pass].kernel, id); }
-void FrameGraphBuilder::pass_technique(crd::u32 pass, crd::containers::StringView id) { bset(m_desc.passes[pass].technique, id); }
-void FrameGraphBuilder::pass_draw_list(crd::u32 pass, crd::containers::StringView n) { bset(m_desc.passes[pass].draw_list, n); }
-void FrameGraphBuilder::pass_view(crd::u32 pass, crd::containers::StringView n) { bset(m_desc.passes[pass].view, n); }
-void FrameGraphBuilder::pass_material(crd::u32 pass, FrameMaterialPass mp) { m_desc.passes[pass].material_pass = mp; }
+// RAF-12.3 §7 fold: the builder writes params (the same names the parser + runtime use), not struct fields.
+void FrameGraphBuilder::pass_shader(crd::u32 pass, crd::containers::StringView id) { set_pass_str(m_desc.passes[pass], crd::containers::StringView(pp::kShader), id); }
+void FrameGraphBuilder::pass_kernel(crd::u32 pass, crd::containers::StringView id) { set_pass_str(m_desc.passes[pass], crd::containers::StringView(pp::kKernel), id); }
+void FrameGraphBuilder::pass_technique(crd::u32 pass, crd::containers::StringView id) { set_pass_str(m_desc.passes[pass], crd::containers::StringView(pp::kTechnique), id); }
+void FrameGraphBuilder::pass_draw_list(crd::u32 pass, crd::containers::StringView n) { set_pass_str(m_desc.passes[pass], crd::containers::StringView(pp::kDrawList), n); }
+void FrameGraphBuilder::pass_view(crd::u32 pass, crd::containers::StringView n) { set_pass_str(m_desc.passes[pass], crd::containers::StringView(pp::kView), n); }
+void FrameGraphBuilder::pass_material(crd::u32 pass, FrameMaterialPass mp) { set_pass_enum(m_desc.passes[pass], crd::containers::StringView(pp::kMaterialPass), static_cast<crd::u32>(mp)); }
 void FrameGraphBuilder::pass_for_each(crd::u32 pass, FrameForEach gen, crd::u32 arg)
 {
     m_desc.passes[pass].for_each     = gen;
@@ -2048,19 +2291,14 @@ void FrameGraphBuilder::pass_for_each(crd::u32 pass, FrameForEach gen, crd::u32 
 }
 void FrameGraphBuilder::pass_clear_color(crd::u32 pass, float r, float g, float b, float a)
 {
-    FramePassDesc& p    = m_desc.passes[pass];
-    p.has_clear_color   = true;
-    p.clear_color[0]    = r;
-    p.clear_color[1]    = g;
-    p.clear_color[2]    = b;
-    p.clear_color[3]    = a;
+    const float cc[4] = {r, g, b, a};
+    set_pass_vec4(m_desc.passes[pass], crd::containers::StringView(pp::kClearColor), cc);
 }
 void FrameGraphBuilder::pass_clear_depth(crd::u32 pass, float d)
 {
-    m_desc.passes[pass].has_clear_depth = true;
-    m_desc.passes[pass].clear_depth     = d;
+    set_pass_f32(m_desc.passes[pass], crd::containers::StringView(pp::kClearDepth), d);
 }
-void FrameGraphBuilder::pass_depth(crd::u32 pass, crd::gpu::DepthCompare cmp) { m_desc.passes[pass].depth = cmp; }
+void FrameGraphBuilder::pass_depth(crd::u32 pass, crd::gpu::DepthCompare cmp) { set_pass_enum(m_desc.passes[pass], crd::containers::StringView(pp::kDepthCompare), static_cast<crd::u32>(cmp)); }
 void FrameGraphBuilder::pass_param(crd::u32 pass, crd::containers::StringView name, double value)
 {
     FrameParam prm(m_alloc);

@@ -1,7 +1,7 @@
 # ADR-0106 — Unified frame-graph runtime: `crd-render-graph` is the single live runtime
 
-**Status:** Accepted (2026-08-03) — **RAF-8 (in progress).** The `FramePassKind` switch remains as a migration
-adapter until RAF-12 deletes it.
+**Status:** Accepted (2026-08-03) — **CLOSED at RAF-12.3 (2026-08-06).** The `FramePassKind` migration adapter is
+DELETED (retired to `ExecutorTypeId` + role bits); one live runtime remains. See the RAF-12 close amendment below.
 **Phase:** D-007 (RAF band) — RAF-8a/8b. Mission constitution: `docs/research/2026-08-03-gold-standard-asset-driven-rendering.md`.
 **Tags:** `[renderer]` `[frame-graph]` `[gpu-context]` `[architecture]` `[render-path]`
 
@@ -94,3 +94,51 @@ graph **runtime template + compiled instance** to `frame-cook`. The RAF-6/7 impl
 - **Move the registry + runtime into `frame-cook` per the original RAF-0 §3 table** — rebuilds the "one giant
   rendering module" §18/§21 forbid; discards two clean leaf modules. (The table's *diagnosis* that ownership was
   mislocated is right; the fix is to correct the table, not move the code.)
+
+---
+
+## RAF-12 close amendment (2026-08-06)
+
+The migration this ADR opened is complete. Three things landed after the original text, and two of them refine a
+decision above — recorded here in place (the superseded-clause-struck-in-place rule) rather than in an index.
+
+**1. The live unification mechanism is `AuthoredPass` + `run_authored_cb`, NOT `execute_frame(FrameGraphTemplate)`
+(refines Decision #1).** Decision #1 named `crd::rendergraph::execute_frame` as "the single live runtime." RAF-12.2
+wired the live `SceneRenderer` frame differently and better: `FrameRecorder::record` (`frame_runtime.cpp`) resolves
+each cooked pass to a **`crd::rendergraph::AuthoredPass`** (via `to_authored_pass`) and records it through **one
+generic dispatch** — `pb.execute(authored_pass_fn(), &ap)` → `run_authored_cb` → the `crd-render-pass`
+`GraphExecutorTable`. `record_pass` + the 11 `record_*_via_executor` wrappers + every inline `draw_*` fallback are
+DELETED. So the render-graph module exposes **two entry levels that share ONE executor registry**:
+
+- **Live authored** — host-driven: `FrameGraphDesc` → `FrameRecorder` (for_each expansion, overlay weave, draw-list
+  resolution to `DrawItem` handles) → `AuthoredPass` → `run_authored_cb`.
+- **Programmatic / hand-built** — `FrameGraphTemplate` → `compile` → `execute_frame` → the same executors. This is
+  the render-graph's own Gate-7 path ("hand-built == authored record the same descriptors"), exercised by
+  `crd-render-graph-gpu-tests`; the `frame-cook` cooked→template load bridge (`build_frame_graph_template`) feeds it.
+
+Both funnel through the **same** `run_authored_cb` executor dispatch — that shared funnel IS the unification. They
+are two *levels* of one runtime (host-orchestrated vs. hand-built), not two representations to collapse; deleting
+either removes real coverage, so neither is a §31 "parallel old path." The genuine parallel path this ADR set out to
+delete — the `FramePassKind`→verb dispatch — is gone.
+
+**2. `FramePassKind` is retired to `ExecutorTypeId` + role bits (RAF-12.3; completes Decision #4).** The pass MECHANIC
+is now the cooked `crd::renderpass::ExecutorTypeId executor_id` on `FramePassDesc` (a constexpr FNV of the executor
+name, proven equal to the runtime `executor_type_id` hash — gated in `test_frame_asset`), plus four role bits
+(`depth_only` / `mrt` / `composite` / `indirect`) for the within-executor variants one id cannot spell (a depth-only
+vs. MRT scene-raster pass; a compositing vs. plain fullscreen pass; an indirect vs. direct compute dispatch). A NEW
+mechanic is a **registered executor**, never an engine-enum edit — the app extension point is `register_pass_executor`
+(§22-10). The `.crdr` blob bumps **v7 → v8**: the retired kind byte becomes the executor id (u64) + a role byte, and a
+custom pass' app `executor` string now rides the record (v7 silently dropped it — the field-both-sides-drop class). The
+migration is **byte-identical** to the committed baseline (verified by stash-diff: identical GPU results both backends)
+and removes the record-time string hash Decision #1 left behind (§22-18: no runtime string lookup at recording).
+
+**3. The 59 combinatorial `draw_*/dispatch_*/trace_*` verbs are OFF `IRasterContext` (RAF-12.4).** The lowering moved
+into the per-backend command encoders; the interface no longer carries a verb per feature-combination (§22-9). With
+FramePassKind and the verbs gone, the mission §7 deletion list's primary items are grep-proven empty.
+
+**Status closed:** one live rendering architecture; the `FramePassKind` adapter, the `record_pass` switch, the 11
+wrappers and the 59 verbs are deleted; both frame-graph entry levels share the executor registry. ADR-0032's runtime
+model stays superseded. Follow-ups that are DESIGN choices, not gaps, are named in the RAF-12.5 notes (the authoring
+`FramePassDesc` keeps typed fields as validated authoring data per §8 — the cooked/runtime form is the payload; the
+`crd://`→`engine://` alias stays as RAF-1 back-compat; `untracked_storage` stays as a scheduling hint the compute
+executor reads).

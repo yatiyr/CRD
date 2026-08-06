@@ -7,39 +7,17 @@
 
 #include <crd/framecook/frame_asset.hpp>
 
+#include <algorithm> // RAF-12.3: std::ranges::any_of (folded-param filter)
 #include <cstdio>
+#include <cstring>   // RAF-12.3: strlen/memcmp (folded-param filter)
 
 namespace crd::framecook
 {
 namespace
 {
 
-const char* from_pass_kind(FramePassKind k)
-{
-    switch (k)
-    {
-    case FramePassKind::RasterGeometry:   return "raster.geometry";
-    case FramePassKind::RasterDepthOnly:  return "raster.depth_only";
-    case FramePassKind::RasterFullscreen: return "raster.fullscreen";
-    case FramePassKind::RasterMrt:        return "raster.mrt";
-    case FramePassKind::Compute:          return "compute";
-    case FramePassKind::Present:          return "present";
-    case FramePassKind::Clear:            return "clear";
-    case FramePassKind::Copy:             return "copy";
-    case FramePassKind::Blit:             return "blit";
-    case FramePassKind::Resolve:          return "resolve";
-    case FramePassKind::RasterTess:       return "raster.tess";
-    case FramePassKind::RasterMesh:       return "raster.mesh";
-    case FramePassKind::RasterVisbuffer:  return "raster.visbuffer";
-    case FramePassKind::RasterComposite:  return "raster.composite";
-    case FramePassKind::RayTrace:         return "raytrace";
-    case FramePassKind::RayTracePipeline: return "raytrace.pipeline";
-    case FramePassKind::ComputeIndirect:  return "compute.indirect";
-    case FramePassKind::RasterMeshIndirect: return "raster.mesh.indirect";
-    case FramePassKind::Custom:             return "custom"; // RAF-10: app executor by id (round-trips to Custom)
-    }
-    return "raster.geometry";
-}
+// RAF-12.3: the enum→string mapping is now the shared `pass_kind_string(const FramePassDesc&)` (frame_asset.cpp) —
+// the inverse of the parser's `pass_mechanic_from_kind`, kept in one table so the two cannot drift.
 const char* from_format(crd::gpu::FgImageFormat f)
 {
     using F = crd::gpu::FgImageFormat;
@@ -163,6 +141,23 @@ void app_refs(crd::containers::String& o, const crd::containers::Array<FrameReso
     }
     app(o, "]");
 }
+// RAF-12.3 §7 fold: emit a StringView (a pass_str param value) as a quoted TOML string — char-by-char, so a
+// non-NUL-terminated view is safe.
+void app_quoted_sv(crd::containers::String& o, crd::containers::StringView v)
+{
+    app(o, "\"");
+    for (crd::usize i = 0; i < v.size(); ++i)
+    {
+        const char ch[2] = {v[i], '\0'};
+        o.append(static_cast<const char*>(ch));
+    }
+    app(o, "\"");
+}
+// RAF-12.3 §7 fold: is `n` a FOLDED-config param name? The `[pass.params]` block emits only GENUINE authored params
+// (groups_x, exposure_ev100, clear_id, …); the folded config (shader/clear_color/depth_compare/…) is emitted above as
+// its own TOML key, so it must be SKIPPED here or it would double-emit and the round-trip would grow the graph.
+// RAF-12.3 §7 fold: the folded-name set has ONE home (frame_asset's `is_folded_pass_param`); forward to it.
+bool is_folded_param_name(crd::containers::StringView n) noexcept { return is_folded_pass_param(n); }
 
 } // namespace
 
@@ -329,38 +324,50 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
         app(o, "\n[[pass]]\nname = ");
         app_quoted(o, p.name);
         app(o, "\nkind = \"");
-        app(o, from_pass_kind(p.kind));
+        app(o, pass_kind_string(p)); // RAF-12.3: inverse of the parser's kind table
         app(o, "\"\n");
+        // ⭐ RAF-12.3 §7 fold: every config value is a NAMED PARAM now. Emit each key iff its param is present, so
+        // the emitted TOML re-parses to an IDENTICAL param set (round-trip byte-identity by construction).
+        using SV            = crd::containers::StringView;
+        const auto semit = [&](const char* toml_key, const char* pkey) {
+            const SV v = pass_str(p, SV(pkey));
+            if (!v.empty()) { app(o, toml_key); app(o, " = "); app_quoted_sv(o, v); app(o, "\n"); }
+        };
         if (p.reads.size() > 0)   { app(o, "reads = ");     app_refs(o, p.reads);       app(o, "\n"); }
         if (p.writes.size() > 0)  { app(o, "writes = ");    app_refs(o, p.writes);      app(o, "\n"); }
-        if (!p.draw_list.empty()) { app(o, "draw_list = "); app_quoted(o, p.draw_list); app(o, "\n"); }
-        if (!p.view.empty())      { app(o, "view = ");      app_quoted(o, p.view);      app(o, "\n"); }
-        if (!p.shader.empty())    { app(o, "shader = ");    app_quoted(o, p.shader);    app(o, "\n"); }
-        if (!p.kernel.empty())    { app(o, "kernel = ");    app_quoted(o, p.kernel);    app(o, "\n"); }
-        if (!p.raygen.empty())      { app(o, "raygen = ");      app_quoted(o, p.raygen);      app(o, "\n"); }
-        if (!p.miss.empty())        { app(o, "miss = ");        app_quoted(o, p.miss);        app(o, "\n"); }
-        if (!p.closest_hit.empty()) { app(o, "closest_hit = "); app_quoted(o, p.closest_hit); app(o, "\n"); }
-        if (!p.any_hit.empty())     { app(o, "any_hit = ");     app_quoted(o, p.any_hit);     app(o, "\n"); }
-        // REN-38-F13: the last two SBT roles
-        if (!p.intersection.empty()) { app(o, "intersection = "); app_quoted(o, p.intersection); app(o, "\n"); }
-        if (!p.callable.empty())     { app(o, "callable = ");     app_quoted(o, p.callable);     app(o, "\n"); }
-        if (!p.technique.empty()) { app(o, "technique = "); app_quoted(o, p.technique); app(o, "\n"); }
-        // REN-38-A6: only a BLIT rescales, so only a blit emits its filter — a round-trip that wrote `filter` on
-        // every pass would make two identical graphs differ by a field neither kind reads.
-        if (p.kind == FramePassKind::Blit)
+        semit("draw_list", pp::kDrawList);
+        semit("view", pp::kView);
+        semit("shader", pp::kShader);
+        semit("kernel", pp::kKernel);
+        // RAF-12.3: a CUSTOM pass' app executor id — a KEPT struct field; round-trip it.
+        if (!p.executor.empty())  { app(o, "executor = ");  app_quoted(o, p.executor);  app(o, "\n"); }
+        semit("raygen", pp::kRaygen);
+        semit("miss", pp::kMiss);
+        semit("closest_hit", pp::kClosestHit);
+        semit("any_hit", pp::kAnyHit);
+        semit("intersection", pp::kIntersection); // REN-38-F13
+        semit("callable", pp::kCallable);
+        semit("technique", pp::kTechnique);
+        // REN-38-A6: only a BLIT rescales, so only a blit emits its filter — and only when it was AUTHORED
+        // (RAF-12.3 §7: the fold is conditional on authorship, so emit must be too, or the round-trip grows).
+        if (pass_is_blit(p) && pass_has(p, SV(pp::kFilter)))
         {
+            const auto bf = static_cast<FrameBlitFilter>(
+                pass_u32(p, SV(pp::kFilter), static_cast<crd::u32>(FrameBlitFilter::Linear)));
             app(o, "filter = \"");
-            app(o, p.filter == FrameBlitFilter::Nearest ? "nearest" : "linear");
+            app(o, bf == FrameBlitFilter::Nearest ? "nearest" : "linear");
             app(o, "\"\n");
         }
-        if (p.blend.size() > 0)
+        const crd::u32 blend_count = pass_u32(p, SV(pp::kBlendCount), 0U);
+        if (blend_count > 0U)
         {
             app(o, "blend = [");
-            for (crd::usize k = 0; k < p.blend.size(); ++k)
+            for (crd::u32 k = 0; k < blend_count && k < 4U; ++k)
             {
-                if (k > 0) { app(o, ", "); }
+                if (k > 0U) { app(o, ", "); }
                 app(o, "\"");
-                switch (p.blend[k])
+                switch (static_cast<crd::gpu::BlendMode>(
+                    pass_u32(p, SV(pp::kBlendSlot[k]), static_cast<crd::u32>(crd::gpu::BlendMode::Opaque))))
                 {
                 case crd::gpu::BlendMode::Alpha:              app(o, "alpha"); break;
                 case crd::gpu::BlendMode::PremultipliedAlpha: app(o, "premultiplied"); break;
@@ -375,12 +382,12 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
             }
             app(o, "]\n");
         }
-        // REN-38-A13/A14: only emit what was DECLARED — writing the defaults on every pass would make two
-        // identical graphs differ by fields neither meant to set.
-        if (p.shading_rate != crd::gpu::ShadingRate::Rate1x1)
+        // REN-38-A13/A14: VRS + conservative — folded ONLY when non-default, so a present param == authored.
+        if (pass_has(p, SV(pp::kShadingRate)))
         {
             app(o, "shading_rate = \"");
-            switch (p.shading_rate)
+            switch (static_cast<crd::gpu::ShadingRate>(
+                pass_u32(p, SV(pp::kShadingRate), static_cast<crd::u32>(crd::gpu::ShadingRate::Rate1x1))))
             {
             case crd::gpu::ShadingRate::Rate1x2: app(o, "1x2"); break;
             case crd::gpu::ShadingRate::Rate2x1: app(o, "2x1"); break;
@@ -393,10 +400,11 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
             }
             app(o, "\"\n");
         }
-        if (p.rate_combiner != crd::gpu::ShadingRateCombiner::Keep)
+        if (pass_has(p, SV(pp::kRateCombiner)))
         {
             app(o, "rate_combiner = \"");
-            switch (p.rate_combiner)
+            switch (static_cast<crd::gpu::ShadingRateCombiner>(
+                pass_u32(p, SV(pp::kRateCombiner), static_cast<crd::u32>(crd::gpu::ShadingRateCombiner::Keep))))
             {
             case crd::gpu::ShadingRateCombiner::Replace: app(o, "replace"); break;
             case crd::gpu::ShadingRateCombiner::Min:     app(o, "min"); break;
@@ -407,25 +415,27 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
             }
             app(o, "\"\n");
         }
-        if (p.conservative != crd::gpu::ConservativeMode::Off)
+        if (pass_has(p, SV(pp::kConservative)))
         {
+            const auto cm = static_cast<crd::gpu::ConservativeMode>(
+                pass_u32(p, SV(pp::kConservative), static_cast<crd::u32>(crd::gpu::ConservativeMode::Off)));
             app(o, "conservative = \"");
-            app(o, p.conservative == crd::gpu::ConservativeMode::Underestimate ? "underestimate" : "overestimate");
+            app(o, cm == crd::gpu::ConservativeMode::Underestimate ? "underestimate" : "overestimate");
             app(o, "\"\n");
         }
         if (p.queue != FrameQueue::Graphics) { app(o, "queue = \"async\"\n"); }
-        // REN-38-B8: only a pass that DECLARED a sampler emits one — writing the defaults everywhere would make
-        // two identical graphs differ by fields neither meant to set.
-        if (p.has_sampler)
+        // REN-38-B8: only a pass that DECLARED a sampler emits one (reconstructed from its decomposed params).
+        if (pass_flag(p, SV(pp::kHasSampler)))
         {
-            if (p.kind != FramePassKind::Blit) // `filter` on a blit already means the blit filter
+            const crd::gpu::SamplerDesc smp = pass_sampler(p);
+            if (!pass_is_blit(p)) // `filter` on a blit already means the blit filter
             {
                 app(o, "filter = \"");
-                app(o, p.sampler.mag_filter == crd::gpu::SamplerFilter::Nearest ? "nearest" : "linear");
+                app(o, smp.mag_filter == crd::gpu::SamplerFilter::Nearest ? "nearest" : "linear");
                 app(o, "\"\n");
             }
             app(o, "address = \"");
-            switch (p.sampler.address)
+            switch (smp.address)
             {
             case crd::gpu::SamplerAddress::ClampToEdge:   app(o, "clamp"); break;
             case crd::gpu::SamplerAddress::ClampToBorder: app(o, "clamp_to_border"); break;
@@ -434,10 +444,11 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
             default:                                      app(o, "repeat"); break;
             }
             app(o, "\"\n");
-            if (p.sampler.anisotropy > 1U) { app(o, "anisotropy = "); app_u32(o, p.sampler.anisotropy); app(o, "\n"); }
-            if (p.sampler.compare) { app(o, "compare = true\n"); }
+            if (smp.anisotropy > 1U) { app(o, "anisotropy = "); app_u32(o, smp.anisotropy); app(o, "\n"); }
+            if (smp.compare) { app(o, "compare = true\n"); }
         }
-        const char* mp = from_material(p.material_pass);
+        const char* mp =
+            from_material(static_cast<FrameMaterialPass>(pass_u32(p, SV(pp::kMaterialPass), 0U)));
         if (mp != nullptr) { app(o, "material_pass = \""); app(o, mp); app(o, "\"\n"); }
         if (p.for_each != FrameForEach::None)
         {
@@ -456,29 +467,35 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
             }
             app(o, "\"\n");
         }
-        if (p.has_clear_color)
         {
-            app(o, "clear_color = [");
-            for (crd::u32 c = 0; c < 4U; ++c)
+            float cc[4] = {0.0F, 0.0F, 0.0F, 1.0F};
+            if (pass_vec4(p, SV(pp::kClearColor), cc))
             {
-                if (c > 0U) { app(o, ", "); }
-                app_f64(o, static_cast<double>(p.clear_color[c]));
+                app(o, "clear_color = [");
+                for (crd::u32 c = 0; c < 4U; ++c)
+                {
+                    if (c > 0U) { app(o, ", "); }
+                    app_f64(o, static_cast<double>(cc[c]));
+                }
+                app(o, "]\n");
             }
-            app(o, "]\n");
         }
-        if (p.has_clear_depth)
+        if (pass_has(p, SV(pp::kClearDepth)))
         {
             app(o, "clear_depth = ");
-            app_f64(o, static_cast<double>(p.clear_depth));
+            app_f64(o, static_cast<double>(pass_f32(p, SV(pp::kClearDepth), 1.0F)));
             app(o, "\n");
         }
-        app(o, "depth = \"");
-        app(o, from_compare(p.depth));
-        app(o, "\"\n");
-        // ── ⭐ REN-38 audit: the PASS-STATE vocabulary — non-default fields only, and BEFORE `[pass.params]`
-        // (a bare key written after a table belongs to THAT table; the root-keys-before-tables scar). ──
+        if (pass_has(p, SV(pp::kDepthCompare)))
         {
-            const crd::gpu::PassRasterState& st = p.state;
+            app(o, "depth = \"");
+            app(o, from_compare(static_cast<crd::gpu::DepthCompare>(
+                       pass_u32(p, SV(pp::kDepthCompare), static_cast<crd::u32>(crd::gpu::DepthCompare::LessEqual)))));
+            app(o, "\"\n");
+        }
+        // ── ⭐ REN-38 audit: the PASS-STATE vocabulary — non-default fields only, and BEFORE `[pass.params]`. ──
+        {
+            const crd::gpu::PassRasterState st = pass_state(p);
             const auto from_stencil_op = [](crd::gpu::StencilOp op) {
                 switch (op)
                 {
@@ -493,13 +510,11 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
                 }
                 return "keep";
             };
-            // REN-38-F11: the pass-level LOAD flag (mask-then-test pass pairs stack on one target)
-            if (p.load_target) { app(o, "load = true\n"); }
-            // REN-40-G1: load depth only (depth-prepass pattern: clear colour, load depth)
-            if (p.load_depth) { app(o, "load_depth = true\n"); }
-            if (!p.shared_depth.empty()) { app(o, "shared_depth = "); app_quoted(o, p.shared_depth); app(o, "\n"); }
-            if (p.depth_as_float) { app(o, "depth_as_float = true\n"); }
-            if (p.untracked_storage) { app(o, "untracked_storage = true\n"); }
+            if (pass_flag(p, SV(pp::kLoad))) { app(o, "load = true\n"); }
+            if (pass_flag(p, SV(pp::kLoadDepth))) { app(o, "load_depth = true\n"); }
+            semit("shared_depth", pp::kSharedDepth);
+            if (pass_flag(p, SV(pp::kDepthAsFloat))) { app(o, "depth_as_float = true\n"); }
+            if (pass_flag(p, SV(pp::kUntracked))) { app(o, "untracked_storage = true\n"); }
             if (!st.depth_write) { app(o, "depth_write = false\n"); }
             if (st.depth_bias != 0.0F) { app(o, "depth_bias = "); app_f64(o, static_cast<double>(st.depth_bias)); app(o, "\n"); }
             if (st.depth_bias_slope != 0.0F)
@@ -553,12 +568,21 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
                 app(o, "\"\n");
             }
         }
-        if (p.params.size() > 0)
+        // ⭐ RAF-12.3 §7 fold: `[pass.params]` emits ONLY the GENUINE authored params — the folded config keys above
+        // live in the SAME `params` array and must be SKIPPED here or the round-trip would double-emit + grow.
+        bool any_authored = false;
+        for (crd::usize k = 0; k < p.params.size(); ++k)
+        {
+            const FrameParam& prm = p.params[k];
+            if (!is_folded_param_name(SV(prm.name.c_str(), prm.name.size()))) { any_authored = true; break; }
+        }
+        if (any_authored)
         {
             app(o, "[pass.params]\n");
             for (crd::usize k = 0; k < p.params.size(); ++k)
             {
                 const FrameParam& prm = p.params[k];
+                if (is_folded_param_name(SV(prm.name.c_str(), prm.name.size()))) { continue; }
                 o.append(prm.name.c_str());
                 app(o, " = ");
                 if (prm.type == FrameParamType::Vec4)
