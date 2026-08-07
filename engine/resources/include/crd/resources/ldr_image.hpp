@@ -50,6 +50,7 @@ enum class LdrCodec : crd::u8
     Tga, // note: TGA has NO magic — sniffed heuristically, so it dispatches LAST
     Bmp,
     Jpeg,
+    Gif,
 };
 
 // Sniff the leading bytes. TGA (magic-less) is claimed only when its header fields are self-consistent.

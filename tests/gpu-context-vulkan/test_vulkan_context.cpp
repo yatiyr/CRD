@@ -259,6 +259,14 @@ TEST_CASE("D-007 C6-b: cooperative-vector matrix-vector DISPATCHES on Vulkan == 
     rec.barrier(*d_out, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::TransferSrc);
     compute.submit_and_wait();
 
+    // CGP-0 (Track C): the PORTABLE GPU-timing primitive returns real dispatch time through the backend-agnostic
+    // `IComputeContext` surface (Vulkan's `last_gpu_ms` is now the override of the interface method — same value both ways).
+    {
+        cg::IComputeContext& base = compute;
+        CHECK(base.last_gpu_ms() == compute.last_gpu_ms()); // portable (virtual) access == concrete
+        CHECK(base.last_gpu_ms() > 0.0);                    // timestamp query pool measured real elapsed GPU time
+    }
+
     auto rb = compute.create_buffer(static_cast<crd::u64>(b_n * m_n) * 2U, transfer_dst, cg::ComputeMemory::GpuToCpu);
     {
         auto& r2 = compute.begin();

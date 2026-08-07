@@ -4,6 +4,7 @@
 #include <crd/resources/ldr_image.hpp>
 
 #include <crd/resources/bmp_image.hpp>
+#include <crd/resources/gif_image.hpp>
 #include <crd/resources/jpeg_image.hpp>
 #include <crd/resources/png_image.hpp>
 #include <crd/resources/tga_image.hpp>
@@ -16,6 +17,7 @@ LdrCodec ldr_sniff(crd::containers::ConstSpan<crd::u8> bytes) noexcept
     if (png_sniff(bytes)) { return LdrCodec::Png; }
     if (jpeg_sniff(bytes)) { return LdrCodec::Jpeg; }
     if (bmp_sniff(bytes)) { return LdrCodec::Bmp; }
+    if (gif_sniff(bytes)) { return LdrCodec::Gif; }
     if (tga_sniff(bytes)) { return LdrCodec::Tga; } // heuristic — LAST
     return LdrCodec::Unknown;
 }
@@ -27,6 +29,7 @@ LdrError ldr_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, cr
     case LdrCodec::Png: return png_decode(bytes, out, a);
     case LdrCodec::Jpeg: return jpeg_decode(bytes, out, a);
     case LdrCodec::Bmp: return bmp_decode(bytes, out, a);
+    case LdrCodec::Gif: return gif_decode(bytes, out, a);
     case LdrCodec::Tga: return tga_decode(bytes, out, a);
     default: return LdrError::BadMagic;
     }

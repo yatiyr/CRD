@@ -181,11 +181,14 @@ public:
             // ⭐ RAF-8: the VISIBILITY-BUFFER draw (an R32_UINT id target). The FIRST draw of the scope clears to the
             // integer `clear_id`; every later one LOADS (draw_visbuffer_load) so the one image keeps EVERY draw's ids
             // — a per-draw clear would leave only the last mesh's, the visibility scar in its most silent form.
-            if (r.visbuffer)
+            // ⭐ RAH-1: visibility is derived STRUCTURALLY from the typed clear (color[0].clear_kind == Uint) — the old
+            // `RenderingDesc.visbuffer` boolean is RETIRED. The FIRST draw clears to the integer background id; later
+            // draws LOAD (clear-once/load-rest) so the one image keeps EVERY draw's ids.
+            if (r.color.size() > 0 && r.color[0].clear_kind == ClearKind::Uint)
             {
                 if (clears)
                 {
-                    m_ctx.draw_visbuffer(*color0, prog, r.clear_id, count);
+                    m_ctx.draw_visbuffer(*color0, prog, r.color[0].clear_uint, count);
                 }
                 else
                 {

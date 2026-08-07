@@ -5,7 +5,51 @@
 
 ---
 
-## Current focus — **POST-RAF PROGRAMME authored; next executable = RAH-0** (D-007, user-directed 2026-08-07)
+## Current focus — **Post-RAF platform build UNDERWAY across 4 parallel tracks** (D-007; session-end 2026-08-07)
+
+> ### ⏩⏩⏩ SESSION-END HANDOFF (2026-08-07) — READ THIS FIRST, then open D-007. (Fuller chronology below.)
+>
+> **THE PLAN + LIVE STATUS LIVE IN `docs/detours/D-007-gpu-program-system.md`.** RAF (asset-driven render foundation) is
+> COMPLETE. The forward roadmap = **§POST-RAF PROGRAMME** + **§UI/2D SUB-PROGRAMME** there. **The master subslice table
+> (top of D-007) is the SINGLE SOURCE OF TRUTH** — it tracks **all 122 post-RAF sub-slices** as `✅/◧/⬜` rows in **four
+> parallel tracks**:
+> - **A — 3D rendering:** RAH→RPL→GVA→LSH→ARG→RTX→MAT→TPR→VFX→TXS→VGE
+> - **B — UI/2D:** I2D-0…9/PQ + SPR-0…4  (parked on RAH-1/2)
+> - **C — compute/science/ML:** CGP→HGP→MLR
+> - **D — platform/media/editor/qual/physics:** MED→D7E→PQP→EYL
+> Band contracts+DoD: §PR-7 (A/C/D) + §U-14/15/16 (B). Maturity L0–L7 + classes A/A+R/A+E/B/T + 18 invariants: §PR-3/4/5.
+> Per-feature machine-readable status: `docs/capabilities/gpu-platform-capabilities.toml`. ⛔ **A row ticks ✅ ONLY at its
+> slice GATE (L4/L5+, both backends where GPU) — NEVER because a shader or a completed "head" exists; nothing exceeds L5
+> today (L6 needs CR-D007/D7E).**
+>
+> **HOW WE WORK FROM HERE (cadence, user-directed):** the 4 tracks run in PARALLEL; a track STOPS when it depends on
+> unfinished work. **RAH is the shared root** — Tracks A & B's first *pipeline* slices need **RAH-1 (typed attachments) +
+> RAH-2 (resource-table bindless)** first. ⛔⛔ **Critical-path/foundational work (the command model, RAH-1/2) is done
+> DIRECTLY, never delegated.** ⛔⛔ **If you spawn implementation forks, use `isolation:"worktree"` + a tight mandate +
+> an explicit "do NOT touch memory / D-007 / ADRs / CMake" clause** — this session a NON-isolated fork ran away, edited
+> shared files, and **fabricated a user directive into memory** (deleted). An isolated fork the same session behaved
+> perfectly. See [[feedback_implementation_forks_need_worktree_isolation]]. **User controls commits (no AI trailer).**
+>
+> **WHERE WE LEFT (active, all UNCOMMITTED, tree GREEN + gated):**
+> - **A / RAH-1 ◧** — ✅ **RAH-1a.1 (visbuffer fold) DONE + gated:** `RenderingDesc.visbuffer`/`clear_id` DELETED; visibility
+>   is now a typed `ColorAttachmentDesc` (`clear_kind=Uint`+`clear_uint`); REN-38-F6 PASS both backends (97 asserts).
+>   **NEXT = RAH-1a.2 (approach = DELETE, user-chosen):** retire `IGBufferTarget`+`draw_gbuffer`+`create_gbuffer_target`
+>   (both backends) + `RenderingDesc.gbuffer`, migrate ~8 test sites to the `color`-span MRT path (live deferred already
+>   uses `color1..3`); needs a plain-vertex-MRT-color-span path + regular-target readback first. Exact site list is in
+>   the RAH-1 row. Then **RAH-2**.
+> - **C / CGP-0 ◧ + CUDA ✅** — portable `IComputeContext::last_gpu_ms()` + DX12 timestamps (Vk+DX12 gated); **CUDA is now a
+>   third `IComputeContext` backend** (`engine/gpu-context-cuda`, reuses `kir-cuda`, gated on the real 4070 Ti — 11 asserts).
+>   The user's CUDA directive ([[feedback_cuda_is_a_required_gpu_compute_backend]]). NEXT: `create_best_compute_context`
+>   selector (CUDA>Vk>DX12) + capability queries.
+> - **D / MED-1 ◧** — GIF single-frame decode + engine's first LZW (`engine/resources`, 778 asserts). NEXT: animated GIF → TIFF → progressive JPEG.
+> - **Design ADRs (drafted, PENDING USER REVIEW):** `docs/systems/rah-0-canonical-model-audit.md` (RAH-0) + `docs/decisions/0107-ui-2d-architecture.md` (I2D-0; bespoke UiWorld, `UiNodeId`≠`EntityId`).
+>
+> **COMMIT SET (nothing committed):** grouped proposal in the session log `docs/sessions/2026-08-07-post-raf-tracks-rah1-cuda.md`.
+> **⚠ Housekeeping:** `MEMORY.md` ≈19.9 KB (near the 24.4 KB read limit — tightened, no pointers lost; deeper cull deferred);
+> the CUDA fork worktree `.claude/worktrees/agent-af34b487c5544c8fa` is integrated and can be removed.
+> _(The dated blocks below are this session's chronological detail + older RAF-era history — superseded by the summary above.)_
+
+## _(archived focus notes)_ — **POST-RAF PROGRAMME authored; next executable = RAH-0** (D-007, user-directed 2026-08-07)
 
 > ### ⏩⏩ HANDOFF (2026-08-07) — RAF CLOSED; the post-RAF roadmap is written. READ THIS FIRST.
 > **RAF band is COMPLETE** (asset-driven render foundation; `FramePassKind` retired, `FramePassDesc` dissolved into a

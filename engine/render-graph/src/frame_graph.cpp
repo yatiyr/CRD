@@ -1008,10 +1008,13 @@ void record_visbuffer_raster(const PassPayload& payload, RecordContext& ctx, ICo
     RenderingDesc rd;
     rd.width = color->width();
     rd.height = color->height();
-    rd.visbuffer = true;
-    rd.clear_id = u32_param(payload, "clear_id", 0U);
-    // the attachment LoadOp is Clear so the FIRST draw of the scope clears (to `clear_id`) and later draws load.
-    rd.color.push_back(ColorAttachmentDesc{color, LoadOp::Clear, StoreOp::Store, clear_from(payload), BlendMode::Opaque});
+    // ⭐ RAH-1: visibility is an ORDINARY TYPED ATTACHMENT — an R32_UINT id target whose typed clear (`clear_kind == Uint`,
+    // `clear_uint` = the background id) IS the whole visbuffer semantics. No `rd.visbuffer` boolean; the encoder derives
+    // the id-write draw (clear-once/load-rest) from the attachment. LoadOp::Clear ⇒ FIRST draw clears, later draws load.
+    ColorAttachmentDesc att{color, LoadOp::Clear, StoreOp::Store, clear_from(payload), BlendMode::Opaque};
+    att.clear_kind = ClearKind::Uint;
+    att.clear_uint = u32_param(payload, "clear_id", 0U);
+    rd.color.push_back(att);
     IRasterProgram* const def_prog = ctx.programs().raster;
     const DrawList draws = ctx.draws();
     encoder.begin_rendering(rd);

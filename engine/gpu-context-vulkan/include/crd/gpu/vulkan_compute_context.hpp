@@ -73,7 +73,8 @@ public:
 
     // GPU-only execution time (ms) of the command buffer from the most recent submit_and_wait — measured by device
     // timestamps bracketing the recorded work, so it EXCLUDES CPU record/submit overhead. For fair kernel benchmarking.
-    [[nodiscard]] double last_gpu_ms() const noexcept;
+    // CGP-0: now the override of the portable `IComputeContext::last_gpu_ms()` (was a Vulkan-only method).
+    [[nodiscard]] double last_gpu_ms() const noexcept override;
 
 private:
     struct Impl;

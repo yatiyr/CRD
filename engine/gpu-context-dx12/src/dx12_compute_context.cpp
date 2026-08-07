@@ -122,6 +122,14 @@ struct Dx12ComputeContext::Impl final : ComputeRecorder
     crd::u64                          fence_val = 0;
     bool                              ok        = false;
 
+    // CGP-0: portable GPU timing. Two timestamps bracket the recorded work (queue tick-count → ms via the queue
+    // frequency), resolved into a READBACK buffer and read after the fence. Best-effort: ts_ok=false ⇒ last_gpu_ms stays 0.
+    ComPtr<ID3D12QueryHeap>           ts_heap;                // 2 timestamps (start @ begin, end @ submit)
+    ComPtr<ID3D12Resource>           ts_readback;            // 2×u64 resolved ticks (READBACK heap, COPY_DEST)
+    double                            ts_period_ms = 0.0;     // ms per tick = 1000 / GetTimestampFrequency
+    double                            last_gpu_ms_v = 0.0;
+    bool                              ts_ok        = false;
+
     void ensure_state(BufferImpl& b, D3D12_RESOURCE_STATES want)
     {
         if (b.fixed || b.state == want) { return; }
@@ -229,6 +237,27 @@ Dx12ComputeContext::Dx12ComputeContext(crd::memory::IAllocator* alloc) : m_impl(
     D3D12_COMMAND_QUEUE_DESC qd{};
     qd.Type = D3D12_COMMAND_LIST_TYPE_COMPUTE;
     if (FAILED(impl.device->CreateCommandQueue(&qd, IID_PPV_ARGS(&impl.queue)))) { return; }
+
+    // CGP-0: the timestamp query heap (2 timestamps) + a 16-byte READBACK buffer for the resolved ticks. Best-effort:
+    // any failure leaves ts_ok=false and last_gpu_ms() returns 0. A compute queue supports timestamps on all D3D12 tier-1+
+    // hardware; the frequency (ticks/sec) is per-queue, so read it from THIS queue.
+    {
+        UINT64                    freq = 0U;
+        D3D12_QUERY_HEAP_DESC     qhd{};
+        qhd.Type  = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+        qhd.Count = 2U;
+        if (SUCCEEDED(impl.queue->GetTimestampFrequency(&freq)) && freq != 0U
+            && SUCCEEDED(impl.device->CreateQueryHeap(&qhd, IID_PPV_ARGS(&impl.ts_heap))))
+        {
+            impl.ts_readback = make_buffer(impl.device.Get(), 2U * sizeof(UINT64), D3D12_HEAP_TYPE_READBACK,
+                                           D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST);
+            if (impl.ts_readback)
+            {
+                impl.ts_period_ms = 1.0e3 / static_cast<double>(freq); // ms per tick
+                impl.ts_ok        = true;
+            }
+        }
+    }
     if (FAILED(impl.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE, IID_PPV_ARGS(&impl.cmd_alloc)))) { return; }
     if (FAILED(impl.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COMPUTE, impl.cmd_alloc.Get(), nullptr, IID_PPV_ARGS(&impl.list)))) { return; }
     impl.list->Close();
@@ -428,12 +457,20 @@ ComputeRecorder& Dx12ComputeContext::begin()
     ID3D12DescriptorHeap* heaps[] = {impl.heap.Get()};
     impl.list->SetDescriptorHeaps(1, heaps);
     impl.heap_next = 0;
+    // CGP-0: start timestamp (D3D12 timestamps use EndQuery — there is no BeginQuery for the TIMESTAMP type).
+    if (impl.ts_ok) { impl.list->EndQuery(impl.ts_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0U); }
     return impl;
 }
 
 void Dx12ComputeContext::submit_and_wait()
 {
     auto& impl = *m_impl;
+    // CGP-0: end timestamp + resolve the two ticks into the READBACK buffer (both before Close).
+    if (impl.ts_ok)
+    {
+        impl.list->EndQuery(impl.ts_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 1U);
+        impl.list->ResolveQueryData(impl.ts_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0U, 2U, impl.ts_readback.Get(), 0U);
+    }
     impl.list->Close();
     ID3D12CommandList* lists[] = {impl.list.Get()};
     impl.queue->ExecuteCommandLists(1, lists);
@@ -444,6 +481,22 @@ void Dx12ComputeContext::submit_and_wait()
         impl.fence->SetEventOnCompletion(impl.fence_val, impl.event);
         WaitForSingleObject(impl.event, INFINITE);
     }
+    // CGP-0: read the resolved ticks now that the GPU has finished. end >= start ⇒ elapsed ms; otherwise leave 0.
+    if (impl.ts_ok)
+    {
+        void*             mapped = nullptr;
+        const D3D12_RANGE rr{0U, 2U * sizeof(UINT64)};
+        if (SUCCEEDED(impl.ts_readback->Map(0U, &rr, &mapped)) && mapped != nullptr)
+        {
+            UINT64 ticks[2] = {0U, 0U};
+            std::memcpy(ticks, mapped, sizeof(ticks));
+            const D3D12_RANGE wrote{0U, 0U}; // CPU wrote nothing
+            impl.ts_readback->Unmap(0U, &wrote);
+            impl.last_gpu_ms_v = (ticks[1] >= ticks[0]) ? static_cast<double>(ticks[1] - ticks[0]) * impl.ts_period_ms : 0.0;
+        }
+    }
 }
+
+double Dx12ComputeContext::last_gpu_ms() const noexcept { return m_impl->last_gpu_ms_v; }
 
 } // namespace crd::gpu

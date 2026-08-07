@@ -146,11 +146,11 @@ inline void enc_draw_visbuffer(g::IRasterContext& r, g::IRasterTarget& target, g
     auto                   enc = r.create_command_encoder();
     g::RenderingDesc       rd{};
     g::ColorAttachmentDesc c{};
-    c.target = &target;
-    c.load   = g::LoadOp::Clear;
+    c.target     = &target;
+    c.load       = g::LoadOp::Clear;
+    c.clear_kind = g::ClearKind::Uint; // RAH-1: visibility is a typed R32_UINT id attachment (was rd.visbuffer + rd.clear_id)
+    c.clear_uint = clear_id;
     rd.color.push_back(c);
-    rd.visbuffer = true;
-    rd.clear_id  = clear_id;
     enc->begin_rendering(rd);
     g::RasterDrawPacket pk{};
     pk.program                        = &prog;

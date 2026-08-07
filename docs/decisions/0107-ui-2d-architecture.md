@@ -1,6 +1,8 @@
 # ADR-0107 — Interactive UI + 2D rendering architecture: `UiWorld`, `CanvasCompositor`, and the paint-to-command seam
 
 **Status:** Proposed (2026-08-07) — the **I2D-0** gate of the post-RAF **I2D band** (D-007 §UI/2D SUB-PROGRAMME, U-1…U-19).
+The **bespoke retained UiWorld** decision (D2 — reuses ECS *concepts* only, `UiNodeId` ≠ `EntityId`) was user-chosen 2026-08-07,
+superseding REN·B's "UI is ECS entities" premise. Independent design review cleared 2026-08-07 (RAH-1 seam consistent).
 This ADR is the design gate that must be **reviewed and accepted before any I2D/SPR implementation**; I2D-1 (Canvas) also
 depends on RAH-1 (typed attachments) + RAH-2 (resource-table bindless) landing first.
 **Phase:** D-007 (post-RAF programme, I2D band). Source: `CRD_D007_UI_2D_MASTER_ROADMAP_PROMPT` (2026-08-07).
@@ -264,8 +266,9 @@ five-concept split makes the §37 architecture traps hard to fall into by constr
 engine, and a widget library are large new modules. The compositor is **blocked on RAH-1/RAH-2** (typed attachments +
 resource-table bindless) — I2D-1 cannot start until those land. `platform::Input` must grow (or be wrapped) to reach
 touch/pen/gamepad/IME/clipboard/drag-drop and an event-propagation model; `platform::Window` must grow multi-window /
-docking / per-monitor DPI (I2D-8, §20). Text ownership (shaping/font parsing vs. an external library) is deferred to I2D-2
-under the Cerid ownership policy and must be decided with a documented conformance plan.
+docking / per-monitor DPI (I2D-8, §20). ~~Text ownership (shaping/font parsing vs. an external library) is deferred to
+I2D-2~~ **RESOLVED (2026-08-07, D-007 §U-20 / REN-12 lineage): Cerid OWNS the font+shaping stack (`crd-font`, HarfBuzz-class;
+FreeType/HarfBuzz = test oracles only)** — the codec doctrine; the I2D-2 conformance plan uses the Unicode UAX test files.
 
 ---
 

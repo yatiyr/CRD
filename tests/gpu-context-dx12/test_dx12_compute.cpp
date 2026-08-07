@@ -112,6 +112,13 @@ TEST_CASE("v17-i: D3D12 IComputeContext runs a kernel through the backend-agnost
     }
     rb->unmap();
     CHECK(mism == 0);
+
+    // CGP-0 (Track C): the PORTABLE GPU-timing primitive works through the backend-agnostic surface. A real dispatch
+    // (+ copies) takes measurable GPU time, and the virtual `IComputeContext::last_gpu_ms()` returns the same device
+    // timestamp value the concrete backend measured.
+    g::IComputeContext& base = ctx;
+    CHECK(base.last_gpu_ms() == ctx.last_gpu_ms()); // portable (virtual) access == concrete
+    CHECK(base.last_gpu_ms() > 0.0);                // timestamp query heap measured real elapsed GPU time
 }
 
 TEST_CASE("v17 NRC: CKIR fused-MLP FP32 forward DISPATCHES on DX12 == CPU oracle BIT-EXACT (the portable moat)",

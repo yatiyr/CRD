@@ -47,6 +47,16 @@ enum class StoreOp : crd::u8
     DontCare,  // result not needed after the pass (a transient depth buffer)
 };
 
+// ⭐ RAH-1: the attachment clear is TYPED. `clear_kind == Float` ⇒ the float `clear` (the common colour case);
+// `clear_kind == Uint` ⇒ the integer background id `clear_uint` (an R32_UINT id target — the visibility buffer).
+// This is what makes VISIBILITY an ORDINARY typed attachment: the encoder derives the id-write draw from `clear_kind`,
+// not a `RenderingDesc.visbuffer` boolean. (A float ClearColor cannot express an integer id, so the clear is typed.)
+enum class ClearKind : crd::u8
+{
+    Float = 0, // the float `clear` (ClearColor)
+    Uint,      // the integer `clear_uint` (R32_UINT id target)
+};
+
 // One colour attachment. `target` is the concrete image (a frame-graph transient or a standalone target); MRT is just
 // N of these. `blend` replaces the per-attachment blend array threaded through draw_storage_mrt.
 struct ColorAttachmentDesc
@@ -56,6 +66,10 @@ struct ColorAttachmentDesc
     StoreOp store = StoreOp::Store;
     ClearColor clear{};
     BlendMode blend = BlendMode::Opaque;
+    // RAH-1: appended AT END so positional init `{target, load, store, clear, blend}` stays valid (D135 vtable-style
+    // append discipline for aggregates). `clear_kind == Uint` selects `clear_uint` (the R32_UINT id) over `clear`.
+    ClearKind clear_kind = ClearKind::Float;
+    crd::u32 clear_uint = 0; // integer background id when clear_kind == Uint (was RenderingDesc.clear_id)
 };
 
 // The depth/stencil attachment. `enabled == false` ⇒ no depth attachment (a colour-only pass). Zero colour
@@ -81,12 +95,9 @@ struct RenderingDesc
     FixedArray<ColorAttachmentDesc, kMaxColorAttachments> color;
     DepthStencilAttachmentDesc depth{};
     IRasterTarget* shading_rate_attachment = nullptr; // optional per-tile VRS source (3rd rate source)
-    // ── ⭐ RAF-8: the VISIBILITY-BUFFER scope. The single colour attachment is an R32_UINT id target cleared to an
-    // INTEGER `clear_id` (not a float ClearColor) and each draw writes a per-pixel primitive id — draw_visbuffer /
-    // draw_visbuffer_load, selected by the scope's first-vs-later draw (the same clear-once, load-rest rule). A
-    // colour clear value cannot express an integer background id, so it is DATA on the scope, not a reinterpreted float.
-    bool visbuffer = false;
-    crd::u32 clear_id = 0; // crd-lint-allow-untagged-physical: the R32_UINT visibility background id, a raw API scalar
+    // ── ⭐ RAH-1: the VISIBILITY-BUFFER scope is now an ORDINARY TYPED ATTACHMENT — a `color[0]` whose `clear_kind == Uint`
+    // carries the R32_UINT background id in `clear_uint`. The encoder derives the id-write (clear-once/load-rest) from that
+    // typed clear; the old `bool visbuffer` + `u32 clear_id` scope fields are RETIRED (RAH-1a.1).
     // ── B5 deferred G-BUFFER scope. An IGBufferTarget bundles N (2..8) host-readable RGBA8 colour attachments +
     // their own per-attachment read_pixel — a DISTINCT target type, not an IRasterTarget, so it rides its own field
     // rather than the `color` list. When set (with GeometryKind::None), the encoder lowers a plain-vertex draw that

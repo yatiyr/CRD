@@ -142,6 +142,15 @@ public:
     // never over-promises. Real backends override with the queried values (NV 32/48KB+, llvmpipe 8/32KB).
     [[nodiscard]] virtual crd::u32 subgroup_size() const noexcept { return 0U; }         // 0 = unknown width
     [[nodiscard]] virtual crd::u32 shared_memory_bytes() const noexcept { return 16384U; } // Vulkan min-spec
+
+    // ── CGP-0 (post-RAF Track C): the PORTABLE GPU-timing primitive. GPU-only elapsed time in milliseconds of the last
+    // `submit_and_wait()`, measured by device timestamps bracketing the recorded work — so it EXCLUDES CPU record/submit
+    // overhead. This is the compute platform's profiling foundation (the auto-scheduler's kernel timing, PQP perf budgets,
+    // any "how long did that dispatch take" consumer) exposed on the backend-agnostic surface instead of only on the
+    // concrete backend. Appended at END (vtable stability). Default 0.0 = the backend has no timestamp support
+    // (best-effort — a backend without a timestamp query pool under-promises, it never reports a wrong time). Real
+    // backends override with the device-measured value (Vulkan `timestampPeriod`, D3D12 `GetTimestampFrequency`).
+    [[nodiscard]] virtual double last_gpu_ms() const noexcept { return 0.0; }
 };
 
 } // namespace crd::gpu

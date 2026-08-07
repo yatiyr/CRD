@@ -55,6 +55,7 @@ add_subdirectory(vertex-cook)     # REN-38-D (D-007 row 141): the VERTEX PROGRAM
 add_subdirectory(light-cook)      # REN-38-E (D-007 row 141): the LIGHTING VOCABULARY as an authored asset
 add_subdirectory(gpu-context-vulkan)  # ADR-0099 v17-i-a
 add_subdirectory(gpu-context-dx12)    # ADR-0100 v17-i: D3D12 IComputeContext backend
+add_subdirectory(gpu-context-cuda)    # ADR-0100 (2026-08-07): CUDA IComputeContext backend; self-skips without CUDAToolkit
 add_subdirectory(kir-vulkan)
 add_subdirectory(kir-cuda)
 add_subdirectory(kir-dx12)
