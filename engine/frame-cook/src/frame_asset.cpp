@@ -702,7 +702,7 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
             crd::containers::Array<crd::gpu::BlendMode> l_blend(alloc);
             float                         l_clear_color[4]  = {0.0F, 0.0F, 0.0F, 1.0F};
             bool                          l_has_clear_color = false;
-            float                         l_clear_depth     = 1.0F;
+            float l_clear_depth = 1.0F; // crd-lint-allow-untagged-physical: normalized [0,1] device depth-clear (a graphics-API value), NOT a physical length
             bool                          l_has_clear_depth = false;
             crd::gpu::DepthCompare        l_depth    = crd::gpu::DepthCompare::LessEqual;
             FrameMaterialPass             l_material = FrameMaterialPass::None;

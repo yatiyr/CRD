@@ -5,46 +5,41 @@
 
 ---
 
-## Current focus — Post-RAF platform build across 4 parallel tracks (D-007)
+## Current focus — CEIR is the master spine of D-007 (design phase DONE; CEIR-1 next)
 
-**THE PLAN + LIVE STATUS LIVE IN `docs/detours/D-007-gpu-program-system.md`.** RAF (asset-driven render foundation) is
-COMPLETE. The forward roadmap = **§POST-RAF PROGRAMME** + **§UI/2D SUB-PROGRAMME** there. **The master subslice table
-(top of D-007) is the SINGLE SOURCE OF TRUTH** — it tracks **all 122 post-RAF sub-slices** as `✅/◧/⬜` rows in **four
-parallel tracks**:
+**⛔ THE LIVE TRACKER IS `docs/detours/D-007-ceir-tracker.md`** (CEIR bands 0–32 + the RAH parallel track). CEIR — the
+Cerid Execution IR — is the new master architectural spine (user-directed 2026-08-07): every reusable algorithm becomes
+a versioned, inspectable, hot-reloadable **program asset**; native C++ only for genuinely new host/hardware capability.
+**THE LAW:** `docs/research/2026-08-07-ceir-universal-programming-master-roadmap.md` (§0–§185). Mantra: *ALGORITHMS ARE
+PROGRAM ASSETS · CAPABILITIES ARE NATIVE PRIMITIVES · COMPILERS CHOOSE LOWERINGS · BACKENDS EXECUTE.* The old post-RAF
+4-track table in `D-007-gpu-program-system.md` is **re-hung under the CEIR bands** and preserved as history/contracts
+(A/RPL→CEIR-15 · C/MLR→CEIR-21 · hesap-GPU→CEIR-19 · frame+executor→CEIR-12/13 · B/I2D→CEIR-28 · D/D7E→CEIR-30).
 
-- **A — 3D rendering:** RAH→RPL→GVA→LSH→ARG→RTX→MAT→TPR→VFX→TXS→VGE
-- **B — UI/2D:** I2D-0…9/PQ + SPR-0…4  (parked on RAH-1/2)
-- **C — compute/science/ML:** CGP→HGP→MLR
-- **D — platform/media/editor/qual/physics:** MED→D7E→PQP→EYL
+**CEIR-0 DESIGN PHASE COMPLETE + ACCEPTED (2026-08-07/08):** 0a inventory (headline: RAF already did the atomic-vs-
+composite split → CEIR is a promotion, not a rewrite) · **ADR-0108** (owned language stack; C++ no longer the *only*
+authorable program — supersedes ADR-0081 §9) · **ADR-0109** (CEIR/CHIR/CKIR one-way layer contract + `crd-ceir`
+host-only module + `crd-ceir-host`/`crd-ceir-gpu` dependency-inversion bridges + I3/I4/I5; **binding for CEIR-1**) ·
+**ADR-0110** (native-intrinsic schema + plugin levels) · 0e CHIR-0 note · 0g two-axis maturity model · 0h deletion
+ledger · 0z §184 report + sizing (CEIR-1…13 ≈ 34–55 KLOC, ~4–8 mo). CEIR-0f (D-007 restructure) executing.
 
-Band contracts+DoD: §PR-7 (A/C/D) + §U-14/15/16 (B). Maturity L0–L7 + classes A/A+R/A+E/B/T + 18 invariants: §PR-3/4/5.
-Per-feature machine-readable status: `docs/capabilities/gpu-platform-capabilities.toml`. ⛔ **A row ticks ✅ ONLY at its
-slice GATE (L4/L5+, both backends where GPU) — NEVER because a shader or a completed "head" exists; nothing exceeds L5
-today (L6 needs CR-D007/D7E).**
-
-**HOW WE WORK (cadence, user-directed 2026-08-07):** the 4 tracks run in PARALLEL; a track STOPS when it depends on
-unfinished work. **RAH is the shared root** — Tracks A & B's first *pipeline* slices need **RAH-1 (typed attachments) +
-RAH-2 (resource-table bindless)** first. ⛔⛔ **Critical-path/foundational work (the command model, RAH-1/2) is done
-DIRECTLY, never delegated.** ⛔⛔ **Implementation forks require `isolation:"worktree"` + a tight mandate + an explicit
-"do NOT touch memory / D-007 / ADRs / CMake" clause** (see [[feedback_implementation_forks_need_worktree_isolation]]).
+**HOW WE WORK (user-directed):** **strict band order** CEIR-0→32; each band closes at its gate before the next. **RAH
+runs in PARALLEL** (the binding/attachment vocabulary CEIR-9/11 lower onto). ⛔ Everything else PAUSED (§176: only bug
+fixes, CKIR fixes, tests, docs, RAH, CEIR). ⛔⛔ Foundational/critical-path work done DIRECTLY, never delegated. ⛔⛔
+Implementation forks require `isolation:"worktree"` + a tight mandate ([[feedback_implementation_forks_need_worktree_isolation]]).
 **User controls commits (no AI trailer).**
 
-## Active track state
+## Active state
 
-- **A / RAH-1 ◧** — ✅ **RAH-1a.1 (visbuffer fold) DONE + gated:** `RenderingDesc.visbuffer`/`clear_id` DELETED; visibility
-  is a typed `ColorAttachmentDesc` (`clear_kind=Uint`+`clear_uint`); REN-38-F6 PASS both backends (97 asserts).
-  **NEXT = RAH-1a.2 (approach = DELETE, user-chosen):** retire `IGBufferTarget`+`draw_gbuffer`+`create_gbuffer_target`
-  (both backends) + `RenderingDesc.gbuffer`, migrate ~8 test sites to the `color`-span MRT path (live deferred already
-  uses `color1..3`); needs a plain-vertex-MRT-color-span path + regular-target readback first. Exact site list is in
-  the RAH-1 row. Then **RAH-2**.
-- **B — parked** on RAH-1/2 + the ADR-0107 review. No I2D/SPR code until both.
-- **C / CGP-0 ◧ + CUDA ✅** — portable `IComputeContext::last_gpu_ms()` + DX12 timestamps (Vk+DX12 gated); **CUDA is a
-  third `IComputeContext` backend** (`engine/gpu-context-cuda`, reuses `kir-cuda`, gated on the real 4070 Ti — 11 asserts;
-  the user's CUDA directive, [[feedback_cuda_is_a_required_gpu_compute_backend]]). NEXT: `create_best_compute_context`
-  selector (CUDA>Vk>DX12) + capability queries.
-- **D / MED-1 ◧** — GIF single-frame decode + engine's first LZW (`engine/resources`, 778 asserts). NEXT: animated GIF →
-  TIFF → progressive JPEG. Follow-up owed: a real-GIF external-oracle corpus (encoder+decoder both ours — the
-  bit-exact-symmetric-bug scar).
+- **CEIR (spine) — design phase ✅; CEIR-1a is the first line of code**, gated only on ADR-0109 (✅ Accepted). After the
+  accepted 0a–0z batch is committed + CEIR-0f lands: open **CEIR-1a** (`crd::ceir::{Context,Module,Operation,Value,
+  Block,Region}` with arena storage). Band order + per-slice contracts + §§: the CEIR tracker.
+- **RAH (parallel track) — front = RAH-1a.2.** ✅ RAH-1a.1 (visbuffer fold) DONE + gated (REN-38-F6, 97 asserts, both
+  backends). **NEXT = RAH-1a.2 (DELETE, user-chosen):** retire `IGBufferTarget`+`draw_gbuffer`+`create_gbuffer_target`
+  (both backends) + `RenderingDesc.gbuffer`; migrate ~8 test sites to the `color`-span MRT path; needs a
+  plain-vertex-MRT-color-span path + regular-target readback first. Then RAH-1a-close → RAH-2 (unblocks CEIR-11/B).
+- **PAUSED (parked, not dropped):** B/I2D+SPR (ADR-0107 review pending) · C/CGP selector + HGP/MLR · D/MED codecs
+  (animated GIF→TIFF→JPEG; real-GIF external-oracle corpus owed) · main roadmap (hesap v18, eylem v1c+). Resume paths:
+  the CEIR tracker's "Paused" table.
 
 ## Recently landed
 
@@ -52,6 +47,9 @@ DIRECTLY, never delegated.** ⛔⛔ **Implementation forks require `isolation:"w
   (history archived), ROADMAP/systems/debt/AGENTS/READMEs refreshed to honest state, retired-module overviews
   DELETED (user direction; git history keeps them), research outcome stamps, ADR index + link fixes. Full report:
   `docs/sessions/2026-08-07-doc-hygiene-pass.md`.
+- **2026-08-07/08** — **CEIR pivot + CEIR-0 design phase COMPLETE:** CEIR becomes the master spine; the live tracker
+  `docs/detours/D-007-ceir-tracker.md` created; CEIR-0a inventory + ADRs 0108/0109/0110 + the 0e/0g/0h/0z design notes
+  all accepted; D-007 restructured (CEIR-0f). (uncommitted at time of writing — user commits.)
 - **2026-08-07** — post-RAF 4-track kickoff: RAH-1a.1 + CGP-0/CUDA + MED-1 (`c116e98`); D-007 §POST-RAF + §UI/2D
   programmes + four-track tracker (`e3f8e5e`). Log: `docs/sessions/2026-08-07-post-raf-tracks-rah1-cuda.md`.
 - **2026-08-06** — **RAF band COMPLETE** (`af3e04c`): `FramePassKind` retired, ADR-0106 closed.
@@ -75,9 +73,10 @@ Per-slice DoD: `scripts/per-slice-check.ps1` (+ `-IncludeRelease` for GPU/LTCG s
 
 ## Active detour
 
-**D-007 (merged with D-008 on 2026-07-11) — the GPU program system.** ACTIVE; grew out of hesap v17 (GPU compute,
-kicked off 2026-07-07). RAF + the whole post-RAF programme run under it. Everything above is D-007 state. Queue rules:
-`docs/detours/README.md`.
+**D-007 (merged with D-008 on 2026-07-11) — the GPU program system.** ACTIVE; grew out of hesap v17 (2026-07-07).
+CKIR IR + gpu-context convergence + the full visual frontier + RAF (all ✅) → now **CEIR is the master spine** (2026-08-07;
+the live tracker is `docs/detours/D-007-ceir-tracker.md`, the landed-history ledger is `D-007-gpu-program-system.md`).
+Everything above is D-007 state. Queue rules: `docs/detours/README.md`.
 
 ## Recent milestones (one line each; details in session logs + `docs/bench/`)
 

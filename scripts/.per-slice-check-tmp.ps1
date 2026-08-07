@@ -5,7 +5,7 @@
 @{ name='win-tidy'; runCTest=$false; asan=$false }
 )
 $asanRuntimeDir = 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\bin\Hostx64\x64'
-$reconfigure = $false
+$reconfigure = $true
 $results = [ordered]@{}
 $perEdgeGb  = @{ 'win-shipping' = 4; 'win-debug' = 2; 'win-tidy' = 1.5; 'win-asan' = 2.5; 'win-release' = 4 }
 $reserveGb  = 2

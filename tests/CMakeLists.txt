@@ -8,6 +8,7 @@ add_subdirectory(test_helpers)
 add_subdirectory(core)
 add_subdirectory(vm)
 add_subdirectory(units)
+add_subdirectory(ceir)  # D-007 CEIR-1a: Cerid Execution IR core (arena + intrusive def-use)
 add_subdirectory(render-asset-core)  # RAF-1 (D-007 "RAF band"): identity/namespaces/diagnostics/deps Gate 1
 add_subdirectory(gpu-context)        # RAF-2a (D-007 "RAF band"): canonical GPU command model (device-free structural gate)
 add_subdirectory(render-program)     # RAF-4 (D-007 "RAF band"): shader + program contract Gate 4

@@ -4,9 +4,11 @@
 #
 # ⛔ THE REGISTRY LEVEL IS THE HONEST CLAIM. D-007 prose must never exceed it.
 #
-# Maturity (see D-007 §PR-3): L0 catalogued · L1 math/oracle · L2 mechanic · L3 one-backend
-# end-to-end · L4 cross-backend proven · L5 shipped asset · L6 live-authorable (needs CR-D007,
-# NOT yet possible) · L7 production-qualified.
+# Maturity — the UNIFIED two-axis model (CEIR-0g; §173 is the law; docs/design/ceir-0g-maturity-and-manifest.md).
+# The `level` field below is the `raf_level` axis (today's RAF-asset maturity); a `ceir_level` axis (the forward
+# CEIR-program track) is added at the schema-2 migration. §PR-3's standalone ladder is SUPERSEDED (struck in place).
+# raf_level rungs: L0 catalogued · L1 math/oracle · L2 mechanic · L3 one-backend end-to-end · L4 cross-backend proven
+# · L5 shipped asset · L6 live-authorable (needs CR-D007, NOT yet possible) · L7 production-qualified.
 # Classification (§PR-4): A pure-asset · A+R asset+runtime · A+E asset+executor · B canonical/backend · T tooling.
 #
 # Seeded 2026-08-06 from a code+test audit (NOT prose). Every `[feature.<id>]` carries the full

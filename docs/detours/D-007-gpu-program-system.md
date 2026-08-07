@@ -10,14 +10,47 @@
   [0103](../decisions/0103-gpu-context-owns-every-gpu-program.md) (gpu-context owns every GPU program; supersedes 0099 §6).
   Corpus: `docs/systems/shader-ir-corpus-and-stages.md`.
 
+## ⭐⭐⭐ CEIR IS THE MASTER SPINE (CEIR-0f, 2026-08-08) — READ THIS FIRST
+
+The user directed (2026-08-07) that **CEIR — the Cerid Execution IR — is the new master architectural spine of this
+detour.** Every reusable algorithm becomes a versioned, inspectable, serializable, hot-reloadable **program asset**;
+native C++ is required only for a genuinely new host/hardware capability. Mantra: *ALGORITHMS ARE PROGRAM ASSETS ·
+CAPABILITIES ARE NATIVE PRIMITIVES · COMPILERS CHOOSE LOWERINGS · BACKENDS EXECUTE.*
+
+- **THE LIVE TRACKER MOVED.** Live tick-tracking for ALL active work is now **`docs/detours/D-007-ceir-tracker.md`**
+  (CEIR bands 0–32 + the RAH parallel track). ⛔ The master subslice table further down in THIS file is **no longer
+  the live tracker** — it is preserved as the pre-CEIR post-RAF plan/history and re-hangs under the CEIR bands (see
+  the banner on that table). One live tracker; no row tracked in two places.
+- **THE LAW** is the mission constitution `docs/research/2026-08-07-ceir-universal-programming-master-roadmap.md` (§0–§185).
+- **THE DESIGN IS SETTLED** (CEIR-0, accepted 2026-08-07/08): ADR-0108 (owned language stack; C++ no longer the *only*
+  authorable program) · ADR-0109 (CEIR/CHIR/CKIR one-way layer contract + `crd-ceir` host-only module + `crd-ceir-host`/
+  `crd-ceir-gpu` dependency-inversion bridges + invariants I3/I4/I5) · ADR-0110 (native-intrinsic schema + plugin
+  levels A/B/C) · the CEIR-0e CHIR-0 language design note · the CEIR-0g two-axis maturity model · the CEIR-0h deletion
+  ledger · the CEIR-0z §184 report + sizing (CEIR-1…13 ≈ 34–55 KLOC). All in `docs/design/ceir-0*.md` + `docs/decisions/`.
+- **HOW THE OLD TRACKS RE-HANG:** A/RPL → CEIR-15 · C/MLR → CEIR-21 · C/hesap-GPU → CEIR-19 · frame+executor →
+  CEIR-12/13 · B/I2D effects → CEIR-28 · D/D7E → CEIR-30. **RAH stays the shared root** (in the CEIR tracker's parallel
+  track). ⛔ Nothing is discarded — RAF and the whole post-RAF plan below are the foundation CEIR is built ON; CEIR-0a
+  proved it is a *promotion*, not a rewrite (the 14 executor verbs + the frame-graph runtime + CKIR all re-base).
+- **The maturity model is unified** (CEIR-0g): the §PR-3 ladder below is struck-in-place (§173 + the registry header
+  are the operational home). The **first line of code** is CEIR-1a, gated only on ADR-0109 (✅ Accepted).
+- **ADR-0106 supersession PLAN** (written here per CEIR-0f; the in-place strike EXECUTES at CEIR-12f, not now —
+  CEIR-0h F3): ADR-0106 declared `crd-render-graph` **THE single live frame-graph runtime**. Under CEIR-12, the
+  frame graph becomes a `ceir.frame` dialect and `crd-render-graph` becomes the **execution engine inside the
+  `crd-ceir-gpu` provider** (ADR-0109) — so ADR-0106's *runtime-ownership* claim is superseded, while its
+  lifetime/aliasing/barrier/one-submission **contracts are PRESERVED** (re-realized by the CEIR planner, CEIR-9/12).
+  ⛔ The strike lands only when **CEIR-12z is green** (every shipped frame asset pixel-identical through CEIR, both
+  backends) — the deletion-is-the-proof rule; until then ADR-0106 stands.
+
 ## Reading this document
 
-This is the engine's longest-running working document — a **live tracker and a historical ledger in one file**.
-Keep the four kinds of truth separate as you read:
+This is the engine's longest-running working document — a **historical ledger + the pre-CEIR plan** (the LIVE tracker
+now lives in `docs/detours/D-007-ceir-tracker.md`, per the spine section above). Keep the four kinds of truth separate:
 
-- **LIVE / CURRENT** — the **master subslice table** below (the `✅/◧/⬜` first column is the live status; `◀ NEXT`
-  marks the front) and the **§POST-RAF PROGRAMME** + **§UI/2D SUB-PROGRAMME** band tables. Cross-checked by
-  `context.md` and `docs/capabilities/gpu-platform-capabilities.toml` (the honest per-feature maturity registry).
+- **LIVE / CURRENT** — ⛔ **moved out of this file (CEIR-0f).** The live tracker is now
+  `docs/detours/D-007-ceir-tracker.md` (CEIR bands + RAH). The master subslice table + the §POST-RAF/§UI-2D band
+  tables below are now **PLANNED/HISTORICAL** (the pre-CEIR post-RAF plan, re-hung under CEIR bands) — do NOT tick
+  them live. The honest per-feature maturity registry `docs/capabilities/gpu-platform-capabilities.toml` remains
+  machine-readable current-state.
 - **LANDED HISTORY** — the prose inside every `✅` row (the A/B/C/D/RET/GEO/REN-era slice narratives) records what
   shipped *and the state of the world at that time*. "NEXT/currently/today" language inside a ✅ row is relative to
   that row's date, never to now. Nothing in a ✅ row is re-edited to match later reality — later rows supersede
@@ -160,7 +193,8 @@ D-007); **DEV** = the device/context side (was D-008).
 | ✅ | 96 | RET-8 | DEV | **DELETION + the squeaky-clean sweep — [✅ 2026-07-23: THE OLD WORLD IS GONE.]** **(1) the coverage-parity audit SIGNS OFF** on the RET-1 ledger: tests/rhi 151 (API-level — died with the API; the semantic contracts re-gated on gpu-context across RET-2/4/7) · tests/rhi_vulkan 4809 (S6/S7 allocator + capture → the RET-4 suites [48→2 blocks · tombstone compaction · byte-exact buffer + sampled-draw image relocation] · swapchain → the RET-2 present gates both backends · async-compute → family-matched pools BY CONSTRUCTION + the C5 GPU-driven coverage) · tests/renderer 192 (loader coverage → tests/resources at RET-3; the MATR/Effect coverage died with the ADR-0104-superseded pipeline it gated) — every mapped assertion has its named green home in rows 89-95. **(2) DELETED**: engine/{rhi, rhi-vulkan, renderer, shader, shader-vulkan} + tests/{rhi, rhi_vulkan, renderer, shader} + sandbox_layer.{cpp,hpp} (the last dead-header consumer) + the draw GLSL sources (the CKIR ports' reference, no longer needed) + the deleted smokes' shaders/config. ⭐ an over-deletion CAUGHT by the build: geometry/curves showcases include NO dead headers (only sandbox_layer did) and a living test compiles them — RESTORED; their wiring into the new sandbox main is recorded scene-content work (they emit RenderBuffers → submit_overlay, a natural fit). Two stale straggler links the zero-links grep's `$`-anchored pattern missed (tests/resources' crd-shader with ZERO source usage · tests/sandbox) fixed; another mid-list SYSTEM CMake bug (tests/sandbox) fixed — the CI-1 class. **(3) root + tests CMake**: the five add_subdirectory entries replaced by the retirement banner pointing at this ledger. **Gates: FULL win-debug build GREEN on the clean tree · `grep -r crd-rhi` returns ONLY the retirement's own documentation comments (no code, no links) · the sandbox runs entirely on gpu-context at 175.8 fps validated · full ctest + the CI matrix close the sweep (the established flow).** ADR-0105's end state is REAL: ONE device, ONE facade, ONE IR — gpu-context IS the graphics layer. |
 | ✅ | 97 | CI-1 | DEV | **CI un-redded (user-directed 2026-07-23: 8+ straight red pushes, ALL failing in Build — three root causes, all fixed):** **(1) the CI Vulkan SDK was a YEAR too old** (pin 1.3.290.0, mid-2024) for the four NV extensions the engine drives — `VK_NV_cluster_acceleration_structure` (RT-3 mega-geometry) · `VK_NV_cooperative_vector` (C6 neural) · `VK_NV_cooperative_matrix2` (v17-g GEMM) · `VK_NV_ray_tracing_linear_swept_spheres` (B18 hair) — all need headers ≥1.4.305 (Jan 2025); killed every Windows job + clang-cl + clang-tidy at vulkan_context/vulkan_ray_tracing_context. **Fix**: pin → **1.4.341.1** (the proven local SDK; installer URL verified — LunarG's filename convention CHANGED to `vulkansdk-windows-X64-<ver>.exe`), cache key bumped so the fresh SDK actually installs. **Linux was worse — apt's libvulkan-dev ships ~1.3.275**: the workflow now clones Khronos **Vulkan-Headers @ vulkan-sdk-1.4.341.0** into the /tmp SDK prefix both Linux jobs already use (runtime loader stays apt's — headers-newer-than-loader is the supported direction); SPIRV-Reflect pins bumped to the matching tag (tags verified to exist). **(2) a REAL guard bug in `gemm_microkernel.hpp`**: the E4 fused-merge kernels (`gemm_microkernel_avx2_{f64,f32}_fused`) were added AFTER the `#if CRD_SIMD_HAS_AVX2` block's `#endif` — `Vec4d`/`gemm_prefetch_t0` undefined on BOTH sse2 jobs (their dispatcher call sites were already guarded with fallbacks). Wrapped in the guard; **REPRODUCED-then-PROVEN locally: the win-debug-sse2 preset failed exactly like CI before, builds green after** (fresh sse2 dir tripped the documented VS-CMake `#deps 0` landmine — wiped + helper-script reconfigure per BUILDING.md). **(3) three GCC-only portability bugs MSVC masks**: `std::memcpy` ×6 in vulkan_raster_context.cpp with NO `<cstring>` (RET-4 code — MSVC transitively provides it) · two `enum ? : 0` conditionals under `-Wextra` (cast to the flags type) · `u32` into the 24-bit `instanceCustomIndex` bitfield under `-Wconversion` (masked to field width). All tidy-clean; gemm header's latent debt paid on touch (multi-decls split; BLIS `MR/NR` under a justified scoped NOLINT — the paper-notation precedent). **Verification**: sse2 + AVX2 configs build locally; the EXACT fixed-CI Linux env replicated in WSL (same Ubuntu 24.04/g++ 13.3 as the runners + fetched 1.4.341 headers, source on native ext4) — the full `linux-gcc-shipping` build runs there after the local sweep (GCC died ~150/1636 targets in, so deeper GCC-only errors may still hide behind these; peeled before push, not after). CI Test phases have NEVER run behind the broken builds — first green build is the first look at the Linux test suite. **[✅ the WSL CAMPAIGN CONVERGED — the FULL 1,685-target linux-gcc-shipping build is GREEN.]** Nine layers peeled beyond the CI-visible errors (each one hiding behind the previous build stop): (5) **a repo-wide CMake bug** — `SYSTEM` placed MID-argument-list in 4 CMakeLists (imgui/perf-ui/draw-imgui/sandbox) parses as a literal include dir named "SYSTEM": the vendored ImGui headers were NEVER real `-isystem` (GCC -Werror'd imgui's own header) AND the dirs leaked PUBLICly — split into properly-formed calls, consumers rebuilt green under the tightened visibility; (6) `check_vk_result` unused param in shipping (assert compiles out) → `[[maybe_unused]]`; (7) cluster-AS `triangleCount/vertexCount` are 9-BIT bitfields → field-width masks (value-preserving: NV caps 512/256/cluster); (8) 3× float-vs-double in the CUDA autotuner event timing (WSL has CUDA ⇒ WIDER coverage than the runners, which skip kir-cuda); (9) test-code portability: unguarded MSVC-only `fopen_s` (2 sites fixed + the guarded-idiom sweep — all other 7 files already guarded), 10 float-literal-vs-double comparisons (kir mesh/fft + 9 RT CHECKs), 8 printf float VARARGS in the gsplat tests (implicit promotion IS -Wdouble-promotion), an unused `clamp0` lambda + a float×double staleness-cap in ckir_rt.hpp; (10) **kir-webgpu linked the WINDOWS import lib on Linux** (the vendored prebuilt is Windows-only; the .dll.lib path was unconditional) → platform-selected, Linux skips cleanly until a Linux .so is vendored (the browser/WASM goal's natural extension); (11) **a HIDDEN module dependency** — crd-hesap-tensor's io.hpp uses `crd::platform::fs` with NO declared crd-platform dep (MSVC's order-forgiving linker masked it; GCC LTO archive ordering exposed undefined refs) → declared PUBLIC, the ADR-0096 link-isolation gate's closure comment updated to match. GCC LTO's value-range warnings (Array-resize memset bound · span iteration in the tensor smoke — verified against the actual 24-element tensor: spans exact, NOT real UB) are the known false-positive family, warning-only. **Windows parity re-certified after every fix: touched targets rebuilt, kir mesh/fft 83 + vulkan rt/gsplat 1,414 + tensor-cli 35 + [rt] 1,309 asserts green; test_vulkan_rt.cpp's latent tidy debt paid on touch (~40 renames + 45 multi-decl splits, 3 passes); all touched files tidy-clean.** |
 | | | | | ── **REN band — ✅ SUPERSEDED / COLLAPSED (2026-08-07 rendering trim).** The pre-RAF raster pipeline + interactive frontier (REN-1…35) is **replaced** by **RAF** (✅ complete) + the **§POST-RAF PROGRAMME** (RAH · RPL · GVA · LSH · ARG · RTX · MAT · TPR · VFX · TXS · VGE) + the **§UI/2D SUB-PROGRAMME** (I2D · SPR). Completed pre-RAF rendering work is folded there: the authorable frame graph (REN-36/37/38), indexed-pull vertex reuse (REN-39), the O(chunks) extract (REN-40), and Nanite S4-0 (REN-41→VGE) all shipped into **RAF**; REN-3's CSM device atlas + its scars live in the shipped `forward_csm` frames + session logs; REN·A device gaps → RAH/RPL/TPR. **The rendering roadmap is now ONLY the new system.** The UI/2D track is tracked immediately below (I2D/SPR); full contracts: §UI/2D SUB-PROGRAMME. ── |
-| | | | | ── **THE POST-RAF PROGRAMME = FOUR PARALLEL TRACKS — EVERY SUB-SLICE TRACKED HERE.** On the RAH-hardened canonical model (contracts + DoD: §PR-7 · §U-14/15/16; §PR-6 dependency graph). **A** 3D rendering · **B** UI/2D · **C** compute/science/ML · **D** platform/media/editor/qual/physics. ⛔ A row ticks ✅ only at its slice GATE (L4/L5+, §PR-3) — never because a shader or a completed *head* exists (heads noted in *italics*). ✅ done · ◧ in-progress/drafted · ⬜ todo. RAH is the shared root: Tracks A & B need **RAH-1** + **RAH-2** before their first pipeline slice. ── |
+| | | | | ── ⛔⛔ **RE-HUNG UNDER THE CEIR SPINE (CEIR-0f, 2026-08-08) — THIS TABLE IS NO LONGER THE LIVE TRACKER.** Live tick-tracking moved to `docs/detours/D-007-ceir-tracker.md`. The four tracks below re-hang under the CEIR bands: **A/RPL → CEIR-15 · C/MLR → CEIR-21 · C/hesap-GPU → CEIR-19 · frame+executor → CEIR-12/13 · B/I2D effects → CEIR-28 · D/D7E → CEIR-30**; RAH stays the shared root (CEIR tracker's parallel track). The rows below are the **PRE-CEIR post-RAF PLAN, preserved as history + as the band contracts CEIR builds on** — ⛔ do NOT tick them live. ── |
+| | | | | ── **THE POST-RAF PROGRAMME = FOUR PARALLEL TRACKS** (the pre-CEIR plan; re-hung above). On the RAH-hardened canonical model (contracts + DoD: §PR-7 · §U-14/15/16; §PR-6 dependency graph). **A** 3D rendering · **B** UI/2D · **C** compute/science/ML · **D** platform/media/editor/qual/physics. RAH is the shared root: Tracks A & B need **RAH-1** + **RAH-2** before their first pipeline slice. ── |
 | | | | | ── **① 3D RENDERING track (post-RAF) — A** ── |
 | | | | | ── *RAH — Render Architecture Hardening* — §PR-7 (shared root: RAH-1/2 gate Tracks A & B) ── |
 | ◧ | — | RAH-0 | DEV | canonical-model audit (design note drafted, pending review — `docs/systems/rah-0-canonical-model-audit.md`) |
@@ -527,7 +561,14 @@ registered executor (**A+E**, `register_pass_executor` — apps can add one, it 
 a canonical/backend extension (**B**). This is the correct architecture, not a shortfall — but it is the exact answer to
 "can literally everything be an asset", and the programme never blurs it.
 
-## PR-3. Maturity model (every feature/subfeature carries one; no skipping by prose)
+## PR-3. Maturity model — ⛔ SUPERSEDED IN PLACE (CEIR-0f, 2026-08-08)
+
+> **This standalone L0–L7 ladder is no longer the operational definition.** CEIR-0g unified it with the CEIR L0–L8
+> model (§173) into ONE forward model + a **two-axis transition** (`raf_level` = today's RAF-asset reality +
+> `ceir_level` = the forward CEIR-program track — the two ladders measure *different axes*, so this was a
+> reconciliation, not a renumber; see `docs/design/ceir-0g-maturity-and-manifest.md`). **The operational home of the
+> maturity definitions is now the registry header** `docs/capabilities/gpu-platform-capabilities.toml`; **the law is
+> mission §173.** The ladder below is preserved as history (its rungs are the `raf_level` axis).
 
 | Level | Name | Required evidence |
 |---|---|---|
@@ -540,8 +581,8 @@ a canonical/backend extension (**B**). This is the correct architecture, not a s
 | **L6** | Live-authorable | hot reload + dependency invalidation + CR-D007 inspection/authoring schema + app override/composition proven. |
 | **L7** | Production-qualified | stress/perf/memory/quality/failure-recovery/validation-layer/scalability gates pass. |
 
-> ⚠ **Nothing exceeds L5 today.** L6 requires a CR-D007 inspection/authoring schema, which does not exist yet (D7E band).
-> The forward family is L5 *with hot-reload + app-override evidence noted* — it is not L6 until D7E ships its inspectors.
+> ⚠ **Nothing exceeds L5 (RAF axis) today.** L6 requires a CR-D007 inspection/authoring schema, which does not exist
+> yet (D7E band). On the CEIR axis, every feature is `ceir_level = 0` until CEIR programs exist (CEIR-0g §2).
 
 ## PR-4. Implementation classification (recorded per feature in the registry)
 

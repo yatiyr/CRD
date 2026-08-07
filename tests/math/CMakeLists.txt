@@ -82,6 +82,12 @@ if(WIN32)
                 "${CMAKE_SOURCE_DIR}"
     )
     add_test(
+        NAME    crd-ceir-invariants
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+                -File "${CMAKE_SOURCE_DIR}/scripts/check_ceir_invariants.ps1"
+                "${CMAKE_SOURCE_DIR}"
+    )
+    add_test(
         NAME    crd-hesap-v13-no-exceptions
         COMMAND powershell -NoProfile -ExecutionPolicy Bypass
                 -File "${CMAKE_SOURCE_DIR}/scripts/check_hesap_v13_no_exceptions.ps1"
@@ -127,6 +133,11 @@ elseif(UNIX)
     add_test(
         NAME    crd-no-shader-language-leak
         COMMAND bash "${CMAKE_SOURCE_DIR}/scripts/check_no_shader_language_leak.sh"
+                "${CMAKE_SOURCE_DIR}"
+    )
+    add_test(
+        NAME    crd-ceir-invariants
+        COMMAND bash "${CMAKE_SOURCE_DIR}/scripts/check_ceir_invariants.sh"
                 "${CMAKE_SOURCE_DIR}"
     )
     add_test(

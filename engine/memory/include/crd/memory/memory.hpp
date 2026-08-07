@@ -24,6 +24,7 @@
 
 #include <crd/memory/alignment.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/allocators/growable_linear_allocator.hpp>
 #include <crd/memory/allocators/linear_allocator.hpp>
 #include <crd/memory/allocators/malloc_allocator.hpp>
 #include <crd/memory/allocators/pool_allocator.hpp>

@@ -23,12 +23,12 @@ external request).
   former detours — **D-007** (CKIR becomes the universal shader IR, ADR-0101) and **D-008** (the gpu-context convergence,
   ADR-0103) — are ONE master doc with a single ordered subslice table (the two-doc split was confusing: two different
   "C3"s; interleaved shader/device slices).
-  **→ The single master: `docs/detours/D-007-gpu-program-system.md`.** (The old `D-007-ckir-*.md` +
-  `D-008-gpu-context-*.md` are redirect stubs.) ⛔ Live status is NOT restated here — it goes stale; read the master
-  doc's subslice table + `context.md`. Landmark state as of 2026-08-07: device+IR convergence ✅ · legacy
-  rhi/renderer/shader stack RETIRED (ADR-0105) · full visual frontier ✅ · **RAF asset-driven rendering ✅ COMPLETE
-  (ADR-0106)** · the post-RAF four-track programme (122 sub-slices) is executing; hesap-GPU remains the detour's
-  final stop before the main roadmap resumes.
+  **Now spined on CEIR** (2026-08-07): algorithms/techniques become versioned inspectable program assets.
+  ⛔ Live status is NOT restated here — it goes stale. **The LIVE tracker is
+  `docs/detours/D-007-ceir-tracker.md`** (CEIR bands 0–32 + RAH); the landed-history ledger + pre-CEIR plan is
+  `docs/detours/D-007-gpu-program-system.md`; live state also in `context.md`. Landmark state (2026-08-08):
+  device+IR convergence ✅ · legacy rhi/renderer/shader RETIRED (ADR-0105) · full visual frontier ✅ · **RAF ✅
+  (ADR-0106)** · **CEIR-0 design phase ✅ accepted** (ADR-0108/0109/0110 + notes); CEIR-1a is the next code.
 
 <!-- Historical D-003 plan retained for reference; see Closed detours
      for the actual shipped state. Each slice has its own session log

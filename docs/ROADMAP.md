@@ -20,14 +20,15 @@ hub the map points you to; below is the live phase status.
 
 ## Status (snapshot)
 
-> ⛔ **The live front is NOT a row in this table** — it is detour **D-007** (the GPU program system → RAF → the
-> post-RAF four-track platform programme). Live state: `context.md`; the master subslice table:
-> `docs/detours/D-007-gpu-program-system.md`. This table tracks the MAIN ROADMAP phases; each phase doc holds the
-> full slice ledger (this table stays one line per phase — history lives in the phase docs, not here).
+> ⛔ **The live front is NOT a row in this table** — it is detour **D-007**, now spined on **CEIR** (the Cerid
+> Execution IR: algorithms become program assets). Live state: `context.md`; **the live tracker:
+> `docs/detours/D-007-ceir-tracker.md`** (CEIR bands + RAH); the landed-history ledger + pre-CEIR plan:
+> `D-007-gpu-program-system.md`. This table tracks the MAIN ROADMAP phases; each phase doc holds the full slice
+> ledger (one line per phase — history lives in the phase docs, not here).
 
 | Phase | State        | Detail                                       |
 | ----- | ------------ | -------------------------------------------- |
-| — **Detour D-007 + D-008 (GPU program system)** | 🚧 **ACTIVE — the current front** (grew out of hesap v17, kicked off 2026-07-07; docs merged 2026-07-11) | `docs/detours/D-007-gpu-program-system.md` — CKIR universal shader IR (ADR-0101/0103/0104) + one-device gpu-context convergence + the full visual frontier (GI/atmosphere/ocean/RT/mesh-shaders/…) + **RAF asset-driven rendering ✅ COMPLETE 2026-08-06 (ADR-0106)** + the post-RAF 4-track programme (122 sub-slices, tracked there) |
+| — **Detour D-007 (GPU program system → CEIR)** | 🚧 **ACTIVE — the current front**; **CEIR is the master spine** (2026-08-07) | Live tracker: `docs/detours/D-007-ceir-tracker.md` (CEIR bands 0–32 + RAH). Landed: CKIR universal shader IR (ADR-0101/0103/0104) + one-device gpu-context convergence + the full visual frontier + **RAF ✅ (ADR-0106)**. Now: **CEIR** — algorithms/techniques as versioned inspectable program assets (ADR-0108/0109/0110; CEIR-0 design phase ✅ accepted; CEIR-1a next). Landed-history ledger + pre-CEIR plan: `D-007-gpu-program-system.md` |
 | 1.0   Foundations               | ✅ shipped       | `docs/phases/phase-1-foundations.md`     |
 | 1.5   Application skeleton      | ✅ shipped       | `docs/phases/phase-1.5-app.md`           |
 | 1.6   Configuration substrate   | ◧ 1.6a shipped; 1.6b hot-reload hook deferred (no active work) | `docs/phases/phase-1.6-config.md` |
