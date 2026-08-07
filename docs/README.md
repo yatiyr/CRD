@@ -15,7 +15,7 @@ Read these in order; they go from stable rules → live state → the task at ha
 2. **`docs/BUILDING.md`** — build presets, verification protocol, smoke tests, platform notes, and ALL troubleshooting. (An untracked local `CLAUDE.md` may exist as an AI-session pointer into these generic docs; project knowledge never lives there.)
 3. **`docs/PRINCIPLES.md`** — non-negotiable engineering principles + pinned cornerstones. Short.
 4. **`docs/SANITY.md`** — engineering sanity doctrine + the living **Sanity Ledger**. Short. Claim one ledger item when you have slack.
-5. **`context.md`** (repo root) — live "where we are now": current focus, last shipped, next up, test counts.
+5. **`context.md`** (repo root) — live "where we are now": current focus, active track state, recently landed, risks, gates.
 6. **`docs/ROADMAP.md`** — navigation hub: phase status, decision log (tagged), detour queue, glossary. A hub — don't read end-to-end; follow the link for your task.
 7. **The active phase doc** under `docs/phases/` — its name is in `context.md`. (If the active work is a
    DETOUR, the detour file under `docs/detours/` is the equivalent — `context.md` names it.)
@@ -25,6 +25,30 @@ Read these in order; they go from stable rules → live state → the task at ha
    it), the sequenced increments, and the gate for each.
 
 Then, as your task needs, pull the relevant ADR(s), system overview(s), and research dossier(s) from the map below.
+
+---
+
+## Which document wins — the canonical source-of-truth table
+
+When two documents disagree, the one on the right wins for that question; the other one gets fixed (or is
+historical and says so). Dated snapshots (session logs, archived context history, closed phase ledgers) are
+*records* — they were true when written and are never "wrong", but they never override a living doc.
+
+| Question | Canonical source |
+| --- | --- |
+| What is Cerid? | `README.md` (root) |
+| How do I work in this repo (rules, DoD, git policy, style)? | `AGENTS.md` (+ `docs/BUILDING.md` for build/verify) |
+| What is happening right now / what's next? | `context.md` |
+| What is the live front's plan + sub-slice status? | the active detour/phase doc it names (today: `docs/detours/D-007-gpu-program-system.md`, master subslice table) |
+| What must stay true / how do I not repeat a paid-for bug? | `docs/SANITY.md` (+ the memory index) |
+| What stable principles govern design? | `docs/PRINCIPLES.md` |
+| How does a landed subsystem work today? | `docs/systems/<module>.md` (retired modules have NO overview — deleted with the module; the index's Retired note points at successors, git history keeps the old text) |
+| Why was a decision made? | the ADR under `docs/decisions/` (a superseded clause is struck **in place** and points at its successor) |
+| What is a feature's honest maturity? | `docs/capabilities/gpu-platform-capabilities.toml` (GPU platform) / the phase doc's slice table |
+| What alternatives were investigated? | the dossier under `docs/research/` (research, never current-state) |
+| What happened on a given day? | the session log under `docs/sessions/` (historical snapshot) |
+| What are the measured numbers? | the board under `docs/bench/` (numbers live nowhere else) |
+| What is still owed? | `docs/debt.md` (open items only) |
 
 ---
 

@@ -2,7 +2,10 @@
 
 The Scene / ECS foundation. Entities, components, relations, queries, systems, and the index slot framework that makes the architecture extensible. Every Phase 3.x onwards consumes it.
 
-**Phase 3.0 active.** v1a–v1m all shipped 2026-05-06 / 07 / 08. **v1m (Öbek system) FULLY DELIVERED 2026-05-08** across 12 sub-slices (~2700 LOC, 58 öbek tests; ADR-0058 fully realised). Phase 3.0 expanded from 14 to 17 slices on 2026-05-08 to land the elite-tier authoring substrate (Öbek + Preset + Profile). 3 slices remaining: v1n (Preset + Profile, ADRs 0059/0060), v1o (sandbox integration), v1p (reserved-slot + API freeze).
+**Phase 3.0 CLOSED 2026-05-10** — all 17 slices (v1a–v1p) shipped, ADRs 0049–0061 realised (incl. the Öbek
+authoring substrate ADR-0058, Preset/Profile ADRs 0059/0060, the async-GPU-upload contract ADR-0061).
+Concurrency addendum: [`scene-concurrency.md`](scene-concurrency.md). The sections below describe the shipped
+architecture (written during Phase 3.0; slice-status language in them is historical).
 
 Depends on `crd-core` + `crd-containers` + `crd-memory`. Links `crd-resources` (SceneLoader / ObekLoader); `crd-cooker` extended with SceneCooker + ObekCooker. Future slices link `crd-jobs` (parallel queries) and feed `crd-renderer` (extract via query). ADR-0020 cornerstone; ADRs 0049–0057 lock the eight layers; ADRs 0058 (Öbek) / 0059 (Preset) / 0060 (Profile) lock the authoring substrate.
 

@@ -1,5 +1,7 @@
 # Research — the Command / Action Layer: one agent-native backbone for every Cerid surface
 
+> **Status:** **research only (direction pinned)** — the unified command/action layer is a strategic direction (memory `project_command_layer_unified_action_interface`); no implementation phase scheduled yet. *(stamped 2026-08-07, doc-hygiene pass)*
+
 > Status: RESEARCH / DESIGN DOSSIER (pre-phase). User-directed 2026-08-03: build the command/action layer as its
 > OWN phase (after crd-ui + REN + MED + the hesap-GPU return, before the D007 editor). It must be gold-standard,
 > frontier-2026, and the single backbone that (1) drives the D007 editor AND every app built on Cerid, (2) exposes

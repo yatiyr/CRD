@@ -1,5 +1,7 @@
 # Cerid Eylem — Physics Industry Research
 
+> **Outcome:** **adopted** — ADR-0062/0063; eylem v0–v1b shipped, then ⏸ paused (2026-05-11); this dossier remains the v1c+ plan. *(stamped 2026-08-07, doc-hygiene pass)*
+
 > **Eylem** (Turkish: *eylem* — "action" / "motion") is the Cerid-native physics
 > module. Built from day one rather than wrapping PhysX or Jolt. This file
 > captures the deep research pass that informed ADRs 0062 (architecture) and

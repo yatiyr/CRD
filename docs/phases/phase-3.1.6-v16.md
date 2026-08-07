@@ -7,7 +7,8 @@
 > agent-drivable (typed API + a CLI per op + deterministic). None optional; none traded.
 > Memory `project_hesap_is_universal_foundation_zero_defect`.
 >
-> **Status: KICKOFF 2026-07-06.** v15 forward-mode is COMPLETE (a–h+z, shipped 2026-07-06). ADR-0097 (Accepted; v15
+> **Status: ✅ SHIPPED — v16 a–k formally closed + v16-z 2026-07-07 (ADR-0097 finalized: v16 SHIPPED).** (Header refreshed 2026-08-07; originally: kickoff 2026-07-06.)
+> v15 forward-mode is COMPLETE (a–h+z, shipped 2026-07-06). ADR-0097 (Accepted; v15
 > SHIPPED) pins the one-module architecture; memory `project_v14_v18_planning` pins the scope (locked 2026-07-02,
 > user-approved, maximal — do NOT re-plan the shape; refine within). The master phase doc (`phase-3.1.6-hesap.md`)
 > carries the one-line roadmap rows (v16-a…v16-z) + per-slice crush verdicts as they land; **this** doc is the spec.

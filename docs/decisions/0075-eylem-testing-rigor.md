@@ -145,7 +145,7 @@ The "within 2× best-of-three" assertion is the elite-tier bar — beats
 the worst engine, comparable to the median, may or may not lead. CI
 fails the build only on >2× regression. Reference implementations
 inform algorithm choice — not source code reuse — per the
-[ADR-0065 §3](0065-crd-hesap-numerical-computing-substrate.md) posture
+[ADR-0065 §3](0065-hesap-numerical-substrate.md) posture
 (used here for tests only, not shipping engine).
 
 ### 5. Property-based tests
@@ -294,7 +294,7 @@ stability) that a release-only bar would hide.
 **Companion ADRs:**
 - [ADR-0062](0062-eylem-physics-architecture.md) §1 (snapshot-replay deliverable centrality)
 - [ADR-0063](0063-eylem-determinism-contract.md) — determinism contract (the *why* behind drift tests)
-- [ADR-0065](0065-crd-hesap-numerical-computing-substrate.md) §3 — reference-implementation posture (informs cross-engine bench)
+- [ADR-0065](0065-hesap-numerical-substrate.md) §3 — reference-implementation posture (informs cross-engine bench)
 
 **Reference implementations (test-only deps):**
 - [Box2D v3](https://box2d.org/) — MIT, primary 2D reference

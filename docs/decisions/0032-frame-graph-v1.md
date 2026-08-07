@@ -1,7 +1,10 @@
 # ADR-0032 — Frame graph v1
 
 **Date:** 2026-05
-**Status:** Accepted
+**Status:** Accepted — **runtime-ownership half SUPERSEDED by ADR-0106 (2026-08)**: `crd-render-graph` is the
+single live frame-graph runtime (the crd-renderer home of this ADR was retired at RET-8, ADR-0105). The design
+contracts this ADR pinned — transient lifetime analysis, aliasing, automatic barriers, one-submission execution —
+are **preserved** and re-realized by the ADR-0106 runtime.
 **Tags:** [renderer] [arch] [render-path]
 
 ## Context

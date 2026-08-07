@@ -1,5 +1,7 @@
 # Research — 2026-07-23 — the offline renderer frontier (the OFF band master survey)
 
+> **Status:** **research → planned** — the D-007 OFF band tracks this survey; not yet started. *(stamped 2026-08-07, doc-hygiene pass)*
+
 > The kickoff/index research for the D-007 **OFF band** (offline render mode, rows 46-54). One master survey mapping the
 > *newest* (2024-2026 SIGGRAPH/TOG) advances onto the already-planned pillars, plus Cerid-specific recommendations. Per-pillar
 > deep dives (each its own dated doc) branch from here — flagged in **Next research**.

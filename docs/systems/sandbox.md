@@ -1,7 +1,10 @@
 # crd-sandbox — System Overview
 
 **Module:** `sandbox/` (repo root, not under `engine/`)
-**Status:** ✅ updated 2026-05-06 — bootstrap (Phase 2.7 v1d) + 3D rendering wired (Phase 2.8 v1e) + unified Asset Browser (Phase 2.8 v1g) shipped.
+**Status:** ⚠ **overview predates the rendering retirement** — since RET-6/RET-8 (2026-07-23, ADR-0105) the
+sandbox runs **entirely on `crd-gpu-context`** (CKIR scene → `crd-draw` overlay → ImGui → present,
+validation-clean; `--smoke-test N` / `--headless` flags), and since RAF it drives the asset-driven frame-graph
+stack. The Phase 2.7/2.8-era details below (ForwardRenderPath, Asset Browser wiring) are **historical**.
 **ADR:** ADR-0045
 
 ---

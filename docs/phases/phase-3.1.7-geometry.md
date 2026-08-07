@@ -2,7 +2,7 @@
 
 > **🎉 PHASE 3.1.7 FULLY CLOSED 2026-05-19.** 12 of 11 sub-modules complete (12 = original 11 + v10 curves extension). ADR-0076 §1-§28 all Accepted. Next: `crd-hesap-dense` v0 → Phase 3.1 eylem v1c resume per Strategic Execution Plan locked 2026-05-15. Archive note added at phase top per AGENTS.md session-end ritual. Detailed per-slice ledger preserved below for historical reference.
 
-**Status:** 🚧 **active** — 7th of 11 sub-modules COMPLETE (v6 `-polygon`
+**Status (historical, as written 2026-05-16 — see the CLOSED banner above):** 🚧 active — 7th of 11 sub-modules COMPLETE (v6 `-polygon`
 CLOSED 2026-05-16) / 51 of 49 renewed-scope slices shipped (104% — v6
 expanded 4→6 slices per v6a substrate separation; nothing cut).
 **v0 + v1 (`-bvh`) + v1h+v1i+v1j + v2 (`-convex`) + v3 (Shewchuk + 2D hull

@@ -3,7 +3,7 @@
 > Status: **Accepted** (2026-05-11)
 > Companions: [ADR-0062](0062-eylem-physics-architecture.md) (eylem
 > architecture; §5.5 reserves Material), [ADR-0063](0063-eylem-determinism-contract.md)
-> (determinism contract), [ADR-0065](0065-crd-hesap-numerical-computing-substrate.md)
+> (determinism contract), [ADR-0065](0065-hesap-numerical-substrate.md)
 > §3 (reference-implementation posture), [ADR-0066](0066-draw-substrate-architecture.md)
 > (`crd-draw`), [ADR-0067](0067-eylem-force-field-architecture.md) (force
 > fields), [ADR-0068](0068-eylem-body-types-collision-filtering-callbacks.md)
@@ -488,7 +488,7 @@ determinism failure modes; performance benchmarks.
 - [ADR-0058](0058-obek-system.md) — öbek prefab system (round-trips Material via 'EMAT')
 - [ADR-0062](0062-eylem-physics-architecture.md) §5.5 — material reservation
 - [ADR-0063](0063-eylem-determinism-contract.md) — determinism contract
-- [ADR-0065](0065-crd-hesap-numerical-computing-substrate.md) §3 — reference-implementation posture
+- [ADR-0065](0065-hesap-numerical-substrate.md) §3 — reference-implementation posture
 - [ADR-0066](0066-draw-substrate-architecture.md) — VisualizerRegistry pattern (used by eylem-viz to render per-material contact response)
 - [ADR-0067](0067-eylem-force-field-architecture.md) — `FieldId` content-addressing pattern (mirrored by `MaterialId`)
 - [ADR-0068](0068-eylem-body-types-collision-filtering-callbacks.md) §8 — contact warm-start cache (LuGre bristle state piggybacks)

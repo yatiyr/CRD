@@ -3,7 +3,7 @@
 > Status: **Accepted** (2026-05-11)
 > Companions: [ADR-0062](0062-eylem-physics-architecture.md) (eylem
 > architecture), [ADR-0063](../decisions/0063-eylem-determinism-contract.md)
-> (determinism contract), [ADR-0064](0064-crd-sdf-substrate-architecture.md)
+> (determinism contract), [ADR-0064](0064-sdf-substrate-architecture.md)
 > (`crd-sdf`), [ADR-0066](0066-draw-substrate-architecture.md) (`crd-draw`).
 > Research dossier: [`docs/research/cerid-eylem-fields.md`](../research/cerid-eylem-fields.md).
 
@@ -537,5 +537,5 @@ performance benchmarks.
 - [ADR-0058](0058-obek-system.md) — öbek prefab system
 - [ADR-0062](0062-eylem-physics-architecture.md) §3 (broadphase reuse), §4.5 (collider model), §6 (ECS integration)
 - [ADR-0063](../decisions/0063-eylem-determinism-contract.md) — determinism contract
-- [ADR-0064](0064-crd-sdf-substrate-architecture.md) — `crd-sdf` substrate
+- [ADR-0064](0064-sdf-substrate-architecture.md) — `crd-sdf` substrate
 - [ADR-0066](0066-draw-substrate-architecture.md) §11–12 — VisualizerRegistry pattern (d3)

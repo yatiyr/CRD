@@ -1,5 +1,7 @@
 # The Hair/Fur Frontier Collection — B18 research dossier
 
+> **Outcome:** **adopted** — the hair/fur RT renderer shipped (offline path working; real-time path tracked); see the hair recipes in `docs/recipes/`. *(stamped 2026-08-07, doc-hygiene pass)*
+
 > Studied 2026-07-19 (pymupdf page-image reading; see `reference_read_pdfs_with_pymupdf` memory).
 > Papers live in `docs/research/papers/hair_fur/`. Companion notes: `2026-07-19-huang-microfacet-hair.md`
 > (Huang 2022 in full). This dossier maps EVERY technique to its B18 slice. The B18 target is the union:

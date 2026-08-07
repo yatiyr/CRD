@@ -1,6 +1,6 @@
 ﻿# Phase 1.6 — Configuration substrate
 
-**Status:** 🚧 active
+**Status:** ◧ 1.6a shipped; 1.6b (hot-reload hook) deferred — no active work. (Header refreshed 2026-08-07; the plan below is the original.)
 
 Small but pervasive — everything downstream consumes it. ImGui overlay (2.1)
 needs a config format; this phase ships the substrate so 2.1 has it ready.

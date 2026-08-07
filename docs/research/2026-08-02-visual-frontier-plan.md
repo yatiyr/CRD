@@ -1,5 +1,7 @@
 # REN-41 — VISUAL FRONTIER: TAA + prefiltered impostors + Nanite cluster-LOD
 
+> **Outcome:** **adopted** — REN-41 shipped (velocity/TAA + impostors + Nanite-class cluster LOD start, sessions 2026-08-03); the broader frontier planning was superseded by the 2026-08-03 RAF mission + §POST-RAF programme. *(stamped 2026-08-07, doc-hygiene pass)*
+
 > Execute-ready campaign dossier. User-directed 2026-08-02: "fully gold standard, frontier 2026
 > level, no artifacts — seamless LODs, no aliased pixels, impostors far away, full speed." Scope
 > approved: full frontier bundle (deterministic + TAA) **and** Nanite cluster-LOD integration.

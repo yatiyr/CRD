@@ -465,5 +465,5 @@ DoD (debug + asan + shipping + tidy).
 - `docs/sessions/2026-05-19-geometry-v9e-c-hlsl-emitter-and-dxc-spirv-dispatch.md` — v9e-c + follow-on log.
 - `docs/sessions/2026-05-19-geometry-v9e-d-cooker.md` — v9e-d session log.
 - `docs/systems/geometry-primitives.md` — `signed_distance.hpp` + `formulary.hpp` (the C++ side of the library this module mirrors to GPU).
-- `docs/systems/rhi-compute.md` (ADR-0080) — the substrate the
-  conformance test path consumes.
+- The compute substrate the conformance test path consumes was `crd-rhi-compute` (ADR-0080) at ship time; since
+  RET-7 (2026-07-23, ADR-0105) the dispatches run on gpu-context's `IComputeContext`.

@@ -1,6 +1,6 @@
 # Phase 2.5 — `crd-jobs`: fiber-based job system
 
-**Status:** 🚧 active — planning complete; implementation begins v1a  
+**Status:** ✅ shipped — v1a–v1k all landed (ADR-0033). (Header refreshed 2026-08-07; the planning language below is the original record.)
 **ADR:** ADR-0033 — crd-jobs implementation architecture  
 **Module:** `engine/jobs/`  
 **Depends on:** `crd-core`, `crd-containers` only

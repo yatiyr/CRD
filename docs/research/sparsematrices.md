@@ -1,5 +1,7 @@
 # Seyrek Matris Hesaplamaları ve Özel Oyun Motoru İçin Uygulamalı Rehber
 
+> **Outcome:** **adopted** — grounded `crd-hesap-sparse` + the sparse-direct/iterative clusters. *(stamped 2026-08-07, doc-hygiene pass)*
+
 ## Yönetici özeti
 
 Bu rapor, C++ tabanlı masaüstü bir oyun motoru varsayımıyla hazırlanmıştır; ana hedef platformlar Windows ve Linux, hızlandırılmış GPU yolu için CUDA, taşınabilir compute yolu için Vulkan kabul edilmiştir. Seyrek matris dünyasında asıl darboğaz çoğu zaman “aritmetik” değil “veri hareketi”dir: SpMV, SpMM, üçgensel çözüm ve önkoşullayıcı uygulaması gibi çekirdekler tipik olarak bellek bant genişliği, düzensiz erişim ve dolaylı indeksleme tarafından sınırlanır. Bu yüzden doğru formatı seçmek, çoğu pratik sistemde “hangi solver” sorusundan bile daha kritik hale gelir. citeturn36view0turn20view3turn20view13

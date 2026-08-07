@@ -7,7 +7,8 @@
 > green, no known-broken edge), and agent-drivable (clean typed API, a CLI per op, deterministic). None is optional;
 > none is traded. Memory `project_hesap_is_universal_foundation_zero_defect`.
 >
-> **Status: OPEN — kickoff 2026-07-06.** ADR-0097 (Accepted 2026-07-06) pins the architecture for the v15+v16
+> **Status: ✅ COMPLETE — v15 forward-mode a–h+z shipped 2026-07-06.** (Header refreshed 2026-08-07; originally: kickoff 2026-07-06.)
+> ADR-0097 (Accepted 2026-07-06) pins the architecture for the v15+v16
 > autodiff PAIR; memory `project_v14_v18_planning` pins the scope (locked 2026-07-02, user-approved, maximal — do
 > NOT re-plan; read the table). v15 = forward mode: ~11 KLOC / ~455 tests / a–h+z / ~4–5 weeks, multi-session.
 > The master phase doc (`phase-3.1.6-hesap.md`) carries the one-line roadmap rows + per-slice crush verdicts as

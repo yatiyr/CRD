@@ -624,7 +624,7 @@ determinism failure modes; performance benchmarks.
 
 **Companion ADRs:**
 - [ADR-0050](0050-scene-storage-backends.md) — sparse-set storage rationale
-- [ADR-0052](0052-ecs-query-schedule-commands.md) — ECS query DSL (consumed by Tier 4)
+- [ADR-0052](0052-scene-query-system-schedule.md) — ECS query DSL (consumed by Tier 4)
 - [ADR-0058](0058-obek-system.md) — öbek prefab system (round-trips ColliderFlags + filter state)
 - [ADR-0062](0062-eylem-physics-architecture.md) §3 (broadphase reuse), §4.5 (collider model), §6 (ECS integration)
 - [ADR-0063](0063-eylem-determinism-contract.md) — determinism contract

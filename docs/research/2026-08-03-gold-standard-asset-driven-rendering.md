@@ -1,7 +1,8 @@
 # QUEST — Cerid Gold-Standard Asset-Driven Rendering Foundation (the RAF band mission)
 
 > **Status:** the authoritative mission for the **RAF band** in `docs/detours/D-007-gpu-program-system.md`
-> (Rendering Asset Foundation). User-directed 2026-08-03: a foundation-cleanup quest to make Cerid's rendering
+> (Rendering Asset Foundation). **RAF ✅ COMPLETE 2026-08-06 (ADR-0106 closed)** — this document remains the
+> constitution the post-RAF programme extends. User-directed 2026-08-03: a foundation-cleanup quest to make Cerid's rendering
 > architecture fully gold-standard and asset-driven **before** adding more rendering features. **S4 (REN-41 Nanite
 > cluster-LOD) is PAUSED after S4-0** until this band lands (see the RAF band note in D-007 for the S4-0 state).
 >

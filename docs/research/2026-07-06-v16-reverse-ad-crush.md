@@ -1,5 +1,7 @@
 # v16 — reverse-mode AD + differentiable solvers: the crush reference (2026-07-06)
 
+> **Outcome:** **adopted** — v16 reverse-mode AD shipped 2026-07-07 (ADR-0097 finalized: v16 SHIPPED). *(stamped 2026-08-07, doc-hygiene pass)*
+
 > **Implementation reference — read before coding any v16 slice.** The frontier crush levers per slice, the honesty
 > caveats, the ready-to-use rule/peer tables, and the NEW 2025–26 parts folded in from the kickoff research. Sibling
 > to the v15 dossier `2026-07-06-v15-forward-ad-crush.md`. Governed by ADR-0097 (the one autodiff module, forward +

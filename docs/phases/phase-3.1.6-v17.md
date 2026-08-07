@@ -1,5 +1,11 @@
 # Phase 3.1.6 v17 — the Cerid GPU compute compiler (`crd-kir` + `crd-hesap-gpu`) — DETAILED PLAN
 
+> **Status (refreshed 2026-08-07): ABSORBED INTO DETOUR D-007.** This plan's substrate half (CKIR, the backends,
+> the autotuner, determinism tiers) was built — and grew far beyond this document — inside
+> `docs/detours/D-007-gpu-program-system.md` (ADR-0098→0106; the engine is 100% CKIR, 6 backends, RAF rendering on
+> top). The `crd-hesap-gpu` op-library half remains the detour's final stop and is tracked there (Track C: HGP),
+> not here. This file is the original v17 plan, kept as the record of the maximal scope the user locked 2026-07-07.
+
 > **MAXIMAL scope (user direction 2026-07-07).** Not "port the suite to Vulkan" — **build the compute substrate every
 > Cerid project stands on**: a unified compute+autodiff kernel IR (**CKIR**) that lowers to **six backends**
 > (Vulkan/CUDA/WebGPU/Metal/DX12/ROCm), **beats the vendor kernels** (cuBLAS/cuFFT/cuDNN/rocBLAS), and carries

@@ -1,5 +1,7 @@
 # Cerid Eylem — Multi-Domain Coverage Audit
 
+> **Outcome:** **adopted** — gap audit folded into the eylem phase plan (ADR-0062 amendments); resumes with v1c+. *(stamped 2026-08-07, doc-hygiene pass)*
+
 > **Purpose.** Identify the BLANK PARTS of `crd-eylem` against the
 > "beyond industry standard, multi-domain" mandate. The five domains
 > the engine is contracted to serve simultaneously — **games**,

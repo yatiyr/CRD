@@ -1,6 +1,6 @@
 # Phase 3.1.6 — v13: the Numerical-Analysis + Motion cluster (interpolation · quadrature · differentiation · trajectory generation)
 
-> **Status: v13-a…q SHIPPED (2026-07-01) + linux-gcc-green + crushing; only v13-z close remains.** The
+> **Status: ✅ COMPLETE — v13-a…q shipped 2026-07-01; v13-z close landed 2026-07-02 (4-config DoD green).** The
 > certification-grade classical numerical-analysis layer + the mission-critical motion-primitive layer. This is the
 > spec; the master phase doc (`phase-3.1.6-hesap.md`) carries the one-line roadmap rows + the per-slice crush verdicts.
 > ADR-0095 to write at v13-z close.

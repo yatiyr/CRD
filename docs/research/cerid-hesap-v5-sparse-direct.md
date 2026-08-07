@@ -1,5 +1,7 @@
 # Research — 2026-05-28 — hesap v5 sparse-direct factorization
 
+> **Outcome:** **adopted** — the v5 sparse-direct family shipped + closed 2026-06-05 (CHOLMOD/MUMPS results on the honest board). *(stamped 2026-08-07, doc-hygiene pass)*
+
 > Deep-research design dossier for **Phase 3.1.6 `crd-hesap` v5 — sparse
 > direct solvers**. Feeds the `## v5 — Sparse direct — DETAILED PLAN`
 > section in `docs/phases/phase-3.1.6-hesap.md` and the eventual

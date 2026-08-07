@@ -1,5 +1,7 @@
 # Cerid Eylem — Force-Field Architecture Research
 
+> **Outcome:** **adopted** — ADR-0067 (three-tier force-field substrate); shipped through v1b scope, rest resumes v1c+. *(stamped 2026-08-07, doc-hygiene pass)*
+
 > **Companion to** [`cerid-eylem.md`](cerid-eylem.md). That file backed
 > ADR-0062 (architecture) + ADR-0063 (determinism contract). This file
 > backs **ADR-0067 (eylem force-field architecture)** and the

@@ -1,5 +1,7 @@
 # The tiled register-blocked 2-D FFT — execute-ready crush plan (2026-07-13)
 
+> **Outcome:** **executed** — the tiled register-blocked 2-D path landed during the 2026-07-13 campaign (see the ncu boards in `docs/bench/`). *(stamped 2026-08-07, doc-hygiene pass)*
+
 > The path to crushing cuFFT at 1024²+ (single-image) 2-D FFT / FFT-convolution. Written after the fused-2-D-conv landed
 > (256² **2.91×** crush, 1024² **0.40×** loss) so a fresh focused session executes without re-deriving. Reference board:
 > `docs/bench/2026-07-13-gpu-fft-cufft-gold.md` §"Phase 3". User decision 2026-07-13: **commit to the tiled 2-D FFT** (the

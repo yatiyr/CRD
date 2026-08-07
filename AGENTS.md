@@ -7,7 +7,14 @@
 
 Cerid is a **general-purpose C++20 real-time engine substrate**. Games are one consumer; **simulation (incl. robotics), medical visualization, DAW-class creative tools, CAD/CAM, and offline cinematic pipelines** are equal-class consumers. The architecture serves all of them; no domain is privileged.
 
-Shipped modules (~30): `core / log / vm / memory / containers / math / platform / app / config / rhi / rhi-vulkan / rhi-compute / shader / renderer / imgui / jobs / resources / units / time / perf / perf-ui / scene / geometry-{primitives,bvh,convex,mesh,mesh-processing,spatial,polygon,delaunay,decomposition,bvh-gpu,viz} / meshgen / profile`. **In active development — `crd-hesap` numerical substrate (Phase 3.1.6, the current focus):** `hesap (dense/sparse/eig/opt/ode/fft) / hesap-dsp / hesap-wavelet / hesap-comms / hesap-special / hesap-stats / hesap-quadrature / hesap-interp` shipped; `hesap-diff / hesap-motion` next. Planned: `eylem (physics; paused at v1b) / sdf / curves / font / audio / animation / scripting (hot-reload C++) / ui / editor`.
+Shipped modules (~90) — the honest per-module index is **`docs/systems/README.md`** (this file does NOT carry a
+module inventory; a second copy of it always rots). The broad strokes: the foundation
+(`core/log/vm/memory/containers/math/units/time/platform/app/config/jobs/perf/resources/scene/imgui/profile`), the
+GPU platform (`gpu-context{,-vulkan,-dx12,-cuda}` + `kir` + the RAF render-asset stack + `draw` — the former
+`rhi/renderer/shader` stack is **retired**, ADR-0105), 13 `geometry-*` sub-modules, and the `crd-hesap` numerical
+substrate (v0–v16 shipped: dense → sparse → eig → opt → ODE → FFT → DSP/wavelet/comms → special/stats →
+interp/quad/diff/motion → tensors → autodiff). **The current focus lives in `context.md`, never here.** Planned:
+`eylem` resume (paused at v1b) / `sdf` / `font` / `audio` / `scripting (hot-reload C++)` / `ui` / editor (CR-D007).
 
 ## Engineering Principles (non-negotiable)
 
@@ -154,13 +161,19 @@ This section is CANONICAL (enforced by `.clang-format` / `.clang-tidy`):
 
 Pinned decisions from `docs/decisions/`. Don't re-litigate; circumstances change → new ADR.
 
-- **RHI split (ADR-0001 + ADR-0080).** Backend-agnostic `crd-rhi` interface + `crd-rhi-vulkan` impl. `crd-rhi-compute` (ADR-0080) adds compute pipelines + storage buffers + dispatch + cross-stage barriers + async compute queue + binary semaphores. Vtable-stability discipline: append new virtuals at END (D135).
-- **Renderer v1 (ADR-0016, ADR-0017).** Clustered Forward+ behind `IRenderPath` interface. Deferred / Visibility-Buffer paths land later as additional implementations.
+- **The graphics layer IS `crd-gpu-context` (ADR-0103, ADR-0105 — supersedes the ADR-0001/0080 rhi split).** One
+  device, one facade, one IR: `crd-gpu-context` owns every GPU program + pipeline; no module outside a backend names
+  a shading language or a bytecode (I1/I2 grep gates). The former `crd-rhi`/`crd-rhi-vulkan`/`crd-rhi-compute`/
+  `crd-shader`/`crd-renderer` modules were retired at RET-8 (2026-07-23). Vtable-stability discipline unchanged:
+  append new virtuals at END (D135).
+- **Rendering is asset-driven (ADR-0106; supersedes the ADR-0016/0017 IRenderPath plan).** Every technique is an
+  authored frame-graph asset executed by `crd-render-graph`; render "paths" (forward/deferred/vis-buffer) are the
+  post-RAF RPL proof library, not C++ path classes. See the ⛔⛔⛔ authored-frame-graphs rule above.
 - **Hybrid scene model (ADR-0020 + ADR-0049-0061).** Spatial Hierarchy (scene tree) + SoA component storage. UI nodes coexist with 3D nodes Godot-style. 8-layer slot-shaped ECS substrate (Phase 3.0 ✅).
 - **Two-layer typed architecture (ADR-0078).** Upper layer = `Quantity<D, T>` at every API/config/cooker/UI surface. Lower layer = raw `f32`/`f64` in SIMD/math/geometry/numerical kernels + GPU writes. Bridges only at the boundary. Mars Climate Orbiter bug class is a compile error.
-- **Physics — Cerid-native (eylem) from day 1 (ADR-0062, ADR-0063).** No third-party wrap; `crd-eylem` substrate IS the interface. Deterministic by construction, ECS-native, fiber-jobified, multi-domain (games + robotics + medical + cinematic + DAW), templated 2D + 3D, GPU-extensible. Phase 3.1 v0–v9 (~30 slices); v0–v1b ✅, v1c+ paused pending Phase 3.1.7 close.
+- **Physics — Cerid-native (eylem) from day 1 (ADR-0062, ADR-0063).** No third-party wrap; `crd-eylem` substrate IS the interface. Deterministic by construction, ECS-native, fiber-jobified, multi-domain (games + robotics + medical + cinematic + DAW), templated 2D + 3D, GPU-extensible. Phase 3.1 v0–v9 (~30 slices); v0–v1b ✅; v1c+ paused (resumes after detour D-007 + hesap per the locked sequencing).
 - **Geometry-before-physics sequencing (ADR-0076 §12).** `crd-geometry` (substrate of 11 sub-modules) ships full BEFORE eylem v1c resumes, so eylem v1c+ consumes geometry from day 1 with no deferred-refactor debt.
-- **Numerical substrate (ADR-0065).** `crd-hesap` MATLAB-class numerical substrate planned for Phase 3.1.6 (14 sub-modules: dense/sparse/iterative/direct/eig/opt/ode/fft/dsp/stats/tensor/autodiff/gpu/repl). `crd-hesap-dense` v0 ships BEFORE eylem v1c resume per Strategic Execution Plan locked 2026-05-15.
+- **Numerical substrate (ADR-0065).** `crd-hesap` MATLAB-class numerical substrate, Phase 3.1.6 — **v0–v16 shipped** (dense/sparse/iterative/direct/eig/opt/ode/fft/dsp/wavelet/comms/special/stats/interp/quadrature/diff/motion/tensor/autodiff); v17 GPU compute grew into detour D-007 (hesap-GPU is its last stop); v18 notebook+MCP planned.
 - **Authoring vs runtime.** Configs and scenes authored in TOML; scenes cooked to binary for runtime. Configs parsed directly (small, not hot-path).
 - **ImGui's role.** Debug-only forever. After `crd-ui` ships, ImGui never grows into editor or game surfaces.
 - **Reference counting split.** Generic intrusive ref-counting in `crd-memory`. Resource-facing shared references (eviction, lazy loading, hot-reload ownership) in `crd-resources`.
@@ -195,7 +208,7 @@ Every shipped slice must pass **all** of these:
    Cluster-close slices additionally run the **18-config full sweep** (`scripts/full-sweep.ps1`): 11 Windows + 7 Linux configs.
 
 5. **Per-slice verification runs `ctest --preset <X>`, NOT the test binary directly.** Guard tests (`crd-no-non-ascii-test-names`, `crd-simd-emission-check`, `crd-no-std-math-check`, `crd-no-std-sort-check`, `crd-no-untagged-physical-numeric`) are ctest-registered and don't appear in any test binary's `--list-tests`. A test binary saying "All tests passed" can coexist with a failing guard — both must be green.
-6. **GPU slices (Phase 3.1.7 v9+)** additionally use the v9-prereq-test-harness discipline: wrap setup in `crd::rhi::ValidationCapture` → assert 0 errors/warnings; `bit_compare`/`ulp_compare` GPU output vs CPU oracle; `gpu_determinism_check` 3 rounds if claiming determinism; `CRD_PERF_BUDGET_LE` per published budget.
+6. **GPU slices** additionally use the v9-prereq-test-harness discipline: wrap setup in `crd::gpu::ValidationCapture` (gpu-context; the DX12 twin closes by debug-layer counter) → assert 0 errors/warnings; `bit_compare`/`ulp_compare` GPU output vs CPU oracle; `gpu_determinism_check` 3 rounds if claiming determinism; `CRD_PERF_BUDGET_LE` per published budget.
 7. Public API change → update `context.md`; `docs/systems/<module>.md` updated if relevant.
 8. Architectural decision → ADR file under `docs/decisions/` + entry in `docs/decisions/README.md` index + tag in `docs/ROADMAP.md` Section 4.
 9. Commit message follows Conventional Commits: `feat(<module>): ...`, `fix(<module>): ...`, `refactor(<module>): ...`.
@@ -279,7 +292,7 @@ Side missions that interrupt the main roadmap. Active detour is named in `contex
 - Keep compile warnings at **zero**.
 - For graphics/platform slices, check runtime behavior + validation-layer output, not just compile/test success.
 - If a smoke/example reveals a real runtime issue, fix it or document exactly why it is intentionally deferred (and file in `docs/debt.md`).
-- Use `crd::rhi::ValidationCapture` to assert validation silence on every GPU test (v9+ slices). It's the authoritative oracle for "did I drive Vulkan correctly?"
+- Use `crd::gpu::ValidationCapture` to assert validation silence on every GPU test. It's the authoritative oracle for "did I drive Vulkan correctly?" (DX12: the debug-layer counter twin.)
 
 ## Documentation Conventions
 

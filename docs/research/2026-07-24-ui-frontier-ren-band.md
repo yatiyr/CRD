@@ -1,5 +1,7 @@
 # 2026-07-24 — The Interactive Frontier: UI-as-ECS, text, vector, docking (the REN·B recipe)
 
+> **Outcome:** **absorbed** — the REN·B UI plan was folded into D-007 §UI/2D SUB-PROGRAMME (I2D/SPR bands, §U-20) + ADR-0107 (Proposed, pending review). *(stamped 2026-08-07, doc-hygiene pass)*
+
 > STUDY→RECIPE for the REN band's interactive half. User mandate (2026-07-24): *"completely future proof,
 > completely world class frontier gold standard"* — one architecture that can build ANY program beautifully:
 > the editor with full game-engine + Blender + Cascadeur + DAW + CAD/CAM abilities, the hesap MATLAB

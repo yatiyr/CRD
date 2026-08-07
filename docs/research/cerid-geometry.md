@@ -1,5 +1,7 @@
 # Cerid — `crd-geometry` substrate research
 
+> **Outcome:** **adopted** — ADR-0076; the full `crd-geometry` substrate shipped and Phase 3.1.7 closed 2026-05-19. Section-level consumer notes (e.g. eylem v1d-mesh) describe still-future eylem work. *(stamped 2026-08-07, doc-hygiene pass)*
+
 **Date:** 2026-05-11
 **Locks:** ADR-00xx (`crd-geometry` substrate architecture — to be drafted from this document).
 **Phase plan:** `docs/phases/phase-3.1.7-geometry.md` (to be drafted; recommendation in §10 below).

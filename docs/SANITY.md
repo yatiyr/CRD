@@ -142,6 +142,20 @@ the point — the core gets to A++ by accretion, not by a heroic pass.
 
 ## Sanity Ledger (append-only; dated; one line each; *actions*, not philosophy)
 
+- 2026-08-07 — **Repository-wide doc-hygiene pass (rules #2/#6 applied to the docs themselves):** `context.md`
+  2,012 → 108 lines (history moved VERBATIM to `docs/sessions/2026-08-07-context-md-history-archive.md` — the
+  2026-07-06…16 + 08-01/02 blocks were the ONLY narrative record of those days); `debt.md` 982 → ~360 (closed
+  entries deleted when session-log-homed, orphans salvaged into the hygiene log's appendix); ROADMAP status table
+  rebuilt honest (D-007 named as the live front; renderer-era rows annotated RETIRED); systems index refreshed + the four
+  retired-module overviews (rhi/rhi-compute/renderer/shader) DELETED per user direction (git history keeps them;
+  the index's Retired note points at successors); AGENTS/PRINCIPLES cornerstones annotated to
+  gpu-context/RAF reality; ADR tag index extended 0076–0107; ADR-0032's recorded supersession (by 0106) struck in
+  place per the SUPERSEDED rule; 36 research dossiers stamped with outcomes; BUILDING smoke list purged of the 9
+  RET-deleted smokes; 5 broken doc links fixed; a stale scope comment in `deterministic.hpp` corrected (only
+  non-doc touch). Canonical source-of-truth table added to `docs/README.md`. Full report:
+  `docs/sessions/2026-08-07-doc-hygiene-pass.md`. Rule reinforced: **a living doc that restates status owned by
+  another doc WILL go stale — state facts in one home, point everywhere else.**
+
 - 2026-07-25 — **A "content hash" that memcpys a POD hashes STACK HISTORY, not content — and the tool that was blamed
   was innocent twice over (rules #1/#4/#5/#10).** The parallel-cook dedup failure (D3/D5/D6/D8/D10/D12 red on
   win-asan/win-shipping, green on win-debug) had been handed over as "address-dependent ordering in the KIR→GLSL emitter",
@@ -255,5 +269,5 @@ the point — the core gets to A++ by accretion, not by a heroic pass.
 - Adversarial boundary-test pass on `crd-containers` (String/Array/HashMap capacity-edge cases).
 - Confirm (don't assume) no other heavy-churn `GrowableTlsfAllocator` consumer was relying on the old behaviour now that `init_pool` is fixed.
 - **Doc bloat (living/scannable class only — never truncate session logs/ADRs/dossiers):**
-  - Collapse `docs/ROADMAP.md` status-table rows (full phase histories inline, 81 KB) to one line per phase; detail belongs in the phase doc.
-  - Prune **closed** entries from `docs/debt.md` (73 KB) per its own "move to a session log when done" rule — a recurring discipline, not a one-time cut.
+  - ~~Collapse `docs/ROADMAP.md` status-table rows to one line per phase~~ — ✅ DONE 2026-08-07 (doc-hygiene pass; the discipline stays: phase history belongs in the phase doc, never in the hub).
+  - ~~Prune **closed** entries from `docs/debt.md`~~ — ✅ DONE 2026-08-07 (982 → ~360 lines; salvage in the hygiene session log). The rule is RECURRING: prune at every close, don't re-accumulate.

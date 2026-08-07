@@ -10,6 +10,24 @@
   [0103](../decisions/0103-gpu-context-owns-every-gpu-program.md) (gpu-context owns every GPU program; supersedes 0099 §6).
   Corpus: `docs/systems/shader-ir-corpus-and-stages.md`.
 
+## Reading this document
+
+This is the engine's longest-running working document — a **live tracker and a historical ledger in one file**.
+Keep the four kinds of truth separate as you read:
+
+- **LIVE / CURRENT** — the **master subslice table** below (the `✅/◧/⬜` first column is the live status; `◀ NEXT`
+  marks the front) and the **§POST-RAF PROGRAMME** + **§UI/2D SUB-PROGRAMME** band tables. Cross-checked by
+  `context.md` and `docs/capabilities/gpu-platform-capabilities.toml` (the honest per-feature maturity registry).
+- **LANDED HISTORY** — the prose inside every `✅` row (the A/B/C/D/RET/GEO/REN-era slice narratives) records what
+  shipped *and the state of the world at that time*. "NEXT/currently/today" language inside a ✅ row is relative to
+  that row's date, never to now. Nothing in a ✅ row is re-edited to match later reality — later rows supersede
+  earlier ones.
+- **PLANNED CONTRACTS** — §POST-RAF/§UI-2D band contracts, DoD taxonomies (§PR-1…PR-15, §U-1…U-20), and every `⬜`
+  row describe work that does NOT exist yet. The maturity model's own rule applies: nothing exceeds L5 today, and a
+  row ticks ✅ only at its slice GATE — never because a shader or a "head" exists.
+- **Current landed architecture** (what the engine IS as a result of all this) lives in
+  `docs/systems/rendering-foundation.md`, not here — this file is the campaign, that file is the map.
+
 ## The mission (why the IR must be frontier-complete)
 
 Compute the best + most interesting things end to end — **ML/AI · FFT · simulations · skinning · particles · light

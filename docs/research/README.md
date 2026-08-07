@@ -12,7 +12,7 @@ Filename convention: `YYYY-MM-DD-<kebab-case-topic>.md` (2-4 word slug).
 | Date | Topic | Used by |
 | ---- | ----- | ------- |
 | 2026-05-27 | [Streaming allocators (virtual-memory substrate)](cerid-streaming-allocators.md) | Phase 2.2 S2+ (ADR-0085) |
-| 2026-06-14 | [Beating MKL on 1D complex FFT — every number + dead end](fft-mkl-crush.md) | v10 `crd-hesap-fft` (FRONTIER, open) |
+| 2026-06-14 | [Beating MKL on 1D complex FFT — every number + dead end](fft-mkl-crush.md) | v10 `crd-hesap-fft` (v10 shipped; the banked wins + remaining large-N parity gap are recorded in the dossier's own status) |
 | 2026-07-06 | [v15 forward-mode AD: frontier crush levers + reconstruct-verify tables](2026-07-06-v15-forward-ad-crush.md) | v15 `crd-hesap-autodiff` (a–z impl reference) |
 | 2026-07-23 | [The offline renderer frontier — the OFF band master survey](2026-07-23-offline-renderer-frontier.md) | D-007 OFF band (rows 46-54); offline render mode |
 | 2026-07-23 | [The geometry-resource pipeline — import → decompose → author → cook](2026-07-23-geometry-resource-pipeline.md) | D-007 GEO band (rows 66-70); mesh/scene I/O before the offline renderer |

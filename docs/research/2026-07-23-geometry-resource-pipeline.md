@@ -1,5 +1,7 @@
 # Research — 2026-07-23 — the geometry-resource pipeline (import → decompose → author → cook)
 
+> **Outcome:** **adopted** — drove the D-007 GEO band (import→decompose→author→cook), landed per its rows in the master table. *(stamped 2026-08-07, doc-hygiene pass)*
+
 > The design research for Cerid's mesh/scene I/O + resource layer — the foundation the offline renderer (OFF band), the
 > real-time renderer, CAD/CAM/slicing, and physics all consume. Produces the **GEO band** slices (D-007, interleaved before/with
 > the OFF band). User-directed 2026-07-23.

@@ -30,7 +30,7 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 - ADR-0065 — **`crd-hesap` numerical computing substrate (MATLAB-class)**
 - ADR-0066 — **`crd-draw` substrate architecture**
 - ADR-0079 — **`crd-perf` profiler substrate + `crd-perf-ui` ImGui frontend** (region timing + jobs auto-instrument + GPU timestamps + memory tracking + CPROF v1 capture format + 7-panel ImGui UI)
-- ADR-0080 — **`crd-rhi-compute` substrate** (Proposed; Phase 3.1.7.6 prerequisite for v9 GPU geometry; additive RHI extension: IComputePipeline + IStorageBuffer + dispatch + compute↔graphics sync + opt-in async compute queue + shaderc compute pipeline)
+- ~~ADR-0080 — **`crd-rhi-compute` substrate**~~ — **rhi halves superseded by ADR-0103/0105 (module retired at RET-8); compute surface today = `IComputeContext` on gpu-context**
 
 ### `[draw]`
 - ADR-0066 — `crd-draw` substrate architecture (peer module; retained `RenderBuffer` + immediate-mode API; vertex-shader quad-expanded AA lines + sort-by-centroid translucent solids; 3 depth modes; per-component visualizer plug-in registry; ImGui projection day-one text + reserved SDF text; consumed by eylem / sdf / audio / nav / editor / renderer / sandbox)
@@ -66,7 +66,7 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 ### `[app]` `[event]`
 - ADR-0007 — `crd-app` shape
 
-### `[rhi]` `[vulkan]`
+### `[rhi]` `[vulkan]` — ⚠ era note: the crd-rhi stack was RETIRED at RET-8 (2026-07-23, ADR-0105); these remain the record of how it was built
 - ADR-0008 — Graphics architecture
 - ADR-0009 — RHI v1a scaffold
 - ADR-0010 — Vulkan bootstrap
@@ -110,9 +110,9 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 - ADR-0035 — Networking architecture principles (layered, determinism-first)
 - ADR-0056 — Scene/ECS L6–L8: Reserved API slots (Replication slot)
 
-### `[renderer]` `[render-path]`
-- ADR-0016 — Render path strategy
-- ADR-0032 — Frame graph v1
+### `[renderer]` `[render-path]` — ⚠ era note: crd-renderer was RETIRED (ADR-0105); rendering today = the RAF asset stack (ADR-0106, `[raf]` section below)
+- ADR-0016 — Render path strategy (the IRenderPath plan; render paths are now the post-RAF RPL proof library — no formal superseding ADR yet, flagged 2026-08-07)
+- ADR-0032 — Frame graph v1 (runtime-ownership half superseded by ADR-0106, struck in place; its lifetime/aliasing/barrier contracts live on)
 - ADR-0042 — Texture cooked format + GPU upload strategy
 - ADR-0043 — MeshResource vertex layout + glTF import scope
 - ADR-0044 — Phase ordering: material PSO/variant completion precedes scene/ECS
@@ -186,7 +186,7 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 ### `[imgui]` `[vulkan]`
 - ADR-0024 — ImGui single-viewport default
 
-### `[shader]` `[cache]` `[reflection]`
+### `[shader]` `[cache]` `[reflection]` — ⚠ era note: crd-shader was RETIRED (ADR-0105); shaders today = CKIR (ADR-0101/0103/0104 below)
 - ADR-0025 — Shader mechanism policy
 - ADR-0026 — Shader variant key
 - ADR-0027 — Shader reflection consumption model
@@ -195,6 +195,31 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 - ADR-0030 — Shader / PSO boundary
 - ADR-0031 — Shader frontend → IR seam
 - ADR-0048 — Material system architecture foundation (ShaderOptions, inline functor, ParameterType)
+
+### `[geometry]` `[units]` `[multi-domain]`
+- ADR-0076 — **`crd-geometry` substrate architecture** (11+ sub-modules; §12–§28 amendment trail = the phase ledger)
+- ADR-0077 — Multi-domain expansion (CAD/CFD/FEA/CAM/EDA/ML/sciviz/procgen future phases)
+- ADR-0078 — **`crd-units` substrate + the two-layer typed architecture** (`Quantity<D, T>`; §5 = the engine-wide layer split)
+
+### `[agent-native]` `[cli]` `[scripting]`
+- ADR-0081 — **Agent-native engine** (CLI/JSON-RPC/MCP as source of truth; C++ hot-reload as the ONLY scripting language; subsumes ADR-0034)
+
+### `[hesap]` — per-cluster ADRs
+- ADR-0082…0097 — one ADR per hesap cluster (v0 dense microkernels → … → 0089 sparse-eig · 0090 opt · 0091 ODE/DAE · 0092 FFT · 0093 DSP/wavelet/comms · 0094/0095 special/interp/quad/diff/motion · 0096 tensors · 0097 autodiff). Exact titles: the chronological table below.
+
+### `[gpu-context]` `[kir]` `[ir]` — the GPU-era north stars
+- ADR-0098 — crd-kir + crd-hesap-gpu: the GPU compute COMPILER (CKIR two-level IR, six backends, determinism tiers)
+- ADR-0099 — crd-gpu-context: one shared GPU device; compute/rendering are separate concerns on it (§6 struck → ADR-0103)
+- ADR-0100 — CKIR is the one GPU compute manager (kernel-source-agnostic dispatch)
+- ADR-0101 — **The IR is the single source of truth for EVERY shader; backend languages are OUTPUTS only**
+- ADR-0102 — Render-data, lighting & pass architecture (frequency-based sets; material = surface response)
+- ADR-0103 — **`crd-gpu-context` owns every GPU program; I1/I2 leak invariants** (supersedes ADR-0099 §6)
+- ADR-0105 — **Retire crd-rhi + crd-renderer: gpu-context IS the graphics layer** (supersedes the rhi halves of 0036/0042/0080/0085, struck in place as slices landed)
+
+### `[raf]` `[frame-graph]` `[rendering-assets]`
+- ADR-0104 — IR-as-crdr: the shader cook + deploy pipeline (content-hash cache, variants, pipeline cache, hot reload)
+- ADR-0106 — **Unified frame-graph runtime: `crd-render-graph` is the single live runtime** (closed at RAF-12.3)
+- ADR-0107 — Interactive UI + 2D rendering architecture (UiWorld/Canvas/I2D-SPR; **Proposed**, pending review)
 
 ## All ADRs (chronological)
 
@@ -304,6 +329,6 @@ Status: Accepted / Superseded / Deprecated / Reserved.
 | 0102  | **Render-data, lighting & pass architecture — how the shader IR feeds a frontier renderer.** Unification, not greenfield: the renderer (frame graph, `IRenderPath` Forward/Forward+/Deferred/VisBuffer, `PerFrameUbo`, `MaterialTemplate`+variants, reflection, cooking) STAYS; CKIR replaces the hand-written GLSL as the shader SOURCE. Decisions: globals (camera/time) live in the renderer's per-frame set 0, NOT the GPU context (upholds 0099); **frequency-based descriptor sets** 0=frame/1=pass-lighting/2=material/3=object (bindless/GPU-driven ready); **material = surface response (OpenPBR params), lighting-agnostic; render path = lighting technique** → one material works Forward+ OR Deferred (HYBRID: deferred/vis-buffer opaque + forward transparent); multi-pass (shadows/CSM/G-buffer) = the frame graph + `variant_for_pass`; skinning = structured-buffer palette (set 3, VS-skin default); uber-shaders = existing `ShaderOption` variants. D-007 DESIGNS+validates the seam (renders); the full Forward+/Deferred pipelines are the post-hesap RENDERING phase. | renderer, shader, ir, materials, lighting, deferred, forward-plus, frame-graph, bindless, architecture, north-star | Accepted |
 | 0103  | **`crd-gpu-context` owns every GPU program and pipeline; no module outside a backend names a shading language or a bytecode.** Makes ADR-0101 enforceable. TWO grep-checkable invariants: **I1** no GLSL/HLSL/WGSL/MSL/CUDA source crosses a module boundary (it lives only between our emitter and the vendor compiler, inside one backend); **I2** no SPIR-V/DXIL/PTX bytes appear in a public header — a consumer holds only an opaque `IGpuProgram`. Currency IN = the IR (`KGraph`+`KEntry`), OUT = `IGpuProgram`. `IGpuContext` gains `create_program(graph, entry)` + `create_program(cooked_name)` (ship path + the ADR-0101 §4 non-portable escape hatch) and the three domains `compute()`/`raster()`/`raytracing()`. `ShaderStage` complete day one = the 14 SPIR-V execution models (compute · vertex · tess-control · tess-eval · geometry · fragment · task · mesh · raygen · intersection · any-hit · closest-hit · miss · callable); unimplemented stages REFUSE LOUDLY, never fall back to compute. `crd-shader` loses `compile.hpp` + shaderc + dxc, keeps Effect/reflection/runtime/material. `crd-rhi`'s Device/ShaderModule converge onto `IGpuContext`/`IGpuProgram`; `rhi-vulkan` is absorbed by `gpu-context-vulkan` (one VkDevice, one pipeline cache, one Vulkan-aware module). Edge `crd-gpu-context → crd-kir` verified acyclic. **Supersedes ADR-0099 §6** (crd-shader as the shared GLSL/HLSL compiler — an Accepted decision that contradicted ADR-0101). Rollout = detour D-008 C0–C4, each step independently green. | gpu-context, kir, shader, rhi, renderer, architecture, ir, ray-tracing, mesh-shaders, substrate, north-star | Accepted |
 | 0104  | **IR-as-crdr: the shader cook + deploy pipeline (D1–D12).** The IR (ADR-0101) SHIPS: KGraph+KEntry serialize into `.crdr` ('SHDR') → content-hash cook cache → per-backend REAL bytecode (SPIR-V/DXIL/PTX; MSL/WGSL source) → variant containers (VART, content-hash dedup) → zero-compile load + persistent driver pipeline cache (VkPipelineCache / ID3D12PipelineLibrary) → hot-reload (atomic pipeline swap, generation retire) → parallel cook on crd-jobs fibers → async warmup → spec-constant binding at load. Supersedes crd-shader's Effect/PSO path as the deploy currency. | kir, shader-cook, crdr, deploy, variants, pipeline-cache, hot-reload, architecture | Accepted |
+| 0105  | **Retire crd-rhi + crd-renderer: crd-gpu-context IS the graphics layer.** Two facades over ONE device (D-008 made rhi ADOPT gpu-context's VkDevice) = a standing double-wiring tax (GEO-3 2b: sRGB wired twice in a day; cooked linear-space mips never reach the real renderer). rhi/renderer FROZEN immediately; the D-007 **RET band** (rows 89-96) absorbs every capability into gpu-context (present/swapchain · cooked-mip+sRGB upload seam · ADR-0085 allocator parity · ImGui · crd-draw port · bvh-gpu Morton compute · shader/meshgen sweep), PORTS ~5k device-level test assertions (coverage parity = deletion PREcondition), then DELETES crd-rhi + crd-rhi-vulkan + crd-renderer (the legacy-GLSL-Effect precedent). CPU-side resource types re-home GPU-free in crd-resources (ADR-0042's loader posture survives; its rhi upload half dies). Sequencing: GEO-3 close → RET complete → GEO-4..7 integrate ONCE on the clean stack. Supersedes the rhi halves of 0036/0042/0080/0085 (struck in place as slices land). | gpu-context, rhi, renderer, retirement, architecture, substrate | Accepted |
 | 0106  | **Unified frame-graph runtime: `crd-render-graph` is the single live runtime.** RAF-0…7 built the asset-driven foundation as ADDITIVE leaf modules (render-asset-core · render-program · render-material · render-pass registry · render-graph runtime), gated in isolation — the LIVE renderer was never wired onto them, so two frame-graph execution paths exist over one device (SceneRenderer→`frame_runtime.cpp` `FramePassKind` switch→~57 verbs, vs `crd-render-graph::execute_frame`). §2.1 forbids two at close; corollary 3 (unreachable runtime ≡ missing) means RAF-6/7's live migration silently landed on RAF-8. Decision: **render-graph is THE live runtime** (`FrameGraphTemplate`+`CompiledFrameGraph`); **render-pass**/**render-graph** own the registry+runtime (corrects RAF-0 §3, struck in place — folding into frame-cook would rebuild the giant module §18/§21 forbid); **frame-cook** keeps `FrameGraphDesc`+cooked blobs and gains a Cooked→Template **load bridge** via a new ACYCLIC `frame-cook→render-graph` edge (render-graph depends on neither frame-cook nor scene, so `frame-cook ⊥ crd-scene` holds via the preserved `IFrameGraphHost` seam — the host resolves ECS→pre-resolved `DrawItem`; render-graph never sees a scene type); **SceneRenderer** becomes an ORCHESTRATOR; the `FramePassKind` switch is a migration adapter deleted at RAF-12. Migrate ONE kind at a time — old switch + new executor both resolve; command-parity (mock encoder) + pixel-parity + `crd-sandbox --smoke-test 2` both backends per increment. RAF-8 splits into 8a (wire live runtime) + 8b (orchestration). Supersedes ADR-0032's runtime-ownership (preserves its lifetime/aliasing/barrier/one-submission). **CLOSED at RAF-12.3 (2026-08-06):** the `FramePassKind` adapter is deleted (→ `ExecutorTypeId` + role bits); 12.2 unified the live path via `AuthoredPass`+`run_authored_cb` (Decision #1 refined in place — see the ADR's RAF-12 amendment). | renderer, frame-graph, gpu-context, architecture, render-path | Accepted (closed RAF-12.3) |
 | 0107  | **Interactive UI + 2D rendering architecture (I2D-0, post-RAF).** Five distinct concepts (SceneWorld · UiWorld · CanvasCompositor · UiMaterial/UiEffectGraph · FrameGraph), never collapsed. `UiWorld` is a dedicated RETAINED world (`UiNodeId` ≠ gameplay `EntityId`); UI = semantics (layout/focus/nav/a11y/l10n/state/binding), sprites = visuals. `CanvasDisplayList` = a typed backend-neutral compiled paint rep lowering `UiWorld → style/layout/text → paint compile → display list → clip/layer/batch compiler → RAH-hardened canonical GPU commands → RAF executors` (**I2D-1 Canvas BLOCKED on RAH-1 typed attachments + RAH-2 resource-table bindless**; seam consistent with `docs/systems/rah-0-canonical-model-audit.md`). Three authoring paths (documents / builder-reconciliation with stable identity / low-level) → one UiWorld. CKIR-backed UiMaterial + multi-pass UiEffectGraph compiling to the RAF frame graph (no mini scheduler). Reuses `AssetId`/`DiagnosticList`/RAF-11 reloader/`crd-anim`. CR-D007 editor = I2D-9 widgets on the I2D-4 shell (D7E reframed); ImGui kept for debug/recovery. Same L0–L7 maturity (nothing >L5 today). D-007 §UI/2D SUB-PROGRAMME. | ui, 2d, canvas, uiworld, sprite, editor, architecture, post-raf | Proposed |
-| 0105  | **Retire crd-rhi + crd-renderer: crd-gpu-context IS the graphics layer.** Two facades over ONE device (D-008 made rhi ADOPT gpu-context's VkDevice) = a standing double-wiring tax (GEO-3 2b: sRGB wired twice in a day; cooked linear-space mips never reach the real renderer). rhi/renderer FROZEN immediately; the D-007 **RET band** (rows 89-96) absorbs every capability into gpu-context (present/swapchain · cooked-mip+sRGB upload seam · ADR-0085 allocator parity · ImGui · crd-draw port · bvh-gpu Morton compute · shader/meshgen sweep), PORTS ~5k device-level test assertions (coverage parity = deletion PREcondition), then DELETES crd-rhi + crd-rhi-vulkan + crd-renderer (the legacy-GLSL-Effect precedent). CPU-side resource types re-home GPU-free in crd-resources (ADR-0042's loader posture survives; its rhi upload half dies). Sequencing: GEO-3 close → RET complete → GEO-4..7 integrate ONCE on the clean stack. Supersedes the rhi halves of 0036/0042/0080/0085 (struck in place as slices land). | gpu-context, rhi, renderer, retirement, architecture, substrate | Accepted |

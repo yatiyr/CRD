@@ -1,5 +1,7 @@
 # Research — 2026-05-27 — Streaming allocators (virtual-memory substrate)
 
+> **Outcome:** **adopted** — Phase 2.2 S1–S8 closed 2026-05-28 (ADR-0085); the allocator parity later re-shipped on gpu-context (RET-4). *(stamped 2026-08-07, doc-hygiene pass)*
+
 > Long-form substrate dossier for **Phase 2.2 (ADR-0085)** — the virtual-memory +
 > streaming allocator cluster that runs before hesap v5. Primary depth on **S2
 > `VirtualMemoryAllocator`** (the next slice); spans S3 (re-parent TLSF), S4

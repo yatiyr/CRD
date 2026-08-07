@@ -61,12 +61,15 @@ clang-tidy -p build/win-debug <file>
 
 **Smoke tests** are standalone executables in `build/<preset>/runtime/` and are NOT registered with
 CTest. Headless set (no GPU/window): `smoke_config smoke_containers smoke_filesystem smoke_frame_clock
-smoke_jobs smoke_log smoke_math smoke_memory smoke_shader smoke_resources smoke_resources_async
-smoke_resources_reload smoke_resources_stream smoke_resources_render smoke_texture smoke_mesh
-smoke_material smoke_hesap_substrate smoke_hesap_blas1 smoke_hesap_sparse smoke_hesap_matrix_resource
-smoke_hesap_tensor smoke_virtual_memory smoke_virtual_memory_allocator`. GPU/window set (run manually):
-`smoke_app smoke_imgui_overlay smoke_renderer smoke_rhi_api smoke_rhi_vulkan_bootstrap smoke_window
-smoke_asset_import`.
+smoke_jobs smoke_log smoke_math smoke_memory smoke_meshgen smoke_resources smoke_resources_async
+smoke_resources_reload smoke_resources_stream smoke_texture smoke_mesh smoke_hesap_substrate
+smoke_hesap_blas1 smoke_hesap_blas2 smoke_hesap_blas3 smoke_hesap_sparse smoke_hesap_matrix_resource
+smoke_hesap_solve_cli smoke_hesap_tensor smoke_virtual_memory smoke_virtual_memory_allocator`.
+GPU/window set (run manually): `smoke_app smoke_window` + **`crd-sandbox --smoke-test N`** (the real GPU
+smoke — validation ON, N seconds, zero-validation-output gate; `--headless` for CI). The nine
+retiring-stack smokes (`smoke_shader/renderer/imgui_overlay/rhi_api/rhi_vulkan_bootstrap/material/
+resources_render/asset_import/depth_prepass`) were DELETED at RET-7 (2026-07-23, ADR-0105) — their living
+coverage is the sandbox smoke + the gpu-context test suites.
 
 **Benchmarks:** every measured board is written to [`docs/bench/`](bench/) at measurement time
 (convention + naming in `docs/bench/README.md`).

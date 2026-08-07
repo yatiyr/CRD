@@ -1,5 +1,7 @@
 # Research — 2026-07-21 — 3D Gaussian Splatting frontier (B19 dossier)
 
+> **Outcome:** **adopted** — the 3DGS renderer shipped (1080p perf recorded; reference-comparison blocker noted in memory `project_3dgs_1080p_perf_and_reference_blocker`). *(stamped 2026-08-07, doc-hygiene pass)*
+
 ## Question
 
 B19 makes **radiance fields a first-class primitive** in Cerid — 3D Gaussian Splatting (3DGS). Before building,

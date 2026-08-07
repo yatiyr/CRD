@@ -1,5 +1,7 @@
 # Research — 2026-07-23 — the WORLD-CLASS resource + scene system (GEO band, no-gap expansion)
 
+> **Outcome:** **adopted as the GEO-band expansion plan** — see the D-007 master table for which rows have landed. *(stamped 2026-08-07, doc-hygiene pass)*
+
 > Round 2 of the geometry-resource research (companion: `2026-07-23-geometry-resource-pipeline.md`), user-directed: "FULL WORLD
 > CLASS NO GAP — Cerid makes DAWs, composes video/movies, everything agent-drivable via MCP/CLI; ECS world-class data-driven;
 > if a module is missing we BUILD it, not patch it." This doc widens the GEO band from mesh I/O to the complete

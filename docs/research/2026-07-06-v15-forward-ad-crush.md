@@ -1,5 +1,7 @@
 # Research — 2026-07-06 — v15 forward-mode AD: the frontier crush levers + reconstruct-verify tables
 
+> **Outcome:** **adopted** — v15 forward-mode AD shipped 2026-07-06 (`crd-hesap-autodiff`, ADR-0097). *(stamped 2026-08-07, doc-hygiene pass)*
+
 > Deep-research dossier standing up v15 (`crd-hesap-autodiff`, forward mode). Captured
 > BEFORE code so the crush levers, the honesty caveats, and the ready-to-code formula
 > tables are durable (not lost in a session). Spec = `docs/phases/phase-3.1.6-v15.md`;

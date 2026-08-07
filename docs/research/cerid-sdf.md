@@ -1,5 +1,7 @@
 # Cerid — SDF substrate research
 
+> **Status:** **research → planned** — ADR-0064 Accepted; the `crd-sdf` module is not yet built (Phase 3.1.5 slot). *(stamped 2026-08-07, doc-hygiene pass)*
+
 **Date:** 2026-05-10
 **Locks:** ADR-0064 (`crd-sdf` substrate architecture).
 **Phase plan:** `docs/phases/phase-3.1.5-sdf.md`.

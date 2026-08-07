@@ -1,5 +1,7 @@
 # Research — 2026-07-23 — the OWNED MEDIA-CODEC PLATFORM (images · audio · video · transcode)
 
+> **Outcome:** **adopted (in progress)** — the D-007 MED band executes this plan; Track D is live (MED-1 GIF+LZW landed 2026-08-07). *(stamped 2026-08-07, doc-hygiene pass)*
+
 > The plan for handling EVERY media resource ourselves (user-directed: "videos, sound files, image files… webp avif gif
 > tiff… video codecs, lossless and lossy sound formats… convert one into another"). Produces the **MED band** (D-007).
 > Ground rules: zero 3rd-party in the product path (test oracles allowed); patent-encumbered formats are EXCLUDED BY

@@ -1,5 +1,7 @@
 # B-compute GPU FFT — the crush campaign plan (2026-07-13)
 
+> **Outcome:** **executed** — the GPU-FFT crush campaign ran 2026-07-12…13 (batched 2-D 1.16–1.20× cuFFT bit-exact; boards in `docs/bench/`). *(stamped 2026-08-07, doc-hygiene pass)*
+
 > Execute-ready dossier for the hesap-GPU FFT (D-007 **B-cmp**), the compute primitive B13-b's FFT-convolution
 > bloom consumes. Written at the close of the orientation+research session so the build starts without re-deriving.
 > User mandate (2026-07-13): **build the COMPLETE general CKIR shared-memory IR first** (not minimal — the substrate

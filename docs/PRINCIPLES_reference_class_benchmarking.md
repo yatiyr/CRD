@@ -210,8 +210,9 @@ This policy applies to:
   policy formalizes what was an implicit standard.
 - `crd-eylem` (physics) when v1c+ resumes — vs Box2D / PhysX-CPU /
   Chaos / Jolt at equivalent feature sets.
-- Future: `crd-renderer`, `crd-rhi` vs reference renderers when
-  perf-critical.
+- Future: the `crd-gpu-context` + RAF rendering stack vs reference
+  renderers when perf-critical. (The originally named `crd-renderer`/
+  `crd-rhi` were retired 2026-07-23, ADR-0105.)
 
 ## What this is NOT
 

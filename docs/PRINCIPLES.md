@@ -101,12 +101,17 @@ consumers. The architecture serves all of them; no domain is privileged.
 These come from accepted ADRs and are not re-litigated in routine sessions.
 If circumstances genuinely change, open a new ADR or escalate to `@heavy`.
 
-- **Render path:** Renderer v1 ships **Clustered Forward+** behind an
-  `IRenderPath` interface. Deferred and Visibility-Buffer paths land later
-  as additional implementations, not replacements.  → ADR-0016
-- **Culling:** Frustum culling in v1 → BVH-accelerated when scene grows →
-  Hi-Z occlusion later. Per-light culling is part of clustered Forward+. →
-  ADR-0017
+- **Render path — SUPERSEDED BY EVENTS (annotated 2026-08-07):** the original cornerstone ("Renderer v1
+  ships Clustered Forward+ behind an `IRenderPath` interface; Deferred / Visibility-Buffer land later as
+  additional implementations" → ADR-0016) described the retired `crd-renderer` (deleted at RET-8,
+  ADR-0105). **Today's cornerstone:** rendering is **asset-driven** — every technique is an authored
+  frame-graph asset executed by `crd-render-graph` (ADR-0106); the forward/deferred/visibility "paths" are
+  the post-RAF **RPL proof library** of authored renderers, not C++ path classes. (No formal ADR supersedes
+  0016 yet — flagged 2026-08-07; the original decision text is preserved here and in the ADR.)
+- **Culling — realized on the new stack (annotated 2026-08-07):** the intent of ADR-0017 (frustum → BVH →
+  Hi-Z occlusion; per-light culling) survives and is partially landed as GPU-driven culling (REN-40
+  device-side cull; HZB + LOD/SSE tracked in the post-RAF GVA band); the "part of clustered Forward+"
+  framing referred to the retired renderer. → ADR-0017
 - **Scene + ECS:** **Hybrid model.** SoA component storage for cache-friendly
   iteration; hierarchical scene tree for traversal/authoring. Not pure ECS,
   not naive scene graph. → ADR-0020

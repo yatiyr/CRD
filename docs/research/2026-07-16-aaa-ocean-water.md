@@ -1,5 +1,7 @@
 # Research — 2026-07-16 — AAA ocean water (2026 state of the art)
 
+> **Outcome:** **adopted** — the B16 4-cascade FFT ocean shipped in CKIR (displaced geometry + meshlets + water shading). *(stamped 2026-08-07, doc-hygiene pass)*
+
 > D-007 / B16 water-ocean. Triggered by: the hand-tuned fragment render kept
 > looking wrong (too choppy, foam everywhere, flat far field). User direction:
 > "study the papers, learn AAA water properly, 2026 style." This doc is the

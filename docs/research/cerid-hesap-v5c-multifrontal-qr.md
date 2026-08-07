@@ -1,5 +1,7 @@
 # Cerid hesap v5c — Multifrontal QR (SuiteSparseQR / SPQR-class) — research + design
 
+> **Outcome:** **adopted** — v5c multifrontal QR shipped (session 2026-06-02). *(stamped 2026-08-07, doc-hygiene pass)*
+
 > Phase 3.1.6 `crd-hesap-direct`, slice **v5c**. The sparse-direct QR twin of
 > v5a (Cholesky) / v5b (LU). Mandate: correctness-first, performance designed
 > in from the start, and an HONEST close scoreboard that crushes BOTH the

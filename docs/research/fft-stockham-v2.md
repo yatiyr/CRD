@@ -1,5 +1,7 @@
 # Stockham v2 — the pass-pipeline FFT engine (the MKL-architecture build)
 
+> **Outcome:** **adopted** — the v10 FFT engine shipped on this design (deterministic-plan Stockham + codelets). *(stamped 2026-08-07, doc-hygiene pass)*
+
 ## ★★ THE MKL ARCHAEOLOGY (2026-07-04 — sampled + disassembled ON THIS BOX; the definitive answer)
 
 Software-clock perf sampling (`build/crd_mkl_perf.sh`; WSL2 vPMU absent but cpu-clock works) +

@@ -1,5 +1,7 @@
 # Cerid Eylem — Body Types, Collision Filtering, and Contact Callbacks
 
+> **Outcome:** **adopted** — ADR-0068 (body types + 5-tier filter + callbacks); implementation resumes with eylem v1c+. *(stamped 2026-08-07, doc-hygiene pass)*
+
 > **Companion to** [`cerid-eylem.md`](cerid-eylem.md) and
 > [`cerid-eylem-fields.md`](cerid-eylem-fields.md). Those backed
 > ADR-0062 (architecture) + ADR-0063 (determinism contract) +

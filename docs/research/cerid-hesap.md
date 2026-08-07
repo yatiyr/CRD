@@ -1,5 +1,7 @@
 # Cerid — `crd-hesap` numerical substrate research
 
+> **Outcome:** **adopted** — ADR-0065; hesap v0–v16 shipped (see `docs/phases/phase-3.1.6-hesap.md`). *(stamped 2026-08-07, doc-hygiene pass)*
+
 **Date:** 2026-05-10
 **Locks:** ADR-0065 (`crd-hesap` numerical computing substrate).
 **Phase plan:** `docs/phases/phase-3.1.6-hesap.md`.

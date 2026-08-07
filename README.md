@@ -24,6 +24,11 @@ API-stable across backends, and built on vertical slices rather than horizontal 
 - **Own-your-primitives engineering:** hand-rolled fiber job system (asm context switch,
   Chase-Lev deques, futex/WaitOnAddress semaphores), custom allocators (TLSF, virtual-memory,
   streaming), engine-native containers — no black-box dependencies in the core.
+- **One IR for everything the GPU does.** Every shader and compute kernel — rendering,
+  FFT/sort/reduction, neural inference, ray tracing, mesh shaders — is authored once as
+  backend-neutral CKIR and lowered to Vulkan/DX12/CUDA (WGSL/MSL emitters in place), with
+  bit-exact CPU oracles gating the kernels and rendering techniques shipped as cooked assets
+  rather than engine code.
 - **Agent-native by design:** every engine operation is planned to be reachable via CLI /
   JSON-RPC / MCP; the GUI is a visualization layer. C++ hot-reload is the only scripting layer.
 
@@ -32,18 +37,21 @@ API-stable across backends, and built on vertical slices rather than horizontal 
 | Area | Modules |
 |---|---|
 | Foundation | `core` · `log` · `vm` · `memory` · `containers` · `math` · `jobs` · `platform` · `app` · `config` · `units` · `time` · `perf` |
-| Graphics | `rhi` · `rhi-vulkan` · `rhi-compute` · `shader` · `renderer` · `imgui` (debug) |
-| Scene & assets | `scene` (8-layer ECS substrate) · `resources` (CRDR pack format, hot-reload) · `profile` |
-| Geometry | 11 sub-modules: primitives (Shewchuk predicates) · BVH (+GPU LBVH) · convex (GJK/EPA/Quickhull) · mesh · mesh-processing (QEM/remesh) · spatial · polygon (Boolean) · Delaunay/Voronoi · decomposition (V-HACD) · viz · meshgen |
-| Numerics (`crd-hesap`) | dense (BLAS/LAPACK-class) · sparse · orderings · iterative+AMG · sparse-direct (supernodal Cholesky/LU/QR/LDLᵀ, HSS/BLR, mixed-precision IR) · eigensolvers · optimization (QP/LP/NLP/conic/MIP/global) · ODE/DAE · FFT · DSP/wavelets/comms · special functions · statistics (RNG/distributions/MCMC/regression) · interpolation · quadrature · differentiation · motion (Ruckig-class OTG) · **tensors (in progress)** |
+| GPU platform | `gpu-context` (one device facade; Vulkan · DX12 · CUDA backends) · `kir` (**CKIR** — the backend-neutral shader/kernel IR; GLSL/HLSL/WGSL/MSL/CUDA are emitter *outputs*, never authored) · the asset-driven **RAF** rendering stack (`render-graph`/`render-pass`/`render-program`/`render-material` + five asset cookers — every technique is a cooked asset, not C++) · `draw` (overlay/viz) · `imgui` (debug-only) |
+| Scene & assets | `scene` (8-layer ECS substrate) · `resources` (CRDR pack format, hot-reload) · `asset-io` · `anim` · `profile` |
+| Geometry | 13 sub-modules: primitives (Shewchuk predicates) · BVH (+GPU LBVH) · convex (GJK/EPA/Quickhull) · mesh · mesh-processing (QEM/remesh) · spatial · polygon (Boolean) · Delaunay/Voronoi · decomposition (V-HACD) · curves · shader-helpers · viz · meshgen |
+| Numerics (`crd-hesap`) | dense (BLAS/LAPACK-class) · sparse · orderings · iterative+AMG · sparse-direct (supernodal Cholesky/LU/QR/LDLᵀ, HSS/BLR, mixed-precision IR) · eigensolvers · optimization (QP/LP/NLP/conic/MIP/global) · ODE/DAE · FFT · DSP/wavelets/comms · special functions · statistics (RNG/distributions/MCMC/regression) · interpolation · quadrature · differentiation · motion (Ruckig-class OTG) · tensors (incl. quantized dtypes + NN inference) · autodiff (forward + reverse, deterministic gradients) |
 
-Planned next: forward/reverse autodiff, GPU compute numerics, a notebook + MCP agent
-platform, then the Cerid-native physics resume (`eylem`), UI, and editor.
+Current front: the post-RAF GPU-platform programme (rendering pipelines · UI/2D · GPU
+compute/science/ML · media/editor) — live state in [`context.md`](context.md). Then: hesap-GPU
+numerics, the notebook + MCP agent platform, the Cerid-native physics resume (`eylem`), and the
+editor.
 
 ## Building
 
-Requirements: CMake ≥ 3.25, Ninja, Vulkan SDK 1.3+, and MSVC 2022+/clang-cl (Windows) or
-GCC (Linux).
+Requirements: CMake ≥ 3.25, Ninja, Vulkan SDK ≥ 1.4.305 (NV extension headers; 1.4.341 is the
+CI pin), and MSVC 2026 (VS 18)/clang-cl (Windows) or GCC (Linux). CUDA Toolkit is optional
+(enables the CUDA compute backend).
 
 ```powershell
 cmake --preset win-debug

@@ -9,12 +9,11 @@ external request).
 - Each detour gets its own file: `D-NNN-<slug>.md`.
 - A detour pauses the main roadmap. `context.md` records "Active detour:
   D-NNN" so future-you knows.
-- Each detour has: title, why, scope, exit criteria.
-- Run detours as their own mini-pipeline (research → coder → tester →
-  reviewer → docs-keeper). Same DoD applies.
-- When done: `@docs-keeper` closes the detour. If it changed architecture,
-  it produces a new ADR; otherwise just a session log entry. The main
-  roadmap then resumes.
+- Each detour has: title, why, scope, exit criteria. Same DoD applies
+  (per-slice DoD + the full sweep at close — AGENTS.md).
+- When done: close the detour file per the AGENTS.md session-end ritual.
+  If it changed architecture, it produces a new ADR; otherwise a session
+  log entry. The main roadmap then resumes.
 - Detours that grow beyond their exit criteria become real phase slices —
   promote them, don't let them quietly take over.
 
@@ -22,13 +21,14 @@ external request).
 
 - **D-007 + D-008 (MERGED 2026-07-11) — the GPU program system: one IR for every shader, one device.** ACTIVE. The two
   former detours — **D-007** (CKIR becomes the universal shader IR, ADR-0101) and **D-008** (the gpu-context convergence,
-  ADR-0103) — are now ONE master doc with a single ordered subslice table (the two-doc split was confusing: two different
-  "C3"s; interleaved shader/device slices). **Device convergence CLOSED** (C0·C1·C2 ✅ — one `VkDevice`; I1+I2 both
-  grep-gate-closed; full 4-config sweep green). **IR core done** (Phase A ✅ · fan-out ✅ · B0 ✅ · B3-a/a′ stage model ✅).
-  **NEXT = B3-c** (raster GLSL VS+FS emitters), then the full visual frontier (materials/lighting → mesh → ray tracing →
-  neural → work-graphs) + Phase D cook, **then** the main roadmap resumes at Phase 3.1.6 v17 hesap-GPU compute.
-  **→ See the single master: `docs/detours/D-007-gpu-program-system.md`.** (The old `D-007-ckir-*.md` +
-  `D-008-gpu-context-*.md` are redirect stubs.)
+  ADR-0103) — are ONE master doc with a single ordered subslice table (the two-doc split was confusing: two different
+  "C3"s; interleaved shader/device slices).
+  **→ The single master: `docs/detours/D-007-gpu-program-system.md`.** (The old `D-007-ckir-*.md` +
+  `D-008-gpu-context-*.md` are redirect stubs.) ⛔ Live status is NOT restated here — it goes stale; read the master
+  doc's subslice table + `context.md`. Landmark state as of 2026-08-07: device+IR convergence ✅ · legacy
+  rhi/renderer/shader stack RETIRED (ADR-0105) · full visual frontier ✅ · **RAF asset-driven rendering ✅ COMPLETE
+  (ADR-0106)** · the post-RAF four-track programme (122 sub-slices) is executing; hesap-GPU remains the detour's
+  final stop before the main roadmap resumes.
 
 <!-- Historical D-003 plan retained for reference; see Closed detours
      for the actual shipped state. Each slice has its own session log

@@ -120,4 +120,4 @@ Only `TextureFormat::RGBA8Unorm` is supported by the uploader in v1d; `BC7` asse
 
 ## Session logs
 
-- [v1a — TextureResource + stb_image cooker](../sessions/2026-05-05-asset-import-v1a.md)
+- [v1a — TextureResource + stb_image cooker](../sessions/2026-05-05-asset-import-v1d.md)

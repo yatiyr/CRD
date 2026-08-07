@@ -1,5 +1,7 @@
 # Cerid — `crd-geometry` substrate research SUPPLEMENT
 
+> **Outcome:** **adopted** — the renewed-scope additions (curves, transform-aware helpers, v4-validate) shipped; Phase 3.1.7 closed 2026-05-19. *(stamped 2026-08-07, doc-hygiene pass)*
+
 **Date:** 2026-05-11
 **Extends:** `docs/research/cerid-geometry.md` (11,523 words; closed
 2026-05-11) and ADR-0076 (Accepted 2026-05-11).

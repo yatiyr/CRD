@@ -1,5 +1,7 @@
 # RAF-9 — Engine default assets load by canonical `engine://` id through a public registry
 
+> **Outcome:** **adopted** — RAF-9 shipped 2026-08-04 (`engine://` default-asset registry; session 2026-08-04-raf9-engine-default-assets). *(stamped 2026-08-07, doc-hygiene pass)*
+
 ## Context
 
 RAF-1 shipped the **identity** half of the asset model — the `engine://`/`app://`/`plugin://`/`test://` schemes,

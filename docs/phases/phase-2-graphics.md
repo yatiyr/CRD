@@ -1,6 +1,6 @@
 ﻿# Phase 2 — Graphics foundation
 
-**Status:** 🚧 active — 2.0–2.5 shipped; renderer v1j (GPU instancing, Phase 3.2 dep), 2.6 resources, and 2.7 asset import next
+**Status:** ✅ shipped (2.0–2.5; resources/asset-import continue in their own phase files) — and the rhi/renderer modules this phase built were later **RETIRED 2026-07-23** (ADR-0105): the graphics layer today is `crd-gpu-context` + the RAF asset stack (ADR-0106). This file is the historical record of how the first stack was built. The old “v1j GPU instancing next” item is superseded (instanced/multi-draw/indirect landed on gpu-context; post-RAF GVA-0 tracks completeness). (Header refreshed 2026-08-07.)
 
 Vulkan-first, layered:
 

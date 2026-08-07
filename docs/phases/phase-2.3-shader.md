@@ -1,6 +1,6 @@
 # Phase 2.3 — `crd-shader`
 
-**Status:** 🚧 active
+**Status:** ✅ shipped (a–g) — `crd-shader` was later **RETIRED** (ADR-0105); shaders today are CKIR-authored (ADR-0101/0103/0104). Historical record. (Header refreshed 2026-08-07.)
 
 `crd-shader` sits between the proven RHI/backend foundation and the future
 renderer/material system. Its job is not to be "GLSL wrappers"; its job is to

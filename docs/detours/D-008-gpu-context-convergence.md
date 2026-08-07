@@ -5,7 +5,8 @@
 > table — the two-doc split was confusing (two different "C3"s; interleaved shader/device slices). This file is kept only
 > as a redirect so existing links resolve.
 
-**D-008 status (for the record): the device convergence is CLOSED.** `C0 · C1 · C2-a…f` all ✅ — ONE `VkDevice` (the
+**D-008 status (for the record, as of 2026-07-11 — the `rhi/shader` modules named below were later deleted
+outright at RET-8, 2026-07-23, ADR-0105): the device convergence is CLOSED.** `C0 · C1 · C2-a…f` all ✅ — ONE `VkDevice` (the
 `VulkanGpuContext` owns it; `rhi-vulkan` adopts, never creates), **I1 + I2 both closed** (no shading language in
 `crd-shader`; no bytecode in any public rhi header — consumers hold opaque `IGpuProgram`). Full 4-config sweep green
 2026-07-11. Decision record: [ADR-0103](../decisions/0103-gpu-context-owns-every-gpu-program.md).

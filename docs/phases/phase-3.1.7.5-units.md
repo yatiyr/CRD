@@ -1,6 +1,6 @@
 # Phase 3.1.7.5 — `crd-units`: compile-time-dimensional units substrate
 
-**Status:** 📋 planned — locked 2026-05-14 as the architectural answer to
+**Status:** ✅ **CLOSED 2026-05-15** — all 4 arcs shipped (v0a substrate + v0b/c/d adoption); ADR-0078; `crd-no-untagged-physical-numeric` CI guard live. Originally locked 2026-05-14 as the architectural answer to
 the units / scale / precision question surfaced in the Phase 3.1.7
 renewed-scope review. Sequenced **between Phase 3.1.7 `crd-geometry`
 close and Phase 3.1 eylem v1c resume** so eylem v1c+ and every

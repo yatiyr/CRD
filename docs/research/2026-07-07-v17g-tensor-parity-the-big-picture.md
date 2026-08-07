@@ -1,5 +1,7 @@
 # 2026-07-07 — v17-g tensor-GEMM parity: the BIG-PICTURE resolution (studied the user's GPURes/ pack)
 
+> **Outcome:** **adopted** — the v17-g GEMM campaign reached ≈88–89% cuBLAS parity (boards in `docs/bench/`). *(stamped 2026-08-07, doc-hygiene pass)*
+
 After exhaustively grinding a hand-written TF32 mma.sync GEMM to **0.86–0.90× cuBLAS-TF32** (profiler-driven, every
 CUDA-C lever + warp specialization tried), the user supplied a research pack (`D:\Dev\GPURes\`). Studying it RESOLVED
 the parity question — the wall is not our kernel, it's a **target/hardware mismatch**. This doc is the strategic finding.

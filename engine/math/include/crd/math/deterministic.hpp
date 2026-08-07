@@ -24,12 +24,10 @@
 //     exp, exp2, log, log2, log10, pow,
 //     floor, ceil, trunc, round, fmod
 //
-// SCOPE — what's NOT in v0c (see docs/debt.md, "Phase 3.1 v0c" entry):
-//     - f64 overloads          → crd-hesap v0a
-//     - Vec4f/Vec8f overloads  → eylem v1+ when batched-angle work surfaces
-//     - sinh / cosh / tanh     → reserved (no consumer in eylem v1-v6)
-//     - erf / gamma / bessel   → crd-hesap-stats v13
-//     - expm1 / log1p          → reserved
+// SCOPE — the original v0c deferral list was PAID same-day (v0c-debt-A, 2026-05-10; session logs
+// 2026-05-10-v0c-deterministic.md + 2026-05-10-v0c-debt-A-paydown.md): f64 overloads, Vec4f/Vec8f
+// SIMD overloads, sinh/cosh/tanh, erf/erfc/gamma/lgamma/beta, expm1/log1p all ship BELOW in this file.
+// Bessel functions + orthogonal polynomials intentionally live in crd-hesap-special (shipped), not here.
 
 #pragma once
 

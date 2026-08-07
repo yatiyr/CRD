@@ -1,6 +1,14 @@
 # Phase 3.1.6 — `crd-hesap` numerical computing substrate
 
-**Status (2026-07-02):** 🟢 IN PROGRESS (ships BEFORE eylem v1c resumes — re-amended 2026-05-19, see Phase posture). **CLOSED clusters: v0–v5 (dense/sparse/orderings/eig/SVD/least-squares/iterative+AMG/sparse-direct incl. CHOLMOD/UMFPACK crush + mixed-precision IR) · v6 (sparse eigensolvers) · v7 (the full optimization domain) · v9 (ODE/DAE) · v10 (FFT) · v11 (DSP + wavelets + comms) · v12 (special + statistics) · v13 (interpolation + quadrature + differentiation + motion, 2026-07-02, 4-config DoD green).** **⏳ ACTIVE: v14 TENSORS (`crd-hesap-tensor`, opened 2026-07-02 — ADR-0096 + detail doc `phase-3.1.6-v14.md`).** Then v15/v16 autodiff → v17 GPU → v18 notebook+MCP (all planned, sub-slice tables below — DO NOT re-plan). Live state: `context.md`; per-cluster verdicts: the master table below.
+**Status (refreshed 2026-08-07):** ⏸ **PAUSED mid-v17** — every CPU cluster is CLOSED: **v0–v5** (dense/sparse/
+orderings/eig/SVD/least-squares/iterative+AMG/sparse-direct incl. CHOLMOD/UMFPACK crush + mixed-precision IR) ·
+**v6** (sparse eigensolvers) · **v7** (optimization) · **v9** (ODE/DAE) · **v10** (FFT) · **v11** (DSP + wavelets +
+comms) · **v12** (special + statistics) · **v13** (interp/quadrature/differentiation/motion, 2026-07-02) · **v14**
+(tensors, 2026-07-05, ADR-0096) · **v15** (forward AD, 2026-07-06) · **v16** (reverse AD, 2026-07-07, ADR-0097).
+**v17 (GPU compute) GREW INTO detour D-007** — CKIR became the engine-wide GPU program system (ADR-0098→0106);
+hesap-GPU proper is the detour's LAST stop (the compute substrate is proven: GEMM at cuBLAS parity, 6 backends,
+bit-exact). **v18** (notebook + MCP) stays planned. Live state: `context.md`; per-cluster verdicts: the master
+table below (sub-slice tables — DO NOT re-plan).
 **Estimated duration:** ~6–8 months across 18 slices.
 **Locked architecture:** ADR-0065.
 **Research:** `docs/research/cerid-hesap.md` + pre-existing

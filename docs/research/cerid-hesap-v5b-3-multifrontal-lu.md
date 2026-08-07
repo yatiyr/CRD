@@ -1,5 +1,8 @@
 # Cerid hesap v5b-3 — Multifrontal LU (crush UMFPACK on CFD/sim-target factor)
 
+> **Outcome:** **adopted — v5b (LU) shipped and the whole v5 sparse-direct family closed 2026-06-05.** The
+> status below is the mid-flight snapshot it was written as. *(stamped 2026-08-07)*
+>
 > **Status:** v5b-3a SKELETON LANDED (2026-06-01) — symmetric-pattern front structure BUILT + validated;
 > `build_symmetric_multifrontal_symbolic` (fronts from chol(B+Bᵀ) via `ordering::symbolic_factorize`) +
 > `check_multifrontal_containment` in `multifrontal_lu.{hpp,cpp}`; test `[v5b-3a]` proves containment HOLDS

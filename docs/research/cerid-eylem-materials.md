@@ -1,5 +1,7 @@
 # Cerid Eylem — Materials Substrate Research
 
+> **Outcome:** **adopted** — ADR-0069 (materials substrate, 6 friction models); shipped in v1a-material. *(stamped 2026-08-07, doc-hygiene pass)*
+
 > **Companion to** [`cerid-eylem.md`](cerid-eylem.md),
 > [`cerid-eylem-fields.md`](cerid-eylem-fields.md), and
 > [`cerid-eylem-collision-filtering.md`](cerid-eylem-collision-filtering.md).

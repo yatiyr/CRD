@@ -1,5 +1,7 @@
 # Cerid — draw substrate research
 
+> **Outcome:** **adopted** — ADR-0066; `crd-draw` shipped, later re-based rhi-free onto gpu-context/CKIR at RET-6 (2026-07-23). *(stamped 2026-08-07, doc-hygiene pass)*
+
 **Date:** 2026-05-10
 **Locks:** ADR-0066 (`crd-draw` substrate architecture).
 **Phase plan:** `docs/phases/phase-3.1-eylem.md` v1a-draw section.
