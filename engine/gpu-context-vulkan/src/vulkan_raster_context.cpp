@@ -11,6 +11,8 @@
 #include <crd/gpu/frame_graph.hpp>          // REN-1: the frame-graph interface this TU implements
 #include <crd/gpu/vulkan_gpu_allocator.hpp> // RET-4 pt 2: the ADR-0085 S6 suballocation core, absorbed
 
+#include <crd/containers/hash.hpp> // fnv1a_64: content-hash identity for the RT pipeline cache (see RtPipe::key SCAR)
+
 #include <vulkan/vulkan.h>
 
 #include <algorithm> // std::ranges::any_of
@@ -2539,7 +2541,15 @@ public:
         if (any_hit != nullptr && ah == nullptr) { return; } // a named any-hit that is not ours is never dropped silently
         if (intersection != nullptr && is == nullptr) { return; } // F13: same rule for the last two stages
         if (callable != nullptr && cl == nullptr) { return; }
-        RtPipe* pipe = rt_pipeline(rg->vk_module(), ms->vk_module(), ch->vk_module(),
+        // Content-hash identity (see RtPipe::key SCAR): key the pipeline cache on each stage's SPIR-V bytes, never the
+        // VkShaderModule handle (which the driver can recycle after a program is destroyed → stale-pipeline aliasing).
+        const auto kh = [](VulkanGpuProgram* p) -> crd::u64 {
+            if (p == nullptr) { return 0U; }
+            const auto s = p->vk_spirv();
+            return (s.data() == nullptr || s.size() == 0U) ? 0U : crd::containers::fnv1a_64(s.data(), s.size());
+        };
+        const crd::u64 keys[6] = {kh(rg), kh(ms), kh(ch), kh(ah), kh(is), kh(cl)};
+        RtPipe* pipe = rt_pipeline(keys, rg->vk_module(), ms->vk_module(), ch->vk_module(),
                                    ah != nullptr ? ah->vk_module() : VK_NULL_HANDLE,
                                    is != nullptr ? is->vk_module() : VK_NULL_HANDLE,
                                    cl != nullptr ? cl->vk_module() : VK_NULL_HANDLE);
@@ -2598,7 +2608,11 @@ private:
     };
     struct RtPipe
     {
-        VkShaderModule                 key[6]{}; // rg · ms · ch · ah · isect · callable (every stage is identity)
+        // ⛔⛔ SCAR (D-007 CEIR grind, 2026-08-08): key by CONTENT HASH of each stage's SPIR-V, NOT its VkShaderModule
+        // handle. The cache outlives the programs, and a destroyed module's non-dispatchable handle can be RECYCLED by
+        // the driver for the next program — a handle key would then alias a STALE pipeline (the DX12 twin of this cache
+        // flaked exactly this way; this driver happens not to recycle, but the identity must be content, not handle).
+        crd::u64                       key[6]{}; // fnv1a_64 of rg · ms · ch · ah · isect · callable SPIR-V (0 = absent)
         VkPipeline                     pipeline = VK_NULL_HANDLE;
         VkBuffer                       sbt      = VK_NULL_HANDLE;
         VkDeviceMemory                 sbt_mem  = VK_NULL_HANDLE;
@@ -2673,26 +2687,27 @@ private:
 
     // Build (or find) the pipeline + SBT for one raygen/miss/hit triple. Cached on the three modules, because an
     // RT pipeline build is far more expensive than a graphics one and a pass rebuilds it every frame otherwise.
-    [[nodiscard]] RtPipe* rt_pipeline(VkShaderModule rg, VkShaderModule ms, VkShaderModule ch,
-                                      VkShaderModule ah = VK_NULL_HANDLE, VkShaderModule is = VK_NULL_HANDLE,
-                                      VkShaderModule cl = VK_NULL_HANDLE)
+    // `keys` are the fnv1a_64 CONTENT hashes of each stage's SPIR-V (0 = absent) — the cache identity (see RtPipe::key
+    // SCAR). The VkShaderModule handles are still needed to BUILD the pipeline, but MUST NOT be the key.
+    [[nodiscard]] RtPipe* rt_pipeline(const crd::u64 keys[6], VkShaderModule rg, VkShaderModule ms, VkShaderModule ch,
+                                      VkShaderModule ah, VkShaderModule is, VkShaderModule cl)
     {
         for (crd::u32 i = 0; i < m_rtp_n; ++i)
         {
-            if (m_rtp[i].key[0] == rg && m_rtp[i].key[1] == ms && m_rtp[i].key[2] == ch && m_rtp[i].key[3] == ah
-                && m_rtp[i].key[4] == is && m_rtp[i].key[5] == cl)
+            if (m_rtp[i].key[0] == keys[0] && m_rtp[i].key[1] == keys[1] && m_rtp[i].key[2] == keys[2]
+                && m_rtp[i].key[3] == keys[3] && m_rtp[i].key[4] == keys[4] && m_rtp[i].key[5] == keys[5])
             {
                 return &m_rtp[i];
             }
         }
         if (m_rtp_n >= kKernelPsoCap) { return nullptr; }
         RtPipe out{};
-        out.key[0] = rg;
-        out.key[1] = ms;
-        out.key[2] = ch;
-        out.key[3] = ah; // REN-38 audit: the any-hit is part of the pipeline identity, like every other stage
-        out.key[4] = is; // REN-38-F13: and so are the intersection + callable stages
-        out.key[5] = cl;
+        out.key[0] = keys[0];
+        out.key[1] = keys[1];
+        out.key[2] = keys[2];
+        out.key[3] = keys[3]; // REN-38 audit: the any-hit is part of the pipeline identity, like every other stage
+        out.key[4] = keys[4]; // REN-38-F13: and so are the intersection + callable stages
+        out.key[5] = keys[5];
 
         VkPipelineShaderStageCreateInfo st[6]{};
         const VkShaderStageFlagBits     all_bits[6] = {VK_SHADER_STAGE_RAYGEN_BIT_KHR, VK_SHADER_STAGE_MISS_BIT_KHR,

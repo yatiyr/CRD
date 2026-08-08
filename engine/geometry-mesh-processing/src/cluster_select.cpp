@@ -41,7 +41,7 @@ crd::f32 node_distance(const crd::u32* packed_node, const crd::f32* cam) noexcep
     return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
 
-static constexpr crd::u32 kMaxStackDepth = 64U;
+constexpr crd::u32 kMaxStackDepth = 64U;
 
 void collect_leaves(const crd::u32* packed_bvh, crd::u32 node_idx,
                     crd::u32* out, crd::u32& count, crd::u32 max_selected)

@@ -94,7 +94,9 @@ void build_adjacency(const crd::u32* indices, crd::u32 tri_count, crd::u32 /*ver
             {
                 const crd::u32 mid = lo + width < n ? lo + width : n;
                 const crd::u32 hi  = lo + width * 2U < n ? lo + width * 2U : n;
-                crd::u32       i = lo, j = mid, k = lo;
+                crd::u32       i = lo;
+                crd::u32       j = mid;
+                crd::u32       k = lo;
                 while (i < mid && j < hi)
                 {
                     if (less(edges[i], edges[j]))
@@ -165,8 +167,8 @@ MeshletBuildReport build_meshlets(const crd::f32* /*positions*/, crd::u32 vertex
     // Per-vertex: which meshlet slot it occupies (reset per meshlet)
     crd::containers::Array<crd::u32> vert_slot(scratch);
     vert_slot.resize(vertex_count);
-    constexpr crd::u32 kNoSlot = ~0U;
-    for (crd::u32 i = 0; i < vertex_count; ++i) vert_slot[i] = kNoSlot;
+    constexpr crd::u32 no_slot = ~0U;
+    for (crd::u32 i = 0; i < vertex_count; ++i) vert_slot[i] = no_slot;
 
     // Frontier: triangles adjacent to current meshlet, scored by vertex reuse
     crd::containers::Array<crd::u32> frontier(scratch);
@@ -180,8 +182,6 @@ MeshletBuildReport build_meshlets(const crd::f32* /*positions*/, crd::u32 vertex
     crd::containers::Array<crd::u32> vert_gen(scratch);
     vert_gen.resize(vertex_count);
     for (crd::u32 i = 0; i < vertex_count; ++i) vert_gen[i] = 0U;
-
-    crd::u32 total_tri_refs = 0U;
 
     for (crd::u32 seed = 0; seed < tri_count; ++seed)
     {
@@ -317,7 +317,6 @@ MeshletBuildReport build_meshlets(const crd::f32* /*positions*/, crd::u32 vertex
             out.meshlet_vertices.push_back(cur_verts[i]);
         for (crd::u32 i = 0; i < cur_tris.size(); ++i)
             out.meshlet_triangles.push_back(cur_tris[i]);
-        total_tri_refs += cur_tc;
     }
 
     out.total_triangles = tri_count;

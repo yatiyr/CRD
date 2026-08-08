@@ -31,7 +31,9 @@ void compute_cluster_bounds(const crd::f32* positions, const crd::u32* verts, cr
         radius = 0.0F;
         return;
     }
-    crd::f64 cx = 0.0, cy = 0.0, cz = 0.0;
+    crd::f64 cx = 0.0;
+    crd::f64 cy = 0.0;
+    crd::f64 cz = 0.0;
     for (crd::u32 i = 0; i < vc; ++i)
     {
         const crd::u32 v = verts[i];
@@ -176,8 +178,8 @@ DagBuildReport build_cluster_dag(const crd::f32* positions, crd::u32 vertex_coun
             // ── Merge group's meshlets into local mesh ────────────────
             crd::containers::Array<crd::u32> local_remap(scratch);
             local_remap.resize(total_verts);
-            constexpr crd::u32 kUnmapped = ~0U;
-            for (crd::u32 i = 0; i < total_verts; ++i) local_remap[i] = kUnmapped;
+            constexpr crd::u32 unmapped = ~0U;
+            for (crd::u32 i = 0; i < total_verts; ++i) local_remap[i] = unmapped;
 
             crd::containers::Array<V3>       local_pos(scratch);
             crd::containers::Array<crd::u32> local_idx(scratch);
@@ -194,7 +196,7 @@ DagBuildReport build_cluster_dag(const crd::f32* positions, crd::u32 vertex_coun
                     {
                         const crd::u8  li = out.cluster_triangles[dc.triangle_offset + ti * 3U + k];
                         const crd::u32 gv = out.cluster_vertices[dc.vertex_offset + li];
-                        if (local_remap[gv] == kUnmapped)
+                        if (local_remap[gv] == unmapped)
                         {
                             local_remap[gv] = static_cast<crd::u32>(local_pos.size());
                             V3 p;
@@ -222,7 +224,7 @@ DagBuildReport build_cluster_dag(const crd::f32* positions, crd::u32 vertex_coun
             for (crd::u32 bi = bv_beg; bi < bv_end; ++bi)
             {
                 const crd::u32 gv = gresult.boundary_vertices[bi];
-                if (gv < total_verts && local_remap[gv] != kUnmapped) locked.push_back(local_remap[gv]);
+                if (gv < total_verts && local_remap[gv] != unmapped) locked.push_back(local_remap[gv]);
             }
 
             // ── QEM decimate ──────────────────────────────────────────

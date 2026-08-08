@@ -218,7 +218,8 @@ TEST_CASE("REN-40-I8: BVH selection matches flat for all test distances",
         params.proj_factor     = 0.005F;
         params.camera_pos[2]   = d;
 
-        crd::containers::Array<crd::u32> sf(&alloc), sb(&alloc);
+        crd::containers::Array<crd::u32> sf(&alloc);
+        crd::containers::Array<crd::u32> sb(&alloc);
         sf.resize(rep.cluster_count);
         sb.resize(rep.cluster_count);
 
@@ -290,7 +291,8 @@ TEST_CASE("REN-40-I8: cook-select-unpack determinism end to end",
 
     mp::DagBuildOptions opts;
 
-    mp::ClusterDagCookResult c1(&alloc), c2(&alloc);
+    mp::ClusterDagCookResult c1(&alloc);
+    mp::ClusterDagCookResult c2(&alloc);
     const auto rep1 = mp::cook_cluster_dag(pos.data(),
         static_cast<crd::u32>(pos.size() / 3U), idx.data(),
         static_cast<crd::u32>(idx.size()), opts, c1, &alloc);
@@ -305,7 +307,8 @@ TEST_CASE("REN-40-I8: cook-select-unpack determinism end to end",
     params.proj_factor     = 0.01F;
     params.camera_pos[2]   = 5.0F;
 
-    crd::containers::Array<crd::u32> s1(&alloc), s2(&alloc);
+    crd::containers::Array<crd::u32> s1(&alloc);
+    crd::containers::Array<crd::u32> s2(&alloc);
     s1.resize(c1.cluster_count);
     s2.resize(c2.cluster_count);
     const crd::u32 n1 = mp::select_clusters_flat(
@@ -314,7 +317,8 @@ TEST_CASE("REN-40-I8: cook-select-unpack determinism end to end",
         c2.packed_clusters.data(), c2.cluster_count, params, s2.data(), c2.cluster_count);
     REQUIRE(n1 == n2);
 
-    mp::ClusterUnpackResult r1(&alloc), r2(&alloc);
+    mp::ClusterUnpackResult r1(&alloc);
+    mp::ClusterUnpackResult r2(&alloc);
     mp::unpack_selected_clusters(
         c1.packed_clusters.data(), c1.cluster_vertices.data(),
         c1.cluster_triangles_packed.data(), c1.positions.data(),

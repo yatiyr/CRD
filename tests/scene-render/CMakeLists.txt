@@ -36,6 +36,17 @@ if(WIN32) # REN-38-F6: the DX12 twins of the advanced-family render gates (the b
 endif()
 
 # REN-38 audit: the DRIFT GATE reads the shipped authored assets — the root rides ctest, so the guard lives in
-# ctest exactly like every cross-config guard (binary-direct runs SKIP rather than passing on nothing).
+# ctest exactly like every cross-config guard (binary-direct runs SKIP rather than passing on nothing). CRD_ASSETS_DIR
+# (the SHIPPED-assets root) MUST stay env-only so a binary-direct run skips instead of falsely passing.
+# ⚠ SCAR (D-007 CEIR grind, 2026-08-08): a catch_discover_tests ENVIRONMENT property CANNOT carry two `;`-joined vars.
+# cmake_parse_arguments flattens "A=x;B=y" into two list elements at capture, then the value is forwarded over a `-D`
+# command line and re-emitted — neither `\;` NOR `\\;` survives (verified: both still generate ENVIRONMENT [==[A]==]
+# [==[B]==], which set_tests_properties misparses so BOTH the 2nd var AND SKIP_RETURN_CODE are lost → RAF-10 skips and
+# the skip scores ***Failed). So: keep the ONE shipped-root var here (single-var ENVIRONMENT works + preserves the
+# skip-gate), and give RAF-10 its OWN app fixtures via a compiled path (CRD_RAF10_APP_ASSETS_DIR, env-overridable).
 catch_discover_tests(crd-scene-render-tests
-    PROPERTIES ENVIRONMENT "CRD_ASSETS_DIR=${CMAKE_SOURCE_DIR}/assets;CRD_APP_ASSETS_DIR=${CMAKE_CURRENT_SOURCE_DIR}/app_assets")
+    PROPERTIES ENVIRONMENT "CRD_ASSETS_DIR=${CMAKE_SOURCE_DIR}/assets")
+# RAF-10's app_assets are this test's OWN fixtures (fixed source location) — a compiled path is robust + config-invariant;
+# the env var still wins if ctest/a dev sets it.
+target_compile_definitions(crd-scene-render-tests PRIVATE
+    CRD_RAF10_APP_ASSETS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/app_assets")

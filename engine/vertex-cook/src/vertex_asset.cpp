@@ -695,7 +695,7 @@ crd::u32 varying_width(const VertexProgramDesc& desc, crd::u32 varying_index) no
         switch (s.kind)
         {
         case VaryingSourceKind::ClipW:    w += 1U; break;
-        case VaryingSourceKind::PrevClip: w += 4U; break; // REN-41 velocity
+        case VaryingSourceKind::PrevClip: // REN-41 velocity — same 4-component clip width as Clip
         case VaryingSourceKind::Clip:     w += 4U; break; // REN-41 velocity
         case VaryingSourceKind::Node:     w += s.comps; break;
         case VaryingSourceKind::Instance:
@@ -2298,10 +2298,11 @@ namespace
         const int cx = c.mul(c.add(bmin[0], bmax[0]), c.kf(0.5));
         const int cy = c.mul(c.add(bmin[1], bmax[1]), c.kf(0.5));
         const int cz = c.mul(c.add(bmin[2], bmax[2]), c.kf(0.5));
-        int clip[4];
+        const int* const rows[4] = {r0, r1, r2, r3};
+        int              clip[4];
         for (crd::u32 i = 0; i < 4U; ++i)
         {
-            const int* row = i == 0U ? r0 : (i == 1U ? r1 : (i == 2U ? r2 : r3));
+            const int* row = rows[i];
             int d = row[3];
             d     = c.add(d, c.mul(row[0], cx));
             d     = c.add(d, c.mul(row[1], cy));
@@ -2713,6 +2714,12 @@ template <typename InFn, typename OpFn>
 }
 
 // The stage dispatch, unchecked — every path out of here runs the shape check in the public wrapper below.
+// This IS the per-StageKind cook dispatch: RT/Cull are already factored to cook_rt/cook_cull, and the procedural
+// stages (TessControl/Task/TessEval/Mesh/procedural-Vertex) each emit ONE coherent stage sharing the same
+// build_stage_nodes + emit_procedural_varyings + Vx context — splitting a single stage out scatters the family
+// from its siblings and reads worse. The codebase suppresses readability-function-size the same way for the CKIR
+// per-KOp emitters (ckir_glsl/hlsl/msl/cuda/eval). 899 statements vs the 800 threshold.
+// NOLINTNEXTLINE(readability-function-size)
 bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd::kir::KEntry& ve)
 {
     if (validate_vertex_program(desc, nullptr) != VertexCookError::Ok) { return false; }

@@ -216,7 +216,8 @@ TEST_CASE("REN-40-I7: determinism",
     const crd::u32 n = mp::select_clusters_flat(
         fx.cook.packed_clusters.data(), fx.cc, params, sel.data(), fx.cc);
 
-    mp::ClusterUnpackResult r1(&fx.alloc), r2(&fx.alloc);
+    mp::ClusterUnpackResult r1(&fx.alloc);
+    mp::ClusterUnpackResult r2(&fx.alloc);
     mp::unpack_selected_clusters(
         fx.cook.packed_clusters.data(), fx.cook.cluster_vertices.data(),
         fx.cook.cluster_triangles_packed.data(), fx.cook.positions.data(),

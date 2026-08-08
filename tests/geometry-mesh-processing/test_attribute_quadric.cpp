@@ -47,14 +47,14 @@ TEST_CASE("REN-40-C1 GATE: an attribute quadric with zero channels IS the plain 
     const V3    p1{0.0F, 0.0F, 0.0F};
     const V3    p2{1.0F, 0.0F, 0.0F};
     const V3    p3{0.0F, 1.0F, 0.0F};
-    const Plane pl = tri_plane(p1, p2, p3);
+    const Plane pln = tri_plane(p1, p2, p3);
 
     mp::Quadric<crd::f32> plain{};
-    plain += mp::Quadric<crd::f32>::from_plane(pl.a, pl.b, pl.c, pl.d) * 0.5F;
+    plain += mp::Quadric<crd::f32>::from_plane(pln.a, pln.b, pln.c, pln.d) * 0.5F;
 
     mp::AttributeQuadric<crd::f32, 0U>  aq{};
     mp::AttributeGradient<crd::f32>     none[1]{};
-    mp::accumulate_face<crd::f32, 0U>(aq, pl.a, pl.b, pl.c, pl.d, none, 0.5F);
+    mp::accumulate_face<crd::f32, 0U>(aq, pln.a, pln.b, pln.c, pln.d, none, 0.5F);
     const mp::Quadric<crd::f32> folded = mp::fold(aq);
 
     CHECK(std::memcmp(static_cast<const void*>(plain.data), static_cast<const void*>(folded.data),
@@ -84,8 +84,8 @@ TEST_CASE("REN-40-C1 GATE: the per-face attribute model interpolates the corners
     CHECK(at(p2) == Catch::Approx(s2).margin(1e-5));
     CHECK(at(p3) == Catch::Approx(s3).margin(1e-5));
 
-    const Plane    pl    = tri_plane(p1, p2, p3);
-    const crd::f32 g_dot_n = (grad.g.x * pl.a) + (grad.g.y * pl.b) + (grad.g.z * pl.c);
+    const Plane    pln   = tri_plane(p1, p2, p3);
+    const crd::f32 g_dot_n = (grad.g.x * pln.a) + (grad.g.y * pln.b) + (grad.g.z * pln.c);
     CHECK(g_dot_n == Catch::Approx(0.0F).margin(1e-5));
 
     // a degenerate (collinear) triangle must yield a CONSTANT model, never a NaN
@@ -113,9 +113,9 @@ TEST_CASE("REN-40-C1 GATE: the attribute term is zero for a consistent field and
 
     const auto add_face = [](mp::AttributeQuadric<crd::f32, 1U>& q, const V3& q1, const V3& q2, const V3& q3,
                              crd::f32 v1, crd::f32 v2, crd::f32 v3) {
-        const Plane                     pl = tri_plane(q1, q2, q3);
+        const Plane                     pln = tri_plane(q1, q2, q3);
         mp::AttributeGradient<crd::f32> gr[1]{mp::plane_gradient(q1, q2, q3, v1, v2, v3)};
-        mp::accumulate_face<crd::f32, 1U>(q, pl.a, pl.b, pl.c, pl.d, gr, 1.0F);
+        mp::accumulate_face<crd::f32, 1U>(q, pln.a, pln.b, pln.c, pln.d, gr, 1.0F);
     };
 
     mp::AttributeQuadric<crd::f32, 1U> consistent{};
@@ -163,12 +163,12 @@ TEST_CASE("REN-40-C1 GATE: attribute quadric accumulation is byte-identical acro
             const V3    p1{f * 0.13F, 0.0F, 0.0F};
             const V3    p2{1.0F + (f * 0.07F), 0.29F, f * 0.11F};
             const V3    p3{0.0F, 1.0F + (f * 0.03F), 0.5F};
-            const Plane pl = tri_plane(p1, p2, p3);
+            const Plane pln = tri_plane(p1, p2, p3);
             mp::AttributeGradient<crd::f32> gr[2]{
                 mp::plane_gradient(p1, p2, p3, f, f + 1.0F, f * 2.0F),
                 mp::plane_gradient(p1, p2, p3, -f, 0.5F, f * 0.25F),
             };
-            mp::accumulate_face<crd::f32, 2U>(q, pl.a, pl.b, pl.c, pl.d, gr, 0.5F + (f * 0.01F));
+            mp::accumulate_face<crd::f32, 2U>(q, pln.a, pln.b, pln.c, pln.d, gr, 0.5F + (f * 0.01F));
         }
         return mp::fold(q);
     };

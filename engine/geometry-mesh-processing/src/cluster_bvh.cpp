@@ -37,7 +37,7 @@ struct Aabb
         }
     }
 
-    crd::f32 half_area() const noexcept
+    [[nodiscard]] crd::f32 half_area() const noexcept
     {
         const crd::f32 dx = mx[0] - mn[0];
         const crd::f32 dy = mx[1] - mn[1];
@@ -45,14 +45,14 @@ struct Aabb
         return dx * dy + dy * dz + dz * dx;
     }
 
-    bool valid() const noexcept { return mn[0] <= mx[0]; }
+    [[nodiscard]] bool valid() const noexcept { return mn[0] <= mx[0]; }
 };
 
 // ── Bounding-sphere merge ────────────────────────────────────────────────
 // Safe when c1==oc (in-place accumulation): r1 is by-value, and each
 // oc[k] write follows the c1[k] read in the same expression.
 
-static void merge_sphere(const crd::f32* c1, crd::f32 r1,
+void merge_sphere(const crd::f32* c1, crd::f32 r1,
                          const crd::f32* c2, crd::f32 r2,
                          crd::f32* oc, crd::f32& out_r) noexcept
 {
@@ -88,7 +88,7 @@ static void merge_sphere(const crd::f32* c1, crd::f32 r1,
 
 // ── 16-bin SAH ───────────────────────────────────────────────────────────
 
-static constexpr crd::u32 kBinCount = 16U;
+constexpr crd::u32 kBinCount = 16U;
 
 struct SahBin
 {
@@ -103,14 +103,15 @@ struct SahSplit
     crd::f32 threshold = 0.0F;
 };
 
-static SahSplit find_best_split(const DagCluster* clusters, const crd::u32* idx,
+SahSplit find_best_split(const DagCluster* clusters, const crd::u32* idx,
                                 crd::u32 begin, crd::u32 end) noexcept
 {
     SahSplit best;
 
     for (crd::u32 axis = 0U; axis < 3U; ++axis)
     {
-        crd::f32 cmin = FLT_MAX, cmax = -FLT_MAX;
+        crd::f32 cmin = FLT_MAX;
+        crd::f32 cmax = -FLT_MAX;
         for (crd::u32 i = begin; i < end; ++i)
         {
             const crd::f32 c = clusters[idx[i]].center[axis];
@@ -172,7 +173,8 @@ static SahSplit find_best_split(const DagCluster* clusters, const crd::u32* idx,
         crd::f32 best_extent = -1.0F;
         for (crd::u32 axis = 0U; axis < 3U; ++axis)
         {
-            crd::f32 cmin = FLT_MAX, cmax = -FLT_MAX;
+            crd::f32 cmin = FLT_MAX;
+            crd::f32 cmax = -FLT_MAX;
             for (crd::u32 i = begin; i < end; ++i)
             {
                 const crd::f32 c = clusters[idx[i]].center[axis];
@@ -193,11 +195,12 @@ static SahSplit find_best_split(const DagCluster* clusters, const crd::u32* idx,
 
 // ── Partition ────────────────────────────────────────────────────────────
 
-static crd::u32 partition_indices(crd::u32* idx, crd::u32 begin, crd::u32 end,
+crd::u32 partition_indices(crd::u32* idx, crd::u32 begin, crd::u32 end,
                                   crd::u32 axis, crd::f32 threshold,
                                   const DagCluster* clusters) noexcept
 {
-    crd::u32 lo = begin, hi = end;
+    crd::u32 lo = begin;
+    crd::u32 hi = end;
     while (lo < hi)
     {
         if (clusters[idx[lo]].center[axis] < threshold)

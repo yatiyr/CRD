@@ -171,15 +171,15 @@ ClusterGroupReport group_meshlets(const MeshletBuildResult& meshlets, crd::u32 v
     // ── Step 3: greedy graph partitioning ─────────────────────────────────
     crd::containers::Array<crd::u32> meshlet_group(scratch);
     meshlet_group.resize(mc);
-    constexpr crd::u32 kNoGroup = ~0U;
-    for (crd::u32 i = 0; i < mc; ++i) meshlet_group[i] = kNoGroup;
+    constexpr crd::u32 no_group = ~0U;
+    for (crd::u32 i = 0; i < mc; ++i) meshlet_group[i] = no_group;
 
     crd::u32                         group_idx = 0U;
     crd::containers::Array<crd::u32> cur_group(scratch);
 
     for (crd::u32 seed = 0U; seed < mc; ++seed)
     {
-        if (meshlet_group[seed] != kNoGroup) continue;
+        if (meshlet_group[seed] != no_group) continue;
 
         cur_group.clear();
         cur_group.push_back(seed);
@@ -187,7 +187,7 @@ ClusterGroupReport group_meshlets(const MeshletBuildResult& meshlets, crd::u32 v
 
         while (static_cast<crd::u32>(cur_group.size()) < tgs)
         {
-            crd::u32 best_m     = kNoGroup;
+            crd::u32 best_m     = no_group;
             crd::u32 best_score = 0U;
 
             for (crd::u32 gi = 0; gi < static_cast<crd::u32>(cur_group.size()); ++gi)
@@ -198,7 +198,7 @@ ClusterGroupReport group_meshlets(const MeshletBuildResult& meshlets, crd::u32 v
                 for (crd::u32 ai = adj_beg; ai < adj_end; ++ai)
                 {
                     const crd::u32 nb = out.adjacency.neighbors[ai];
-                    if (meshlet_group[nb] != kNoGroup) continue;
+                    if (meshlet_group[nb] != no_group) continue;
 
                     crd::u32 score = 0U;
                     for (crd::u32 gj = 0; gj < static_cast<crd::u32>(cur_group.size()); ++gj)
@@ -213,7 +213,7 @@ ClusterGroupReport group_meshlets(const MeshletBuildResult& meshlets, crd::u32 v
                         }
                     }
 
-                    if (score > best_score || (score == best_score && (best_m == kNoGroup || nb < best_m)))
+                    if (score > best_score || (score == best_score && (best_m == no_group || nb < best_m)))
                     {
                         best_m     = nb;
                         best_score = score;
@@ -221,7 +221,7 @@ ClusterGroupReport group_meshlets(const MeshletBuildResult& meshlets, crd::u32 v
                 }
             }
 
-            if (best_m == kNoGroup) break;
+            if (best_m == no_group) break;
             cur_group.push_back(best_m);
             meshlet_group[best_m] = group_idx;
         }
@@ -242,7 +242,7 @@ ClusterGroupReport group_meshlets(const MeshletBuildResult& meshlets, crd::u32 v
 
     crd::containers::Array<crd::u32> bv_gen(scratch);
     bv_gen.resize(vertex_count);
-    for (crd::u32 i = 0; i < vertex_count; ++i) bv_gen[i] = kNoGroup;
+    for (crd::u32 i = 0; i < vertex_count; ++i) bv_gen[i] = no_group;
 
     for (crd::u32 g = 0; g < group_idx; ++g)
     {

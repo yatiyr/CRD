@@ -13,6 +13,7 @@
 #include <crd/gpu/frame_graph.hpp>  // REN-1 pt-2 (D-007 row 98): the DX12 frame graph (Dx12FrameGraph + create_frame_graph)
 
 #include <crd/containers/array.hpp> // REN-1 pt-2: the frame graph's node/pass/slot arrays (no std containers)
+#include <crd/containers/hash.hpp>  // fnv1a_64: content-hash identity for the DXR pipeline cache (see DxrPipe::key SCAR)
 #include <crd/memory/allocator.hpp> // REN-1 pt-2: crd::memory::default_allocator() for those arrays
 
 #include <crd/core/types.hpp>
@@ -2443,7 +2444,11 @@ public:
     // renames its single export.
     struct DxrPipe
     {
-        const void*                    key[6]{}; // rg / ms / ch / ah / isect / callable — every stage is identity
+        // ⛔⛔ SCAR (D-007 CEIR grind, 2026-08-08): key by CONTENT HASH of each stage's DXIL, NOT its data pointer.
+        // The cache outlives the programs: a freed any-hit program's DXIL buffer gets reused for the NEXT program at
+        // the SAME address (~10% of the time), so a pointer key returned a STALE state object + SBT — the old
+        // any-hit ran and the REN-38 "ignore every hit" gate flaked (`1 1 -1 -1` = the previous cutoff's result).
+        crd::u64                       key[6]{}; // fnv1a_64 of rg / ms / ch / ah / isect / callable DXIL (0 = absent)
         ComPtr<ID3D12StateObject>      state;
         ComPtr<ID3D12Resource>         sbt;
         D3D12_GPU_VIRTUAL_ADDRESS      sbt_va       = 0;
@@ -2568,10 +2573,21 @@ public:
         const bool has_ah = ah.data() != nullptr && ah.size() > 0U;
         const bool has_is = isect.data() != nullptr && isect.size() > 0U; // REN-38-F13
         const bool has_cl = call.data() != nullptr && call.size() > 0U;
+        // Content-hash identity (see the SCAR on DxrPipe::key): a stage's key is fnv1a_64 over its DXIL bytes, so a
+        // freed-then-reallocated program can never alias a stale pipeline, and two identical shaders correctly share.
+        const auto kh = [](crd::containers::ConstSpan<crd::u8> s) -> crd::u64 {
+            return (s.data() == nullptr || s.size() == 0U) ? 0U : crd::containers::fnv1a_64(s.data(), s.size());
+        };
+        const crd::u64 k0 = kh(rg);
+        const crd::u64 k1 = kh(ms);
+        const crd::u64 k2 = kh(ch);
+        const crd::u64 k3 = kh(ah);
+        const crd::u64 k4 = kh(isect);
+        const crd::u64 k5 = kh(call);
         for (crd::u32 i = 0; i < m_dxr_n; ++i)
         {
-            if (m_dxr[i].key[0] == rg.data() && m_dxr[i].key[1] == ms.data() && m_dxr[i].key[2] == ch.data()
-                && m_dxr[i].key[3] == ah.data() && m_dxr[i].key[4] == isect.data() && m_dxr[i].key[5] == call.data())
+            if (m_dxr[i].key[0] == k0 && m_dxr[i].key[1] == k1 && m_dxr[i].key[2] == k2 && m_dxr[i].key[3] == k3
+                && m_dxr[i].key[4] == k4 && m_dxr[i].key[5] == k5)
             {
                 return &m_dxr[i];
             }
@@ -2639,12 +2655,12 @@ public:
         sod.pSubobjects   = so;
 
         DxrPipe out{};
-        out.key[0] = rg.data();
-        out.key[1] = ms.data();
-        out.key[2] = ch.data();
-        out.key[3] = ah.data(); // REN-38 audit: the any-hit joins the pipeline identity
-        out.key[4] = isect.data(); // REN-38-F13: and so do the intersection + callable stages
-        out.key[5] = call.data();
+        out.key[0] = k0;
+        out.key[1] = k1;
+        out.key[2] = k2;
+        out.key[3] = k3; // REN-38 audit: the any-hit joins the pipeline identity (by CONTENT — see the SCAR above)
+        out.key[4] = k4; // REN-38-F13: and so do the intersection + callable stages
+        out.key[5] = k5;
         out.has_callable = has_cl;
         if (FAILED(m_dxr_device->CreateStateObject(&sod, IID_PPV_ARGS(&out.state)))) { return nullptr; }
         ComPtr<ID3D12StateObjectProperties> props;

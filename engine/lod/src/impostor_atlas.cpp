@@ -81,7 +81,8 @@ void rasterise_triangle(Tile& tile, const crd::f32 p[3][2], const crd::f32 z[3],
     const crd::f32 inv_ext = (half_extent > 1.0e-12F) ? 0.5F / half_extent : 0.0F;
 
     // screen coords: map [-half_extent, half_extent] → [0, tile_w/h)
-    crd::f32 sx[3], sy[3];
+    crd::f32 sx[3];
+    crd::f32 sy[3];
     for (int i = 0; i < 3; ++i)
     {
         sx[i] = (p[i][0] * inv_ext + 0.5F) * tw;
@@ -89,7 +90,10 @@ void rasterise_triangle(Tile& tile, const crd::f32 p[3][2], const crd::f32 z[3],
     }
 
     // bounding box, clipped to tile
-    crd::f32 min_x = sx[0], max_x = sx[0], min_y = sy[0], max_y = sy[0];
+    crd::f32 min_x = sx[0];
+    crd::f32 max_x = sx[0];
+    crd::f32 min_y = sy[0];
+    crd::f32 max_y = sy[0];
     for (int i = 1; i < 3; ++i)
     {
         if (sx[i] < min_x) { min_x = sx[i]; }
@@ -107,9 +111,12 @@ void rasterise_triangle(Tile& tile, const crd::f32 p[3][2], const crd::f32 z[3],
     if (iy1 > static_cast<crd::i32>(tile.h)) { iy1 = static_cast<crd::i32>(tile.h); }
 
     // edge function: e(p) = (v1-v0) × (p-v0) — positive inside for CCW winding
-    const crd::f32 dx01 = sx[1] - sx[0], dy01 = sy[1] - sy[0];
-    const crd::f32 dx12 = sx[2] - sx[1], dy12 = sy[2] - sy[1];
-    const crd::f32 dx20 = sx[0] - sx[2], dy20 = sy[0] - sy[2];
+    const crd::f32 dx01 = sx[1] - sx[0];
+    const crd::f32 dy01 = sy[1] - sy[0];
+    const crd::f32 dx12 = sx[2] - sx[1];
+    const crd::f32 dy12 = sy[2] - sy[1];
+    const crd::f32 dx20 = sx[0] - sx[2];
+    const crd::f32 dy20 = sy[0] - sy[2];
     const crd::f32 area2 = dx01 * (sy[2] - sy[0]) - dy01 * (sx[2] - sx[0]);
     if (fabsf_crd(area2) < 1.0e-6F) { return; } // degenerate
     const crd::f32 inv_area2 = 1.0F / area2;
@@ -261,8 +268,8 @@ ImpostorBakeReport bake_impostor_atlas(const crd::resources::MeshResource& mesh,
     // ⭐⭐ REN-41: SUPERSAMPLE level 0. Rasterise each tile at `tile*SS` and box-downsample to `tile`, so the
     // silhouette coverage becomes FRACTIONAL (antialiased) instead of a binary 0/255 edge — the single biggest
     // per-impostor quality fix. SS=4 → 16 subsamples/texel, enough for a clean edge at impostor scale.
-    constexpr crd::u32 kSS = 4U;
-    const crd::u32     hi  = tile * kSS;
+    constexpr crd::u32 ss = 4U;
+    const crd::u32     hi  = tile * ss;
     crd::containers::Array<crd::f32> depth_buf(scratch);
     depth_buf.resize(static_cast<crd::usize>(hi) * hi);
     crd::containers::Array<crd::u8> hi_rgba(scratch);
@@ -284,10 +291,13 @@ ImpostorBakeReport bake_impostor_atlas(const crd::resources::MeshResource& mesh,
         {
             const crd::f32 ox = (static_cast<crd::f32>(tx) + 0.5F) / static_cast<crd::f32>(grid) * 2.0F - 1.0F;
             const crd::f32 oy = (static_cast<crd::f32>(ty) + 0.5F) / static_cast<crd::f32>(grid) * 2.0F - 1.0F;
-            crd::f32 dx, dy, dz;
+            crd::f32 dx;
+            crd::f32 dy;
+            crd::f32 dz;
             oct_decode_cpu(ox, oy, dx, dy, dz);
             V3 fwd = {dx, dy, dz};
-            V3 right, up;
+            V3 right;
+            V3 up;
             build_basis(fwd, right, up);
 
             for (crd::u32 di = 0; di < hi * hi; ++di) { depth_buf[di] = 1.0e30F; }
@@ -328,15 +338,15 @@ ImpostorBakeReport bake_impostor_atlas(const crd::resources::MeshResource& mesh,
                 for (crd::u32 x = 0; x < tile; ++x)
                 {
                     crd::u32 asum = 0U;
-                    for (crd::u32 sy = 0; sy < kSS; ++sy)
+                    for (crd::u32 sy = 0; sy < ss; ++sy)
                     {
-                        for (crd::u32 sx = 0; sx < kSS; ++sx)
+                        for (crd::u32 sx = 0; sx < ss; ++sx)
                         {
-                            const crd::usize si = (static_cast<crd::usize>(y * kSS + sy) * hi + (x * kSS + sx)) * 4U;
+                            const crd::usize si = (static_cast<crd::usize>(y * ss + sy) * hi + (x * ss + sx)) * 4U;
                             asum += hi_rgba[si + 3U];
                         }
                     }
-                    const crd::u32 cov = asum / (kSS * kSS); // 0..255 fractional coverage
+                    const crd::u32 cov = asum / (ss * ss); // 0..255 fractional coverage
                     crd::u8* d = lvl_texel(0U, tx, ty, x, y);
                     d[0] = 204U; d[1] = 204U; d[2] = 204U; d[3] = static_cast<crd::u8>(cov);
                     if (cov > 0U) { ++tile_covered; }

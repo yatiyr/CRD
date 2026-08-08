@@ -350,7 +350,7 @@ TEST_CASE("RAF-10 GATE: an application customises the renderer without engine ed
     const char* eroot = std::getenv("CRD_ASSETS_DIR");
     const char* aroot = std::getenv("CRD_APP_ASSETS_DIR");
     if (eroot == nullptr || eroot[0] == '\0') { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
-    if (aroot == nullptr || aroot[0] == '\0') { SKIP("CRD_APP_ASSETS_DIR not set (run through ctest)"); }
+    if (aroot == nullptr || aroot[0] == '\0') { aroot = CRD_RAF10_APP_ASSETS_DIR; } // compiled fallback (see CMakeLists SCAR)
     auto raster = gpu::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
     run_raf10_app(*vk, *raster, eroot, aroot);
@@ -368,7 +368,7 @@ TEST_CASE("RAF-10 GATE (DX12): an application customises the renderer without en
     const char* eroot = std::getenv("CRD_ASSETS_DIR");
     const char* aroot = std::getenv("CRD_APP_ASSETS_DIR");
     if (eroot == nullptr || eroot[0] == '\0') { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
-    if (aroot == nullptr || aroot[0] == '\0') { SKIP("CRD_APP_ASSETS_DIR not set (run through ctest)"); }
+    if (aroot == nullptr || aroot[0] == '\0') { aroot = CRD_RAF10_APP_ASSETS_DIR; } // compiled fallback (see CMakeLists SCAR)
     run_raf10_app(*gctx, *raster, eroot, aroot);
 }
 #endif

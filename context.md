@@ -5,7 +5,7 @@
 
 ---
 
-## Current focus — CEIR is the master spine of D-007 (design phase DONE; CEIR-1 next)
+## Current focus — CEIR is the master spine of D-007 (CEIR-1a CLOSED 2026-08-08; CEIR-1b next)
 
 **⛔ THE LIVE TRACKER IS `docs/detours/D-007-ceir-tracker.md`** (CEIR bands 0–32 + the RAH parallel track). CEIR — the
 Cerid Execution IR — is the new master architectural spine (user-directed 2026-08-07): every reusable algorithm becomes
@@ -30,9 +30,13 @@ Implementation forks require `isolation:"worktree"` + a tight mandate ([[feedbac
 
 ## Active state
 
-- **CEIR (spine) — design phase ✅; CEIR-1a is the first line of code**, gated only on ADR-0109 (✅ Accepted). After the
-  accepted 0a–0z batch is committed + CEIR-0f lands: open **CEIR-1a** (`crd::ceir::{Context,Module,Operation,Value,
-  Block,Region}` with arena storage). Band order + per-slice contracts + §§: the CEIR tracker.
+- **CEIR (spine) — CEIR-1a ✅ CLOSED (4-config per-slice sweep PASS, 2026-08-08).** `crd-ceir` module +
+  `Context/Module/Operation/Value/Block/Region` + intrusive in-arena def-use + `crd::memory::GrowableLinearAllocator`
+  (moved to crd-memory) + `crd-ceir-invariants` I3/I5 gates — all green across debug/asan/shipping-LTCG/tidy. The full
+  sweep peeled **7 pre-existing cross-band blockers** (RAF/REN/CKIR bands never passed shipping-LTCG/asan-complete/tidy);
+  all fixed gold-standard (2 real engine bugs: DX12+Vulkan RT pipeline-cache keyed by pointer/handle → content-hash).
+  Log: `docs/sessions/2026-08-08-ceir-1a-and-preexisting-fixes.md`. **NEXT = CEIR-1b** (SymbolTable + `ceir.func`:
+  func.func/call/return, visibility, cross-module symbol refs). Band order + per-slice contracts + §§: the CEIR tracker.
 - **RAH (parallel track) — front = RAH-1a.2.** ✅ RAH-1a.1 (visbuffer fold) DONE + gated (REN-38-F6, 97 asserts, both
   backends). **NEXT = RAH-1a.2 (DELETE, user-chosen):** retire `IGBufferTarget`+`draw_gbuffer`+`create_gbuffer_target`
   (both backends) + `RenderingDesc.gbuffer`; migrate ~8 test sites to the `color`-span MRT path; needs a
@@ -43,6 +47,12 @@ Implementation forks require `isolation:"worktree"` + a tight mandate ([[feedbac
 
 ## Recently landed
 
+- **2026-08-08** — **CEIR-1a CLOSED** (4-config per-slice sweep PASS). The global close peeled 7 pre-existing
+  cross-band blockers (RAF/REN/CKIR left them: shipping-LTCG/asan-complete/tidy had never run to completion) — all
+  fixed gold-standard, incl. two real engine bugs (DX12+Vulkan RT pipeline caches keyed by pointer/handle →
+  fnv1a_64 content hash; DX12 anyhit flake 200/200 after), the RAF-10 catch_discover_tests ENVIRONMENT split, the
+  AS-4 ASan timing guard, the C4743 stale-obj wipe, and 37 clang-tidy errors across 12 files. Uncommitted (19 files;
+  user commits — proposed message in the log). Log: `docs/sessions/2026-08-08-ceir-1a-and-preexisting-fixes.md`.
 - **2026-08-07 (later)** — repository-wide **documentation hygiene pass** (uncommitted): context.md → dashboard
   (history archived), ROADMAP/systems/debt/AGENTS/READMEs refreshed to honest state, retired-module overviews
   DELETED (user direction; git history keeps them), research outcome stamps, ADR index + link fixes. Full report:
@@ -59,6 +69,11 @@ Implementation forks require `isolation:"worktree"` + a tight mandate ([[feedbac
 
 ## Open questions / risks
 
+- **⚡ Per-slice-gate velocity (USER DECISION, not adopted):** the full-tree ASan config takes **hours** because it
+  re-runs GPU compute/render tests (minutes each under instrumentation) that never touch a **host-only** slice like
+  crd-ceir. Proposal (NOT adopted — flagged for ratification): scope per-slice **ASan** to the touched-module test
+  subset (crd-ceir/memory/containers/core), keep **debug/shipping/tidy tree-wide**, run **full-tree ASan at band
+  boundaries only**. Debug/shipping/tidy NOT weakened. Until ratified, CEIR-1b closes under the standard full gate.
 - **Pending user review:** RAH-0 audit (`docs/systems/rah-0-canonical-model-audit.md`) + ADR-0107
   (`docs/decisions/0107-ui-2d-architecture.md`). Track B code is blocked on the ADR-0107 review.
 - `MEMORY.md` ≈ 19.9 KB (hard read limit 24.4 KB) — deeper cull deferred, entries must be MERGED/DROPPED not just

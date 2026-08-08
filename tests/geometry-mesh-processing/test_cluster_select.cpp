@@ -248,7 +248,8 @@ TEST_CASE("REN-40-I6: determinism",
     params.proj_factor     = 0.01F;
     params.camera_pos[2]   = 5.0F;
 
-    crd::containers::Array<crd::u32> s1(&fx.alloc), s2(&fx.alloc);
+    crd::containers::Array<crd::u32> s1(&fx.alloc);
+    crd::containers::Array<crd::u32> s2(&fx.alloc);
     s1.resize(fx.cc);
     s2.resize(fx.cc);
 
