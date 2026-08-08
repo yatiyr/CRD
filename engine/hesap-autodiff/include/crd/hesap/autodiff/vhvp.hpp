@@ -84,7 +84,7 @@ private:
     VNode*                   m_node  = nullptr;
     crd::f64*                m_pool  = nullptr;
     int                      m_n     = 0;
-    int                      m_cap   = 0;
+    [[maybe_unused]] int     m_cap   = 0; // read only by the CRD_ASSERT overflow guard — stripped under NDEBUG (shipping)
     crd::u32                 m_count = 0;
 };
 

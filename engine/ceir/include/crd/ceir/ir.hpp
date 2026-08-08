@@ -12,6 +12,7 @@
 // node threaded into the defining `Value`'s chain. `replace_all_uses_with` (RAUW) splices chains — O(uses), ZERO
 // allocation. `prev` is a pointer-to-pointer so an unlink is O(1) with no head special-case.
 
+#include <crd/ceir/attr.hpp>
 #include <crd/ceir/id.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
@@ -23,6 +24,7 @@ class Operation;
 class Block;
 class Region;
 class Module;
+class SymbolTable; // CEIR-1b — a Module's name→definition index (symbol_table.hpp)
 
 // Where a Value comes from.
 enum class ValueKind : u8
@@ -148,6 +150,30 @@ public:
         return m_regions[i];
     }
 
+    // ── Attributes (CEIR-1c). Mutated via `Context::set_attr` (needs the arena); read here. The dict is a small
+    // arena array of interned (name → AttrId) pairs — O(num_attrs) lookup, and dicts are small. ──
+    [[nodiscard]] u32 num_attrs() const noexcept { return m_num_attrs; }
+    [[nodiscard]] containers::StringView attr_name(u32 i) const noexcept
+    {
+        CRD_ASSERT_MSG(i < m_num_attrs, "attr index out of range");
+        return m_attrs[i].name;
+    }
+    [[nodiscard]] AttrId attr_id_at(u32 i) const noexcept
+    {
+        CRD_ASSERT_MSG(i < m_num_attrs, "attr index out of range");
+        return m_attrs[i].value;
+    }
+    // The interned value of attribute `name`, or an invalid AttrId if the op has no such attribute.
+    [[nodiscard]] AttrId attr(containers::StringView name) const noexcept
+    {
+        for (u32 k = 0; k < m_num_attrs; ++k)
+        {
+            if (m_attrs[k].name == name) { return m_attrs[k].value; }
+        }
+        return {};
+    }
+    [[nodiscard]] bool has_attr(containers::StringView name) const noexcept { return attr(name).valid(); }
+
     [[nodiscard]] Operation* next_in_block() const noexcept { return m_next; }
     [[nodiscard]] Operation* prev_in_block() const noexcept { return m_prev; }
     [[nodiscard]] Block*     parent_block() const noexcept { return m_parent; }
@@ -168,6 +194,8 @@ private:
     u32       m_num_results  = 0;
     Region**  m_regions      = nullptr;
     u32       m_num_regions  = 0;
+    NamedAttr* m_attrs       = nullptr; // CEIR-1c — the attribute dict (interned name→value pairs); grows by rebuild
+    u32        m_num_attrs   = 0;
     Operation* m_next        = nullptr;
     Operation* m_prev        = nullptr;
     Block*     m_parent      = nullptr;
@@ -280,15 +308,18 @@ private:
     Operation* m_parent = nullptr;
 };
 
-// A top-level program unit: a single-region body (the SymbolTable/`ceir.func` layer is CEIR-1b).
+// A top-level program unit: a single-region body + a symbol table (the name→definition index for `ceir.func` and any
+// later symbol-defining op; CEIR-1b §34). Both are created by `Context::create_module`.
 class Module
 {
 public:
-    [[nodiscard]] Region* body() const noexcept { return m_body; }
+    [[nodiscard]] Region*      body() const noexcept { return m_body; }
+    [[nodiscard]] SymbolTable* symbols() const noexcept { return m_symbols; }
 
 private:
     friend class Context;
-    Region* m_body = nullptr;
+    Region*      m_body    = nullptr;
+    SymbolTable* m_symbols = nullptr; // CEIR-1b — arena-allocated alongside the module
 };
 
 // ── cross-referencing inline defs (need the full class set) ──

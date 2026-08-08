@@ -37,6 +37,13 @@ public:
 [[nodiscard]] std::unique_ptr<IGpuContext>
 create_dx12_gpu_context(crd::memory::IAllocator* alloc = crd::memory::default_allocator());
 
+// True iff the D3D12 DEFAULT adapter (the one `D3D12CreateDevice(nullptr, ...)` selects — what both the compute and
+// raster/RT contexts run on) is a SOFTWARE adapter (WARP), reported via `DXGI_ADAPTER_FLAG_SOFTWARE`. GPU numerical
+// tests use this to relax a hardware-tuned tolerance on WARP ONLY (its fp32 transcendentals / rasterization / RT
+// diverge from real silicon by ~orders of magnitude more than hardware) while keeping the tight bar on real GPUs —
+// e.g. GitHub-hosted runners have no GPU, so DX12 falls back to WARP. False if no device/adapter is available.
+[[nodiscard]] bool dx12_default_adapter_is_software() noexcept;
+
 // Mint a Dx12GpuProgram from cooked DXIL — the ONE program constructor (mirror of make_vulkan_program). DXIL is device-
 // independent bytecode, so no device is needed: the program just copies + owns the bytes. Returns nullptr on empty input.
 [[nodiscard]] std::unique_ptr<IGpuProgram>

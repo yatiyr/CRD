@@ -12,6 +12,7 @@
 #include <crd/hesap/tensor/io.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/platform/filesystem.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -44,6 +45,15 @@ crd::containers::String corpus_path(crd::memory::IAllocator* alloc, const char* 
     {
         root = "tests/hesap-tensor/io_corpus";
     }
+    // Ensure <root>/<sub> exists before any write. The `out/` dir is gitignored (a designated output location the
+    // python oracle re-reads), so a FRESH checkout — every CI run — has no out/ dir and io_write_file's fopen("wb")
+    // fails. mkdir -p makes the write robust; it is a harmless no-op for the committed `ref/` dir.
+    crd::containers::String dir(alloc);
+    dir.append(root);
+    dir.append("/");
+    dir.append(sub);
+    (void)crd::platform::fs::create_directories(crd::platform::fs::Path{crd::containers::StringView{dir.data(), dir.size()}});
+
     crd::containers::String s(alloc);
     s.append(root);
     s.append("/");

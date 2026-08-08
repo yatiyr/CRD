@@ -28,7 +28,7 @@ namespace crd::audio::detail
 
 [[nodiscard]] constexpr crd::u16 crc16_update(crd::u16 crc, crd::u8 byte) noexcept
 {
-    crc ^= static_cast<crd::u16>(byte) << 8U;
+    crc = static_cast<crd::u16>(crc ^ (static_cast<crd::u16>(byte) << 8U)); // explicit narrow (gcc -Wconversion)
     for (int i = 0; i < 8; ++i)
     {
         crc = (crc & 0x8000U) != 0 ? static_cast<crd::u16>((crc << 1U) ^ 0x8005U)

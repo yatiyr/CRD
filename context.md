@@ -5,7 +5,7 @@
 
 ---
 
-## Current focus — CEIR is the master spine of D-007 (CEIR-1a CLOSED 2026-08-08; CEIR-1b next)
+## Current focus — CEIR BAND 1 CLOSED 2026-08-08 (1a..1z) — awaiting USER commit → GitHub CI green → CEIR-2
 
 **⛔ THE LIVE TRACKER IS `docs/detours/D-007-ceir-tracker.md`** (CEIR bands 0–32 + the RAH parallel track). CEIR — the
 Cerid Execution IR — is the new master architectural spine (user-directed 2026-08-07): every reusable algorithm becomes
@@ -35,8 +35,57 @@ Implementation forks require `isolation:"worktree"` + a tight mandate ([[feedbac
   (moved to crd-memory) + `crd-ceir-invariants` I3/I5 gates — all green across debug/asan/shipping-LTCG/tidy. The full
   sweep peeled **7 pre-existing cross-band blockers** (RAF/REN/CKIR bands never passed shipping-LTCG/asan-complete/tidy);
   all fixed gold-standard (2 real engine bugs: DX12+Vulkan RT pipeline-cache keyed by pointer/handle → content-hash).
-  Log: `docs/sessions/2026-08-08-ceir-1a-and-preexisting-fixes.md`. **NEXT = CEIR-1b** (SymbolTable + `ceir.func`:
-  func.func/call/return, visibility, cross-module symbol refs). Band order + per-slice contracts + §§: the CEIR tracker.
+  Log: `docs/sessions/2026-08-08-ceir-1a-and-preexisting-fixes.md`.
+- **CEIR-1b ✅ CLOSED (2026-08-08).** `SymbolTable` (per-Module, arena-backed HashMap; duplicate-reject) + `Visibility`
+  + the `ceir.func` dialect (`func.func`/`func.call`/`func.return`, cross-module resolution by name) — all on the
+  generic Context factories (open-world). `tests/ceir` 12/12. **Gated across all 4 configs on crd-ceir** (a complete
+  gate — crd-ceir has zero downstream consumers, grep-proven; full-tree sweep re-earns its keep at the band close).
+- **CEIR-1c ✅ CLOSED (2026-08-08).** Interned typed attribute VALUES (`AttrValue`/`AttrId`, dedup) + a per-op
+  AttrDict (`op->attr(name)` / `Context::set_attr`) + the source map (`register_file`→`file_id`, `file_path`) so
+  every op's `SourceLoc` provenance is real (§111, no retrofit). Dissolved the 1b interim: `func.call`'s callee is
+  now a `SymbolRef` attribute. `tests/ceir` 18/18. Gated all 4 configs (scoped-complete).
+- **CEIR-1d ✅ CLOSED (2026-08-08).** Open-world **dialect registry** + op **traits/interfaces** + **verifier**
+  dispatch — analyses query traits/interfaces, the core NEVER switches on op.kind (new **I6** grep-gate proves it,
+  bites on `switch(op.kind())`). Unknown-dialect ops survive opaquely; the `func` dialect self-registers.
+  `tests/ceir` 22/22. Gated all 4 configs (scoped-complete).
+- **CEIR-1e ✅ CLOSED (2026-08-08).** Deterministic textual **printer** (IR→canonical MLIR-flavored text; pre-order SSA
+  numbering + name-sorted attrs → byte-identical; floats keep a `.`/`e` marker; unknown-dialect opaque; **no layout**,
+  §10) + recursive-descent **parser** (`parse→ParseResult`; use-before-def fixup pass, strings unescaped-before-intern,
+  balanced-brace region count skipping string literals, malformed input rejected w/ byte offset). **`print(parse(x))==x`
+  byte-exact.** MLIR-faithful symbol identity (advisor): func name/visibility now ride ON the op as `sym_name`/
+  `sym_visibility` attrs (SymbolTable = an INDEX over `sym_name`), so identity round-trips through the generic attr
+  machinery and the parser rebuilds the module table. `tests/ceir` **31/31**. Gated across the 5-config contract.
+- **CEIR-1f ✅ CLOSED (2026-08-08).** **Binary serial form** (`binary.hpp`/`binary.cpp`: `serialize`/`deserialize`) —
+  CRDR-shaped (ADR-0038): magic `'CEIR'` + version + FourCC/length chunks a reader **skips by length** when unknown
+  (`STRP`/`SRCM`/`ATTR`/`BODY`). ⛔⛔ field-by-field LE (self-contained `put_u*` + `.ok` `Cursor`; can't link crd-kir).
+  **⭐ Content-pure:** pools built from the module WALK, BODY holds pool INDICES not Context ids → the blob is a pure
+  function of module content (dirty-context byte-equality proven). Carries `Region::kind` (closes the 1e divergence, via
+  new `Context::set_region_kind`); `SourceLoc` survives by PATH; symbol identity via the shared `detail::register_symbol`
+  (extracted from the parser). `serialize∘deserialize∘serialize` byte-exact; agrees with the text form. Malformed input
+  rejected w/ byte offset (bad magic/version/truncation/trailing-junk/oob index). `tests/ceir` **37/37** (`build_rich`
+  now a shared `rich_graph.hpp`). Gated across the 5-config contract; invariants I3/I5/I6 green both OSes.
+- **CEIR-1g ✅ CLOSED (2026-08-08).** **`ModuleBuilder` fluent API** (`builder.hpp`/`builder.cpp`: `ModuleBuilder` +
+  `OpBuilder` proxy + `InsertionGuard`). ⛔⛔ NO privileged bypass — every op routes through `Context::create_operation`
+  + shared `detail::register_symbol`, so a builder module is **byte-identical to the hand-built one** (proven).
+  `verify(&failing)` dispatches the REAL per-kind `Context::verify` (rejection test proves it, no stub); `build()`
+  returns nullptr on a duplicate `sym_name` (op erased, no silent overwrite). `tests/ceir` **41/41**. Gated across the
+  5-config contract.
+- **CEIR-1h ✅ CLOSED (2026-08-08).** **The permanent harness, seeded** (§119/§167): round-trip fuzz (random valid
+  modules via `ModuleBuilder`, fixed xorshift64 seeds — text+binary byte-exact), a `stable_hash` (FNV-1a over the 1f
+  content-pure blob — NEW surface, deterministic + content-derived), and a malformed corpus + single-byte-corruption
+  SWEEP (no crash; ASan is the proof). ⛔⛔ **The fuzz caught 2 real OOM crashes on day one** in code that had passed 4
+  slices of gates — a huge textual def-id and a corrupt binary count; BOTH loaders hardened (text bound by input
+  length; binary counts bounded by chunk length / `kMaxDecodeCount`). `tests/ceir` **46/46**. Gated across the 5-config
+  contract.
+- **CEIR-1z ✅ CLOSED (2026-08-08) — BAND-1 GATE.** A typed hello-world (func + const + call + return) round-trips
+  **text ⇄ binary ⇄ builder byte-identically** and its callee symbol resolves after all three forms
+  (`tests/ceir/test_hello.cpp`). `tests/ceir` **49/49**. Gated across the 5-config contract. ⭐⭐ **BAND 1 CLOSED
+  (1a..1z).** Already committed this session: 1a core (`5f81ce8`) + the 7 pre-existing fixes & 1a docs (`6e6f183 "CEIR-1a
+  finished"`). ⛔ NOW: (A) the USER commits+pushes the remaining **CEIR-1b..1z** batch (~38 files: `engine/ceir/**` +
+  `tests/ceir/**` + `scripts/check_ceir_invariants.{ps1,sh}` + docs) — ONE commit
+  `feat(ceir): band 1 core IR substrate (CEIR-1b..1z)` with the per-slice breakdown in the body (slices overlap in
+  files → not per-slice stageable). (B) then make **GitHub CI GREEN** (whole-repo net; fix reds gold-standard, user
+  commits fix batches). (C) MEMORY.md compaction to <17.1KB during the wait. Only after CI green → **CEIR-2**.
 - **RAH (parallel track) — front = RAH-1a.2.** ✅ RAH-1a.1 (visbuffer fold) DONE + gated (REN-38-F6, 97 asserts, both
   backends). **NEXT = RAH-1a.2 (DELETE, user-chosen):** retire `IGBufferTarget`+`draw_gbuffer`+`create_gbuffer_target`
   (both backends) + `RenderingDesc.gbuffer`; migrate ~8 test sites to the `color`-span MRT path; needs a
@@ -69,11 +118,12 @@ Implementation forks require `isolation:"worktree"` + a tight mandate ([[feedbac
 
 ## Open questions / risks
 
-- **⚡ Per-slice-gate velocity (USER DECISION, not adopted):** the full-tree ASan config takes **hours** because it
-  re-runs GPU compute/render tests (minutes each under instrumentation) that never touch a **host-only** slice like
-  crd-ceir. Proposal (NOT adopted — flagged for ratification): scope per-slice **ASan** to the touched-module test
-  subset (crd-ceir/memory/containers/core), keep **debug/shipping/tidy tree-wide**, run **full-tree ASan at band
-  boundaries only**. Debug/shipping/tidy NOT weakened. Until ratified, CEIR-1b closes under the standard full gate.
+- **Per-slice gate — RATIFIED (2026-08-08):** each slice closes on **2 Windows + 2 Linux configs + tidy**, all
+  clean (win-debug + win-asan + linux-debug + linux-asan + tidy; Linux via WSL), **scoped to the changed module**
+  (crd-ceir has zero downstream, grep-proven → crd-ceir-tests across those configs is complete). **No whole-repo
+  suite per slice** (too slow). **GitHub CI is the whole-repo safety net and must stay GREEN.** See
+  `project_ceir_autonomous_loop_grant`. ⛔ **Between CEIR-1 and CEIR-2: fix CI green** (it has real build/test reds).
+  ⛔ **At CEIR-14: expand its subslices explicitly in the tracker.** GOAL = all bands 1→32 closed.
 - **Pending user review:** RAH-0 audit (`docs/systems/rah-0-canonical-model-audit.md`) + ADR-0107
   (`docs/decisions/0107-ui-2d-architecture.md`). Track B code is blocked on the ADR-0107 review.
 - `MEMORY.md` ≈ 19.9 KB (hard read limit 24.4 KB) — deeper cull deferred, entries must be MERGED/DROPPED not just

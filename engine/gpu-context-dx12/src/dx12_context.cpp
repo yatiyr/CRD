@@ -237,6 +237,24 @@ private:
 
 } // namespace
 
+bool dx12_default_adapter_is_software() noexcept
+{
+    // Match exactly what the contexts run on: create a device on the DEFAULT adapter, then read that adapter's
+    // DXGI_ADAPTER_FLAG_SOFTWARE (WARP). Mirrors Dx12GpuContext::capture_adapter_name.
+    ComPtr<ID3D12Device> device;
+    if (FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)))) { return false; }
+    ComPtr<IDXGIFactory4> factory;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) { return false; }
+    ComPtr<IDXGIAdapter1> adapter;
+    const LUID            luid = device->GetAdapterLuid();
+    if (SUCCEEDED(factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&adapter))) && adapter != nullptr)
+    {
+        DXGI_ADAPTER_DESC1 desc{};
+        if (SUCCEEDED(adapter->GetDesc1(&desc))) { return (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0U; }
+    }
+    return false;
+}
+
 DxilCompileResult compile_hlsl_to_dxil(ShaderStage stage, crd::containers::StringView source,
                                        crd::containers::StringView /*name*/, crd::memory::IAllocator* a)
 {

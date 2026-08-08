@@ -41,13 +41,19 @@ foreach ($f in (Get-ChildItem -Path $dirs -Recurse -Include *.hpp, *.cpp -File))
         if ($line -cmatch $langTokens) {
             $violations += ("I3 {0}:{1} names a shading language/bytecode/compiler '{2}' (crd-ceir is backend-agnostic): {3}" -f $f.Name, $n, $Matches[1], $line.Trim())
         }
+        # ---- I6 (CEIR-1d, §7): open-world dispatch — the core must NEVER switch on an op's kind. Dispatch via traits
+        # (has_trait) or interfaces (get_interface). This catches `switch (op.kind())` / `switch (x->kind())` (the
+        # method form); a `switch` over a CLOSED value enum member like `attr.kind`/`v.kind` (no parens) is fine.
+        if ($line -match 'switch\s*\(.*\bkind\s*\(\s*\)') {
+            $violations += ("I6 {0}:{1} switches on an op KIND - dispatch via traits/interfaces, never switch(op.kind()): {2}" -f $f.Name, $n, $line.Trim())
+        }
     }
 }
 
 if ($violations.Count -gt 0) {
-    Write-Host "crd-ceir invariant violations (ADR-0109 I3/I5):"
+    Write-Host "crd-ceir invariant violations (ADR-0109 I3/I5 + open-world I6):"
     $violations | ForEach-Object { Write-Host "  $_" }
     exit 1
 }
-Write-Host "crd-ceir invariants OK (I3: no shader-lang name/forbidden include; I5: host-only link edges)."
+Write-Host "crd-ceir invariants OK (I3: no shader-lang name/forbidden include; I5: host-only links; I6: no switch on op.kind)."
 exit 0

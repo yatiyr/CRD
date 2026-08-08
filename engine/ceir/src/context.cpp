@@ -1,12 +1,14 @@
 #include <crd/ceir/context.hpp>
 
+#include <crd/ceir/symbol_table.hpp>
 #include <crd/containers/hash.hpp>
 #include <crd/memory/construct.hpp>
 
 namespace crd::ceir
 {
 Context::Context(memory::IAllocator* alloc, usize arena_chunk_bytes)
-    : m_arena(arena_chunk_bytes, alloc), m_op_names(alloc) // GrowableLinearAllocator is (chunk_bytes, parent)
+    : m_arena(arena_chunk_bytes, alloc), m_op_names(alloc), // GrowableLinearAllocator is (chunk_bytes, parent)
+      m_attr_values(alloc), m_files(alloc), m_dialects(&m_arena), m_op_infos(&m_arena), m_interface_names(alloc)
 {
 }
 
@@ -47,7 +49,67 @@ Module* Context::create_module(RegionKind body_kind)
 {
     Module* const m = memory::construct<Module>(m_arena);
     m->m_body       = create_region(body_kind);
+    m->m_symbols    = memory::construct<SymbolTable>(m_arena, &m_arena); // arena-backed name→def index (§34)
     return m;
+}
+
+containers::StringView Context::intern_symbol(containers::StringView name)
+{
+    if (name.empty()) { return {}; }
+    char* const stored = static_cast<char*>(m_arena.allocate(name.size(), 1U));
+    for (usize i = 0; i < name.size(); ++i) { stored[i] = name[i]; }
+    return containers::StringView(stored, name.size());
+}
+
+AttrId Context::intern_attr(const AttrValue& v)
+{
+    for (usize i = 0; i < m_attr_values.size(); ++i)
+    {
+        if (m_attr_values[i] == v) { return AttrId{static_cast<u32>(i + 1U)}; } // dedup by value
+    }
+    m_attr_values.push_back(v);
+    return AttrId{static_cast<u32>(m_attr_values.size())}; // index + 1 (0 = invalid)
+}
+
+AttrValue Context::attr_value(AttrId id) const noexcept
+{
+    if (!id.valid() || id.value > m_attr_values.size()) { return AttrValue::of_int(0); }
+    return m_attr_values[id.value - 1U];
+}
+
+void Context::set_attr(Operation* op, containers::StringView name, AttrId value)
+{
+    for (u32 k = 0; k < op->m_num_attrs; ++k) // overwrite in place if `name` is already present
+    {
+        if (op->m_attrs[k].name == name)
+        {
+            op->m_attrs[k].value = value;
+            return;
+        }
+    }
+    const u32        n     = op->m_num_attrs; // grow by rebuild (old slice leaks into the arena — operand-grow policy)
+    NamedAttr* const grown = memory::construct_array<NamedAttr>(m_arena, n + 1U);
+    for (u32 k = 0; k < n; ++k) { grown[k] = op->m_attrs[k]; }
+    grown[n]        = NamedAttr{intern_symbol(name), value};
+    op->m_attrs     = grown;
+    op->m_num_attrs = n + 1U;
+}
+
+u32 Context::register_file(containers::StringView path)
+{
+    if (path.empty()) { return 0U; }
+    for (usize i = 0; i < m_files.size(); ++i)
+    {
+        if (m_files[i] == path) { return static_cast<u32>(i + 1U); } // dedup by path
+    }
+    m_files.push_back(intern_symbol(path)); // arena-copy so the id is stable for the Context's life
+    return static_cast<u32>(m_files.size()); // index + 1 (0 = unknown)
+}
+
+containers::StringView Context::file_path(u32 file_id) const noexcept
+{
+    if (file_id == 0U || file_id > m_files.size()) { return {}; }
+    return m_files[file_id - 1U];
 }
 
 Region* Context::create_region(RegionKind kind)
@@ -55,6 +117,11 @@ Region* Context::create_region(RegionKind kind)
     Region* const r = memory::construct<Region>(m_arena);
     r->m_kind       = kind;
     return r;
+}
+
+void Context::set_region_kind(Region* r, RegionKind kind) noexcept
+{
+    if (r != nullptr) { r->m_kind = kind; }
 }
 
 Block* Context::create_block(u32 num_args, TypeId arg_type)

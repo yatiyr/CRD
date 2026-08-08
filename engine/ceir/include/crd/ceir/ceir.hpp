@@ -8,6 +8,14 @@
 // ⛔ crd-ceir is HOST-ONLY (ADR-0109 §4): it links crd-core/log/memory/containers/units and NOTHING else — no
 // GPU, no kir, no render-graph, no jobs (those are reached through the dependency-inversion provider bridges).
 
+#include <crd/ceir/attr.hpp>
+#include <crd/ceir/binary.hpp>
+#include <crd/ceir/builder.hpp>
 #include <crd/ceir/context.hpp>
+#include <crd/ceir/dialect.hpp>
+#include <crd/ceir/func.hpp>
 #include <crd/ceir/id.hpp>
 #include <crd/ceir/ir.hpp>
+#include <crd/ceir/parse.hpp>
+#include <crd/ceir/print.hpp>
+#include <crd/ceir/symbol_table.hpp>

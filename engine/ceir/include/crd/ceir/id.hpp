@@ -31,6 +31,26 @@ struct TypeId
     friend constexpr std::strong_ordering operator<=>(TypeId, TypeId) noexcept = default;
 };
 
+// An interned attribute-VALUE handle (CEIR-1c). Identical attribute values share one `AttrId` (the Context dedups),
+// so attribute equality is a `u32` compare and repeated values cost no storage. 0 = none/invalid.
+struct AttrId
+{
+    u32 value = 0;
+    [[nodiscard]] constexpr bool valid() const noexcept { return value != 0; }
+    friend constexpr bool operator==(AttrId, AttrId) noexcept = default;
+    friend constexpr std::strong_ordering operator<=>(AttrId, AttrId) noexcept = default;
+};
+
+// An interned OP-INTERFACE identity (CEIR-1d) — a dynamic capability an op-kind implements, so analyses dispatch
+// through the interface instead of a central `switch(op.kind)`. 0 = none/invalid.
+struct InterfaceId
+{
+    u32 value = 0;
+    [[nodiscard]] constexpr bool valid() const noexcept { return value != 0; }
+    friend constexpr bool operator==(InterfaceId, InterfaceId) noexcept = default;
+    friend constexpr std::strong_ordering operator<=>(InterfaceId, InterfaceId) noexcept = default;
+};
+
 // Provenance carried on EVERY operation from day one (ADR-0109 §6). CEIR-1c fills `file_id` from the source-map
 // table; CEIR-1a reserves the field so no later slice retrofits it into an arena-packed struct.
 struct SourceLoc

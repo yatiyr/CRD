@@ -34,10 +34,16 @@ while IFS= read -r hit; do
     [[ -n "$hit" ]] && violations+=("I3 names a shading language/bytecode/compiler: $hit")
 done < <(grep -rnE "$lang_tokens" "$ceir/include" "$ceir/src" 2>/dev/null || true)
 
+# I6 (CEIR-1d, §7): open-world dispatch — the core must NEVER switch on an op's kind. `switch (op.kind())` (method
+# form); a `switch` over a CLOSED value enum member like `attr.kind` (no parens) is fine.
+while IFS= read -r hit; do
+    [[ -n "$hit" ]] && violations+=("I6 switches on an op KIND (dispatch via traits/interfaces): $hit")
+done < <(grep -rnE "switch[[:space:]]*\(.*\bkind[[:space:]]*\([[:space:]]*\)" "$ceir/include" "$ceir/src" 2>/dev/null || true)
+
 if [[ ${#violations[@]} -gt 0 ]]; then
-    echo "crd-ceir invariant violations (ADR-0109 I3/I5):"
+    echo "crd-ceir invariant violations (ADR-0109 I3/I5 + open-world I6):"
     printf '  %s\n' "${violations[@]}"
     exit 1
 fi
-echo "crd-ceir invariants OK (I3: no shader-lang/forbidden include; I5: host-only link edges)."
+echo "crd-ceir invariants OK (I3: no shader-lang/forbidden include; I5: host-only links; I6: no switch on op.kind)."
 exit 0
