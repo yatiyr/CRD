@@ -37,21 +37,21 @@ namespace
 Module* build_via_builder(Context& ctx)
 {
     ModuleBuilder mb(ctx);
-    Block* const  top = mb.add_block(1U, TypeId{1U});
+    Block* const  top = mb.add_block(1U, ctx.type_i32());
     Value* const  a0  = top->arg(0U);
 
     Value* const r =
-        mb.op("test", "add").operand(a0).operand(a0).result(TypeId{2U}).attr("k", ctx.attr_int(7)).build_result();
+        mb.op("test", "add").operand(a0).operand(a0).result(ctx.type_f32()).attr("k", ctx.attr_int(7)).build_result();
 
     Operation* const rop = mb.op("scf", "region").operand(r).regions(1U).build();
     {
         InsertionGuard g(mb);
-        Block* const   inner      = mb.add_block(1U, TypeId{1U}, rop->region(0));
+        Block* const   inner      = mb.add_block(1U, ctx.type_i32(), rop->region(0));
         Value*         use_ops[2] = {r, inner->arg(0U)};
         mb.op("test", "use").operands(ConstSpan<Value*>(use_ops, 2U)).build();
     }
 
-    Operation* const fn = mb.func("helper", Visibility::Public, 1U, TypeId{1U});
+    Operation* const fn = mb.func("helper", Visibility::Public, 1U, ctx.type_i32());
     {
         InsertionGuard g(mb);
         Block* const   fb         = func::func_body_block(fn);
@@ -61,20 +61,20 @@ Module* build_via_builder(Context& ctx)
     }
 
     Value* call_args[1] = {a0};
-    mb.call("helper", ConstSpan<Value*>(call_args, 1U), 1U, TypeId{1U});
+    mb.call("helper", ConstSpan<Value*>(call_args, 1U), 1U, ctx.type_i32());
     return mb.module();
 }
 
 Module* build_via_hand(Context& ctx)
 {
     Module* const m   = ctx.create_module();
-    Block* const  top = ctx.create_block(1U, TypeId{1U});
+    Block* const  top = ctx.create_block(1U, ctx.type_i32());
     m->body()->append(top);
     Value* const a0 = top->arg(0U);
 
     Value*           add_ops[2] = {a0, a0};
     Operation* const add =
-        ctx.create_operation(ctx.intern_op("test", "add"), ConstSpan<Value*>(add_ops, 2U), 1U, TypeId{2U});
+        ctx.create_operation(ctx.intern_op("test", "add"), ConstSpan<Value*>(add_ops, 2U), 1U, ctx.type_f32());
     ctx.set_attr(add, "k", ctx.attr_int(7));
     top->append(add);
     Value* const r = add->result(0U);
@@ -83,19 +83,19 @@ Module* build_via_hand(Context& ctx)
     Operation* const rop =
         ctx.create_operation(ctx.intern_op("scf", "region"), ConstSpan<Value*>(reg_ops, 1U), 0U, {}, 1U);
     top->append(rop);
-    Block* const inner = ctx.create_block(1U, TypeId{1U});
+    Block* const inner = ctx.create_block(1U, ctx.type_i32());
     rop->region(0)->append(inner);
     Value* use_ops[2] = {r, inner->arg(0U)};
     inner->append(ctx.create_operation(ctx.intern_op("test", "use"), ConstSpan<Value*>(use_ops, 2U), 0U));
 
-    Operation* const fn = func::create_func(ctx, *m, "helper", Visibility::Public, 1U, TypeId{1U});
+    Operation* const fn = func::create_func(ctx, *m, "helper", Visibility::Public, 1U, ctx.type_i32());
     top->append(fn);
     Block* const fb         = func::func_body_block(fn);
     Value*       ret_ops[1] = {fb->arg(0U)};
     fb->append(func::create_return(ctx, ConstSpan<Value*>(ret_ops, 1U)));
 
     Value*           call_args[1] = {a0};
-    Operation* const call = func::create_call(ctx, "helper", ConstSpan<Value*>(call_args, 1U), 1U, TypeId{1U});
+    Operation* const call = func::create_call(ctx, "helper", ConstSpan<Value*>(call_args, 1U), 1U, ctx.type_i32());
     top->append(call);
     return m;
 }
@@ -137,10 +137,10 @@ TEST_CASE("ceir builder: verify() dispatches the real per-kind verifier (no bypa
     crd::memory::MallocAllocator root;
     Context                      ctx(&root);
     Dialect* const               d = ctx.register_dialect("vtest");
-    d->register_op("needsop", 0U, &verify_needs_operand);
+    d->register_op("needsop", {.verify = &verify_needs_operand});
 
     ModuleBuilder mb(ctx);
-    Block* const  top = mb.add_block(1U, TypeId{1U});
+    Block* const  top = mb.add_block(1U, ctx.type_i32());
     Value* const  a0  = top->arg(0U);
 
     (void)mb.op("vtest", "needsop").operand(a0).build(); // 1 operand -> passes

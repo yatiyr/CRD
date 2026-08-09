@@ -1,0 +1,144 @@
+{
+  "schema_version": 1,
+  "dialect": "test",
+  "summary": "A full-surface reference dialect exercising every CEIR-2 schema field - no runtime meaning.",
+  "ops": [
+    {
+      "name": "dummy",
+      "qualified": "test.dummy",
+      "version": 3,
+      "summary": "Shape-coverage op: fixed + variadic operands, required + optional attrs, effects, domain, native, a region.",
+      "docs": "test.dummy is a reference op with no runtime semantics; it exists to keep every generator emission path compiled.",
+      "operands": [
+        {
+          "name": "lhs",
+          "doc": "the fixed leading operand",
+          "variadic": false
+        },
+        {
+          "name": "rest",
+          "doc": "zero or more trailing operands",
+          "variadic": true
+        }
+      ],
+      "results": [
+        {
+          "name": "out",
+          "doc": "the single result"
+        }
+      ],
+      "attributes": [
+        {
+          "name": "axis",
+          "kind": "int",
+          "required": true,
+          "doc": "a required integer attribute"
+        },
+        {
+          "name": "mode",
+          "kind": "string",
+          "required": true,
+          "doc": "a required string attribute"
+        },
+        {
+          "name": "flag",
+          "kind": "bool",
+          "required": false,
+          "doc": "an OPTIONAL attribute - not a builder parameter"
+        }
+      ],
+      "traits": [
+        "Symbol",
+        "IsolatedFromAbove"
+      ],
+      "regions": 1,
+      "effects": [
+        {
+          "family": "GPUCommand"
+        },
+        {
+          "family": "MemoryRead",
+          "target": "operand",
+          "index": 0,
+          "range": [
+            "element"
+          ]
+        },
+        {
+          "family": "MemoryWrite",
+          "target": "result",
+          "index": 0
+        }
+      ],
+      "determinism": "DeterministicWithinTarget",
+      "domain": "HostFrameTime",
+      "native": {
+        "provider": "host",
+        "determinism": "BitExact",
+        "thread_safe": true,
+        "hot_reload_safe": false,
+        "lifetime": "borrows its operands for the duration of the call",
+        "cost": "cheap",
+        "capabilities": [
+          "reference"
+        ]
+      },
+      "type_inference": "same_as_first_operand",
+      "shape_inference": "elementwise",
+      "fold": "identity_when_rest_empty",
+      "deprecation": {
+        "since": "test-v3",
+        "replaced_by": "test.kinds",
+        "note": "reference-only migration metadata, not a real deprecation"
+      }
+    },
+    {
+      "name": "kinds",
+      "qualified": "test.kinds",
+      "version": 1,
+      "summary": "Attribute-kind-coverage op: a required attribute of every remaining kind (float / bool / symbol / type).",
+      "docs": "test.kinds carries a required attribute of each remaining kind, so the builder + smoke exercise every attr factory.",
+      "operands": [],
+      "results": [
+        {
+          "name": "out",
+          "doc": ""
+        }
+      ],
+      "attributes": [
+        {
+          "name": "a_float",
+          "kind": "float",
+          "required": true,
+          "doc": "a required float attribute"
+        },
+        {
+          "name": "a_bool",
+          "kind": "bool",
+          "required": true,
+          "doc": "a required bool attribute"
+        },
+        {
+          "name": "a_sym",
+          "kind": "symbol",
+          "required": true,
+          "doc": "a required symbol-ref attribute"
+        },
+        {
+          "name": "a_type",
+          "kind": "type",
+          "required": true,
+          "doc": "a required type attribute"
+        }
+      ],
+      "traits": [
+        "Pure"
+      ],
+      "regions": 0,
+      "effects": [],
+      "determinism": "",
+      "domain": "",
+      "native": null
+    }
+  ]
+}

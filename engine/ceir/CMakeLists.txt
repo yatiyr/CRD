@@ -9,12 +9,17 @@
 
 crd_collect_sources(SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src")
 crd_collect_sources(HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include")
+# CEIR-2: op dialects DEFINED in engine/ceir/ops/*.ceirop.toml are GENERATED to C++ under generated/ by
+# tools/ceir_opgen/ceir_opgen.py (committed output; the crd-ceir-opgen-drift ctest guards drift). Collected + exposed
+# like the hand-written tree so `#include <crd/ceir/gen/<dialect>_ops.hpp>` resolves and the .cpp links into the lib.
+crd_collect_sources(GENERATED "${CMAKE_CURRENT_SOURCE_DIR}/generated")
 
-add_library(crd-ceir STATIC ${SOURCES} ${HEADERS})
+add_library(crd-ceir STATIC ${SOURCES} ${HEADERS} ${GENERATED})
 
 target_include_directories(crd-ceir
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/generated"
 )
 
 target_link_libraries(crd-ceir

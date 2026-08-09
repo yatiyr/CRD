@@ -1,0 +1,177 @@
+#pragma once
+
+// crd-ceir — the CEIR-5z REFERENCE EXECUTOR (§118): a SLOW, CORRECT semantic interpreter for the core CEIR subset —
+// arith (const/addi/muli/cmpi), ceir.core control flow (scope/if/for/while/switch/match/yield + §20 state/delay/history),
+// and ceir.func calls. Its purpose is differential testing / headless validation / deterministic debugging (§118/§119),
+// NOT speed. ⛔ Dispatch is an Interpreter-OWNED `OpId → EvalFn` table, NOT an OpInfo hook: `register_op` is first-wins
+// idempotent, so a hook attached after the generated registration would silently no-op (the registered-default-empty
+// scar). Semantics are INSTALLED per dialect (open-world — a caller may add or replace); an op with no installed EvalFn is
+// a typed error, never skipped (EMPTY≠UNKNOWN at the executor). Values are wrapping `i64` scalars (real per-width typing
+// joins CEIR-6). State cells are a §20 depth-N ring keyed by the STATIC op instance, persisting across evaluations (incl.
+// across function calls) — `state` ≡ `delay` ≡ `history(depth=1)` under one register mechanism.
+
+#include <crd/ceir/context.hpp>
+#include <crd/ceir/ir.hpp>
+#include <crd/containers/array.hpp>
+#include <crd/containers/hash_map.hpp>
+#include <crd/containers/string_view.hpp>
+#include <crd/core/types.hpp>
+
+#include <atomic> // the CEIR-6c cooperative cancel flag (a primitive, thread-safe monotonic signal — not an std container)
+
+namespace crd::ceir
+{
+class SymbolTable;
+}
+
+namespace crd::ceir::exec
+{
+// The typed failure modes (§118 — a reference executor REPORTS, never crashes or hangs).
+// NOLINTNEXTLINE(performance-enum-size)
+enum class ExecError : u8
+{
+    None = 0,
+    NoSemantics,        // an op-kind with no installed EvalFn (EMPTY≠UNKNOWN at the executor)
+    UnresolvedCall,     // a func.call whose callee symbol does not resolve
+    UndefinedValue,     // an operand read before its value is in the environment
+    BadForStep,         // core.for with step <= 0 (a non-terminating / backwards counted loop)
+    SelectorOutOfRange, // a switch/match selector not in [0, num_regions)
+    UnknownPredicate,   // arith.cmpi with an unrecognized predicate string
+    CondArity,          // a while/if condition region did not yield exactly one value
+    FuelExhausted,      // the step budget ran out (a runaway loop — timeout is not a hang-proof)
+    NoEntry,            // the named entry function was not found in the module
+    BadArity,           // entry/call argument count != the callee's parameter count
+    ParallelBodyStateful, // CEIR-6b: a task.parallel_for body (or a resolved callee) holds a StateEdge cell — results would
+                          // depend on the range split (non-deterministic); a parallel body must be state-free.
+    ParallelYieldArity,   // CEIR-6b: a task.parallel_for body does not yield exactly one value (its per-index map output).
+    BadToken,             // CEIR-6b: an async.await/join on a token value that is not a live session handle (a forged /
+                          // cross-session token — token runtime values are session-scoped; the 6a static verifier catches
+                          // static misuse, this catches a runtime-forged handle instead of silently yielding nothing).
+    Cancelled,            // CEIR-6c: cooperative cancellation was requested (the cancel flag) and the running op observed
+                          // it in the step loop — distinct from FuelExhausted (both stop loops; this is a REQUESTED stop).
+};
+[[nodiscard]] containers::StringView exec_error_name(ExecError e) noexcept;
+
+// The result of an execution: the entry function's `func.return` values, or the FIRST error + the offending op.
+struct ExecResult
+{
+    containers::Array<crd::i64> values;
+    ExecError                   error = ExecError::None;
+    const Operation*            op    = nullptr; // the op the error points at (nullptr when ok / NoEntry)
+    explicit ExecResult(memory::IAllocator* a) : values(a) {}
+    [[nodiscard]] bool ok() const noexcept { return error == ExecError::None; }
+};
+
+class Interpreter;
+// An op-kind's reference semantics: read operands / write results / run sub-regions via `in`. Returns None or a failure.
+using EvalFn = ExecError (*)(Interpreter& in, const Operation& op);
+
+// The reference interpreter. Construct → install semantics (`install_builtin_semantics` or the per-dialect installers) →
+// `invoke`. ⛔ The CALLER registers the module's dialects first (traits are registry state, not serialized — the CEIR-5d
+// finding): the executor reads `StateEdge`/`Terminator` traits + `resolve_call`, which need the dialect registered.
+// ⛔ An Interpreter is ONE EXECUTION SESSION: the fuel budget and the §20 state cells CARRY ACROSS `invoke` calls (so a
+// stateful function keeps its cells between top-level calls). Construct a FRESH Interpreter for an independent run.
+class Interpreter
+{
+public:
+    // `scratch` (null ⇒ `ctx.allocator()`) backs ALL per-run state (the semantics table, cells, frames, EvalFn scratch,
+    // the result). ⛔ For PARALLEL execution (CEIR-6b): a worker range must NOT touch the shared Context arena — give each
+    // sub-interpreter its OWN scratch allocator + build it from a PROTOTYPE (below), and reads of the const Context are
+    // then the only shared access (safe).
+    explicit Interpreter(Context& ctx, crd::u64 max_steps = crd::u64{1} << 24U, memory::IAllocator* scratch = nullptr);
+    // PROTOTYPE constructor (CEIR-6b): copy `proto`'s installed semantics table (intern-free — the keys are already
+    // OpId.value) with FRESH env / cells / fuel over `scratch`. The submitting thread installs once into a prototype; each
+    // parallel range builds its own interpreter from it. Does NOT copy proto's cells/env/fuel (a fresh session).
+    Interpreter(const Interpreter& proto, memory::IAllocator* scratch, crd::u64 max_steps);
+    Interpreter(Interpreter&&) = delete;
+    Interpreter& operator=(const Interpreter&) = delete;
+    Interpreter& operator=(Interpreter&&) = delete;
+    ~Interpreter()                        = default;
+
+    void install(OpId kind, EvalFn fn); // open-world: (re-)bind a kind's semantics; last install wins
+    [[nodiscard]] Context&              ctx() const noexcept { return m_ctx; }
+    [[nodiscard]] memory::IAllocator*   allocator() const noexcept { return m_scratch; } // the per-run scratch (EvalFns use it)
+    // A generic extension pointer for installed EvalFns — opaque to crd-ceir; the installer sets + interprets it (the
+    // CEIR-6b host provider threads its parallel context / map-output buffers here). NOT copied by the prototype ctor.
+    void                                set_user(void* u) noexcept { m_user = u; }
+    [[nodiscard]] void*                 user() const noexcept { return m_user; }
+    // §30 cooperative cancellation (CEIR-6c): a monotonic flag the step loop checks. The host provider threads ONE shared
+    // flag into every parallel sub-interpreter (set from any thread; reads are relaxed — a monotonic true never un-sets).
+    // NOT copied by the prototype ctor. `cancelled()` ⇒ the running program should stop with `ExecError::Cancelled`.
+    void                                set_cancel_flag(const std::atomic<bool>* f) noexcept { m_cancel = f; }
+    [[nodiscard]] bool cancelled() const noexcept { return m_cancel != nullptr && m_cancel->load(std::memory_order_relaxed); }
+
+    // Run `@entry(args)` against `m` (calls resolve via `m.symbols()`).
+    [[nodiscard]] ExecResult invoke(const Module& m, containers::StringView entry, containers::ConstSpan<crd::i64> args);
+
+    // Run `body` as an ISOLATED entry: a FRESH frame, `block_args` bind its entry block's args, calls resolve via `m`;
+    // capture its terminator's (core.yield) operands into `out_yield`. The CEIR-6b parallel provider runs a
+    // task.parallel_for body per index this way. ⛔ `body` must be SELF-CONTAINED — it uses only its block-args (the
+    // induction var) + body-local defs (inline consts) + self-contained calls; OUTER captures are NOT seeded.
+    [[nodiscard]] ExecError invoke_region(const Module& m, const Region& body, containers::ConstSpan<crd::i64> block_args,
+                                          containers::Array<crd::i64>& out_yield);
+
+    // ---- the surface the installed EvalFns use ----
+    [[nodiscard]] bool      value_of(const Value* v, crd::i64& out) const noexcept; // env lookup; false ⇒ undefined
+    void                    set_value(const Value* v, crd::i64 x);                  // bind a result / block-arg value
+    [[nodiscard]] ExecError run_region(const Region& r, containers::Array<crd::i64>* out_yield); // eval; capture terminator
+    [[nodiscard]] ExecError call(const Operation& call_op, containers::Array<crd::i64>& out_results); // a func.call frame
+    [[nodiscard]] crd::i64  cell_read(const Operation& state_op);       // §20: init-fill on first eval; return ring oldest
+    [[nodiscard]] bool      spend_fuel() noexcept;                      // decrement the step budget; false ⇒ exhausted
+    ExecError               fail(ExecError e, const Operation* op) noexcept; // record the offending op (first wins), return e
+
+    // Inspection (§118 deterministic debugging): a state cell's current value. Builder-form ONLY — cells are keyed by op
+    // POINTER, which does not survive a text/binary round-trip. false ⇒ the op has never been evaluated.
+    [[nodiscard]] bool cell_value(const Operation* state_op, crd::i64& out) const noexcept;
+
+    // A store of value-lists indexed by a u32 handle. The CEIR-6b SEQUENTIAL-async installer uses it: `async.launch`
+    // stashes its body's yields and the token's runtime value IS the handle; `async.await` retrieves them. Generic — the
+    // builtin (arith/core/func) installer never touches it. ⛔ Handles are SESSION-SCOPED (they index this interpreter's
+    // store, which never resets across invokes); a token value forged at runtime (or carried across sessions) is NOT a
+    // valid handle — `valid_yield_handle` distinguishes it from a legitimately-empty launch (both give an empty span).
+    [[nodiscard]] crd::u32                        store_yields(containers::ConstSpan<crd::i64> ys);
+    [[nodiscard]] bool                            valid_yield_handle(crd::u32 handle) const noexcept;
+    [[nodiscard]] containers::ConstSpan<crd::i64> stored_yields(crd::u32 handle) const noexcept;
+
+private:
+    using Env = containers::HashMap<const Value*, crd::i64>;
+    // A §20 state cell: a ring of the last `depth` `next` values; `current` = the value from `depth` evaluations ago
+    // (init-filled until warm). `pos` is the oldest slot (the next `cell_read` returns `ring[pos]`; a latch overwrites it).
+    struct Cell
+    {
+        containers::Array<crd::i64> ring;
+        crd::u32                    pos = 0U;
+    };
+
+    [[nodiscard]] ExecError eval_block(const Block& b);
+    [[nodiscard]] ExecError eval_op(const Operation& op);
+    [[nodiscard]] ExecError cell_latch(const Operation& op); // read env[next], push into the ring (block-eval end)
+
+    Context&                                     m_ctx;
+    memory::IAllocator*                           m_scratch; // backs all per-run state (null-defaulted to ctx.allocator())
+    crd::u64                                      m_fuel;
+    const SymbolTable*                            m_symbols = nullptr; // the invoked module's table (call resolution)
+    Env*                                          m_env     = nullptr; // the CURRENT frame (a function call's env)
+    containers::HashMap<crd::u64, EvalFn>         m_sem;               // OpId.value → semantics
+    containers::HashMap<const Operation*, Cell>   m_cells;             // persistent §20 state cells
+    containers::Array<containers::Array<crd::i64>> m_yield_store;      // §37 sequential-async completed-yields (CEIR-6b)
+    ExecError                                     m_err    = ExecError::None;
+    const Operation*                              m_err_op = nullptr;
+    void*                                         m_user   = nullptr; // opaque EvalFn extension pointer (CEIR-6b host provider)
+    const std::atomic<bool>*                      m_cancel = nullptr; // §30 cooperative cancel flag (CEIR-6c); not proto-copied
+};
+
+// Install the built-in reference semantics (open-world — a caller may install more or override).
+void install_arith_semantics(Interpreter& in);
+void install_core_semantics(Interpreter& in);
+void install_func_semantics(Interpreter& in);
+void install_builtin_semantics(Interpreter& in); // arith + core + func
+// §37 async SEQUENTIAL reference semantics (CEIR-6b — the 6a IOU's sequential half): launch runs the body at launch and
+// stashes its yields (the token's value is the store handle); await returns them; join concatenates; race → index 0
+// deterministically; cancel consumes (a no-op — real cancellation is CEIR-6c). Jobs-backed parallel async is CEIR-6c.
+// A SEPARATE installer (NOT in install_builtin_semantics).
+void install_async_semantics(Interpreter& in);
+
+// Byte-pin `values` deterministically: 8 bytes little-endian per i64 (the §118 "byte-pinned output" the gate compares).
+[[nodiscard]] containers::Array<crd::u8> pin_values(containers::ConstSpan<crd::i64> values, memory::IAllocator* alloc);
+} // namespace crd::ceir::exec

@@ -1,0 +1,79 @@
+# ceir.async -- structured-concurrency ops (sec 37, the sec 30 concurrency model). CEIR-6a: tokens + waits + joins +
+# race/select + cancellation, with the sec 116 USE-ONCE token discipline (find_token_misuse). ⛔ HOST-ONLY (ADR-0109):
+# the crd-jobs execution provider + the ceir.task ops land at CEIR-6b in the crd-ceir-host BRIDGE, NOT here. This slice is
+# the ops + the verifier; the reference-EXECUTOR semantics land with the provider at CEIR-6b (uninstalled ops are a typed
+# NoSemantics -- the foreach named-deferral precedent).
+#
+# ⛔ Tokens are TRAIT-typed, not TYPE-typed (advisor): an op with TokenProducer produces token result(s); TokenConsumer
+# consumes token operand(s). A producer trait cannot be forgotten, whereas TOML `type`s are doc-only + builders take a
+# caller `result_type`, so a type-keyed token would be invisible to a mistyped op (the 3z construction hole). The `!async<T>`
+# ASYNC-VALUE TYPE (sec 37's other half -- a future holding a typed value) routes to the slice that needs typed results
+# (CEIR-6b/6c), NAMED not silently subset (NO-FOLLOW).
+#
+# ⛔ Every op declares an ambient Synchronization effect and is NOT structured-zero-effects like ceir.core: a launch's
+# region executes at an UNSPECIFIED later time, so the CEIR-4d per-block hazard walk seeing its contents AT the launch
+# point would be a lie. Synchronization = a Universe barrier (4d reorders nothing across it) -- conservative-correct;
+# token-mediated precise ordering (tokens as a hazard resource) is a named later refinement. The CEIR-4c domain walk
+# descends a launch region under the ENCLOSING tag (conservative -- the body may run in that context).
+schema_version = 1
+dialect = "async"
+summary = "Structured-concurrency ops (sec 37): tokens / waits / joins / race / cancellation, host-only."
+
+[[op]]
+name = "scope"
+summary = "A structured-concurrency scope (sec 30): a region whose dynamic extent ends only when every token launched inside it is consumed."
+version = 1
+results = [ { name = "results", type = "any", variadic = true, doc = "the scope region's yielded values" } ]
+regions = [ { kind = "graph" } ]
+effects = ["Synchronization"]
+docs = "async.scope { ... } -> (%r...). Structured concurrency (sec 30): the scope OWNS the tokens launched inside it -- its dynamic extent ends only when every one is consumed. ⛔ SCOPE-CONFINEMENT is LAYERED verification, not new code: 5b SSA-scoping already blocks consuming a scope-launched token in a SIBLING region (UseBeforeDef), and 6a use-once already blocks leaking it (Unconsumed) or yielding it OUT (ConsumedByNonConsumer) -- a token is confined to its scope's dynamic extent by construction. Declares an ambient Synchronization effect (its exit is a JOIN point -- a blocking wait) -> illegal in an audio-RT region (correct: a join-at-exit blocks). ⛔ EXECUTOR CONTRACT: the SEQUENTIAL reference is a no-op boundary (everything already completed at launch -- it just forwards the region's yield); the JOBS-BACKED provider joins outstanding work at scope exit (the slice that needs concurrent async semantics)."
+
+[[op]]
+name = "launch"
+summary = "Structured async fork: run the region asynchronously and produce a completion token."
+version = 1
+results = [ { name = "token", type = "any", doc = "the completion token -- consume EXACTLY once (await / join / race / cancel)" } ]
+regions = [ { kind = "graph" } ]
+traits = ["TokenProducer"]
+effects = ["Synchronization"]
+docs = "async.launch { body } -> %token. Structured concurrency (sec 30): the body runs asynchronously; %token represents its completion (its yielded values are what await produces). ⛔ EXECUTOR CONTRACT (CEIR-6b): the body runs at an UNSPECIFIED later time; the SEQUENTIAL REFERENCE executor runs it AT launch and %token completes when the body's yield is reached."
+
+[[op]]
+name = "await"
+summary = "Wait for a token; produce the async body's yielded values."
+version = 1
+operands = [ { name = "token", type = "any", doc = "the token to consume" } ]
+results = [ { name = "values", type = "any", variadic = true, doc = "the launched body's yielded values" } ]
+traits = ["TokenConsumer"]
+effects = ["Synchronization"]
+docs = "async.await(%token) -> (%v...). Consumes %token EXACTLY once (use-once, sec 116) and yields the launched body's values. Reference executor (CEIR-6b): returns the body's yield."
+
+[[op]]
+name = "join"
+summary = "All-of: consume N tokens; produce one token that completes when all of them do."
+version = 1
+operands = [ { name = "tokens", type = "any", variadic = true, doc = "the tokens to join (each consumed once)" } ]
+results = [ { name = "token", type = "any", doc = "a new completion token for the whole group" } ]
+traits = ["TokenProducer", "TokenConsumer"]
+effects = ["Synchronization"]
+docs = "async.join(%t...) -> %token. Consumes each operand token ONCE (TokenConsumer) and produces a NEW token (TokenProducer) that completes when all inputs do. join carries BOTH traits."
+
+[[op]]
+name = "race"
+summary = "Any-of / select: consume N tokens; produce the index of the first ready."
+version = 1
+operands = [ { name = "tokens", type = "any", variadic = true, doc = "the racing tokens (each consumed once)" } ]
+results = [ { name = "index", type = "any", doc = "the index of the winning token -- NOT a token (so NOT a TokenProducer)" } ]
+traits = ["TokenConsumer"]
+effects = ["Synchronization"]
+determinism = "Nondeterministic"
+docs = "async.race(%t...) -> %index. Consumes each operand token once; produces the WINNER'S INDEX (a value-CARRYING race needs async-value types -> CEIR-6b/6c, named). Nondeterministic (the order of readiness is not fixed) -- so it is illegal under CertifiedDeterministic/Deterministic compiler mode (CEIR-4b)."
+
+[[op]]
+name = "cancel"
+summary = "Cancel a pending async operation (consumes its token)."
+version = 1
+operands = [ { name = "token", type = "any", doc = "the token to cancel" } ]
+traits = ["TokenConsumer"]
+effects = ["Synchronization"]
+docs = "async.cancel(%token). Consumes %token -- ⛔ every token is awaited XOR cancelled, NO silent drops (an unconsumed token is a find_token_misuse Unconsumed). Cancellation PLUMBING through the provider lands at CEIR-6c."

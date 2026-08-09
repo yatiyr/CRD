@@ -1,0 +1,58 @@
+# test - a FULL-SURFACE reference dialect. It exercises every field the CEIR-2 schema can express (fixed + variadic
+# operands, an optional attribute, every attribute kind, effects, an eval domain, a native binding, multiple traits,
+# regions, deprecation) so that EVERY generator emission path stays compiled even before a real dialect uses it. This
+# dialect was added by a TOML edit ALONE (CEIR-2z, section 7/8): a regen produces the wrapper / builder / verifier /
+# reflection / docs / JSON + the smoke test, with ZERO central-file edits. It has no runtime meaning.
+schema_version = 1
+dialect = "test"
+summary = "A full-surface reference dialect exercising every CEIR-2 schema field - no runtime meaning."
+
+[[op]]
+name = "dummy"
+summary = "Shape-coverage op: fixed + variadic operands, required + optional attrs, effects, domain, native, a region."
+version = 3
+operands = [
+    { name = "lhs", type = "any", doc = "the fixed leading operand" },
+    { name = "rest", type = "any", variadic = true, doc = "zero or more trailing operands" },
+]
+results = [ { name = "out", type = "any", doc = "the single result" } ]
+attributes = [
+    { name = "axis", kind = "int", required = true, doc = "a required integer attribute" },
+    { name = "mode", kind = "string", required = true, doc = "a required string attribute" },
+    { name = "flag", kind = "bool", required = false, doc = "an OPTIONAL attribute - not a builder parameter" },
+]
+regions = 1
+traits = ["Symbol", "IsolatedFromAbove"]
+# §26 effects (CEIR-4a) exercising BOTH declaration forms: a bare-family string (ambient, no resource identity) AND
+# inline tables carrying operand/result identity + an optional ViewRange narrowing (the full-surface reference input).
+effects = [
+    "GPUCommand",
+    { family = "MemoryRead", operand = 0, range = ["element"] },
+    { family = "MemoryWrite", result = 0 },
+]
+# §27 op-level determinism (CEIR-4b): the ABSTRACT class. Weaker than the [op.native] claim below (BitExact) — a specific
+# native impl may be stronger than the op's contract; the generator's consistency check requires native >= op, not equal.
+determinism = "DeterministicWithinTarget"
+domain = "HostFrameTime"
+# declared-marker fields (the rules they name land at CEIR-3/CEIR-6; the schema reflects the names now) - so this
+# reference dialect genuinely exercises EVERY field the schema can express, and the committed docs/JSON show the markers.
+type_inference = "same_as_first_operand"
+shape_inference = "elementwise"
+fold = "identity_when_rest_empty"
+docs = "test.dummy is a reference op with no runtime semantics; it exists to keep every generator emission path compiled."
+native = { provider = "host", determinism = "BitExact", thread_safe = true, hot_reload_safe = false, lifetime = "borrows its operands for the duration of the call", cost = "cheap", capabilities = ["reference"] }
+deprecation = { since = "test-v3", replaced_by = "test.kinds", note = "reference-only migration metadata, not a real deprecation" }
+
+[[op]]
+name = "kinds"
+summary = "Attribute-kind-coverage op: a required attribute of every remaining kind (float / bool / symbol / type)."
+version = 1
+results = [ { name = "out", type = "any" } ]
+attributes = [
+    { name = "a_float", kind = "float", required = true, doc = "a required float attribute" },
+    { name = "a_bool", kind = "bool", required = true, doc = "a required bool attribute" },
+    { name = "a_sym", kind = "symbol", required = true, doc = "a required symbol-ref attribute" },
+    { name = "a_type", kind = "type", required = true, doc = "a required type attribute" },
+]
+traits = ["Pure"]
+docs = "test.kinds carries a required attribute of each remaining kind, so the builder + smoke exercise every attr factory."

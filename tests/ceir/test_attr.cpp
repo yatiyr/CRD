@@ -48,9 +48,10 @@ TEST_CASE("ceir attr: typed values round-trip through the intern table", "[ceir]
     CHECK(s.kind == AttrKind::String);
     CHECK(s.s == crd::containers::StringView{"text"});
 
-    const AttrValue t = ctx.attr_value(ctx.attr_type(TypeId{5U}));
+    const TypeId    ity = ctx.type_i32();
+    const AttrValue t   = ctx.attr_value(ctx.attr_type(ity));
     CHECK(t.kind == AttrKind::Type);
-    CHECK(t.t == TypeId{5U});
+    CHECK(t.t == ity);
 
     const AttrValue none = ctx.attr_value(AttrId{}); // invalid id → Int(0) sentinel
     CHECK(none.kind == AttrKind::Int);

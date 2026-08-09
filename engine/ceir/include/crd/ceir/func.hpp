@@ -42,7 +42,50 @@ namespace crd::ceir::func
 [[nodiscard]] Operation* resolve_call(const Context& ctx, const Operation* call, const SymbolTable& table);
 
 // Register the `func` DIALECT + its ops on `ctx` (CEIR-1d). OPTIONAL — the helpers above work WITHOUT registration
-// (open-world), but registration records traits (func.func = Symbol, func.return = Terminator) + a verifier, and is
-// where CEIR-1e's printer/parser hooks will live. Idempotent. Returns the dialect.
+// (open-world), but registration records traits (func.func = Symbol, func.return = Terminator) + a verifier + the
+// CEIR-5c `func.call` EffectsFn hook (callee-derived effects), and is where CEIR-1e's printer/parser hooks will live.
+// Idempotent. Returns the dialect.
 Dialect* register_dialect(Context& ctx);
+
+// ── §34 recursion policy (CEIR-5c) ── a `func.func` may DECLARE how it recurses; the verifier checks the declaration
+// against the resolved call graph (the constitution's "recursion where legal" / "bounded recursion attributes"). A
+// CLOSED machine-verified vocabulary (the CEIR-4c `region_exec` precedent), stored as the int attr `recursion` (plus
+// `recursion_max_depth` when Bounded) — reserved attr vocabulary.
+enum class RecursionPolicy : u8
+{
+    Unspecified = 0, // no claim — recursion neither promised nor forbidden (the executor's concern at 5d/5z)
+    None,            // NON-recursive — must be acyclic in the resolved call graph (verified)
+    Bounded,         // may recurse to a declared depth — requires recursion_max_depth >= 1 (present+positive verified)
+    Unbounded,       // explicitly permits unbounded recursion (legal — the acknowledgement itself is the contract)
+};
+[[nodiscard]] containers::StringView recursion_policy_name(RecursionPolicy p) noexcept;
+
+// Declare `func_op`'s recursion policy (sets the `recursion` int attr; `max_depth` sets `recursion_max_depth` when > 0).
+void set_recursion_policy(Context& ctx, Operation* func_op, RecursionPolicy policy, u32 max_depth = 0U);
+// Read it back. Returns false iff the `recursion` attr is PRESENT but out-of-range (corrupt ⇒ an InvalidPolicyAttr);
+// absent ⇒ `out = Unspecified`, true. `recursion_max_depth_of` ⇒ 0 if absent.
+[[nodiscard]] bool recursion_policy_of(const Context& ctx, const Operation& func_op, RecursionPolicy& out) noexcept;
+[[nodiscard]] u32  recursion_max_depth_of(const Context& ctx, const Operation& func_op) noexcept;
+
+// The §34 recursion-policy verifier's pointing result.
+enum class RecursionViolationKind : u8
+{
+    None = 0,
+    DeclaredNoneRecurses, // a `None`-declared func participates in a call-graph cycle (incl. self-recursion)
+    BoundedMissingDepth,  // a `Bounded`-declared func lacks recursion_max_depth >= 1 (declared-words-must-be-validated)
+    InvalidPolicyAttr,    // the `recursion` attr is present but corrupt / out-of-range (the 4c corrupt-tag precedent)
+};
+[[nodiscard]] containers::StringView recursion_violation_kind_name(RecursionViolationKind k) noexcept;
+struct RecursionViolation
+{
+    const Operation*       func_op = nullptr;
+    RecursionViolationKind kind    = RecursionViolationKind::None;
+};
+
+// Verify every DECLARED recursion policy in `m` against the resolved call graph (calls resolved via `table`). Returns the
+// FIRST offender in module PRE-ORDER (deterministic — the printer's walk order) or `{}`. ⛔ Verifies only where DECLARED:
+// an UNDECLARED (Unspecified) func on a cycle is NOT a violation — unacknowledged recursion is the executor's concern at
+// 5d/5z (a documented relaxation, NOT a silent invalidation of every unannotated recursive module). `None` is proven
+// acyclic over the RESOLVED graph only — an unresolvable callee is an unverifiable edge (single-module scope).
+[[nodiscard]] RecursionViolation find_recursion_violation(const Context& ctx, const Module& m, const SymbolTable& table);
 } // namespace crd::ceir::func

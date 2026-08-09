@@ -63,6 +63,11 @@ inline constexpr crd::u32 kFourCC_SPVV = make_fourcc('S', 'P', 'V', 'V'); // ver
 inline constexpr crd::u32 kFourCC_SPVF = make_fourcc('S', 'P', 'V', 'F'); // fragment SPIRV chunk
 inline constexpr crd::u32 kFourCC_SPVC = make_fourcc('S', 'P', 'V', 'C'); // compute SPIRV chunk
 
+// CEIR-7a (D-007) — the cooked CEIR program asset: a CRDR container of type 'CEIR' carrying the CookedHeader ('META'),
+// the CEIR binary program blob ('CEIR'), and the structured §106 dependency record ('CDEP').
+inline constexpr crd::u32 kFourCC_CEIR = make_fourcc('C', 'E', 'I', 'R'); // the CEIR program binary blob chunk (+ container type)
+inline constexpr crd::u32 kFourCC_CDEP = make_fourcc('C', 'D', 'E', 'P'); // the sec 106 CEIR dependency record chunk
+
 // Phase 2.7 — texture artifact FourCCs (ADR-0042)
 inline constexpr crd::u32 kFourCC_TXTR = make_fourcc('T', 'X', 'T', 'R');
 inline constexpr crd::u32 kFourCC_HEAD = make_fourcc('H', 'E', 'A', 'D');

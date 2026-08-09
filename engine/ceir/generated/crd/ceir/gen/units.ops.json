@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "dialect": "units",
+  "summary": "Physical-quantity boundary ops (section 17): strip a dimension tag at the raw/kernel boundary.",
+  "ops": [
+    {
+      "name": "erase",
+      "qualified": "units.erase",
+      "version": 1,
+      "summary": "Erase the physical-quantity dimension tag from a value at the raw/kernel boundary.",
+      "docs": "units.erase(%tagged) -> %raw. A boundary marker: dimensional errors (section 17) are caught ABOVE this op; below it values are raw SI scalars. The operand-is-a-Quantity / result-is-its-underlying check lands with typed-operand verification at CEIR-4+ (like a 3b trait conformance, it has no producer op yet); the generator's arity/attr verifier is the correct scope here.",
+      "operands": [
+        {
+          "name": "tagged",
+          "doc": "the dimension-tagged quantity value",
+          "variadic": false
+        }
+      ],
+      "results": [
+        {
+          "name": "raw",
+          "doc": "the underlying raw value, dimension tag erased"
+        }
+      ],
+      "attributes": [],
+      "traits": [
+        "Pure"
+      ],
+      "regions": 0,
+      "effects": [],
+      "determinism": "",
+      "domain": "",
+      "native": null
+    }
+  ]
+}

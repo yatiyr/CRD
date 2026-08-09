@@ -28,7 +28,7 @@ foreach ($line in (Get-Content $cml)) {
 # in spirit, so explanatory prose names "the kernel backend", never a specific one). This is the name-half of I3 that
 # the engine-wide crd-no-shader-language-leak gate does NOT cover (that gate checks only the deleted compile API and
 # shaderc/dxc includes).
-$forbidden  = 'crd/gpu/|crd/kir|crd/rendergraph|crd/renderpass|crd/renderprogram|crd/rendermaterial|crd/renderasset|crd/framecook|crd/scenerender|crd/jobs/|crd/math/|crd/shader|crd/rhi'
+$forbidden  = 'crd/gpu/|crd/kir|crd/rendergraph|crd/renderpass|crd/renderprogram|crd/rendermaterial|crd/renderasset|crd/resources|crd/framecook|crd/scenerender|crd/jobs/|crd/math/|crd/shader|crd/rhi'
 $langTokens = '\b(GLSL|HLSL|WGSL|MSL|SPIR-?V|SPIRV|DXIL|DXBC|PTX|NVRTC|glslang|shaderc|dxc|CUDA)\b'
 $dirs = @((Join-Path $ceir "include"), (Join-Path $ceir "src")) | Where-Object { Test-Path $_ }
 foreach ($f in (Get-ChildItem -Path $dirs -Recurse -Include *.hpp, *.cpp -File)) {

@@ -1,0 +1,16 @@
+# units - the physical-quantity boundary dialect (CEIR-3e, section 17/18). The FIRST NON-REFERENCE dialect authored
+# through the CEIR-2 op generator: adding a real op is a TOML edit + regen, with ZERO central-enum/switch edits (the
+# generator earning its keep beyond the `test` reference dialect). A quantity TYPE (crd::ceir Quantity) tags a numeric
+# value with an ADR-0078 physical dimension; this dialect owns the ops that cross the tagged<->raw boundary.
+schema_version = 1
+dialect = "units"
+summary = "Physical-quantity boundary ops (section 17): strip a dimension tag at the raw/kernel boundary."
+
+[[op]]
+name = "erase"
+summary = "Erase the physical-quantity dimension tag from a value at the raw/kernel boundary."
+version = 1
+operands = [ { name = "tagged", type = "any", doc = "the dimension-tagged quantity value" } ]
+results = [ { name = "raw", type = "any", doc = "the underlying raw value, dimension tag erased" } ]
+traits = ["Pure"]
+docs = "units.erase(%tagged) -> %raw. A boundary marker: dimensional errors (section 17) are caught ABOVE this op; below it values are raw SI scalars. The operand-is-a-Quantity / result-is-its-underlying check lands with typed-operand verification at CEIR-4+ (like a 3b trait conformance, it has no producer op yet); the generator's arity/attr verifier is the correct scope here."

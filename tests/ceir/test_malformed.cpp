@@ -46,12 +46,61 @@ TEST_CASE("ceir malformed: bad TEXT is rejected, never a crash", "[ceir][malform
     CHECK(rejects("module { ^bb0: test.x(%9) }"));            // dangling operand
     CHECK(rejects("module { ^bb0: test.x( }"));               // truncated operands
     CHECK(rejects("module { ^bb0: nodialect() }"));           // op name is not 'dialect.op'
-    CHECK(rejects("module { ^bb0: %0 = a.b() : !t1\n%0 = c.d() : !t1 }")); // duplicate SSA id
+    CHECK(rejects("module { ^bb0: %0 = a.b() : !i32\n%0 = c.d() : !i32 }")); // duplicate SSA id
     CHECK(rejects(R"(module { ^bb0: t.x() {s = "unterminated } })"));      // unterminated string literal
     CHECK(rejects("module { ^bb0: } trailing"));             // trailing junk after the module
     // KILLER (used to OOM): a def id far larger than the text -> must reject, not allocate a multi-GB array
-    CHECK(rejects("module { ^bb0: %4000000000 = t.x() : !t1 }"));
-    CHECK(rejects("module { ^bb0(%4000000000 : !t1): }"));   // ...same, as a block-arg def
+    CHECK(rejects("module { ^bb0: %4000000000 = t.x() : !i32 }"));
+    CHECK(rejects("module { ^bb0(%4000000000 : !i32): }"));   // ...same, as a block-arg def
+
+    // CEIR-3a type syntax (section 16): every malformed type is rejected, never a crash.
+    CHECK(rejects("module { ^bb0: t.x() : !nope }"));            // unknown type keyword
+    CHECK(rejects("module { ^bb0: t.x() : !i }"));               // integer with no width -> unknown keyword
+    CHECK(rejects("module { ^bb0: t.x() : !vec<4> }"));          // vector missing 'x element'
+    CHECK(rejects("module { ^bb0: t.x() : !vec<4x!f32 }"));      // unterminated aggregate ('>' missing)
+    CHECK(rejects("module { ^bb0: t.x() : !mat<4x!f32> }"));     // matrix missing the second dim
+    CHECK(rejects("module { ^bb0: t.x() : !struct<> }"));        // struct with no name
+    CHECK(rejects("module { ^bb0: t.x() : !result<!i32> }"));    // result needs two arms
+    // CEIR-3b generics syntax
+    CHECK(rejects("module { ^bb0: t.x() : !param<> }"));         // type param needs a name
+    CHECK(rejects("module { ^bb0: t.x() : !trait<> }"));         // trait needs a name
+    CHECK(rejects("module { ^bb0: t.x() : !fn<!i32> }"));        // callable needs (params)->(results)
+    CHECK(rejects("module { ^bb0: t.x() : !fn<(!i32)-> }"));     // unterminated callable (no result list)
+    CHECK(rejects("module { ^bb0: t.x() : !fn<(!i32)(!i32)> }")); // callable missing the arrow
+    // CEIR-3c resource/view syntax
+    CHECK(rejects("module { ^bb0: t.x() : !buffer<> }"));         // buffer needs a mode
+    CHECK(rejects("module { ^bb0: t.x() : !buffer<bogus> }"));    // unknown buffer mode
+    CHECK(rejects("module { ^bb0: t.x() : !buffer<plain> }"));    // plain buffer needs an element
+    CHECK(rejects("module { ^bb0: t.x() : !image<d9,!f32> }"));   // unknown image dim
+    CHECK(rejects("module { ^bb0: t.x() : !sampler<hmm> }"));     // unknown sampler kind
+    CHECK(rejects("module { ^bb0: t.x() : !view<!buffer<plain,!f32>,bogus> }")); // unknown view range
+    CHECK(rejects("module { ^bb0: t.x() : !view<!buffer<plain,!f32>,mip> }"));   // mip range on a buffer (combination)
+    CHECK(rejects("module { ^bb0: t.x() : !view<!i32,byte> }"));                 // view of a non-resource
+    // CEIR-3d shape/tensor syntax
+    CHECK(rejects("module { ^bb0: t.x() : !dim<> }"));                    // dim needs an extent / name / dyn
+    CHECK(rejects("module { ^bb0: t.x() : !shape<!i32> }"));             // a shape member must be a dim
+    CHECK(rejects("module { ^bb0: t.x() : !tensor<!f32,!i32> }"));       // a tensor's shape arg must be a Shape
+    CHECK(rejects("module { ^bb0: t.x() : !tensor<!shape<>,!shape<>> }")); // a tensor element must not be a Shape
+    CHECK(rejects("module { ^bb0: t.x() : !tensor<!f32> }"));            // tensor needs element AND shape
+    // CEIR-3e quantity syntax
+    CHECK(rejects("module { ^bb0: t.x() : !qty<!f32,> }"));      // empty dimension (dimensionless must be '1')
+    CHECK(rejects("module { ^bb0: t.x() : !qty<!f32,L> }"));     // missing exponent after a base
+    CHECK(rejects("module { ^bb0: t.x() : !qty<!f32,X1> }"));    // unknown base letter
+    CHECK(rejects("module { ^bb0: t.x() : !qty<!f32,L1L1> }"));  // duplicate base
+    CHECK(rejects("module { ^bb0: t.x() : !qty<!f32,T1L1> }"));  // bases out of canonical order
+    CHECK(rejects("module { ^bb0: t.x() : !qty<!shape<>,L1> }")); // a non-numeric underlying
+    // KILLER: pathological type nesting must be depth-rejected, not blow the recursive-descent stack
+    {
+        String deep(&root);
+        deep.append("module { ^bb0: t.x() : ");
+        for (u32 i = 0; i < 200U; ++i) { deep.append("!vec<1x"); }
+        deep.append("!i32");
+        for (u32 i = 0; i < 200U; ++i) { deep.push_back('>'); }
+        deep.append(" }");
+        Context    ctx(&root);
+        const auto pr = parse(ctx, StringView(deep.data(), deep.size()));
+        CHECK_FALSE(pr.ok); // rejected by the nesting-depth guard, no stack overflow
+    }
 }
 
 TEST_CASE("ceir malformed: bad BINARY is rejected, never a crash", "[ceir][malformed]")

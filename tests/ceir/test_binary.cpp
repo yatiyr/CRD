@@ -89,6 +89,11 @@ TEST_CASE("ceir binary: the blob is a pure function of module content, not of Co
     (void)dirty.attr_string("noise-string");
     (void)dirty.attr_int(999999);
     (void)dirty.attr_symbol("noise-symbol");
+    // ...including the TYPE table: noise types shift the Context TypeId numbering, so build_rich's types get DIFFERENT
+    // TypeIds here than in `clean`. The TYPE pool is derived from the module WALK (first-use order) + BODY/ATTR hold
+    // pool INDICES, never Context ids — so the blob must still be byte-identical (the CEIR-3a content-purity proof).
+    (void)dirty.type_f64();
+    (void)dirty.type_vector(dirty.type_i64(), 8U);
     const ByteArray b = serialize(dirty, *build_rich(dirty), &root);
 
     CHECK(blob_equal(a, b)); // identical content -> identical bytes, regardless of Context state
@@ -236,4 +241,184 @@ TEST_CASE("ceir binary: malformed blobs are rejected with a byte offset", "[ceir
         CHECK_FALSE(pr.ok);
         CHECK(pr.error_offset == blob.size());
     }
+}
+
+TEST_CASE("ceir binary: a structurally-invalid TYPE record is rejected", "[ceir][binary]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const ByteArray              blob = serialize(ctx, *build_rich(ctx), &root); // rich graph carries typed values
+
+    auto read_u32 = [](const ByteArray& b, usize off) -> u32 {
+        return static_cast<u32>(b[off]) | (static_cast<u32>(b[off + 1U]) << 8U) |
+               (static_cast<u32>(b[off + 2U]) << 16U) | (static_cast<u32>(b[off + 3U]) << 24U);
+    };
+    const u32 type_fourcc = static_cast<u32>('T') | (static_cast<u32>('Y') << 8U) | (static_cast<u32>('P') << 16U) |
+                            (static_cast<u32>('E') << 24U);
+
+    // walk chunk headers (from byte 12: after magic+version+count) to the TYPE payload — OFFSET-INDEPENDENT of the
+    // other chunks' sizes, so this survives future format tweaks.
+    usize pos          = 12U;
+    usize type_payload = 0U;
+    while (pos + 8U <= blob.size())
+    {
+        const u32 fourcc = read_u32(blob, pos);
+        const u32 size   = read_u32(blob, pos + 4U);
+        if (fourcc == type_fourcc)
+        {
+            type_payload = pos + 8U;
+            break;
+        }
+        pos += 8U + size;
+    }
+    REQUIRE(type_payload != 0U);
+
+    // the first record (a scalar — child-first ordering) begins after the u32 record count; its child-count `nch` sits
+    // at +[kind(1)+is_signed(1)+fkind(1)+count(4)+cols(4)] = +11. Inflate it -> the decoder must reject (overruns), not
+    // drive an out-of-bounds members[] in a consumer.
+    ByteArray bad(&root);
+    for (usize i = 0; i < blob.size(); ++i) { bad.push_back(blob[i]); }
+    const usize nch_off = type_payload + 4U + 11U;
+    REQUIRE(nch_off + 4U <= bad.size());
+    bad[nch_off]      = 0xFFU;
+    bad[nch_off + 1U] = 0xFFU;
+    bad[nch_off + 2U] = 0xFFU;
+    bad[nch_off + 3U] = 0xFFU;
+    Context           c2(&root);
+    const ParseResult pr = deserialize(c2, span(bad));
+    CHECK_FALSE(pr.ok); // rejected, never a crash
+}
+
+TEST_CASE("ceir binary: a keyword-mapped scalar out of range (image dim) is rejected", "[ceir][binary]")
+{
+    // A deterministic 2-record TYPE pool: an image<d2,!f32> value -> record 0 = f32 (child-first), record 1 = image.
+    // Inflate the image's dim code (a keyword-table scalar) past Cube -> the decoder must reject (else the printer would
+    // map it to nothing and the text form would be silently lossy).
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    Module* const                m   = ctx.create_module();
+    Block* const                 top = ctx.create_block(0U);
+    m->body()->append(top);
+    top->append(ctx.create_operation(ctx.intern_op("t", "x"), {}, 1U, ctx.type_image(ImageDim::Dim2D, ctx.type_f32())));
+    const ByteArray blob = serialize(ctx, *m, &root);
+
+    auto read_u32 = [](const ByteArray& b, usize off) -> u32 {
+        return static_cast<u32>(b[off]) | (static_cast<u32>(b[off + 1U]) << 8U) |
+               (static_cast<u32>(b[off + 2U]) << 16U) | (static_cast<u32>(b[off + 3U]) << 24U);
+    };
+    const u32 type_fourcc = static_cast<u32>('T') | (static_cast<u32>('Y') << 8U) | (static_cast<u32>('P') << 16U) |
+                            (static_cast<u32>('E') << 24U);
+    usize pos          = 12U;
+    usize type_payload = 0U;
+    while (pos + 8U <= blob.size())
+    {
+        if (read_u32(blob, pos) == type_fourcc)
+        {
+            type_payload = pos + 8U;
+            break;
+        }
+        pos += 8U + read_u32(blob, pos + 4U);
+    }
+    REQUIRE(type_payload != 0U);
+
+    // record 0 (f32) is 23 bytes; record 1 (image) `count`=dim is at +[kind+is_signed+fkind = 3] within it.
+    const usize dim_off = type_payload + 4U + 23U + 3U;
+    ByteArray   bad(&root);
+    for (usize i = 0; i < blob.size(); ++i) { bad.push_back(blob[i]); }
+    REQUIRE(dim_off + 4U <= bad.size());
+    REQUIRE(bad[dim_off] == 0x01U); // sanity: the record's dim byte is Dim2D (=1) — a layout shift would patch the wrong byte
+    bad[dim_off] = 0x63U;           // 99 -> past ImageDim::Cube
+    Context           c2(&root);
+    const ParseResult pr = deserialize(c2, span(bad));
+    CHECK_FALSE(pr.ok); // "invalid image dim"
+}
+
+TEST_CASE("ceir binary: an out-of-range ownership qualifier is rejected", "[ceir][binary]")
+{
+    // A deterministic 2-record TYPE pool: qual<borrow,!f32> -> record 0 = f32 (child-first), record 1 = qualified with
+    // count = BorrowedView (=2). Inflate the ownership code (a keyword-table scalar) past TransientArena -> the decoder
+    // must reject (else the printer would map it to nothing and the text form would be silently lossy).
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    Module* const                m   = ctx.create_module();
+    Block* const                 top = ctx.create_block(0U);
+    m->body()->append(top);
+    top->append(ctx.create_operation(ctx.intern_op("t", "x"), {}, 1U,
+                                     ctx.type_qualified(OwnershipKind::BorrowedView, ctx.type_f32())));
+    const ByteArray blob = serialize(ctx, *m, &root);
+
+    auto read_u32 = [](const ByteArray& b, usize off) -> u32 {
+        return static_cast<u32>(b[off]) | (static_cast<u32>(b[off + 1U]) << 8U) |
+               (static_cast<u32>(b[off + 2U]) << 16U) | (static_cast<u32>(b[off + 3U]) << 24U);
+    };
+    const u32 type_fourcc = static_cast<u32>('T') | (static_cast<u32>('Y') << 8U) | (static_cast<u32>('P') << 16U) |
+                            (static_cast<u32>('E') << 24U);
+    usize pos          = 12U;
+    usize type_payload = 0U;
+    while (pos + 8U <= blob.size())
+    {
+        if (read_u32(blob, pos) == type_fourcc)
+        {
+            type_payload = pos + 8U;
+            break;
+        }
+        pos += 8U + read_u32(blob, pos + 4U);
+    }
+    REQUIRE(type_payload != 0U);
+
+    // record 0 (f32) is 23 bytes; record 1 (qualified) `count`=ownership is at +[kind+is_signed+fkind = 3] within it.
+    const usize own_off = type_payload + 4U + 23U + 3U;
+    ByteArray   bad(&root);
+    for (usize i = 0; i < blob.size(); ++i) { bad.push_back(blob[i]); }
+    REQUIRE(own_off + 4U <= bad.size());
+    REQUIRE(bad[own_off] == 0x02U); // sanity: the record's ownership byte is BorrowedView (=2) — a layout shift patches wrong
+    bad[own_off] = 0x63U;           // 99 -> past OwnershipKind::TransientArena (=8)
+    Context           c2(&root);
+    const ParseResult pr = deserialize(c2, span(bad));
+    CHECK_FALSE(pr.ok); // "invalid ownership qualifier"
+}
+
+TEST_CASE("ceir binary: a NON-CANONICAL TYPE record (a name on an Int) is rejected", "[ceir][binary]")
+{
+    // A minimal module: an op named "t.x" with an i32 result. Encode order interns the op NAME first (STRP[0]="t.x",
+    // non-empty), then i32's empty name (STRP[1]=""). The single TYPE record (i32) stores name_strp=1 (the ""). Repoint
+    // it to STRP[0] -> the Int gains a name -> non-canonical (the printer ignores an Int's name, so it would print
+    // identically to the canonical !i32 -> form-agreement broken) -> the decoder's canonical check must reject.
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    Module* const                m   = ctx.create_module();
+    Block* const                 top = ctx.create_block(0U);
+    m->body()->append(top);
+    top->append(ctx.create_operation(ctx.intern_op("t", "x"), {}, 1U, ctx.type_i32()));
+    const ByteArray blob = serialize(ctx, *m, &root);
+
+    auto read_u32 = [](const ByteArray& b, usize off) -> u32 {
+        return static_cast<u32>(b[off]) | (static_cast<u32>(b[off + 1U]) << 8U) |
+               (static_cast<u32>(b[off + 2U]) << 16U) | (static_cast<u32>(b[off + 3U]) << 24U);
+    };
+    const u32 type_fourcc = static_cast<u32>('T') | (static_cast<u32>('Y') << 8U) | (static_cast<u32>('P') << 16U) |
+                            (static_cast<u32>('E') << 24U);
+    usize pos          = 12U;
+    usize type_payload = 0U;
+    while (pos + 8U <= blob.size())
+    {
+        if (read_u32(blob, pos) == type_fourcc)
+        {
+            type_payload = pos + 8U;
+            break;
+        }
+        pos += 8U + read_u32(blob, pos + 4U);
+    }
+    REQUIRE(type_payload != 0U);
+
+    // record 0 (i32) name_strp is at +[4 record-count][kind+is_signed+fkind+count+cols+nch = 15] = +19; it holds 1 ("").
+    const usize name_off = type_payload + 4U + 15U;
+    ByteArray   bad(&root);
+    for (usize i = 0; i < blob.size(); ++i) { bad.push_back(blob[i]); }
+    REQUIRE(name_off + 4U <= bad.size());
+    REQUIRE(read_u32(bad, name_off) == 1U); // sanity: the canonical Int points at the empty string
+    bad[name_off] = 0x00U;                   // repoint to STRP[0] = "t.x" (non-empty)
+    Context           c2(&root);
+    const ParseResult pr = deserialize(c2, span(bad));
+    CHECK_FALSE(pr.ok); // non-canonical Int rejected
 }

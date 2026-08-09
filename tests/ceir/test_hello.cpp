@@ -38,39 +38,39 @@ namespace
 [[nodiscard]] ConstSpan<u8> span(const Array<u8>& b) noexcept { return ConstSpan<u8>(b.data(), b.size()); }
 
 // module { ^bb0:
-//   func.func() {sym_name = "add1"} { ^bb0(%0 : !t1):
-//     %1 = arith.const() {value = 1} : !t1
-//     %2 = math.add(%0, %1) : !t1
+//   func.func() {sym_name = "add1"} { ^bb0(%0 : !i32):
+//     %1 = arith.const() {value = 1} : !i32
+//     %2 = math.add(%0, %1) : !i32
 //     func.return(%2) }
-//   %3 = arith.const() {value = 41} : !t1
-//   %4 = func.call(%3) {callee = @add1} : !t1 }
+//   %3 = arith.const() {value = 41} : !i32
+//   %4 = func.call(%3) {callee = @add1} : !i32 }
 Module* build_hello_hand(Context& ctx)
 {
     Module* const m   = ctx.create_module();
     Block* const  top = ctx.create_block(0U);
     m->body()->append(top);
 
-    Operation* const fn = func::create_func(ctx, *m, "add1", Visibility::Public, 1U, TypeId{1U});
+    Operation* const fn = func::create_func(ctx, *m, "add1", Visibility::Public, 1U, ctx.type_i32());
     top->append(fn);
     Block* const fb = func::func_body_block(fn);
 
-    Operation* const c1 = ctx.create_operation(ctx.intern_op("arith", "const"), {}, 1U, TypeId{1U});
+    Operation* const c1 = ctx.create_operation(ctx.intern_op("arith", "const"), {}, 1U, ctx.type_i32());
     ctx.set_attr(c1, "value", ctx.attr_int(1));
     fb->append(c1);
 
     Value*           add_ops[2] = {fb->arg(0U), c1->result(0U)};
-    Operation* const add = ctx.create_operation(ctx.intern_op("math", "add"), ConstSpan<Value*>(add_ops, 2U), 1U, TypeId{1U});
+    Operation* const add = ctx.create_operation(ctx.intern_op("math", "add"), ConstSpan<Value*>(add_ops, 2U), 1U, ctx.type_i32());
     fb->append(add);
 
     Value* ret_ops[1] = {add->result(0U)};
     fb->append(func::create_return(ctx, ConstSpan<Value*>(ret_ops, 1U)));
 
-    Operation* const c41 = ctx.create_operation(ctx.intern_op("arith", "const"), {}, 1U, TypeId{1U});
+    Operation* const c41 = ctx.create_operation(ctx.intern_op("arith", "const"), {}, 1U, ctx.type_i32());
     ctx.set_attr(c41, "value", ctx.attr_int(41));
     top->append(c41);
 
     Value*           call_args[1] = {c41->result(0U)};
-    Operation* const call = func::create_call(ctx, "add1", ConstSpan<Value*>(call_args, 1U), 1U, TypeId{1U});
+    Operation* const call = func::create_call(ctx, "add1", ConstSpan<Value*>(call_args, 1U), 1U, ctx.type_i32());
     top->append(call);
     return m;
 }
@@ -80,19 +80,19 @@ Module* build_hello_builder(Context& ctx)
     ModuleBuilder mb(ctx);
     (void)mb.add_block(0U);
 
-    Operation* const fn = mb.func("add1", Visibility::Public, 1U, TypeId{1U});
+    Operation* const fn = mb.func("add1", Visibility::Public, 1U, ctx.type_i32());
     {
         InsertionGuard g(mb);
         Block* const   fb = func::func_body_block(fn);
         mb.set_insertion(fb);
-        Value* const one = mb.op("arith", "const").result(TypeId{1U}).attr("value", ctx.attr_int(1)).build_result();
-        Value* const sum = mb.op("math", "add").operand(fb->arg(0U)).operand(one).result(TypeId{1U}).build_result();
+        Value* const one = mb.op("arith", "const").result(ctx.type_i32()).attr("value", ctx.attr_int(1)).build_result();
+        Value* const sum = mb.op("math", "add").operand(fb->arg(0U)).operand(one).result(ctx.type_i32()).build_result();
         Value* ret_ops[1] = {sum};
         mb.ret(ConstSpan<Value*>(ret_ops, 1U));
     }
-    Value* const c41 = mb.op("arith", "const").result(TypeId{1U}).attr("value", ctx.attr_int(41)).build_result();
+    Value* const c41 = mb.op("arith", "const").result(ctx.type_i32()).attr("value", ctx.attr_int(41)).build_result();
     Value* call_args[1] = {c41};
-    mb.call("add1", ConstSpan<Value*>(call_args, 1U), 1U, TypeId{1U});
+    mb.call("add1", ConstSpan<Value*>(call_args, 1U), 1U, ctx.type_i32());
     return mb.module();
 }
 

@@ -62,8 +62,9 @@ public:
     [[nodiscard]] Operation* defining_op() const noexcept; // null for a block arg
     [[nodiscard]] Block*     owner_block() const noexcept;  // null for an op result
 
-    [[nodiscard]] bool has_uses() const noexcept { return m_first_use != nullptr; }
-    [[nodiscard]] u32  num_uses() const noexcept
+    [[nodiscard]] bool       has_uses() const noexcept { return m_first_use != nullptr; }
+    [[nodiscard]] const Use* first_use() const noexcept { return m_first_use; } // CEIR-3f escape analysis walks the uses
+    [[nodiscard]] u32        num_uses() const noexcept
     {
         u32 n = 0;
         for (const Use* u = m_first_use; u != nullptr; u = u->next) { ++n; }
@@ -137,7 +138,7 @@ public:
     void set_operand(u32 i, Value* v) noexcept; // updates the use-list
 
     [[nodiscard]] u32    num_results() const noexcept { return m_num_results; }
-    [[nodiscard]] Value* result(u32 i) noexcept
+    [[nodiscard]] Value* result(u32 i) const noexcept // const like operand(): returns a stable handle, never mutates the op
     {
         CRD_ASSERT_MSG(i < m_num_results, "result index out of range");
         return &m_results[i];

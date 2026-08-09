@@ -1,0 +1,295 @@
+{
+  "schema_version": 1,
+  "dialect": "core",
+  "summary": "Structured control-flow region ops: scope / if / for / foreach + the yield terminator (sec 13/14).",
+  "ops": [
+    {
+      "name": "delay",
+      "qualified": "core.delay",
+      "version": 1,
+      "summary": "A one-step delay register (sec 20 delay<T>): `current` = `init` on the first evaluation, thereafter the `next` from the PREVIOUS evaluation.",
+      "docs": "core.delay(%init, %next) -> %current. A one-evaluation delay/register (audio delay lines, TAA history taps): %current is %init on the first-ever evaluation, thereafter the %next of the PREVIOUS evaluation. The cell PERSISTS across evaluations (it does not reset on region re-entry). Structurally identical to core.state; the distinction is the executor's update timing (CEIR-5z).",
+      "operands": [
+        {
+          "name": "init",
+          "doc": "the first-evaluation value",
+          "variadic": false
+        },
+        {
+          "name": "next",
+          "doc": "the value delayed by one evaluation (the FEEDBACK operand)",
+          "variadic": false
+        }
+      ],
+      "results": [
+        {
+          "name": "current",
+          "doc": "the delayed value"
+        }
+      ],
+      "attributes": [],
+      "traits": [
+        "StateEdge"
+      ],
+      "regions": 0,
+      "effects": [],
+      "determinism": "BitExact",
+      "domain": "",
+      "native": null
+    },
+    {
+      "name": "for",
+      "qualified": "core.for",
+      "version": 1,
+      "summary": "A counted loop: run the body for each index in [lower, upper) stepping by step.",
+      "docs": "core.for(%lo, %hi, %step) { ^body(%iv): ... }. The body region's entry block takes the induction variable.",
+      "operands": [
+        {
+          "name": "lower",
+          "doc": "",
+          "variadic": false
+        },
+        {
+          "name": "upper",
+          "doc": "",
+          "variadic": false
+        },
+        {
+          "name": "step",
+          "doc": "",
+          "variadic": false
+        }
+      ],
+      "results": [],
+      "attributes": [],
+      "traits": [],
+      "regions": 1,
+      "effects": [],
+      "determinism": "BitExact",
+      "domain": "",
+      "native": null
+    },
+    {
+      "name": "foreach",
+      "qualified": "core.foreach",
+      "version": 1,
+      "summary": "Iterate a collection / view / work-set: run the body once per element.",
+      "docs": "core.foreach(%items) { ^body(%elem): ... }. The body region's entry block takes the current element.",
+      "operands": [
+        {
+          "name": "items",
+          "doc": "the collection / view / work-set to iterate",
+          "variadic": false
+        }
+      ],
+      "results": [],
+      "attributes": [],
+      "traits": [],
+      "regions": 1,
+      "effects": [],
+      "determinism": "BitExact",
+      "domain": "",
+      "native": null
+    },
+    {
+      "name": "history",
+      "qualified": "core.history",
+      "version": 1,
+      "summary": "A depth-N history buffer (sec 20 history<T>): a delay line keeping the previous `depth` values (default 1).",
+      "docs": "core.history(%init, %next) -> %current, with an optional int `depth` attribute (RESERVED vocabulary; ABSENT = 1, PRESENT must be an Int >= 1 -- validated trait-generically by the CEIR-5d verifier as StateDepthInvalid). A ring of the previous `depth` values (GI/exposure histories); the cell PERSISTS across evaluations (it does not reset on region re-entry). NOT Pure (a distinct cell). persistent_resource<T> (sec 20's fourth construct) is NOT here -- it routes to ceir.resource (sec 36), a resource-lifetime concern, not a control-flow cell.",
+      "operands": [
+        {
+          "name": "init",
+          "doc": "the pre-history fill value",
+          "variadic": false
+        },
+        {
+          "name": "next",
+          "doc": "the value pushed into the history (the FEEDBACK operand)",
+          "variadic": false
+        }
+      ],
+      "results": [
+        {
+          "name": "current",
+          "doc": "the current head of the history (depth taps land at CEIR-5z)"
+        }
+      ],
+      "attributes": [],
+      "traits": [
+        "StateEdge"
+      ],
+      "regions": 0,
+      "effects": [],
+      "determinism": "BitExact",
+      "domain": "",
+      "native": null
+    },
+    {
+      "name": "if",
+      "qualified": "core.if",
+      "version": 1,
+      "summary": "Run the THEN region when the condition is nonzero, else the ELSE region; both yield the (variadic) results.",
+      "docs": "core.if(%cond) -> (%r...) { then } { else }. A constant %cond folds via Context::fold_constant_if (RAUW the results with the taken yield).",
+      "operands": [
+        {
+          "name": "cond",
+          "doc": "the condition value (nonzero selects THEN)",
+          "variadic": false
+        }
+      ],
+      "results": [
+        {
+          "name": "results",
+          "doc": "the taken region's yielded values (0 or more)"
+        }
+      ],
+      "attributes": [],
+      "traits": [],
+      "regions": 2,
+      "effects": [],
+      "determinism": "BitExact",
+      "domain": "",
+      "native": null
+    },
+    {
+      "name": "match",
+      "qualified": "core.match",
+      "version": 1,
+      "summary": "Structural pattern match: run the arm region selected by matching the scrutinee.",
+      "docs": "core.match(%scrutinee) { arm0 } { arm1 } ... -- STRUCTURAL only (each arm a region); PATTERN semantics are CHIR's.",
+      "operands": [
+        {
+          "name": "scrutinee",
+          "doc": "the value to match against the arms",
+          "variadic": false
+        }
+      ],
+      "results": [],
+      "attributes": [],
+      "traits": [],
+      "regions": 1,
+      "effects": [],
+      "determinism": "BitExact",
+      "domain": "",
+      "native": null
+    },
+    {
+      "name": "scope",
+      "qualified": "core.scope",
+      "version": 1,
+      "summary": "A structured scope: unconditionally run its region; its yield forwards to the op's (variadic) results.",
+      "docs": "core.scope { ... core.yield %v... } -- the region's yield produces the op's results (per-result TYPES join at CEIR-6).",
+      "operands": [],
+      "results": [
+        {
+          "name": "results",
+          "doc": "the region's yielded values (0 or more)"
+        }
+      ],
+      "attributes": [],
+      "traits": [],
+      "regions": 1,
+      "effects": [],
+      "determinism": "BitExact",
+      "domain": "",
+      "native": null
+    },
+    {
+      "name": "state",
+      "qualified": "core.state",
+      "version": 1,
+      "summary": "An explicit persistent state cell (sec 20 state<T>): `current` = `init` on the first evaluation of the enclosing region instance, thereafter the previous `next`.",
+      "docs": "core.state(%init, %next) -> %current. The sec 20 state<T> primitive: %current is %init on the FIRST-EVER evaluation of the op and the previous evaluation's %next thereafter. The cell is PER STATIC OP INSTANCE and PERSISTS across evaluations -- it does NOT reset on region re-entry. StateEdge -> %next (the last operand) is the feedback edge. NOT Pure: each instance is a distinct cell. Executor semantics land at CEIR-5z.",
+      "operands": [
+        {
+          "name": "init",
+          "doc": "the first-evaluation value (must dominate normally)",
+          "variadic": false
+        },
+        {
+          "name": "next",
+          "doc": "the value to store for the next evaluation (the FEEDBACK operand -- may forward-reference)",
+          "variadic": false
+        }
+      ],
+      "results": [
+        {
+          "name": "current",
+          "doc": "the current state value"
+        }
+      ],
+      "attributes": [],
+      "traits": [
+        "StateEdge"
+      ],
+      "regions": 0,
+      "effects": [],
+      "determinism": "BitExact",
+      "domain": "",
+      "native": null
+    },
+    {
+      "name": "switch",
+      "qualified": "core.switch",
+      "version": 1,
+      "summary": "Multi-way branch: run the case region selected by the integer selector.",
+      "docs": "core.switch(%sel) { case0 } { case1 } ... -- N variadic case regions, one selected at runtime by %sel.",
+      "operands": [
+        {
+          "name": "selector",
+          "doc": "the integer case selector",
+          "variadic": false
+        }
+      ],
+      "results": [],
+      "attributes": [],
+      "traits": [],
+      "regions": 1,
+      "effects": [],
+      "determinism": "BitExact",
+      "domain": "",
+      "native": null
+    },
+    {
+      "name": "while",
+      "qualified": "core.while",
+      "version": 1,
+      "summary": "A while loop: repeat the body region while the condition region yields true.",
+      "docs": "core.while { cond: ... core.yield %bool } { body: ... }. The cond region yields the loop test (its yield count=1 + bool-ness verified at CEIR-5b; loop-carried values are 5d state ops).",
+      "operands": [],
+      "results": [],
+      "attributes": [],
+      "traits": [],
+      "regions": 2,
+      "effects": [],
+      "determinism": "BitExact",
+      "domain": "",
+      "native": null
+    },
+    {
+      "name": "yield",
+      "qualified": "core.yield",
+      "version": 1,
+      "summary": "Terminate a structured region's block (the region terminator).",
+      "docs": "core.yield ends a structured region's block (a Terminator like func.return) and forwards its operands to the region owner's results. The operand-count = owner-result-count contract is enforced at its consumer (the fold); the general region-walking verifier is CEIR-5b.",
+      "operands": [
+        {
+          "name": "values",
+          "doc": "zero or more yielded values (forwarding to owner results is 5a remaining)",
+          "variadic": true
+        }
+      ],
+      "results": [],
+      "attributes": [],
+      "traits": [
+        "Terminator"
+      ],
+      "regions": 0,
+      "effects": [],
+      "determinism": "BitExact",
+      "domain": "",
+      "native": null
+    }
+  ]
+}

@@ -62,6 +62,103 @@ struct Rng
 }
 [[nodiscard]] ConstSpan<u8> span(const Array<u8>& b) noexcept { return ConstSpan<u8>(b.data(), b.size()); }
 
+// A random INTERNED type (CEIR-3a) — bounded depth (aggregates recurse to a scalar leaf by depth 3, so a fuzz module
+// can never build an unbounded type), covering every scalar + aggregate kind incl. named struct/enum. Feeds the same
+// text + binary round-trip harness, so the TYPE chunk (child-first pool, per-result/arg refs) is fuzzed end-to-end.
+[[nodiscard]] TypeId random_type(Context& ctx, Rng& rng, u32 depth)
+{
+    if (depth >= 3U || rng.chance(50U)) // a scalar leaf
+    {
+        switch (rng.range(6U))
+        {
+        case 0U: return ctx.type_bool();
+        case 1U: return ctx.type_index();
+        case 2U: return ctx.type_int(rng.chance(50U) ? 32U : 64U, rng.chance(50U));
+        case 3U: return ctx.type_float(FloatKind::F32);
+        case 4U: return ctx.type_float(FloatKind::F64);
+        default: return ctx.type_float(FloatKind::BF16);
+        }
+    }
+    const TypeId e = random_type(ctx, rng, depth + 1U);
+    switch (rng.range(19U))
+    {
+    case 0U: return ctx.type_vector(e, 1U + rng.range(8U));
+    case 1U: return ctx.type_matrix(e, 1U + rng.range(4U), 1U + rng.range(4U));
+    case 2U: return ctx.type_array(e, rng.range(16U));
+    case 3U: return ctx.type_complex(e);
+    case 4U: return ctx.type_quaternion(e);
+    case 5U: return ctx.type_option(e);
+    case 6U: return ctx.type_result(e, random_type(ctx, rng, depth + 1U));
+    case 7U:
+    {
+        const TypeId elems[2] = {e, random_type(ctx, rng, depth + 1U)};
+        return ctx.type_variant(ConstSpan<TypeId>(elems, 2U));
+    }
+    case 8U:
+    {
+        const StringView cases[2] = {StringView("lo"), StringView("hi")};
+        return ctx.type_enum(StringView("E"), ConstSpan<StringView>(cases, 2U));
+    }
+    case 9U: return ctx.type_trait(StringView("Tr"), {}); // a leaf trait (CEIR-3b)
+    case 10U:
+    {
+        const TypeId con[1] = {ctx.type_trait(StringView("C"), {})}; // a type param constrained by a trait
+        return ctx.type_param(StringView("P"), rng.chance(50U) ? ConstSpan<TypeId>{} : ConstSpan<TypeId>(con, 1U));
+    }
+    case 11U:
+    {
+        const TypeId p[1] = {e}; // a callable: 1 random param, 1 random result
+        const TypeId r[1] = {random_type(ctx, rng, depth + 1U)};
+        return ctx.type_callable(ConstSpan<TypeId>(p, 1U), ConstSpan<TypeId>(r, 1U));
+    }
+    case 12U: return ctx.type_buffer(rng.chance(50U) ? BufferMode::Plain : BufferMode::Structured, e); // CEIR-3c
+    case 13U: return ctx.type_image(rng.chance(50U) ? ImageDim::Dim2D : ImageDim::Dim3D, e);
+    case 14U: return ctx.type_sampler(rng.chance(50U));
+    case 15U:
+    {
+        // a VALID view: pick a resource then a mask legal for it (an illegal combo would trip the factory assert)
+        if (rng.chance(50U))
+        {
+            const TypeId b = ctx.type_buffer(BufferMode::Plain, e);
+            return ctx.type_view(b, rng.chance(50U) ? (ViewRange::Byte | ViewRange::Element)
+                                                    : static_cast<crd::u32>(ViewRange::Byte));
+        }
+        const TypeId im = ctx.type_image(ImageDim::Dim2D, e);
+        return ctx.type_view(im, rng.chance(50U) ? (ViewRange::Mip | ViewRange::Layer)
+                                                 : static_cast<crd::u32>(ViewRange::Aspect));
+    }
+    case 16U:
+    {
+        // CEIR-3d: a tensor whose ELEMENT is `e` (never a bare Dim/Shape — those only appear inside a shape here, so the
+        // composition is always valid) and whose SHAPE is a small mix of static/symbolic/dynamic dims.
+        TypeId    dm   = ctx.type_dim_dynamic();
+        const u32 pick = rng.range(3U);
+        if (pick == 0U) { dm = ctx.type_dim_static(rng.range(8U)); }
+        else if (pick == 1U) { dm = ctx.type_dim_symbolic(StringView("N")); }
+        const TypeId dm2[2] = {dm, ctx.type_dim_static(1U + rng.range(4U))};
+        const TypeId shp    = ctx.type_shape(ConstSpan<TypeId>(dm2, rng.chance(50U) ? 2U : 1U));
+        return rng.chance(50U) ? ctx.type_tensor(e, shp) : ctx.type_sparse_tensor(e, shp);
+    }
+    case 17U:
+    {
+        // CEIR-3e: a quantity over a NUMERIC underlying (built fresh so composition is always valid) + a random dim
+        const TypeId num = rng.chance(50U) ? ctx.type_f32() : ctx.type_vector(ctx.type_f32(), 1U + rng.range(4U));
+        QuantityDim  d;
+        d.exp[rng.range(8U)] = static_cast<crd::i8>(static_cast<int>(rng.range(5U)) - 2); // a small signed exponent
+        return ctx.type_quantity(num, d);
+    }
+    default:
+    {
+        const TypeId     ftys[2]   = {e, random_type(ctx, rng, depth + 1U)};
+        const StringView fnames[2] = {StringView("f0"), StringView("f1")};
+        return ctx.type_struct(StringView("S"), ConstSpan<TypeId>(ftys, 2U), ConstSpan<StringView>(fnames, 2U));
+    }
+    }
+}
+
+// A result/block-arg type: sometimes NONE (untyped), else a random interned type.
+[[nodiscard]] TypeId random_value_type(Context& ctx, Rng& rng) { return rng.chance(30U) ? TypeId{} : random_type(ctx, rng, 0U); }
+
 // A random attribute of a random kind — floats are FINITE (NaN's text form is payload-lossy by design), symbols and
 // attr-names are identifiers (the printer emits @name raw), strings include quote/backslash/brace (the 1e escaping).
 [[nodiscard]] AttrId random_attr(Context& ctx, Rng& rng)
@@ -84,7 +181,7 @@ struct Rng
         const char* const syms[] = {"foo", "bar", "baz", "qux"};
         return ctx.attr_symbol(StringView(syms[rng.range(4U)]));
     }
-    return ctx.attr_type(TypeId{rng.range(8U) + 1U}); // pick == 5
+    return ctx.attr_type(random_type(ctx, rng, 0U)); // pick == 5 — a real interned type (possibly a nested aggregate)
 }
 
 const char* const kDialects[] = {"test", "math", "cf", "scf", "arith"};
@@ -104,7 +201,7 @@ void gen_ops(ModuleBuilder& mb, Rng& rng, Array<Value*>& live, u32 count, u32 de
         for (u32 i = 0; i < nops; ++i) { ob.operand(live[rng.range(static_cast<u32>(live.size()))]); }
 
         const u32 nres = rng.range(3U);
-        ob.results(nres, TypeId{rng.range(6U)}); // type 0 = none
+        ob.results(nres, random_value_type(ctx, rng)); // uniform result type (sometimes none)
 
         const u32 nattrs = rng.range(4U);
         for (u32 i = 0; i < nattrs; ++i) { ob.attr(StringView(kAttrKeys[rng.range(8U)]), random_attr(ctx, rng)); }
@@ -122,7 +219,7 @@ void gen_ops(ModuleBuilder& mb, Rng& rng, Array<Value*>& live, u32 count, u32 de
         {
             InsertionGuard g(mb); // each region fills independently, restoring the parent insertion point after
             const u32      rnargs = rng.range(3U);
-            Block* const   rb     = mb.add_block(rnargs, TypeId{rng.range(4U)}, op->region(ri));
+            Block* const   rb     = mb.add_block(rnargs, random_value_type(ctx, rng), op->region(ri));
             for (u32 i = 0; i < rnargs; ++i) { live.push_back(rb->arg(i)); }
             gen_ops(mb, rng, live, rng.range(4U), depth + 1U); // may be 0 ops — empty-block round-trip coverage
         }
@@ -137,7 +234,7 @@ void gen_ops(ModuleBuilder& mb, Rng& rng, Array<Value*>& live, u32 count, u32 de
     for (u32 bi = 0; bi < nblocks; ++bi)
     {
         const u32    nargs = rng.range(3U);
-        Block* const blk   = mb.add_block(nargs, TypeId{rng.range(4U)});
+        Block* const blk   = mb.add_block(nargs, random_value_type(ctx, rng));
         for (u32 i = 0; i < nargs; ++i) { live.push_back(blk->arg(i)); }
         gen_ops(mb, rng, live, rng.range(5U), 0U); // may be 0 ops (zero-op block round-trip coverage)
     }
@@ -193,6 +290,8 @@ TEST_CASE("ceir fuzz: the stable content hash is deterministic and content-deriv
     (void)dirty.register_file("noise.txt");
     (void)dirty.intern_op("noise", "op");
     (void)dirty.attr_int(999999);
+    (void)dirty.type_f64(); // ...including the TYPE table (v2): the hash is over the content-pure blob, type-history-free
+    (void)dirty.type_vector(dirty.type_i64(), 8U);
     CHECK(stable_hash(clean, *test::build_rich(clean), &root) == stable_hash(dirty, *test::build_rich(dirty), &root));
 
     // discrimination: two clearly-different modules hash differently

@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "dialect": "arith",
+  "summary": "Integer/float constants and arithmetic \u2014 the canonical value-domain dialect.",
+  "ops": [
+    {
+      "name": "addi",
+      "qualified": "arith.addi",
+      "version": 1,
+      "summary": "Two's-complement integer addition.",
+      "docs": "arith.addi(%lhs, %rhs) -> %result. Wrapping two's-complement add (the u32-wrap oracle rule applies).",
+      "operands": [
+        {
+          "name": "lhs",
+          "doc": "",
+          "variadic": false
+        },
+        {
+          "name": "rhs",
+          "doc": "",
+          "variadic": false
+        }
+      ],
+      "results": [
+        {
+          "name": "result",
+          "doc": ""
+        }
+      ],
+      "attributes": [],
+      "traits": [
+        "Pure"
+      ],
+      "regions": 0,
+      "effects": [],
+      "determinism": "BitExact",
+      "domain": "EitherHostOrDevice",
+      "native": null
+    },
+    {
+      "name": "cmpi",
+      "qualified": "arith.cmpi",
+      "version": 1,
+      "summary": "Integer comparison producing a boolean-valued result.",
+      "docs": "arith.cmpi {predicate} (%lhs, %rhs) -> %result. The predicate selects the comparison; result is 0/1.",
+      "operands": [
+        {
+          "name": "lhs",
+          "doc": "",
+          "variadic": false
+        },
+        {
+          "name": "rhs",
+          "doc": "",
+          "variadic": false
+        }
+      ],
+      "results": [
+        {
+          "name": "result",
+          "doc": "1 if the predicate holds, else 0"
+        }
+      ],
+      "attributes": [
+        {
+          "name": "predicate",
+          "kind": "string",
+          "required": true,
+          "doc": "eq/ne/slt/sle/sgt/sge/ult/ule/ugt/uge"
+        }
+      ],
+      "traits": [
+        "Pure"
+      ],
+      "regions": 0,
+      "effects": [],
+      "determinism": "BitExact",
+      "domain": "EitherHostOrDevice",
+      "native": null
+    },
+    {
+      "name": "const",
+      "qualified": "arith.const",
+      "version": 1,
+      "summary": "A typed compile-time constant materialized into an SSA value.",
+      "docs": "arith.const has no operands; its `value` attribute is lifted into its single result. Pure \u2014 safe to CSE/DCE.",
+      "operands": [],
+      "results": [
+        {
+          "name": "result",
+          "doc": "the constant value"
+        }
+      ],
+      "attributes": [
+        {
+          "name": "value",
+          "kind": "int",
+          "required": true,
+          "doc": "the integer constant"
+        }
+      ],
+      "traits": [
+        "Pure"
+      ],
+      "regions": 0,
+      "effects": [],
+      "determinism": "BitExact",
+      "domain": "EitherHostOrDevice",
+      "native": null
+    },
+    {
+      "name": "muli",
+      "qualified": "arith.muli",
+      "version": 1,
+      "summary": "Two's-complement integer multiplication.",
+      "docs": "arith.muli(%lhs, %rhs) -> %result. Wrapping two's-complement multiply.",
+      "operands": [
+        {
+          "name": "lhs",
+          "doc": "",
+          "variadic": false
+        },
+        {
+          "name": "rhs",
+          "doc": "",
+          "variadic": false
+        }
+      ],
+      "results": [
+        {
+          "name": "result",
+          "doc": ""
+        }
+      ],
+      "attributes": [],
+      "traits": [
+        "Pure"
+      ],
+      "regions": 0,
+      "effects": [],
+      "determinism": "BitExact",
+      "domain": "EitherHostOrDevice",
+      "native": null
+    }
+  ]
+}

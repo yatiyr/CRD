@@ -543,6 +543,8 @@ add_subdirectory(engine/core)
 add_subdirectory(engine/vm)  # ADR-0085: OS virtual-memory leaf (page source for crd-memory's VirtualMemoryAllocator)
 add_subdirectory(engine/units)
 add_subdirectory(engine/ceir)  # D-007 CEIR-1: Cerid Execution IR — host-only execution/orchestration IR (ADR-0109); the CEIR master spine
+add_subdirectory(engine/ceir-host)  # D-007 CEIR-6b: the crd-jobs execution-provider bridge (ADR-0109 §4.2) — crd-ceir + crd-jobs
+add_subdirectory(engine/ceir-cook)  # D-007 CEIR-7a: the CEIR asset cook bridge (ADR-0109 §4.2) — crd-ceir + crd-resources + crd-render-asset-core
 add_subdirectory(engine/time)
 add_subdirectory(engine/perf)
 add_subdirectory(engine/memory)

@@ -1,0 +1,187 @@
+{
+  "schema_version": 1,
+  "dialect": "async",
+  "summary": "Structured-concurrency ops (sec 37): tokens / waits / joins / race / cancellation, host-only.",
+  "ops": [
+    {
+      "name": "await",
+      "qualified": "async.await",
+      "version": 1,
+      "summary": "Wait for a token; produce the async body's yielded values.",
+      "docs": "async.await(%token) -> (%v...). Consumes %token EXACTLY once (use-once, sec 116) and yields the launched body's values. Reference executor (CEIR-6b): returns the body's yield.",
+      "operands": [
+        {
+          "name": "token",
+          "doc": "the token to consume",
+          "variadic": false
+        }
+      ],
+      "results": [
+        {
+          "name": "values",
+          "doc": "the launched body's yielded values"
+        }
+      ],
+      "attributes": [],
+      "traits": [
+        "TokenConsumer"
+      ],
+      "regions": 0,
+      "effects": [
+        {
+          "family": "Synchronization"
+        }
+      ],
+      "determinism": "",
+      "domain": "",
+      "native": null
+    },
+    {
+      "name": "cancel",
+      "qualified": "async.cancel",
+      "version": 1,
+      "summary": "Cancel a pending async operation (consumes its token).",
+      "docs": "async.cancel(%token). Consumes %token -- \u26d4 every token is awaited XOR cancelled, NO silent drops (an unconsumed token is a find_token_misuse Unconsumed). Cancellation PLUMBING through the provider lands at CEIR-6c.",
+      "operands": [
+        {
+          "name": "token",
+          "doc": "the token to cancel",
+          "variadic": false
+        }
+      ],
+      "results": [],
+      "attributes": [],
+      "traits": [
+        "TokenConsumer"
+      ],
+      "regions": 0,
+      "effects": [
+        {
+          "family": "Synchronization"
+        }
+      ],
+      "determinism": "",
+      "domain": "",
+      "native": null
+    },
+    {
+      "name": "join",
+      "qualified": "async.join",
+      "version": 1,
+      "summary": "All-of: consume N tokens; produce one token that completes when all of them do.",
+      "docs": "async.join(%t...) -> %token. Consumes each operand token ONCE (TokenConsumer) and produces a NEW token (TokenProducer) that completes when all inputs do. join carries BOTH traits.",
+      "operands": [
+        {
+          "name": "tokens",
+          "doc": "the tokens to join (each consumed once)",
+          "variadic": true
+        }
+      ],
+      "results": [
+        {
+          "name": "token",
+          "doc": "a new completion token for the whole group"
+        }
+      ],
+      "attributes": [],
+      "traits": [
+        "TokenProducer",
+        "TokenConsumer"
+      ],
+      "regions": 0,
+      "effects": [
+        {
+          "family": "Synchronization"
+        }
+      ],
+      "determinism": "",
+      "domain": "",
+      "native": null
+    },
+    {
+      "name": "launch",
+      "qualified": "async.launch",
+      "version": 1,
+      "summary": "Structured async fork: run the region asynchronously and produce a completion token.",
+      "docs": "async.launch { body } -> %token. Structured concurrency (sec 30): the body runs asynchronously; %token represents its completion (its yielded values are what await produces). \u26d4 EXECUTOR CONTRACT (CEIR-6b): the body runs at an UNSPECIFIED later time; the SEQUENTIAL REFERENCE executor runs it AT launch and %token completes when the body's yield is reached.",
+      "operands": [],
+      "results": [
+        {
+          "name": "token",
+          "doc": "the completion token -- consume EXACTLY once (await / join / race / cancel)"
+        }
+      ],
+      "attributes": [],
+      "traits": [
+        "TokenProducer"
+      ],
+      "regions": 1,
+      "effects": [
+        {
+          "family": "Synchronization"
+        }
+      ],
+      "determinism": "",
+      "domain": "",
+      "native": null
+    },
+    {
+      "name": "race",
+      "qualified": "async.race",
+      "version": 1,
+      "summary": "Any-of / select: consume N tokens; produce the index of the first ready.",
+      "docs": "async.race(%t...) -> %index. Consumes each operand token once; produces the WINNER'S INDEX (a value-CARRYING race needs async-value types -> CEIR-6b/6c, named). Nondeterministic (the order of readiness is not fixed) -- so it is illegal under CertifiedDeterministic/Deterministic compiler mode (CEIR-4b).",
+      "operands": [
+        {
+          "name": "tokens",
+          "doc": "the racing tokens (each consumed once)",
+          "variadic": true
+        }
+      ],
+      "results": [
+        {
+          "name": "index",
+          "doc": "the index of the winning token -- NOT a token (so NOT a TokenProducer)"
+        }
+      ],
+      "attributes": [],
+      "traits": [
+        "TokenConsumer"
+      ],
+      "regions": 0,
+      "effects": [
+        {
+          "family": "Synchronization"
+        }
+      ],
+      "determinism": "Nondeterministic",
+      "domain": "",
+      "native": null
+    },
+    {
+      "name": "scope",
+      "qualified": "async.scope",
+      "version": 1,
+      "summary": "A structured-concurrency scope (sec 30): a region whose dynamic extent ends only when every token launched inside it is consumed.",
+      "docs": "async.scope { ... } -> (%r...). Structured concurrency (sec 30): the scope OWNS the tokens launched inside it -- its dynamic extent ends only when every one is consumed. \u26d4 SCOPE-CONFINEMENT is LAYERED verification, not new code: 5b SSA-scoping already blocks consuming a scope-launched token in a SIBLING region (UseBeforeDef), and 6a use-once already blocks leaking it (Unconsumed) or yielding it OUT (ConsumedByNonConsumer) -- a token is confined to its scope's dynamic extent by construction. Declares an ambient Synchronization effect (its exit is a JOIN point -- a blocking wait) -> illegal in an audio-RT region (correct: a join-at-exit blocks). \u26d4 EXECUTOR CONTRACT: the SEQUENTIAL reference is a no-op boundary (everything already completed at launch -- it just forwards the region's yield); the JOBS-BACKED provider joins outstanding work at scope exit (the slice that needs concurrent async semantics).",
+      "operands": [],
+      "results": [
+        {
+          "name": "results",
+          "doc": "the scope region's yielded values"
+        }
+      ],
+      "attributes": [],
+      "traits": [],
+      "regions": 1,
+      "effects": [
+        {
+          "family": "Synchronization"
+        }
+      ],
+      "determinism": "",
+      "domain": "",
+      "native": null
+    }
+  ]
+}

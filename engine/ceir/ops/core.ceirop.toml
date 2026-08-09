@@ -1,0 +1,124 @@
+# ceir.core -- structured control-flow region ops (sec 13/14). CEIR-5a: the region-carrying scope / if / for / foreach +
+# the yield terminator, defined via the CEIR-2 generator (the region SIGNATURE -- entry-block arg count -- is a 5a schema
+# evolution). Constant-condition `if` folds via Context::fold_constant_if (the partial-eval seed).
+# ⛔ Every core op is BitExact (a control-flow CONSTRUCT is deterministic) and declares ZERO effects: a structured op is
+# not itself effectful -- its effects are its CONTENTS', which the per-block hazard walk (CEIR-4d) already sees.
+# CEIR-5a REMAINING (this slice is a checkpoint): value-producing variants (results = yields, needing variadic results),
+# `while` (a region-result condition), and switch / match (variadic case regions). See the tracker 5a row.
+schema_version = 1
+dialect = "core"
+summary = "Structured control-flow region ops: scope / if / for / foreach + the yield terminator (sec 13/14)."
+
+[[op]]
+name = "scope"
+summary = "A structured scope: unconditionally run its region; its yield forwards to the op's (variadic) results."
+version = 1
+results = [ { name = "results", type = "any", variadic = true, doc = "the region's yielded values (0 or more)" } ]
+regions = [ { kind = "graph" } ]
+determinism = "BitExact"
+docs = "core.scope { ... core.yield %v... } -- the region's yield produces the op's results (per-result TYPES join at CEIR-6)."
+
+[[op]]
+name = "if"
+summary = "Run the THEN region when the condition is nonzero, else the ELSE region; both yield the (variadic) results."
+version = 1
+operands = [ { name = "cond", type = "any", doc = "the condition value (nonzero selects THEN)" } ]
+results = [ { name = "results", type = "any", variadic = true, doc = "the taken region's yielded values (0 or more)" } ]
+regions = [ { kind = "graph" }, { kind = "graph" } ]
+determinism = "BitExact"
+docs = "core.if(%cond) -> (%r...) { then } { else }. A constant %cond folds via Context::fold_constant_if (RAUW the results with the taken yield)."
+
+[[op]]
+name = "while"
+summary = "A while loop: repeat the body region while the condition region yields true."
+version = 1
+regions = [ { kind = "graph" }, { kind = "graph" } ]
+determinism = "BitExact"
+docs = "core.while { cond: ... core.yield %bool } { body: ... }. The cond region yields the loop test (its yield count=1 + bool-ness verified at CEIR-5b; loop-carried values are 5d state ops)."
+
+[[op]]
+name = "for"
+summary = "A counted loop: run the body for each index in [lower, upper) stepping by step."
+version = 1
+operands = [ { name = "lower", type = "any" }, { name = "upper", type = "any" }, { name = "step", type = "any" } ]
+regions = [ { kind = "graph", args = [ { name = "iv", type_hint = "the induction variable (an index)" } ] } ]
+determinism = "BitExact"
+docs = "core.for(%lo, %hi, %step) { ^body(%iv): ... }. The body region's entry block takes the induction variable."
+
+[[op]]
+name = "foreach"
+summary = "Iterate a collection / view / work-set: run the body once per element."
+version = 1
+operands = [ { name = "items", type = "any", doc = "the collection / view / work-set to iterate" } ]
+regions = [ { kind = "graph", args = [ { name = "elem", type_hint = "the current element" } ] } ]
+determinism = "BitExact"
+docs = "core.foreach(%items) { ^body(%elem): ... }. The body region's entry block takes the current element."
+
+[[op]]
+name = "switch"
+summary = "Multi-way branch: run the case region selected by the integer selector."
+version = 1
+operands = [ { name = "selector", type = "any", doc = "the integer case selector" } ]
+regions = [ { kind = "graph", variadic = true } ]
+determinism = "BitExact"
+docs = "core.switch(%sel) { case0 } { case1 } ... -- N variadic case regions, one selected at runtime by %sel."
+
+[[op]]
+name = "match"
+summary = "Structural pattern match: run the arm region selected by matching the scrutinee."
+version = 1
+operands = [ { name = "scrutinee", type = "any", doc = "the value to match against the arms" } ]
+regions = [ { kind = "graph", variadic = true } ]
+determinism = "BitExact"
+docs = "core.match(%scrutinee) { arm0 } { arm1 } ... -- STRUCTURAL only (each arm a region); PATTERN semantics are CHIR's."
+
+[[op]]
+name = "yield"
+summary = "Terminate a structured region's block (the region terminator)."
+version = 1
+operands = [ { name = "values", type = "any", variadic = true, doc = "zero or more yielded values (forwarding to owner results is 5a remaining)" } ]
+traits = ["Terminator"]
+determinism = "BitExact"
+docs = "core.yield ends a structured region's block (a Terminator like func.return) and forwards its operands to the region owner's results. The operand-count = owner-result-count contract is enforced at its consumer (the fold); the general region-walking verifier is CEIR-5b."
+
+# CEIR-5d (sec 20 STATE IS EXPLICIT): the three explicit-state ops. ALL are shaped (init, next) -> current and carry the
+# StateEdge trait, which makes their LAST operand (`next`) the feedback edge -- the only operand exempt from CEIR-5b
+# def-before-use, so "graph cycles must pass through explicit state/delay semantics" (sec 20). ⛔ Each is BitExact and
+# declares ZERO effects -- BUT is deliberately NOT Pure: every instance is a DISTINCT state cell, and a Pure trait would
+# let CSE merge two cells into one (the CSE trap). `next` may forward-reference the value the cycle produces; `init` is the
+# first-evaluation value and MUST be normally dominating (it is NOT the feedback operand). ⛔ EXECUTOR CONTRACT (pinned for
+# CEIR-5z): the cell is PER STATIC OP INSTANCE and PERSISTS across evaluations -- it does NOT reset when the enclosing
+# region is re-entered (TAA/GI histories, audio delay lines require this). `current` = `init` on the FIRST-EVER evaluation
+# of the op; thereafter the previous evaluation's `next`. (This persistence is what makes fold_constant_if's state-splice
+# sound: same op = same cell, same evaluation count.) Loop-carried accumulators (the sec 20 "stateful loops") are expressed
+# by a state op INSIDE the loop body -- iter_args-as-structural-sugar is NOT built (the CEIR-5a "iter_args -> 5d" note is
+# struck: sec 20's spelling is state/delay/history, not MLIR iter_args).
+[[op]]
+name = "state"
+summary = "An explicit persistent state cell (sec 20 state<T>): `current` = `init` on the first evaluation of the enclosing region instance, thereafter the previous `next`."
+version = 1
+operands = [ { name = "init", type = "any", doc = "the first-evaluation value (must dominate normally)" }, { name = "next", type = "any", doc = "the value to store for the next evaluation (the FEEDBACK operand -- may forward-reference)" } ]
+results = [ { name = "current", type = "any", doc = "the current state value" } ]
+traits = ["StateEdge"]
+determinism = "BitExact"
+docs = "core.state(%init, %next) -> %current. The sec 20 state<T> primitive: %current is %init on the FIRST-EVER evaluation of the op and the previous evaluation's %next thereafter. The cell is PER STATIC OP INSTANCE and PERSISTS across evaluations -- it does NOT reset on region re-entry. StateEdge -> %next (the last operand) is the feedback edge. NOT Pure: each instance is a distinct cell. Executor semantics land at CEIR-5z."
+
+[[op]]
+name = "delay"
+summary = "A one-step delay register (sec 20 delay<T>): `current` = `init` on the first evaluation, thereafter the `next` from the PREVIOUS evaluation."
+version = 1
+operands = [ { name = "init", type = "any", doc = "the first-evaluation value" }, { name = "next", type = "any", doc = "the value delayed by one evaluation (the FEEDBACK operand)" } ]
+results = [ { name = "current", type = "any", doc = "the delayed value" } ]
+traits = ["StateEdge"]
+determinism = "BitExact"
+docs = "core.delay(%init, %next) -> %current. A one-evaluation delay/register (audio delay lines, TAA history taps): %current is %init on the first-ever evaluation, thereafter the %next of the PREVIOUS evaluation. The cell PERSISTS across evaluations (it does not reset on region re-entry). Structurally identical to core.state; the distinction is the executor's update timing (CEIR-5z)."
+
+[[op]]
+name = "history"
+summary = "A depth-N history buffer (sec 20 history<T>): a delay line keeping the previous `depth` values (default 1)."
+version = 1
+operands = [ { name = "init", type = "any", doc = "the pre-history fill value" }, { name = "next", type = "any", doc = "the value pushed into the history (the FEEDBACK operand)" } ]
+results = [ { name = "current", type = "any", doc = "the current head of the history (depth taps land at CEIR-5z)" } ]
+traits = ["StateEdge"]
+determinism = "BitExact"
+docs = "core.history(%init, %next) -> %current, with an optional int `depth` attribute (RESERVED vocabulary; ABSENT = 1, PRESENT must be an Int >= 1 -- validated trait-generically by the CEIR-5d verifier as StateDepthInvalid). A ring of the previous `depth` values (GI/exposure histories); the cell PERSISTS across evaluations (it does not reset on region re-entry). NOT Pure (a distinct cell). persistent_resource<T> (sec 20's fourth construct) is NOT here -- it routes to ceir.resource (sec 36), a resource-lifetime concern, not a control-flow cell."

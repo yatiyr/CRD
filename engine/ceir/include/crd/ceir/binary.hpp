@@ -25,10 +25,11 @@
 namespace crd::ceir
 {
 // The container magic 'CEIR' (little-endian on disk) and the format version. A version bump cleanly rejects older
-// blobs (recook); CEIR-3 will add a 'TYPE' chunk and bump this.
+// blobs (recook). v2 (CEIR-3a) adds the 'TYPE' chunk — an interned structural-type pool (child-first, so every record
+// references strictly-lower indices) — and makes result/block-arg types per-element type-pool refs (1-based; 0 = none).
 inline constexpr u32 kBinaryMagic =
     static_cast<u32>('C') | (static_cast<u32>('E') << 8U) | (static_cast<u32>('I') << 16U) | (static_cast<u32>('R') << 24U);
-inline constexpr u32 kBinaryVersion = 1U;
+inline constexpr u32 kBinaryVersion = 2U;
 
 // v1 decode cap for a count that costs ZERO stream bytes (a block's arg count, an op's result count) — a hostile blob
 // could otherwise declare 4e9 and force a multi-GB allocation before any byte is consumed. Counts whose elements DO

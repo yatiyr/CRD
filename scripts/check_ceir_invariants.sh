@@ -25,7 +25,7 @@ done <"$ceir/CMakeLists.txt"
 # crd-ceir holds KernelRef identities, never kernels/backends — so it must not include a backend module NOR name a
 # shading language, its bytecode, or its vendor compiler anywhere (code OR comment). This is the name-half of I3 that
 # the engine-wide crd-no-shader-language-leak gate does NOT cover.
-forbidden='crd/gpu/|crd/kir|crd/rendergraph|crd/renderpass|crd/renderprogram|crd/rendermaterial|crd/renderasset|crd/framecook|crd/scenerender|crd/jobs/|crd/math/|crd/shader|crd/rhi'
+forbidden='crd/gpu/|crd/kir|crd/rendergraph|crd/renderpass|crd/renderprogram|crd/rendermaterial|crd/renderasset|crd/resources|crd/framecook|crd/scenerender|crd/jobs/|crd/math/|crd/shader|crd/rhi'
 lang_tokens='\b(GLSL|HLSL|WGSL|MSL|SPIR-?V|SPIRV|DXIL|DXBC|PTX|NVRTC|glslang|shaderc|dxc|CUDA)\b'
 while IFS= read -r hit; do
     [[ -n "$hit" ]] && violations+=("I3 $hit")

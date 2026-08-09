@@ -15,16 +15,16 @@ using namespace crd::ceir;
 
 namespace
 {
-// Build: module { ^bb0(%0 : !t1): %1 = test.add(%0, %0) {tag = 7, zebra = "z"} : !t1 }
+// Build: module { ^bb0(%0 : !i32): %1 = test.add(%0, %0) {tag = 7, zebra = "z"} : !i32 }
 Module* build_sample(Context& ctx)
 {
     Module* m     = ctx.create_module();
-    Block*  entry = ctx.create_block(1U, TypeId{1U});
+    Block*  entry = ctx.create_block(1U, ctx.type_i32());
     m->body()->append(entry);
     Value*     a0        = entry->arg(0U);
     Value*     operands[2] = {a0, a0};
     Operation* add = ctx.create_operation(ctx.intern_op("test", "add"),
-                                          crd::containers::ConstSpan<Value*>(operands, 2U), 1U, TypeId{1U});
+                                          crd::containers::ConstSpan<Value*>(operands, 2U), 1U, ctx.type_i32());
     // set attrs OUT of name order to prove the printer canonicalizes (zebra before tag by insertion)
     ctx.set_attr(add, "zebra", ctx.attr_string("z"));
     ctx.set_attr(add, "tag", ctx.attr_int(7));
@@ -54,10 +54,10 @@ TEST_CASE("ceir print: canonical shape - value ids, sorted attrs, op name, types
     const char* const            t = s.c_str();
 
     CHECK(std::strstr(t, "module {") != nullptr);
-    CHECK(std::strstr(t, "^bb0(%0 : !t1):") != nullptr);        // block arg with its type
+    CHECK(std::strstr(t, "^bb0(%0 : !i32):") != nullptr);       // block arg with its type
     CHECK(std::strstr(t, "%1 = test.add(%0, %0)") != nullptr);  // result id, op name, operand refs
     CHECK(std::strstr(t, "{tag = 7, zebra = \"z\"}") != nullptr); // attrs SORTED by name (tag < zebra), int + string
-    CHECK(std::strstr(t, ": !t1") != nullptr);                  // result type
+    CHECK(std::strstr(t, ": !i32") != nullptr);                 // result type
 }
 
 TEST_CASE("ceir print: an unregistered-dialect op prints opaquely by its interned name", "[ceir][print]")

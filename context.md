@@ -5,7 +5,129 @@
 
 ---
 
-## Current focus — CEIR BAND 1 CLOSED 2026-08-08 (1a..1z) — awaiting USER commit → GitHub CI green → CEIR-2
+## Current focus — CEIR BAND 7 OPENS (7a ✅ 2026-08-09: the `'CEIR'` cook — source → VERIFIED → binary chunk + content hash + §107 INTERFACE hash + §106 dependency record). crd-ceir CORE (no new edge): `interface_hash` (FNV over a canonical projection — exported funcs sorted by name, structural param/result types, the 5c transitive effect set, the module-wide §20 state schema; impl-only edits keep it, signature/effect/state edits change it — the four-edit matrix), `collect_dependencies` (external calls + intrinsics + providers, schema-driven via op_info — the `intrinsic`/`native_provider` PROMOTION from OpSchema to runtime OpInfo, the determinism/domain precedent), `find_unregistered_op` (strict cook check). The NEW `crd-ceir-cook` BRIDGE (crd-ceir + crd-resources + crd-render-asset-core): `cook_program`/`cook_program_text` (text≡builder hashes) verify→serialize→hash→deps→a CRDR container (`'META'` CookedHeader + `'CEIR'` blob + `'CDEP'` deps, reusing the RAF cooked-envelope + AssetType::Program); `read_program` round-trips + validates (missing `'CDEP'` → BadDeps). ⭐ Cross-Context PURITY proven (cook in A, read into fresh B, recompute both hashes → equal). 226/226 × 4 configs; I5 green as-is, I3 hardened (+crd/resources); all-targets build clean. DEFERRED to real rows: ckir_refs→CEIR-10, native_determinism→CEIR-13c, RuntimeSlot→7b, CookDb/register_cook_handler→7c, §105 asset classes + namespaces→7b/7c; ⚠ §107 capability-contract field has NO owning row (flagged for the user). 7b NEXT = RuntimeSlot/handle model over crd-resources (generation-safe handles), §105. Bands 1–6 ✅ CLOSED; all uncommitted
+
+> **CEIR-2 ✅ BAND CLOSED (op-definition generator, §8).** Ops DEFINED in `engine/ceir/ops/*.ceirop.toml` →
+> `tools/ceir_opgen/ceir_opgen.py` (stdlib) emits committed C++ (self-registers via the CEIR-1d registry) +
+> `.ops.{json,md}` + a gated smoke test — **an op is a TOML edit + regen, ZERO central-enum/switch edits** (proven
+> end-to-end by adding the full-surface `test` dialect at 2z). Detail → `docs/sessions/2026-08-08-ceir-2-opgen.md`.
+>
+> **CEIR-3a ✅ (interned structural types, §16) 2026-08-08.** `TypeId` is now a real interned STRUCTURAL type (scalars +
+> the §16 aggregate family): `type.hpp` (`TypeKind`/`FloatKind`/`Type`; **`kind` a FIELD** for I6), `Context::type_*` +
+> `type_of` (**asserts, no silent fallback**), a canonical `!`-sigil grammar (`!vec<4x!f32>`, `!struct<P,x:!i32,y:!f32>`,
+> `!option<!result<…>>`, …) printer+parser byte-exact, and binary **v2** with a **child-first `TYPE` chunk** (content-pure;
+> per-result/arg refs so no future v3 bump). Every `TypeId{n}` magic literal migrated to real factories (a stray one
+> aliased to incidental intern state — caught only by the dirty-context purity test). 65/65 × 4 configs + tidy +
+> invariants. Detail → `docs/sessions/2026-08-08-ceir-3-types.md`.
+> **CEIR-3b ✅ (generics, §16/§98) 2026-08-08.** Appended `TypeParam`/`Trait`/`Callable` kinds (reuse the v2 record —
+> **no version bump**); `!param<T,!trait<Ord>>` / `!trait<..>` / `!fn<(P)->(R)>` grammar; a live trait-conformance
+> registry (`register_conformance`/`satisfies`, transitive over supertraits) + a memoized, diagnostic-bearing
+> `substitute` (unbound params stay generic; a constraint violation reports the (param,trait)). Added `type_is_well_formed`
+> — the decoder now rejects structurally-invalid records (a latent 3a gap). 70/70 × 4 configs + tidy + GCC
+> `-Werror=switch`.
+> **CEIR-3c ✅ (resource + view types, §23) 2026-08-08.** Nine appended kinds (Buffer/Image/Sampler/ResourceTable/
+> AccelStruct/VideoFrame/AudioBuffer/ExternalResource/View — **no version bump**, reuse the v2 record). **Interp B**:
+> a view TYPE carries the underlying resource + a range-dimension presence MASK (`byte/element/mip/layer/aspect`), the
+> range VALUES are runtime (tensor/sparse → 3d; §24 domains = value semantics). Grammar `!buffer<plain,!f32>` /
+> `!image<d2,fmt>` / `!view<RES,mip,layer>`; tri-split `view_combination_valid` (parser fails / decoder rejects /
+> factory asserts). Fixed a corrupt-input abort (parser fell into the asserting factory on a prior error). 73/73 × 4
+> configs + tidy + `-Werror=switch`.
+> **CEIR-3d ✅ (shapes + tensors, §21/§35) 2026-08-08.** Four appended kinds (Dim/Shape/Tensor/SparseTensor — **no
+> version bump**). Type-level foundation only (the `ceir.shape`/`ceir.tensor` op dialects + layout §22 are CEIR-18;
+> tensor/sparse returned from the 3c boundary). `!dim<4|dyn|N>` / `!shape<..>` / `!tensor<e,s>` grammar; tri-state
+> `shapes_broadcast` (right-aligned incompatible pos) / `shapes_reshape` (overflow→Unknown). Added `type_is_canonical`
+> (decoder rejects non-canonical records — a name on an Int etc. — latent since 3a) + `dyn` reservation tri-split. A
+> 3b×3d seam test (substitute a param through a tensor shape). 77/77 × 4 configs + tidy + `-Werror=switch` (31 kinds).
+> **CEIR-3e ✅ (physical quantities, §17/§18) 2026-08-08.** One appended kind (`Quantity`, no version bump): tags a
+> numeric underlying with an 8-base SI dimension (ADR-0078) **bit-packed into count+cols** (crd::units::Dim is
+> compile-time-only → CEIR mirrors it at runtime; a static_assert pins the base order). Grammar `!qty<!f32,L1T-2>` /
+> dimensionless `!qty<!f32,1>`; `quantity_dimensions_equal`→first_differing_base (the 3z Length+Time diag), `quantity_dim_mul/div`
+> (i8 overflow→failure). ⭐ The **`units.erase` op is the FIRST non-reference dialect through the CEIR-2 generator** (a
+> `.ceirop.toml` + regen, zero central edits; drift now 3 dialects × 5 files, smoke auto-generated). 83/83 × 4 configs +
+> tidy + `-Werror=switch`.
+> **CEIR-3f ✅ (ownership/lifetime qualifiers + escape predicate, §19) 2026-08-08.** One appended kind (`Qualified`, no
+> version bump): a WRAPPER — `members[0]`=type, `count`=`OwnershipKind` (9 modes imm/mut/borrow/own/shared/weak/state/ext/
+> transient) — chosen over nine kinds (a value has exactly one mode; the wrapper composes over resources too). Grammar
+> `!qual<borrow,!buffer<plain,!f32>>`; tri-split `qualified_composition_valid` (rejects qual-of-qual/dim/shape/trait). The
+> escape rule splits 3f/3z: 3f ships `value_escapes_region(Value*,Region*)` (def-use walk vs directional region
+> containment), 3z composes it over `Qualified<BorrowedView>`. ⛔ Two advisor-caught fixes: **`create_operation` never
+> wired `Region::m_parent`** (latent since 1a; the first upward walk reported false-positive escapes) and **`substitute`
+> bypassed the tri-split** (retroactively closes qty-of-qty/qual-of-qual via a new `SubstResult::failed_compose`).
+> Escape contract = direct-use, type-directed. 87/87 (773 assertions) × 4 configs + tidy + `-Werror=switch` (33 kinds).
+> **CEIR-3z ✅ BAND-3 GATE (§16/§17/§19/§21) 2026-08-08.** The four band-3 error checks fire as **discriminating pointing
+> diagnostics**: Length+Time (`quantity_dimensions_equal`→first_differing_base, base 0 AND base 2), rank-mismatched
+> broadcast (`shapes_broadcast`→position 1 + control), borrowed-view escape (a NEW public `find_borrowed_escape(Module&)`
+> →`BorrowEscape{value,escaping_use}` module walk over `!qual<borrow,_>` values — both value kinds; owned-escaper +
+> inside-borrow correctly ignored), generic-constraint (`substitute`→failed_param/failed_trait, exact (T,Ord) + accept
+> control). Pointing upgrade: `value_escapes_region`(bool) gained `first_escaping_use`→`Operation*` (a bool can't point).
+> ⭐ **Honest boundary:** pointing predicates + the one escape walk; the op-level verifier wiring of dim/broadcast/
+> constraint onto typed operands composes at **CEIR-4** (no producer op yet — 3e "predicate-now" precedent). `find_borrowed_escape`
+> is first-offender, structural (not dominance — CEIR-5b), direct-use+type-directed. Dedicated `test_band3_gate.cpp`
+> (`[gate3]`, 4 cases). 91/91 (791 assertions) × 4 configs + tidy + `-Werror=switch`. **→ BAND 3 CLOSED.**
+> **CEIR-4a ✅ BAND 4 OPENS (§26 effect vocabulary) 2026-08-09.** `effect.hpp`: `EffectFamily` (all 27 §26 families, u8,
+> append-at-end, static_assert-pinned to the generator) + `EffectRecord` POD `{family, target(None/Operand/Result),
+> index, range_mask}` (range_mask reuses 3c ViewRange; kind-level — per-instance is 4d, callee-derived EffectsFn is
+> CEIR-5). ⭐ Attach point **B1**: effects on `OpInfo` via `register_op(...,effects={})` (arena-COPIED), queried by
+> `Context::op_effects` — not a 1d interface, not reflection-only. ⛔ **EMPTY≠UNKNOWN**: an empty span is "provably
+> effect-free" only when `op_info!=nullptr`; unregistered = maximally effectful. ⛔ **func.call landmine** (a registered
+> op defaulting to effect-free reads as *provably* none) → declares a conservative ExternalCall barrier. Pure⇒zero
+> effects at both live arms. 2a schema: bare-family string OR `{family, operand|result, range}` table, generator
+> validates vocab+index+range; `OpSchema.effects` StringView[]→EffectRecord[]; `.ops.json` string[]→object[] (schema_v1,
+> scaffold field). NOT serialized (no version bump). 98/98 ctest (820 assertions) × 4 configs + tidy + opgen(36 py).
+> **CEIR-4b ✅ (§27 determinism + §28 numerics) 2026-08-09.** `semantics.hpp`: `DeterminismClass` (5 §27 tiers +
+> `Unspecified=0` default, static_assert-pinned; `External`→`ExternalNondeterminism` reconciled) on `OpInfo` via
+> `register_op`, `op_determinism`; `CompilerMode` (Normal/Fast/Deterministic/Certified, session state NOT serialized) +
+> `determinism_satisfies_mode` (6×4 matrix). `NumericalSemantics` = all 12 §28 knobs (0=Inherit), per-INSTANCE, ONE
+> pack/unpack into a reserved `numerics` int attr (unpack validates bounds); `numerics_satisfies_mode` honors the fmad
+> scar (Fast admits FMA/fast-math). `find_mode_violation(Module&)` = first op violating the active mode's §27 class OR §28
+> numerics OR a corrupt `numerics` attr (violates every mode). Cook-time native≥op consistency; `OpSchema.native_determinism`
+> typed. ⛔ EMPTY≠UNKNOWN (Unspecified fails strict modes). Boundaries: pass-wiring→CEIR-6, replay/alternatives→CEIR-5+,
+> kind-vs-instance not cross-checked (CEIR-6). arith int ops = BitExact. 106/106 ctest × 4 configs + tidy + opgen(40 py).
+> **CEIR-4c ✅ (§15 eval domains + §32 realtime + domain-legality verifier) 2026-08-09.** ⭐ `register_op` consolidated
+> into an `OpSpec{traits,verify,effects,determinism,domain}` descriptor (designated initializers; migrated every site).
+> `EvalDomain` (10 §15 domains + Unspecified, static_assert-pinned) per-op-KIND on `OpInfo` via the spec + 2a `domain`
+> field + `op_domain`; `OpSchema.domain` StringView→EvalDomain. `RealtimeClass` (7 §32 + Unspecified) — a REGION property,
+> NOT a schema field. A region's (domain+realtime) rides ONE packed `region_exec` int attr on the region-owning op (module
+> CONTENT — survives round-trip; symmetric with 4b's session-only mode). `find_domain_violation(Module&)→DomainViolation`
+> — innermost-tag-wins; seeded §32 rule (FileIO/NetworkIO illegal in AudioRealTime/DeviceTime/HostAudioTime); ⛔ an
+> UNREGISTERED op in an audio region is flagged (maximally effectful), a registered effect-free op is legal (empty≠unknown).
+> The 4c walk does NOT consume kind-domain (→CEIR-6). arith=EitherHostOrDevice, test=HostFrameTime. 115/115 ctest × 4
+> configs + tidy + opgen(43 py).
+> **CEIR-4d ✅ (effect-derived ordering hazards §26/§116) 2026-08-09.** A SCHEMA-QUIET slice (hazards DERIVED from 4a
+> effects — no TOML/generator/regen/py). `hazard.hpp`: `HazardKind{None,War,Raw,Waw}` + `ResourceClass` (14) +
+> `effect_access(EffectFamily)` (TOTAL switch, NO default → -Werror=switch guards a 28th). ⛔ `RandomRead` WRITES (a PRNG
+> draw advances the stream — else RNG draws reorder, breaking replay); `TimeRead` inert-read; Alloc/Dealloc/Residency in
+> Memory (use-after-free visible); IO one rw class; ExternalCall+Synchronization = Universe barrier. `Context::ops_hazard
+> (before,after)` (WAW>RAW>WAR over effect-pairs sharing a resource `(class, Value|null)` + overlapping range with ≥1
+> write; distinct Values non-aliasing; reports everything; unknown=Universe rw, Pure=None) + `collect_block_hazards` (O(n²)
+> all-pairs reference, one block, list order). `Operation::result` loosened to const. 122/122 ctest × 4 configs + tidy.
+> **CEIR-4z ✅ BAND-4 GATE 2026-08-09 → BAND 4 CLOSED (4a–4z).** A TEST-ONLY gate (like 3z) composing find_mode_violation +
+> find_domain_violation + ops_hazard/collect_block_hazards over ONE curated module — the band's exit criterion "the
+> compiler distinguishes reorderable vs ordered ops correctly" met verbatim. Centerpiece: the **WAR-needs-lifetime scar**
+> (read(R)-then-write(R) = WAR from effects+SSA identity, no decl-order; different buffer = None). Exact 4-edge
+> collect_block_hazards matrix + reverse sweep; ⛔ every gate op BitExact (the Unspecified-default mode-axis trap);
+> orthogonality by FULL edge-list identity (numerics→Certified, Unspecified-op→determinism, side audio-RT+FileIO→domain —
+> hazards identical each time); hazards survive serialize/deserialize (Value identity through the parser fixup). `test_band4_gate.cpp`
+> (`[gate4]`, 5 cases). 127/127 ctest × 4 configs + tidy. → BAND 4 CLOSED.
+> **CEIR-5a ✅ (structured control-flow region ops + the constant-cond if fold) 2026-08-09.** Band 5 opens (a GEAR
+> CHANGE). The generator gained a region-SIGNATURE schema + THREE variadic axes (operands/regions/results; arg COUNT is
+> the verifier contract, MIN-ARITY builders, full arity via create_operation). `ceir.core` = `scope`/`if` (value-producing,
+> variadic results), `for`/`foreach` (typed region arg), `while` (cond+body, structural — cond-yields-1-bool→5b),
+> `switch`/`match` (variadic case regions; patterns→CHIR), `yield` (variadic-operand Terminator) — all BitExact + ZERO
+> effects. `Context::fold_constant_if` splices the taken branch (THEN and ELSE, both tested) + RAUWs the results with the
+> yield's operands + erases; BAILS on non-const/multi-block/no-yield, a `region_exec`-tagged if OR any tagged op INSIDE
+> the taken block (⛔ a rewrite must audit the attrs it MOVES), and a yield/result COUNT MISMATCH. Design: HOMOGENEOUS
+> result types (placeholders until CEIR-6; the fold replaces them — no create_operation overload), MIN-ARITY builders,
+> SKELETON-VERIFIES, loop-carried values→5d. ⚠ This turn disproved 2 checkpoint blocker-guesses (builder-count-param,
+> create_operation-overload) — mark checkpoint blockers unverified unless the code was read. 138/138 ctest × 4 + tidy +
+> opgen(49 py). NEXT = **CEIR-5b** (SSACFG verifier: dominance/terminators/block-args — the general yield contract + the
+> 3f back-link earn their keep, §13/§115) → 5c (calls + EffectsFn) → 5d (state/delay) → 5z (executor gate).
+
+> **CEIR-2 generator (reusable for every future band):** `tools/ceir_opgen/ceir_opgen.py` reads
+> `engine/ceir/ops/<dialect>.ceirop.toml` → validates (structure+vocab of every §8 + ADR-0110 field) → emits from ONE
+> model: `engine/ceir/generated/crd/ceir/gen/<d>_ops.{hpp,cpp}` + `<d>.ops.{json,md}` + `tests/ceir/generated/test_<d>_gen_smoke.cpp`
+> (3 TEST_CASEs, globbed via CONFIGURE_DEPENDS). `--check` drift ctest guards all 5 files/dialect; `test_opgen.py` = 26
+> validator/emitter unit tests. **Adding a CEIR op = a TOML edit + regen, zero central-enum/switch edits.**
 
 **⛔ THE LIVE TRACKER IS `docs/detours/D-007-ceir-tracker.md`** (CEIR bands 0–32 + the RAH parallel track). CEIR — the
 Cerid Execution IR — is the new master architectural spine (user-directed 2026-08-07): every reusable algorithm becomes

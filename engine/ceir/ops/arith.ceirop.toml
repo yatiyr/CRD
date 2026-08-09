@@ -1,0 +1,51 @@
+# arith — integer/float constants and arithmetic. The first dialect DEFINED through the CEIR-2 schema generator
+# (§8): edit this TOML + regen (`python tools/ceir_opgen/ceir_opgen.py`) — the typed wrapper / builder / verifier /
+# reflection / registration in engine/ceir/generated/crd/ceir/gen/arith_ops.{hpp,cpp} follow, with zero central edits.
+schema_version = 1
+dialect = "arith"
+summary = "Integer/float constants and arithmetic — the canonical value-domain dialect."
+
+[[op]]
+name = "const"
+summary = "A typed compile-time constant materialized into an SSA value."
+version = 1
+results = [ { name = "result", type = "any", doc = "the constant value" } ]
+attributes = [ { name = "value", kind = "int", required = true, doc = "the integer constant" } ]
+traits = ["Pure"]
+determinism = "BitExact"
+domain = "EitherHostOrDevice"
+docs = "arith.const has no operands; its `value` attribute is lifted into its single result. Pure — safe to CSE/DCE."
+
+[[op]]
+name = "addi"
+summary = "Two's-complement integer addition."
+version = 1
+operands = [ { name = "lhs", type = "any" }, { name = "rhs", type = "any" } ]
+results = [ { name = "result", type = "any" } ]
+traits = ["Pure"]
+determinism = "BitExact"
+domain = "EitherHostOrDevice"
+docs = "arith.addi(%lhs, %rhs) -> %result. Wrapping two's-complement add (the u32-wrap oracle rule applies)."
+
+[[op]]
+name = "muli"
+summary = "Two's-complement integer multiplication."
+version = 1
+operands = [ { name = "lhs", type = "any" }, { name = "rhs", type = "any" } ]
+results = [ { name = "result", type = "any" } ]
+traits = ["Pure"]
+determinism = "BitExact"
+domain = "EitherHostOrDevice"
+docs = "arith.muli(%lhs, %rhs) -> %result. Wrapping two's-complement multiply."
+
+[[op]]
+name = "cmpi"
+summary = "Integer comparison producing a boolean-valued result."
+version = 1
+operands = [ { name = "lhs", type = "any" }, { name = "rhs", type = "any" } ]
+results = [ { name = "result", type = "any", doc = "1 if the predicate holds, else 0" } ]
+attributes = [ { name = "predicate", kind = "string", required = true, doc = "eq/ne/slt/sle/sgt/sge/ult/ule/ugt/uge" } ]
+traits = ["Pure"]
+determinism = "BitExact"
+domain = "EitherHostOrDevice"
+docs = "arith.cmpi {predicate} (%lhs, %rhs) -> %result. The predicate selects the comparison; result is 0/1."

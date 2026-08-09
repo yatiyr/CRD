@@ -20,8 +20,9 @@ using ByteArray = containers::Array<u8>;
            (static_cast<u32>(static_cast<u8>(c)) << 16U) | (static_cast<u32>(static_cast<u8>(d)) << 24U);
 }
 constexpr u32 kChunkStrp = make_fourcc('S', 'T', 'R', 'P'); // string pool
+constexpr u32 kChunkType = make_fourcc('T', 'Y', 'P', 'E'); // interned type pool (child-first; refs STRP for names)
 constexpr u32 kChunkSrcm = make_fourcc('S', 'R', 'C', 'M'); // source-file map (indices into STRP)
-constexpr u32 kChunkAttr = make_fourcc('A', 'T', 'T', 'R'); // attribute-value pool
+constexpr u32 kChunkAttr = make_fourcc('A', 'T', 'T', 'R'); // attribute-value pool (of_type refs the TYPE pool)
 constexpr u32 kChunkBody = make_fourcc('B', 'O', 'D', 'Y'); // the region graph
 
 // ── writer helpers (little-endian, field-by-field — every hole is removed by construction) ──
@@ -99,7 +100,7 @@ class Serializer
 public:
     Serializer(Context& ctx, memory::IAllocator* alloc)
         : m_ctx(ctx), m_alloc(alloc), m_ids(alloc), m_strp(alloc), m_strp_index(alloc), m_srcm(alloc),
-          m_srcm_index(alloc), m_attr(alloc), m_attr_index(alloc), m_body(alloc)
+          m_srcm_index(alloc), m_attr(alloc), m_attr_index(alloc), m_type_body(alloc), m_type_index(alloc), m_body(alloc)
     {
     }
 
@@ -111,8 +112,9 @@ public:
         ByteArray out(m_alloc);
         put_u32(out, kBinaryMagic);
         put_u32(out, kBinaryVersion);
-        put_u32(out, 4U); // chunk_count: STRP, SRCM, ATTR, BODY
-        emit_strp(out);
+        put_u32(out, 5U); // chunk_count: STRP, TYPE, SRCM, ATTR, BODY
+        emit_strp(out);   // STRP first — TYPE/SRCM/ATTR all reference it by index
+        emit_type(out);   // TYPE before ATTR (of_type attr values reference the type pool)
         emit_srcm(out);
         emit_attr(out);
         emit_chunk(out, kChunkBody, m_body);
@@ -149,10 +151,12 @@ private:
         const auto idx = static_cast<u32>(m_attr.size());
         m_attr.push_back(id);
         m_attr_index.insert(id.value, idx);
-        // Eagerly pool the value's backing string so STRP is COMPLETE before any chunk is emitted (STRP is written
-        // before ATTR). A String/SymbolRef value's text becomes a STRP entry the ATTR chunk then references by index.
+        // Eagerly pool the value's backing string / type so STRP + TYPE are COMPLETE before any chunk is emitted (both
+        // are written before ATTR). A String/SymbolRef value's text becomes a STRP entry; an of_type value's type
+        // becomes a TYPE-pool entry — the ATTR chunk then references each by index.
         const AttrValue v = m_ctx.attr_value(id);
         if (v.kind == AttrKind::String || v.kind == AttrKind::SymbolRef) { (void)intern_str(v.s); }
+        else if (v.kind == AttrKind::Type) { (void)type_ref(v.t); }
         return idx;
     }
     [[nodiscard]] u32 intern_srcm(u32 file_id) // returns the 0-based SRCM index for a (nonzero) file id
@@ -163,6 +167,37 @@ private:
         m_srcm_index.insert(file_id, idx);
         return idx;
     }
+
+    // Intern a type into the TYPE pool, returning its 0-BASED pool index. CHILD-FIRST: every child is interned (and its
+    // record appended) BEFORE this type's index is assigned, so a record never references an index >= its own — the
+    // decoder rejects a forward ref by construction, and in-memory cycles are impossible (a parent cannot be interned
+    // until its children exist). Deduped by the Context TypeId (identical types already share one id, so this is exact).
+    [[nodiscard]] u32 intern_type_pool(TypeId id)
+    {
+        if (const u32* const p = m_type_index.find(id.value)) { return *p; }
+        const Type              t = m_ctx.type_of(id);
+        containers::Array<u32>  kids(m_alloc);
+        for (usize i = 0; i < t.members.size(); ++i) { kids.push_back(intern_type_pool(t.members[i])); } // recurse FIRST
+        const u32              name_strp = intern_str(t.name); // "" for scalars (deduped to one STRP entry)
+        containers::Array<u32> labs(m_alloc);
+        for (usize i = 0; i < t.labels.size(); ++i) { labs.push_back(intern_str(t.labels[i])); }
+        const auto idx = m_type_count; // assigned AFTER children — the child-first invariant
+        m_type_index.insert(id.value, idx);
+        put_u8(m_type_body, static_cast<u8>(t.kind));
+        put_u8(m_type_body, t.is_signed ? 1U : 0U);
+        put_u8(m_type_body, static_cast<u8>(t.fkind));
+        put_u32(m_type_body, t.count);
+        put_u32(m_type_body, t.cols);
+        put_u32(m_type_body, static_cast<u32>(kids.size()));
+        for (usize i = 0; i < kids.size(); ++i) { put_u32(m_type_body, kids[i]); }
+        put_u32(m_type_body, name_strp);
+        put_u32(m_type_body, static_cast<u32>(labs.size()));
+        for (usize i = 0; i < labs.size(); ++i) { put_u32(m_type_body, labs[i]); }
+        ++m_type_count;
+        return idx;
+    }
+    // A BODY / ATTR type reference: 1-BASED (0 = none / no type), so it never collides with pool index 0.
+    [[nodiscard]] u32 type_ref(TypeId id) { return id.valid() ? intern_type_pool(id) + 1U : 0U; }
 
     void encode_region(Region* r)
     {
@@ -175,7 +210,9 @@ private:
     void encode_block(Block* b)
     {
         put_u32(m_body, b->num_args());
-        put_u32(m_body, b->num_args() > 0U ? b->arg(0)->type().value : 0U); // ONE arg type (uniform block model)
+        // per-arg type refs (v2). The in-memory block model is uniform (create_block gives every arg one type), so these
+        // are equal today; writing one ref PER arg keeps the format ready for distinct per-arg types with no v3 bump.
+        for (u32 i = 0; i < b->num_args(); ++i) { put_u32(m_body, type_ref(b->arg(i)->type())); }
         u32 nops = 0;
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block()) { ++nops; }
         put_u32(m_body, nops);
@@ -192,7 +229,8 @@ private:
             put_u32(m_body, id != nullptr ? *id : 0U);
         }
         put_u32(m_body, op->num_results());
-        put_u32(m_body, op->num_results() > 0U ? op->result(0)->type().value : 0U);
+        // per-result type refs (v2) — uniform today (all equal), one ref per result for future distinct result typing.
+        for (u32 i = 0; i < op->num_results(); ++i) { put_u32(m_body, type_ref(op->result(i)->type())); }
         put_u32(m_body, op->num_regions());
         put_u32(m_body, op->num_attrs());
         for (u32 i = 0; i < op->num_attrs(); ++i)
@@ -220,6 +258,13 @@ private:
         for (usize i = 0; i < m_strp.size(); ++i) { put_str(p, m_strp[i]); }
         emit_chunk(out, kChunkStrp, p);
     }
+    void emit_type(ByteArray& out)
+    {
+        ByteArray p(m_alloc);
+        put_u32(p, m_type_count); // record count; the records themselves were appended in child-first index order
+        for (usize i = 0; i < m_type_body.size(); ++i) { p.push_back(m_type_body[i]); }
+        emit_chunk(out, kChunkType, p);
+    }
     void emit_srcm(ByteArray& out)
     {
         ByteArray p(m_alloc);
@@ -244,7 +289,7 @@ private:
         case AttrKind::Bool:      put_u8(p, v.b ? 1U : 0U); break;
         case AttrKind::String:                            // both text kinds emit the STRP index (kind byte distinguishes)
         case AttrKind::SymbolRef: put_u32(p, intern_str(v.s)); break;
-        case AttrKind::Type:      put_u32(p, v.t.value); break;
+        case AttrKind::Type:      put_u32(p, type_ref(v.t)); break; // 1-based TYPE-pool ref (0 = none)
         }
     }
 
@@ -257,6 +302,9 @@ private:
     containers::HashMap<u32, u32>                                                 m_srcm_index; // file_id → srcm idx
     containers::Array<AttrId>                                                     m_attr;       // attr pool
     containers::HashMap<u32, u32>                                                 m_attr_index; // AttrId.value → idx
+    ByteArray                                                                     m_type_body;  // TYPE records (index order)
+    containers::HashMap<u32, u32>                                                 m_type_index; // TypeId.value → pool idx
+    u32                                                                           m_type_count = 0U;
     ByteArray                                                                     m_body;
     u32                                                                           m_next = 0U;
 };
@@ -269,14 +317,14 @@ class Deserializer
 {
 public:
     Deserializer(Context& ctx, containers::ConstSpan<u8> bytes)
-        : m_ctx(ctx), m_bytes(bytes), m_strings(ctx.allocator()), m_files(ctx.allocator()), m_attrs(ctx.allocator()),
-          m_values(ctx.allocator()), m_fixups(ctx.allocator())
+        : m_ctx(ctx), m_bytes(bytes), m_strings(ctx.allocator()), m_types_decoded(ctx.allocator()),
+          m_files(ctx.allocator()), m_attrs(ctx.allocator()), m_values(ctx.allocator()), m_fixups(ctx.allocator())
     {
     }
 
     [[nodiscard]] ParseResult run()
     {
-        if (!parse_header() || !scan_chunks() || !decode_strp() || !decode_srcm() || !decode_attr())
+        if (!parse_header() || !scan_chunks() || !decode_strp() || !decode_type() || !decode_srcm() || !decode_attr())
         {
             return err_result();
         }
@@ -333,6 +381,7 @@ private:
             if (c.pos + size > m_bytes.size()) { fail(c.pos, "chunk payload overruns the blob"); return false; }
             const containers::ConstSpan<u8> payload = m_bytes.subspan(c.pos, size);
             if (fourcc == kChunkStrp) { m_strp = payload; m_strp_off = c.pos; m_has_strp = true; }
+            else if (fourcc == kChunkType) { m_type = payload; m_type_off = c.pos; }
             else if (fourcc == kChunkSrcm) { m_srcm = payload; m_srcm_off = c.pos; }
             else if (fourcc == kChunkAttr) { m_attr = payload; m_attr_off = c.pos; }
             else if (fourcc == kChunkBody) { m_body = payload; m_body_off = c.pos; m_has_body = true; }
@@ -360,6 +409,128 @@ private:
         }
         if (!c.ok) { fail(m_strp_off + c.pos, "malformed STRP chunk"); return false; }
         return true;
+    }
+
+    // Rebuild the interned type pool (v2). Records are in child-first index order, so every child ref is < the record's
+    // own index and is already decoded — a forward/self ref is malformed and rejected. Each record is re-interned into
+    // the decode Context, giving a fresh TypeId per pool slot (`m_types_decoded[i]`).
+    [[nodiscard]] bool decode_type() noexcept
+    {
+        if (m_type.size() == 0) { return true; } // optional (a module with no typed values)
+        Cursor    c{m_type};
+        const u32 n = c.u32v();
+        for (u32 i = 0; i < n; ++i)
+        {
+            const u8  kind      = c.u8v();
+            const u8  is_signed = c.u8v();
+            const u8  fk        = c.u8v();
+            const u32 count     = c.u32v();
+            const u32 cols      = c.u32v();
+            if (!c.ok) { fail(m_type_off + c.pos, "truncated TYPE record"); return false; }
+            if (kind > static_cast<u8>(TypeKind::Qualified)) { fail(m_type_off + c.pos, "invalid type kind"); return false; }
+            if (fk > static_cast<u8>(FloatKind::F8E5M2)) { fail(m_type_off + c.pos, "invalid float kind"); return false; }
+            // keyword-table-mapped scalars must be in range (else the printer maps them to nothing — silently lossy).
+            // FREE numerics (int width, vector/array count) stay unbounded: `!i7` legitimately round-trips.
+            if (kind == static_cast<u8>(TypeKind::Buffer) && count > static_cast<u32>(BufferMode::Typed))
+            {
+                fail(m_type_off + c.pos, "invalid buffer mode");
+                return false;
+            }
+            if (kind == static_cast<u8>(TypeKind::Image) && count > static_cast<u32>(ImageDim::Cube))
+            {
+                fail(m_type_off + c.pos, "invalid image dim");
+                return false;
+            }
+            if (kind == static_cast<u8>(TypeKind::View) && (count & ~kViewRangeAll) != 0U)
+            {
+                fail(m_type_off + c.pos, "invalid view range mask");
+                return false;
+            }
+            if (kind == static_cast<u8>(TypeKind::Dim) && cols > static_cast<u32>(DimKind::Dynamic))
+            {
+                fail(m_type_off + c.pos, "invalid dim kind");
+                return false;
+            }
+            if (kind == static_cast<u8>(TypeKind::Qualified) && count > static_cast<u32>(OwnershipKind::TransientArena))
+            {
+                fail(m_type_off + c.pos, "invalid ownership qualifier");
+                return false;
+            }
+            const u32 nch = c.u32v();
+            if (!c.have(static_cast<u64>(nch) * 4U)) { fail(m_type_off + c.pos, "TYPE child count overruns the chunk"); return false; }
+            containers::Array<TypeId> kids(m_ctx.allocator());
+            for (u32 k = 0; k < nch; ++k)
+            {
+                const u32 ref = c.u32v();
+                if (ref >= i) { fail(m_type_off + c.pos, "TYPE record references a forward/self index"); return false; }
+                kids.push_back(m_types_decoded[ref]); // child-first: ref < i is already decoded
+            }
+            const u32 name_strp = c.u32v();
+            if (!c.ok) { fail(m_type_off + c.pos, "truncated TYPE record"); return false; }
+            if (name_strp >= m_strings.size()) { fail(m_type_off + c.pos, "TYPE name index out of range"); return false; }
+            const u32 nlab = c.u32v();
+            if (!c.have(static_cast<u64>(nlab) * 4U)) { fail(m_type_off + c.pos, "TYPE label count overruns the chunk"); return false; }
+            containers::Array<containers::StringView> labs(m_ctx.allocator());
+            for (u32 l = 0; l < nlab; ++l)
+            {
+                const u32 sidx = c.u32v();
+                if (sidx >= m_strings.size()) { fail(m_type_off + c.pos, "TYPE label index out of range"); return false; }
+                labs.push_back(m_strings[sidx]);
+            }
+            Type t;
+            t.kind      = static_cast<TypeKind>(kind);
+            t.is_signed = is_signed != 0U;
+            t.fkind     = static_cast<FloatKind>(fk);
+            t.count     = count;
+            t.cols      = cols;
+            t.members   = containers::ConstSpan<TypeId>(kids.data(), kids.size());
+            t.name      = m_strings[name_strp];
+            t.labels    = containers::ConstSpan<containers::StringView>(labs.data(), labs.size());
+            // ⛔ per-kind arity/parity: a hand-crafted record (e.g. a Vector with 0 children, a Callable whose param
+            // count exceeds its members) would drive an out-of-bounds members[i] in any later consumer — reject it here.
+            // CANONICAL subsumes well-formedness (arity) AND rejects junk in an ignored field (a name on an Int, an
+            // extent on a Dynamic dim, a 'dyn'-named symbolic dim) — such a record prints lossily, breaking form-agreement.
+            if (!type_is_canonical(t)) { fail(m_type_off + c.pos, "non-canonical or structurally-invalid TYPE record"); return false; }
+            // the tri-split DECODER arm: a composite kind's members (already decoded — child-first) must be the right
+            // kinds, else interning would assert / a consumer would mis-render.
+            if (t.kind == TypeKind::View && !m_ctx.view_combination_valid(t.members[0], t.count))
+            {
+                fail(m_type_off + c.pos, "invalid view/resource combination");
+                return false;
+            }
+            if (t.kind == TypeKind::Shape && !m_ctx.shape_members_valid(t.members))
+            {
+                fail(m_type_off + c.pos, "shape members must be dims");
+                return false;
+            }
+            if ((t.kind == TypeKind::Tensor || t.kind == TypeKind::SparseTensor) &&
+                !m_ctx.tensor_composition_valid(t.members[0], t.members[1]))
+            {
+                fail(m_type_off + c.pos, "invalid tensor element/shape composition");
+                return false;
+            }
+            if (t.kind == TypeKind::Quantity && !m_ctx.quantity_composition_valid(t.members[0]))
+            {
+                fail(m_type_off + c.pos, "a quantity's underlying type must be numeric");
+                return false;
+            }
+            if (t.kind == TypeKind::Qualified && !m_ctx.qualified_composition_valid(t.members[0]))
+            {
+                fail(m_type_off + c.pos, "this type cannot be ownership-qualified");
+                return false;
+            }
+            m_types_decoded.push_back(m_ctx.intern_type(t));
+        }
+        if (!c.ok) { fail(m_type_off + c.pos, "malformed TYPE chunk"); return false; }
+        return true;
+    }
+
+    // Map a 1-based BODY/ATTR type ref (0 = none) to a decoded TypeId; out-of-range is malformed.
+    [[nodiscard]] TypeId type_from_ref(u32 ref, u64 off) noexcept
+    {
+        if (ref == 0U) { return TypeId{}; }
+        if (static_cast<usize>(ref - 1U) >= m_types_decoded.size()) { fail(off, "type reference out of range"); return {}; }
+        return m_types_decoded[ref - 1U];
     }
 
     [[nodiscard]] bool decode_srcm() noexcept
@@ -404,7 +575,13 @@ private:
                 id = kind == static_cast<u8>(AttrKind::String) ? m_ctx.attr_string(m_strings[sidx])
                                                                : m_ctx.attr_symbol(m_strings[sidx]);
             }
-            else if (kind == static_cast<u8>(AttrKind::Type)) { id = m_ctx.attr_type(TypeId{c.u32v()}); }
+            else if (kind == static_cast<u8>(AttrKind::Type))
+            {
+                const u32 ref = c.u32v();
+                const TypeId ty = type_from_ref(ref, m_attr_off + c.pos);
+                if (!m_ok) { return false; }
+                id = m_ctx.attr_type(ty);
+            }
             else { fail(m_attr_off + c.pos, "unknown attribute kind"); return false; }
             m_attrs.push_back(id);
         }
@@ -444,20 +621,26 @@ private:
         m_ctx.set_region_kind(r, static_cast<RegionKind>(kind));
         const u32 nb = m_bc.u32v();
         if (!m_bc.ok) { return; }
-        // Each block is >= 12 bytes (num_args + arg_type + num_ops) — a block count that overruns the chunk is
-        // malformed, so reject BEFORE the loop rather than spin (defence-in-depth over the per-block ok-break).
-        if (!m_bc.have(static_cast<u64>(nb) * 12U)) { fail(m_body_off + m_bc.pos, "block count overruns the chunk"); return; }
+        // Each block is >= 8 bytes (num_args + num_ops; a 0-arg block carries no per-arg type refs) — a block count that
+        // overruns the chunk is malformed, so reject BEFORE the loop rather than spin (defence over the per-block ok-break).
+        if (!m_bc.have(static_cast<u64>(nb) * 8U)) { fail(m_body_off + m_bc.pos, "block count overruns the chunk"); return; }
         for (u32 i = 0; i < nb && m_ok; ++i) { decode_block(r); }
     }
     void decode_block(Region* r)
     {
         const u32 num_args = m_bc.u32v();
-        const u32 arg_type = m_bc.u32v();
-        const u32 num_ops  = m_bc.u32v();
-        if (!m_bc.ok) { fail(m_body_off + m_bc.pos, "truncated block header"); return; }
-        // num_args costs no stream bytes (create_block allocates from it) — cap it against the v1 limit.
-        if (num_args > kMaxDecodeCount) { fail(m_body_off + m_bc.pos, "block-arg count exceeds the v1 cap"); return; }
-        Block* const b = m_ctx.create_block(num_args, TypeId{arg_type});
+        // Each arg now carries a type ref (4 bytes) — bound them by the chunk AND cap num_args (it drives allocation).
+        if (num_args > kMaxDecodeCount) { fail(m_body_off + m_bc.pos, "block-arg count exceeds the cap"); return; }
+        if (!m_bc.have(static_cast<u64>(num_args) * 4U)) { fail(m_body_off + m_bc.pos, "block-arg type refs overrun the chunk"); return; }
+        TypeId arg0{};
+        for (u32 i = 0; i < num_args; ++i)
+        {
+            const TypeId t = type_from_ref(m_bc.u32v(), m_body_off + m_bc.pos);
+            if (i == 0U) { arg0 = t; } // uniform block model: every arg shares one type today (all refs equal)
+        }
+        const u32 num_ops = m_bc.u32v();
+        if (!m_bc.ok || !m_ok) { fail(m_body_off + m_bc.pos, "truncated block header"); return; }
+        Block* const b = m_ctx.create_block(num_args, arg0);
         r->append(b);
         for (u32 i = 0; i < num_args; ++i) { register_value(b->arg(i)); }
         for (u32 i = 0; i < num_ops && m_ok; ++i) { decode_op(b); }
@@ -478,12 +661,18 @@ private:
             operand_vals.push_back(resolve(id));
         }
         const u32 num_results = m_bc.u32v();
-        const u32 result_type = m_bc.u32v();
+        // Each result now carries a type ref (4 bytes) — cap num_results (drives allocation) AND bound the refs.
+        if (num_results > kMaxDecodeCount) { fail(m_body_off + m_bc.pos, "result count exceeds the cap"); return; }
+        if (!m_bc.have(static_cast<u64>(num_results) * 4U)) { fail(m_body_off + m_bc.pos, "result type refs overrun the chunk"); return; }
+        TypeId result0{};
+        for (u32 i = 0; i < num_results; ++i)
+        {
+            const TypeId t = type_from_ref(m_bc.u32v(), m_body_off + m_bc.pos);
+            if (i == 0U) { result0 = t; } // uniform result model: all result refs equal today
+        }
         const u32 num_regions = m_bc.u32v();
         const u32 num_attrs   = m_bc.u32v();
-        // num_results costs no stream bytes (create_operation allocates from it) — cap it; each attr is 8 stream bytes
-        // and each region is >= 5 (kind + block count) — bound those by the chunk length.
-        if (num_results > kMaxDecodeCount) { fail(m_body_off + m_bc.pos, "result count exceeds the v1 cap"); return; }
+        // each attr is 8 stream bytes and each region is >= 5 (kind + block count) — bound those by the chunk length.
         if (!m_bc.have(static_cast<u64>(num_attrs) * 8U)) { fail(m_body_off + m_bc.pos, "attribute count overruns the chunk"); return; }
         if (!m_bc.have(static_cast<u64>(num_regions) * 5U)) { fail(m_body_off + m_bc.pos, "region count overruns the chunk"); return; }
         containers::Array<u32> attr_name_idx(m_ctx.allocator());
@@ -508,8 +697,8 @@ private:
         const OpId kind = m_ctx.intern_op(dialect, opname);
 
         Operation* const op = m_ctx.create_operation(
-            kind, containers::ConstSpan<Value*>(operand_vals.data(), operand_vals.size()), num_results,
-            TypeId{result_type}, num_regions);
+            kind, containers::ConstSpan<Value*>(operand_vals.data(), operand_vals.size()), num_results, result0,
+            num_regions);
         b->append(op);
         for (u32 i = 0; i < num_results; ++i) { register_value(op->result(i)); }
         for (usize i = 0; i < operand_ids.size(); ++i)
@@ -561,19 +750,22 @@ private:
     u64                                      m_scan_pos    = 0;
 
     containers::ConstSpan<u8> m_strp;
+    containers::ConstSpan<u8> m_type;
     containers::ConstSpan<u8> m_srcm;
     containers::ConstSpan<u8> m_attr;
     containers::ConstSpan<u8> m_body;
     u64                       m_strp_off = 0;
+    u64                       m_type_off = 0;
     u64                       m_srcm_off = 0;
     u64                       m_attr_off = 0;
     u64                       m_body_off = 0;
     bool                      m_has_strp = false;
     bool                      m_has_body = false;
 
-    containers::Array<containers::StringView> m_strings; // STRP → views into the blob
-    containers::Array<u32>                    m_files;   // SRCM idx → target file_id
-    containers::Array<AttrId>                 m_attrs;   // ATTR idx → target AttrId
+    containers::Array<containers::StringView> m_strings;       // STRP → views into the blob
+    containers::Array<TypeId>                 m_types_decoded; // TYPE pool idx → decoded TypeId
+    containers::Array<u32>                    m_files;         // SRCM idx → target file_id
+    containers::Array<AttrId>                 m_attrs;         // ATTR idx → target AttrId
     containers::Array<Value*>                 m_values;  // SSA id → value (creation order)
     containers::Array<Fixup>                  m_fixups;
 

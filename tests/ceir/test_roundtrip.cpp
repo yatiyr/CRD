@@ -44,7 +44,8 @@ TEST_CASE("ceir roundtrip: a rich graph prints, parses, and re-prints byte-exact
     CHECK(std::strstr(text1.c_str(), "flag = true, frac = 4.5, i = -42, s = ") != nullptr);  // sorted attrs, bool, neg
     CHECK(std::strstr(text1.c_str(), "s = \"he said \\\"hi\\\"\\\\n\"") != nullptr);         // escaped string
     CHECK(std::strstr(text1.c_str(), "sym = @target") != nullptr);                           // symbol ref
-    CHECK(std::strstr(text1.c_str(), "ty = !t7") != nullptr);                                // type attr
+    CHECK(std::strstr(text1.c_str(), "ty = !struct<Point,x:!i32,y:!f32>") != nullptr);       // named-struct type attr
+    CHECK(std::strstr(text1.c_str(), ": !vec<4x!f32>") != nullptr);                          // a nested aggregate value type
     CHECK(std::strstr(text1.c_str(), "whole = 4.0") != nullptr);                             // float, not "4"
 
     Context           ctx2(&root);

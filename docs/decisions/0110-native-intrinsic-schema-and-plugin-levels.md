@@ -40,7 +40,7 @@ id, binary-searched lookup, `register_intrinsic` rejects duplicates — no centr
 | `attributes` | compile-time config (the tagged-union `TypedValue` shape, no `void*`) |
 | `Effect[] effects` | §26 effect families + resource/range identity (so the scheduler can order/parallelize it) |
 | `EvalDomain domain` | §15 (CompileTime…HostFrameTime…DeviceTime…OfflineTime) + realtime class (§32) |
-| `Determinism determinism` | the ADR-0098 tier (BitExact / DeterministicWithinTarget / …Backend / Nondeterministic / External, §27) |
+| `Determinism determinism` | the ADR-0098 tier (BitExact / DeterministicWithinTarget / …Backend / Nondeterministic / ExternalNondeterminism, §27) — *(CEIR-4b reconciled the token to the §27-verbatim `ExternalNondeterminism`; the old short `External` was never used in any TOML)* |
 | `bool thread_safe` | may it run off the main thread / concurrently |
 | `Lifetime lifetime` | ownership/borrow rules of its resource operands (§19) |
 | `Capability[] capabilities` | §99 — declared, host-granted; a sandboxed program without the cap cannot call it |

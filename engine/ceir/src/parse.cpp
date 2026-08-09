@@ -24,6 +24,44 @@ namespace
     return a == containers::StringView(b);
 }
 
+// A cap on TYPE nesting depth — a pathological `!vec<2x!vec<2x...` must not blow the recursive-descent stack (the
+// CEIR-1h OOM lesson, type edition). Deep-but-legal types are vanishingly rare; 64 is far beyond any real program.
+constexpr u32 kMaxTypeDepth = 64U;
+
+[[nodiscard]] bool sv_all_digits(containers::StringView s, usize from) noexcept
+{
+    if (from >= s.size()) { return false; }
+    for (usize i = from; i < s.size(); ++i)
+    {
+        if (!is_digit(s[i])) { return false; }
+    }
+    return true;
+}
+
+[[nodiscard]] u32 sv_to_uint(containers::StringView s, usize from) noexcept
+{
+    u32 v = 0U;
+    for (usize i = from; i < s.size(); ++i) { v = (v * 10U) + static_cast<u32>(s[i] - '0'); }
+    return v;
+}
+
+// The canonical base-dimension letter → index (CEIR-3e). K = temperature (crd-units `Th`). -1 ⇒ not a base letter.
+[[nodiscard]] int base_dim_index(char c) noexcept
+{
+    switch (c)
+    {
+    case 'L': return 0;
+    case 'M': return 1;
+    case 'T': return 2;
+    case 'I': return 3;
+    case 'K': return 4;
+    case 'N': return 5;
+    case 'J': return 6;
+    case 'A': return 7;
+    default: return -1;
+    }
+}
+
 // One operand whose defining value was not yet numbered when the use was parsed. In a Graph region SSA defs need not
 // precede uses textually (free block-insertion order), so operand wiring is a deferred second pass, mirroring the
 // printer's own two-pass numbering. `off` is retained purely for the diagnostic on an unresolved id.
@@ -133,12 +171,412 @@ private:
         return v;
     }
 
-    // A type reference: "!t" <u32>. TypeId is opaque until CEIR-3; 0 is never emitted (printer prints only valid()).
-    [[nodiscard]] TypeId parse_type() noexcept
+    // A type (CEIR-3a, §16): the canonical `!`-sigil grammar print.cpp emits, parsed recursively and interned via the
+    // Context. Depth-guarded (nesting cannot blow the stack). The head token after `!` disambiguates scalar vs aggregate.
+    [[nodiscard]] TypeId parse_type(u32 depth = 0U) noexcept
     {
+        if (depth > kMaxTypeDepth)
+        {
+            fail("type nesting too deep");
+            return {};
+        }
         expect('!', "expected '!' starting a type");
-        expect('t', "expected 't' in type '!tN'");
-        return TypeId{parse_uint()};
+        const containers::StringView head = parse_ident("expected a type keyword after '!'");
+        if (!m_ok) { return {}; }
+        // scalars
+        if (sv_eq(head, "bool")) { return m_ctx.type_bool(); }
+        if (sv_eq(head, "index")) { return m_ctx.type_index(); }
+        if (sv_eq(head, "f16")) { return m_ctx.type_float(FloatKind::F16); }
+        if (sv_eq(head, "bf16")) { return m_ctx.type_float(FloatKind::BF16); }
+        if (sv_eq(head, "f32")) { return m_ctx.type_float(FloatKind::F32); }
+        if (sv_eq(head, "f64")) { return m_ctx.type_float(FloatKind::F64); }
+        if (sv_eq(head, "f8e4m3")) { return m_ctx.type_float(FloatKind::F8E4M3); }
+        if (sv_eq(head, "f8e5m2")) { return m_ctx.type_float(FloatKind::F8E5M2); }
+        if ((head[0] == 'i' || head[0] == 'u') && head.size() > 1U && sv_all_digits(head, 1U))
+        {
+            return m_ctx.type_int(sv_to_uint(head, 1U), head[0] == 'i');
+        }
+        // numeric aggregates
+        if (sv_eq(head, "vec"))
+        {
+            expect('<', "expected '<'");
+            const u32 n = parse_uint();
+            expect('x', "expected 'x'");
+            const TypeId e = parse_type(depth + 1U);
+            expect('>', "expected '>'");
+            return m_ctx.type_vector(e, n);
+        }
+        if (sv_eq(head, "mat"))
+        {
+            expect('<', "expected '<'");
+            const u32 r = parse_uint();
+            expect('x', "expected 'x'");
+            const u32 c = parse_uint();
+            expect('x', "expected 'x'");
+            const TypeId e = parse_type(depth + 1U);
+            expect('>', "expected '>'");
+            return m_ctx.type_matrix(e, r, c);
+        }
+        if (sv_eq(head, "complex")) { return m_ctx.type_complex(parse_wrapped(depth)); }
+        if (sv_eq(head, "quat")) { return m_ctx.type_quaternion(parse_wrapped(depth)); }
+        if (sv_eq(head, "option")) { return m_ctx.type_option(parse_wrapped(depth)); }
+        if (sv_eq(head, "array"))
+        {
+            expect('<', "expected '<'");
+            const u32 n = parse_uint();
+            expect('x', "expected 'x'");
+            const TypeId e = parse_type(depth + 1U);
+            expect('>', "expected '>'");
+            return m_ctx.type_array(e, n);
+        }
+        if (sv_eq(head, "result"))
+        {
+            expect('<', "expected '<'");
+            const TypeId ok = parse_type(depth + 1U);
+            expect(',', "expected ','");
+            const TypeId err = parse_type(depth + 1U);
+            expect('>', "expected '>'");
+            return m_ctx.type_result(ok, err);
+        }
+        if (sv_eq(head, "tuple") || sv_eq(head, "variant"))
+        {
+            const bool is_tuple = sv_eq(head, "tuple");
+            expect('<', "expected '<'");
+            containers::Array<TypeId> elems(m_ctx.allocator());
+            elems.push_back(parse_type(depth + 1U));
+            while (accept(',')) { elems.push_back(parse_type(depth + 1U)); }
+            expect('>', "expected '>'");
+            const containers::ConstSpan<TypeId> sp(elems.data(), elems.size());
+            return is_tuple ? m_ctx.type_tuple(sp) : m_ctx.type_variant(sp);
+        }
+        if (sv_eq(head, "struct"))
+        {
+            expect('<', "expected '<'");
+            const containers::StringView name = parse_ident("expected struct name");
+            containers::Array<TypeId>              ftypes(m_ctx.allocator());
+            containers::Array<containers::StringView> fnames(m_ctx.allocator());
+            while (accept(','))
+            {
+                fnames.push_back(parse_ident("expected field name"));
+                expect(':', "expected ':'");
+                ftypes.push_back(parse_type(depth + 1U));
+            }
+            expect('>', "expected '>'");
+            return m_ctx.type_struct(name, containers::ConstSpan<TypeId>(ftypes.data(), ftypes.size()),
+                                     containers::ConstSpan<containers::StringView>(fnames.data(), fnames.size()));
+        }
+        if (sv_eq(head, "enum"))
+        {
+            expect('<', "expected '<'");
+            const containers::StringView              name = parse_ident("expected enum name");
+            containers::Array<containers::StringView> cases(m_ctx.allocator());
+            while (accept(',')) { cases.push_back(parse_ident("expected enum case name")); }
+            expect('>', "expected '>'");
+            return m_ctx.type_enum(name, containers::ConstSpan<containers::StringView>(cases.data(), cases.size()));
+        }
+        // generics (CEIR-3b): !param<T[,trait]*>  !trait<Name[,supertrait]*>  !fn<(P,..)->(R,..)>
+        if (sv_eq(head, "param") || sv_eq(head, "trait"))
+        {
+            const bool is_param = sv_eq(head, "param");
+            expect('<', "expected '<'");
+            const containers::StringView name = parse_ident(is_param ? "expected type-param name" : "expected trait name");
+            containers::Array<TypeId>    ms(m_ctx.allocator());
+            while (accept(',')) { ms.push_back(parse_type(depth + 1U)); }
+            expect('>', "expected '>'");
+            const containers::ConstSpan<TypeId> sp(ms.data(), ms.size());
+            return is_param ? m_ctx.type_param(name, sp) : m_ctx.type_trait(name, sp);
+        }
+        if (sv_eq(head, "fn"))
+        {
+            expect('<', "expected '<'");
+            containers::Array<TypeId> params(m_ctx.allocator());
+            containers::Array<TypeId> results(m_ctx.allocator());
+            parse_paren_type_list(depth, params);
+            expect('-', "expected '->'");
+            expect('>', "expected '->'");
+            parse_paren_type_list(depth, results);
+            expect('>', "expected '>'");
+            return m_ctx.type_callable(containers::ConstSpan<TypeId>(params.data(), params.size()),
+                                       containers::ConstSpan<TypeId>(results.data(), results.size()));
+        }
+        // resources + views (CEIR-3c): !buffer<mode[,T]>  !image<dim,fmt>  !sampler<plain|cmp>  !restable<T>
+        // !accel / !video / !audio / !external  !view<resource[,range]*>
+        if (sv_eq(head, "buffer"))
+        {
+            expect('<', "expected '<'");
+            const containers::StringView mode = parse_ident("expected buffer mode");
+            BufferMode                   bm    = BufferMode::Raw;
+            if (sv_eq(mode, "raw")) { bm = BufferMode::Raw; }
+            else if (sv_eq(mode, "plain")) { bm = BufferMode::Plain; }
+            else if (sv_eq(mode, "structured")) { bm = BufferMode::Structured; }
+            else if (sv_eq(mode, "typed")) { bm = BufferMode::Typed; }
+            else
+            {
+                fail("unknown buffer mode");
+                return {};
+            }
+            TypeId elem;
+            if (bm != BufferMode::Raw)
+            {
+                expect(',', "expected ','");
+                elem = parse_type(depth + 1U);
+            }
+            expect('>', "expected '>'");
+            return m_ctx.type_buffer(bm, elem);
+        }
+        if (sv_eq(head, "image"))
+        {
+            expect('<', "expected '<'");
+            const containers::StringView dim = parse_ident("expected image dim");
+            ImageDim                     id   = ImageDim::Dim1D;
+            if (sv_eq(dim, "d1")) { id = ImageDim::Dim1D; }
+            else if (sv_eq(dim, "d2")) { id = ImageDim::Dim2D; }
+            else if (sv_eq(dim, "d3")) { id = ImageDim::Dim3D; }
+            else if (sv_eq(dim, "cube")) { id = ImageDim::Cube; }
+            else
+            {
+                fail("unknown image dim");
+                return {};
+            }
+            expect(',', "expected ','");
+            const TypeId fmt = parse_type(depth + 1U);
+            expect('>', "expected '>'");
+            return m_ctx.type_image(id, fmt);
+        }
+        if (sv_eq(head, "sampler"))
+        {
+            expect('<', "expected '<'");
+            const containers::StringView k = parse_ident("expected sampler kind");
+            bool                         cmp = false;
+            if (sv_eq(k, "plain")) { cmp = false; }
+            else if (sv_eq(k, "cmp")) { cmp = true; }
+            else
+            {
+                fail("unknown sampler kind");
+                return {};
+            }
+            expect('>', "expected '>'");
+            return m_ctx.type_sampler(cmp);
+        }
+        if (sv_eq(head, "restable")) { return m_ctx.type_resource_table(parse_wrapped(depth)); }
+        if (sv_eq(head, "accel")) { return m_ctx.type_accel_struct(); }
+        if (sv_eq(head, "video")) { return m_ctx.type_video_frame(); }
+        if (sv_eq(head, "audio")) { return m_ctx.type_audio_buffer(); }
+        if (sv_eq(head, "external")) { return m_ctx.type_external_resource(); }
+        if (sv_eq(head, "view"))
+        {
+            expect('<', "expected '<'");
+            const TypeId underlying = parse_type(depth + 1U);
+            u32          mask       = 0U;
+            while (accept(','))
+            {
+                const containers::StringView r = parse_ident("expected view range dimension");
+                if (sv_eq(r, "byte")) { mask |= static_cast<u32>(ViewRange::Byte); }
+                else if (sv_eq(r, "element")) { mask |= static_cast<u32>(ViewRange::Element); }
+                else if (sv_eq(r, "mip")) { mask |= static_cast<u32>(ViewRange::Mip); }
+                else if (sv_eq(r, "layer")) { mask |= static_cast<u32>(ViewRange::Layer); }
+                else if (sv_eq(r, "aspect")) { mask |= static_cast<u32>(ViewRange::Aspect); }
+                else
+                {
+                    fail("unknown view range dimension");
+                    return {};
+                }
+            }
+            expect('>', "expected '>'");
+            // the tri-split's PARSER arm: a grammatically-valid but semantically-invalid combination fails with a
+            // pointing diagnostic. ⛔ Must bail on a prior error FIRST — else `underlying` is unreliable and the
+            // asserting factory would be reached on an already-failed parse (a corrupt-input abort).
+            if (!m_ok) { return {}; }
+            if (!m_ctx.view_combination_valid(underlying, mask))
+            {
+                fail("invalid view/resource combination");
+                return {};
+            }
+            return m_ctx.type_view(underlying, mask);
+        }
+        // shapes + tensors (CEIR-3d): !dim<4|dyn|Name>  !shape<dim,..>  !tensor<elem,shape>  !stensor<elem,shape>
+        if (sv_eq(head, "dim"))
+        {
+            expect('<', "expected '<'");
+            TypeId d;
+            if (is_digit(la())) { d = m_ctx.type_dim_static(parse_uint()); } // a static extent
+            else
+            {
+                const containers::StringView nm = parse_ident("expected a dim name or 'dyn'");
+                if (!m_ok) { return {}; } // ⛔ bail before the asserting symbolic-dim factory
+                d = sv_eq(nm, "dyn") ? m_ctx.type_dim_dynamic() : m_ctx.type_dim_symbolic(nm);
+            }
+            expect('>', "expected '>'");
+            return d;
+        }
+        if (sv_eq(head, "shape"))
+        {
+            expect('<', "expected '<'");
+            containers::Array<TypeId> dims(m_ctx.allocator());
+            if (la() != '>')
+            {
+                dims.push_back(parse_type(depth + 1U));
+                while (accept(',')) { dims.push_back(parse_type(depth + 1U)); }
+            }
+            expect('>', "expected '>'");
+            if (!m_ok) { return {}; } // ⛔ bail before the asserting shape factory
+            const containers::ConstSpan<TypeId> sp(dims.data(), dims.size());
+            if (!m_ctx.shape_members_valid(sp))
+            {
+                fail("shape members must be dims");
+                return {};
+            }
+            return m_ctx.type_shape(sp);
+        }
+        if (sv_eq(head, "tensor") || sv_eq(head, "stensor"))
+        {
+            const bool sparse = sv_eq(head, "stensor");
+            expect('<', "expected '<'");
+            const TypeId elem = parse_type(depth + 1U);
+            expect(',', "expected ','");
+            const TypeId shp = parse_type(depth + 1U);
+            expect('>', "expected '>'");
+            if (!m_ok) { return {}; } // ⛔ bail before the asserting tensor factory
+            if (!m_ctx.tensor_composition_valid(elem, shp))
+            {
+                fail("invalid tensor element/shape composition");
+                return {};
+            }
+            return sparse ? m_ctx.type_sparse_tensor(elem, shp) : m_ctx.type_tensor(elem, shp);
+        }
+        // physical quantities (CEIR-3e): !qty<UNDERLYING,DIM>  DIM = base-letter+signed-exponent terms, or '1' (dimensionless)
+        if (sv_eq(head, "qty"))
+        {
+            expect('<', "expected '<'");
+            const TypeId      underlying = parse_type(depth + 1U);
+            expect(',', "expected ','");
+            const QuantityDim dim = parse_dimension();
+            expect('>', "expected '>'");
+            if (!m_ok) { return {}; } // ⛔ bail before the asserting quantity factory
+            if (!m_ctx.quantity_composition_valid(underlying))
+            {
+                fail("a quantity's underlying type must be numeric");
+                return {};
+            }
+            return m_ctx.type_quantity(underlying, dim);
+        }
+        // ownership / lifetime qualifiers (CEIR-3f, §19): !qual<KIND,T>  KIND ∈ {imm,mut,borrow,own,shared,weak,state,
+        // ext,transient} — the keyword set is kept in lockstep with the printer's emit_ownership (no -Werror=switch guard
+        // on this if-chain, so the round-trip test must cover ALL nine).
+        if (sv_eq(head, "qual"))
+        {
+            expect('<', "expected '<'");
+            const containers::StringView kw = parse_ident("expected an ownership keyword");
+            OwnershipKind                own = OwnershipKind::ImmutableValue;
+            if (sv_eq(kw, "imm")) { own = OwnershipKind::ImmutableValue; }
+            else if (sv_eq(kw, "mut")) { own = OwnershipKind::MutableValue; }
+            else if (sv_eq(kw, "borrow")) { own = OwnershipKind::BorrowedView; }
+            else if (sv_eq(kw, "own")) { own = OwnershipKind::OwnedResource; }
+            else if (sv_eq(kw, "shared")) { own = OwnershipKind::SharedHandle; }
+            else if (sv_eq(kw, "weak")) { own = OwnershipKind::WeakHandle; }
+            else if (sv_eq(kw, "state")) { own = OwnershipKind::StateSlot; }
+            else if (sv_eq(kw, "ext")) { own = OwnershipKind::ExternalHandle; }
+            else if (sv_eq(kw, "transient")) { own = OwnershipKind::TransientArena; }
+            else
+            {
+                fail("unknown ownership qualifier");
+                return {};
+            }
+            expect(',', "expected ','");
+            const TypeId underlying = parse_type(depth + 1U);
+            expect('>', "expected '>'");
+            if (!m_ok) { return {}; } // ⛔ bail before the asserting qualified factory
+            if (!m_ctx.qualified_composition_valid(underlying))
+            {
+                fail("this type cannot be ownership-qualified");
+                return {};
+            }
+            return m_ctx.type_qualified(own, underlying);
+        }
+        fail("unknown type keyword");
+        return {};
+    }
+
+    // A signed integer: optional '-' then digits. Distinct from parse_uint (which is unsigned) — used by dimension terms.
+    [[nodiscard]] i32 parse_signed_int() noexcept
+    {
+        skip_ws();
+        bool neg = false;
+        if (m_cur < m_end && *m_cur == '-')
+        {
+            neg = true;
+            ++m_cur;
+        }
+        if (m_cur >= m_end || !is_digit(*m_cur))
+        {
+            fail("expected an integer exponent");
+            return 0;
+        }
+        i32 v = 0;
+        while (m_cur < m_end && is_digit(*m_cur))
+        {
+            v = (v * 10) + static_cast<i32>(*m_cur - '0');
+            ++m_cur;
+        }
+        return neg ? -v : v;
+    }
+
+    // A physical dimension (CEIR-3e): base-letter+signed-exponent terms in canonical order (no dup, mandatory exponent),
+    // or the literal '1' for dimensionless. Parsed character-wise (the '-' rules out parse_ident).
+    [[nodiscard]] QuantityDim parse_dimension() noexcept
+    {
+        QuantityDim d;
+        if (la() == '1') // dimensionless (the ONLY spelling for it — an empty dimension is malformed)
+        {
+            ++m_cur;
+            return d;
+        }
+        int last  = -1;
+        int terms = 0;
+        for (;;)
+        {
+            const int base = base_dim_index(la());
+            if (base < 0) { break; } // not a base letter ⇒ end of the dimension (the caller expects '>')
+            ++m_cur;                 // consume the letter (la() left m_cur on it)
+            if (base <= last)
+            {
+                fail("dimension bases must be in canonical order without duplicates");
+                return d;
+            }
+            last          = base;
+            const i32 e   = parse_signed_int();
+            if (!m_ok) { return d; }
+            if (e > 127 || e < -128)
+            {
+                fail("dimension exponent out of range");
+                return d;
+            }
+            d.exp[base] = static_cast<i8>(e);
+            ++terms;
+        }
+        if (terms == 0) { fail("a dimension needs '1' (dimensionless) or at least one base-exponent term"); }
+        return d;
+    }
+
+    // `( [type (, type)*] )` — the possibly-empty parenthesized type list used by a callable's params + results.
+    void parse_paren_type_list(u32 depth, containers::Array<TypeId>& out) noexcept
+    {
+        expect('(', "expected '('");
+        if (la() != ')')
+        {
+            out.push_back(parse_type(depth + 1U));
+            while (accept(',')) { out.push_back(parse_type(depth + 1U)); }
+        }
+        expect(')', "expected ')'");
+    }
+
+    // `< type >` — the single-child aggregate wrapper (complex/quat/option).
+    [[nodiscard]] TypeId parse_wrapped(u32 depth) noexcept
+    {
+        expect('<', "expected '<'");
+        const TypeId e = parse_type(depth + 1U);
+        expect('>', "expected '>'");
+        return e;
     }
 
     // ── SSA value id -> Value* map (dense in the printer's pre-order; a gap-tolerant Array keyed by id) ──
