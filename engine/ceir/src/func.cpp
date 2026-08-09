@@ -78,7 +78,7 @@ bool verify_func_return(const Context& /*ctx*/, const Operation& op) noexcept { 
 // barrier (genuinely-unmodeled code); an unregistered op REACHED inside the callee degrades the same way (handled by
 // `collect_effective_mask`). Returns true (handled) — except when no table is present, where it DECLINES so the static
 // `ExternalCall` fallback stands (the conservative no-table baseline).
-bool call_effects_fn(const Context& ctx, const Operation& call, const EffectQuery& q, u32& mask)
+bool call_effects_fn(const Context& ctx, const Operation& call, const EffectQuery& q, u64& mask) // u64 mask (CEIR-8c)
 {
     if (q.symbols == nullptr) { return false; } // no resolver ⇒ decline ⇒ the registered static ExternalCall stands
     Operation* const callee = resolve_call(ctx, &call, *q.symbols);

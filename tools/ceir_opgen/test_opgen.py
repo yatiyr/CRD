@@ -169,11 +169,21 @@ class ValidatorTests(unittest.TestCase):
         self._assert_error(GOOD + 'effects = "io"\n', "'effects' must be an array")
 
     def test_effect_family_vocabulary_in_lockstep_with_cpp(self):
-        # ⛔ §26 lists 27 families; effect.hpp's static_assert pins the C++ side. This pins the generator side so an append
-        # to one language alone is caught (a C++-only append silently makes a family undeclarable from TOML).
-        self.assertEqual(len(og.EFFECT_FAMILIES), 27)
+        # ⛔ §26's 27 families + CEIR-8c's 8 U-§19 families = 35; effect.hpp's static_assert pins the C++ side. This pins
+        # the generator side so an append to one language alone is caught (a C++-only append silently makes a family
+        # undeclarable from TOML; a TOML-only append breaks the ordinal lockstep the C++ static_assert relies on).
+        self.assertEqual(len(og.EFFECT_FAMILIES), 35)
         self.assertEqual(og.EFFECT_FAMILIES[0], "MemoryRead")
-        self.assertEqual(og.EFFECT_FAMILIES[-1], "Debug")
+        self.assertEqual(og.EFFECT_FAMILIES[26], "Debug")       # the §26 boundary is preserved (ordinals 0..26 unchanged)
+        self.assertEqual(og.EFFECT_FAMILIES[-1], "AgentAction")
+
+    def test_op_trait_vocabulary_in_lockstep_with_cpp(self):
+        # ⛔ CEIR-8e (ADR-0115): OpTrait is a CLOSED core vocabulary (8 bits 0..7); dialect.hpp's kKnownTraitsMask +
+        # static_assert pin the C++ side. This pins the generator side so a C++/TOML trait append can't drift (the
+        # EFFECT_FAMILIES precedent). OP_TRAITS[i] corresponds to OpTrait bit i.
+        self.assertEqual(len(og.OP_TRAITS), 8)
+        self.assertEqual(og.OP_TRAITS[0], "Terminator")
+        self.assertEqual(og.OP_TRAITS[-1], "TokenConsumer")
 
     def test_effect_unknown_family_string(self):
         self._assert_error(GOOD + 'effects = ["Bogus"]\n', "unknown effect family 'Bogus'")

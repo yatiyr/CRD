@@ -128,6 +128,9 @@ public:
     [[nodiscard]] OpId      kind() const noexcept { return m_kind; }
     [[nodiscard]] SourceLoc loc() const noexcept { return m_loc; }
     void                    set_loc(SourceLoc l) noexcept { m_loc = l; }
+    // CEIR-8d (ADR-0114): the content-independent stable identity. 0 until `Context::assign_stable_ids` (pre-order,
+    // one-time) or a `STID`-chunk decode assigns it. Read-only here; the Context (a friend) is the sole assigner.
+    [[nodiscard]] StableId stable_id() const noexcept { return m_stable_id; }
 
     [[nodiscard]] u32    num_operands() const noexcept { return m_num_operands; }
     [[nodiscard]] Value* operand(u32 i) const noexcept
@@ -189,6 +192,9 @@ private:
     friend class Block;
     OpId      m_kind{};
     SourceLoc m_loc{};
+    // CEIR-8d: MUTABLE — assignment is memoization (logical-const): `serialize`/`interface_hash` take `const Module&`
+    // yet must give a never-persisted op a deterministic pre-order id the moment they need one (ADR-0114 §2.2).
+    mutable StableId m_stable_id{};
     Use*      m_operands     = nullptr;
     u32       m_num_operands = 0;
     Value*    m_results      = nullptr;
@@ -316,11 +322,17 @@ class Module
 public:
     [[nodiscard]] Region*      body() const noexcept { return m_body; }
     [[nodiscard]] SymbolTable* symbols() const noexcept { return m_symbols; }
+    // CEIR-8d (ADR-0114): the high-water mark of every stable id EVER assigned in this module. `assign_stable_ids`
+    // draws NEW ids from `max(scan_max, watermark)+1` — so an id freed by `erase()` (a tombstoned op is invisible to the
+    // pre-order scan) is NEVER reused by a later op; identity is monotone. Serialized in the STID chunk, restored on
+    // load. `mutable`: assignment is logical-const memoization (ADR-0114 §2.2).
+    [[nodiscard]] u64 stable_id_watermark() const noexcept { return m_stable_id_watermark; }
 
 private:
     friend class Context;
     Region*      m_body    = nullptr;
     SymbolTable* m_symbols = nullptr; // CEIR-1b — arena-allocated alongside the module
+    mutable u64  m_stable_id_watermark = 0; // CEIR-8d monotone id high-water mark (prevents post-erase id reuse)
 };
 
 // ── cross-referencing inline defs (need the full class set) ──

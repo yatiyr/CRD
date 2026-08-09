@@ -18,7 +18,13 @@ namespace crd::ceir::cook
 namespace
 {
 // The cooked-CEIR blob layout version (bumped when the chunk set / header schema changes — a recook by design).
-constexpr crd::u32 kCeirCookSchema = 1U;
+// ⛔ v2 (CEIR-8c, ADR-0113): the §107 interface hash now projects a u64 effect-family mask (was u32) — every effectful
+// program's interface hash changed, so stale v1 cooked blobs must reject cleanly at this schema check rather than
+// mismatch on the hash. The module BINARY format (kBinaryVersion) is UNCHANGED — effects aren't serialized in it.
+// ⛔ v3 (CEIR-8d, ADR-0114): the §20 state schema in the interface hash is now keyed by STABLE ID (sorted), not body
+// order — every stateful program's interface hash changed. Same clean-reject rationale; kBinaryVersion still UNCHANGED
+// (the STID chunk is additive/forward-skippable and the content hash skips it — zero content-hash churn).
+constexpr crd::u32 kCeirCookSchema = 3U;
 
 void push_u32(containers::Array<crd::u8>& out, crd::u32 v)
 {
@@ -200,8 +206,11 @@ CookResult cook_program(Context& ctx, const Module& module, crd::u64 asset_id, m
     containers::Array<crd::u8> deps(scratch);
     serialize_deps(dep, deps);
 
-    // 6. assemble the CRDR container (type 'CEIR'): 'META' header · 'CEIR' program · 'CDEP' deps.
-    crd::resources::CrdrWriter w(alloc, crd::resources::ResourceId{0U, asset_id}, crd::resources::kFourCC_CEIR);
+    // 6. assemble the CRDR container (type 'CEIR'): 'META' header · 'CEIR' program · 'CDEP' deps. The container id is
+    // CONTENT-ADDRESSED (ResourceId::from_content over the program blob — the shader-cook precedent, ADR-0104): a physical
+    // id distinct from the logical AssetId in the header (ResourceId 128-bit content hash vs AssetId 64-bit path hash).
+    crd::resources::CrdrWriter w(alloc, crd::resources::ResourceId::from_content(span_of(program)),
+                                 crd::resources::kFourCC_CEIR);
     w.add_chunk(crd::resources::kFourCC_META, span_of(header));
     w.add_chunk(crd::resources::kFourCC_CEIR, span_of(program));
     w.add_chunk(crd::resources::kFourCC_CDEP, span_of(deps));

@@ -15,13 +15,14 @@ target_include_directories(crd-ceir-cook
 
 target_link_libraries(crd-ceir-cook
     PUBLIC
-        crd-ceir      # the IR + interface_hash / stable_hash / collect_dependencies + the binary serializer
-        crd-core      # types, asserts
+        crd-ceir              # the IR + interface_hash / stable_hash / collect_dependencies + the binary serializer
+        crd-core              # types, asserts
         crd-containers
         crd-memory
+        crd-render-asset-core # PUBLIC (CEIR-7b): runtime_program.hpp names RuntimeSlot / RuntimeHandle / AssetId — consumers
+                              # need its include dirs. (7a used it impl-only; the runtime handle model surfaces it.)
     PRIVATE
-        crd-resources         # the CRDR container writer/reader — the 'CEIR' chunk (NOT in any public header)
-        crd-render-asset-core # the CookedHeader cooked-envelope + interface/content-hash vocabulary (impl only)
+        crd-resources         # the CRDR container writer/reader — the 'CEIR' chunk (still NOT in any public header)
         crd-warnings
 )
 

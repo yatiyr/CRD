@@ -113,3 +113,76 @@ Gated: crd-ceir-tests + crd-ceir-host-tests + crd-ceir-cook-tests 226/226 ctest 
 drift/validator (52 py) + crd-ceir-invariants + a full win-debug all-targets build. No binary
 version bump.
 ```
+
+## CEIR-7b — the RuntimeProgram + generation-safe handle (2026-08-09)
+
+**Delivered.** The runtime side of the cooked asset: a `RuntimeProgram` (the loaded, immutable form) + a
+generation-safe slot/handle, with a load path that VALIDATES the cooked header's declared hashes against the
+payload.
+
+**The design (advisor-ruled).**
+- **RuntimeProgram = `{Module*, content_hash, interface_hash}`** — the loaded form, nothing more. The executable
+  form (CompiledExecutionPlan / interpreter binding) is CEIR-8 (8b's row), explicitly not here.
+- ⭐ **CEIR is the FIRST consumer of crd-render-asset-core's `RuntimeSlot<T>`/`RuntimeHandle<T>`** — RAF-3 built the
+  generation-tagged handle for the render families to adopt; CEIR adopted it first. `using ProgramSlot =
+  RuntimeSlot<RuntimeProgram>` reused verbatim; install bumps the generation, a handle minted before a same-id
+  re-install is `is_current()==false` (the RAF-11 hot-reload safety property).
+- **`load_program` validates the header hashes (the declared-header-words-validated scar — closed AT LOAD;** 7a
+  closed it at cook, `read_program` does not recompute). Order: `find_unregistered_op` FIRST (a typed
+  `UnregisteredOp` — `interface_hash`'s effect walk is registration-sensitive, the register-to-verify contract),
+  then recompute both hashes and match the header. Two discriminators: a CONTENT mismatch = a corrupt/spliced blob;
+  an INTERFACE mismatch with content matching = REGISTRY DRIFT (a dialect's declared effects changed between cook
+  and load) — the case a 7c swap-compatibility check must catch. A content-hash match carries the cook-time
+  verification forward — no verifier re-run at load.
+- **Identity (7a's provisional resolved).** The CRDR container id is now `ResourceId::from_content(program blob)`
+  (the shader-cook precedent, ADR-0104 content-addressed); the AssetId stays the LOGICAL identity (the
+  CookedHeader.id + the RuntimeHandle key). ResourceId (128-bit physical) and AssetId (64-bit logical, path-hashed)
+  are permanently distinct layers — no mapping.
+- **Context: borrow, not own.** No ownership / deferred-destroy machinery (that is 7c's row). But the
+  per-generation-Context pattern is NAMED as 7c's inbound (each generation in its own Context so a hot-swap frees
+  an old generation wholesale — arenas free per-Context, never per-module) + PROVEN by the two-Context two-generation
+  test (two generations coexist independently, both modules alive).
+- **Module edges.** `crd-render-asset-core` moved PRIVATE→PUBLIC in the bridge CMake (usage requirements —
+  `runtime_program.hpp` names the RAF types); `crd-resources` stays PRIVATE. An all-targets build was NOT triggered
+  (only the bridge's own files changed — no non-ceir engine header touched). crd-ceir gains no edge (I5 green).
+
+**Tests.** `test_runtime_program.cpp` (6 `[runtime]`): hash-validated load → a current handle; same-id re-install →
+the old handle stale + a wrong-id handle not current; the two-Context two-generation coexistence; the SPLICE forge
+(P1 header + P2 program) → `ContentHashMismatch`; unregistered-at-load → `UnregisteredOp`; a corrupted iface-word
+(META offset 12, content intact) → `InterfaceHashMismatch` (also pins the header-offset layout).
+
+**Gate.** crd-ceir-tests + crd-ceir-host-tests + crd-ceir-cook-tests **232/232 ctest** (226 + 6 `[runtime]`) on
+**win-debug + win-asan + linux-gcc-debug + linux-gcc-asan** (full `-R ceir` on every config) + LLVM-20 tidy + GCC
+`-Werror=switch` (the `LoadError` switch) + `crd-ceir-opgen-{drift,validator}` (52 py) + `crd-ceir-invariants`
+(crd-ceir asset-free + jobs-free) + invariants. No binary version bump. Next = CEIR-7c (hot reload —
+detect→verify→cook→compile-affected→atomic install→generation bump→deferred destroy; state migration; §108/§109).
+
+## Proposed commit — CEIR-7b (user commits; NO AI trailer)
+
+```
+feat(ceir-7b): the CEIR RuntimeProgram + generation-safe handle
+
+- RuntimeProgram (crd-ceir-cook): the loaded, immutable runtime form of a cooked 'CEIR'
+  asset = {Module*, content_hash, interface_hash}. The executable form
+  (CompiledExecutionPlan) is CEIR-8, not here.
+- CEIR is the FIRST consumer of crd-render-asset-core's RuntimeSlot<T>/RuntimeHandle<T>
+  (RAF-11): ProgramSlot reused verbatim -- install bumps the generation, a handle minted
+  before a same-id re-install is is_current()==false (hot-reload staleness detection).
+- load_program VALIDATES the cooked header's declared hashes against the payload (the
+  declared-header-words scar, closed at load; read_program does not recompute). Registration
+  check first (UnregisteredOp -- interface_hash's effect walk needs the dialects), then
+  content then interface. Content mismatch = corrupt/spliced; interface mismatch with content
+  matching = registry drift (what a 7c swap-compat check catches). A content match carries
+  cook-time verification forward (no re-verify at load).
+- Identity (7a provisional resolved): the CRDR container id = ResourceId::from_content(blob)
+  (content-addressed, the shader-cook precedent); the AssetId stays the logical identity --
+  distinct layers, no mapping. Context is BORROWED (per-generation-Context named as 7c's
+  inbound). crd-render-asset-core PRIVATE->PUBLIC in the bridge; crd-ceir gains no edge.
+- tests: test_runtime_program (6 [runtime]) -- hash-validated load, generation staleness,
+  two-Context two-generation coexistence, the splice forge (ContentHashMismatch), an
+  unregistered load (UnregisteredOp), a corrupted iface word (InterfaceHashMismatch).
+
+Gated: crd-ceir-tests + crd-ceir-host-tests + crd-ceir-cook-tests 232/232 ctest on win-debug
++ win-asan + linux-gcc-debug + linux-gcc-asan + LLVM-20 tidy + GCC -Werror=switch + opgen
+drift/validator (52 py) + crd-ceir-invariants. No binary version bump.
+```

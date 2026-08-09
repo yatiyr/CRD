@@ -33,6 +33,13 @@ void push_u32(containers::Array<u8>& out, u32 v)
     out.push_back(static_cast<u8>((v >> 16U) & 0xFFU));
     out.push_back(static_cast<u8>((v >> 24U) & 0xFFU));
 }
+// CEIR-8c: the effect family mask widened u32→u64; the §107 projection pushes all 8 bytes little-endian (by-field, the
+// struct-padding-in-content-hash scar) so a ≥bit-32 family is part of the caller-visible interface hash.
+void push_u64(containers::Array<u8>& out, u64 v)
+{
+    push_u32(out, static_cast<u32>(v & 0xFFFFFFFFU));
+    push_u32(out, static_cast<u32>((v >> 32U) & 0xFFFFFFFFU));
+}
 void push_str(containers::Array<u8>& out, containers::StringView s)
 {
     push_u32(out, static_cast<u32>(s.size()));
@@ -54,6 +61,15 @@ void encode_type(const Context& ctx, TypeId id, containers::Array<u8>& out)
     for (usize i = 0; i < t.members.size(); ++i) { encode_type(ctx, t.members[i], out); }
     push_u32(out, static_cast<u32>(t.labels.size()));
     for (usize i = 0; i < t.labels.size(); ++i) { push_str(out, t.labels[i]); }
+    // CEIR-8a (ADR-0111 §2.4 landmine): the type-class discriminates an Extern type — emit it CONDITIONALLY (only for
+    // kind==Extern) so two custom types with identical param slots do NOT collide in the §107 interface hash (which would
+    // silently break 7b's registry-drift discriminator), while EVERY existing (non-Extern) type hashes byte-identically
+    // to pre-8a (zero interface-hash churn — no needless recook).
+    if (t.kind == TypeKind::Extern)
+    {
+        push_str(out, ctx.type_class_name(t.type_class));
+        push_u32(out, t.type_class_version);
+    }
 }
 [[nodiscard]] bool sv_less(containers::StringView a, containers::StringView b) noexcept
 {
@@ -165,21 +181,29 @@ u64 interface_hash(Context& ctx, const Module& module, memory::IAllocator* scrat
         // yields deterministic-but-WRONG masks). A body edit that adds an effect visible to callers IS an interface change.
         containers::HashMap<const Operation*, u8> visited(scratch);
         const EffectQuery                         q{syms, &visited};
-        u32                                       mask = 0U;
+        u64                                       mask = 0U; // CEIR-8c: u64 — a ≥bit-32 (U-§19) family must survive here
         ctx.collect_region_effective_mask(*f->region(0), q, mask);
-        push_u32(proj, mask);
+        push_u64(proj, mask);
     }
 
-    // §20 STATE SCHEMA — MODULE-WIDE (every StateEdge cell, module pre-order), NOT per-exported-func: a PRIVATE callee's
-    // cells are live runtime state a 7c hot-swap must migrate; exported-only under-inclusion risks a wrong "compatible"
-    // verdict (state corruption), while over-inclusion only costs a spurious recook — the safety asymmetry decides it.
-    // ⛔ Cells are INSTANCE-keyed with no stable id until 7c, so a private-func reorder changes this hash — a SAFE
-    // false-incompatible (a needless recook, never a missed migration), named as 7c's refinement. Cell = its value type +
-    // §20 depth, in body order (layout order IS the migration schema).
+    // §20 STATE SCHEMA — MODULE-WIDE (every StateEdge cell), NOT per-exported-func: a PRIVATE callee's cells are live
+    // runtime state a hot-swap must migrate; exported-only under-inclusion risks a wrong "compatible" verdict (state
+    // corruption), while over-inclusion only costs a spurious recook — the safety asymmetry decides it.
+    // ⭐ CEIR-8d (ADR-0114 §2.7): cells are now keyed by their StateEdge op's STABLE ID (was body order). Collect
+    // (stable_id, value type, §20 depth), SORT by stable id, then hash — so a REORDER is invariant (the false-
+    // incompatible fixed), while the id VALUE in the hash keeps delete-id-1 + add-id-2 correctly INCOMPATIBLE (an
+    // order-only hash would call them compatible and 10a migration would silently lose the id-1 state).
+    ctx.assign_stable_ids(module); // ensure every StateEdge op carries a stable id before we read it
     push_str(proj, containers::StringView("state:"));
+    struct Cell
+    {
+        crd::u64 id;
+        TypeId   type;
+        crd::u32 depth;
+    };
     struct StateW
     {
-        static void go(Context& c, Region* r, containers::Array<u8>& p)
+        static void go(Context& c, Region* r, containers::Array<Cell>& cells)
         {
             if (r == nullptr) { return; }
             for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
@@ -188,22 +212,40 @@ u64 interface_hash(Context& ctx, const Module& module, memory::IAllocator* scrat
                 {
                     if (c.has_trait(op->kind(), OpTrait::StateEdge) && op->num_results() >= 1U)
                     {
-                        encode_type(c, op->result(0)->type(), p);
-                        u32          depth   = 1U; // §20 default depth
+                        crd::u32     depth    = 1U; // §20 default depth
                         const AttrId depth_id = op->attr("depth");
                         if (depth_id.valid())
                         {
                             const AttrValue dv = c.attr_value(depth_id);
-                            if (dv.kind == AttrKind::Int && dv.i >= 1) { depth = static_cast<u32>(dv.i); }
+                            if (dv.kind == AttrKind::Int && dv.i >= 1) { depth = static_cast<crd::u32>(dv.i); }
                         }
-                        push_u32(p, depth);
+                        cells.push_back(Cell{op->stable_id().value, op->result(0)->type(), depth});
                     }
-                    for (u32 i = 0; i < op->num_regions(); ++i) { go(c, op->region(i), p); }
+                    for (crd::u32 i = 0; i < op->num_regions(); ++i) { go(c, op->region(i), cells); }
                 }
             }
         }
     };
-    StateW::go(ctx, module.body(), proj);
+    containers::Array<Cell> cells(scratch);
+    StateW::go(ctx, module.body(), cells);
+    // insertion sort by stable id (cells are few; a stable id is unique per op, so the order is total + deterministic).
+    for (crd::u32 i = 1; i < static_cast<crd::u32>(cells.size()); ++i)
+    {
+        const Cell key = cells[i];
+        crd::u32   j   = i;
+        while (j > 0U && cells[j - 1U].id > key.id)
+        {
+            cells[j] = cells[j - 1U];
+            --j;
+        }
+        cells[j] = key;
+    }
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(cells.size()); ++i)
+    {
+        push_u64(proj, cells[i].id); // ⛔ the id VALUE is hashed (the delete/re-add discriminator), not just the order
+        encode_type(ctx, cells[i].type, proj);
+        push_u32(proj, cells[i].depth);
+    }
 
     return fnv1a(containers::ConstSpan<u8>(proj.data(), proj.size()));
 }

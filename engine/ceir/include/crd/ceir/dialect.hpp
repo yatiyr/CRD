@@ -7,6 +7,7 @@
 // is still a fully valid Operation — unknown-dialect preservation (§6.11): tools carry it opaquely.
 
 #include <crd/ceir/effect.hpp>
+#include <crd/ceir/hazard.hpp> // ResourceClass (CEIR-8c location-class resource class)
 #include <crd/ceir/id.hpp>
 #include <crd/ceir/semantics.hpp>
 #include <crd/containers/span.hpp>
@@ -18,11 +19,16 @@ namespace crd::ceir
 class Context;
 class Operation;
 class Dialect;
+struct Type;      // CEIR-8a: the open-world type-class verify hook takes a `const Type&` (full def in type.hpp)
+struct AttrValue; // CEIR-8b: the open-world attribute-class verify hook takes a `const AttrValue&` (full def in attr.hpp)
 
-// Structural traits an op-kind may carry (a flags set — the core never enumerates them centrally; a dialect ORs its
-// own bits). E.g. CEIR-5b's CFG verifier reads Terminator; Symbol/SymbolTable drive symbol resolution. A FLAGS enum
-// whose bits OR into OpInfo::traits (a u32 word) — sized for growth toward 32 traits, not the current value set
-// (matches RtFeature/EventCategory); performance-enum-size is a false positive here.
+// Structural traits an op-kind may carry (a flags set). ⛔ CEIR-8e (ADR-0115) CLOSED-vocabulary policy (struck in
+// place — the SUPERSEDED discipline): traits are the fixed REASONING AXES the CORE's verifiers switch on (5b reads
+// Terminator, 5d reads StateEdge, 6a reads TokenProducer/Consumer). A dialect **SETS** these core-minted bits on its
+// ops; it NEVER **MINTS** a new bit — plugin BEHAVIOR lives in an open-world op-INTERFACE (OpInterface below), never
+// a new trait bit. `register_op` REJECTS a stray/out-of-vocabulary bit (`kKnownTraitsMask`), the `kLastEffectFamily`
+// parallel. A FLAGS enum whose bits OR into OpInfo::traits (a u32 word), room for 32; performance-enum-size is a false
+// positive here. ⛔ Append at END + keep `kKnownTraitsMask` AND ceir_opgen.py's OP_TRAITS in lockstep.
 // NOLINTNEXTLINE(performance-enum-size)
 enum class OpTrait : u32
 {
@@ -53,6 +59,16 @@ enum class OpTrait : u32
 // A single trait → the flags word (ergonomic register_op(..., flags_of(OpTrait::Symbol))).
 [[nodiscard]] constexpr u32 flags_of(OpTrait t) noexcept { return static_cast<u32>(t); }
 
+// ⛔ CEIR-8e (ADR-0115): the closed core-trait vocabulary as a mask — every bit the core has assigned. `register_op`
+// asserts `(spec.traits & ~kKnownTraitsMask) == 0` so a dialect cannot MINT a bit (the kLastEffectFamily parallel).
+// ⛔ Append every new OpTrait here (and to ceir_opgen.py OP_TRAITS) — the drift is a silent future bit-collision.
+inline constexpr u32 kKnownTraitsMask =
+    flags_of(OpTrait::Terminator) | flags_of(OpTrait::Symbol) | flags_of(OpTrait::SymbolTable) |
+    flags_of(OpTrait::Pure) | flags_of(OpTrait::IsolatedFromAbove) | flags_of(OpTrait::StateEdge) |
+    flags_of(OpTrait::TokenProducer) | flags_of(OpTrait::TokenConsumer);
+// Cross-language pin: 8 traits today (bits 0..7). If this fires, OpTrait and OP_TRAITS (ceir_opgen.py) diverged.
+static_assert(kKnownTraitsMask == 0xFFU, "OpTrait must be 8 contiguous bits (0..7); sync kKnownTraitsMask + OP_TRAITS");
+
 // A verifier hook: true iff `op` is well-formed for its kind. nullptr ⇒ trivially valid (opaque — unknown dialects).
 using VerifyFn = bool (*)(const Context&, const Operation&);
 
@@ -66,7 +82,7 @@ struct EffectQuery;
 // and returns true iff it HANDLED the op; false ⇒ the dispatcher falls back to the static `effects` records. nullptr on
 // an OpInfo ⇒ no instance-dependent effects (the common case). Kept a plain fn-ptr (the `verify` precedent) so the core
 // never special-cases a dialect (I6) — the func dialect registers this for `func.call`.
-using EffectsFn = bool (*)(const Context&, const Operation&, const EffectQuery&, u32&);
+using EffectsFn = bool (*)(const Context&, const Operation&, const EffectQuery&, u64&); // u64 mask (CEIR-8c widened)
 
 // One op-interface implementation on an op-kind — an opaque pointer to the interface's function table; the analysis
 // that owns the `InterfaceId` casts it back. Small per-op list (linear scan).
@@ -118,6 +134,66 @@ struct OpSpec
     containers::StringView              native_provider = {};   // "" unless intrinsic; asserted non-empty when intrinsic
 };
 
+// ── CEIR-8a open-world TYPE-CLASS registration (ADR-0111) — the type analogue of OpInfo/OpSpec ──
+// A dialect-defined type-class's verify hook: is this `Extern` Type instance well-formed for its class? The registered
+// class owns its own arity (the Context-free `type_is_well_formed` accepts Extern structurally — ADR-0111 §2.5).
+// nullptr ⇒ the class declares no shape constraint (trivially valid).
+using VerifyTypeFn = bool (*)(const Context&, const Type&);
+
+// The registered record for a dialect-defined type-class (held on the Context, keyed by TypeClassId). ⛔ Append fields
+// at END (the OpInfo discipline). `version` is stored in the binary record + range-checked on decode (ADR-0111 §2.4).
+struct TypeClassInfo
+{
+    TypeClassId            id;
+    containers::StringView name;              // "dialect.class"
+    const Dialect*         dialect = nullptr;
+    VerifyTypeFn           verify  = nullptr; // nullptr ⇒ trivially valid
+    u32                    version = 1U;      // the class schema version
+};
+
+// The registration descriptor for `Dialect::register_type_class` (CEIR-8a). Every field defaults.
+struct TypeClassSpec
+{
+    VerifyTypeFn verify  = nullptr;
+    u32          version = 1U;
+};
+
+// ── CEIR-8b open-world ATTRIBUTE-CLASS registration (ADR-0112) — the attribute analogue of the type-class surface ──
+using VerifyAttrFn = bool (*)(const Context&, const AttrValue&); // is this Extern AttrValue well-formed for its class?
+struct AttrClassInfo
+{
+    AttrClassId            id;
+    containers::StringView name;              // "dialect.attr"
+    const Dialect*         dialect = nullptr;
+    VerifyAttrFn           verify  = nullptr; // nullptr ⇒ trivially valid
+    u32                    version = 1U;      // the class schema version (binary record range-check)
+};
+struct AttrClassSpec
+{
+    VerifyAttrFn verify  = nullptr;
+    u32          version = 1U;
+};
+
+// ── CEIR-8c open-world effect-LOCATION-CLASS registration (ADR-0113) — the location analogue of the type/attr-class
+// surface. A dialect-defined location class carries a DECLARED ResourceClass (the hazard analysis reads it to place
+// the effect in a conflict class) + a verify hook (is this Extern EffectRecord well-formed for its class?). ──
+using VerifyLocationFn = bool (*)(const Context&, const EffectRecord&);
+struct LocationClassInfo
+{
+    LocationClassId        id;
+    containers::StringView name;                              // "dialect.location"
+    const Dialect*         dialect       = nullptr;
+    VerifyLocationFn       verify        = nullptr;           // nullptr ⇒ trivially valid
+    ResourceClass          resource_class = ResourceClass::Universe; // the conflict class (default = maximally conservative)
+    u32                    version       = 1U;                // the class schema version
+};
+struct LocationClassSpec
+{
+    VerifyLocationFn verify         = nullptr;
+    ResourceClass    resource_class = ResourceClass::Universe; // ⛔ default Universe: an under-declared class over-conflicts (safe)
+    u32              version        = 1U;
+};
+
 // A registered dialect: a name + a factory for its ops. Created via `Context::register_dialect`. A thin typed handle —
 // the Context owns the OpInfos; `Dialect` interns "<dialect>.<op>" and registers on the owning Context.
 class Dialect
@@ -133,6 +209,20 @@ public:
     // registration's info. The `spec.effects` records are COPIED into the Context arena (the span need not outlive the
     // call). ⛔ Asserts: a `Pure` op declares zero effects; every effect's family/target is in range; `domain` is in range.
     OpId register_op(containers::StringView op, const OpSpec& spec = {});
+
+    // Register type-class `cls` (interned as "<dialect>.<class>", CEIR-8a) from a `TypeClassSpec`. Returns its
+    // `TypeClassId`. Idempotent by class — re-registering returns the same id and keeps the first registration's info
+    // (late registration works — the id is a content hash; an unregistered Extern round-trips until its class registers).
+    TypeClassId register_type_class(containers::StringView cls, const TypeClassSpec& spec = {});
+
+    // Register attribute-class `cls` (interned as "<dialect>.<class>", CEIR-8b). Idempotent by class; late registration
+    // works (an unregistered Extern attr round-trips until its class registers — the id is a content hash).
+    AttrClassId register_attr_class(containers::StringView cls, const AttrClassSpec& spec = {});
+
+    // Register effect-location-class `cls` (interned as "<dialect>.<location>", CEIR-8c). Idempotent by class; late
+    // registration works (an op declaring an Extern location whose class is not yet registered is treated as
+    // maximally-conflicting — ResourceClass::Universe — until its class registers with a declared resource_class).
+    LocationClassId register_location_class(containers::StringView cls, const LocationClassSpec& spec = {});
 
 private:
     Context*               m_ctx = nullptr;

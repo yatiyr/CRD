@@ -45,10 +45,14 @@ DEPRECATION_FIELDS = {"since", "replaced_by", "note"}
 # §26 core effect families, in §26 ORDER — the tuple index IS the EffectFamily enum value the generator emits (CEIR-4a);
 # ⛔ APPEND AT END, and keep in lockstep with engine/ceir/include/crd/ceir/effect.hpp (NO subsetting — the NO-FOLLOW
 # mandate keeps MemoryReadWrite a family even though it reads as composable).
+# ⛔ LOCKSTEP with engine/ceir/include/crd/ceir/effect.hpp::EffectFamily (identical ORDER — ordinals are the vocabulary;
+# the effect.hpp static_assert + the drift/validator enforce it). CEIR-8c (ADR-0113) appended the 8 U-§19 families.
 EFFECT_FAMILIES = ("MemoryRead", "MemoryWrite", "MemoryReadWrite", "Allocate", "Deallocate", "ResourceResidency",
                    "GPUCommand", "HostStateRead", "HostStateWrite", "SceneRead", "SceneWrite", "EcsRead", "EcsWrite",
                    "PhysicsRead", "PhysicsWrite", "AudioRead", "AudioWrite", "FileIO", "NetworkIO", "DeviceIO",
-                   "ExternalCall", "TimeRead", "RandomRead", "Nondeterministic", "Synchronization", "Logging", "Debug")
+                   "ExternalCall", "TimeRead", "RandomRead", "Nondeterministic", "Synchronization", "Logging", "Debug",
+                   "DocumentRead", "DocumentWrite", "ConstraintRead", "ConstraintWrite", "TransactionBoundary",
+                   "UIRead", "UIWrite", "AgentAction")
 # CEIR-3c ViewRange bits — an effect's optional range narrowing reuses this exact vocabulary (0 = whole resource).
 VIEW_RANGES = {"byte": 1, "element": 2, "mip": 4, "layer": 8, "aspect": 16}
 EFFECT_FIELDS = {"family", "operand", "result", "range"}

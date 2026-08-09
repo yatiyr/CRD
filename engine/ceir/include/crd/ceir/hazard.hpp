@@ -52,7 +52,14 @@ enum class ResourceClass : u8
     Random, // ⛔ a PRNG draw ADVANCES the stream, so RandomRead WRITES this class — RNG draws must NOT reorder (replay)
     Log,
     Debug,
-    Universe, // overlaps everything (an opaque call / a synchronization fence)
+    // ── CEIR-8c (ADR-0113) U-§19 domain classes — the conflict classes for the new families + built-in/Extern
+    // locations. A dialect-defined Extern location declares its own ResourceClass (LocationClassSpec::resource_class);
+    // an UNREGISTERED one degrades to Universe. ──
+    Document,   // DCC/CAD/EDA/notebook document-object graph
+    Constraint, // CAD parametric constraints + EDA design rules
+    Ui,         // reactive-UI signals + events
+    Agent,      // agent-driven edits (specific resource identity rides the open LOCATION)
+    Universe,   // overlaps everything (an opaque call / a synchronization fence / a transaction boundary)
 };
 
 // How a §26 effect family accesses its class: does it read, does it write, and which class. ⛔ RandomRead writes (it
@@ -101,6 +108,18 @@ struct EffectAccess
     case EffectFamily::Synchronization: return {true, true, ResourceClass::Universe};
     case EffectFamily::Logging: return {false, true, ResourceClass::Log};
     case EffectFamily::Debug: return {false, true, ResourceClass::Debug};
+    // CEIR-8c (ADR-0113) U-§19 families. Read/write follows the family name; the class is the domain. ⛔ documented
+    // judgment: TransactionBoundary is a Universe BARRIER (a commit/rollback orders every effect across it, like
+    // Synchronization); AgentAction reads AND writes (an edit observes-then-mutates) — its specific resource rides the
+    // open LOCATION, not the family, so the family class is the coarse Agent domain.
+    case EffectFamily::DocumentRead: return {true, false, ResourceClass::Document};
+    case EffectFamily::DocumentWrite: return {false, true, ResourceClass::Document};
+    case EffectFamily::ConstraintRead: return {true, false, ResourceClass::Constraint};
+    case EffectFamily::ConstraintWrite: return {false, true, ResourceClass::Constraint};
+    case EffectFamily::TransactionBoundary: return {true, true, ResourceClass::Universe};
+    case EffectFamily::UIRead: return {true, false, ResourceClass::Ui};
+    case EffectFamily::UIWrite: return {false, true, ResourceClass::Ui};
+    case EffectFamily::AgentAction: return {true, true, ResourceClass::Agent};
     }
     return {true, true, ResourceClass::Universe}; // unreachable (total switch); conservative if somehow hit
 }

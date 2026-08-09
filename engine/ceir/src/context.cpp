@@ -6,9 +6,27 @@
 
 namespace crd::ceir
 {
+namespace
+{
+// Byte-order (unsigned) less — the canonical Dict-key ordering (CEIR-8b).
+[[nodiscard]] bool sv_less(containers::StringView a, containers::StringView b) noexcept
+{
+    const usize n = a.size() < b.size() ? a.size() : b.size();
+    for (usize i = 0; i < n; ++i)
+    {
+        const unsigned char ca = static_cast<unsigned char>(a[i]);
+        const unsigned char cb = static_cast<unsigned char>(b[i]);
+        if (ca != cb) { return ca < cb; }
+    }
+    return a.size() < b.size();
+}
+} // namespace
+
 Context::Context(memory::IAllocator* alloc, usize arena_chunk_bytes)
     : m_arena(arena_chunk_bytes, alloc), m_op_names(alloc), // GrowableLinearAllocator is (chunk_bytes, parent)
-      m_attr_values(alloc), m_files(alloc), m_dialects(&m_arena), m_op_infos(&m_arena), m_interface_names(alloc)
+      m_type_class_names(alloc), m_attr_class_names(alloc), m_location_class_names(alloc), m_attr_values(alloc),
+      m_files(alloc), m_dialects(&m_arena), m_op_infos(&m_arena), m_type_classes(&m_arena), m_attr_classes(&m_arena),
+      m_location_classes(&m_arena), m_interface_names(alloc)
 {
 }
 
@@ -45,6 +63,64 @@ containers::StringView Context::op_name(OpId id) const noexcept
     return containers::StringView{};
 }
 
+// ── CEIR-8a open-world type classes (ADR-0111) — intern/reverse-lookup mirroring intern_op/op_name exactly ──
+TypeClassId Context::intern_type_class(containers::StringView dialect, containers::StringView cls)
+{
+    char        buf[256]; // "dialect.class" on the stack for hashing; class names are short (matches intern_op)
+    usize       k = 0;
+    const usize n = dialect.size() + 1U + cls.size();
+    CRD_ASSERT_MSG(n < sizeof(buf), "intern_type_class: dialect.class too long");
+    for (usize i = 0; i < dialect.size(); ++i) { buf[k++] = dialect[i]; }
+    buf[k++] = '.';
+    for (usize i = 0; i < cls.size(); ++i) { buf[k++] = cls[i]; }
+    buf[k] = '\0';
+
+    const u64 h = containers::hash_string(buf, n);
+    for (usize i = 0; i < m_type_class_names.size(); ++i)
+    {
+        if (m_type_class_names[i].hash == h) { return TypeClassId{h}; } // already interned — no churn
+    }
+    char* const stored = static_cast<char*>(m_arena.allocate(n + 1U, 1U));
+    for (usize i = 0; i <= n; ++i) { stored[i] = buf[i]; }
+    m_type_class_names.push_back(OpName{h, containers::StringView(stored, n)});
+    return TypeClassId{h};
+}
+
+containers::StringView Context::type_class_name(TypeClassId id) const noexcept
+{
+    for (usize i = 0; i < m_type_class_names.size(); ++i)
+    {
+        if (m_type_class_names[i].hash == id.value) { return m_type_class_names[i].name; }
+    }
+    return containers::StringView{};
+}
+
+const TypeClassInfo* Context::type_class_info(TypeClassId id) const noexcept
+{
+    TypeClassInfo* const* slot = m_type_classes.find(id.value);
+    return slot != nullptr ? *slot : nullptr; // nullptr ⇒ unregistered ⇒ preserve opaquely (U-§56)
+}
+
+bool Context::verify_extern(const Type& t) const noexcept
+{
+    const TypeClassInfo* const info = type_class_info(t.type_class);
+    if (info == nullptr || info->verify == nullptr) { return true; } // unregistered / no hook ⇒ preserve (U-§56)
+    return info->verify(*this, t);
+}
+
+TypeId Context::type_extern(TypeClassId cls, const Type& params)
+{
+    Type t       = params; // the caller's slots (members/count/cols/is_signed/fkind/name/labels)
+    t.kind       = TypeKind::Extern;
+    t.type_class = cls;
+    // A registered class stamps its CURRENT schema version (authoritative); an unregistered class keeps the caller's
+    // (the decoder path sets it from the blob for a preserved unknown type — this factory path is for known classes).
+    if (const TypeClassInfo* const info = type_class_info(cls)) { t.type_class_version = info->version; }
+    // ⛔ the FACTORY boundary asserts (builder misuse = programmer error); the decoder/parser use verify_extern + reject.
+    CRD_ASSERT_MSG(verify_extern(t), "type_extern: the type-class verify hook rejected this instance");
+    return intern_type(t);
+}
+
 Module* Context::create_module(RegionKind body_kind)
 {
     Module* const m = memory::construct<Module>(m_arena);
@@ -63,12 +139,235 @@ containers::StringView Context::intern_symbol(containers::StringView name)
 
 AttrId Context::intern_attr(const AttrValue& v)
 {
+    // ⛔ CEIR-8b: only a CANONICAL value enters the table (every field a kind does not use is default) — a non-canonical
+    // one would intern distinctly / serialize divergently (the intern_type house guard, extended to attributes).
+    CRD_ASSERT_MSG(attr_is_canonical(v), "intern_attr: non-canonical attribute value");
     for (usize i = 0; i < m_attr_values.size(); ++i)
     {
-        if (m_attr_values[i] == v) { return AttrId{static_cast<u32>(i + 1U)}; } // dedup by value
+        if (m_attr_values[i] == v) { return AttrId{static_cast<u32>(i + 1U)}; } // dedup by value (element-wise for aggregates)
     }
-    m_attr_values.push_back(v);
+    AttrValue stored = v;
+    // deep-stabilize the borrowed aggregate spans into the arena (like intern_type's child span); scalars/wrappers carry
+    // no span. Keys are interned so their StringViews are arena-stable.
+    if (v.elems.size() > 0U)
+    {
+        auto* const e = static_cast<AttrId*>(m_arena.allocate(v.elems.size() * sizeof(AttrId), alignof(AttrId)));
+        for (usize i = 0; i < v.elems.size(); ++i) { e[i] = v.elems[i]; }
+        stored.elems = containers::ConstSpan<AttrId>(e, v.elems.size());
+    }
+    if (v.keys.size() > 0U)
+    {
+        auto* const k = static_cast<containers::StringView*>(
+            m_arena.allocate(v.keys.size() * sizeof(containers::StringView), alignof(containers::StringView)));
+        for (usize i = 0; i < v.keys.size(); ++i) { k[i] = intern_symbol(v.keys[i]); }
+        stored.keys = containers::ConstSpan<containers::StringView>(k, v.keys.size());
+    }
+    m_attr_values.push_back(stored);
     return AttrId{static_cast<u32>(m_attr_values.size())}; // index + 1 (0 = invalid)
+}
+
+AttrId Context::attr_dict(containers::ConstSpan<containers::StringView> keys, containers::ConstSpan<AttrId> values)
+{
+    CRD_ASSERT_MSG(keys.size() == values.size(), "attr_dict: keys/values length mismatch");
+    // canonicalize: SORT (key, value) pairs by key byte-order (one representation for dedup + content-hash stability;
+    // authored key order is not semantic). Insertion sort — dicts are small. A duplicate key trips attr_is_canonical.
+    containers::Array<containers::StringView> ks(allocator());
+    containers::Array<AttrId>                 vs(allocator());
+    for (usize i = 0; i < keys.size(); ++i)
+    {
+        ks.push_back(keys[i]);
+        vs.push_back(values[i]);
+    }
+    for (usize i = 1; i < ks.size(); ++i)
+    {
+        const containers::StringView kk = ks[i];
+        const AttrId                 vv = vs[i];
+        usize                        j  = i;
+        while (j > 0U && sv_less(kk, ks[j - 1U]))
+        {
+            ks[j] = ks[j - 1U];
+            vs[j] = vs[j - 1U];
+            --j;
+        }
+        ks[j] = kk;
+        vs[j] = vv;
+    }
+    return intern_attr(AttrValue::of_dict(containers::ConstSpan<containers::StringView>(ks.data(), ks.size()),
+                                          containers::ConstSpan<AttrId>(vs.data(), vs.size())));
+}
+
+AttrId Context::attr_typed(TypeId ty, AttrId value)
+{
+    const AttrValue v = AttrValue::of_typed_const(ty, value);
+    CRD_ASSERT_MSG(verify_attr_extern(v), "attr_typed: the payload must not itself be a wrapper (composition rule)");
+    return intern_attr(v);
+}
+
+AttrId Context::attr_extern(AttrClassId cls, AttrId value)
+{
+    u32 ver = 0U;
+    if (const AttrClassInfo* const info = attr_class_info(cls)) { ver = info->version; } // registered class stamps its version
+    const AttrValue v = AttrValue::of_extern(cls, ver, value);
+    CRD_ASSERT_MSG(verify_attr_extern(v), "attr_extern: the class verify hook rejected the value (or a wrapper payload)");
+    return intern_attr(v);
+}
+
+// ── CEIR-8b open-world attribute classes (ADR-0112) — intern/reverse-lookup/descriptor, mirroring the type-class set ──
+AttrClassId Context::intern_attr_class(containers::StringView dialect, containers::StringView cls)
+{
+    char        buf[256];
+    usize       k = 0;
+    const usize n = dialect.size() + 1U + cls.size();
+    CRD_ASSERT_MSG(n < sizeof(buf), "intern_attr_class: dialect.attr too long");
+    for (usize i = 0; i < dialect.size(); ++i) { buf[k++] = dialect[i]; }
+    buf[k++] = '.';
+    for (usize i = 0; i < cls.size(); ++i) { buf[k++] = cls[i]; }
+    buf[k] = '\0';
+    const u64 h = containers::hash_string(buf, n);
+    for (usize i = 0; i < m_attr_class_names.size(); ++i)
+    {
+        if (m_attr_class_names[i].hash == h) { return AttrClassId{h}; }
+    }
+    char* const stored = static_cast<char*>(m_arena.allocate(n + 1U, 1U));
+    for (usize i = 0; i <= n; ++i) { stored[i] = buf[i]; }
+    m_attr_class_names.push_back(OpName{h, containers::StringView(stored, n)});
+    return AttrClassId{h};
+}
+
+containers::StringView Context::attr_class_name(AttrClassId id) const noexcept
+{
+    for (usize i = 0; i < m_attr_class_names.size(); ++i)
+    {
+        if (m_attr_class_names[i].hash == id.value) { return m_attr_class_names[i].name; }
+    }
+    return containers::StringView{};
+}
+
+const AttrClassInfo* Context::attr_class_info(AttrClassId id) const noexcept
+{
+    AttrClassInfo* const* slot = m_attr_classes.find(id.value);
+    return slot != nullptr ? *slot : nullptr; // nullptr ⇒ unregistered ⇒ preserve opaquely (U-§56)
+}
+
+bool Context::verify_attr_extern(const AttrValue& v) const noexcept
+{
+    // ⛔ the WRAPPER gate: a wrapper's payload must not itself be a wrapper (the qty<qty> composition rule) — for BOTH
+    // TypedConst and Extern; then the Extern class's verify hook (unregistered/no-hook ⇒ preserve, U-§56).
+    if (v.kind == AttrKind::TypedConst || v.kind == AttrKind::Extern)
+    {
+        const AttrValue pv = attr_value(v.payload);
+        if (pv.kind == AttrKind::TypedConst || pv.kind == AttrKind::Extern) { return false; }
+    }
+    if (v.kind == AttrKind::Extern)
+    {
+        const AttrClassInfo* const info = attr_class_info(v.attr_class);
+        if (info != nullptr && info->verify != nullptr) { return info->verify(*this, v); }
+    }
+    return true;
+}
+
+// ── CEIR-8c open-world effect-LOCATION classes (ADR-0113) — intern/reverse-lookup/descriptor, mirroring the attr-class
+// set; plus the effective-resource-class rule the hazard analysis consults ──
+LocationClassId Context::intern_location_class(containers::StringView dialect, containers::StringView cls)
+{
+    char        buf[256];
+    usize       k = 0;
+    const usize n = dialect.size() + 1U + cls.size();
+    CRD_ASSERT_MSG(n < sizeof(buf), "intern_location_class: dialect.location too long");
+    for (usize i = 0; i < dialect.size(); ++i) { buf[k++] = dialect[i]; }
+    buf[k++] = '.';
+    for (usize i = 0; i < cls.size(); ++i) { buf[k++] = cls[i]; }
+    buf[k] = '\0';
+    const u64 h = containers::hash_string(buf, n);
+    for (usize i = 0; i < m_location_class_names.size(); ++i)
+    {
+        if (m_location_class_names[i].hash == h) { return LocationClassId{h}; }
+    }
+    char* const stored = static_cast<char*>(m_arena.allocate(n + 1U, 1U));
+    for (usize i = 0; i <= n; ++i) { stored[i] = buf[i]; }
+    m_location_class_names.push_back(OpName{h, containers::StringView(stored, n)});
+    return LocationClassId{h};
+}
+
+containers::StringView Context::location_class_name(LocationClassId id) const noexcept
+{
+    for (usize i = 0; i < m_location_class_names.size(); ++i)
+    {
+        if (m_location_class_names[i].hash == id.value) { return m_location_class_names[i].name; }
+    }
+    return containers::StringView{};
+}
+
+const LocationClassInfo* Context::location_class_info(LocationClassId id) const noexcept
+{
+    LocationClassInfo* const* slot = m_location_classes.find(id.value);
+    return slot != nullptr ? *slot : nullptr; // nullptr ⇒ unregistered ⇒ maximally-conflicting (Universe) in the analysis
+}
+
+ResourceClass Context::effect_resource_class(const EffectRecord& e) const noexcept
+{
+    if (e.target == EffectTarget::Extern)
+    {
+        const LocationClassInfo* const info = location_class_info(e.location_class);
+        // ⛔ EMPTY≠UNKNOWN: an UNREGISTERED Extern location conflicts with EVERYTHING (never inert), so a plugin
+        // location whose class this loader does not know is scheduled maximally conservatively.
+        return info != nullptr ? info->resource_class : ResourceClass::Universe;
+    }
+    return effect_access(e.family).klass; // None/Operand/Result + the built-in kinds use the family's class (8c)
+}
+
+bool Context::effect_location_valid(const EffectRecord& e) const noexcept
+{
+    if (e.target != EffectTarget::Extern) { return true; }
+    const LocationClassInfo* const info = location_class_info(e.location_class);
+    if (info != nullptr && info->verify != nullptr) { return info->verify(*this, e); }
+    return true; // unregistered / no hook ⇒ preserve (the analysis treats an unregistered class as Universe)
+}
+
+// ── CEIR-8d (ADR-0114) stable semantic identity — module-scoped, pre-order, idempotent assignment ──
+void Context::stable_id_scan_max(Region* r, u64& mx) const noexcept
+{
+    if (r == nullptr) { return; }
+    for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
+    {
+        for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+        {
+            if (op->m_stable_id.value > mx) { mx = op->m_stable_id.value; }
+            for (u32 i = 0; i < op->num_regions(); ++i) { stable_id_scan_max(op->region(i), mx); }
+        }
+    }
+}
+void Context::stable_id_assign_unset(Region* r, u64& next) const noexcept
+{
+    if (r == nullptr) { return; }
+    for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
+    {
+        for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+        {
+            if (!op->m_stable_id.valid()) { op->m_stable_id = StableId{next++}; } // one-time; never re-derive an assigned id
+            for (u32 i = 0; i < op->num_regions(); ++i) { stable_id_assign_unset(op->region(i), next); }
+        }
+    }
+}
+void Context::assign_stable_ids(const Module& m) const noexcept
+{
+    u64 mx = 0U;
+    stable_id_scan_max(m.body(), mx); // max of the CURRENT ids (pure function of existing ids + pre-order)
+    // ⛔ CEIR-8d id-reuse guard (advisor pre-close): draw NEW ids from the WATERMARK too, not just the live max — a
+    // tombstoned (erased) op is invisible to the scan, so without this a later op would reuse the dead op's id and the
+    // §2.7 delete/re-add discriminator would silently pass (state corruption). Identity is monotone per module.
+    if (m.m_stable_id_watermark > mx) { mx = m.m_stable_id_watermark; }
+    u64 next = mx + 1U;
+    stable_id_assign_unset(m.body(), next);
+    m.m_stable_id_watermark = next - 1U; // the new high-water mark (>= the old one — monotone)
+}
+void Context::set_stable_id(Operation* op, StableId id) noexcept
+{
+    if (op != nullptr) { op->m_stable_id = id; } // deserialization-only (the STID loader); Context is a friend of Operation
+}
+void Context::set_stable_id_watermark(Module* m, u64 watermark) noexcept
+{
+    if (m != nullptr) { m->m_stable_id_watermark = watermark; } // deserialization-only: restore the monotone high-water mark
 }
 
 AttrValue Context::attr_value(AttrId id) const noexcept
@@ -866,7 +1165,7 @@ bool Context::op_region_exec(const Operation& op, RegionExec& out) const noexcep
 }
 
 // ── §34 callee-derived effects (CEIR-5c): the CEIR-4a EffectsFn landing ──
-void Context::collect_effective_mask(const Operation& op, const EffectQuery& q, u32& mask) const
+void Context::collect_effective_mask(const Operation& op, const EffectQuery& q, u64& mask) const
 {
     const OpInfo* const info = op_info(op.kind());
     // An INSTANCE-dependent hook (func.call) OVERRIDES the static records — but only when we can resolve (a table is
@@ -883,7 +1182,7 @@ void Context::collect_effective_mask(const Operation& op, const EffectQuery& q, 
     for (u32 i = 0; i < info->num_effects; ++i) { mask |= effect_family_bit(info->effects[i].family); }
 }
 
-void Context::collect_region_effective_mask(const Region& r, const EffectQuery& q, u32& mask) const
+void Context::collect_region_effective_mask(const Region& r, const EffectQuery& q, u64& mask) const
 {
     for (Block* b = r.first_block(); b != nullptr; b = b->next_in_region())
     {
@@ -903,7 +1202,7 @@ void Context::effective_effects(const Operation& op, const SymbolTable& table, c
 {
     containers::HashMap<const Operation*, u8> visited(allocator()); // the recursion cycle guard (per query)
     const EffectQuery                         q{&table, &visited};
-    u32                                       mask = 0U;
+    u64                                       mask = 0U;
     collect_effective_mask(op, q, mask);
     // Emit one AMBIENT record per set family bit (ascending §26 ordinal — deterministic). Resource identity is dropped
     // to whole-class at the call boundary (a callee's operand/result target is meaningless at the call site).
@@ -994,13 +1293,17 @@ struct ResolvedAccess
     const OpInfo* const info = ctx.op_info(op.kind());
     if (info == nullptr) { return {ResourceClass::Universe, true, true, nullptr, 0U}; } // unknown ⇒ maximally effectful
     const EffectRecord& e = info->effects[i];
-    const EffectAccess  a = effect_access(e.family);
+    const EffectAccess  a = effect_access(e.family); // read/write is the FAMILY's; the class may be the LOCATION's (8c)
     // ambient (target None) ⇒ whole class; an OUT-OF-RANGE index on a malformed instance also degrades to whole-class
-    // (nullptr) — the CONSERVATIVE direction (more hazards, never fewer).
+    // (nullptr) — the CONSERVATIVE direction (more hazards, never fewer). CEIR-8c: the built-in location kinds beyond
+    // Operand/Result (BufferRange..Net, Extern) carry no operand-position identity yet (named-forward to 8d), so they
+    // resolve to whole-class here too.
     const Value* res = nullptr;
     if (e.target == EffectTarget::Operand && e.index < op.num_operands()) { res = op.operand(e.index); }
     else if (e.target == EffectTarget::Result && e.index < op.num_results()) { res = op.result(e.index); }
-    return {a.klass, a.reads, a.writes, res, e.range_mask};
+    // CEIR-8c: an Extern location's class comes from its registered descriptor (Universe if UNREGISTERED — EMPTY≠UNKNOWN,
+    // maximally conflicting); every other target uses the family's class. `effect_resource_class` encapsulates the rule.
+    return {ctx.effect_resource_class(e), a.reads, a.writes, res, e.range_mask};
 }
 // Two accesses conflict iff both touch a resource, ≥1 writes, the resources overlap (Universe on either side, or the same
 // class with aliasing Values — where a null Value is the whole class), and the ranges overlap. ⛔ distinct Values are

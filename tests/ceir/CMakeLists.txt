@@ -31,6 +31,11 @@ add_executable(crd-ceir-tests
     test_band5_gate.cpp # CEIR-5z: BAND-5 GATE - a pinned program (loop + switch + calls + state accumulator) executes byte-identically builder == text-parsed
     test_async.cpp    # CEIR-6a: ceir.async ops (sec 37) + the sec 116 use-once token-misuse verifier + the audio Synchronization flip
     test_program_asset.cpp # CEIR-7a: the sec 105-107 program-as-asset metadata - interface hash, dependency record, strict cook-time registration check
+    test_extern_type.cpp # CEIR-8a: the open-world type model (ADR-0111) - dialect-defined type-classes behind TypeKind::Extern, zero central-enum edits
+    test_extern_attr.cpp # CEIR-8b: the open-world attribute model (ADR-0112) - aggregate/wrapper kinds + dialect attr-classes behind AttrKind::Extern, zero central-enum edits
+    test_effect_open.cpp # CEIR-8c: effect family widening (u32->u64) + the open-world effect-location model (ADR-0113) - dialect location-classes behind EffectTarget::Extern
+    test_stable_id.cpp   # CEIR-8d: content-independent stable semantic identity (ADR-0114) - per-op StableId, STID chunk, content-hash id-independence, reorder-invariant state schema
+    test_interface_typed.cpp # CEIR-8e: trait/interface split (ADR-0115) - closed core traits (kKnownTraitsMask guard) + the typed open-world op-interface surface (CostInterface, FNV InterfaceId)
     ${CEIR_GENERATED_TESTS} # CEIR-2d: generated per-dialect smoke tests (auto-grow as dialects/ops are added)
 )
 

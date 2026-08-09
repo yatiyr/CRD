@@ -24,6 +24,7 @@ constexpr u32 kChunkType = make_fourcc('T', 'Y', 'P', 'E'); // interned type poo
 constexpr u32 kChunkSrcm = make_fourcc('S', 'R', 'C', 'M'); // source-file map (indices into STRP)
 constexpr u32 kChunkAttr = make_fourcc('A', 'T', 'T', 'R'); // attribute-value pool (of_type refs the TYPE pool)
 constexpr u32 kChunkBody = make_fourcc('B', 'O', 'D', 'Y'); // the region graph
+constexpr u32 kChunkStid = make_fourcc('S', 'T', 'I', 'D'); // CEIR-8d stable ids (per-op, body pre-order; skippable)
 
 // ── writer helpers (little-endian, field-by-field — every hole is removed by construction) ──
 void put_u8(ByteArray& b, u8 v) { b.push_back(v); }
@@ -104,21 +105,50 @@ public:
     {
     }
 
-    [[nodiscard]] ByteArray run(const Module& module)
+    // `with_stid` = emit the CEIR-8d STID chunk (identity). The content hash builds the blob WITHOUT it (stable_hash
+    // is id-independent — ADR-0114 §2.4), so a no-STID blob is byte-identical to a pre-8d blob ⇒ zero content churn.
+    [[nodiscard]] ByteArray run(const Module& module, bool with_stid)
     {
+        if (with_stid) { m_ctx.assign_stable_ids(module); } // one-time pre-order assignment (idempotent)
         assign_ids(module.body());   // pass 0
         encode_region(module.body()); // pass 1 → fills the pools + m_body
 
         ByteArray out(m_alloc);
         put_u32(out, kBinaryMagic);
         put_u32(out, kBinaryVersion);
-        put_u32(out, 5U); // chunk_count: STRP, TYPE, SRCM, ATTR, BODY
+        put_u32(out, with_stid ? 6U : 5U); // chunk_count: STRP, TYPE, SRCM, ATTR, BODY [, STID]
         emit_strp(out);   // STRP first — TYPE/SRCM/ATTR all reference it by index
         emit_type(out);   // TYPE before ATTR (of_type attr values reference the type pool)
         emit_srcm(out);
         emit_attr(out);
         emit_chunk(out, kChunkBody, m_body);
+        if (with_stid) { emit_stid(out, module); } // LAST: an additive, forward-skippable identity chunk (no version bump)
         return out;
+    }
+
+    // The STID chunk: a u32 op count + one u64 stable id per op, in the SAME body pre-order the decoder rebuilds ops in
+    // (so it needs no per-op key). assign_stable_ids ran in `run`, so every op carries a valid id here.
+    void emit_stid(ByteArray& out, const Module& module)
+    {
+        ByteArray p(m_alloc);
+        containers::Array<Operation*> ops(m_alloc);
+        gather_ops(module.body(), ops);
+        put_u32(p, static_cast<u32>(ops.size()));
+        put_u64(p, module.stable_id_watermark()); // CEIR-8d: the monotone high-water mark (prevents post-erase id reuse)
+        for (usize i = 0; i < ops.size(); ++i) { put_u64(p, ops[i]->stable_id().value); }
+        emit_chunk(out, kChunkStid, p);
+    }
+    static void gather_ops(Region* r, containers::Array<Operation*>& out) // pre-order, MATCHING the decoder's rebuild order
+    {
+        if (r == nullptr) { return; }
+        for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
+        {
+            for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+            {
+                out.push_back(op);
+                for (u32 i = 0; i < op->num_regions(); ++i) { gather_ops(op->region(i), out); }
+            }
+        }
     }
 
 private:
@@ -148,15 +178,33 @@ private:
     [[nodiscard]] u32 intern_attr(AttrId id)
     {
         if (const u32* const p = m_attr_index.find(id.value)) { return *p; }
+        const AttrValue v = m_ctx.attr_value(id);
+        // ⛔ CEIR-8b CHILD-FIRST (the intern_type_pool shape): pool every CHILD attr (and its backing strings/types)
+        // BEFORE this record's index is assigned, so an aggregate/wrapper record never references an ATTR index >= its
+        // own (the decoder rejects a forward ref by construction; attrs are a DAG — child-first interning forbids cycles).
+        if (v.kind == AttrKind::Array || v.kind == AttrKind::Dict)
+        {
+            for (usize i = 0; i < v.elems.size(); ++i) { (void)intern_attr(v.elems[i]); }
+        }
+        if (v.kind == AttrKind::Dict)
+        {
+            for (usize i = 0; i < v.keys.size(); ++i) { (void)intern_str(v.keys[i]); }
+        }
+        else if (v.kind == AttrKind::TypedConst)
+        {
+            (void)type_ref(v.wrapped_type);
+            (void)intern_attr(v.payload);
+        }
+        else if (v.kind == AttrKind::Extern)
+        {
+            (void)intern_str(m_ctx.attr_class_name(v.attr_class)); // the class STRING survives to an unregistered decoder
+            (void)intern_attr(v.payload);
+        }
+        else if (v.kind == AttrKind::String || v.kind == AttrKind::SymbolRef) { (void)intern_str(v.s); }
+        else if (v.kind == AttrKind::Type) { (void)type_ref(v.t); }
         const auto idx = static_cast<u32>(m_attr.size());
         m_attr.push_back(id);
         m_attr_index.insert(id.value, idx);
-        // Eagerly pool the value's backing string / type so STRP + TYPE are COMPLETE before any chunk is emitted (both
-        // are written before ATTR). A String/SymbolRef value's text becomes a STRP entry; an of_type value's type
-        // becomes a TYPE-pool entry — the ATTR chunk then references each by index.
-        const AttrValue v = m_ctx.attr_value(id);
-        if (v.kind == AttrKind::String || v.kind == AttrKind::SymbolRef) { (void)intern_str(v.s); }
-        else if (v.kind == AttrKind::Type) { (void)type_ref(v.t); }
         return idx;
     }
     [[nodiscard]] u32 intern_srcm(u32 file_id) // returns the 0-based SRCM index for a (nonzero) file id
@@ -193,6 +241,14 @@ private:
         put_u32(m_type_body, name_strp);
         put_u32(m_type_body, static_cast<u32>(labs.size()));
         for (usize i = 0; i < labs.size(); ++i) { put_u32(m_type_body, labs[i]); }
+        // CEIR-8a (ADR-0111): an Extern record carries a TRAILING class-string (STRP) + schema version — ONLY on
+        // kind==Extern, so pre-8a decoders (which reject the out-of-range Extern kind) are unaffected → NO version bump.
+        // The class STRING (not the runtime id) is what an unregistered decoder round-trips (mirrors op-name encoding).
+        if (t.kind == TypeKind::Extern)
+        {
+            put_u32(m_type_body, intern_str(m_ctx.type_class_name(t.type_class)));
+            put_u32(m_type_body, t.type_class_version);
+        }
         ++m_type_count;
         return idx;
     }
@@ -290,6 +346,29 @@ private:
         case AttrKind::String:                            // both text kinds emit the STRP index (kind byte distinguishes)
         case AttrKind::SymbolRef: put_u32(p, intern_str(v.s)); break;
         case AttrKind::Type:      put_u32(p, type_ref(v.t)); break; // 1-based TYPE-pool ref (0 = none)
+        // ⛔ CEIR-8b: the new fields are written ONLY on the new kinds — the six scalar encodings above are byte-IDENTICAL
+        // to pre-8b, so every existing module's content hash (stable_hash over this blob) is unchanged (no recook).
+        case AttrKind::Array:
+            put_u32(p, static_cast<u32>(v.elems.size()));
+            for (usize i = 0; i < v.elems.size(); ++i) { put_u32(p, intern_attr(v.elems[i])); } // child ATTR-pool indices
+            break;
+        case AttrKind::Dict:
+            put_u32(p, static_cast<u32>(v.keys.size()));
+            for (usize i = 0; i < v.keys.size(); ++i)
+            {
+                put_u32(p, intern_str(v.keys[i]));       // key STRP index
+                put_u32(p, intern_attr(v.elems[i]));     // value ATTR-pool index
+            }
+            break;
+        case AttrKind::TypedConst:
+            put_u32(p, type_ref(v.wrapped_type));        // 1-based TYPE ref
+            put_u32(p, intern_attr(v.payload));          // payload ATTR-pool index
+            break;
+        case AttrKind::Extern:
+            put_u32(p, intern_str(m_ctx.attr_class_name(v.attr_class))); // class STRP index (survives unregistered decode)
+            put_u32(p, v.attr_class_version);
+            put_u32(p, intern_attr(v.payload));
+            break;
         }
     }
 
@@ -333,6 +412,7 @@ public:
         decode_region(m_module->body());
         if (m_ok && !m_bc.ok) { fail(m_body_off + m_bc.pos, "truncated BODY chunk"); }
         resolve_fixups();
+        if (m_ok) { decode_stid(); } // CEIR-8d: apply stable ids AFTER the full body (m_ops is complete + pre-ordered)
         if (!m_ok) { return err_result(); }
         return ParseResult{m_module, true, 0U, ""};
     }
@@ -385,6 +465,7 @@ private:
             else if (fourcc == kChunkSrcm) { m_srcm = payload; m_srcm_off = c.pos; }
             else if (fourcc == kChunkAttr) { m_attr = payload; m_attr_off = c.pos; }
             else if (fourcc == kChunkBody) { m_body = payload; m_body_off = c.pos; m_has_body = true; }
+            else if (fourcc == kChunkStid) { m_stid = payload; m_stid_off = c.pos; m_has_stid = true; } // CEIR-8d
             // else: unknown chunk — skipped by length (forward compatibility)
             c.pos += size;
         }
@@ -427,7 +508,7 @@ private:
             const u32 count     = c.u32v();
             const u32 cols      = c.u32v();
             if (!c.ok) { fail(m_type_off + c.pos, "truncated TYPE record"); return false; }
-            if (kind > static_cast<u8>(TypeKind::Qualified)) { fail(m_type_off + c.pos, "invalid type kind"); return false; }
+            if (kind > static_cast<u8>(TypeKind::Extern)) { fail(m_type_off + c.pos, "invalid type kind"); return false; }
             if (fk > static_cast<u8>(FloatKind::F8E5M2)) { fail(m_type_off + c.pos, "invalid float kind"); return false; }
             // keyword-table-mapped scalars must be in range (else the printer maps them to nothing — silently lossy).
             // FREE numerics (int width, vector/array count) stay unbounded: `!i7` legitimately round-trips.
@@ -477,6 +558,31 @@ private:
                 if (sidx >= m_strings.size()) { fail(m_type_off + c.pos, "TYPE label index out of range"); return false; }
                 labs.push_back(m_strings[sidx]);
             }
+            // CEIR-8a (ADR-0111): an Extern record's trailing class-string + version. The class STRING is resolved to an
+            // interned TypeClassId in THIS Context (late-bind — works even if the class is not registered here → preserve).
+            TypeClassId ext_class{};
+            u32         ext_version = 0U;
+            if (kind == static_cast<u8>(TypeKind::Extern))
+            {
+                const u32 cls_strp = c.u32v();
+                ext_version        = c.u32v();
+                if (!c.ok) { fail(m_type_off + c.pos, "truncated Extern TYPE record"); return false; }
+                if (cls_strp >= m_strings.size()) { fail(m_type_off + c.pos, "Extern class index out of range"); return false; }
+                const containers::StringView cn = m_strings[cls_strp];
+                usize                        dot   = 0;
+                bool                         found = false;
+                for (usize di = 0; di < cn.size(); ++di)
+                {
+                    if (cn[di] == '.') { dot = di; found = true; break; }
+                }
+                if (!found || dot == 0U || dot + 1U >= cn.size())
+                {
+                    fail(m_type_off + c.pos, "Extern class name must be 'dialect.class'");
+                    return false;
+                }
+                ext_class = m_ctx.intern_type_class(containers::StringView(cn.data(), dot),
+                                                    containers::StringView(cn.data() + dot + 1U, cn.size() - dot - 1U));
+            }
             Type t;
             t.kind      = static_cast<TypeKind>(kind);
             t.is_signed = is_signed != 0U;
@@ -486,6 +592,8 @@ private:
             t.members   = containers::ConstSpan<TypeId>(kids.data(), kids.size());
             t.name      = m_strings[name_strp];
             t.labels    = containers::ConstSpan<containers::StringView>(labs.data(), labs.size());
+            t.type_class         = ext_class;   // 0 unless Extern (CEIR-8a)
+            t.type_class_version = ext_version; // 0 unless Extern
             // ⛔ per-kind arity/parity: a hand-crafted record (e.g. a Vector with 0 children, a Callable whose param
             // count exceeds its members) would drive an out-of-bounds members[i] in any later consumer — reject it here.
             // CANONICAL subsumes well-formedness (arity) AND rejects junk in an ignored field (a name on an Int, an
@@ -518,6 +626,23 @@ private:
             {
                 fail(m_type_off + c.pos, "this type cannot be ownership-qualified");
                 return false;
+            }
+            // CEIR-8a (ADR-0111 §2.4/§2.5): a REGISTERED class range-checks the schema version (a NEWER record than the
+            // loader's class = reject — declared-words-validated) + runs its verify hook; an UNREGISTERED class preserves
+            // opaquely (verify_extern returns true). This is the tri-split DECODER arm for Extern (reject, not assert).
+            if (t.kind == TypeKind::Extern)
+            {
+                if (const TypeClassInfo* const info = m_ctx.type_class_info(t.type_class); info != nullptr
+                    && t.type_class_version > info->version)
+                {
+                    fail(m_type_off + c.pos, "Extern record is a newer class schema version than this loader knows");
+                    return false;
+                }
+                if (!m_ctx.verify_extern(t))
+                {
+                    fail(m_type_off + c.pos, "Extern type-class verify hook rejected the record");
+                    return false;
+                }
             }
             m_types_decoded.push_back(m_ctx.intern_type(t));
         }
@@ -581,6 +706,93 @@ private:
                 const TypeId ty = type_from_ref(ref, m_attr_off + c.pos);
                 if (!m_ok) { return false; }
                 id = m_ctx.attr_type(ty);
+            }
+            // ── CEIR-8b (ADR-0112) aggregate + wrapper kinds. Child ATTR-pool refs are child-first (ref < i, already
+            // decoded); a forward/self ref is malformed and rejected. Each record is re-interned into the decode Context
+            // (deep-copying the spans). The canonical + verify + version checks are the tri-split DECODER arm. ──
+            else if (kind == static_cast<u8>(AttrKind::Array))
+            {
+                const u32 ne = c.u32v();
+                if (!c.ok) { fail(m_attr_off + c.pos, "truncated ATTR array record"); return false; }
+                if (ne > kMaxDecodeCount) { fail(m_attr_off + c.pos, "ATTR array element count exceeds the cap"); return false; }
+                if (!c.have(static_cast<u64>(ne) * 4U)) { fail(m_attr_off + c.pos, "ATTR array elements overrun the chunk"); return false; }
+                containers::Array<AttrId> es(m_ctx.allocator());
+                for (u32 e = 0; e < ne; ++e)
+                {
+                    const u32 ref = c.u32v();
+                    if (static_cast<usize>(ref) >= m_attrs.size()) { fail(m_attr_off + c.pos, "ATTR array element references a forward/self index"); return false; }
+                    es.push_back(m_attrs[ref]); // child-first: ref < i is already decoded
+                }
+                const AttrValue v = AttrValue::of_array(containers::ConstSpan<AttrId>(es.data(), es.size()));
+                if (!attr_is_canonical(v)) { fail(m_attr_off + c.pos, "non-canonical ATTR array record"); return false; }
+                id = m_ctx.intern_attr(v);
+            }
+            else if (kind == static_cast<u8>(AttrKind::Dict))
+            {
+                const u32 nd = c.u32v();
+                if (!c.ok) { fail(m_attr_off + c.pos, "truncated ATTR dict record"); return false; }
+                if (nd > kMaxDecodeCount) { fail(m_attr_off + c.pos, "ATTR dict entry count exceeds the cap"); return false; }
+                if (!c.have(static_cast<u64>(nd) * 8U)) { fail(m_attr_off + c.pos, "ATTR dict entries overrun the chunk"); return false; }
+                containers::Array<containers::StringView> ks(m_ctx.allocator());
+                containers::Array<AttrId>                 vs(m_ctx.allocator());
+                for (u32 e = 0; e < nd; ++e)
+                {
+                    const u32 sidx = c.u32v();
+                    const u32 ref  = c.u32v();
+                    if (sidx >= m_strings.size()) { fail(m_attr_off + c.pos, "ATTR dict key index out of range"); return false; }
+                    if (static_cast<usize>(ref) >= m_attrs.size()) { fail(m_attr_off + c.pos, "ATTR dict value references a forward/self index"); return false; }
+                    ks.push_back(m_strings[sidx]);
+                    vs.push_back(m_attrs[ref]);
+                }
+                // Build DIRECTLY (not Context::attr_dict, which re-sorts) so a hand-crafted UNSORTED dict is rejected by
+                // attr_is_canonical rather than silently repaired — the on-disk order must already be canonical.
+                const AttrValue v = AttrValue::of_dict(containers::ConstSpan<containers::StringView>(ks.data(), ks.size()),
+                                                       containers::ConstSpan<AttrId>(vs.data(), vs.size()));
+                if (!attr_is_canonical(v)) { fail(m_attr_off + c.pos, "non-canonical or unsorted ATTR dict record"); return false; }
+                id = m_ctx.intern_attr(v);
+            }
+            else if (kind == static_cast<u8>(AttrKind::TypedConst))
+            {
+                const u32 tref = c.u32v();
+                const u32 pref = c.u32v();
+                if (!c.ok) { fail(m_attr_off + c.pos, "truncated ATTR typed-const record"); return false; }
+                const TypeId ty = type_from_ref(tref, m_attr_off + c.pos);
+                if (!m_ok) { return false; }
+                if (static_cast<usize>(pref) >= m_attrs.size()) { fail(m_attr_off + c.pos, "ATTR typed-const payload references a forward/self index"); return false; }
+                const AttrValue v = AttrValue::of_typed_const(ty, m_attrs[pref]);
+                if (!attr_is_canonical(v)) { fail(m_attr_off + c.pos, "non-canonical ATTR typed-const record"); return false; }
+                if (!m_ctx.verify_attr_extern(v)) { fail(m_attr_off + c.pos, "ATTR typed-const payload must not itself be a wrapper"); return false; }
+                id = m_ctx.intern_attr(v);
+            }
+            else if (kind == static_cast<u8>(AttrKind::Extern))
+            {
+                const u32 cls_strp = c.u32v();
+                const u32 version  = c.u32v();
+                const u32 pref     = c.u32v();
+                if (!c.ok) { fail(m_attr_off + c.pos, "truncated ATTR extern record"); return false; }
+                if (cls_strp >= m_strings.size()) { fail(m_attr_off + c.pos, "ATTR extern class index out of range"); return false; }
+                if (static_cast<usize>(pref) >= m_attrs.size()) { fail(m_attr_off + c.pos, "ATTR extern payload references a forward/self index"); return false; }
+                const containers::StringView cn = m_strings[cls_strp]; // the class STRING is what an unregistered decoder round-trips
+                usize                        dot   = 0;
+                bool                         found = false;
+                for (usize di = 0; di < cn.size(); ++di)
+                {
+                    if (cn[di] == '.') { dot = di; found = true; break; }
+                }
+                if (!found || dot == 0U || dot + 1U >= cn.size()) { fail(m_attr_off + c.pos, "ATTR extern class name must be 'dialect.attr'"); return false; }
+                const AttrClassId cls = m_ctx.intern_attr_class(containers::StringView(cn.data(), dot),
+                                                                containers::StringView(cn.data() + dot + 1U, cn.size() - dot - 1U));
+                const AttrValue v = AttrValue::of_extern(cls, version, m_attrs[pref]);
+                if (!attr_is_canonical(v)) { fail(m_attr_off + c.pos, "non-canonical ATTR extern record"); return false; }
+                // a REGISTERED class range-checks its schema version (a NEWER record than this loader knows = reject) and
+                // runs its verify hook (+ the wrapper-composition gate); an UNREGISTERED class preserves opaquely (U-§56).
+                if (const AttrClassInfo* const info = m_ctx.attr_class_info(cls); info != nullptr && version > info->version)
+                {
+                    fail(m_attr_off + c.pos, "ATTR extern record is a newer class schema version than this loader knows");
+                    return false;
+                }
+                if (!m_ctx.verify_attr_extern(v)) { fail(m_attr_off + c.pos, "ATTR extern class verify hook rejected the record"); return false; }
+                id = m_ctx.intern_attr(v);
             }
             else { fail(m_attr_off + c.pos, "unknown attribute kind"); return false; }
             m_attrs.push_back(id);
@@ -700,6 +912,8 @@ private:
             kind, containers::ConstSpan<Value*>(operand_vals.data(), operand_vals.size()), num_results, result0,
             num_regions);
         b->append(op);
+        m_ops.push_back(op); // CEIR-8d: collect ops in pre-order (BEFORE the region recursion) — MATCHES the encoder's
+                             // gather_ops order, so decode_stid can zip stable ids onto ops by index.
         for (u32 i = 0; i < num_results; ++i) { register_value(op->result(i)); }
         for (usize i = 0; i < operand_ids.size(); ++i)
         {
@@ -736,6 +950,32 @@ private:
         }
     }
 
+    // CEIR-8d: apply the STID chunk's stable ids onto the decoded ops (pre-order, zipped by index). ⛔ build-raw-graceful
+    // reject (the 8b scar): a 0 id, a duplicate id, a count ≠ the decoded op count, or a truncated chunk are all
+    // MALFORMED — reject, never assert. A pre-8d blob (no STID) leaves ops at id 0 (assigned lazily on the next persist).
+    void decode_stid() noexcept
+    {
+        if (!m_has_stid) { return; }
+        Cursor    c{m_stid};
+        const u32 n         = c.u32v();
+        const u64 watermark = c.u64v(); // CEIR-8d: the monotone high-water mark (restored so a post-load edit can't reuse)
+        if (!c.ok) { fail(m_stid_off + c.pos, "truncated STID chunk"); return; }
+        if (static_cast<usize>(n) != m_ops.size()) { fail(m_stid_off + c.pos, "STID op count does not match the BODY"); return; }
+        if (!c.have(static_cast<u64>(n) * 8U)) { fail(m_stid_off + c.pos, "STID ids overrun the chunk"); return; }
+        containers::HashMap<u64, u8> seen(m_ctx.allocator());
+        for (u32 i = 0; i < n; ++i)
+        {
+            const u64 id = c.u64v();
+            if (id == 0U) { fail(m_stid_off + c.pos, "STID contains an invalid (0) stable id"); return; }
+            if (id > watermark) { fail(m_stid_off + c.pos, "STID id exceeds the watermark"); return; } // monotone invariant
+            if (seen.find(id) != nullptr) { fail(m_stid_off + c.pos, "STID contains a duplicate stable id"); return; }
+            seen.insert(id, 1U);
+            m_ctx.set_stable_id(m_ops[i], StableId{id});
+        }
+        if (!c.ok) { fail(m_stid_off + c.pos, "truncated STID chunk"); return; }
+        m_ctx.set_stable_id_watermark(m_module, watermark);
+    }
+
     struct Fixup
     {
         Operation* op  = nullptr;
@@ -754,19 +994,23 @@ private:
     containers::ConstSpan<u8> m_srcm;
     containers::ConstSpan<u8> m_attr;
     containers::ConstSpan<u8> m_body;
+    containers::ConstSpan<u8> m_stid; // CEIR-8d stable ids (optional chunk)
     u64                       m_strp_off = 0;
     u64                       m_type_off = 0;
     u64                       m_srcm_off = 0;
     u64                       m_attr_off = 0;
     u64                       m_body_off = 0;
+    u64                       m_stid_off = 0;
     bool                      m_has_strp = false;
     bool                      m_has_body = false;
+    bool                      m_has_stid = false;
 
     containers::Array<containers::StringView> m_strings;       // STRP → views into the blob
     containers::Array<TypeId>                 m_types_decoded; // TYPE pool idx → decoded TypeId
     containers::Array<u32>                    m_files;         // SRCM idx → target file_id
     containers::Array<AttrId>                 m_attrs;         // ATTR idx → target AttrId
     containers::Array<Value*>                 m_values;  // SSA id → value (creation order)
+    containers::Array<Operation*>             m_ops;     // CEIR-8d: ops in body pre-order (zips with the STID chunk)
     containers::Array<Fixup>                  m_fixups;
 
     Cursor      m_bc; // the BODY read cursor
@@ -779,7 +1023,7 @@ private:
 containers::Array<u8> serialize(Context& ctx, const Module& module, memory::IAllocator* alloc)
 {
     Serializer s(ctx, alloc);
-    return s.run(module);
+    return s.run(module, /*with_stid*/ true); // the full persistent form: content + CEIR-8d identity (STID)
 }
 
 ParseResult deserialize(Context& ctx, containers::ConstSpan<u8> bytes)
@@ -790,7 +1034,11 @@ ParseResult deserialize(Context& ctx, containers::ConstSpan<u8> bytes)
 
 u64 stable_hash(Context& ctx, const Module& module, memory::IAllocator* scratch)
 {
-    const containers::Array<u8> blob = serialize(ctx, module, scratch);
+    // ⛔ CEIR-8d (ADR-0114 §2.4): the CONTENT hash is id-INDEPENDENT — hash the blob WITHOUT the STID chunk. A no-STID
+    // blob is byte-identical to a pre-8d blob, so every existing module's content hash (the cook-cache key) is unchanged
+    // ⇒ ZERO content-hash churn, cache hits survive the migration. Identity lives in serialize()'s STID chunk instead.
+    Serializer                  s(ctx, scratch);
+    const containers::Array<u8> blob = s.run(module, /*with_stid*/ false);
     return containers::fnv1a_64(blob.data(), blob.size());
 }
 } // namespace crd::ceir

@@ -15,6 +15,7 @@
 #include <crd/ceir/dialect.hpp>
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/id.hpp>
+#include <crd/ceir/interface.hpp>
 #include <crd/ceir/ir.hpp>
 #include <crd/ceir/parse.hpp>
 #include <crd/ceir/print.hpp>

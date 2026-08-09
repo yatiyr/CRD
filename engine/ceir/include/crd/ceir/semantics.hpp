@@ -163,8 +163,16 @@ struct RegionExec
     // ⭐ CEIR-6a: `Synchronization` (a BLOCKING wait — ceir.async's await/join/race) joins the forbidden set. A blocking
     // wait in an audio-real-time callback is the priority-inversion bug §32 exists to forbid; band 6 introduces the
     // engine's first blocking waits, so the flip lands with them (not a new "legal-for-now").
+    // ⛔ CEIR-8c (ADR-0113) DELIBERATE classification of the 8 U-§19 families for audio-RT legality — this is the SECOND
+    // family consumer (the -Werror=switch guard does NOT cover this predicate, so each is decided by hand):
+    //   • TransactionBoundary → FORBIDDEN: a commit/rollback can block or run unbounded (the Synchronization rationale).
+    //   • AgentAction        → FORBIDDEN: an agent decision is unbounded external-ish work (the ExternalCall rationale).
+    //   • DocumentRead/Write, ConstraintRead/Write, UIRead/Write → LEGAL: bounded domain-state access, exactly analogous
+    //     to SceneRead/Write · EcsRead/Write · HostStateRead/Write, which are already legal in an audio-RT region. Over-
+    //     forbidding a bounded read/write here would break legitimate real-time patterns, not add safety.
     return !(audio_rt && (f == EffectFamily::FileIO || f == EffectFamily::NetworkIO || f == EffectFamily::ExternalCall ||
-                          f == EffectFamily::Synchronization));
+                          f == EffectFamily::Synchronization || f == EffectFamily::TransactionBoundary ||
+                          f == EffectFamily::AgentAction));
 }
 
 // ── §28 numerical semantics (per-INSTANCE) ── one field per §28 line, verbatim. Each field's 0 = INHERIT (from the mode

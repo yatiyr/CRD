@@ -63,6 +63,10 @@ enum class TypeKind : u8
     Quantity, // `members[0]` = underlying numeric type; the 8 SI base-dimension exponents pack into `count`+`cols`
     // -- ownership / lifetime qualifier (CEIR-3f, §19) --
     Qualified, // `members[0]` = the qualified type; `count` = an OwnershipKind (the §19 ownership/view category)
+    // -- OPEN-WORLD extension (CEIR-8a, ADR-0111) — the ONE-TIME door for dialect-defined type-classes --
+    Extern, // a dialect-defined type-class: `type_class` names it (interned "dialect.class"); parameters ride the
+            // existing slots (`members`/`count`/`cols`/`is_signed`/`fkind`/`name`/`labels`). Every custom type after
+            // this one lands with ZERO further TypeKind edits. The registered class's verify hook owns its arity.
 };
 
 // The §19 ownership/lifetime categories, in §19 order (append at END). A flat MUTUALLY-EXCLUSIVE enum, not a bitmask —
@@ -234,11 +238,13 @@ enum class FloatKind : u8
 // interned (the factory + `intern_type` copy them), so a `Type` handed back by `type_of` outlives the caller.
 struct Type
 {
-    TypeKind  kind      = TypeKind::Bool;
-    bool      is_signed = false;              // Int
-    FloatKind fkind     = FloatKind::F32;     // Float
-    u32       count     = 0;                  // Int: bit width; Vector/Array: element count; Matrix: rows
-    u32       cols      = 0;                  // Matrix: columns
+    TypeKind    kind       = TypeKind::Bool;
+    bool        is_signed  = false;             // Int
+    FloatKind   fkind      = FloatKind::F32;    // Float
+    u32         count      = 0;                 // Int: bit width; Vector/Array: element count; Matrix: rows
+    u32         cols       = 0;                 // Matrix: columns
+    TypeClassId type_class         = {};        // Extern ONLY: the dialect-defined type-class (0 otherwise) — CEIR-8a
+    u32         type_class_version = 0;          // Extern ONLY: the class schema version (preserved for round-trip; 0 else)
     containers::ConstSpan<TypeId>              members; // child types (see the per-kind notes above)
     containers::StringView                     name;    // Struct / Enum type name (empty otherwise)
     containers::ConstSpan<containers::StringView> labels; // Struct field names / Enum case names (empty otherwise)
@@ -253,8 +259,11 @@ struct Type
 
 [[nodiscard]] inline bool operator==(const Type& a, const Type& b) noexcept
 {
+    // ⛔ CEIR-8a landmine: `type_class` MUST participate — two DIFFERENT Extern classes with identical param slots are
+    // DIFFERENT types; omitting it would intern them to one TypeId (silent type confusion). It is 0 for every built-in.
     if (a.kind != b.kind || a.is_signed != b.is_signed || a.fkind != b.fkind || a.count != b.count || a.cols != b.cols
-        || a.name != b.name || a.members.size() != b.members.size() || a.labels.size() != b.labels.size())
+        || a.type_class != b.type_class || a.type_class_version != b.type_class_version || a.name != b.name
+        || a.members.size() != b.members.size() || a.labels.size() != b.labels.size())
     {
         return false;
     }
@@ -329,6 +338,8 @@ struct Type
     case TypeKind::Tensor:
     case TypeKind::SparseTensor: // members = [element, shape]
         return m == 2U && l == 0U;
+    case TypeKind::Extern: // CEIR-8a: a dialect-defined type-class owns its own arity (its registered verify hook) —
+        return true;       // this Context-free check accepts structurally; the class hook is the real arity layer.
     }
     return false;
 }
@@ -341,6 +352,9 @@ struct Type
 [[nodiscard]] inline bool type_is_canonical(const Type& t) noexcept
 {
     if (!type_is_well_formed(t)) { return false; }
+    // ⛔ CEIR-8a: the type-class fields are Extern-ONLY — junk on any other kind prints identically to the real type but
+    // interns as a DISTINCT id (equality includes type_class), the exact "prints-but-differs" hazard this check guards.
+    if (t.kind != TypeKind::Extern && (t.type_class.valid() || t.type_class_version != 0U)) { return false; }
     const bool scalars_default = !t.is_signed && t.fkind == FloatKind::F32 && t.count == 0U && t.cols == 0U;
     switch (t.kind)
     {
@@ -395,6 +409,8 @@ struct Type
         }
         return false; // an out-of-range DimKind
     }
+    case TypeKind::Extern: // CEIR-8a: an Extern MUST name a class (class 0 is nonsense — the factory could be handed {});
+        return t.type_class.valid(); // the registered hook owns the SLOT canonicality (we cannot know which it uses).
     }
     return false;
 }

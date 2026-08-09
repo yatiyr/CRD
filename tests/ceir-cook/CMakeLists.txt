@@ -1,5 +1,6 @@
 add_executable(crd-ceir-cook-tests
-    test_program_cook.cpp # CEIR-7a: cook a module -> a self-describing CRDR blob; round-trip, cross-Context reload, verify-reject, header validation
+    test_program_cook.cpp    # CEIR-7a: cook a module -> a self-describing CRDR blob; round-trip, cross-Context reload, verify-reject, header validation
+    test_runtime_program.cpp # CEIR-7b: RuntimeProgram + generation-safe RuntimeSlot handle; hash-validated load, splice-reject, generation staleness
 )
 
 target_link_libraries(crd-ceir-cook-tests PRIVATE

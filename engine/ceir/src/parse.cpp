@@ -196,6 +196,8 @@ private:
         {
             return m_ctx.type_int(sv_to_uint(head, 1U), head[0] == 'i');
         }
+        // CEIR-8a open-world custom type (ADR-0111): the generic canonical form, parseable WITHOUT the class registered.
+        if (sv_eq(head, "extern")) { return parse_extern(depth); }
         // numeric aggregates
         if (sv_eq(head, "vec"))
         {
@@ -497,6 +499,135 @@ private:
         return {};
     }
 
+    // CEIR-8a: a "dialect.class" token (parse_ident reads the dots) → an interned TypeClassId, split on the FIRST dot.
+    [[nodiscard]] TypeClassId parse_type_class_id() noexcept
+    {
+        const containers::StringView full = parse_ident("expected a type-class name (dialect.class)");
+        if (!m_ok) { return {}; }
+        usize dot   = 0;
+        bool  found = false;
+        for (usize i = 0; i < full.size(); ++i)
+        {
+            if (full[i] == '.')
+            {
+                dot   = i;
+                found = true;
+                break;
+            }
+        }
+        if (!found || dot == 0U || dot + 1U >= full.size())
+        {
+            fail("type-class name must be 'dialect.class'");
+            return {};
+        }
+        return m_ctx.intern_type_class(containers::StringView(full.data(), dot),
+                                       containers::StringView(full.data() + dot + 1U, full.size() - dot - 1U));
+    }
+
+    // A quoted string (CEIR-8a Extern name/labels) — un-escapes '\"'/'\\', interned so the view is arena-stable.
+    [[nodiscard]] containers::StringView parse_quoted() noexcept
+    {
+        skip_ws();
+        if (m_cur >= m_end || *m_cur != '"')
+        {
+            fail("expected a quoted string");
+            return {};
+        }
+        ++m_cur; // opening quote
+        containers::Array<char> buf(m_ctx.allocator());
+        while (m_cur < m_end && *m_cur != '"')
+        {
+            char c = *m_cur;
+            if (c == '\\')
+            {
+                ++m_cur;
+                if (m_cur >= m_end)
+                {
+                    fail("unterminated string escape");
+                    return {};
+                }
+                c = *m_cur;
+            }
+            buf.push_back(c);
+            ++m_cur;
+        }
+        if (m_cur >= m_end)
+        {
+            fail("unterminated string");
+            return {};
+        }
+        ++m_cur; // closing quote
+        return m_ctx.intern_symbol(containers::StringView(buf.data(), buf.size()));
+    }
+
+    // The CEIR-8a generic Extern form: !extern<CLASS,VER,COUNT,COLS,SIGNED,FKIND,"NAME",NMEM,m..,NLAB,"l"..>. Built +
+    // verify_extern-gated (reject, not assert — the parser boundary) + interned. Unregistered classes preserve opaquely.
+    [[nodiscard]] TypeId parse_extern(u32 depth) noexcept
+    {
+        expect('<', "expected '<'");
+        const TypeClassId cls = parse_type_class_id();
+        expect(',', "expected ','");
+        const u32 ver = parse_uint();
+        expect(',', "expected ','");
+        const u32 count = parse_uint();
+        expect(',', "expected ','");
+        const u32 cols = parse_uint();
+        expect(',', "expected ','");
+        const u32 signd = parse_uint();
+        expect(',', "expected ','");
+        const u32 fkindv = parse_uint();
+        expect(',', "expected ','");
+        const containers::StringView name = parse_quoted();
+        expect(',', "expected ','");
+        const u32                 nmem = parse_uint();
+        containers::Array<TypeId> mem(m_ctx.allocator());
+        for (u32 i = 0; i < nmem && m_ok; ++i)
+        {
+            expect(',', "expected ','");
+            mem.push_back(parse_type(depth + 1U));
+        }
+        expect(',', "expected ','");
+        const u32                                 nlab = parse_uint();
+        containers::Array<containers::StringView> labs(m_ctx.allocator());
+        for (u32 i = 0; i < nlab && m_ok; ++i)
+        {
+            expect(',', "expected ','");
+            labs.push_back(parse_quoted());
+        }
+        expect('>', "expected '>'");
+        if (!m_ok) { return {}; }
+        if (signd > 1U || fkindv > static_cast<u32>(FloatKind::F8E5M2))
+        {
+            fail("extern: signed/fkind field out of range");
+            return {};
+        }
+        Type t;
+        t.kind               = TypeKind::Extern;
+        t.type_class         = cls;
+        t.type_class_version = ver;
+        t.count              = count;
+        t.cols               = cols;
+        t.is_signed          = (signd != 0U);
+        t.fkind              = static_cast<FloatKind>(fkindv);
+        t.name               = name;
+        t.members            = containers::ConstSpan<TypeId>(mem.data(), mem.size());
+        t.labels             = containers::ConstSpan<containers::StringView>(labs.data(), labs.size());
+        // version range-check, SYMMETRIC with the binary decoder arm (CEIR-8b symmetry retrofit): a REGISTERED class
+        // rejects a record NEWER than this loader's schema — the text form must agree with the binary form on validity.
+        if (const TypeClassInfo* const info = m_ctx.type_class_info(t.type_class); info != nullptr
+            && t.type_class_version > info->version)
+        {
+            fail("extern: record is a newer class schema version than this loader knows");
+            return {};
+        }
+        if (!m_ctx.verify_extern(t))
+        {
+            fail("extern: the type-class verify hook rejected this instance");
+            return {};
+        }
+        return m_ctx.intern_type(t); // intern deep-copies members + interns labels (the name is already interned)
+    }
+
     // A signed integer: optional '-' then digits. Distinct from parse_uint (which is unsigned) — used by dimension terms.
     [[nodiscard]] i32 parse_signed_int() noexcept
     {
@@ -759,8 +890,13 @@ private:
         expect('}', "expected '}' closing an attribute dict");
     }
 
-    [[nodiscard]] AttrId parse_attr_value() noexcept
+    [[nodiscard]] AttrId parse_attr_value(u32 depth = 0U) noexcept
     {
+        if (depth > kMaxTypeDepth) // CEIR-8b: attrs now nest (arrays/dicts/wrappers) — the same depth guard as types
+        {
+            fail("attribute nesting too deep");
+            return {};
+        }
         const char c = la();
         if (c == '"') { return parse_string_attr(); }
         if (c == '@')
@@ -770,12 +906,115 @@ private:
             return m_ctx.attr_symbol(s);
         }
         if (c == '!') { return m_ctx.attr_type(parse_type()); }
+        if (c == '[') { return parse_array_attr(depth); }   // CEIR-8b
+        if (c == '{') { return parse_dict_attr(depth); }    // CEIR-8b
+        if (c == '#') { return parse_wrapper_attr(depth); } // CEIR-8b (#typed / #extern)
         if (c == '-' || c == '+' || c == '.' || is_digit(c)) { return parse_number_attr(); }
         // an identifier: true / false, or a bare float word (nan / inf) the printer can emit
         const containers::StringView w = parse_ident("expected an attribute value");
         if (sv_eq(w, "true")) { return m_ctx.attr_bool(true); }
         if (sv_eq(w, "false")) { return m_ctx.attr_bool(false); }
         return float_from_word(w); // nan / inf
+    }
+
+    // CEIR-8b aggregate + wrapper attribute values (ADR-0112). Generic canonical forms; the wrapper boundary runs
+    // verify_attr_extern (REJECT, not assert) then interns.
+    [[nodiscard]] AttrId parse_array_attr(u32 depth) noexcept
+    {
+        expect('[', "expected '['");
+        containers::Array<AttrId> elems(m_ctx.allocator());
+        if (la() != ']')
+        {
+            elems.push_back(parse_attr_value(depth + 1U));
+            while (accept(',')) { elems.push_back(parse_attr_value(depth + 1U)); }
+        }
+        expect(']', "expected ']'");
+        if (!m_ok) { return {}; }
+        return m_ctx.attr_array(containers::ConstSpan<AttrId>(elems.data(), elems.size()));
+    }
+    [[nodiscard]] AttrId parse_dict_attr(u32 depth) noexcept
+    {
+        expect('{', "expected '{'");
+        containers::Array<containers::StringView> keys(m_ctx.allocator());
+        containers::Array<AttrId>                 vals(m_ctx.allocator());
+        if (la() != '}')
+        {
+            do {
+                keys.push_back(parse_quoted());
+                expect(':', "expected ':' in a dict entry");
+                vals.push_back(parse_attr_value(depth + 1U));
+            } while (accept(','));
+        }
+        expect('}', "expected '}'");
+        if (!m_ok) { return {}; }
+        // The CANONICAL text form has keys byte-order SORTED + UNIQUE (the printer emits exactly this). Build of_dict RAW
+        // and REJECT a non-canonical (unsorted / duplicate-key) dict GRACEFULLY, mirroring the binary decoder arm — NEVER
+        // route hostile text through attr_dict->intern_attr, whose canonical ASSERT would fire on a duplicate key (a crash
+        // on malformed input violates the reject-not-assert triple).
+        const AttrValue av = AttrValue::of_dict(containers::ConstSpan<containers::StringView>(keys.data(), keys.size()),
+                                                containers::ConstSpan<AttrId>(vals.data(), vals.size()));
+        if (!attr_is_canonical(av)) { fail("dict keys must be byte-order sorted and unique"); return {}; }
+        return m_ctx.intern_attr(av);
+    }
+    [[nodiscard]] AttrId parse_wrapper_attr(u32 depth) noexcept
+    {
+        expect('#', "expected '#'");
+        const containers::StringView head = parse_ident("expected 'typed' or 'extern' after '#'");
+        if (!m_ok) { return {}; }
+        if (sv_eq(head, "typed"))
+        {
+            expect('<', "expected '<'");
+            const TypeId ty = parse_type();
+            expect(',', "expected ','");
+            const AttrId payload = parse_attr_value(depth + 1U);
+            expect('>', "expected '>'");
+            if (!m_ok) { return {}; }
+            const AttrValue av = AttrValue::of_typed_const(ty, payload);
+            if (!m_ctx.verify_attr_extern(av)) { fail("typed: the payload must not itself be a wrapper"); return {}; }
+            return m_ctx.intern_attr(av);
+        }
+        if (sv_eq(head, "extern"))
+        {
+            expect('<', "expected '<'");
+            const AttrClassId cls = parse_attr_class_id();
+            expect(',', "expected ','");
+            const u32 ver = parse_uint();
+            expect(',', "expected ','");
+            const AttrId payload = parse_attr_value(depth + 1U);
+            expect('>', "expected '>'");
+            if (!m_ok) { return {}; }
+            // version range-check, SYMMETRIC with the binary decoder arm: a REGISTERED class rejects a record NEWER than
+            // this loader's schema (a v5 text loaded by a v1 loader is the future — declared-words-validated).
+            if (const AttrClassInfo* const info = m_ctx.attr_class_info(cls); info != nullptr && ver > info->version)
+            {
+                fail("extern: record is a newer class schema version than this loader knows");
+                return {};
+            }
+            const AttrValue av = AttrValue::of_extern(cls, ver, payload);
+            if (!m_ctx.verify_attr_extern(av)) { fail("extern: the class verify hook rejected the value"); return {}; }
+            return m_ctx.intern_attr(av);
+        }
+        fail("unknown attribute wrapper (expected 'typed' or 'extern')");
+        return {};
+    }
+    // a "dialect.attr" token → an interned AttrClassId (split on the FIRST dot; parse_ident reads the dots).
+    [[nodiscard]] AttrClassId parse_attr_class_id() noexcept
+    {
+        const containers::StringView full = parse_ident("expected an attribute-class name (dialect.attr)");
+        if (!m_ok) { return {}; }
+        usize dot   = 0;
+        bool  found = false;
+        for (usize i = 0; i < full.size(); ++i)
+        {
+            if (full[i] == '.') { dot = i; found = true; break; }
+        }
+        if (!found || dot == 0U || dot + 1U >= full.size())
+        {
+            fail("attribute-class name must be 'dialect.attr'");
+            return {};
+        }
+        return m_ctx.intern_attr_class(containers::StringView(full.data(), dot),
+                                       containers::StringView(full.data() + dot + 1U, full.size() - dot - 1U));
     }
 
     // "..." with only \" and \\ escapes (print.cpp emit_quoted). Unescape BEFORE interning — interning the raw slice

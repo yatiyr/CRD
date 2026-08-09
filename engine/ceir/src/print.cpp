@@ -176,8 +176,48 @@ private:
             m_out.append(v.s.data(), v.s.size());
             break;
         case AttrKind::Type: emit_type(v.t); break;
+        case AttrKind::Array: // CEIR-8b: [v0,v1,...]
+            m_out.push_back('[');
+            for (usize i = 0; i < v.elems.size(); ++i)
+            {
+                if (i != 0U) { m_out.push_back(','); }
+                emit_attr_id(v.elems[i]);
+            }
+            m_out.push_back(']');
+            break;
+        case AttrKind::Dict: // CEIR-8b: {"k0":v0,"k1":v1,...} — quoted keys (arbitrary content); the ':' distinguishes it
+            m_out.push_back('{'); // from the op-attribute dict's `name = value` (parsed at the op level, not in a value)
+            for (usize i = 0; i < v.keys.size(); ++i)
+            {
+                if (i != 0U) { m_out.push_back(','); }
+                emit_quoted(v.keys[i]);
+                m_out.push_back(':');
+                emit_attr_id(v.elems[i]);
+            }
+            m_out.push_back('}');
+            break;
+        case AttrKind::TypedConst: // CEIR-8b: #typed<!TYPE,payload>
+            m_out.append("#typed<");
+            emit_type(v.wrapped_type);
+            m_out.push_back(',');
+            emit_attr_id(v.payload);
+            m_out.push_back('>');
+            break;
+        case AttrKind::Extern: // CEIR-8b: #extern<dialect.attr,VER,payload> (generic form — no pretty hooks, U-§56)
+        {
+            m_out.append("#extern<");
+            const containers::StringView cn = m_ctx.attr_class_name(v.attr_class);
+            m_out.append(cn.data(), cn.size());
+            m_out.push_back(',');
+            emit_u32(v.attr_class_version);
+            m_out.push_back(',');
+            emit_attr_id(v.payload);
+            m_out.push_back('>');
+            break;
+        }
         }
     }
+    void emit_attr_id(AttrId id) { emit_attr_value(m_ctx.attr_value(id)); } // CEIR-8b: a child attr by id
 
     // ── types (CEIR-3a, §16) — the canonical `!`-sigil grammar; nested types recurse and keep their own sigil ──
     void emit_type(TypeId id)
@@ -380,6 +420,43 @@ private:
             emit_type(t.members[0]); // the qualified type
             m_out.push_back('>');
             break;
+        case TypeKind::Extern:
+        {
+            // CEIR-8a GENERIC canonical form (ADR-0111 §2.4): fixed-order, total, injective — round-trips WITHOUT the
+            // class registered (NO pretty hooks; those would break the U-§56 unknown-plugin round-trip). Form:
+            // !extern<CLASS,VER,COUNT,COLS,SIGNED,FKIND,"NAME",NMEM,m0..,NLAB,"l0"..>.
+            m_out.append("extern<");
+            const containers::StringView cn = m_ctx.type_class_name(t.type_class);
+            m_out.append(cn.data(), cn.size()); // "dialect.class" (the parser re-splits on the first '.')
+            m_out.push_back(',');
+            emit_u32(t.type_class_version);
+            m_out.push_back(',');
+            emit_u32(t.count);
+            m_out.push_back(',');
+            emit_u32(t.cols);
+            m_out.push_back(',');
+            emit_u32(t.is_signed ? 1U : 0U);
+            m_out.push_back(',');
+            emit_u32(static_cast<u32>(t.fkind));
+            m_out.push_back(',');
+            emit_quoted(t.name);
+            m_out.push_back(',');
+            emit_u32(static_cast<u32>(t.members.size()));
+            for (usize i = 0; i < t.members.size(); ++i)
+            {
+                m_out.push_back(',');
+                emit_type(t.members[i]);
+            }
+            m_out.push_back(',');
+            emit_u32(static_cast<u32>(t.labels.size()));
+            for (usize i = 0; i < t.labels.size(); ++i)
+            {
+                m_out.push_back(',');
+                emit_quoted(t.labels[i]);
+            }
+            m_out.push_back('>');
+            break;
+        }
         }
     }
 

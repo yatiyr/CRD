@@ -146,6 +146,15 @@ public:
     // Reverse lookup for diagnostics — the "dialect.op" string, or "" if the id was never interned here.
     [[nodiscard]] containers::StringView op_name(OpId id) const noexcept;
 
+    // ── CEIR-8a open-world TYPE classes (ADR-0111) ── intern a type-class identity (FNV of "dialect.class", mirroring
+    // intern_op) + its reverse lookup. An `Extern` Type stores the id; the string survives serialization via STRP so an
+    // unregistered decoder round-trips it. `Dialect::register_type_class` attaches the verify hook + version.
+    [[nodiscard]] TypeClassId          intern_type_class(containers::StringView dialect, containers::StringView cls);
+    [[nodiscard]] containers::StringView type_class_name(TypeClassId id) const noexcept;
+    // The registered descriptor for `id`, or nullptr if the class is not registered in THIS Context (⇒ preserve opaquely
+    // — the U-§56 unknown-plugin policy; EMPTY≠UNKNOWN — ADR-0111 §2.5).
+    [[nodiscard]] const TypeClassInfo* type_class_info(TypeClassId id) const noexcept;
+
     // Arena-copy a symbol NAME into stable storage (SymbolTable + symbol-ref keys point here). Empty → empty. Not
     // deduplicated (symbols are few); the SymbolTable dedups by VALUE, so two copies of the same name still resolve.
     [[nodiscard]] containers::StringView intern_symbol(containers::StringView name);
@@ -159,6 +168,36 @@ public:
     [[nodiscard]] AttrId attr_string(containers::StringView s) { return intern_attr(AttrValue::of_string(intern_symbol(s))); }
     [[nodiscard]] AttrId attr_symbol(containers::StringView s) { return intern_attr(AttrValue::of_symbol(intern_symbol(s))); }
     [[nodiscard]] AttrId attr_type(TypeId t) { return intern_attr(AttrValue::of_type(t)); }
+    // ── CEIR-8b aggregate + wrapper + open-world attributes (ADR-0112) ── the makers intern the value (deep-copying the
+    // borrowed spans into the arena, like the type factories). `attr_dict` CANONICALIZES its keys (byte-order sorted).
+    // ⛔ a wrapper's payload must not itself be a wrapper (the composition rule); the factory asserts via intern_attr.
+    [[nodiscard]] AttrId attr_array(containers::ConstSpan<AttrId> elems) { return intern_attr(AttrValue::of_array(elems)); }
+    [[nodiscard]] AttrId attr_dict(containers::ConstSpan<containers::StringView> keys, containers::ConstSpan<AttrId> values);
+    [[nodiscard]] AttrId attr_typed(TypeId ty, AttrId value);  // asserts the composition rule (payload not a wrapper)
+    [[nodiscard]] AttrId attr_extern(AttrClassId cls, AttrId value); // asserts composition + the class verify hook
+    // Intern an attribute-class identity (FNV "dialect.attr", mirroring intern_type_class) + reverse lookup + descriptor.
+    [[nodiscard]] AttrClassId          intern_attr_class(containers::StringView dialect, containers::StringView cls);
+    [[nodiscard]] containers::StringView attr_class_name(AttrClassId id) const noexcept;
+    [[nodiscard]] const AttrClassInfo* attr_class_info(AttrClassId id) const noexcept;
+    // Run the Extern attr's class verify hook (true if unregistered [preserve] / no hook / passes) — the decoder/parser
+    // gate (⛔ `v.kind` must be Extern). Also enforces the no-wrapper-payload composition rule.
+    [[nodiscard]] bool verify_attr_extern(const AttrValue& v) const noexcept;
+    // Intern an effect-location-class identity (FNV "dialect.location", CEIR-8c) + reverse lookup + descriptor.
+    [[nodiscard]] LocationClassId       intern_location_class(containers::StringView dialect, containers::StringView cls);
+    [[nodiscard]] containers::StringView location_class_name(LocationClassId id) const noexcept;
+    [[nodiscard]] const LocationClassInfo* location_class_info(LocationClassId id) const noexcept;
+    // The effective conflict ResourceClass an EffectRecord touches (CEIR-8c): for an Extern location, its registered
+    // class's declared resource_class — or ResourceClass::Universe when UNREGISTERED (EMPTY≠UNKNOWN, maximally
+    // conflicting); for every other target kind, the family's own class (hazard.hpp::effect_access).
+    [[nodiscard]] ResourceClass effect_resource_class(const EffectRecord& e) const noexcept;
+    // Run an Extern effect-location's class verify hook (true if not Extern / unregistered [preserve] / no hook /
+    // passes) — the register_op factory gate (CEIR-8c).
+    [[nodiscard]] bool effect_location_valid(const EffectRecord& e) const noexcept;
+    // CEIR-8d (ADR-0114): assign content-independent STABLE IDS to `m`'s ops — idempotent, module-scoped, pre-order:
+    // find the current max id, then give every UNASSIGNED (id 0) op the next id in pre-order. Already-assigned ops are
+    // never re-derived (survives edits/reorders). `const` + a `mutable` id field: assignment is memoization, so the
+    // const `serialize`/`interface_hash` can give a never-persisted op a deterministic id. One routine, no drift.
+    void assign_stable_ids(const Module& m) const noexcept;
     // The interned value behind `id` (by value — the intern table may reallocate; an invalid id yields Int(0)).
     [[nodiscard]] AttrValue attr_value(AttrId id) const noexcept;
     // Attach (or overwrite) attribute `name` = `value` on `op`. The name is interned; the op's dict grows by rebuild
@@ -197,6 +236,15 @@ public:
     [[nodiscard]] TypeId type_param(containers::StringView name, containers::ConstSpan<TypeId> constraints);
     [[nodiscard]] TypeId type_trait(containers::StringView name, containers::ConstSpan<TypeId> supertraits);
     [[nodiscard]] TypeId type_callable(containers::ConstSpan<TypeId> params, containers::ConstSpan<TypeId> results);
+    // ── CEIR-8a open-world custom type (ADR-0111) ── build an `Extern` type of class `cls` whose PARAMETERS ride the
+    // slots of `params` (its `members`/`count`/`cols`/`is_signed`/`fkind`/`name`/`labels`; `params.kind`/`type_class` are
+    // ignored — set here). ⛔ The FACTORY boundary: if `cls` is registered its verify hook runs and this ASSERTS on
+    // failure (builder misuse = programmer error); an unregistered class is accepted opaquely (preserve — U-§56). The
+    // decoder/parser use `verify_extern` (reject, not assert) instead. Returns the interned TypeId.
+    [[nodiscard]] TypeId type_extern(TypeClassId cls, const Type& params);
+    // Run type-class `t.type_class`'s verify hook on the `Extern` type `t`. true iff the class is UNREGISTERED (preserve),
+    // has no hook, or the hook passes — the decoder/parser gate (reject on false). ⛔ `t.kind` must be Extern.
+    [[nodiscard]] bool   verify_extern(const Type& t) const noexcept;
     // True if `id` mentions any TypeParam (i.e. it is not fully ground). Recursive over the interned DAG.
     [[nodiscard]] bool   type_has_params(TypeId id) const noexcept;
 
@@ -339,8 +387,8 @@ public:
     // reached callee is unresolved OR any reached op is unregistered (the 4a "registered-empty reads as provably-none"
     // landmine, interprocedural). `collect_effective_mask` (one op's own contribution — hook or static) + `collect_region_
     // effective_mask` (the recursive callee-body walker) are the shared `u32`-bitmask core the hook re-enters.
-    void collect_effective_mask(const Operation& op, const EffectQuery& q, u32& mask) const;
-    void collect_region_effective_mask(const Region& r, const EffectQuery& q, u32& mask) const;
+    void collect_effective_mask(const Operation& op, const EffectQuery& q, u64& mask) const;   // u64 mask (CEIR-8c)
+    void collect_region_effective_mask(const Region& r, const EffectQuery& q, u64& mask) const; // u64 mask (CEIR-8c)
     void effective_effects(const Operation& op, const SymbolTable& table, containers::Array<EffectRecord>& out) const;
 
     // ── §26/§116 effect-derived ordering hazards (CEIR-4d) ── compose the two ops' 4a effects into an ordering
@@ -389,7 +437,8 @@ public:
     [[nodiscard]] TokenMisuse find_token_misuse(const Module& m) const;
 
     // Interfaces: intern a name, register/query an op-kind's implementation (an opaque function-table pointer).
-    [[nodiscard]] InterfaceId    intern_interface(containers::StringView name);
+    [[nodiscard]] InterfaceId    intern_interface(containers::StringView name); // CEIR-8e: an FNV of the name (== T::kId)
+    [[nodiscard]] containers::StringView interface_name(InterfaceId id) const noexcept; // reverse lookup (diagnostics)
     void                         register_interface(OpId kind, InterfaceId iface, const void* impl);
     [[nodiscard]] const void*    get_interface(OpId kind, InterfaceId iface) const noexcept;
 
@@ -405,11 +454,21 @@ public:
     // a friend of Region); do not use it to mutate a region mid-analysis.
     void set_region_kind(Region* r, RegionKind kind) noexcept;
 
+    // Set an op's CEIR-8d stable id. For DESERIALIZATION only (the STID-chunk loader) — Context is a friend of Operation.
+    // ⛔ Not for mutation mid-analysis: a stable id is one-time (see assign_stable_ids). 0 is rejected by the loader.
+    // Uniqueness is the caller's contract (the decoder enforces it; assign_stable_ids never produces a duplicate).
+    void set_stable_id(Operation* op, StableId id) noexcept;
+    // Restore a module's CEIR-8d id high-water mark (the STID-chunk loader) — so a post-load edit never reuses a freed id.
+    void set_stable_id_watermark(Module* m, u64 watermark) noexcept;
+
     [[nodiscard]] memory::IAllocator*             allocator() const noexcept { return m_arena.parent(); }
     [[nodiscard]] memory::GrowableLinearAllocator& arena() noexcept { return m_arena; }
 
 private:
     friend class Dialect; // Dialect::register_op registers an OpInfo on its owning Context
+    // CEIR-8d recursion helpers for assign_stable_ids (Context is a friend of Operation, so these can read/set the id).
+    void stable_id_scan_max(Region* r, u64& mx) const noexcept;   // find the current max stable id in pre-order
+    void stable_id_assign_unset(Region* r, u64& next) const noexcept; // give every id-0 op the next id in pre-order
 
     struct OpName
     {
@@ -419,6 +478,9 @@ private:
 
     memory::GrowableLinearAllocator           m_arena;
     containers::Array<OpName>                  m_op_names;
+    containers::Array<OpName>                  m_type_class_names; // CEIR-8a: TypeClassId → "dialect.class" (OpName reuse)
+    containers::Array<OpName>                  m_attr_class_names; // CEIR-8b: AttrClassId → "dialect.attr" (OpName reuse)
+    containers::Array<OpName>                  m_location_class_names; // CEIR-8c: LocationClassId → "dialect.location"
     containers::Array<AttrValue>               m_attr_values; // attribute-value intern table (AttrId.value = index+1)
     containers::Array<Type>                    m_types;        // type intern table (TypeId.value = index+1; 0 = none)
     struct Conformance { u32 concrete = 0; u32 trait = 0; };   // a registered (concrete satisfies trait) fact
@@ -426,7 +488,10 @@ private:
     containers::Array<containers::StringView>  m_files;        // source map (file_id = index+1; each path arena-interned)
     containers::HashMap<containers::StringView, Dialect*, detail::StringViewHash> m_dialects; // name → dialect
     containers::HashMap<u64, OpInfo*>          m_op_infos;         // OpId.value → its ODS-lite descriptor
-    containers::Array<containers::StringView>  m_interface_names;  // interface intern (InterfaceId.value = index+1)
+    containers::HashMap<u64, TypeClassInfo*>   m_type_classes;     // CEIR-8a: TypeClassId.value → its type-class descriptor
+    containers::HashMap<u64, AttrClassInfo*>   m_attr_classes;     // CEIR-8b: AttrClassId.value → its attribute-class descriptor
+    containers::HashMap<u64, LocationClassInfo*> m_location_classes; // CEIR-8c: LocationClassId.value → its location-class descriptor
+    containers::Array<OpName>                  m_interface_names;  // CEIR-8e: InterfaceId (FNV) → name (reverse lookup)
     CompilerMode                               m_compiler_mode = CompilerMode::Normal; // §27 active mode (session state)
 };
 } // namespace crd::ceir
