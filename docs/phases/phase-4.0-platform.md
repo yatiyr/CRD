@@ -83,7 +83,7 @@ In dependency order. Each: purpose · key decisions · dependencies · provision
 
 ### Pillar 3 — C++ hot-reload script runtime (`crd-script`)
 
-**Purpose.** Author native logic in C++, hot-reload it live, no restart. Scripts ARE `.crds.cpp` files compiled to hot-reloadable DLLs (ADR-0081 §9 / ADR-0034). **The only scripting language — no Lua/Python/GDScript** (decision locked in ADR-0081; rationale: one language, no marshalling, full type system + debugger, deterministic FP, AI-writable).
+**Purpose.** Author native logic in C++, hot-reload it live, no restart. Scripts ARE `.crds.cpp` files compiled to hot-reloadable DLLs (ADR-0081 §9 / ADR-0034). **~~The only scripting language~~ A first-class scripting surface — no Lua/Python/GDScript** (decision locked in ADR-0081; ⚠ **superseded in part by ADR-0108 (2026-08-07): C++ is no longer the ONLY authoring surface — Cerid owns the CEIR/CHIR + CR-D007-visual language stack; the no-third-party-VM rule stands.** Rationale for the C++ surface: one language, no marshalling, full type system + debugger, deterministic FP, AI-writable).
 
 **Key decisions:**
 - **Hot-reload mechanism:** `DynamicLibrary` load → suspend `crd-jobs` → swap DLL → re-bind symbols → resume. Per-type **state-migration callbacks** across reload (the hard part — preserving live state when a struct layout changes). Reference patterns: Live++, Anvil, JetBrains C++ hot-reload, RemedyBG.

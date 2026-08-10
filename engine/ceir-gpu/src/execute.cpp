@@ -110,6 +110,12 @@ ExecuteError validate_lowered(const Context& ctx, containers::ConstSpan<LoweredC
         const LoweredCommand& cmd = commands[i];
         if (cmd.kind == LoweredKind::Barrier) { continue; } // inert at 13z-1 (the resource-on-barrier map is 13z-3)
         if (cmd.kind == LoweredKind::Transfer) { return ExecuteError::UnsupportedCommand; }
+        // CEIR-14b: render kinds (BeginRender/Draw/EndRender) target the 14z RASTER executor, not this IComputeContext
+        // surface — reject them TYPED (the Transfer named-forward mirror), never fall through to check_dispatch.
+        if (cmd.kind == LoweredKind::BeginRender || cmd.kind == LoweredKind::Draw || cmd.kind == LoweredKind::EndRender)
+        {
+            return ExecuteError::UnsupportedCommand;
+        }
         const ExecuteError err = check_dispatch(ctx, cmd, resolver, user, bindings, nullptr, nullptr);
         if (err != ExecuteError::None) { return err; }
     }
@@ -130,6 +136,11 @@ ExecuteError execute_lowered(const Context& ctx, containers::ConstSpan<LoweredCo
             continue;
         }
         if (cmd.kind == LoweredKind::Transfer) { return ExecuteError::UnsupportedCommand; }
+        // CEIR-14b: render kinds target the 14z RASTER executor — reject them TYPED (the Transfer mirror).
+        if (cmd.kind == LoweredKind::BeginRender || cmd.kind == LoweredKind::Draw || cmd.kind == LoweredKind::EndRender)
+        {
+            return ExecuteError::UnsupportedCommand;
+        }
         crd::gpu::ComputePipeline* pipe = nullptr;
         const ExecuteError         err  = check_dispatch(ctx, cmd, resolver, user, bindings, &pipe, &bufs);
         if (err != ExecuteError::None) { return err; }

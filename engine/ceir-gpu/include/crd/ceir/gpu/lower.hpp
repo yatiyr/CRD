@@ -24,6 +24,16 @@ enum class LoweredKind : crd::u8
     Dispatch = 0,
     Transfer,
     Barrier,
+    // ── CEIR-14b render (§40): a render.scope lowers to BeginRender → the region's Draws → EndRender. ⛔ append at END.
+    // These target the 14z RASTER executor (IRasterEncoder / RenderingDesc / GeometrySource), NOT the IComputeContext
+    // surface — so 13z's execute_lowered/validate_lowered REJECT them TYPED (UnsupportedCommand, the Transfer named-forward
+    // mirror). The `op` back-pointer carries everything: BeginRender/EndRender → the render.scope (the executor materializes
+    // the RenderingDesc from its attachment operands); Draw → the render.draw / render.draw_indexed op (its @program +
+    // counts + bindings). Barriers stay at SCOPE granularity (the scope's ambient hazards against neighbors; raster order +
+    // blending own intra-pass ordering — no per-Draw barriers).
+    BeginRender,
+    Draw,
+    EndRender,
 };
 
 // The lowered TRANSFER op (CEIR-13b §50). ⛔ this is our OWN enum — the 5 SHIPPED 13b ops — NOT crd::gpu::TransferKind

@@ -5,6 +5,8 @@
 **Tags:** [arch] [cli] [rpc] [mcp] [agent] [scripting] [substrate] [vision]
 **Supersedes:** ADR-0034 (C++ scripting / DLL hot-reload — folded in
 as the C++ hot-reload sub-aspect of the broader agent-native vision).
+**Superseded-by:** ADR-0108 (2026-08-07) — §9's "C++ is the ONLY scripting path" clause ONLY
+(in-file strike executed 2026-08-10 at the first CEIR vertical slice); §1-§8 reaffirmed verbatim.
 
 ## Context
 
@@ -328,9 +330,16 @@ when a slice ships a feature, the slice also ships its CLI commands.
 5. **Notebook + Claude Code agent reference** (later).
 
 **Note on scripting language (locked 2026-05-19 user direction):**
-**C++ hot-reload is the ONLY scripting path.** Cerid scripts ARE C++
-files compiled into hot-reloadable DLLs. No Lua / Python / JavaScript
-/ GDScript / WrenScript / Roblox-Luau. Reasons:
+
+> ⛔ **SUPERSEDED IN PART by ADR-0108** (Accepted 2026-08-07; this in-file strike executed 2026-08-10 at the first
+> CEIR vertical slice, CEIR-13z). ONLY the "C++ is the ONLY scripting path / other paths explicitly rejected" clause
+> is superseded: Cerid now owns a CEIR/CHIR + CR-D007-visual executable-program language stack, and C++ stays a
+> first-class native + hot-reload authoring surface — no longer the *only* one. The third-party-VM rejection (no
+> embedded Lua/Python/JS/GDScript runtime) **STANDS** — CHIR is Cerid's own language. §1-§8 of this ADR are untouched.
+
+~~**C++ hot-reload is the ONLY scripting path.**~~ Cerid scripts may be C++
+files compiled into hot-reloadable DLLs (still supported). No embedded Lua / Python / JavaScript
+/ GDScript / WrenScript / Roblox-Luau (this third-party-VM rejection STANDS). Reasons the C++-path is valued:
 
 - One language for engine + scripts + tools = no marshaling, full
   type system, full debugger, deterministic FP.
@@ -342,9 +351,11 @@ files compiled into hot-reloadable DLLs. No Lua / Python / JavaScript
   observe results. Same loop as a human C++ engineer; agents
   benefit from the same compile-time errors + debugger.
 
-Other scripting paths (Lua, Python wrapped by C-API, etc.) are
-**explicitly rejected**. Future revisitation would require a new
-ADR; not anticipated.
+~~Other scripting paths (Lua, Python wrapped by C-API, etc.) are~~
+~~**explicitly rejected**. Future revisitation would require a new~~
+~~ADR; not anticipated.~~ **[Superseded by ADR-0108 — this IS the "new ADR"
+the last sentence required: Cerid-owned CEIR/CHIR + CR-D007 visual are now
+first-class authoring surfaces alongside C++. Embedded third-party VMs stay rejected.]**
 
 ### 10. Per-DoD CLI surface requirement (cross-cutting)
 

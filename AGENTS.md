@@ -14,7 +14,7 @@ GPU platform (`gpu-context{,-vulkan,-dx12,-cuda}` + `kir` + the RAF render-asset
 `rhi/renderer/shader` stack is **retired**, ADR-0105), 13 `geometry-*` sub-modules, and the `crd-hesap` numerical
 substrate (v0–v16 shipped: dense → sparse → eig → opt → ODE → FFT → DSP/wavelet/comms → special/stats →
 interp/quad/diff/motion → tensors → autodiff). **The current focus lives in `context.md`, never here.** Planned:
-`eylem` resume (paused at v1b) / `sdf` / `font` / `audio` / `scripting (hot-reload C++)` / `ui` / editor (CR-D007).
+`eylem` resume (paused at v1b) / `sdf` / `font` / `audio` / `scripting/language (Cerid-owned CEIR/CHIR + CR-D007 visual + first-class C++ hot-reload, ADR-0108)` / `ui` / editor (CR-D007).
 
 ## Engineering Principles (non-negotiable)
 

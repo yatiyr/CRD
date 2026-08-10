@@ -30,7 +30,9 @@ API-stable across backends, and built on vertical slices rather than horizontal 
   bit-exact CPU oracles gating the kernels and rendering techniques shipped as cooked assets
   rather than engine code.
 - **Agent-native by design:** every engine operation is planned to be reachable via CLI /
-  JSON-RPC / MCP; the GUI is a visualization layer. C++ hot-reload is the only scripting layer.
+  JSON-RPC / MCP; the GUI is a visualization layer. Programs are authored as Cerid-owned
+  CEIR/CHIR (text or CR-D007 visual) or via a C++ builder; C++ hot-reload stays a first-class
+  authoring surface, no longer the only one (ADR-0108).
 
 ## Modules (shipped)
 

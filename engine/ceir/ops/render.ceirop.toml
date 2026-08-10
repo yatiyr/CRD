@@ -1,0 +1,237 @@
+schema_version = 1
+dialect = "render"
+summary = "CEIR-14 sec-40/41 ceir.render: backend-neutral rendering orchestration on RAH's hardened model. A render.scope REGION op (the structured begin/end -- the draws live in its graph region; the crd-ceir-gpu BRIDGE lowers it to the canonical RenderingDesc begin/end + draw verbs the frame graph records today, CEIR-14b; crd-ceir core NEVER links gpu-context -- I3/I4). ATTACHMENTS ARE GENERAL (sec-41): render.color_attachment / render.depth_attachment DECLARE ops each take an image resource + carry per-attachment config (load/store/typed-clear/blend/read-only) and PRODUCE a value of a render-dialect ATTACHMENT TYPE (the 8a Extern type-class machinery; the ROLE -- color vs depth -- rides the TYPE, NOT a string attr, per the 12a one-source-of-truth doctrine). render.scope consumes N of them through its single variadic operand tail. ⛔ the attachment TARGETS are OPERANDS (not attrs) so the 13d per-resource barrier machinery + resource_root normalization SEE them (attribute-encoded targets are invisible to hazard derivation -- the RTT/WAR scar). G-buffer / visibility-buffer / object-ID / primitive-ID / velocity / selection / material-ID are PROGRAM-DEFINED output contracts over general typed attachments -- NOT special ops or canonical fields (sec-41, the RAH-1a.1 lesson lifted to the IR). ⛔ no material/shadow/deferred combinations in op NAMES (sec-40) -- combinations stay typed data/program composition. Effects: render.scope is a CONSERVATIVE baseline (GPUCommand + ambient MemoryReadWrite -- a scope may touch any bound attachment/resource, so it MUST hazard against exports/transfers; 14b narrows to the attachment writes + resource reads in lowering); the attachment-declare ops are EFFECT-FREE metadata (the resource.declare shape). Well-formedness rides the module-walk verifier Context::find_render_misuse (the find_dispatch_misuse house pattern, CEIR-14a): attachment operand is image/view-kinded; render.scope operands are all attachment-typed; at most one depth attachment; draw-family ops (CEIR-14b) are legal ONLY inside a render.scope region; and -- the RAH-1a.1 lesson made STATIC -- a Uint typed-clear only on a uint-format attachment. ⛔ NO-FOLLOW (named, never silently subset): the DRAW FAMILY (draw / indexed / indirect / indirect-count / mesh-dispatch / indirect-mesh / patch-tess) + dynamic state (viewport / scissor / shading-rate) -> CEIR-14b; indirect + indirect-count + mesh/task dispatch (the DrawIndex scar) -> CEIR-14c; RAH-2 resident resource-table binding semantics -> CEIR-14d; multiview / view-selection + fragment-density/foveation + the shading-rate ATTACHMENT -> CEIR-14b dynamic state; mip/layer/aspect attachment VIEWS ride the existing resource.view op (sec-41's typed views); DYNAMIC render area (a runtime viewport) -> CEIR-14b (width/height/sample_count are compile-time scope config here, the RenderingDesc-at-record model)."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# render.color_attachment -- declare a COLOR attachment over an image: its per-attachment load/store, typed clear
+# (float RGBA or a uint id via clear_kind), and blend. PRODUCES a color-attachment-typed value (the 8a Extern type-class;
+# the ROLE is in the type). EFFECT-FREE metadata (a value constructor, the resource.declare shape) -- the actual
+# read/write hazards ride render.scope + the draws (14b). ⛔ clear_kind selects the typed clear: `float` uses clear_r..a,
+# `uint` uses clear_uint (the RAH-1a.1 ClearKind -- an integer/id target). find_render_misuse: a `uint` clear only on a
+# uint-format attachment.
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "color_attachment"
+summary = "Declare a color attachment over an image (load/store/typed-clear/blend); produces a color-attachment-typed value."
+version = 1
+operands = [
+    { name = "image", type = "resource", doc = "the color target image (or a resource.view subresource of one); its CEIR-3c type is the attachment's underlying format" },
+]
+results = [
+    { name = "attachment", type = "color_attachment", doc = "the color-attachment value (an 8a Extern type of the render.color_attachment class, wrapping the image type); consumed by render.scope's variadic tail" },
+]
+attributes = [
+    { name = "load", kind = "string", required = false, doc = "sec-41 the LoadOp: clear | load | dontcare (absent = clear). CLOSED vocabulary, find_render_misuse enforces it." },
+    { name = "store", kind = "string", required = false, doc = "sec-41 the StoreOp: store | dontcare (absent = store). CLOSED vocabulary, enforced." },
+    { name = "clear_kind", kind = "string", required = false, doc = "the typed-clear selector: float | uint (absent = float). CLOSED. `float` reads clear_r..clear_a; `uint` reads clear_uint (RAH-1a.1 -- a uint/id target). find_render_misuse: `uint` only on a uint-format attachment." },
+    { name = "clear_r", kind = "float", required = false, doc = "float clear red (clear_kind=float; absent = 0.0)" },
+    { name = "clear_g", kind = "float", required = false, doc = "float clear green (absent = 0.0)" },
+    { name = "clear_b", kind = "float", required = false, doc = "float clear blue (absent = 0.0)" },
+    { name = "clear_a", kind = "float", required = false, doc = "float clear alpha (absent = 0.0)" },
+    { name = "clear_uint", kind = "int", required = false, doc = "uint clear id (clear_kind=uint; the R32_UINT background id -- RAH-1a.1 clear_uint; absent = 0)" },
+    { name = "blend", kind = "string", required = false, doc = "sec-40 the per-attachment BlendMode: opaque | alpha | additive | premultiplied (absent = opaque). CLOSED vocabulary, enforced. (The blend STATE surface beyond these presets is CEIR-14b pipeline state.)" },
+]
+traits = ["Pure"]
+docs = "render.color_attachment(%image) {load, store, clear_kind, clear_r/g/b/a | clear_uint, blend} -> %attachment. Declares a color attachment; PRODUCES a color-attachment Extern-typed value (8a; role-in-type). Pure (effect-free metadata -- the resource.declare shape; the read/write hazards ride render.scope + the draws). find_render_misuse: operand(0) image/view-kinded; load/store/clear_kind/blend in their closed vocabularies; clear_kind=uint only on a uint-format attachment (the RAH-1a.1 typed-clear-vs-format check lifted to the IR)."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# render.depth_attachment -- declare the DEPTH/STENCIL attachment over an image: load/store, a float depth clear, the
+# depth compare, and READ-ONLY depth (the shadow-map/depth-prepass RO-depth surface -- sec-41). PRODUCES a
+# depth-attachment-typed value. EFFECT-FREE metadata. ⛔ at most ONE depth attachment per scope (find_render_misuse).
+# separate depth/stencil load/store (sec-41) is named-forward to when a stencil aspect lands (the stencil op surface is
+# CEIR-14b+); this slice carries the depth load/store + a depth clear + RO-depth.
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "depth_attachment"
+summary = "Declare the depth/stencil attachment over an image (load/store/clear/compare/read-only); produces a depth-attachment-typed value."
+version = 1
+operands = [
+    { name = "image", type = "resource", doc = "the depth/stencil target image (or a resource.view subresource); its CEIR-3c type is the underlying depth/stencil format" },
+]
+results = [
+    { name = "attachment", type = "depth_attachment", doc = "the depth-attachment value (an 8a Extern type of the render.depth_attachment class); consumed by render.scope's variadic tail (at most one per scope)" },
+]
+attributes = [
+    { name = "load", kind = "string", required = false, doc = "sec-41 the depth LoadOp: clear | load | dontcare (absent = clear). CLOSED, enforced." },
+    { name = "store", kind = "string", required = false, doc = "sec-41 the depth StoreOp: store | dontcare (absent = store). CLOSED, enforced." },
+    { name = "clear_depth", kind = "float", required = false, doc = "the normalized device depth clear [0,1] (absent = 1.0 -- the RAH DepthStencilAttachmentDesc default). A raw NDC scalar." },
+    { name = "compare", kind = "string", required = false, doc = "the DepthCompare: never | less | equal | less_equal | greater | not_equal | greater_equal | always (absent = less_equal). CLOSED vocabulary, enforced." },
+    { name = "read_only", kind = "bool", required = false, doc = "sec-41 READ-ONLY depth/stencil (absent = false). A RO-depth attachment (a depth-prepass reuse / shadow read) -- the FS may sample it but not write. find_render_misuse pairs it with the draws' depth-write state at 14b." },
+]
+traits = ["Pure"]
+docs = "render.depth_attachment(%image) {load, store, clear_depth, compare, read_only} -> %attachment. Declares the depth/stencil attachment; PRODUCES a depth-attachment Extern-typed value. Pure (effect-free metadata). find_render_misuse: operand(0) image/view-kinded (a depth/stencil format); load/store/compare in their closed vocabularies; at most ONE depth_attachment per render.scope. Separate stencil load/store + the stencil aspect is named-forward (CEIR-14b+)."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# render.scope -- a RENDER SCOPE (the structured begin/end): the attachments + render area a set of draws target. The
+# draws (CEIR-14b) live in its GRAPH region. RESULTLESS -- ordering is effect-derived (the command-stream model 14b
+# lowers to: RenderingDesc begin -> draws -> end). Attachments are the variadic operand tail (SLOT order -> the color[]
+# array order; the depth attachment is recognized by its TYPE, not a slot). ⛔ operand order: attachments only (the whole
+# tail is variadic + uniform-typed -- color/depth distinguished by the attachment TYPE, honoring only-last-variadic).
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "scope"
+summary = "A render scope: bind the attachments + render area, run the draws in the region. Lowers to RenderingDesc begin/end + draw verbs (14b)."
+version = 1
+operands = [
+    { name = "attachments", type = "attachment", variadic = true, doc = "the color + depth attachments (from render.color_attachment / render.depth_attachment), in SLOT order -> the color[] array order; the depth attachment is recognized by its TYPE. Zero attachments is legal (a no-op scope / a pure-compute-in-a-render-pass is 14b+)." },
+]
+attributes = [
+    { name = "width", kind = "int", required = true, doc = "the render-area width in pixels (>=1). Compile-time scope config (the RenderingDesc-at-record model); a DYNAMIC viewport is CEIR-14b dynamic state. find_render_misuse: >=1." },
+    { name = "height", kind = "int", required = true, doc = "the render-area height in pixels (>=1). find_render_misuse: >=1." },
+    { name = "sample_count", kind = "int", required = false, doc = "MSAA sample count (absent = 1; >1 => multisample + resolve, sec-41). find_render_misuse: a power of two in [1,64]." },
+]
+regions = [ { kind = "graph" } ]
+effects = [ "GPUCommand", "MemoryReadWrite" ]
+docs = "render.scope(%attachments...) {width, height, sample_count} { ...draws (14b)... }. A render scope, RESULTLESS, carrying a graph region for the draws. Effects: GPUCommand + a CONSERVATIVE ambient MemoryReadWrite (14b narrows to the attachment writes + resource reads in lowering). find_render_misuse: every operand attachment-typed (a render.color_attachment / render.depth_attachment result); at most ONE depth attachment; width/height >= 1; sample_count a power of two in [1,64]; the region holds only render draw-family ops (14b) + structured control flow."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# render.draw (CEIR-14b) -- a NON-INDEXED draw: run @program over vertex_count vertices x instance_count instances with the
+# bound resources (vertex-pull geometry lives in the bindings -- StoragePull/None, program semantics, NOT an op axis).
+# Legal ONLY inside a render.scope region (find_render_misuse: DrawOutsideScope). Counts are RUNTIME index operands
+# (const-folded in lowering; a dynamic count -> UnsupportedCommand, the grid precedent). ⛔ operand order: vertex_count,
+# instance_count FIRST, then the variadic bindings (opgen: only the LAST operand may be variadic).
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "draw"
+summary = "A non-indexed draw: run @program over vertex_count x instance_count with the bound resources (inside a render.scope)."
+version = 1
+operands = [
+    { name = "vertex_count", type = "index", doc = "the vertex count (a runtime index; a compile-time count is an arith.const operand -- const-folded in lowering, a dynamic count -> UnsupportedCommand)" },
+    { name = "instance_count", type = "index", doc = "the instance count (a runtime index; callers pass arith.const 1 for a single instance)" },
+    { name = "bindings", type = "resource", variadic = true, doc = "the draw's bound resources (vertex-pull storage buffers, textures, ...), in SLOT order; each binding's ACCESS is the matching `access` token, its KIND derives from its CEIR-3c type" },
+]
+attributes = [
+    { name = "program", kind = "symbol", required = true, doc = "the graphics program/pipeline asset identity (@program); CEIR-13c: extracted as a ckir_ref + resolved/pin-checked by the cook's resolver. ⛔ identity is LOAD-BEARING: an absent/non-symbol program is ProgramNotSymbol (find_render_misuse)." },
+    { name = "access", kind = "string", required = true, doc = "per-binding access: comma-separated {r|w|rw} in binding operand order, one token per binding (empty string = zero bindings). find_render_misuse checks token-count == num bindings and each token in {r,w,rw}." },
+    { name = "program_interface", kind = "int", required = false, doc = "CEIR-13c the EXPECTED §107 interface hash of @program (a PIN, the u64 stored as its i64 bit pattern; absent = unpinned). Checked vs the resolved program at cook." },
+    { name = "first_vertex", kind = "int", required = false, doc = "sec-40 the START vertex (absent = 0; the GeometrySource.first_vertex u32 field). A static ATTR (compile-time)." },
+]
+effects = [ "GPUCommand", "MemoryReadWrite" ]
+kernel_ref = { symbol = "program", interface = "program_interface" }
+docs = "render.draw(%vertex_count, %instance_count, %bindings...) {program=@p, access=\"...\", first_vertex=F}. A non-indexed draw (StoragePull/None geometry), RESULTLESS, legal ONLY inside a render.scope region. Effects: GPUCommand + a CONSERVATIVE ambient MemoryReadWrite (two blended draws to one attachment must not reorder -- pairwise hazards pin raster order). CEIR-13c [op.kernel_ref] {program, program_interface}. find_render_misuse: counts (operands 0-1) Index-typed (DrawCountNotIndex); program a Symbol (ProgramNotSymbol); access-token-count == num_operands-2; each binding (operands 2..) resource-kinded."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# render.draw_indexed (CEIR-14b) -- an INDEXED draw: run @program over index_count indices (from the bound index buffer) x
+# instance_count instances. The index_buffer is a distinct operand (a static MemoryRead -- always read GPU-side, the
+# dispatch_indirect args precedent). Legal ONLY inside a render.scope region. ⛔ operand order: counts (0-1), index_buffer
+# (2), then the variadic bindings.
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "draw_indexed"
+summary = "An indexed draw: run @program over index_count indices (bound index buffer) x instance_count with the bound resources."
+version = 1
+operands = [
+    { name = "index_count", type = "index", doc = "the index count (a runtime index; const-folded in lowering, a dynamic count -> UnsupportedCommand)" },
+    { name = "instance_count", type = "index", doc = "the instance count (a runtime index)" },
+    { name = "index_buffer", type = "resource", doc = "the index buffer (a Buffer or a View of one -- read GPU-side; carries a static MemoryRead)" },
+    { name = "bindings", type = "resource", variadic = true, doc = "the draw's bound resources, in SLOT order (as render.draw)" },
+]
+attributes = [
+    { name = "program", kind = "symbol", required = true, doc = "the graphics program identity (@program); absent/non-symbol = ProgramNotSymbol" },
+    { name = "access", kind = "string", required = true, doc = "per-binding access over the variadic bindings tail: comma-separated {r|w|rw}, one token per binding (empty = zero bindings)" },
+    { name = "program_interface", kind = "int", required = false, doc = "CEIR-13c the EXPECTED §107 interface hash of @program (a PIN, u64 as i64 bit pattern; absent = unpinned)" },
+    { name = "first_index", kind = "int", required = false, doc = "sec-40 the START index within the bound index buffer (absent = 0; GeometrySource.first_index). A static ATTR." },
+]
+effects = [ "GPUCommand", "MemoryReadWrite", { family = "MemoryRead", operand = 2 } ]
+kernel_ref = { symbol = "program", interface = "program_interface" }
+docs = "render.draw_indexed(%index_count, %instance_count, %index_buffer, %bindings...) {program=@p, access=\"...\", first_index=F}. An indexed draw, RESULTLESS, legal ONLY inside a render.scope region. Effects: GPUCommand + ambient MemoryReadWrite + a static MemoryRead on %index_buffer (operand 2). CEIR-13c [op.kernel_ref] {program, program_interface}. find_render_misuse: counts (operands 0-1) Index-typed; index_buffer (operand 2) a Buffer/View-of-buffer; program a Symbol; access-token-count == num_operands-3; each binding (operands 3..) resource-kinded."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# render.draw_indirect (CEIR-14c) -- an INDIRECT draw: the draw params (vertex/instance counts, offsets) are read from an
+# %args buffer GPU-side (GeometrySource::Indirect); up to `max_draws` sub-draws. ⛔ max_draws is the DrawIndex RANGE: the
+# 14z RASTER executor pushes the per-sub-draw SV_DrawIndex row (Vulkan push constant / D3D12 command-signature root
+# constant) -- the REN-40 scar. This lowering carries `max_draws` + the args identity forward; the push-the-row assertion +
+# the forced-value probe (render one mesh LARGE, pin the field) are NAMED-FORWARD to CEIR-14z (the scar memory is explicit:
+# cheap checks cannot see the failure, so a lowering test claiming to cover it would be a false-clean). Args FIRST, then
+# the variadic bindings. Static MemoryRead on %args on top of the conservative baseline.
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "draw_indirect"
+summary = "An indirect draw: @program with draw params read from an %args buffer, up to max_draws sub-draws, inside a render.scope."
+version = 1
+operands = [
+    { name = "args", type = "resource", doc = "the indirect-args buffer (draw params read GPU-side; a Buffer or View-of-buffer)" },
+    { name = "bindings", type = "resource", variadic = true, doc = "the draw's bound resources, in SLOT order (as render.draw)" },
+]
+attributes = [
+    { name = "program", kind = "symbol", required = true, doc = "the graphics program identity (@program); absent/non-symbol = ProgramNotSymbol" },
+    { name = "access", kind = "string", required = true, doc = "per-binding access over the variadic bindings tail: comma-separated {r|w|rw}" },
+    { name = "program_interface", kind = "int", required = false, doc = "CEIR-13c the EXPECTED §107 interface hash of @program (a PIN; absent = unpinned)" },
+    { name = "max_draws", kind = "int", required = false, doc = "sec-40 the MAX sub-draw count (>=1, absent = 1). ⭐ the DrawIndex RANGE -- 14z pushes SV_DrawIndex per sub-draw (REN-40). find_render_misuse: >=1 (MaxDrawsInvalid)." },
+    { name = "args_offset", kind = "int", required = false, doc = "BYTE offset into %args (absent = 0; GeometrySource.args_offset). A static ATTR." },
+]
+effects = [ "GPUCommand", "MemoryReadWrite", { family = "MemoryRead", operand = 0 } ]
+kernel_ref = { symbol = "program", interface = "program_interface" }
+docs = "render.draw_indirect(%args, %bindings...) {program=@p, access=\"...\", max_draws=N, args_offset=O}. An indirect draw (GeometryKind::Indirect), RESULTLESS, legal ONLY inside a render.scope region. Effects: GPUCommand + ambient MemoryReadWrite + a static MemoryRead on %args (operand 0). ⭐ max_draws = the DrawIndex range (14z pushes the row; REN-40). find_render_misuse: args (operand 0) a Buffer/View-of-buffer (IndirectArgsNotBuffer); program a Symbol; max_draws >=1; access-token-count == num_operands-1; bindings (operands 1..) resource-kinded."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# render.draw_indirect_count (CEIR-14c) -- an INDIRECT draw whose ACTUAL draw count is read from a device %count buffer
+# (GeometryKind::IndirectCount; the GPU decides the count, bounded by max_draws). TWO buffer operands (args, count), each a
+# static MemoryRead. Args(0), count(1), then the variadic bindings.
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "draw_indirect_count"
+summary = "An indirect-count draw: @program with args + a device count buffer (the GPU decides the draw count, up to max_draws)."
+version = 1
+operands = [
+    { name = "args", type = "resource", doc = "the indirect-args buffer (a Buffer or View-of-buffer; static read)" },
+    { name = "count", type = "resource", doc = "the device count buffer holding the actual draw count (a Buffer or View-of-buffer; static read)" },
+    { name = "bindings", type = "resource", variadic = true, doc = "the draw's bound resources, in SLOT order" },
+]
+attributes = [
+    { name = "program", kind = "symbol", required = true, doc = "the graphics program identity (@program); absent/non-symbol = ProgramNotSymbol" },
+    { name = "access", kind = "string", required = true, doc = "per-binding access over the variadic bindings tail" },
+    { name = "program_interface", kind = "int", required = false, doc = "CEIR-13c the EXPECTED §107 interface hash (a PIN; absent = unpinned)" },
+    { name = "max_draws", kind = "int", required = false, doc = "sec-40 the MAX draw count bound (>=1, absent = 1). The DrawIndex range (14z; REN-40). find_render_misuse: >=1." },
+    { name = "args_offset", kind = "int", required = false, doc = "BYTE offset into %args (absent = 0)" },
+    { name = "count_offset", kind = "int", required = false, doc = "BYTE offset into %count (absent = 0; GeometrySource.count_offset)" },
+]
+effects = [ "GPUCommand", "MemoryReadWrite", { family = "MemoryRead", operand = 0 }, { family = "MemoryRead", operand = 1 } ]
+kernel_ref = { symbol = "program", interface = "program_interface" }
+docs = "render.draw_indirect_count(%args, %count, %bindings...) {program=@p, access=\"...\", max_draws=N}. An indirect-count draw (GeometryKind::IndirectCount), RESULTLESS, legal ONLY inside a render.scope region. Effects: GPUCommand + ambient MemoryReadWrite + a static MemoryRead on %args (0) AND %count (1). find_render_misuse: args (0) + count (1) each a Buffer/View-of-buffer (IndirectArgsNotBuffer / IndirectCountNotBuffer); program a Symbol; max_draws >=1; access arity == num_operands-2; bindings (operands 2..) resource-kinded."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# render.mesh_dispatch (CEIR-14c) -- a MESH-SHADER dispatch: run the mesh @program over a (gx, gy, gz) workgroup grid
+# (GeometryKind::Meshlet; no vertex/index buffer -- the mesh shader emits geometry). Grid dims are RUNTIME index operands
+# (const-folded in lowering, the compute.dispatch grid shape). ⛔ grid (0..2) FIRST, then the variadic bindings.
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "mesh_dispatch"
+summary = "A mesh-shader dispatch: run the mesh @program over a (gx,gy,gz) workgroup grid with the bound resources, inside a render.scope."
+version = 1
+operands = [
+    { name = "grid_x", type = "index", doc = "mesh workgroup count in X (a runtime index; const-folded, dynamic -> UnsupportedCommand)" },
+    { name = "grid_y", type = "index", doc = "mesh workgroup count in Y" },
+    { name = "grid_z", type = "index", doc = "mesh workgroup count in Z" },
+    { name = "bindings", type = "resource", variadic = true, doc = "the mesh program's bound resources, in SLOT order" },
+]
+attributes = [
+    { name = "program", kind = "symbol", required = true, doc = "the mesh graphics program identity (@program); absent/non-symbol = ProgramNotSymbol" },
+    { name = "access", kind = "string", required = true, doc = "per-binding access over the variadic bindings tail" },
+    { name = "program_interface", kind = "int", required = false, doc = "CEIR-13c the EXPECTED §107 interface hash (a PIN; absent = unpinned)" },
+]
+effects = [ "GPUCommand", "MemoryReadWrite" ]
+kernel_ref = { symbol = "program", interface = "program_interface" }
+docs = "render.mesh_dispatch(%gx, %gy, %gz, %bindings...) {program=@p, access=\"...\"}. A mesh-shader dispatch (GeometryKind::Meshlet), RESULTLESS, legal ONLY inside a render.scope region. Effects: GPUCommand + ambient MemoryReadWrite. find_render_misuse: grid (operands 0-2) Index-typed (DrawCountNotIndex); program a Symbol; access arity == num_operands-3; bindings (operands 3..) resource-kinded."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# render.mesh_dispatch_indirect (CEIR-14c) -- a mesh dispatch whose group counts are read from an %args buffer GPU-side
+# (GeometryKind::MeshletIndirect). Args(0), then the variadic bindings; static MemoryRead on %args.
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "mesh_dispatch_indirect"
+summary = "An indirect mesh dispatch: the mesh @program group counts read from an %args buffer, with the bound resources."
+version = 1
+operands = [
+    { name = "args", type = "resource", doc = "the indirect-args buffer holding the mesh group counts (read GPU-side; a Buffer or View-of-buffer)" },
+    { name = "bindings", type = "resource", variadic = true, doc = "the mesh program's bound resources, in SLOT order" },
+]
+attributes = [
+    { name = "program", kind = "symbol", required = true, doc = "the mesh graphics program identity (@program); absent/non-symbol = ProgramNotSymbol" },
+    { name = "access", kind = "string", required = true, doc = "per-binding access over the variadic bindings tail" },
+    { name = "program_interface", kind = "int", required = false, doc = "CEIR-13c the EXPECTED §107 interface hash (a PIN; absent = unpinned)" },
+    { name = "args_offset", kind = "int", required = false, doc = "BYTE offset into %args (absent = 0)" },
+]
+effects = [ "GPUCommand", "MemoryReadWrite", { family = "MemoryRead", operand = 0 } ]
+kernel_ref = { symbol = "program", interface = "program_interface" }
+docs = "render.mesh_dispatch_indirect(%args, %bindings...) {program=@p, access=\"...\"}. An indirect mesh dispatch (GeometryKind::MeshletIndirect), RESULTLESS, legal ONLY inside a render.scope region. Effects: GPUCommand + ambient MemoryReadWrite + a static MemoryRead on %args (operand 0). find_render_misuse: args (operand 0) a Buffer/View-of-buffer (IndirectArgsNotBuffer); program a Symbol; access arity == num_operands-1; bindings (operands 1..) resource-kinded."

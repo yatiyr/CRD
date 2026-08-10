@@ -68,7 +68,8 @@ Legend: ✅ shipped · 🚧 active · ◧ partially shipped, no active work · �
 ## Strategic Execution Plan (locked 2026-05-15; **revised 2026-05-19 — agent-native pivot + hesap-elite + C++-only-scripting**)
 
 > **HISTORICAL — a locked plan, preserved as decided (2026-05-15/19).** The strategic *direction* here (engineering
-> platform, agent-native, hesap-elite, C++-only scripting) still stands. The *sequencing*, however, was overtaken by
+> platform, agent-native, hesap-elite, ~~C++-only scripting~~ → a Cerid-owned CEIR/CHIR language stack, flipped by
+> ADR-0108 2026-08-07) still stands. The *sequencing*, however, was overtaken by
 > events: step 2 (hesap v0–v17) ran through v16, and **v17 GPU compute grew into detour D-007** — the user then locked
 > (2026-07-11) the FULL visual frontier + RAF + the post-RAF programme *before* hesap-GPU and the eylem resume. For
 > what to work on **today**, read `context.md` + `docs/detours/D-007-gpu-program-system.md`; this section explains how
@@ -90,12 +91,19 @@ After a step-back strategic review (Pathways A–E + cross-cuts) on
   `docs/research/cerid-agent-native-engine.md` +
   `docs/research/cerid-hesap-2026-update.md`.
 
-- **C++ hot-reload is the ONLY scripting language.** Cerid scripts
-  ARE C++ files (`.crds.cpp`) compiled into hot-reloadable DLLs.
-  **No Lua / Python / GDScript / JavaScript embedded interpreter.**
-  ADR-0034 (C++ DLL hot-reload) is now subsumed by ADR-0081 as the
-  scripting-substrate sub-aspect of the broader agent-native vision.
-  Locked 2026-05-19; revisiting requires a new ADR.
+- **Cerid owns its executable-program language stack (CEIR/CHIR);
+  C++ is one authoring surface, not the only one (ADR-0108).**
+  Reusable algorithms are inspectable / serializable / hot-reloadable
+  program assets, authored as text (CEIR/CHIR), a CR-D007 visual
+  graph, a domain frontend, or a C++ builder. C++ stays first-class
+  for native extension + programmatic authoring, and C++ DLL
+  hot-reload remains supported. **No Lua / Python / GDScript /
+  JavaScript embedded interpreter — CHIR is Cerid's OWN, not a wrapped
+  VM.** ADR-0034 (C++ DLL hot-reload) is subsumed by ADR-0081 as one
+  authoring sub-aspect. ~~Locked 2026-05-19; revisiting requires a new
+  ADR.~~ **Historical:** the C++-ONLY clause was surgically superseded
+  by ADR-0108 (Accepted 2026-08-07; cornerstone flip executed at the
+  first CEIR vertical slice, CEIR-13z, 2026-08-10).
 
 - **`crd-hesap` goes elite-and-big** (same precedent as Phase 3.1.7
   `crd-geometry`). Full SOTA scope from v0: matrix-type catalog
@@ -148,7 +156,7 @@ After a step-back strategic review (Pathways A–E + cross-cuts) on
 
 4. **`crd-hesap-dense` v0 ships BEFORE eylem v1c resume** (after 3.1.7 close). **REVISED 2026-05-19**: hesap-elite-and-big — full v0-v17 substrate (~10-12 months) ships before eylem v1c resume; v0 expands to v0a-f over ~5 weeks (matrix types + complex + LinearOp + task-DAG + mixed-precision IR + CLI plumbing + bench substrate). Aligns with the engineering-platform pivot. Eylem v7 FEM and v9 differentiable later consume hesap natively. Per the user "elite, no shortcuts" mandate.
 
-5. **C++ scripting + DLL hot-reload DEFERRED to Phase 4.0 as planned.** Not pulled forward. **REVISED 2026-05-19**: locked as the **ONLY** scripting language (no Lua / Python / GDScript). Phase 4.0 absorbs `crd-cli` + `crd-rpc` + `crd-script` into one agent-native substrate phase. ADR-0034 is subsumed by ADR-0081 (Proposed). Original 2026-05-15 reasoning still valid: (a) no consumer-tier code exists yet to reload — hesap-v0 protocol plumbing serves as the first consumer; (b) DLL supervisor's state-migration design crystallizes when crd-hesap-repl + crd-cli land; (c) script-as-DLL-loaded-into-engine over a domain is the right shape (agent emits C++ → cooker compiles → hot-reload → call); (d) iteration-speed productivity gain available cheaper via per-slice protocol plumbing until Phase 4.0 ships the parser.
+5. **C++ scripting + DLL hot-reload DEFERRED to Phase 4.0 as planned.** Not pulled forward. **REVISED 2026-05-19**: ~~locked as the **ONLY** scripting language (no Lua / Python / GDScript)~~. **RE-REVISED 2026-08-07 (ADR-0108): C++ is no longer the ONLY scripting language — Cerid owns the CEIR/CHIR + CR-D007-visual language stack; C++ stays first-class native + hot-reload; the third-party-VM rejection (no Lua/Python/JS) stands.** Phase 4.0 absorbs `crd-cli` + `crd-rpc` + `crd-script` into one agent-native substrate phase. ADR-0034 is subsumed by ADR-0081 (Proposed). Original 2026-05-15 reasoning still valid: (a) no consumer-tier code exists yet to reload — hesap-v0 protocol plumbing serves as the first consumer; (b) DLL supervisor's state-migration design crystallizes when crd-hesap-repl + crd-cli land; (c) script-as-DLL-loaded-into-engine over a domain is the right shape (agent emits C++ → cooker compiles → hot-reload → call); (d) iteration-speed productivity gain available cheaper via per-slice protocol plumbing until Phase 4.0 ships the parser.
 
 6. **Cross-cuts run in flight with units adoption + through geometry phase.** Four detours: **D-006 `crd-time` substrate ✅ shipped 2026-05-15** (absorbs `platform::Timer`/`FrameClock`, ships `Instant`/`Duration = Quantity<dim::Time, f64>`/`Stopwatch`/`FrameClock` fixed-step + alpha/`DeterministicClock`/`Deadline`/GPU timestamp delegation; **first major consumer of the units substrate**; foundation for D-003 + D-004 + eylem v1c+ fixed-step); **D-003 `crd-perf` profiler + ImGui frontend ✅ shipped 2026-05-15** (renamed from `crd-profiler` at v0a — collision with existing `crd-profile` quality-preset module; **all 8 slices v0a-v0h shipped same session** = substrate + UX + sandbox wiring + ADR-0079 + system doc + `win-shipping-profile` preset extending per-slice DoD 4 → 5 configs; 97 perf-* test cases / 336 assertions); D-004 deterministic-replay sandbox queued (uses D-006 `DeterministicClock`); D-005 config/resource hot-reload polish queued. Per-slice protocol fix shipped 2026-05-15 as Sprint 0 ahead of units v0a (codified in `feedback_per_slice_run_ctest.md` + `scripts/per-slice-check.{ps1,sh}` + `docs/protocols/per-slice-verification.md`).
 

@@ -141,6 +141,43 @@ void gather(const Context& ctx, const Operation* op, containers::Array<Access>& 
     if (nm == containers::StringView("transfer.mip_gen")) { out = LoweredTransferKind::MipGen; return true; }
     return false;
 }
+
+// CEIR-14b: lower a render.scope's region body — emit a Draw command per render.draw / render.draw_indexed op. ⛔ NO
+// barriers here (raster order + blending own intra-pass ordering; the scope-level ambient barrier covers scope-vs-neighbors,
+// including the region-interior binding hazard). Pure value ops emit nothing; structured control flow recurses (its draws
+// stay in the scope). find_render_misuse has already rejected a non-render GPUCommand op inside the scope.
+// ⛔ CEIR-14b/14c: inside a render.scope region, ANY op with a §26 GPUCommand effect IS a draw-family op (render.draw /
+// draw_indexed / draw_indirect(_count) / mesh_dispatch(_indirect)) — find_render_misuse's ComputeInRenderScope check has
+// already rejected a non-render GPUCommand op here (the verifier-first contract). So this EFFECT predicate needs NO draw-op
+// name list: adding a 14c+ draw op requires ZERO edits here — the authoritative name list lives ONCE, in the verifier's
+// `draw_shape_of` (the 14c two-list fragility, resolved).
+[[nodiscard]] bool op_emits_draw(const Context& ctx, const Operation* op)
+{
+    const containers::ConstSpan<EffectRecord> fx = ctx.op_effects(op->kind());
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(fx.size()); ++i)
+    {
+        if (fx[i].family == EffectFamily::GPUCommand) { return true; }
+    }
+    return false;
+}
+void lower_scope_body(const Context& ctx, const Region* r, containers::Array<LoweredCommand>& out) // NOLINT(misc-no-recursion)
+{
+    if (r == nullptr) { return; }
+    for (const Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
+    {
+        for (const Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+        {
+            if (op_emits_draw(ctx, op)) // any GPUCommand op here is a draw (the verifier guaranteed it) → one Draw command
+            {
+                LoweredCommand d;
+                d.kind = LoweredKind::Draw;
+                d.op   = op;
+                out.push_back(d);
+            }
+            for (crd::u32 i = 0; i < op->num_regions(); ++i) { lower_scope_body(ctx, op->region(i), out); }
+        }
+    }
+}
 } // namespace
 
 void lower_region(const Context& ctx, const Block& block, containers::Array<LoweredCommand>& out)
@@ -154,9 +191,10 @@ void lower_region(const Context& ctx, const Block& block, containers::Array<Lowe
         const containers::StringView nm       = ctx.op_name(op->kind());
         const bool                   direct   = nm == containers::StringView("compute.dispatch");
         const bool                   indirect = nm == containers::StringView("compute.dispatch_indirect");
+        const bool                   scope    = nm == containers::StringView("render.scope"); // CEIR-14b
         LoweredTransferKind          tk       = LoweredTransferKind::Copy;
         const bool                   transfer = transfer_kind_of(nm, tk);
-        if (!(direct || indirect || transfer)) { continue; } // Pure consts/declares emit nothing
+        if (!(direct || indirect || transfer || scope)) { continue; } // Pure consts/declares emit nothing
 
         // BARRIER: PER-RESOURCE (⭐ CEIR-13z-3). For each ROOT resource `op` accesses (binding-operand order, deduped), the
         // strongest hazard from any earlier lowered op touching it + the NEAREST such op (the last writer, reverse scan). A
@@ -203,6 +241,25 @@ void lower_region(const Context& ctx, const Block& block, containers::Array<Lowe
                 b.resource = res;
                 out.push_back(b);
             }
+        }
+
+        // ── CEIR-14b: a render.scope lowers to BeginRender → the region's Draws → EndRender. The barrier gather above ran
+        // for the scope too (its ambient MemoryReadWrite → a nullptr whole-class access → a barrier before this BeginRender
+        // vs any earlier writer — the region-interior binding hazard hole is covered at SCOPE granularity). No per-Draw
+        // barriers (raster order + blending own intra-pass ordering).
+        if (scope)
+        {
+            LoweredCommand bgn;
+            bgn.kind = LoweredKind::BeginRender;
+            bgn.op   = op;
+            out.push_back(bgn);
+            for (crd::u32 i = 0; i < op->num_regions(); ++i) { lower_scope_body(ctx, op->region(i), out); }
+            LoweredCommand end;
+            end.kind = LoweredKind::EndRender;
+            end.op   = op;
+            out.push_back(end);
+            earlier.push_back(op);
+            continue;
         }
 
         LoweredCommand c;

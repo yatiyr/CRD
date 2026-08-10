@@ -339,6 +339,55 @@ struct TransferMisuse
     TransferMisuseKind kind  = TransferMisuseKind::None;
 };
 
+// CEIR-14a §40/§41: the `ceir.render` well-formedness ENFORCEMENT (the find_dispatch_misuse house pattern) — a
+// deterministic module walk over render.scope / render.color_attachment / render.depth_attachment checking the contract
+// the per-op structural verify cannot: the attachment operand is an Image (or a View of one); the closed-vocabulary
+// per-attachment attrs (load/store/clear_kind/blend/compare); a Uint typed-clear only on a uint-format attachment (the
+// RAH-1a.1 typed-clear-vs-format scar lifted to the IR); every render.scope operand is a color/depth attachment TYPE; at
+// most ONE depth attachment per scope (a type property — the two classes are distinct TypeIds); the render area (width/
+// height ≥ 1) + sample_count (a power of two in [1,64]). ⛔ A wrong VALUE and a wrong attr-KIND fold into ONE kind per
+// attr (the 12b fold doctrine). Draw-family region contents are CEIR-14b (no draw ops yet).
+// NOLINTNEXTLINE(performance-enum-size)
+enum class RenderMisuseKind : u8
+{
+    None = 0,
+    AttachmentNotImage,       // a render.color/depth_attachment operand(0) is not an Image nor a View of an Image
+    LoadOpInvalid,            // `load` is not in {clear, load, dontcare} (or a non-String value)
+    StoreOpInvalid,           // `store` is not in {store, dontcare}
+    ClearKindInvalid,         // `clear_kind` is not in {float, uint}
+    BlendInvalid,             // `blend` is not in {opaque, alpha, additive, premultiplied}
+    CompareInvalid,           // `compare` is not in the DepthCompare vocabulary
+    ClearKindFormatMismatch,  // clear_kind=uint on a non-uint-format attachment (RAH-1a.1: a uint clear needs a uint target)
+    ScopeOperandNotAttachment,// a render.scope operand is not a color/depth attachment-typed value
+    MultipleDepthAttachments, // a render.scope binds more than one depth attachment
+    RenderAreaInvalid,        // render.scope width or height < 1 (or a non-Int / absent required attr)
+    SampleCountInvalid,       // render.scope sample_count is not a power of two in [1,64] (or a non-Int)
+    // CEIR-14b draw-family + region-context kinds (append at end — the widen-enum discipline).
+    DrawOutsideScope,         // a render.draw / render.draw_indexed op outside any render.scope region
+    NestedRenderScope,        // a render.scope inside another render.scope region (begin-inside-begin, illegal Vulkan/D3D12)
+    ComputeInRenderScope,     // a non-render GPUCommand op (e.g. compute.dispatch) inside a render.scope region
+    ProgramNotSymbol,         // a draw's `program` @identity attr is absent or not a Symbol (identity before contract)
+    DrawCountNotIndex,        // a draw's vertex/index/instance count operand (0..1) is not Index-typed
+    DrawAccessInvalid,        // a draw's `access` string has a token outside {r,w,rw} (or a non-String value)
+    DrawAccessArity,          // a draw's `access` token count != the number of bindings
+    DrawBindingNotResource,   // a draw binding operand is not a resource-kinded value
+    DrawIndexBufferNotBuffer, // render.draw_indexed operand 2 (index_buffer) is not a Buffer nor a View of a Buffer
+    // CEIR-14c indirect / mesh draw kinds (append at end).
+    IndirectArgsNotBuffer,    // an indirect draw's %args operand is not a Buffer nor a View of a Buffer
+    IndirectCountNotBuffer,   // render.draw_indirect_count's %count operand is not a Buffer nor a View of a Buffer
+    MaxDrawsInvalid,          // an indirect draw's `max_draws` attr is < 1 (or a non-Int) — the DrawIndex range must be >= 1
+};
+[[nodiscard]] containers::StringView render_misuse_kind_name(RenderMisuseKind k) noexcept;
+
+// The pointing result of the CEIR-14a render walk: the FIRST misuse (pre-order), the offending `op`, and the `value` it
+// points at (a bad attachment operand; null for an attribute misuse, which is an attribute of the op).
+struct RenderMisuse
+{
+    const Value*     value = nullptr;
+    const Operation* op    = nullptr;
+    RenderMisuseKind kind  = RenderMisuseKind::None;
+};
+
 class Context
 {
 public:
@@ -726,6 +775,14 @@ public:
     // Buffer/Image or a View one-hop) + the clear `value` attr. ⛔ Assumes structural validity; robust to a raw
     // deserialized module for the `value` kind-fold (like find_dispatch_misuse).
     [[nodiscard]] TransferMisuse find_transfer_misuse(const Module& m) const noexcept;
+
+    // CEIR-14a §40/§41: the `ceir.render` well-formedness check — a pre-order walk returning the FIRST render.scope /
+    // render.color_attachment / render.depth_attachment op whose attachment/area contract is malformed (see
+    // RenderMisuseKind), or {None}. Reads the CEIR-3c operand TYPES (attachment operand = Image or View-of-Image; a
+    // render.scope operand = a render color/depth attachment Extern type) + the closed-vocabulary per-attachment attrs +
+    // the typed-clear-vs-format pairing. ⛔ Assumes structural validity (run the per-op verify first — it guarantees the
+    // required width/height attrs + min arity); robust to a raw deserialized module for the attr kind-folds.
+    [[nodiscard]] RenderMisuse find_render_misuse(const Module& m) const noexcept;
 
     // Interfaces: intern a name, register/query an op-kind's implementation (an opaque function-table pointer).
     [[nodiscard]] InterfaceId    intern_interface(containers::StringView name); // CEIR-8e: an FNV of the name (== T::kId)

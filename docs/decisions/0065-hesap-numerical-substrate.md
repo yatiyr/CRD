@@ -565,7 +565,7 @@ Companion vision: `docs/research/cerid-agent-native-engine.md`.
   those ship with `crd-cli` substrate in Phase 4.0. Protocol-first,
   parser-later (same pattern as ADR-0076 §12 for geometry-before-eylem).
 
-- **D17 (C++ scripting via hot-reload — the ONLY scripting path).**
+- **D17 (C++ scripting via hot-reload — ~~the ONLY scripting path~~ a first-class path; ADR-0108 2026-08-07 flipped "ONLY" → Cerid-owned CEIR/CHIR stack).**
   Per ADR-0081 + user direction 2026-05-19. The original ADR-0034
   C ABI plug-in plan is **subsumed by ADR-0081**'s broader
   agent-native substrate. Cerid scripts (including notebook cells)

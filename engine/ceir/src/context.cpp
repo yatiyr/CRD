@@ -2695,6 +2695,307 @@ containers::StringView transfer_misuse_kind_name(TransferMisuseKind k) noexcept
 
 TransferMisuse Context::find_transfer_misuse(const Module& m) const noexcept { return scan_transfer(*this, m.body()); }
 
+// ── CEIR-14a §40/§41: the ceir.render well-formedness enforcement (find_render_misuse) ──
+namespace
+{
+// The render per-attachment CLOSED vocabularies (find_render_misuse enforces them, the resource-intent precedent).
+constexpr containers::StringView kLoadVocab[]  = {containers::StringView("clear"), containers::StringView("load"),
+                                                 containers::StringView("dontcare")};
+constexpr containers::StringView kStoreVocab[] = {containers::StringView("store"), containers::StringView("dontcare")};
+constexpr containers::StringView kClearKindVocab[] = {containers::StringView("float"), containers::StringView("uint")};
+constexpr containers::StringView kBlendVocab[]     = {containers::StringView("opaque"), containers::StringView("alpha"),
+                                                  containers::StringView("additive"),
+                                                  containers::StringView("premultiplied")};
+constexpr containers::StringView kCompareVocab[]   = {
+    containers::StringView("never"),      containers::StringView("less"),          containers::StringView("equal"),
+    containers::StringView("less_equal"), containers::StringView("greater"),       containers::StringView("not_equal"),
+    containers::StringView("greater_equal"), containers::StringView("always")};
+
+// A CLOSED-vocabulary STRING attr on a render op: ABSENT ⇒ ok (unspecified is a valid default); else it must be a String
+// whose text is in `set` (a wrong KIND folds into "not ok" — one kind per attr). Mirrors ceir_intent_string_ok; reuses
+// the file-local ceir_sv_in.
+[[nodiscard]] bool ceir_render_string_ok(const Context& ctx, const Operation* op, containers::StringView name,
+                                         const containers::StringView* set, crd::u32 n) noexcept
+{
+    const AttrId a = op->attr(name);
+    if (!a.valid()) { return true; }
+    const AttrValue v = ctx.attr_value(a);
+    return v.kind == AttrKind::String && ceir_sv_in(v.s, set, n);
+}
+// An attachment operand type is an Image, or a View one-hop over an Image (the §41 mip/layer/aspect subresource case).
+[[nodiscard]] bool ceir_is_image_or_view_of_image(const Context& ctx, TypeId t) noexcept
+{
+    const Type ty = ctx.type_of(t);
+    if (ty.kind == TypeKind::Image) { return true; }
+    if (ty.kind == TypeKind::View && ty.members.size() >= 1U) { return ctx.type_of(ty.members[0]).kind == TypeKind::Image; }
+    return false;
+}
+// The underlying image FORMAT element type of an attachment operand (unwrap View one-hop → Image → members[0]); an
+// invalid TypeId if not an image. For the RAH-1a.1 typed-clear-vs-format check.
+[[nodiscard]] TypeId ceir_image_format(const Context& ctx, TypeId t) noexcept
+{
+    Type ty = ctx.type_of(t);
+    if (ty.kind == TypeKind::View && ty.members.size() >= 1U) { ty = ctx.type_of(ty.members[0]); }
+    if (ty.kind == TypeKind::Image && ty.members.size() >= 1U) { return ty.members[0]; }
+    return TypeId{};
+}
+// Is `fmt` an UNSIGNED-integer format? A uint typed-clear needs one (RAH-1a.1). An unsigned Int element.
+[[nodiscard]] bool ceir_is_uint_format(const Context& ctx, TypeId fmt) noexcept
+{
+    if (!fmt.valid()) { return false; }
+    const Type f = ctx.type_of(fmt);
+    return f.kind == TypeKind::Int && !f.is_signed;
+}
+enum class RAtt : crd::u8 { None = 0, Color, Depth };
+// Which render attachment class is `t`? An Extern type of render.color_attachment / render.depth_attachment.
+[[nodiscard]] RAtt ceir_attachment_class(const Context& ctx, TypeId t) noexcept
+{
+    const Type ty = ctx.type_of(t);
+    if (ty.kind != TypeKind::Extern) { return RAtt::None; }
+    const containers::StringView n = ctx.type_class_name(ty.type_class);
+    if (n == containers::StringView("render.color_attachment")) { return RAtt::Color; }
+    if (n == containers::StringView("render.depth_attachment")) { return RAtt::Depth; }
+    return RAtt::None;
+}
+[[nodiscard]] bool ceir_is_pow2_1_64(crd::i64 v) noexcept { return v >= 1 && v <= 64 && (v & (v - 1)) == 0; }
+// Does op-kind `k` declare a §26 GPUCommand effect? (a compute.dispatch / transfer / draw — a real command submission).
+[[nodiscard]] bool ceir_op_is_gpu_command(const Context& ctx, OpId k) noexcept
+{
+    const containers::ConstSpan<EffectRecord> fx = ctx.op_effects(k);
+    const EffectRecord* const                 d  = fx.data();
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(fx.size()); ++i)
+    {
+        if (d[i].family == EffectFamily::GPUCommand) { return true; }
+    }
+    return false;
+}
+// The CEIR-14b draw contract (render.draw / render.draw_indexed): identity (program symbol) BEFORE contract, then counts
+// (operands 0-1) Index-typed, the index_buffer (indexed, operand 2) a Buffer/View, the `access` tokens + arity, bindings
+// resource-kinded. Returns the FIRST misuse or {None}. Reuses the file-local ceir_parse_access /
+// ceir_is_buffer_or_view_of_buffer / ceir_is_resource_kind (the scan_dispatch helpers, same TU).
+// CEIR-14b/14c: a draw op's operand SHAPE — `n_counts` leading Index-typed count operands, then `n_buffers` Buffer/View
+// operands (each with its OWN misuse kind), then the variadic bindings tail; `has_max_draws` gates the indirect DrawIndex-
+// range check (the REN-40 scar's IR-side half — max_draws >= 1; the executor-pushes-the-row assertion is CEIR-14z).
+struct DrawShape
+{
+    crd::u32         n_counts      = 0;
+    crd::u32         n_buffers     = 0;
+    RenderMisuseKind buf_err[2]    = {RenderMisuseKind::None, RenderMisuseKind::None};
+    bool             has_max_draws = false;
+};
+// The draw-op shape for `nm`, or false if `nm` is not a render draw-family op. ⛔ THE authoritative draw-op name list —
+// scan_render_region routes every draw here; the lowering (lower_scope_body) uses an EFFECT predicate (any GPUCommand op in
+// a scope is a draw, guaranteed by find_render_misuse), so there is NO second name list to keep in sync (the 14c fragility).
+[[nodiscard]] bool draw_shape_of(containers::StringView nm, DrawShape& out)
+{
+    if (nm == containers::StringView("render.draw")) { out = {2U, 0U, {RenderMisuseKind::None, RenderMisuseKind::None}, false}; return true; }
+    if (nm == containers::StringView("render.draw_indexed")) { out = {2U, 1U, {RenderMisuseKind::DrawIndexBufferNotBuffer, RenderMisuseKind::None}, false}; return true; }
+    if (nm == containers::StringView("render.draw_indirect")) { out = {0U, 1U, {RenderMisuseKind::IndirectArgsNotBuffer, RenderMisuseKind::None}, true}; return true; }
+    if (nm == containers::StringView("render.draw_indirect_count")) { out = {0U, 2U, {RenderMisuseKind::IndirectArgsNotBuffer, RenderMisuseKind::IndirectCountNotBuffer}, true}; return true; }
+    if (nm == containers::StringView("render.mesh_dispatch")) { out = {3U, 0U, {RenderMisuseKind::None, RenderMisuseKind::None}, false}; return true; }
+    if (nm == containers::StringView("render.mesh_dispatch_indirect")) { out = {0U, 1U, {RenderMisuseKind::IndirectArgsNotBuffer, RenderMisuseKind::None}, false}; return true; }
+    return false;
+}
+// The CEIR-14b/14c draw contract for op-shape `sh`: identity (program symbol) BEFORE contract, then counts Index-typed, the
+// buffer operands each Buffer/View, max_draws >= 1 (indirect), the `access` tokens + arity, bindings resource-kinded.
+[[nodiscard]] RenderMisuse ceir_check_draw(const Context& ctx, Operation* op, const DrawShape& sh)
+{
+    if (ctx.attr_value(op->attr(containers::StringView("program"))).kind != AttrKind::SymbolRef)
+    {
+        return {nullptr, op, RenderMisuseKind::ProgramNotSymbol};
+    }
+    for (crd::u32 i = 0; i < sh.n_counts && i < op->num_operands(); ++i)
+    {
+        if (ctx.type_of(op->operand(i)->type()).kind != TypeKind::Index)
+        {
+            return {op->operand(i), op, RenderMisuseKind::DrawCountNotIndex};
+        }
+    }
+    for (crd::u32 j = 0; j < sh.n_buffers; ++j)
+    {
+        const crd::u32 idx = sh.n_counts + j;
+        if (op->num_operands() > idx && !ceir_is_buffer_or_view_of_buffer(ctx, op->operand(idx)->type()))
+        {
+            return {op->operand(idx), op, sh.buf_err[j]};
+        }
+    }
+    if (sh.has_max_draws)
+    {
+        const AttrId md = op->attr(containers::StringView("max_draws"));
+        if (md.valid())
+        {
+            const AttrValue mv = ctx.attr_value(md);
+            if (mv.kind != AttrKind::Int || mv.i < 1) { return {nullptr, op, RenderMisuseKind::MaxDrawsInvalid}; }
+        }
+    }
+    const crd::u32  fixed    = sh.n_counts + sh.n_buffers;
+    const crd::u32  bindings = op->num_operands() >= fixed ? op->num_operands() - fixed : 0U;
+    crd::u32        tokens   = 0;
+    const AttrValue av       = ctx.attr_value(op->attr(containers::StringView("access")));
+    if (av.kind != AttrKind::String) { return {nullptr, op, RenderMisuseKind::DrawAccessInvalid}; }
+    if (!ceir_parse_access(av.s, tokens)) { return {nullptr, op, RenderMisuseKind::DrawAccessInvalid}; }
+    if (tokens != bindings) { return {nullptr, op, RenderMisuseKind::DrawAccessArity}; }
+    for (crd::u32 i = fixed; i < op->num_operands(); ++i)
+    {
+        if (!ceir_is_resource_kind(ctx.type_of(op->operand(i)->type()).kind))
+        {
+            return {op->operand(i), op, RenderMisuseKind::DrawBindingNotResource};
+        }
+    }
+    return {};
+}
+
+// the pre-order walk — the FIRST render misuse, or {None}. `in_scope` = are we inside a render.scope region? Per-op check
+// ORDER is CONTRACTUAL (negatives pin the exact kind): color/depth_attachment = image-operand → load → store → (color:
+// clear_kind → blend → clear-vs-format | depth: compare); scope = NOT-nested → operands-are-attachments → at-most-one-depth
+// → width/height → sample_count, then recurse its region IN-SCOPE; draw = in-scope → program → counts → index_buffer →
+// access → bindings; a non-render GPUCommand op inside a scope is ComputeInRenderScope.
+RenderMisuse scan_render_region(const Context& ctx, const Region* r, bool in_scope) // NOLINT(misc-no-recursion)
+{
+    if (r == nullptr) { return {}; }
+    for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
+    {
+        for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+        {
+            const containers::StringView nm    = ctx.op_name(op->kind());
+            const bool                   color = nm == containers::StringView("render.color_attachment");
+            const bool                   depth = nm == containers::StringView("render.depth_attachment");
+            DrawShape                    dsh;
+            const bool                   draw = draw_shape_of(nm, dsh); // CEIR-14b/14c: the authoritative draw-op registry
+            if (color || depth)
+            {
+                if (op->num_operands() >= 1U && !ceir_is_image_or_view_of_image(ctx, op->operand(0U)->type()))
+                {
+                    return {op->operand(0U), op, RenderMisuseKind::AttachmentNotImage};
+                }
+                if (!ceir_render_string_ok(ctx, op, containers::StringView("load"), kLoadVocab, 3U))
+                {
+                    return {nullptr, op, RenderMisuseKind::LoadOpInvalid};
+                }
+                if (!ceir_render_string_ok(ctx, op, containers::StringView("store"), kStoreVocab, 2U))
+                {
+                    return {nullptr, op, RenderMisuseKind::StoreOpInvalid};
+                }
+                if (color)
+                {
+                    if (!ceir_render_string_ok(ctx, op, containers::StringView("clear_kind"), kClearKindVocab, 2U))
+                    {
+                        return {nullptr, op, RenderMisuseKind::ClearKindInvalid};
+                    }
+                    if (!ceir_render_string_ok(ctx, op, containers::StringView("blend"), kBlendVocab, 4U))
+                    {
+                        return {nullptr, op, RenderMisuseKind::BlendInvalid};
+                    }
+                    // RAH-1a.1: a uint typed-clear needs a uint-format attachment (the scar lifted to the IR).
+                    const AttrId ck = op->attr(containers::StringView("clear_kind"));
+                    if (ck.valid())
+                    {
+                        const AttrValue ckv = ctx.attr_value(ck);
+                        if (ckv.kind == AttrKind::String && ckv.s == containers::StringView("uint")
+                            && op->num_operands() >= 1U
+                            && !ceir_is_uint_format(ctx, ceir_image_format(ctx, op->operand(0U)->type())))
+                        {
+                            return {op->operand(0U), op, RenderMisuseKind::ClearKindFormatMismatch};
+                        }
+                    }
+                }
+                else if (!ceir_render_string_ok(ctx, op, containers::StringView("compare"), kCompareVocab, 8U))
+                {
+                    return {nullptr, op, RenderMisuseKind::CompareInvalid};
+                }
+            }
+            else if (nm == containers::StringView("render.scope"))
+            {
+                if (in_scope) { return {nullptr, op, RenderMisuseKind::NestedRenderScope}; }
+                crd::u32 depths = 0;
+                for (crd::u32 i = 0; i < op->num_operands(); ++i)
+                {
+                    const RAtt a = ceir_attachment_class(ctx, op->operand(i)->type());
+                    if (a == RAtt::None) { return {op->operand(i), op, RenderMisuseKind::ScopeOperandNotAttachment}; }
+                    if (a == RAtt::Depth) { ++depths; }
+                }
+                if (depths > 1U) { return {nullptr, op, RenderMisuseKind::MultipleDepthAttachments}; }
+                // width/height are REQUIRED Int >= 1 (a wrong-kind/absent folds into RenderAreaInvalid — standalone-robust).
+                const AttrValue w = ctx.attr_value(op->attr(containers::StringView("width")));
+                const AttrValue h = ctx.attr_value(op->attr(containers::StringView("height")));
+                if (w.kind != AttrKind::Int || w.i < 1 || h.kind != AttrKind::Int || h.i < 1)
+                {
+                    return {nullptr, op, RenderMisuseKind::RenderAreaInvalid};
+                }
+                const AttrId sc = op->attr(containers::StringView("sample_count"));
+                if (sc.valid())
+                {
+                    const AttrValue scv = ctx.attr_value(sc);
+                    if (scv.kind != AttrKind::Int || !ceir_is_pow2_1_64(scv.i))
+                    {
+                        return {nullptr, op, RenderMisuseKind::SampleCountInvalid};
+                    }
+                }
+                // ⭐ recurse the scope's region IN-SCOPE (the draws live here), then skip the generic recursion below.
+                for (crd::u32 i = 0; i < op->num_regions(); ++i)
+                {
+                    const RenderMisuse e = scan_render_region(ctx, op->region(i), true);
+                    if (e.kind != RenderMisuseKind::None) { return e; }
+                }
+                continue;
+            }
+            else if (draw)
+            {
+                if (!in_scope) { return {nullptr, op, RenderMisuseKind::DrawOutsideScope}; }
+                const RenderMisuse e = ceir_check_draw(ctx, op, dsh);
+                if (e.kind != RenderMisuseKind::None) { return e; }
+            }
+            else if (in_scope && ceir_op_is_gpu_command(ctx, op->kind()))
+            {
+                // a non-render command submission (compute.dispatch / transfer) inside a render pass is illegal.
+                return {nullptr, op, RenderMisuseKind::ComputeInRenderScope};
+            }
+            // generic recursion into non-scope op regions (structured control flow propagates the current in_scope).
+            for (crd::u32 i = 0; i < op->num_regions(); ++i)
+            {
+                const RenderMisuse e = scan_render_region(ctx, op->region(i), in_scope);
+                if (e.kind != RenderMisuseKind::None) { return e; }
+            }
+        }
+    }
+    return {};
+}
+} // namespace
+
+containers::StringView render_misuse_kind_name(RenderMisuseKind k) noexcept
+{
+    switch (k)
+    {
+    case RenderMisuseKind::None: return containers::StringView("none");
+    case RenderMisuseKind::AttachmentNotImage: return containers::StringView("attachment-not-image");
+    case RenderMisuseKind::LoadOpInvalid: return containers::StringView("load-op-invalid");
+    case RenderMisuseKind::StoreOpInvalid: return containers::StringView("store-op-invalid");
+    case RenderMisuseKind::ClearKindInvalid: return containers::StringView("clear-kind-invalid");
+    case RenderMisuseKind::BlendInvalid: return containers::StringView("blend-invalid");
+    case RenderMisuseKind::CompareInvalid: return containers::StringView("compare-invalid");
+    case RenderMisuseKind::ClearKindFormatMismatch: return containers::StringView("clear-kind-format-mismatch");
+    case RenderMisuseKind::ScopeOperandNotAttachment: return containers::StringView("scope-operand-not-attachment");
+    case RenderMisuseKind::MultipleDepthAttachments: return containers::StringView("multiple-depth-attachments");
+    case RenderMisuseKind::RenderAreaInvalid: return containers::StringView("render-area-invalid");
+    case RenderMisuseKind::SampleCountInvalid: return containers::StringView("sample-count-invalid");
+    case RenderMisuseKind::DrawOutsideScope: return containers::StringView("draw-outside-scope");
+    case RenderMisuseKind::NestedRenderScope: return containers::StringView("nested-render-scope");
+    case RenderMisuseKind::ComputeInRenderScope: return containers::StringView("compute-in-render-scope");
+    case RenderMisuseKind::ProgramNotSymbol: return containers::StringView("program-not-symbol");
+    case RenderMisuseKind::DrawCountNotIndex: return containers::StringView("draw-count-not-index");
+    case RenderMisuseKind::DrawAccessInvalid: return containers::StringView("draw-access-invalid");
+    case RenderMisuseKind::DrawAccessArity: return containers::StringView("draw-access-arity");
+    case RenderMisuseKind::DrawBindingNotResource: return containers::StringView("draw-binding-not-resource");
+    case RenderMisuseKind::DrawIndexBufferNotBuffer: return containers::StringView("draw-index-buffer-not-buffer");
+    case RenderMisuseKind::IndirectArgsNotBuffer: return containers::StringView("indirect-args-not-buffer");
+    case RenderMisuseKind::IndirectCountNotBuffer: return containers::StringView("indirect-count-not-buffer");
+    case RenderMisuseKind::MaxDrawsInvalid: return containers::StringView("max-draws-invalid");
+    }
+    return containers::StringView("?");
+}
+
+RenderMisuse Context::find_render_misuse(const Module& m) const noexcept { return scan_render_region(*this, m.body(), false); }
+
 u32 Context::register_file(containers::StringView path)
 {
     if (path.empty()) { return 0U; }

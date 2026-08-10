@@ -9,6 +9,7 @@
 #include <crd/ceir/gen/compute_ops.hpp>
 #include <crd/ceir/gen/resource_ops.hpp>
 #include <crd/ceir/gen/transfer_ops.hpp>
+#include <crd/ceir/render.hpp> // CEIR-14b: the render.scope region-recursion lowering + the hazard-hole
 #include <crd/ceir/exec.hpp> // CEIR-13z-4 leg 1b: the core Interpreter REFUSES a dispatch (typed NoSemantics)
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/gpu/execute.hpp>
@@ -75,19 +76,63 @@ crd::gpu::ComputePipeline* resolve_from_user(const Operation*, void* user)
 
 struct Kit
 {
-    OpId cst, decl, view, disp, upload;
+    OpId cst, decl, view, disp, upload, col, scope, draw, dind, mesh;
     explicit Kit(Context& c)
         : cst(c.intern_op("arith", "const")), decl(c.intern_op("resource", "declare")),
           view(c.intern_op("resource", "view")), disp(c.intern_op("compute", "dispatch")),
-          upload(c.intern_op("transfer", "upload"))
+          upload(c.intern_op("transfer", "upload")), col(c.intern_op("render", "color_attachment")),
+          scope(c.intern_op("render", "scope")), draw(c.intern_op("render", "draw")),
+          dind(c.intern_op("render", "draw_indirect")), mesh(c.intern_op("render", "mesh_dispatch"))
     {
         (void)arith::register_arith_ops(c);
         (void)func::register_dialect(c);
         (void)resource::register_resource_ops(c);
         (void)compute::register_compute_ops(c);
         (void)transfer::register_transfer_ops(c);
+        (void)render::register_dialect(c); // CEIR-14b: the render ops + attachment type-classes
     }
 };
+// CEIR-14b render builders.
+Value* declimg(Context& c, const Kit& k, Block* b)
+{
+    Operation* const d = c.create_operation(k.decl, {}, 1U, c.type_image(ImageDim::Dim2D, c.type_f32()));
+    b->append(d);
+    return d->result(0U);
+}
+Value* coloratt(Context& c, const Kit& k, Block* b, Value* img)
+{
+    Value*           ops[1] = {img};
+    Operation* const op     = c.create_operation(k.col, ConstSpan<Value*>(ops, 1U), 1U, render::type_color_attachment(c, img->type()));
+    b->append(op);
+    return op->result(0U);
+}
+Operation* scope_op(Context& c, const Kit& k, Block* b, Value* const* atts, crd::u32 na, i64 w, i64 h)
+{
+    Operation* const op = c.create_operation(k.scope, ConstSpan<Value*>(atts, na), 0U, {}, 1U);
+    c.set_attr(op, "width", c.attr_int(w));
+    c.set_attr(op, "height", c.attr_int(h));
+    b->append(op);
+    return op;
+}
+Block* scope_body(Context& c, Operation* sc)
+{
+    Block* const rb = c.create_block(0U);
+    sc->region(0)->append(rb);
+    return rb;
+}
+Operation* draw_op(Context& c, const Kit& k, Block* rb, Value* vc, Value* ic, Value* const* binds, crd::u32 nb,
+                   const char* access, const char* prog)
+{
+    Value* ops[16];
+    ops[0] = vc;
+    ops[1] = ic;
+    for (crd::u32 i = 0; i < nb; ++i) { ops[2 + i] = binds[i]; }
+    Operation* const op = c.create_operation(k.draw, ConstSpan<Value*>(ops, 2U + nb), 0U);
+    c.set_attr(op, "program", c.attr_symbol(StringView(prog)));
+    c.set_attr(op, "access", c.attr_string(StringView(access)));
+    rb->append(op);
+    return op;
+}
 Value* konst(Context& c, const Kit& k, Block* b, i64 v)
 {
     Operation* const o = c.create_operation(k.cst, {}, 1U, c.type_index());
@@ -98,6 +143,14 @@ Value* konst(Context& c, const Kit& k, Block* b, i64 v)
 Value* declbuf(Context& c, const Kit& k, Block* b)
 {
     Operation* const d = c.create_operation(k.decl, {}, 1U, c.type_buffer(BufferMode::Plain, c.type_f32()));
+    b->append(d);
+    return d->result(0U);
+}
+// CEIR-14d: a graph-owned RESOURCE TABLE (a §157 bindless table of a buffer element) — a resource.declare of the CEIR-3c
+// ResourceTable type. It binds like any other resource (ceir_is_resource_kind covers it).
+Value* decltable(Context& c, const Kit& k, Block* b)
+{
+    Operation* const d = c.create_operation(k.decl, {}, 1U, c.type_resource_table(c.type_buffer(BufferMode::Plain, c.type_f32())));
     b->append(d);
     return d->result(0U);
 }
@@ -493,4 +546,236 @@ TEST_CASE("ceir 13z-4: the core Interpreter refuses a compute.dispatch with type
     CHECK_FALSE(r.ok());
     CHECK(r.error == exec::ExecError::NoSemantics); // ⭐ the typed refusal
     CHECK(r.op == d);                               // pointing at the dispatch
+}
+
+// ── CEIR-14b part (ii): the render.scope region-recursion lowering (device-free) ──
+
+TEST_CASE("ceir 14b: a render.scope with two draws lowers to BeginRender, Draw, Draw, EndRender", "[ceir][ceir-gpu][render]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const Kit                    k(ctx);
+    Block* const                 b   = ctx.create_block(0U);
+    Value* const                 img = declimg(ctx, k, b);
+    Value* const                 col = coloratt(ctx, k, b, img);
+    Value*                       atts[1] = {col};
+    Operation* const             sc  = scope_op(ctx, k, b, atts, 1U, 640, 480);
+    Block* const                 rb  = scope_body(ctx, sc);
+    Value* const                 vc  = konst(ctx, k, rb, 3); // 3 vertices
+    Value* const                 ic  = konst(ctx, k, rb, 1); // 1 instance
+    (void)draw_op(ctx, k, rb, vc, ic, nullptr, 0U, "", "prog");
+    (void)draw_op(ctx, k, rb, vc, ic, nullptr, 0U, "", "prog");
+
+    Array<LoweredCommand> cmds(&root);
+    lower_region(ctx, *b, cmds);
+    REQUIRE(cmds.size() == 4U); // the color_attachment + the konsts are Pure — they emit nothing
+    CHECK(cmds[0].kind == LoweredKind::BeginRender);
+    CHECK(cmds[1].kind == LoweredKind::Draw);
+    CHECK(cmds[2].kind == LoweredKind::Draw);
+    CHECK(cmds[3].kind == LoweredKind::EndRender);
+    CHECK(cmds[0].op == sc); // BeginRender + EndRender carry the scope op (the 14z executor materializes the RenderingDesc)
+    CHECK(cmds[3].op == sc);
+}
+
+TEST_CASE("ceir 14b: a dispatch writing B then a scope-with-a-draw-binding-B emits a barrier before the scope (hazard hole)",
+          "[ceir][ceir-gpu][render]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const Kit                    k(ctx);
+    Block* const                 b   = ctx.create_block(0U);
+    Value* const                 g   = konst(ctx, k, b, 1);
+    Value* const                 buf = declbuf(ctx, k, b); // buffer B
+    Value*                       wb[1] = {buf};
+    (void)dispatch_bufs(ctx, k, b, g, wb, 1U, "w", "writer"); // the dispatch WRITES B
+    Value* const                 img = declimg(ctx, k, b);
+    Value* const                 col = coloratt(ctx, k, b, img);
+    Value*                       atts[1] = {col};
+    Operation* const             sc  = scope_op(ctx, k, b, atts, 1U, 8, 8);
+    Block* const                 rb  = scope_body(ctx, sc);
+    Value* const                 vc  = konst(ctx, k, rb, 3);
+    Value* const                 ic  = konst(ctx, k, rb, 1);
+    Value*                       db[1] = {buf};                          // ⭐ the DRAW (inside the region) BINDS B
+    (void)draw_op(ctx, k, rb, vc, ic, db, 1U, "r", "prog");
+
+    Array<LoweredCommand> cmds(&root);
+    lower_region(ctx, *b, cmds);
+    // ⭐ THE LOAD-BEARING ASSERTION: the scope's conservative ambient MemoryReadWrite hazards against the dispatch's write of
+    // B — even though the flat walk at the scope sees only its attachment operand, not the draw's binding inside the region.
+    int begin = -1;
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(cmds.size()); ++i)
+    {
+        if (cmds[i].kind == LoweredKind::BeginRender) { begin = static_cast<int>(i); break; }
+    }
+    REQUIRE(begin > 0);
+    CHECK(cmds[static_cast<crd::u32>(begin - 1)].kind == LoweredKind::Barrier); // a barrier lands BEFORE the scope
+    CHECK(cmds[static_cast<crd::u32>(begin - 1)].after == sc);                  // ...ordered into the scope
+    CHECK(cmds[static_cast<crd::u32>(begin - 1)].before != nullptr);            // ...from the earlier writer (the dispatch)
+}
+
+TEST_CASE("ceir 14b: validate_lowered + execute_lowered reject render kinds typed (UnsupportedCommand, the Transfer mirror)",
+          "[ceir][ceir-gpu][render]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const Kit                    k(ctx);
+    Block* const                 b   = ctx.create_block(0U);
+    Value* const                 img = declimg(ctx, k, b);
+    Value* const                 col = coloratt(ctx, k, b, img);
+    Value*                       atts[1] = {col};
+    Operation* const             sc  = scope_op(ctx, k, b, atts, 1U, 8, 8);
+    Block* const                 rb  = scope_body(ctx, sc);
+    Value* const                 vc  = konst(ctx, k, rb, 3);
+    Value* const                 ic  = konst(ctx, k, rb, 1);
+    (void)draw_op(ctx, k, rb, vc, ic, nullptr, 0U, "", "prog");
+
+    Array<LoweredCommand> cmds(&root);
+    lower_region(ctx, *b, cmds);
+    REQUIRE(cmds.size() >= 1U);
+    CHECK(cmds[0].kind == LoweredKind::BeginRender);
+    FakePipe                              pipe;
+    const ConstSpan<LoweredCommand>       clist(cmds.data(), cmds.size());
+    const ConstSpan<ResolvedBinding>      empty(static_cast<const ResolvedBinding*>(nullptr), 0U);
+    CHECK(validate_lowered(ctx, clist, resolve_from_user, &pipe, empty) == ExecuteError::UnsupportedCommand);
+    FakeRec rec;
+    CHECK(execute_lowered(ctx, clist, rec, resolve_from_user, &pipe, empty) == ExecuteError::UnsupportedCommand);
+    CHECK(rec.dispatches == 0); // recorded NOTHING (rejected before any dispatch)
+}
+
+TEST_CASE("ceir 14c: a scope with draw + draw_indirect + mesh_dispatch lowers to BeginRender + 3 Draws + EndRender",
+          "[ceir][ceir-gpu][render]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const Kit                    k(ctx);
+    Block* const                 b   = ctx.create_block(0U);
+    Value* const                 img = declimg(ctx, k, b);
+    Value* const                 col = coloratt(ctx, k, b, img);
+    Value*                       atts[1] = {col};
+    Operation* const             sc  = scope_op(ctx, k, b, atts, 1U, 8, 8);
+    Block* const                 rb  = scope_body(ctx, sc);
+    Value* const                 vc  = konst(ctx, k, rb, 3);
+    Value* const                 ic  = konst(ctx, k, rb, 1);
+    Value* const                 args = declbuf(ctx, k, rb);
+    (void)draw_op(ctx, k, rb, vc, ic, nullptr, 0U, "", "prog"); // render.draw
+    {
+        Value*           ops[1] = {args};
+        Operation* const op     = ctx.create_operation(k.dind, ConstSpan<Value*>(ops, 1U), 0U); // render.draw_indirect
+        ctx.set_attr(op, "program", ctx.attr_symbol(StringView("prog")));
+        ctx.set_attr(op, "access", ctx.attr_string(StringView("")));
+        ctx.set_attr(op, "max_draws", ctx.attr_int(16));
+        rb->append(op);
+    }
+    {
+        Value*           ops[3] = {vc, ic, ic};
+        Operation* const op     = ctx.create_operation(k.mesh, ConstSpan<Value*>(ops, 3U), 0U); // render.mesh_dispatch
+        ctx.set_attr(op, "program", ctx.attr_symbol(StringView("prog")));
+        ctx.set_attr(op, "access", ctx.attr_string(StringView("")));
+        rb->append(op);
+    }
+    Array<LoweredCommand> cmds(&root);
+    lower_region(ctx, *b, cmds);
+    REQUIRE(cmds.size() == 5U); // the effect predicate emits Draw for ALL THREE (no draw-op name list in the lowering)
+    CHECK(cmds[0].kind == LoweredKind::BeginRender);
+    CHECK(cmds[1].kind == LoweredKind::Draw);
+    CHECK(cmds[2].kind == LoweredKind::Draw);
+    CHECK(cmds[3].kind == LoweredKind::Draw);
+    CHECK(cmds[4].kind == LoweredKind::EndRender);
+}
+
+TEST_CASE("ceir 14c: draw_indirect lowers preserving max_draws + args identity (the DrawIndex-scar IR half; the push is 14z)",
+          "[ceir][ceir-gpu][render]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const Kit                    k(ctx);
+    Block* const                 b    = ctx.create_block(0U);
+    Value* const                 img  = declimg(ctx, k, b);
+    Value* const                 col  = coloratt(ctx, k, b, img);
+    Value*                       atts[1] = {col};
+    Operation* const             sc   = scope_op(ctx, k, b, atts, 1U, 8, 8);
+    Block* const                 rb   = scope_body(ctx, sc);
+    Value* const                 args = declbuf(ctx, k, rb);
+    Value*                       ops[1] = {args};
+    Operation* const             di   = ctx.create_operation(k.dind, ConstSpan<Value*>(ops, 1U), 0U);
+    ctx.set_attr(di, "program", ctx.attr_symbol(StringView("prog")));
+    ctx.set_attr(di, "access", ctx.attr_string(StringView("")));
+    ctx.set_attr(di, "max_draws", ctx.attr_int(37)); // ⭐ the DrawIndex RANGE
+    rb->append(di);
+
+    Array<LoweredCommand> cmds(&root);
+    lower_region(ctx, *b, cmds);
+    const LoweredCommand* draw_cmd = nullptr;
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(cmds.size()); ++i)
+    {
+        if (cmds[i].kind == LoweredKind::Draw) { draw_cmd = &cmds[i]; break; }
+    }
+    REQUIRE(draw_cmd != nullptr);
+    CHECK(draw_cmd->op == di); // ⭐ the lowered Draw's op back-pointer IS the draw_indirect — the 14z executor reads from here
+    // ⭐ PRESERVATION: max_draws (the DrawIndex range) + the %args identity survive lowering — the information the executor
+    // needs to push the SV_DrawIndex row is intact.
+    const AttrValue md = ctx.attr_value(draw_cmd->op->attr(StringView("max_draws")));
+    CHECK(md.kind == AttrKind::Int);
+    CHECK(md.i == 37);
+    REQUIRE(draw_cmd->op->num_operands() >= 1U);
+    CHECK(draw_cmd->op->operand(0U) == args);
+    // ⛔ NAMED-FORWARD to CEIR-14z: the executor-PUSHES-the-row assertion + the forced-value probe (render one mesh LARGE,
+    // pin the field) — the REN-40 scar warns cheap checks cannot SEE the push failure, so this IR test asserts ONLY that the
+    // executor's inputs survive lowering, NEVER that the row is pushed (a lowering test claiming the latter is the false-clean).
+}
+
+// ── CEIR-14d: resource-table binding semantics (§156/§157). A ResourceTable is a §157 resident bindless table; at the CEIR
+// HOST-orchestration layer it declares + BINDS + hazards like any resource (ceir_is_resource_kind covers it). ⛔ NAMED-
+// FORWARD: (a) in-KERNEL table indexing (`table[material_id]`) = CKIR descriptor/nonuniform indexing, not a host CEIR op;
+// (b) host-side element extraction → the row where a consumer exists (12a: no vocabulary without a customer); (c) the
+// BindingKind ResourceTable enumerator + the type→kind derivation → CEIR-14z/16 (the widen-enum-audit scar pre-flagged, as
+// binding.hpp is shared RAF-4). ⛔ NOT mapped onto the deprecated BindlessTextureArray (§156 rejects fixed small arrays).
+
+TEST_CASE("ceir 14d: a resource TABLE binding participates in the precise per-resource hazard (write-T then read-T = RAW on T)",
+          "[ceir][ceir-gpu][render]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const Kit                    k(ctx);
+    Block* const                 b   = ctx.create_block(0U);
+    Value* const                 g   = konst(ctx, k, b, 1);
+    Value* const                 tbl = decltable(ctx, k, b); // a §157 bindless resource table
+    Value*                       wb[1] = {tbl};
+    (void)dispatch_bufs(ctx, k, b, g, wb, 1U, "w", "writer"); // dispatch WRITES table T
+    Value*                       rd[1] = {tbl};
+    (void)dispatch_bufs(ctx, k, b, g, rd, 1U, "r", "reader"); // dispatch READS table T
+
+    Array<LoweredCommand> cmds(&root);
+    lower_region(ctx, *b, cmds);
+    REQUIRE(cmds.size() == 3U); // [Dispatch(writer), Barrier(RAW on T), Dispatch(reader)]
+    CHECK(cmds[0].kind == LoweredKind::Dispatch);
+    CHECK(cmds[1].kind == LoweredKind::Barrier);
+    CHECK(cmds[1].hazard == HazardKind::Raw);
+    CHECK(cmds[1].resource == ctx.resource_root(tbl)); // ⭐ the TABLE is the conflicting root (PRECISE, not the ambient)
+    CHECK(cmds[2].kind == LoweredKind::Dispatch);
+}
+
+TEST_CASE("ceir 14d: a table declare + a dispatch binding it verify + round-trip text == builder (the ResourceTable type)",
+          "[ceir][ceir-gpu][render]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const Kit                    k(ctx);
+    Module* const                m   = ctx.create_module();
+    Block* const                 blk = ctx.create_block(0U);
+    m->body()->append(blk);
+    Value* const g   = konst(ctx, k, blk, 1);
+    Value* const tbl = decltable(ctx, k, blk);
+    Value*       bd[1] = {tbl};
+    (void)dispatch_bufs(ctx, k, blk, g, bd, 1U, "r", "reader"); // a dispatch BINDS the table (a valid resource binding)
+    CHECK(ctx.find_dispatch_misuse(*m).kind == DispatchMisuseKind::None); // ⭐ a ResourceTable is an accepted binding
+
+    const crd::containers::String txt = print(ctx, *m, &root);
+    Context                       ctx2(&root);
+    const Kit                     k2(ctx2);
+    const ParseResult             pr = parse(ctx2, StringView(txt.data(), txt.size()));
+    REQUIRE(pr.ok);
+    const crd::containers::String txt2 = print(ctx2, *pr.module, &root);
+    CHECK(StringView(txt.data(), txt.size()) == StringView(txt2.data(), txt2.size())); // the ResourceTable type round-trips
+    CHECK(ctx2.find_dispatch_misuse(*pr.module).kind == DispatchMisuseKind::None);
 }

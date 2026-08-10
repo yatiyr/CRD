@@ -354,3 +354,53 @@ Files: `tests/ceir-gpu-vulkan/test_ceir_add_vulkan.cpp` (probe + hotswap + devic
 latent Linux-ASan red; solved, not deferred: built + guarded + green on both configs, vecadd runs on the real RTX under
 linux-debug), `tests/ceir-gpu-vulkan/CMakeLists.txt` (the `crd-ceir-cook` edge). All numbers re-sealed against the final
 (post-tidy-rename) source. **NEXT: 13z-z.**
+
+## 13z-z — BAND-13 CLOSE + the ADR-0108 cornerstone flip — ✅ 2026-08-10 (user go-ahead: "close CEIR-13z and CEIR-13 in total")
+
+**(a) The BAND-13 gate.** The §129 execution proof composes end to end: add/reduce/scan/6-dispatch-FFT as CEIR program
+assets, authored as text AND builder, cooked, hot-reloaded, executed BIT-EXACT across Vulkan + DX12 + CUDA — win-debug/asan
+full ceir 510/510, linux-gcc-debug/asan 505/505, CUDA on two physical platforms (Windows + real Linux RTX 4070 Ti). No new
+work; the last two ticks' sweeps ARE the composition proof.
+
+**(b) The ADR-0108 cornerstone flip — EXECUTED.** 13z is unambiguously "the first CEIR vertical slice" (§5 gate 2: a working
+CEIR program asset from authoring → cook → hot-reload → device execution), so ADR-0108's deferred flip triggers. Executed the
+four coordinated edits of ADR-0108 §7 faithfully, plus forward-pointers for coherence (the user's "no gaps"):
+- `docs/PRINCIPLES.md` — the "C++ hot-reload is the ONLY scripting language" cornerstone → Cerid owns the CEIR/CHIR +
+  CR-D007-visual language stack; C++ is one first-class authoring surface (native + hot-reload), not the only one; the
+  no-third-party-VM rule (Lua/Python/JS) STANDS (CHIR is Cerid's own). Kept the reversal rationale (a `.crds.cpp` DLL isn't
+  inspectable/diffable/verifiable/lowerable).
+- `README.md` + `AGENTS.md` — the C++-only lines reframed to the CEIR/CHIR + C++-builder authoring surfaces.
+- `docs/ROADMAP.md` — the cornerstone bullet + the "locked 2026-05-19; revisiting requires a new ADR" note struck-in-place →
+  historical; the §5 sequencing note RE-REVISED; the HISTORICAL strategic-direction banner corrected.
+- ADR-0081 §9 — struck IN PLACE (house rule): a `> ⛔ SUPERSEDED IN PART by ADR-0108` banner + `~~...~~` on the two
+  load-bearing sentences ("C++ is the ONLY scripting path" / "other paths explicitly rejected"), the "new ADR the last
+  sentence required" note, a `**Superseded-by: ADR-0108**` header line, and the decisions/README.md narrative + table rows.
+- Forward-pointers (secondary live-rule carriers, out of §7's strict scope but closing the coherence gap): phase-3.1.6 item 17,
+  phase-4.0 §Purpose, ADR-0065 D17. Frozen historical records (research dossiers, the 2026-05-19 session log) left as-is.
+
+Verified: no UNQUALIFIED live "C++-only" claim remains in `docs/`/README/AGENTS (only the superseding ADR-0108 + the struck
+banner reference the old rule). Tracker: CEIR-0b deferred-action note → EXECUTED; CEIR-13z row + the CEIR-13 band header
+`◧ → ✅`; band-13 CLOSED.
+
+⛔ **This is doc-only + user-ratification-gated:** ADR-0108 §7 makes the flip ONE coordinated commit whose commit IS the
+ratification act — proposed as its own commit for the user (agents never commit). **NEXT: CEIR-14 — the Render dialect (⬜,
+§40/§41, proof §169).**
+
+## CEIR-14 opened → CEIR-14a CLOSED — the `ceir.render` dialect (2026-08-10, user go-ahead: "carry on with CEIR-14")
+
+**Design-lock (advisor + 3 checks):** `render.scope` REGION op (resultless, `kind="graph"`) + `render.color_attachment`/
+`render.depth_attachment` DECLARE ops producing a new 8a attachment TYPE CLASS consumed by the scope's variadic tail —
+targets are OPERANDS (barriers/`resource_root` see operands only), role-in-TYPE (12a), typed clears = Float attrs. Design
+note `docs/design/ceir-14-render-dialect.md`. **14a** (device-free): the ops (`render.ceirop.toml` → opgen `render_ops.*`)
++ the type class (`render.{hpp,cpp}`, the `time.cpp` precedent: `register_dialect` = generated ops + `register_type_class`
+color/depth + `verify_attachment` [one Image/View-of-Image/TypeParam member] + `type_*` factories) + the verifier
+(`find_render_misuse`, `context.{hpp,cpp}`, mirror `find_dispatch_misuse`: 12 kinds — attachment-is-image, closed-vocab
+attrs [load/store/clear_kind/blend/compare via `ceir_sv_in`], ⭐ the RAH-1a.1 typed-clear-vs-format scar lifted to the IR
+[`ClearKindFormatMismatch`: a `uint` clear needs an unsigned-Int format], scope-operands-attachment-typed, at-most-one-depth
+[a type property], area/sample bounds) + `tests/ceir/test_render.cpp` (4 tests: positive · color≠depth distinctness ·
+text==builder round-trip · the 11-case misuse matrix). ⛔ **ASCII-name scar RE-HIT** (the 13z-2 `§` scar): a `§121` in a
+TEST_CASE name made ctest report a false **Failed** ("no tests ran") while the direct exe PASSED — renamed to "sec 121".
+**Gate:** win-debug/asan ceir 507/507 + 14a 4/4; linux-gcc-debug/asan 512/512 (+ CUDA 2/2); opgen validator(59)+drift(exit 0);
+GCC `-Werror=switch`; `crd-ceir-invariants` (I3/I4/I5 — render is core, no forbidden edges); LLVM-20 tidy(4). **NEXT: CEIR-14b
+— draw ops + dynamic state + the `crd-ceir-gpu` region-recursion lowering (`render.scope` → RenderingDesc begin/end + draw
+verbs) + the widen-`LoweredKind` audit.**

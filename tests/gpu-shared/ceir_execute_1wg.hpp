@@ -404,6 +404,13 @@ inline bool execute_lowered_cpu(const crd::ceir::Context& ctx, crd::containers::
     for (crd::u32 i = 0; i < static_cast<crd::u32>(cmds.size()); ++i)
     {
         const ce::gpu::LoweredCommand& cmd = cmds[i];
+        // ⛔ CEIR-14b: a render kind (BeginRender/Draw/EndRender) has NO CPU-compute reference — ERROR, never silently skip
+        // (a silent skip would be a false-clean: the reference would "succeed" without running the render).
+        if (cmd.kind == ce::gpu::LoweredKind::BeginRender || cmd.kind == ce::gpu::LoweredKind::Draw
+            || cmd.kind == ce::gpu::LoweredKind::EndRender)
+        {
+            return false;
+        }
         if (cmd.kind != ce::gpu::LoweredKind::Dispatch) { continue; } // Barrier/Transfer: no-op on the sequential CPU
         const CpuKernelRef* const kr = (resolver != nullptr) ? resolver(cmd.op, user) : nullptr;
         if (kr == nullptr || kr->graph == nullptr) { return false; }

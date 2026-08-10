@@ -114,7 +114,7 @@ ship before consumer pull.
     REPL / RPC server in hesap** — those ship with `crd-cli`
     substrate in Phase 4.0. Protocol-first, parser-later.
 
-17. **C++ hot-reload as the ONLY scripting language** (per ADR-0081
+17. **C++ hot-reload as ~~the ONLY~~ a first-class scripting language** (⚠ ADR-0108 2026-08-07 flipped "ONLY" → Cerid-owned CEIR/CHIR + CR-D007-visual stack; per ADR-0081
     + ADR-0034 subsumed). The original `crd-hesap-repl` "MATLAB-class
     facade with `randn`/`\` syntax" plan in v18 is **replaced** by a
     C++-cell notebook on top of `crd-cli` (Phase 4.0+2). MATLAB

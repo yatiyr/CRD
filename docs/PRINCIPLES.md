@@ -151,18 +151,26 @@ If circumstances genuinely change, open a new ADR or escalate to `@heavy`.
   with AI agents as peer collaborators; the engine substrate built
   for that wins.
 
-- **C++ hot-reload is the ONLY scripting language.** Cerid scripts
-  ARE C++ files (`.crds.cpp`) compiled into hot-reloadable DLLs.
-  **No Lua / Python / JavaScript / GDScript / WrenScript embedded
-  interpreter.** Reasons: one language for engine + scripts + tools
-  = no marshaling, full type system, full debugger, deterministic FP
-  (ADR-0063), no FFI overhead for AI agents. Reference architectures:
-  Live++ (Molecular Matters), Anvil engine (RAD Game Tools),
-  RemedyBG, JetBrains C++ hot reload. Locked 2026-05-19 per user
-  direction. Other scripting paths are explicitly rejected; revisiting
-  requires a new ADR. → ADR-0081, ADR-0034 (subsumed). The same C++
-  scripts AI agents emit run in the engine's hot path with zero
-  marshaling overhead.
+- **Cerid owns its executable-program language stack (CEIR/CHIR);
+  C++ is one first-class authoring surface, not the only one.**
+  Reusable algorithms are versioned, inspectable, serializable,
+  hot-reloadable program ASSETS, authored as four projections of one
+  semantic model: text (CEIR execution IR now; the CHIR high-level
+  layer later), a CR-D007 visual graph, a domain frontend, or a C++
+  builder. C++ stays first-class for native extension, providers, and
+  programmatic authoring — the C++ builder emits ordinary canonical
+  CEIR — and C++ DLL hot-reload remains supported. **No Lua / Python /
+  JavaScript / GDScript / WrenScript embedded interpreter — CHIR is
+  Cerid's OWN language, not a wrapped third-party VM.** Why the
+  earlier C++-ONLY rule was reversed (ADR-0108): an algorithm-as-asset
+  must be inspectable, semantically diffable, verifiable, partially
+  evaluable, and lowerable to the best legal CPU/GPU/NPU/provider
+  strategy — a compiled `.crds.cpp` DLL is none of those, so "C++ is
+  the only authorable program" would block the CEIR mission. The
+  determinism (ADR-0063), no-marshaling, full-debugger, and zero-FFI
+  benefits of C++ survive as versioned native intrinsics + the C++
+  builder. → ADR-0108 (surgically supersedes ADR-0081 §9), ADR-0081,
+  ADR-0034 (subsumed).
 
 - **Schema versioning + backwards-compat for the agent surface.**
   Every CLI / MCP command schema is versioned (major/minor). Major
