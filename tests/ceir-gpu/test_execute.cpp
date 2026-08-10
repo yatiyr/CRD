@@ -9,6 +9,8 @@
 #include <crd/ceir/gen/compute_ops.hpp>
 #include <crd/ceir/gen/resource_ops.hpp>
 #include <crd/ceir/gen/transfer_ops.hpp>
+#include <crd/ceir/exec.hpp> // CEIR-13z-4 leg 1b: the core Interpreter REFUSES a dispatch (typed NoSemantics)
+#include <crd/ceir/func.hpp>
 #include <crd/ceir/gpu/execute.hpp>
 #include <crd/ceir/gpu/lower.hpp>
 #include <crd/ceir/parse.hpp>
@@ -458,4 +460,37 @@ TEST_CASE("ceir 13z-3: execute_lowered emits PER-RESOURCE barriers (2 buffers fr
           == ExecuteError::None);
     CHECK(rec.dispatches == 3);
     CHECK(rec.barriers == 2); // ⭐ one per conflicting root resource (the completion: a single barrier would drop one)
+}
+
+// CEIR-13z-4 leg 1b (fork G): the CORE Interpreter (the §118 reference) REFUSES a compute.dispatch with a TYPED NoSemantics
+// error — dispatch has no installed core semantics (I5: the core never learns kernels; the §150 forward). ⛔ this is a
+// graceful typed refusal, NOT a crash and NOT a fake skip — installing skip/no-op dispatch semantics in core would silently
+// pre-empt §150. The buffer-level reference is the bridge/test side (execute_lowered_cpu, leg 1a).
+TEST_CASE("ceir 13z-4: the core Interpreter refuses a compute.dispatch with typed NoSemantics (I5 stays device-blind)", "[ceir][ceir-gpu]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const Kit                    k(ctx);
+
+    Module* const    m     = ctx.create_module();
+    const TypeId     bufty = ctx.type_buffer(BufferMode::Plain, ctx.type_f32());
+    Operation* const f     = func::create_func(ctx, *m, StringView("main"), Visibility::Public, 1U, bufty);
+    Block* const     b     = func::func_body_block(f);
+    REQUIRE(b != nullptr);
+    // a resultless compute.dispatch binding the func's buffer ARGUMENT (no resource.declare, which would also be NoSemantics).
+    Value* const     g     = konst(ctx, k, b, 1);
+    Value*           ops[4] = {g, g, g, b->arg(0U)};
+    Operation* const d     = ctx.create_operation(k.disp, ConstSpan<Value*>(ops, 4U), 0U);
+    ctx.set_attr(d, "kernel", ctx.attr_symbol(StringView("kern")));
+    ctx.set_attr(d, "access", ctx.attr_string(StringView("r")));
+    b->append(d);
+    b->append(func::create_return(ctx, {}));
+
+    exec::Interpreter in(ctx);
+    exec::install_builtin_semantics(in); // arith/core/func ONLY — NOT compute/resource
+    i64                    a0[1] = {0};
+    const exec::ExecResult r     = in.invoke(*m, StringView("main"), ConstSpan<i64>(a0, 1U));
+    CHECK_FALSE(r.ok());
+    CHECK(r.error == exec::ExecError::NoSemantics); // ⭐ the typed refusal
+    CHECK(r.op == d);                               // pointing at the dispatch
 }

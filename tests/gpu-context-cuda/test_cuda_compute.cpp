@@ -61,7 +61,8 @@ TEST_CASE("CUDA compute: vec-add through IComputeContext == CPU reference + last
     bb->unmap();
 
     auto pipe = ctx->create_pipeline_from_cuda(crd::containers::StringView(kVecAdd), crd::containers::StringView("vecadd"),
-                                               /*n_bindings*/ 3, /*push_size*/ sizeof(crd::u32));
+                                               /*n_bindings*/ 3, /*local_size*/ 256U, /*push_size*/ sizeof(crd::u32),
+                                               /*fmad*/ true);
     REQUIRE(pipe != nullptr);
 
     g::ComputeBuffer* binds[3] = {ba.get(), bb.get(), bo.get()};

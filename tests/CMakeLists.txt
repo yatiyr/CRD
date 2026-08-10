@@ -63,6 +63,7 @@ add_subdirectory(gpu-context-cuda)    # ADR-0100 (2026-08-07): CUDA IComputeCont
 add_subdirectory(kir-vulkan)
 add_subdirectory(ceir-gpu-vulkan)  # D-007 CEIR-13z-1b: a CEIR compute asset executed on a real Vulkan device (execute_lowered, ADR-0126)
 add_subdirectory(kir-cuda)
+add_subdirectory(ceir-gpu-cuda)    # D-007 CEIR-13z: the CUDA mirror — a CEIR compute asset on a real CUDA device (required backend)
 add_subdirectory(kir-dx12)
 add_subdirectory(ceir-gpu-dx12)  # D-007 CEIR-13z-1b: the DX12 mirror — a CEIR compute asset on a real D3D12 device (Windows-only)
 add_subdirectory(kir-webgpu)

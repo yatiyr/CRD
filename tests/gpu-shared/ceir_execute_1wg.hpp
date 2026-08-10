@@ -15,6 +15,7 @@
 #include <crd/ceir/gpu/execute.hpp>
 #include <crd/ceir/gpu/lower.hpp>
 #include <crd/kir/ckir.hpp>
+#include <crd/kir/ckir_kernel_eval.hpp> // CEIR-13z-4: eval_cpu_kernel / KernelBuffer — the CPU reference executor
 
 #include <crd/gpu/compute.hpp>
 
@@ -233,9 +234,9 @@ inline int collect_dispatch_binds(const crd::ceir::Context& ctx, const crd::ceir
 // `ceir_binds[b]` are the CEIR binding Values in buffer order; `cctx` is the asset's Context (resource_root). Returns the
 // ExecuteError (None on success). No push constants (local_size baked into the kernel), so pipe was created with push 0.
 inline crd::ceir::gpu::ExecuteError
-dispatch_ceir_1wg(crd::ceir::Context& cctx, crd::containers::ConstSpan<crd::ceir::gpu::LoweredCommand> cmds,
-                  const crd::ceir::Value* const* ceir_binds, crd::gpu::ComputePipeline& pipe,
-                  crd::gpu::IComputeContext& ctx, float** host, const int* lens, int nbufs, crd::u32 gx)
+dispatch_ceir_1wg_resolved(crd::ceir::Context& cctx, crd::containers::ConstSpan<crd::ceir::gpu::LoweredCommand> cmds,
+                           const crd::ceir::Value* const* ceir_binds, crd::ceir::gpu::KernelResolveFn resolve, void* ruser,
+                           crd::gpu::IComputeContext& ctx, float** host, const int* lens, int nbufs, crd::u32 gx)
 {
     namespace g = crd::gpu;
     using g::compute_usage::storage;
@@ -267,7 +268,7 @@ dispatch_ceir_1wg(crd::ceir::Context& cctx, crd::containers::ConstSpan<crd::ceir
     // ⭐ the ONE swapped line: execute_lowered records the dispatch (resolve kernel + gather bindings) instead of rec.dispatch.
     (void)gx; // the CEIR grid const (1) drives the workgroup count; gx is the caller's intent, asserted equal by the asset
     const crd::ceir::gpu::ExecuteError err =
-        crd::ceir::gpu::execute_lowered(cctx, cmds, rec, resolve_single_pipeline, &pipe,
+        crd::ceir::gpu::execute_lowered(cctx, cmds, rec, resolve, ruser,
                                         crd::containers::ConstSpan<crd::ceir::gpu::ResolvedBinding>(table, static_cast<crd::usize>(nbufs)));
 
     for (int b = 0; b < nbufs; ++b)
@@ -284,6 +285,16 @@ dispatch_ceir_1wg(crd::ceir::Context& cctx, crd::containers::ConstSpan<crd::ceir
         rb[b]->unmap();
     }
     return err;
+}
+
+// The single-pipeline convenience: EVERY 13z-1/2/3 caller (one dispatch, one pipeline). Delegates to the resolver core with
+// the constant resolver. (13z-4's hot-swap leg calls the _resolved core directly with a SYMBOL-KEYED resolver.)
+inline crd::ceir::gpu::ExecuteError
+dispatch_ceir_1wg(crd::ceir::Context& cctx, crd::containers::ConstSpan<crd::ceir::gpu::LoweredCommand> cmds,
+                  const crd::ceir::Value* const* ceir_binds, crd::gpu::ComputePipeline& pipe,
+                  crd::gpu::IComputeContext& ctx, float** host, const int* lens, int nbufs, crd::u32 gx)
+{
+    return dispatch_ceir_1wg_resolved(cctx, cmds, ceir_binds, resolve_single_pipeline, &pipe, ctx, host, lens, nbufs, gx);
 }
 
 // ⭐ CEIR-13z-3 part 3: run a MULTI-DISPATCH CEIR asset on a device — a byte-for-byte clone of `dispatch_fft2d`
@@ -345,5 +356,80 @@ dispatch_ceir_multi(crd::ceir::Context& cctx, const CeirMultiAsset& asset,
         rb[b]->unmap();
     }
     return err;
+}
+
+// ── CEIR-13z-4 leg 1a: the CPU REFERENCE EXECUTOR of the lowered CEIR list (device-free; the §118 reference) ──────────────
+// ⛔ This lives on the TEST side of the I5 wall (the Vulkan test target links crd-kir), NOT the crd-ceir-gpu module — the
+// bridge's no-kir-edge holds; "bridge-side" in the design note means the test side, not the bridge module.
+struct CpuKernelRef
+{
+    const crd::kir::KGraph* graph = nullptr;
+    crd::kir::KEntry        entry;
+};
+using CpuKernelResolveFn = const CpuKernelRef* (*)(const crd::ceir::Operation* dispatch, void* user);
+// A CEIR resource Value* (resource_root-normalized) → its CPU f64 buffer.
+struct CpuBinding
+{
+    const crd::ceir::Value* resource = nullptr;
+    crd::f64*               data     = nullptr;
+    int                     size     = 0;
+};
+// By-identity CPU resolver (mirrors resolve_multi): a dispatch op → its (graph, entry).
+struct CpuMultiResolve
+{
+    const crd::ceir::Operation* const* ops;
+    const CpuKernelRef*                refs;
+    int                                n;
+};
+inline const CpuKernelRef* resolve_cpu_multi(const crd::ceir::Operation* d, void* user)
+{
+    const auto* m = static_cast<const CpuMultiResolve*>(user);
+    for (int i = 0; i < m->n; ++i)
+    {
+        if (m->ops[i] == d) { return &m->refs[i]; }
+    }
+    return nullptr;
+}
+
+// Run the LOWERED CEIR list on the CPU via eval_cpu_kernel — the §118 reference executor, DEVICE-FREE. Each Dispatch resolves
+// its (graph, entry), gathers its binding f64 buffers in operand order (the 13a positional rule; resource_root-normalized),
+// and eval_cpu_kernel's over ⛔ `cmd.groups_x` workgroups (the LOWERING's resolved grid — a wrong grid diverges from the plan
+// driver). Barriers/Transfer are no-ops (sequential CPU — the passes run in list order). Returns false on an unresolved
+// kernel or unmapped binding. `bindings[b].data` is mutated in place (the kernel result).
+inline bool execute_lowered_cpu(const crd::ceir::Context& ctx, crd::containers::ConstSpan<crd::ceir::gpu::LoweredCommand> cmds,
+                                CpuKernelResolveFn resolver, void* user, const CpuBinding* bindings, int nbindings,
+                                crd::memory::IAllocator* scratch)
+{
+    namespace ce = crd::ceir;
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(cmds.size()); ++i)
+    {
+        const ce::gpu::LoweredCommand& cmd = cmds[i];
+        if (cmd.kind != ce::gpu::LoweredKind::Dispatch) { continue; } // Barrier/Transfer: no-op on the sequential CPU
+        const CpuKernelRef* const kr = (resolver != nullptr) ? resolver(cmd.op, user) : nullptr;
+        if (kr == nullptr || kr->graph == nullptr) { return false; }
+
+        const ce::Operation* const op = cmd.op;
+        const int                  nb = op->num_operands() >= 3U ? static_cast<int>(op->num_operands()) - 3 : 0;
+        crd::kir::KernelBuffer     kb[8];
+        for (int k = 0; k < nb && k < 8; ++k)
+        {
+            const ce::Value* const root = ctx.resource_root(op->operand(static_cast<crd::u32>(3 + k)));
+            crd::f64*              data = nullptr;
+            int                    size = 0;
+            for (int j = 0; j < nbindings; ++j)
+            {
+                if (bindings[j].resource == root)
+                {
+                    data = bindings[j].data;
+                    size = bindings[j].size;
+                    break;
+                }
+            }
+            if (data == nullptr) { return false; }
+            kb[k] = crd::kir::KernelBuffer{data, size, 0U, static_cast<crd::u8>(k)};
+        }
+        crd::kir::eval_cpu_kernel(*kr->graph, kr->entry, kb, nb, kr->entry.local_size[0], scratch, cmd.groups_x);
+    }
+    return true;
 }
 } // namespace crd::ceir_gpu_test

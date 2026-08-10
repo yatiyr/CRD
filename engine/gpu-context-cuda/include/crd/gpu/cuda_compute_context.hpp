@@ -29,11 +29,22 @@ class CudaComputeContext : public IComputeContext
 {
 public:
     // ── ESCAPE HATCH: NVRTC-compile `cuda_source` (CUDA C) to CUBIN, load it, and cache a pipeline whose kernel entry is
-    // `entry` (extern "C"), with `n_bindings` buffer params followed by a `push_size`-byte by-value push param. Returns
-    // nullptr on compile/load failure (the NVRTC log is written to stderr).
+    // `entry` (extern "C"), with `n_bindings` buffer params followed by a `push_size`-byte by-value push param. `local_size`
+    // is the 1-D CUDA BLOCK dim the pipeline launches with (blockDim.x). Returns nullptr on compile/load failure (NVRTC log
+    // to stderr) or an invalid `local_size` (0 or > 1024).
+    // ⛔ `local_size` is REQUIRED — no default (a defaulted 256 is how the NEXT shared-memory caller silently reproduces the
+    // block-dim-mismatch bug). ⛔ Two kernel models: an ELEMENTWISE kernel (guarded `blockIdx.x*blockDim.x+threadIdx.x`) may
+    // use any block ≥ its element stride; a SHARED-MEMORY kernel (shared arrays sized to local_size, `__syncthreads()`,
+    // cross-thread reads within the workgroup — the CKIR is_kernel path: FFT/transpose/reduce/scan) REQUIRES
+    // blockDim.x == local_size. Vulkan/DX12 bake this into the shader; CUDA specifies it at launch, so it rides the pipeline.
+    // ⭐ `fmad` is the PER-KERNEL FP-contraction choice (NVRTC `--fmad=`): `true` = FMA-fused (the "Fast tier"); `false` =
+    // bit-exact multiply-then-add (matches a per-op-rounding CPU oracle, the CUDA-fan-out convention). ⛔ REQUIRED — a
+    // correctness-critical (oracle-matched) kernel MUST pass `false`; a perf kernel passes `true`. (Integer kernels are
+    // exact either way.) Vulkan/DX12 never contract, so their kernels are always bit-exact; CUDA is the one backend that
+    // chooses, so the choice is explicit per pipeline.
     [[nodiscard]] virtual std::unique_ptr<ComputePipeline>
     create_pipeline_from_cuda(crd::containers::StringView cuda_source, crd::containers::StringView entry, int n_bindings,
-                              crd::u32 push_size) = 0;
+                              crd::u32 local_size, crd::u32 push_size, bool fmad) = 0;
 
     // The GPU time (ms) of the most recent submit_and_wait(), measured with CUDA events. 0 if nothing was dispatched.
     // NOTE (integration): once crd::gpu::IComputeContext gains the last_gpu_ms() virtual (the CGP-0 increment), mark this

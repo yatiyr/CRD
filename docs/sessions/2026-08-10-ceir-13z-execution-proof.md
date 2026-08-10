@@ -234,12 +234,123 @@ invariants. NO recook/fuzz. ⭐ **CEIR-13z-3 CLOSED — the 6-dispatch 2D FFT ru
 llvmpipe + real DX12; the whole barrier machinery (part-1 per-resource lowering + part-2 execute replay) validated on a real
 multi-dispatch transform, both backends.**
 
-## NEXT — 13z-4 (the reference leg + hot-reload), then 13z-z (band gate + the flip)
+## 13z-4 leg 1 — the reference executor (DONE + gated); leg 2 (hot-reload) next
 
-- **13z-4:** the two remaining §129 DoD legs. (1) The reference-executor leg (fork G): a BRIDGE-side CPU-oracle run of the
-  lowered list validates host-visible semantics — the core Interpreter STAYS `NoSemantics` for dispatch (the §150 forward, I5
-  intact). (2) Hot-reload live-swap: a kernel-ref rebinds to a new CKIR program via the 10a ReloadSet; the CEIR asset
-  re-lowers + re-executes, the output tracks the swap.
-- **13z-z:** the BAND-13 GATE (the §129 proof composes: all 4 kernels — add/reduce/scan/FFT — both backends, text+builder,
-  oracle-exact, hot-reload) + ⚠ the ADR-0108 CORNERSTONE FLIP (PRINCIPLES/AGENTS/README/ROADMAP C++-only → CEIR/CHIR + the
-  ADR-0081 §9 in-file strike, as ONE user-committed commit — §5 gate 2, ALREADY user-authorized). Band-13 header ◧ → ✅.
+Advisor-decomposed (both legs + three leg-2 landmines). Leg 1 = the reference-executor DoD leg (fork G), TWO parts, both
+device-free (all 4 configs):
+
+- **1a — the CPU reference executor** (`execute_lowered_cpu`, shared harness): runs the LOWERED CEIR list on the CPU via
+  `eval_cpu_kernel` — each Dispatch resolves its (graph, entry), gathers its binding f64 buffers in operand order
+  (`resource_root`-normalized), and evals over `cmd.groups_x` workgroups; Barriers/Transfer are no-ops (sequential CPU). The
+  test asserts its FFT output is **BYTE-EQUAL to the plan-driven `run_fft2d_cpu`** — both run the same kernels in the same
+  order, one plan-driven one lowered-list-driven, so ANY lowering error (dispatch sequence, binding mapping, grid resolution)
+  diverges. ⛔ this lives on the TEST side of the I5 wall (the Vulkan target links kir) — "bridge-side" in fork G means the
+  test side, NOT the crd-ceir-gpu module; the bridge's no-kir-edge holds. Device == CPU-reference then follows transitively
+  through the existing h32-vs-h64 device asserts.
+- **1b — the core Interpreter REFUSES a dispatch** (reality-checked, per the advisor): `exec.cpp:238` — an op with no
+  installed semantics fails `ExecError::NoSemantics`. `compute.dispatch` has no `install_compute_semantics`, so a func-wrapped
+  dispatch invoked through the core Interpreter returns a **typed `NoSemantics` error** pointing at the dispatch (the interp
+  eagerly evals the resultless side-effecting op). ⛔ I5: the core stays device-blind (the §150 forward) — a graceful typed
+  refusal, NOT a crash and NOT a fake skip (installing skip/no-op dispatch semantics in core would silently pre-empt §150).
+
+**Gate (13z-4 leg 1, GREEN):** win-debug **503** · win-asan **503** · linux-gcc-debug **498** · linux-gcc-asan **498** (+2
+device-free tests). Tidy clean; `-Werror=switch`; opgen; invariants (bridge/test-side only). NO recook/fuzz.
+
+## CUDA backend detour (user-directed) — a THIRD backend + a real kir/CUDA bug fixed
+
+The user directed CUDA into the proof ("CUDA is one of the most important backends for computing"). Added `tests/ceir-gpu-cuda`
+(guarded on `crd-gpu-context-cuda`; NOT in gate6b — Linux has no NVIDIA device; win-debug + win-asan only). The harness is
+backend-agnostic — only the context factory + emitter differ (`create_cuda_compute_context` → `emit_compute_kernel_cuda`,
+entry `"ckir"`, NVRTC via `create_pipeline_from_cuda`). add/reduce/scan landed bit-exact immediately.
+
+⭐ **The FFT test CAUGHT + DROVE a real, pre-existing kir/CUDA-backend defect (fixed, advisor-reviewed):** the CUDA
+`IComputeContext` launched a **FIXED 256-thread block** (`kCudaBlock`) regardless of the kernel's `local_size`. Correct for
+ELEMENTWISE kernels (guarded), but SHARED-MEMORY kernels (the CKIR `is_kernel` path: FFT/transpose/reduce/scan — shared
+arrays sized to local_size, `__syncthreads()` over exactly those threads) REQUIRE `blockDim.x == local_size`. So the
+multi-pass FFT was **garbage** (maxrel=1.0) and the direct `dispatch_fft2d` **segfaulted** (transpose over-launch stomping
+device memory). ⛔ single-workgroup add/reduce/scan PASSED *under* the mismatch — a FALSE-CLEAN: reduce/scan legitimately
+(identity-padded guarded threads), **add by luck** (UB that didn't fault). **Fix:** `create_pipeline_from_cuda` gains a
+REQUIRED `local_size` param (no default — a defaulted 256 is how the next shared-memory caller reproduces the bug), stored in
+`CudaPipeline::block()`, used as `cuLaunchKernel`'s blockDim; rejects 0/>1024; `kCudaBlock` deleted; the §112 "documents the
+bug as design" comment struck. Callers pass `KEntry.local_size[0]`. **Result:** the CEIR FFT is now BYTE-IDENTICAL to the
+direct `dispatch_fft2d` on CUDA (bad_vs_direct==0), no segfault. Memory:
+`feedback_cuda_multipass_fft_broken_single_workgroup_ok` (amended per the advisor's false-clean correction).
+
+⭐ **Fix #2 — the PER-KERNEL `fmad` flag (user decision, resolved):** the FMA-vs-bit-exact question was a real fork (the
+backend deliberately compiled `--fmad=true` "Fast tier" — primary-source evidence I surfaced against the advisor's blanket
+"--fmad=false"). The user chose the **surgical per-kernel flag** over a global policy flip: `create_pipeline_from_cuda` gains
+a REQUIRED `bool fmad` → threaded to NVRTC (`--fmad=true/false`). Correctness-critical (oracle-matched) kernels pass `false`
+(bit-exact — the CKIR FFT is now BIT-EXACT vs `run_fft2d_cpu`, `badr==badi==0`); perf/elementwise kernels pass `true`
+(gpu-context-cuda's vecadd). Kept a SEPARATE change from the block-dim fix (advisor: don't blend). Integer kernels are exact
+either way. ⛔ REQUIRED param (no default) — the explicit-choice discipline, like `local_size`.
+
+**Gate (CUDA, GREEN):** win-debug **7/7** · win-asan **7/7** (add/reduce/scan/FFT + the gpu-context-cuda vecadd regression,
+under ASan). Tidy clean (cuda_compute_context.{hpp,cpp}, test_cuda_compute.cpp, test_ceir_add_cuda.cpp). ⛔ NOT gated on
+Linux (no CUDA). The `crd-gpu-context-cuda` API change touched exactly two callers (vecadd + the ceir-gpu-cuda tests).
+
+## NEXT — 13z-4 leg 2 (hot-reload), then 13z-z (band gate + the flip)
+
+Leg 2 (hot-reload live-swap) via the 10a stage-4 `add_source`/`reload_source` TEXT seam — composing text authoring (13z-2) →
+the real ReloadSet lifecycle → GPU execution. ⛔ option B (a test that changes its own fn-ptr's return) is TAUTOLOGICAL —
+rejected (source≠scoreboard). Sequence (advisor): a **probe first** (`add_source(reduce_text)` → cook → lower → assert 1
+dispatch — the cooked-blob round-trip of compute+resource through the ReloadSet is UNTESTED, the D-probe precedent), then the
+swap test: `add_source(@radd)` → execute → 2016; `reload_source(@rmax)` → assert decision **HotSwap** (symbol attrs feed
+`stable_hash` not `interface_hash` → content change, contract unchanged) → re-lower + re-execute → 63. ⛔ **three landmines:**
+(1) reload invalidates every `Operation*`/`Value*` (new generation = new Context) — rebuild the resolver + ResolvedBinding
+tables from the RELOADED module (executing a stale lowered list is a UAF); (2) the Registrar must install arith/resource/
+compute into the fresh per-generation Context; (3) the test target gains a `crd-ceir-cook` edge (Vulkan target only). Then
+**13z-z:** the BAND-13 GATE (the §129 proof composes: add/reduce/scan/FFT both backends, text+builder, oracle-exact,
+hot-reload) + ⚠ the ADR-0108 CORNERSTONE FLIP (PRINCIPLES/AGENTS/README/ROADMAP + ADR-0081 §9 strike — user-committed, ALREADY
+user-authorized). Band-13 header ◧ → ✅.
+
+## 13z-4 leg 2 (hot-reload) — ✅ DONE + gated 2026-08-10
+
+Landed exactly as the advisor sequenced, refined by one primary-source discovery.
+
+- **The PROBE (device-free) — the untested seam:** `ReloadSet rs(&root, &ceir_gpu_registrar, nullptr)` (the Registrar installs
+  arith/func/resource/compute into the transient cook Context — `cook_source` calls `m_reg(*cctx)` before `cook_program_text`
+  so the verifiers aren't vacuous). `rs.add_source(id, kReduceRadd)` COOKS a func-less top-level `compute.dispatch` over two
+  `resource.declare` + LOADS it into a fresh generation Context. `generation(id)->ctx` + `program.module` re-collect 2 binds +
+  re-lower to 1 dispatch. ⭐ Prior 10a coverage cooked only func/arith/state programs — this proves the cooked-blob round-trip
+  of **compute+resource** end to end. If the cook had rejected a func-less module, this is where it would have surfaced; it did
+  not.
+- **The HOTSWAP (device-free):** `reload_source(id, kReduceRmax)` (@radd→@rmax) → `decision == HotSwap` + `installed`. Verified
+  `content_hash` MOVED while `interface_hash` HELD — confirming the recalled claim (`interface_hash` = the exported-func
+  projection + state + caps; a func-less module ⇒ empty projection ⇒ the kernel SYMBOL feeds `stable_hash`/content, NOT the
+  contract). The **NoChange seal**: identical text re-`reload_source` → `NoChange`, `!installed` (cook determinism for this
+  shape). ⭐ Had this returned `ContractChange`, it would have been a finding, not a test bug — it did not.
+- **The DEVICE hot-swap (real Vulkan) — the tautology killed:** primary-source check first — `execute_lowered` resolves the
+  pipeline via a caller `KernelResolveFn(const Operation* dispatch, void*)`, so the CEIR asset's kernel symbol is NOT bound to
+  a pipeline by the executor. So a **symbol-keyed resolver** (`swap_resolve` reads the dispatch's `kernel` attr → radd:pAdd /
+  rmax:pMax) with **both pipelines + the resolver FIXED across both runs** makes the RELOADED TEXT ALONE select
+  add-reduce(2016)→max-reduce(63). ⛔ rebind `sctx.ctx = gen->ctx` + re-collect binds from the RELOADED module each run (reload
+  mints a fresh Context — a stale lowered list is a UAF; ASan-clean confirms the rebind). Harness refactor: extracted
+  `dispatch_ceir_1wg_resolved` (takes the resolver) with `dispatch_ceir_1wg` as a thin delegate — all 13z-1/2/3 callers
+  unchanged (28/28 backend tests still green).
+
+### CUDA as a SECOND platform (user-directed) + the gate scar
+
+Adding `crd-ceir-gpu-cuda-tests` to the Linux gate surfaced a `crd-ceir-gpu-cuda-tests_NOT_BUILT` failure. Root cause: **WSL2
+here has the CUDA toolkit (`/usr/bin/nvcc`) AND a real GPU-passthrough device (RTX 4070 Ti SUPER)** → the CUDA test target
+CONFIGURES on Linux, and its `catch_discover_tests` sentinel fires because gate6b wasn't building it. ⛔ **The advisor caught a
+wrong plan** (switch PRE_TEST→POST_BUILD): the `_NOT_BUILT` sentinel fires in **both** discovery modes — the axis is
+built-vs-configured. The **honest** fix respected the sentinel: BUILD + RUN the CUDA CEIR tests on Linux — they PASS on the
+real device (add/reduce/scan/6-dispatch FFT, linux-gcc-debug 5/5). Genuine 2nd-platform CUDA coverage, added to gate6b.
+
+**Linux-ASan CUDA:** `cuInit` in the WSL `libcuda.so` shim FAILS under ASan → the tests SKIP, but the driver's cuInit allocs
+(~50 KB, some in `<unknown module>` JIT frames a `leak:libcuda` LSan suppression can't name — tested, only ~half matched) trip
+LSan at exit → a correct skip becomes exit≠0. Fix: `ASAN_OPTIONS=detect_leaks=0` on the CUDA test binary, `if(UNIX)`-guarded
+(ASan's UAF/overflow checks stay ON; the tests never reach our code under ASan; Windows debug+asan cover CUDA with the native
+driver, no suppression). Memory: `feedback_ctest_not_built_sentinel_axis_and_cuda_linux_asan_leak`.
+
+### Gate (4 configs + CUDA on two platforms)
+
+win-debug full ceir **510/510** · win-asan full ceir **510/510** · linux-gcc-debug **505/505** (CUDA on real RTX 4070 Ti) ·
+linux-gcc-asan **505/505** (CUDA clean-skip via `detect_leaks=0`) · opgen validator+drift OK · gcc `-Werror=switch` clean ·
+LLVM-20 tidy clean (`test_ceir_add_vulkan.cpp` + `ceir_execute_1wg.hpp`; the two new global constants renamed to `kCamelCase`).
+Files: `tests/ceir-gpu-vulkan/test_ceir_add_vulkan.cpp` (probe + hotswap + device tests, Registrar, SwapResolve),
+`tests/gpu-shared/ceir_execute_1wg.hpp` (resolver-core refactor), `tests/ceir-gpu-cuda/CMakeLists.txt` +
+`tests/gpu-context-cuda/CMakeLists.txt` (the `if(UNIX)` detect_leaks guard — the base gpu-context CUDA test had the identical
+latent Linux-ASan red; solved, not deferred: built + guarded + green on both configs, vecadd runs on the real RTX under
+linux-debug), `tests/ceir-gpu-vulkan/CMakeLists.txt` (the `crd-ceir-cook` edge). All numbers re-sealed against the final
+(post-tidy-rename) source. **NEXT: 13z-z.**

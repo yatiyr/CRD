@@ -12,6 +12,7 @@ target_link_libraries(crd-ceir-gpu-vulkan-tests PRIVATE
     crd-memory
     crd-ceir          # the IR + the asset builder
     crd-ceir-gpu      # lower_region + execute_lowered (ADR-0125/0126)
+    crd-ceir-cook     # CEIR-13z-4 leg 2: the 10a ReloadSet (add_source/reload_source hot-reload)
     crd-kir           # the CKIR add kernel + the CPU dispatch harness
     crd-kir-vulkan    # the Vulkan backend (transitively: gpu-context-vulkan — VulkanComputeContext, compile_glsl_to_spirv, ValidationCapture)
     Catch2::Catch2WithMain

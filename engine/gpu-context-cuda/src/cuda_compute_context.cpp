@@ -19,15 +19,16 @@ namespace crd::gpu
 namespace
 {
 // NVRTC: compile CUDA C (`src`, null-terminated) → a CUBIN for the device's exact `arch` (e.g. "sm_89"). CUBIN, not PTX:
-// newer NVRTC emits a PTX version the driver JIT rejects (cuModuleLoadData error 222). Fast tier (--fmad=true) — this is
-// a compute-dispatch surface, not the bit-exact determinism path (that lives in kir-cuda).
-[[nodiscard]] bool compile_cubin(const char* src, const char* arch, crd::containers::Array<char>& cubin)
+// newer NVRTC emits a PTX version the driver JIT rejects (cuModuleLoadData error 222). ⭐ `fmad` is the PER-PIPELINE
+// FP-contraction choice: `--fmad=false` yields bit-exact (oracle-matched, the CUDA-fan-out convention), `--fmad=true` fuses
+// (the Fast tier). The caller picks (create_pipeline_from_cuda's `fmad` param) — no global policy.
+[[nodiscard]] bool compile_cubin(const char* src, const char* arch, bool fmad, crd::containers::Array<char>& cubin)
 {
     nvrtcProgram prog{};
     if (nvrtcCreateProgram(&prog, src, "crd_cuda.cu", 0, nullptr, nullptr) != NVRTC_SUCCESS) { return false; }
     char archopt[64];
     std::snprintf(archopt, sizeof(archopt), "--gpu-architecture=%s", arch);
-    const char*       opts[] = {"--fmad=true", archopt};
+    const char*       opts[] = {fmad ? "--fmad=true" : "--fmad=false", archopt};
     const nvrtcResult r      = nvrtcCompileProgram(prog, 2, opts);
     if (r != NVRTC_SUCCESS)
     {
@@ -92,8 +93,8 @@ private:
 class CudaPipeline final : public ComputePipeline
 {
 public:
-    CudaPipeline(CUmodule mod, CUfunction fn, int n_bindings, crd::u32 /*push_size*/) noexcept
-        : m_mod(mod), m_fn(fn), m_n(n_bindings) {}
+    CudaPipeline(CUmodule mod, CUfunction fn, int n_bindings, crd::u32 block, crd::u32 /*push_size*/) noexcept
+        : m_mod(mod), m_fn(fn), m_n(n_bindings), m_block(block) {}
     ~CudaPipeline() override { if (m_mod != nullptr) { cuModuleUnload(m_mod); } }
     CudaPipeline(const CudaPipeline&)            = delete;
     CudaPipeline& operator=(const CudaPipeline&) = delete;
@@ -102,17 +103,22 @@ public:
 
     [[nodiscard]] CUfunction fn() const noexcept { return m_fn; }
     [[nodiscard]] int        n_bindings() const noexcept { return m_n; }
+    [[nodiscard]] crd::u32   block() const noexcept { return m_block; } // the 1-D blockDim.x this kernel launches with
 
 private:
     CUmodule    m_mod  = nullptr;
-    CUfunction  m_fn   = nullptr;
-    int         m_n    = 0;
+    CUfunction  m_fn    = nullptr;
+    int         m_n     = 0;
+    crd::u32    m_block = 0U; // blockDim.x — the kernel's local_size (CEIR-13z CUDA fix: was a fixed 256, broke shared-mem kernels)
 };
 
-// ⭐ CUDA local-size convention: the IComputeContext dispatch surface passes only the GRID dims (gx,gy,gz) — the Vulkan
-// model bakes the block size into the SPIR-V, CUDA specifies it at launch. This backend launches a fixed 256-thread 1-D
-// block; a CUDA kernel for this surface indexes `blockIdx.x*blockDim.x + threadIdx.x` and guards its element count.
-inline constexpr crd::u32 kCudaBlock = 256U;
+// ⭐ CUDA local-size convention: the IComputeContext dispatch surface passes only the GRID dims (gx,gy,gz) — the Vulkan model
+// bakes the block size into the SPIR-V; CUDA specifies it at launch, so it rides the PIPELINE (`create_pipeline_from_cuda`'s
+// `local_size` → `CudaPipeline::block()`, used as blockDim.x). ⛔ CEIR-13z fix (2026-08-10): this backend USED to launch a
+// FIXED 256-thread block — correct for ELEMENTWISE kernels (guarded `blockIdx.x*blockDim.x+threadIdx.x`) but GARBAGE for
+// SHARED-MEMORY kernels (the CKIR is_kernel path: FFT/transpose/reduce/scan) which need blockDim.x == local_size (shared
+// arrays sized to it, __syncthreads() over exactly those threads). The FFT was garbage + the transpose over-launch
+// segfaulted; single-workgroup reduce/scan only survived by identity-padding guarded threads (add by luck — UB that passed).
 // Local params cap — a compute backend has no dependency on the raster command_model's kMaxBindings.
 inline constexpr crd::u32 kCudaMaxBindings = 16U;
 
@@ -157,7 +163,8 @@ class CudaContextImpl final : public CudaComputeContext
                 std::memcpy(pushbuf, push, push_size); // copy out of the const source ⇒ no const_cast of the kernel arg
                 params[nparams++] = pushbuf;
             }
-            cuLaunchKernel(cp.fn(), gx > 0U ? gx : 1U, gy > 0U ? gy : 1U, gz > 0U ? gz : 1U, kCudaBlock, 1U, 1U, 0U,
+            const crd::u32 block = cp.block() > 0U ? cp.block() : 1U; // the kernel's local_size (was a fixed kCudaBlock)
+            cuLaunchKernel(cp.fn(), gx > 0U ? gx : 1U, gy > 0U ? gy : 1U, gz > 0U ? gz : 1U, block, 1U, 1U, 0U,
                            m_c.m_stream, params, nullptr);
         }
 
@@ -237,9 +244,15 @@ public:
 
     [[nodiscard]] std::unique_ptr<ComputePipeline> create_pipeline_from_cuda(crd::containers::StringView cuda_source,
                                                                              crd::containers::StringView entry,
-                                                                             int n_bindings, crd::u32 push_size) override
+                                                                             int n_bindings, crd::u32 local_size,
+                                                                             crd::u32 push_size, bool fmad) override
     {
         if (!m_ok) { return nullptr; }
+        if (local_size == 0U || local_size > 1024U) // ⛔ blockDim.x must be a valid CUDA block (CUDA caps at 1024 threads/block)
+        {
+            std::fprintf(stderr, "create_pipeline_from_cuda: invalid local_size %u (must be 1..1024)\n", local_size);
+            return nullptr;
+        }
         crd::containers::Array<char> src(&m_alloc);
         src.resize(cuda_source.size() + 1U, '\0');
         for (crd::usize i = 0; i < cuda_source.size(); ++i) { src[i] = cuda_source[i]; }
@@ -248,7 +261,7 @@ public:
         for (crd::usize i = 0; i < entry.size(); ++i) { name[i] = entry[i]; }
 
         crd::containers::Array<char> cubin(&m_alloc);
-        if (!compile_cubin(src.data(), m_arch, cubin)) { return nullptr; }
+        if (!compile_cubin(src.data(), m_arch, fmad, cubin)) { return nullptr; }
         CUmodule mod = nullptr;
         if (cuModuleLoadData(&mod, cubin.data()) != CUDA_SUCCESS) { return nullptr; }
         CUfunction fn = nullptr;
@@ -257,7 +270,7 @@ public:
             cuModuleUnload(mod);
             return nullptr;
         }
-        return std::make_unique<CudaPipeline>(mod, fn, n_bindings, push_size);
+        return std::make_unique<CudaPipeline>(mod, fn, n_bindings, local_size, push_size);
     }
 
     [[nodiscard]] ComputeRecorder& begin() override
