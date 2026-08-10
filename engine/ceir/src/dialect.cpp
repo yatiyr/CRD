@@ -59,6 +59,10 @@ OpId Dialect::register_op(containers::StringView op, const OpSpec& spec)
                    "register_op: an intrinsic op ([op.native]) must name a native_provider");
     info->intrinsic       = spec.intrinsic;
     info->native_provider = spec.native_provider;
+    // CEIR-13c (§85/§106): the [op.kernel_ref] attr NAMES (opgen-emitted static strings, outlive the Context — stored by
+    // reference like native_provider). The §106 collector reads them to extract ckir_refs schema-driven (I6, no name-sniff).
+    info->kernel_ref_symbol    = spec.kernel_ref_symbol;
+    info->kernel_ref_interface = spec.kernel_ref_interface;
     // CEIR-8f (ADR-0116): intern the required-capability NAMES to CapabilityIds and arena-copy the set (the effects
     // precedent — the borrowed name span need not outlive the call). The program's required set is the module-wide union.
     if (const auto n = static_cast<u32>(spec.capabilities.size()); n > 0U)

@@ -1,0 +1,83 @@
+schema_version = 1
+dialect = "resource"
+summary = "CEIR-12a sec-36 the resource dialect: resource declaration, views/ranges/subresources over the 3c resource types, and import/export of externals. Resource-ness rides the TYPE (the CEIR-3c Buffer/Image/View/ResourceTable/ExternalResource/Tensor kinds) -- NOT a new trait (kKnownTraitsMask is pinned) -- and cross-op typing is enforced by the module-walk verifier Context::find_resource_misuse (the find_token_misuse house pattern). Lifetime classes + memory-domain intent + residency hints LANDED in CEIR-12b as declaration-site attrs: resource.declare carries lifetime/history_length/memory_domain/residency (CLOSED vocabularies, enforced) + streaming_priority/budget_class/size_class (OPEN tags, 12c/12d consume; size_class is the sec-78 alias slot bucket added CEIR-12c), resource.export carries direction (closed, enforced) -- all validated by the SEPARATE module walk Context::find_resource_intent_misuse (12a's find_resource_misuse stays the TYPE contract). CEIR-12c ADDS the alias/lifetime ANALYSIS (Context::compute_block_lifetimes + resources_interfere/resources_may_alias) over these attrs + the 4d effects; CEIR-12d ADDS the memory PLANNER (Context::plan_block_memory -> the inspectable MemoryPlan: greedy interval-coloring within a (size_class, kind) bucket, the §78 PlanProfile, per-assignment SlotReason for §162 explainability; ADR-0124). The finer sec-25 machinery (sparse pages, virtual textures, budget classes, prefetch, feedback-driven residency) is the CEIR-12d planner's, named-forward. alias/lifetime ANALYSIS (which consumes the alias_group attr + the export effect) is CEIR-12c; the memory planner is CEIR-12d. Reference/interpreter semantics are a NAMED-FORWARD: an uninstalled resource op is a typed NoSemantics (the async precedent), landing when the resource runtime + provider binding land (13+ / sec-150). Provider handle binding for import/export is a sec-150 provider seam, named-forward to CEIR-13+."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# resource.declare -- a GRAPH-OWNED resource (the planner OWNS its memory, CEIR-12d). The definition site of a resource
+# value; its type is a CEIR-3c resource kind (buffer<T>/image<Dim,Fmt>/tensor<...>/... supplied by the caller's
+# result_type via the ctx.type_* factories). A Pure value constructor -- no effect. ⛔ vs resource.import: declare is
+# graph-owned + PLANNED; import is externally-owned + NEVER planned (the distinction is the OP KIND, not a flag).
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "declare"
+summary = "Declare a graph-owned resource of a 3c resource type (the planner owns its memory)."
+version = 1
+results = [ { name = "resource", type = "resource", doc = "the declared resource value; type = a 3c resource kind (buffer/image/tensor/...)" } ]
+attributes = [
+    { name = "name", kind = "symbol", required = false, doc = "an optional debug/identity name (attr-only this slice -- NOT a SymbolTable entry; cross-module resolution is CEIR-13+)" },
+    { name = "alias_group", kind = "symbol", required = false, doc = "an optional alias-group tag; doc-only this slice -- CEIR-12c's alias/lifetime analysis CONSUMES it (given a syntactic home now so 12c mints no vocabulary mid-analysis)" },
+    { name = "lifetime", kind = "string", required = false, doc = "CEIR-12b sec-20 the LIFETIME class: transient | persistent | history (absent = unspecified, the planner's default). A CLOSED vocabulary -- find_resource_intent_misuse enforces it. history<T> binds HERE: a persistent ring whose depth is history_length." },
+    { name = "history_length", kind = "int", required = false, doc = "CEIR-12b sec-20 the history RING depth in frames (>=1; absent under lifetime=history means 1 -- the TAA prev-frame case). ONLY valid with lifetime=history: find_resource_intent_misuse rejects it elsewhere (HistoryLengthWithoutHistory) and rejects <1 or a non-int (HistoryLengthInvalid)." },
+    { name = "memory_domain", kind = "string", required = false, doc = "CEIR-12b sec-24 the memory-domain INTENT: host | pinned_host | device_local | host_visible_device | unified | upload | readback | sparse | external | peer_visible | distributed (absent = unspecified). A CLOSED vocabulary, enforced. sec-24's transient/persistent entries ride the `lifetime` axis (orthogonal), NOT here. INTENT only -- providers lower to Vulkan memory types / D3D heap flags (NEVER exposed as source semantics)." },
+    { name = "residency", kind = "string", required = false, doc = "CEIR-12b sec-25 the residency HINT: resident | streamable | evictable (absent = unspecified). A CLOSED vocabulary, enforced. The finer sec-25 machinery (sparse pages, virtual textures, budget classes, prefetch, feedback-driven residency) is the 12d planner's -- named-forward." },
+    { name = "streaming_priority", kind = "int", required = false, doc = "CEIR-12b sec-25 an OPEN streaming-priority hint (alias_group-style: UNCHECKED by the walk -- open values; the 12d planner consumes it)." },
+    { name = "budget_class", kind = "symbol", required = false, doc = "CEIR-12b sec-25 an OPEN budget-class tag (alias_group-style: UNCHECKED by the walk -- open symbol; the 12d planner consumes it)." },
+    { name = "size_class", kind = "int", required = false, doc = "CEIR-12c sec-78 the memory SIZE-CLASS bucket (an opaque planner bucket id; absent = unspecified/0). OPEN value (UNCHECKED by the walk); the 12c alias/lifetime analysis reads it -- two transients may share a slot ONLY within the same (size_class, TypeKind) bucket (the frame graph's slot-SIZE scar, IR edition). ⛔ still declare-ONLY planning intent: on a resource.import it is IntentAttrOnImport." },
+]
+traits = ["Pure"]
+docs = "The graph-owned resource definition site. Result type is a CEIR-3c resource kind. Pure (a value constructor -- no memory effect; reads/writes ride the ops that USE the resource). CEIR-12b attaches the planning-intent attrs HERE: lifetime (sec-20) + history_length (the history<T> ring depth) + memory_domain (sec-24 INTENT) + residency (sec-25 hint) are CLOSED vocabularies enforced by find_resource_intent_misuse; streaming_priority + budget_class + size_class (CEIR-12c sec-78, the alias slot bucket) are OPEN tags (12c/12d consume). ⛔ these are declare-ONLY -- the planner plans declare's resources, NEVER import's, so a planning-intent attr on an import is IntentAttrOnImport (nonsense-by-construction, the view-of-view legal-by-accident shape)."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# resource.view -- a VIEW / RANGE / SUBRESOURCE over a resource. ONE op spans all three: the CEIR-3c View type unifies
+# them -- the range MASK (ViewRange: byte/element for buffers, mip/layer/aspect for images) lives in the result View
+# TYPE (ctx.type_view(underlying, mask)); the range VALUES (offset/size per masked dim) are RUNTIME operands. ⛔ operand
+# order: the resource, then offset/size PAIRS in ASCENDING ViewRange bit order (byte<element<mip<layer<aspect). The
+# verifier checks num_operands == 1 + 2*popcount(mask) and that the result's underlying matches operand(0)'s type and
+# that the mask passes view_combination_valid. A Pure value constructor.
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "view"
+summary = "A view/range/subresource over a resource; result = a View type carrying the range mask (offsets/sizes are runtime operands)."
+version = 1
+operands = [
+    { name = "resource", type = "resource", doc = "the resource (or view) being narrowed" },
+    { name = "ranges", type = "index", variadic = true, doc = "offset/size PAIRS per masked ViewRange dim, ASCENDING bit order (byte<element<mip<layer<aspect); count = 2*popcount(mask)" },
+]
+results = [ { name = "view", type = "view", doc = "the view value; type = ctx.type_view(underlying = operand(0)'s type, mask)" } ]
+traits = ["Pure"]
+docs = "The unified view/range/subresource op. The mask is in the result View type; offsets/sizes are runtime operands (ascending ViewRange bit order). Pure. find_resource_misuse enforces: operand(0) resource-kinded; result.underlying == operand(0) type; mask valid for the underlying (view_combination_valid); num_operands == 1 + 2*popcount(mask)."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# resource.import -- bring an EXTERNALLY-OWNED resource into the graph (the PROVIDER binds the handle -- a sec-150
+# provider seam, named-forward to CEIR-13+). ⛔ The planner must NEVER plan an imported resource's memory (it is not
+# graph-owned). Result type is a 3c resource kind (often external_resource for an opaque external, or a typed
+# buffer/image that is externally bound). A Pure value constructor at the IR layer (the actual binding is provider-side).
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "import"
+summary = "Import an externally-owned resource (provider-bound handle); the planner never plans its memory."
+version = 1
+results = [ { name = "resource", type = "resource", doc = "the imported resource value; type = a 3c resource kind (external_resource, or a typed externally-bound buffer/image)" } ]
+attributes = [
+    { name = "name", kind = "symbol", required = false, doc = "an optional external identity name (attr-only; the provider resolves the real handle -- sec-150, CEIR-13+)" },
+]
+traits = ["Pure"]
+docs = "The externally-owned resource entry point. Distinct OP from declare (graph-owned vs externally-owned -- the planner plans declare's resources, NEVER import's). Pure at the IR layer; provider handle binding is a named-forward (sec-150 / CEIR-13+)."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# resource.export -- publish a resource externally (the boundary). ⛔ NOT Pure: it carries a conservative MemoryReadWrite
+# effect on operand 0 so the CEIR-12c hazard walk sees exports as ORDERING-RELEVANT (writes before export must complete;
+# external code may also mutate) -- getting this wrong is the WAR scar's IR edition. The access DIRECTION (read-only vs
+# read-write publish) LANDED at CEIR-12b as the optional `direction` attr {read|readwrite}; ADVISORY ONLY -- the EFFECT
+# record stays a conservative MemoryReadWrite (TOML-static), the attr merely narrows what the 12c hazard walk MAY assume.
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "export"
+summary = "Publish a resource externally (a boundary; conservative MemoryReadWrite so the hazard walk orders it)."
+version = 1
+operands = [ { name = "resource", type = "resource", doc = "the resource being published externally" } ]
+attributes = [
+    { name = "direction", kind = "string", required = false, doc = "CEIR-12b the publish DIRECTION intent: read | readwrite (absent = unspecified). A CLOSED vocabulary, enforced by find_resource_intent_misuse. ADVISORY: the EFFECT record stays a conservative MemoryReadWrite (TOML-static, always ordering-relevant); this attr only NARROWS what the CEIR-12c hazard walk MAY assume (a read-only publish need not order against upstream reads)." },
+]
+effects = [ { family = "MemoryReadWrite", operand = 0 } ]
+docs = "The external-publish boundary. A conservative MemoryReadWrite on operand 0 (writes before export must complete; external code may mutate) -- ordering-relevant for the CEIR-12c hazard walk. CEIR-12b adds the optional `direction` attr {read|readwrite} as an ADVISORY narrowing (the effect record itself stays conservative-both). find_resource_misuse enforces operand(0) is resource-kinded; find_resource_intent_misuse enforces the direction vocabulary."

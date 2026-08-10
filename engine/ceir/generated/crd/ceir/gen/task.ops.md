@@ -5,7 +5,99 @@
 
 Host/job execution ops (sec 38): the data-parallel loop (parallel_for) + the fixed-order map_reduce, lowered onto crd-jobs by the crd-ceir-host bridge.
 
-**2 ops:** `map_reduce`, `parallel_for`
+**8 ops:** `continuation`, `fiber_wait`, `group`, `main_thread`, `map_reduce`, `parallel_for`, `spawn`, `worker`
+
+## `task.continuation`
+
+Run a body AFTER a token completes, receiving its values; produce a new token (the sec 37 dependency / 'then').
+
+task.continuation(%token) { ^body(%vals...): ... core.yield %next... } -> %token2. Consumes %token ONCE (TokenConsumer) and runs the body AFTER it completes, binding the antecedent's yielded values as the body's block-args; produces a NEW token (TokenProducer) carrying the body's yields -- the sec 37 dependency chain ('then'). ⛔ EXECUTOR CONTRACT: the SEQUENTIAL reference reads the antecedent's stored yields, binds them via invoke_region, and stores the body's yields as the new token (an arity mismatch is a runtime BadArity -- the invoke_region contract; static cross-op yield-count checking is a semantic-verifier question, CEIR-3/4). Jobs-backed: run-after-wait (stage 3). Synchronization -> audio-RT illegal.
+
+- **Version:** 1
+- **Traits:** `TokenConsumer`, `TokenProducer`
+- **Regions:** 1
+- **Effects:** `Synchronization`
+
+**Operands:**
+
+| name | type | variadic | doc |
+| --- | --- | --- | --- |
+| `token` | any | no | the antecedent token to consume |
+
+**Results:**
+
+| name | type | doc |
+| --- | --- | --- |
+| `next` | any | a new completion token for the continuation body |
+
+**Attributes:** _none_
+
+## `task.fiber_wait`
+
+Fiber-yielding wait on a token; produce the awaited body's yielded values (host-level await).
+
+task.fiber_wait(%token) -> (%v...). The HOST-level await: consume %token ONCE and yield the awaited body's values, ⛔ YIELDING THE FIBER (never blocking the thread) -- vs async.await (the substrate-neutral structural wait). EXECUTOR CONTRACT: the SEQUENTIAL reference mirrors async.await's EvalFn (returns the body's stored yields); the JOBS-BACKED provider lowers to crd::jobs::wait(counter) (stage 3). Synchronization -> audio-RT illegal.
+
+- **Version:** 1
+- **Traits:** `TokenConsumer`
+- **Regions:** 0
+- **Effects:** `Synchronization`
+
+**Operands:**
+
+| name | type | variadic | doc |
+| --- | --- | --- | --- |
+| `token` | any | no | the token to consume |
+
+**Results:**
+
+| name | type | doc |
+| --- | --- | --- |
+| `values` | any | the awaited body's yielded values |
+
+**Attributes:** _none_
+
+## `task.group`
+
+A structured task group: bound a region so every task spawned inside is joined at group exit (the task-level scope).
+
+task.group { ... } -> (%r...). A structured TASK GROUP (sec 38): its dynamic extent ends only when every task spawned inside is joined -- the task-level counterpart of async.scope. ⛔ It BOUNDS, it does NOT fork, so it carries NO token traits (a token spawned inside + consumed outside is UseBeforeDef by 5b; never-consumed is Unconsumed by 6a -- confinement is LAYERED verification, zero new code, exactly like async.scope). EXECUTOR CONTRACT: the SEQUENTIAL reference shares async.scope's EvalFn (a no-op boundary forwarding the region's yield -- everything already completed at spawn); the JOBS-BACKED provider joins outstanding work at group exit via crd::jobs::run(span)+wait (stage 3). Synchronization -> audio-RT illegal (a join-at-exit blocks).
+
+- **Version:** 1
+- **Traits:** _none_
+- **Regions:** 1
+- **Effects:** `Synchronization`
+
+**Operands:** _none_
+
+**Results:**
+
+| name | type | doc |
+| --- | --- | --- |
+| `results` | any | the group region's yielded values |
+
+**Attributes:** _none_
+
+## `task.main_thread`
+
+Run a body pinned to the main thread (thread 0); produce a completion token.
+
+task.main_thread { body } -> %token. Run the body pinned to the MAIN THREAD (thread 0 -- for main-thread-affine work). ⛔ EXECUTOR CONTRACT: main-thread PLACEMENT is value-unobservable in the sec 118 oracle, so the SEQUENTIAL reference shares async.launch's EvalFn (runs the body at the op, correct for the oracle); the JOBS-BACKED provider lowers to crd::jobs::run with JobDecl.pin_thread=0 + pump_main_thread (stage 3). Synchronization -> audio-RT illegal. Token use-once via the shared verifier.
+
+- **Version:** 1
+- **Traits:** `TokenProducer`
+- **Regions:** 1
+- **Effects:** `Synchronization`
+
+**Operands:** _none_
+
+**Results:**
+
+| name | type | doc |
+| --- | --- | --- |
+| `token` | any | the completion token -- consume EXACTLY once |
+
+**Attributes:** _none_
 
 ## `task.map_reduce`
 
@@ -55,5 +147,47 @@ task.parallel_for(%lo, %hi, %step) { ^body(%iv): ... core.yield %v }. ⛔ HOST P
 | `step` | any | no |  |
 
 **Results:** _none_
+
+**Attributes:** _none_
+
+## `task.spawn`
+
+Fork a body as a host job; produce a completion token (the sec 38 task-level fork).
+
+task.spawn { body } -> %token. Fork the body as a HOST JOB (vs async.launch, which commits to no substrate). ⛔ EXECUTOR CONTRACT: the SEQUENTIAL reference shares async.launch's EvalFn (runs the body at spawn; %token completes at the body's yield); the JOBS-BACKED provider (CEIR-11a stage 3) lowers to crd::jobs::run(JobDecl). Declares an ambient Synchronization effect -> illegal in an audio-real-time region (the 6a flip). Token use-once (sec 116) is enforced by the SHARED find_token_misuse verifier -- ZERO verifier edits (open-world).
+
+- **Version:** 1
+- **Traits:** `TokenProducer`
+- **Regions:** 1
+- **Effects:** `Synchronization`
+
+**Operands:** _none_
+
+**Results:**
+
+| name | type | doc |
+| --- | --- | --- |
+| `token` | any | the completion token -- consume EXACTLY once (await / fiber_wait / join / cancel) |
+
+**Attributes:** _none_
+
+## `task.worker`
+
+Run a body on a worker thread (worker-pool affinity); produce a completion token.
+
+task.worker { body } -> %token. Run the body on a WORKER thread (the default pool). ⛔ EXECUTOR CONTRACT: worker PLACEMENT is value-unobservable in the oracle, so the SEQUENTIAL reference shares async.launch's EvalFn (runs on the calling thread, correct for the oracle); the JOBS-BACKED provider lowers to crd::jobs::run(JobDecl) (stage 3). Synchronization -> audio-RT illegal. Token use-once via the shared verifier.
+
+- **Version:** 1
+- **Traits:** `TokenProducer`
+- **Regions:** 1
+- **Effects:** `Synchronization`
+
+**Operands:** _none_
+
+**Results:**
+
+| name | type | doc |
+| --- | --- | --- |
+| `token` | any | the completion token -- consume EXACTLY once |
 
 **Attributes:** _none_

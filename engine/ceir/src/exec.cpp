@@ -32,12 +32,13 @@ containers::StringView exec_error_name(ExecError e) noexcept
 
 Interpreter::Interpreter(Context& ctx, crd::u64 max_steps, memory::IAllocator* scratch)
     : m_ctx(ctx), m_scratch(scratch != nullptr ? scratch : ctx.allocator()), m_fuel(max_steps), m_sem(m_scratch),
-      m_cells(m_scratch), m_yield_store(m_scratch)
+      m_cells(m_scratch), m_yield_store(m_scratch), m_map_output(m_scratch)
 {
 }
 
 Interpreter::Interpreter(const Interpreter& proto, memory::IAllocator* scratch, crd::u64 max_steps)
-    : m_ctx(proto.m_ctx), m_scratch(scratch), m_fuel(max_steps), m_sem(scratch), m_cells(scratch), m_yield_store(scratch)
+    : m_ctx(proto.m_ctx), m_scratch(scratch), m_fuel(max_steps), m_sem(scratch), m_cells(scratch), m_yield_store(scratch),
+      m_map_output(scratch) // fresh (per-session, like cells/yields — NOT copied from proto)
 {
     // copy the installed semantics (intern-free — the keys are already OpId.value); env / cells / fuel start FRESH.
     for (auto it = proto.m_sem.begin(); it != proto.m_sem.end(); ++it) { m_sem.insert(it.key(), it.value()); }
@@ -62,6 +63,19 @@ containers::ConstSpan<crd::i64> Interpreter::stored_yields(crd::u32 handle) cons
     if (handle >= static_cast<crd::u32>(m_yield_store.size())) { return {}; }
     const containers::Array<crd::i64>& ys = m_yield_store[handle];
     return containers::ConstSpan<crd::i64>(ys.data(), ys.size());
+}
+
+void Interpreter::store_map_output(const Operation* op, containers::Array<crd::i64>&& out)
+{
+    if (containers::Array<crd::i64>* const slot = m_map_output.find(op); slot != nullptr) { *slot = std::move(out); }
+    else { m_map_output.insert(op, std::move(out)); }
+}
+
+containers::ConstSpan<crd::i64> Interpreter::map_output(const Operation* op) const noexcept
+{
+    const containers::Array<crd::i64>* const slot = m_map_output.find(op);
+    if (slot == nullptr) { return {}; }
+    return containers::ConstSpan<crd::i64>(slot->data(), slot->size());
 }
 
 void Interpreter::install(OpId kind, EvalFn fn)
@@ -222,7 +236,10 @@ ExecError Interpreter::eval_op(const Operation& op)
 {
     EvalFn* const fn = m_sem.find(op.kind().value);
     if (fn == nullptr) { return fail(ExecError::NoSemantics, &op); }
-    return (*fn)(*this, op);
+    if (m_pre_hook != nullptr) { m_pre_hook(op, m_hook_user); } // §112: fires before EVERY dispatched op
+    const ExecError e = (*fn)(*this, op);
+    if (e == ExecError::None && m_post_hook != nullptr) { m_post_hook(op, m_hook_user); } // post: successful dispatch only
+    return e;
 }
 
 ExecError Interpreter::eval_block(const Block& b)
@@ -299,6 +316,7 @@ ExecResult Interpreter::invoke(const Module& m, containers::StringView entry, co
 {
     ExecResult r(m_scratch);
     m_symbols = m.symbols();
+    m_module  = &m; // the sequential parallel_for/map_reduce EvalFns invoke_region on a sub with THIS module
     m_err     = ExecError::None;
     m_err_op  = nullptr;
     if (m_symbols == nullptr)
@@ -344,6 +362,7 @@ ExecError Interpreter::invoke_region(const Module& m, const Region& body, contai
                                      containers::Array<crd::i64>& out_yield)
 {
     m_symbols = m.symbols();
+    m_module  = &m;
     m_err     = ExecError::None;
     m_err_op  = nullptr;
     Block* const eb = body.first_block();
@@ -524,6 +543,28 @@ ExecError eval_await(Interpreter& in, const Operation& op)
     }
     return ExecError::None;
 }
+// CEIR-11a task.continuation: consume the antecedent token, bind ITS yields as the body's block-args, run the body, and
+// store the body's yields as a NEW token. A hybrid of await (read antecedent) + launch (run body, store). ⛔ Read the
+// antecedent's values into the env BEFORE run_region (the body may store_yields, growing the store under the span).
+ExecError eval_continuation(Interpreter& in, const Operation& op)
+{
+    crd::i64 tok = 0;
+    if (!in.value_of(op.operand(0), tok)) { return in.fail(ExecError::UndefinedValue, &op); }
+    if (tok < 0 || !in.valid_yield_handle(static_cast<crd::u32>(tok))) { return in.fail(ExecError::BadToken, &op); }
+    const containers::ConstSpan<crd::i64> vals = in.stored_yields(static_cast<crd::u32>(tok));
+    const Region* const                   body = op.region(0);
+    Block* const                          eb   = body->first_block();
+    if (eb != nullptr) // bind the antecedent's yields as the body's block-args (arity-checked — the invoke_region contract)
+    {
+        if (eb->num_args() != static_cast<crd::u32>(vals.size())) { return in.fail(ExecError::BadArity, &op); }
+        for (crd::u32 i = 0; i < eb->num_args(); ++i) { in.set_value(eb->arg(i), vals[static_cast<crd::usize>(i)]); }
+    }
+    containers::Array<crd::i64> ys(in.allocator());
+    if (const ExecError e = in.run_region(*body, &ys); e != ExecError::None) { return e; }
+    const crd::u32 handle = in.store_yields(containers::ConstSpan<crd::i64>(ys.data(), ys.size()));
+    in.set_value(op.result(0), static_cast<crd::i64>(handle)); // the new token IS the store handle
+    return ExecError::None;
+}
 ExecError eval_join(Interpreter& in, const Operation& op)
 {
     containers::Array<crd::i64> merged(in.allocator());
@@ -554,6 +595,80 @@ ExecError eval_cancel(Interpreter& in, const Operation& op)
     crd::i64 t = 0;
     if (!in.value_of(op.operand(0), t)) { return in.fail(ExecError::UndefinedValue, &op); }
     return ExecError::None; // consume + no-op; real cancellation is CEIR-6c
+}
+
+// ── the SEQUENTIAL reference for task.parallel_for / task.map_reduce (CEIR-11a — the §118 oracle) ──
+// ⛔ The body runs on ONE fresh SUB-interpreter cloned from `in` (the 6z fold pattern): NOT run_region in `in`'s frame
+// (outer captures would wrongly RESOLVE — the TOML pins them UndefinedValue) and NOT invoke_region on `in` (its frame is
+// live). The sub gets `in`'s remaining fuel; captures are structurally UndefinedValue, matching the provider. Runs the
+// map SEQUENTIALLY in index order — the SAME output as the provider's parallel run (index-order-disjoint slots), so the
+// §118 differential compare is byte-identical WITHOUT sharing execution (only the pre-flight ANALYSIS is shared).
+ExecError run_seq_map(Interpreter& in, const Operation& op, containers::Array<crd::i64>& out)
+{
+    crd::i64 lo   = 0;
+    crd::i64 hi   = 0;
+    crd::i64 step = 0;
+    if (!in.value_of(op.operand(0), lo) || !in.value_of(op.operand(1), hi) || !in.value_of(op.operand(2), step))
+    {
+        return in.fail(ExecError::UndefinedValue, &op);
+    }
+    if (step <= 0) { return in.fail(ExecError::BadForStep, &op); }
+    const Module* const m = in.module();
+    if (m == nullptr || m->symbols() == nullptr) { return in.fail(ExecError::NoEntry, &op); }
+    // legality AT the op (the SHARED core pre-flight — the map region: 1 block-arg, yields 1, state-free).
+    if (const PreflightResult pf = check_parallel_region(in.ctx(), *m->symbols(), &op, op.region(0), 1U);
+        pf.err != ExecError::None)
+    {
+        return in.fail(pf.err, pf.op);
+    }
+    const crd::u32 count = (hi > lo) ? static_cast<crd::u32>((hi - lo + step - 1) / step) : 0U; // == the provider's count
+    for (crd::u32 i = 0; i < count; ++i) { out.push_back(0); }
+    if (count == 0U) { return ExecError::None; } // empty range: an empty map (matches the provider's empty store)
+    Interpreter sub(in, in.allocator(), in.fuel()); // ONE fresh sub (semantics copied; fresh env/cells/fuel)
+    for (crd::u32 i = 0; i < count; ++i)
+    {
+        if (in.cancelled()) { return in.fail(ExecError::Cancelled, &op); } // per-index (eval_for granularity)
+        const crd::i64              iv     = lo + static_cast<crd::i64>(i) * step;
+        const crd::i64              iva[1] = {iv};
+        containers::Array<crd::i64> yield(in.allocator());
+        const ExecError e = sub.invoke_region(*m, *op.region(0), containers::ConstSpan<crd::i64>(iva, 1U), yield);
+        if (e != ExecError::None) { return in.fail(e, &op); }
+        out[i] = (yield.size() >= 1U) ? yield[0] : 0; // pre-flight guarantees yield == 1
+    }
+    return ExecError::None;
+}
+ExecError eval_parallel_for_seq(Interpreter& in, const Operation& op)
+{
+    containers::Array<crd::i64> out(in.allocator());
+    if (const ExecError e = run_seq_map(in, op, out); e != ExecError::None) { return e; }
+    in.store_map_output(&op, std::move(out)); // statement op — no SSA result; the map is the map_output inspection
+    return ExecError::None;
+}
+ExecError eval_map_reduce_seq(Interpreter& in, const Operation& op)
+{
+    containers::Array<crd::i64> out(in.allocator());
+    if (const ExecError e = run_seq_map(in, op, out); e != ExecError::None) { return e; } // region(0) = map
+    const Module* const m = in.module(); // (run_seq_map already validated m + symbols)
+    // legality of the COMBINE region (2 block-args, yields 1, state-free).
+    if (const PreflightResult pf = check_parallel_region(in.ctx(), *m->symbols(), &op, op.region(1), 2U);
+        pf.err != ExecError::None)
+    {
+        return in.fail(pf.err, pf.op);
+    }
+    crd::i64 acc = 0;
+    if (!in.value_of(op.operand(3), acc)) { return in.fail(ExecError::UndefinedValue, &op); } // the init operand
+    Interpreter sub(in, in.allocator(), in.fuel());
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(out.size()); ++i) // SEQUENTIAL fold in INDEX order (the fixed order)
+    {
+        const crd::i64              ba[2] = {acc, out[i]}; // (acc, elem) in index order
+        containers::Array<crd::i64> yield(in.allocator());
+        const ExecError e = sub.invoke_region(*m, *op.region(1), containers::ConstSpan<crd::i64>(ba, 2U), yield);
+        if (e != ExecError::None) { return in.fail(e, &op); } // a fold-step error → the map_reduce op
+        acc = (yield.size() >= 1U) ? yield[0] : 0;
+    }
+    in.set_value(op.result(0U), acc);           // expression op — the reduced value is its SSA result
+    in.store_map_output(&op, std::move(out));   // §118 inspection parity (the intermediate map — the provider stores it too)
+    return ExecError::None;
 }
 } // namespace
 
@@ -606,6 +721,123 @@ void install_async_semantics(Interpreter& in) // §37 SEQUENTIAL reference (CEIR
     // §30 structured-concurrency scope (CEIR-6c): the SEQUENTIAL reference is a no-op boundary — run the region + forward
     // its yield (everything launched inside already completed at launch). Same shape as core.scope.
     in.install(c.intern_op("async", "scope"), &eval_scope);
+}
+
+void install_task_semantics(Interpreter& in) // §38 host-task SEQUENTIAL reference (CEIR-11a) — the §118 oracle, host-neutral
+{
+    Context& c = in.ctx();
+    // ⭐ Placement is value-unobservable in the oracle, so spawn/main_thread/worker SHARE launch's EvalFn (run the body at
+    // the op, token = the yield-store handle) and group SHARES scope's (a no-op boundary forwarding the yield) — distinct
+    // vocabulary, shared EvalFn (the state/delay/history + switch/match precedent). The jobs-backed placement is stage 3.
+    in.install(c.intern_op("task", "spawn"), &eval_launch);
+    in.install(c.intern_op("task", "main_thread"), &eval_launch);
+    in.install(c.intern_op("task", "worker"), &eval_launch);
+    in.install(c.intern_op("task", "group"), &eval_scope);
+    in.install(c.intern_op("task", "fiber_wait"), &eval_await); // the host-level await (mirrors async.await)
+    in.install(c.intern_op("task", "continuation"), &eval_continuation);
+    // the data-parallel ops' SEQUENTIAL reference (the §118 oracle; the jobs-backed provider OVERRIDES these via
+    // last-install-wins). ⛔ Requires the ENTRY to run under invoke() (so in.module() is set — the sub invoke_regions on it).
+    in.install(c.intern_op("task", "parallel_for"), &eval_parallel_for_seq);
+    in.install(c.intern_op("task", "map_reduce"), &eval_map_reduce_seq);
+}
+
+// ── the parallel-purity pre-flight (CEIR-11a — moved from crd-ceir-host; the 9d hoist-at-second-consumer) ──
+namespace
+{
+// The body + its resolved callees must be StateEdge-free (a cell would make the result depend on the range split).
+// `call_kind` is passed in (interned once by the caller) so this recursion never re-interns. Offenses point at the
+// precise inner op (stateful / unresolved-call).
+PreflightResult preflight_region_walk(const Context& ctx, const SymbolTable& syms, OpId call_kind, Region* r,
+                                      containers::HashMap<const Operation*, crd::u8>& visited)
+{
+    if (r == nullptr) { return {}; }
+    for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
+    {
+        for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+        {
+            if (ctx.has_trait(op->kind(), OpTrait::StateEdge)) { return {ExecError::ParallelBodyStateful, op}; }
+            if (op->kind() == call_kind) // interned-id compare (was a bridge-era "func.call" string match)
+            {
+                Operation* const callee = func::resolve_call(ctx, op, syms);
+                if (callee == nullptr) { return {ExecError::UnresolvedCall, op}; }
+                if (!visited.contains(callee))
+                {
+                    visited.insert(callee, static_cast<crd::u8>(1));
+                    const PreflightResult e = preflight_region_walk(ctx, syms, call_kind, callee->region(0), visited);
+                    if (e.err != ExecError::None) { return e; }
+                }
+            }
+            for (crd::u32 i = 0; i < op->num_regions(); ++i)
+            {
+                const PreflightResult e = preflight_region_walk(ctx, syms, call_kind, op->region(i), visited);
+                if (e.err != ExecError::None) { return e; }
+            }
+        }
+    }
+    return {};
+}
+} // namespace
+
+PreflightResult region_state_free(Context& ctx, const SymbolTable& syms, Region* r)
+{
+    containers::HashMap<const Operation*, crd::u8> visited(ctx.allocator());
+    return preflight_region_walk(ctx, syms, func::call_kind(ctx), r, visited);
+}
+
+PreflightResult check_parallel_region(Context& ctx, const SymbolTable& syms, const Operation* owner, Region* r,
+                                      crd::u32 expect_args)
+{
+    Block* const bb = (r != nullptr) ? r->first_block() : nullptr;
+    if (bb == nullptr || bb->num_args() != expect_args) { return {ExecError::BadArity, owner}; }
+    Operation* const term = bb->last_op();
+    if (term == nullptr || !ctx.has_trait(term->kind(), OpTrait::Terminator) || term->num_operands() != 1U)
+    {
+        return {ExecError::ParallelYieldArity, owner};
+    }
+    return region_state_free(ctx, syms, r); // the StateEdge-free + calls-resolved transitive walk
+}
+
+PreflightResult preflight_parallel(Context& ctx, const Module& module)
+{
+    const SymbolTable* const syms = module.symbols();
+    if (syms == nullptr) { return {}; }
+    const OpId pf_kind = ctx.intern_op("task", "parallel_for");
+    const OpId mr_kind = ctx.intern_op("task", "map_reduce");
+    // collect every task.parallel_for + task.map_reduce (pre-order over the module body).
+    containers::Array<Operation*> ops(ctx.allocator());
+    struct Walk
+    {
+        static void go(Region* r, OpId pf, OpId mr, containers::Array<Operation*>& out)
+        {
+            if (r == nullptr) { return; }
+            for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
+            {
+                for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+                {
+                    if (op->kind() == pf || op->kind() == mr) { out.push_back(op); }
+                    for (crd::u32 i = 0; i < op->num_regions(); ++i) { go(op->region(i), pf, mr, out); }
+                }
+            }
+        }
+    };
+    Walk::go(module.body(), pf_kind, mr_kind, ops);
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(ops.size()); ++i)
+    {
+        Operation* const op = ops[i];
+        // MAP region (both ops): 1 block-arg (the induction var), yields 1, state-free.
+        if (const PreflightResult e = check_parallel_region(ctx, *syms, op, op->region(0), 1U); e.err != ExecError::None)
+        {
+            return e;
+        }
+        if (op->kind() == mr_kind) // COMBINE region (map_reduce only): 2 block-args (acc, elem), yields 1, state-free.
+        {
+            if (const PreflightResult e = check_parallel_region(ctx, *syms, op, op->region(1), 2U); e.err != ExecError::None)
+            {
+                return e;
+            }
+        }
+    }
+    return {};
 }
 
 containers::Array<crd::u8> pin_values(containers::ConstSpan<crd::i64> values, memory::IAllocator* alloc)

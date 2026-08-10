@@ -62,6 +62,106 @@ struct Hazard
     HazardKind       kind   = HazardKind::None;
 };
 
+// ── CEIR-12c §78/§26: the resource ALIAS/LIFETIME analysis vocabulary — the effect-derived hazard model (CEIR-4d) gives
+// ORDERING; this gives per-resource LIVE RANGES + the may-alias predicate the memory planner (CEIR-12d) colors. Ports the
+// frame graph's greedy interval model (first_use/last_use over schedule positions; transients alias within a NON-ZERO
+// (size_class, kind) bucket when their ranges are disjoint; persistent/history/unspecified get dedicated slots). ⛔ a view
+// laundered through a region YIELD / call RESULT (its SSA identity no longer traces to its declare's result) escapes the
+// view→root map — such a use is invisible here (an unbound alias-model refinement, shared with the 4d hazard walk). ──
+
+// The §20 lifetime class a resource.declare's `lifetime` attr names (⛔ ABSENT ⇒ Unspecified, NOT Transient — 12b pinned
+// absent as "the planner's default"; the may-alias predicate treats only an EXPLICIT Transient as aliasable).
+// NOLINTNEXTLINE(performance-enum-size)
+enum class ResourceLifetimeClass : u8
+{
+    Unspecified = 0, // no `lifetime` attr (or an unrecognized value — find_resource_intent_misuse rejects bad values first)
+    Transient,       // lives within the frame; the ONLY class the aliaser may pool
+    Persistent,      // lives across frames; a dedicated slot (never aliased)
+    History,         // a persistent ring (`history<T>`); a dedicated slot
+};
+
+// One graph-owned resource's LIVE RANGE over a block's op list (the schedule-position proxy — real scheduling is §79).
+// `first`/`last` are op POSITIONS (0-based); a resource is LIVE across [first, last]. `last` extends to the last op whose
+// operand's ROOT resource is this one (following resource.view chains), to any op with an ambient Memory/Universe effect
+// at-or-after `first` (the 4d conservative "more-live-never-less" rule), and to block-END when `exported` (external code
+// may touch it past any position — the WAR-scar IR edition). Two resources INTERFERE iff their [first,last] overlap.
+struct ResourceLifetime
+{
+    const Value*          resource = nullptr;                          // the resource.declare's result SSA Value (identity)
+    const Operation*      declare  = nullptr;                          // the defining resource.declare op
+    u32                   first    = 0;                                // the declare's op position (its definition site)
+    u32                   last     = 0;                                // the last-use position (>= first)
+    ResourceLifetimeClass lifetime = ResourceLifetimeClass::Unspecified;
+    TypeKind              kind     = TypeKind::Buffer;                  // the CEIR-3c resource kind (buffers never alias images)
+    i64                   size_class = 0;                              // the §78 `size_class` bucket (0 = unspecified — never pools)
+    bool                  exported = false;                            // reached a resource.export ⇒ never aliasable
+};
+
+// ── CEIR-12d §78/§162: the memory PLANNER — colors 12c's live ranges into physical SLOTS. The "planner interface" is this
+// inspectable `MemoryPlan` contract + the §78 `PlanProfile`; the "first planner" is the greedy interval-coloring (the frame
+// graph's aliaser, ported). Downstream-consumed (§15d frame-compile → the CEIR-12 planner), so ADR-0124 pins the contract. ──
+
+// §78 optimization profiles. ⛔ its name switch has ALL arms (append-at-end + -Werror=switch). Real TODAY: `Memory` (alias
+// aggressively) vs `Latency` (no aliasing — preserve parallelism); `Balanced` (a parallelism-aware cost model) +
+// `Deterministic` (cross-run stability guarantees) RIDE Memory's already-deterministic behavior this slice (named-forward,
+// ADR-0124). Every arm produces defined behavior (aliasing = profile != Latency).
+enum class PlanProfile : u8 // NOLINT(performance-enum-size)
+{
+    Memory = 0,
+    Balanced,
+    Latency,
+    Deterministic,
+};
+[[nodiscard]] containers::StringView plan_profile_name(PlanProfile p) noexcept;
+
+// WHY a resource got its slot (§162 "explain decisions" — the negative reasons matter as much as the positive). ⛔ ONE
+// name switch, all arms. `Pooled` sets SlotAssignment::prior (the reused occupant); the rest leave it null.
+enum class SlotReason : u8 // NOLINT(performance-enum-size)
+{
+    Pooled = 0,        // shares a slot with a prior DISJOINT poolable resource (the frame-graph alias — memory saved)
+    NewPoolSlot,       // poolable-eligible; opened a fresh SHAREABLE slot (no existing bucket slot was free)
+    DedicatedLifetime, // Persistent/History/Unspecified never pool (a history<T> ring records its depth on the slot)
+    DedicatedExported, // reached resource.export -- external code may touch it past any position
+    DedicatedUnsized,  // a transient with size_class 0 (an unknown size cannot be safely bucketed)
+    DedicatedProfile,  // the Latency profile disabled pooling to preserve parallelism (a would-be-poolable resource)
+};
+[[nodiscard]] containers::StringView slot_reason_name(SlotReason r) noexcept;
+
+// One physical slot in the plan (the inspectable unit — §162 "why N slots / why this big"). `dedicated` ⇒ never shared.
+struct MemorySlot
+{
+    TypeKind kind           = TypeKind::Buffer;
+    i64      size_class     = 0;
+    bool     dedicated      = false;
+    u32      first          = 0; // span start (min occupant `first`)
+    u32      last           = 0; // span end (max occupant `last`)
+    u32      occupant_count = 0;
+    i64      history_length = 0; // >0 iff a history<T> ring realizes here (its depth = the memory MULTIPLE; §162)
+};
+
+// Where one resource landed + WHY (§162). `prior` is non-null ONLY when `reason == Pooled` (the occupant it reused).
+struct SlotAssignment
+{
+    const Value* resource = nullptr;
+    u32          slot     = 0;
+    SlotReason   reason   = SlotReason::DedicatedLifetime;
+    const Value* prior    = nullptr;
+};
+
+// The inspectable output of the CEIR-12d memory planner. `assignments` is in resource DECLARATION order (parallel to
+// compute_block_lifetimes). `transient_logical`/`transient_physical` count ONLY poolable-eligible resources (Transient,
+// non-exported, non-zero size_class): logical = the slots they'd need WITHOUT aliasing; physical = the slots they actually
+// use. physical ≤ logical, STRICT iff any pooling happened — the REN-1 "aliasing saves memory" proof, IR edition (§78).
+struct MemoryPlan
+{
+    containers::Array<MemorySlot>     slots;
+    containers::Array<SlotAssignment> assignments;
+    u32                               transient_logical  = 0;
+    u32                               transient_physical = 0;
+    PlanProfile                       profile            = PlanProfile::Memory;
+    explicit MemoryPlan(memory::IAllocator* a) : slots(a), assignments(a) {}
+};
+
 class SymbolTable; // forward — the EffectQuery resolves callees against it (full def in symbol_table.hpp)
 
 // The context threaded through an INSTANCE-DEPENDENT effect resolution (CEIR-5c, §34): a `func.call`'s effective effects
@@ -129,6 +229,114 @@ struct TokenMisuse
     const Value*    value = nullptr;
     const Operation* op   = nullptr;
     TokenMisuseKind kind  = TokenMisuseKind::None;
+};
+
+// CEIR-12a §36: the resource-dialect type-system ENFORCEMENT (the `find_token_misuse` house pattern) — a deterministic
+// pre-order module walk enforcing the resource ops' typing that the per-op structural verify (arity/attr-kind) and the
+// doc-only TOML `type` fields CANNOT: resource-ness rides the CEIR-3c resource TYPE, and this walk checks it cross-op.
+// NOLINTNEXTLINE(performance-enum-size)
+enum class ResourceMisuseKind : u8
+{
+    None = 0,
+    ViewOperandNotViewable,   // resource.view operand(0) is not a VIEWABLE resource (must be a Buffer or Image -- the only
+                              // kinds view_combination_valid admits; ⛔ rejects view-of-view + views over Sampler/Tensor/etc.)
+    ViewResultNotView,        // resource.view result(0) is not a View type
+    ViewUnderlyingMismatch,   // the view result's underlying type != operand(0)'s type
+    ViewMaskInvalid,          // the view result's range mask is illegal for the underlying (view_combination_valid)
+    ViewRangeArity,           // num_operands != 1 + 2*popcount(mask) (offset/size PAIRS per masked ViewRange dim)
+    ExportOperandNotResource, // resource.export operand(0) is not a resource-kinded value
+    DeclImportResultNotResource, // resource.declare / resource.import result(0) is not a resource-kinded value
+};
+[[nodiscard]] containers::StringView resource_misuse_kind_name(ResourceMisuseKind k) noexcept;
+
+// The pointing result of the CEIR-12a resource-misuse walk: the FIRST misuse (pre-order), the offending `op`, and the
+// `value` it points at (the bad operand / the malformed result).
+struct ResourceMisuse
+{
+    const Value*       value = nullptr;
+    const Operation*   op    = nullptr;
+    ResourceMisuseKind kind  = ResourceMisuseKind::None;
+};
+
+// CEIR-12b §24/§25: the resource planning-INTENT attribute-vocabulary enforcement (a SEPARATE walk from the 12a TYPE
+// contract — see find_resource_intent_misuse). Each CLOSED-vocabulary attr has ONE misuse kind: a wrong VALUE and a wrong
+// attr-KIND both fold into it (the state-depth precedent `kind != Int || i < 1` → one kind, context.cpp). OPEN tags
+// (streaming_priority/budget_class) mint no kind — they are unchecked (the 12d planner consumes them).
+// NOLINTNEXTLINE(performance-enum-size)
+enum class ResourceIntentMisuseKind : u8
+{
+    None = 0,
+    LifetimeValueInvalid,        // resource.declare `lifetime` present but not a String in {transient, persistent, history}
+    HistoryLengthInvalid,        // resource.declare `history_length` present but not an Int >= 1
+    HistoryLengthWithoutHistory, // resource.declare `history_length` present while `lifetime` is not "history" (incl. absent)
+    MemoryDomainValueInvalid,    // resource.declare `memory_domain` present but not a String in the §24 domain vocabulary
+    ResidencyValueInvalid,       // resource.declare `residency` present but not a String in {resident, streamable, evictable}
+    DirectionValueInvalid,       // resource.export `direction` present but not a String in {read, readwrite}
+    IntentAttrOnImport,          // resource.import carries a declare-only planning-intent attr (imports are never planned —
+                                 // nonsense-by-construction, the view-of-view legal-by-accident shape)
+};
+[[nodiscard]] containers::StringView resource_intent_misuse_kind_name(ResourceIntentMisuseKind k) noexcept;
+
+// The pointing result of the CEIR-12b intent walk: the FIRST misuse (pre-order) and the offending `op` (the misuse is an
+// ATTRIBUTE of the op — there is no bad Value to point at, unlike ResourceMisuse).
+struct ResourceIntentMisuse
+{
+    const Operation*         op   = nullptr;
+    ResourceIntentMisuseKind kind = ResourceIntentMisuseKind::None;
+};
+
+// CEIR-13a §42: the `ceir.compute` dispatch well-formedness ENFORCEMENT (the `find_token_misuse`/`find_resource_misuse`
+// house pattern) — a deterministic module walk over compute.dispatch / compute.dispatch_indirect checking the binding
+// contract the per-op structural verify (arity/attr-kind) cannot: the `access` string's tokens + arity, that each binding
+// is a CEIR-3c resource, that a direct dispatch's grid operands are Index-typed, and that an indirect dispatch's args is a
+// Buffer (or a View of one). Binding KIND/SLOT are DERIVED (type + position), not stored — nothing to verify there.
+// NOLINTNEXTLINE(performance-enum-size)
+enum class DispatchMisuseKind : u8
+{
+    None = 0,
+    GridNotIndex,        // compute.dispatch grid operand (0..2) is not an Index-typed value
+    AccessTokenInvalid,  // the `access` string has a token outside {r, w, rw} (or an empty/malformed token)
+    AccessArityMismatch, // the `access` token count != the number of bindings (num_operands-3 direct / -1 indirect)
+    BindingNotResource,  // a binding operand is not a resource-kinded value (the 12a ceir_is_resource_kind predicate)
+    ArgsNotBuffer,       // compute.dispatch_indirect operand 0 (args) is not a Buffer nor a View of a Buffer
+    KernelNotSymbol,     // the `kernel` @identity attr is absent or not a Symbol (CEIR-13c: identity became load-bearing —
+                         // a standalone-robust fold, like the access kind-fold; checked FIRST — identity before contract)
+};
+[[nodiscard]] containers::StringView dispatch_misuse_kind_name(DispatchMisuseKind k) noexcept;
+
+// The pointing result of the CEIR-13a dispatch walk: the FIRST misuse (pre-order), the offending `op`, and the `value` it
+// points at (a bad grid/binding/args operand; null for an access-string misuse, which is an attribute of the op).
+struct DispatchMisuse
+{
+    const Value*       value = nullptr;
+    const Operation*   op    = nullptr;
+    DispatchMisuseKind kind  = DispatchMisuseKind::None;
+};
+
+// CEIR-13b §50: the `ceir.transfer` well-formedness ENFORCEMENT (the find_resource/dispatch_misuse house pattern) — a
+// deterministic module walk over the transfer ops checking the movement contract: every operand is TRANSFERABLE (a
+// Buffer/Image, or a View of one — the 12a one-hop underlying); a copy's src != dst by SSA identity (a whole-resource
+// self-copy is API-invalid; same-root-through-distinct-views is LEGAL); a clear's `value` fill word is Int + not on an
+// image; a mip_gen operand is an Image. ⛔ opaque ExternalResource is NOT transferable (kind unknowable — import it typed).
+// NOLINTNEXTLINE(performance-enum-size)
+enum class TransferMisuseKind : u8
+{
+    None = 0,
+    OperandNotTransferable, // a copy/upload/readback/clear operand is not a Buffer/Image nor a View of one
+    CopySrcIsDst,           // transfer.copy src and dst are the SAME SSA Value (a whole-resource self-copy)
+    MipGenNotImage,         // transfer.mip_gen operand (through a view one-hop) is not an Image
+    ClearValueInvalid,      // transfer.clear `value` is present but not an Int (the fill word is a u32 pattern) — 13a fold
+    ClearValueOnImage,      // transfer.clear `value` (a buffer FILL WORD) is on an IMAGE clear — a typed image clear is 13d
+};
+[[nodiscard]] containers::StringView transfer_misuse_kind_name(TransferMisuseKind k) noexcept;
+
+// The pointing result of the CEIR-13b transfer walk: the FIRST misuse, the offending `op`, and the `value` it points at (a
+// bad operand; null for a `value`-attribute misuse, which is an attribute of the op).
+struct TransferMisuse
+{
+    const Value*       value = nullptr;
+    const Operation*   op    = nullptr;
+    TransferMisuseKind kind  = TransferMisuseKind::None;
 };
 
 class Context
@@ -412,16 +620,55 @@ public:
     // the strongest hazard (WAW>RAW>WAR) over every pair of their effects that share a resource + overlapping range with
     // ≥1 write; `None` ⇒ freely reorderable. ⛔ EMPTY≠UNKNOWN: an UNREGISTERED op reads+writes `Universe` (hazards
     // everything); a registered EFFECT-FREE (Pure) op touches nothing ⇒ `None` vs anything. ⛔ DISTINCT SSA Values are
-    // assumed NON-ALIASING (view-creation ops don't exist yet, so this is vacuously safe; a CEIR-6+ alias model refines
-    // it). `collect_block_hazards` is the O(n²) all-pairs CORRECTNESS reference over ONE block's ops in LIST (authored-
+    // assumed NON-ALIASING — ⛔ SUPERSEDED (CEIR-13d part 3, DONE): 12a minted `resource.view` and 12c built a view→root map,
+    // and the hazard walk NOW consults it — `op_access_at` normalizes every captured resource through `resource_root`, so
+    // `write(%buf)` vs `read(view(%buf))` is a REAL hazard (no longer a false-negative). ⛔ a view laundered through a region
+    // yield / call result STILL escapes BOTH this walk and the 12c lifetime analysis (its `defining_op` is not a
+    // `resource.view` — an unbound inter-op alias-model refinement). `collect_block_hazards` is the O(n²) all-pairs CORRECTNESS reference over ONE block's ops in LIST (authored-
     // linearization) order — the edges a scheduler must preserve; no transitive reduction (that is the scheduler's).
     // Cross-block / loop-carried hazards need the CFG (CEIR-5b) — not here. ⭐ CEIR-5c: the `table`-taking OVERLOADS use a
     // call's callee-DERIVED effects (a call to a pure func is reorderable; the no-table paths keep the conservative
     // `ExternalCall`-barrier baseline — the A/B pair). Lifted call effects are whole-class (ambient) as above.
+    // CEIR-13d part 3 (§78/§116): the underlying resource `v` names — follow `resource.view` chains to the root resource so
+    // `write(%buf)` vs `read(view(%buf))` is a REAL hazard (the 12c view→root map, on-demand via `defining_op`). Returns `v`
+    // unchanged when it is not a view (or is a block arg). ⛔ a view LAUNDERED through a region yield / call result (its
+    // defining op is not a `resource.view`) is NOT resolved — a deeper alias-model hole, still forwarded. Used by the 4d
+    // access-gather so hazards + the crd-ceir-gpu barrier lowering both see through views; ⛔ resolves IDENTITY only, not the
+    // view's byte RANGE (a disjoint-view refinement is a later slice — normalizing to the root is conservative-safe here).
+    [[nodiscard]] const Value* resource_root(const Value* v) const noexcept;
+
     [[nodiscard]] HazardKind ops_hazard(const Operation& before, const Operation& after) const noexcept;
     [[nodiscard]] HazardKind ops_hazard(const Operation& before, const Operation& after, const SymbolTable& table) const;
     void collect_block_hazards(const Block& b, containers::Array<Hazard>& out) const;
     void collect_block_hazards(const Block& b, const SymbolTable& table, containers::Array<Hazard>& out) const;
+
+    // ── CEIR-12c §78: the resource ALIAS/LIFETIME analysis (over the same one-block LIST-order scope as the hazards) ──
+    // Enumerate the GRAPH-OWNED resources (resource.declare results; resource.import is EXCLUDED — never planned) of `b`
+    // and compute each one's live range (ResourceLifetime). `last` follows resource.view chains to the root, extends to any
+    // op with an ambient Memory/Universe effect at-or-after the declare (the 4d conservative rule), pins to block-end when
+    // the resource is exported, and — the nested-region fix — an operand USE inside a nested region is attributed to the
+    // CONTAINING op's position (the "pass"). Appends in declaration order. Allocates scratch (a Value*→root map); not
+    // noexcept. ⛔ per-block, like collect_block_hazards — cross-block/loop-carried ranges need the CFG (a later refinement).
+    void compute_block_lifetimes(const Block& b, containers::Array<ResourceLifetime>& out) const;
+
+    // Two resources INTERFERE iff their [first, last] live ranges OVERLAP (they cannot share memory). A pure interval test.
+    [[nodiscard]] static bool resources_interfere(const ResourceLifetime& a, const ResourceLifetime& b) noexcept;
+
+    // Whether `a` and `b` MAY share one memory slot (the predicate the CEIR-12d planner colors): BOTH explicitly Transient
+    // (Unspecified/Persistent/History never pool — the conservative direction), NEITHER exported, the SAME resource kind
+    // AND the SAME NON-ZERO size_class bucket (the slot-SIZE scar — size_class 0/unspecified never pools), and
+    // NON-interfering live ranges. ⛔ a de-facto-persistent (Unspecified) or unsized resource is refused, not aliased — a
+    // wrong alias is a correctness bug, a refused one only a pessimization (12d relaxes per profile). Symmetric; a resource
+    // never aliases itself (it always self-interferes).
+    [[nodiscard]] static bool resources_may_alias(const ResourceLifetime& a, const ResourceLifetime& b) noexcept;
+
+    // ── CEIR-12d §78/§162: the memory PLANNER — color a block's 12c live ranges into physical slots (`out` is CLEARED and
+    // filled; the out-param house pattern of the hazard/lifetime collectors). `profile` selects the strategy (§78): Memory
+    // aliases via resources_may_alias (greedy interval-coloring — provably minimal, the input is start-sorted by
+    // construction), Latency dedicates a slot per resource (preserves parallelism). ⛔ every co-slotted pair satisfies
+    // resources_may_alias (the plan↔predicate consistency invariant — holds by construction). Allocates scratch; not
+    // noexcept. The plan is inspectable (per-slot occupancy + per-assignment SlotReason) — §162. ADR-0124 pins the contract.
+    void plan_block_memory(const Block& b, PlanProfile profile, MemoryPlan& out) const;
 
     // ── CEIR-5a structured control flow: canonicalization ── the constant-condition `if` fold (the partial-eval seed).
     // If `if_op` is a `core.if` whose condition is a constant `arith.const`, splice the TAKEN region's single block into
@@ -451,6 +698,34 @@ public:
     // produce-outside / consume-inside a LOOP = 1 static use = passes (dynamic multiplicity needs execution — a gap).
     // Inherits the 5d register-to-verify contract (traits are registry state). Allocates scratch (hence not noexcept).
     [[nodiscard]] TokenMisuse find_token_misuse(const Module& m) const;
+
+    // CEIR-12a §36: the resource-dialect type-system enforcement — a pre-order walk returning the FIRST resource.view /
+    // resource.export / declare / import op whose typing is malformed (see ResourceMisuseKind), or {None}. Reads the
+    // CEIR-3c resource TYPES (Buffer/Image/View/... via `type_of` + `view_combination_valid`); resource-ness rides the
+    // type, not a trait. ⛔ Assumes structural validity (run `find_structure_error` first — the structural verify checks
+    // op arity/attr-kinds; this walk checks the cross-op TYPE contract the doc-only TOML types cannot).
+    [[nodiscard]] ResourceMisuse find_resource_misuse(const Module& m) const noexcept;
+
+    // CEIR-12b §24/§25: the resource planning-INTENT attribute-vocabulary enforcement — a SEPARATE pre-order walk from
+    // find_resource_misuse (12a's TYPE contract), returning the FIRST resource.declare / resource.export / resource.import
+    // op whose §20 lifetime / §24 memory-domain / §25 residency / export-direction attr is malformed (see
+    // ResourceIntentMisuseKind), or {None}. Enforces the CLOSED vocabularies (wrong VALUE or wrong KIND folds into one kind
+    // per attr — the state-depth precedent); OPEN tags (streaming_priority/budget_class) are unchecked. ⛔ Kept separate so
+    // 12a's contractual check order + its pinned negatives stay untouched (the widen-enum-audit scar).
+    [[nodiscard]] ResourceIntentMisuse find_resource_intent_misuse(const Module& m) const noexcept;
+
+    // CEIR-13a §42: the `ceir.compute` dispatch well-formedness check — a pre-order walk returning the FIRST
+    // compute.dispatch / compute.dispatch_indirect op whose binding contract is malformed (see DispatchMisuseKind), or
+    // {None}. Reads the CEIR-3c operand TYPES + the `access` string; binding KIND/SLOT are derived (type + position).
+    // ⛔ Assumes structural validity (run the per-op verify first — it guarantees the required kernel/access attrs + the
+    // min operand arity; this walk checks the cross-operand + access-string contract those cannot).
+    [[nodiscard]] DispatchMisuse find_dispatch_misuse(const Module& m) const noexcept;
+
+    // CEIR-13b §50: the `ceir.transfer` well-formedness check — a pre-order walk returning the FIRST transfer op whose
+    // movement contract is malformed (see TransferMisuseKind), or {None}. Reads the CEIR-3c operand TYPES (transferable =
+    // Buffer/Image or a View one-hop) + the clear `value` attr. ⛔ Assumes structural validity; robust to a raw
+    // deserialized module for the `value` kind-fold (like find_dispatch_misuse).
+    [[nodiscard]] TransferMisuse find_transfer_misuse(const Module& m) const noexcept;
 
     // Interfaces: intern a name, register/query an op-kind's implementation (an opaque function-table pointer).
     [[nodiscard]] InterfaceId    intern_interface(containers::StringView name); // CEIR-8e: an FNV of the name (== T::kId)

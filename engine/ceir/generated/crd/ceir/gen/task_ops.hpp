@@ -15,10 +15,62 @@
 namespace crd::ceir::task
 {
 // -- op-kind identities (interned lazily against `ctx`, idempotent) --
+[[nodiscard]] inline OpId continuation_kind(Context& ctx) { return ctx.intern_op("task", "continuation"); }
+[[nodiscard]] inline OpId fiber_wait_kind(Context& ctx) { return ctx.intern_op("task", "fiber_wait"); }
+[[nodiscard]] inline OpId group_kind(Context& ctx) { return ctx.intern_op("task", "group"); }
+[[nodiscard]] inline OpId main_thread_kind(Context& ctx) { return ctx.intern_op("task", "main_thread"); }
 [[nodiscard]] inline OpId map_reduce_kind(Context& ctx) { return ctx.intern_op("task", "map_reduce"); }
 [[nodiscard]] inline OpId parallel_for_kind(Context& ctx) { return ctx.intern_op("task", "parallel_for"); }
+[[nodiscard]] inline OpId spawn_kind(Context& ctx) { return ctx.intern_op("task", "spawn"); }
+[[nodiscard]] inline OpId worker_kind(Context& ctx) { return ctx.intern_op("task", "worker"); }
 
 // -- typed op wrappers (a thin view over an Operation*; the registered verifier enforces shape) --
+// task.continuation - Run a body AFTER a token completes, receiving its values; produce a new token (the sec 37 dependency / 'then').
+class ContinuationOp
+{
+public:
+    explicit ContinuationOp(Operation* op) noexcept : m_op(op) {}
+    [[nodiscard]] Operation* operation() const noexcept { return m_op; }
+    [[nodiscard]] Value* token() const noexcept { return m_op->operand(0U); }
+    [[nodiscard]] Value* next() const noexcept { return m_op->result(0U); }
+
+private:
+    Operation* m_op;
+};
+// task.fiber_wait - Fiber-yielding wait on a token; produce the awaited body's yielded values (host-level await).
+class FiberWaitOp
+{
+public:
+    explicit FiberWaitOp(Operation* op) noexcept : m_op(op) {}
+    [[nodiscard]] Operation* operation() const noexcept { return m_op; }
+    [[nodiscard]] Value* token() const noexcept { return m_op->operand(0U); }
+    [[nodiscard]] Value* values() const noexcept { return m_op->result(0U); }
+
+private:
+    Operation* m_op;
+};
+// task.group - A structured task group: bound a region so every task spawned inside is joined at group exit (the task-level scope).
+class GroupOp
+{
+public:
+    explicit GroupOp(Operation* op) noexcept : m_op(op) {}
+    [[nodiscard]] Operation* operation() const noexcept { return m_op; }
+    [[nodiscard]] Value* results() const noexcept { return m_op->result(0U); }
+
+private:
+    Operation* m_op;
+};
+// task.main_thread - Run a body pinned to the main thread (thread 0); produce a completion token.
+class MainThreadOp
+{
+public:
+    explicit MainThreadOp(Operation* op) noexcept : m_op(op) {}
+    [[nodiscard]] Operation* operation() const noexcept { return m_op; }
+    [[nodiscard]] Value* token() const noexcept { return m_op->result(0U); }
+
+private:
+    Operation* m_op;
+};
 // task.map_reduce - A data-parallel map + a fixed-order (index-order) reduction: map each index in [lower, upper) via the map region, then fold the results left-to-right from init via the combine region.
 class MapReduceOp
 {
@@ -47,12 +99,40 @@ public:
 private:
     Operation* m_op;
 };
+// task.spawn - Fork a body as a host job; produce a completion token (the sec 38 task-level fork).
+class SpawnOp
+{
+public:
+    explicit SpawnOp(Operation* op) noexcept : m_op(op) {}
+    [[nodiscard]] Operation* operation() const noexcept { return m_op; }
+    [[nodiscard]] Value* token() const noexcept { return m_op->result(0U); }
+
+private:
+    Operation* m_op;
+};
+// task.worker - Run a body on a worker thread (worker-pool affinity); produce a completion token.
+class WorkerOp
+{
+public:
+    explicit WorkerOp(Operation* op) noexcept : m_op(op) {}
+    [[nodiscard]] Operation* operation() const noexcept { return m_op; }
+    [[nodiscard]] Value* token() const noexcept { return m_op->result(0U); }
+
+private:
+    Operation* m_op;
+};
 
 // -- builders (through the ordinary Context factories - no privileged construction). NOTE: a builder
 // produces the MINIMUM arity on every variadic axis (operands / results / regions); build the full arity
 // (extra variadic operands, N result values, N case regions) directly with `Context::create_operation`. --
+[[nodiscard]] Operation* build_continuation(Context& ctx, Value* token, TypeId result_type = {});
+[[nodiscard]] Operation* build_fiber_wait(Context& ctx, Value* token, TypeId result_type = {});
+[[nodiscard]] Operation* build_group(Context& ctx, TypeId result_type = {});
+[[nodiscard]] Operation* build_main_thread(Context& ctx, TypeId result_type = {});
 [[nodiscard]] Operation* build_map_reduce(Context& ctx, Value* lower, Value* upper, Value* step, Value* init, TypeId result_type = {});
 [[nodiscard]] Operation* build_parallel_for(Context& ctx, Value* lower, Value* upper, Value* step, TypeId result_type = {});
+[[nodiscard]] Operation* build_spawn(Context& ctx, TypeId result_type = {});
+[[nodiscard]] Operation* build_worker(Context& ctx, TypeId result_type = {});
 
 // -- registration: self-registers the dialect + every op (traits + verifier), NO central edit (section 7) --
 Dialect* register_task_ops(Context& ctx);

@@ -10,7 +10,9 @@
 #include <crd/ceir/cook/program_cook.hpp>
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/gen/arith_ops.hpp>
+#include <crd/ceir/gen/compute_ops.hpp>
 #include <crd/ceir/gen/core_ops.hpp>
+#include <crd/ceir/gen/resource_ops.hpp>
 #include <crd/ceir/gen/test_ops.hpp>
 #include <crd/ceir/print.hpp> // print (the source-text cook path)
 #include <crd/ceir/program_asset.hpp>
@@ -86,7 +88,143 @@ Module* build_const_fn(Context& c, const Reg& r, i64 k)
     b->append(func::create_return(c, ConstSpan<Value*>(rv, 1U)));
     return m;
 }
+// CEIR-13c: a single-entry mock kernel resolver (name -> interface hash). fn-ptr + user, the KernelResolveFn contract.
+struct KTable
+{
+    StringView name;
+    u64        hash;
+};
+bool resolve_one(StringView n, void* user, u64& out)
+{
+    const KTable* const t = static_cast<const KTable*>(user);
+    if (n == t->name)
+    {
+        out = t->hash;
+        return true;
+    }
+    return false;
+}
+struct CReg
+{
+    OpId cst, decl, disp;
+    explicit CReg(Context& c)
+        : cst(c.intern_op("arith", "const")), decl(c.intern_op("resource", "declare")),
+          disp(c.intern_op("compute", "dispatch"))
+    {
+        (void)arith::register_arith_ops(c);
+        (void)func::register_dialect(c);
+        (void)resource::register_resource_ops(c);
+        (void)compute::register_compute_ops(c);
+    }
+};
+// append %buf=declare; %g=1; compute.dispatch(%g,%g,%g, %buf){kernel=@kernel_name, access="r"[, kernel_interface=pin]}.
+Operation* add_dispatch(Context& c, const CReg& r, Block* bm, const char* kernel_name, i64 pin, bool pinned)
+{
+    Operation* const buf = c.create_operation(r.decl, {}, 1U, c.type_buffer(BufferMode::Plain, c.type_f32()));
+    bm->append(buf);
+    Operation* const g = c.create_operation(r.cst, {}, 1U, c.type_index());
+    c.set_attr(g, "value", c.attr_int(1));
+    bm->append(g);
+    Value*           dops[4] = {g->result(0U), g->result(0U), g->result(0U), buf->result(0U)};
+    Operation* const d       = c.create_operation(r.disp, ConstSpan<Value*>(dops, 4U), 0U);
+    c.set_attr(d, "kernel", c.attr_symbol(StringView(kernel_name)));
+    c.set_attr(d, "access", c.attr_string("r"));
+    if (pinned) { c.set_attr(d, "kernel_interface", c.attr_int(pin)); }
+    bm->append(d);
+    return d;
+}
+Block* main_block(Context& c, Module& m)
+{
+    Operation* const f = func::create_func(c, m, "main", Visibility::Public, 0U);
+    module_block(c, m)->append(f);
+    return func::func_body_block(f);
+}
+Module* build_dispatch(Context& c, const CReg& r, const char* kernel_name, i64 pin, bool pinned)
+{
+    Module* const m  = c.create_module();
+    Block* const  bm = main_block(c, *m);
+    (void)add_dispatch(c, r, bm, kernel_name, pin, pinned);
+    bm->append(func::create_return(c, {}));
+    return m;
+}
 } // namespace
+
+TEST_CASE("ceir 13c: the cook resolves ckir_refs and enforces the interface-hash contract", "[ceir][cook]")
+{
+    crd::memory::MallocAllocator root;
+    // a stand-in KERNEL program cooked first; its §107 interface hash is the "actual" the resolver returns.
+    u64 kernel_hash = 0;
+    {
+        Context    kc(&root);
+        const Reg  kr(kc);
+        Module*    km = kc.create_module();
+        (void)mkfunc_sq(kc, kr, *km, StringView("kmain"));
+        const CookResult kres = cook_program(kc, *km, 0x9001U, &root, &root);
+        REQUIRE(kres.ok());
+        kernel_hash = kres.interface_hash;
+    }
+    KTable      table{StringView("mykernel"), kernel_hash}; // non-const so &table -> void* needs no const_cast
+    void* const user = &table;
+
+    // (1) the pin MATCHES the resolved kernel -> cook OK.
+    {
+        Context      c(&root);
+        const CReg   r(c);
+        Module* const    m   = build_dispatch(c, r, "mykernel", static_cast<i64>(kernel_hash), true);
+        const CookResult res = cook_program(c, *m, 1U, &root, &root, &resolve_one, user);
+        CHECK(res.ok());
+    }
+    // (2) the pin MISMATCHES -> KernelInterfaceMismatch, op = the dispatch.
+    {
+        Context          c(&root);
+        const CReg       r(c);
+        Module* const    m   = build_dispatch(c, r, "mykernel", static_cast<i64>(kernel_hash ^ 1U), true);
+        const CookResult res = cook_program(c, *m, 1U, &root, &root, &resolve_one, user);
+        CHECK(res.error == CookError::KernelInterfaceMismatch);
+        REQUIRE(res.op != nullptr);
+        CHECK(c.op_name(res.op->kind()) == StringView("compute.dispatch")); // ⭐ points at the DISPATCH
+    }
+    // (3) an unknown @kernel name -> KernelUnresolved (existence is ALWAYS checked, even unpinned).
+    {
+        Context          c(&root);
+        const CReg       r(c);
+        Module* const    m   = build_dispatch(c, r, "ghost", 0, false);
+        const CookResult res = cook_program(c, *m, 1U, &root, &root, &resolve_one, user);
+        CHECK(res.error == CookError::KernelUnresolved);
+    }
+    // (4) UNPINNED but resolvable -> OK (no hash to check, but the name must resolve).
+    {
+        Context          c(&root);
+        const CReg       r(c);
+        Module* const    m   = build_dispatch(c, r, "mykernel", 0, false);
+        const CookResult res = cook_program(c, *m, 1U, &root, &root, &resolve_one, user);
+        CHECK(res.ok());
+    }
+    // (5) NO resolver -> cook OK (deferred) + the CDEP chunk PERSISTS the refs; read_program returns them (schema v5). Two
+    // dispatches (one PINNED, one UNPINNED) exercise the pinned=0 wire branch + the count>1 CDEP path + the sort.
+    {
+        Context       c(&root);
+        const CReg    r(c);
+        Module* const m  = c.create_module();
+        Block* const  bm = main_block(c, *m);
+        (void)add_dispatch(c, r, bm, "ghost", static_cast<i64>(kernel_hash), true); // pinned (unresolvable, but deferred)
+        (void)add_dispatch(c, r, bm, "zebra", 0, false);                            // UNPINNED
+        bm->append(func::create_return(c, {}));
+        const CookResult res = cook_program(c, *m, 1U, &root, &root); // no resolver -> resolution deferred
+        REQUIRE(res.ok());
+        Context          c2(&root);
+        const CReg       r2(c2);
+        (void)r2;
+        const ReadResult rr = read_program(c2, ConstSpan<u8>(res.blob.data(), res.blob.size()), &root);
+        REQUIRE(rr.ok());
+        REQUIRE(rr.deps.ckir_refs.size() == 2U); // ⭐ both refs survived the CDEP round-trip, sorted by name
+        CHECK(rr.deps.ckir_refs[0].name == StringView("ghost"));
+        CHECK(rr.deps.ckir_refs[0].pinned);
+        CHECK(rr.deps.ckir_refs[0].interface_hash == kernel_hash);
+        CHECK(rr.deps.ckir_refs[1].name == StringView("zebra"));
+        CHECK_FALSE(rr.deps.ckir_refs[1].pinned); // ⭐ the unpinned (pinned=0) wire branch
+    }
+}
 
 TEST_CASE("ceir cook 7a: a module cooks and round-trips CROSS-CONTEXT with matching hashes", "[ceir][cook]")
 {

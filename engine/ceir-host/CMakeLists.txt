@@ -21,6 +21,8 @@ target_link_libraries(crd-ceir-host
         crd-memory
     PRIVATE
         crd-jobs      # the execution provider lowers task.parallel_for onto crd::jobs::parallel_for (NOT in any public header)
+        crd-perf      # CEIR-11c: the plan-perf bridge adapter owns the crd-perf calls (core cannot link crd-perf: I5 + jobs-free)
+        crd-time      # MonotonicClock for the parent-pause self-time (always available; the profile fills even perf-OFF)
         crd-warnings
 )
 

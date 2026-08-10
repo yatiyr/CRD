@@ -30,6 +30,14 @@ add_executable(crd-ceir-tests
     test_exec.cpp     # CEIR-5z: the sec 118 reference executor - per-op semantics, the state ring, fuel, typed errors, open-world install
     test_band5_gate.cpp # CEIR-5z: BAND-5 GATE - a pinned program (loop + switch + calls + state accumulator) executes byte-identically builder == text-parsed
     test_async.cpp    # CEIR-6a: ceir.async ops (sec 37) + the sec 116 use-once token-misuse verifier + the audio Synchronization flip
+    test_task.cpp     # CEIR-11a: the six sec-38 residual ceir.task ops (spawn/continuation/main_thread/worker/fiber_wait/group) + sequential reference semantics + zero-edit token-verifier coverage + the audio flip
+    test_plan.cpp     # CEIR-11b: the compiled execution tier - plan compiler (Module -> dense CompiledPlan) + executor + the differential harness (reference vs compiled, pin_values byte-compare); stage 2 = straight-line arith
+    test_resource.cpp # CEIR-12a: the ceir.resource dialect (sec 36) - find_resource_misuse verifier (view/export/declare/import typing) + a text/binary round-trip of View/ExternalResource kinds
+    test_lifetime.cpp # CEIR-12c: the resource alias/lifetime analysis (sec 78) - compute_block_lifetimes + resources_interfere/may_alias; the WAR-lifetime + slot-SIZE frame-graph scars as IR ctests
+    test_planner.cpp  # CEIR-12d: the memory planner (sec 78/162) - plan_block_memory interval-coloring + inspectable MemoryPlan; the transient_physical<logical proof + plan<->may_alias consistency
+    test_band12_gate.cpp # CEIR-12z: the BAND-12 composing gate - ONE frame-graph module composes 12a-d in sequence (type + intent verifiers, WAR-lifetime through a view + slot-SIZE scars, the REN-1 physical<logical proof, Latency cross-check, round-trip reproducibility)
+    test_compute.cpp  # CEIR-13a: the ceir.compute dialect (sec 42) - dispatch/dispatch_indirect + find_dispatch_misuse (access tokens/arity, binding-is-resource, grid-is-index, args-is-buffer); the conservative GPUCommand+ambient effect baseline (hazards export, extends 12c ranges)
+    test_transfer.cpp # CEIR-13b: the ceir.transfer dialect (sec 50) - copy/upload/readback/clear/mip_gen + find_transfer_misuse (transferable, copy src!=dst, clear value fold+image, mip-gen is-image); STATIC per-kind effects (precise upload->readback RAW, no ambient bleed)
     test_program_asset.cpp # CEIR-7a: the sec 105-107 program-as-asset metadata - interface hash, dependency record, strict cook-time registration check
     test_extern_type.cpp # CEIR-8a: the open-world type model (ADR-0111) - dialect-defined type-classes behind TypeKind::Extern, zero central-enum edits
     test_extern_attr.cpp # CEIR-8b: the open-world attribute model (ADR-0112) - aggregate/wrapper kinds + dialect attr-classes behind AttrKind::Extern, zero central-enum edits

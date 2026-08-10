@@ -26,7 +26,7 @@ TEST_CASE("ceir task gen smoke: the dialect self-registers and reflects a cohere
     CHECK(dlt->name() == crd::containers::StringView("task"));
 
     const crd::containers::ConstSpan<OpSchema> schemas = task::task_op_schemas();
-    REQUIRE(schemas.size() == 2U);
+    REQUIRE(schemas.size() == 8U);
 
     crd::containers::StringView prev;
     for (const OpSchema& s : schemas)
@@ -47,6 +47,36 @@ TEST_CASE("ceir task gen smoke: every op builds through its generated builder an
     Context                      ctx(&root);
     (void)task::register_task_ops(ctx);
 
+    // task.continuation
+    {
+        Operation* const src = ctx.create_operation(ctx.intern_op("smoke", "src"), {}, 1U, ctx.type_i32());
+        Operation* const op = task::build_continuation(ctx, src->result(0U), ctx.type_i32());
+        CHECK(op != nullptr);
+        CHECK(ctx.verify(*op));
+    }
+
+    // task.fiber_wait
+    {
+        Operation* const src = ctx.create_operation(ctx.intern_op("smoke", "src"), {}, 1U, ctx.type_i32());
+        Operation* const op = task::build_fiber_wait(ctx, src->result(0U), ctx.type_i32());
+        CHECK(op != nullptr);
+        CHECK(ctx.verify(*op));
+    }
+
+    // task.group
+    {
+        Operation* const op = task::build_group(ctx, ctx.type_i32());
+        CHECK(op != nullptr);
+        CHECK(ctx.verify(*op));
+    }
+
+    // task.main_thread
+    {
+        Operation* const op = task::build_main_thread(ctx, ctx.type_i32());
+        CHECK(op != nullptr);
+        CHECK(ctx.verify(*op));
+    }
+
     // task.map_reduce
     {
         Operation* const src = ctx.create_operation(ctx.intern_op("smoke", "src"), {}, 4U, ctx.type_i32());
@@ -62,6 +92,20 @@ TEST_CASE("ceir task gen smoke: every op builds through its generated builder an
         CHECK(op != nullptr);
         CHECK(ctx.verify(*op));
     }
+
+    // task.spawn
+    {
+        Operation* const op = task::build_spawn(ctx, ctx.type_i32());
+        CHECK(op != nullptr);
+        CHECK(ctx.verify(*op));
+    }
+
+    // task.worker
+    {
+        Operation* const op = task::build_worker(ctx, ctx.type_i32());
+        CHECK(op != nullptr);
+        CHECK(ctx.verify(*op));
+    }
 }
 
 TEST_CASE("ceir task gen smoke: the generated verifier rejects a malformed construction",
@@ -70,6 +114,30 @@ TEST_CASE("ceir task gen smoke: the generated verifier rejects a malformed const
     crd::memory::MallocAllocator root;
     Context                      ctx(&root);
     (void)task::register_task_ops(ctx);
+
+    // task.continuation
+    {
+        Operation* const bad = ctx.create_operation(task::continuation_kind(ctx), {}, 1U, ctx.type_i32());
+        CHECK_FALSE(ctx.verify(*bad));
+    }
+
+    // task.fiber_wait
+    {
+        Operation* const bad = ctx.create_operation(task::fiber_wait_kind(ctx), {}, 1U, ctx.type_i32());
+        CHECK_FALSE(ctx.verify(*bad));
+    }
+
+    // task.group
+    {
+        Operation* const bad = ctx.create_operation(task::group_kind(ctx), {}, 1U, ctx.type_i32());
+        CHECK_FALSE(ctx.verify(*bad));
+    }
+
+    // task.main_thread
+    {
+        Operation* const bad = ctx.create_operation(task::main_thread_kind(ctx), {}, 1U, ctx.type_i32());
+        CHECK_FALSE(ctx.verify(*bad));
+    }
 
     // task.map_reduce
     {
@@ -80,6 +148,18 @@ TEST_CASE("ceir task gen smoke: the generated verifier rejects a malformed const
     // task.parallel_for
     {
         Operation* const bad = ctx.create_operation(task::parallel_for_kind(ctx), {}, 0U, ctx.type_i32());
+        CHECK_FALSE(ctx.verify(*bad));
+    }
+
+    // task.spawn
+    {
+        Operation* const bad = ctx.create_operation(task::spawn_kind(ctx), {}, 1U, ctx.type_i32());
+        CHECK_FALSE(ctx.verify(*bad));
+    }
+
+    // task.worker
+    {
+        Operation* const bad = ctx.create_operation(task::worker_kind(ctx), {}, 1U, ctx.type_i32());
         CHECK_FALSE(ctx.verify(*bad));
     }
 }

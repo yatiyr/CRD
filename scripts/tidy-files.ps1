@@ -49,6 +49,9 @@ if ($hasDb) {
 $inc = @("-I$buildDir\engine\core\include",
          "-I$buildDir\_deps\catch2-src\src", "-I$buildDir\_deps\catch2-build\generated-includes")
 $inc += (Get-ChildItem "$repo\engine" -Directory | ForEach-Object { "-I$($_.FullName)\include" } | Where-Object { Test-Path ($_ -replace '^-I','') })
+# opgen-GENERATED headers (e.g. engine/ceir/generated/crd/ceir/gen/*.hpp) are real includes a header can pull in — glob the
+# generated roots too, else a header that includes a generated engine header parses to UNGATED (the CEIR-13z-1b gap).
+$inc += (Get-ChildItem "$repo\engine" -Directory | ForEach-Object { "-I$($_.FullName)\generated" } | Where-Object { Test-Path ($_ -replace '^-I','') })
 if ($env:VULKAN_SDK) { $inc += "-I$env:VULKAN_SDK\Include" }
 
 $dirty   = 0

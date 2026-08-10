@@ -69,6 +69,14 @@ Operation* use_res(Context& ctx, OpId kind, Value* v, Block* b)
     b->append(o);
     return o;
 }
+// a resource.view over `src` (12a: operand(0) is the source resource). resource_root follows this one hop to the root.
+Value* mk_view(Context& ctx, Value* src, Block* b)
+{
+    Value*           ops[1] = {src};
+    Operation* const v      = ctx.create_operation(ctx.intern_op("resource", "view"), ConstSpan<Value*>(ops, 1U), 1U, ctx.type_i32());
+    b->append(v);
+    return v->result(0U);
+}
 } // namespace
 
 TEST_CASE("ceir hazard: effect_access classifies every family (incl the RandomRead-writes trap)", "[ceir][hazard]")
@@ -135,6 +143,38 @@ TEST_CASE("ceir hazard: range masks + distinct-Value non-aliasing gate a conflic
     // ⛔ distinct SSA Values are assumed NON-ALIASING: writes to two different buffers do not hazard.
     Value* const v2 = mk_resource(ctx, hz, b);
     CHECK(ctx.ops_hazard(*use_res(ctx, hz.write, v, b), *use_res(ctx, hz.write, v2, b)) == HazardKind::None);
+}
+
+TEST_CASE("ceir hazard: a resource.view aliases its root -- write(buf) vs read(view(buf)) HAZARDS (CEIR-13d part 3)", "[ceir][hazard]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const HzOps                  hz(ctx);
+    Module* const                m = ctx.create_module();
+    Block* const                 b = ctx.create_block(0U);
+    m->body()->append(b);
+
+    // a buffer, and a resource.view over it. The read binds the VIEW -- a DISTINCT SSA Value from the buffer -- yet the
+    // hazard walk normalizes both to the buffer root via Context::resource_root, so the write->read edge is a REAL RAW.
+    // ⭐ this was a false-None before part 3 (the 12c view hole struck in place at context.hpp:ops_hazard).
+    Value* const     buf = mk_resource(ctx, hz, b);
+    Value* const     vv  = mk_view(ctx, buf, b);
+    Operation* const wr  = use_res(ctx, hz.write, buf, b); // write the whole buffer
+    Operation* const rd  = use_res(ctx, hz.read, vv, b);   // read THROUGH the view
+    CHECK(ctx.ops_hazard(*wr, *rd) == HazardKind::Raw);
+    CHECK(ctx.ops_hazard(*rd, *wr) == HazardKind::War);
+
+    // ⛔ the normalization is PRECISE, not blanket: a view over a DIFFERENT buffer resolves to a distinct root -> no hazard.
+    Value* const buf2 = mk_resource(ctx, hz, b);
+    Value* const vv2  = mk_view(ctx, buf2, b);
+    CHECK(ctx.ops_hazard(*use_res(ctx, hz.write, buf, b), *use_res(ctx, hz.read, vv2, b)) == HazardKind::None);
+
+    // ⭐ TWO DISTINCT view ops over the SAME buffer both normalize to `buf` -> they hazard each other (the aliasing case
+    // the distinct-Value gate alone would miss). ⛔ a view laundered through a non-view producer (e.g. a region yield) would
+    // still escape -- its defining op is not a resource.view -- a deeper inter-op alias hole, named-forward.
+    CHECK(ctx.ops_hazard(*use_res(ctx, hz.write, mk_view(ctx, buf, b), b),
+                         *use_res(ctx, hz.read, mk_view(ctx, buf, b), b))
+          == HazardKind::Raw);
 }
 
 TEST_CASE("ceir hazard: ambient effects, the RandomRead/Logging/TimeRead families", "[ceir][hazard]")

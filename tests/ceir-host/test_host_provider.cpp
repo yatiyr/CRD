@@ -567,3 +567,328 @@ TEST_CASE("ceir host: map_reduce pre-flight -- the combine must be state-free an
         CHECK(prov.execute(ctx, *m, "main", {}).error == exec::ExecError::ParallelYieldArity);
     }
 }
+
+// ─────────────────── CEIR-11a stage 2b-ii-B: the SEQUENTIAL reference vs the provider (the 118 oracle) ───────────────────
+
+TEST_CASE("ceir 11a: the sequential reference AGREES with the HostProvider byte-for-byte (map_reduce)", "[ceir][host]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const Ops                    o(ctx);
+    Module* const                m  = ctx.create_module();
+    Operation* const             fm = mkfunc(ctx, *m, "main", 0U);
+    Block* const                 mb = func::func_body_block(fm);
+    // @main() -> i32 { %r = map_reduce(0,13,1, init=0) map{iv: yield iv*iv} combine{acc,elem: yield acc*31+elem}; ret %r }
+    Block* mapb = nullptr;
+    Block* cb   = nullptr;
+    Operation* const mr = mk_map_reduce(ctx, o, mb, /*n*/ 13, /*init*/ 0, mapb, cb);
+    yield1(ctx, o, mapb, bin(ctx, o.muli, mapb->arg(0U), mapb->arg(0U), mapb)->result(0U));
+    Value* const acc31 = bin(ctx, o.muli, cb->arg(0U), konst(ctx, o, cb, 31)->result(0U), cb)->result(0U);
+    yield1(ctx, o, cb, bin(ctx, o.addi, acc31, cb->arg(1U), cb)->result(0U)); // NON-associative -> bit-identity alone can't pass a wrong
+    Value* rv[1] = {mr->result(0U)};
+    mb->append(func::create_return(ctx, ConstSpan<Value*>(rv, 1U)));
+
+    // 1. the SEQUENTIAL reference (crd-ceir core: builtin + async + task).
+    exec::Interpreter seq(ctx);
+    exec::install_builtin_semantics(seq);
+    exec::install_async_semantics(seq);
+    exec::install_task_semantics(seq);
+    const exec::ExecResult rs = seq.invoke(*m, "main", {});
+    REQUIRE(rs.ok());
+    REQUIRE(rs.values.size() == 1U);
+    crd::memory::MallocAllocator     pin_root;
+    const containers::Array<crd::u8> seq_bytes =
+        exec::pin_values(ConstSpan<i64>(rs.values.data(), rs.values.size()), &pin_root);
+    const ConstSpan<i64> seq_map = seq.map_output(mr);
+    REQUIRE(seq_map.size() == 13U); // the intermediate map (iv*iv for iv in [0,13))
+
+    // 2. the PROVIDER across {1..16} -- byte-identical reduced value AND same index-order map_output as the reference.
+    for (crd::u32 nj = 1U; nj <= 16U; ++nj)
+    {
+        crd::memory::MallocAllocator palloc;
+        host::HostProvider          prov(&palloc, nj);
+        const exec::ExecResult      rp = prov.execute(ctx, *m, "main", {});
+        REQUIRE(rp.ok());
+        const containers::Array<crd::u8> pbytes =
+            exec::pin_values(ConstSpan<i64>(rp.values.data(), rp.values.size()), &palloc);
+        REQUIRE(pbytes.size() == seq_bytes.size());
+        for (crd::u32 b = 0; b < static_cast<crd::u32>(pbytes.size()); ++b) { CHECK(pbytes[b] == seq_bytes[b]); }
+        const ConstSpan<i64> pmap = prov.map_output(mr);
+        REQUIRE(pmap.size() == seq_map.size());
+        for (crd::u32 i = 0; i < static_cast<crd::u32>(pmap.size()); ++i) { CHECK(pmap[i] == seq_map[i]); }
+    }
+}
+
+TEST_CASE("ceir 11a: the sequential reference rejects a STATEFUL parallel body like the provider (shared pre-flight)", "[ceir][host]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const Ops                    o(ctx);
+    Module* const                m  = ctx.create_module();
+    Operation* const             fm = mkfunc(ctx, *m, "main", 0U);
+    Block* const                 mb = func::func_body_block(fm);
+    Block*                       body = nullptr;
+    (void)mk_pfor(ctx, o, mb, 4, body);
+    Value* sops[2] = {konst(ctx, o, body, 0)->result(0U), konst(ctx, o, body, 0)->result(0U)};
+    Operation* const cell = ctx.create_operation(o.state, ConstSpan<Value*>(sops, 2U), 1U, ctx.type_i32());
+    body->append(cell);
+    cell->set_operand(1U, bin(ctx, o.addi, cell->result(0U), body->arg(0U), body)->result(0U));
+    yield1(ctx, o, body, cell->result(0U));
+    mb->append(func::create_return(ctx, {}));
+    // the SEQUENTIAL reference runs the SAME shared exec::preflight analysis -> ParallelBodyStateful (agree by construction).
+    exec::Interpreter seq(ctx);
+    exec::install_builtin_semantics(seq);
+    exec::install_task_semantics(seq);
+    CHECK(seq.invoke(*m, "main", {}).error == exec::ExecError::ParallelBodyStateful);
+}
+
+TEST_CASE("ceir 11a: an OUTER-CAPTURE parallel body is UndefinedValue in the sequential reference (like the provider)", "[ceir][host]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const Ops                    o(ctx);
+    Module* const                m  = ctx.create_module();
+    Operation* const             fm = mkfunc(ctx, *m, "main", 0U);
+    Block* const                 mb = func::func_body_block(fm);
+    Value* const                 outer = konst(ctx, o, mb, 99)->result(0U); // defined OUTSIDE the parallel body
+    Block*                       body  = nullptr;
+    (void)mk_pfor(ctx, o, mb, 3, body);
+    yield1(ctx, o, body, outer); // ⛔ captures %outer -- NOT seeded into the per-index sub (self-contained bodies only)
+    mb->append(func::create_return(ctx, {}));
+    // the sequential reference runs the body on a self-contained sub (the 6z fold pattern) -> %outer is UndefinedValue,
+    // matching the provider's per-item sub (the TOML-pinned capture contract).
+    exec::Interpreter seq(ctx);
+    exec::install_builtin_semantics(seq);
+    exec::install_task_semantics(seq);
+    CHECK(seq.invoke(*m, "main", {}).error == exec::ExecError::UndefinedValue);
+    crd::memory::MallocAllocator palloc;
+    host::HostProvider          prov(&palloc, 4U);
+    CHECK(prov.execute(ctx, *m, "main", {}).error == exec::ExecError::UndefinedValue); // the provider agrees
+}
+
+// ─────────────────── CEIR-11a stage 3: jobs-backed launch/await ON-POOL (conditional pooling) ───────────────────
+namespace
+{
+// %t = async.launch { %c = const v; core.yield %c }  (a PURE, self-contained body -> pool-eligible)
+Operation* mk_launch(Context& ctx, OpId launch, const Ops& o, Block* b, i64 v)
+{
+    Operation* const l  = ctx.create_operation(launch, {}, 1U, ctx.type_i32(), 1U);
+    Block* const     lb = ctx.create_block(0U);
+    l->region(0)->append(lb);
+    yield1(ctx, o, lb, konst(ctx, o, lb, v)->result(0U));
+    b->append(l);
+    return l;
+}
+Operation* mk_await(Context& ctx, OpId awaitk, Block* b, Value* tok)
+{
+    Value* a[1] = {tok};
+    Operation* const aw = ctx.create_operation(awaitk, ConstSpan<Value*>(a, 1U), 1U, ctx.type_i32());
+    b->append(aw);
+    return aw;
+}
+} // namespace
+
+TEST_CASE("ceir 11a: jobs-backed launch/await -- N pure launches byte-match the sequential reference (pooled)", "[ceir][host]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const Ops                    o(ctx);
+    const OpId                   launch = ctx.intern_op("async", "launch");
+    const OpId                   awaitk = ctx.intern_op("async", "await");
+    Module* const                m  = ctx.create_module();
+    Operation* const             fm = mkfunc(ctx, *m, "main", 0U);
+    Block* const                 mb = func::func_body_block(fm);
+    // @main() -> i32 { %t1=launch{y 10}; %t2=launch{y 20}; %a=await %t1; %b=await %t2; ret a+b }  => 30
+    Operation* const t1 = mk_launch(ctx, launch, o, mb, 10);
+    Operation* const t2 = mk_launch(ctx, launch, o, mb, 20);
+    Operation* const a  = mk_await(ctx, awaitk, mb, t1->result(0U));
+    Operation* const b  = mk_await(ctx, awaitk, mb, t2->result(0U));
+    Value* rv[1] = {bin(ctx, o.addi, a->result(0U), b->result(0U), mb)->result(0U)};
+    mb->append(func::create_return(ctx, ConstSpan<Value*>(rv, 1U)));
+
+    exec::Interpreter seq(ctx); // the core sequential reference
+    exec::install_builtin_semantics(seq);
+    exec::install_async_semantics(seq);
+    const exec::ExecResult rs = seq.invoke(*m, "main", {});
+    REQUIRE(rs.ok());
+    REQUIRE(rs.values.size() == 1U);
+    CHECK(rs.values[0] == 30);
+
+    crd::memory::MallocAllocator palloc;
+    host::HostProvider          prov(&palloc, 4U);
+    const exec::ExecResult      rp = prov.execute(ctx, *m, "main", {});
+    REQUIRE(rp.ok());
+    REQUIRE(rp.values.size() == 1U);
+    CHECK(rp.values[0] == rs.values[0]);     // byte-identical to the sequential reference
+    CHECK(prov.pooled_count() == 2U);        // ⭐ the witness: BOTH pure launches actually pooled
+}
+
+TEST_CASE("ceir 11a: a CAPTURING launch body falls back to sequential in-frame (correct, NOT pooled)", "[ceir][host]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const Ops                    o(ctx);
+    const OpId                   launch = ctx.intern_op("async", "launch");
+    const OpId                   awaitk = ctx.intern_op("async", "await");
+    Module* const                m  = ctx.create_module();
+    Operation* const             fm = mkfunc(ctx, *m, "main", 0U);
+    Block* const                 mb = func::func_body_block(fm);
+    Value* const                 outer = konst(ctx, o, mb, 99)->result(0U); // defined OUTSIDE the launch body
+    Operation* const             l  = ctx.create_operation(launch, {}, 1U, ctx.type_i32(), 1U);
+    Block* const                 lb = ctx.create_block(0U);
+    l->region(0)->append(lb);
+    yield1(ctx, o, lb, outer); // ⛔ captures %outer -> INELIGIBLE
+    mb->append(l);
+    Operation* const aw = mk_await(ctx, awaitk, mb, l->result(0U));
+    Value* rv[1] = {aw->result(0U)};
+    mb->append(func::create_return(ctx, ConstSpan<Value*>(rv, 1U)));
+
+    crd::memory::MallocAllocator palloc;
+    host::HostProvider          prov(&palloc, 4U);
+    const exec::ExecResult      rp = prov.execute(ctx, *m, "main", {});
+    REQUIRE(rp.ok());
+    CHECK(rp.values[0] == 99);          // correct via the in-frame fallback (captures resolve there)
+    CHECK(prov.pooled_count() == 0U);   // ⭐ NOT pooled -- the contract preserved (never reject/misrun a capturing body)
+}
+
+TEST_CASE("ceir 11a: a STATEFUL launch body falls back to sequential (correct, NOT pooled)", "[ceir][host]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const Ops                    o(ctx);
+    const OpId                   launch = ctx.intern_op("async", "launch");
+    const OpId                   awaitk = ctx.intern_op("async", "await");
+    Module* const                m  = ctx.create_module();
+    Operation* const             fm = mkfunc(ctx, *m, "main", 0U);
+    Block* const                 mb = func::func_body_block(fm);
+    Operation* const             l  = ctx.create_operation(launch, {}, 1U, ctx.type_i32(), 1U);
+    Block* const                 lb = ctx.create_block(0U);
+    l->region(0)->append(lb);
+    Value* sops[2] = {konst(ctx, o, lb, 0)->result(0U), konst(ctx, o, lb, 7)->result(0U)};
+    Operation* const cell = ctx.create_operation(o.state, ConstSpan<Value*>(sops, 2U), 1U, ctx.type_i32()); // §20 cell
+    lb->append(cell);
+    yield1(ctx, o, lb, cell->result(0U));
+    mb->append(l);
+    Operation* const aw = mk_await(ctx, awaitk, mb, l->result(0U));
+    Value* rv[1] = {aw->result(0U)};
+    mb->append(func::create_return(ctx, ConstSpan<Value*>(rv, 1U)));
+
+    crd::memory::MallocAllocator palloc;
+    host::HostProvider          prov(&palloc, 4U);
+    const exec::ExecResult      rp = prov.execute(ctx, *m, "main", {});
+    REQUIRE(rp.ok());                   // a stateful body runs correctly via the fallback (never rejected)
+    CHECK(prov.pooled_count() == 0U);   // ⭐ NOT pooled (a cell would make a pooled result schedule-dependent)
+}
+
+TEST_CASE("ceir 11a: a LEAKED pooled token is drained at execute() exit (no hang, no leak)", "[ceir][host]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const Ops                    o(ctx);
+    const OpId                   launch = ctx.intern_op("async", "launch");
+    Module* const                m  = ctx.create_module();
+    Operation* const             fm = mkfunc(ctx, *m, "main", 0U);
+    Block* const                 mb = func::func_body_block(fm);
+    (void)mk_launch(ctx, launch, o, mb, 5); // %t leaked -- never awaited / cancelled (an unverified program)
+    mb->append(func::create_return(ctx, {}));
+    crd::memory::MallocAllocator palloc;
+    host::HostProvider          prov(&palloc, 4U);
+    const exec::ExecResult      rp = prov.execute(ctx, *m, "main", {});
+    CHECK(rp.ok());                     // the drain waits + frees the outstanding pooled token before returning
+    CHECK(prov.pooled_count() == 1U);   // it WAS pooled (the witness); the drain (no hang/leak) is proven by the ASan configs
+}
+
+TEST_CASE("ceir 11a: join / race / cancel resolve POOLED tokens through the provider", "[ceir][host]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const Ops                    o(ctx);
+    const OpId                   launch = ctx.intern_op("async", "launch");
+    const OpId                   awaitk = ctx.intern_op("async", "await");
+    const OpId                   joink  = ctx.intern_op("async", "join");
+    const OpId                   racek  = ctx.intern_op("async", "race");
+    const OpId                   cancelk = ctx.intern_op("async", "cancel");
+
+    SECTION("join concatenates two pooled tokens; await the join -> the first value")
+    {
+        Module* const    m  = ctx.create_module();
+        Operation* const fm = mkfunc(ctx, *m, "main", 0U);
+        Block* const     mb = func::func_body_block(fm);
+        Operation* const t1 = mk_launch(ctx, launch, o, mb, 11);
+        Operation* const t2 = mk_launch(ctx, launch, o, mb, 22);
+        Value* jt[2] = {t1->result(0U), t2->result(0U)};
+        Operation* const j  = ctx.create_operation(joink, ConstSpan<Value*>(jt, 2U), 1U, ctx.type_i32());
+        mb->append(j);
+        Operation* const aw = mk_await(ctx, awaitk, mb, j->result(0U)); // join -> [11,22]; await binds result0 = 11
+        Value* rv[1] = {aw->result(0U)};
+        mb->append(func::create_return(ctx, ConstSpan<Value*>(rv, 1U)));
+        crd::memory::MallocAllocator palloc;
+        host::HostProvider          prov(&palloc, 4U);
+        const exec::ExecResult      rp = prov.execute(ctx, *m, "main", {});
+        REQUIRE(rp.ok());
+        CHECK(rp.values[0] == 11);
+        CHECK(prov.pooled_count() == 2U); // both launches pooled
+    }
+    SECTION("race over two pooled tokens -> index 0; cancel a pooled token is a clean consume")
+    {
+        Module* const    m  = ctx.create_module();
+        Operation* const fm = mkfunc(ctx, *m, "main", 0U);
+        Block* const     mb = func::func_body_block(fm);
+        Operation* const t1 = mk_launch(ctx, launch, o, mb, 1);
+        Operation* const t2 = mk_launch(ctx, launch, o, mb, 2);
+        Value* rt[2] = {t1->result(0U), t2->result(0U)};
+        Operation* const rc = ctx.create_operation(racek, ConstSpan<Value*>(rt, 2U), 1U, ctx.type_i32());
+        mb->append(rc); // race consumes both, yields the winning index (0)
+        Value* rv[1] = {rc->result(0U)};
+        mb->append(func::create_return(ctx, ConstSpan<Value*>(rv, 1U)));
+        crd::memory::MallocAllocator palloc;
+        host::HostProvider          prov(&palloc, 4U);
+        const exec::ExecResult      rp = prov.execute(ctx, *m, "main", {});
+        REQUIRE(rp.ok());
+        CHECK(rp.values[0] == 0); // deterministic index 0 (the Nondeterministic contract)
+    }
+    SECTION("cancel a pooled token consumes it cleanly (drained at exit)")
+    {
+        Module* const    m  = ctx.create_module();
+        Operation* const fm = mkfunc(ctx, *m, "main", 0U);
+        Block* const     mb = func::func_body_block(fm);
+        Operation* const t1 = mk_launch(ctx, launch, o, mb, 9);
+        Value* ct[1] = {t1->result(0U)};
+        mb->append(ctx.create_operation(cancelk, ConstSpan<Value*>(ct, 1U), 0U)); // cancel(%t) -- consume, no result
+        mb->append(func::create_return(ctx, {}));
+        crd::memory::MallocAllocator palloc;
+        host::HostProvider          prov(&palloc, 4U);
+        CHECK(prov.execute(ctx, *m, "main", {}).ok());
+        CHECK(prov.pooled_count() == 1U);
+    }
+}
+
+TEST_CASE("ceir 11a: a main_thread-pinned task pooled + awaited from main completes (the pump path)", "[ceir][host]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const Ops                    o(ctx);
+    const OpId                   main_thread = ctx.intern_op("task", "main_thread");
+    const OpId                   fiber_wait  = ctx.intern_op("task", "fiber_wait");
+    Module* const                m  = ctx.create_module();
+    Operation* const             fm = mkfunc(ctx, *m, "main", 0U);
+    Block* const                 mb = func::func_body_block(fm);
+    // @main() -> i32 { %t = task.main_thread { yield 77 }; %r = task.fiber_wait(%t); ret %r }
+    Operation* const l  = ctx.create_operation(main_thread, {}, 1U, ctx.type_i32(), 1U);
+    Block* const     lb = ctx.create_block(0U);
+    l->region(0)->append(lb);
+    yield1(ctx, o, lb, konst(ctx, o, lb, 77)->result(0U));
+    mb->append(l);
+    Value* wt[1] = {l->result(0U)};
+    Operation* const fw = ctx.create_operation(fiber_wait, ConstSpan<Value*>(wt, 1U), 1U, ctx.type_i32());
+    mb->append(fw);
+    Value* rv[1] = {fw->result(0U)};
+    mb->append(func::create_return(ctx, ConstSpan<Value*>(rv, 1U)));
+    // execute() runs on the MAIN thread (Catch) -> wait() pumps thread 0 so the pin_thread=0 job makes progress (VERIFY 2).
+    crd::memory::MallocAllocator palloc;
+    host::HostProvider          prov(&palloc, 4U);
+    const exec::ExecResult      rp = prov.execute(ctx, *m, "main", {});
+    REQUIRE(rp.ok()); // ⛔ completes (no deadlock — the pump path); the timeout≠hang scar is the guard if it regresses
+    CHECK(rp.values[0] == 77);
+    CHECK(prov.pooled_count() == 1U); // main_thread pooled (pure body)
+}

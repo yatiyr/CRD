@@ -316,6 +316,31 @@ void sort_svs(containers::Array<containers::StringView>& list)
         list[j] = key;
     }
 }
+// CEIR-13c: a KernelRefDep list deduped by NAME (a kernel is one dependency; the first-seen pin is kept — the authoritative
+// per-dispatch contract check re-walks the module at cook), sorted by name (the sort_svs precedent).
+void add_unique_kref(containers::Array<KernelRefDep>& list, const KernelRefDep& k)
+{
+    if (k.name.empty()) { return; }
+    for (u32 i = 0; i < static_cast<u32>(list.size()); ++i)
+    {
+        if (list[i].name == k.name) { return; }
+    }
+    list.push_back(k);
+}
+void sort_krefs(containers::Array<KernelRefDep>& list)
+{
+    for (u32 i = 1; i < static_cast<u32>(list.size()); ++i)
+    {
+        const KernelRefDep key = list[i];
+        u32                j   = i;
+        while (j > 0U && sv_less(key.name, list[j - 1U].name))
+        {
+            list[j] = list[j - 1U];
+            --j;
+        }
+        list[j] = key;
+    }
+}
 } // namespace
 
 DependencyRecord collect_dependencies(Context& ctx, const Module& module, memory::IAllocator* alloc)
@@ -355,6 +380,37 @@ DependencyRecord collect_dependencies(Context& ctx, const Module& module, memory
                         add_unique(out.intrinsics, c.op_name(op->kind()));
                         add_unique(out.providers, info->native_provider);
                     }
+                    // §106 CKIR KernelRefs (CEIR-13c): SCHEMA-DRIVEN from op_info.kernel_ref_symbol (the [op.kernel_ref]
+                    // marker), NEVER op-name-sniffing (I6 — an op merely NAMED "kernel" on some other dialect is not one).
+                    // Read the kernel identity (the symbol attr) + the OPTIONAL interface-hash PIN (the int attr's u64 bit
+                    // pattern; absent ⇒ unpinned, a dependency-only ref).
+                    if (const OpInfo* const info = c.op_info(op->kind());
+                        info != nullptr && !info->kernel_ref_symbol.empty())
+                    {
+                        const AttrId sid = op->attr(info->kernel_ref_symbol);
+                        if (sid.valid())
+                        {
+                            const AttrValue sv = c.attr_value(sid);
+                            if (sv.kind == AttrKind::SymbolRef)
+                            {
+                                KernelRefDep k{sv.s, 0U, false};
+                                if (!info->kernel_ref_interface.empty())
+                                {
+                                    const AttrId iid = op->attr(info->kernel_ref_interface);
+                                    if (iid.valid())
+                                    {
+                                        const AttrValue iv = c.attr_value(iid);
+                                        if (iv.kind == AttrKind::Int)
+                                        {
+                                            k.interface_hash = static_cast<u64>(iv.i);
+                                            k.pinned         = true;
+                                        }
+                                    }
+                                }
+                                add_unique_kref(out.ckir_refs, k);
+                            }
+                        }
+                    }
                     for (u32 i = 0; i < op->num_regions(); ++i) { go(c, op->region(i), ck, s, out); }
                 }
             }
@@ -364,6 +420,7 @@ DependencyRecord collect_dependencies(Context& ctx, const Module& module, memory
     sort_svs(rec.called_funcs);
     sort_svs(rec.intrinsics);
     sort_svs(rec.providers);
+    sort_krefs(rec.ckir_refs); // CEIR-13c: distinct + sorted by name (deterministic), like the string lists above
     return rec;
 }
 

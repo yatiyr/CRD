@@ -65,6 +65,49 @@ class ValidatorTests(unittest.TestCase):
         self.assertNotIn(".intrinsic", plain_line)
         self.assertNotIn(".native_provider", plain_line)
 
+    def test_kernel_ref_promotes_to_register_op(self):
+        # CEIR-13c: an [op.kernel_ref] op must emit .kernel_ref_symbol/.kernel_ref_interface into the register_op OpSpec
+        # (the promotion the sec 106 collector reads); a NON-kernel-ref op's register call stays byte-identical.
+        raw = ('schema_version = 1\ndialect = "t"\nsummary = "s"\n\n'
+               '[[op]]\nname = "plain"\nsummary = "s"\nversion = 1\n\n'
+               '[[op]]\nname = "disp"\nsummary = "s"\nversion = 1\n'
+               'attributes = [ { name = "kernel", kind = "symbol" }, { name = "iface", kind = "int" } ]\n'
+               'kernel_ref = { symbol = "kernel", interface = "iface" }\n')
+        model = og.validate("engine/ceir/ops/mem.ceirop.toml", raw, tomllib.loads(raw))
+        cpp = og.emit_cpp(model)
+        disp_line = [ln for ln in cpp.splitlines() if 'register_op("disp"' in ln][0]
+        self.assertIn('.kernel_ref_symbol = "kernel"', disp_line)
+        self.assertIn('.kernel_ref_interface = "iface"', disp_line)
+        plain_line = [ln for ln in cpp.splitlines() if 'register_op("plain"' in ln][0]
+        self.assertNotIn(".kernel_ref_symbol", plain_line)
+
+    def test_kernel_ref_interface_optional(self):
+        # `interface` is OPTIONAL: a kernel_ref with only `symbol` emits .kernel_ref_symbol and NOT .kernel_ref_interface.
+        raw = (GOOD + 'attributes = [ { name = "kernel", kind = "symbol" } ]\n'
+               'kernel_ref = { symbol = "kernel" }\n')
+        model = og.validate("engine/ceir/ops/mem.ceirop.toml", raw, tomllib.loads(raw))
+        line = [ln for ln in og.emit_cpp(model).splitlines() if 'register_op("a"' in ln][0]
+        self.assertIn('.kernel_ref_symbol = "kernel"', line)
+        self.assertNotIn(".kernel_ref_interface", line)
+
+    def test_kernel_ref_symbol_must_name_an_attr(self):
+        self._assert_error(GOOD + 'kernel_ref = { symbol = "nope" }\n', "must name an attribute")
+
+    def test_kernel_ref_symbol_wrong_kind(self):
+        raw = (GOOD + 'attributes = [ { name = "kernel", kind = "int" } ]\n'
+               'kernel_ref = { symbol = "kernel" }\n')
+        self._assert_error(raw, "must be kind 'symbol'")
+
+    def test_kernel_ref_interface_wrong_kind(self):
+        raw = (GOOD + 'attributes = [ { name = "kernel", kind = "symbol" }, { name = "iface", kind = "string" } ]\n'
+               'kernel_ref = { symbol = "kernel", interface = "iface" }\n')
+        self._assert_error(raw, "must be kind 'int'")
+
+    def test_kernel_ref_unknown_field(self):
+        raw = (GOOD + 'attributes = [ { name = "kernel", kind = "symbol" } ]\n'
+               'kernel_ref = { symbol = "kernel", bogus = "x" }\n')
+        self._assert_error(raw, "unknown field")
+
     def test_unknown_top_field(self):
         raw = 'schema_version = 1\ndialect = "t"\nsummary = "s"\nbogus = 1\n\n[[op]]\nname = "a"\nsummary = "s"\nversion = 1\n'
         self._assert_error(raw, "unknown top-level field 'bogus'", line=4)

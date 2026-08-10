@@ -1501,13 +1501,18 @@ struct ResolvedAccess
     const Value* res = nullptr;
     if (e.target == EffectTarget::Operand && e.index < op.num_operands()) { res = op.operand(e.index); }
     else if (e.target == EffectTarget::Result && e.index < op.num_results()) { res = op.result(e.index); }
+    // ⭐ CEIR-13d part 3: NORMALIZE the resource to its view-ROOT, so `write(%buf)` vs `read(view(%buf))` now conflicts (the
+    // 12c false-negative, struck below). Identity only — the view's byte range is not tracked here (conservative-safe).
+    res = ctx.resource_root(res);
     // CEIR-8c: an Extern location's class comes from its registered descriptor (Universe if UNREGISTERED — EMPTY≠UNKNOWN,
     // maximally conflicting); every other target uses the family's class. `effect_resource_class` encapsulates the rule.
     return {ctx.effect_resource_class(e), a.reads, a.writes, res, e.range_mask};
 }
 // Two accesses conflict iff both touch a resource, ≥1 writes, the resources overlap (Universe on either side, or the same
 // class with aliasing Values — where a null Value is the whole class), and the ranges overlap. ⛔ distinct Values are
-// assumed non-aliasing (no view-creation op exists yet).
+// assumed non-aliasing — but op_access_at now NORMALIZES each resource to its view-ROOT (resource_root), so distinct views
+// of ONE buffer DO conflict (CEIR-13d part 3 closed the 12c false-negative). A view laundered through a yield/call still
+// escapes (its root is the yield/call result, not the buffer) — a deeper alias-model hole.
 [[nodiscard]] bool accesses_conflict(const ResolvedAccess& a, const ResolvedAccess& b) noexcept
 {
     if (!(a.reads || a.writes) || !(b.reads || b.writes)) { return false; } // an inert access touches nothing
@@ -1566,6 +1571,25 @@ void gather_accesses(const Context& ctx, const Operation& op, const SymbolTable&
 }
 } // namespace
 
+// ⭐ CEIR-13d part 3 (§78/§116): follow `resource.view` chains to the underlying resource, so a view and its buffer NAME the
+// same Value in the hazard walk (op_access_at normalizes every captured resource through here). ONE hop per view op (12a: a
+// view's operand(0) is the source resource), loop-guarded against a malformed cycle. Returns `v` unchanged when it is not a
+// view (or a block arg — `defining_op()==nullptr). ⛔ IDENTITY only: the view's byte RANGE is not resolved (disjoint views of
+// one buffer still collapse to the root ⇒ conservative over-conflict, refinable). ⛔ a view laundered through a region
+// yield / call result is NOT chased (its `defining_op` is the yield/call, not the view) — a deeper alias hole (D-007 §116).
+const Value* Context::resource_root(const Value* v) const noexcept
+{
+    for (u32 guard = 0U; v != nullptr && guard < 64U; ++guard)
+    {
+        const Operation* const def = v->defining_op();
+        if (def == nullptr) { break; }
+        if (op_name(def->kind()) != containers::StringView("resource.view")) { break; }
+        if (def->num_operands() < 1U) { break; }
+        v = def->operand(0U);
+    }
+    return v;
+}
+
 HazardKind Context::ops_hazard(const Operation& before, const Operation& after) const noexcept
 {
     HazardKind      strongest = HazardKind::None;
@@ -1619,6 +1643,310 @@ void Context::collect_block_hazards(const Block& b, const SymbolTable& table, co
         {
             const HazardKind k = ops_hazard(*a, *c, table);
             if (k != HazardKind::None) { out.push_back(Hazard{a, c, k}); }
+        }
+    }
+}
+
+// ── CEIR-12c §78: the resource ALIAS/LIFETIME analysis (compute_block_lifetimes + the interference/may-alias predicates) ──
+// The effect-hazard model above (CEIR-4d) yields ORDERING; this yields per-resource LIVE RANGES the memory planner
+// (CEIR-12d) colors. Ports the frame graph's greedy interval model. Reuses the anon-namespace op_access_* helpers above for
+// the "over 4d effects" rule (an ambient Memory/Universe touch conservatively extends every prior resource's range).
+namespace
+{
+constexpr u32 kNoRoot = ~0U; // "this Value is not a tracked graph-owned resource (nor a view of one)"
+
+// A Value* → root-resource-index entry: a resource.declare's result maps to its own index; a resource.view's result maps
+// to the ROOT of its operand(0) (so a use of a view is a use of the underlying resource — the frame-graph lifetime rule).
+struct RootEntry
+{
+    const Value* v   = nullptr;
+    u32          idx = 0;
+};
+[[nodiscard]] u32 root_lookup(const RootEntry* m, u32 n, const Value* v) noexcept
+{
+    for (u32 i = 0; i < n; ++i)
+    {
+        if (m[i].v == v) { return m[i].idx; }
+    }
+    return kNoRoot;
+}
+// the §20 lifetime class from the declare's `lifetime` attr (⛔ ABSENT or unrecognized ⇒ Unspecified — find_resource_intent_
+// misuse rejects bad values before analysis, but map defensively; Unspecified is NOT aliasable, the conservative direction).
+[[nodiscard]] ResourceLifetimeClass read_lifetime_class(const Context& ctx, const Operation* op) noexcept
+{
+    const AttrId a = op->attr(containers::StringView("lifetime"));
+    if (!a.valid()) { return ResourceLifetimeClass::Unspecified; }
+    const AttrValue v = ctx.attr_value(a);
+    if (v.kind != AttrKind::String) { return ResourceLifetimeClass::Unspecified; }
+    if (v.s == containers::StringView("transient")) { return ResourceLifetimeClass::Transient; }
+    if (v.s == containers::StringView("persistent")) { return ResourceLifetimeClass::Persistent; }
+    if (v.s == containers::StringView("history")) { return ResourceLifetimeClass::History; }
+    return ResourceLifetimeClass::Unspecified;
+}
+[[nodiscard]] i64 read_size_class(const Context& ctx, const Operation* op) noexcept
+{
+    const AttrId a = op->attr(containers::StringView("size_class"));
+    if (!a.valid()) { return 0; }
+    const AttrValue v = ctx.attr_value(a);
+    return v.kind == AttrKind::Int ? v.i : 0;
+}
+[[nodiscard]] bool op_has_ambient_mem_or_universe(const Context& ctx, const Operation& op) noexcept
+{
+    const u32 n = op_access_count(ctx, op);
+    for (u32 i = 0; i < n; ++i)
+    {
+        const ResolvedAccess a = op_access_at(ctx, op, i); // ambient ⇒ resource == nullptr (whole class)
+        if (a.resource == nullptr && (a.reads || a.writes) &&
+            (a.klass == ResourceClass::Memory || a.klass == ResourceClass::Universe))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+// Visit `op` and its nested regions (recursively), ALL attributed to the CONTAINING top-level `pos` (the "pass"): extend
+// every used resource's `last` to `pos`, mark an exported root, and REPORT whether any op in the tree has an ambient
+// Memory/Universe effect (the caller applies the at-or-before extension once, at `pos`). ⛔ nested-region uses/exports/
+// effects are REAL (produce-outside/consume-inside): wrapping an op in a region must NEVER weaken the analysis — every
+// check that fires on a top-level op fires on a nested one too.
+[[nodiscard]] bool visit_uses_and_effects(const Context& ctx, const Operation* op, const RootEntry* m, u32 nm,
+                                          containers::Array<ResourceLifetime>& out, u32 pos) // NOLINT(misc-no-recursion)
+{
+    for (u32 i = 0; i < op->num_operands(); ++i)
+    {
+        const u32 r = root_lookup(m, nm, op->operand(i));
+        if (r != kNoRoot && out[r].last < pos) { out[r].last = pos; }
+    }
+    if (ctx.op_name(op->kind()) == containers::StringView("resource.export") && op->num_operands() >= 1U)
+    {
+        const u32 r = root_lookup(m, nm, op->operand(0U));
+        if (r != kNoRoot) { out[r].exported = true; }
+    }
+    bool ambient = op_has_ambient_mem_or_universe(ctx, *op);
+    for (u32 rg = 0; rg < op->num_regions(); ++rg)
+    {
+        for (const Block* bb = op->region(rg)->first_block(); bb != nullptr; bb = bb->next_in_region())
+        {
+            for (const Operation* inner = bb->first_op(); inner != nullptr; inner = inner->next_in_block())
+            {
+                const bool sub = visit_uses_and_effects(ctx, inner, m, nm, out, pos); // ⛔ ALWAYS recurse (side effects) then OR
+                ambient        = ambient || sub;
+            }
+        }
+    }
+    return ambient;
+}
+} // namespace
+
+void Context::compute_block_lifetimes(const Block& b, containers::Array<ResourceLifetime>& out) const
+{
+    // Pass 1 — positions; collect graph-owned resources (resource.declare) into `out`; build the Value*→root map (declares
+    // map to self, resource.view maps to operand(0)'s root). ⛔ resource.import is EXCLUDED — the planner never plans it.
+    containers::Array<RootEntry> vmap(allocator());
+    u32                          pos = 0;
+    for (const Operation* op = b.first_op(); op != nullptr; op = op->next_in_block(), ++pos)
+    {
+        const containers::StringView nm = op_name(op->kind());
+        if (nm == containers::StringView("resource.declare") && op->num_results() >= 1U)
+        {
+            const Value*     r = op->result(0U);
+            ResourceLifetime lt;
+            lt.resource   = r;
+            lt.declare    = op;
+            lt.first      = pos;
+            lt.last       = pos;
+            lt.lifetime   = read_lifetime_class(*this, op);
+            lt.kind       = type_of(r->type()).kind;
+            lt.size_class = read_size_class(*this, op);
+            const u32 idx = static_cast<u32>(out.size());
+            out.push_back(lt);
+            vmap.push_back(RootEntry{r, idx});
+        }
+        else if (nm == containers::StringView("resource.view") && op->num_results() >= 1U && op->num_operands() >= 1U)
+        {
+            const u32 root = root_lookup(vmap.data(), static_cast<u32>(vmap.size()), op->operand(0U));
+            if (root != kNoRoot) { vmap.push_back(RootEntry{op->result(0U), root}); }
+        }
+    }
+    const u32 num_ops = pos;
+    if (out.empty()) { return; }
+    const RootEntry* const m  = vmap.data();
+    const u32              nm = static_cast<u32>(vmap.size());
+
+    // Pass 2 — uses. For each op: extend the ranges of the resources it (or its nested regions) use as operands; mark
+    // exported resources; and — the "over 4d effects" rule — let an ambient Memory/Universe touch extend every resource
+    // declared at-or-before it (conservative: such an op may alias any live resource).
+    pos = 0;
+    for (const Operation* op = b.first_op(); op != nullptr; op = op->next_in_block(), ++pos)
+    {
+        // one recursive walk handles operand uses + export marking + ambient detection for this op AND its nested regions.
+        const bool ambient = visit_uses_and_effects(*this, op, m, nm, out, pos);
+        if (ambient) // an ambient Memory/Universe touch anywhere under this pass extends every resource declared at-or-before it
+        {
+            for (u32 i = 0; i < static_cast<u32>(out.size()); ++i)
+            {
+                if (out[i].first <= pos && out[i].last < pos) { out[i].last = pos; }
+            }
+        }
+    }
+
+    // Pass 3 — pin exported resources to block-END: external code may touch a published resource past any op position.
+    const u32 endpos = num_ops == 0U ? 0U : num_ops - 1U;
+    for (u32 i = 0; i < static_cast<u32>(out.size()); ++i)
+    {
+        if (out[i].exported && out[i].last < endpos) { out[i].last = endpos; }
+    }
+}
+
+bool Context::resources_interfere(const ResourceLifetime& a, const ResourceLifetime& b) noexcept
+{
+    return !(a.last < b.first || b.last < a.first); // [first,last] closed intervals overlap
+}
+
+bool Context::resources_may_alias(const ResourceLifetime& a, const ResourceLifetime& b) noexcept
+{
+    if (a.resource == b.resource) { return false; }                             // a resource never aliases itself
+    if (a.lifetime != ResourceLifetimeClass::Transient || b.lifetime != ResourceLifetimeClass::Transient) { return false; }
+    if (a.exported || b.exported) { return false; }                             // a published resource is never poolable
+    // same resource KIND + same NON-ZERO size_class bucket. ⛔ size_class 0 (unspecified) never pools — same reasoning as
+    // unspecified lifetime: aliasing a resource of unknown size into a same-unknown slot is a correctness gamble, refusing
+    // is only a pessimization (12d relaxes per profile once real sizes bind).
+    if (a.kind != b.kind || a.size_class == 0 || a.size_class != b.size_class) { return false; }
+    return !resources_interfere(a, b);
+}
+
+// ── CEIR-12d §78/§162: the memory PLANNER (plan_block_memory) — the greedy interval-coloring port + the inspectable plan ──
+containers::StringView plan_profile_name(PlanProfile p) noexcept
+{
+    switch (p)
+    {
+    case PlanProfile::Memory: return containers::StringView("memory");
+    case PlanProfile::Balanced: return containers::StringView("balanced");
+    case PlanProfile::Latency: return containers::StringView("latency");
+    case PlanProfile::Deterministic: return containers::StringView("deterministic");
+    }
+    return containers::StringView("?");
+}
+containers::StringView slot_reason_name(SlotReason r) noexcept
+{
+    switch (r)
+    {
+    case SlotReason::Pooled: return containers::StringView("pooled");
+    case SlotReason::NewPoolSlot: return containers::StringView("new-pool-slot");
+    case SlotReason::DedicatedLifetime: return containers::StringView("dedicated-lifetime");
+    case SlotReason::DedicatedExported: return containers::StringView("dedicated-exported");
+    case SlotReason::DedicatedUnsized: return containers::StringView("dedicated-unsized");
+    case SlotReason::DedicatedProfile: return containers::StringView("dedicated-profile");
+    }
+    return containers::StringView("?");
+}
+
+void Context::plan_block_memory(const Block& b, PlanProfile profile, MemoryPlan& out) const
+{
+    out.slots.clear();
+    out.assignments.clear();
+    out.transient_logical  = 0;
+    out.transient_physical = 0;
+    out.profile            = profile;
+
+    containers::Array<ResourceLifetime> lts(allocator());
+    compute_block_lifetimes(b, lts);
+    const u32 n = static_cast<u32>(lts.size());
+    if (n == 0U) { return; }
+
+    for (u32 i = 0; i < n; ++i) // assignments parallel to lts (declaration order); slot/reason filled below
+    {
+        out.assignments.push_back(SlotAssignment{lts[i].resource, 0U, SlotReason::DedicatedLifetime, nullptr});
+    }
+    containers::Array<const Value*> slot_last_occ(allocator()); // parallel to out.slots — the current end-occupant per slot
+    const bool                      aliasing = profile != PlanProfile::Latency; // Memory/Balanced/Deterministic pool; Latency does not
+
+    // Pass A — dedicated slots in DECLARATION order: every non-poolable-eligible resource + (under Latency) every eligible
+    // one. A poolable-eligible resource under an aliasing profile is DEFERRED to the interval-coloring pass.
+    for (u32 i = 0; i < n; ++i)
+    {
+        const ResourceLifetime& r        = lts[i];
+        const bool eligible = r.lifetime == ResourceLifetimeClass::Transient && !r.exported && r.size_class != 0;
+        if (eligible && aliasing) { continue; }
+        SlotReason reason = SlotReason::DedicatedLifetime;
+        if (r.lifetime != ResourceLifetimeClass::Transient) { reason = SlotReason::DedicatedLifetime; }
+        else if (r.exported) { reason = SlotReason::DedicatedExported; }
+        else if (r.size_class == 0) { reason = SlotReason::DedicatedUnsized; }
+        else { reason = SlotReason::DedicatedProfile; } // eligible but the Latency profile refused to pool it
+        // §162: a history<T> ring's depth = its memory MULTIPLE. ⛔ 12b pins "absent under lifetime=history means 1" (the
+        // TAA prev-frame case), so History DEFAULTS to depth 1; a present, valid history_length overrides.
+        i64 hlen = r.lifetime == ResourceLifetimeClass::History ? 1 : 0;
+        if (r.lifetime == ResourceLifetimeClass::History)
+        {
+            const AttrId a = r.declare->attr(containers::StringView("history_length"));
+            if (a.valid())
+            {
+                const AttrValue v = attr_value(a);
+                if (v.kind == AttrKind::Int && v.i > 0) { hlen = v.i; }
+            }
+        }
+        const u32 s = static_cast<u32>(out.slots.size());
+        out.slots.push_back(MemorySlot{r.kind, r.size_class, true, r.first, r.last, 1U, hlen});
+        slot_last_occ.push_back(r.resource);
+        out.assignments[i].slot   = s;
+        out.assignments[i].reason = reason;
+        if (eligible) { ++out.transient_logical; ++out.transient_physical; } // DedicatedProfile: own slot, counts in both
+    }
+
+    if (!aliasing) { return; } // Latency: no interval-coloring pass
+
+    // Pass B — interval-color the poolable-eligible resources in (first asc, decl-index asc) order. First-fit on a
+    // start-sorted stream is provably minimal (χ = max concurrent live). ⛔ today lts is ALREADY start-sorted by
+    // construction (12c `first` = the declare position, appended in walk order), so this sort is a GUARD for a future
+    // first-USE semantics — NOT a claimed improvement over the frame-graph reference.
+    containers::Array<u32> order(allocator());
+    for (u32 i = 0; i < n; ++i)
+    {
+        const ResourceLifetime& r = lts[i];
+        if (r.lifetime == ResourceLifetimeClass::Transient && !r.exported && r.size_class != 0) { order.push_back(i); }
+    }
+    for (u32 a = 1; a < static_cast<u32>(order.size()); ++a) // stable insertion sort by `first`
+    {
+        const u32 key = order[a];
+        u32       j   = a;
+        while (j > 0U && lts[order[j - 1U]].first > lts[key].first) { order[j] = order[j - 1U]; --j; }
+        order[j] = key;
+    }
+    const u32 no_slot = ~0U;
+    for (u32 oi = 0; oi < static_cast<u32>(order.size()); ++oi)
+    {
+        const u32               idx = order[oi];
+        const ResourceLifetime& r   = lts[idx];
+        ++out.transient_logical;
+        u32 chosen = no_slot; // first non-dedicated same-bucket slot whose end precedes this resource's first (disjoint)
+        for (u32 s = 0; s < static_cast<u32>(out.slots.size()); ++s)
+        {
+            const MemorySlot& sl = out.slots[s];
+            if (!sl.dedicated && sl.kind == r.kind && sl.size_class == r.size_class && sl.last < r.first)
+            {
+                chosen = s;
+                break;
+            }
+        }
+        if (chosen != no_slot)
+        {
+            MemorySlot& sl              = out.slots[chosen];
+            out.assignments[idx].slot   = chosen;
+            out.assignments[idx].reason = SlotReason::Pooled;
+            out.assignments[idx].prior  = slot_last_occ[chosen];
+            if (r.first < sl.first) { sl.first = r.first; }
+            sl.last = r.last;
+            ++sl.occupant_count;
+            slot_last_occ[chosen] = r.resource;
+        }
+        else
+        {
+            const u32 s = static_cast<u32>(out.slots.size());
+            out.slots.push_back(MemorySlot{r.kind, r.size_class, false, r.first, r.last, 1U, 0});
+            slot_last_occ.push_back(r.resource);
+            out.assignments[idx].slot   = s;
+            out.assignments[idx].reason = SlotReason::NewPoolSlot;
+            ++out.transient_physical;
         }
     }
 }
@@ -1907,6 +2235,465 @@ TokenMisuse Context::find_token_misuse(const Module& m) const
     }
     return {};
 }
+
+// ── CEIR-12a §36: the resource-dialect type-system enforcement (find_resource_misuse) ──
+namespace
+{
+// a CEIR-3c resource TYPE — the kinds a resource.view operand / export operand / declare|import result must be.
+[[nodiscard]] bool ceir_is_resource_kind(TypeKind k) noexcept
+{
+    switch (k)
+    {
+    case TypeKind::Buffer:
+    case TypeKind::Image:
+    case TypeKind::Tensor:
+    case TypeKind::SparseTensor:
+    case TypeKind::Sampler:
+    case TypeKind::ResourceTable:
+    case TypeKind::AccelStruct:
+    case TypeKind::VideoFrame:
+    case TypeKind::AudioBuffer:
+    case TypeKind::ExternalResource:
+    case TypeKind::View:
+        return true;
+    default: // ⛔ a NEW resource TypeKind (§23 growth) MUST be added above — else views/exports over it read as non-resource
+        return false;
+    }
+}
+// popcount over the 5 ViewRange bits (the mask is bounded by kViewRangeAll = 0x1F).
+[[nodiscard]] crd::u32 ceir_popcount5(crd::u32 mask) noexcept
+{
+    crd::u32 n = 0U;
+    for (crd::u32 b = 0; b < 5U; ++b) { n += (mask >> b) & 1U; }
+    return n;
+}
+// the pre-order walk — the FIRST resource-op misuse, or {None}. ⛔ The per-op check ORDER is CONTRACTUAL (the negative
+// tests pin the exact kind, so a reorder would silently re-label): view = result-is-View → operand-viewable → underlying
+// == operand → mask-valid → arity; export = operand-resource; declare/import = result-resource.
+ResourceMisuse scan_resources(const Context& ctx, const Region* r) // NOLINT(misc-no-recursion)
+{
+    if (r == nullptr) { return {}; }
+    for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
+    {
+        for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+        {
+            const containers::StringView nm = ctx.op_name(op->kind());
+            if (nm == containers::StringView("resource.view"))
+            {
+                if (op->num_results() >= 1U && op->num_operands() >= 1U)
+                {
+                    const Value* const vv = op->result(0U);
+                    const Type         vt = ctx.type_of(vv->type());
+                    if (vt.kind != TypeKind::View) { return {vv, op, ResourceMisuseKind::ViewResultNotView}; }
+                    const Value* const res = op->operand(0U);
+                    const TypeKind     rk  = ctx.type_of(res->type()).kind;
+                    if (rk != TypeKind::Buffer && rk != TypeKind::Image) // only Buffer/Image are viewable (view_combination_valid)
+                    {
+                        return {res, op, ResourceMisuseKind::ViewOperandNotViewable}; // ⛔ rejects view-of-view + non-viewable resources
+                    }
+                    if (vt.members.size() < 1U || !(vt.members[0] == res->type()))
+                    {
+                        return {vv, op, ResourceMisuseKind::ViewUnderlyingMismatch};
+                    }
+                    const crd::u32 mask = vt.count; // View's `count` = the ViewRange presence mask
+                    if (!ctx.view_combination_valid(res->type(), mask))
+                    {
+                        return {vv, op, ResourceMisuseKind::ViewMaskInvalid};
+                    }
+                    if (op->num_operands() != 1U + 2U * ceir_popcount5(mask))
+                    {
+                        return {vv, op, ResourceMisuseKind::ViewRangeArity}; // offset/size PAIRS per masked dim
+                    }
+                }
+            }
+            else if (nm == containers::StringView("resource.export"))
+            {
+                if (op->num_operands() >= 1U && !ceir_is_resource_kind(ctx.type_of(op->operand(0U)->type()).kind))
+                {
+                    return {op->operand(0U), op, ResourceMisuseKind::ExportOperandNotResource};
+                }
+            }
+            else if (nm == containers::StringView("resource.declare") || nm == containers::StringView("resource.import"))
+            {
+                if (op->num_results() >= 1U && !ceir_is_resource_kind(ctx.type_of(op->result(0U)->type()).kind))
+                {
+                    return {op->result(0U), op, ResourceMisuseKind::DeclImportResultNotResource};
+                }
+            }
+            for (crd::u32 i = 0; i < op->num_regions(); ++i)
+            {
+                const ResourceMisuse e = scan_resources(ctx, op->region(i));
+                if (e.kind != ResourceMisuseKind::None) { return e; }
+            }
+        }
+    }
+    return {};
+}
+} // namespace
+
+containers::StringView resource_misuse_kind_name(ResourceMisuseKind k) noexcept
+{
+    switch (k)
+    {
+    case ResourceMisuseKind::None: return containers::StringView("none");
+    case ResourceMisuseKind::ViewOperandNotViewable: return containers::StringView("view-operand-not-viewable");
+    case ResourceMisuseKind::ViewResultNotView: return containers::StringView("view-result-not-view");
+    case ResourceMisuseKind::ViewUnderlyingMismatch: return containers::StringView("view-underlying-mismatch");
+    case ResourceMisuseKind::ViewMaskInvalid: return containers::StringView("view-mask-invalid");
+    case ResourceMisuseKind::ViewRangeArity: return containers::StringView("view-range-arity");
+    case ResourceMisuseKind::ExportOperandNotResource: return containers::StringView("export-operand-not-resource");
+    case ResourceMisuseKind::DeclImportResultNotResource: return containers::StringView("decl-import-result-not-resource");
+    }
+    return containers::StringView("?");
+}
+
+ResourceMisuse Context::find_resource_misuse(const Module& m) const noexcept { return scan_resources(*this, m.body()); }
+
+// ── CEIR-12b §24/§25: the resource planning-INTENT attribute-vocabulary enforcement (find_resource_intent_misuse) ──
+// A SEPARATE module walk from find_resource_misuse (12a, the CEIR-3c TYPE contract). The intent attrs are the §20 lifetime
+// + §24 memory-domain + §25 residency + export-direction vocabulary — a different layer than the typing — so this stays a
+// distinct verifier: 12a's contractual check order + its 8 pinned negatives never move (the widen-enum-audit scar). ⛔ A
+// wrong VALUE and a wrong attr-KIND fold into ONE kind per attr (the state-depth precedent at the top of this file:
+// `dv.kind != Int || dv.i < 1` → StateDepthInvalid). OPEN tags (streaming_priority/budget_class) are unchecked.
+namespace
+{
+constexpr containers::StringView kLifetimeVocab[] = {
+    containers::StringView("transient"), containers::StringView("persistent"), containers::StringView("history")};
+constexpr containers::StringView kMemoryDomainVocab[] = {
+    containers::StringView("host"), containers::StringView("pinned_host"), containers::StringView("device_local"),
+    containers::StringView("host_visible_device"), containers::StringView("unified"), containers::StringView("upload"),
+    containers::StringView("readback"), containers::StringView("sparse"), containers::StringView("external"),
+    containers::StringView("peer_visible"), containers::StringView("distributed")};
+constexpr containers::StringView kResidencyVocab[] = {
+    containers::StringView("resident"), containers::StringView("streamable"), containers::StringView("evictable")};
+constexpr containers::StringView kDirectionVocab[] = {
+    containers::StringView("read"), containers::StringView("readwrite")};
+// the declare-ONLY planning-intent attr names — their presence on a resource.import is IntentAttrOnImport.
+constexpr containers::StringView kIntentAttrNames[] = {
+    containers::StringView("lifetime"), containers::StringView("history_length"),
+    containers::StringView("memory_domain"), containers::StringView("residency"),
+    containers::StringView("streaming_priority"), containers::StringView("budget_class"),
+    containers::StringView("size_class")}; // CEIR-12c added: declare-only planning input, so import must reject it too
+
+[[nodiscard]] bool ceir_sv_in(containers::StringView s, const containers::StringView* set, crd::u32 n) noexcept
+{
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        if (s == set[i]) { return true; }
+    }
+    return false;
+}
+// A CLOSED-vocabulary STRING attr: ABSENT ⇒ ok (unspecified is a valid state, not a misuse); else it must be a String
+// value whose text is in `set`. A wrong KIND (a non-String stored under the name) folds into "not ok" — one kind.
+[[nodiscard]] bool ceir_intent_string_ok(const Context& ctx, const Operation* op, containers::StringView name,
+                                         const containers::StringView* set, crd::u32 n) noexcept
+{
+    const AttrId a = op->attr(name);
+    if (!a.valid()) { return true; }
+    const AttrValue v = ctx.attr_value(a);
+    return v.kind == AttrKind::String && ceir_sv_in(v.s, set, n);
+}
+// the pre-order walk — the FIRST intent misuse, or {None}. Per-attr check order on declare is CONTRACTUAL (negatives pin
+// the exact kind): lifetime → history_length(value) → history_length(without-history) → memory_domain → residency.
+ResourceIntentMisuse scan_resource_intent(const Context& ctx, const Region* r) // NOLINT(misc-no-recursion)
+{
+    if (r == nullptr) { return {}; }
+    for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
+    {
+        for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+        {
+            const containers::StringView nm = ctx.op_name(op->kind());
+            if (nm == containers::StringView("resource.declare"))
+            {
+                if (!ceir_intent_string_ok(ctx, op, containers::StringView("lifetime"), kLifetimeVocab, 3U))
+                {
+                    return {op, ResourceIntentMisuseKind::LifetimeValueInvalid};
+                }
+                const AttrId hl = op->attr(containers::StringView("history_length"));
+                if (hl.valid())
+                {
+                    const AttrValue hv = ctx.attr_value(hl);
+                    if (hv.kind != AttrKind::Int || hv.i < 1) { return {op, ResourceIntentMisuseKind::HistoryLengthInvalid}; }
+                    // lifetime is absent-or-valid here (a bad lifetime already returned above), so "history" iff String=="history".
+                    const AttrId lf         = op->attr(containers::StringView("lifetime"));
+                    bool         is_history = false;
+                    if (lf.valid())
+                    {
+                        const AttrValue lv = ctx.attr_value(lf);
+                        is_history = lv.kind == AttrKind::String && lv.s == containers::StringView("history");
+                    }
+                    if (!is_history) { return {op, ResourceIntentMisuseKind::HistoryLengthWithoutHistory}; }
+                }
+                if (!ceir_intent_string_ok(ctx, op, containers::StringView("memory_domain"), kMemoryDomainVocab, 11U))
+                {
+                    return {op, ResourceIntentMisuseKind::MemoryDomainValueInvalid};
+                }
+                if (!ceir_intent_string_ok(ctx, op, containers::StringView("residency"), kResidencyVocab, 3U))
+                {
+                    return {op, ResourceIntentMisuseKind::ResidencyValueInvalid};
+                }
+                // streaming_priority / budget_class: OPEN tags (alias_group-style) — unchecked; the 12d planner consumes them.
+            }
+            else if (nm == containers::StringView("resource.export"))
+            {
+                if (!ceir_intent_string_ok(ctx, op, containers::StringView("direction"), kDirectionVocab, 2U))
+                {
+                    return {op, ResourceIntentMisuseKind::DirectionValueInvalid};
+                }
+            }
+            else if (nm == containers::StringView("resource.import"))
+            {
+                for (const containers::StringView an : kIntentAttrNames)
+                {
+                    if (op->has_attr(an)) { return {op, ResourceIntentMisuseKind::IntentAttrOnImport}; }
+                }
+            }
+            for (crd::u32 i = 0; i < op->num_regions(); ++i)
+            {
+                const ResourceIntentMisuse e = scan_resource_intent(ctx, op->region(i));
+                if (e.kind != ResourceIntentMisuseKind::None) { return e; }
+            }
+        }
+    }
+    return {};
+}
+} // namespace
+
+containers::StringView resource_intent_misuse_kind_name(ResourceIntentMisuseKind k) noexcept
+{
+    switch (k)
+    {
+    case ResourceIntentMisuseKind::None: return containers::StringView("none");
+    case ResourceIntentMisuseKind::LifetimeValueInvalid: return containers::StringView("lifetime-value-invalid");
+    case ResourceIntentMisuseKind::HistoryLengthInvalid: return containers::StringView("history-length-invalid");
+    case ResourceIntentMisuseKind::HistoryLengthWithoutHistory: return containers::StringView("history-length-without-history");
+    case ResourceIntentMisuseKind::MemoryDomainValueInvalid: return containers::StringView("memory-domain-value-invalid");
+    case ResourceIntentMisuseKind::ResidencyValueInvalid: return containers::StringView("residency-value-invalid");
+    case ResourceIntentMisuseKind::DirectionValueInvalid: return containers::StringView("direction-value-invalid");
+    case ResourceIntentMisuseKind::IntentAttrOnImport: return containers::StringView("intent-attr-on-import");
+    }
+    return containers::StringView("?");
+}
+
+ResourceIntentMisuse Context::find_resource_intent_misuse(const Module& m) const noexcept
+{
+    return scan_resource_intent(*this, m.body());
+}
+
+// ── CEIR-13a §42: the ceir.compute dispatch well-formedness enforcement (find_dispatch_misuse) ──
+namespace
+{
+// A CEIR-3c args buffer: an indirect dispatch's operand 0 must be a Buffer, or a View whose underlying is a Buffer.
+[[nodiscard]] bool ceir_is_buffer_or_view_of_buffer(const Context& ctx, TypeId t) noexcept
+{
+    const Type ty = ctx.type_of(t);
+    if (ty.kind == TypeKind::Buffer) { return true; }
+    if (ty.kind == TypeKind::View && ty.members.size() >= 1U) { return ctx.type_of(ty.members[0]).kind == TypeKind::Buffer; }
+    return false;
+}
+// Parse the `access` string: comma-separated tokens, each EXACTLY "r" | "w" | "rw", one per binding in operand order (an
+// empty string = zero bindings). Sets `count` and returns false on any malformed/empty token. ⛔ no StringView slicing —
+// compare the token bytes directly (r/w len 1, rw len 2), so no (ptr,len) StringView ctor dependency.
+[[nodiscard]] bool ceir_parse_access(containers::StringView s, crd::u32& count) noexcept
+{
+    count = 0;
+    if (s.size() == 0U) { return true; }
+    crd::usize start = 0;
+    for (crd::usize i = 0; i <= s.size(); ++i)
+    {
+        if (i == s.size() || s[i] == ',')
+        {
+            const crd::usize len = i - start;
+            const char*      t   = s.data() + start;
+            const bool       ok  = (len == 1U && (t[0] == 'r' || t[0] == 'w')) || (len == 2U && t[0] == 'r' && t[1] == 'w');
+            if (!ok) { return false; }
+            ++count;
+            start = i + 1U;
+        }
+    }
+    return true;
+}
+// the pre-order walk — the FIRST dispatch misuse, or {None}. ⛔ per-op check ORDER is CONTRACTUAL (negatives pin the exact
+// kind): dispatch = grid-is-index → access(kind-fold → tokens → arity) → bindings-resource; dispatch_indirect =
+// args-is-buffer → access(kind-fold → tokens → arity) → bindings-resource.
+DispatchMisuse scan_dispatch(const Context& ctx, const Region* r) // NOLINT(misc-no-recursion)
+{
+    if (r == nullptr) { return {}; }
+    for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
+    {
+        for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+        {
+            const containers::StringView nm     = ctx.op_name(op->kind());
+            const bool                   direct  = nm == containers::StringView("compute.dispatch");
+            const bool                   indirect = nm == containers::StringView("compute.dispatch_indirect");
+            if (direct || indirect)
+            {
+                // ⛔ IDENTITY before contract (CEIR-13c): the @kernel must be a readable Symbol — a raw/deserialized dispatch
+                // with an absent or non-symbol `kernel` is KernelNotSymbol (the access-fold consistency; standalone-robust).
+                if (ctx.attr_value(op->attr(containers::StringView("kernel"))).kind != AttrKind::SymbolRef)
+                {
+                    return {nullptr, op, DispatchMisuseKind::KernelNotSymbol};
+                }
+                const crd::u32 fixed    = direct ? 3U : 1U;                 // grid(3) vs args(1)
+                const crd::u32 bindings = op->num_operands() >= fixed ? op->num_operands() - fixed : 0U;
+                if (direct)
+                {
+                    for (crd::u32 i = 0; i < 3U && i < op->num_operands(); ++i)
+                    {
+                        if (ctx.type_of(op->operand(i)->type()).kind != TypeKind::Index)
+                        {
+                            return {op->operand(i), op, DispatchMisuseKind::GridNotIndex};
+                        }
+                    }
+                }
+                else if (op->num_operands() >= 1U && !ceir_is_buffer_or_view_of_buffer(ctx, op->operand(0U)->type()))
+                {
+                    return {op->operand(0U), op, DispatchMisuseKind::ArgsNotBuffer};
+                }
+                crd::u32        tokens = 0;
+                const AttrValue av     = ctx.attr_value(op->attr(containers::StringView("access")));
+                // ⛔ a wrong-KIND (or ABSENT -> attr_value yields Int) `access` folds into AccessTokenInvalid, the 12b fold
+                // doctrine — NOT silently skipped: a deserialized module is built RAW (graceful-reject), so per-op verify
+                // may not have run before this standalone walk, and a false-clean here would be a real path.
+                if (av.kind != AttrKind::String) { return {nullptr, op, DispatchMisuseKind::AccessTokenInvalid}; }
+                if (!ceir_parse_access(av.s, tokens)) { return {nullptr, op, DispatchMisuseKind::AccessTokenInvalid}; }
+                if (tokens != bindings) { return {nullptr, op, DispatchMisuseKind::AccessArityMismatch}; }
+                for (crd::u32 i = fixed; i < op->num_operands(); ++i)
+                {
+                    if (!ceir_is_resource_kind(ctx.type_of(op->operand(i)->type()).kind))
+                    {
+                        return {op->operand(i), op, DispatchMisuseKind::BindingNotResource};
+                    }
+                }
+            }
+            for (crd::u32 i = 0; i < op->num_regions(); ++i)
+            {
+                const DispatchMisuse e = scan_dispatch(ctx, op->region(i));
+                if (e.kind != DispatchMisuseKind::None) { return e; }
+            }
+        }
+    }
+    return {};
+}
+} // namespace
+
+containers::StringView dispatch_misuse_kind_name(DispatchMisuseKind k) noexcept
+{
+    switch (k)
+    {
+    case DispatchMisuseKind::None: return containers::StringView("none");
+    case DispatchMisuseKind::GridNotIndex: return containers::StringView("grid-not-index");
+    case DispatchMisuseKind::AccessTokenInvalid: return containers::StringView("access-token-invalid");
+    case DispatchMisuseKind::AccessArityMismatch: return containers::StringView("access-arity-mismatch");
+    case DispatchMisuseKind::BindingNotResource: return containers::StringView("binding-not-resource");
+    case DispatchMisuseKind::ArgsNotBuffer: return containers::StringView("args-not-buffer");
+    case DispatchMisuseKind::KernelNotSymbol: return containers::StringView("kernel-not-symbol");
+    }
+    return containers::StringView("?");
+}
+
+DispatchMisuse Context::find_dispatch_misuse(const Module& m) const noexcept { return scan_dispatch(*this, m.body()); }
+
+// ── CEIR-13b §50: the ceir.transfer well-formedness enforcement (find_transfer_misuse) ──
+namespace
+{
+// the EFFECTIVE resource kind: for a View, its underlying (members[0]); else the type's own kind (the 12a one-hop rule —
+// views are flat, so one hop is complete). Used to resolve transferability + mip_gen-is-image + clear-on-image.
+[[nodiscard]] TypeKind ceir_effective_kind(const Context& ctx, TypeId t) noexcept
+{
+    const Type ty = ctx.type_of(t);
+    if (ty.kind == TypeKind::View && ty.members.size() >= 1U) { return ctx.type_of(ty.members[0]).kind; }
+    return ty.kind;
+}
+// a TRANSFERABLE operand: a Buffer or Image, or a View of one. ⛔ opaque ExternalResource is OUT (kind unknowable).
+[[nodiscard]] bool ceir_is_transferable(const Context& ctx, TypeId t) noexcept
+{
+    const TypeKind k = ceir_effective_kind(ctx, t);
+    return k == TypeKind::Buffer || k == TypeKind::Image;
+}
+// the pre-order walk — the FIRST transfer misuse, or {None}. ⛔ per-op check ORDER is CONTRACTUAL (negatives pin the exact
+// kind): copy = dst-transferable → src-transferable → src!=dst; upload/readback = operand-transferable; clear =
+// dst-transferable → value(kind-fold → on-image); mip_gen = is-image.
+TransferMisuse scan_transfer(const Context& ctx, const Region* r) // NOLINT(misc-no-recursion)
+{
+    if (r == nullptr) { return {}; }
+    for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
+    {
+        for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+        {
+            const containers::StringView nm = ctx.op_name(op->kind());
+            if (nm == containers::StringView("transfer.copy"))
+            {
+                if (op->num_operands() >= 1U && !ceir_is_transferable(ctx, op->operand(0U)->type()))
+                {
+                    return {op->operand(0U), op, TransferMisuseKind::OperandNotTransferable};
+                }
+                if (op->num_operands() >= 2U && !ceir_is_transferable(ctx, op->operand(1U)->type()))
+                {
+                    return {op->operand(1U), op, TransferMisuseKind::OperandNotTransferable};
+                }
+                if (op->num_operands() >= 2U && op->operand(0U) == op->operand(1U))
+                {
+                    return {op->operand(0U), op, TransferMisuseKind::CopySrcIsDst}; // ⛔ distinct views of one root are LEGAL
+                }
+            }
+            else if (nm == containers::StringView("transfer.upload") || nm == containers::StringView("transfer.readback"))
+            {
+                if (op->num_operands() >= 1U && !ceir_is_transferable(ctx, op->operand(0U)->type()))
+                {
+                    return {op->operand(0U), op, TransferMisuseKind::OperandNotTransferable};
+                }
+            }
+            else if (nm == containers::StringView("transfer.clear"))
+            {
+                if (op->num_operands() >= 1U && !ceir_is_transferable(ctx, op->operand(0U)->type()))
+                {
+                    return {op->operand(0U), op, TransferMisuseKind::OperandNotTransferable};
+                }
+                const AttrId a = op->attr(containers::StringView("value"));
+                if (a.valid())
+                {
+                    const AttrValue av = ctx.attr_value(a);
+                    if (av.kind != AttrKind::Int) { return {nullptr, op, TransferMisuseKind::ClearValueInvalid}; }
+                    if (op->num_operands() >= 1U && ceir_effective_kind(ctx, op->operand(0U)->type()) == TypeKind::Image)
+                    {
+                        return {nullptr, op, TransferMisuseKind::ClearValueOnImage};
+                    }
+                }
+            }
+            else if (nm == containers::StringView("transfer.mip_gen"))
+            {
+                if (op->num_operands() >= 1U && ceir_effective_kind(ctx, op->operand(0U)->type()) != TypeKind::Image)
+                {
+                    return {op->operand(0U), op, TransferMisuseKind::MipGenNotImage};
+                }
+            }
+            for (crd::u32 i = 0; i < op->num_regions(); ++i)
+            {
+                const TransferMisuse e = scan_transfer(ctx, op->region(i));
+                if (e.kind != TransferMisuseKind::None) { return e; }
+            }
+        }
+    }
+    return {};
+}
+} // namespace
+
+containers::StringView transfer_misuse_kind_name(TransferMisuseKind k) noexcept
+{
+    switch (k)
+    {
+    case TransferMisuseKind::None: return containers::StringView("none");
+    case TransferMisuseKind::OperandNotTransferable: return containers::StringView("operand-not-transferable");
+    case TransferMisuseKind::CopySrcIsDst: return containers::StringView("copy-src-is-dst");
+    case TransferMisuseKind::MipGenNotImage: return containers::StringView("mip-gen-not-image");
+    case TransferMisuseKind::ClearValueInvalid: return containers::StringView("clear-value-invalid");
+    case TransferMisuseKind::ClearValueOnImage: return containers::StringView("clear-value-on-image");
+    }
+    return containers::StringView("?");
+}
+
+TransferMisuse Context::find_transfer_misuse(const Module& m) const noexcept { return scan_transfer(*this, m.body()); }
 
 u32 Context::register_file(containers::StringView path)
 {

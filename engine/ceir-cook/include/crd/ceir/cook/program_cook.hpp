@@ -30,8 +30,19 @@ enum class CookError : crd::u8
     TokenMisuse,        // find_token_misuse flagged a §116 async use-once defect
     BorrowEscape,       // find_borrowed_escape flagged a §19 borrow escaping its region
     RecursionViolation, // find_recursion_violation flagged a §34 declared-recursion-policy breach
+    // CEIR-13c §85/§107 — the CKIR KernelRef declared-contract check (only when a resolver is supplied):
+    KernelUnresolved,        // a dispatch's @kernel identity did NOT resolve (the resolver returned false) — existence is
+                             // ALWAYS checked; `op` points at the dispatch.
+    KernelInterfaceMismatch, // a dispatch PINS an expected §107 interface hash (kernel_interface) that != the resolved
+                             // kernel's actual interface hash — the declared-contract violation; `op` points at the dispatch.
 };
 [[nodiscard]] containers::StringView cook_error_name(CookError e) noexcept;
+
+// CEIR-13c §85 — resolve a CKIR KernelRef asset IDENTITY (`name`, the dispatch's @kernel symbol) to its ACTUAL §107
+// interface hash. Returns false iff the name does NOT resolve (→ KernelUnresolved); on true, `out_interface` is the
+// resolved kernel's interface hash (compared to a dispatch's pin, iff pinned). ⛔ fn-ptr + `user` (the RunHooks precedent —
+// no std::function). In production this is backed by the ADR-0104 cook cache; a test supplies a table-backed mock.
+using KernelResolveFn = bool (*)(containers::StringView name, void* user, crd::u64& out_interface);
 
 // The result of a cook: on success `blob` is the self-describing CRDR bytes + the two hashes; on failure `error` names
 // why and `op` points at the offender (nullptr when ok / NoModuleBody).
@@ -49,14 +60,18 @@ struct CookResult
 // COOK `module` (asset id `asset_id`) → a verified, self-describing CRDR blob. ⛔ Runs the STRICT registration check
 // (EMPTY≠UNKNOWN) + the §115/§15/§116/§19 verifiers FIRST (source → VERIFIED) — a cook that stamped "verified" on an
 // unregistered op would have verified nothing. `scratch` backs transient work; `blob` is allocated from `alloc`.
+// ⛔ CEIR-13c: when `resolve != nullptr`, the CKIR KernelRef declared-contract check runs (every dispatch's @kernel must
+// resolve → KernelUnresolved; a pinned interface hash must match → KernelInterfaceMismatch; `op` points at the dispatch).
+// `resolve == nullptr` DEFERS resolution to a later phase — the CDEP chunk still persists the refs (a documented split).
 [[nodiscard]] CookResult cook_program(Context& ctx, const Module& module, crd::u64 asset_id, memory::IAllocator* alloc,
-                                      memory::IAllocator* scratch);
+                                      memory::IAllocator* scratch, KernelResolveFn resolve = nullptr, void* user = nullptr);
 
 // COOK from SOURCE TEXT (§105 ProgramSourceAsset): parse `source` (→ `CookError::ParseFailed` on a parse error) then cook
 // the resulting module. ⛔ The text and builder paths are the SAME cook — a program cooked from text and the identical
 // program built in C++ produce byte-identical content + interface hashes (the no-privileged-path property, §121).
 [[nodiscard]] CookResult cook_program_text(Context& ctx, containers::StringView source, crd::u64 asset_id,
-                                           memory::IAllocator* alloc, memory::IAllocator* scratch);
+                                           memory::IAllocator* alloc, memory::IAllocator* scratch,
+                                           KernelResolveFn resolve = nullptr, void* user = nullptr);
 
 // Why a read FAILED.
 // NOLINTNEXTLINE(performance-enum-size)

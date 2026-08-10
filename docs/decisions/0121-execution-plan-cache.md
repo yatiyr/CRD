@@ -31,6 +31,12 @@ the 10a ReloadSet's reload events — and gives the twice-deferred KernelRef rec
 production — and it is what lets 10b exist now without naming the compile→plan interface deferred to 21/26. The artifact
 is opaque bytes this slice; the real producer is 21/26, the real consumer 11+.
 
+> ⛔ **Struck in place (ADR-0123 §4, 2026-08-10):** the real CEIR-11b plan (`CompiledExecutionPlan`) is an **IN-MEMORY
+> dense-array object** with raw index/enum dispatch — **non-serializable as-is**, NOT the "opaque bytes" a byte-artifact
+> cache would store. 11b did NOT wire a persisted plan cache (nothing serializes); the **serializable blueprint** (dense
+> arrays with thunk-TABLE indices instead of raw dispatch) is ADR-0123's named-forward, awaiting a real cross-session
+> consumer. The 10b MECHANISM (store + validate-on-hit) is unaffected — it stores whatever the caller produces.
+
 ### 2.2 The key + validate-on-hit against live truth ("caches, never truth")
 
 `PlanKey{u64 content_hash, u64 target, u32 compiler_version}` — `content_hash` = `stable_hash(module)` (the truth the

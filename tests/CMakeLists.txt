@@ -11,6 +11,7 @@ add_subdirectory(units)
 add_subdirectory(ceir)  # D-007 CEIR-1a: Cerid Execution IR core (arena + intrusive def-use)
 add_subdirectory(ceir-host)  # D-007 CEIR-6b: the crd-jobs execution-provider bridge
 add_subdirectory(ceir-cook)  # D-007 CEIR-7a: the CEIR asset cook bridge
+add_subdirectory(ceir-gpu)  # D-007 CEIR-13d: the GPU lowering bridge
 add_subdirectory(render-asset-core)  # RAF-1 (D-007 "RAF band"): identity/namespaces/diagnostics/deps Gate 1
 add_subdirectory(gpu-context)        # RAF-2a (D-007 "RAF band"): canonical GPU command model (device-free structural gate)
 add_subdirectory(render-program)     # RAF-4 (D-007 "RAF band"): shader + program contract Gate 4
@@ -60,8 +61,10 @@ add_subdirectory(gpu-context-vulkan)  # ADR-0099 v17-i-a
 add_subdirectory(gpu-context-dx12)    # ADR-0100 v17-i: D3D12 IComputeContext backend
 add_subdirectory(gpu-context-cuda)    # ADR-0100 (2026-08-07): CUDA IComputeContext backend; self-skips without CUDAToolkit
 add_subdirectory(kir-vulkan)
+add_subdirectory(ceir-gpu-vulkan)  # D-007 CEIR-13z-1b: a CEIR compute asset executed on a real Vulkan device (execute_lowered, ADR-0126)
 add_subdirectory(kir-cuda)
 add_subdirectory(kir-dx12)
+add_subdirectory(ceir-gpu-dx12)  # D-007 CEIR-13z-1b: the DX12 mirror — a CEIR compute asset on a real D3D12 device (Windows-only)
 add_subdirectory(kir-webgpu)
 add_subdirectory(kir-hip)
 add_subdirectory(kir-metal)

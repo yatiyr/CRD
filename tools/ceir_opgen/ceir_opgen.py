@@ -59,11 +59,17 @@ EFFECT_FIELDS = {"family", "operand", "result", "range"}
 
 TOP_FIELDS = {"schema_version", "dialect", "summary", "op"}
 OP_FIELDS = {"name", "summary", "version", "operands", "results", "attributes", "regions", "traits", "docs",
-             "deprecation", "effects", "determinism", "domain", "type_inference", "shape_inference", "fold", "native"}
+             "deprecation", "effects", "determinism", "domain", "type_inference", "shape_inference", "fold", "native",
+             "kernel_ref"}
 OPERAND_FIELDS = {"name", "type", "variadic", "doc"}
 RESULT_FIELDS = {"name", "type", "doc", "variadic"}
 ATTR_FIELDS = {"name", "kind", "required", "doc"}
 NATIVE_FIELDS = {"provider", "determinism", "thread_safe", "hot_reload_safe", "lifetime", "cost", "capabilities"}
+# CEIR-13c §85 [op.kernel_ref]: names the attrs a KERNEL-REFERENCING op (compute.dispatch) carries — `symbol` (the kernel
+# asset identity, a symbol attr; required) + `interface` (the expected §107 interface hash, an int attr PIN; optional). The
+# generator VALIDATES the named attrs EXIST on the op with the right KINDS (the declared-words-validated discipline), then
+# emits them into OpSpec conditionally (the [op.native] precedent — non-kernel dialects regen byte-identical, drift-safe).
+KERNEL_REF_FIELDS = {"symbol", "interface"}
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 OPS_DIR = os.path.join(REPO_ROOT, "engine", "ceir", "ops")
@@ -315,10 +321,37 @@ def validate(path, raw, data):
                 _err(path, raw, anchor, "op '%s': [op.native] determinism '%s' is weaker than the op's declared class '%s'"
                      % (name, nd, op_det))
 
+        # CEIR-13c §85 [op.kernel_ref]: validate the named attrs EXIST on this op with the right KINDS (declared-words-
+        # validated). `symbol` (required) names a `symbol`-kind attr (the kernel identity); `interface` (optional) names an
+        # `int`-kind attr (the expected interface-hash pin). Emitted into OpSpec conditionally (the [op.native] precedent).
+        kref = op.get("kernel_ref")
+        if kref is not None:
+            if not isinstance(kref, dict):
+                _err(path, raw, anchor, "op '%s': 'kernel_ref' must be a table {symbol, interface}" % name)
+            for key in kref:
+                if key not in KERNEL_REF_FIELDS:
+                    _err(path, raw, anchor, "op '%s' [op.kernel_ref]: unknown field '%s' (known: %s)"
+                         % (name, key, ", ".join(sorted(KERNEL_REF_FIELDS))))
+            attr_kind = {a["name"]: a["kind"] for a in attrs}
+            sym = kref.get("symbol")
+            if not isinstance(sym, str) or sym not in attr_kind:
+                _err(path, raw, anchor, "op '%s' [op.kernel_ref]: 'symbol' must name an attribute of this op" % name)
+            if attr_kind[sym] != "symbol":
+                _err(path, raw, anchor, "op '%s' [op.kernel_ref]: symbol attr '%s' must be kind 'symbol' (is '%s')"
+                     % (name, sym, attr_kind[sym]))
+            iface = kref.get("interface")
+            if iface is not None:
+                if not isinstance(iface, str) or iface not in attr_kind:
+                    _err(path, raw, anchor, "op '%s' [op.kernel_ref]: 'interface' must name an attribute of this op" % name)
+                if attr_kind[iface] != "int":
+                    _err(path, raw, anchor, "op '%s' [op.kernel_ref]: interface attr '%s' must be kind 'int' (is '%s')"
+                         % (name, iface, attr_kind[iface]))
+
         ops.append({"name": name, "summary": op["summary"], "version": op["version"], "operands": operands,
                     "results": results, "attrs": attrs, "traits": list(op.get("traits", [])),
                     "num_regions": num_regions, "region_sig": region_sig, "docs": op.get("docs", ""), "effects": parsed_effects,
                     "determinism": op.get("determinism", ""), "domain": op.get("domain", ""), "native": native,
+                    "kernel_ref": op.get("kernel_ref"),
                     "deprecation": dep, "type_inference": op.get("type_inference", ""),
                     "shape_inference": op.get("shape_inference", ""), "fold": op.get("fold", "")})
 
@@ -521,9 +554,19 @@ def emit_cpp(model):
             native_kv = ", .intrinsic = true, .native_provider = %s%s" % (_cstr(native["provider"]), caps_kv)
         else:
             native_kv = ""
-        out.append('    d->register_op("%s", {.traits = %s, .verify = &verify_%s, .effects = %s, .determinism = %s, .domain = %s%s});\n'
+        # CEIR-13c §85: emit .kernel_ref_symbol/.kernel_ref_interface ONLY when [op.kernel_ref] is present (the [op.native]
+        # drift-safe precedent — every prior op's register call stays byte-identical; OpSpec defaults to "").
+        kref = op["kernel_ref"]
+        if kref:
+            iface = kref.get("interface")
+            kref_kv = ", .kernel_ref_symbol = %s%s" % (
+                _cstr(kref["symbol"]),
+                (", .kernel_ref_interface = %s" % _cstr(iface)) if iface else "")
+        else:
+            kref_kv = ""
+        out.append('    d->register_op("%s", {.traits = %s, .verify = &verify_%s, .effects = %s, .determinism = %s, .domain = %s%s%s});\n'
                    % (op["name"], _traits_expr(op["traits"]), op["name"], _effects_expr(op),
-                      _det_expr(op["determinism"]), _dom_expr(op["domain"]), native_kv))
+                      _det_expr(op["determinism"]), _dom_expr(op["domain"]), native_kv, kref_kv))
     out.append("    return d;\n}\n")
 
     # reflection - the OpSchema table (constexpr; StringView is std::string_view, so static-init-order immune)

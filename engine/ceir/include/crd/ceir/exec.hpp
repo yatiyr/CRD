@@ -6,8 +6,9 @@
 // NOT speed. ⛔ Dispatch is an Interpreter-OWNED `OpId → EvalFn` table, NOT an OpInfo hook: `register_op` is first-wins
 // idempotent, so a hook attached after the generated registration would silently no-op (the registered-default-empty
 // scar). Semantics are INSTALLED per dialect (open-world — a caller may add or replace); an op with no installed EvalFn is
-// a typed error, never skipped (EMPTY≠UNKNOWN at the executor). Values are wrapping `i64` scalars (real per-width typing
-// joins CEIR-6). State cells are a §20 depth-N ring keyed by the STATIC op instance, persisting across evaluations (incl.
+// a typed error, never skipped (EMPTY≠UNKNOWN at the executor). Values are wrapping `i64` scalars (the arith dialect is
+// integer-only through CEIR-11a; real per-width/float typing is a future refinement when a float op is defined). State
+// cells are a §20 depth-N ring keyed by the STATIC op instance, persisting across evaluations (incl.
 // across function calls) — `state` ≡ `delay` ≡ `history(depth=1)` under one register mechanism.
 
 #include <crd/ceir/context.hpp>
@@ -102,6 +103,11 @@ public:
     void install(OpId kind, EvalFn fn); // open-world: (re-)bind a kind's semantics; last install wins
     [[nodiscard]] Context&              ctx() const noexcept { return m_ctx; }
     [[nodiscard]] memory::IAllocator*   allocator() const noexcept { return m_scratch; } // the per-run scratch (EvalFns use it)
+    // The module being invoked (captured by invoke/invoke_region) + the remaining fuel — the CEIR-11a sequential
+    // reference for task.parallel_for/map_reduce runs a body via a sub-interpreter (invoke_region needs the module; the
+    // sub gets the parent's remaining budget). nullptr module ⇒ not inside an invoke.
+    [[nodiscard]] const Module*         module() const noexcept { return m_module; }
+    [[nodiscard]] crd::u64              fuel() const noexcept { return m_fuel; }
     // A generic extension pointer for installed EvalFns — opaque to crd-ceir; the installer sets + interprets it (the
     // CEIR-6b host provider threads its parallel context / map-output buffers here). NOT copied by the prototype ctor.
     void                                set_user(void* u) noexcept { m_user = u; }
@@ -111,6 +117,11 @@ public:
     // NOT copied by the prototype ctor. `cancelled()` ⇒ the running program should stop with `ExecError::Cancelled`.
     void                                set_cancel_flag(const std::atomic<bool>* f) noexcept { m_cancel = f; }
     [[nodiscard]] bool cancelled() const noexcept { return m_cancel != nullptr && m_cancel->load(std::memory_order_relaxed); }
+    // §112 STEP HOOKS (CEIR-11a — the debugger SEAM, hooks only; no debugger/stepping UI): `pre` fires BEFORE each op
+    // dispatches, `post` fires ONLY after a SUCCESSFUL dispatch (never on an error). Null by default → ZERO work when
+    // unset (a single null check in the hot loop). ⛔ NOT copied by the prototype ctor (per-session, like set_user/cancel).
+    using StepHook = void (*)(const Operation& op, void* user);
+    void set_step_hooks(StepHook pre, StepHook post, void* user) noexcept { m_pre_hook = pre; m_post_hook = post; m_hook_user = user; }
 
     // Run `@entry(args)` against `m` (calls resolve via `m.symbols()`).
     [[nodiscard]] ExecResult invoke(const Module& m, containers::StringView entry, containers::ConstSpan<crd::i64> args);
@@ -156,6 +167,14 @@ public:
     [[nodiscard]] bool                            valid_yield_handle(crd::u32 handle) const noexcept;
     [[nodiscard]] containers::ConstSpan<crd::i64> stored_yields(crd::u32 handle) const noexcept;
 
+    // §118 MAP-OUTPUT store (CEIR-11a): the per-index yields of a task.parallel_for / task.map_reduce, keyed by op
+    // POINTER (builder-form only — pointers don't survive a round-trip; the `cell_value` caveat). ⭐ Named `map_output`
+    // VERBATIM to mirror `HostProvider::map_output` — the CEIR-11b harness compares `in.map_output(op)` vs
+    // `provider.map_output(op)` symmetrically. The sequential parallel_for/map_reduce EvalFns store here; the builtin
+    // (arith/core/func) installer never touches it (generic, like the yield-store).
+    void                                          store_map_output(const Operation* op, containers::Array<crd::i64>&& out);
+    [[nodiscard]] containers::ConstSpan<crd::i64> map_output(const Operation* op) const noexcept;
+
 private:
     using Env = containers::HashMap<const Value*, crd::i64>;
     // A §20 state cell: a ring of the last `depth` `next` values; `current` = the value from `depth` evaluations ago
@@ -178,10 +197,15 @@ private:
     containers::HashMap<crd::u64, EvalFn>         m_sem;               // OpId.value → semantics
     containers::HashMap<const Operation*, Cell>   m_cells;             // persistent §20 state cells
     containers::Array<containers::Array<crd::i64>> m_yield_store;      // §37 sequential-async completed-yields (CEIR-6b)
+    containers::HashMap<const Operation*, containers::Array<crd::i64>> m_map_output; // §118 task map-output (CEIR-11a)
+    const Module*                                 m_module = nullptr; // the module being invoked (invoke/invoke_region)
     ExecError                                     m_err    = ExecError::None;
     const Operation*                              m_err_op = nullptr;
     void*                                         m_user   = nullptr; // opaque EvalFn extension pointer (CEIR-6b host provider)
     const std::atomic<bool>*                      m_cancel = nullptr; // §30 cooperative cancel flag (CEIR-6c); not proto-copied
+    StepHook                                      m_pre_hook  = nullptr; // §112 pre-op hook (CEIR-11a); not proto-copied
+    StepHook                                      m_post_hook = nullptr; // §112 post-op hook (successful dispatch only)
+    void*                                         m_hook_user = nullptr; // opaque user for the step hooks
 };
 
 // Install the built-in reference semantics (open-world — a caller may install more or override).
@@ -191,9 +215,42 @@ void install_func_semantics(Interpreter& in);
 void install_builtin_semantics(Interpreter& in); // arith + core + func
 // §37 async SEQUENTIAL reference semantics (CEIR-6b — the 6a IOU's sequential half): launch runs the body at launch and
 // stashes its yields (the token's value is the store handle); await returns them; join concatenates; race → index 0
-// deterministically; cancel consumes (a no-op — real cancellation is CEIR-6c). Jobs-backed parallel async is CEIR-6c.
+// deterministically; cancel consumes (a no-op — real cancellation is CEIR-6c). Jobs-backed parallel async (launch/await
+// ON-POOL) is CEIR-11a (the §84 async-host subset — routed at 6z).
 // A SEPARATE installer (NOT in install_builtin_semantics).
 void install_async_semantics(Interpreter& in);
+// §38 host-task ops SEQUENTIAL reference (CEIR-11a — the §118 oracle, host-neutral): spawn/main_thread/worker (share
+// launch's EvalFn — placement is value-unobservable in the oracle), group (shares scope), fiber_wait (mirrors await),
+// continuation (antecedent yields → body block-args → new token). Jobs-backed placement is the crd-ceir-host provider
+// (CEIR-11a stage 3). A SEPARATE installer (uses the yield-store, like install_async_semantics; NOT in builtin).
+void install_task_semantics(Interpreter& in);
+
+// ── the parallel-purity PRE-FLIGHT (CEIR-11a — moved from crd-ceir-host at the sequential reference's arrival) ──
+// ⭐ The 9d hoist-at-second-consumer: the provider's PARALLEL run (submit-thread check) and the reference's SEQUENTIAL run
+// (legality at the op) share ONE legality analysis, so they AGREE by construction rather than by duplication. PURE IR
+// analysis — StateEdge/Terminator traits + resolved callees; ⛔ NO jobs types (crd-ceir stays host-only, I4).
+struct PreflightResult
+{
+    ExecError        err = ExecError::None;
+    const Operation* op  = nullptr; // the offender (owner for arity/shape; the precise inner op for stateful/unresolved)
+};
+// The STATE-FREE / calls-resolved transitive walk over a region (the pre-flight core, WITHOUT the arity/terminator
+// checks): every op in `r` + its resolved callees is StateEdge-free (a §20 cell would make a parallel result depend on
+// the schedule) and every call resolves. ⛔ `err == ParallelBodyStateful` / `UnresolvedCall` on the offender, else None.
+// Exported so a variadic-body consumer (the CEIR-11a jobs-backed launch pool-eligibility classifier — launch bodies take
+// 0 block-args + yield variadic, so `check_parallel_region`'s arity/terminator checks don't apply) reuses it, not dup it.
+[[nodiscard]] PreflightResult region_state_free(Context& ctx, const SymbolTable& syms, Region* r);
+
+// A single parallel region (a parallel_for/map_reduce MAP body, or a map_reduce COMBINE body) must: have a first block
+// with EXACTLY `expect_args` block-args, a Terminator yielding EXACTLY 1 value, and be StateEdge-free transitively (a cell
+// would make the result depend on the range split). The sequential EvalFns call this on their own regions AT eval.
+[[nodiscard]] PreflightResult check_parallel_region(Context& ctx, const SymbolTable& syms, const Operation* owner,
+                                                    Region* r, crd::u32 expect_args);
+// Module-wide: pre-flight every task.parallel_for + task.map_reduce (the provider's submit-thread check + the CEIR-11b
+// harness precondition). ⛔ Deliberately CONSERVATIVE: rejects the whole module if ANY parallel op is impure, even one the
+// entry never reaches (over-rejection, safe — a sequential reference simply never reaches such an op; a documented
+// oracle/provider divergence, not a bug). `ctx` is non-const (interns the op kinds it dispatches on — idempotent).
+[[nodiscard]] PreflightResult preflight_parallel(Context& ctx, const Module& module);
 
 // Byte-pin `values` deterministically: 8 bytes little-endian per i64 (the §118 "byte-pinned output" the gate compares).
 [[nodiscard]] containers::Array<crd::u8> pin_values(containers::ConstSpan<crd::i64> values, memory::IAllocator* alloc);

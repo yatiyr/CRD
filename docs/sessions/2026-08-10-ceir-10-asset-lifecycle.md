@@ -513,3 +513,91 @@ docs(ceir-10b): CLOSE -- ADR-0121, the validate-on-hit plan-cache design
 CEIR-10b is CLOSED: the plan-cache mechanism, driven live by the 10a ReloadSet. 381/381 x 4 configs.
 No recook, no fuzz (in-memory).
 ```
+
+---
+
+## CEIR-10z — the BAND-10 GATE — ✅ CLOSED 2026-08-10 → ⭐⭐ BAND 10 CLOSED
+
+**A COMPOSING gate, not doc-synthesis.** Unlike 9z (whose domains were each already a composition, so its gate was
+synthesis), band 10's two guarantees — the 10a hot-reload lifecycle and the 10b plan cache — only MEET here: the PlanCache
+validates against a resolver backed by the LIVE ReloadSet, so a reload DECISION and a cache VERDICT are checked in
+lockstep. `test_band10_gate.cpp` (1 `[ceir][gate10]`, tag; TEST_CASE name "ceir 10z: BAND-10 GATE …") walks ONE program
+graph — A (imports "bar") → B (exports bar()), plus independent C — through the three §172 edit classes:
+
+1. **body-edit B → HotSwap installs LIVE, and caller A's plan stays a HIT** — the §107 hot-swap property proven at the
+   PLAN layer against the live resolver (B's interface unchanged → A's recorded `PlanDep` still validates); B's OWN plan
+   self-misses (new content = new key).
+2. **signature-edit B → ContractChange REJECT + last-good, and A's plan STILL HITS** — a rejected reload leaves B's live
+   interface unchanged, so the cache stays fully valid (a reject invalidates nothing).
+3. **dep-edit (cold-reload B with a new signature) → B's interface changes → A's plan StaleDeps** (A must recompile),
+   B self-misses = the recompile set `affected(B) ∪ {B}`; C stays a HIT throughout (∉ affected(B)).
+
+⛔ **EXACT hit/miss counter deltas at every step** (the 9a "not ≥" discipline): `3/0 → 6/1 → 8/1 → 9/3` — these ARE the
+§172 "cache-hit counts". The gate is the band's tightest artifact: every `get()` is enumerated, so a double-increment
+counter bug fails it (a `>` would have passed).
+
+**Re-verification (the 8z discipline):** the gate re-verifies the 10a/10b public surfaces against code by EXERCISING
+them live (real `reload` decisions, real `PlanCache` verdicts) — the composing gate is itself the row re-verification.
+
+**Advisor pre-close** caught two defects, both fixed before the flip: (1) the "∪ {B}" half of the dep-edit row was
+unasserted (step 3 checked A→StaleDeps + C→Hit but never B's self-miss at new content — internally doc-vs-code
+inconsistent on its own headline); (2) weak `hits() > hits0` / `misses() >= 2` violated the exact-counts discipline →
+replaced with exact per-step assertions (I traced the counters against the code: baseline 3/0, step 1 6/1, step 2 8/1,
+step 3 9/3 — all confirmed by the passing test). Also self-corrected mid-tick: the ctest name-vs-tag scar (`-R "gate10"`
+found nothing — the tag isn't the name; `-R "ceir 10z"` is correct) and a LocalConstant tidy fix (`A/B/C/depA` →
+`id_a/id_b/id_c/dep_a`). After both fixes: a FULL 4-config re-run (not win-debug-only — the band gate closes on the final
+source).
+
+**Gate.** crd-ceir-tests + host + cook **382/382 ctest** (381 + 1) on **win-debug + win-asan + linux-gcc-debug +
+linux-gcc-asan** + LLVM-20 tidy (clean) + GCC `-Werror=switch` + opgen drift/validator + `crd-ceir-invariants` (U-§116
+holds — bridge-only). **NO recook, NO fuzz, NO ADR** (a gate composes ADR-0120 + ADR-0121 — the 3z/4z/5z/8z/9z precedent).
+
+## BAND 10 — summary (Asset lifecycle completion)
+
+The paused band-7 remainders (7c/7d/7z) resumed VERBATIM as CEIR-10a/10b/10z on the closed 8d/8h/8i foundation — the
+2026-08-09 re-baseline's promise kept (foundation first, then the consumers that needed it). The arc:
+- **10a (ADR-0120)** — the full hot-reload lifecycle on a `ReloadSet` (crd-ceir-cook bridge), 4 gated increments
+  (364→370→373→377): core surfaces (`collect_state_schema` + `contract_hash`) → supervisor (the 8h dag AS the
+  validate-set) → caller-driven migration (fork B) → source-in seam + the RAF-11 guard.
+- **10b (ADR-0121)** — the execution-plan cache: a store + validate-on-hit client of live truth (381).
+- **10z** — the composing gate (382).
+**The two reusable lessons (both in the ADRs, [[feedback_lifecycle_manager_must_not_own_execution_state_fork_b]] in
+memory):** (1) a lifecycle manager must not own execution state — gate on fn presence, run caller-side (fork B); (2)
+cache-validity keys CONSERVATIVELY (`interface_hash`), reload-reject keys PRECISELY (`contract_hash`) — the 7a
+under/over-inclusion asymmetry applied to a new pair. **Six named-forwards** landed honestly (mtime signal, CookedHeader.id
+validation, leaf-allow, compile-affected, KernelRef in-memory-now/serialized-later, semantic call-site) — three converge
+at CEIR-11. **Whole band bridge-only except 10a stage 1** (crd-ceir core touched once, gated on all 4 configs). NO recook,
+NO fuzz across the entire band (nothing new serialized). **Next = CEIR-11** (reference executor + compiled host plan).
+
+## Proposed BATCH commit — CEIR-10z + BAND 10 CLOSE (user commits; NO AI trailer; ordered)
+
+```
+test(ceir-10z): BAND-10 GATE -- lifecycle + plan cache composed live across the 3 edit classes
+
+The band-10 close gate (sec-172 matrix, host subset). A COMPOSING test (not doc-synthesis): the 10a
+hot-reload lifecycle and the 10b plan cache meet here -- the PlanCache validates against a resolver
+backed by the LIVE ReloadSet, so a reload decision and a cache verdict are checked in lockstep.
+
+- test_band10_gate.cpp (1 [ceir][gate10]): one program graph (A imports B; C independent) walked
+  through the 3 edit classes: (1) body-edit B -> HotSwap live AND caller A's plan stays a HIT (sec-107
+  at the plan layer; B self-misses by new content); (2) signature-edit B -> ContractChange reject +
+  last-good AND A still HIT (a reject invalidates nothing); (3) dep-edit (cold-reload B) -> A StaleDeps,
+  B self-miss = the recompile set affected(B) + {B}, C untouched.
+- EXACT hit/miss counter deltas at every step (3/0 -> 6/1 -> 8/1 -> 9/3) -- the sec-172 cache-hit counts.
+
+Gated: 382/382 on win-debug + win-asan + linux-gcc-debug + linux-gcc-asan + LLVM-20 tidy + GCC
+-Werror=switch + opgen drift/validator + crd-ceir-invariants (U-116 holds; bridge-only). No recook,
+no fuzz, no ADR (a gate composes ADR-0120 + ADR-0121).
+```
+```
+docs(ceir-10z): BAND 10 CLOSED -- asset lifecycle completion
+
+- D-007 tracker: CEIR-10z row -> CLOSED; CEIR-10 band header -> BAND 10 CLOSED (10a..10z); CEIR-11 NEXT.
+  The band-contract "reload transactions ride 8i" phrase struck in place (corrected at 10a: install
+  atomicity is the 7b slot; 8i is the upstream authoring seam).
+- context.md + the session log band-10 summary (the arc, the two reusable lessons, the six
+  named-forwards, three converging at CEIR-11).
+
+BAND 10 CLOSED: the paused band-7 remainders (7c/7d/7z) resumed verbatim as 10a/10b/10z on the closed
+8d/8h/8i foundation. 382/382 x 4 configs. No recook, no fuzz across the band.
+```

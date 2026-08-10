@@ -25,9 +25,13 @@ namespace crd::ceir
 // STABLE ID (sorted by id, the id VALUE hashed) — reorder-invariant, delete/re-add-sensitive; that projection is the
 // 10a migration schema (see `collect_state_schema`). ⭐ CEIR-8f (ADR-0116 §2.1): the module-wide capability set IS folded
 // in (a host must re-grant on a change). ⛔ Implementation-only bodies / private functions / constants are EXCLUDED, so
-// an implementation-only edit leaves this hash UNCHANGED (the §107 hot-swap property). NAMED-FORWARD: §107's resource
-// contract is unbuilt (KernelRef asset refs → CEIR-13) — folding it in later changes the hash (a recook, honest). Field-
-// by-field little-endian (the ⛔ struct-padding-in-content-hash scar); version-sensitive like `stable_hash`.
+// an implementation-only edit leaves this hash UNCHANGED (the §107 hot-swap property). ⛔ CEIR-13c (forward RESOLVED, NOT
+// folded): a program's KernelRef deps are DELIBERATELY excluded from this hash — WHICH kernel a program dispatches is
+// IMPLEMENTATION, not caller-visible contract, so swapping kernel X for a contract-compatible Y must NOT invalidate the
+// program's own callers (that is exactly the hot-swap property this hash provides). The program→kernel edge rides the §106
+// DEPENDENCY record (`ckir_refs`) + the cook's declared-contract check instead. (A future §107 resource-I/O-SURFACE folding
+// — the caller-visible resource contract — is a DISTINCT item, still unbuilt.) Field-by-field little-endian (the ⛔
+// struct-padding-in-content-hash scar); version-sensitive like `stable_hash`.
 [[nodiscard]] u64 interface_hash(Context& ctx, const Module& module, memory::IAllocator* scratch);
 
 // §107 CONTRACT HASH (CEIR-10a) — the `interface_hash` projection MINUS the §20 state schema: the caller-visible
@@ -54,6 +58,17 @@ struct StateCell
 [[nodiscard]] containers::Array<StateCell> collect_state_schema(Context& ctx, const Module& module,
                                                                 memory::IAllocator* alloc);
 
+// One CKIR KernelRef dependency (CEIR-13c §85/§106): the kernel ASSET IDENTITY (`name` — the `[op.kernel_ref] symbol`
+// attr's value) + the EXPECTED §107 interface hash the dispatch PINS (`interface_hash`, valid iff `pinned`). ⛔ `pinned`
+// is a distinct bool, NOT `interface_hash == 0` (a real FNV hash can be 0 — the 8f phantom-id shape). The cook resolves
+// `name` and, iff `pinned`, checks the resolved kernel's actual interface hash against `interface_hash` (declared-contract).
+struct KernelRefDep
+{
+    containers::StringView name;
+    u64                    interface_hash = 0U;
+    bool                   pinned         = false;
+};
+
 // §106 DEPENDENCY RECORD — what a program asset REFERENCES. Extracted by an IR walk that is SCHEMA/REGISTRY-driven +
 // symbol-driven, NEVER dialect-name-sniffing (the I6 open-world rule). All lists are DISTINCT + sorted (deterministic).
 struct DependencyRecord
@@ -61,10 +76,12 @@ struct DependencyRecord
     containers::Array<containers::StringView> called_funcs; // distinct func.call callee symbol names
     containers::Array<containers::StringView> intrinsics;   // distinct op names of ops declared `[op.native]` (op_info.intrinsic)
     containers::Array<containers::StringView> providers;    // distinct native_provider names those intrinsics declare
-    // ⛔ ckir_refs (KernelRef asset dependencies) are NAMED-FORWARD to CEIR-13 (CKIR/general-compute integration) — the
-    // schema slot exists but no CKIR-referencing op is built yet. ⛔ "Which execution provider RUNS a region" is a §69 plan-time
-    // question (routed to the partitioner rows CEIR-21/26), NOT inferred here by prefix-matching an op name.
-    explicit DependencyRecord(memory::IAllocator* a) : called_funcs(a), intrinsics(a), providers(a) {}
+    // ⭐ CEIR-13c (§64 forward LANDED): the distinct CKIR KernelRef asset deps of the program's dispatch ops — extracted
+    // SCHEMA-DRIVEN from `op_info.kernel_ref_symbol` (the `[op.kernel_ref]` marker), NEVER by op-name-sniffing (I6). Sorted
+    // by name; the first-seen pin is kept per name (the authoritative per-dispatch contract check re-walks the module, cook).
+    // ⛔ "Which execution provider RUNS a region" is a §69 plan-time question (partitioner rows CEIR-21/26), NOT here.
+    containers::Array<KernelRefDep>           ckir_refs;
+    explicit DependencyRecord(memory::IAllocator* a) : called_funcs(a), intrinsics(a), providers(a), ckir_refs(a) {}
 };
 [[nodiscard]] DependencyRecord collect_dependencies(Context& ctx, const Module& module, memory::IAllocator* alloc);
 

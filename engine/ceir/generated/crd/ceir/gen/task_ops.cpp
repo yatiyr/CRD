@@ -15,6 +15,35 @@ namespace
 {
 // verifiers - structural conformance (operand/result/region counts + required attrs & kinds), wired to
 // Context::verify via register_op. Semantic verification (types/effects/domain) lands at CEIR-3/4.
+[[nodiscard]] bool verify_continuation(const Context& /*ctx*/, const Operation& op) noexcept
+{
+    if (op.num_operands() != 1U) { return false; }
+    if (op.num_results() != 1U) { return false; }
+    if (op.num_regions() != 1U) { return false; }
+    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 1U) { return false; }
+    return true;
+}
+[[nodiscard]] bool verify_fiber_wait(const Context& /*ctx*/, const Operation& op) noexcept
+{
+    if (op.num_operands() != 1U) { return false; }
+    if (op.num_regions() != 0U) { return false; }
+    return true;
+}
+[[nodiscard]] bool verify_group(const Context& /*ctx*/, const Operation& op) noexcept
+{
+    if (op.num_operands() != 0U) { return false; }
+    if (op.num_regions() != 1U) { return false; }
+    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 0U) { return false; }
+    return true;
+}
+[[nodiscard]] bool verify_main_thread(const Context& /*ctx*/, const Operation& op) noexcept
+{
+    if (op.num_operands() != 0U) { return false; }
+    if (op.num_results() != 1U) { return false; }
+    if (op.num_regions() != 1U) { return false; }
+    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 0U) { return false; }
+    return true;
+}
 [[nodiscard]] bool verify_map_reduce(const Context& /*ctx*/, const Operation& op) noexcept
 {
     if (op.num_operands() != 4U) { return false; }
@@ -32,8 +61,46 @@ namespace
     if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 1U) { return false; }
     return true;
 }
+[[nodiscard]] bool verify_spawn(const Context& /*ctx*/, const Operation& op) noexcept
+{
+    if (op.num_operands() != 0U) { return false; }
+    if (op.num_results() != 1U) { return false; }
+    if (op.num_regions() != 1U) { return false; }
+    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 0U) { return false; }
+    return true;
+}
+[[nodiscard]] bool verify_worker(const Context& /*ctx*/, const Operation& op) noexcept
+{
+    if (op.num_operands() != 0U) { return false; }
+    if (op.num_results() != 1U) { return false; }
+    if (op.num_regions() != 1U) { return false; }
+    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 0U) { return false; }
+    return true;
+}
 } // namespace
 
+Operation* build_continuation(Context& ctx, Value* token, TypeId result_type)
+{
+    Value* operands[] = {token};
+    Operation* const op = ctx.create_operation(continuation_kind(ctx), containers::ConstSpan<Value*>(operands, 1U), 1U, result_type, 1U);
+    return op;
+}
+Operation* build_fiber_wait(Context& ctx, Value* token, TypeId result_type)
+{
+    Value* operands[] = {token};
+    Operation* const op = ctx.create_operation(fiber_wait_kind(ctx), containers::ConstSpan<Value*>(operands, 1U), 1U, result_type, 0U);
+    return op;
+}
+Operation* build_group(Context& ctx, TypeId result_type)
+{
+    Operation* const op = ctx.create_operation(group_kind(ctx), {}, 1U, result_type, 1U);
+    return op;
+}
+Operation* build_main_thread(Context& ctx, TypeId result_type)
+{
+    Operation* const op = ctx.create_operation(main_thread_kind(ctx), {}, 1U, result_type, 1U);
+    return op;
+}
 Operation* build_map_reduce(Context& ctx, Value* lower, Value* upper, Value* step, Value* init, TypeId result_type)
 {
     Value* operands[] = {lower, upper, step, init};
@@ -46,36 +113,84 @@ Operation* build_parallel_for(Context& ctx, Value* lower, Value* upper, Value* s
     Operation* const op = ctx.create_operation(parallel_for_kind(ctx), containers::ConstSpan<Value*>(operands, 3U), 0U, result_type, 1U);
     return op;
 }
+Operation* build_spawn(Context& ctx, TypeId result_type)
+{
+    Operation* const op = ctx.create_operation(spawn_kind(ctx), {}, 1U, result_type, 1U);
+    return op;
+}
+Operation* build_worker(Context& ctx, TypeId result_type)
+{
+    Operation* const op = ctx.create_operation(worker_kind(ctx), {}, 1U, result_type, 1U);
+    return op;
+}
 
 namespace
 {
+constexpr EffectRecord kContinuationEffects[] = {{EffectFamily::Synchronization, EffectTarget::None, 0U, 0U}};
+constexpr EffectRecord kFiberWaitEffects[] = {{EffectFamily::Synchronization, EffectTarget::None, 0U, 0U}};
+constexpr EffectRecord kGroupEffects[] = {{EffectFamily::Synchronization, EffectTarget::None, 0U, 0U}};
+constexpr EffectRecord kMainThreadEffects[] = {{EffectFamily::Synchronization, EffectTarget::None, 0U, 0U}};
 constexpr EffectRecord kMapReduceEffects[] = {{EffectFamily::Synchronization, EffectTarget::None, 0U, 0U}};
 constexpr EffectRecord kParallelForEffects[] = {{EffectFamily::Synchronization, EffectTarget::None, 0U, 0U}};
+constexpr EffectRecord kSpawnEffects[] = {{EffectFamily::Synchronization, EffectTarget::None, 0U, 0U}};
+constexpr EffectRecord kWorkerEffects[] = {{EffectFamily::Synchronization, EffectTarget::None, 0U, 0U}};
 } // namespace
 
 Dialect* register_task_ops(Context& ctx)
 {
     Dialect* const d = ctx.register_dialect("task");
+    d->register_op("continuation", {.traits = OpTrait::TokenConsumer | OpTrait::TokenProducer, .verify = &verify_continuation, .effects = containers::ConstSpan<EffectRecord>(kContinuationEffects, 1U), .determinism = DeterminismClass::Unspecified, .domain = EvalDomain::Unspecified});
+    d->register_op("fiber_wait", {.traits = flags_of(OpTrait::TokenConsumer), .verify = &verify_fiber_wait, .effects = containers::ConstSpan<EffectRecord>(kFiberWaitEffects, 1U), .determinism = DeterminismClass::Unspecified, .domain = EvalDomain::Unspecified});
+    d->register_op("group", {.traits = 0U, .verify = &verify_group, .effects = containers::ConstSpan<EffectRecord>(kGroupEffects, 1U), .determinism = DeterminismClass::Unspecified, .domain = EvalDomain::Unspecified});
+    d->register_op("main_thread", {.traits = flags_of(OpTrait::TokenProducer), .verify = &verify_main_thread, .effects = containers::ConstSpan<EffectRecord>(kMainThreadEffects, 1U), .determinism = DeterminismClass::Unspecified, .domain = EvalDomain::Unspecified});
     d->register_op("map_reduce", {.traits = 0U, .verify = &verify_map_reduce, .effects = containers::ConstSpan<EffectRecord>(kMapReduceEffects, 1U), .determinism = DeterminismClass::Unspecified, .domain = EvalDomain::Unspecified});
     d->register_op("parallel_for", {.traits = 0U, .verify = &verify_parallel_for, .effects = containers::ConstSpan<EffectRecord>(kParallelForEffects, 1U), .determinism = DeterminismClass::Unspecified, .domain = EvalDomain::Unspecified});
+    d->register_op("spawn", {.traits = flags_of(OpTrait::TokenProducer), .verify = &verify_spawn, .effects = containers::ConstSpan<EffectRecord>(kSpawnEffects, 1U), .determinism = DeterminismClass::Unspecified, .domain = EvalDomain::Unspecified});
+    d->register_op("worker", {.traits = flags_of(OpTrait::TokenProducer), .verify = &verify_worker, .effects = containers::ConstSpan<EffectRecord>(kWorkerEffects, 1U), .determinism = DeterminismClass::Unspecified, .domain = EvalDomain::Unspecified});
     return d;
 }
 
 namespace
 {
+constexpr OperandInfo kContinuationOperands[] = {{"token", "the antecedent token to consume", false}};
+constexpr ResultInfo kContinuationResults[] = {{"next", "a new completion token for the continuation body"}};
+constexpr OperandInfo kFiberWaitOperands[] = {{"token", "the token to consume", false}};
+constexpr ResultInfo kFiberWaitResults[] = {{"values", "the awaited body's yielded values"}};
+constexpr ResultInfo kGroupResults[] = {{"results", "the group region's yielded values"}};
+constexpr ResultInfo kMainThreadResults[] = {{"token", "the completion token -- consume EXACTLY once"}};
 constexpr OperandInfo kMapReduceOperands[] = {{"lower", "", false}, {"upper", "", false}, {"step", "", false}, {"init", "", false}};
 constexpr ResultInfo kMapReduceResults[] = {{"result", "the reduced value (init folded over the map results in index order)"}};
 constexpr OperandInfo kParallelForOperands[] = {{"lower", "", false}, {"upper", "", false}, {"step", "", false}};
+constexpr ResultInfo kSpawnResults[] = {{"token", "the completion token -- consume EXACTLY once (await / fiber_wait / join / cancel)"}};
+constexpr ResultInfo kWorkerResults[] = {{"token", "the completion token -- consume EXACTLY once"}};
 
 constexpr OpSchema kOpSchemas[] = {
+    {"continuation", "task.continuation", "task", 1U, "Run a body AFTER a token completes, receiving its values; produce a new token (the sec 37 dependency / 'then').", "task.continuation(%token) { ^body(%vals...): ... core.yield %next... } -> %token2. Consumes %token ONCE (TokenConsumer) and runs the body AFTER it completes, binding the antecedent's yielded values as the body's block-args; produces a NEW token (TokenProducer) carrying the body's yields -- the sec 37 dependency chain ('then'). ⛔ EXECUTOR CONTRACT: the SEQUENTIAL reference reads the antecedent's stored yields, binds them via invoke_region, and stores the body's yields as the new token (an arity mismatch is a runtime BadArity -- the invoke_region contract; static cross-op yield-count checking is a semantic-verifier question, CEIR-3/4). Jobs-backed: run-after-wait (stage 3). Synchronization -> audio-RT illegal.",
+     containers::ConstSpan<OperandInfo>(kContinuationOperands, 1U), containers::ConstSpan<ResultInfo>(kContinuationResults, 1U), containers::ConstSpan<AttrInfo>{},
+     OpTrait::TokenConsumer | OpTrait::TokenProducer, 1U, containers::ConstSpan<EffectRecord>(kContinuationEffects, 1U), DeterminismClass::Unspecified, EvalDomain::Unspecified, false, "", DeterminismClass::Unspecified},
+    {"fiber_wait", "task.fiber_wait", "task", 1U, "Fiber-yielding wait on a token; produce the awaited body's yielded values (host-level await).", "task.fiber_wait(%token) -> (%v...). The HOST-level await: consume %token ONCE and yield the awaited body's values, ⛔ YIELDING THE FIBER (never blocking the thread) -- vs async.await (the substrate-neutral structural wait). EXECUTOR CONTRACT: the SEQUENTIAL reference mirrors async.await's EvalFn (returns the body's stored yields); the JOBS-BACKED provider lowers to crd::jobs::wait(counter) (stage 3). Synchronization -> audio-RT illegal.",
+     containers::ConstSpan<OperandInfo>(kFiberWaitOperands, 1U), containers::ConstSpan<ResultInfo>(kFiberWaitResults, 1U), containers::ConstSpan<AttrInfo>{},
+     flags_of(OpTrait::TokenConsumer), 0U, containers::ConstSpan<EffectRecord>(kFiberWaitEffects, 1U), DeterminismClass::Unspecified, EvalDomain::Unspecified, false, "", DeterminismClass::Unspecified},
+    {"group", "task.group", "task", 1U, "A structured task group: bound a region so every task spawned inside is joined at group exit (the task-level scope).", "task.group { ... } -> (%r...). A structured TASK GROUP (sec 38): its dynamic extent ends only when every task spawned inside is joined -- the task-level counterpart of async.scope. ⛔ It BOUNDS, it does NOT fork, so it carries NO token traits (a token spawned inside + consumed outside is UseBeforeDef by 5b; never-consumed is Unconsumed by 6a -- confinement is LAYERED verification, zero new code, exactly like async.scope). EXECUTOR CONTRACT: the SEQUENTIAL reference shares async.scope's EvalFn (a no-op boundary forwarding the region's yield -- everything already completed at spawn); the JOBS-BACKED provider joins outstanding work at group exit via crd::jobs::run(span)+wait (stage 3). Synchronization -> audio-RT illegal (a join-at-exit blocks).",
+     containers::ConstSpan<OperandInfo>{}, containers::ConstSpan<ResultInfo>(kGroupResults, 1U), containers::ConstSpan<AttrInfo>{},
+     0U, 1U, containers::ConstSpan<EffectRecord>(kGroupEffects, 1U), DeterminismClass::Unspecified, EvalDomain::Unspecified, false, "", DeterminismClass::Unspecified},
+    {"main_thread", "task.main_thread", "task", 1U, "Run a body pinned to the main thread (thread 0); produce a completion token.", "task.main_thread { body } -> %token. Run the body pinned to the MAIN THREAD (thread 0 -- for main-thread-affine work). ⛔ EXECUTOR CONTRACT: main-thread PLACEMENT is value-unobservable in the sec 118 oracle, so the SEQUENTIAL reference shares async.launch's EvalFn (runs the body at the op, correct for the oracle); the JOBS-BACKED provider lowers to crd::jobs::run with JobDecl.pin_thread=0 + pump_main_thread (stage 3). Synchronization -> audio-RT illegal. Token use-once via the shared verifier.",
+     containers::ConstSpan<OperandInfo>{}, containers::ConstSpan<ResultInfo>(kMainThreadResults, 1U), containers::ConstSpan<AttrInfo>{},
+     flags_of(OpTrait::TokenProducer), 1U, containers::ConstSpan<EffectRecord>(kMainThreadEffects, 1U), DeterminismClass::Unspecified, EvalDomain::Unspecified, false, "", DeterminismClass::Unspecified},
     {"map_reduce", "task.map_reduce", "task", 1U, "A data-parallel map + a fixed-order (index-order) reduction: map each index in [lower, upper) via the map region, then fold the results left-to-right from init via the combine region.", "task.map_reduce(%lo, %hi, %step, %init) map { ^m(%iv): ... core.yield %v } combine { ^c(%acc, %elem): ... core.yield %next } -> %result. ⛔ HOST PROVIDER (crd-ceir-host, CEIR-6z): the MAP region runs in PARALLEL (crd::jobs::parallel_for -- fresh per-item interpreters over the shared const Context, disjoint index-order output slots, exactly as task.parallel_for); the COMBINE region then folds those results SEQUENTIALLY in INDEX ORDER (acc = init; acc = combine(acc, out[i]) for i = 0..count) on ONE fresh sub-interpreter. ⭐ The result is num_jobs-INDEPENDENT and BIT-IDENTICAL across {1..16}: the map output is index-order-disjoint (split-independent) and the fold order is FIXED (index order), so even a NON-associative combine is deterministic -- the sec 30/sec 31 band-6 gate. ⛔ PARALLEL PURITY (pre-flight): BOTH regions state-free (no StateEdge, transitively) + self-contained; the map yields EXACTLY 1 (arg: %iv), the combine yields EXACTLY 1 (args: %acc, %elem -- arg count checked so invoke_region's block-arg bind never reads OOB). Declares an ambient Synchronization effect (it blocks on a jobs counter) -> illegal in an audio-real-time region (the 6a flip); determinism Unspecified. The map output is also stashed for IExecutionProvider::map_output inspection (sec 118 parity).",
      containers::ConstSpan<OperandInfo>(kMapReduceOperands, 4U), containers::ConstSpan<ResultInfo>(kMapReduceResults, 1U), containers::ConstSpan<AttrInfo>{},
      0U, 2U, containers::ConstSpan<EffectRecord>(kMapReduceEffects, 1U), DeterminismClass::Unspecified, EvalDomain::Unspecified, false, "", DeterminismClass::Unspecified},
     {"parallel_for", "task.parallel_for", "task", 1U, "A data-parallel counted loop: run the body region for each index in [lower, upper) stepping by step, on the host job provider.", "task.parallel_for(%lo, %hi, %step) { ^body(%iv): ... core.yield %v }. ⛔ HOST PROVIDER (crd-ceir-host, CEIR-6b): lowered to crd::jobs::parallel_for -- each index runs the body via a FRESH interpreter (per-range, from a prototype) over the shared CONST Context; the per-index yield is collected into the provider's map buffer (IExecutionProvider::map_output). ⛔ PARALLEL PURITY (pre-flight-enforced on the submitting thread): the body AND its resolved callees must be STATE-FREE (no StateEdge cell -- a cell would make results depend on the range split, destroying the {1..16} bit-identity) and yield EXACTLY one value (arg: %iv). ⛔ The body must also be SELF-CONTAINED: it uses only its block-arg (%iv) + body-local defs (inline consts) + self-contained calls -- OUTER captures are NOT seeded into the per-index interpreters (a captured value is an UndefinedValue at execution); capture-seeding is a named later refinement. The in-IR reduction is task.map_reduce -- CEIR-6z. Declares an ambient Synchronization effect (it blocks on a jobs counter) -> illegal in an audio-real-time region (the 6a flip); determinism Unspecified (fails Deterministic mode, honestly -- the 6a finding).",
      containers::ConstSpan<OperandInfo>(kParallelForOperands, 3U), containers::ConstSpan<ResultInfo>{}, containers::ConstSpan<AttrInfo>{},
      0U, 1U, containers::ConstSpan<EffectRecord>(kParallelForEffects, 1U), DeterminismClass::Unspecified, EvalDomain::Unspecified, false, "", DeterminismClass::Unspecified},
+    {"spawn", "task.spawn", "task", 1U, "Fork a body as a host job; produce a completion token (the sec 38 task-level fork).", "task.spawn { body } -> %token. Fork the body as a HOST JOB (vs async.launch, which commits to no substrate). ⛔ EXECUTOR CONTRACT: the SEQUENTIAL reference shares async.launch's EvalFn (runs the body at spawn; %token completes at the body's yield); the JOBS-BACKED provider (CEIR-11a stage 3) lowers to crd::jobs::run(JobDecl). Declares an ambient Synchronization effect -> illegal in an audio-real-time region (the 6a flip). Token use-once (sec 116) is enforced by the SHARED find_token_misuse verifier -- ZERO verifier edits (open-world).",
+     containers::ConstSpan<OperandInfo>{}, containers::ConstSpan<ResultInfo>(kSpawnResults, 1U), containers::ConstSpan<AttrInfo>{},
+     flags_of(OpTrait::TokenProducer), 1U, containers::ConstSpan<EffectRecord>(kSpawnEffects, 1U), DeterminismClass::Unspecified, EvalDomain::Unspecified, false, "", DeterminismClass::Unspecified},
+    {"worker", "task.worker", "task", 1U, "Run a body on a worker thread (worker-pool affinity); produce a completion token.", "task.worker { body } -> %token. Run the body on a WORKER thread (the default pool). ⛔ EXECUTOR CONTRACT: worker PLACEMENT is value-unobservable in the oracle, so the SEQUENTIAL reference shares async.launch's EvalFn (runs on the calling thread, correct for the oracle); the JOBS-BACKED provider lowers to crd::jobs::run(JobDecl) (stage 3). Synchronization -> audio-RT illegal. Token use-once via the shared verifier.",
+     containers::ConstSpan<OperandInfo>{}, containers::ConstSpan<ResultInfo>(kWorkerResults, 1U), containers::ConstSpan<AttrInfo>{},
+     flags_of(OpTrait::TokenProducer), 1U, containers::ConstSpan<EffectRecord>(kWorkerEffects, 1U), DeterminismClass::Unspecified, EvalDomain::Unspecified, false, "", DeterminismClass::Unspecified},
 };
 } // namespace
 
-containers::ConstSpan<OpSchema> task_op_schemas() noexcept { return containers::ConstSpan<OpSchema>(kOpSchemas, 2U); }
+containers::ConstSpan<OpSchema> task_op_schemas() noexcept { return containers::ConstSpan<OpSchema>(kOpSchemas, 8U); }
 } // namespace crd::ceir::task

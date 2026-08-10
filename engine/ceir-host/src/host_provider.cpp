@@ -4,14 +4,112 @@
 #include <crd/jobs/jobs.hpp> // crd::jobs::parallel_for / wait / Counter — the PRIVATE backend (never in a public header)
 #include <crd/memory/allocators/malloc_allocator.hpp>
 
+#include <new>     // placement new
 #include <utility> // std::move
 
 namespace crd::ceir::host
 {
 using exec::ExecError;
 
+// CEIR-11a stage 3: one jobs-backed launch's state — its OWN allocator (the worker's sub-interpreter + the result buffer),
+// the body's yields (filled by the worker BEFORE the counter decrements — the counter is the happens-before edge), the
+// job context, and the completion counter. ⛔ HEAP-owned by the provider (the growable pooled table never moves it — the
+// JobDecl captures &token by pointer; the push-back-UAF scar). A `MallocAllocator` member ⇒ non-movable ⇒ pointer-owned.
+struct PooledToken
+{
+    crd::memory::MallocAllocator scratch;                 // this token's OWN allocator (worker sub + result)
+    containers::Array<crd::i64>  result;                  // the body's yields (valid after the counter reaches 0)
+    const exec::Interpreter*     proto    = nullptr;      // the worker clones its sub from this
+    const Module*                module   = nullptr;
+    const Region*                body     = nullptr;
+    const std::atomic<bool>*     cancel   = nullptr;
+    crd::u64                     sub_fuel = 0U;
+    crd::jobs::Counter*          counter  = nullptr;
+    ExecError                    err      = ExecError::None;
+    bool                         waited   = false;        // resolve waits the counter exactly once
+    PooledToken() : result(&scratch) {}
+};
+
 namespace
 {
+// The pool JOB (runs on a worker): clone a fresh sub from the proto over the token's OWN scratch, run the launch body
+// (0 block-args), copy its yields into the token's result — all BEFORE returning (the counter decrements on return).
+void run_launch(void* data)
+{
+    auto* const t = static_cast<PooledToken*>(data);
+    exec::Interpreter sub(*t->proto, &t->scratch, t->sub_fuel);
+    sub.set_cancel_flag(t->cancel);
+    containers::Array<crd::i64> y(&t->scratch);
+    const ExecError e = sub.invoke_region(*t->module, *t->body, containers::ConstSpan<crd::i64>(), y);
+    if (e != ExecError::None) { t->err = e; }
+    else
+    {
+        for (crd::u32 i = 0; i < static_cast<crd::u32>(y.size()); ++i) { t->result.push_back(y[i]); }
+    }
+}
+// POOL-ELIGIBILITY (bridge-local — the launch classifier): the body is StateEdge-free + calls-resolved (reuse the core
+// `exec::region_state_free`) AND has NO outer captures (every operand of every op is defined region-locally or is a
+// block-arg). ⛔ Ineligible ⇒ the sequential IN-FRAME fallback (captures + state legally work there — stage 3 must never
+// reject what the sequential reference ran). The no-captures walk is the genuinely NEW part (bridge-local; hoist at a 2nd consumer).
+bool region_defines(Region* r, const Value* v); // fwd
+bool block_defines(Block* b, const Value* v)
+{
+    for (crd::u32 a = 0; a < b->num_args(); ++a)
+    {
+        if (b->arg(a) == v) { return true; }
+    }
+    for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+    {
+        for (crd::u32 rr = 0; rr < op->num_results(); ++rr)
+        {
+            if (op->result(rr) == v) { return true; }
+        }
+        for (crd::u32 i = 0; i < op->num_regions(); ++i)
+        {
+            if (region_defines(op->region(i), v)) { return true; }
+        }
+    }
+    return false;
+}
+bool region_defines(Region* r, const Value* v)
+{
+    if (r == nullptr) { return false; }
+    for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
+    {
+        if (block_defines(b, v)) { return true; }
+    }
+    return false;
+}
+bool no_outer_captures(Region* body)
+{
+    if (body == nullptr) { return true; }
+    for (Block* b = body->first_block(); b != nullptr; b = b->next_in_region())
+    {
+        for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+        {
+            for (crd::u32 i = 0; i < op->num_operands(); ++i)
+            {
+                if (!region_defines(body, op->operand(i))) { return false; } // an operand defined OUTSIDE the body = a capture
+            }
+        }
+    }
+    return true;
+}
+bool pool_eligible(Context& ctx, const SymbolTable& syms, Region* body)
+{
+    return exec::region_state_free(ctx, syms, body).err == ExecError::None && no_outer_captures(body);
+}
+
+// The SEQUENTIAL in-frame launch (the fallback — reimplements the core reference via public surface): run the body in
+// `in`'s CURRENT frame (captures resolve), store the yields, token = a sequential yield-store handle.
+ExecError launch_seq_inframe(exec::Interpreter& in, const Operation& op)
+{
+    containers::Array<crd::i64> ys(in.allocator());
+    if (const ExecError e = in.run_region(*op.region(0), &ys); e != ExecError::None) { return e; }
+    const crd::u32 handle = in.store_yields(containers::ConstSpan<crd::i64>(ys.data(), ys.size()));
+    in.set_value(op.result(0), static_cast<crd::i64>(handle));
+    return ExecError::None;
+}
 // The context the parallel_for EvalFn reads from Interpreter::user() (set by execute()).
 struct ParallelCtx
 {
@@ -136,106 +234,106 @@ ExecError eval_map_reduce(exec::Interpreter& in, const Operation& op)
     return ExecError::None; // task.map_reduce is an EXPRESSION op — the reduced value is its SSA result
 }
 
-// ── parallel-purity pre-flight (submit thread) — the body + resolved callees must be StateEdge-free ──
-struct PfResult
+// ── CEIR-11a stage 3: the jobs-backed launch/await ON-POOL EvalFns (override the sequential via last-install-wins) ──
+// Resolve a token's yields: pooled ⇒ wait its counter (once) + read its result; sequential ⇒ the yield-store. ⛔ Routes by
+// FULL i64 (kPoolBase) so a pooled handle never truncates into a sequential one. None ⇒ `out` valid; else the typed error.
+ExecError resolve_yields(exec::Interpreter& in, HostProvider* self, crd::i64 tok, containers::ConstSpan<crd::i64>& out)
 {
-    ExecError        err = ExecError::None;
-    const Operation* op  = nullptr;
-};
-PfResult preflight_region(const Context& ctx, const SymbolTable& syms, Region* r,
-                          containers::HashMap<const Operation*, crd::u8>& visited)
-{
-    if (r == nullptr) { return {}; }
-    for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
+    if (self != nullptr && self->is_pooled(tok))
     {
-        for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
-        {
-            if (ctx.has_trait(op->kind(), OpTrait::StateEdge)) { return {ExecError::ParallelBodyStateful, op}; }
-            if (ctx.op_name(op->kind()) == containers::StringView("func.call"))
-            {
-                Operation* const callee = func::resolve_call(ctx, op, syms);
-                if (callee == nullptr) { return {ExecError::UnresolvedCall, op}; }
-                if (!visited.contains(callee))
-                {
-                    visited.insert(callee, static_cast<crd::u8>(1));
-                    const PfResult e = preflight_region(ctx, syms, callee->region(0), visited);
-                    if (e.err != ExecError::None) { return e; }
-                }
-            }
-            for (crd::u32 i = 0; i < op->num_regions(); ++i)
-            {
-                const PfResult e = preflight_region(ctx, syms, op->region(i), visited);
-                if (e.err != ExecError::None) { return e; }
-            }
-        }
+        ExecError e = ExecError::None;
+        if (!self->resolve_pooled(tok, out, e)) { return ExecError::BadToken; } // forged / out-of-range pooled handle
+        return e;
     }
-    return {};
+    if (tok < 0 || !in.valid_yield_handle(static_cast<crd::u32>(tok))) { return ExecError::BadToken; }
+    out = in.stored_yields(static_cast<crd::u32>(tok));
+    return ExecError::None;
 }
-// A parallel region (a parallel_for/map_reduce MAP body, or a map_reduce COMBINE body) must: have a first block with
-// EXACTLY `expect_args` block-args (so invoke_region's per-index / fold bind never trips BadArity mid-run — caught here on
-// the submit thread instead), a Terminator yielding EXACTLY 1 value, and be StateEdge-free transitively (a cell would make
-// the result depend on the range split). Offenses point at `owner` (arity/shape) or the precise inner op (stateful/call).
-PfResult check_parallel_region(const Context& ctx, const SymbolTable& syms, Operation* owner, Region* r, crd::u32 expect_args)
+bool token_valid(exec::Interpreter& in, HostProvider* self, crd::i64 tok) // validity WITHOUT waiting (race/cancel)
 {
-    Block* const bb = (r != nullptr) ? r->first_block() : nullptr;
-    if (bb == nullptr || bb->num_args() != expect_args) { return {ExecError::BadArity, owner}; }
-    Operation* const term = bb->last_op();
-    if (term == nullptr || !ctx.has_trait(term->kind(), OpTrait::Terminator) || term->num_operands() != 1U)
-    {
-        return {ExecError::ParallelYieldArity, owner};
-    }
-    containers::HashMap<const Operation*, crd::u8> visited(ctx.allocator());
-    return preflight_region(ctx, syms, r, visited);
+    if (self != nullptr && self->is_pooled(tok)) { return self->pooled_index_valid(tok); }
+    return tok >= 0 && in.valid_yield_handle(static_cast<crd::u32>(tok));
 }
-// Pre-flight every task.parallel_for AND task.map_reduce in the module: each parallel region (+ its resolved callees)
-// StateEdge-free, correct block-arity, and yields exactly 1 — the {1..16} bit-identity precondition.
-PfResult preflight(const Context& ctx, const Module& m)
+// launch/spawn/worker/main_thread: pool the body if eligible (pure + self-contained), else the sequential in-frame
+// fallback (captures + state legally work). `pin_thread`: -1 for spawn/worker (any), 0 for main_thread.
+ExecError launch_pooled_impl(exec::Interpreter& in, const Operation& op, crd::i32 pin_thread)
 {
-    const SymbolTable* const syms = m.symbols();
-    if (syms == nullptr) { return {}; }
-    containers::Array<Operation*> ops(ctx.allocator());
-    // collect all task.parallel_for + task.map_reduce ops (pre-order over the module body).
-    // (a small local walk — the module is host-authored, not huge.)
-    struct Walk
-    {
-        static void go(const Context& c, Region* r, containers::Array<Operation*>& out)
-        {
-            if (r == nullptr) { return; }
-            for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
-            {
-                for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
-                {
-                    const containers::StringView n = c.op_name(op->kind());
-                    if (n == containers::StringView("task.parallel_for") || n == containers::StringView("task.map_reduce"))
-                    {
-                        out.push_back(op);
-                    }
-                    for (crd::u32 i = 0; i < op->num_regions(); ++i) { go(c, op->region(i), out); }
-                }
-            }
-        }
-    };
-    Walk::go(ctx, m.body(), ops);
-    for (crd::u32 i = 0; i < static_cast<crd::u32>(ops.size()); ++i)
-    {
-        Operation* const op    = ops[i];
-        const bool       is_mr = ctx.op_name(op->kind()) == containers::StringView("task.map_reduce");
-        // MAP region (both ops): 1 block-arg (the induction var), yields 1, state-free.
-        if (const PfResult e = check_parallel_region(ctx, *syms, op, op->region(0), 1U); e.err != ExecError::None)
-        {
-            return e;
-        }
-        if (is_mr)
-        {
-            // COMBINE region (map_reduce only): 2 block-args (acc, elem), yields 1, state-free.
-            if (const PfResult e = check_parallel_region(ctx, *syms, op, op->region(1), 2U); e.err != ExecError::None)
-            {
-                return e;
-            }
-        }
-    }
-    return {};
+    auto* const pc = static_cast<ParallelCtx*>(in.user());
+    if (pc == nullptr) { return launch_seq_inframe(in, op); } // NESTED launch (a sub has no user) ⇒ sequential fallback
+    const SymbolTable* const syms = pc->module->symbols();
+    if (syms == nullptr || !pool_eligible(in.ctx(), *syms, op.region(0))) { return launch_seq_inframe(in, op); }
+    RegionExec re{};
+    (void)in.ctx().op_region_exec(op, re);
+    const crd::i64 handle =
+        pc->self->pool_launch(*pc->proto, *pc->module, op.region(0), pc->cancel, pc->sub_fuel, priority_for(re.realtime), pin_thread);
+    in.set_value(op.result(0), handle);
+    return ExecError::None;
 }
+ExecError eval_launch_pooled(exec::Interpreter& in, const Operation& op) { return launch_pooled_impl(in, op, -1); }
+ExecError eval_main_thread_pooled(exec::Interpreter& in, const Operation& op) { return launch_pooled_impl(in, op, 0); }
+// await/fiber_wait: resolve the token, bind the yields to the results.
+ExecError eval_await_pooled(exec::Interpreter& in, const Operation& op)
+{
+    crd::i64 tok = 0;
+    if (!in.value_of(op.operand(0), tok)) { return in.fail(ExecError::UndefinedValue, &op); }
+    auto* const                     pc = static_cast<ParallelCtx*>(in.user());
+    containers::ConstSpan<crd::i64> ys;
+    if (const ExecError e = resolve_yields(in, pc != nullptr ? pc->self : nullptr, tok, ys); e != ExecError::None)
+    {
+        return in.fail(e, &op);
+    }
+    for (crd::u32 j = 0; j < op.num_results() && j < static_cast<crd::u32>(ys.size()); ++j)
+    {
+        in.set_value(op.result(j), ys[static_cast<crd::usize>(j)]);
+    }
+    return ExecError::None;
+}
+// join: resolve+concatenate every operand token's yields → ONE new SEQUENTIAL token (the result is eager).
+ExecError eval_join_pooled(exec::Interpreter& in, const Operation& op)
+{
+    auto* const                 pc = static_cast<ParallelCtx*>(in.user());
+    containers::Array<crd::i64> merged(in.allocator());
+    for (crd::u32 i = 0; i < op.num_operands(); ++i)
+    {
+        crd::i64 tok = 0;
+        if (!in.value_of(op.operand(i), tok)) { return in.fail(ExecError::UndefinedValue, &op); }
+        containers::ConstSpan<crd::i64> ys;
+        if (const ExecError e = resolve_yields(in, pc != nullptr ? pc->self : nullptr, tok, ys); e != ExecError::None)
+        {
+            return in.fail(e, &op);
+        }
+        for (crd::usize k = 0; k < ys.size(); ++k) { merged.push_back(ys[k]); }
+    }
+    in.set_value(op.result(0),
+                 static_cast<crd::i64>(in.store_yields(containers::ConstSpan<crd::i64>(merged.data(), merged.size()))));
+    return ExecError::None;
+}
+// race: validate every token (no wait), produce index 0 (deterministic — the Nondeterministic contract; real first-ready
+// is 24/29). cancel: validate + consume (no-op — the pooled counter is drained at execute() exit; crd-jobs has no preempt).
+ExecError eval_race_pooled(exec::Interpreter& in, const Operation& op)
+{
+    auto* const pc = static_cast<ParallelCtx*>(in.user());
+    for (crd::u32 i = 0; i < op.num_operands(); ++i)
+    {
+        crd::i64 t = 0;
+        if (!in.value_of(op.operand(i), t)) { return in.fail(ExecError::UndefinedValue, &op); }
+        if (!token_valid(in, pc != nullptr ? pc->self : nullptr, t)) { return in.fail(ExecError::BadToken, &op); }
+    }
+    if (op.num_results() > 0U) { in.set_value(op.result(0), 0); }
+    return ExecError::None;
+}
+ExecError eval_cancel_pooled(exec::Interpreter& in, const Operation& op)
+{
+    crd::i64    t  = 0;
+    auto* const pc = static_cast<ParallelCtx*>(in.user());
+    if (!in.value_of(op.operand(0), t)) { return in.fail(ExecError::UndefinedValue, &op); }
+    if (!token_valid(in, pc != nullptr ? pc->self : nullptr, t)) { return in.fail(ExecError::BadToken, &op); }
+    return ExecError::None; // consume + no-op (the counter is drained at execute() exit)
+}
+
+// ⛔ The parallel-purity PRE-FLIGHT moved to crd-ceir core at CEIR-11a stage 2b-ii (`exec::preflight_parallel` /
+// `exec::check_parallel_region`) — the 9d hoist-at-second-consumer: the provider's PARALLEL submit-thread check and the
+// reference's SEQUENTIAL run share ONE legality analysis (agree by construction). The provider delegates in `execute()`.
 } // namespace
 
 HostProvider::HostProvider(memory::IAllocator* alloc, crd::u32 num_jobs, crd::u64 sub_fuel)
@@ -269,8 +367,9 @@ exec::ExecResult HostProvider::execute(Context& ctx, const Module& m, containers
                                        containers::ConstSpan<crd::i64> args)
 {
     exec::ExecResult r(ctx.allocator());
-    // 1. parallel-purity pre-flight on the SUBMIT thread (a parallel body must be state-free + yield exactly 1).
-    if (const PfResult pf = preflight(ctx, m); pf.err != ExecError::None)
+    // 1. parallel-purity pre-flight on the SUBMIT thread (a parallel body must be state-free + yield exactly 1) — the
+    // SHARED core analysis (CEIR-11a: the provider + the sequential reference agree on legality by construction).
+    if (const exec::PreflightResult pf = exec::preflight_parallel(ctx, m); pf.err != ExecError::None)
     {
         r.error = pf.err;
         r.op    = pf.op;
@@ -280,13 +379,29 @@ exec::ExecResult HostProvider::execute(Context& ctx, const Module& m, containers
     exec::Interpreter proto(ctx);
     exec::install_builtin_semantics(proto);
     exec::install_async_semantics(proto); // §37 (so a scope / launch in an entry runs — sequential reference)
+    exec::install_task_semantics(proto);  // §38 host-task ops (so a task.spawn in an entry runs — sequential reference)
+    // ⛔ then OVERRIDE parallel_for/map_reduce with the PARALLEL (jobs-backed) versions (last-install-wins — the seam).
     proto.install(ctx.intern_op("task", "parallel_for"), &eval_parallel_for);
     proto.install(ctx.intern_op("task", "map_reduce"), &eval_map_reduce); // CEIR-6z: the in-IR fixed-order reduction
+    // CEIR-11a stage 3: OVERRIDE async launch/await/join/race/cancel + the launch-shaped task ops with the jobs-backed
+    // ON-POOL versions. ⛔ ALL FIVE consumers overridden together — a pooled handle (> u32-max) would truncate + alias a
+    // sequential handle in the un-overridden `u32(tok)` cast (a silent wrong read).
+    proto.install(ctx.intern_op("async", "launch"), &eval_launch_pooled);
+    proto.install(ctx.intern_op("async", "await"), &eval_await_pooled);
+    proto.install(ctx.intern_op("async", "join"), &eval_join_pooled);
+    proto.install(ctx.intern_op("async", "race"), &eval_race_pooled);
+    proto.install(ctx.intern_op("async", "cancel"), &eval_cancel_pooled);
+    proto.install(ctx.intern_op("task", "spawn"), &eval_launch_pooled);      // fork as a host job (any thread)
+    proto.install(ctx.intern_op("task", "worker"), &eval_launch_pooled);     // worker-pool affinity (any thread)
+    proto.install(ctx.intern_op("task", "main_thread"), &eval_main_thread_pooled); // pin_thread=0
+    proto.install(ctx.intern_op("task", "fiber_wait"), &eval_await_pooled);  // the host-level await
     proto.set_cancel_flag(&m_cancel); // §30 cooperative cancel — the top run + every clone observes it
     ParallelCtx pc{this, &m, &proto, &m_cancel, m_num_jobs, m_sub_fuel};
     proto.set_user(&pc);
-    // 3. run the entry (task.parallel_for's EvalFn drives crd::jobs from inside).
-    return proto.invoke(m, entry, args);
+    // 3. run the entry (the task/async EvalFns drive crd::jobs from inside).
+    exec::ExecResult res = proto.invoke(m, entry, args);
+    drain_pooled(); // ⛔ wait + free every pooled token BEFORE returning (leak containment — a worker must not outlive execute)
+    return res;
 }
 
 crd::jobs::Priority priority_for(RealtimeClass rc) noexcept
@@ -303,5 +418,55 @@ crd::jobs::Priority priority_for(RealtimeClass rc) noexcept
     case RealtimeClass::Throughput: return crd::jobs::Priority::Normal;
     }
     return crd::jobs::Priority::Normal; // unreachable (total switch)
+}
+
+crd::i64 HostProvider::pool_launch(const exec::Interpreter& proto, const Module& module, const Region* body,
+                                   const std::atomic<bool>* cancel, crd::u64 sub_fuel, crd::jobs::Priority prio,
+                                   crd::i32 pin_thread)
+{
+    void* const  mem = m_alloc->allocate(sizeof(PooledToken), alignof(PooledToken));
+    auto* const  t   = new (mem) PooledToken(); // heap-owned (the table never moves it — the JobDecl captures &t)
+    t->proto = &proto;
+    t->module = &module;
+    t->body   = body;
+    t->cancel = cancel;
+    t->sub_fuel = sub_fuel;
+    const crd::i64 handle = kPoolBase + static_cast<crd::i64>(m_pooled.size());
+    m_pooled.push_back(t);
+    ++m_pooled_total; // the cumulative witness (survives the drain)
+    crd::jobs::JobDecl jd{};
+    jd.fn         = &run_launch;
+    jd.data       = t;
+    jd.pin_thread = pin_thread;
+    jd.priority   = prio;
+    t->counter    = crd::jobs::run(jd);
+    return handle;
+}
+
+bool HostProvider::resolve_pooled(crd::i64 tok, containers::ConstSpan<crd::i64>& out, exec::ExecError& out_err) noexcept
+{
+    if (!pooled_index_valid(tok)) { return false; } // forged / out-of-range pooled handle
+    PooledToken* const t = m_pooled[static_cast<crd::usize>(tok - kPoolBase)];
+    if (!t->waited) // wait the completion counter exactly once — the happens-before edge to the worker's result write
+    {
+        crd::jobs::wait(t->counter);
+        t->waited = true;
+    }
+    out_err = t->err;
+    out     = containers::ConstSpan<crd::i64>(t->result.data(), t->result.size());
+    return true;
+}
+
+void HostProvider::drain_pooled() noexcept
+{
+    // wait every outstanding counter (a leaked/un-awaited token — the provider runs no verifier) then free every entry.
+    for (crd::usize i = 0; i < m_pooled.size(); ++i)
+    {
+        PooledToken* const t = m_pooled[i];
+        if (!t->waited && t->counter != nullptr) { crd::jobs::wait(t->counter); }
+        t->~PooledToken();
+        m_alloc->deallocate(t);
+    }
+    m_pooled.clear();
 }
 } // namespace crd::ceir::host

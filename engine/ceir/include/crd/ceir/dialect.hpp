@@ -119,6 +119,12 @@ struct OpInfo
     // ⛔ Append at END.
     const CapabilityId*    required_capabilities = nullptr;
     u32                    num_capabilities       = 0U;
+    // CEIR-13c (§85/§106): a KERNEL-REFERENCING op (compute.dispatch) declares `[op.kernel_ref] {symbol, interface}` — the
+    // NAMES of its attrs holding the kernel asset identity (a symbol) + the expected interface hash (an int pin, optional).
+    // Promoted to the runtime OpInfo so collect_dependencies extracts ckir_refs SCHEMA-DRIVEN (never op-name-sniffing — I6),
+    // exactly like intrinsic/native_provider. `kernel_ref_symbol` == "" ⇒ NOT a kernel-ref op. ⛔ Append at END.
+    containers::StringView kernel_ref_symbol    = {};
+    containers::StringView kernel_ref_interface = {};
 };
 
 // The registration descriptor for `Dialect::register_op` (CEIR-4c) — one struct instead of a growing positional param
@@ -140,6 +146,10 @@ struct OpSpec
     // CEIR-8f (ADR-0116): required host-granted capability NAMES (borrowed StringViews; register_op interns them to
     // CapabilityId and arena-copies the set — the effects precedent). The opgen emits these from `[op.native] capabilities`.
     containers::ConstSpan<containers::StringView> capabilities = {}; // ⛔ Append at END.
+    // CEIR-13c (§85): the `[op.kernel_ref]` attr NAMES (opgen-emitted; borrowed StringViews, register_op interns/arena-copies
+    // them into OpInfo — the native_provider precedent). "" ⇒ not a kernel-ref op. ⛔ Append at END.
+    containers::StringView kernel_ref_symbol    = {};
+    containers::StringView kernel_ref_interface = {};
 };
 
 // ── CEIR-8a open-world TYPE-CLASS registration (ADR-0111) — the type analogue of OpInfo/OpSpec ──
