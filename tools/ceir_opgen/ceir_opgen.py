@@ -303,6 +303,11 @@ def validate(path, raw, data):
                     _err(path, raw, anchor, "op '%s' [op.native]: '%s' must be a string" % (name, f))
             if "capabilities" in native and not isinstance(native["capabilities"], list):
                 _err(path, raw, anchor, "op '%s' [op.native]: 'capabilities' must be an array" % name)
+            # ⛔ CEIR-8f (ADR-0116): a capability NAME must be a non-empty string (an empty name hashes to the FNV offset
+            # basis — a phantom id; register_op asserts the same, the declared-words-validated parallel).
+            for c in native.get("capabilities", []):
+                if not isinstance(c, str) or not c:
+                    _err(path, raw, anchor, "op '%s' [op.native]: each capability must be a non-empty string" % name)
             # ⛔ consistency (validate-at-cook-time): when BOTH are declared, the provider's determinism claim must be
             # AT-LEAST-AS-STRONG as the op's abstract class — a native impl cannot be less reproducible than the contract.
             nd = native.get("determinism")
@@ -486,13 +491,22 @@ def emit_cpp(model):
     # §26 effect tables (CEIR-4a) — emitted BEFORE register_%s_ops so the register call can reference them; an
     # anonymous-namespace member is visible across every anon-namespace block in this TU, so the OpSchema table reuses
     # the SAME arrays (no duplicate emission).
-    if any(op["effects"] for op in model["ops"]):
+    def _op_caps(o):
+        nat = o["native"]
+        return nat.get("capabilities", []) if nat else []
+    if any(op["effects"] or _op_caps(op) for op in model["ops"]):
         out.append("\nnamespace\n{\n")
         for op in model["ops"]:
             if op["effects"]:
                 items = ", ".join("{EffectFamily::%s, EffectTarget::%s, %dU, %dU}"
                                   % (e["family"], e["target"], e["index"], e["range_mask"]) for e in op["effects"])
                 out.append("constexpr EffectRecord k%sEffects[] = {%s};\n" % (_camel(op["name"]), items))
+            # CEIR-8f (ADR-0116): the op's [op.native] required-capability NAMES as a constexpr StringView array; the
+            # register call passes it to OpSpec.capabilities, which register_op interns to CapabilityIds.
+            caps = _op_caps(op)
+            if caps:
+                out.append("constexpr containers::StringView k%sCaps[] = {%s};\n"
+                           % (_camel(op["name"]), ", ".join(_cstr(c) for c in caps)))
         out.append("} // namespace\n")
     out.append("\nDialect* register_%s_ops(Context& ctx)\n{\n" % d)
     out.append('    Dialect* const d = ctx.register_dialect("%s");\n' % d)
@@ -500,7 +514,13 @@ def emit_cpp(model):
         # ADR-0110 §2.1 native binding (CEIR-7a): emit .intrinsic/.native_provider ONLY when [op.native] is present, so a
         # non-native op's register call stays byte-identical (OpSpec defaults false/"" ) — drift-safe for every prior file.
         native = op["native"]
-        native_kv = (", .intrinsic = true, .native_provider = %s" % _cstr(native["provider"])) if native else ""
+        if native:
+            caps = native.get("capabilities", [])
+            caps_kv = (", .capabilities = containers::ConstSpan<containers::StringView>(k%sCaps, %dU)"
+                       % (_camel(op["name"]), len(caps))) if caps else ""
+            native_kv = ", .intrinsic = true, .native_provider = %s%s" % (_cstr(native["provider"]), caps_kv)
+        else:
+            native_kv = ""
         out.append('    d->register_op("%s", {.traits = %s, .verify = &verify_%s, .effects = %s, .determinism = %s, .domain = %s%s});\n'
                    % (op["name"], _traits_expr(op["traits"]), op["name"], _effects_expr(op),
                       _det_expr(op["determinism"]), _dom_expr(op["domain"]), native_kv))

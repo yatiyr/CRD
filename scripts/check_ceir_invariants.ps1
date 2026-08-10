@@ -50,10 +50,32 @@ foreach ($f in (Get-ChildItem -Path $dirs -Recurse -Include *.hpp, *.cpp -File))
     }
 }
 
+# ---- U-116 (external-plugin proof, CEIR-9h): the central OPEN-WORLD enums must NOT grow to accommodate a plugin/domain.
+# TypeKind/AttrKind's LAST enumerator is the `Extern` door - a new type/attr rides Extern + registration, NEVER a new
+# enum value (the whole 8a/8b thesis). A future slice widening one trips this forever. (EffectFamily is already pinned at
+# compile time by its kLastEffectFamily static_assert; EvalDomain/RealtimeClass likewise.)
+function Get-EnumLastMember([string]$file, [string]$enum) {
+    $inEnum = $false; $last = ""
+    foreach ($line in (Get-Content $file)) {
+        if ($line -match ("enum class {0}\b" -f $enum)) { $inEnum = $true; continue }
+        if (-not $inEnum) { continue }
+        if ($line -match '^\s*\}') { break }
+        $code = ($line -replace '//.*$', '').Trim()
+        if ($code -match '^([A-Za-z_][A-Za-z0-9_]*)') { $last = $Matches[1] }
+    }
+    return $last
+}
+foreach ($pin in @(, @("include/crd/ceir/type.hpp", "TypeKind", "Extern")) + @(, @("include/crd/ceir/attr.hpp", "AttrKind", "Extern"))) {
+    $last = Get-EnumLastMember (Join-Path $ceir $pin[0]) $pin[1]
+    if ($last -ne $pin[2]) {
+        $violations += ("U-116 {0} last enumerator is '{1}', expected '{2}' - a central enum grew; a plugin/domain must use the Extern door + registration, not a new enum value" -f $pin[1], $last, $pin[2])
+    }
+}
+
 if ($violations.Count -gt 0) {
-    Write-Host "crd-ceir invariant violations (ADR-0109 I3/I5 + open-world I6):"
+    Write-Host "crd-ceir invariant violations (ADR-0109 I3/I5 + open-world I6 + U-116 enum-pins):"
     $violations | ForEach-Object { Write-Host "  $_" }
     exit 1
 }
-Write-Host "crd-ceir invariants OK (I3: no shader-lang name/forbidden include; I5: host-only links; I6: no switch on op.kind)."
+Write-Host "crd-ceir invariants OK (I3: no shader-lang name/forbidden include; I5: host-only links; I6: no switch on op.kind; U-116: TypeKind/AttrKind end at Extern)."
 exit 0

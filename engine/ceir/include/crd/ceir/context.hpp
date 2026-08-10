@@ -335,6 +335,22 @@ public:
     // effects here yet is MAXIMALLY EFFECTFUL (assume it reads/writes everything), never reorderable. A registered kind
     // with an empty span is genuinely effect-free (⇒ typically `OpTrait::Pure`).
     [[nodiscard]] containers::ConstSpan<EffectRecord> op_effects(OpId kind) const noexcept;
+    // ── CEIR-8f capabilities (ADR-0116, U-§57) ── an op-kind's REQUIRED host-granted capabilities (arena-copied set;
+    // ⛔ EMPTY≠UNKNOWN: an unregistered kind returns {} here, but program_capabilities treats it as `external.process`).
+    [[nodiscard]] containers::ConstSpan<CapabilityId> op_capabilities(OpId kind) const noexcept;
+    // ── CEIR-8f safety axes (ADR-0116 §2.2, U-§23) ── the op-kind's may-allocate/may-block/may-IO (+ derived
+    // realtime_safe), FOLDED over its declared effects (a PROJECTION — no new state). ⛔ EMPTY≠UNKNOWN: an unregistered
+    // kind is MAXIMALLY unsafe (may-allocate+block+IO), never accidentally realtime-safe.
+    [[nodiscard]] SafetyBits op_safety(OpId kind) const noexcept;
+    // Intern a capability NAME (FNV, intern-only — no verify/version) + reverse lookup (diagnostics).
+    [[nodiscard]] CapabilityId          intern_capability(containers::StringView name);
+    [[nodiscard]] containers::StringView capability_name(CapabilityId id) const noexcept;
+    // The PROGRAM's required-capability set: the module-wide (pre-order, every private callee) UNION of its ops'
+    // required sets, SORTED + deduped. An UNREGISTERED op contributes `external.process` (EMPTY≠UNKNOWN). Fills `out`.
+    void program_capabilities(const Module& m, containers::Array<CapabilityId>& out) const;
+    // true iff every `required` capability is in `granted` (the host-grant check; both sets are CapabilityId spans).
+    [[nodiscard]] static bool capabilities_satisfied(containers::ConstSpan<CapabilityId> required,
+                                                     containers::ConstSpan<CapabilityId> granted) noexcept;
     // The §27 determinism class declared for `kind` (CEIR-4b). ⛔ Same EMPTY≠UNKNOWN discipline as op_effects: an
     // UNREGISTERED kind returns Unspecified but is actually UNKNOWN — check `op_info(kind)!=nullptr` first.
     [[nodiscard]] DeterminismClass op_determinism(OpId kind) const noexcept;
@@ -461,6 +477,32 @@ public:
     // Restore a module's CEIR-8d id high-water mark (the STID-chunk loader) — so a post-load edit never reuses a freed id.
     void set_stable_id_watermark(Module* m, u64 watermark) noexcept;
 
+    // ── CEIR-8i (ADR-0119) transaction support ── the privileged inverse/rebuild atoms the `Transaction` recorder
+    // (transaction.hpp) routes through so ALL raw mutation stays inside Context (never a second mutation implementation).
+    // ⛔ TRANSACTION-ONLY (like set_stable_id's deserialization-only contract) — the authored-edit surface is `Transaction`,
+    // not these. ⛔ Every restore PAYLOAD the caller passes (operand snapshot, attr dict) must be CONTEXT-ARENA-owned: a
+    // rolled-back attr dict BECOMES live module state and outlives the Transaction.
+    //
+    // The inverse of Operation::erase — restore `op`'s operand count, re-thread `operands` into its (arena-preserved) Use
+    // slots, re-link before `before` (nullptr ⇒ append) in `block`, clear the tombstone.
+    void reinsert_erased_op(Operation* op, Block* block, Operation* before, containers::ConstSpan<Value*> operands) noexcept;
+    // Repoint one Use at `value` (unlink from its current value's use-list, relink into `value`'s) — the forward+inverse
+    // RAUW atom. `value` may be null (detach only).
+    void detach_and_point_use(Use* u, Value* value) noexcept;
+    // Walk `from`'s use-list, capture every Use* into `moved`, and repoint each at `to` — RAUW with a recorded moved-set
+    // (the recorder pushes one detach_and_point_use inverse per captured use, so RAUW reuses the set_operand-style inverse).
+    void rauw_recording(Value* from, Value* to, containers::Array<Use*>& moved);
+    // The inverse of set_attr — restore `op`'s attribute dict to a prior (Context-arena) snapshot; uniform across the
+    // overwrite-in-place and grow-by-rebuild branches of set_attr.
+    void restore_attr_dict(Operation* op, NamedAttr* dict, u32 count) noexcept;
+    // Rebuild `m`'s SymbolTable from its ops (the detail::register_symbol path the parser/decoder share — never a second
+    // path), swapping in a fresh table ONLY on success. On the FIRST duplicate sym_name it mutates NOTHING, sets
+    // `first_dup`, and returns false — the commit-verify hook (a transaction that introduces a duplicate symbol fails).
+    [[nodiscard]] bool resync_symbols(Module& m, const Operation*& first_dup);
+    // Resolve a CEIR-8d StableId to its op in `m` (pre-order; nullptr ⇒ none) — the "reference an op by stable id"
+    // surface a Transaction uses so a reference survives an edit (never a pointer/pre-order that a concurrent edit voids).
+    [[nodiscard]] const Operation* find_by_stable_id(const Module& m, StableId id) const noexcept;
+
     [[nodiscard]] memory::IAllocator*             allocator() const noexcept { return m_arena.parent(); }
     [[nodiscard]] memory::GrowableLinearAllocator& arena() noexcept { return m_arena; }
 
@@ -492,6 +534,7 @@ private:
     containers::HashMap<u64, AttrClassInfo*>   m_attr_classes;     // CEIR-8b: AttrClassId.value → its attribute-class descriptor
     containers::HashMap<u64, LocationClassInfo*> m_location_classes; // CEIR-8c: LocationClassId.value → its location-class descriptor
     containers::Array<OpName>                  m_interface_names;  // CEIR-8e: InterfaceId (FNV) → name (reverse lookup)
+    containers::Array<OpName>                  m_capability_names; // CEIR-8f: CapabilityId (FNV) → name (reverse lookup)
     CompilerMode                               m_compiler_mode = CompilerMode::Normal; // §27 active mode (session state)
 };
 } // namespace crd::ceir

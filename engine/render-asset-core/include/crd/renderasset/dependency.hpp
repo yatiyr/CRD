@@ -13,6 +13,7 @@
 // (deterministic introsort). No std container anywhere.
 
 #include <crd/containers/array.hpp>
+#include <crd/containers/incremental_dag.hpp> // CEIR-8h (ADR-0118): the ONE engine this graph is now a thin wrapper over
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/renderasset/diagnostic.hpp>
@@ -45,7 +46,7 @@ private:
 class DependencyGraph
 {
 public:
-    explicit DependencyGraph(memory::IAllocator* alloc) noexcept : m_nodes(alloc), m_alloc(alloc) {}
+    explicit DependencyGraph(memory::IAllocator* alloc) noexcept : m_dag(alloc), m_alloc(alloc) {}
 
     // Record "from depends on to" (so `to` must be ordered before `from`). Both
     // ids are materialized as nodes. Self-edges and invalid ids are ignored.
@@ -54,7 +55,7 @@ public:
     // Ensure a node exists even with no edges (participates in ordering).
     void add_node(AssetId id);
 
-    [[nodiscard]] usize node_count() const noexcept { return m_nodes.size(); }
+    [[nodiscard]] usize node_count() const noexcept { return m_dag.node_count(); }
 
     // Deterministic topological order (deps first, ties by ascending id). On a
     // cycle: emits CyclicDependency, clears `out`, returns false.
@@ -76,17 +77,11 @@ public:
     bool validate_against(const AssetRegistry& registry, DiagnosticList& diags) const;
 
 private:
-    struct Node
-    {
-        AssetId id;
-        Array<AssetId> deps; // sorted ascending, unique
-    };
-
-    // Index of `id`'s node, or the count if absent (lower_bound by id).
-    [[nodiscard]] usize find_node(AssetId id) const noexcept;
-    usize ensure_node(AssetId id);
-
-    Array<Node> m_nodes; // sorted ascending by id
-    memory::IAllocator* m_alloc;
+    // CEIR-8h (ADR-0118): the internals are now the ONE engine (crd::containers::IncrementalDag). The API above is
+    // BYTE-STABLE (AssetId ↔ NodeId is lossless + order-preserving — AssetId is a u64 value, valid()==value!=0,
+    // value-ordered), so topo_order/affected_by emit the IDENTICAL order (the RAF-11 regression pin). `validate_against`
+    // needs AssetRegistry (a render-asset type that cannot move into containers), so it stays here, iterating the engine.
+    crd::containers::IncrementalDag m_dag;
+    memory::IAllocator*             m_alloc;
 };
 } // namespace crd::renderasset

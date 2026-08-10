@@ -64,12 +64,13 @@ Operation* build_kinds(Context& ctx, AttrId a_float, AttrId a_bool, AttrId a_sym
 namespace
 {
 constexpr EffectRecord kDummyEffects[] = {{EffectFamily::GPUCommand, EffectTarget::None, 0U, 0U}, {EffectFamily::MemoryRead, EffectTarget::Operand, 0U, 2U}, {EffectFamily::MemoryWrite, EffectTarget::Result, 0U, 0U}};
+constexpr containers::StringView kDummyCaps[] = {"reference"};
 } // namespace
 
 Dialect* register_test_ops(Context& ctx)
 {
     Dialect* const d = ctx.register_dialect("test");
-    d->register_op("dummy", {.traits = OpTrait::Symbol | OpTrait::IsolatedFromAbove, .verify = &verify_dummy, .effects = containers::ConstSpan<EffectRecord>(kDummyEffects, 3U), .determinism = DeterminismClass::DeterministicWithinTarget, .domain = EvalDomain::HostFrameTime, .intrinsic = true, .native_provider = "host"});
+    d->register_op("dummy", {.traits = OpTrait::Symbol | OpTrait::IsolatedFromAbove, .verify = &verify_dummy, .effects = containers::ConstSpan<EffectRecord>(kDummyEffects, 3U), .determinism = DeterminismClass::DeterministicWithinTarget, .domain = EvalDomain::HostFrameTime, .intrinsic = true, .native_provider = "host", .capabilities = containers::ConstSpan<containers::StringView>(kDummyCaps, 1U)});
     d->register_op("kinds", {.traits = flags_of(OpTrait::Pure), .verify = &verify_kinds, .effects = containers::ConstSpan<EffectRecord>{}, .determinism = DeterminismClass::Unspecified, .domain = EvalDomain::Unspecified});
     return d;
 }

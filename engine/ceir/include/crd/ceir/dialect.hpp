@@ -114,6 +114,11 @@ struct OpInfo
     // is NOT promoted (no runtime consumer yet — CEIR-13c). ⛔ Append at END.
     bool                   intrinsic       = false;
     containers::StringView native_provider = {};
+    // CEIR-8f (ADR-0116, U-§57): the host-granted capabilities this op-kind REQUIRES to run (arena-copied CapabilityId
+    // set). Joins the §107 interface hash (a program's required set = the module-wide union). nullptr ⇒ requires none.
+    // ⛔ Append at END.
+    const CapabilityId*    required_capabilities = nullptr;
+    u32                    num_capabilities       = 0U;
 };
 
 // The registration descriptor for `Dialect::register_op` (CEIR-4c) — one struct instead of a growing positional param
@@ -132,6 +137,9 @@ struct OpSpec
     // intrinsic/provider without a schema index (the determinism/domain precedent). ⛔ Append at END.
     bool                                intrinsic       = false;
     containers::StringView              native_provider = {};   // "" unless intrinsic; asserted non-empty when intrinsic
+    // CEIR-8f (ADR-0116): required host-granted capability NAMES (borrowed StringViews; register_op interns them to
+    // CapabilityId and arena-copies the set — the effects precedent). The opgen emits these from `[op.native] capabilities`.
+    containers::ConstSpan<containers::StringView> capabilities = {}; // ⛔ Append at END.
 };
 
 // ── CEIR-8a open-world TYPE-CLASS registration (ADR-0111) — the type analogue of OpInfo/OpSpec ──

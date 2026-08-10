@@ -129,4 +129,68 @@ struct EffectAccess
 {
     return m1 == 0U || m2 == 0U || (m1 & m2) != 0U;
 }
+
+// ── CEIR-8f (ADR-0116 §2.2) the SAFETY axes (U-§23) — orthogonal to WHERE (EvalDomain). A PROJECTION of the effect
+// families, NOT new declared data (extend-not-fork). `realtime_safe` is DERIVED (allocation-, block-, and IO-free). ──
+struct SafetyBits
+{
+    bool may_allocate;
+    bool may_block;
+    bool may_io;
+    [[nodiscard]] constexpr bool realtime_safe() const noexcept { return !(may_allocate || may_block || may_io); }
+    [[nodiscard]] constexpr SafetyBits merged(SafetyBits o) const noexcept
+    {
+        return {may_allocate || o.may_allocate, may_block || o.may_block, may_io || o.may_io};
+    }
+};
+// The classifier — a TOTAL switch over all 35 families (⛔ NO default: appending a family without classifying its
+// safety is a `-Werror=switch` COMPILE ERROR — the append-at-end guard, exactly like effect_access; a mask/denylist
+// predicate would be a THIRD family consumer INVISIBLE to that guard, the 8c hole). Documented judgment: the lifecycle
+// families are may-allocate; File/Network/Device are may-IO; ExternalCall/Synchronization/TransactionBoundary/
+// AgentAction AND GPUCommand (a submit can stall) are may-block; reads/writes/time/random/log/debug are none.
+// ⛔ realtime_safe is STRICTER than effect_legal_in_region (semantics.hpp): that HARD gate permits Allocate in an
+// audio-RT region (a soft cost, not a priority-inversion deadlock), so `realtime_safe ⟹ legal_in_RT` but not the
+// converse — two questions over ONE vocabulary (§2.2), never two drifting oracles.
+[[nodiscard]] constexpr SafetyBits effect_safety(EffectFamily f) noexcept
+{
+    switch (f)
+    {
+    case EffectFamily::Allocate:
+    case EffectFamily::Deallocate:
+    case EffectFamily::ResourceResidency: return {true, false, false};
+    case EffectFamily::FileIO:
+    case EffectFamily::NetworkIO:
+    case EffectFamily::DeviceIO: return {false, false, true};
+    case EffectFamily::GPUCommand:        // a command submission can stall on a full queue
+    case EffectFamily::ExternalCall:
+    case EffectFamily::Synchronization:
+    case EffectFamily::TransactionBoundary:
+    case EffectFamily::AgentAction: return {false, true, false};
+    case EffectFamily::MemoryRead:
+    case EffectFamily::MemoryWrite:
+    case EffectFamily::MemoryReadWrite:
+    case EffectFamily::HostStateRead:
+    case EffectFamily::HostStateWrite:
+    case EffectFamily::SceneRead:
+    case EffectFamily::SceneWrite:
+    case EffectFamily::EcsRead:
+    case EffectFamily::EcsWrite:
+    case EffectFamily::PhysicsRead:
+    case EffectFamily::PhysicsWrite:
+    case EffectFamily::AudioRead:
+    case EffectFamily::AudioWrite:
+    case EffectFamily::TimeRead:
+    case EffectFamily::RandomRead:
+    case EffectFamily::Nondeterministic:
+    case EffectFamily::Logging:
+    case EffectFamily::Debug:
+    case EffectFamily::DocumentRead:
+    case EffectFamily::DocumentWrite:
+    case EffectFamily::ConstraintRead:
+    case EffectFamily::ConstraintWrite:
+    case EffectFamily::UIRead:
+    case EffectFamily::UIWrite: return {false, false, false};
+    }
+    return {true, true, true}; // unreachable (total switch); maximally unsafe if somehow hit
+}
 } // namespace crd::ceir

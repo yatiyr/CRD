@@ -24,7 +24,10 @@ namespace
 // ⛔ v3 (CEIR-8d, ADR-0114): the §20 state schema in the interface hash is now keyed by STABLE ID (sorted), not body
 // order — every stateful program's interface hash changed. Same clean-reject rationale; kBinaryVersion still UNCHANGED
 // (the STID chunk is additive/forward-skippable and the content hash skips it — zero content-hash churn).
-constexpr crd::u32 kCeirCookSchema = 3U;
+// ⛔ v4 (CEIR-8f, ADR-0116): the §107 interface hash now folds in the program's required-CAPABILITY set (module-wide,
+// sorted-unique) — EVERY program's interface hash changed (a cap-free module too: the count is pushed unconditionally).
+// kBinaryVersion still UNCHANGED (capabilities are registration metadata, re-derived on load — not in the module blob).
+constexpr crd::u32 kCeirCookSchema = 4U;
 
 void push_u32(containers::Array<crd::u8>& out, crd::u32 v)
 {

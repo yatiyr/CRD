@@ -62,6 +62,17 @@ struct ExecResult
     [[nodiscard]] bool ok() const noexcept { return error == ExecError::None; }
 };
 
+// A migration SNAPSHOT of one §20 state cell (CEIR-10a): its 8d STABLE ID (the cross-generation key — op pointers do NOT
+// survive a generation swap / round-trip), the whole ring, and the ring position. A hot-swap snapshots the OLD
+// generation's cells then restores them into the NEW generation's interpreter matched by id.
+struct StateSnapshot
+{
+    crd::u64                    id  = 0U;
+    containers::Array<crd::i64> ring;
+    crd::u32                    pos = 0U;
+    explicit StateSnapshot(memory::IAllocator* a) : ring(a) {}
+};
+
 class Interpreter;
 // An op-kind's reference semantics: read operands / write results / run sub-regions via `in`. Returns None or a failure.
 using EvalFn = ExecError (*)(Interpreter& in, const Operation& op);
@@ -123,6 +134,18 @@ public:
     // Inspection (§118 deterministic debugging): a state cell's current value. Builder-form ONLY — cells are keyed by op
     // POINTER, which does not survive a text/binary round-trip. false ⇒ the op has never been evaluated.
     [[nodiscard]] bool cell_value(const Operation* state_op, crd::i64& out) const noexcept;
+
+    // ---- CEIR-10a hot-reload state migration ----
+    // SNAPSHOT every live §20 cell keyed by its op's 8d STABLE ID, into `out` (each snapshot's ring copied from `alloc`).
+    // ⛔ The live cells' ops must carry stable ids (the module was cooked/loaded, which assigns them). A cell never
+    // evaluated is simply absent from the live set → absent from the snapshot. Order is unspecified (restore is id-keyed).
+    void snapshot_state_by_id(containers::Array<StateSnapshot>& out, memory::IAllocator* alloc) const;
+
+    // RESTORE cells into THIS (fresh, new-generation) interpreter from `snap`, matched by 8d stable id against
+    // `new_module`'s StateEdge ops: a cell present in `snap` AND in `new_module` with a MATCHING ring depth is seeded
+    // (value reuse); an absent id or a depth mismatch is SKIPPED (the new generation init-fills — EMPTY≠UNKNOWN). Returns
+    // the number of cells actually restored. ⛔ Assigns stable ids on `new_module` first (the migration key must be valid).
+    crd::u32 restore_state_by_id(const Module& new_module, containers::ConstSpan<StateSnapshot> snap);
 
     // A store of value-lists indexed by a u32 handle. The CEIR-6b SEQUENTIAL-async installer uses it: `async.launch`
     // stashes its body's yields and the token's runtime value IS the handle; `async.await` retrieves them. Generic — the

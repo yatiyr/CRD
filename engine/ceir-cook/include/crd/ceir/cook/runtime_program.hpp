@@ -5,7 +5,7 @@
 // reads a cooked blob and ⛔ VALIDATES the header's declared hashes against the payload (the declared-header-words-
 // validated scar) before handing back a program. The generation-safe `RuntimeSlot`/`RuntimeHandle` come from
 // crd-render-asset-core (RAF-3/RAF-11) — ⭐ CEIR is the FIRST consumer of that framework. The EXECUTABLE form
-// (CompiledExecutionPlan / interpreter binding) is CEIR-8, NOT here.
+// (CompiledExecutionPlan / interpreter binding) is CEIR-11, NOT here.
 //
 // ⛔ Context lifetime (7c inbound pattern): each generation's Module should be deserialized into ITS OWN Context, so a
 // hot-swap can free an old generation WHOLESALE (arenas free per-Context, never per-module) without disturbing live

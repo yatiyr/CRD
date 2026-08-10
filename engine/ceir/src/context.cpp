@@ -1,5 +1,6 @@
 #include <crd/ceir/context.hpp>
 
+#include <crd/ceir/detail/symbol_registration.hpp> // CEIR-8i: resync_symbols reuses the shared registration path
 #include <crd/ceir/symbol_table.hpp>
 #include <crd/containers/hash.hpp>
 #include <crd/memory/construct.hpp>
@@ -26,7 +27,7 @@ Context::Context(memory::IAllocator* alloc, usize arena_chunk_bytes)
     : m_arena(arena_chunk_bytes, alloc), m_op_names(alloc), // GrowableLinearAllocator is (chunk_bytes, parent)
       m_type_class_names(alloc), m_attr_class_names(alloc), m_location_class_names(alloc), m_attr_values(alloc),
       m_files(alloc), m_dialects(&m_arena), m_op_infos(&m_arena), m_type_classes(&m_arena), m_attr_classes(&m_arena),
-      m_location_classes(&m_arena), m_interface_names(alloc)
+      m_location_classes(&m_arena), m_interface_names(alloc), m_capability_names(alloc)
 {
 }
 
@@ -368,6 +369,202 @@ void Context::set_stable_id(Operation* op, StableId id) noexcept
 void Context::set_stable_id_watermark(Module* m, u64 watermark) noexcept
 {
     if (m != nullptr) { m->m_stable_id_watermark = watermark; } // deserialization-only: restore the monotone high-water mark
+}
+
+// ── CEIR-8i (ADR-0119) transaction support — inverse/rebuild atoms the `Transaction` recorder routes through ──
+namespace
+{
+// Pre-order (block args → op results, recursing regions — the printer/STID order) search for the op carrying `id`.
+[[nodiscard]] const Operation* find_sid(Region* r, StableId id) noexcept
+{
+    if (r == nullptr) { return nullptr; }
+    for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
+    {
+        for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+        {
+            if (op->stable_id() == id) { return op; }
+            for (u32 i = 0; i < op->num_regions(); ++i)
+            {
+                if (const Operation* const hit = find_sid(op->region(i), id)) { return hit; }
+            }
+        }
+    }
+    return nullptr;
+}
+// Pre-order re-register of every symbol-defining op into `m`'s CURRENT SymbolTable; returns the FIRST duplicate op
+// (nullptr ⇒ clean). Reuses the shared detail::register_symbol path (never a second registration path).
+[[nodiscard]] const Operation* resync_walk(Region* r, Context& ctx, Module& m) noexcept
+{
+    if (r == nullptr) { return nullptr; }
+    for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
+    {
+        for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+        {
+            if (!detail::register_symbol(ctx, m, op)) { return op; }
+            for (u32 i = 0; i < op->num_regions(); ++i)
+            {
+                if (const Operation* const dup = resync_walk(op->region(i), ctx, m)) { return dup; }
+            }
+        }
+    }
+    return nullptr;
+}
+} // namespace
+
+void Context::reinsert_erased_op(Operation* op, Block* block, Operation* before,
+                                 containers::ConstSpan<Value*> operands) noexcept
+{
+    if (op == nullptr) { return; }
+    // erase() left the operand array + Use slots allocated (arena) but zeroed the count and nulled each Use.value; restore
+    // the count and re-thread the recorded operand values into those same slots (re-adding each to its value's use-list).
+    op->m_num_operands = static_cast<u32>(operands.size());
+    for (u32 i = 0; i < op->m_num_operands; ++i)
+    {
+        Use& u  = op->m_operands[i];
+        u.owner = op;
+        u.value = operands[i];
+        if (operands[i] != nullptr) { operands[i]->add_use(&u); }
+    }
+    op->m_erased = false;
+    if (block != nullptr) { block->insert_before(op, before); } // before == nullptr ⇒ append (Block::insert_before)
+}
+
+void Context::detach_and_point_use(Use* u, Value* value) noexcept
+{
+    if (u == nullptr) { return; }
+    if (u->value != nullptr) { u->value->remove_use(u); } // unlink from its current value's list (nulls u->value/next/prev)
+    u->value = value;
+    if (value != nullptr) { value->add_use(u); }
+}
+
+void Context::rauw_recording(Value* from, Value* to, containers::Array<Use*>& moved)
+{
+    if (from == nullptr || from == to) { return; }
+    while (from->m_first_use != nullptr) // friend read; detach advances the head so the loop terminates
+    {
+        Use* const u = from->m_first_use;
+        moved.push_back(u);
+        detach_and_point_use(u, to);
+    }
+}
+
+void Context::restore_attr_dict(Operation* op, NamedAttr* dict, u32 count) noexcept
+{
+    if (op == nullptr) { return; }
+    op->m_attrs     = dict;  // the prior (Context-arena) snapshot BECOMES live module state (must outlive the Transaction)
+    op->m_num_attrs = count; // dict == nullptr / count == 0 restores a no-attr op
+}
+
+bool Context::resync_symbols(Module& m, const Operation*& first_dup)
+{
+    first_dup                   = nullptr;
+    SymbolTable* const old_table = m.m_symbols;
+    SymbolTable* const fresh      = memory::construct<SymbolTable>(m_arena, &m_arena); // old table leaks (arena policy)
+    m.m_symbols                  = fresh; // register_symbol registers into m.symbols() == fresh
+    if (const Operation* const dup = resync_walk(m.body(), *this, m))
+    {
+        m.m_symbols = old_table; // atomic-on-failure: discard the fresh table, the old (pre-tx-correct) index is untouched
+        first_dup   = dup;
+        return false;
+    }
+    return true; // the fresh table is the committed index
+}
+
+const Operation* Context::find_by_stable_id(const Module& m, StableId id) const noexcept
+{
+    if (!id.valid()) { return nullptr; }
+    return find_sid(m.body(), id);
+}
+
+// ── CEIR-8f capabilities (ADR-0116, U-§57) — intern (FNV, intern-only) / reverse-lookup / program set / host grant ──
+CapabilityId Context::intern_capability(containers::StringView name)
+{
+    const u64 h = containers::hash_string(name.data(), name.size()); // the InterfaceId FNV shape — no verify/version
+    for (usize i = 0; i < m_capability_names.size(); ++i)
+    {
+        if (m_capability_names[i].hash == h) { return CapabilityId{h}; }
+    }
+    m_capability_names.push_back(OpName{h, intern_symbol(name)});
+    return CapabilityId{h};
+}
+
+containers::StringView Context::capability_name(CapabilityId id) const noexcept
+{
+    for (usize i = 0; i < m_capability_names.size(); ++i)
+    {
+        if (m_capability_names[i].hash == id.value) { return m_capability_names[i].name; }
+    }
+    return containers::StringView{};
+}
+
+namespace
+{
+// Module-wide pre-order (the StateW::go shape) — funcs ARE ops in the body, so this already visits every private
+// callee; no call-resolution / "transitive" machinery. An UNREGISTERED op contributes `external.process` (EMPTY≠UNKNOWN).
+void gather_program_caps(const Context& ctx, Region* r, containers::Array<CapabilityId>& out, CapabilityId external_process)
+{
+    if (r == nullptr) { return; }
+    for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
+    {
+        for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+        {
+            if (ctx.op_info(op->kind()) == nullptr) { out.push_back(external_process); }
+            else
+            {
+                const containers::ConstSpan<CapabilityId> caps = ctx.op_capabilities(op->kind());
+                for (usize i = 0; i < caps.size(); ++i) { out.push_back(caps[i]); }
+            }
+            for (u32 i = 0; i < op->num_regions(); ++i) { gather_program_caps(ctx, op->region(i), out, external_process); }
+        }
+    }
+}
+} // namespace
+
+void Context::program_capabilities(const Module& m, containers::Array<CapabilityId>& out) const
+{
+    const containers::StringView ep_name{"external.process"};
+    const CapabilityId ep{containers::hash_string(ep_name.data(), ep_name.size())}; // pure FNV — no mutation (const method)
+    gather_program_caps(*this, m.body(), out, ep);
+    // SORT (insertion; sets are small) + DEDUP adjacent → a sorted-UNIQUE set: a REORDER is invariant, membership (a
+    // deleted/added cap) changes the hash (the 8c/8d discriminator). ⛔ the id VALUE is what enters the hash.
+    for (usize i = 1; i < out.size(); ++i)
+    {
+        const CapabilityId key = out[i];
+        usize              j   = i;
+        while (j > 0U && out[j - 1U].value > key.value)
+        {
+            out[j] = out[j - 1U];
+            --j;
+        }
+        out[j] = key;
+    }
+    usize w = 0;
+    for (usize i = 0; i < out.size(); ++i)
+    {
+        if (w == 0U || !(out[w - 1U] == out[i])) { out[w++] = out[i]; }
+    }
+    while (out.size() > w) { out.pop_back(); }
+}
+
+SafetyBits Context::op_safety(OpId kind) const noexcept
+{
+    const OpInfo* const info = op_info(kind);
+    if (info == nullptr) { return {true, true, true}; } // ⛔ EMPTY≠UNKNOWN: unregistered ⇒ maximally unsafe
+    SafetyBits s{false, false, false};
+    for (u32 i = 0; i < info->num_effects; ++i) { s = s.merged(effect_safety(info->effects[i].family)); }
+    return s; // a registered EFFECT-FREE op ⇒ all-false ⇒ realtime_safe (genuinely declared no effects)
+}
+
+bool Context::capabilities_satisfied(containers::ConstSpan<CapabilityId> required,
+                                     containers::ConstSpan<CapabilityId> granted) noexcept
+{
+    for (usize i = 0; i < required.size(); ++i)
+    {
+        bool found = false;
+        for (usize j = 0; j < granted.size() && !found; ++j) { found = required[i] == granted[j]; }
+        if (!found) { return false; } // an ungranted required capability ⇒ the host must NOT run this program
+    }
+    return true;
 }
 
 AttrValue Context::attr_value(AttrId id) const noexcept
@@ -1296,8 +1493,11 @@ struct ResolvedAccess
     const EffectAccess  a = effect_access(e.family); // read/write is the FAMILY's; the class may be the LOCATION's (8c)
     // ambient (target None) ⇒ whole class; an OUT-OF-RANGE index on a malformed instance also degrades to whole-class
     // (nullptr) — the CONSERVATIVE direction (more hazards, never fewer). CEIR-8c: the built-in location kinds beyond
-    // Operand/Result (BufferRange..Net, Extern) carry no operand-position identity yet (named-forward to 8d), so they
-    // resolve to whole-class here too.
+    // Operand/Result (BufferRange..Net, Extern, EcsComponent, …) carry no per-instance location identity, so they resolve
+    // to whole-class here too — a DELIBERATE conservative fallback (safe-but-pessimal), NOT a bug. Per-instance location
+    // identity is an unbound FUTURE refinement (⛔ 8d delivered per-OP stable identity, NOT per-location identity — this
+    // is not that; do not bind it to a band until an owning slice earns it). Precise per-resource hazards are available
+    // TODAY by targeting the resource's SSA Value via `EffectTarget::Operand`/`Result` (the CEIR-9f ECS proof).
     const Value* res = nullptr;
     if (e.target == EffectTarget::Operand && e.index < op.num_operands()) { res = op.operand(e.index); }
     else if (e.target == EffectTarget::Result && e.index < op.num_results()) { res = op.result(e.index); }

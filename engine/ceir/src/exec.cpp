@@ -148,6 +148,76 @@ bool Interpreter::cell_value(const Operation* state_op, crd::i64& out) const noe
     return true;
 }
 
+namespace
+{
+// Collect every module-wide StateEdge op (pre-order, nested regions) — the ops a migration seeds. Mirrors the
+// program_asset state walk, but returns OPS (not the schema) because restore keys m_cells by the op pointer.
+void collect_state_ops(Context& c, Region* r, containers::Array<const Operation*>& out)
+{
+    if (r == nullptr) { return; }
+    for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
+    {
+        for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+        {
+            if (c.has_trait(op->kind(), OpTrait::StateEdge) && op->num_results() >= 1U) { out.push_back(op); }
+            for (crd::u32 i = 0; i < op->num_regions(); ++i) { collect_state_ops(c, op->region(i), out); }
+        }
+    }
+}
+// The §20 ring depth of a StateEdge op (the "depth" attr; absent / <1 ⇒ 1) — mirrors cell_read.
+crd::u32 state_depth(Context& c, const Operation& op)
+{
+    crd::u32     depth = 1U;
+    const AttrId d     = op.attr("depth");
+    if (d.valid())
+    {
+        const AttrValue dv = c.attr_value(d);
+        if (dv.kind == AttrKind::Int && dv.i >= 1) { depth = static_cast<crd::u32>(dv.i); }
+    }
+    return depth;
+}
+} // namespace
+
+void Interpreter::snapshot_state_by_id(containers::Array<StateSnapshot>& out, memory::IAllocator* alloc) const
+{
+    for (auto it = m_cells.begin(); it != m_cells.end(); ++it)
+    {
+        const Operation* const op = it.key();
+        const Cell&            cl = it.value();
+        StateSnapshot          s(alloc);
+        s.id  = op->stable_id().value;
+        s.pos = cl.pos;
+        for (crd::u32 i = 0; i < static_cast<crd::u32>(cl.ring.size()); ++i) { s.ring.push_back(cl.ring[i]); }
+        out.push_back(std::move(s));
+    }
+}
+
+crd::u32 Interpreter::restore_state_by_id(const Module& new_module, containers::ConstSpan<StateSnapshot> snap)
+{
+    m_ctx.assign_stable_ids(new_module); // the migration key must be valid on the new generation
+    containers::Array<const Operation*> ops(m_scratch);
+    collect_state_ops(m_ctx, new_module.body(), ops);
+    crd::u32 restored = 0U;
+    for (crd::u32 k = 0; k < static_cast<crd::u32>(ops.size()); ++k)
+    {
+        const Operation* const op    = ops[k];
+        const crd::u64         id    = op->stable_id().value;
+        const crd::u32         depth = state_depth(m_ctx, *op);
+        for (crd::u32 s = 0; s < static_cast<crd::u32>(snap.size()); ++s)
+        {
+            if (snap[s].id != id) { continue; }
+            // a matching depth (ring size) is required — else the new cell has a different §20 shape; skip → init-fill.
+            if (static_cast<crd::u32>(snap[s].ring.size()) != depth) { break; }
+            Cell cell{containers::Array<crd::i64>(m_scratch), snap[s].pos};
+            for (crd::u32 i = 0; i < static_cast<crd::u32>(snap[s].ring.size()); ++i) { cell.ring.push_back(snap[s].ring[i]); }
+            m_cells.insert(op, std::move(cell));
+            ++restored;
+            break;
+        }
+    }
+    return restored;
+}
+
 ExecError Interpreter::eval_op(const Operation& op)
 {
     EvalFn* const fn = m_sem.find(op.kind().value);

@@ -469,3 +469,436 @@ win-asan + linux-gcc-debug + linux-gcc-asan (all 3 targets fresh against the new
 OpInterface layout) + LLVM-20 tidy (incl. the new interface.hpp) + GCC (the constexpr FNV path)
 + opgen drift/validator (the OP_TRAITS count-pin) + crd-ceir-invariants. Zero recook.
 ```
+
+## CEIR-8f — capabilities + domain/safety split + typed time domains (ADR-0116) — 2026-08-09
+
+**The gap (three U-§ items).** (a) The TOML `[op.native] capabilities` field was PARSED by opgen but wired to NOTHING
+(program_asset.hpp named it forward: "capabilities have no owning row yet") — programs had no way to REQUEST a
+permission, hosts none to GRANT. (b) EvalDomain (WHERE an op runs) was entangled with realtime-ness; the orthogonal
+SAFETY axes (may-allocate/may-block/may-IO/realtime-safe, U-§23) had no representation. (c) Time values (a frame dt, a
+sim step, an audio sample count) were just numbers — mixing wall-clock with sim-step was a silent bug (U-§17).
+
+**The shape (ADR-0116), advisor-approved on the design fork.**
+
+(1) CAPABILITIES — a `CapabilityId` = FNV of a name (`gpu.compute`/`file.write`/`external.process`/…; open-world +
+INTERN-ONLY — a capability is a name, no verify/version, the intern_interface shape). `OpSpec.capabilities` (opgen
+emits from the TOML) -> register_op interns them (rejects an EMPTY name — the declared-words-validated guard) into
+`OpInfo.required_capabilities` (arena-copied, the effects precedent). The PROGRAM's required set = the MODULE-WIDE
+(pre-order — funcs ARE ops in the body, so no "transitive" machinery, the StateW::go shape) sorted-UNIQUE union; an
+UNREGISTERED op contributes `external.process` (EMPTY!=UNKNOWN — an unknown op must not read as requiring-nothing and
+smuggle past a future sandbox). It JOINS the §107 interface hash (a "caps:" section, the count pushed UNCONDITIONALLY
+even at 0 — the 8c no-conditional-width lesson; then the sorted-unique id VALUES) -> a NAMED interface-hash recook,
+kCeirCookSchema 3->4. stable_hash + kBinaryVersion UNTOUCHED (capabilities are registration metadata — a cap-bearing
+module round-trips byte-exact). program_capabilities / capabilities_satisfied are the host-grant queries; sandbox
+ENFORCEMENT + a cooked-META surfacing of the set (so a host pre-flights a grant off-disk) are named-forward.
+
+(2) DOMAIN/SAFETY SPLIT — EvalDomain stays WHERE. The safety axes are a PROJECTION of the effect families (no new
+declared/hashed data — extend-not-fork): `effect_safety` a per-family TOTAL SWITCH (the effect_access shape,
+-Werror=switch-guarded — a mask/denylist predicate would be a THIRD family consumer invisible to that guard, the 8c
+hole), folded by `op_safety` over an op's effects (unregistered = maximally unsafe). `realtime_safe :=
+!(may_allocate || may_block || may_io)`. THE two-oracles reconciliation: effect_legal_in_region (the HARD gate)
+PERMITS Allocate in an audio-RT region (a soft cost, not a priority-inversion deadlock) while realtime_safe excludes
+it -> realtime_safe => legal, never the converse — a documented SUBSET over ONE effect vocabulary, not two drifting
+oracles, pinned side by side.
+
+(3) TIME DOMAINS — a time domain IS an 8a TYPE-CLASS (advisor simplification: NO TimeDomainId — that would fork
+TypeClassId). A hand-registered `time` dialect (the func precedent) registers the six built-ins (wall/sim/frame/
+audio_sample/sequencer/logical) with a verify hook (exactly one Int/Float/Quantity/TypeParam member — the units-Time
+seed + generics). `time.wall<T> != time.sim<T>` as distinct TypeIds (the ADR-0111 landmine) — the type distinction a
+future operand-type checker rejects mixing on. ENFORCEMENT is named-forward honestly: NO operand-type-mix verifier
+exists today (semantic type-checking lands at CEIR-3/4; the search found no same-type check), so 8f establishes the
+DISTINCT TYPES and does not claim to enforce mixing now. A plugin `game.turn` domain works with ZERO central edits;
+U-§56 round-trip inherited from 8a.
+
+**Advisor pre-close caught four small findings, all fixed:** (1) an ADR/code mismatch — the ADR said the time hook
+requires a numeric/quantity member but the code checked arity only; STRENGTHENED the hook to Int/Float/Quantity/
+TypeParam (the TypeParam arm keeps generic time types verifying — the 8a substitute-through precedent) and aligned the
+ADR. (2) added a test that a capability required by an op INSIDE a func body reaches the program set (the
+module-wide-covers-func-bodies claim the whole simplification rests on). (3) an EMPTY capability name hashes to the FNV
+offset basis (a phantom id) — added the register_op assert + the opgen validator arm. (4) two ADR touches: named-
+forward the cooked-META surfacing of the required set, and replaced an untestable "cap-free stable_hash unchanged"
+claim with the implemented cap-bearing serialize->deserialize byte-exact + same stable_hash test. Per the advisor, no
+new memory scar — count-unconditional / EMPTY!=UNKNOWN / total-switch-not-predicate are applications of existing
+entries; the two-oracles-subset is carried by the ADR.
+
+**Tests.** test_capability.cpp (7 [capability]): required-set round-trip + external.process EMPTY!=UNKNOWN + func-body
+reach + module-wide sorted-unique union + host-grant check + the interface-hash reorder-invariant/membership-sensitive/
+unregistered-moves-it + cap-bearing byte-exact round-trip. test_safety.cpp (2 [safety]): effect_safety + op_safety fold
++ the two-oracles subset. test_time_domain.cpp (3 [time]): wall!=sim + plugin domain + verify-rejects-0/2-members +
+U-§56 round-trip.
+
+**Gate.** crd-ceir-tests + crd-ceir-host-tests + crd-ceir-cook-tests **291/291 ctest** (279 + 12) on
+**win-debug + win-asan + linux-gcc-debug + linux-gcc-asan** — all 3 targets rebuilt fresh against the new OpInfo/OpSpec
+layout (the stale-.obj scar) — + LLVM-20 tidy (14 files incl. the NEW time.hpp/time.cpp) + GCC -Werror=switch (the
+first non-MSVC exhaustiveness check of the 35-arm effect_safety) + crd-ceir-opgen-{drift,validator} (the
+capabilities->OpSpec emission + the empty-name arm; regen clean) + crd-ceir-invariants. Interface-hash recook
+(kCeirCookSchema 3->4); NO binary-format bump; ZERO content-hash churn. Next = CEIR-8g (the compiler-infrastructure
+skeleton — AnalysisManager/PassManager/RewritePattern/ConversionTarget/DiagnosticEngine, FRAMEWORKS ONLY, no
+optimization passes — the no-consumer rule).
+
+## Proposed commit — CEIR-8f (user commits; NO AI trailer; ADR-0116 ships in the same batch)
+
+```
+feat(ceir-8f): capabilities + domain/safety split + typed time domains (ADR-0116)
+
+- U-57 CAPABILITY model (owns the sec107 field ownerless since 7a): a CapabilityId (FNV of a
+  name, intern-only). OpSpec.capabilities (opgen-emitted from [op.native]) -> register_op interns
+  them (rejects an empty name) into OpInfo.required_capabilities. The program's required set =
+  the MODULE-WIDE sorted-unique union (an UNREGISTERED op contributes external.process,
+  EMPTY!=UNKNOWN) and JOINS the sec107 interface hash (a "caps:" section, count unconditional) ->
+  kCeirCookSchema 3->4. stable_hash + kBinaryVersion UNTOUCHED (registration metadata). Host-grant
+  queries program_capabilities / capabilities_satisfied; sandbox enforcement + cooked-META
+  surfacing named-forward.
+- U-23 domain/safety split: EvalDomain stays WHERE; the safety axes (may-allocate/block/IO +
+  derived realtime_safe) are a PROJECTION of the effect families -- effect_safety a per-family
+  TOTAL SWITCH (the effect_access shape, -Werror=switch-guarded, not a predicate that dodges the
+  guard) folded by op_safety. The two RT oracles (effect_legal_in_region vs realtime_safe) are a
+  documented SUBSET (realtime_safe => legal), not two drifting oracles.
+- U-17 typed time domains: a time domain IS an 8a TYPE-CLASS (no TimeDomainId -- that would fork
+  TypeClassId). A hand-registered `time` dialect registers six built-ins (verify: one Int/Float/
+  Quantity/TypeParam member). time.wall<T> != time.sim<T> as distinct TypeIds -- the type
+  distinction a future operand-type checker rejects mixing on (enforcement named-forward; no such
+  checker exists yet). A plugin game.turn works with zero central edits.
+- ADR-0116 ACCEPTED. tests: test_capability (7), test_safety (2), test_time_domain (3).
+
+Gated: crd-ceir-tests + crd-ceir-host-tests + crd-ceir-cook-tests 291/291 ctest on win-debug +
+win-asan + linux-gcc-debug + linux-gcc-asan (all 3 targets fresh against the new OpInfo/OpSpec
+layout) + LLVM-20 tidy (incl. new time.hpp/cpp) + GCC -Werror=switch (35-arm effect_safety) +
+opgen drift/validator + crd-ceir-invariants. Interface-hash recook (kCeirCookSchema 3->4); no
+binary-format bump; zero content-hash churn.
+```
+
+## CEIR-8g — the compiler-infrastructure skeleton (ADR-0117) — 2026-08-09
+
+**The gap.** CEIR had op/type/attr/effect/interface machinery but no compiler DRIVER layer: no way to register an
+analysis and reuse its result, no pass sequencing, no rewrite/legalization framework, and only
+ParseResult{ok,offset,msg} for errors (no codes/severity/notes/fix-its). U-§72 also warns Context must not become a
+god-object.
+
+**The shape (ADR-0117), advisor-approved on the design fork.** Four THIN FRAMEWORKS, ⛔ FRAMEWORKS ONLY (no
+optimization passes / no real lowering — those are CEIR-26/27; the no-consumer rule), each a SEPARATE class over a
+Context/Module (ZERO new Context members — the U-§72 bound; the all-targets rebuild happens via the ceir.hpp umbrella
+edit anyway).
+
+- ⭐ ONE shared `fnv1a_ct` (id.hpp) — `make_interface_id`/`make_analysis_id`/`make_diagnostic_code` ALL call it (a
+  copy-per-id would silently drift from hash_string, and drift means T::kId != intern(name); the 8e interface_hash_ct
+  was hoisted here). AnalysisId/DiagnosticCode are open-world FNVs; kId is compile-time.
+- AnalysisManager (U-§73): a registered analysis (kId + a compute fn returning an arena const T*); get<T> computes-or-
+  caches. Never-stale INVALIDATION: a pass declares a PRESERVED set, the manager EVICTS the rest (+ invalidate_all);
+  a pass reporting UNCHANGED preserves ALL regardless of its set. ⛔ THE slice's biggest trap, refused: NO
+  inter-analysis dependency tracking — that would be a new dependency graph ONE SLICE before 8h exists to unify the
+  >=2 the tree holds (the band's own anti-pattern); inter-analysis deps are a documented pass-author contract,
+  named-forward to 8h. Eviction leaks into the arena (accepted, grow-by-rebuild).
+- PassManager (U-§65): a Pass = name + run fn (bool(Context&, Module&, DiagnosticEngine&)) + preserved set; run
+  sequences + drives invalidation + ⛔ STOPS on a Fatal (has_fatal()).
+- Rewrite/Conversion (U-§67/§74): RewritePattern{match, rewrite} + ⛔ caller-driven per-op try_apply (NOT a block walk
+  — the iterator-invalidation/worklist driver IS CEIR-26, reserved); ConversionTarget per-kind legality (Legal/Illegal/
+  Dynamic) with ⛔ an UNLISTED kind => Illegal (EMPTY!=UNKNOWN).
+- DiagnosticEngine (U-§102): one structured surface — DiagnosticCode + Severity (closed axis) + SourceLoc + message +
+  notes + fix-its; render prints code-name + file:line:col + message. ⛔ ALL text COPIED into the engine arena
+  (alloc-outlives-borrowers — a diagnostic outlives the dying buffer it came from). The reverse-lookup name rides EACH
+  diagnostic (a copied code_name), NOT a separate intern registry no consumer queries.
+
+**The recook story — ZERO motion.** Every framework is runtime state; nothing serializes: no kBinaryVersion, no
+kCeirCookSchema, no interface/content-hash change, no recook.
+
+**Advisor pre-close caught a blocker + a test gap, both fixed:** (1) BLOCKER — Severity::Fatal short-circuited
+NOTHING (the ADR claimed it, but has_errors treated Fatal like Error and the PassManager loop had no stop condition,
+so a Fatal in pass 1 didn't stop pass 2 — the exact overrun Fatal exists to prevent; source-must-match-scoreboard).
+WIRED it: has_fatal() on the engine, threaded through the pass run signature + PassManager::run, which now breaks on
+has_fatal(); a test with two passes proves pass 2 never runs after a Fatal. (2) the never-stale counter tests only
+moved a compute-counter (a broken invalidation serving STALE results would still pass) — added a test that appends a
+real op, invalidates, and checks the recomputed result reflects the new IR (op_count 1 -> 2). Per the advisor, no new
+memory scar — Fatal-unwired is source-must-match-scoreboard, the counter gap is measure-the-property-not-the-proxy;
+both existing entries.
+
+**Tests.** test_pass_manager.cpp (6 [analysis][pass]): compute-once/cache (never-redundant); never-stale invalidation
++ preserved-analysis-not-recomputed; FRESH-data-after-invalidation; PassManager-drives-invalidation + unchanged-
+preserves-all; Fatal-short-circuits-the-pipeline; the shared-FNV pin (analysis id == interface id of the same name).
+test_rewrite.cpp (2 [rewrite]): try_apply match/rewrite/decline + match-only + null; ConversionTarget legal/illegal/
+dynamic + unlisted=>Illegal + last-set-wins. test_diagnostic.cpp (4 [diagnostic]): emit/collect/has_errors + render
+(code+loc+message, <unknown> for file 0) + Fatal + ⛔ the text-COPY ASan probe (emit from a scope-local buffer, read
+after it dies) + the shared-FNV pin. ⛔ the text-copy probe is only meaningful under ASan — verified on
+linux-gcc-asan (the money config), not just win-debug.
+
+**Gate.** crd-ceir-tests + crd-ceir-host-tests + crd-ceir-cook-tests **303/303 ctest** (291 + 12) on
+**win-debug + win-asan + linux-gcc-debug + linux-gcc-asan** — all 3 targets rebuilt fresh (the ceir.hpp umbrella edit)
+— + LLVM-20 tidy (9 files incl. the 3 NEW headers pass_manager.hpp/rewrite.hpp/diagnostic.hpp) + GCC + opgen drift/
+validator + crd-ceir-invariants. **ZERO recook (a zero-motion slice).** Next = CEIR-8h (the INCREMENTAL-EVALUATION
+architecture — ENGINE-FIRST UNIFICATION: absorb the >=2 existing dependency graphs into ONE dirty-propagation/
+memoization model keyed by the 7a content/interface hashes; a third graph is the failure mode; the AnalysisManager
+built here is the seam it grows from).
+
+## Proposed commit — CEIR-8g (user commits; NO AI trailer; ADR-0117 ships in the same batch)
+
+```
+feat(ceir-8g): compiler-infrastructure skeleton (ADR-0117)
+
+- Four THIN frameworks, FRAMEWORKS ONLY (no optimization passes/lowering -- CEIR-26/27), each a
+  SEPARATE class over a Context/Module (zero new Context members -- the U-72 god-object bound).
+- ONE shared fnv1a_ct (id.hpp) behind make_interface_id/make_analysis_id/make_diagnostic_code
+  (a copy-per-id would drift from hash_string); AnalysisId/DiagnosticCode are open-world FNVs.
+- AnalysisManager (U-73): cached analyses + never-stale invalidation via preserved-sets (an
+  unchanged pass preserves all). NO inter-analysis dependency tracking -- that would be a new
+  dependency graph one slice before 8h unifies the >=2 the tree holds; named-forward to 8h.
+- PassManager (U-65): a Pass = name + run fn + preserved set; run sequences + drives invalidation
+  + STOPS on a Fatal (has_fatal()).
+- Rewrite/Conversion (U-67/74): RewritePattern{match,rewrite} + caller-driven per-op try_apply
+  (the walking driver is CEIR-26, reserved); ConversionTarget legality with an UNLISTED kind =>
+  Illegal (EMPTY!=UNKNOWN).
+- DiagnosticEngine (U-102): one structured surface (code/severity/SourceLoc/notes/fix-its); ALL
+  text COPIED into the engine arena (alloc-outlives-borrowers, ASan-proven on the money config).
+- ZERO-MOTION: nothing serializes (no kBinaryVersion/kCeirCookSchema/hash change, no recook).
+- ADR-0117 ACCEPTED. tests: test_pass_manager (6), test_rewrite (2), test_diagnostic (4).
+
+Gated: crd-ceir-tests + crd-ceir-host-tests + crd-ceir-cook-tests 303/303 ctest on win-debug +
+win-asan + linux-gcc-debug + linux-gcc-asan + LLVM-20 tidy (incl. 3 new headers) + GCC + opgen
+drift/validator + crd-ceir-invariants. Zero recook.
+```
+
+## CEIR-8h — incremental-evaluation ENGINE-FIRST unification (ADR-0118) — 2026-08-09
+
+**The gap.** Three pieces of an incremental model existed, scattered + unlinked: render-asset-core::DependencyGraph
+(a generic AssetId DAG — deterministic topo + affected_by dirty/rebuild set + validate, NO memoization); the cook's
+content_hash (cache key) + interface_hash (§107: interface change invalidates dependents, content-only hot-swaps);
+the 8g AnalysisManager (per-Module memo + preserved-set invalidation). The ENGINE tying content-addressed
+memoization to dependency-driven dirty propagation was missing — and U-§125 (never a third graph) makes building a
+NEW one the failure mode.
+
+**The design fork (advisor-decided): (B) in crd-containers, absorb REAL this slice.** ⛔ The LAYERING WALL is the
+discriminator: crd-ceir is asset-free (I4/I5) and render-asset-core does NOT link crd-ceir — they are independent
+SIBLING modules. So a crd-ceir engine is a graph render-asset-core can NEVER adopt without inverting the module DAG —
+a permanent third graph BY CONSTRUCTION (not "a third graph until adoption"). The ONLY home both link with zero new
+edges is the LOW shared module: a dependency DAG is a generic data structure -> crd-containers.
+
+**The shape (ADR-0118).** `crd::containers::IncrementalDag`, a DAG keyed by NodeId=u64: a DETERMINISTIC topo
+(deps-first, min-id tie-break — the RAF-11 reproducibility contract) + affected_by (transitive dependents),
+ABSORBED byte-identical from DependencyGraph; PLUS per-node TWO revision hashes (content/interface) driving the §107
+rule GENERALIZED — recompute_after_change recomputes the node on a content-OR-interface change and its transitive
+dependents ONLY on an interface change (content-only hot-swaps). It holds STRUCTURE + REVISIONS + dirty propagation,
+NOT the consumer's cached RESULTS (keyed by the content hash). ⭐ THE ABSORB IS REAL THIS SLICE:
+render-asset-core::DependencyGraph keeps its 4-method API BYTE-STABLE and swaps its internals to an owned
+IncrementalDag (AssetId <-> NodeId lossless + order-preserving — AssetId is a u64 value, valid()==value!=0,
+value-ordered), so the emitted order is IDENTICAL; validate_against (needs AssetRegistry, a render-asset type that
+cannot move down) stays wrapper-side; the existing RAF/render-asset/scene-render/ceir-cook suites are the regression
+net (a canonical model with zero real consumers is how third graphs are born — the 7a capability field sat ownerless
+six slices). Named-forward WITH reasons: the AnalysisManager (a DIFFERENT paradigm — preserved-sets vs
+dependency-propagation; forcing it invents the inter-analysis edges 8g refused — CEIR-26+), the CookDb (already
+PRODUCES the content/interface pair the engine consumes — semantic unification, plan-cache at 10b). hesap-sched's
+DependencyGraph is a scheduling precedence graph (no revision model) — out of scope.
+
+**The recook story — ZERO motion.** The engine is runtime state; DependencyGraph's serialized §106 CDEP records are
+unchanged in SHAPE (the wrapper API is byte-stable). No kBinaryVersion, no kCeirCookSchema, no hash change, no recook.
+
+**Advisor pre-close caught FIVE findings, all fixed:** (1) the `interface` member/param renamed `interface_rev` — the
+Windows COM `#define interface struct` (combaseapi.h) landmine in a FOUNDATIONAL containers header a COM-pulling
+module may include (green only because no current TU includes windows.h before it). (2) BLOCKER on "gate green": the
+blast radius was enumerated BY SYMBOL (grep DependencyGraph|affected_by) -> render-asset + scene-render/reload
+(RAF-11) + ceir-cook (which STATIC-LINKS render-asset-core, so the earlier ceir 303 ran STALE objects); ceir-cook-tests
+was REBUILT + re-run (relinked), scene-render run. (3) parity: the existing render-asset dependency tests already
+assert exact order + tie-break + cycle (the byte-identical pin); added a reverse-insertion-order engine test (the
+"regardless of insertion order" contract). (4) recompute_after_change with interface-changed-but-content-same
+returned dependents WITHOUT the changed node (incoherent under content-addressing); fixed to recompute self on EITHER
+change (over-recompute, never stale) + a test. (5) the hesap-sched out-of-scope note.
+
+**Tests.** test_incremental_dag.cpp (6 [containers][incremental]): topo determinism + min-id tie-break; affected_by
+transitive dependents in topo order; insertion-order independence (reverse-insertion parity); cycle -> false; ⛔ the
+§107 rule (interface change propagates to dependents, content-only does not, interface-only still recomputes self).
+The render-asset-core suite (exact order + tie-break + cycle, unchanged) is the byte-identical regression pin.
+
+**Gate.** crd-containers-tests + crd-render-asset-core-tests + crd-scene-render-tests + crd-ceir-cook-tests (RELINKED)
++ crd-ceir on **win-debug + win-asan + linux-gcc-debug + linux-gcc-asan** (the money config verifies the wrapper +
+engine memory-safe) + LLVM-20 tidy (4 files incl. the NEW incremental_dag.hpp) + GCC + crd-ceir-opgen-{drift,
+validator}. **ZERO recook; the >=2 graphs are now ONE.** Next = CEIR-8i (TRANSACTIONS — atomic multi-op edits with
+commit/rollback, keyed by the 8d stable ids + 8h dirty propagation; the last framework before 8z the U-§121 gate).
+
+## Proposed commit — CEIR-8h (user commits; NO AI trailer; ADR-0118 ships in the same batch)
+
+```
+feat(ceir-8h): incremental-evaluation unification -- one dependency/dirty engine (ADR-0118)
+
+- ENGINE-FIRST UNIFICATION (never a third graph): crd::containers::IncrementalDag is the ONE
+  dependency/dirty engine. The LAYERING WALL decided the home -- crd-ceir is asset-free and
+  render-asset-core does not link crd-ceir (independent siblings), so a crd-ceir engine is a
+  permanent third graph by construction; the low shared module both link is crd-containers.
+- IncrementalDag: a u64-keyed DAG with a deterministic topo (deps-first, min-id tie-break) +
+  affected_by ABSORBED byte-identical from DependencyGraph, PLUS per-node content/interface
+  revisions driving the §107 rule generalized (recompute_after_change: content-or-interface
+  change recomputes the node; an INTERFACE change also recomputes its transitive dependents; a
+  content-only change hot-swaps). Holds structure+revisions+dirty propagation, not the cached
+  results (keyed by content hash). The `interface` field is `interface_rev` (the Windows COM
+  `#define interface struct` landmine in a foundational header).
+- THE ABSORB IS REAL THIS SLICE: render-asset-core::DependencyGraph keeps its 4-method API
+  BYTE-STABLE and delegates to an owned IncrementalDag (AssetId<->NodeId lossless); the existing
+  RAF/render-asset/scene-render/ceir-cook suites are the regression net. AnalysisManager (a
+  different invalidation paradigm) + CookDb (semantic-only) are named-forward.
+- ZERO-MOTION recook: runtime state; the §106 CDEP records are byte-stable.
+- ADR-0118 ACCEPTED. tests: test_incremental_dag (6) incl. the §107 rule + insertion-order
+  independence; the render-asset-core suite is the byte-identical determinism pin.
+
+Gated: crd-containers-tests + crd-render-asset-core-tests + crd-scene-render-tests +
+crd-ceir-cook-tests (relinked) + crd-ceir on win-debug + win-asan + linux-gcc-debug +
+linux-gcc-asan + LLVM-20 tidy (incl. new incremental_dag.hpp) + GCC + opgen drift/validator.
+Zero recook; the >=2 graphs are now one.
+```
+
+## CEIR-8i — the TRANSACTION model (ADR-0119) — 2026-08-09
+
+**The gap.** Every authored edit to a live program (a node-graph editor, an agent, a CLI `ceir edit`) is a MULTI-OP
+mutation that must be all-or-nothing. CEIR had the 1a mutation PRIMITIVES (create+place, erase, set_operand, RAUW,
+set_attr) but no atomic grouping, no rollback, and no seam feeding 8h. The last U-§ foundation gap before 8z; the
+CAD-parametric / agent-editing / reactive-UI universality domains are all transaction-shaped and blocked on it.
+
+**The design fork (advisor-first): eager mutation + an inverse-op UNDO JOURNAL, reverse-order replay.** Rejected: a
+COW module snapshot (fights the arena's stable-pointer identity model — handles ARE identity; a snapshot invalidates
+every external reference + breaks stable-id continuity); a deferred-apply journal (the tx body couldn't see its own
+edits — unusable for an editor building op X then wiring Y->X). ⛔ Reverse-order replay IS the correctness proof: each
+primitive's inverse telescopes back last-to-first. ⛔ The Transaction RECORDS, Context APPLIES — six thin
+transaction-only Context primitives (reinsert_erased_op / detach_and_point_use / rauw_recording / restore_attr_dict /
+resync_symbols / find_by_stable_id) ride Context's EXISTING friendships → ZERO ir.hpp edit, no second mutation
+implementation (the frame-graph-recording discipline).
+
+**Reuses the band.** A pre-existing op is referenced by its 8d StableId (survives the edit — not a pointer/pre-order);
+the committed touched/removed id-sets feed the 8h IncrementalDag (the tx says WHAT changed, the consumer computes
+revisions — 8h's division of labour); a rejected edit / failed commit reports through the 8g DiagnosticEngine.
+
+**Advisor's four begin-time corrections (all landed + tested):** (1) restore payloads (the attr dict snapshot) live in
+the CONTEXT arena, never tx-owned — a rolled-back attr dict BECOMES live module state and must outlive the Transaction
+(the linux-asan UAF guard test destroys the tx then reads). (2) commit re-syncs the SymbolTable from ops via the
+shared detail::register_symbol path (a duplicate sym_name is a commit-verify failure; rollback needs nothing — the
+index was never touched during the edit). (3) begin() calls assign_stable_ids up front — settling pre-existing ids =
+the canonical serialized form, so the ONLY tx-window assignments are to tx-created ops (all erased on rollback) → the
+watermark record/restore makes byte-identity UNCONDITIONAL. (4) graceful-reject + POISON at every mutator (never
+delegate straight to the asserting 1a primitives — hostile agent input would crash).
+
+**Advisor pre-close caught the region-bearing-erase subtree-boundary hole.** The erase pre-check guarded only the OUTER
+op's results, and Operation::erase doesn't recurse — so a nested op's cross-boundary SSA edge would leak (an IN-edge: a
+nested operand defined outside stays threaded into that external value's use-list after the tombstone; an OUT-edge: a
+nested result used outside becomes a live use into a dead subtree). Every op the suite erased was region-free, so it
+couldn't see it. Fixed: the erase mutator walks the subtree once and rejects both directions; a CLOSED subtree commits
+whole + rolls back whole (three tests added).
+
+**ZERO format motion — the recook story.** A transaction serializes NOTHING (runtime edit-session state, like the 8g
+AnalysisManager / 4b compiler mode). A committed tx changes the module's CONTENT → the ordinary content-hash cache
+miss the existing mechanism handles, NOT a schema recook. kBinaryVersion=2, kCeirCookSchema=4 UNTOUCHED; no new
+serialized record ⇒ no new fuzz corpus.
+
+**Tests.** test_transaction.cpp (12 [ceir][transaction]): commit applies + touched/removed; the A/B money proof (a
+poisoned edit → byte-identical rollback); a duplicate-symbol commit-verify failure → byte-identical; reverse-replay
+exact block order (both interleavings); a replacement never reuses a freed id; watermark-restore under rollback with a
+mid-tx serialize; erase-with-live-uses rejected not asserted; the attr-undo lifetime proof (destroy the tx, then read
+— Context-arena UAF guard); the 8h seam (touched drives recompute_after_change, §107 rule); region-bearing erase
+IN-edge reject / OUT-edge reject / closed-subtree accept+rollback.
+
+**Gate.** crd-ceir-tests + crd-ceir-host-tests + crd-ceir-cook-tests **315/315 ctest** (303 + 12) on win-debug +
+win-asan + linux-gcc-debug + linux-gcc-asan (all 3 targets fresh vs the new context.hpp surface — the stale-.obj scar)
++ LLVM-20 tidy (6 files incl. the new transaction.hpp) + GCC -Werror=switch (the 5-arm rollback switch; GCC also
+caught an MSVC-hidden unused-function) + opgen drift/validator + crd-ceir-invariants (I6: the rollback switch is on
+MutKind, not op.kind). NEXT = CEIR-8z (the BAND-8 GATE — the U-§121 twenty-item foundation DoD).
+
+## Proposed commit — CEIR-8i (user commits; NO AI trailer; ADR-0119 ships in the same batch)
+
+```
+feat(ceir-8i): transaction model -- atomic authored-mutation with commit/rollback (ADR-0119)
+
+- The atomic AUTHORED-mutation surface: a Transaction records IR edits against a Module, applies
+  them EAGERLY (the body sees its own edits), and COMMITS atomically or ROLLS BACK to the
+  byte-identical pre-transaction state. Model: eager mutation + an inverse-op UNDO JOURNAL,
+  reverse-order replay (the correctness proof). Rejected a COW module snapshot (fights the arena's
+  stable-pointer identity) and a deferred-apply journal (the body couldn't see its own edits).
+- The Transaction RECORDS, Context APPLIES -- six thin transaction-only Context primitives ride
+  Context's EXISTING friendships (reinsert_erased_op / detach_and_point_use / rauw_recording /
+  restore_attr_dict / resync_symbols / find_by_stable_id), so ZERO ir.hpp edit and no second
+  mutation implementation (the frame-graph-recording discipline).
+- REUSES the band: a pre-existing op is referenced by its 8d StableId (survives the edit); the
+  committed touched/removed id-sets feed the 8h IncrementalDag (the tx reports WHAT changed, the
+  consumer computes revisions); a rejected edit / failed commit reports via the 8g DiagnosticEngine.
+- id-under-rollback: begin() settles pre-existing ids up front (= the canonical serialized form) +
+  records the watermark; rollback() restores it -> byte-identity unconditional; a replacement never
+  reuses a freed id (the 8d discriminator holds across a committed tx).
+- Graceful-reject + POISON on every mutator (agent-facing); commit VERIFIES (per-op verifier +
+  symbol re-sync) BEFORE assigning ids. Region-bearing erase walks the subtree and rejects a nested
+  IN-edge or OUT-edge (Operation::erase doesn't recurse); a closed subtree commits + rolls back whole.
+- ZERO format motion: a transaction serializes nothing (runtime edit-session state); a committed tx
+  is an ordinary content-hash cache miss, not a schema recook. kBinaryVersion/kCeirCookSchema
+  untouched; no new fuzz corpus. Scope: authored edits only (compiler rewrites adopt journaling at 26).
+- ADR-0119 ACCEPTED. tests: test_transaction (12) incl. the A/B byte-identical rollback proof, the
+  attr-undo Context-arena lifetime guard, the 8h dirty seam, and the subtree-boundary rules.
+
+Gated: crd-ceir-tests + crd-ceir-host-tests + crd-ceir-cook-tests 315/315 on win-debug + win-asan +
+linux-gcc-debug + linux-gcc-asan + LLVM-20 tidy (incl. new transaction.hpp) + GCC -Werror=switch +
+opgen drift/validator + crd-ceir-invariants. Zero recook.
+```
+
+## CEIR-8z — BAND-8 GATE (no ADR) — 2026-08-09 → BAND 8 CLOSED
+
+**The gate.** Like 3z/4z/5z, a COMPOSING gate that PROVES the foundation is closed — it composes existing decisions
+(ADR-0111…0119) and introduces no new architecture, so it ships NO ADR. Two deliverables: the U-§121 foundation DoD
+answered item-by-item from evidence, and a composed end-to-end proof program.
+
+**The U-§121 DoD (the review doc).** The verbatim twenty-item enumeration lives in the quest prompt; the §B foundation
+matrix (23 rows) IS its operational form, so it is answered item-by-item — each row → its closing slice + the SPECIFIC
+test that is its evidence (framed AS a reconstruction, count flagged for the user to reconcile). Verdict: **20/23
+CLOSED**; the 3 remainders (Provenance transform-preservation, unknown-plugin EXECUTION-denial, agent QUERY
+introspection) are ◧ consumer-band-deferred (CEIR-26 / 9h / 9g), NOT foundation gaps.
+
+**Advisor pre-close caught the §B matrix contradicting itself** — three stale rows fixed DURING the DoD pass rather
+than inherited into the answer: Time domains read "❌ missing" though 8f closed it; Unknown-plugin content read "no
+policy doc" though ADR-0111/0115 landed the preserve-opaque policy; and ⛔ **Provenance's "policy at 8g" was an
+UNVERIFIED forward-claim — I checked ADR-0117 and it states NO transform-preservation policy**, so the honest verdict
+is named-forward-to-26, not a claimed 8g policy. The lesson: a gate that answers a status matrix must RE-VERIFY each row
+against code/ADRs; matrices accrue stale rows and unverified forward-claims.
+
+**The composing proof — `test_band8_gate.cpp` (5 [gate8]).** ONE curated program carrying every foundation axis at once
+— an Extern TYPE (8a) in an exported func signature, an Extern + aggregate ATTR (8b) on a capability-bearing op (8f)
+with EXPLICIT determinism/domain axes (the 4z Unspecified-default trap), settled stable ids (8d) — then the guarantees
+composed IN SEQUENCE on that same module: (1) byte-identical text⇔binary; (2) decode into an UNREGISTERED host (core
+substrate present, plugin absent) preserves the plugin content + re-serializes byte-exact (U-§56 × STID × caps × extern
+in ONE blob — no slice test did this); (3) re-register UNIFIES the preserved plugin type; (4) the interface hash is
+cross-Context pure (caps + extern composed); (5) ⭐ a TRANSACTION edits the preserved plugin content in the unregistered
+host — commit succeeds (an unknown op verifies true), touched-set correct; a second edit rolls back BYTE-IDENTICALLY
+(the U-§52 agent-edits-plugin-content story end-to-end); (6) a single-byte corruption sweep over the COMPOSED blob
+(cross-chunk: ATTR pool × STID × extern class strings). A tidy catch: `static const` gate arrays → dropped to plain
+const locals (register_op arena-copies), the money config re-confirmed no UAF.
+
+**Gate discipline (confirmed, not skipped).** Recook migrations kCeirCookSchema 1→2→3→4 (kBinaryVersion held at 2)
+executed + clean — test_program_cook SchemaMismatch rejects stale blobs, the cook suite green at schema 4. Fuzz corpus
+covers every open-world SERIALIZED record (extern types 8a / extern+aggregate attrs 8b / STID 8d / the composed blob
+8z); effects/locations/safety/time/caps are REGISTRATION metadata → N/A-by-design. NO new invariant earns its keep
+(documented-why: I6 gates op-kind dispatch; GCC -Werror=switch gates Extern-arm completeness, stronger than grep; the
+single-mutation-path is an ADR-0119 discipline construction paths legitimately use raw primitives for).
+
+**Gate.** crd-ceir-tests + host + cook **320/320 ctest** (315 + 5) on win-debug + win-asan + linux-gcc-debug +
+linux-gcc-asan (the money config proving the composed-blob fuzz + plugin-content transaction memory-safe) + LLVM-20
+tidy (test_band8_gate.cpp) + GCC -Werror=switch + opgen drift/validator + crd-ceir-invariants. **THE VERDICT: the
+foundation is universal by open-world semantics, not a second architecture. → BAND 8 CLOSED (8a..8z).** NEXT = CEIR-9a
+(the first universality-VALIDATION proof: notebook/incremental through the 8h model).
+
+## Proposed commit — CEIR-8z (user commits; NO AI trailer; NO ADR — a gate composes ADR-0111..0119)
+
+```
+test(ceir-8z): BAND-8 GATE -- the foundation DoD answered + one composed universality proof
+
+- BAND-8 GATE (no ADR -- a gate COMPOSES existing decisions ADR-0111..0119, the 3z/4z/5z precedent).
+  The foundation is universal by OPEN-WORLD SEMANTICS, not a second architecture.
+- The U-§121 foundation DoD answered ITEM-BY-ITEM from evidence in the universality review (the
+  §B matrix, 23 rows, each -> its closing slice + the specific test): 20/23 CLOSED; the 3 remainders
+  (Provenance transform-preservation, unknown-plugin execution-denial, agent QUERY introspection)
+  are consumer-band-deferred (CEIR-26/9h/9g), not foundation gaps. Fixed 3 stale/self-contradicting
+  §B rows during the pass (Time domains, unknown-plugin policy, and Provenance's UNVERIFIED
+  "policy at 8g" -> corrected to named-forward-26 after verifying ADR-0117 states none).
+- test_band8_gate.cpp (5 [gate8]) -- ONE composed program (Extern type + Extern/aggregate attr +
+  cap-bearing op with explicit determinism/domain axes + settled stable ids) proving, in sequence:
+  byte-identical text<->binary; PRESERVE through an unregistered host + byte-exact re-serialize
+  (U-56 x STID x caps x extern in one blob); re-register UNIFY + cross-Context interface-hash purity;
+  a TRANSACTION editing preserved plugin content (commit + byte-identical rollback, the U-52 story);
+  a single-byte corruption sweep over the composed blob.
+- Gate discipline: recook migrations (kCeirCookSchema 1->2->3->4, kBinaryVersion=2) clean; fuzz
+  covers every serialized open-world record (locations/effects/caps are registration metadata,
+  N/A-by-design); no new invariant earns its keep (I6 + -Werror=switch + the ADR discipline).
+- Review doc: the DoD table + the expanded D-H sections + the U-126 foundation verdict.
+
+Gated: crd-ceir-tests + host + cook 320/320 on win-debug + win-asan + linux-gcc-debug +
+linux-gcc-asan + LLVM-20 tidy + GCC -Werror=switch + opgen drift/validator + crd-ceir-invariants.
+Zero recook. -> BAND 8 CLOSED (8a..8z).
+```

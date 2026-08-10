@@ -13,6 +13,19 @@
 
 namespace crd::ceir
 {
+// The ONE shared compile-time FNV-1a-64 over a NUL-terminated string (CEIR-8g) — BYTE-IDENTICAL to
+// `containers::fnv1a_64` (which takes a `void*` and so is not usable in a constant expression over a string literal).
+// Every FNV id's compile-time `kId` (make_interface_id/make_analysis_id/make_diagnostic_code) calls THIS — a
+// copy-per-id would silently drift from `hash_string`, and drift means `T::kId != intern(name)`.
+[[nodiscard]] constexpr u64 fnv1a_ct(const char* s) noexcept
+{
+    u64 h = 0xcbf29ce484222325ULL;
+    for (const char* p = s; *p != '\0'; ++p)
+    {
+        h = (h ^ static_cast<u64>(static_cast<unsigned char>(*p))) * 0x00000100000001B3ULL;
+    }
+    return h;
+}
 // An interned op-kind identity: the FNV-1a hash of "dialect.op". Records/ops store THIS, never a string at runtime.
 struct OpId
 {
@@ -97,6 +110,40 @@ struct StableId
     [[nodiscard]] constexpr bool valid() const noexcept { return value != 0; }
     friend constexpr bool operator==(StableId, StableId) noexcept = default;
     friend constexpr std::strong_ordering operator<=>(StableId, StableId) noexcept = default;
+};
+
+// An interned CAPABILITY identity (CEIR-8f, ADR-0116, U-§57): the FNV-1a hash of a capability NAME (`gpu.compute`,
+// `file.write`, `external.process`, …) — a named HOST-GRANTED PERMISSION an op-kind requires. Open-world + intern-only
+// (no verify/version — a capability is a name, not a class), mirroring the InterfaceId FNV model. The program's
+// required-capability set joins the §107 interface hash. 0 = none/invalid.
+struct CapabilityId
+{
+    u64 value = 0;
+    [[nodiscard]] constexpr bool valid() const noexcept { return value != 0; }
+    friend constexpr bool operator==(CapabilityId, CapabilityId) noexcept = default;
+    friend constexpr std::strong_ordering operator<=>(CapabilityId, CapabilityId) noexcept = default;
+};
+
+// An interned ANALYSIS identity (CEIR-8g, ADR-0117): the FNV of an analysis NAME — a cached, invalidatable computation
+// over a Module (dominance, liveness, …). Open-world (a plugin registers its own analysis) + `kId` is compile-time
+// (fnv1a_ct). 0 = none/invalid.
+struct AnalysisId
+{
+    u64 value = 0;
+    [[nodiscard]] constexpr bool valid() const noexcept { return value != 0; }
+    friend constexpr bool operator==(AnalysisId, AnalysisId) noexcept = default;
+    friend constexpr std::strong_ordering operator<=>(AnalysisId, AnalysisId) noexcept = default;
+};
+
+// An interned DIAGNOSTIC CODE (CEIR-8g, ADR-0117): the FNV of a stable code NAME (`ceir.unresolved_symbol`, …) — the
+// stable identity a text/visual/agent/CLI surface renders + i18n keys off. Open-world; `kId` compile-time; a
+// reverse-lookup name table renders the NAME, not a u64. 0 = none/invalid.
+struct DiagnosticCode
+{
+    u64 value = 0;
+    [[nodiscard]] constexpr bool valid() const noexcept { return value != 0; }
+    friend constexpr bool operator==(DiagnosticCode, DiagnosticCode) noexcept = default;
+    friend constexpr std::strong_ordering operator<=>(DiagnosticCode, DiagnosticCode) noexcept = default;
 };
 
 // Provenance carried on EVERY operation from day one (ADR-0109 §6). CEIR-1c fills `file_id` from the source-map

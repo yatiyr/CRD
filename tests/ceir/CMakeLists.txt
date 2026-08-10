@@ -36,6 +36,23 @@ add_executable(crd-ceir-tests
     test_effect_open.cpp # CEIR-8c: effect family widening (u32->u64) + the open-world effect-location model (ADR-0113) - dialect location-classes behind EffectTarget::Extern
     test_stable_id.cpp   # CEIR-8d: content-independent stable semantic identity (ADR-0114) - per-op StableId, STID chunk, content-hash id-independence, reorder-invariant state schema
     test_interface_typed.cpp # CEIR-8e: trait/interface split (ADR-0115) - closed core traits (kKnownTraitsMask guard) + the typed open-world op-interface surface (CostInterface, FNV InterfaceId)
+    test_capability.cpp  # CEIR-8f: the U-57 capability contract (ADR-0116) - CapabilityId, required set on OpInfo, module-wide program set in the interface hash, host-grant check
+    test_safety.cpp      # CEIR-8f: the domain/safety split (ADR-0116) - effect_safety total switch + op_safety fold; the two-RT-oracles subset
+    test_time_domain.cpp # CEIR-8f: typed time domains (ADR-0116) - the time dialect over 8a type-classes (wall != sim), plugin domain, verify hook, U-56 round-trip
+    test_pass_manager.cpp # CEIR-8g: AnalysisManager + PassManager (ADR-0117) - cached analyses + never-stale invalidation via preserved sets
+    test_rewrite.cpp     # CEIR-8g: rewrite/conversion skeleton (ADR-0117) - try_apply per-op + ConversionTarget legality (unlisted=Illegal)
+    test_diagnostic.cpp  # CEIR-8g: DiagnosticEngine (ADR-0117) - stable codes/severity/SourceLoc/notes/fixits, one surface, text copied
+    test_transaction.cpp # CEIR-8i: transactions (ADR-0119) - atomic commit/rollback, byte-identical A/B rollback, id-under-rollback, the 8h dirty seam
+    test_band8_gate.cpp  # CEIR-8z: BAND-8 GATE - ONE composed program (extern type+attr+caps+stable-ids) proving open-world round-trip/preserve/unify/transaction, cross-Context interface-hash purity, composed-blob fuzz
+    test_notebook.cpp    # CEIR-9a: U1 notebook/incremental PROOF - real arith cells + the 8h IncrementalDag + 8i transactions; exact recompute counts, the section-107 early-cutoff (content=formula/interface=value), no second engine
+    test_daw.cpp         # CEIR-9b: U2 DAW/timeline PROOF - a mock audio dialect over 8f time domains + 5d state/feedback + 4c region legality + 8e latency interface; offline=tag-flip, the two-oracles subset, no second engine
+    test_dcc.cpp         # CEIR-9c: U3 DCC modifier-graph PROOF - a mock modifier stack; 8h affected_by AS the Blender depsgraph (tag-then-evaluate), precise upstream isolation over a two-branch join, the section-107 early-out
+    test_cad.cpp         # CEIR-9d: U4 CAD parametric PROOF - the 8i transaction is the headline (multi-op edits in one tx, byte-identical rollback, a constraint = the commit-verify), over the 8h affected_by depsgraph
+    test_eda.cpp         # CEIR-9e: U5 PCB/EDA PROOF - external tools as 8f capability-bearing ops (typed contract + effects/determinism/provenance); U-34 domain-neutral (no GPU/render vocabulary); DRC = the board verifier
+    test_ecs.cpp         # CEIR-9f: U6 Game/ECS PROOF - the 4d hazard analysis over 4a EcsRead/EcsWrite effects IS the parallelism oracle; per-component identity = the SSA Value; a whole-store write is the structural barrier
+    test_agent.cpp       # CEIR-9g: U7 Agent PROOF - the full agent loop (discover via OpSchema registry -> 8i tx -> author -> module-wide sweep + op-local backstop -> 8g diagnostics -> commit/rollback), ZERO hard-coded op knowledge
+    test_plugin.cpp      # CEIR-9h: U8 MANDATORY external-plugin PROOF - a full plugin dialect (type+attr+location+interface+ops+verifier+rewrite+lowering+provider) via public APIs only, ZERO central-enum edits (grep-gated), agent-discoverable
+    test_reload_migration.cpp # CEIR-10a: the hot-reload state-migration core - collect_state_schema + contract_hash (the Reject/Migrate decision-table split) + Interpreter snapshot/restore-by-8d-stable-id (the cell value move)
     ${CEIR_GENERATED_TESTS} # CEIR-2d: generated per-dialect smoke tests (auto-grow as dialects/ops are added)
 )
 

@@ -14,21 +14,10 @@ namespace crd::ceir
 {
 class Operation;
 
-// A constexpr FNV-1a-64 over a NUL-terminated string, BYTE-IDENTICAL to containers::fnv1a_64 (which takes a `void*`
-// and so is not usable in a constant expression over a string literal). This is what makes `T::kId` compile-time.
-[[nodiscard]] constexpr u64 interface_hash_ct(const char* s) noexcept
-{
-    u64 h = 0xcbf29ce484222325ULL;
-    for (usize i = 0; s[i] != '\0'; ++i)
-    {
-        h = (h ^ static_cast<u64>(static_cast<unsigned char>(s[i]))) * 0x00000100000001B3ULL;
-    }
-    return h;
-}
-[[nodiscard]] constexpr InterfaceId make_interface_id(const char* name) noexcept
-{
-    return InterfaceId{interface_hash_ct(name)};
-}
+// CEIR-8g: uses the ONE shared `fnv1a_ct` (id.hpp) — byte-identical to `containers::fnv1a_64`, so `T::kId` matches the
+// runtime `intern_interface(name)`. (The former local `interface_hash_ct` was hoisted to id.hpp so analysis + diagnostic
+// ids share it and cannot drift.)
+[[nodiscard]] constexpr InterfaceId make_interface_id(const char* name) noexcept { return InterfaceId{fnv1a_ct(name)}; }
 
 // ⭐ The LIVE proof interface (ADR-0115 §2.2): "what does this op-kind cost?" An analysis dispatches through THIS,
 // never a switch on op.kind. Cost is the one catalog family with no existing home (MemoryEffect/Shape/Lowering/… live

@@ -40,10 +40,32 @@ while IFS= read -r hit; do
     [[ -n "$hit" ]] && violations+=("I6 switches on an op KIND (dispatch via traits/interfaces): $hit")
 done < <(grep -rnE "switch[[:space:]]*\(.*\bkind[[:space:]]*\([[:space:]]*\)" "$ceir/include" "$ceir/src" 2>/dev/null || true)
 
+# ── U-116 (external-plugin proof, CEIR-9h): the central OPEN-WORLD enums must NOT grow to accommodate a plugin/domain.
+# TypeKind/AttrKind's LAST enumerator is the `Extern` door — a new type/attr rides Extern + registration, NEVER a new
+# enum value (the 8a/8b thesis). A future slice widening one trips this forever. (EffectFamily is already pinned at
+# compile time by its kLastEffectFamily static_assert.)
+enum_last() { # $1 file, $2 enum → prints the last enumerator identifier
+    awk -v e="$2" '
+        $0 ~ ("enum class " e "([^A-Za-z0-9_]|$)") { inenum = 1; next }
+        inenum && /^[[:space:]]*}/ { print last; exit }
+        inenum {
+            line = $0; sub(/\/\/.*/, "", line); gsub(/^[[:space:]]+/, "", line)
+            if (match(line, /^[A-Za-z_][A-Za-z0-9_]*/)) { last = substr(line, RSTART, RLENGTH) }
+        }
+    ' "$1"
+}
+for pin in "include/crd/ceir/type.hpp:TypeKind:Extern" "include/crd/ceir/attr.hpp:AttrKind:Extern"; do
+    IFS=: read -r pf pe px <<<"$pin"
+    got="$(enum_last "$ceir/$pf" "$pe")"
+    if [[ "$got" != "$px" ]]; then
+        violations+=("U-116 $pe last enumerator is '$got', expected '$px' — a central enum grew; a plugin/domain must use the Extern door + registration, not a new enum value")
+    fi
+done
+
 if [[ ${#violations[@]} -gt 0 ]]; then
-    echo "crd-ceir invariant violations (ADR-0109 I3/I5 + open-world I6):"
+    echo "crd-ceir invariant violations (ADR-0109 I3/I5 + open-world I6 + U-116 enum-pins):"
     printf '  %s\n' "${violations[@]}"
     exit 1
 fi
-echo "crd-ceir invariants OK (I3: no shader-lang/forbidden include; I5: host-only links; I6: no switch on op.kind)."
+echo "crd-ceir invariants OK (I3: no shader-lang/forbidden include; I5: host-only links; I6: no switch on op.kind; U-116: TypeKind/AttrKind end at Extern)."
 exit 0

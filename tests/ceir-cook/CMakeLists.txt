@@ -1,6 +1,8 @@
 add_executable(crd-ceir-cook-tests
     test_program_cook.cpp    # CEIR-7a: cook a module -> a self-describing CRDR blob; round-trip, cross-Context reload, verify-reject, header validation
     test_runtime_program.cpp # CEIR-7b: RuntimeProgram + generation-safe RuntimeSlot handle; hash-validated load, splice-reject, generation staleness
+    test_hot_reload.cpp      # CEIR-10a stage 2: the ReloadSet supervisor - body-edit hot-swap + handle staleness, contract-change/needs-migration reject + last-good, the 8h affected-set, dup-symbol + AssetId-0 reject
+    test_plan_cache.cpp      # CEIR-10b: the execution-plan cache - content-addressed store validated on hit against live truth (deps by interface_hash), §107 extended to plans, clear/evict "never truth"
 )
 
 target_link_libraries(crd-ceir-cook-tests PRIVATE

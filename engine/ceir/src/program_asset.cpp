@@ -130,13 +130,17 @@ const Operation* find_return(Operation* func_op, OpId return_kind)
 }
 } // namespace
 
-u64 interface_hash(Context& ctx, const Module& module, memory::IAllocator* scratch)
+namespace
 {
-    containers::Array<u8>         proj(scratch);
+// The CALLER-VISIBLE CONTRACT projection (CEIR-10a extraction — shared by interface_hash + contract_hash, byte-identical
+// to the pre-10a inline form): each EXPORTED (Public) func SORTED BY NAME → {sym_name · param types · result types · 5c
+// TRANSITIVE effect mask}, followed by the §57 capability contract (`push_caps_projection`). ⛔ NO state schema here —
+// that is the one segment `contract_hash` omits so a signature change (Reject) is distinguished from a state-schema-only
+// change (Migrate). A func reorder is an impl edit (sort by name, never body order).
+void push_funcs_projection(Context& ctx, const Module& module, containers::Array<u8>& proj, memory::IAllocator* scratch)
+{
     containers::Array<Operation*> funcs(scratch);
     collect_funcs(ctx, module, funcs);
-
-    // Keep ONLY exported (Public) funcs, then SORT BY NAME (⛔ never body order — a func reorder is an impl edit).
     const SymbolTable* const syms = module.symbols();
     containers::Array<Operation*> exported(scratch);
     for (u32 i = 0; i < static_cast<u32>(funcs.size()); ++i)
@@ -161,7 +165,6 @@ u64 interface_hash(Context& ctx, const Module& module, memory::IAllocator* scrat
         }
         exported[j] = key;
     }
-
     const OpId return_kind = func::return_kind(ctx);
     for (u32 i = 0; i < static_cast<u32>(exported.size()); ++i)
     {
@@ -185,25 +188,34 @@ u64 interface_hash(Context& ctx, const Module& module, memory::IAllocator* scrat
         ctx.collect_region_effective_mask(*f->region(0), q, mask);
         push_u64(proj, mask);
     }
+}
 
-    // §20 STATE SCHEMA — MODULE-WIDE (every StateEdge cell), NOT per-exported-func: a PRIVATE callee's cells are live
-    // runtime state a hot-swap must migrate; exported-only under-inclusion risks a wrong "compatible" verdict (state
-    // corruption), while over-inclusion only costs a spurious recook — the safety asymmetry decides it.
-    // ⭐ CEIR-8d (ADR-0114 §2.7): cells are now keyed by their StateEdge op's STABLE ID (was body order). Collect
-    // (stable_id, value type, §20 depth), SORT by stable id, then hash — so a REORDER is invariant (the false-
-    // incompatible fixed), while the id VALUE in the hash keeps delete-id-1 + add-id-2 correctly INCOMPATIBLE (an
-    // order-only hash would call them compatible and 10a migration would silently lose the id-1 state).
+// ⭐ CEIR-8f (ADR-0116 §2.1) CAPABILITY CONTRACT — the program's REQUIRED host-granted capability set (module-wide,
+// sorted + deduped; an unregistered op contributes external.process). Part of the §107 swap-compatible identity (a host
+// must re-grant if the set changes). ⛔ the count is pushed UNCONDITIONALLY even when 0 (the 8c no-conditional-width
+// lesson — a cap-free module recooks too), then the sorted-unique id VALUES.
+void push_caps_projection(Context& ctx, const Module& module, containers::Array<u8>& proj, memory::IAllocator* scratch)
+{
+    push_str(proj, containers::StringView("caps:"));
+    containers::Array<CapabilityId> caps(scratch);
+    ctx.program_capabilities(module, caps);
+    push_u32(proj, static_cast<crd::u32>(caps.size()));
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(caps.size()); ++i) { push_u64(proj, caps[i].value); }
+}
+
+// §20 STATE SCHEMA walk — MODULE-WIDE (every StateEdge cell), NOT per-exported-func: a PRIVATE callee's cells are live
+// runtime state a hot-swap must migrate; exported-only under-inclusion risks a wrong "compatible" verdict (state
+// corruption), while over-inclusion only costs a spurious recook — the safety asymmetry decides it.
+// ⭐ CEIR-8d (ADR-0114 §2.7): cells are keyed by their StateEdge op's STABLE ID (was body order). Collect
+// (stable_id, value type, §20 depth), SORT by stable id — so a REORDER is invariant (the false-incompatible fixed),
+// while the id VALUE keeps delete-id-1 + add-id-2 correctly INCOMPATIBLE (an order-only key would call them compatible
+// and 10a migration would silently lose the id-1 state). ⛔ Assigns stable ids first.
+void collect_state_cells(Context& ctx, const Module& module, containers::Array<StateCell>& cells)
+{
     ctx.assign_stable_ids(module); // ensure every StateEdge op carries a stable id before we read it
-    push_str(proj, containers::StringView("state:"));
-    struct Cell
-    {
-        crd::u64 id;
-        TypeId   type;
-        crd::u32 depth;
-    };
     struct StateW
     {
-        static void go(Context& c, Region* r, containers::Array<Cell>& cells)
+        static void go(Context& c, Region* r, containers::Array<StateCell>& out)
         {
             if (r == nullptr) { return; }
             for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
@@ -219,20 +231,19 @@ u64 interface_hash(Context& ctx, const Module& module, memory::IAllocator* scrat
                             const AttrValue dv = c.attr_value(depth_id);
                             if (dv.kind == AttrKind::Int && dv.i >= 1) { depth = static_cast<crd::u32>(dv.i); }
                         }
-                        cells.push_back(Cell{op->stable_id().value, op->result(0)->type(), depth});
+                        out.push_back(StateCell{op->stable_id().value, op->result(0)->type(), depth});
                     }
-                    for (crd::u32 i = 0; i < op->num_regions(); ++i) { go(c, op->region(i), cells); }
+                    for (crd::u32 i = 0; i < op->num_regions(); ++i) { go(c, op->region(i), out); }
                 }
             }
         }
     };
-    containers::Array<Cell> cells(scratch);
     StateW::go(ctx, module.body(), cells);
     // insertion sort by stable id (cells are few; a stable id is unique per op, so the order is total + deterministic).
     for (crd::u32 i = 1; i < static_cast<crd::u32>(cells.size()); ++i)
     {
-        const Cell key = cells[i];
-        crd::u32   j   = i;
+        const StateCell key = cells[i];
+        crd::u32        j   = i;
         while (j > 0U && cells[j - 1U].id > key.id)
         {
             cells[j] = cells[j - 1U];
@@ -240,14 +251,44 @@ u64 interface_hash(Context& ctx, const Module& module, memory::IAllocator* scrat
         }
         cells[j] = key;
     }
+}
+} // namespace
+
+u64 interface_hash(Context& ctx, const Module& module, memory::IAllocator* scratch)
+{
+    containers::Array<u8> proj(scratch);
+    push_funcs_projection(ctx, module, proj, scratch);
+    // §20 STATE SCHEMA folded in AT THIS byte position (unchanged from CEIR-8d): the "state:" marker, then each cell
+    // (stable_id, type, depth) sorted by id. ⛔ Byte order is load-bearing — a change here recooks every 'CEIR' asset.
+    push_str(proj, containers::StringView("state:"));
+    containers::Array<StateCell> cells(scratch);
+    collect_state_cells(ctx, module, cells);
     for (crd::u32 i = 0; i < static_cast<crd::u32>(cells.size()); ++i)
     {
         push_u64(proj, cells[i].id); // ⛔ the id VALUE is hashed (the delete/re-add discriminator), not just the order
         encode_type(ctx, cells[i].type, proj);
         push_u32(proj, cells[i].depth);
     }
-
+    push_caps_projection(ctx, module, proj, scratch);
     return fnv1a(containers::ConstSpan<u8>(proj.data(), proj.size()));
+}
+
+// §107 CONTRACT HASH (CEIR-10a) — `interface_hash`'s projection MINUS the state schema (funcs + caps only). `interface_hash`
+// ≡ funcs + state + caps, so `contract_hash`-equal + `interface_hash`-differ ⇒ ONLY the state schema changed → a migration
+// fn may cover it; a `contract_hash` difference means callers break (Reject). PURE analysis — the cooked format is untouched.
+u64 contract_hash(Context& ctx, const Module& module, memory::IAllocator* scratch)
+{
+    containers::Array<u8> proj(scratch);
+    push_funcs_projection(ctx, module, proj, scratch);
+    push_caps_projection(ctx, module, proj, scratch);
+    return fnv1a(containers::ConstSpan<u8>(proj.data(), proj.size()));
+}
+
+containers::Array<StateCell> collect_state_schema(Context& ctx, const Module& module, memory::IAllocator* alloc)
+{
+    containers::Array<StateCell> cells(alloc);
+    collect_state_cells(ctx, module, cells);
+    return cells;
 }
 
 namespace

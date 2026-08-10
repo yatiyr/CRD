@@ -59,8 +59,30 @@ OpId Dialect::register_op(containers::StringView op, const OpSpec& spec)
                    "register_op: an intrinsic op ([op.native]) must name a native_provider");
     info->intrinsic       = spec.intrinsic;
     info->native_provider = spec.native_provider;
+    // CEIR-8f (ADR-0116): intern the required-capability NAMES to CapabilityIds and arena-copy the set (the effects
+    // precedent — the borrowed name span need not outlive the call). The program's required set is the module-wide union.
+    if (const auto n = static_cast<u32>(spec.capabilities.size()); n > 0U)
+    {
+        CapabilityId* const owned = memory::construct_array<CapabilityId>(m_ctx->m_arena, n);
+        for (u32 i = 0; i < n; ++i)
+        {
+            // ⛔ declared-words-validated (the intrinsic-must-name-provider parallel): an EMPTY capability name hashes
+            // to the FNV offset basis — a valid-looking phantom id that would smuggle into the interface hash. Reject it.
+            CRD_ASSERT_MSG(!spec.capabilities[i].empty(), "register_op: a required capability name must be non-empty");
+            owned[i] = m_ctx->intern_capability(spec.capabilities[i]);
+        }
+        info->required_capabilities = owned;
+        info->num_capabilities      = n;
+    }
     m_ctx->m_op_infos.insert(kind.value, info);
     return kind;
+}
+
+containers::ConstSpan<CapabilityId> Context::op_capabilities(OpId kind) const noexcept
+{
+    const OpInfo* const info = op_info(kind); // ⛔ EMPTY≠UNKNOWN: unregistered ⇒ {} here; program_capabilities adds
+    if (info == nullptr) { return {}; }       // external.process for an unknown kind (an empty span = registered, none)
+    return containers::ConstSpan<CapabilityId>(info->required_capabilities, info->num_capabilities);
 }
 
 TypeClassId Dialect::register_type_class(containers::StringView cls, const TypeClassSpec& spec)

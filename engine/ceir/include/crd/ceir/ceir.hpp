@@ -12,11 +12,16 @@
 #include <crd/ceir/binary.hpp>
 #include <crd/ceir/builder.hpp>
 #include <crd/ceir/context.hpp>
+#include <crd/ceir/diagnostic.hpp>
 #include <crd/ceir/dialect.hpp>
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/id.hpp>
 #include <crd/ceir/interface.hpp>
 #include <crd/ceir/ir.hpp>
 #include <crd/ceir/parse.hpp>
+#include <crd/ceir/pass_manager.hpp>
 #include <crd/ceir/print.hpp>
+#include <crd/ceir/rewrite.hpp>
 #include <crd/ceir/symbol_table.hpp>
+#include <crd/ceir/time.hpp>
+#include <crd/ceir/transaction.hpp>
