@@ -8,9 +8,12 @@
 //
 // (Binding device resources + resolving the ECS draw lists is the host's job at record time — this gate is topology.)
 
+#include <crd/ceir/ceir.hpp>
 #include <crd/framecook/frame_asset.hpp>
+#include <crd/framecook/frame_ceir.hpp>
 #include <crd/framecook/frame_template_bridge.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/platform/filesystem.hpp>
 #include <crd/renderasset/diagnostic.hpp>
 #include <crd/rendergraph/frame_graph.hpp>
 #include <crd/renderpass/executor_registry.hpp>
@@ -84,6 +87,15 @@ void build_forward_csm(fc::FrameGraphBuilder& b, crd::memory::IAllocator& alloc)
     add_buffer("instances");
     add_buffer("cull_args");
 
+    // DECLARE the ECS draw lists (Fork A: a pass references a draw list by OPERAND, so it must be a declared frame.draw_list —
+    // the canonical CEIR model; the bridge also resolves by name, so this is bridge-neutral but ceir-convertible).
+    const u32 dl_shadow = b.add_draw_list(StringView("shadow_casters"));
+    b.draw_list_all(dl_shadow, StringView("Transform"));
+    b.draw_list_all(dl_shadow, StringView("Mesh"));
+    const u32 dl_opaque = b.add_draw_list(StringView("opaque"));
+    b.draw_list_all(dl_opaque, StringView("Transform"));
+    b.draw_list_all(dl_opaque, StringView("Mesh"));
+
     // csm_cascade: a for_each depth-only pass, one instance per cascade, each writing its atlas slice.
     const u32 csm = b.add_pass(StringView("csm_cascade"), StringView("raster.depth_only"));
     b.pass_for_each(csm, fc::FrameForEach::LightCascades, 0U);
@@ -116,6 +128,96 @@ void build_forward_csm(fc::FrameGraphBuilder& b, crd::memory::IAllocator& alloc)
     // present the canvas.
     const u32 present = b.add_pass(StringView("present"), StringView("present"));
     b.pass_reads(present, StringView("@output"));
+}
+
+// A generic for_each resolver for the shipped-asset gate: every host count the built-in generators need.
+u32 generic_for_each_count(fc::FrameForEach kind, u32 arg, void* /*user*/)
+{
+    switch (kind)
+    {
+    case fc::FrameForEach::None: return 1U;
+    case fc::FrameForEach::StereoViews: return 2U;
+    case fc::FrameForEach::CubeFaces: return 6U;
+    case fc::FrameForEach::ShadowCastingLights: return 2U;
+    case fc::FrameForEach::LightCascades: return arg > 0U ? arg : 4U;
+    }
+    return 1U;
+}
+
+// CEIR-15e: the A/B RUNTIME-FIDELITY gate for ONE desc — build_frame_graph_template(desc) must be BYTE-EQUIVALENT to
+// build_frame_graph_template(desc round-tripped through ceir.frame). If the DIRECT desc does not bridge (a bridge gap, not
+// a ceir divergence), we only assert the round-trip bridges identically. All comparisons via Catch CHECKs.
+void ab_template_fidelity(const fc::FrameGraphDesc& desc, rp::ExecutorRegistry& schemas, crd::memory::IAllocator& alloc)
+{
+    crd::renderasset::DiagnosticList diags_a(&alloc);
+    rg::FrameGraphTemplate           tmpl_a(&alloc);
+    const bool ok_a = fc::build_frame_graph_template(desc, generic_for_each_count, nullptr, schemas, tmpl_a, diags_a);
+
+    // round-trip through ceir.frame (Fork E) and lower the reconstruction.
+    crd::ceir::Context       ctx(&alloc);
+    crd::ceir::Module* const m = fc::to_ceir_frame(desc, ctx);
+    REQUIRE(m != nullptr); // ⛔ the CEIR path must ACCEPT every shipped asset
+    REQUIRE(ctx.find_frame_misuse(*m).kind == crd::ceir::FrameMisuseKind::None);
+    fc::FrameGraphDesc desc_b(&alloc);
+    REQUIRE(fc::from_ceir_frame(ctx, *m, &alloc, desc_b));
+    crd::renderasset::DiagnosticList diags_b(&alloc);
+    rg::FrameGraphTemplate           tmpl_b(&alloc);
+    const bool ok_b = fc::build_frame_graph_template(desc_b, generic_for_each_count, nullptr, schemas, tmpl_b, diags_b);
+
+    REQUIRE(ok_a == ok_b); // the ceir round-trip does not change bridgeability
+    if (!ok_a) { return; } // a bridge gap on BOTH — not this gate's subject
+
+    REQUIRE(tmpl_a.passes().size() == tmpl_b.passes().size());
+    for (u32 i = 0; i < tmpl_a.passes().size(); ++i)
+    {
+        const rg::GraphPass& pa = tmpl_a.passes()[i];
+        const rg::GraphPass& pb = tmpl_b.passes()[i];
+        CHECK(pa.name_hash == pb.name_hash);
+        CHECK(pa.payload.executor == pb.payload.executor);
+        REQUIRE(pa.payload.resources.size() == pb.payload.resources.size());
+        for (u32 r = 0; r < pa.payload.resources.size(); ++r)
+        {
+            const rp::ResourceRef& ra = pa.payload.resources[r];
+            const rp::ResourceRef& rb = pb.payload.resources[r];
+            CHECK(ra.slot_name_hash == rb.slot_name_hash);
+            CHECK(ra.kind == rb.kind);
+            CHECK(ra.access == rb.access);
+            CHECK(ra.resource_id == rb.resource_id);
+        }
+    }
+
+    rg::CompiledFrameGraph ca(&alloc);
+    rg::CompiledFrameGraph cb(&alloc);
+    const bool             cok_a = rg::compile(tmpl_a, schemas, 1920U, 1080U, ca, diags_a);
+    const bool             cok_b = rg::compile(tmpl_b, schemas, 1920U, 1080U, cb, diags_b);
+    REQUIRE(cok_a == cok_b);
+    if (cok_a)
+    {
+        REQUIRE(ca.schedule().size() == cb.schedule().size());
+        for (u32 s = 0; s < ca.schedule().size(); ++s) { CHECK(ca.schedule()[s] == cb.schedule()[s]); }
+    }
+}
+
+// Load a shipped .frame.toml (from the CRD_FRAME_ASSETS_DIR the CMake pins) and run the A/B fidelity gate on it.
+void gate_shipped_asset(const char* stem, crd::memory::IAllocator& alloc)
+{
+    INFO("shipped asset = " << stem);
+    crd::containers::String path(&alloc);
+    path.append(CRD_FRAME_ASSETS_DIR);
+    path.append("/");
+    path.append(stem);
+    path.append(".frame.toml");
+    crd::containers::String toml(&alloc);
+    REQUIRE(crd::platform::fs::read_file_text(crd::platform::fs::Path{StringView(path.c_str(), path.size())}, toml));
+
+    fc::FrameGraphDesc     desc(&alloc);
+    crd::containers::String where(&alloc);
+    REQUIRE(fc::parse_frame_toml(StringView(toml.c_str(), toml.size()), desc, &where) == fc::FrameCookError::Ok);
+
+    crd::renderasset::DiagnosticList diags(&alloc);
+    rp::ExecutorRegistry             schemas(&alloc);
+    REQUIRE(rp::register_builtin_executors(schemas, diags) == 14U);
+    ab_template_fidelity(desc, schemas, alloc);
 }
 
 } // namespace
@@ -188,6 +290,96 @@ TEST_CASE("RAF-8: a forward_csm frame bridges to a render-graph template and com
     }
     CHECK(fwd_pos < post_pos);     // forward writes scene_color; post reads it
     CHECK(post_pos < present_pos); // post writes @output; present reads it
+}
+
+// ── CEIR-15d-5: RUNTIME FIDELITY of the CEIR path (Fork E). The `ceir.frame` executes through the EXISTING runtime via the
+// backward converter: `desc → to_ceir_frame → from_ceir_frame → desc' → build_frame_graph_template`. This proves the whole
+// round-trip lowers to a BYTE-EQUIVALENT render-graph template — a STRONGER gate than the emit_frame_toml round-trip, because
+// it catches any desc field the ceir round-trip lost that the BRIDGE consumes but the toml serializer does not. forward_csm
+// exercises the hard cases together: a `for_each` depth-only pass, an INDEXED (`[$index]`) layered-atlas write, external
+// buffers (imports), a sampled depth texture, MRT-adjacent depth/colour, and present. ──
+TEST_CASE("CEIR-15d-5: the ceir round-trip lowers to an IDENTICAL render-graph template (Fork E runtime fidelity)",
+          "[framecook][ceir][frame][bridge]")
+{
+    crd::memory::TlsfAllocator alloc(8U << 20U, nullptr, "15d5-parity");
+    fc::FrameGraphBuilder      builder(&alloc, StringView("forward_csm"));
+    build_forward_csm(builder, alloc);
+
+    crd::renderasset::DiagnosticList diags(&alloc);
+    rp::ExecutorRegistry             schemas(&alloc);
+    REQUIRE(rp::register_builtin_executors(schemas, diags) == 14U);
+
+    // (A) lower the DIRECT desc.
+    rg::FrameGraphTemplate tmpl_a(&alloc);
+    REQUIRE(fc::build_frame_graph_template(builder.desc(), four_cascades, nullptr, schemas, tmpl_a, diags));
+    REQUIRE_FALSE(diags.has_errors());
+
+    // round-trip the desc THROUGH ceir.frame.
+    crd::ceir::Context        ctx(&alloc);
+    crd::ceir::Module* const  m = fc::to_ceir_frame(builder.desc(), ctx);
+    REQUIRE(m != nullptr);
+    fc::FrameGraphDesc        desc_b(&alloc);
+    REQUIRE(fc::from_ceir_frame(ctx, *m, &alloc, desc_b));
+
+    // (B) lower the ROUND-TRIPPED desc through the SAME bridge.
+    rg::FrameGraphTemplate tmpl_b(&alloc);
+    REQUIRE(fc::build_frame_graph_template(desc_b, four_cascades, nullptr, schemas, tmpl_b, diags));
+    REQUIRE_FALSE(diags.has_errors());
+
+    // ⭐ the two templates are IDENTICAL — pass-for-pass, executor-for-executor, slot-for-slot.
+    REQUIRE(tmpl_a.passes().size() == tmpl_b.passes().size());
+    for (u32 i = 0; i < tmpl_a.passes().size(); ++i)
+    {
+        const rg::GraphPass& pa = tmpl_a.passes()[i];
+        const rg::GraphPass& pb = tmpl_b.passes()[i];
+        CHECK(pa.name_hash == pb.name_hash);
+        CHECK(pa.payload.executor == pb.payload.executor);
+        REQUIRE(pa.payload.resources.size() == pb.payload.resources.size());
+        for (u32 r = 0; r < pa.payload.resources.size(); ++r)
+        {
+            const rp::ResourceRef& ra = pa.payload.resources[r];
+            const rp::ResourceRef& rb = pb.payload.resources[r];
+            CHECK(ra.slot_name_hash == rb.slot_name_hash);
+            CHECK(ra.kind == rb.kind);
+            CHECK(ra.access == rb.access);
+            CHECK(ra.resource_id == rb.resource_id);
+        }
+    }
+
+    // …and they SCHEDULE identically (same passes, same order — the ordering the runtime executes).
+    rg::CompiledFrameGraph ca(&alloc);
+    rg::CompiledFrameGraph cb(&alloc);
+    REQUIRE(rg::compile(tmpl_a, schemas, 1920U, 1080U, ca, diags));
+    REQUIRE(rg::compile(tmpl_b, schemas, 1920U, 1080U, cb, diags));
+    REQUIRE_FALSE(diags.has_errors());
+    REQUIRE(ca.schedule().size() == cb.schedule().size());
+    for (u32 s = 0; s < ca.schedule().size(); ++s) { CHECK(ca.schedule()[s] == cb.schedule()[s]); }
+}
+
+// ── CEIR-15e: every SHIPPED frame asset lowers IDENTICALLY through the CEIR path (device-free per-asset fidelity). Each
+// section reads the REAL .frame.toml, parses it, and asserts build_frame_graph_template(desc) is byte-equivalent to
+// build_frame_graph_template(desc round-tripped through ceir.frame). A per-asset SECTION so a gap names the exact asset. ──
+TEST_CASE("CEIR-15e: shipped frame assets lower identically through the CEIR path", "[framecook][ceir][frame][bridge][15e]")
+{
+    crd::memory::TlsfAllocator alloc(32U << 20U, nullptr, "15e-assets");
+    SECTION("forward_basic") { gate_shipped_asset("forward_basic", alloc); }
+    SECTION("forward_srgb") { gate_shipped_asset("forward_srgb", alloc); }
+    SECTION("forward_agx") { gate_shipped_asset("forward_agx", alloc); }
+    SECTION("forward_csm") { gate_shipped_asset("forward_csm", alloc); }
+    SECTION("forward_csm_srgb") { gate_shipped_asset("forward_csm_srgb", alloc); }
+    SECTION("forward_csm_agx") { gate_shipped_asset("forward_csm_agx", alloc); }
+    SECTION("forward_csm_moment") { gate_shipped_asset("forward_csm_moment", alloc); }
+    SECTION("forward_csm_gpu") { gate_shipped_asset("forward_csm_gpu", alloc); }
+    SECTION("forward_csm_gpu_srgb") { gate_shipped_asset("forward_csm_gpu_srgb", alloc); }
+    SECTION("scene_cull") { gate_shipped_asset("scene_cull", alloc); }
+    // (scene_gpu_cull is EXCLUDED: it is a compute-only GPU-cull FRAGMENT — produces the instances/cull_args buffers a forward
+    //  pass consumes, writes no @output, so it is not a standalone renderable frame [NoOutputPass]. Its CEIR fidelity rides
+    //  the frames that consume its output; the standalone-frame gate does not apply to a fragment.)
+    SECTION("scene_mesh") { gate_shipped_asset("scene_mesh", alloc); }
+    SECTION("scene_tess") { gate_shipped_asset("scene_tess", alloc); }
+    SECTION("scene_visbuffer") { gate_shipped_asset("scene_visbuffer", alloc); }
+    SECTION("scene_rt") { gate_shipped_asset("scene_rt", alloc); }
+    SECTION("velocity_debug") { gate_shipped_asset("velocity_debug", alloc); }
 }
 
 TEST_CASE("RAF-8: an amplification pass kind now MAPS (the RAF-8 tail closed the gap)", "[framecook][raf8][bridge]")

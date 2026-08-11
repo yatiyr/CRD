@@ -98,6 +98,9 @@ containers::StringView execute_error_name(ExecuteError e) noexcept
     case ExecuteError::BindingArity: return containers::StringView("BindingArity");
     case ExecuteError::UnmappedBinding: return containers::StringView("UnmappedBinding");
     case ExecuteError::UnsupportedCommand: return containers::StringView("UnsupportedCommand");
+    case ExecuteError::UnresolvedProgram: return containers::StringView("UnresolvedProgram");
+    case ExecuteError::NoFrameGraph: return containers::StringView("NoFrameGraph");
+    case ExecuteError::FrameBuildFailed: return containers::StringView("FrameBuildFailed");
     }
     return containers::StringView("None");
 }

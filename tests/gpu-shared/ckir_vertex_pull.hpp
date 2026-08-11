@@ -40,4 +40,41 @@ inline void build_vertex_pull_vs(crd::kir::KGraph& g, crd::kir::KEntry& ve)
     ve.n_out    = 0;
 }
 
+// CEIR-14z-6: the DrawIndex-READING pull VS — build_vertex_pull_vs plus an X shift by the pushed SV_DrawIndex (uint → float).
+// Draw sub-command i lands at x + i (draw 0 → left, draw 1 → right). This is the DrawIndex-PUSH discriminator: if the raster
+// executor does NOT push the per-sub-draw row (the REN-40 scar), every sub-draw reads DrawIndex 0 → all land left → the
+// right half reads the clear. Positional (not colour) so the outcome is draw-ORDER-independent. Pairs with an indexed-indirect
+// draw whose args hold N identical commands. (KBuiltin::DrawIndex is emitter-supported: GLSL pc_draw.index+gl_DrawIDARB, HLSL
+// a b7 root constant — no new emitter work.)
+inline void build_vertex_pull_drawindex_vs(crd::kir::KGraph& g, crd::kir::KEntry& ve)
+{
+    namespace kir = crd::kir;
+    const auto sh = kir::make_shape({1});
+
+    const int vid    = g.builtin(kir::KBuiltin::VertexIndex);
+    const int stride = g.constant(12.0, sh, kir::DType::I32);
+    const int base   = g.binary(kir::KOp::Mul, vid, stride);
+
+    const auto fetch = [&](int word_offset) {
+        const int off  = g.constant(static_cast<crd::f64>(word_offset), sh, kir::DType::I32);
+        const int idx  = g.binary(kir::KOp::Add, base, off);
+        const int word = g.storage_load(idx);
+        const int bits = g.cast(word, kir::DType::I32);
+        return g.int_bits_to_float(bits);
+    };
+
+    const int x0    = fetch(0);
+    const int y     = fetch(1);
+    const int z     = fetch(2);
+    const int di    = g.cast(g.builtin(kir::KBuiltin::DrawIndex), kir::DType::F32); // the pushed per-sub-draw row (uint → float)
+    const int shift = g.constant(1.0, sh, kir::DType::F32);
+    const int x     = g.binary(kir::KOp::Add, x0, g.binary(kir::KOp::Mul, di, shift));
+    const int w     = g.constant(1.0, sh, kir::DType::F32);
+    const int pos   = g.vec4(x, y, z, w);
+
+    ve.stage    = kir::KStage::Vertex;
+    ve.position = pos;
+    ve.n_out    = 0;
+}
+
 } // namespace crd::gputest

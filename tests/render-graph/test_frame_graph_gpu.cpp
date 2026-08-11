@@ -289,9 +289,13 @@ void record_test_mrt(const crd::rendergraph::PassPayload& /*payload*/, crd::rend
     gpu::RenderingDesc rd;
     rd.width = c0->width();
     rd.height = c0->height();
-    const gpu::ClearColor black{0.0F, 0.0F, 0.0F, 1.0F};
-    rd.color.push_back(gpu::ColorAttachmentDesc{c0, gpu::LoadOp::Clear, gpu::StoreOp::Store, black, gpu::BlendMode::Opaque});
-    rd.color.push_back(gpu::ColorAttachmentDesc{c1, gpu::LoadOp::Clear, gpu::StoreOp::Store, black, gpu::BlendMode::Opaque});
+    // CEIR-14z-4b: DISTINCT per-attachment clears — c0 clears BLUE, c1 clears RED. A verb that broadcast ONE clear to
+    // every attachment (the pre-14z-4b shared-clear bug) would leave both corners the SAME colour; distinct corners prove
+    // each attachment carried its OWN clear.
+    const gpu::ClearColor blue{0.0F, 0.0F, 1.0F, 1.0F};
+    const gpu::ClearColor red{1.0F, 0.0F, 0.0F, 1.0F};
+    rd.color.push_back(gpu::ColorAttachmentDesc{c0, gpu::LoadOp::Clear, gpu::StoreOp::Store, blue, gpu::BlendMode::Opaque});
+    rd.color.push_back(gpu::ColorAttachmentDesc{c1, gpu::LoadOp::Clear, gpu::StoreOp::Store, red, gpu::BlendMode::Opaque});
     gpu::RasterDrawPacket p;
     p.program = ctx.programs().raster;
     p.command = gpu::RasterCommandKind::Draw;
@@ -411,6 +415,17 @@ void run_mrt_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& raster, 
     CHECK(((p0 >> 8U) & 0xFFU) < 8U);    // c0 green low
     CHECK(((p1 >> 8U) & 0xFFU) >= 250U); // c1 GREEN high — attachment 1 was written
     CHECK((p1 & 0xFFU) < 8U);            // c1 red low
+
+    // ⭐ CEIR-14z-4b: the DISTINCT per-attachment CLEAR proof — c0's corner is BLUE, c1's corner is RED (each attachment's
+    // OWN clear). A verb that broadcast one shared clear to all attachments (the pre-14z-4b bug) would leave both corners
+    // the SAME colour; here they differ, so each attachment's clear was threaded independently. The screen corner (0,0)
+    // lies outside the ±0.8 triangle on BOTH backends (no y-flip ambiguity — the triangle reaches no screen corner).
+    const u32 k0 = c0->read_pixel(0U, 0U);
+    const u32 k1 = c1->read_pixel(0U, 0U);
+    CHECK(((k0 >> 16U) & 0xFFU) >= 250U); // c0 corner BLUE high
+    CHECK((k0 & 0xFFU) < 8U);             // c0 corner red low
+    CHECK((k1 & 0xFFU) >= 250U);          // c1 corner RED high
+    CHECK(((k1 >> 16U) & 0xFFU) < 8U);    // c1 corner blue low — DISTINCT from c0's blue clear
 }
 
 // BINDLESS record: a fullscreen draw sampling a 2-element texture array by a per-fragment index (uv.x<0.5 ? 0 : 1).

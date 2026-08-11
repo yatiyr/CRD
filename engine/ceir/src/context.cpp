@@ -1482,11 +1482,60 @@ struct ResolvedAccess
 // a registered op = one per declared effect (a registered EFFECT-FREE op contributes zero ⇒ never hazards).
 [[nodiscard]] u32 op_access_count(const Context& ctx, const Operation& op) noexcept
 {
+    // CEIR-15d-1: a frame.pass's hazards are DERIVED PER-OPERAND from `access` — ONE access per operand (see op_access_at).
+    if (ctx.op_name(op.kind()) == containers::StringView("frame.pass")) { return op.num_operands(); }
     const OpInfo* const info = ctx.op_info(op.kind());
     return info != nullptr ? info->num_effects : 1U;
 }
 [[nodiscard]] ResolvedAccess op_access_at(const Context& ctx, const Operation& op, u32 i) noexcept
 {
+    // ── CEIR-15d-1: frame.pass hazards are DERIVED PER-OPERAND from `access`, NOT from its declared AMBIENT effects. The
+    // declared [GPUCommand, MemoryReadWrite] still serve the 4c domain-legality + effect-safety layers (they read
+    // info->effects DIRECTLY) — but at THIS access layer they are REPLACED by one Memory access per operand, tokened by
+    // `access`. ⛔ GPUCommand is SUPPRESSED by omission (else its whole-class Gpu WRITE re-introduces all-pairs WAW): the
+    // frame.graph CONTAINER keeps the ambient for EXTERNAL ordering ("the passes inside carry their own precise effects"),
+    // and a frame.pass `access` is a COMPLETE declaration of what it touches (UNLIKE compute.dispatch's "may touch any bound
+    // memory", whose conservative baseline this must NOT disturb — hence the op-NAME gate). This DELIBERATELY breaks the 1:1
+    // declared-effect↔access map, for frame.pass ONLY. resource_root runs below, so a frame.history operand is its OWN root
+    // (read-of-prev vs write-of-curr ⇒ no false RAW — Fork B, at the hazard level).
+    if (ctx.op_name(op.kind()) == containers::StringView("frame.pass"))
+    {
+        if (i >= op.num_operands()) { return {ResourceClass::Memory, true, true, nullptr, 0U}; } // OOB ⇒ conservative whole-class
+        const Value* const     v   = op.operand(i);
+        const Operation* const def = v != nullptr ? v->defining_op() : nullptr;
+        if (def != nullptr && ctx.op_name(def->kind()) == containers::StringView("frame.draw_list"))
+        {
+            return {ResourceClass::None, false, false, nullptr, 0U}; // a draw-list operand is not a memory resource — INERT
+        }
+        // token i of `access` (comma-separated {r|w|rw}); STRUCTURAL decode (first 'r' ⟺ read, last 'w' ⟺ write — NEVER
+        // last-char-wins, the 15c-1b scar). A missing / short / empty token degrades to read+write (the conservative house
+        // rule; the effect path must not assume find_frame_misuse ran).
+        bool         reads  = true;
+        bool         writes = true;
+        const AttrId aid    = op.attr("access");
+        if (aid.valid())
+        {
+            const AttrValue av = ctx.attr_value(aid);
+            if (av.kind == AttrKind::String)
+            {
+                u32   tok   = 0U;
+                usize start = 0U;
+                for (usize k = 0; k <= av.s.size(); ++k)
+                {
+                    if (k != av.s.size() && av.s[k] != ',') { continue; }
+                    if (tok == i)
+                    {
+                        const containers::StringView t(av.s.data() + start, k - start);
+                        if (t.size() > 0U) { reads = t[0] == 'r'; writes = t[t.size() - 1U] == 'w'; } // else keep conservative
+                        break;
+                    }
+                    ++tok;
+                    start = k + 1U;
+                }
+            }
+        }
+        return {ResourceClass::Memory, reads, writes, ctx.resource_root(v), 0U}; // mask 0 = whole range
+    }
     const OpInfo* const info = ctx.op_info(op.kind());
     if (info == nullptr) { return {ResourceClass::Universe, true, true, nullptr, 0U}; } // unknown ⇒ maximally effectful
     const EffectRecord& e = info->effects[i];
@@ -1715,7 +1764,15 @@ struct RootEntry
     for (u32 i = 0; i < op->num_operands(); ++i)
     {
         const u32 r = root_lookup(m, nm, op->operand(i));
-        if (r != kNoRoot && out[r].last < pos) { out[r].last = pos; }
+        if (r != kNoRoot)
+        {
+            // ⛔ CEIR-15d-3b: `first` is the FIRST-USE, not the declare position — a transient's physical slot is FREE
+            // until its first access, so the memory planner can reuse it up to here (this is the render-graph aliaser's
+            // `first_use` model, frame_graph.cpp L1200-1225). The frame converter emits ALL declares up-front, which under
+            // the old declare-pos `first` tied every transient's range to ~0 → they all overlapped → zero pooling.
+            if (pos < out[r].first) { out[r].first = pos; }
+            if (out[r].last < pos) { out[r].last = pos; }
+        }
     }
     if (ctx.op_name(op->kind()) == containers::StringView("resource.export") && op->num_operands() >= 1U)
     {
@@ -1742,7 +1799,9 @@ void Context::compute_block_lifetimes(const Block& b, containers::Array<Resource
 {
     // Pass 1 — positions; collect graph-owned resources (resource.declare) into `out`; build the Value*→root map (declares
     // map to self, resource.view maps to operand(0)'s root). ⛔ resource.import is EXCLUDED — the planner never plans it.
+    constexpr u32                unused_first = ~u32{0}; // 15d-3b sentinel: a resource with no first-USE yet
     containers::Array<RootEntry> vmap(allocator());
+    containers::Array<u32>       declare_pos(allocator()); // parallel to `out`: each declare's block position (the ambient rule keys on ALLOCATION, not first-use)
     u32                          pos = 0;
     for (const Operation* op = b.first_op(); op != nullptr; op = op->next_in_block(), ++pos)
     {
@@ -1753,13 +1812,14 @@ void Context::compute_block_lifetimes(const Block& b, containers::Array<Resource
             ResourceLifetime lt;
             lt.resource   = r;
             lt.declare    = op;
-            lt.first      = pos;
+            lt.first      = unused_first; // 15d-3b: pulled down to the FIRST-USE in Pass 2, NOT the declare position
             lt.last       = pos;
             lt.lifetime   = read_lifetime_class(*this, op);
             lt.kind       = type_of(r->type()).kind;
             lt.size_class = read_size_class(*this, op);
             const u32 idx = static_cast<u32>(out.size());
             out.push_back(lt);
+            declare_pos.push_back(pos);
             vmap.push_back(RootEntry{r, idx});
         }
         else if (nm == containers::StringView("resource.view") && op->num_results() >= 1U && op->num_operands() >= 1U)
@@ -1781,13 +1841,29 @@ void Context::compute_block_lifetimes(const Block& b, containers::Array<Resource
     {
         // one recursive walk handles operand uses + export marking + ambient detection for this op AND its nested regions.
         const bool ambient = visit_uses_and_effects(*this, op, m, nm, out, pos);
-        if (ambient) // an ambient Memory/Universe touch anywhere under this pass extends every resource declared at-or-before it
+        if (ambient) // an ambient Memory/Universe touch may CLOBBER the shared physical slot of any resource ALLOCATED at-or-before it
         {
             for (u32 i = 0; i < static_cast<u32>(out.size()); ++i)
             {
-                if (out[i].first <= pos && out[i].last < pos) { out[i].last = pos; }
+                // ⛔ CEIR-15d-3b (advisor): key on the DECLARE position (allocation), not `first` (first-use), and extend
+                // SYMMETRICALLY. An ambient write at `pos` hits the physical slot, so any resource whose slot exists here
+                // must SPAN `pos` in BOTH directions — else a not-yet-first-used resource could pool into a slot the
+                // ambient op clobbers under a live tenant. Converted frames have ZERO ambient ops (the 15d-1 narrowing),
+                // so this never fires there and full first-use pooling precision holds.
+                if (declare_pos[i] <= pos)
+                {
+                    if (pos < out[i].first) { out[i].first = pos; }
+                    if (out[i].last < pos) { out[i].last = pos; }
+                }
             }
         }
+    }
+
+    // A resource NEVER used (and never ambient-touched) keeps the sentinel `first` — collapse it to a degenerate point at
+    // its declare so the interval stays well-formed (a valid graph has no such transient: ResourceNeverWritten catches it).
+    for (u32 i = 0; i < static_cast<u32>(out.size()); ++i)
+    {
+        if (out[i].first == unused_first) { out[i].first = declare_pos[i]; }
     }
 
     // Pass 3 — pin exported resources to block-END: external code may touch a published resource past any op position.
@@ -2996,6 +3072,254 @@ containers::StringView render_misuse_kind_name(RenderMisuseKind k) noexcept
 
 RenderMisuse Context::find_render_misuse(const Module& m) const noexcept { return scan_render_region(*this, m.body(), false); }
 
+// ── CEIR-15a: the ceir.frame walk (find_frame_misuse) — the scan_render_region mirror. Reuses the file-local
+// ceir_render_string_ok / ceir_parse_access / ceir_is_resource_kind / ceir_op_is_gpu_command (same TU). ──
+namespace
+{
+// The frame CLOSED vocabularies (find_frame_misuse enforces them; the render/resource-intent precedent).
+constexpr containers::StringView kForEachVocab[] = {
+    containers::StringView("none"), containers::StringView("light.cascades"), containers::StringView("views.stereo"),
+    containers::StringView("cube.faces"), containers::StringView("lights.shadow_casting")};
+constexpr containers::StringView kQueueVocab[] = {containers::StringView("graphics"), containers::StringView("async")};
+constexpr containers::StringView kCullVocab[]  = {containers::StringView("none"), containers::StringView("frustum"),
+                                                containers::StringView("frustum_occlusion")};
+constexpr containers::StringView kSortVocab[]  = {containers::StringView("none"), containers::StringView("front_to_back"),
+                                                containers::StringView("back_to_front"), containers::StringView("material")};
+
+// Is `t` the frame `draw_list` marker Extern type-class? (the ceir_attachment_class idiom.)
+[[nodiscard]] bool ceir_is_frame_draw_list(const Context& ctx, TypeId t) noexcept
+{
+    const Type ty = ctx.type_of(t);
+    return ty.kind == TypeKind::Extern
+           && ctx.type_class_name(ty.type_class) == containers::StringView("frame.draw_list");
+}
+// Is `v` a lifetime=history resource.declare result? ⛔ IDENTITY via defining_op (a view/yield-laundered value is not chased —
+// the same alias hole as resource_root; a frame.history over one is the caller's error, not a false accept here).
+[[nodiscard]] bool ceir_is_history_declare(const Context& ctx, const Value* v) noexcept
+{
+    if (v == nullptr) { return false; }
+    const Operation* const def = v->defining_op();
+    if (def == nullptr || ctx.op_name(def->kind()) != containers::StringView("resource.declare")) { return false; }
+    const AttrValue lv = ctx.attr_value(def->attr(containers::StringView("lifetime")));
+    return lv.kind == AttrKind::String && lv.s == containers::StringView("history");
+}
+
+// CEIR-15c-1a (guard 2): the SECOND frame.graph op in pre-order anywhere in the module (nested graphs included), or null if
+// there is at most one. A FrameGraphDesc is EXACTLY one graph — a second (or a nested) graph is expressible in CEIR but has
+// no desc home (the backward converter's find_graph silently takes the first). `first` threads the "seen one yet" flag.
+const Operation* second_frame_graph(const Context& ctx, const Region* r, const Operation*& first) // NOLINT(misc-no-recursion)
+{
+    if (r == nullptr) { return nullptr; }
+    for (const Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
+    {
+        for (const Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+        {
+            if (ctx.op_name(op->kind()) == containers::StringView("frame.graph"))
+            {
+                if (first == nullptr) { first = op; }
+                else { return op; }
+            }
+            for (crd::u32 i = 0; i < op->num_regions(); ++i)
+            {
+                if (const Operation* s = second_frame_graph(ctx, op->region(i), first)) { return s; }
+            }
+        }
+    }
+    return nullptr;
+}
+
+FrameMisuse scan_frame_region(const Context& ctx, const Region* r, bool in_graph) // NOLINT(misc-no-recursion)
+{
+    if (r == nullptr) { return {}; }
+    for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
+    {
+        for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+        {
+            const containers::StringView nm = ctx.op_name(op->kind());
+            if (nm == containers::StringView("frame.graph"))
+            {
+                // recurse the graph's region IN-GRAPH (its passes live here), then skip the generic recursion below.
+                for (crd::u32 i = 0; i < op->num_regions(); ++i)
+                {
+                    const FrameMisuse e = scan_frame_region(ctx, op->region(i), true);
+                    if (e.kind != FrameMisuseKind::None) { return e; }
+                }
+                continue;
+            }
+            if (nm == containers::StringView("frame.pass"))
+            {
+                if (!in_graph) { return {nullptr, op, FrameMisuseKind::PassOutsideGraph}; }
+                if (ctx.attr_value(op->attr(containers::StringView("executor"))).kind != AttrKind::SymbolRef)
+                {
+                    return {nullptr, op, FrameMisuseKind::ExecutorNotSymbol};
+                }
+                const AttrValue ac     = ctx.attr_value(op->attr(containers::StringView("access")));
+                crd::u32        tokens = 0;
+                if (ac.kind != AttrKind::String || !ceir_parse_access(ac.s, tokens))
+                {
+                    return {nullptr, op, FrameMisuseKind::PassAccessInvalid};
+                }
+                if (tokens != op->num_operands()) { return {nullptr, op, FrameMisuseKind::PassAccessArity}; }
+                // CEIR-15c-1a: per-operand structural guards. Tokens are validated ∈ {r,w,rw} + count==operands (above), so
+                // walk them in lockstep with the operands (the same tokenization as ceir_parse_access: skip on empty). first
+                // char 'r' ⟺ a READ component, last char 'w' ⟺ a WRITE component.
+                crd::u32 opi = 0U;
+                if (ac.s.size() > 0U)
+                {
+                    crd::usize start = 0U;
+                    for (crd::usize c = 0; c <= ac.s.size(); ++c)
+                    {
+                        if (c != ac.s.size() && ac.s[c] != ',') { continue; }
+                        const containers::StringView tok(ac.s.data() + start, c - start);
+                        start                = c + 1U;
+                        const bool         has_read  = tok.size() > 0U && tok[0] == 'r';
+                        const bool         has_write = tok.size() > 0U && tok[tok.size() - 1U] == 'w';
+                        const Value* const v         = op->operand(opi);
+                        ++opi;
+                        const TypeId t = v->type();
+                        if (!ceir_is_resource_kind(ctx.type_of(t).kind) && !ceir_is_frame_draw_list(ctx, t))
+                        {
+                            return {v, op, FrameMisuseKind::PassOperandNotResource};
+                        }
+                        // §9 (CEIR-15c-1c-2): a draw-list operand is QUERIED, never written — a write token on one is
+                        // meaningless (the backward converter ignores the token, silently normalizing it).
+                        if (ceir_is_frame_draw_list(ctx, t) && has_write) { return {v, op, FrameMisuseKind::DrawListNotWritable}; }
+                        // guard 1: the operand must be DEFINED in THIS frame.graph region (the flat-graph shape: declares and
+                        // passes are siblings in the graph region's block). A block-arg (def==null) or a foreign-region value
+                        // has no [[resource]] home in the desc — the backward converter reads a garbage/empty name.
+                        const Operation* const def = v->defining_op();
+                        if (def == nullptr || def->parent_block() == nullptr || def->parent_block()->parent_region() != r)
+                        {
+                            return {v, op, FrameMisuseKind::OperandOutsideGraph};
+                        }
+                        // guard 3: a READ of a lifetime=history declare DIRECTLY (not through frame.history) would derive a
+                        // false intra-frame RAW vs a same-frame write (the RMW scar). A legit history read's operand is a
+                        // frame.history RESULT (def kind frame.history), so ceir_is_history_declare is false for it.
+                        if (has_read && ceir_is_history_declare(ctx, v))
+                        {
+                            return {v, op, FrameMisuseKind::HistoryReadNotThroughFrameHistory};
+                        }
+                        // guard 4: a WRITE through a frame.history result is "write the previous frame" — nonsense; the
+                        // backward converter would silently rewrite it into a current-frame write (the inverse mangle).
+                        if (has_write && ctx.op_name(def->kind()) == containers::StringView("frame.history"))
+                        {
+                            return {v, op, FrameMisuseKind::HistoryWriteThroughHistory};
+                        }
+                    }
+                }
+                if (!ceir_render_string_ok(ctx, op, containers::StringView("for_each"), kForEachVocab, 5U))
+                {
+                    return {nullptr, op, FrameMisuseKind::ForEachInvalid};
+                }
+                if (!ceir_render_string_ok(ctx, op, containers::StringView("queue"), kQueueVocab, 2U))
+                {
+                    return {nullptr, op, FrameMisuseKind::QueueInvalid};
+                }
+            }
+            else if (nm == containers::StringView("frame.draw_list"))
+            {
+                // §8 (CEIR-15c-1c-2): only frame.pass had an outside-graph kind; a draw_list in the func body is now flagged too.
+                if (!in_graph) { return {nullptr, op, FrameMisuseKind::DrawListOutsideGraph}; }
+                if (!ceir_render_string_ok(ctx, op, containers::StringView("cull"), kCullVocab, 3U))
+                {
+                    return {nullptr, op, FrameMisuseKind::DrawListCullInvalid};
+                }
+                if (!ceir_render_string_ok(ctx, op, containers::StringView("sort"), kSortVocab, 4U))
+                {
+                    return {nullptr, op, FrameMisuseKind::DrawListSortInvalid};
+                }
+                const AttrId lim = op->attr(containers::StringView("limit"));
+                if (lim.valid())
+                {
+                    const AttrValue lv = ctx.attr_value(lim);
+                    if (lv.kind == AttrKind::Int && lv.i < 0) { return {nullptr, op, FrameMisuseKind::DrawListLimitInvalid}; }
+                }
+            }
+            else if (nm == containers::StringView("frame.history"))
+            {
+                // §8 (CEIR-15c-1c-2): a frame.history outside any frame.graph region.
+                if (!in_graph) { return {nullptr, op, FrameMisuseKind::HistoryOutsideGraph}; }
+                if (op->num_operands() < 1U || !ceir_is_history_declare(ctx, op->operand(0U)))
+                {
+                    const Value* v = op->num_operands() >= 1U ? op->operand(0U) : nullptr;
+                    return {v, op, FrameMisuseKind::HistoryOperandNotHistory};
+                }
+                // guard 1 (CEIR-15c-1a): the history resource must be DECLARED in THIS graph region — HistoryOperandNotHistory
+                // proves it is a lifetime=history declare, but NOT that it belongs to this frame.graph (a func-body declare
+                // passes the kind check yet has no desc home).
+                {
+                    const Operation* const hdef = op->operand(0U)->defining_op();
+                    if (hdef == nullptr || hdef->parent_block() == nullptr || hdef->parent_block()->parent_region() != r)
+                    {
+                        return {op->operand(0U), op, FrameMisuseKind::OperandOutsideGraph};
+                    }
+                }
+                const AttrId fb = op->attr(containers::StringView("frames_back"));
+                if (fb.valid())
+                {
+                    const AttrValue fv = ctx.attr_value(fb);
+                    if (fv.kind != AttrKind::Int || fv.i < 1) { return {nullptr, op, FrameMisuseKind::HistoryFramesBackInvalid}; }
+                }
+            }
+            else if (in_graph && ceir_op_is_gpu_command(ctx, op->kind()))
+            {
+                // a non-frame command submission (compute.dispatch / transfer / a render.scope) directly in a frame.graph
+                // region -- a foreign mechanic that is not a frame.pass. (frame.pass IS the graph's command node.)
+                return {nullptr, op, FrameMisuseKind::ForeignCommandInGraph};
+            }
+            // generic recursion into non-graph op regions (structured control flow propagates the current in_graph).
+            for (crd::u32 i = 0; i < op->num_regions(); ++i)
+            {
+                const FrameMisuse e = scan_frame_region(ctx, op->region(i), in_graph);
+                if (e.kind != FrameMisuseKind::None) { return e; }
+            }
+        }
+    }
+    return {};
+}
+} // namespace
+
+containers::StringView frame_misuse_kind_name(FrameMisuseKind k) noexcept
+{
+    switch (k)
+    {
+    case FrameMisuseKind::None: return containers::StringView("None");
+    case FrameMisuseKind::PassOutsideGraph: return containers::StringView("PassOutsideGraph");
+    case FrameMisuseKind::ForeignCommandInGraph: return containers::StringView("ForeignCommandInGraph");
+    case FrameMisuseKind::ExecutorNotSymbol: return containers::StringView("ExecutorNotSymbol");
+    case FrameMisuseKind::PassAccessInvalid: return containers::StringView("PassAccessInvalid");
+    case FrameMisuseKind::PassAccessArity: return containers::StringView("PassAccessArity");
+    case FrameMisuseKind::PassOperandNotResource: return containers::StringView("PassOperandNotResource");
+    case FrameMisuseKind::ForEachInvalid: return containers::StringView("ForEachInvalid");
+    case FrameMisuseKind::QueueInvalid: return containers::StringView("QueueInvalid");
+    case FrameMisuseKind::DrawListCullInvalid: return containers::StringView("DrawListCullInvalid");
+    case FrameMisuseKind::DrawListSortInvalid: return containers::StringView("DrawListSortInvalid");
+    case FrameMisuseKind::DrawListLimitInvalid: return containers::StringView("DrawListLimitInvalid");
+    case FrameMisuseKind::HistoryOperandNotHistory: return containers::StringView("HistoryOperandNotHistory");
+    case FrameMisuseKind::HistoryFramesBackInvalid: return containers::StringView("HistoryFramesBackInvalid");
+    case FrameMisuseKind::OperandOutsideGraph: return containers::StringView("OperandOutsideGraph");
+    case FrameMisuseKind::MultipleGraphs: return containers::StringView("MultipleGraphs");
+    case FrameMisuseKind::HistoryReadNotThroughFrameHistory: return containers::StringView("HistoryReadNotThroughFrameHistory");
+    case FrameMisuseKind::HistoryWriteThroughHistory: return containers::StringView("HistoryWriteThroughHistory");
+    case FrameMisuseKind::DrawListOutsideGraph: return containers::StringView("DrawListOutsideGraph");
+    case FrameMisuseKind::HistoryOutsideGraph: return containers::StringView("HistoryOutsideGraph");
+    case FrameMisuseKind::DrawListNotWritable: return containers::StringView("DrawListNotWritable");
+    }
+    return containers::StringView("None");
+}
+
+FrameMisuse Context::find_frame_misuse(const Module& m) const noexcept
+{
+    // guard 2 (CEIR-15c-1a): a FrameGraphDesc is EXACTLY one graph — reject a second (or nested) frame.graph up front, before
+    // the region walk (which would otherwise scan only the reachable ops and silently ignore the extra graph).
+    const Operation* first = nullptr;
+    if (const Operation* const second = second_frame_graph(*this, m.body(), first))
+    {
+        return {nullptr, second, FrameMisuseKind::MultipleGraphs};
+    }
+    return scan_frame_region(*this, m.body(), false);
+}
+
 u32 Context::register_file(containers::StringView path)
 {
     if (path.empty()) { return 0U; }
@@ -3058,5 +3382,14 @@ Operation* Context::create_operation(OpId kind, containers::ConstSpan<Value*> op
     for (u32 i = 0; i < num_operands; ++i) { op->set_operand(i, operands[i]); } // wires the def-use lists
 
     return op;
+}
+
+// CEIR-14z-4c: the binding-tail start for a render draw-family op — `n_counts + n_buffers` from THE authoritative
+// `draw_shape_of` table (above, this TU), so `crd-ceir-gpu`'s materializer never re-encodes the per-op layout.
+crd::u32 render_draw_binding_start(containers::StringView op_name) noexcept
+{
+    DrawShape sh;
+    if (!draw_shape_of(op_name, sh)) { return 0U; }
+    return sh.n_counts + sh.n_buffers;
 }
 } // namespace crd::ceir

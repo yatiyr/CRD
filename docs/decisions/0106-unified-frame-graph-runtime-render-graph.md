@@ -142,3 +142,36 @@ model stays superseded. Follow-ups that are DESIGN choices, not gaps, are named 
 `FramePassDesc` keeps typed fields as validated authoring data per §8 — the cooked/runtime form is the payload; the
 `crd://`→`engine://` alias stays as RAF-1 back-compat; `untracked_storage` stays as a scheduling hint the compute
 executor reads).
+
+---
+
+## CEIR-15 amendment (2026-08-11) — the canonical DESCRIPTION is now `ceir.frame` (refines Decision #2)
+
+CEIR-15 (FrameGraph unification, D-007 detour; ADR-0127) makes the frame graph's authored/cook representation a
+canonical **`ceir.frame`** CEIR dialect — the §159 realization "the frame graph's barrier/lifetime passes ARE CEIR
+analysis passes." This REFINES Decision #2's "`frame-cook` owns `FrameGraphDesc` (description)"; it does NOT supersede
+the runtime decision — Decision #1 (`crd-render-graph` is the single live runtime) stands unchanged.
+
+- **The canonical authored form is `ceir.frame`, not `FrameGraphDesc`.** The live cook is `parse → flatten →
+  to_ceir_frame → validate_ceir_frame → from_ceir_frame → FrameGraphDesc → build_frame_graph_template → runtime`
+  (CEIR-15f-2/3). `validate_ceir_frame` — the full §115 CEIR semantic verifier (structural + resource-shape + def-use
+  + NEW-IN-CEIR consistency + program-contract for every executor + closed-vocab + DependencyCycle) — is the LIVE cook
+  gate; the CEIR analysis passes (15d: hazards / DependencyCycle / lifetimes+first-use memory-plan) derive what the
+  desc-side aliaser/validator used to. §121: no path executes without going through canonical CEIR — the pre-CEIR
+  direct desc path AND its `CRD_FRAME_VIA_CEIR` opt-out flag are DELETED (@ 15f-3).
+
+- **`FrameGraphDesc` is PRESERVED as the Desc-vs-Runtime STAGING form** — Decision #2's "legitimate staging, NOT
+  duplication" STANDS. It is the intermediate between the canonical `ceir.frame` and the runtime `FrameGraphTemplate`;
+  `from_ceir_frame` (ceir→desc) and `build_frame_graph_template` (desc→template) are both BLESSED lowering stages, NOT
+  adapters to delete. (Reading **B** — a direct `ceir.frame → FrameGraphTemplate` re-lowering that would ELIMINATE the
+  desc — was REJECTED: `build_frame_graph_template` is 796 lines of per-executor mapping; a direct version would
+  DUPLICATE it, manufacturing the very duplication §126 exists to kill.)
+
+- **The runtime, executor registry, load bridge, and `.crdr` blob format are UNCHANGED.** `crd-render-graph` +
+  `crd-render-pass` + `build_frame_graph_template` (Decisions #1/#2) are preserved. The `.crdr` cooker
+  (`cook_frame_graph`, asset_cooker) serializes the AUTHORED desc (composition intact — it does NOT flatten), so the
+  15e flatten anchor-clear does not touch the blob: no format change, no version bump (stays v8).
+
+**Status:** Decision #2's "description" role is amended in place (canonical = `ceir.frame`; `FrameGraphDesc` = staging);
+all other decisions stand. CEIR-15 = the frame graph is a CEIR dialect gated by the CEIR verifier; one runtime, reached
+only through canonical CEIR.

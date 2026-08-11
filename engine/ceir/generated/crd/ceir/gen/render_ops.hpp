@@ -112,6 +112,7 @@ public:
     [[nodiscard]] AttrId program_interface() const noexcept { return m_op->attr("program_interface"); }
     [[nodiscard]] AttrId max_draws() const noexcept { return m_op->attr("max_draws"); }
     [[nodiscard]] AttrId args_offset() const noexcept { return m_op->attr("args_offset"); }
+    [[nodiscard]] AttrId index_offset() const noexcept { return m_op->attr("index_offset"); }
 
 private:
     Operation* m_op;
@@ -131,6 +132,7 @@ public:
     [[nodiscard]] AttrId max_draws() const noexcept { return m_op->attr("max_draws"); }
     [[nodiscard]] AttrId args_offset() const noexcept { return m_op->attr("args_offset"); }
     [[nodiscard]] AttrId count_offset() const noexcept { return m_op->attr("count_offset"); }
+    [[nodiscard]] AttrId index_offset() const noexcept { return m_op->attr("index_offset"); }
 
 private:
     Operation* m_op;

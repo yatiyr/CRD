@@ -109,11 +109,11 @@ TEST_CASE("ceir 12c: transient live ranges alias when disjoint and the WAR scar 
     const ResourceLifetime* lb = find_lt(lts, b);
     REQUIRE(la != nullptr);
     REQUIRE(lb != nullptr);
-    CHECK(la->first == 0U);
-    CHECK(la->last == 4U);                                   // ⭐ WAR scar: last-USE, not decl order (would be 0)
-    CHECK(lb->first == 2U);
+    CHECK(la->first == 1U);                                  // ⛔ 15d-3b: FIRST-use (read @1), not the declare position (0)
+    CHECK(la->last == 4U);                                   // ⭐ view/late-use scar: last-USE, not decl order (would be 0)
+    CHECK(lb->first == 3U);                                  // ⛔ 15d-3b: FIRST-use (read @3), not the declare position (2)
     CHECK(lb->last == 3U);
-    CHECK(Context::resources_interfere(*la, *lb));           // [0,4] overlaps [2,3]
+    CHECK(Context::resources_interfere(*la, *lb));           // [1,4] overlaps [3,3]
     CHECK_FALSE(Context::resources_may_alias(*la, *lb));     // ⭐ so they must NOT share a slot
 
     // positive control: a THIRD transient declared+used AFTER %a's range ends would alias %a -- build it fresh to keep
@@ -224,7 +224,9 @@ TEST_CASE("ceir 12c: slot-size, exported, and the over-4d-effects ambient rule",
         CHECK_FALSE(Context::resources_may_alias(lts[0], lts[1])); // an exported resource never pools
     }
     // (3) the OVER-4D-EFFECTS ambient rule: a gwrite (ambient Memory write) between two otherwise-disjoint transients
-    //     extends the earlier one's range across it, forcing interference. Without the rule they would falsely alias.
+    //     extends BOTH across it (the 15d-3b SYMMETRIC extension), forcing interference. Without the rule they falsely alias.
+    //     ⛔ This is the clobber-guard: under first-use %b (used @4) would be [4,4] and %a [1,3] — falsely poolable across the
+    //     ambient write @3; the symmetric pull makes %b span @3 so a slot the gwrite touches can't hold a live tenant twice.
     {
         Module* const    m  = ctx.create_module();
         Block* const     bm = mkmain(ctx, *m);
@@ -241,8 +243,10 @@ TEST_CASE("ceir 12c: slot-size, exported, and the over-4d-effects ambient rule",
         const ResourceLifetime* lb = find_lt(lts, b);
         REQUIRE(la != nullptr);
         REQUIRE(lb != nullptr);
-        CHECK(la->last == 3U);                                // ⭐ the ambient gwrite extended %a from 1 to 3
-        CHECK(Context::resources_interfere(*la, *lb));        // [0,3] now overlaps [2,4]
+        CHECK(la->first == 1U);                               // ⛔ 15d-3b: %a's FIRST-use is @1 (the read), not the declare (0)
+        CHECK(la->last == 3U);                                // ⭐ the ambient gwrite extended %a's last from 1 to 3
+        CHECK(lb->first == 3U);                               // ⛔ 15d-3b clobber-guard: the ambient @3 pulled %b's first DOWN from its real use @4 (SYMMETRIC)
+        CHECK(Context::resources_interfere(*la, *lb));        // [1,3] overlaps [3,4] at the ambient op
         CHECK_FALSE(Context::resources_may_alias(*la, *lb));  // ⭐ the ambient touch blocks the alias
     }
     // (3b) an UNREGISTERED op is maximally effectful (synthetic Universe rw) -> it triggers the ambient rule too.
@@ -301,7 +305,7 @@ TEST_CASE("ceir 12c: nested-region and view-chain uses extend the root resource'
         Array<ResourceLifetime> lts(&root);
         ctx.compute_block_lifetimes(*bm, lts);
         REQUIRE(lts.size() == 1U);
-        CHECK(lts[0].first == 0U);
+        CHECK(lts[0].first == 1U); // ⛔ 15d-3b: FIRST-use is the CONTAINING scope op @1 (the nested use), not the declare position (0)
         CHECK(lts[0].last == 1U); // ⭐ extended to the scope op's position (would be 0 if nested uses were missed)
     }
     // (1b) NESTED export: a resource.export INSIDE a region must still mark the root exported (wrapping never weakens).
@@ -367,7 +371,7 @@ TEST_CASE("ceir 12c: nested-region and view-chain uses extend the root resource'
         Array<ResourceLifetime> lts(&root);
         ctx.compute_block_lifetimes(*bm, lts);
         REQUIRE(lts.size() == 1U);
-        CHECK(lts[0].first == 0U);
+        CHECK(lts[0].first == 3U); // ⛔ 15d-3b: FIRST-use is the VIEW op @3 (first access of %a), not the declare position (0)
         CHECK(lts[0].last == 4U); // ⭐ extended by the read of the VIEW (pos 4), via the view->root map
     }
     // (3) resource.import is EXCLUDED from the analysis (it is never planned).

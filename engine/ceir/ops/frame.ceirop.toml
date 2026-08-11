@@ -1,0 +1,102 @@
+schema_version = 1
+dialect = "frame"
+summary = "CEIR-15 sec-39 the ceir.frame dialect: the AUTHORABLE FRAME GRAPH as CEIR (REN-36's .frame.toml asset system, promoted). A frame.graph REGION contains the frame's resource.declare/import ops (graph-owned + external resources -- the frame graph's resources ARE resource dialect values, so the CEIR-12b/c/d lifetime/alias/memory planner plans them; NO parallel frame.resource op), its frame.draw_list ECS-query declares, and its frame.pass work-unit nodes. A pass' MECHANIC is a registered ExecutorTypeId named by the `executor` SYMBOL attr (never one-op-per-executor -- that recreates the retired FramePassKind enum); its read/written resources ride ONE variadic `resources` operand tail tokened by the `access` string (opgen: only the last operand may be variadic -- the 13a compute.dispatch / 14b render.draw house pattern), so CEIR's resource_root + ops_hazard machinery DERIVES the frame's barriers + transient lifetimes (the sec-159 realization: topology/lifetime/history become a CEIR analysis pass, not a hand-rolled one). HISTORY (ping-pong / TAA prev-frame) rides resource.declare's EXISTING lifetime=history + history_length (CEIR-12b); frame.history(R) is the prev-frame READ -- a distinct op whose result is its own resource_root, so a read-of-prev vs write-of-curr does NOT derive a false intra-frame RAW (the RMW scar's frame edition, fixed STRUCTURALLY). Frame-scoped SIZING (width/height/scale/samples/mips/depth_buffer/no_alias/resizable) + buffer usage (indirect_args/structured/counter) ride as OPEN attrs on the resource.declare inside a frame.graph region (the open-attr precedent is IN-dialect: declare already carries open planner tags streaming_priority/budget_class), validated by Context::find_frame_misuse WHEN the declare sits in a frame.graph region. Executor-specific pass config (shader/kernel/technique/draw_list/clear/blend/depth/sampler/render-state/role-bits) rides as OPEN attrs on frame.pass, validated at COOK against the EXECUTOR's schema (15c), NOT the op verifier -- CEIR attrs are an open set (the opgen verifier checks only required attrs). Migration: .frame.toml + FrameGraphBuilder both END at ceir.frame via a FrameGraphDesc<->ceir.frame converter pair with a round-trip-identity gate (15a-3); the old runtime consumes ceir.frame through the backward converter (incremental 15e); ADR-0106 superseded in place @ 15f; asset IDs preserved. ADR-0127. Reference/interpreter semantics = a NAMED-FORWARD typed NoSemantics (the resource/async precedent): a frame op executes when the frame runtime + provider binding land (15d/15e)."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# frame.graph -- the whole-frame REGION container (the render.scope precedent, kind="graph"). Its region holds the frame's
+# resource.declare/import ops (with frame-scoped open attrs), its frame.draw_list declares, and its frame.pass nodes, in
+# authored order. RESULTLESS: the frame's output/present endpoint is a frame.pass with executor="present" writing the
+# imported output resource. Effects = GPUCommand + ambient MemoryReadWrite (the region ambient; the passes inside carry
+# their own precise effects). sec-39: subgraphs / includes / injection-anchors / pass-replacement / multi-window are
+# FORWARD capabilities the dialect is SHAPED to admit (nested frame.graph regions, an `include` attr) -- named-forward, not 15a.
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "graph"
+summary = "The whole-frame REGION container: a graph region holding the frame's resource declares, draw-list declares, and passes."
+version = 1
+attributes = [
+    { name = "name", kind = "symbol", required = false, doc = "an optional frame identity/debug name (attr-only this slice; asset-id preservation is the converter's job -- sec-126 'preserve asset IDs')." },
+    { name = "schema", kind = "int", required = false, doc = "the source .frame.toml schema version (kFrameSchemaVersion; absent = current). Round-trips so a re-emit matches the authored asset." },
+]
+regions = [ { kind = "graph" } ]
+effects = [ "GPUCommand", "MemoryReadWrite" ]
+docs = "frame.graph { <resource.declare/import>* <frame.draw_list>* <frame.pass>* } -- the frame container, RESULTLESS, one graph region. Effects: GPUCommand + ambient MemoryReadWrite (region ambient; passes carry precise effects). The present endpoint is a frame.pass executor=\"present\". find_frame_misuse: the region's ops are resource.declare/import, frame.draw_list, frame.pass, frame.history (NestedNonFrameOp otherwise); resource.declare frame-scoped attrs are validated HERE (in-region); EXACTLY one frame.graph per module this slice (MultipleGraphs, CEIR-15c-1a — subgraphs are the named-forward). sec-39 forward capabilities (subgraphs/includes/injection/replacement/multi-window) are named-forward."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# frame.draw_list -- an ECS QUERY the graph declares itself (REN-36 user-lock: the flexible option, not fixed engine view
+# names). Produces a draw-list VALUE consumed by a frame.pass through its `resources` tail (token r). all/any/none are
+# comma-separated component-name lists (the `access`-token precedent for a list-in-a-scalar-attr); cull/sort are closed
+# vocabularies. Pure (a query declaration -- no effect; the actual traversal is the host's IFrameGraphHost, at execute).
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "draw_list"
+summary = "An ECS-query draw list (all/any/none component filters + cull/sort/limit); produces a draw-list value a pass consumes."
+version = 1
+results = [ { name = "list", type = "draw_list", doc = "the draw-list value (a frame `draw_list` extern type; the host resolves the query to pre-resolved DrawItems at execute -- CEIR never sees a scene type)." } ]
+attributes = [
+    { name = "all", kind = "string", required = false, doc = "comma-separated component names an entity must have ALL of (empty = no all-constraint)." },
+    { name = "any", kind = "string", required = false, doc = "comma-separated component names an entity must have AT LEAST ONE of (empty = ignored)." },
+    { name = "none", kind = "string", required = false, doc = "comma-separated component names an entity must have NONE of (empty = no exclusion)." },
+    { name = "name", kind = "symbol", required = false, doc = "CEIR-15a-3b the draw-list's authored NAME (asset-id preservation + the backward FrameGraphDesc round-trip; attr-only, not a SymbolTable entry)." },
+    { name = "cull", kind = "string", required = false, doc = "the cull mode: none | frustum | frustum_occlusion (absent = frustum). A CLOSED vocabulary -- find_frame_misuse enforces it." },
+    { name = "sort", kind = "string", required = false, doc = "the sort mode: none | front_to_back | back_to_front | material (absent = none). A CLOSED vocabulary, enforced." },
+    { name = "limit", kind = "int", required = false, doc = "the max draw count (0 = unlimited). find_frame_misuse: >= 0." },
+]
+traits = ["Pure"]
+docs = "frame.draw_list { all, any, none, cull, sort, limit } -> a draw_list value. Pure (a declaration). find_frame_misuse: all/any/none comma-separated component tokens; cull/sort closed vocabularies; limit >= 0; legal ONLY inside a frame.graph region."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# frame.pass -- ONE op for EVERY mechanic (the RAF-12.3 fold: a pass = graph metadata + a typed named-param payload). The
+# MECHANIC is the `executor` SYMBOL attr (a registered ExecutorTypeId name -- scene.raster/fullscreen.raster/compute.dispatch/
+# present/... or an app id); ExecutorTypeId = fnv1a(name) at the boundary, so cook-id == record-id (one source). ⛔ opgen
+# allows only the LAST operand variadic, so reads + writes are NOT two operand lists: ONE `resources` tail tokened by the
+# required `access` string ({r|w|rw} per operand; a draw-list operand takes r). resources-as-operands ⇒ CEIR derives the
+# barriers/lifetimes. RESULTLESS. Effects = GPUCommand + ambient MemoryReadWrite (the render.scope ambient; the 15d lowering
+# narrows per-operand from `access`). Executor-specific config rides as OPEN extra attrs (validated at cook against the
+# executor schema, 15c). The well-known reference params (shader/kernel/technique) are declared OPTIONAL SYMBOL attrs so
+# they are typed + findable; the multi-ref CDEP dependency extraction is NAMED-FORWARD to 15c (a pass refs shader + kernel +
+# technique + six RT programs, and [op.kernel_ref] is one-per-op -- generalize collect_dependencies there, not here).
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "pass"
+summary = "A frame work-unit node: run the `executor` MECHANIC over the `resources` (tokened by `access`), inside a frame.graph."
+version = 1
+operands = [
+    { name = "resources", type = "resource", variadic = true, doc = "the pass' read/written resources (resource.declare/import/frame.history results) AND its draw-list operands (frame.draw_list results), in SLOT order; each one's ACCESS is the matching `access` token, its ROLE derives from its TYPE CLASS (a draw_list is not a memory resource -- the hazard walk skips it)." },
+]
+attributes = [
+    { name = "executor", kind = "symbol", required = true, doc = "the pass MECHANIC name: a built-in (scene.raster / fullscreen.raster / compute.dispatch / transfer.copy / mesh.raster / raytrace.pipeline / present / ...) or an app's custom id. ExecutorTypeId = fnv1a_64(name), derived at the boundary (cook-id == record-id). absent/non-symbol = ExecutorNotSymbol." },
+    { name = "name", kind = "symbol", required = false, doc = "CEIR-15a-3b the pass' authored NAME (asset-id preservation + the backward FrameGraphDesc round-trip; attr-only)." },
+    { name = "access", kind = "string", required = true, doc = "per-operand access over the `resources` tail: comma-separated {r|w|rw} in operand order, one token per operand (empty = zero operands). A draw-list operand takes r. find_frame_misuse checks token-count == num operands and each token in {r,w,rw}." },
+    { name = "for_each", kind = "string", required = false, doc = "graph-EXPANSION metadata (NOT executor-specific): none | light.cascades | views.stereo | cube.faces | lights.shadow_casting (absent = none). One declaration -> N passes, EXPANDED at 15d lowering (so lifetime/barriers/aliasing need no special case). A CLOSED vocabulary, enforced." },
+    { name = "for_each_arg", kind = "int", required = false, doc = "the for_each argument (e.g., the cascade count for light.cascades). Only meaningful with for_each != none." },
+    { name = "queue", kind = "string", required = false, doc = "the QUEUE request: graphics | async (absent = graphics). ⛔ async is a REQUEST, not a guarantee -- a single-queue adapter runs it on graphics and the graph SAYS SO through its counters. A CLOSED vocabulary, enforced." },
+    { name = "shader", kind = "symbol", required = false, doc = "the pass' CKIR shader program identity (a raster/fullscreen pass); a SYMBOL so it is typed + findable. The CDEP dependency extraction is 15c." },
+    { name = "kernel", kind = "symbol", required = false, doc = "the pass' CKIR compute kernel identity (a compute pass). CDEP extraction = 15c." },
+    { name = "technique", kind = "symbol", required = false, doc = "the pass' material-technique identity (a scene-raster pass, sec-45). CDEP extraction = 15c." },
+]
+effects = [ "GPUCommand", "MemoryReadWrite" ]
+docs = "frame.pass(%resources...) { executor=@mechanic, access=\"...\", for_each, queue, shader?/kernel?/technique?, <open executor params> } -- RESULTLESS, legal ONLY inside a frame.graph region. Effects: GPUCommand + ambient MemoryReadWrite (15d narrows per-operand from access). find_frame_misuse: executor a Symbol (ExecutorNotSymbol); access token-count == num operands + tokens in {r,w,rw}; for_each/queue closed vocabularies; every operand resource- or draw_list-kinded. Executor-specific params ride as OPEN attrs, validated at cook against the executor schema (15c). NestedNonFrameOp if outside a frame.graph region. CEIR-15c-1a per-operand guards: every operand DEFINED in this frame.graph region (OperandOutsideGraph); a lifetime=history resource is READ only via frame.history, never as a direct r/rw operand (HistoryReadNotThroughFrameHistory); a frame.history result is never WRITTEN (HistoryWriteThroughHistory)."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# frame.history -- the PREVIOUS-FRAME read of a history (ping-pong) resource (Fork B, B1). A history resource is a
+# resource.declare with lifetime=history + history_length (CEIR-12b, EXISTING): its physical ring holds frames N, N-1, ...
+# A READ of the prev frame vs a WRITE of the current frame are TWO physical images behind one declare; wiring both to the
+# same value would derive a FALSE intra-frame RAW and trip the RMW scar. frame.history(R) is a DISTINCT op whose result is
+# its OWN resource_root (resource_root chases ONLY resource.view by op kind -- the 13d retrofit), so read(frame.history(R))
+# vs write(R) are different identities and the false RAW is fixed STRUCTURALLY (no hazard special-case). Pure value
+# constructor; result type = R's UNDERLYING resource type (NOT a View -- a View result risks resource_root chasing it).
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "history"
+summary = "The previous-frame read of a lifetime=history resource (ping-pong / TAA prev-frame); a distinct op ⇒ its own resource_root."
+version = 1
+operands = [
+    { name = "resource", type = "resource", doc = "a lifetime=history resource.declare result -- the ping-pong ring whose PREVIOUS-frame contents this reads." },
+]
+results = [ { name = "prev", type = "resource", doc = "the previous-frame value; type = operand(0)'s underlying resource type. A DISTINCT op result ⇒ its OWN resource_root ⇒ a read here vs a write of the current frame does not derive a false intra-frame RAW." } ]
+attributes = [
+    { name = "frames_back", kind = "int", required = false, doc = "how many frames back to read (absent = 1, the TAA prev-frame case). find_frame_misuse: >= 1 (and, when the ring depth is known, <= the operand's history_length -- HistoryFramesBackInvalid)." },
+]
+traits = ["Pure"]
+docs = "frame.history(%history_resource) { frames_back } -> the previous-frame value (operand's underlying type). Pure. find_frame_misuse: operand(0) a lifetime=history resource.declare result (HistoryOperandNotHistory) DECLARED in this frame.graph region (OperandOutsideGraph, CEIR-15c-1a); frames_back >= 1. The structural RMW fix: a distinct op result is its own resource_root, so read-of-prev vs write-of-curr are different identities."

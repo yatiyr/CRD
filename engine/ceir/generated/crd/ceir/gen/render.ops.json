@@ -334,6 +334,12 @@
           "kind": "int",
           "required": false,
           "doc": "BYTE offset into %args (absent = 0; GeometrySource.args_offset). A static ATTR."
+        },
+        {
+          "name": "index_offset",
+          "kind": "int",
+          "required": false,
+          "doc": "CEIR-14z-6 BYTE offset of the INDEX section within the bound pull buffer (absent = 0; GeometrySource.index_offset). The engine's indirect draw is INDEXED (Nanite-style, one buffer for pull + indices); this locates the index section. A static ATTR, symmetric with args_offset."
         }
       ],
       "traits": [],
@@ -415,6 +421,12 @@
           "kind": "int",
           "required": false,
           "doc": "BYTE offset into %count (absent = 0; GeometrySource.count_offset)"
+        },
+        {
+          "name": "index_offset",
+          "kind": "int",
+          "required": false,
+          "doc": "CEIR-14z-6 BYTE offset of the INDEX section within the bound pull buffer (absent = 0; GeometrySource.index_offset). The indirect draw is INDEXED; this locates the index section. A static ATTR, symmetric with args_offset/count_offset."
         }
       ],
       "traits": [],

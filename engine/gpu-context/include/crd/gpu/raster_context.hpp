@@ -30,6 +30,15 @@ struct ClearColor
     float a = 1.0F;
 };
 
+// RAH-1 / CEIR-14z-4b: how an attachment's CLEAR value is TYPED. Lives here (the verb layer, next to its sibling
+// `ClearColor`) so the MRT verb can carry per-attachment typed clears; `command_model.hpp` (which includes THIS header)
+// composes it into `ColorAttachmentDesc`.
+enum class ClearKind : crd::u8
+{
+    Float = 0, // the float `color` (ClearColor)
+    Uint,      // the integer `uint_value` (an R32_UINT id target)
+};
+
 // B1-d: the depth-test comparison (fragment depth `op` stored depth ⇒ pass). Order matches VkCompareOp / D3D12.
 // ── REN-38-A15: PER-ATTACHMENT BLEND. ────────────────────────────────────────────────────────────────────────
 // A pass can declare N colour attachments and N reads, but until this it could not say how they BLEND — so every
@@ -51,6 +60,19 @@ enum class BlendMode : crd::u8
                          // the FS emits (avg, reveal), so this yields `avg·(1-reveal) + background·reveal`. It is the
                          // INVERSE of Alpha's factors, which no other mode expresses — a symmetric quad hides it, an
                          // asymmetric multi-layer scene (reveal far from 0.5) exposes it.
+};
+
+// CEIR-14z-4b: ONE MRT colour attachment's TYPED clear + blend — the per-attachment payload `draw_storage_mrt` carries,
+// replacing the single shared `ClearColor clear` + the parallel `const BlendMode* blend` array. Defaults make a
+// value-initialised `{}` mean "float clear to (0,0,0,1)-ish, opaque" (today's behaviour for a single attachment). ⛔ the
+// WBOIT precedence: a multiplicative `blend` (Multiply / RevealageMultiply) OVERRIDES `kind`/`color` and clears to the
+// multiplicative IDENTITY 1 — `dst·(1-src)` from 0 is unrecoverable regardless of the caller's clear.
+struct AttachmentClear
+{
+    ClearKind  kind       = ClearKind::Float; // Float ⇒ use `color`; Uint ⇒ use `uint_value` (an R32_UINT id target)
+    ClearColor color{};                        // the float clear (used when kind == Float)
+    crd::u32   uint_value = 0U;                 // the integer clear (used when kind == Uint)
+    BlendMode  blend      = BlendMode::Opaque;  // this attachment's blend equation
 };
 
 enum class DepthCompare : crd::u8

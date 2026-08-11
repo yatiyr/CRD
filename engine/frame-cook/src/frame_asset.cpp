@@ -1019,151 +1019,24 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
     return validate_frame_graph(out, where);
 }
 
-FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers::String* where)
+// CEIR-15c-1d-0: the per-executor CONTRACT checks, extracted VERBATIM from validate_frame_graph's pass loop so the
+// desc validator AND validate_ceir_frame (15c-1d-1) share ONE contract implementation (no desync; 15f can then delete
+// validate_frame_graph). PURE per-pass verdict over a resource span; wrote_output accumulation stays in the caller.
+FrameCookError pass_contract_diag(const FramePassDesc& p, crd::containers::ConstSpan<FrameResourceDesc> resources,
+                                  crd::containers::String* where)
 {
-    auto* alloc = desc.resources.allocator();
-    // ── VALIDATION. Every rejection is named, at COOK time — never at runtime on a user's machine. ──
     const auto find_resource = [&](const crd::containers::String& n) -> const FrameResourceDesc* {
-        for (crd::usize i = 0; i < desc.resources.size(); ++i)
+        for (crd::usize i = 0; i < resources.size(); ++i)
         {
-            if (desc.resources[i].name.size() == n.size()
-                && std::memcmp(desc.resources[i].name.c_str(), n.c_str(), n.size()) == 0)
+            if (resources[i].name.size() == n.size()
+                && std::memcmp(resources[i].name.c_str(), n.c_str(), n.size()) == 0)
             {
-                return &desc.resources[i];
+                return &resources[i];
             }
         }
         return nullptr;
     };
-    const auto is_output = [](const crd::containers::String& n) { return str_eq(n, "@output"); };
-    // ⛔ REN-37.6: an `@`-prefixed name is an EXTERNAL SENTINEL, not a graph resource. `@output` was always
-    // one; a SUBGRAPH additionally has `@input`-style parameters its includer binds. Neither is declared by the
-    // graph that names it, so neither can be checked against the resource table - that check belongs to the
-    // FLATTENED graph, after binding has resolved them.
-    const auto is_sentinel = [](const crd::containers::String& n) {
-        return n.size() > 0U && n.c_str()[0] == '@';
-    };
-    // A graph WITH INCLUDES is legitimately PARTIAL: its `@output` may be produced by an included subgraph, and
-    // its resources may be consumed by one. Deferring the completeness checks to `flatten_frame_graph` - which
-    // runs this same validator on the result - is what lets a subgraph be authored and shipped on its own.
-    const bool composed = desc.includes.size() > 0U;
-
-    // REN-3.2: the layer-count bound lives HERE, in the validator, not in the TOML parser — a PROGRAMMATIC graph
-    // never passes through the parser, and the hard rule is that the two provenances are equal. A check only the
-    // text path performed would make the ergonomic path the unsafe one.
-    for (crd::usize i = 0; i < desc.resources.size(); ++i)
-    {
-        const FrameResourceDesc& r = desc.resources[i];
-        if (r.kind == FrameResourceKind::TransientImage
-            && (r.layers == 0U || r.layers > crd::gpu::kFgMaxImageLayers))
-        {
-            set_where(where, std::string_view(r.name.c_str(), r.name.size()));
-            return FrameCookError::LayersOutOfRange;
-        }
-        // ── ⭐ REN-38-B3: what a STRUCTURED / COUNTER buffer may say. ──
-        if (r.kind == FrameResourceKind::StructuredBuffer || r.kind == FrameResourceKind::CounterBuffer)
-        {
-            const auto ew = std::string_view(r.name.c_str(), r.name.size());
-            // ⛔ Elements with no SIZE. DX12 carries the stride in the UAV, and a wrong one reads every element at
-            // the wrong offset — an error that GROWS with the index, so element 0 looks right and element 1000 is
-            // nonsense. There is no safe default to pick here, so there is none.
-            if (r.stride == 0U) { set_where(where, ew); return FrameCookError::StructuredNeedsStride; }
-            // ⛔ Both APIs require a 4-byte-aligned structure stride. Rounding it up silently would change the
-            // element the shader lands on; refusing names the resource while the author can still fix it.
-            if ((r.stride % 4U) != 0U) { set_where(where, ew); return FrameCookError::StrideNotAligned; }
-        }
-        // ── ⭐ REN-38-B1: what a PERSISTENT / PING-PONG resource may say. ──
-        if (r.kind == FrameResourceKind::PersistentImage || r.kind == FrameResourceKind::PingPongImage)
-        {
-            // ⛔ An ABSOLUTE size, never `scale` alone — UNLESS `resizable = true`. A persistent image is looked up
-            // by a STABLE KEY across frames, and a scale-relative extent changes the moment the output resizes,
-            // which recreates the image and DISCARDS the history, silently, mid-session. The author must state the
-            // size they mean — OR explicitly opt into the discard with `resizable` (⭐ REN-41: what a TAA history
-            // buffer WANTS — it follows the window and reconverges in a few frames after a resize).
-            if ((r.width == 0U || r.height == 0U) && !(r.resizable && r.scale > 0.0F))
-            {
-                set_where(where, std::string_view(r.name.c_str(), r.name.size()));
-                return FrameCookError::PersistentNeedsSize;
-            }
-            // ⛔ A PING-PONG resource that is only read, or only written, never rotates — so it is a persistent
-            // image the author mislabelled, and every frame would read the same stale image forever.
-            if (r.kind == FrameResourceKind::PingPongImage)
-            {
-                bool read = false;
-                bool wrote = false;
-                for (crd::usize pi2 = 0; pi2 < desc.passes.size(); ++pi2)
-                {
-                    for (crd::usize k = 0; k < desc.passes[pi2].reads.size(); ++k)
-                    {
-                        if (str_eq(r.name, std::string_view(desc.passes[pi2].reads[k].name.c_str(),
-                                                            desc.passes[pi2].reads[k].name.size()))) { read = true; }
-                    }
-                    for (crd::usize k = 0; k < desc.passes[pi2].writes.size(); ++k)
-                    {
-                        if (str_eq(r.name, std::string_view(desc.passes[pi2].writes[k].name.c_str(),
-                                                            desc.passes[pi2].writes[k].name.size()))) { wrote = true; }
-                    }
-                }
-                if (!(read && wrote) && !composed)
-                {
-                    set_where(where, std::string_view(r.name.c_str(), r.name.size()));
-                    return FrameCookError::PingPongNeedsBothWays;
-                }
-            }
-        }
-        // ── ⭐ REN-38-B2: what a SHAPED resource may say. ──
-        if (r.kind == FrameResourceKind::TransientImage)
-        {
-            const auto ew = std::string_view(r.name.c_str(), r.name.size());
-            // ⛔ A CUBE FACE MUST BE SQUARE — the hardware has no other shape for one, so a non-square request is
-            // either silently squashed or refused at creation. Refusing it HERE names the resource.
-            if ((r.kind_2d == crd::gpu::FgImageKind::Cube || r.kind_2d == crd::gpu::FgImageKind::CubeArray)
-                && r.width != r.height)
-            {
-                set_where(where, ew);
-                return FrameCookError::CubeNeedsSquare;
-            }
-            // ⛔ A VOLUME with no depth is a 2-D texture the author believes is a volume; every froxel index into
-            // it would then read slice 0. `depth = 1` is a legal volume, so only ZERO is the mistake.
-            if (r.kind_2d == crd::gpu::FgImageKind::Tex3D && r.depth == 0U)
-            {
-                set_where(where, ew);
-                return FrameCookError::VolumeNeedsDepth;
-            }
-            // ⛔ MIPS: 0 is not "full chain" — guessing what an author meant is how a bloom chain silently gets a
-            // different length than the technique reading it expects. And a chain cannot outlive its extent: the
-            // levels halve to 1x1 and no further, so more levels than that is a request the device must refuse.
-            if (r.mips == 0U) { set_where(where, ew); return FrameCookError::BadMipCount; }
-            crd::u32 ext = r.width > r.height ? r.width : r.height;
-            if (ext == 0U && r.scale > 0.0F) { ext = 0U; } // scale-relative: the runtime checks against the output
-            if (ext != 0U)
-            {
-                crd::u32 max_mips = 1U;
-                while ((ext >> max_mips) != 0U) { ++max_mips; }
-                if (r.mips > max_mips) { set_where(where, ew); return FrameCookError::BadMipCount; }
-            }
-        }
-    }
-
-    // ── ⭐ REN-38-B4: an ACCELERATION STRUCTURE is EXTERNAL. ──
-    // ⛔ It is the host's, like `@output`: building a BLAS/TLAS needs scene geometry, which lives in the World,
-    // which this module must never depend on. So a size or a format on one is not a harmless extra field — it
-    // means the author believed the graph would ALLOCATE it, and every later question ("why is it empty?") starts
-    // from that wrong belief. Rejected while the file is still open.
-    for (crd::usize i = 0; i < desc.resources.size(); ++i)
-    {
-        const FrameResourceDesc& r = desc.resources[i];
-        if (r.kind != FrameResourceKind::AccelerationStructure) { continue; }
-        if (r.size_bytes != 0U || r.width != 0U || r.height != 0U || r.scale > 0.0F)
-        {
-            set_where(where, std::string_view(r.name.c_str(), r.name.size()));
-            return FrameCookError::AccelIsExternal;
-        }
-    }
-
-    bool wrote_output = false;
-    for (crd::usize pi = 0; pi < desc.passes.size(); ++pi)
-    {
-        const FramePassDesc& p = desc.passes[pi];
+    const auto is_sentinel = [](const crd::containers::String& n) { return n.size() > 0U && n.c_str()[0] == '@'; };
         if (pass_is_scene_raster(p) && pass_str(p, crd::containers::StringView(pp::kDrawList)).empty())
         {
             set_where(where, std::string_view(p.name.c_str(), p.name.size()));
@@ -1203,12 +1076,12 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
                 return FrameCookError::UnknownResource;
             }
             bool found_depth_res = false;
-            for (crd::usize ri = 0; ri < desc.resources.size(); ++ri)
+            for (crd::usize ri = 0; ri < resources.size(); ++ri)
             {
-                if (desc.resources[ri].name.size() == shared.size()
-                    && std::memcmp(desc.resources[ri].name.c_str(), shared.data(), shared.size()) == 0)
+                if (resources[ri].name.size() == shared.size()
+                    && std::memcmp(resources[ri].name.c_str(), shared.data(), shared.size()) == 0)
                 {
-                    found_depth_res = crd::gpu::fg_format_has_depth(desc.resources[ri].format);
+                    found_depth_res = crd::gpu::fg_format_has_depth(resources[ri].format);
                     break;
                 }
             }
@@ -1480,58 +1353,16 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
         if (e1 != FrameCookError::Ok) { return e1; }
         const FrameCookError e2 = check_refs(p.writes);
         if (e2 != FrameCookError::Ok) { return e2; }
-        for (crd::usize i = 0; i < p.writes.size(); ++i)
-        {
-            if (is_output(p.writes[i].name)) { wrote_output = true; }
-        }
-    }
-    if (!wrote_output && !composed) { return FrameCookError::NoOutputPass; }
+    return FrameCookError::Ok;
+}
 
-    // every DECLARED resource must be produced by some pass (an unwritten transient is dead weight and, more
-    // importantly, a sign the author mistyped a name — `build()` already rejects it at runtime; we reject earlier)
-    for (crd::usize ri = 0; ri < desc.resources.size(); ++ri)
-    {
-        // ⛔ REN-38-B4: an ACCELERATION STRUCTURE is EXEMPT — it is external (the host built it), so no pass in
-        // this graph writes it and requiring one would make every ray-tracing asset invalid. The rule this loop
-        // enforces is "a resource the GRAPH owns must have a producer"; an AS is not one the graph owns.
-        // ⛔ REN-38-B5: an EXTERNAL TEXTURE is the host's too — read-only content with its own update schedule.
-        if (desc.resources[ri].kind == FrameResourceKind::ExternalTexture) { continue; }
-        // ⛔ An ACCELERATION STRUCTURE and an EXTERNAL BUFFER are both the HOST's — no pass in this graph writes
-        // them, and demanding a producer would make every ray-tracing asset, and every graph that consumes scene
-        // geometry, invalid. The rule is "a resource the GRAPH owns must have a producer"; neither is one.
-        if (desc.resources[ri].kind == FrameResourceKind::AccelerationStructure
-            || desc.resources[ri].kind == FrameResourceKind::ExternalBuffer)
-        {
-            continue;
-        }
-        // ⛔ REN-38-B1: a PERSISTENT image need not be written THIS frame — that is the entire point. A cached
-        // thumbnail or a converged accumulation buffer is read for many frames and rewritten only when something
-        // changed, so demanding a producer would forbid exactly the steady state the row exists to make possible.
-        if (desc.resources[ri].kind == FrameResourceKind::PersistentImage
-            || desc.resources[ri].kind == FrameResourceKind::PingPongImage)
-        {
-            continue;
-        }
-        bool written = false;
-        for (crd::usize pi = 0; pi < desc.passes.size() && !written; ++pi)
-        {
-            for (crd::usize wi = 0; wi < desc.passes[pi].writes.size(); ++wi)
-            {
-                if (str_eq(desc.resources[ri].name,
-                           std::string_view(desc.passes[pi].writes[wi].name.c_str(), desc.passes[pi].writes[wi].name.size())))
-                {
-                    written = true;
-                    break;
-                }
-            }
-        }
-        if (!written && !composed)
-        {
-            set_where(where, std::string_view(desc.resources[ri].name.c_str(), desc.resources[ri].name.size()));
-            return FrameCookError::ResourceNeverWritten;
-        }
-    }
-
+// CEIR-15d-2 (ADR-0127): the pass-DAG CYCLE check, EXTRACTED from validate_frame_graph so validate_ceir_frame shares
+// the ONE source (the 15c-1d extract-and-share discipline). A DependencyCycle is a Kahn topo-sort FAILURE over the
+// REN-41 authored-order-aware dependency graph (RAW/WAR disambiguated by a frame-start value or an earlier producer;
+// WAW by declaration order). `desc`-only: the temp arrays use its allocator.
+FrameCookError dependency_cycle_diag(const FrameGraphDesc& desc)
+{
+    auto* alloc = desc.resources.allocator();
     // CYCLE detection — Kahn's algorithm over the pass DAG.
     // RAW: pass A reads something an EARLIER writer B produces → A depends on B (writer precedes reader).
     // WAR: pass A reads something a LATER writer B overwrites → B depends on A — but ONLY when the read is
@@ -1654,6 +1485,197 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
     if (visited != np) { return FrameCookError::DependencyCycle; }
 
     return FrameCookError::Ok;
+}
+
+FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers::String* where)
+{
+    // ── VALIDATION. Every rejection is named, at COOK time — never at runtime on a user's machine. ──
+    const auto is_output = [](const crd::containers::String& n) { return str_eq(n, "@output"); };
+    // ⛔ REN-37.6: an `@`-prefixed name is an EXTERNAL SENTINEL, not a graph resource. `@output` was always
+    // one; a SUBGRAPH additionally has `@input`-style parameters its includer binds. Neither is declared by the
+    // graph that names it, so neither can be checked against the resource table - that check belongs to the
+    // FLATTENED graph, after binding has resolved them.
+    // A graph WITH INCLUDES is legitimately PARTIAL: its `@output` may be produced by an included subgraph, and
+    // its resources may be consumed by one. Deferring the completeness checks to `flatten_frame_graph` - which
+    // runs this same validator on the result - is what lets a subgraph be authored and shipped on its own.
+    const bool composed = desc.includes.size() > 0U;
+
+    // REN-3.2: the layer-count bound lives HERE, in the validator, not in the TOML parser — a PROGRAMMATIC graph
+    // never passes through the parser, and the hard rule is that the two provenances are equal. A check only the
+    // text path performed would make the ergonomic path the unsafe one.
+    for (crd::usize i = 0; i < desc.resources.size(); ++i)
+    {
+        const FrameResourceDesc& r = desc.resources[i];
+        if (r.kind == FrameResourceKind::TransientImage
+            && (r.layers == 0U || r.layers > crd::gpu::kFgMaxImageLayers))
+        {
+            set_where(where, std::string_view(r.name.c_str(), r.name.size()));
+            return FrameCookError::LayersOutOfRange;
+        }
+        // ── ⭐ REN-38-B3: what a STRUCTURED / COUNTER buffer may say. ──
+        if (r.kind == FrameResourceKind::StructuredBuffer || r.kind == FrameResourceKind::CounterBuffer)
+        {
+            const auto ew = std::string_view(r.name.c_str(), r.name.size());
+            // ⛔ Elements with no SIZE. DX12 carries the stride in the UAV, and a wrong one reads every element at
+            // the wrong offset — an error that GROWS with the index, so element 0 looks right and element 1000 is
+            // nonsense. There is no safe default to pick here, so there is none.
+            if (r.stride == 0U) { set_where(where, ew); return FrameCookError::StructuredNeedsStride; }
+            // ⛔ Both APIs require a 4-byte-aligned structure stride. Rounding it up silently would change the
+            // element the shader lands on; refusing names the resource while the author can still fix it.
+            if ((r.stride % 4U) != 0U) { set_where(where, ew); return FrameCookError::StrideNotAligned; }
+        }
+        // ── ⭐ REN-38-B1: what a PERSISTENT / PING-PONG resource may say. ──
+        if (r.kind == FrameResourceKind::PersistentImage || r.kind == FrameResourceKind::PingPongImage)
+        {
+            // ⛔ An ABSOLUTE size, never `scale` alone — UNLESS `resizable = true`. A persistent image is looked up
+            // by a STABLE KEY across frames, and a scale-relative extent changes the moment the output resizes,
+            // which recreates the image and DISCARDS the history, silently, mid-session. The author must state the
+            // size they mean — OR explicitly opt into the discard with `resizable` (⭐ REN-41: what a TAA history
+            // buffer WANTS — it follows the window and reconverges in a few frames after a resize).
+            if ((r.width == 0U || r.height == 0U) && !(r.resizable && r.scale > 0.0F))
+            {
+                set_where(where, std::string_view(r.name.c_str(), r.name.size()));
+                return FrameCookError::PersistentNeedsSize;
+            }
+            // ⛔ A PING-PONG resource that is only read, or only written, never rotates — so it is a persistent
+            // image the author mislabelled, and every frame would read the same stale image forever.
+            if (r.kind == FrameResourceKind::PingPongImage)
+            {
+                bool read = false;
+                bool wrote = false;
+                for (crd::usize pi2 = 0; pi2 < desc.passes.size(); ++pi2)
+                {
+                    for (crd::usize k = 0; k < desc.passes[pi2].reads.size(); ++k)
+                    {
+                        if (str_eq(r.name, std::string_view(desc.passes[pi2].reads[k].name.c_str(),
+                                                            desc.passes[pi2].reads[k].name.size()))) { read = true; }
+                    }
+                    for (crd::usize k = 0; k < desc.passes[pi2].writes.size(); ++k)
+                    {
+                        if (str_eq(r.name, std::string_view(desc.passes[pi2].writes[k].name.c_str(),
+                                                            desc.passes[pi2].writes[k].name.size()))) { wrote = true; }
+                    }
+                }
+                if (!(read && wrote) && !composed)
+                {
+                    set_where(where, std::string_view(r.name.c_str(), r.name.size()));
+                    return FrameCookError::PingPongNeedsBothWays;
+                }
+            }
+        }
+        // ── ⭐ REN-38-B2: what a SHAPED resource may say. ──
+        if (r.kind == FrameResourceKind::TransientImage)
+        {
+            const auto ew = std::string_view(r.name.c_str(), r.name.size());
+            // ⛔ A CUBE FACE MUST BE SQUARE — the hardware has no other shape for one, so a non-square request is
+            // either silently squashed or refused at creation. Refusing it HERE names the resource.
+            if ((r.kind_2d == crd::gpu::FgImageKind::Cube || r.kind_2d == crd::gpu::FgImageKind::CubeArray)
+                && r.width != r.height)
+            {
+                set_where(where, ew);
+                return FrameCookError::CubeNeedsSquare;
+            }
+            // ⛔ A VOLUME with no depth is a 2-D texture the author believes is a volume; every froxel index into
+            // it would then read slice 0. `depth = 1` is a legal volume, so only ZERO is the mistake.
+            if (r.kind_2d == crd::gpu::FgImageKind::Tex3D && r.depth == 0U)
+            {
+                set_where(where, ew);
+                return FrameCookError::VolumeNeedsDepth;
+            }
+            // ⛔ MIPS: 0 is not "full chain" — guessing what an author meant is how a bloom chain silently gets a
+            // different length than the technique reading it expects. And a chain cannot outlive its extent: the
+            // levels halve to 1x1 and no further, so more levels than that is a request the device must refuse.
+            if (r.mips == 0U) { set_where(where, ew); return FrameCookError::BadMipCount; }
+            crd::u32 ext = r.width > r.height ? r.width : r.height;
+            if (ext == 0U && r.scale > 0.0F) { ext = 0U; } // scale-relative: the runtime checks against the output
+            if (ext != 0U)
+            {
+                crd::u32 max_mips = 1U;
+                while ((ext >> max_mips) != 0U) { ++max_mips; }
+                if (r.mips > max_mips) { set_where(where, ew); return FrameCookError::BadMipCount; }
+            }
+        }
+    }
+
+    // ── ⭐ REN-38-B4: an ACCELERATION STRUCTURE is EXTERNAL. ──
+    // ⛔ It is the host's, like `@output`: building a BLAS/TLAS needs scene geometry, which lives in the World,
+    // which this module must never depend on. So a size or a format on one is not a harmless extra field — it
+    // means the author believed the graph would ALLOCATE it, and every later question ("why is it empty?") starts
+    // from that wrong belief. Rejected while the file is still open.
+    for (crd::usize i = 0; i < desc.resources.size(); ++i)
+    {
+        const FrameResourceDesc& r = desc.resources[i];
+        if (r.kind != FrameResourceKind::AccelerationStructure) { continue; }
+        if (r.size_bytes != 0U || r.width != 0U || r.height != 0U || r.scale > 0.0F)
+        {
+            set_where(where, std::string_view(r.name.c_str(), r.name.size()));
+            return FrameCookError::AccelIsExternal;
+        }
+    }
+
+    bool wrote_output = false;
+    for (crd::usize pi = 0; pi < desc.passes.size(); ++pi)
+    {
+        const FramePassDesc& p = desc.passes[pi];
+        if (const FrameCookError pe = pass_contract_diag(
+                p, crd::containers::ConstSpan<FrameResourceDesc>(desc.resources.data(), desc.resources.size()), where);
+            pe != FrameCookError::Ok)
+        {
+            return pe;
+        }
+        for (crd::usize i = 0; i < p.writes.size(); ++i)
+        {
+            if (is_output(p.writes[i].name)) { wrote_output = true; }
+        }
+    }
+    if (!wrote_output && !composed) { return FrameCookError::NoOutputPass; }
+
+    // every DECLARED resource must be produced by some pass (an unwritten transient is dead weight and, more
+    // importantly, a sign the author mistyped a name — `build()` already rejects it at runtime; we reject earlier)
+    for (crd::usize ri = 0; ri < desc.resources.size(); ++ri)
+    {
+        // ⛔ REN-38-B4: an ACCELERATION STRUCTURE is EXEMPT — it is external (the host built it), so no pass in
+        // this graph writes it and requiring one would make every ray-tracing asset invalid. The rule this loop
+        // enforces is "a resource the GRAPH owns must have a producer"; an AS is not one the graph owns.
+        // ⛔ REN-38-B5: an EXTERNAL TEXTURE is the host's too — read-only content with its own update schedule.
+        if (desc.resources[ri].kind == FrameResourceKind::ExternalTexture) { continue; }
+        // ⛔ An ACCELERATION STRUCTURE and an EXTERNAL BUFFER are both the HOST's — no pass in this graph writes
+        // them, and demanding a producer would make every ray-tracing asset, and every graph that consumes scene
+        // geometry, invalid. The rule is "a resource the GRAPH owns must have a producer"; neither is one.
+        if (desc.resources[ri].kind == FrameResourceKind::AccelerationStructure
+            || desc.resources[ri].kind == FrameResourceKind::ExternalBuffer)
+        {
+            continue;
+        }
+        // ⛔ REN-38-B1: a PERSISTENT image need not be written THIS frame — that is the entire point. A cached
+        // thumbnail or a converged accumulation buffer is read for many frames and rewritten only when something
+        // changed, so demanding a producer would forbid exactly the steady state the row exists to make possible.
+        if (desc.resources[ri].kind == FrameResourceKind::PersistentImage
+            || desc.resources[ri].kind == FrameResourceKind::PingPongImage)
+        {
+            continue;
+        }
+        bool written = false;
+        for (crd::usize pi = 0; pi < desc.passes.size() && !written; ++pi)
+        {
+            for (crd::usize wi = 0; wi < desc.passes[pi].writes.size(); ++wi)
+            {
+                if (str_eq(desc.resources[ri].name,
+                           std::string_view(desc.passes[pi].writes[wi].name.c_str(), desc.passes[pi].writes[wi].name.size())))
+                {
+                    written = true;
+                    break;
+                }
+            }
+        }
+        if (!written && !composed)
+        {
+            set_where(where, std::string_view(desc.resources[ri].name.c_str(), desc.resources[ri].name.size()));
+            return FrameCookError::ResourceNeverWritten;
+        }
+    }
+
+    return dependency_cycle_diag(desc);
 }
 
 // ── RAF-12.3: the ONE authoring-vocabulary table — kind string ↔ (executor id + role bits). Forward + inverse are

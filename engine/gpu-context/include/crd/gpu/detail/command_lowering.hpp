@@ -354,15 +354,21 @@ public:
             }
             else if (r.color.size() >= 2)
             {
+                // CEIR-14z-4b: thread each attachment's OWN typed clear (kind + float + uint) AND blend — was one shared
+                // `clear` broadcast to all + a parallel blends[]. `materialize_rendering_desc` already produced per-attachment
+                // ColorAttachmentDesc; carry it faithfully into the verb.
                 IRasterTarget* targets[kMaxColorAttachments];
-                BlendMode blends[kMaxColorAttachments];
+                AttachmentClear attaches[kMaxColorAttachments];
                 const crd::u32 cc = static_cast<crd::u32>(r.color.size());
                 for (crd::u32 i = 0; i < cc; ++i)
                 {
-                    targets[i] = r.color[i].target;
-                    blends[i] = r.color[i].blend;
+                    targets[i]           = r.color[i].target;
+                    attaches[i].kind       = r.color[i].clear_kind;
+                    attaches[i].color      = r.color[i].clear;
+                    attaches[i].uint_value = r.color[i].clear_uint;
+                    attaches[i].blend      = r.color[i].blend;
                 }
-                m_ctx.draw_storage_mrt(targets, cc, prog, clear, clear_depth, compare, *buf, count, blends);
+                m_ctx.draw_storage_mrt(targets, cc, prog, attaches, clear_depth, compare, *buf, count);
             }
             else if (r.depth.enabled && r.depth.target != nullptr && color0 != nullptr)
             {

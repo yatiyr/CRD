@@ -388,6 +388,55 @@ struct RenderMisuse
     RenderMisuseKind kind  = RenderMisuseKind::None;
 };
 
+// CEIR-14z-4c: the operand index where a render draw-family op's VARIADIC RESOURCE BINDINGS begin (after its fixed count +
+// buffer operands) — i.e. `DrawShape.n_counts + n_buffers` from THE authoritative per-op layout table (`draw_shape_of`,
+// context.cpp). Returns 0 if `op_name` is not a render draw-family op. Exposed so `crd-ceir-gpu`'s `materialize_draw_packet`
+// resolves the binding tail from the SAME source, never a second table (the 14c two-list fragility).
+[[nodiscard]] crd::u32 render_draw_binding_start(containers::StringView op_name) noexcept;
+
+// ── CEIR-15a: the FRAME dialect walk (find_frame_misuse) — the find_render_misuse mirror for ceir.frame (§39). A frame.graph
+// region holds resource.declare/import + frame.draw_list + frame.pass + frame.history; a pass' MECHANIC is the `executor`
+// SYMBOL attr, its read/written resources the variadic `resources` tail tokened by `access`. Each CLOSED-vocabulary attr has
+// ONE misuse kind; the walk is pre-order and returns the FIRST misuse. ──
+enum class FrameMisuseKind : u8
+{
+    None = 0,
+    PassOutsideGraph,         // a frame.pass outside any frame.graph region
+    ForeignCommandInGraph,    // a non-frame GPUCommand op (e.g. compute.dispatch) directly in a frame.graph region (not a frame.pass)
+    ExecutorNotSymbol,        // a frame.pass `executor` attr is absent or not a Symbol (identity before contract)
+    PassAccessInvalid,        // a frame.pass `access` token is outside {r,w,rw} (or a non-String value)
+    PassAccessArity,          // a frame.pass `access` token count != the number of `resources` operands
+    PassOperandNotResource,   // a frame.pass operand is not a resource- nor draw_list-kinded value
+    ForEachInvalid,           // a frame.pass `for_each` is not in {none, light.cascades, views.stereo, cube.faces, lights.shadow_casting}
+    QueueInvalid,             // a frame.pass `queue` is not in {graphics, async}
+    DrawListCullInvalid,      // a frame.draw_list `cull` is not in {none, frustum, frustum_occlusion}
+    DrawListSortInvalid,      // a frame.draw_list `sort` is not in {none, front_to_back, back_to_front, material}
+    DrawListLimitInvalid,     // a frame.draw_list `limit` is < 0 (a non-Int folds here)
+    HistoryOperandNotHistory, // a frame.history operand(0) is not a lifetime=history resource.declare result
+    HistoryFramesBackInvalid, // a frame.history `frames_back` attr is < 1 (or a non-Int)
+    // ── CEIR-15c-1a: the NEW-IN-CEIR structural guards. `ceir.frame` is a STRICT SUPERSET of `FrameGraphDesc` — these
+    // reject shapes the CEIR can express but the desc cannot name, which the FrameGraphDesc backward converter would
+    // silently drop/mangle. Appended at the END (a renumbered kind is a silently different rejection in every test). ──
+    OperandOutsideGraph,               // a frame.pass/frame.history operand is defined OUTSIDE this frame.graph region (a block-arg or a foreign region)
+    MultipleGraphs,                    // more than one frame.graph in the module (this slice: EXACTLY one; subgraphs are the §39 named-forward)
+    HistoryReadNotThroughFrameHistory, // a frame.pass READS a lifetime=history declare directly — a history read must go through frame.history (Fork-B B1)
+    HistoryWriteThroughHistory,        // a frame.pass WRITES a frame.history result — "write the previous frame" is nonsense (the inverse mangle)
+    // ── CEIR-15c-1c-2 §8/§9: the OTHER frame ops outside a graph (only frame.pass had PassOutsideGraph), + a draw-list write. ──
+    DrawListOutsideGraph, // a frame.draw_list outside any frame.graph region (the DrawListOutsideGraph sibling of PassOutsideGraph)
+    HistoryOutsideGraph,  // a frame.history outside any frame.graph region
+    DrawListNotWritable,  // a frame.pass operand that is a draw_list carries a WRITE token — a draw list is QUERIED, never written
+};
+[[nodiscard]] containers::StringView frame_misuse_kind_name(FrameMisuseKind k) noexcept;
+
+// The pointing result of the CEIR-15a frame walk: the FIRST misuse (pre-order), the offending `op`, and the `value` it points
+// at (a bad pass operand; null for an attribute misuse).
+struct FrameMisuse
+{
+    const Value*    value = nullptr;
+    const Operation* op   = nullptr;
+    FrameMisuseKind kind  = FrameMisuseKind::None;
+};
+
 class Context
 {
 public:
@@ -783,6 +832,13 @@ public:
     // the typed-clear-vs-format pairing. ⛔ Assumes structural validity (run the per-op verify first — it guarantees the
     // required width/height attrs + min arity); robust to a raw deserialized module for the attr kind-folds.
     [[nodiscard]] RenderMisuse find_render_misuse(const Module& m) const noexcept;
+
+    // CEIR-15a §39: the `ceir.frame` well-formedness check — a pre-order walk returning the FIRST frame.graph / frame.pass /
+    // frame.draw_list / frame.history op whose contract is malformed (see FrameMisuseKind), or {None}. Reads the pass' executor
+    // symbol + access tokens + operand TYPE classes (resource- or frame.draw_list-kinded) + the closed-vocabulary for_each/
+    // queue/cull/sort attrs + the frame.history operand's lifetime=history-declare identity. ⛔ Assumes structural validity
+    // (run the per-op verify first); robust to a raw deserialized module for the attr kind-folds.
+    [[nodiscard]] FrameMisuse find_frame_misuse(const Module& m) const noexcept;
 
     // Interfaces: intern a name, register/query an op-kind's implementation (an opaque function-table pointer).
     [[nodiscard]] InterfaceId    intern_interface(containers::StringView name); // CEIR-8e: an FNV of the name (== T::kId)

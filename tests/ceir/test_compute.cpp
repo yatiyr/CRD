@@ -279,7 +279,10 @@ TEST_CASE("ceir 13a: a dispatch hazards the export of its output and extends a p
         bm->append(func::create_return(ctx, {}));
         CHECK(ctx.ops_hazard(*disp, *ex) != HazardKind::None); // ⭐ NOT freely reorderable
     }
-    // (2) 12c integration: a dispatch's ambient memory touch extends a prior transient's live range to the dispatch pos.
+    // (2) 12c integration: a dispatch's ambient memory touch makes an (otherwise-unused) prior transient slot-live AT the
+    //     dispatch pos. ⛔ 15d-3b: memory-liveness is [first-use, last-use] + a SYMMETRIC ambient span, so %t (never used
+    //     directly) is pulled to [4,4] — the ambient dispatch is its first (and only) slot-touch, NOT the declare @0. A
+    //     resource done before pos 4 may now reuse %t's slot (the gain); the ambient op stays a pooling barrier at pos 4.
     {
         Module* const    m   = ctx.create_module();
         Block* const     bm  = mkmain(ctx, *m);
@@ -293,8 +296,8 @@ TEST_CASE("ceir 13a: a dispatch hazards the export of its output and extends a p
         ctx.compute_block_lifetimes(*bm, lts);
         REQUIRE(lts.size() == 1U);
         CHECK(lts[0].resource == t->result(0U));
-        CHECK(lts[0].first == 0U);
-        CHECK(lts[0].last == 4U); // ⭐ the dispatch's ambient MemoryReadWrite extended %t from 0 to 4
+        CHECK(lts[0].first == 4U); // ⛔ 15d-3b: %t never directly used -> the ambient dispatch @4 is its first slot-touch (symmetric pull, not the declare @0)
+        CHECK(lts[0].last == 4U); // ⭐ the dispatch's ambient MemoryReadWrite makes %t span the dispatch pos (4)
     }
 }
 

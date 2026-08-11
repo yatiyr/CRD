@@ -104,7 +104,7 @@ Res build_band12(Context& ctx, const Kit& k, Block* bm, TypeId buf1, TypeId buf9
 {
     // pos  op                                     lifetime effect
     // ----------------------------------------------------------------------------------------------------------------
-    //  0   %war  = declare[transient, sz1]         war: [0,19] (used LATE, through a view + a direct read -- WAR scar)
+    //  0   %war  = declare[transient, sz1]         war: [17,19] (FIRST-use is the view op @17; last @19 -- 15d-3b first-use + view-chain-lifetime scar)
     //  1   %a    = declare[transient, sz1]
     //  2   read(%a)                                a:   [1,2]
     //  3   %b    = declare[transient, sz1]
@@ -174,22 +174,25 @@ TEST_CASE("ceir 12z band gate: the resource->memory pipeline composes and aliasi
     REQUIRE(ctx.find_resource_misuse(*m).kind == ResourceMisuseKind::None);
     REQUIRE(ctx.find_resource_intent_misuse(*m).kind == ResourceIntentMisuseKind::None);
 
-    // 12c: the WAR resource's live range extends to its LAST use (pos 19), reached through the VIEW chain + a direct read
-    // -- NOT the declaration order (it is declared first). The short transients are disjoint.
+    // 12c: the WAR resource's live range is [FIRST-use 17, LAST-use 19] — `last` reached through the VIEW chain + a direct
+    // read (NOT collapsed to the declaration); `first` is its first ACCESS (the view op @17), NOT the declare position (0).
+    // ⛔ 15d-3b: memory-liveness = [first-use, last-use] (the render-graph aliaser's model, frame_graph.cpp), so %war is
+    // DISJOINT in time from the early short transients and pools with them — the memory gain the old declare-pos model lost.
     Array<ResourceLifetime> lts(&root);
     ctx.compute_block_lifetimes(*bm, lts);
     REQUIRE(lts.size() == 8U);
-    CHECK(lt_of(lts, r.war)->first == 0U);
-    CHECK(lt_of(lts, r.war)->last == 19U);   // ⭐ WAR-lifetime scar (would be 0 on declaration order)
+    CHECK(lt_of(lts, r.war)->first == 17U);  // ⛔ 15d-3b: FIRST-use (the view op @17), not the declare position (0)
+    CHECK(lt_of(lts, r.war)->last == 19U);   // ⭐ view-chain-lifetime scar (would be 0 on declaration order)
     CHECK(lt_of(lts, r.a)->last == 2U);
     CHECK(lt_of(lts, r.c)->last == 6U);
 
-    // 12d: the planner pools the three disjoint sz1 transients into ONE slot; everything else keeps its own.
+    // 12d: the planner pools the FOUR disjoint sz1 transients {%a,%b,%c,%war} into ONE slot (15d-3b: %war's memory-live
+    // range [17,19] is disjoint from the early [2..6] ones); %big (different bucket) + the dedicated resources keep their own.
     MemoryPlan plan(&root);
     ctx.plan_block_memory(*bm, PlanProfile::Memory, plan);
     CHECK(plan.assignments.size() == 8U);    // ⭐ the resource.import got NO assignment (the planner never plans imports)
     CHECK(plan.transient_logical == 5U);     // %war,%a,%b,%c,%big are poolable-eligible
-    CHECK(plan.transient_physical == 3U);    // ⭐ REN-1 proof: 5 logical -> 3 physical (the {%a,%b,%c} collapse)
+    CHECK(plan.transient_physical == 2U);    // ⛔ 15d-3b: 5 logical -> 2 physical ({%a,%b,%c,%war} collapse + %big); was 3 under the over-conservative declare-pos `first`
     CHECK(plan.transient_physical < plan.transient_logical);
     // the {%a,%b,%c} pool + their §162 reasons.
     CHECK(assign_of(plan, r.a)->slot == assign_of(plan, r.b)->slot);
@@ -199,8 +202,10 @@ TEST_CASE("ceir 12z band gate: the resource->memory pipeline composes and aliasi
     CHECK(assign_of(plan, r.b)->prior == r.a->result(0U));
     CHECK(assign_of(plan, r.c)->reason == SlotReason::Pooled);
     CHECK(assign_of(plan, r.c)->prior == r.b->result(0U));
-    // the scars: the WAR resource spans the short transients (own slot), and the differently-sized transient never shares.
-    CHECK(assign_of(plan, r.war)->slot != assign_of(plan, r.a)->slot); // ⭐ WAR: spans them -> not pooled with them
+    // 15d-3b: %war's memory-live range [17,19] is DISJOINT from the early transients, so it CORRECTLY pools into their slot
+    // (the first-use gain; the old declare-pos `first`=0 forced war=[0,19] and blocked this). The differently-SIZED transient
+    // still never shares (the slot-SIZE scar is intact).
+    CHECK(assign_of(plan, r.war)->slot == assign_of(plan, r.a)->slot); // ⛔ 15d-3b: war [17,19] disjoint from a [2,2] -> POOLED (was != under declare-pos)
     CHECK(assign_of(plan, r.big)->slot != assign_of(plan, r.a)->slot); // ⭐ slot-SIZE: different bucket -> own slot
     // the dedicated resources + the §162 ring depth.
     CHECK(assign_of(plan, r.hist)->reason == SlotReason::DedicatedLifetime);
@@ -249,7 +254,7 @@ TEST_CASE("ceir 12z band gate: the resource->memory pipeline composes and aliasi
     MemoryPlan   tplan(&root);
     ctx2.plan_block_memory(*twin_body, PlanProfile::Memory, tplan);
     CHECK(tplan.transient_logical == 5U);  // ⭐ lifetime + size_class attrs survived (else these would collapse to 0)
-    CHECK(tplan.transient_physical == 3U); // ⭐ the same aliasing shape reproduced in a fresh Context
+    CHECK(tplan.transient_physical == 2U); // ⛔ 15d-3b: the same aliasing shape (2 physical) reproduced in a fresh Context
     // the full plan SHAPE reproduces (stronger than the counts): the twin is declaration-ordered too, so compare by INDEX.
     // ⛔ `prior` is a Value* into ctx2 -- compare only its NULL-ness (Pooled vs not), never the cross-context pointer.
     REQUIRE(tplan.assignments.size() == plan.assignments.size());

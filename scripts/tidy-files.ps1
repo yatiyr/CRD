@@ -85,10 +85,12 @@ foreach ($f in $Files) {
   }
 
   # (1) An unresolved include means the TU never parsed -> ZERO checks ran -> this file is UNGATED, not clean.
-  $missing = $raw | Select-String "file not found"
-  if ($missing) {
+  # NOTE: a DISTINCT name from the `$missing` file COUNTER (line 59) — reusing `$missing` here clobbered the counter with a
+  # MatchInfo, so a MISSING file could exit 0 behind a later clean one and the line-101/104 summaries never fired.
+  $unresolved = $raw | Select-String "file not found"
+  if ($unresolved) {
     Write-Host "UNGATED      $f  <-- includes did not resolve; NO checks ran (this is a DoD failure, not a pass)" -ForegroundColor Magenta
-    $missing | Select-Object -First 5 | ForEach-Object { Write-Host "  $_" }
+    $unresolved | Select-Object -First 5 | ForEach-Object { Write-Host "  $_" }
     $ungated++
     continue
   }

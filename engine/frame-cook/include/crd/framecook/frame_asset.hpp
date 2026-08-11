@@ -603,6 +603,20 @@ enum class FrameCookError : crd::u8
 [[nodiscard]] FrameCookError validate_frame_graph(const FrameGraphDesc& desc,
                                                   crd::containers::String* where = nullptr);
 
+// CEIR-15c-1d: the per-executor CONTRACT verdict for ONE pass (MissingShader/MissingDrawList/LoadNeedsGeometry/Visbuffer/
+// Composite/Rt*/RayTrace/Indirect*/Amplify/Transfer*/Clear/Present*/AsyncQueue/UnknownResource/Subscript*/Index*). Extracted
+// from validate_frame_graph's pass loop so BOTH the desc validator AND the CEIR validator (validate_ceir_frame) share ONE
+// contract implementation — no desync, and 15f can then delete validate_frame_graph. PURE per-pass verdict; the caller owns
+// the wrote_output accumulation. `resources` is the graph's resource table (several checks consult it).
+[[nodiscard]] FrameCookError pass_contract_diag(const FramePassDesc& p,
+                                                crd::containers::ConstSpan<FrameResourceDesc> resources,
+                                                crd::containers::String* where = nullptr);
+
+// CEIR-15d-2: the pass-DAG CYCLE check (a Kahn topo-sort failure over the REN-41 authored-order-aware dependency graph),
+// EXTRACTED from validate_frame_graph so validate_ceir_frame shares the ONE source (the 15c-1d extract-and-share discipline).
+// `desc`-only (the temp arrays use its allocator). Returns DependencyCycle or Ok.
+[[nodiscard]] FrameCookError dependency_cycle_diag(const FrameGraphDesc& desc);
+
 // Emit a description back to `.frame.toml` — the EDITOR ROUND-TRIP. A node editor loads a graph, the user drags
 // wires, and the result must be writable back to the same authoring format a human reads and diffs. Lossless by
 // gate: `parse → emit → parse → cook` produces bytes identical to `parse → cook`, so a save cannot quietly drop

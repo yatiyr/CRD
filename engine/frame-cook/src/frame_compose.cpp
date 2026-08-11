@@ -1,11 +1,15 @@
 // frame_compose.cpp — REN-37.6: SUBGRAPHS + INJECTION POINTS, flattened away before `build()`.
 //
-// One function, `flatten_frame_graph`, turns a composed graph into an ordinary one:
-//   · every `[[include]]` is inlined with its names prefixed by `<as>.` (or rewritten by `bind`), recursively;
-//   · every `[[inject]]` splices its pass at a DECLARED anchor.
+// One function, `flatten_frame_graph`, turns a composed graph into an ordinary one — the output carries NO composition
+// metadata of any kind:
+//   · every `[[include]]` is INLINED with its names prefixed by `<as>.` (or rewritten by `bind`), recursively;
+//   · every `[[inject]]` splices its pass at a DECLARED anchor, then is dropped;
+//   · every `[[anchor]]` is CONSUMED — anchors carry forward through expansion only so a parent inject can find a
+//     child's extension point, and once injection is done they are inert scaffolding, so they are cleared at the end.
 // After it runs, nothing downstream — the validator, the executor, lifetime analysis, barriers, aliasing, the
-// dependency sort — knows composition exists. That is the same decision REN-36.3 made for `for_each`, for the
-// same reason: a composition feature that reached the scheduler would need a special case in every one of those.
+// dependency sort, and the `ceir.frame` converter (CEIR-15e: `to_ceir_frame` rejects ANY residual include/anchor/inject
+// as un-flattened composition) — knows composition exists. That is the same decision REN-36.3 made for `for_each`, for
+// the same reason: a composition feature that reached the scheduler would need a special case in every one of those.
 //
 // ⛔ WHY NAMESPACING IS LOAD-BEARING, not cosmetic. Two instances of the same graph (two viewports, two blur
 // chains) would otherwise both declare `hdr` and both write it. That is not an error in any validator — it just
@@ -330,7 +334,19 @@ FrameCookError flatten_frame_graph(const FrameGraphDesc& desc, FrameGraphResolve
 
     // The flattened graph faces the SAME 19+ rejections a hand-authored one does. A composed graph must not get a
     // weaker contract than a typed one, or composition becomes the unsafe path.
-    return validate_frame_graph(out, where);
+    if (const FrameCookError e2 = validate_frame_graph(out, where); e2 != FrameCookError::Ok) { return e2; }
+
+    // ⛔ CEIR-15e: composition is fully RESOLVED now — every include was expanded into plain passes and every inject
+    // was positioned at its anchor. Anchors carried forward through `append_graph` ONLY so a parent inject could find a
+    // child's extension point DURING expansion above; that is done. They have no execution semantics, and flatten is
+    // terminal (the frame resolver parses each subgraph FRESH, never a re-flattened cache — so no later inject can
+    // target them). Drop the spent scaffolding so the output is a TRULY ordinary graph with NO residual composition
+    // metadata — the exact contract `to_ceir_frame` relies on (`parse -> flatten_frame_graph -> to_ceir_frame`; the
+    // converter models only the RESOLVED graph and rejects any include/anchor/inject as un-flattened composition).
+    // Validated FIRST, so any anchor integrity the validator enforces still runs against the real anchors. This also
+    // makes `emit_frame_toml(flat)` anchor-free, so a flattened composed graph round-trips through CEIR byte-for-byte.
+    out.anchors.clear();
+    return FrameCookError::Ok;
 }
 
 } // namespace crd::framecook

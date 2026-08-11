@@ -165,6 +165,7 @@ render.draw_indirect(%args, %bindings...) {program=@p, access="...", max_draws=N
 | `program_interface` | `int` | no | CEIR-13c the EXPECTED §107 interface hash of @program (a PIN; absent = unpinned) |
 | `max_draws` | `int` | no | sec-40 the MAX sub-draw count (>=1, absent = 1). ⭐ the DrawIndex RANGE -- 14z pushes SV_DrawIndex per sub-draw (REN-40). find_render_misuse: >=1 (MaxDrawsInvalid). |
 | `args_offset` | `int` | no | BYTE offset into %args (absent = 0; GeometrySource.args_offset). A static ATTR. |
+| `index_offset` | `int` | no | CEIR-14z-6 BYTE offset of the INDEX section within the bound pull buffer (absent = 0; GeometrySource.index_offset). The engine's indirect draw is INDEXED (Nanite-style, one buffer for pull + indices); this locates the index section. A static ATTR, symmetric with args_offset. |
 
 ## `render.draw_indirect_count`
 
@@ -197,6 +198,7 @@ render.draw_indirect_count(%args, %count, %bindings...) {program=@p, access="...
 | `max_draws` | `int` | no | sec-40 the MAX draw count bound (>=1, absent = 1). The DrawIndex range (14z; REN-40). find_render_misuse: >=1. |
 | `args_offset` | `int` | no | BYTE offset into %args (absent = 0) |
 | `count_offset` | `int` | no | BYTE offset into %count (absent = 0; GeometrySource.count_offset) |
+| `index_offset` | `int` | no | CEIR-14z-6 BYTE offset of the INDEX section within the bound pull buffer (absent = 0; GeometrySource.index_offset). The indirect draw is INDEXED; this locates the index section. A static ATTR, symmetric with args_offset/count_offset. |
 
 ## `render.mesh_dispatch`
 

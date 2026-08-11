@@ -2339,10 +2339,14 @@ public:
         VkRenderingAttachmentInfo dep{};
         if (depth_on && t.has_depth())
         {
-            dep.sType                         = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-            dep.imageView                     = t.depth_view();
-            dep.imageLayout                   = t.depth_attach_layout();
-            dep.loadOp                        = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            dep.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            dep.imageView   = t.depth_view();
+            dep.imageLayout = t.depth_attach_layout();
+            // REN-40-G1: honour set_next_draw_load_depth (a depth PREPASS wrote this buffer in a prior pass — LOAD it, do not
+            // re-clear). Every other depth record path already reads m_next_load_depth; record_plain (draw / draw_depth) did
+            // NOT, so a fullscreen depth-tested draw always re-cleared the depth (CEIR-14z-5 occlusion caught it). Consumed here.
+            dep.loadOp                        = m_next_load_depth ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+            m_next_load_depth                 = false;
             dep.storeOp                       = VK_ATTACHMENT_STORE_OP_STORE;
             dep.clearValue.depthStencil.depth = clear_depth;
             ri.pDepthAttachment               = &dep;
@@ -6208,13 +6212,15 @@ public:
         return dset;
     }
 
-    void draw_storage_mrt(IRasterTarget* const* targets, crd::u32 count, IRasterProgram& program, ClearColor clear,
-                          float clear_depth, DepthCompare compare, IStorageBuffer& storage, crd::u32 vertex_count,
-                          const BlendMode* blend)
+    // CEIR-14z-4b: `attachments` carries each colour attachment's OWN typed clear (kind + float + uint) + blend — was a
+    // single shared `ClearColor clear` broadcast to all + a parallel `const BlendMode* blend`.
+    void draw_storage_mrt(IRasterTarget* const* targets, crd::u32 count, IRasterProgram& program,
+                          const AttachmentClear* attachments, float clear_depth, DepthCompare compare,
+                          IStorageBuffer& storage, crd::u32 vertex_count)
     {
         auto& p = static_cast<VulkanRasterProgram&>(program);
         auto& s = static_cast<VulkanStorageBuffer&>(storage);
-        if (!m_api.valid() || !p.valid() || targets == nullptr || count == 0U) { return; }
+        if (!m_api.valid() || !p.valid() || targets == nullptr || attachments == nullptr || count == 0U) { return; }
         const crd::u32 n = count < kMaxGBuffer ? count : kMaxGBuffer;
         if (!frame_recording()) { return; } // the graph is the only consumer; `draw_gbuffer` is the standalone path
         auto& t0 = static_cast<VulkanRasterTarget&>(*targets[0]);
@@ -6225,15 +6231,20 @@ public:
         VkRenderingAttachmentInfo att[kMaxGBuffer]{};
         for (crd::u32 i = 0; i < n; ++i)
         {
-            // ⛔ A MULTIPLICATIVE attachment (Multiply / RevealageMultiply — e.g. the WBOIT revealage) MUST clear to
-            // the multiplicative IDENTITY 1, never the pass's clear_color: `dst·(1-src)` starting from 0 stays 0
-            // forever, so the background is NEVER revealed. The fused draw_wboit clears reveal to 1 in its own pass;
-            // the frame-graph MRT path cleared BOTH attachments to the single clear_color [0,0,0,0], which is the
-            // asymmetric-WBOIT bug the 1-quad gate was blind to.
-            const bool mult = blend != nullptr &&
-                              (blend[i] == BlendMode::Multiply || blend[i] == BlendMode::RevealageMultiply);
-            const ClearColor cc = mult ? ClearColor{1.0F, 1.0F, 1.0F, 1.0F} : clear;
-            att[i] = colour_clear_attachment(static_cast<VulkanRasterTarget&>(*targets[i]).view(), cc);
+            const AttachmentClear& a = attachments[i];
+            // ⛔ WBOIT PRECEDENCE: a MULTIPLICATIVE attachment (Multiply / RevealageMultiply — the WBOIT revealage) MUST
+            // clear to the multiplicative IDENTITY 1, OVERRIDING the caller's kind/color: `dst·(1-src)` starting from 0
+            // stays 0 forever, so the background is NEVER revealed. Otherwise the attachment's OWN typed clear.
+            const bool mult = a.blend == BlendMode::Multiply || a.blend == BlendMode::RevealageMultiply;
+            att[i] = colour_clear_attachment(static_cast<VulkanRasterTarget&>(*targets[i]).view(),
+                                             mult ? ClearColor{1.0F, 1.0F, 1.0F, 1.0F} : a.color);
+            if (!mult && a.kind == ClearKind::Uint) // a typed UINT clear (R32_UINT id target): overwrite the float clearValue
+            {
+                att[i].clearValue.color.uint32[0] = a.uint_value;
+                att[i].clearValue.color.uint32[1] = 0U;
+                att[i].clearValue.color.uint32[2] = 0U;
+                att[i].clearValue.color.uint32[3] = 0U;
+            }
         }
         VkRenderingInfo ri{};
         ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
@@ -6267,15 +6278,15 @@ public:
         set_draw_state(cmd, t0.width(), t0.height(), 1U, has_depth, to_vk_compare(compare), n);
         // REN-38-A15: per-attachment blend, applied AFTER `set_draw_state` leaves blending disabled. Without this
         // an MRT pass always rendered opaque, which is why WBOIT could not be authored as two ordinary passes.
-        if (blend != nullptr && m_api.set_color_blend_enable != nullptr && m_api.set_color_blend_equation != nullptr)
+        if (m_api.set_color_blend_enable != nullptr && m_api.set_color_blend_equation != nullptr)
         {
             VkBool32                en[kMaxGBuffer]{};
             VkColorBlendEquationEXT eq[kMaxGBuffer]{};
             bool                    any = false;
             for (crd::u32 i = 0; i < n; ++i)
             {
-                en[i] = blend[i] != BlendMode::Opaque ? VK_TRUE : VK_FALSE;
-                eq[i] = blend_equation(blend[i]);
+                en[i] = attachments[i].blend != BlendMode::Opaque ? VK_TRUE : VK_FALSE;
+                eq[i] = blend_equation(attachments[i].blend);
                 any   = any || en[i] == VK_TRUE;
             }
             if (any)
@@ -8208,7 +8219,17 @@ private:
         }
         for (BufferNode& n : m_buffers)
         {
-            if (n.transient && n.vkbuf != VK_NULL_HANDLE) { vkDestroyBuffer(m_device, n.vkbuf, nullptr); n.vkbuf = VK_NULL_HANDLE; }
+            // Parity with the IMAGE path above (which deletes n.texture / n.target): the transient buffer WRAPPER minted in
+            // build_tail (`new VulkanTransientBuffer`) is graph-owned and must be deleted. An IMPORTED node BORROWS n.buffer
+            // (import_storage sets it to the caller's object), so gate the delete on n.transient exactly as vkDestroyBuffer is
+            // — else this would free a borrowed buffer. (LeakSanitizer caught the 24-byte wrapper leak per graph build; the
+            // CEIR-14z-5 broader linux-asan run — REN-38 authored graphs — surfaced it. delete nullptr is safe if never built.)
+            if (n.transient)
+            {
+                delete n.buffer;
+                n.buffer = nullptr;
+                if (n.vkbuf != VK_NULL_HANDLE) { vkDestroyBuffer(m_device, n.vkbuf, nullptr); n.vkbuf = VK_NULL_HANDLE; }
+            }
         }
         for (Slot& s : m_slots) { if (s.memory != VK_NULL_HANDLE) { vkFreeMemory(m_device, s.memory, nullptr); } }
         m_slots.clear();

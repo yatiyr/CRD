@@ -14,6 +14,7 @@
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/gpu/execute.hpp>
 #include <crd/ceir/gpu/lower.hpp>
+#include <crd/ceir/gpu/render_materialize.hpp> // CEIR-14z-1: the render materializers
 #include <crd/ceir/parse.hpp>
 #include <crd/ceir/print.hpp>
 
@@ -73,6 +74,25 @@ crd::gpu::ComputePipeline* resolve_from_user(const Operation*, void* user)
 {
     return static_cast<crd::gpu::ComputePipeline*>(user);
 }
+// CEIR-14z-1: the materializers only STORE the resolved target/program pointers (never DEREF them), so identity-only
+// sentinel resolvers suffice — `user` is a void* sentinel round-tripped to the interface pointer (no fake subclass).
+crd::gpu::IRasterTarget*  resolve_target(const Operation*, void* user) { return static_cast<crd::gpu::IRasterTarget*>(user); }
+crd::gpu::IRasterProgram* resolve_rprog(const Operation*, void* user) { return static_cast<crd::gpu::IRasterProgram*>(user); }
+// CEIR-14z-2: a device-free ICommandEncoder that COUNTS + captures the render verbs (the compute/transfer/trace verbs no-op).
+struct FakeEncoder : crd::gpu::ICommandEncoder
+{
+    int                        begins = 0;
+    int                        draws  = 0;
+    int                        ends   = 0;
+    crd::gpu::RenderingDesc     last_rd{};
+    crd::gpu::RasterDrawPacket  last_draw{};
+    void begin_rendering(const crd::gpu::RenderingDesc& rd) override { ++begins; last_rd = rd; }
+    void draw(const crd::gpu::RasterDrawPacket& p) override { ++draws; last_draw = p; }
+    void end_rendering() override { ++ends; }
+    void dispatch(const crd::gpu::DispatchDesc&) override {}
+    void transfer(const crd::gpu::TransferDesc&) override {}
+    void trace_rays(const crd::gpu::TraceDesc&) override {}
+};
 
 struct Kit
 {
@@ -778,4 +798,180 @@ TEST_CASE("ceir 14d: a table declare + a dispatch binding it verify + round-trip
     const crd::containers::String txt2 = print(ctx2, *pr.module, &root);
     CHECK(StringView(txt.data(), txt.size()) == StringView(txt2.data(), txt2.size())); // the ResourceTable type round-trips
     CHECK(ctx2.find_dispatch_misuse(*pr.module).kind == DispatchMisuseKind::None);
+}
+
+// ── CEIR-14z-1: the render MATERIALIZERS (device-free) — CEIR op → command_model desc, Option A (test-surface bridge). ──
+
+TEST_CASE("ceir 14z-1: materialize_rendering_desc maps the scope + attachments (RAH-1a.1: uint clear = ClearKind::Uint)",
+          "[ceir][ceir-gpu][render]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const Kit                    k(ctx);
+    int                          tgt_sentinel = 0;
+    void* const                  tgt_u        = &tgt_sentinel; // an identity sentinel (never deref'd)
+    const OpId                   depk = ctx.intern_op("render", "depth_attachment");
+    Block* const                 b    = ctx.create_block(0U);
+
+    Value* const     uimg = declimg(ctx, k, b); // color 0: a uint-clear id target (the RAH-1a.1 thread)
+    Value*           uo[1] = {uimg};
+    Operation* const uc = ctx.create_operation(k.col, ConstSpan<Value*>(uo, 1U), 1U, render::type_color_attachment(ctx, uimg->type()));
+    ctx.set_attr(uc, "clear_kind", ctx.attr_string(StringView("uint")));
+    ctx.set_attr(uc, "clear_uint", ctx.attr_int(7));
+    ctx.set_attr(uc, "load", ctx.attr_string(StringView("clear")));
+    b->append(uc);
+    Value* const     fimg = declimg(ctx, k, b); // color 1: a float clear + alpha blend
+    Value*           fo[1] = {fimg};
+    Operation* const fc = ctx.create_operation(k.col, ConstSpan<Value*>(fo, 1U), 1U, render::type_color_attachment(ctx, fimg->type()));
+    ctx.set_attr(fc, "clear_r", ctx.attr_float(0.25));
+    ctx.set_attr(fc, "blend", ctx.attr_string(StringView("alpha")));
+    b->append(fc);
+    Value* const     dimg = declimg(ctx, k, b); // depth
+    Value*           dvo[1] = {dimg};
+    Operation* const dp = ctx.create_operation(depk, ConstSpan<Value*>(dvo, 1U), 1U, render::type_depth_attachment(ctx, dimg->type()));
+    ctx.set_attr(dp, "compare", ctx.attr_string(StringView("greater")));
+    ctx.set_attr(dp, "clear_depth", ctx.attr_float(0.5));
+    b->append(dp);
+
+    Value*           atts[3] = {uc->result(0U), fc->result(0U), dp->result(0U)};
+    Operation* const sc      = scope_op(ctx, k, b, atts, 3U, 1920, 1080);
+    ctx.set_attr(sc, "sample_count", ctx.attr_int(4));
+
+    crd::gpu::RenderingDesc rd;
+    REQUIRE(materialize_rendering_desc(ctx, sc, resolve_target, tgt_u, rd));
+    CHECK(rd.width == 1920U);
+    CHECK(rd.height == 1080U);
+    CHECK(rd.sample_count == 4U);
+    REQUIRE(rd.color.size() == 2U); // the depth attachment does NOT go in color[]
+    CHECK(rd.color[0].clear_kind == crd::gpu::ClearKind::Uint); // ⭐ RAH-1a.1 end-to-end
+    CHECK(rd.color[0].clear_uint == 7U);
+    CHECK(rd.color[0].target == static_cast<crd::gpu::IRasterTarget*>(tgt_u));
+    CHECK(rd.color[0].load == crd::gpu::LoadOp::Clear);
+    CHECK(rd.color[1].clear_kind == crd::gpu::ClearKind::Float);
+    CHECK(rd.color[1].clear.r == 0.25F);
+    CHECK(rd.color[1].blend == crd::gpu::BlendMode::Alpha);
+    CHECK(rd.depth.enabled);
+    CHECK(rd.depth.compare == crd::gpu::DepthCompare::Greater);
+    CHECK(rd.depth.clear_depth == 0.5F);
+}
+
+TEST_CASE("ceir 14z-1: materialize_draw_packet maps command + GeometryKind + counts per draw op", "[ceir][ceir-gpu][render]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const Kit                    k(ctx);
+    int                          prog_sentinel = 0;
+    void* const                  prog_u = &prog_sentinel; // an identity sentinel (never deref'd)
+    Block* const                 b  = ctx.create_block(0U);
+    Value* const                 vc = konst(ctx, k, b, 3);
+    Value* const                 ic = konst(ctx, k, b, 1);
+
+    SECTION("render.draw with 0 bindings -> Draw / None (procedural)")
+    {
+        Operation* const d = draw_op(ctx, k, b, vc, ic, nullptr, 0U, "", "prog");
+        ctx.set_attr(d, "first_vertex", ctx.attr_int(5));
+        crd::gpu::RasterDrawPacket p;
+        REQUIRE(materialize_draw_packet(ctx, d, resolve_rprog, prog_u, p));
+        CHECK(p.program == static_cast<crd::gpu::IRasterProgram*>(prog_u));
+        CHECK(p.command == crd::gpu::RasterCommandKind::Draw);
+        CHECK(p.geometry.kind == crd::gpu::GeometryKind::None); // 0 bindings ⇒ procedural (the fullscreen/proc-triangle path)
+        CHECK(p.geometry.vertex_or_index_count == 3U);
+        CHECK(p.geometry.instance_count == 1U);
+        CHECK(p.geometry.first_vertex == 5U);
+    }
+    SECTION("render.draw with a vertex-pull binding -> Draw / StoragePull")
+    {
+        Value* const     vbuf = declbuf(ctx, k, b);
+        Value*           bd[1] = {vbuf};
+        Operation* const d = draw_op(ctx, k, b, vc, ic, bd, 1U, "r", "prog");
+        crd::gpu::RasterDrawPacket p;
+        REQUIRE(materialize_draw_packet(ctx, d, resolve_rprog, prog_u, p));
+        CHECK(p.geometry.kind == crd::gpu::GeometryKind::StoragePull); // ≥1 binding ⇒ vertex-pull
+    }
+    SECTION("render.draw_indirect -> DrawIndirect / Indirect, max_draws survives")
+    {
+        Value* const     args = declbuf(ctx, k, b);
+        Value*           ops[1] = {args};
+        Operation* const d = ctx.create_operation(k.dind, ConstSpan<Value*>(ops, 1U), 0U);
+        ctx.set_attr(d, "program", ctx.attr_symbol(StringView("p")));
+        ctx.set_attr(d, "access", ctx.attr_string(StringView("")));
+        ctx.set_attr(d, "max_draws", ctx.attr_int(42));
+        b->append(d);
+        crd::gpu::RasterDrawPacket p;
+        REQUIRE(materialize_draw_packet(ctx, d, resolve_rprog, prog_u, p));
+        CHECK(p.command == crd::gpu::RasterCommandKind::DrawIndirect);
+        CHECK(p.geometry.kind == crd::gpu::GeometryKind::Indirect);
+        CHECK(p.geometry.max_draws == 42U); // ⭐ the DrawIndex range survives into the packet (REN-40; push at 14z-6)
+    }
+    SECTION("render.mesh_dispatch -> DispatchMesh / Meshlet, group counts fold")
+    {
+        Value*           ops[3] = {vc, ic, ic};
+        Operation* const d = ctx.create_operation(k.mesh, ConstSpan<Value*>(ops, 3U), 0U);
+        ctx.set_attr(d, "program", ctx.attr_symbol(StringView("p")));
+        ctx.set_attr(d, "access", ctx.attr_string(StringView("")));
+        b->append(d);
+        crd::gpu::RasterDrawPacket p;
+        REQUIRE(materialize_draw_packet(ctx, d, resolve_rprog, prog_u, p));
+        CHECK(p.command == crd::gpu::RasterCommandKind::DispatchMesh);
+        CHECK(p.geometry.kind == crd::gpu::GeometryKind::Meshlet);
+        CHECK(p.geometry.group_count_x == 3U);
+        CHECK(p.geometry.group_count_y == 1U);
+    }
+    SECTION("render.mesh_dispatch with a y/z > 1 grid is REFUSED (the Meshlet verb is 1D — LOUD, not a silent narrow)")
+    {
+        // ⛔ CEIR-14z-7: the op is 3D but every Meshlet verb consumes group_count_x only, so a (gx, gy>1, gz) would silently
+        // draw (gx). materialize_draw_packet must FAIL (→ UnsupportedCommand) rather than lower a program that draws the wrong thing.
+        Value*           ops[3] = {vc, vc, ic}; // grid (3, 3, 1) — group_count_y = 3 != 1
+        Operation* const d = ctx.create_operation(k.mesh, ConstSpan<Value*>(ops, 3U), 0U);
+        ctx.set_attr(d, "program", ctx.attr_symbol(StringView("p")));
+        ctx.set_attr(d, "access", ctx.attr_string(StringView("")));
+        b->append(d);
+        crd::gpu::RasterDrawPacket p;
+        CHECK(!materialize_draw_packet(ctx, d, resolve_rprog, prog_u, p));
+    }
+}
+
+TEST_CASE("ceir 14z-2: execute_render_lowered walks BeginRender/Draw/EndRender into the encoder (device-free FakeEncoder)",
+          "[ceir][ceir-gpu][render]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const Kit                    k(ctx);
+    int                          tgt_s  = 0;
+    int                          prog_s = 0;
+    Block* const                 b   = ctx.create_block(0U);
+    Value* const                 img = declimg(ctx, k, b);
+    Value* const                 col = coloratt(ctx, k, b, img);
+    Value*                       atts[1] = {col};
+    Operation* const             sc  = scope_op(ctx, k, b, atts, 1U, 640, 480);
+    Block* const                 rb  = scope_body(ctx, sc);
+    Value* const                 vc  = konst(ctx, k, rb, 3);
+    Value* const                 ic  = konst(ctx, k, rb, 1);
+    (void)draw_op(ctx, k, rb, vc, ic, nullptr, 0U, "", "prog");
+    (void)draw_op(ctx, k, rb, vc, ic, nullptr, 0U, "", "prog");
+    Array<LoweredCommand> cmds(&root);
+    lower_region(ctx, *b, cmds); // [BeginRender, Draw, Draw, EndRender]
+    const ConstSpan<LoweredCommand> clist(cmds.data(), cmds.size());
+
+    SECTION("happy path — begin once, draw twice, end once, captured descs")
+    {
+        FakeEncoder enc;
+        CHECK(execute_render_lowered(ctx, clist, enc, resolve_target, &tgt_s, resolve_rprog, &prog_s) == ExecuteError::None);
+        CHECK(enc.begins == 1);
+        CHECK(enc.draws == 2);
+        CHECK(enc.ends == 1);
+        REQUIRE(enc.last_rd.color.size() == 1U); // the scope's one color attachment materialized
+        CHECK(enc.last_rd.width == 640U);
+        CHECK(enc.last_rd.height == 480U);
+        CHECK(enc.last_draw.command == crd::gpu::RasterCommandKind::Draw); // the last Draw materialized
+        CHECK(enc.last_draw.program == resolve_rprog(nullptr, &prog_s)); // == what the resolver returns (no test-side cast)
+    }
+    SECTION("a null program resolver -> UnresolvedProgram (typed)")
+    {
+        FakeEncoder enc;
+        CHECK(execute_render_lowered(ctx, clist, enc, resolve_target, &tgt_s, resolve_rprog, nullptr)
+              == ExecuteError::UnresolvedProgram);
+        CHECK(enc.begins == 1); // the scope began (target resolved) before the draw's null program was hit
+        CHECK(enc.draws == 0);
+    }
 }

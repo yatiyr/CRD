@@ -38,6 +38,9 @@ enum class ExecuteError : crd::u8
     BindingArity,       // the dispatch's binding-operand count exceeds kMaxBindings (the command-model structural cap)
     UnmappedBinding,    // a binding operand's (root) Value has no ResolvedBinding entry
     UnsupportedCommand, // a Transfer command, or a dynamic-grid dispatch (dispatch-only / const-grid at 13z-1 — named-forward)
+    UnresolvedProgram,  // CEIR-14z-2: a render program/target resolver returned nullptr (a draw's @program or an attachment target)
+    NoFrameGraph,       // CEIR-14z-4a: the raster context has no frame graph (create_frame_graph()/create_command_encoder() == nullptr) — a capability absence
+    FrameBuildFailed,   // CEIR-14z-4a: the gpu-context frame graph failed to build (an unwritten transient / a cycle in the declared reads/writes)
 };
 [[nodiscard]] containers::StringView execute_error_name(ExecuteError e) noexcept;
 

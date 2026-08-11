@@ -414,6 +414,34 @@ TEST_CASE("RAF-9: an engine default frame loads by canonical engine:// id", "[sc
                                           nullptr));
 }
 
+// ── ⛔ CEIR-15f-2: the CEIR SEMANTIC VERIFIER is the LIVE cook gate. Before 15f-2 the live renderer routed THROUGH ceir but
+// was gated by the DESC verifier (validate_frame_graph); the whole 15c body (validate_ceir_frame — program contracts, closed
+// vocabs, DependencyCycle, …) was TEST-ONLY. This proves the authority transferred: a structurally-valid frame that is
+// SEMANTICALLY incomplete (passes exist, but NOTHING writes `@output`) is REJECTED by the live cook. `to_ceir_frame` ACCEPTS
+// it (no undeclared refs), and 15f-2 removed the pre-route desc validate, so the ONLY rejector is validate_ceir_frame's
+// NoOutputPass. The @output-writing control cooks fine ⇒ it's the SEMANTIC check firing, not a parse/structural error.
+// Device-free — no CRD_ASSETS_DIR (inline TOML, no composition to resolve). ──
+TEST_CASE("REN-41/CEIR-15f-2: the live cook is gated by the CEIR semantic verifier", "[scene-render][ceir][ren41]")
+{
+    memory::TlsfAllocator      alloc(16U << 20U, nullptr, "ceir-15f2-gate");
+    scenerender::SceneRenderer r(&alloc);
+    // a pass writes only the transient `scene`, NEVER @output -> NoOutputPass (a validate_ceir_frame SEMANTIC reject).
+    CHECK_FALSE(r.set_frame_graph_toml(
+        "schema = 1\n"
+        "name = \"test://frame/no_output\"\n"
+        "[[resource]]\nname = \"scene\"\nformat = \"RGBA16F\"\nscale = 1.0\nsampled = true\n"
+        "[[draw_list]]\nname = \"opaque\"\nall = [\"MeshRenderer\", \"Transform\"]\n"
+        "[[pass]]\nname = \"geo\"\nkind = \"raster.geometry\"\ndraw_list = \"opaque\"\nwrites = [\"scene\"]\n"));
+    // control: the SAME frame + a pass that DOES write @output cooks fine -> the reject above was SEMANTIC, not structural.
+    CHECK(r.set_frame_graph_toml(
+        "schema = 1\n"
+        "name = \"test://frame/with_output\"\n"
+        "[[resource]]\nname = \"scene\"\nformat = \"RGBA16F\"\nscale = 1.0\nsampled = true\n"
+        "[[draw_list]]\nname = \"opaque\"\nall = [\"MeshRenderer\", \"Transform\"]\n"
+        "[[pass]]\nname = \"geo\"\nkind = \"raster.geometry\"\ndraw_list = \"opaque\"\nwrites = [\"scene\"]\n"
+        "[[pass]]\nname = \"fwd\"\nkind = \"raster.geometry\"\ndraw_list = \"opaque\"\nreads = [\"scene\"]\nwrites = [\"@output\"]\n"));
+}
+
 // `CRD_ASSETS_DIR` is set by ctest (the guard lives in ctest, like every cross-config guard); without it the
 // gate SKIPS rather than passing on nothing.
 TEST_CASE("REN-41: every shipped authored default asset cooks (parses + validates)", "[scene-render][ren38][ren41]")

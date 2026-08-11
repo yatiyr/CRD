@@ -51,11 +51,8 @@ enum class StoreOp : crd::u8
 // `clear_kind == Uint` ⇒ the integer background id `clear_uint` (an R32_UINT id target — the visibility buffer).
 // This is what makes VISIBILITY an ORDINARY typed attachment: the encoder derives the id-write draw from `clear_kind`,
 // not a `RenderingDesc.visbuffer` boolean. (A float ClearColor cannot express an integer id, so the clear is typed.)
-enum class ClearKind : crd::u8
-{
-    Float = 0, // the float `clear` (ClearColor)
-    Uint,      // the integer `clear_uint` (R32_UINT id target)
-};
+// `ClearKind` moved DOWN to raster_context.hpp (CEIR-14z-4b — the verb layer needs it for AttachmentClear); still visible
+// here via the include above (crd::gpu::ClearKind, unchanged).
 
 // One colour attachment. `target` is the concrete image (a frame-graph transient or a standalone target); MRT is just
 // N of these. `blend` replaces the per-attachment blend array threaded through draw_storage_mrt.

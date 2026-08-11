@@ -1342,6 +1342,35 @@ inline void build_gbuffer_two_output_fs(crd::kir::KGraph& g, crd::kir::KEntry& f
     fe.out[1]     = {g.vec4(kf(0.0), kf(1.0), kf(0.0), kf(1.0)), 1}; // attachment 1 = GREEN (normal slot)
 }
 
+// CEIR-14z-4c(c2): a UINT two-output G-buffer FS — writes id 7 to attachment 0 and id 9 to attachment 1, both SCALAR U32
+// (each targets one R32_UINT visbuffer attachment). Distinct output values PLUS distinct clears prove per-attachment TYPED
+// (uint) clears + correct MRT ordering on a homogeneous-uint MRT. The emitter lowers a scalar-uint out[k] to
+// `layout(location=k) out uint o_k;` (the build_visbuffer_fs single-output precedent, generalised to n_out=2).
+inline void build_visbuffer_two_output_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
+{
+    namespace kir = crd::kir;
+    const auto sh = kir::make_shape({1});
+    fe.stage      = kir::KStage::Fragment;
+    fe.n_out      = 2;
+    fe.out[0]     = {g.constant(7.0, sh, kir::DType::U32), 0}; // id 7 → attachment 0 (R32_UINT)
+    fe.out[1]     = {g.constant(9.0, sh, kir::DType::U32), 1}; // id 9 → attachment 1 (R32_UINT)
+}
+
+// CEIR-14z-4c(c3): a MIXED-type two-output FS — a SCALAR U32 id (7) to attachment 0 (R32_UINT) and a VEC4 FLOAT (GREEN) to
+// attachment 1 (RGBA8). The emitter types each output independently (`out uint o_0;` + `out vec4 o_1;` in GLSL / `uint
+// o0 : SV_Target0;` + `float4 o1 : SV_Target1;` in HLSL), so a HETEROGENEOUS-format MRT is expressible — the shape the
+// "typed clears per-target" (uint@0 + float@1) proof needs.
+inline void build_gbuffer_uint_float_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
+{
+    namespace kir = crd::kir;
+    const auto sh = kir::make_shape({1});
+    const auto kf = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    fe.stage      = kir::KStage::Fragment;
+    fe.n_out      = 2;
+    fe.out[0]     = {g.constant(7.0, sh, kir::DType::U32), 0};       // uint id 7 → attachment 0 (R32_UINT)
+    fe.out[1]     = {g.vec4(kf(0.0), kf(1.0), kf(0.0), kf(1.0)), 1}; // GREEN   → attachment 1 (RGBA8 float)
+}
+
 // REN-38-A3: a fullscreen composite that samples TWO textures from a BINDLESS array and proves BOTH were bound,
 // IN DECLARATION ORDER. This is the shape of a deferred LIGHTING pass (albedo + normal + material + depth) reduced
 // to its smallest checkable form.
@@ -1498,6 +1527,26 @@ inline void build_depth_only_const_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe,
     fe.stage      = kir::KStage::Fragment;
     fe.n_out      = 0; // ⛔ no colour attachment is bound in a depth-only pass
     fe.frag_depth = g.constant(depth_value, sh, kir::DType::F32);
+}
+
+// CEIR-14z-5 DEPTH-OCCLUSION FS: writes a CONSTANT colour (n_out = 1) AND an explicit `gl_FragDepth = depth_value`. The
+// emitters type a colour output (`layout(location=0) out`) and frag_depth (`gl_FragDepth`/`o_depth`) as INDEPENDENT paths,
+// so the two coexist (distinct from build_depth_only_const_fs, which sets n_out = 0). Paired with `build_fullscreen_vs` for
+// scope 1 of the depth-only occlusion proof: the fragment's depth (0.75) is TESTED (LessEqual) against the depth map scope 0
+// rendered (0.5 under the triangle, 1.0 elsewhere) — where the test passes, `colour` is written; where it fails, the prior
+// clear survives. The colour SURVIVING or being OVERWRITTEN is the attachment-only observation that the depth-only pass wrote
+// real depth. A constant frag_depth off the compare boundary is deliberate (the REN-3.1 ramp lesson: never sit on ==).
+inline void build_color_depth_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe, double r, double gg, double bb,
+                                 double depth_value)
+{
+    namespace kir = crd::kir;
+    const auto sh   = kir::make_shape({1});
+    const int  col  = g.vec4(g.constant(r, sh, kir::DType::F32), g.constant(gg, sh, kir::DType::F32),
+                             g.constant(bb, sh, kir::DType::F32), g.constant(1.0, sh, kir::DType::F32));
+    fe.stage        = kir::KStage::Fragment;
+    fe.n_out        = 1;
+    fe.out[0]       = {col, 0};
+    fe.frag_depth   = g.constant(depth_value, sh, kir::DType::F32);
 }
 
 // B2-b SHADOW (depth-compare) FS: samples a depth texture (shadow sampler) with `ref = uv.x`. With the depth = 0.5

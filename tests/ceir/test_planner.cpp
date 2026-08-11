@@ -110,13 +110,17 @@ TEST_CASE("ceir 12d: interval-coloring is minimal and the plan is consistent wit
     const TypeId                 buf = ctx.type_buffer(BufferMode::Plain, ctx.type_f32());
     Module* const                m   = ctx.create_module();
     Block* const                 bm  = mkmain(ctx, *m);
-    // %a=[0,5], %b=[1,2], %c=[3,4]. %a spans everything (2 slots minimum); %c reuses %b's slot (disjoint). -> 2 slots.
+    // ⛔ 15d-3b (first-use memory-liveness): a transient's slot is FREE until its FIRST access, so a resource only-read-LATE
+    // would not span. %a is therefore touched EARLY (@1) and LATE (@6) so it genuinely SPANS -> %a=[1,6], %b=[3,3], %c=[5,5].
+    // %a overlaps both (2 slots minimum); %c reuses %b's slot (disjoint) -> 2 slots. (This mirrors a real write-then-read
+    // resource, and matches the render-graph aliaser's first-touch `first_use` model, frame_graph.cpp.)
     Operation* const a = decl_res(ctx, k, bm, "transient", 1, buf); // pos 0
-    Operation* const b = decl_res(ctx, k, bm, "transient", 1, buf); // pos 1
-    read_into(ctx, k, bm, b->result(0U));                           // pos 2 -> %b=[1,2]
-    Operation* const c = decl_res(ctx, k, bm, "transient", 1, buf); // pos 3
-    read_into(ctx, k, bm, c->result(0U));                           // pos 4 -> %c=[3,4]
-    read_into(ctx, k, bm, a->result(0U));                           // pos 5 -> %a=[0,5]
+    read_into(ctx, k, bm, a->result(0U));                           // pos 1 -> %a first-touched @1
+    Operation* const b = decl_res(ctx, k, bm, "transient", 1, buf); // pos 2
+    read_into(ctx, k, bm, b->result(0U));                           // pos 3 -> %b=[3,3]
+    Operation* const c = decl_res(ctx, k, bm, "transient", 1, buf); // pos 4
+    read_into(ctx, k, bm, c->result(0U));                           // pos 5 -> %c=[5,5]
+    read_into(ctx, k, bm, a->result(0U));                           // pos 6 -> %a=[1,6] spans everything
     bm->append(func::create_return(ctx, {}));
 
     MemoryPlan plan(&root);
@@ -151,6 +155,64 @@ TEST_CASE("ceir 12d: interval-coloring is minimal and the plan is consistent wit
     }
 }
 
+// ⛔ CEIR-15d-3b: memory-liveness is [FIRST-use, last-use], NOT [declare, last-use]. A transient DECLARED early but
+// first-USED late is free until then, so it pools with a transient that finished before it — the EXACT frame-graph shape
+// (the converter emits every resource.declare up-front). Under the old declare-pos `first`, both ranges started at ~0 and
+// overlapped -> zero pooling. This is parity with the render-graph aliaser's `first_use` model (frame_graph.cpp L1200).
+TEST_CASE("ceir 15d-3b: a declared-early first-used-late transient pools with an early-and-done one", "[ceir][planner]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const Kit                    k(ctx);
+    const TypeId                 buf = ctx.type_buffer(BufferMode::Plain, ctx.type_f32());
+    Module* const                m   = ctx.create_module();
+    Block* const                 bm  = mkmain(ctx, *m);
+    // Both declared UP-FRONT (positions 0,1 — the frame-converter shape). %late is first-USED @3; %early is done @2.
+    Operation* const late  = decl_res(ctx, k, bm, "transient", 1, buf); // pos 0 (declared FIRST, used LAST)
+    Operation* const early = decl_res(ctx, k, bm, "transient", 1, buf); // pos 1
+    read_into(ctx, k, bm, early->result(0U));                           // pos 2 -> %early=[2,2]
+    read_into(ctx, k, bm, late->result(0U));                            // pos 3 -> %late=[3,3] (NOT [0,3])
+    bm->append(func::create_return(ctx, {}));
+
+    MemoryPlan plan(&root);
+    ctx.plan_block_memory(*bm, PlanProfile::Memory, plan);
+    CHECK(plan.transient_logical == 2U);
+    CHECK(plan.transient_physical == 1U); // ⛔ THE 15d-3b GAIN: 2 logical -> 1 physical (declare-pos `first`=0 would tie both to ~0 -> 2)
+    const SlotAssignment* al = assign_of(plan, late);
+    const SlotAssignment* ae = assign_of(plan, early);
+    REQUIRE(al != nullptr);
+    REQUIRE(ae != nullptr);
+    CHECK(al->slot == ae->slot);          // pooled into the SAME physical slot
+
+    // the lifetimes prove WHY: %late's memory-live range starts at its first ACCESS @3, disjoint from %early=[2,2].
+    Array<ResourceLifetime> lts(&root);
+    ctx.compute_block_lifetimes(*bm, lts);
+    const ResourceLifetime* ll = nullptr;
+    const ResourceLifetime* le = nullptr;
+    for (usize t = 0; t < lts.size(); ++t)
+    {
+        if (lts[t].resource == late->result(0U)) { ll = &lts[t]; }
+        if (lts[t].resource == early->result(0U)) { le = &lts[t]; }
+    }
+    REQUIRE(ll != nullptr);
+    REQUIRE(le != nullptr);
+    CHECK(ll->first == 3U);               // ⛔ first-USE @3, NOT the declare position (0) — the whole point of 15d-3b
+    CHECK(le->last == 2U);
+    CHECK_FALSE(Context::resources_interfere(*ll, *le)); // [3,3] disjoint from [2,2]
+
+    // the DEGENERATE: a transient DECLARED but NEVER used collapses to a well-formed point interval [declare, declare].
+    Module* const           m2  = ctx.create_module();
+    Block* const            bm2 = mkmain(ctx, *m2);
+    Operation* const        unused = decl_res(ctx, k, bm2, "transient", 1, buf); // pos 0, never touched
+    (void)unused;
+    bm2->append(func::create_return(ctx, {}));                                   // pos 1
+    Array<ResourceLifetime> lts2(&root);
+    ctx.compute_block_lifetimes(*bm2, lts2);
+    REQUIRE(lts2.size() == 1U);
+    CHECK(lts2[0].first == 0U);           // ⛔ 15d-3b degenerate: unused -> `first` falls back to the declare position (0)
+    CHECK(lts2[0].last == 0U);
+}
+
 TEST_CASE("ceir 12d: the Latency profile disables pooling (physical == logical == the Memory plan's logical)",
           "[ceir][planner]")
 {
@@ -160,9 +222,9 @@ TEST_CASE("ceir 12d: the Latency profile disables pooling (physical == logical =
     const TypeId                 buf = ctx.type_buffer(BufferMode::Plain, ctx.type_f32());
     Module* const                m   = ctx.create_module();
     Block* const                 bm  = mkmain(ctx, *m);
-    Operation* const a = decl_res(ctx, k, bm, "transient", 1, buf); // %a=[0,1]
+    Operation* const a = decl_res(ctx, k, bm, "transient", 1, buf); // %a=[1,1] (first-use @1)
     read_into(ctx, k, bm, a->result(0U));
-    Operation* const b = decl_res(ctx, k, bm, "transient", 1, buf); // %b=[2,3] (would pool under Memory)
+    Operation* const b = decl_res(ctx, k, bm, "transient", 1, buf); // %b=[3,3] (first-use @3; disjoint -> would pool under Memory)
     read_into(ctx, k, bm, b->result(0U));
     bm->append(func::create_return(ctx, {}));
 

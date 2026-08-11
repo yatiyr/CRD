@@ -159,6 +159,7 @@ attributes = [
     { name = "program_interface", kind = "int", required = false, doc = "CEIR-13c the EXPECTED §107 interface hash of @program (a PIN; absent = unpinned)" },
     { name = "max_draws", kind = "int", required = false, doc = "sec-40 the MAX sub-draw count (>=1, absent = 1). ⭐ the DrawIndex RANGE -- 14z pushes SV_DrawIndex per sub-draw (REN-40). find_render_misuse: >=1 (MaxDrawsInvalid)." },
     { name = "args_offset", kind = "int", required = false, doc = "BYTE offset into %args (absent = 0; GeometrySource.args_offset). A static ATTR." },
+    { name = "index_offset", kind = "int", required = false, doc = "CEIR-14z-6 BYTE offset of the INDEX section within the bound pull buffer (absent = 0; GeometrySource.index_offset). The engine's indirect draw is INDEXED (Nanite-style, one buffer for pull + indices); this locates the index section. A static ATTR, symmetric with args_offset." },
 ]
 effects = [ "GPUCommand", "MemoryReadWrite", { family = "MemoryRead", operand = 0 } ]
 kernel_ref = { symbol = "program", interface = "program_interface" }
@@ -185,6 +186,7 @@ attributes = [
     { name = "max_draws", kind = "int", required = false, doc = "sec-40 the MAX draw count bound (>=1, absent = 1). The DrawIndex range (14z; REN-40). find_render_misuse: >=1." },
     { name = "args_offset", kind = "int", required = false, doc = "BYTE offset into %args (absent = 0)" },
     { name = "count_offset", kind = "int", required = false, doc = "BYTE offset into %count (absent = 0; GeometrySource.count_offset)" },
+    { name = "index_offset", kind = "int", required = false, doc = "CEIR-14z-6 BYTE offset of the INDEX section within the bound pull buffer (absent = 0; GeometrySource.index_offset). The indirect draw is INDEXED; this locates the index section. A static ATTR, symmetric with args_offset/count_offset." },
 ]
 effects = [ "GPUCommand", "MemoryReadWrite", { family = "MemoryRead", operand = 0 }, { family = "MemoryRead", operand = 1 } ]
 kernel_ref = { symbol = "program", interface = "program_interface" }

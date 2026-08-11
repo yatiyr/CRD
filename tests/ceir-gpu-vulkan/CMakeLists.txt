@@ -4,6 +4,7 @@
 # device-free lower-shape case always runs (the all-skip false-green guard).
 add_executable(crd-ceir-gpu-vulkan-tests
     test_ceir_add_vulkan.cpp
+    test_ceir_render_vulkan.cpp   # CEIR-14z-3: the render DEVICE pixel proof (a CEIR render.scope{draw} → real encoder)
 )
 
 target_link_libraries(crd-ceir-gpu-vulkan-tests PRIVATE

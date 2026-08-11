@@ -8,6 +8,7 @@ endif()
 
 add_executable(crd-ceir-gpu-dx12-tests
     test_ceir_add_dx12.cpp
+    test_ceir_render_dx12.cpp   # CEIR-14z-3: the DX12 mirror of the render DEVICE pixel proof
 )
 
 target_link_libraries(crd-ceir-gpu-dx12-tests PRIVATE

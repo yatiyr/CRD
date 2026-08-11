@@ -27,8 +27,12 @@
 #include <crd/kir/ckir_material.hpp> // REN-37.1: the OpenPBR surface slab a material outputs
 #include <crd/kir/ckir_technique.hpp> // REN-37.2: the LIGHTING TECHNIQUE, named + swappable by an asset
 #include <crd/kir/ckir_variant.hpp>   // REN-37.7: the DECLARED variant matrix + content-hash dedup
+#include <crd/ceir/ceir.hpp>               // CEIR-15e (Fork E): route the frame through ceir.frame at cook time
 #include <crd/framecook/frame_asset.hpp>   // REN-37.10: the AUTHORED frame graph this renderer HOSTS
+#include <crd/framecook/frame_ceir.hpp>    // CEIR-15e (Fork E): to_ceir_frame / from_ceir_frame
 #include <crd/framecook/frame_runtime.hpp> // REN-37.10: FrameRecorder + IFrameGraphHost
+
+#include <cstdlib> // std::getenv (renderer_getenv: CRD_ASSETS_DIR)
 #include <crd/log/log.hpp>              // REN-37.10: a graph that fails to record must SAY so
 #include <crd/platform/filesystem.hpp>  // REN-38-F15: disk-first asset resolution (a file shadows the pack)
 #include <crd/resources/openpbr_material.hpp>
@@ -959,11 +963,58 @@ struct SceneRenderer::Impl
             {
                 return e;
             }
-            if (const auto e = crd::framecook::validate_frame_graph(flat, &where); e != FCE::Ok) { return e; }
             desc = static_cast<crd::framecook::FrameGraphDesc&&>(flat);
-            return FCE::Ok;
         }
-        return crd::framecook::validate_frame_graph(desc, &where);
+        // ⭐ CEIR-15e/15f: the runtime renders via the CEIR path (desc -> to_ceir_frame -> from_ceir_frame -> desc'). 15e proved
+        // this lowers to a BYTE-EQUIVALENT FrameGraphTemplate for every shipped asset + renders pixel-identically on real
+        // Vulkan+DX12. ⛔ 15f-2/3: the CANONICAL semantic gate is validate_ceir_frame, run INSIDE the route, UNCONDITIONALLY
+        // (§121 — no path executes without going through canonical CEIR; the old direct path + the CRD_FRAME_VIA_CEIR flag are
+        // gone at 15f-3). The standalone desc-side validate_frame_graph that gated here is GONE from the live path — it survives
+        // as flatten's composition-time check + the differential-oracle reference.
+        return route_frame_through_ceir(desc, where);
+    }
+
+    // CEIR-15e/15f: the CANONICAL frame cook lowering — route a flattened desc through the ceir.frame, VALIDATE it with the
+    // CEIR semantic verifier (validate_ceir_frame — the live §115 gate), and lower back to a desc for the runtime. ⛔ 15f-3:
+    // UNCONDITIONAL — the old direct desc path and the CRD_FRAME_VIA_CEIR opt-out flag are GONE (§121: no path executes without
+    // going through canonical CEIR). LOUD on any converter/verifier rejection — there is no old path to fall through to.
+    [[nodiscard]] crd::framecook::FrameCookError route_frame_through_ceir(crd::framecook::FrameGraphDesc& desc,
+                                                                          crd::containers::String&        where)
+    {
+        using FCE = crd::framecook::FrameCookError;
+        crd::ceir::Context       ceir_ctx(alloc);
+        crd::ceir::Module* const m = crd::framecook::to_ceir_frame(desc, ceir_ctx);
+        if (m == nullptr) // a desc the CEIR dialect cannot represent (e.g. still-composed) — LOUD, never silent
+        {
+            where.clear();
+            where.append("to_ceir_frame rejected the frame (unrepresentable in the ceir.frame dialect)");
+            return FCE::ParseFailed;
+        }
+        // ⛔ CEIR-15f-2: the CEIR SEMANTIC VERIFIER is the LIVE gate now. validate_ceir_frame is the FULL §115 verifier
+        // (structural + resource-shape + def-use + NEW-IN-CEIR consistency + program-contract for EVERY executor + closed-vocab
+        // + DependencyCycle) — before 15f-2 the whole 15c body was TEST-ONLY (the live renderer routed THROUGH ceir but was
+        // gated by the DESC verifier). It materializes its own desc internally for the shared pass_contract_diag; the route's
+        // from_ceir_frame below is a second, accepted materialization (collapsed in a later cut).
+        const crd::framecook::FrameSemanticDiag sd = crd::framecook::validate_ceir_frame(ceir_ctx, *m, alloc);
+        if (sd.kind != crd::framecook::FrameSemanticKind::None)
+        {
+            where.clear();
+            where.append("validate_ceir_frame rejected: ");
+            const crd::containers::StringView kn = crd::framecook::frame_semantic_kind_name(sd.kind);
+            where.append(kn.data(), kn.size());
+            // The specific FrameCookError rides `.contract` for the contract/vocab/cycle rows; the structural/shape/consistency
+            // kinds are NEW-IN-CEIR (no FrameCookError) — surface them as ParseFailed with the named kind above.
+            return sd.contract != FCE::Ok ? sd.contract : FCE::ParseFailed;
+        }
+        crd::framecook::FrameGraphDesc rt(alloc);
+        if (!crd::framecook::from_ceir_frame(ceir_ctx, *m, alloc, rt))
+        {
+            where.clear();
+            where.append("from_ceir_frame failed (ceir.frame -> desc lowering)");
+            return FCE::ParseFailed;
+        }
+        desc = static_cast<crd::framecook::FrameGraphDesc&&>(rt);
+        return FCE::Ok; // 15f-2: validate_ceir_frame already gated; desc' is the byte-equal (15e) reconstruction — no re-validate
     }
 
     // The reload adapter (RAF-11 vtable). `stage` re-reads the frame's source via the resolver and re-cooks it into a

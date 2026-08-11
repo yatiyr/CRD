@@ -94,7 +94,8 @@ ComPtr<ID3D12PipelineState> build_graphics_pso(ID3D12Device* dev, ID3D12RootSign
                                                D3D12_SHADER_BYTECODE ds = D3D12_SHADER_BYTECODE{},  // B4-tess: domain
                                                DXGI_FORMAT rt_fmt = kColorFormat,                   // B4-vis-4: R32_UINT vis buffer
                                                const BlendMode* blend = nullptr,                    // REN-38-A15: per-RT blend
-                                               const PassRasterState* state = nullptr)              // REN-38 audit: pass state
+                                               const PassRasterState* state = nullptr,              // REN-38 audit: pass state
+                                               const DXGI_FORMAT* rt_fmts = nullptr)                // CEIR-14z-4c c3: per-attachment fmts
 {
     D3D12_GRAPHICS_PIPELINE_STATE_DESC pd{};
     pd.pRootSignature                                   = root;
@@ -152,7 +153,9 @@ ComPtr<ID3D12PipelineState> build_graphics_pso(ID3D12Device* dev, ID3D12RootSign
     pd.PrimitiveTopologyType                            = (hs.pShaderBytecode != nullptr) ? D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH
                                                                                           : D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     pd.NumRenderTargets                                 = num_rts; // B5: >1 for a deferred G-buffer (MRT)
-    for (UINT i = 0; i < num_rts; ++i) { pd.RTVFormats[i] = rt_fmt; } // B4-vis-4: R32_UINT for the visibility buffer, else RGBA8
+    // CEIR-14z-4c c3: PER-ATTACHMENT RTV formats (a HETEROGENEOUS uint@0+float@1 MRT). `rt_fmts` (when non-null) gives each
+    // attachment's own format; else broadcast the single `rt_fmt` (the homogeneous path, byte-identical to before).
+    for (UINT i = 0; i < num_rts && i < 8U; ++i) { pd.RTVFormats[i] = rt_fmts != nullptr ? rt_fmts[i] : rt_fmt; }
     pd.SampleDesc.Count                                 = samples;
     pd.DSVFormat                                        = dsv;
     if (dsv != DXGI_FORMAT_UNKNOWN) // B1-d: depth test + write ON with the given compare func
@@ -238,6 +241,9 @@ ComPtr<ID3D12PipelineState> build_mesh_pso(ID3D12Device2* dev2, ID3D12RootSignat
     blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
     D3D12_RT_FORMAT_ARRAY rts{};
     rts.NumRenderTargets = num_rts;
+    // ⚠ NAMED-FORWARD: the mesh PSO hardcodes kColorFormat for every RT. The graphics path threads PER-ATTACHMENT RTV formats
+    // (CEIR-14z-4c c3), but a heterogeneous mesh-MRT has no consumer yet (14z-7 mesh proves single-RT kColorFormat) — mirror the
+    // c3 pso_for fix here on the FIRST mesh-MRT consumer (CEIR-15/16 executor migration is the likely home).
     for (UINT i = 0; i < num_rts; ++i) { rts.RTFormats[i] = kColorFormat; }
     DXGI_SAMPLE_DESC sd{};
     sd.Count = samples;
@@ -705,9 +711,21 @@ public:
     // small keyed cache (a handful of configs per program at most). `dsv == DXGI_FORMAT_UNKNOWN` ⇒ the depth-off colour path.
     [[nodiscard]] ID3D12PipelineState* pso_for(crd::u32 samples, DXGI_FORMAT dsv, D3D12_COMPARISON_FUNC depth_func,
                                                bool conservative, crd::u32 num_rts = 1U, DXGI_FORMAT rt_fmt = kColorFormat,
-                                               const BlendMode* blend = nullptr,
-                                               const PassRasterState* state = nullptr)
+                                               const BlendMode* blend = nullptr, const PassRasterState* state = nullptr,
+                                               const DXGI_FORMAT* rt_fmts = nullptr)
     {
+        // CEIR-14z-4c c3: materialize the PER-ATTACHMENT RTV formats — `rt_fmts` gives each attachment's own format (a
+        // HETEROGENEOUS uint@0+float@1 MRT); else broadcast `rt_fmt` (homogeneous, byte-identical). The FULL array joins the
+        // PSO cache identity (compared member-by-member like `state`), so a heterogeneous PSO never collides with a
+        // homogeneous one — the content-hash rule (a u32 key cannot encode N formats; it stays a prefilter).
+        DXGI_FORMAT    fmts[8]     = {};
+        const crd::u32 nf          = num_rts < 8U ? num_rts : 8U;
+        bool           all_default = true;
+        for (crd::u32 i = 0; i < nf; ++i)
+        {
+            fmts[i] = rt_fmts != nullptr ? rt_fmts[i] : rt_fmt;
+            if (fmts[i] != kColorFormat) { all_default = false; }
+        }
         // REN-38-A15: fold the blend modes into the cache key. ⛔ Without this, two passes asking for DIFFERENT
         // blends would share one PSO and the second would render with the first's equations — a wrong image with
         // nothing to point at, because both passes' declarations look correct.
@@ -723,7 +741,7 @@ public:
         // hashed (a hash collision hands one pass another's pipeline). Default state keeps the historical key.
         const PassRasterState def_state{};
         const PassRasterState& st = state != nullptr ? *state : def_state;
-        if (samples <= 1U && dsv == DXGI_FORMAT_UNKNOWN && !conservative && num_rts == 1U && rt_fmt == kColorFormat
+        if (samples <= 1U && dsv == DXGI_FORMAT_UNKNOWN && !conservative && num_rts == 1U && all_default
             && blend_key == 0U && st == def_state)
         {
             return m_pso1.Get();
@@ -731,19 +749,22 @@ public:
         const crd::u32 key = (samples << 8U)
                              | (dsv != DXGI_FORMAT_UNKNOWN ? (0x80U | static_cast<crd::u32>(depth_func)) : 0U)
                              | (conservative ? 0x10000U : 0U) | (num_rts << 20U) // B5: RT count in the key (MRT G-buffer)
-                             | (rt_fmt == kColorFormat ? 0U : 0x40000U) // B4-vis-4: the R32_UINT visibility-buffer format
-                             | (blend_key << 24U);                       // REN-38-A15: per-RT blend modes
+                             | (all_default ? 0U : 0x40000U) // c3: a cheap "any non-RGBA8 fmt" prefilter (the exact fmts[] compare below is authoritative)
+                             | (blend_key << 24U);            // REN-38-A15: per-RT blend modes
         for (int i = 0; i < m_cache_n; ++i)
         {
-            if (m_cache[i].key == key && m_cache[i].rt_fmt == rt_fmt && m_cache[i].state == st)
+            // ⛔ c3: the FULL per-attachment fmts[] joins the identity, member-by-member (num_rts is in `key`, so a key
+            // match ⇒ same count) — never a single format or a hash (a collision hands one pass another's pipeline).
+            if (m_cache[i].key == key && m_cache[i].state == st
+                && std::memcmp(m_cache[i].rt_fmts, fmts, nf * sizeof(DXGI_FORMAT)) == 0)
             {
                 return m_cache[i].pso.Get();
             }
         }
         if (m_cache_n >= kPsoCacheCap) { return nullptr; }
-        m_cache[m_cache_n].key    = key;
-        m_cache[m_cache_n].rt_fmt = rt_fmt;
-        m_cache[m_cache_n].state  = st;
+        m_cache[m_cache_n].key = key;
+        std::memcpy(m_cache[m_cache_n].rt_fmts, fmts, sizeof(fmts));
+        m_cache[m_cache_n].state = st;
         m_cache[m_cache_n].pso =
             m_is_mesh ? build_mesh_pso(m_device2, m_root.Get(), D3D12_SHADER_BYTECODE{m_vs.get(), m_vs_size},
                                        D3D12_SHADER_BYTECODE{m_fs.get(), m_fs_size}, samples, dsv, depth_func, num_rts,
@@ -754,7 +775,7 @@ public:
                                            conservative, num_rts,
                                            D3D12_SHADER_BYTECODE{m_hs.get(), m_hs_size},   // B4-tess: hull (empty ⇒ non-tess)
                                            D3D12_SHADER_BYTECODE{m_ds.get(), m_ds_size},   // B4-tess: domain
-                                           rt_fmt, blend, &st);                            // A15 blend · REN-38 state
+                                           rt_fmt, blend, &st, fmts);                      // A15 blend · REN-38 state · c3 per-attachment fmts
         return m_cache[m_cache_n++].pso.Get();
     }
 
@@ -762,9 +783,9 @@ private:
     static constexpr int kPsoCacheCap = 8;
     struct PsoCacheEntry
     {
-        crd::u32                    key    = 0;
-        DXGI_FORMAT                 rt_fmt = kColorFormat;
-        PassRasterState             state{}; // REN-38 audit: exact per-pass state, part of the cache identity
+        crd::u32                    key = 0;
+        DXGI_FORMAT                 rt_fmts[8]{}; // CEIR-14z-4c c3: the PER-ATTACHMENT RTV formats — the full cache identity
+        PassRasterState             state{};      // REN-38 audit: exact per-pass state, part of the cache identity
         ComPtr<ID3D12PipelineState> pso;
     };
     ID3D12Device*               m_device  = nullptr; // the context (which owns the device) outlives its programs
@@ -2353,7 +2374,11 @@ public:
         m_list->OMSetRenderTargets(1, &rtv, FALSE, use_depth ? &dsv : nullptr);
         const float rgba[4] = {clear_color.r, clear_color.g, clear_color.b, clear_color.a};
         m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
-        if (use_depth) { m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr); }
+        // REN-40-G1: honour set_next_draw_load_depth — a depth PREPASS wrote this buffer in a prior pass, so LOAD it (skip the
+        // clear), do not re-clear. The other depth record paths gate on !m_next_load_depth; record_plain (draw / draw_depth) did
+        // NOT, so a fullscreen depth-tested draw always re-cleared the depth (CEIR-14z-5 occlusion caught it). Consumed here.
+        if (use_depth && !m_next_load_depth) { m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr); }
+        m_next_load_depth = false;
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
         const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
         m_list->RSSetViewports(1, &vp);
@@ -2715,9 +2740,9 @@ public:
     [[nodiscard]] ID3D12PipelineState* pass_pso(Dx12RasterProgram& p, crd::u32 samples, DXGI_FORMAT dsv,
                                                 D3D12_COMPARISON_FUNC depth_func, bool conservative,
                                                 crd::u32 num_rts = 1U, DXGI_FORMAT rt_fmt = kColorFormat,
-                                                const BlendMode* blend = nullptr)
+                                                const BlendMode* blend = nullptr, const DXGI_FORMAT* rt_fmts = nullptr)
     {
-        return p.pso_for(samples, dsv, depth_func, conservative, num_rts, rt_fmt, blend, &m_pass_state);
+        return p.pso_for(samples, dsv, depth_func, conservative, num_rts, rt_fmt, blend, &m_pass_state, rt_fmts);
     }
 
     void apply_stencil_ref()
@@ -2874,9 +2899,10 @@ public:
         ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, DXGI_FORMAT_R32_UINT);
         if (!p.valid() || pso == nullptr) { return; }
         // REN-38-A1e: inside a frame, RECORD. `ClearRenderTargetView` takes a FLOAT[4] even for an R32_UINT
-        // target, and D3D12 reinterprets those bits as the typed clear — so the id goes in as its bit pattern,
-        // which is what the synchronous path above does too (it clears to 0). No allocator/list reset, no
-        // transitions, no readback: all graph-owned.
+        // target, and D3D12 VALUE-CONVERTS the floats to the target format — so an id goes in as `float(id)` (exact for
+        // id < 2^24), NOT a bit reinterpret (⛔ the old comment claimed bitcast, but this path only ever clears to 0 where
+        // both agree; the CEIR-14z-4c uint-MRT gate proved value-convert — see draw_storage_mrt's uint arm). Here it clears
+        // to 0. No allocator/list reset, no transitions, no readback: all graph-owned.
         if (frame_recording())
         {
             record_plain_topology(t, p, pso, ClearColor{0.0F, 0.0F, 0.0F, 0.0F},
@@ -5284,16 +5310,26 @@ public:
         m_list->ResourceBarrier(1, &uavb);
     }
 
-    void draw_storage_mrt(IRasterTarget* const* targets, crd::u32 count, IRasterProgram& program, ClearColor clear,
-                          float clear_depth, DepthCompare compare, IStorageBuffer& storage, crd::u32 vertex_count,
-                          const BlendMode* blend)
+    // CEIR-14z-4b: `attachments` carries each colour attachment's OWN typed clear (kind + float + uint) + blend — was a
+    // single shared `ClearColor clear` broadcast to all + a parallel `const BlendMode* blend`.
+    void draw_storage_mrt(IRasterTarget* const* targets, crd::u32 count, IRasterProgram& program,
+                          const AttachmentClear* attachments, float clear_depth, DepthCompare compare,
+                          IStorageBuffer& storage, crd::u32 vertex_count)
     {
-        if (targets == nullptr || count == 0U || !frame_recording()) { return; }
+        if (targets == nullptr || attachments == nullptr || count == 0U || !frame_recording()) { return; }
         auto&          p  = static_cast<Dx12RasterProgram&>(program);
         auto&          sb = static_cast<Dx12StorageBuffer&>(storage);
         auto&          t0 = static_cast<Dx12RasterTarget&>(*targets[0]);
         const crd::u32 n  = count < 8U ? count : 8U;
         const bool     has_depth = t0.has_depth();
+        BlendMode      blends[8];
+        DXGI_FORMAT    rt_fmts[8];
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            blends[i]  = attachments[i].blend; // pass_pso keys the PSO off the blend array
+            // ⭐ CEIR-14z-4c c3: each attachment's OWN RTV format — a HETEROGENEOUS uint@0+float@1 MRT PSO is now expressible.
+            rt_fmts[i] = static_cast<Dx12RasterTarget&>(*targets[i]).color_format();
+        }
         // REN-38-A15: blend is PSO state on DX12, so it goes into `pso_for` (and its cache key) rather than being
         // set dynamically the way Vulkan does it. ⛔ RAF-7 fix: samples=1 (the attachments are single-sample) and
         // conservative=false. This verb historically passed samples=n / conservative=has_depth, a miswiring that only
@@ -5301,7 +5337,7 @@ public:
         // shape now. (RAF-12: the indexed/indirect MRT verbs that shared this note are deleted — dead after the
         // record_pass inline-verb-path removal; a multi-colour G-buffer is executor-gated when one is needed.)
         ID3D12PipelineState* pso = pass_pso(p, 1U, has_depth ? DXGI_FORMAT_D32_FLOAT : DXGI_FORMAT_UNKNOWN,
-                                             to_d3d12_compare(compare), false, n, t0.color_format(), blend);
+                                             to_d3d12_compare(compare), false, n, t0.color_format(), blends, rt_fmts);
         if (!p.valid() || pso == nullptr) { return; }
 
         D3D12_CPU_DESCRIPTOR_HANDLE rtvs[8]{};
@@ -5309,16 +5345,41 @@ public:
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv = has_depth ? t0.dsv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
         m_list->OMSetRenderTargets(n, static_cast<const D3D12_CPU_DESCRIPTOR_HANDLE*>(rtvs), FALSE,
                                    has_depth ? &dsv : nullptr);
-        const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
-        const float mult_identity[4] = {1.0F, 1.0F, 1.0F, 1.0F};
         for (crd::u32 i = 0; i < n; ++i)
         {
-            // ⛔ A MULTIPLICATIVE attachment (Multiply / RevealageMultiply — e.g. the WBOIT revealage) MUST clear to
-            // the multiplicative IDENTITY 1, never the pass's clear_color: `dst·(1-src)` from 0 stays 0 forever, so
-            // the background is never revealed. Mirrors the fused draw_wboit reveal-clear and the Vulkan MRT path.
-            const bool mult = blend != nullptr &&
-                              (blend[i] == BlendMode::Multiply || blend[i] == BlendMode::RevealageMultiply);
-            m_list->ClearRenderTargetView(rtvs[i], mult ? mult_identity : rgba, 0, nullptr);
+            const AttachmentClear& a = attachments[i];
+            // ⛔ WBOIT PRECEDENCE: a MULTIPLICATIVE attachment (Multiply / RevealageMultiply — the WBOIT revealage) MUST
+            // clear to the multiplicative IDENTITY 1, OVERRIDING the caller's kind/color: `dst·(1-src)` from 0 stays 0
+            // forever, so the background is never revealed. Mirrors the Vulkan MRT path + the fused draw_wboit reveal-clear.
+            const bool mult = a.blend == BlendMode::Multiply || a.blend == BlendMode::RevealageMultiply;
+            float      rgba[4];
+            if (mult)
+            {
+                rgba[0] = 1.0F;
+                rgba[1] = 1.0F;
+                rgba[2] = 1.0F;
+                rgba[3] = 1.0F;
+            }
+            else if (a.kind == ClearKind::Uint)
+            {
+                // ⛔ R32_UINT: ClearRenderTargetView VALUE-CONVERTS the float[4] to the target format, so `float(v)` clears
+                // the target to v EXACTLY for v < 2^24 (every id these proofs use). NOT a bit reinterpret — a bit-pattern
+                // float is a denormal ≈ 0 that value-converts to 0 (the draw_visbuffer comment claimed reinterpret but only
+                // ever cleared to 0, where both agree; the CEIR-14z-4c uint-MRT gate — the first NON-ZERO DX12 uint clear —
+                // proved value-convert is the correct mechanism).
+                rgba[0] = static_cast<float>(a.uint_value);
+                rgba[1] = 0.0F;
+                rgba[2] = 0.0F;
+                rgba[3] = 0.0F;
+            }
+            else
+            {
+                rgba[0] = a.color.r;
+                rgba[1] = a.color.g;
+                rgba[2] = a.color.b;
+                rgba[3] = a.color.a;
+            }
+            m_list->ClearRenderTargetView(rtvs[i], rgba, 0, nullptr);
         }
         if (has_depth) { m_list->ClearDepthStencilView(dsv, t0.clear_flags(), clear_depth, 0, 0, nullptr); }
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t0.width()), static_cast<float>(t0.height()), 0.0F, 1.0F};
@@ -7217,7 +7278,16 @@ private:
         }
         for (BufferNode& n : m_buffers)
         {
-            if (n.transient) { n.resource.Reset(); }
+            // Parity with the IMAGE path above (delete n.texture) and the Vulkan free_transients fix: the transient buffer
+            // WRAPPER minted in build_tail (`new Dx12TransientBuffer`) is graph-owned and must be deleted. An IMPORTED node
+            // BORROWS n.buffer (never owns it), so gate on n.transient exactly as resource.Reset() is. (LeakSanitizer only
+            // runs on Linux — DX12 has no Linux gate — but this leaked one wrapper per graph rebuild all the same.)
+            if (n.transient)
+            {
+                delete n.buffer;
+                n.buffer = nullptr;
+                n.resource.Reset();
+            }
         }
         m_slots.clear();
         m_physical_bytes = 0U;
