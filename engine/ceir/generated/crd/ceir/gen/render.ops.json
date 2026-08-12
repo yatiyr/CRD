@@ -152,7 +152,7 @@
       "qualified": "render.draw",
       "version": 1,
       "summary": "A non-indexed draw: run @program over vertex_count x instance_count with the bound resources (inside a render.scope).",
-      "docs": "render.draw(%vertex_count, %instance_count, %bindings...) {program=@p, access=\"...\", first_vertex=F}. A non-indexed draw (StoragePull/None geometry), RESULTLESS, legal ONLY inside a render.scope region. Effects: GPUCommand + a CONSERVATIVE ambient MemoryReadWrite (two blended draws to one attachment must not reorder -- pairwise hazards pin raster order). CEIR-13c [op.kernel_ref] {program, program_interface}. find_render_misuse: counts (operands 0-1) Index-typed (DrawCountNotIndex); program a Symbol (ProgramNotSymbol); access-token-count == num_operands-2; each binding (operands 2..) resource-kinded.",
+      "docs": "render.draw(%vertex_count, %instance_count, %bindings...) {program=@p, access=\"...\", first_vertex=F, geometry=procedural|pull}. A non-indexed draw (StoragePull/None geometry), RESULTLESS, legal ONLY inside a render.scope region. Effects: GPUCommand + a CONSERVATIVE ambient MemoryReadWrite (two blended draws to one attachment must not reorder -- pairwise hazards pin raster order). The geometry mode is program semantics: absent it is INFERRED from binding presence, but `geometry` pins it explicitly for the procedural-with-bindings edge (a texture-reading fullscreen is procedural, CEIR-16-3b-1b). CEIR-13c [op.kernel_ref] {program, program_interface}. find_render_misuse: counts (operands 0-1) Index-typed (DrawCountNotIndex); program a Symbol (ProgramNotSymbol); access-token-count == num_operands-2; each binding (operands 2..) resource-kinded.",
       "operands": [
         {
           "name": "vertex_count",
@@ -195,6 +195,12 @@
           "kind": "int",
           "required": false,
           "doc": "sec-40 the START vertex (absent = 0; the GeometrySource.first_vertex u32 field). A static ATTR (compile-time)."
+        },
+        {
+          "name": "geometry",
+          "kind": "string",
+          "required": false,
+          "doc": "CEIR-16-3b-1b the GEOMETRY-SOURCE mode: procedural | pull (absent = INFERRED -- 0 bindings => procedural/None, >=1 => pull/StoragePull, the 14b heuristic). EXPLICIT for the procedural-with-bindings edge: a FULLSCREEN composite reads TEXTURES yet sources vertices procedurally (the VS reads gl_VertexIndex), so it is `procedural` DESPITE its bindings -- without this it infers StoragePull and, with no vertex buffer bound, the encoder's StoragePull arm draws NOTHING (a black pass). CLOSED {procedural, pull}."
         }
       ],
       "traits": [],
@@ -581,11 +587,107 @@
       "native": null
     },
     {
+      "name": "mesh_dispatch_list",
+      "qualified": "render.mesh_dispatch_list",
+      "version": 1,
+      "summary": "A per-draw-item amplification: ONE render.scope, N draws over the host DrawList; each item's count/storage feed a mesh dispatch (primitive=meshlet) or a patch draw (primitive=patches).",
+      "docs": "render.mesh_dispatch_list() {program=@p, primitive=\"meshlet\"|\"patches\", fallback_count=N, access=\"\"}. A per-draw-item amplification (record_amplify_raster): ONE render.scope, the walk expands it over the host DrawList (ctx.draws()) into N DispatchMesh/DrawPatches, RESULTLESS, legal ONLY inside a render.scope. Effects: GPUCommand + ambient MemoryReadWrite. find_render_misuse: ZERO operands (access arity 0); program a Symbol; primitive in {meshlet,patches}.",
+      "operands": [],
+      "results": [],
+      "attributes": [
+        {
+          "name": "program",
+          "kind": "symbol",
+          "required": true,
+          "doc": "the amplification @program PLACEHOLDER (the pass's raster program resolves at record; a per-item program beats it)"
+        },
+        {
+          "name": "primitive",
+          "kind": "string",
+          "required": true,
+          "doc": "meshlet (DispatchMesh/Meshlet) | patches (DrawPatches/Patches) -- the legacy record_amplify_raster `mesh` bool"
+        },
+        {
+          "name": "fallback_count",
+          "kind": "int",
+          "required": false,
+          "doc": "the amplify_count for the PROCEDURAL arm (draws.count==0 -> ONE default-program draw of this count; absent/0 -> nothing)"
+        },
+        {
+          "name": "access",
+          "kind": "string",
+          "required": true,
+          "doc": "per-binding access; ZERO bindings here (arity 0)"
+        },
+        {
+          "name": "program_interface",
+          "kind": "int",
+          "required": false,
+          "doc": "CEIR-13c the EXPECTED \u00a7107 interface hash (a PIN; absent = unpinned)"
+        }
+      ],
+      "traits": [],
+      "regions": 0,
+      "effects": [
+        {
+          "family": "GPUCommand"
+        },
+        {
+          "family": "MemoryReadWrite"
+        }
+      ],
+      "determinism": "",
+      "domain": "",
+      "native": null
+    },
+    {
+      "name": "scene_draw_list",
+      "qualified": "render.scene_draw_list",
+      "version": 1,
+      "summary": "The scene per-draw-item verb ladder: ONE render.scope, N packets over the host DrawList; each item's fields (args/index_count/texture/storage) select its verb (indirect/indexed/storage-pull/coalesced-multi).",
+      "docs": "render.scene_draw_list() {program=@p, access=\"\"}. The scene per-draw-item verb ladder (record_scene_raster single-colour arm): ONE render.scope, the walk expands it over the host DrawList (ctx.draws()) into N raster packets whose verb is chosen PER ITEM (DrawIndexedIndirect | DrawIndexed | Draw StoragePull | DrawMulti/DrawMultiIndexed run-coalesced), RESULTLESS, legal ONLY inside a render.scope. Effects: GPUCommand + ambient MemoryReadWrite. find_render_misuse: ZERO operands (access arity 0); program a Symbol.",
+      "operands": [],
+      "results": [],
+      "attributes": [
+        {
+          "name": "program",
+          "kind": "symbol",
+          "required": true,
+          "doc": "the scene @program PLACEHOLDER (the pass's raster program resolves at record; a per-item program beats it)"
+        },
+        {
+          "name": "access",
+          "kind": "string",
+          "required": true,
+          "doc": "per-binding access; ZERO bindings here (arity 0)"
+        },
+        {
+          "name": "program_interface",
+          "kind": "int",
+          "required": false,
+          "doc": "CEIR-13c the EXPECTED \u00a7107 interface hash (a PIN; absent = unpinned)"
+        }
+      ],
+      "traits": [],
+      "regions": 0,
+      "effects": [
+        {
+          "family": "GPUCommand"
+        },
+        {
+          "family": "MemoryReadWrite"
+        }
+      ],
+      "determinism": "",
+      "domain": "",
+      "native": null
+    },
+    {
       "name": "scope",
       "qualified": "render.scope",
       "version": 1,
       "summary": "A render scope: bind the attachments + render area, run the draws in the region. Lowers to RenderingDesc begin/end + draw verbs (14b).",
-      "docs": "render.scope(%attachments...) {width, height, sample_count} { ...draws (14b)... }. A render scope, RESULTLESS, carrying a graph region for the draws. Effects: GPUCommand + a CONSERVATIVE ambient MemoryReadWrite (14b narrows to the attachment writes + resource reads in lowering). find_render_misuse: every operand attachment-typed (a render.color_attachment / render.depth_attachment result); at most ONE depth attachment; width/height >= 1; sample_count a power of two in [1,64]; the region holds only render draw-family ops (14b) + structured control flow.",
+      "docs": "render.scope(%attachments...) {width, height, sample_count, extent_from_target} { ...draws (14b)... }. A render scope, RESULTLESS, carrying a graph region for the draws. Effects: GPUCommand + a CONSERVATIVE ambient MemoryReadWrite (14b narrows to the attachment writes + resource reads in lowering). `extent_from_target` (CEIR-16-3c) makes the render area the RESOLVED colour target size at record (the fullscreen-composite case), the static width/height then a placeholder. find_render_misuse: every operand attachment-typed (a render.color_attachment / render.depth_attachment result); at most ONE depth attachment; width/height >= 1; sample_count a power of two in [1,64]; the region holds only render draw-family ops (14b) + structured control flow.",
       "operands": [
         {
           "name": "attachments",
@@ -612,6 +714,12 @@
           "kind": "int",
           "required": false,
           "doc": "MSAA sample count (absent = 1; >1 => multisample + resolve, sec-41). find_render_misuse: a power of two in [1,64]."
+        },
+        {
+          "name": "extent_from_target",
+          "kind": "bool",
+          "required": false,
+          "doc": "CEIR-16-3c the render area is the RESOLVED colour target's size at record (absent = false = the static width/height above). A FULLSCREEN composite renders to whatever target it is bound to -- a per-cascade shadow atlas, a half-res buffer, the swapchain -- whose size is only known at record; the authored `width`/`height` stay a valid >=1 placeholder (find_render_misuse unchanged) but are IGNORED, and the materializer reads color[0]->width()/height() instead. \u26d4 requires >=1 colour attachment."
         }
       ],
       "traits": [],

@@ -34,6 +34,8 @@ target_link_libraries(crd-frame-cook
                               #        does not depend back on frame-cook)
         crd-ceir         # CEIR-15a (ADR-0127): the ceir.frame dialect the converter targets. ACYCLIC — crd-ceir is
                          #        host-only + depends on NONE of its providers (ADR-0109 §4.2), so this edge adds no cycle.
+        crd-ceir-gpu     # CEIR-16-3c (ADR-0109 §4.2): build_fullscreen_ceir + LoweredCommand — the per-pass replay plans
+                         #        built at load (FramePlans). ACYCLIC — ceir-gpu does not depend back on frame-cook.
         crd-log          # REN-36.2: a fallback must be REPORTED, never silent
     PRIVATE
         ${_crd_toml_target}

@@ -41,7 +41,7 @@ frame.draw_list { all, any, none, cull, sort, limit } -> a draw_list value. Pure
 
 The whole-frame REGION container: a graph region holding the frame's resource declares, draw-list declares, and passes.
 
-frame.graph { <resource.declare/import>* <frame.draw_list>* <frame.pass>* } -- the frame container, RESULTLESS, one graph region. Effects: GPUCommand + ambient MemoryReadWrite (region ambient; passes carry precise effects). The present endpoint is a frame.pass executor="present". find_frame_misuse: the region's ops are resource.declare/import, frame.draw_list, frame.pass, frame.history (NestedNonFrameOp otherwise); resource.declare frame-scoped attrs are validated HERE (in-region). sec-39 forward capabilities (subgraphs/includes/injection/replacement/multi-window) are named-forward.
+frame.graph { <resource.declare/import>* <frame.draw_list>* <frame.pass>* } -- the frame container, RESULTLESS, one graph region. Effects: GPUCommand + ambient MemoryReadWrite (region ambient; passes carry precise effects). The present endpoint is a frame.pass executor="present". find_frame_misuse: the region's ops are resource.declare/import, frame.draw_list, frame.pass, frame.history (NestedNonFrameOp otherwise); resource.declare frame-scoped attrs are validated HERE (in-region); EXACTLY one frame.graph per module this slice (MultipleGraphs, CEIR-15c-1a — subgraphs are the named-forward). sec-39 forward capabilities (subgraphs/includes/injection/replacement/multi-window) are named-forward.
 
 - **Version:** 1
 - **Traits:** _none_
@@ -63,7 +63,7 @@ frame.graph { <resource.declare/import>* <frame.draw_list>* <frame.pass>* } -- t
 
 The previous-frame read of a lifetime=history resource (ping-pong / TAA prev-frame); a distinct op ⇒ its own resource_root.
 
-frame.history(%history_resource) { frames_back } -> the previous-frame value (operand's underlying type). Pure. find_frame_misuse: operand(0) a lifetime=history resource.declare result (HistoryOperandNotHistory); frames_back >= 1. The structural RMW fix: a distinct op result is its own resource_root, so read-of-prev vs write-of-curr are different identities.
+frame.history(%history_resource) { frames_back } -> the previous-frame value (operand's underlying type). Pure. find_frame_misuse: operand(0) a lifetime=history resource.declare result (HistoryOperandNotHistory) DECLARED in this frame.graph region (OperandOutsideGraph, CEIR-15c-1a); frames_back >= 1. The structural RMW fix: a distinct op result is its own resource_root, so read-of-prev vs write-of-curr are different identities.
 
 - **Version:** 1
 - **Traits:** `Pure`
@@ -91,7 +91,7 @@ frame.history(%history_resource) { frames_back } -> the previous-frame value (op
 
 A frame work-unit node: run the `executor` MECHANIC over the `resources` (tokened by `access`), inside a frame.graph.
 
-frame.pass(%resources...) { executor=@mechanic, access="...", for_each, queue, shader?/kernel?/technique?, <open executor params> } -- RESULTLESS, legal ONLY inside a frame.graph region. Effects: GPUCommand + ambient MemoryReadWrite (15d narrows per-operand from access). find_frame_misuse: executor a Symbol (ExecutorNotSymbol); access token-count == num operands + tokens in {r,w,rw}; for_each/queue closed vocabularies; every operand resource- or draw_list-kinded. Executor-specific params ride as OPEN attrs, validated at cook against the executor schema (15c). NestedNonFrameOp if outside a frame.graph region.
+frame.pass(%resources...) { executor=@mechanic, access="...", for_each, queue, shader?/kernel?/technique?, <open executor params> } -- RESULTLESS, legal ONLY inside a frame.graph region. Effects: GPUCommand + ambient MemoryReadWrite (15d narrows per-operand from access). find_frame_misuse: executor a Symbol (ExecutorNotSymbol); access token-count == num operands + tokens in {r,w,rw}; for_each/queue closed vocabularies; every operand resource- or draw_list-kinded. Executor-specific params ride as OPEN attrs, validated at cook against the executor schema (15c). NestedNonFrameOp if outside a frame.graph region. CEIR-15c-1a per-operand guards: every operand DEFINED in this frame.graph region (OperandOutsideGraph); a lifetime=history resource is READ only via frame.history, never as a direct r/rw operand (HistoryReadNotThroughFrameHistory); a frame.history result is never WRITTEN (HistoryWriteThroughHistory).
 
 - **Version:** 1
 - **Traits:** _none_

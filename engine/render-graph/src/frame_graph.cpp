@@ -1,5 +1,6 @@
 #include <crd/rendergraph/frame_graph.hpp>
 
+#include <crd/ceir/gpu/render_materialize.hpp> // CEIR-16-3c: RenderResolvers + execute_render_lowered (the replay path)
 #include <crd/renderpass/executor_registry.hpp>
 
 #include <utility> // std::swap
@@ -68,6 +69,19 @@ const PassPrograms* PassProgramsTable::find(u64 pass_name_hash) const noexcept
         if (m_entries[i].pass_name_hash == pass_name_hash)
         {
             return &m_entries[i].programs;
+        }
+    }
+    return nullptr;
+}
+
+// CEIR-16-3c: look up a migrated pass's CEIR replay plan by pass name hash (null for a non-migrated pass).
+const CeirPassPlan* CeirPlanTable::find(u64 pass_name_hash) const noexcept
+{
+    for (u32 i = 0; i < m_plans.size(); ++i)
+    {
+        if (m_plans[i].pass_name_hash == pass_name_hash)
+        {
+            return &m_plans[i].plan;
         }
     }
     return nullptr;
@@ -239,8 +253,9 @@ u32 enum_param(const PassPayload& payload, StringView name, u32 fallback)
 }
 
 // One CPU multi-draw verb's cap — a run longer than this splits into consecutive multi commands (mirrors the
-// frame-cook `kMaxDrawItems`; the render-graph does not depend on frame-cook, so the value is restated here).
-constexpr crd::u32 kMaxSceneRun = 256U;
+// frame-cook `kMaxDrawItems`). ⛔ SINGLE SOURCE OF TRUTH: aliased from ceir-gpu's render_materialize.hpp so the CEIR scene
+// template (emit_scene_list) and this legacy recorder coalesce on IDENTICAL run boundaries — A/B pixel parity depends on it.
+constexpr crd::u32 kMaxSceneRun = crd::ceir::gpu::kMaxSceneRun;
 
 // Bind a base-colour MAP (a non-depth SampledTexture, no comparison sampler) — the encoder's `map_texture` reads it.
 void bind_map(RasterDrawPacket& pk, ITexture* tex)
@@ -594,114 +609,6 @@ void record_scene_raster(const PassPayload& payload, RecordContext& ctx, IComman
     encoder.end_rendering();
 }
 
-void record_fullscreen_raster(const PassPayload& payload, RecordContext& ctx, ICommandEncoder& encoder)
-{
-    IRasterTarget* color = ctx.color_target(pass_param_id("color"));
-    if (!ctx.ok() || color == nullptr)
-    {
-        return;
-    }
-    RenderingDesc rd;
-    rd.width = color->width();
-    rd.height = color->height();
-    // ⭐ RAF-8: the COMPOSITE shape (WBOIT resolve) — `load` LOADS the target instead of clearing, and `blend` blends
-    // the bindless draw over what is there (draw_bindless_blend_load). Both absent ⇒ the ordinary clearing fullscreen.
-    const bool     loads = bool_param(payload, "load", false);
-    const TypedValue* bl = find_param(payload, pass_param_id("blend"));
-    const BlendMode blend =
-        (bl != nullptr && bl->type == ExecutorParamType::Enum) ? static_cast<BlendMode>(bl->e) : BlendMode::Opaque;
-    rd.color.push_back(ColorAttachmentDesc{color, loads ? LoadOp::Load : LoadOp::Clear, StoreOp::Store,
-                                           clear_from(payload), blend});
-    RasterDrawPacket p;
-    p.program = ctx.programs().raster;
-    p.command = RasterCommandKind::Draw;
-    p.geometry.kind = GeometryKind::None;
-    p.geometry.vertex_or_index_count = 3U; // fullscreen triangle
-    // RAF-8: full RasterFullscreen parity. VRS / conservative are draw attributes on the packet's RasterState. ⛔ Read
-    // as ENUM (their schema type) — reading them as U32 fell back to 0, so VRS + conservative never fired (A13 VRS).
-    p.state.vrs_pipeline_rate = static_cast<crd::gpu::ShadingRate>(enum_param(payload, "shading_rate", 0U));
-    p.state.conservative = static_cast<crd::gpu::ConservativeMode>(enum_param(payload, "conservative", 0U));
-    // Gather the bound inputs in input0..input7 order (resolve-or-abort — a shifted binding samples wrong inputs).
-    static constexpr StringView kInputs[8] = {StringView("input0"), StringView("input1"), StringView("input2"),
-                                              StringView("input3"), StringView("input4"), StringView("input5"),
-                                              StringView("input6"), StringView("input7")};
-    ITexture* texs[8]{};
-    u32 n = 0U;
-    bool any_depth = false;
-    for (u32 i = 0; i < 8U; ++i)
-    {
-        const u64 slot = pass_param_id(kInputs[i]);
-        if (!ctx.has(slot))
-        {
-            continue;
-        }
-        ITexture* tx = ctx.texture(slot);
-        if (tx == nullptr)
-        {
-            return; // a declared read that does not resolve ABORTS rather than shifting later inputs down a slot
-        }
-        texs[n++] = tx;
-        any_depth = any_depth || tx->is_depth();
-    }
-    if (n == 1U)
-    {
-        // 1 read → single sampled texture. A DEPTH read pairs a comparison sampler (a SHADOW lookup) UNLESS the pass
-        // declared `depth_as_float` (the HZB / TAA raw-depth read), which samples the stored value through an ordinary
-        // sampler — no comparison sampler, so the encoder routes it to draw_textured.
-        const bool depth_as_float = bool_param(payload, "depth_as_float", false);
-        if (any_depth && !depth_as_float)
-        {
-            // ⛔⛔⛔ REN-40-D / RAF-12.2: a SHADOW lookup must bind the depth read as the ATLAS — texture @ slot 4,
-            // comparison sampler @ slot 5 — because the encoder's `shadow_atlas_from` recognises a shadow atlas by
-            // SLOT (4), NEVER by "has a comparison sampler". Binding at slot 0 (as a plain sampled texture) made
-            // `shadow_atlas_from` miss it, so the encoder fell past draw_shadow to a PROCEDURAL draw and every cooked
-            // fullscreen shadow rendered dark — the RAF-12.2 regression exposed when the inline draw_shadow fallback
-            // was deleted. Mirrors the scene executor's `bind_atlas` so both raster shapes route to draw_shadow.
-            bind_atlas(p, texs[0], /*comparison*/ true);
-        }
-        else if (loads && blend != BlendMode::Opaque)
-        {
-            // ⛔⛔ RAF-12.2: a 1-read COMPOSITE (the WBOIT resolve — load + blend) must reach draw_bindless_blend_load,
-            // which the encoder selects ONLY for a BINDLESS array. A plain SampledTexture routed it to draw_textured,
-            // which CLEARS — erasing the background the OIT resolve blends over (the surviving-background assertion).
-            // Bind as a bindless-array-of-one (same lifetime pattern as the n>1 arm) so the blend-load path fires,
-            // matching the inline `draw_bindless_blend_load(texs, n=1, …)` this executor path replaced.
-            ResourceBinding arr{};
-            arr.frequency     = BindingFrequency::Material;
-            arr.kind          = BindingKind::BindlessTextureArray;
-            arr.texture_array = static_cast<ITexture* const*>(texs);
-            arr.array_count   = 1U;
-            p.bindings.push_back(arr);
-        }
-        else
-        {
-            p.bindings.push_back(
-                ResourceBinding{BindingFrequency::Material, BindingKind::SampledTexture, 0U, nullptr, texs[0]});
-        }
-    }
-    else if (n > 1U)
-    {
-        // N reads → a bindless array (declaration order) + an optional constants buffer (the TAA-resolve shape).
-        ResourceBinding arr{};
-        arr.frequency = BindingFrequency::Material;
-        arr.kind = BindingKind::BindlessTextureArray;
-        arr.texture_array = static_cast<ITexture* const*>(texs);
-        arr.array_count = n;
-        p.bindings.push_back(arr);
-        if (ctx.has(pass_param_id("constants")))
-        {
-            IStorageBuffer* cbuf = ctx.storage(pass_param_id("constants"));
-            if (cbuf != nullptr)
-            {
-                p.bindings.push_back(ResourceBinding{BindingFrequency::Object, BindingKind::StorageBuffer, 0U, cbuf});
-            }
-        }
-    }
-    encoder.begin_rendering(rd);
-    encoder.draw(p);
-    encoder.end_rendering();
-}
-
 void record_compute_dispatch(const PassPayload& payload, RecordContext& ctx, ICommandEncoder& encoder)
 {
     if (!ctx.ok())
@@ -894,108 +801,6 @@ void record_raytrace_pipeline(const PassPayload& payload, RecordContext& ctx, IC
     encoder.trace_rays(t);
 }
 
-// mesh.raster / tess.raster — an amplification pass. Colour-only; each draw's count is the workgroup / patch count, its
-// program the per-item program (a mesh grid, a displaced patch); a draw carrying a storage buffer pulls its geometry
-// from it (GEO-1). With NO draw list, one PROCEDURAL draw of `amplify_count`. First clears, every later one loads.
-void record_amplify_raster(const PassPayload& payload, RecordContext& ctx, ICommandEncoder& encoder, bool mesh)
-{
-    IRasterTarget* color = ctx.color_target(pass_param_id("color"));
-    if (!ctx.ok() || color == nullptr)
-    {
-        return;
-    }
-    RenderingDesc rd;
-    rd.width = color->width();
-    rd.height = color->height();
-    rd.color.push_back(ColorAttachmentDesc{color, LoadOp::Clear, StoreOp::Store, clear_from(payload), BlendMode::Opaque});
-    IRasterProgram* const def_prog = ctx.programs().raster;
-    const auto emit = [&](IRasterProgram* prog, u32 count, IStorageBuffer* geo)
-    {
-        RasterDrawPacket p;
-        p.program = prog;
-        if (mesh)
-        {
-            p.command = RasterCommandKind::DispatchMesh;
-            p.geometry.kind = GeometryKind::Meshlet;
-            p.geometry.group_count_x = count;
-        }
-        else
-        {
-            p.command = RasterCommandKind::DrawPatches;
-            p.geometry.kind = GeometryKind::Patches;
-            p.geometry.patch_count = count;
-        }
-        if (geo != nullptr)
-        {
-            p.bindings.push_back(ResourceBinding{BindingFrequency::Object, BindingKind::StorageBuffer, 0U, geo});
-        }
-        encoder.draw(p);
-    };
-    const DrawList draws = ctx.draws();
-    encoder.begin_rendering(rd);
-    if (draws.count == 0U)
-    {
-        // a purely PROCEDURAL amplification pass (ocean / terrain / a generated grid) — one draw, the declared count.
-        const u32 amplify = u32_param(payload, "amplify_count", 0U);
-        if (amplify > 0U && def_prog != nullptr)
-        {
-            emit(def_prog, amplify, nullptr);
-        }
-        encoder.end_rendering();
-        return;
-    }
-    for (u32 i = 0; i < draws.count; ++i)
-    {
-        const RenderDrawItem& it = draws.items[i];
-        // ⛔ the draw item's `vertex_count` IS the amplification count (patches / task-mesh workgroups); a zero-count
-        // item is SKIPPED, never dispatched as one. A per-item program still beats the pass default (else a list of
-        // meshes would all be amplified by the first one's shader).
-        if (it.vertex_count == 0U)
-        {
-            continue;
-        }
-        IRasterProgram* prog = it.program != nullptr ? it.program : def_prog;
-        if (prog == nullptr)
-        {
-            continue;
-        }
-        emit(prog, it.vertex_count, it.storage);
-    }
-    encoder.end_rendering();
-}
-void record_mesh_raster(const PassPayload& p, RecordContext& ctx, ICommandEncoder& e)
-{
-    record_amplify_raster(p, ctx, e, /*mesh*/ true);
-}
-void record_tess_raster(const PassPayload& p, RecordContext& ctx, ICommandEncoder& e)
-{
-    record_amplify_raster(p, ctx, e, /*mesh*/ false);
-}
-
-// mesh.indirect — the GPU-driven meshlet dispatch: the mesh-workgroup count comes from `args` (draw_mesh_indirect_buffer).
-void record_mesh_indirect(const PassPayload& payload, RecordContext& ctx, ICommandEncoder& encoder)
-{
-    IRasterTarget*  color = ctx.color_target(pass_param_id("color"));
-    IStorageBuffer* args  = ctx.storage(pass_param_id("args"));
-    if (!ctx.ok() || color == nullptr || args == nullptr || ctx.programs().raster == nullptr)
-    {
-        return;
-    }
-    RenderingDesc rd;
-    rd.width = color->width();
-    rd.height = color->height();
-    rd.color.push_back(ColorAttachmentDesc{color, LoadOp::Clear, StoreOp::Store, clear_from(payload), BlendMode::Opaque});
-    RasterDrawPacket p;
-    p.program = ctx.programs().raster;
-    p.command = RasterCommandKind::DispatchMeshIndirect;
-    p.geometry.kind = GeometryKind::MeshletIndirect;
-    p.geometry.args_buffer = args;
-    p.geometry.args_offset = u32_param(payload, "args_offset", 0U);
-    encoder.begin_rendering(rd);
-    encoder.draw(p);
-    encoder.end_rendering();
-}
-
 // visbuffer.raster — HW-raster a VS→FS program into an R32_UINT visibility target, clearing the id to `clear_id`. Each
 // resolved draw writes its primitive ids; the first clears, every later one LOADS (the one image keeps EVERY id).
 void record_visbuffer_raster(const PassPayload& payload, RecordContext& ctx, ICommandEncoder& encoder)
@@ -1053,12 +858,151 @@ void record_present(const PassPayload& /*payload*/, RecordContext& ctx, ICommand
 }
 } // namespace
 
+// ── CEIR-16-3c: the GENERIC CEIR replay executor — drives execute_render_lowered on the pass's CeirPassPlan through the
+// (frame-recording) encoder, with resolvers backed by RecordContext. This is the DELETION-IS-THE-PROOF target: the imperative
+// record_fullscreen_raster above becomes DATA (the plan) + this ONE generic driver. scene.raster (16d) reuses it verbatim. ──
+namespace
+{
+// The resolver closure — the ceir Context (for reading each binding's `source` attr) + the RecordContext (for resolution) +
+// storage for the gathered bindless array (⛔ advisor: the array is read at encoder.draw(), AFTER the resolver returns, so it
+// must outlive the resolver frame — it lives HERE, in the bundle on record_ceir_render's stack).
+struct FsResolverBundle
+{
+    const crd::ceir::Context* cctx = nullptr;
+    RecordContext*            rctx = nullptr;
+    ITexture*                 gathered[8]{};
+};
+// A binding operand's SOURCE-param identity (the pass_param_id hash the builder stored as an int `source` attr on the
+// operand's defining resource.declare) — advisor constraint #2: the descriptor SLOT and the source-param are distinct.
+u64 fs_source_of(const crd::ceir::Context& cctx, const crd::ceir::Value* operand)
+{
+    const crd::ceir::Operation* const def = operand->defining_op();
+    if (def == nullptr) { return 0U; }
+    const crd::ceir::AttrId a = def->attr(crd::containers::StringView("source"));
+    if (!a.valid()) { return 0U; }
+    const crd::ceir::AttrValue v = cctx.attr_value(a);
+    return v.kind == crd::ceir::AttrKind::Int ? static_cast<u64>(v.i) : 0U;
+}
+IRasterTarget* fs_target(const crd::ceir::Operation*, void* user)
+{
+    return static_cast<FsResolverBundle*>(user)->rctx->color_target(pass_param_id("color")); // single color ⇒ the "color" slot
+}
+IRasterProgram* fs_program(const crd::ceir::Operation*, void* user)
+{
+    return static_cast<FsResolverBundle*>(user)->rctx->programs().raster; // the pass's raster program (record_fullscreen_raster parity)
+}
+ITexture* fs_texture(const crd::ceir::Value* operand, void* user)
+{
+    auto* const b = static_cast<FsResolverBundle*>(user);
+    return b->rctx->texture(fs_source_of(*b->cctx, operand));
+}
+ITexture* const* fs_texture_array(const crd::ceir::Value*, void* user, u32& out_count)
+{
+    // ⛔ record_fullscreen_raster L644-656 parity: gather input0..input7 in order — an UNDECLARED slot is SKIPPED (compact
+    // over it), a DECLARED-but-unresolved read ABORTS (null return → the draw fails, never a shifted binding).
+    auto* const b = static_cast<FsResolverBundle*>(user);
+    static constexpr StringView kInputs[8] = {StringView("input0"), StringView("input1"), StringView("input2"),
+                                              StringView("input3"), StringView("input4"), StringView("input5"),
+                                              StringView("input6"), StringView("input7")};
+    u32 n = 0U;
+    for (u32 i = 0; i < 8U; ++i)
+    {
+        const u64 slot = pass_param_id(kInputs[i]);
+        if (!b->rctx->has(slot)) { continue; } // undeclared ⇒ not part of this pass's fan; skip (compact)
+        ITexture* const tx = b->rctx->texture(slot);
+        if (tx == nullptr)
+        {
+            out_count = 0U;
+            return nullptr; // a declared read that does not resolve ABORTS the draw (materialize returns false)
+        }
+        b->gathered[n++] = tx;
+    }
+    out_count = n;
+    return b->gathered;
+}
+IStorageBuffer* fs_storage(const crd::ceir::Value* operand, void* user)
+{
+    auto* const b = static_cast<FsResolverBundle*>(user);
+    return b->rctx->storage(fs_source_of(*b->cctx, operand));
+}
+// ⭐ CEIR-16-mesh-2 / 16c: the DrawList — a render.mesh_dispatch_list (amplify) OR render.scene_draw_list (16d scene) expands
+// over this pass's resolved scene draw list. Count + per-index item, mapping RenderDrawItem → the ceir-gpu-neutral
+// RasterDrawItem ON DEMAND (the layering boundary). ⛔ amplify reads only the {program, vertex_count, storage} SUBSET (the
+// amplify count IS `vertex_count` — task-mesh groups / tess patches, NOT a vertex count); the scene path reads the FULL set.
+u32 fs_draws_count(void* user)
+{
+    return static_cast<FsResolverBundle*>(user)->rctx->draws().count;
+}
+void fs_draws_item(void* user, u32 index, crd::ceir::gpu::RasterDrawItem& out)
+{
+    const DrawList dl = static_cast<FsResolverBundle*>(user)->rctx->draws();
+    if (index >= dl.count) { return; } // defensive: out stays default (count 0 ⇒ skipped); the walk already bounds by count
+    const RenderDrawItem& it = dl.items[index];
+    out.program              = it.program;
+    out.storage              = it.storage;
+    out.texture              = it.texture;
+    out.args                 = it.args;
+    out.vertex_count         = it.vertex_count;
+    out.index_count          = it.index_count;
+    out.instance_count       = it.instance_count;
+    out.first_index          = it.first_index;
+    out.args_offset          = it.args_offset;
+    out.indexed              = it.indexed;
+}
+// ⭐ CEIR-16d: the PASS-level sampled atlas a render.scene_draw_list binds per-draw (DrawList::pass_texture) + its shape.
+// ⛔⛔ REN-40-D: pass_texture_is_depth routes it to the atlas slot 4/5 (not the base-colour map slot 1); pass_texture_
+// comparison picks a COMPARISON vs PLAIN sampler (a moment/variance COLOUR array reads through a plain one). Null ⇒ untextured.
+ITexture* fs_pass_texture(void* user, bool& out_is_depth, bool& out_comparison)
+{
+    const DrawList dl = static_cast<FsResolverBundle*>(user)->rctx->draws();
+    out_is_depth   = dl.pass_texture_is_depth;
+    out_comparison = dl.pass_texture_comparison;
+    return dl.pass_texture;
+}
+} // namespace
+
+void record_ceir_render(const PassPayload& /*payload*/, RecordContext& ctx, ICommandEncoder& encoder)
+{
+    const CeirPassPlan* const plan = ctx.plan();
+    if (plan == nullptr || plan->ctx == nullptr || plan->commands == nullptr || plan->count == 0U)
+    {
+        // ⛔ CEIR-16-3d-3: fullscreen.raster records ONLY through this generic replay now, so reaching it with NO plan is a
+        // load-path bug (build_frame_plans failed, or a frame-install site did not rebuild the plan table). FAIL the record
+        // LOUD (not a silent black pass) — the load-time build already logged the specific cause.
+        ctx.fail();
+        return;
+    }
+    FsResolverBundle bundle;
+    bundle.cctx = plan->ctx;
+    bundle.rctx = &ctx;
+    crd::ceir::gpu::RenderResolvers r;
+    r.target             = &fs_target;
+    r.target_user        = &bundle;
+    r.program            = &fs_program;
+    r.program_user       = &bundle;
+    r.texture            = &fs_texture;
+    r.texture_user       = &bundle;
+    r.texture_array      = &fs_texture_array;
+    r.texture_array_user = &bundle;
+    r.storage            = &fs_storage;
+    r.storage_user       = &bundle;
+    r.draws_count        = &fs_draws_count;
+    r.draws_item         = &fs_draws_item;
+    r.draws_user         = &bundle;
+    r.pass_texture       = &fs_pass_texture;
+    r.pass_texture_user  = &bundle;
+    (void)crd::ceir::gpu::execute_render_lowered(
+        *plan->ctx, crd::containers::ConstSpan<crd::ceir::gpu::LoweredCommand>(plan->commands, plan->count), encoder, r);
+}
+
 u32 register_builtin_records(GraphExecutorTable& table, DiagnosticList& diags)
 {
     using crd::renderpass::executor_type_id;
     u32 n = 0;
     n += table.register_record(executor_type_id("scene.raster"), record_scene_raster, diags) ? 1U : 0U;
-    n += table.register_record(executor_type_id("fullscreen.raster"), record_fullscreen_raster, diags) ? 1U : 0U;
+    // ⭐ CEIR-16-3d-3: fullscreen.raster records through the GENERIC CEIR replay (record_ceir_render, driven by the
+    // per-pass plan built at frame load). The imperative record_fullscreen_raster is DELETED — the composite is DATA now.
+    n += table.register_record(executor_type_id("fullscreen.raster"), record_ceir_render, diags) ? 1U : 0U;
     n += table.register_record(executor_type_id("compute.dispatch"), record_compute_dispatch, diags) ? 1U : 0U;
     n += table.register_record(executor_type_id("transfer.clear"), record_transfer_clear, diags) ? 1U : 0U;
     n += table.register_record(executor_type_id("transfer.copy"), record_transfer_copy, diags) ? 1U : 0U;
@@ -1066,9 +1010,13 @@ u32 register_builtin_records(GraphExecutorTable& table, DiagnosticList& diags)
     n += table.register_record(executor_type_id("transfer.resolve"), record_transfer_resolve, diags) ? 1U : 0U;
     n += table.register_record(executor_type_id("raytrace.dispatch"), record_raytrace_dispatch, diags) ? 1U : 0U;
     n += table.register_record(executor_type_id("raytrace.pipeline"), record_raytrace_pipeline, diags) ? 1U : 0U;
-    n += table.register_record(executor_type_id("mesh.raster"), record_mesh_raster, diags) ? 1U : 0U;
-    n += table.register_record(executor_type_id("tess.raster"), record_tess_raster, diags) ? 1U : 0U;
-    n += table.register_record(executor_type_id("mesh.indirect"), record_mesh_indirect, diags) ? 1U : 0U;
+    // ⭐ CEIR-16-mesh-2: mesh.raster + tess.raster record through the GENERIC CEIR replay (record_ceir_render, driven by a
+    // build_amplify_ceir plan whose mesh_dispatch_list the walk expands over ctx.draws()). record_amplify_raster is DELETED.
+    n += table.register_record(executor_type_id("mesh.raster"), record_ceir_render, diags) ? 1U : 0U;
+    n += table.register_record(executor_type_id("tess.raster"), record_ceir_render, diags) ? 1U : 0U;
+    // ⭐ CEIR-16-mesh-1: mesh.indirect records through the GENERIC CEIR replay (a build_mesh_indirect_ceir plan built at
+    // frame load); the imperative record_mesh_indirect is DELETED — descriptor-parity proven, deletion-is-the-proof.
+    n += table.register_record(executor_type_id("mesh.indirect"), record_ceir_render, diags) ? 1U : 0U;
     n += table.register_record(executor_type_id("visbuffer.raster"), record_visbuffer_raster, diags) ? 1U : 0U;
     n += table.register_record(executor_type_id("present"), record_present, diags) ? 1U : 0U;
     return n;
@@ -1248,7 +1196,7 @@ bool compile(const FrameGraphTemplate& tmpl, const ExecutorRegistry& schemas, u3
 // ── execute ──
 bool execute(const CompiledFrameGraph& compiled, const FrameGraphTemplate& tmpl, const GraphExecutorTable& records,
              const ResourceTable& table, const PassPrograms& programs, ICommandEncoder& encoder, DiagnosticList& diags,
-             const DrawListTable* draw_lists, const PassProgramsTable* pass_programs)
+             const DrawListTable* draw_lists, const PassProgramsTable* pass_programs, const CeirPlanTable* plans)
 {
     for (u32 pos = 0; pos < compiled.schedule().size(); ++pos)
     {
@@ -1263,7 +1211,9 @@ bool execute(const CompiledFrameGraph& compiled, const FrameGraphTemplate& tmpl,
         // ⭐⭐ RAF-12.2-b: this pass's OWN programs (shadow VS / lit program / tonemap FS / cull kernel / RT SBT) if the
         // host bound them; else the frame-wide `programs` (the single-program tests + the legacy one-program shape).
         const PassPrograms* pp = pass_programs != nullptr ? pass_programs->find(pass.name_hash) : nullptr;
-        RecordContext ctx(pass.payload, table, pp != nullptr ? *pp : programs, diags, dl);
+        // CEIR-16-3c: this pass's CEIR replay plan (null for a non-migrated pass — its executor uses its C++ record path).
+        const CeirPassPlan* plan = plans != nullptr ? plans->find(pass.name_hash) : nullptr;
+        RecordContext ctx(pass.payload, table, pp != nullptr ? *pp : programs, diags, dl, plan);
         fn(pass.payload, ctx, encoder);
         if (!ctx.ok())
         {
@@ -1285,6 +1235,7 @@ struct PassClosure
     ICommandEncoder* encoder = nullptr;
     DiagnosticList* diags = nullptr;
     const DrawList* draws = nullptr; // RAF-8: this pass's resolved scene draw list (null for a pass with none)
+    const CeirPassPlan* plan = nullptr; // CEIR-16-3c: this pass's replay plan (null for a non-migrated pass)
     bool ok = true;
 };
 
@@ -1294,7 +1245,7 @@ struct PassClosure
 void run_pass_cb(crd::gpu::IFrameContext& /*fctx*/, void* user)
 {
     auto* c = static_cast<PassClosure*>(user);
-    RecordContext ctx(*c->payload, *c->table, *c->programs, *c->diags, c->draws);
+    RecordContext ctx(*c->payload, *c->table, *c->programs, *c->diags, c->draws, c->plan);
     c->fn(*c->payload, ctx, *c->encoder);
     c->ok = ctx.ok();
 }
@@ -1337,7 +1288,7 @@ const ImportedHandle* find_handle(const Array<ImportedHandle>& hs, u64 name_hash
 bool execute_frame(const CompiledFrameGraph& compiled, const FrameGraphTemplate& tmpl, const GraphExecutorTable& records,
                    const ResourceTable& table, const PassPrograms& programs, IRasterContext& raster,
                    memory::IAllocator& alloc, DiagnosticList& diags, u32* out_submit_count,
-                   const DrawListTable* draw_lists, const PassProgramsTable* pass_programs)
+                   const DrawListTable* draw_lists, const PassProgramsTable* pass_programs, const CeirPlanTable* plans)
 {
     auto fg = raster.create_frame_graph();
     if (fg == nullptr)
@@ -1438,8 +1389,10 @@ bool execute_frame(const CompiledFrameGraph& compiled, const FrameGraphTemplate&
         const DrawList* dl = draw_lists != nullptr ? draw_lists->find(pass.name_hash) : nullptr;
         // ⭐⭐ RAF-12.2-b: this pass's OWN programs if the host bound them per pass; else the frame-wide default.
         const PassPrograms* pp = pass_programs != nullptr ? pass_programs->find(pass.name_hash) : nullptr;
+        // CEIR-16-3c: this pass's CEIR replay plan (null for a non-migrated pass).
+        const CeirPassPlan* plan = plans != nullptr ? plans->find(pass.name_hash) : nullptr;
         closures.push_back(
-            PassClosure{&pass.payload, fn, &table, pp != nullptr ? pp : &programs, encoder.get(), &diags, dl, true});
+            PassClosure{&pass.payload, fn, &table, pp != nullptr ? pp : &programs, encoder.get(), &diags, dl, plan, true});
         b.execute(&run_pass_cb, &closures[closures.size() - 1U]);
     }
 
@@ -1571,7 +1524,7 @@ void run_authored_cb(crd::gpu::IFrameContext& fctx, void* user)
         ap.ok = false;
         return;
     }
-    RecordContext ctx(ap.payload, table, ap.programs, *ap.diags, &dl);
+    RecordContext ctx(ap.payload, table, ap.programs, *ap.diags, &dl, ap.plan); // CEIR-16-3c: thread the pass's replay plan
     fn(ap.payload, ctx, *enc);
     ap.ok = ctx.ok();
 }

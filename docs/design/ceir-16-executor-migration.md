@@ -7,6 +7,91 @@
 > (`engine/render-graph/src/frame_graph.cpp:283`, read to verify the atomic-vs-composite reading). **Substrate: RUN this
 > session, GREEN** (engine-first). Advisor-consulted 2026-08-12.
 
+> **⛔⛔ STATUS 2026-08-12 — 16b FULLSCREEN EXECUTOR MIGRATED + gated 4-config (deletion-is-the-proof).** `fullscreen.raster`
+> records ONLY through the generic CEIR replay `record_ceir_render` (frame_graph.cpp; renamed from `record_fullscreen_ceir`
+> at 16b-mesh-1 when it gained a 2nd executor), driven by a per-pass
+> `build_fullscreen_ceir` plan built at frame LOAD (`build_frame_plans`, frame_runtime.cpp; `FramePlans`/`CeirPlanTable`
+> keyed by pass name_hash). The imperative `record_fullscreen_raster` (108 lines) + `fullscreen_via_ceir()` + the
+> `CRD_FULLSCREEN_VIA_CEIR` A/B flag are DELETED; `register_builtin_records` registers the replay UNCONDITIONALLY (count
+> stays 14). `bind_atlas`/`attach_textures` KEPT (scene.raster/16d shares them). 5 shapes (procedural/plain/atlas/bindless/
+> composite) chosen by CEIR TYPE, materialized generically. Device pixel-verified plain+depth_as_float+bindless on real
+> Vulkan+DX12; shipped 11-pass frame renders via CEIR (sandbox `--smoke-test 2`, 63fps). Gate: win-debug + win-asan +
+> linux-gcc-debug(llvmpipe) + clang-tidy LLVM-20 all GREEN.
+> **⛔ SCAR (feedback_plan_table_must_rebuild_at_every_frame_install_site):** a plan-driven executor's plan table must be
+> rebuilt at EVERY frame-install site — `set_frame_graph_toml`, the reload `frame_commit`, `set_soft_shadows` (the
+> forward_csm⇄forward_csm_moment tier swap), AND resolved fallbacks (forward_agx/srgb carry a fullscreen `post`) — or the
+> new frame's fullscreen passes get a null plan → `ctx.fail()` → black frame. The flag-ON sweep of the REAL renderer
+> (scene-render device + sandbox smoke, `run_authored_cb`) caught it; the `execute_frame` device A/B did not.
+>
+> **⛔ STATUS 2026-08-12 — 16b-mesh-1 MESH.INDIRECT MIGRATED + gated 4-config.** `mesh.indirect` records through the same
+> `record_ceir_render`, replaying a `build_mesh_indirect_ceir` plan (a `render.scope` clearing the target + one
+> `render.mesh_dispatch_indirect(%args)`, no bindings). Fixed a LATENT bug: the materializer never resolved the args buffer for
+> `MeshletIndirect` (14z wired only args_offset) → a mesh-indirect draw dispatched off a NULL args buffer; added it +
+> device-free test. `record_mesh_indirect` DELETED (count stays 14). ⭐ No shipped asset uses mesh.indirect, so per the advisor
+> the device A/B is vacuous (both paths feed the encoder the SAME packet); the DELETION GATE was a device-free
+> DESCRIPTOR-PARITY A/B (migration doc §6): legacy vs CEIR record into a capturing encoder, RenderingDesc + RasterDrawPacket
+> field-identical (store/blend/clear/args/offset/cmd/geo). ⭐ INSIGHT: build_fullscreen_ceir does NOT carry the clear COLOR
+> (fullscreen triangle covers all pixels); mesh/amplify/scene builders MUST (a dispatch can leave uncovered pixels). The flag
+> dance stays MANDATORY for amplify (16b-mesh-2 = new per-draw-loop mechanism over SHIPPED scene_mesh/scene_tess).
+>
+> **⛔⛔ STATUS 2026-08-12 — 16b-mesh-2 AMPLIFY (mesh.raster + tess.raster) MIGRATED + gated (the FIRST per-draw LOOP).**
+> `mesh.raster`/`tess.raster` record through `record_ceir_render` replaying a `build_amplify_ceir` plan whose ONE
+> `render.mesh_dispatch_list` (a new op: ZERO operands, `primitive="meshlet"|"patches"`, `fallback_count`) the record-time
+> walk EXPANDS over the host DrawList (`ctx.draws()`) into N draws in ONE scope — the §8a shape-(i) mechanism that ALSO
+> governs 16d. Added the PATCHES vocab (the materializer had none). `record_amplify_raster` + both wrappers + the temp
+> `CRD_AMPLIFY_VIA_CEIR` flag DELETED; count stays 14. Resolver is count+item (no alloc; the RecordContext-owned DrawList
+> is the backing store). ⭐ THE FLAG-ON REAL-RENDERER SWEEP EARNED ITS KEEP (the fullscreen-moment lesson): the device-free
+> descriptor-parity PASSED, but the flag-ON sweep of shipped scene_mesh/scene_tess rendered BLACK — `build_frame_plans` read
+> the schema name `amplify_count`, but the shipped assets author `groups`/`patches` (the recorder maps them → amplify_count),
+> so `fallback_count`=0. Fixed (read groups‖patches‖amplify_count). Post-deletion the REN-38-F6 device gates render
+> scene_mesh/scene_tess via CEIR by default = the permanent live-path regression. Gate: win-debug (rg 116 + scene 1539 +
+> rg-gpu 357 both backends + smoke) + win-asan + clang-tidy; linux pending. **The mechanism (draws-resolver + walk expansion
+> + per-item packet) reuses for 16d; the TEMPLATE does not — scene.raster is per-item VERB selection + atlas + MRT.**
+>
+> **⛔ 16b-tail DECISION 2026-08-12 (timeboxed classification, NO code — the render pattern exists, so the seam question is
+> now decidable; advisor: defer the seam, no speculative infra).** Classified all remaining non-scene executors from source:
+> - **transfer.clear / copy / blit / resolve = ATOMIC** — each `record_*` builds ONE `TransferDesc` + one `encoder.transfer`,
+>   no loop/orchestration ⇒ 1:1 with a `ceir.transfer` op (the op EXISTS). NOT a composite; NO `build_*_ceir` plan needed.
+> - **raytrace.dispatch / pipeline = ATOMIC** — one `DispatchDesc`/`TraceDesc` (accel + grid + `bind_storage_run` bindings) +
+>   one `encoder.dispatch`/`trace_rays`; 1:1 with a `ceir.compute`(+accel) / `ceir.rt` op (exist).
+> - **compute.dispatch = HYBRID** — its single-dispatch arm is ATOMIC (1:1 `ceir.compute`), but its per-item CULL loop
+>   (`for draw in ctx.draws(): dispatch(it.dispatch_groups)`) is COMPOSITE **scene-cull** work → belongs to **16c** (§4 block
+>   3/4/5/8), NOT here. (It could reuse the amplify draws-resolver + a `compute.dispatch_list` op — a 16c call.)
+> - **visbuffer.raster** stays untouched (dissolves into scene.raster + a uint attachment POST-16d, per §b).
+>
+> **Consequence:** the atomic transfer/rt executors need a frame-graph *transfer/rt seam* (the compute/transfer analogue of
+> `record_ceir_render`/`execute_render_lowered`) to migrate — but its SHAPE depends on how scene (16c/16d) drives compute/
+> transfer/rt, so building it now is speculative. DEFER: these migrate when 16c/16d builds the scene compute+transfer seam,
+> or at 16z (which deletes every legacy `record_*` regardless — the E-table is the coverage inventory). NO 16b-tail code.
+>
+> **⛔⛔ 16c/16d SCOPE + DOCTRINE (advisor 2026-08-12, full-loop read done).** Q1 mechanism (one scope, N draws, walk
+> expansion — §8a) and Q3 verb-selection-is-LOWERING-not-IR (§4b) are CLOSED. The open half (Q2) resolved: 16c does NOT
+> collapse into the draws-resolver — 16z must DELETE the E1 block-7 ladder (scene_renderer.cpp ~6275: resolve_base_color +
+> the skinned/shadowed/textured program-variant if-ladder) + E2 (render() assembly/cull), so the resolve logic must move
+> BEHIND the declared seam (fork c: registered §45, replaceable), not survive inline. Split:
+> - **16c = the scene ITEM VIEW** (extend the amplify `RasterAmplifyItem` → a RenderDrawItem projection: program/storage/
+>   texture/args+offset/index_count/instance/first_index/vertex_count/indexed + the pass-texture triple pass_texture/is_depth/
+>   comparison) **+ the declared resolver registrations** (fork c, the fs_draws/fs_program pattern extended). Smaller than the
+>   doc's original framing — fullscreen/amplify already built the resolver plumbing.
+> - **16d = the scene TEMPLATE op** (ONE op) **+ the expansion** (the §4b lowering ladder: per-item VERB routing [args→
+>   DrawIndexedIndirect+first_draw_index=i | index_count+tex→DrawIndexed | combined/tex→StoragePull Draw | plain→COALESCE a
+>   run of compatible items into ONE DrawMulti/DrawMultiIndexed, draw_count=run] + attach_textures + MRT + depth-only) **+
+>   scene.resolve_program** (the ladder behind the seam) **+ parity + delete record_scene_raster**.
+> **⛔ TRAPS (advisor):** (1) COALESCING is a COMMAND-STRUCTURE gate, not just pixels — REN-38 asserts "two mesh groups → ONE
+> multi-draw batch"; if the expansion emits N packets where legacy coalesces to one, PIXELS MATCH but that gate FAILS + the
+> perf contract silently dies. The expansion MUST reproduce the run-coalescing (record_scene_raster L538-595). (2) MRT is a
+> DIFFERENT shape (N scopes per item, ⛔⛔ LOAD-not-clear) + depth-only/color-optional (reverse-Z depth_compare) rides the
+> same template — decide op-mode vs 2nd-op after design. (3) extract scene params by AUTHORED desc names (to_authored_pass
+> ~L211-270: load/load_depth/depth_compare/clear_depth/blend0..3/material_pass — the groups/patches lesson verbatim).
+> **⛔ DOCTRINE (a READING of §128, SURFACE to user — same class as the §4b parity-doctrine change, NOT silently landed):**
+> the IR carries ONE scene template op, NOT the pseudocode's literal `resolve_material→technique→program→geometry→draw` chain
+> — a STATIC plan cannot instance per-draw ops (fork c's callback shape); the resolve chain is host-side behind the seam, the
+> DrawList carries pre-resolved handles, the template op expands. **⛔ PROCESS: the flag dance is MAXIMALLY mandatory** —
+> scene.raster is the geometry executor of EVERY shipped frame (forward/csm/prepass), so the flag-ON sweep = the ENTIRE
+> scene-render suite + smoke (largest blast radius, strongest live-path gate); 16-3c-5-prereq build_frame_plans is the early
+> gate for free (its scene arm fires on every shipped asset).
+> NEXT (locked order) = 16c (item-view + resolver registrations + compute-cull-list) → 16d (template op + expansion + parity + delete; advisor before 16d code) → 16z (delete all + visbuffer dissolution).
+
 ## 0. Band contract (§127/§128, tracker CEIR-16)
 
 Inventory every executor **from source** (§127: "do not assume the current executor list from old docs"); classify
@@ -106,6 +191,33 @@ disposition.** (The §3 table's disposition column applies this criterion.)
 | program hand-list (`register_default_programs`) | ⛔ OUT (RAH-7 dependency-driven registry) — pointer only |
 | 3,4,5,8 — scene consolidation / cull / draw-item assembly | 16c (`ceir.scene` resolvers, §45) |
 | 7 — program-variant selection ladder | **16d** (`scene.resolve_program` host intrinsic — the core §128 deletion) |
+
+## 4b. ⭐ THE BINDING MODEL + PARITY DOCTRINE (advisor 2026-08-12; ⚠ USER-SURFACED doctrine change)
+
+**Finding (engine-first, verified in the COMMITTED `render.ceirop.toml`):** the `ceir.render` binding model is ALREADY
+forward, not slot-based — `render.draw` bindings are TYPED RESOURCE OPERANDS whose *"KIND derives from its CEIR-3c type"*
+(the 12a one-source-of-truth doctrine); attachments are general typed values (G-buffer/visbuffer = program-defined
+contracts, "NOT special ops", sec-41); RAH-2 resident tables are already the named successor (CEIR-14d). **So there are
+NO `input0..7` slots, no `bind_atlas`-at-slot-4, no bindless-of-one in the IR** — the advisor's feared "canonize the
+legacy dispatch scars into the IR" is STRUCTURALLY IMPOSSIBLE here. The legacy `RasterDrawPacket` binding vocabulary
+(`SampledTexture` / `BindlessTextureArray` / `bind_atlas` slot-4 = the ⛔⛔⛔ atlas-by-SLOT scar / bindless-of-one =
+verb-steering) is an ENCODER-DISPATCH artifact, not semantics.
+
+**Resolution:** (1) **No dialect change** — the binding model stays as-is (typed operands). (2) **The 16b gap is the 14z
+MATERIALIZER**, which resolves only `IStorageBuffer`; extend `materialize_draw_packet` to resolve TEXTURE-typed operands →
+the encoder's texture/bindless bindings, deriving the `ResourceBinding` KIND from the operand's CEIR-3c type. (3) The
+slot/sampler/verb choice (slot-4 shadow atlas, bindless-of-one blend-load) lives in the LOWERING — it reproduces the
+legacy mapping for PIXEL-parity now, and is REPLACEABLE when RAH-2/CEIR-14d lands resident tables (never an IR contract).
+
+**⚠ PARITY DOCTRINE CHANGE — for CROSS-mechanism migration (executor→IR-lowering), pixel-parity is PRIMARY, not
+command-parity.** ADR-0106 Decision #4's command-parity was written for SAME-mechanism migration (old-switch→executor,
+where the command stream must be bit-identical). This band migrates executor→IR-lowering, where the binding MECHANICS may
+legitimately differ (a forward binding lowering vs. the legacy slot tricks) while PIXELS must not. So the per-item gate is
+**pixel-parity readback + `crd-sandbox --smoke-test` both backends** (the semantic gate; the ⛔⛔ A/B-deterministic-clock +
+gates-run-configs scars apply to it), with **`MockEncoder` DEMOTED to a structural-sanity check** (B/D/E scope shape +
+draw count — NOT descriptor/slot equality). ⛔ This is a doctrine call with a user-visible tradeoff (weaker structural
+gate, stronger pixel reliance) — RECORDED here as the recommended resolution and SURFACED to the user (not silently
+landed); it is the same class of decision as the Option-A pull-forwards the user has ratified.
 
 ## 5. The 16z deletion list = 0h §3 E-table (per-item proof gates ALREADY WRITTEN)
 

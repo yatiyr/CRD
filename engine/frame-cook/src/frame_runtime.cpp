@@ -2,6 +2,8 @@
 
 #include <crd/framecook/frame_runtime.hpp>
 
+#include <crd/ceir/context.hpp>                     // CEIR-16-3c: the per-asset plan Context (build_frame_plans)
+#include <crd/ceir/gpu/render_fullscreen_build.hpp> // CEIR-16-3c: build_fullscreen_ceir + FullscreenBuildDesc
 #include <crd/containers/array.hpp>
 #include <crd/gpu/command_model.hpp>
 #include <crd/log/log.hpp>
@@ -516,7 +518,8 @@ bool FrameRecorder::register_pass_executor(crd::containers::StringView id, crd::
 }
 
 bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_ref, g::IRasterContext& raster,
-                           IFrameGraphHost& host, FrameExecError* err, crd::containers::String* where)
+                           IFrameGraphHost& host, FrameExecError* err, crd::containers::String* where,
+                           const FramePlans* plans)
 {
     (void)raster; // the graph is the caller's; the raster context is reached through it
     g::IFrameGraph* fgraph = &fgraph_ref;
@@ -1231,6 +1234,14 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         aps.push_back(crd::rendergraph::AuthoredPass(m_impl->alloc));
         crd::rendergraph::AuthoredPass& ap = aps[aps.size() - 1U];
         to_authored_pass(rec, ap);
+        // CEIR-16-3c: attach this pass's CEIR replay plan if the asset built one — keyed by the AUTHORED pass name (every
+        // for_each-expanded instance shares it; the [$index] target difference is the target resolver's job at record). A
+        // null plan leaves the pass on its C++ executor path (still correct for a NOT-YET-MIGRATED executor); a MIGRATED
+        // executor (record_ceir_render) treats a null plan as a load-path bug and fails the record loud (ctx.fail()).
+        ap.plan = plans != nullptr
+                      ? plans->table.find(crd::renderpass::pass_param_id(
+                            crd::containers::StringView(d.name.c_str(), d.name.size())))
+                      : nullptr;
         ap.device_kind = dev_kind;
         ap.has_sampler = pass_flag(d, SV(pp::kHasSampler));
         ap.sampler     = pass_sampler(d);
@@ -1383,6 +1394,144 @@ FrameExecResult execute_frame_graph_with_fallback(const FrameGraphDesc& desc, g:
     res.status = FrameExecStatus::Failed;
     CRD_LOG_ERROR(g_log_framecook, "no frame graph ran AND there is no output target to signal on");
     return res;
+}
+
+// ── CEIR-16-3c: build the per-fullscreen-pass CEIR replay plans ONCE, at load ──
+namespace
+{
+const FrameResourceDesc* fs_find_resource(const FrameGraphDesc& desc, const crd::containers::String& name) noexcept
+{
+    for (crd::usize i = 0; i < desc.resources.size(); ++i)
+    {
+        if (desc.resources[i].name.size() == name.size()
+            && std::memcmp(desc.resources[i].name.c_str(), name.c_str(), name.size()) == 0)
+        {
+            return &desc.resources[i];
+        }
+    }
+    return nullptr;
+}
+// A fullscreen READ that resolves to a BUFFER is the pass's CONSTANTS buffer (REN-41 TAA); every other read is a sampled
+// texture. Mirrors the record loop's kind test (~L1114), minus the Accel case (never a fullscreen read).
+bool fs_read_is_buffer(FrameResourceKind k) noexcept
+{
+    return k == FrameResourceKind::TransientBuffer || k == FrameResourceKind::StructuredBuffer
+           || k == FrameResourceKind::CounterBuffer || k == FrameResourceKind::ExternalBuffer
+           || k == FrameResourceKind::IndirectArgs;
+}
+} // namespace
+
+FramePlans::FramePlans(crd::memory::IAllocator* a) : table(a), storage(a), alloc(a) {}
+FramePlans::~FramePlans() { delete ctx; }
+
+bool build_frame_plans(const FrameGraphDesc& desc, FramePlans& out, crd::renderasset::DiagnosticList& diags)
+{
+    namespace rp = crd::renderpass;
+    static const char* const kIn[8] = {"input0", "input1", "input2", "input3", "input4", "input5", "input6", "input7"};
+    // Reserve storage to the EXACT fullscreen-pass count: the CeirPassPlans bind pointers INTO `storage`, so it must never
+    // relocate (the reserved-arena discipline the recorder itself uses).
+    crd::u32 nfs = 0U;
+    for (crd::usize i = 0; i < desc.passes.size(); ++i)
+    {
+        if (pass_is_fullscreen(desc.passes[i]) || pass_is_mesh_indirect(desc.passes[i]) || pass_is_tess(desc.passes[i])
+            || pass_is_mesh(desc.passes[i]))
+        {
+            ++nfs;
+        }
+    }
+    if (nfs == 0U) { return true; } // no migrated pass in this asset — nothing to build
+    out.storage.reserve(nfs);
+    if (out.ctx == nullptr) { out.ctx = new crd::ceir::Context(out.alloc); }
+
+    for (crd::usize pi = 0; pi < desc.passes.size(); ++pi)
+    {
+        const FramePassDesc& d       = desc.passes[pi];
+        const bool           is_fs   = pass_is_fullscreen(d);
+        const bool           is_mind = !is_fs && pass_is_mesh_indirect(d);
+        const bool           is_amp  = !is_fs && !is_mind && (pass_is_tess(d) || pass_is_mesh(d));
+        if (!is_fs && !is_mind && !is_amp) { continue; }
+
+        out.storage.push_back(crd::containers::Array<crd::ceir::gpu::LoweredCommand>(out.alloc));
+        crd::containers::Array<crd::ceir::gpu::LoweredCommand>& cmds  = out.storage[out.storage.size() - 1U];
+        bool                                                   built = false;
+        if (is_fs)
+        {
+            // ── extract the FULLSCREEN composite recipe from the pass (mirrors to_authored_pass's fullscreen payload). ──
+            crd::ceir::gpu::FullscreenBuildDesc bd;
+            bd.depth_as_float = pass_flag(d, crd::containers::StringView(pp::kDepthAsFloat));
+            bd.shading_rate   = static_cast<crd::gpu::ShadingRate>(pass_u32(
+                d, crd::containers::StringView(pp::kShadingRate), static_cast<crd::u32>(crd::gpu::ShadingRate::Rate1x1)));
+            bd.conservative = static_cast<crd::gpu::ConservativeMode>(pass_u32(
+                d, crd::containers::StringView(pp::kConservative), static_cast<crd::u32>(crd::gpu::ConservativeMode::Off)));
+            if (pass_flag(d, crd::containers::StringView(pp::kComposite)))
+            {
+                bd.load  = true;
+                bd.blend = static_cast<crd::gpu::BlendMode>(pass_u32(
+                    d, crd::containers::StringView(pp::kBlendSlot[0]), static_cast<crd::u32>(crd::gpu::BlendMode::Alpha)));
+            }
+            crd::u32 ni = 0U;
+            for (crd::usize r = 0; r < d.reads.size(); ++r)
+            {
+                const FrameResourceDesc* const res = fs_find_resource(desc, d.reads[r].name);
+                if (res != nullptr && fs_read_is_buffer(res->kind))
+                {
+                    bd.constants_param = rp::pass_param_id(crd::containers::StringView("constants"));
+                }
+                else if (ni < 8U)
+                {
+                    // a texture read → input{ni}. is_depth from the resource FORMAT — the atlas signal the builder pairs with
+                    // !depth_as_float; an external/unfound resource defaults to colour (is_depth = false).
+                    bd.inputs[ni].source_param = rp::pass_param_id(crd::containers::StringView(kIn[ni]));
+                    bd.inputs[ni].is_depth     = res != nullptr && crd::gpu::fg_format_has_depth(res->format);
+                    ++ni;
+                }
+            }
+            bd.num_inputs = ni;
+            built         = crd::ceir::gpu::build_fullscreen_ceir(*out.ctx, bd, cmds);
+        }
+        else if (is_mind)
+        {
+            // ── CEIR-16-mesh-1: the MESH-INDIRECT composite (record_mesh_indirect) — the %args buffer at slot "args", its
+            // byte offset, and the pass clear colour (a mesh dispatch can leave uncovered pixels — carry the real clear). ──
+            crd::ceir::gpu::MeshIndirectBuildDesc mbd;
+            mbd.args_param  = rp::pass_param_id(crd::containers::StringView("args"));
+            mbd.args_offset = pass_u32(d, crd::containers::StringView("args_offset"), 0U);
+            float cc[4] = {0.0F, 0.0F, 0.0F, 1.0F};
+            pass_vec4(d, SV(pp::kClearColor), cc);
+            mbd.clear = crd::gpu::ClearColor{cc[0], cc[1], cc[2], cc[3]};
+            built     = crd::ceir::gpu::build_mesh_indirect_ceir(*out.ctx, mbd, cmds);
+        }
+        else
+        {
+            // ── CEIR-16-mesh-2: the AMPLIFY composite (record_amplify_raster) — mesh.raster (meshlet) or tess.raster
+            // (patches); the record-time walk expands mesh_dispatch_list over ctx.draws(). fallback_count = the procedural
+            // amplify_count arm; carry the clear colour (a dispatch can leave uncovered pixels). ──
+            crd::ceir::gpu::AmplifyBuildDesc abd;
+            abd.patches = pass_is_tess(d); // tess.raster -> patches; mesh.raster -> meshlet
+            // ⛔ CEIR-16-mesh-2: the amplify count is AUTHORED as `groups` (mesh.raster) / `patches` (tess.raster) — the
+            // recorder maps BOTH to rec.amplify_count (this file, ~L876), but the DESC carries the authored name. Read
+            // whichever is present (mirror the recorder), NOT the schema's "amplify_count": the shipped scene_mesh/scene_tess
+            // use groups/patches, so reading "amplify_count" gave 0 and every amplify pass rendered BLACK (flag-ON sweep bug).
+            crd::u32 amp = pass_u32(d, crd::containers::StringView("groups"), 0U);
+            if (amp == 0U) { amp = pass_u32(d, crd::containers::StringView("patches"), 0U); }
+            if (amp == 0U) { amp = pass_u32(d, crd::containers::StringView("amplify_count"), 0U); }
+            abd.fallback_count = amp;
+            float cc[4] = {0.0F, 0.0F, 0.0F, 1.0F};
+            pass_vec4(d, SV(pp::kClearColor), cc);
+            abd.clear = crd::gpu::ClearColor{cc[0], cc[1], cc[2], cc[3]};
+            built     = crd::ceir::gpu::build_amplify_ceir(*out.ctx, abd, cmds);
+        }
+        if (!built)
+        {
+            diags.error(crd::renderasset::DiagCode::AssetCookFailed,
+                        crd::containers::StringView("CEIR-16: build_*_ceir failed for a migrated pass"),
+                        crd::containers::StringView(d.name.c_str(), d.name.size()));
+            return false;
+        }
+        out.table.bind(rp::pass_param_id(crd::containers::StringView(d.name.c_str(), d.name.size())),
+                       crd::rendergraph::CeirPassPlan{out.ctx, cmds.data(), static_cast<crd::u32>(cmds.size())});
+    }
+    return true;
 }
 
 } // namespace crd::framecook

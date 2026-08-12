@@ -672,7 +672,10 @@ inline crd::gpu::IStorageBuffer* ceir_mapped_binding_resolver(const ce::Value* v
     ce::gpu::lower_region(ctx, body, cmds);
     return ce::gpu::execute_render_lowered(ctx,
                                            crd::containers::ConstSpan<ce::gpu::LoweredCommand>(cmds.data(), cmds.size()),
-                                           enc, ceir_render_target_resolver, target, ceir_render_program_resolver, program);
+                                           enc,
+                                           ce::gpu::RenderResolvers{.target = ceir_render_target_resolver, .target_user = target,
+                                                                    .program = ceir_render_program_resolver,
+                                                                    .program_user = program});
 }
 
 // CEIR-14z-4a (the GOLD-STANDARD drive): lower `body` + drive the render program through the raster context's
@@ -689,8 +692,10 @@ inline crd::gpu::IStorageBuffer* ceir_mapped_binding_resolver(const ce::Value* v
     ce::gpu::lower_region(ctx, body, cmds);
     return ce::gpu::execute_render_frame(ctx,
                                          crd::containers::ConstSpan<ce::gpu::LoweredCommand>(cmds.data(), cmds.size()),
-                                         raster, alloc, ceir_render_target_resolver, target, ceir_render_program_resolver,
-                                         program);
+                                         raster, alloc,
+                                         ce::gpu::RenderResolvers{.target = ceir_render_target_resolver, .target_user = target,
+                                                                  .program = ceir_render_program_resolver,
+                                                                  .program_user = program});
 }
 
 // CEIR-14z-4c: the frame-recording drive with a PER-OP target map (for a multi-scope / multi-attachment program). `map`
@@ -704,8 +709,10 @@ inline crd::gpu::IStorageBuffer* ceir_mapped_binding_resolver(const ce::Value* v
     ce::gpu::lower_region(ctx, body, cmds);
     return ce::gpu::execute_render_frame(ctx,
                                          crd::containers::ConstSpan<ce::gpu::LoweredCommand>(cmds.data(), cmds.size()),
-                                         raster, alloc, ceir_mapped_target_resolver, &map, ceir_render_program_resolver,
-                                         program);
+                                         raster, alloc,
+                                         ce::gpu::RenderResolvers{.target = ceir_mapped_target_resolver, .target_user = &map,
+                                                                  .program = ceir_render_program_resolver,
+                                                                  .program_user = program});
 }
 
 // CEIR-14z-4c: the frame-recording drive for an MRT program — a per-op target `map` + a single storage `buffer` (bound via
@@ -721,8 +728,11 @@ inline crd::gpu::IStorageBuffer* ceir_mapped_binding_resolver(const ce::Value* v
     ce::gpu::lower_region(ctx, body, cmds);
     return ce::gpu::execute_render_frame(ctx,
                                          crd::containers::ConstSpan<ce::gpu::LoweredCommand>(cmds.data(), cmds.size()),
-                                         raster, alloc, ceir_mapped_target_resolver, &map, ceir_render_program_resolver,
-                                         program, ceir_render_binding_resolver, buffer);
+                                         raster, alloc,
+                                         ce::gpu::RenderResolvers{.target = ceir_mapped_target_resolver, .target_user = &map,
+                                                                  .program = ceir_render_program_resolver, .program_user = program,
+                                                                  .storage = ceir_render_binding_resolver,
+                                                                  .storage_user = buffer});
 }
 
 // CEIR-14z-5: the frame-recording drive for the DEPTH-ONLY occlusion program — the identity `target` (all 3 attachments share
@@ -739,8 +749,11 @@ inline crd::gpu::IStorageBuffer* ceir_mapped_binding_resolver(const ce::Value* v
     ce::gpu::lower_region(ctx, body, cmds);
     return ce::gpu::execute_render_frame(ctx,
                                          crd::containers::ConstSpan<ce::gpu::LoweredCommand>(cmds.data(), cmds.size()),
-                                         raster, alloc, ceir_render_target_resolver, target, ceir_mapped_program_resolver,
-                                         &progs, ceir_render_binding_resolver, buffer);
+                                         raster, alloc,
+                                         ce::gpu::RenderResolvers{.target = ceir_render_target_resolver, .target_user = target,
+                                                                  .program = ceir_mapped_program_resolver, .program_user = &progs,
+                                                                  .storage = ceir_render_binding_resolver,
+                                                                  .storage_user = buffer});
 }
 
 // CEIR-14z-6: the frame-recording drive for the INDEXED-INDIRECT program — the identity `target` + `program` (one scope, one
@@ -757,8 +770,11 @@ inline crd::gpu::IStorageBuffer* ceir_mapped_binding_resolver(const ce::Value* v
     ce::gpu::lower_region(ctx, body, cmds);
     return ce::gpu::execute_render_frame(ctx,
                                          crd::containers::ConstSpan<ce::gpu::LoweredCommand>(cmds.data(), cmds.size()),
-                                         raster, alloc, ceir_render_target_resolver, target, ceir_render_program_resolver,
-                                         program, ceir_mapped_binding_resolver, &buffers);
+                                         raster, alloc,
+                                         ce::gpu::RenderResolvers{.target = ceir_render_target_resolver, .target_user = target,
+                                                                  .program = ceir_render_program_resolver, .program_user = program,
+                                                                  .storage = ceir_mapped_binding_resolver,
+                                                                  .storage_user = &buffers});
 }
 
 } // namespace crd::ceir_gpu_test

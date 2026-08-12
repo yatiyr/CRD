@@ -23,6 +23,8 @@ namespace crd::ceir::render
 [[nodiscard]] inline OpId draw_indirect_count_kind(Context& ctx) { return ctx.intern_op("render", "draw_indirect_count"); }
 [[nodiscard]] inline OpId mesh_dispatch_kind(Context& ctx) { return ctx.intern_op("render", "mesh_dispatch"); }
 [[nodiscard]] inline OpId mesh_dispatch_indirect_kind(Context& ctx) { return ctx.intern_op("render", "mesh_dispatch_indirect"); }
+[[nodiscard]] inline OpId mesh_dispatch_list_kind(Context& ctx) { return ctx.intern_op("render", "mesh_dispatch_list"); }
+[[nodiscard]] inline OpId scene_draw_list_kind(Context& ctx) { return ctx.intern_op("render", "scene_draw_list"); }
 [[nodiscard]] inline OpId scope_kind(Context& ctx) { return ctx.intern_op("render", "scope"); }
 
 // -- typed op wrappers (a thin view over an Operation*; the registered verifier enforces shape) --
@@ -77,6 +79,7 @@ public:
     [[nodiscard]] AttrId access() const noexcept { return m_op->attr("access"); }
     [[nodiscard]] AttrId program_interface() const noexcept { return m_op->attr("program_interface"); }
     [[nodiscard]] AttrId first_vertex() const noexcept { return m_op->attr("first_vertex"); }
+    [[nodiscard]] AttrId geometry() const noexcept { return m_op->attr("geometry"); }
 
 private:
     Operation* m_op;
@@ -170,6 +173,34 @@ public:
 private:
     Operation* m_op;
 };
+// render.mesh_dispatch_list - A per-draw-item amplification: ONE render.scope, N draws over the host DrawList; each item's count/storage feed a mesh dispatch (primitive=meshlet) or a patch draw (primitive=patches).
+class MeshDispatchListOp
+{
+public:
+    explicit MeshDispatchListOp(Operation* op) noexcept : m_op(op) {}
+    [[nodiscard]] Operation* operation() const noexcept { return m_op; }
+    [[nodiscard]] AttrId program() const noexcept { return m_op->attr("program"); }
+    [[nodiscard]] AttrId primitive() const noexcept { return m_op->attr("primitive"); }
+    [[nodiscard]] AttrId fallback_count() const noexcept { return m_op->attr("fallback_count"); }
+    [[nodiscard]] AttrId access() const noexcept { return m_op->attr("access"); }
+    [[nodiscard]] AttrId program_interface() const noexcept { return m_op->attr("program_interface"); }
+
+private:
+    Operation* m_op;
+};
+// render.scene_draw_list - The scene per-draw-item verb ladder: ONE render.scope, N packets over the host DrawList; each item's fields (args/index_count/texture/storage) select its verb (indirect/indexed/storage-pull/coalesced-multi).
+class SceneDrawListOp
+{
+public:
+    explicit SceneDrawListOp(Operation* op) noexcept : m_op(op) {}
+    [[nodiscard]] Operation* operation() const noexcept { return m_op; }
+    [[nodiscard]] AttrId program() const noexcept { return m_op->attr("program"); }
+    [[nodiscard]] AttrId access() const noexcept { return m_op->attr("access"); }
+    [[nodiscard]] AttrId program_interface() const noexcept { return m_op->attr("program_interface"); }
+
+private:
+    Operation* m_op;
+};
 // render.scope - A render scope: bind the attachments + render area, run the draws in the region. Lowers to RenderingDesc begin/end + draw verbs (14b).
 class ScopeOp
 {
@@ -180,6 +211,7 @@ public:
     [[nodiscard]] AttrId width() const noexcept { return m_op->attr("width"); }
     [[nodiscard]] AttrId height() const noexcept { return m_op->attr("height"); }
     [[nodiscard]] AttrId sample_count() const noexcept { return m_op->attr("sample_count"); }
+    [[nodiscard]] AttrId extent_from_target() const noexcept { return m_op->attr("extent_from_target"); }
 
 private:
     Operation* m_op;
@@ -196,6 +228,8 @@ private:
 [[nodiscard]] Operation* build_draw_indirect_count(Context& ctx, Value* args, Value* count, Value* bindings, AttrId program, AttrId access, TypeId result_type = {});
 [[nodiscard]] Operation* build_mesh_dispatch(Context& ctx, Value* grid_x, Value* grid_y, Value* grid_z, Value* bindings, AttrId program, AttrId access, TypeId result_type = {});
 [[nodiscard]] Operation* build_mesh_dispatch_indirect(Context& ctx, Value* args, Value* bindings, AttrId program, AttrId access, TypeId result_type = {});
+[[nodiscard]] Operation* build_mesh_dispatch_list(Context& ctx, AttrId program, AttrId primitive, AttrId access, TypeId result_type = {});
+[[nodiscard]] Operation* build_scene_draw_list(Context& ctx, AttrId program, AttrId access, TypeId result_type = {});
 [[nodiscard]] Operation* build_scope(Context& ctx, Value* attachments, AttrId width, AttrId height, TypeId result_type = {});
 
 // -- registration: self-registers the dialect + every op (traits + verifier), NO central edit (section 7) --

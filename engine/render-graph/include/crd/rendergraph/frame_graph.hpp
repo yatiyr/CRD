@@ -27,6 +27,18 @@
 #include <crd/renderasset/diagnostic.hpp>
 #include <crd/renderpass/executor_registry.hpp>
 
+// CEIR-16-3c: forward-decls for the per-pass CEIR PLAN a migrated executor replays (the ADR-0109 §4.2 anticipated
+// render-graph→ceir-gpu edge). The plan is carried as pure pointers here (no ceir-gpu header in this widely-included
+// public header); the replay executor that dereferences them links crd-ceir-gpu.
+namespace crd::ceir
+{
+class Context;
+namespace gpu
+{
+struct LoweredCommand;
+} // namespace gpu
+} // namespace crd::ceir
+
 namespace crd::rendergraph
 {
 using crd::containers::Array;
@@ -236,14 +248,45 @@ private:
     Array<Entry> m_entries;
 };
 
+// ⭐ CEIR-16-3c: a migrated executor's per-pass CEIR PLAN — the lowered command slice of the executor's composite (built
+// once from the pass payload at graph-build by `build_fullscreen_ceir` / future builders) plus the CEIR `Context` those
+// commands' `Operation*` back-pointers reference (the Context OUTLIVES the plan — the owner keeps it alive). The generic
+// replay `PassRecordFn` drives `execute_render_lowered(*ctx, {commands, count}, encoder, resolvers)`; scene.raster (16d)
+// rides the SAME seam, so this is executor-agnostic. Pointers only (no ceir-gpu header here — the replay executor links it).
+struct CeirPassPlan
+{
+    const crd::ceir::Context*             ctx      = nullptr; // the plan's CEIR context (outlives the plan)
+    const crd::ceir::gpu::LoweredCommand* commands = nullptr; // the lowered BeginRender…Draw…EndRender slice
+    u32                                   count    = 0U;      // number of commands
+};
+
+// CEIR-16-3c: the per-pass CEIR plans (indexed by pass name hash) — the DrawListTable/PassProgramsTable counterpart for
+// migrated (ceir.render-backed) executors. The owner builds each migrated pass's plan at graph-build and binds it here;
+// the runtime looks it up per pass and threads it into the pass's RecordContext (null for a non-migrated pass).
+class CeirPlanTable
+{
+public:
+    explicit CeirPlanTable(memory::IAllocator* alloc) noexcept : m_plans(alloc) {}
+    void bind(u64 pass_name_hash, const CeirPassPlan& plan) { m_plans.push_back(Entry{pass_name_hash, plan}); }
+    [[nodiscard]] const CeirPassPlan* find(u64 pass_name_hash) const noexcept;
+
+private:
+    struct Entry
+    {
+        u64 pass_name_hash;
+        CeirPassPlan plan;
+    };
+    Array<Entry> m_plans;
+};
+
 // The context a pass's record function sees: it may resolve ONLY resources the pass declared (an undeclared slot is
 // diagnosed — the "declared use matches recorded" contract), plus the host-bound program for this pass.
 class RecordContext
 {
 public:
     RecordContext(const PassPayload& payload, const ResourceTable& table, const PassPrograms& programs,
-                  DiagnosticList& diags, const DrawList* draws = nullptr) noexcept
-        : m_payload(&payload), m_table(&table), m_programs(&programs), m_diags(&diags), m_draws(draws)
+                  DiagnosticList& diags, const DrawList* draws = nullptr, const CeirPassPlan* plan = nullptr) noexcept
+        : m_payload(&payload), m_table(&table), m_programs(&programs), m_diags(&diags), m_draws(draws), m_plan(plan)
     {
     }
 
@@ -261,7 +304,13 @@ public:
     [[nodiscard]] const PassPrograms& programs() const noexcept { return *m_programs; }
     // RAF-8: this pass's resolved scene draw list (host pre-resolved). Empty (count 0) for a pass with none.
     [[nodiscard]] DrawList draws() const noexcept { return m_draws != nullptr ? *m_draws : DrawList{}; }
+    // CEIR-16-3c: this pass's CEIR replay PLAN (null for a non-migrated pass — its executor uses its C++ record path).
+    [[nodiscard]] const CeirPassPlan* plan() const noexcept { return m_plan; }
     [[nodiscard]] bool ok() const noexcept { return m_ok; }
+    // ⭐ CEIR-16-3d-3: a record function marks its pass FAILED — the frame then fails to record LOUD (execute()/the recorder
+    // return false and the caller reports it), never a silent no-op that draws nothing. Used when a plan-driven executor
+    // (record_ceir_render) has no replay plan — a load-path bug the load-time build already logged.
+    void fail() noexcept { m_ok = false; }
 
 private:
     [[nodiscard]] bool is_declared(u64 slot_name) const noexcept;
@@ -270,6 +319,7 @@ private:
     const PassPrograms* m_programs;
     DiagnosticList* m_diags;
     const DrawList* m_draws = nullptr;
+    const CeirPassPlan* m_plan = nullptr;
     mutable bool m_ok = true;
 };
 
@@ -299,6 +349,14 @@ private:
 // tess.raster · mesh.indirect · visbuffer.raster · present).
 u32 register_builtin_records(GraphExecutorTable& table, DiagnosticList& diags);
 
+// ⭐ CEIR-16-3c: the GENERIC CEIR replay record function — drives `execute_render_lowered` on the pass's `CeirPassPlan`
+// (`ctx.plan()`) through the (frame-recording) encoder, with resolvers backed by `RecordContext` (target→the "color" slot,
+// program→the pass raster program, textures/bindless/samplers/storage→the pass's declared slots via each binding's `source`
+// attr). A null plan (a NON-MIGRATED pass) is a no-op. Registered for `fullscreen.raster` behind the CEIR-replay selection
+// (16b-3c-5); `scene.raster` (16d) reuses it. Exposed (unlike the imperative built-in records) so the migration can be
+// A/B-gated and device-free-tested against a hand-built plan.
+void record_ceir_render(const PassPayload& payload, RecordContext& ctx, ICommandEncoder& encoder);
+
 // Compile a template for (width, height): validate every pass's executor + payload against the schema registry and
 // that every declared slot resolves to a declared resource; build the deterministic schedule; assign transient
 // aliasing + pin persistent/history resources. Returns false + diagnostics on any error.
@@ -313,7 +371,8 @@ u32 register_builtin_records(GraphExecutorTable& table, DiagnosticList& diags);
                            const GraphExecutorTable& records, const ResourceTable& table, const PassPrograms& programs,
                            ICommandEncoder& encoder, DiagnosticList& diags,
                            const DrawListTable* draw_lists = nullptr,
-                           const PassProgramsTable* pass_programs = nullptr);
+                           const PassProgramsTable* pass_programs = nullptr,
+                           const CeirPlanTable* plans = nullptr);
 
 // Execute on a DEVICE in ONE SUBMISSION (mission Gate 7 "one submission where expected"). Unlike `execute` — which
 // records into a caller-supplied encoder and is what the device-free architecture gate drives with a mock — this
@@ -331,7 +390,8 @@ u32 register_builtin_records(GraphExecutorTable& table, DiagnosticList& diags);
                                  const PassPrograms& programs, IRasterContext& raster, memory::IAllocator& alloc,
                                  DiagnosticList& diags, u32* out_submit_count = nullptr,
                                  const DrawListTable* draw_lists = nullptr,
-                                 const PassProgramsTable* pass_programs = nullptr);
+                                 const PassProgramsTable* pass_programs = nullptr,
+                                 const CeirPlanTable* plans = nullptr);
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 // RAF-12.2-b: THE AUTHORED-FRAME DISPATCH — the ONE record path every pass runs through, replacing frame-cook's
@@ -422,6 +482,7 @@ struct AuthoredPass
     const GraphExecutorTable* records = nullptr;                   // executor lookup for this pass's dispatch
     memory::IAllocator* alloc = nullptr;                           // per-callback scratch (ResourceTable + draw items)
     DiagnosticList* diags = nullptr;
+    const CeirPassPlan* plan = nullptr;                            // CEIR-16-3c: this pass's CEIR replay plan (null ⇒ C++ record path)
     bool ok = true;                                                // set false if the executor touched an undeclared slot
 };
 

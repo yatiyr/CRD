@@ -2870,6 +2870,13 @@ struct DrawShape
     if (nm == containers::StringView("render.draw_indirect_count")) { out = {0U, 2U, {RenderMisuseKind::IndirectArgsNotBuffer, RenderMisuseKind::IndirectCountNotBuffer}, true}; return true; }
     if (nm == containers::StringView("render.mesh_dispatch")) { out = {3U, 0U, {RenderMisuseKind::None, RenderMisuseKind::None}, false}; return true; }
     if (nm == containers::StringView("render.mesh_dispatch_indirect")) { out = {0U, 1U, {RenderMisuseKind::IndirectArgsNotBuffer, RenderMisuseKind::None}, false}; return true; }
+    // ⭐ CEIR-16-mesh-2: the per-draw-item amplification. ZERO operands (all per-item data is HOST DrawList data resolved at
+    // record) ⇒ 0 counts, 0 buffers, arity 0 — ceir_check_draw validates program-symbol + access=="" for it.
+    if (nm == containers::StringView("render.mesh_dispatch_list")) { out = {0U, 0U, {RenderMisuseKind::None, RenderMisuseKind::None}, false}; return true; }
+    // ⭐ CEIR-16d: the SCENE per-draw-item verb ladder. ZERO operands (all per-item data is HOST DrawList data resolved at
+    // record; the verb is chosen per-item from the item's fields) ⇒ 0 counts, 0 buffers, arity 0 — the same shape as
+    // mesh_dispatch_list; ceir_check_draw validates program-symbol + access=="".
+    if (nm == containers::StringView("render.scene_draw_list")) { out = {0U, 0U, {RenderMisuseKind::None, RenderMisuseKind::None}, false}; return true; }
     return false;
 }
 // The CEIR-14b/14c draw contract for op-shape `sh`: identity (program symbol) BEFORE contract, then counts Index-typed, the

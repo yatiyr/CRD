@@ -14,7 +14,8 @@
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/gpu/execute.hpp>
 #include <crd/ceir/gpu/lower.hpp>
-#include <crd/ceir/gpu/render_materialize.hpp> // CEIR-14z-1: the render materializers
+#include <crd/ceir/gpu/render_materialize.hpp>      // CEIR-14z-1: the render materializers
+#include <crd/ceir/gpu/render_fullscreen_build.hpp> // CEIR-16-3b: the fullscreen composite builder
 #include <crd/ceir/parse.hpp>
 #include <crd/ceir/print.hpp>
 
@@ -77,7 +78,70 @@ crd::gpu::ComputePipeline* resolve_from_user(const Operation*, void* user)
 // CEIR-14z-1: the materializers only STORE the resolved target/program pointers (never DEREF them), so identity-only
 // sentinel resolvers suffice — `user` is a void* sentinel round-tripped to the interface pointer (no fake subclass).
 crd::gpu::IRasterTarget*  resolve_target(const Operation*, void* user) { return static_cast<crd::gpu::IRasterTarget*>(user); }
+// CEIR-16-3c-4: a fake IRasterTarget carrying real dimensions — `extent_from_target` reads width()/height() off the resolved
+// target (the sentinel resolver above returns `user`, so a FakeRTarget* passed as `user` round-trips to a sized target).
+struct FakeRTarget final : crd::gpu::IRasterTarget
+{
+    FakeRTarget(crd::u32 w, crd::u32 h) noexcept : m_w(w), m_h(h) {}
+    [[nodiscard]] crd::u32 width() const noexcept override { return m_w; }
+    [[nodiscard]] crd::u32 height() const noexcept override { return m_h; }
+    [[nodiscard]] crd::u32 read_pixel(crd::u32, crd::u32) const noexcept override { return 0U; }
+
+private:
+    crd::u32 m_w;
+    crd::u32 m_h;
+};
 crd::gpu::IRasterProgram* resolve_rprog(const Operation*, void* user) { return static_cast<crd::gpu::IRasterProgram*>(user); }
+// CEIR-16-2: an IMAGE-typed binding operand resolver (identity sentinel, the same shape) → the draw's SampledTexture.
+crd::gpu::ITexture*       resolve_tex(const Value*, void* user) { return static_cast<crd::gpu::ITexture*>(user); }
+// CEIR-16-3a-1: a bindless-array resolver. `user` points to a small array-of-fakes descriptor; the resolver returns its
+// element pointer + writes the count — the N-ness the materializer stores as texture_array/array_count but never sees in the IR.
+struct FakeTexArray
+{
+    crd::gpu::ITexture* elems[4]{};
+    crd::u32            count = 0U;
+};
+crd::gpu::ITexture* const* resolve_texarray(const Value*, void* user, crd::u32& out_count)
+{
+    FakeTexArray* const fa = static_cast<FakeTexArray*>(user);
+    out_count              = fa->count;
+    return fa->elems;
+}
+// CEIR-16-3b-3: a storage-buffer resolver (identity sentinel) — the constants buffer of the bindless-N fullscreen shape.
+crd::gpu::IStorageBuffer* resolve_buf(const Value*, void* user) { return static_cast<crd::gpu::IStorageBuffer*>(user); }
+// CEIR-16-mesh-2: a draws resolver (count + per-index item) over the hand-built RasterDrawItem span passed as `user`.
+crd::u32 resolve_draws_count(void* user)
+{
+    return static_cast<crd::u32>(static_cast<crd::containers::ConstSpan<RasterDrawItem>*>(user)->size());
+}
+void resolve_draws_item(void* user, crd::u32 index, RasterDrawItem& out)
+{
+    out = (*static_cast<crd::containers::ConstSpan<RasterDrawItem>*>(user))[index];
+}
+// CEIR-16-mesh-2: an encoder capturing EVERY draw's (command, amplify count, program, binding count) — mesh_dispatch_list
+// emits N draws in ONE scope, so a last-only capture cannot check the per-item skip/default/fallback logic.
+struct AmpCapEncoder : crd::gpu::ICommandEncoder
+{
+    int                                                begins = 0, ends = 0;
+    crd::containers::Array<crd::gpu::RasterCommandKind> cmds;
+    crd::containers::Array<crd::u32>                    counts;
+    crd::containers::Array<crd::gpu::IRasterProgram*>   progs;
+    crd::containers::Array<crd::usize>                  nbinds;
+    explicit AmpCapEncoder(crd::memory::IAllocator* a) : cmds(a), counts(a), progs(a), nbinds(a) {}
+    void begin_rendering(const crd::gpu::RenderingDesc&) override { ++begins; }
+    void draw(const crd::gpu::RasterDrawPacket& p) override
+    {
+        cmds.push_back(p.command);
+        counts.push_back(p.geometry.kind == crd::gpu::GeometryKind::Meshlet ? p.geometry.group_count_x
+                                                                            : p.geometry.patch_count);
+        progs.push_back(p.program);
+        nbinds.push_back(p.bindings.size());
+    }
+    void end_rendering() override { ++ends; }
+    void dispatch(const crd::gpu::DispatchDesc&) override {}
+    void transfer(const crd::gpu::TransferDesc&) override {}
+    void trace_rays(const crd::gpu::TraceDesc&) override {}
+};
 // CEIR-14z-2: a device-free ICommandEncoder that COUNTS + captures the render verbs (the compute/transfer/trace verbs no-op).
 struct FakeEncoder : crd::gpu::ICommandEncoder
 {
@@ -96,13 +160,14 @@ struct FakeEncoder : crd::gpu::ICommandEncoder
 
 struct Kit
 {
-    OpId cst, decl, view, disp, upload, col, scope, draw, dind, mesh;
+    OpId cst, decl, view, disp, upload, col, scope, draw, dind, mesh, mind;
     explicit Kit(Context& c)
         : cst(c.intern_op("arith", "const")), decl(c.intern_op("resource", "declare")),
           view(c.intern_op("resource", "view")), disp(c.intern_op("compute", "dispatch")),
           upload(c.intern_op("transfer", "upload")), col(c.intern_op("render", "color_attachment")),
           scope(c.intern_op("render", "scope")), draw(c.intern_op("render", "draw")),
-          dind(c.intern_op("render", "draw_indirect")), mesh(c.intern_op("render", "mesh_dispatch"))
+          dind(c.intern_op("render", "draw_indirect")), mesh(c.intern_op("render", "mesh_dispatch")),
+          mind(c.intern_op("render", "mesh_dispatch_indirect"))
     {
         (void)arith::register_arith_ops(c);
         (void)func::register_dialect(c);
@@ -116,6 +181,24 @@ struct Kit
 Value* declimg(Context& c, const Kit& k, Block* b)
 {
     Operation* const d = c.create_operation(k.decl, {}, 1U, c.type_image(ImageDim::Dim2D, c.type_f32()));
+    b->append(d);
+    return d->result(0U);
+}
+// CEIR-16-3a-2: an image resource declared with an explicit binding `slot` attr (the shadow-atlas tex@4 shape) — the
+// materializer reads it off the defining op, overriding the ordinal position.
+Value* declimg_at(Context& c, const Kit& k, Block* b, i64 slot)
+{
+    Operation* const d = c.create_operation(k.decl, {}, 1U, c.type_image(ImageDim::Dim2D, c.type_f32()));
+    c.set_attr(d, "slot", c.attr_int(slot));
+    b->append(d);
+    return d->result(0U);
+}
+// CEIR-16-3a-3: a sampler resource declared at an explicit slot — `comparison` selects the CEIR Sampler type's is_signed
+// (a shadow COMPARISON sampler vs a plain filtering one). The materializer maps it to a standalone Comparison/Sampler binding.
+Value* declsamp_at(Context& c, const Kit& k, Block* b, i64 slot, bool comparison)
+{
+    Operation* const d = c.create_operation(k.decl, {}, 1U, c.type_sampler(comparison));
+    c.set_attr(d, "slot", c.attr_int(slot));
     b->append(d);
     return d->result(0U);
 }
@@ -171,6 +254,14 @@ Value* declbuf(Context& c, const Kit& k, Block* b)
 Value* decltable(Context& c, const Kit& k, Block* b)
 {
     Operation* const d = c.create_operation(k.decl, {}, 1U, c.type_resource_table(c.type_buffer(BufferMode::Plain, c.type_f32())));
+    b->append(d);
+    return d->result(0U);
+}
+// CEIR-16-3a-1: a graph-owned RESOURCE TABLE of an IMAGE element — the bindless-texture-array binding shape (the fullscreen
+// composite's n>1 / blend-load arms). The render materializer maps this table TYPE to a BindlessTextureArray binding.
+Value* decltblimg(Context& c, const Kit& k, Block* b)
+{
+    Operation* const d = c.create_operation(k.decl, {}, 1U, c.type_resource_table(c.type_image(ImageDim::Dim2D, c.type_f32())));
     b->append(d);
     return d->result(0U);
 }
@@ -855,6 +946,37 @@ TEST_CASE("ceir 14z-1: materialize_rendering_desc maps the scope + attachments (
     CHECK(rd.depth.clear_depth == 0.5F);
 }
 
+TEST_CASE("ceir 16-3c-4: extent_from_target overrides the scope width/height with the RESOLVED target size",
+          "[ceir][ceir-gpu][render]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const Kit                    k(ctx);
+    Block* const                 b   = ctx.create_block(0U);
+    Value* const                 img = declimg(ctx, k, b);
+    Value* const                 col = coloratt(ctx, k, b, img);
+    Value*                       atts[1] = {col};
+    FakeRTarget                  tgt(640U, 480U); // the resolved target the scope binds to
+
+    SECTION("extent_from_target set -> the render area is the target's 640x480, not the 1x1 placeholder")
+    {
+        Operation* const sc = scope_op(ctx, k, b, atts, 1U, 1, 1); // a 1x1 placeholder (as the fullscreen builder emits)
+        ctx.set_attr(sc, "extent_from_target", ctx.attr_bool(true));
+        crd::gpu::RenderingDesc rd;
+        REQUIRE(materialize_rendering_desc(ctx, sc, resolve_target, &tgt, rd));
+        CHECK(rd.width == 640U); // ⭐ the resolved target's size (record_fullscreen_raster parity), NOT the 1x1 attr
+        CHECK(rd.height == 480U);
+    }
+    SECTION("absent -> the authored width/height win (backward-compatible)")
+    {
+        Operation* const sc = scope_op(ctx, k, b, atts, 1U, 8, 8); // no extent_from_target → static 8x8
+        crd::gpu::RenderingDesc rd;
+        REQUIRE(materialize_rendering_desc(ctx, sc, resolve_target, &tgt, rd));
+        CHECK(rd.width == 8U);
+        CHECK(rd.height == 8U);
+    }
+}
+
 TEST_CASE("ceir 14z-1: materialize_draw_packet maps command + GeometryKind + counts per draw op", "[ceir][ceir-gpu][render]")
 {
     crd::memory::MallocAllocator root;
@@ -871,7 +993,7 @@ TEST_CASE("ceir 14z-1: materialize_draw_packet maps command + GeometryKind + cou
         Operation* const d = draw_op(ctx, k, b, vc, ic, nullptr, 0U, "", "prog");
         ctx.set_attr(d, "first_vertex", ctx.attr_int(5));
         crd::gpu::RasterDrawPacket p;
-        REQUIRE(materialize_draw_packet(ctx, d, resolve_rprog, prog_u, p));
+        REQUIRE(materialize_draw_packet(ctx, d, RenderResolvers{.program = resolve_rprog, .program_user = prog_u}, p));
         CHECK(p.program == static_cast<crd::gpu::IRasterProgram*>(prog_u));
         CHECK(p.command == crd::gpu::RasterCommandKind::Draw);
         CHECK(p.geometry.kind == crd::gpu::GeometryKind::None); // 0 bindings ⇒ procedural (the fullscreen/proc-triangle path)
@@ -885,8 +1007,125 @@ TEST_CASE("ceir 14z-1: materialize_draw_packet maps command + GeometryKind + cou
         Value*           bd[1] = {vbuf};
         Operation* const d = draw_op(ctx, k, b, vc, ic, bd, 1U, "r", "prog");
         crd::gpu::RasterDrawPacket p;
-        REQUIRE(materialize_draw_packet(ctx, d, resolve_rprog, prog_u, p));
+        REQUIRE(materialize_draw_packet(ctx, d, RenderResolvers{.program = resolve_rprog, .program_user = prog_u}, p));
         CHECK(p.geometry.kind == crd::gpu::GeometryKind::StoragePull); // ≥1 binding ⇒ vertex-pull
+    }
+    SECTION("CEIR-16-2: an IMAGE binding operand -> a SampledTexture binding (kind derives from the operand TYPE)")
+    {
+        Value* const     img   = declimg(ctx, k, b); // an IMAGE-typed binding operand (vs declbuf's buffer)
+        Value*           bd[1] = {img};
+        Operation* const d     = draw_op(ctx, k, b, vc, ic, bd, 1U, "r", "prog");
+        int              tex_sentinel = 0;
+        void* const      tex_u = &tex_sentinel;
+        crd::gpu::RasterDrawPacket p;
+        REQUIRE(materialize_draw_packet(
+            ctx, d,
+            RenderResolvers{.program = resolve_rprog, .program_user = prog_u, .texture = resolve_tex, .texture_user = tex_u},
+            p));
+        REQUIRE(p.bindings.size() == 1U);
+        CHECK(p.bindings[0].kind == crd::gpu::BindingKind::SampledTexture); // ⭐ Image type ⇒ sampled texture, NOT StorageBuffer
+        CHECK(p.bindings[0].frequency == crd::gpu::BindingFrequency::Material);
+        CHECK(p.bindings[0].slot == 0U);                                        // no explicit `slot` attr ⇒ the ordinal (0)
+        CHECK(p.bindings[0].texture == static_cast<crd::gpu::ITexture*>(tex_u)); // resolved through resolvers.texture
+        CHECK(p.bindings[0].buffer == nullptr);                                  // an image binding sets .texture, never .buffer
+    }
+    SECTION("CEIR-16-2: a BUFFER binding with ONLY a texture resolver -> typed fail (dispatch keys on TYPE, not the resolver set)")
+    {
+        Value* const     buf   = declbuf(ctx, k, b);
+        Value*           bd[1] = {buf};
+        Operation* const d     = draw_op(ctx, k, b, vc, ic, bd, 1U, "r", "prog");
+        int              tex_sentinel = 0;
+        crd::gpu::RasterDrawPacket p;
+        // a texture resolver is set (so the tail loop runs) but the operand is a BUFFER → resolvers.storage is null → false,
+        // never a silent skip and never wrongly texture-resolved.
+        CHECK(!materialize_draw_packet(
+            ctx, d,
+            RenderResolvers{.program = resolve_rprog, .program_user = prog_u, .texture = resolve_tex, .texture_user = &tex_sentinel},
+            p));
+    }
+    SECTION("CEIR-16-3a-1: a RESOURCE-TABLE-of-image binding operand -> a BindlessTextureArray (count behind the resolver)")
+    {
+        Value* const     tbl   = decltblimg(ctx, k, b); // a resource_table(image) binding operand (the bindless shape)
+        Value*           bd[1] = {tbl};
+        Operation* const d     = draw_op(ctx, k, b, vc, ic, bd, 1U, "r", "prog");
+        // the materializer stores the array POINTER + count (never inspects the elements), so leaving the fake elems null and
+        // asserting the pointer/count rode through fully exercises the dispatch.
+        FakeTexArray     fa;
+        fa.count = 2U;
+        crd::gpu::RasterDrawPacket p;
+        REQUIRE(materialize_draw_packet(
+            ctx, d,
+            RenderResolvers{
+                .program = resolve_rprog, .program_user = prog_u, .texture_array = resolve_texarray, .texture_array_user = &fa},
+            p));
+        REQUIRE(p.bindings.size() == 1U);
+        CHECK(p.bindings[0].kind == crd::gpu::BindingKind::BindlessTextureArray); // ⭐ table-of-image type ⇒ bindless array
+        CHECK(p.bindings[0].frequency == crd::gpu::BindingFrequency::Material);
+        CHECK(p.bindings[0].array_count == 2U);        // the N-ness the resolver wrote — never in the IR
+        CHECK(p.bindings[0].texture_array == fa.elems); // the resolved array pointer rode through
+        CHECK(p.bindings[0].texture == nullptr);        // a bindless array sets texture_array, not the single texture
+    }
+    SECTION("CEIR-16-3a-1: a table-of-image binding but NO array resolver -> typed fail (never a silent skip)")
+    {
+        Value* const     tbl   = decltblimg(ctx, k, b);
+        Value*           bd[1] = {tbl};
+        Operation* const d     = draw_op(ctx, k, b, vc, ic, bd, 1U, "r", "prog");
+        int              tex_sentinel = 0;
+        crd::gpu::RasterDrawPacket p;
+        // a texture (single) resolver is set so the loop runs, but the operand is a resource-TABLE → needs texture_array → false.
+        CHECK(!materialize_draw_packet(
+            ctx, d,
+            RenderResolvers{.program = resolve_rprog, .program_user = prog_u, .texture = resolve_tex, .texture_user = &tex_sentinel},
+            p));
+    }
+    SECTION("CEIR-16-3a-2: an explicit `slot` attr on a binding's defining op overrides the ordinal position")
+    {
+        Value* const     img   = declimg_at(ctx, k, b, 4); // an image declared at binding slot 4 (the shadow-atlas tex slot)
+        Value*           bd[1] = {img};
+        Operation* const d     = draw_op(ctx, k, b, vc, ic, bd, 1U, "r", "prog");
+        int              tex_sentinel = 0;
+        crd::gpu::RasterDrawPacket p;
+        REQUIRE(materialize_draw_packet(
+            ctx, d,
+            RenderResolvers{.program = resolve_rprog, .program_user = prog_u, .texture = resolve_tex, .texture_user = &tex_sentinel},
+            p));
+        REQUIRE(p.bindings.size() == 1U);
+        CHECK(p.bindings[0].slot == 4U); // ⭐ the explicit slot, NOT the ordinal 0
+        CHECK(p.bindings[0].kind == crd::gpu::BindingKind::SampledTexture);
+    }
+    SECTION("CEIR-16-3a-3: the shadow-atlas shape — depth texture @slot4 + a COMPARISON sampler @slot5 (bind_atlas parity)")
+    {
+        Value* const     tex   = declimg_at(ctx, k, b, 4);        // the depth atlas texture at slot 4
+        Value* const     samp  = declsamp_at(ctx, k, b, 5, true); // a COMPARISON sampler at slot 5
+        Value*           bd[2] = {tex, samp};
+        Operation* const d     = draw_op(ctx, k, b, vc, ic, bd, 2U, "r", "prog");
+        int              tex_sentinel = 0;
+        crd::gpu::RasterDrawPacket p;
+        REQUIRE(materialize_draw_packet(
+            ctx, d,
+            RenderResolvers{.program = resolve_rprog, .program_user = prog_u, .texture = resolve_tex, .texture_user = &tex_sentinel},
+            p));
+        REQUIRE(p.bindings.size() == 2U);
+        CHECK(p.bindings[0].kind == crd::gpu::BindingKind::SampledTexture);    // slot-4 depth texture (resolved)
+        CHECK(p.bindings[0].slot == 4U);
+        CHECK(p.bindings[1].kind == crd::gpu::BindingKind::ComparisonSampler); // ⭐ slot-5 comparison sampler (the moment-shadow bit)
+        CHECK(p.bindings[1].slot == 5U);
+        CHECK(p.bindings[1].texture == nullptr);                              // a sampler binding carries NO texture
+    }
+    SECTION("CEIR-16-3a-3: a PLAIN sampler operand -> Sampler, NOT comparison (the moment/variance atlas — REN-40-D bit)")
+    {
+        Value* const     tex   = declimg_at(ctx, k, b, 4);
+        Value* const     samp  = declsamp_at(ctx, k, b, 5, false); // a PLAIN (non-comparison) sampler at slot 5
+        Value*           bd[2] = {tex, samp};
+        Operation* const d     = draw_op(ctx, k, b, vc, ic, bd, 2U, "r", "prog");
+        int              tex_sentinel = 0;
+        crd::gpu::RasterDrawPacket p;
+        REQUIRE(materialize_draw_packet(
+            ctx, d,
+            RenderResolvers{.program = resolve_rprog, .program_user = prog_u, .texture = resolve_tex, .texture_user = &tex_sentinel},
+            p));
+        REQUIRE(p.bindings.size() == 2U);
+        CHECK(p.bindings[1].kind == crd::gpu::BindingKind::Sampler); // ⭐ is_signed=false ⇒ PLAIN filtering sampler, not comparison
     }
     SECTION("render.draw_indirect -> DrawIndirect / Indirect, max_draws survives")
     {
@@ -898,7 +1137,7 @@ TEST_CASE("ceir 14z-1: materialize_draw_packet maps command + GeometryKind + cou
         ctx.set_attr(d, "max_draws", ctx.attr_int(42));
         b->append(d);
         crd::gpu::RasterDrawPacket p;
-        REQUIRE(materialize_draw_packet(ctx, d, resolve_rprog, prog_u, p));
+        REQUIRE(materialize_draw_packet(ctx, d, RenderResolvers{.program = resolve_rprog, .program_user = prog_u}, p));
         CHECK(p.command == crd::gpu::RasterCommandKind::DrawIndirect);
         CHECK(p.geometry.kind == crd::gpu::GeometryKind::Indirect);
         CHECK(p.geometry.max_draws == 42U); // ⭐ the DrawIndex range survives into the packet (REN-40; push at 14z-6)
@@ -911,7 +1150,7 @@ TEST_CASE("ceir 14z-1: materialize_draw_packet maps command + GeometryKind + cou
         ctx.set_attr(d, "access", ctx.attr_string(StringView("")));
         b->append(d);
         crd::gpu::RasterDrawPacket p;
-        REQUIRE(materialize_draw_packet(ctx, d, resolve_rprog, prog_u, p));
+        REQUIRE(materialize_draw_packet(ctx, d, RenderResolvers{.program = resolve_rprog, .program_user = prog_u}, p));
         CHECK(p.command == crd::gpu::RasterCommandKind::DispatchMesh);
         CHECK(p.geometry.kind == crd::gpu::GeometryKind::Meshlet);
         CHECK(p.geometry.group_count_x == 3U);
@@ -927,7 +1166,519 @@ TEST_CASE("ceir 14z-1: materialize_draw_packet maps command + GeometryKind + cou
         ctx.set_attr(d, "access", ctx.attr_string(StringView("")));
         b->append(d);
         crd::gpu::RasterDrawPacket p;
-        CHECK(!materialize_draw_packet(ctx, d, resolve_rprog, prog_u, p));
+        CHECK(!materialize_draw_packet(ctx, d, RenderResolvers{.program = resolve_rprog, .program_user = prog_u}, p));
+    }
+    SECTION("render.mesh_dispatch_indirect -> DispatchMeshIndirect / MeshletIndirect, args buffer RESOLVED (CEIR-16-mesh-1)")
+    {
+        // ⛔ CEIR-16-mesh-1: MeshletIndirect reads its group counts from the %args buffer (operand 0). The materializer set
+        // only args_OFFSET (never the buffer) — a mesh-indirect draw dispatched off a NULL args buffer. A storage resolver
+        // must land the buffer on g.args_buffer (record_mesh_indirect parity: p.geometry.args_buffer = ctx.storage("args")).
+        char             arg_sentinel;
+        void* const      arg_u  = &arg_sentinel;
+        Value* const     args   = declbuf(ctx, k, b);
+        Value*           ops[1] = {args};
+        Operation* const d      = ctx.create_operation(k.mind, ConstSpan<Value*>(ops, 1U), 0U);
+        ctx.set_attr(d, "program", ctx.attr_symbol(StringView("p")));
+        ctx.set_attr(d, "access", ctx.attr_string(StringView("")));
+        ctx.set_attr(d, "args_offset", ctx.attr_int(64));
+        b->append(d);
+        crd::gpu::RasterDrawPacket p;
+        REQUIRE(materialize_draw_packet(
+            ctx, d,
+            RenderResolvers{.program = resolve_rprog, .program_user = prog_u, .storage = resolve_buf, .storage_user = arg_u},
+            p));
+        CHECK(p.command == crd::gpu::RasterCommandKind::DispatchMeshIndirect);
+        CHECK(p.geometry.kind == crd::gpu::GeometryKind::MeshletIndirect);
+        CHECK(p.geometry.args_buffer == static_cast<crd::gpu::IStorageBuffer*>(arg_u)); // ⭐ the fix — was null before
+        CHECK(p.geometry.args_offset == 64U);
+    }
+}
+
+TEST_CASE("ceir 16-3b-1: build_fullscreen_ceir emits a verified, lowerable procedural/plain composite", "[ceir][ceir-gpu][render]")
+{
+    crd::memory::MallocAllocator root;
+    SECTION("procedural (n=0 reads) -> BeginRender, Draw, EndRender; the draw is geometry-None with no bindings")
+    {
+        Context               ctx(&root); // a FRESH context (the builder registers its dialects)
+        FullscreenBuildDesc   desc;        // num_inputs defaults to 0 -> the procedural clear/blit shape
+        Array<LoweredCommand> plan(&root);
+        REQUIRE(build_fullscreen_ceir(ctx, desc, plan)); // returns true ⇒ find_render_misuse passed internally
+        REQUIRE(plan.size() == 3U);
+        CHECK(plan[0].kind == LoweredKind::BeginRender);
+        CHECK(plan[1].kind == LoweredKind::Draw);
+        CHECK(plan[2].kind == LoweredKind::EndRender);
+        const Operation* const draw = plan[1].op;
+        REQUIRE(draw != nullptr);
+        int                       sentinel = 0;
+        crd::gpu::RasterDrawPacket p;
+        REQUIRE(materialize_draw_packet(ctx, draw, RenderResolvers{.program = resolve_rprog, .program_user = &sentinel}, p));
+        CHECK(p.geometry.kind == crd::gpu::GeometryKind::None); // ⭐ a fullscreen draw is PROCEDURAL (VS reads gl_VertexIndex)
+        CHECK(p.bindings.size() == 0U);
+    }
+    SECTION("plain single read -> ONE SampledTexture binding at slot 0 with its source-param identity attr")
+    {
+        // ⛔ the PLAIN shape is n==1: record_fullscreen_raster binds >1 read as a BINDLESS array (tested below), never N
+        // separate SampledTextures, so the builder routes n>1 to the bindless shape and plain handles the single read.
+        Context             ctx(&root);
+        FullscreenBuildDesc desc;
+        desc.num_inputs             = 1U;
+        desc.inputs[0].source_param = 111U; // pass_param_id("input0") stand-in
+        Array<LoweredCommand> plan(&root);
+        REQUIRE(build_fullscreen_ceir(ctx, desc, plan));
+        REQUIRE(plan.size() == 3U);
+        const Operation* const draw = plan[1].op;
+        REQUIRE(draw != nullptr);
+        int                       sentinel = 0;
+        crd::gpu::RasterDrawPacket p;
+        REQUIRE(materialize_draw_packet(
+            ctx, draw,
+            RenderResolvers{.program = resolve_rprog, .program_user = &sentinel, .texture = resolve_tex, .texture_user = &sentinel},
+            p));
+        REQUIRE(p.bindings.size() == 1U);
+        CHECK(p.geometry.kind == crd::gpu::GeometryKind::None); // ⭐ 3b-1b: PROCEDURAL despite the texture binding (geometry attr)
+        CHECK(p.bindings[0].kind == crd::gpu::BindingKind::SampledTexture);
+        CHECK(p.bindings[0].slot == 0U);
+        // ⭐ advisor constraint #2: the binding's defining op carries its SOURCE-param identity (distinct from the slot),
+        // so the record-time resolver can map operand → RecordContext.texture(source_param).
+        const AttrId s0 = draw->operand(2U)->defining_op()->attr(StringView("source"));
+        REQUIRE(s0.valid());
+        CHECK(ctx.attr_value(s0).i == 111);
+    }
+    SECTION("a desc with > 8 reads is rejected (the fixed input0..input7 fan)")
+    {
+        Context             ctx(&root);
+        FullscreenBuildDesc desc;
+        desc.num_inputs = 9U;
+        Array<LoweredCommand> plan(&root);
+        CHECK(!build_fullscreen_ceir(ctx, desc, plan));
+    }
+    SECTION("atlas shape (n=1 depth, !depth_as_float) -> SampledTexture@4 + ComparisonSampler@5 (bind_atlas parity, REN-40-D)")
+    {
+        Context             ctx(&root);
+        FullscreenBuildDesc desc;
+        desc.num_inputs             = 1U;
+        desc.inputs[0].source_param = 444U;
+        desc.inputs[0].is_depth     = true;
+        desc.depth_as_float         = false;
+        Array<LoweredCommand> plan(&root);
+        REQUIRE(build_fullscreen_ceir(ctx, desc, plan));
+        REQUIRE(plan.size() == 3U);
+        const Operation* const draw = plan[1].op;
+        REQUIRE(draw != nullptr);
+        int                       sentinel = 0;
+        crd::gpu::RasterDrawPacket p;
+        REQUIRE(materialize_draw_packet(
+            ctx, draw,
+            RenderResolvers{.program = resolve_rprog, .program_user = &sentinel, .texture = resolve_tex, .texture_user = &sentinel},
+            p));
+        CHECK(p.geometry.kind == crd::gpu::GeometryKind::None);
+        REQUIRE(p.bindings.size() == 2U);
+        CHECK(p.bindings[0].kind == crd::gpu::BindingKind::SampledTexture);    // the depth atlas texture
+        CHECK(p.bindings[0].slot == 4U);
+        CHECK(p.bindings[1].kind == crd::gpu::BindingKind::ComparisonSampler); // ⭐ the slot-5 comparison sampler companion
+        CHECK(p.bindings[1].slot == 5U);
+        CHECK(p.bindings[1].texture == nullptr);
+    }
+    SECTION("a depth read WITH depth_as_float stays PLAIN (the moment_convert / HZB raw-depth read, slot 0 not the atlas)")
+    {
+        Context             ctx(&root);
+        FullscreenBuildDesc desc;
+        desc.num_inputs             = 1U;
+        desc.inputs[0].source_param = 555U;
+        desc.inputs[0].is_depth     = true;
+        desc.depth_as_float         = true; // ⛔⛔ REN-40-D: a raw-depth FLOAT read (plain sampler), NOT the comparison atlas
+        Array<LoweredCommand> plan(&root);
+        REQUIRE(build_fullscreen_ceir(ctx, desc, plan));
+        const Operation* const draw = plan[1].op;
+        REQUIRE(draw != nullptr);
+        int                       sentinel = 0;
+        crd::gpu::RasterDrawPacket p;
+        REQUIRE(materialize_draw_packet(
+            ctx, draw,
+            RenderResolvers{.program = resolve_rprog, .program_user = &sentinel, .texture = resolve_tex, .texture_user = &sentinel},
+            p));
+        REQUIRE(p.bindings.size() == 1U);
+        CHECK(p.bindings[0].kind == crd::gpu::BindingKind::SampledTexture); // a plain single texture...
+        CHECK(p.bindings[0].slot == 0U);                                    // ...at the ordinal slot 0, NOT the atlas slot 4
+    }
+    SECTION("bindless-N (n>1) -> ONE BindlessTextureArray binding at slot 0 (the fan collapses to one IR binding)")
+    {
+        Context             ctx(&root);
+        FullscreenBuildDesc desc;
+        desc.num_inputs             = 3U;
+        desc.inputs[0].source_param = 10U;
+        desc.inputs[1].source_param = 20U;
+        desc.inputs[2].source_param = 30U;
+        Array<LoweredCommand> plan(&root);
+        REQUIRE(build_fullscreen_ceir(ctx, desc, plan));
+        const Operation* const draw = plan[1].op;
+        REQUIRE(draw != nullptr);
+        int          sentinel = 0;
+        FakeTexArray fa;
+        fa.count = 3U;
+        crd::gpu::RasterDrawPacket p;
+        REQUIRE(materialize_draw_packet(ctx, draw,
+                                        RenderResolvers{.program            = resolve_rprog,
+                                                        .program_user       = &sentinel,
+                                                        .texture_array      = resolve_texarray,
+                                                        .texture_array_user = &fa},
+                                        p));
+        CHECK(p.geometry.kind == crd::gpu::GeometryKind::None);
+        REQUIRE(p.bindings.size() == 1U);
+        CHECK(p.bindings[0].kind == crd::gpu::BindingKind::BindlessTextureArray); // ⭐ the whole fan is ONE IR binding
+        CHECK(p.bindings[0].slot == 0U);
+        CHECK(p.bindings[0].array_count == 3U);
+    }
+    SECTION("bindless-N with a constants buffer -> BindlessTextureArray + a StorageBuffer (the TAA-resolve shape)")
+    {
+        Context             ctx(&root);
+        FullscreenBuildDesc desc;
+        desc.num_inputs             = 2U;
+        desc.inputs[0].source_param = 10U;
+        desc.inputs[1].source_param = 20U;
+        desc.constants_param        = 99U;
+        Array<LoweredCommand> plan(&root);
+        REQUIRE(build_fullscreen_ceir(ctx, desc, plan));
+        const Operation* const draw = plan[1].op;
+        REQUIRE(draw != nullptr);
+        int          sentinel = 0;
+        FakeTexArray fa;
+        fa.count = 2U;
+        crd::gpu::RasterDrawPacket p;
+        REQUIRE(materialize_draw_packet(ctx, draw,
+                                        RenderResolvers{.program            = resolve_rprog,
+                                                        .program_user       = &sentinel,
+                                                        .storage            = resolve_buf,
+                                                        .storage_user       = &sentinel,
+                                                        .texture_array      = resolve_texarray,
+                                                        .texture_array_user = &fa},
+                                        p));
+        REQUIRE(p.bindings.size() == 2U);
+        CHECK(p.bindings[0].kind == crd::gpu::BindingKind::BindlessTextureArray);
+        CHECK(p.bindings[1].kind == crd::gpu::BindingKind::StorageBuffer); // ⭐ the constants buffer
+        CHECK(p.bindings[1].slot == 0U); // slot 0 in the Object set (distinct from the array's Material slot 0)
+    }
+    SECTION("bindless-blend-load (n=1, load + non-opaque blend) -> ONE BindlessTextureArray (the WBOIT resolve shape)")
+    {
+        Context             ctx(&root);
+        FullscreenBuildDesc desc;
+        desc.num_inputs             = 1U;
+        desc.inputs[0].source_param = 7U;
+        desc.load                   = true;
+        desc.blend                  = crd::gpu::BlendMode::Alpha; // load + blend ⇒ bindless-of-one (NOT a plain SampledTexture)
+        Array<LoweredCommand> plan(&root);
+        REQUIRE(build_fullscreen_ceir(ctx, desc, plan));
+        const Operation* const draw = plan[1].op;
+        REQUIRE(draw != nullptr);
+        int          sentinel = 0;
+        FakeTexArray fa;
+        fa.count = 1U;
+        crd::gpu::RasterDrawPacket p;
+        REQUIRE(materialize_draw_packet(ctx, draw,
+                                        RenderResolvers{.program            = resolve_rprog,
+                                                        .program_user       = &sentinel,
+                                                        .texture_array      = resolve_texarray,
+                                                        .texture_array_user = &fa},
+                                        p));
+        REQUIRE(p.bindings.size() == 1U);
+        CHECK(p.bindings[0].kind == crd::gpu::BindingKind::BindlessTextureArray); // ⭐ bindless-of-ONE, not a plain SampledTexture
+        CHECK(p.bindings[0].array_count == 1U);
+    }
+}
+
+TEST_CASE("ceir 16-mesh-1: build_mesh_indirect_ceir emits a verified, lowerable mesh-indirect composite",
+          "[ceir][ceir-gpu][render]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root); // a FRESH context (the builder registers its dialects)
+    MeshIndirectBuildDesc        desc;
+    desc.args_param  = 222U; // pass_param_id("args") stand-in
+    desc.args_offset = 128U;
+    desc.clear       = {0.1F, 0.2F, 0.3F, 1.0F};
+    Array<LoweredCommand> plan(&root);
+    REQUIRE(build_mesh_indirect_ceir(ctx, desc, plan)); // true ⇒ find_render_misuse passed internally
+    REQUIRE(plan.size() == 3U);
+    CHECK(plan[0].kind == LoweredKind::BeginRender);
+    CHECK(plan[1].kind == LoweredKind::Draw);
+    CHECK(plan[2].kind == LoweredKind::EndRender);
+
+    // the BeginRender carries the CLEAR colour — a mesh dispatch can leave uncovered pixels (record_mesh_indirect parity),
+    // unlike the fullscreen triangle that overwrote every pixel, so the clear colour must survive into the RenderingDesc.
+    FakeRTarget             tgt(320U, 240U); // extent_from_target ⇒ the materializer calls target->width(): a REAL target, not a sentinel
+    crd::gpu::RenderingDesc rd;
+    REQUIRE(materialize_rendering_desc(ctx, plan[0].op, resolve_target, &tgt, rd));
+    REQUIRE(rd.color.size() == 1U);
+    CHECK(rd.color[0].load == crd::gpu::LoadOp::Clear);
+    CHECK(rd.color[0].clear_kind == crd::gpu::ClearKind::Float);
+    CHECK(rd.color[0].clear.r > 0.09F);
+    CHECK(rd.color[0].clear.r < 0.11F); // ⭐ 0.1 carried (not the fullscreen default 0)
+
+    // the Draw materializes to DispatchMeshIndirect with the %args buffer RESOLVED at operand 0 + its offset (the mesh-1 fix).
+    const Operation* const draw = plan[1].op;
+    REQUIRE(draw != nullptr);
+    int                       prog_sentinel = 0;
+    char                      arg_sentinel;
+    void* const               arg_u = &arg_sentinel;
+    crd::gpu::RasterDrawPacket p;
+    REQUIRE(materialize_draw_packet(
+        ctx, draw,
+        RenderResolvers{
+            .program = resolve_rprog, .program_user = &prog_sentinel, .storage = resolve_buf, .storage_user = arg_u},
+        p));
+    CHECK(p.command == crd::gpu::RasterCommandKind::DispatchMeshIndirect);
+    CHECK(p.geometry.kind == crd::gpu::GeometryKind::MeshletIndirect);
+    CHECK(p.geometry.args_buffer == static_cast<crd::gpu::IStorageBuffer*>(arg_u)); // ⛔ operand-0 args buffer resolved
+    CHECK(p.geometry.args_offset == 128U);
+    CHECK(p.bindings.size() == 0U); // record_mesh_indirect binds NO descriptors
+    // ⭐ advisor constraint #2: the %args operand carries its SOURCE-param identity (resolver → RecordContext.storage).
+    const AttrId s = draw->operand(0U)->defining_op()->attr(StringView("source"));
+    REQUIRE(s.valid());
+    CHECK(ctx.attr_value(s).i == 222);
+}
+
+TEST_CASE("ceir 16-mesh-2: execute_render_lowered EXPANDS mesh_dispatch_list over the host DrawList (skip/default/fallback)",
+          "[ceir][ceir-gpu][render]")
+{
+    crd::memory::MallocAllocator     root;
+    int                              def_s  = 0;
+    int                              item_s = 0;
+    int                              geo_s  = 0;
+    crd::gpu::IRasterProgram* const  def_prog  = reinterpret_cast<crd::gpu::IRasterProgram*>(&def_s);
+    crd::gpu::IRasterProgram* const  item_prog = reinterpret_cast<crd::gpu::IRasterProgram*>(&item_s);
+    crd::gpu::IStorageBuffer* const  geo       = reinterpret_cast<crd::gpu::IStorageBuffer*>(&geo_s);
+    FakeRTarget                      tgt(64U, 64U);
+
+    const auto run = [&](bool patches, crd::containers::ConstSpan<RasterDrawItem> items, AmpCapEncoder& enc) {
+        Context          ctx(&root);
+        AmplifyBuildDesc bd;
+        bd.patches        = patches;
+        bd.fallback_count = 7U;
+        Array<LoweredCommand> plan(&root);
+        REQUIRE(build_amplify_ceir(ctx, bd, plan));
+        RenderResolvers r;
+        r.target       = resolve_target;
+        r.target_user  = &tgt;
+        r.program      = resolve_rprog;
+        r.program_user = def_prog; // the PASS DEFAULT program (a null-program item falls back to it)
+        r.draws_count  = resolve_draws_count;
+        r.draws_item   = resolve_draws_item;
+        r.draws_user   = &items;
+        REQUIRE(execute_render_lowered(ctx, ConstSpan<LoweredCommand>(plan.data(), plan.size()), enc, r)
+                == ExecuteError::None);
+        CHECK(enc.begins == 1); // ⭐ ONE scope for N draws (record_amplify_raster: single begin/end)
+        CHECK(enc.ends == 1);
+    };
+
+    SECTION("meshlet: per-item expansion — a zero-count item is SKIPPED, a null-program item uses the pass default")
+    {
+        RasterDrawItem arr[3] = {
+            {.program = item_prog, .storage = geo, .vertex_count = 3U}, // own program + storage
+            {.program = item_prog, .vertex_count = 0U},                 // ⛔ zero count -> SKIPPED (never dispatched)
+            {.vertex_count = 5U},                                       // null program -> the pass default
+        };
+        AmpCapEncoder enc(&root);
+        run(false, crd::containers::ConstSpan<RasterDrawItem>(arr, 3U), enc);
+        REQUIRE(enc.cmds.size() == 2U); // the zero-count item produced no draw
+        CHECK(enc.cmds[0] == crd::gpu::RasterCommandKind::DispatchMesh);
+        CHECK(enc.counts[0] == 3U);
+        CHECK(enc.progs[0] == item_prog);
+        CHECK(enc.nbinds[0] == 1U); // the per-item storage bound
+        CHECK(enc.cmds[1] == crd::gpu::RasterCommandKind::DispatchMesh);
+        CHECK(enc.counts[1] == 5U);
+        CHECK(enc.progs[1] == def_prog); // ⭐ null-program item resolved to the pass default
+        CHECK(enc.nbinds[1] == 0U);      // no storage
+    }
+    SECTION("patches: the primitive routes to DrawPatches + patch_count (the tess.raster half — a NEW render verb)")
+    {
+        RasterDrawItem arr[1] = {{.program = item_prog, .vertex_count = 4U}};
+        AmpCapEncoder     enc(&root);
+        run(true, crd::containers::ConstSpan<RasterDrawItem>(arr, 1U), enc);
+        REQUIRE(enc.cmds.size() == 1U);
+        CHECK(enc.cmds[0] == crd::gpu::RasterCommandKind::DrawPatches);
+        CHECK(enc.counts[0] == 4U);
+    }
+    SECTION("empty DrawList -> the PROCEDURAL arm: ONE default-program draw of fallback_count")
+    {
+        AmpCapEncoder enc(&root);
+        run(false, crd::containers::ConstSpan<RasterDrawItem>{}, enc); // empty DrawList
+        REQUIRE(enc.cmds.size() == 1U);
+        CHECK(enc.cmds[0] == crd::gpu::RasterCommandKind::DispatchMesh);
+        CHECK(enc.counts[0] == 7U); // fallback_count
+        CHECK(enc.progs[0] == def_prog);
+    }
+}
+
+// CEIR-16d: a richer encoder capturing per-draw scene state — the verb (command + geometry kind), program, the run/rebase
+// fields (draw_count, first_draw_index), the vertex/index count, the binding count, and the FIRST texture/sampler binding slot
+// (to check atlas@4 / map@1 / sampler@5). scene_draw_list emits N verb-laddered draws in ONE scope.
+struct SceneCapEncoder : crd::gpu::ICommandEncoder
+{
+    int                                                 begins = 0, ends = 0;
+    bool                                                had_color = false; // rd.color non-empty at the last begin
+    crd::containers::Array<crd::gpu::RasterCommandKind> cmds;
+    crd::containers::Array<crd::gpu::GeometryKind>      gkinds;
+    crd::containers::Array<crd::gpu::IRasterProgram*>   progs;
+    crd::containers::Array<crd::u32>                    draw_counts; // multi draw_count (0 for a single verb)
+    crd::containers::Array<crd::u32>                    first_rows;  // first_draw_index
+    crd::containers::Array<crd::usize>                  nbinds;
+    crd::containers::Array<crd::u32>                    tex_slots;   // the FIRST texture/sampler binding slot (or 0xFFFF)
+    explicit SceneCapEncoder(crd::memory::IAllocator* a)
+        : cmds(a), gkinds(a), progs(a), draw_counts(a), first_rows(a), nbinds(a), tex_slots(a)
+    {
+    }
+    void begin_rendering(const crd::gpu::RenderingDesc& rd) override { ++begins; had_color = rd.color.size() > 0U; }
+    void draw(const crd::gpu::RasterDrawPacket& p) override
+    {
+        cmds.push_back(p.command);
+        gkinds.push_back(p.geometry.kind);
+        progs.push_back(p.program);
+        draw_counts.push_back(p.geometry.draw_count);
+        first_rows.push_back(p.geometry.first_draw_index);
+        nbinds.push_back(p.bindings.size());
+        crd::u32 slot = 0xFFFFU;
+        for (crd::usize bi = 0; bi < p.bindings.size(); ++bi)
+        {
+            const auto kd = p.bindings[bi].kind;
+            if (kd == crd::gpu::BindingKind::SampledTexture || kd == crd::gpu::BindingKind::ComparisonSampler ||
+                kd == crd::gpu::BindingKind::Sampler)
+            {
+                slot = p.bindings[bi].slot;
+                break;
+            }
+        }
+        tex_slots.push_back(slot);
+    }
+    void end_rendering() override { ++ends; }
+    void dispatch(const crd::gpu::DispatchDesc&) override {}
+    void transfer(const crd::gpu::TransferDesc&) override {}
+    void trace_rays(const crd::gpu::TraceDesc&) override {}
+};
+// CEIR-16d: a pass-texture resolver over a hand-set {tex, is_depth, comparison} struct passed as `user`.
+struct PassTexState
+{
+    crd::gpu::ITexture* tex        = nullptr;
+    bool                is_depth   = false;
+    bool                comparison = false;
+};
+crd::gpu::ITexture* resolve_pass_texture(void* user, bool& out_is_depth, bool& out_comparison)
+{
+    auto* const s  = static_cast<PassTexState*>(user);
+    out_is_depth   = s->is_depth;
+    out_comparison = s->comparison;
+    return s->tex;
+}
+
+TEST_CASE("ceir 16d: build_scene_ceir + execute_render_lowered expand scene_draw_list into the per-item verb ladder",
+          "[ceir][ceir-gpu][render]")
+{
+    crd::memory::MallocAllocator    root;
+    int                             def_s = 0, item_s = 0, s0 = 0, s1 = 0, tx = 0, args_s = 0;
+    crd::gpu::IRasterProgram* const def_prog = reinterpret_cast<crd::gpu::IRasterProgram*>(&def_s);
+    (void)item_s;
+    crd::gpu::IStorageBuffer* const buf0 = reinterpret_cast<crd::gpu::IStorageBuffer*>(&s0);
+    crd::gpu::IStorageBuffer* const buf1 = reinterpret_cast<crd::gpu::IStorageBuffer*>(&s1);
+    crd::gpu::IStorageBuffer* const args = reinterpret_cast<crd::gpu::IStorageBuffer*>(&args_s);
+    crd::gpu::ITexture* const       atex = reinterpret_cast<crd::gpu::ITexture*>(&tx);
+    FakeRTarget                     tgt(64U, 64U);
+
+    const auto run = [&](const SceneBuildDesc& bd, crd::containers::ConstSpan<RasterDrawItem> items, PassTexState& pts,
+                         SceneCapEncoder& enc) {
+        Context               ctx(&root);
+        Array<LoweredCommand> plan(&root);
+        REQUIRE(build_scene_ceir(ctx, bd, plan));
+        RenderResolvers r;
+        r.target            = resolve_target;
+        r.target_user       = &tgt;
+        r.program           = resolve_rprog;
+        r.program_user      = def_prog; // the PASS DEFAULT program
+        r.draws_count       = resolve_draws_count;
+        r.draws_item        = resolve_draws_item;
+        r.draws_user        = &items;
+        r.pass_texture      = resolve_pass_texture;
+        r.pass_texture_user = &pts;
+        REQUIRE(execute_render_lowered(ctx, ConstSpan<LoweredCommand>(plan.data(), plan.size()), enc, r)
+                == ExecuteError::None);
+        CHECK(enc.begins == 1); // ⭐ ONE scope for the whole draw list (record_scene_raster: single begin/end)
+        CHECK(enc.ends == 1);
+    };
+
+    SceneBuildDesc color_scope; // has_color=true, has_depth=false by default
+    PassTexState   no_tex;
+
+    SECTION("a plain run coalesces into ONE DrawMulti (same prog+storage), first_draw_index=0")
+    {
+        RasterDrawItem arr[3] = {
+            {.program = def_prog, .storage = buf0, .vertex_count = 3U},
+            {.program = def_prog, .storage = buf0, .vertex_count = 6U},
+            {.program = def_prog, .storage = buf0, .vertex_count = 9U},
+        };
+        SceneCapEncoder enc(&root);
+        run(color_scope, ConstSpan<RasterDrawItem>(arr, 3U), no_tex, enc);
+        REQUIRE(enc.cmds.size() == 1U);
+        CHECK(enc.cmds[0] == crd::gpu::RasterCommandKind::DrawMulti);
+        CHECK(enc.gkinds[0] == crd::gpu::GeometryKind::MultiStoragePull);
+        CHECK(enc.draw_counts[0] == 3U);
+        CHECK(enc.first_rows[0] == 0U);
+    }
+    SECTION("a differing storage BREAKS the run -> two single plain draws")
+    {
+        RasterDrawItem arr[2] = {
+            {.program = def_prog, .storage = buf0, .vertex_count = 3U},
+            {.program = def_prog, .storage = buf1, .vertex_count = 3U},
+        };
+        SceneCapEncoder enc(&root);
+        run(color_scope, ConstSpan<RasterDrawItem>(arr, 2U), no_tex, enc);
+        REQUIRE(enc.cmds.size() == 2U);
+        CHECK(enc.cmds[0] == crd::gpu::RasterCommandKind::Draw);
+        CHECK(enc.cmds[1] == crd::gpu::RasterCommandKind::Draw);
+    }
+    SECTION("a per-item map binds at slot 1 (base-colour map) -> Draw StoragePull")
+    {
+        RasterDrawItem  arr[1] = {{.program = def_prog, .storage = buf0, .texture = atex, .vertex_count = 3U}};
+        SceneCapEncoder enc(&root);
+        run(color_scope, ConstSpan<RasterDrawItem>(arr, 1U), no_tex, enc);
+        REQUIRE(enc.cmds.size() == 1U);
+        CHECK(enc.cmds[0] == crd::gpu::RasterCommandKind::Draw);
+        CHECK(enc.tex_slots[0] == 1U); // scene_bind_map slot 1
+    }
+    SECTION("a DEPTH pass atlas (no per-item map) binds tex@4 + a comparison sampler@5")
+    {
+        RasterDrawItem  arr[1] = {{.program = def_prog, .storage = buf0, .vertex_count = 3U}};
+        PassTexState    shadow{atex, true, true};
+        SceneCapEncoder enc(&root);
+        run(color_scope, ConstSpan<RasterDrawItem>(arr, 1U), shadow, enc);
+        REQUIRE(enc.cmds.size() == 1U);
+        CHECK(enc.cmds[0] == crd::gpu::RasterCommandKind::Draw);
+        CHECK(enc.tex_slots[0] == 4U); // scene_bind_atlas tex slot 4
+        CHECK(enc.nbinds[0] == 3U);    // storage + atlas tex + comparison sampler
+    }
+    SECTION("GPU-driven indirect (args + index_count) -> DrawIndexedIndirect, first_draw_index=i")
+    {
+        RasterDrawItem arr[2] = {
+            {.program = def_prog, .storage = buf0, .vertex_count = 3U},
+            {.program = def_prog, .storage = buf1, .args = args, .index_count = 12U},
+        };
+        SceneCapEncoder enc(&root);
+        run(color_scope, ConstSpan<RasterDrawItem>(arr, 2U), no_tex, enc);
+        REQUIRE(enc.cmds.size() == 2U);
+        CHECK(enc.cmds[1] == crd::gpu::RasterCommandKind::DrawIndexedIndirect);
+        CHECK(enc.first_rows[1] == 1U);
+    }
+    SECTION("a 0-COLOUR depth-only scope is accepted (blocker #2) + items render PLAIN (a depth-only pass binds NO textures)")
+    {
+        SceneBuildDesc depth_only;
+        depth_only.has_color     = false;
+        depth_only.has_depth     = true;
+        depth_only.depth_compare = crd::gpu::DepthCompare::GreaterEqual; // reverse-Z
+        RasterDrawItem  arr[1] = {{.program = def_prog, .storage = buf0, .texture = atex, .vertex_count = 3U}};
+        PassTexState    shadow{atex, true, true};
+        SceneCapEncoder enc(&root);
+        run(depth_only, ConstSpan<RasterDrawItem>(arr, 1U), shadow, enc);
+        CHECK_FALSE(enc.had_color); // the scope has NO colour attachment
+        REQUIRE(enc.cmds.size() == 1U);
+        CHECK(enc.cmds[0] == crd::gpu::RasterCommandKind::Draw);
+        CHECK(enc.nbinds[0] == 1U);           // ONLY the storage bind — scope_has_color=false suppresses ALL textures
+        CHECK(enc.tex_slots[0] == 0xFFFFU);
     }
 }
 
@@ -956,7 +1707,10 @@ TEST_CASE("ceir 14z-2: execute_render_lowered walks BeginRender/Draw/EndRender i
     SECTION("happy path — begin once, draw twice, end once, captured descs")
     {
         FakeEncoder enc;
-        CHECK(execute_render_lowered(ctx, clist, enc, resolve_target, &tgt_s, resolve_rprog, &prog_s) == ExecuteError::None);
+        CHECK(execute_render_lowered(ctx, clist, enc,
+                                     RenderResolvers{.target = resolve_target, .target_user = &tgt_s,
+                                                     .program = resolve_rprog, .program_user = &prog_s})
+              == ExecuteError::None);
         CHECK(enc.begins == 1);
         CHECK(enc.draws == 2);
         CHECK(enc.ends == 1);
@@ -969,7 +1723,9 @@ TEST_CASE("ceir 14z-2: execute_render_lowered walks BeginRender/Draw/EndRender i
     SECTION("a null program resolver -> UnresolvedProgram (typed)")
     {
         FakeEncoder enc;
-        CHECK(execute_render_lowered(ctx, clist, enc, resolve_target, &tgt_s, resolve_rprog, nullptr)
+        CHECK(execute_render_lowered(ctx, clist, enc,
+                                     RenderResolvers{.target = resolve_target, .target_user = &tgt_s,
+                                                     .program = resolve_rprog, .program_user = nullptr})
               == ExecuteError::UnresolvedProgram);
         CHECK(enc.begins == 1); // the scope began (target resolved) before the draw's null program was hit
         CHECK(enc.draws == 0);

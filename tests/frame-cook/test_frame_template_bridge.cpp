@@ -11,6 +11,7 @@
 #include <crd/ceir/ceir.hpp>
 #include <crd/framecook/frame_asset.hpp>
 #include <crd/framecook/frame_ceir.hpp>
+#include <crd/framecook/frame_runtime.hpp> // CEIR-16-3c: FramePlans + build_frame_plans
 #include <crd/framecook/frame_template_bridge.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
@@ -218,6 +219,37 @@ void gate_shipped_asset(const char* stem, crd::memory::IAllocator& alloc)
     rp::ExecutorRegistry             schemas(&alloc);
     REQUIRE(rp::register_builtin_executors(schemas, diags) == 14U);
     ab_template_fidelity(desc, schemas, alloc);
+}
+
+// CEIR-16-3c-5 PREREQ: parse a shipped .frame.toml and prove build_frame_plans builds a CEIR replay plan for EVERY fullscreen
+// pass without error — the real-asset validation that must pass BEFORE the 3c-5 flip makes a null plan a record-time error.
+void gate_frame_plans(const char* stem, crd::memory::IAllocator& alloc)
+{
+    INFO("shipped asset = " << stem);
+    crd::containers::String path(&alloc);
+    path.append(CRD_FRAME_ASSETS_DIR);
+    path.append("/");
+    path.append(stem);
+    path.append(".frame.toml");
+    crd::containers::String toml(&alloc);
+    REQUIRE(crd::platform::fs::read_file_text(crd::platform::fs::Path{StringView(path.c_str(), path.size())}, toml));
+
+    fc::FrameGraphDesc      desc(&alloc);
+    crd::containers::String where(&alloc);
+    REQUIRE(fc::parse_frame_toml(StringView(toml.c_str(), toml.size()), desc, &where) == fc::FrameCookError::Ok);
+
+    fc::FramePlans                   plans(&alloc);
+    crd::renderasset::DiagnosticList diags(&alloc);
+    REQUIRE(fc::build_frame_plans(desc, plans, diags)); // ⭐ the extraction builds every real fullscreen composite w/o error
+    REQUIRE_FALSE(diags.has_errors());
+    for (u32 pi = 0; pi < desc.passes.size(); ++pi)
+    {
+        if (!fc::pass_is_fullscreen(desc.passes[pi])) { continue; }
+        const rg::CeirPassPlan* const plan = plans.table.find(
+            rp::pass_param_id(StringView(desc.passes[pi].name.c_str(), desc.passes[pi].name.size())));
+        REQUIRE(plan != nullptr);  // every fullscreen pass got a bound plan (found by its authored name)
+        CHECK(plan->count >= 3U);  // BeginRender + >=1 Draw + EndRender
+    }
 }
 
 } // namespace
@@ -574,4 +606,78 @@ TEST_CASE("RAF-8: an unresolved for_each fails the bridge LOUDLY", "[framecook][
     // a NULL resolver ⇒ the host cannot answer the cascade count ⇒ UnresolvedForEach, not a silent skip.
     REQUIRE_FALSE(fc::build_frame_graph_template(builder.desc(), nullptr, nullptr, schemas, tmpl, diags));
     CHECK(diags.contains(crd::renderasset::DiagCode::UnresolvedForEach));
+}
+
+TEST_CASE("ceir 16-3c-3b: build_frame_plans builds a fullscreen pass's CEIR replay plan, found by name")
+{
+    crd::memory::TlsfAllocator alloc(2U << 20U, nullptr, "ceir-16-3c-3b");
+    fc::FrameGraphBuilder      b(&alloc, StringView("fs_plan_test"));
+    b.add_image(StringView("scene_color"), crd::gpu::FgImageFormat::RGBA16F, 1920U, 1080U, /*sampled*/ true);
+    const u32 post = b.add_pass(StringView("post"), StringView("raster.fullscreen"));
+    b.pass_reads(post, StringView("scene_color")); // a sampled colour texture → input0 (the plain shape)
+    b.pass_writes(post, StringView("@output"));
+    b.pass_shader(post, StringView("engine://sh/tonemap"));
+
+    fc::FramePlans                   plans(&alloc);
+    crd::renderasset::DiagnosticList diags(&alloc);
+    REQUIRE(fc::build_frame_plans(b.desc(), plans, diags));
+    REQUIRE_FALSE(diags.has_errors());
+
+    // ⭐ the fullscreen pass's replay plan is found by name hash and is a 3-command render scope (Begin/Draw/End).
+    const rg::CeirPassPlan* const plan = plans.table.find(rp::pass_param_id(StringView("post")));
+    REQUIRE(plan != nullptr);
+    CHECK(plan->ctx != nullptr);
+    CHECK(plan->commands != nullptr);
+    CHECK(plan->count == 3U);
+    // a name that is not a migrated pass resolves to no plan (its executor keeps its C++ record path).
+    CHECK(plans.table.find(rp::pass_param_id(StringView("not_a_pass"))) == nullptr);
+}
+
+TEST_CASE("ceir 16-mesh-1: build_frame_plans builds a mesh.indirect pass's CEIR replay plan, found by name")
+{
+    // ⛔ CEIR-16-mesh-1: build_frame_plans now recognises mesh.indirect passes too (not just fullscreen) and builds a
+    // build_mesh_indirect_ceir plan. No shipped asset uses mesh.indirect (like the shadow-atlas fullscreen shape), so this
+    // hand-built pass is its device-free coverage.
+    crd::memory::TlsfAllocator alloc(2U << 20U, nullptr, "ceir-16-mesh-1");
+    fc::FrameGraphBuilder      b(&alloc, StringView("mi_plan_test"));
+    b.add_image(StringView("out"), crd::gpu::FgImageFormat::RGBA16F, 256U, 256U);
+    {
+        fc::FrameResourceDesc rb(&alloc);
+        rb.name.append("mesh_args");
+        rb.kind       = fc::FrameResourceKind::IndirectArgs; // the meshlet-count args buffer → the "args" slot at record
+        rb.size_bytes = 256U;
+        b.desc().resources.push_back(static_cast<fc::FrameResourceDesc&&>(rb));
+    }
+    const u32 mi = b.add_pass(StringView("meshi"), StringView("raster.mesh.indirect"));
+    b.pass_reads(mi, StringView("mesh_args"));
+    b.pass_writes(mi, StringView("out"));
+    b.pass_shader(mi, StringView("engine://sh/meshlet"));
+
+    fc::FramePlans                   plans(&alloc);
+    crd::renderasset::DiagnosticList diags(&alloc);
+    REQUIRE(fc::build_frame_plans(b.desc(), plans, diags));
+    REQUIRE_FALSE(diags.has_errors());
+
+    // ⭐ the mesh.indirect pass's replay plan is found by name hash: a 3-command scope (Begin/Draw(DispatchMeshIndirect)/End).
+    const rg::CeirPassPlan* const plan = plans.table.find(rp::pass_param_id(StringView("meshi")));
+    REQUIRE(plan != nullptr);
+    CHECK(plan->ctx != nullptr);
+    CHECK(plan->commands != nullptr);
+    CHECK(plan->count == 3U);
+}
+
+TEST_CASE("ceir 16-3c-5 prereq: build_frame_plans succeeds on every shipped frame asset's fullscreen passes",
+          "[framecook][ceir][frame]")
+{
+    crd::memory::TlsfAllocator alloc(32U << 20U, nullptr, "3c5-prereq");
+    // the shipped renderable frames — their fullscreen passes (tonemap `post`, moment convert/blur, HZB, TAA resolve) are the
+    // real extraction targets. build_frame_plans must build a CEIR composite for each BEFORE 3c-5 makes a null plan an error.
+    SECTION("forward_srgb") { gate_frame_plans("forward_srgb", alloc); }
+    SECTION("forward_agx") { gate_frame_plans("forward_agx", alloc); }
+    SECTION("forward_csm") { gate_frame_plans("forward_csm", alloc); }
+    SECTION("forward_csm_srgb") { gate_frame_plans("forward_csm_srgb", alloc); }
+    SECTION("forward_csm_agx") { gate_frame_plans("forward_csm_agx", alloc); }
+    SECTION("forward_csm_moment") { gate_frame_plans("forward_csm_moment", alloc); }
+    SECTION("forward_csm_gpu") { gate_frame_plans("forward_csm_gpu", alloc); }
+    SECTION("forward_csm_gpu_srgb") { gate_frame_plans("forward_csm_gpu_srgb", alloc); }
 }

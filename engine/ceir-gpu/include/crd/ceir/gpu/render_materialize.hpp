@@ -27,6 +27,78 @@ using RasterProgramResolveFn = crd::gpu::IRasterProgram* (*)(const Operation* dr
 // to IStorageBuffer*. ⛔ FUTURE (14z-5/6): when a FOURTH resolver appears (index buffers / indirect args), bundle these four
 // into a `RenderResolvers` struct rather than growing the parameter lists.
 using RasterBindingResolveFn = crd::gpu::IStorageBuffer* (*)(const Value* binding_operand, void* user);
+// CEIR-16: resolve an IMAGE-typed render.draw* binding operand → its device sampled texture (Value → ITexture). This is the
+// FOURTH resolver, so — per the 14z-5/6 note above — the four now bundle into `RenderResolvers` rather than growing the lists.
+using RasterTextureResolveFn = crd::gpu::ITexture* (*)(const Value* binding_operand, void* user);
+// CEIR-16-3a: resolve a RESOURCE-TABLE-of-image binding operand → its device BINDLESS texture array (Value → ITexture*[]).
+// The N-ness lives BEHIND the resolver (it returns the array pointer + writes the element `out_count`), so the fullscreen
+// composite's n>1 / blend-load-of-one arms collapse to ONE typed IR binding (the authored-variant plan) — kind-from-type
+// still holds: the RESOURCE-TABLE type selects BindlessTextureArray exactly as an IMAGE type selects SampledTexture.
+using RasterTextureArrayResolveFn = crd::gpu::ITexture* const* (*)(const Value* binding_operand, void* user, crd::u32& out_count);
+// CEIR-16c: one resolved SCENE-DRAW item — the ceir-gpu-neutral PROJECTION of render-graph's `RenderDrawItem` (the layering
+// boundary: ceir-gpu never sees render-graph types, so the host maps its RenderDrawItem → this view ON DEMAND). A
+// `render.mesh_dispatch_list` (amplify) reads the {program, vertex_count, storage} SUBSET (vertex_count = the task-mesh
+// groups / patches count); a `render.scene_draw_list` (16d scene) reads the FULL set — the per-item verb ladder
+// (record_scene_raster): `args`≠null ⇒ indirect; `index_count`>0 ⇒ indexed-pull (index_count/instance_count/first_index);
+// else non-indexed `vertex_count`. `program`/`storage`/`texture`/`args` null ⇒ that binding is absent (⇒ the pass default).
+// ⛔ `dispatch_groups` (RenderDrawItem's RAF-8 COMPUTE field) is DELIBERATELY absent — a raster scene item never dispatches.
+struct RasterDrawItem
+{
+    crd::gpu::IRasterProgram* program        = nullptr; // per-item program (beats the pass default)
+    crd::gpu::IStorageBuffer* storage        = nullptr; // per-item vertex-/storage-pull buffer (Object-frequency binding)
+    crd::gpu::ITexture*       texture        = nullptr; // per-item albedo MAP (beats the pass sampled atlas)
+    crd::gpu::IStorageBuffer* args           = nullptr; // != null ⇒ GPU-driven indirect (device-memory command)
+    crd::u32                  vertex_count   = 0U;      // non-indexed draw count (amplify: the group / patch count)
+    crd::u32                  index_count    = 0U;      // > 0 ⇒ indexed-pull draw
+    crd::u32                  instance_count = 0U;
+    crd::u32                  first_index    = 0U;
+    crd::u32                  args_offset    = 0U;
+    bool                      indexed        = false;   // the draw-index-rebased contract (the multi verb)
+};
+// Resolve the DrawList a `render.mesh_dispatch_list` / `render.scene_draw_list` expands over — WITHOUT the resolver owning a
+// mapped array: `draws_count` returns the item count; `draws_item` fills item `index` (index < count). The render-graph maps
+// its RenderDrawItem → this ceir-gpu-neutral view ON DEMAND, so the host DrawList (owned by the RecordContext for the whole
+// record frame) is the only backing store — no lifetime/allocation snag.
+using RasterDrawCountFn = crd::u32 (*)(void* user);
+using RasterDrawItemFn  = void (*)(void* user, crd::u32 index, RasterDrawItem& out);
+// CEIR-16d: resolve the PASS-level sampled atlas a `render.scene_draw_list` binds per-draw (the shadow / moment atlas a scene
+// pass reads, e.g. DrawList::pass_texture) + its binding shape. Returns null ⇒ an UNTEXTURED pass (no per-pass atlas). Writes
+// `out_is_depth` (a depth OR arrayed atlas binds at the ATLAS slot 4/5, never the base-colour map slot 1) and `out_comparison`
+// (⛔⛔ REN-40-D: true ⇒ a COMPARISON/PCF sampler for a depth atlas, false ⇒ a PLAIN filtering sampler for a moment/variance
+// COLOUR array — conflating them rendered every moment shadow black).
+using RasterPassTextureFn = crd::gpu::ITexture* (*)(void* user, bool& out_is_depth, bool& out_comparison);
+// CEIR-16d: the SCENE draw-run COALESCING cap — a consecutive run of plain-compatible items batches into ONE multi verb of at
+// most this many draws (the batching perf contract, one descriptor reset per run). ⛔ SINGLE SOURCE OF TRUTH: the legacy
+// record_scene_raster (frame_graph.cpp) references THIS constant so the CEIR scene template + the legacy recorder coalesce
+// IDENTICALLY — pixel A/B parity depends on the run boundaries matching. A run's per-draw count/index arrays are stack-sized
+// by this, so it also bounds that stack footprint.
+inline constexpr crd::u32 kMaxSceneRun = 256U;
+
+// CEIR-16 (14z-5/6): the render resolvers bundled — one struct threaded through materialize/execute instead of a growing
+// tail of (fn,user) pairs. Each resolver keeps its OWN `user` (the device objects differ per resolver). `storage` resolves a
+// BUFFER-typed binding operand → IStorageBuffer; `texture` resolves an IMAGE-typed one → ITexture — the CEIR-3c TYPE of the
+// binding operand selects which (the 12a one-source-of-truth doctrine; the binding KIND is never a slot/attr).
+struct RenderResolvers
+{
+    RasterTargetResolveFn  target       = nullptr;
+    void*                  target_user  = nullptr;
+    RasterProgramResolveFn program      = nullptr;
+    void*                  program_user = nullptr;
+    RasterBindingResolveFn storage      = nullptr;
+    void*                  storage_user = nullptr;
+    RasterTextureResolveFn texture      = nullptr;
+    void*                  texture_user = nullptr;
+    RasterTextureArrayResolveFn texture_array      = nullptr;
+    void*                       texture_array_user = nullptr;
+    // CEIR-16-mesh-2: the host DrawList a `render.mesh_dispatch_list` / `render.scene_draw_list` expands over — count +
+    // per-index item accessor.
+    RasterDrawCountFn           draws_count        = nullptr;
+    RasterDrawItemFn            draws_item         = nullptr;
+    void*                       draws_user         = nullptr;
+    // CEIR-16d: the PASS-level sampled atlas a `render.scene_draw_list` binds per-draw (null ⇒ untextured pass).
+    RasterPassTextureFn         pass_texture       = nullptr;
+    void*                       pass_texture_user  = nullptr;
+};
 
 // Materialize a render.scope op into a RenderingDesc: width/height/sample_count from the scope attrs; each attachment
 // operand's DEFINING color/depth_attachment op → a ColorAttachmentDesc / DepthStencilAttachmentDesc (LoadOp/StoreOp/
@@ -37,14 +109,16 @@ using RasterBindingResolveFn = crd::gpu::IStorageBuffer* (*)(const Value* bindin
                                               void* user, crd::gpu::RenderingDesc& out);
 
 // Materialize a render.draw* op into a RasterDrawPacket: the RasterCommandKind + GeometryKind from the op name; the counts
-// const-folded from the operands; first_vertex/first_index/max_draws from attrs; the program via `resolver`. ⭐ CEIR-14z-4c:
-// if `binding_resolver` is non-null, each operand in the draw's variadic binding tail (from `render_draw_binding_start`) is
-// resolved → a StorageBuffer `ResourceBinding` (slot = its ordinal). A binding that resolves to NULL → returns false (a
-// draw that bound 1-of-N buffers would render garbage from the wrong buffer, pixel-plausibly — a typed failure, never a
-// silent skip). Returns false on a malformed draw (unknown op name, a dynamic count that cannot const-fold, or a null binding).
-[[nodiscard]] bool materialize_draw_packet(const Context& ctx, const Operation* draw_op, RasterProgramResolveFn resolver,
-                                           void* user, crd::gpu::RasterDrawPacket& out,
-                                           RasterBindingResolveFn binding_resolver = nullptr, void* binding_user = nullptr);
+// const-folded from the operands; first_vertex/first_index/max_draws from attrs; the program via `resolvers.program`.
+// ⭐ CEIR-14z-4c / CEIR-16: if a binding resolver is set, each operand in the draw's variadic binding tail (from
+// `render_draw_binding_start`) is resolved by its CEIR-3c TYPE — a BUFFER-typed operand → `resolvers.storage` → a
+// StorageBuffer `ResourceBinding`; an IMAGE-typed operand → `resolvers.texture` → a SampledTexture (CEIR-16-2); a
+// RESOURCE-TABLE-of-image operand → `resolvers.texture_array` → a BindlessTextureArray (count behind the resolver,
+// CEIR-16-3a). A binding that resolves to NULL → returns false (a draw that bound 1-of-N would render garbage from the wrong resource,
+// pixel-plausibly — a typed failure, never a silent skip). Returns false on a malformed draw (unknown op name, a dynamic
+// count that cannot const-fold, or a null binding).
+[[nodiscard]] bool materialize_draw_packet(const Context& ctx, const Operation* draw_op, const RenderResolvers& resolvers,
+                                           crd::gpu::RasterDrawPacket& out);
 
 // CEIR-14z-2: execute a render-lowered command list on an ICommandEncoder (the RASTER executor, Option A test-surface):
 // BeginRender → materialize_rendering_desc → encoder.begin_rendering; Draw → materialize_draw_packet → encoder.draw;
@@ -53,10 +127,7 @@ using RasterBindingResolveFn = crd::gpu::IStorageBuffer* (*)(const Value* bindin
 // compute+render CEIR program is 15/16). A null program/target from a resolver → UnresolvedProgram; a draw whose count
 // cannot const-fold → UnsupportedCommand. ⛔ assumes find_render_misuse passed (the verifier-first contract).
 [[nodiscard]] ExecuteError execute_render_lowered(const Context& ctx, containers::ConstSpan<LoweredCommand> commands,
-                                                  crd::gpu::ICommandEncoder& encoder, RasterTargetResolveFn target_resolver,
-                                                  void* target_user, RasterProgramResolveFn program_resolver,
-                                                  void* program_user, RasterBindingResolveFn binding_resolver = nullptr,
-                                                  void* binding_user = nullptr);
+                                                  crd::gpu::ICommandEncoder& encoder, const RenderResolvers& resolvers);
 
 // CEIR-14z-4a (the GOLD-STANDARD drive): execute a render-lowered command list through the raster context's FRAME-RECORDING
 // mode (ADR-0126 / the user-ratified gold-standard pull-forward 2026-08-11), NOT a standalone synchronous encoder. Each
@@ -74,8 +145,5 @@ using RasterBindingResolveFn = crd::gpu::IStorageBuffer* (*)(const Value* bindin
 // storage buffers lands with its FIRST consumer (a mixed compute+raster CEIR program — CEIR-15/16), not speculatively here.
 [[nodiscard]] ExecuteError execute_render_frame(const Context& ctx, containers::ConstSpan<LoweredCommand> commands,
                                                 crd::gpu::IRasterContext& raster, crd::memory::IAllocator& alloc,
-                                                RasterTargetResolveFn target_resolver, void* target_user,
-                                                RasterProgramResolveFn program_resolver, void* program_user,
-                                                RasterBindingResolveFn binding_resolver = nullptr,
-                                                void* binding_user = nullptr);
+                                                const RenderResolvers& resolvers);
 } // namespace crd::ceir::gpu

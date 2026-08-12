@@ -80,7 +80,7 @@ there are **14**.
 | # | Executor (queue) | Schema line | `record_*` line | CEIR op → dialect | §§ |
 |---|---|---|---|---|---|
 | 1 | `scene.raster` (Graphics) | :85 | `record_scene_raster`:283 | `render.draw_list` → `ceir.render` | §40 §128 |
-| 2 | `fullscreen.raster` (Graphics) | :130 | `record_fullscreen_raster`:597 | `render.fullscreen` → `ceir.render` | §40 |
+| 2 | `fullscreen.raster` (Graphics) | :130 | ✅ MIGRATED 16b (2026-08-12): the generic `record_ceir_render` replays a `build_fullscreen_ceir` plan; `record_fullscreen_raster` DELETED | `render.scope`+`render.draw` → `ceir.render` | §40 |
 | 3 | `compute.dispatch` (Compute) | :154 | `record_compute_dispatch`:705 | `compute.dispatch` (+ indirect) → `ceir.compute` | §42 |
 | 4 | `transfer.clear` (Transfer) | :180 | `record_transfer_clear`:786 | `transfer.clear` → `ceir.transfer` | §50 |
 | 5 | `transfer.copy` (Transfer) | :187 | `record_transfer_copy`:817 | `transfer.copy` → `ceir.transfer` | §50 |
@@ -88,9 +88,9 @@ there are **14**.
 | 7 | `transfer.resolve` (Transfer) | :201 | `record_transfer_resolve`:825 | `transfer.resolve` → `ceir.transfer` | §50 |
 | 8 | `raytrace.dispatch` (Compute) — inline ray query | :212 | `record_raytrace_dispatch`:854 | `rt.inline_dispatch` → `ceir.rt` | §49 |
 | 9 | `raytrace.pipeline` (Compute) — SBT | :228 | `record_raytrace_pipeline`:875 | `rt.pipeline_trace` → `ceir.rt` | §49 |
-| 10 | `mesh.raster` (Graphics) | :242 | `record_mesh_raster`:966 (`record_amplify_raster`:900) | `render.mesh_dispatch` → `ceir.render` | §40 |
-| 11 | `tess.raster` (Graphics) | :251 | `record_tess_raster`:970 | `render.patch_draw` → `ceir.render` | §40 |
-| 12 | `mesh.indirect` (Graphics) | :260 | `record_mesh_indirect`:976 | `render.mesh_dispatch` (indirect) → `ceir.render` + `ceir.work` | §40 §43 |
+| 10 | `mesh.raster` (Graphics) | :242 | ✅ MIGRATED 16b-mesh-2 (2026-08-12): `record_ceir_render` replays a `build_amplify_ceir` plan whose `render.mesh_dispatch_list` the walk EXPANDS over `ctx.draws()`; `record_amplify_raster` + wrappers DELETED | `render.mesh_dispatch_list` → `ceir.render` | §40 |
+| 11 | `tess.raster` (Graphics) | :251 | ✅ MIGRATED 16b-mesh-2 (2026-08-12): same `record_ceir_render`/`build_amplify_ceir` (primitive=patches → DrawPatches, the added Patches vocab) | `render.mesh_dispatch_list` → `ceir.render` | §40 |
+| 12 | `mesh.indirect` (Graphics) | :260 | ✅ MIGRATED 16b-mesh-1 (2026-08-12): `record_ceir_render` replays a `build_mesh_indirect_ceir` plan; `record_mesh_indirect` DELETED (descriptor-parity gated — no shipped consumer) | `render.mesh_dispatch_indirect` → `ceir.render` | §40 §43 |
 | 13 | `visbuffer.raster` (Graphics) | :271 | `record_visbuffer_raster`:1001 | `render.draw_list` into a uint attachment (§41 — no special op) | §40 §41 |
 | 14 | `present` (Graphics) | :278 | `record_present`:1048 | native intrinsic (`ceir.io`/present, §100 §177) | §100 §177 |
 

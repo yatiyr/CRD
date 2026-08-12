@@ -34,6 +34,13 @@ namespace
     std::memcpy(&d, &v.f, sizeof(d)); // Float is stored as the f64 bit pattern
     return static_cast<float>(d);
 }
+[[nodiscard]] bool bool_attr(const Context& ctx, const Operation* op, containers::StringView name)
+{
+    const AttrId a = op->attr(name);
+    if (!a.valid()) { return false; } // absent ⇒ false (the CEIR-16-3c extent_from_target default)
+    const AttrValue v = ctx.attr_value(a);
+    return v.kind == AttrKind::Bool && v.b;
+}
 // CEIR string attr → the command_model enums (absent = the enum default). ⛔ find_render_misuse has already pinned the
 // closed vocabularies, so the fall-through defaults here fire only on the absent case, never on a bad token.
 [[nodiscard]] crd::gpu::LoadOp load_op_of(const Context& ctx, const Operation* op)
@@ -133,14 +140,23 @@ bool materialize_rendering_desc(const Context& ctx, const Operation* scope_op, R
             return false;
         }
     }
+    // ⭐ CEIR-16-3c: a FULLSCREEN composite renders to whatever target it is bound to (a per-cascade shadow atlas, a half-res
+    // buffer, the swapchain), whose size is known only at RECORD. `extent_from_target` overrides the authored placeholder
+    // width/height with the RESOLVED colour target's size (record_fullscreen_raster parity: rd.width = color->width()).
+    if (bool_attr(ctx, scope_op, containers::StringView("extent_from_target")) && out.color.size() > 0U
+        && out.color[0].target != nullptr)
+    {
+        out.width  = out.color[0].target->width();
+        out.height = out.color[0].target->height();
+    }
     return true;
 }
 
-bool materialize_draw_packet(const Context& ctx, const Operation* draw_op, RasterProgramResolveFn resolver, void* user,
-                             crd::gpu::RasterDrawPacket& out, RasterBindingResolveFn binding_resolver, void* binding_user)
+bool materialize_draw_packet(const Context& ctx, const Operation* draw_op, const RenderResolvers& resolvers,
+                             crd::gpu::RasterDrawPacket& out)
 {
     out         = crd::gpu::RasterDrawPacket{};
-    out.program = resolver(draw_op, user);
+    out.program = resolvers.program(draw_op, resolvers.program_user);
     crd::gpu::GeometrySource&     g  = out.geometry;
     const containers::StringView  nm = ctx.op_name(draw_op->kind());
     const auto fold = [&](crd::u32 idx, crd::u32& dst) -> bool {
@@ -155,7 +171,14 @@ bool materialize_draw_packet(const Context& ctx, const Operation* draw_op, Raste
         // from a bound buffer): the binding COUNT is the proxy (a procedural draw binds nothing; a vertex-pull draw binds
         // its buffer). ⛔ the texture-bound-but-procedural edge (bindings present, no vertex buffer) → an explicit
         // geometry-mode attr, named-forward. operands 0-1 are the counts, so >2 operands ⇒ ≥1 binding.
-        g.kind = (draw_op->num_operands() > 2U) ? crd::gpu::GeometryKind::StoragePull : crd::gpu::GeometryKind::None;
+        // ⭐ CEIR-16-3b-1b: the geometry-source mode. An explicit `geometry` attr (procedural|pull) PINS it — REQUIRED for the
+        // procedural-with-bindings edge: a fullscreen composite reads TEXTURES yet sources vertices procedurally, and inferring
+        // StoragePull would route it to the encoder's vertex-pull arm which, finding NO vertex buffer, draws NOTHING (a black
+        // pass). Absent → the 14b heuristic (>2 operands ⇒ a binding present ⇒ StoragePull; else procedural/None).
+        const containers::StringView gm = str_attr(ctx, draw_op, containers::StringView("geometry"));
+        if (gm == containers::StringView("procedural")) { g.kind = crd::gpu::GeometryKind::None; }
+        else if (gm == containers::StringView("pull")) { g.kind = crd::gpu::GeometryKind::StoragePull; }
+        else { g.kind = (draw_op->num_operands() > 2U) ? crd::gpu::GeometryKind::StoragePull : crd::gpu::GeometryKind::None; }
     }
     else if (nm == containers::StringView("render.draw_indexed"))
     {
@@ -206,45 +229,373 @@ bool materialize_draw_packet(const Context& ctx, const Operation* draw_op, Raste
     {
         return false;
     }
-    // CEIR-14z-4c: resolve the draw's variadic binding tail → StorageBuffer bindings. `render_draw_binding_start` gives the
-    // tail start (n_counts + n_buffers) from the ONE authoritative per-op layout — never a second table (14c fragility).
-    if (binding_resolver != nullptr)
+    // CEIR-14z-4c / CEIR-16: resolve the draw's variadic binding tail. `render_draw_binding_start` gives the tail start
+    // (n_counts + n_buffers) from the ONE authoritative per-op layout — never a second table (14c fragility). ⭐ Each binding's
+    // KIND derives from its operand's CEIR-3c TYPE (the 12a one-source-of-truth doctrine): a BUFFER-typed operand → a
+    // StorageBuffer (`resolvers.storage`); an IMAGE-typed operand → a SampledTexture (`resolvers.texture`); a
+    // RESOURCE-TABLE-of-image operand → a BindlessTextureArray (`resolvers.texture_array`, the count behind the resolver).
+    if (resolvers.storage != nullptr || resolvers.texture != nullptr || resolvers.texture_array != nullptr)
     {
         // CEIR-14z-6: resolve the NAMED command-source buffers (args, count) — the operands BEFORE the binding tail. They feed
         // GeometrySource.args_buffer / count_buffer and do NOT ride out.bindings (they are command-source buffers read by the
-        // fixed-function indirect machinery, not descriptor bindings). The FIRST real multi-buffer draw: args + the pull buffer
-        // resolve from DISTINCT operands, so the resolver's operand→buffer MAPPING is now observed (a 1-buffer sentinel fails).
-        if (g.kind == crd::gpu::GeometryKind::Indirect || g.kind == crd::gpu::GeometryKind::IndirectCount)
+        // fixed-function indirect machinery, not descriptor bindings). Indirect args/count are always BUFFERS → resolvers.storage.
+        // ⛔ CEIR-16-mesh-1: MeshletIndirect ALSO reads its group counts from an %args buffer at operand 0 (record_mesh_indirect
+        // parity: p.geometry.args_buffer = ctx.storage("args")). It was NOT in this branch (14z wired only args_OFFSET), so the
+        // mesh-indirect draw dispatched with a null args buffer — the encoder reads garbage. It has NO count buffer (unlike
+        // IndirectCount), just args. render_draw_binding_start(mesh_dispatch_indirect)==1, so the binding tail skips operand 0.
+        if (g.kind == crd::gpu::GeometryKind::Indirect || g.kind == crd::gpu::GeometryKind::IndirectCount
+            || g.kind == crd::gpu::GeometryKind::MeshletIndirect)
         {
-            g.args_buffer = binding_resolver(draw_op->operand(0U), binding_user);
+            if (resolvers.storage == nullptr) { return false; } // an indirect draw needs a buffer resolver for its args
+            g.args_buffer = resolvers.storage(draw_op->operand(0U), resolvers.storage_user);
             if (g.args_buffer == nullptr) { return false; } // an indirect draw with no args reads garbage — typed fail
             if (g.kind == crd::gpu::GeometryKind::IndirectCount)
             {
-                g.count_buffer = binding_resolver(draw_op->operand(1U), binding_user);
+                g.count_buffer = resolvers.storage(draw_op->operand(1U), resolvers.storage_user);
                 if (g.count_buffer == nullptr) { return false; }
             }
         }
         const crd::u32 start = render_draw_binding_start(nm);
         for (crd::u32 i = start; i < draw_op->num_operands(); ++i)
         {
-            crd::gpu::IStorageBuffer* const buf = binding_resolver(draw_op->operand(i), binding_user);
-            if (buf == nullptr) { return false; } // a 1-of-N-bound draw renders garbage from the wrong buffer — typed fail
+            const Value* const       operand = draw_op->operand(i);
+            const auto&              oty     = ctx.type_of(operand->type());
+            const Operation* const   def     = operand->defining_op();
             crd::gpu::ResourceBinding b;
-            b.frequency = crd::gpu::BindingFrequency::Object;
-            b.kind      = crd::gpu::BindingKind::StorageBuffer;
-            b.slot      = i - start; // the binding's ORDINAL (0,1,2…), never constant 0 (a two-buffer draw would alias)
-            b.buffer    = buf;
+            // ⭐ CEIR-16-3a-2: the binding's SLOT is an explicit `slot` attr on its defining op when present — the fullscreen
+            // shadow-atlas binds tex@4 / sampler@5 and a constants buffer@0, none of which is the ordinal position. Absent →
+            // the ordinal i-start (the common in-order case). ⛔ absent≠0: a missing attr falls to the ORDINAL, not slot 0.
+            b.slot = (def != nullptr) ? static_cast<crd::u32>(int_attr(ctx, def, containers::StringView("slot"),
+                                                                       static_cast<crd::i64>(i - start)))
+                                      : (i - start);
+            if (oty.kind == TypeKind::Image)
+            {
+                // ⭐ CEIR-16-2: an IMAGE-typed binding operand is a SAMPLED texture. (The shadow-atlas SLOT routing the legacy
+                // fullscreen executor used is an ENCODER-dispatch lowering detail — CEIR-16-3a-2/3, expressed as explicit IR.)
+                crd::gpu::ITexture* const tex =
+                    resolvers.texture != nullptr ? resolvers.texture(operand, resolvers.texture_user) : nullptr;
+                if (tex == nullptr) { return false; } // an image binding with no / a failed texture resolver — typed fail, never silent
+                b.frequency = crd::gpu::BindingFrequency::Material;
+                b.kind      = crd::gpu::BindingKind::SampledTexture;
+                b.texture   = tex;
+            }
+            else if (oty.kind == TypeKind::ResourceTable && oty.members.size() >= 1U
+                     && ctx.type_of(oty.members[0]).kind == TypeKind::Image)
+            {
+                // ⭐ CEIR-16-3a-1: a RESOURCE-TABLE-of-image binding operand is a BINDLESS texture array. The resolver returns
+                // the array pointer + writes `count`, so the fullscreen composite's n>1 / blend-load-of-one arms collapse to
+                // ONE typed IR binding (the authored-variant plan) — the N-ness never touches the IR (kind-from-type holds).
+                crd::u32                         count = 0U;
+                crd::gpu::ITexture* const* const arr =
+                    resolvers.texture_array != nullptr ? resolvers.texture_array(operand, resolvers.texture_array_user, count)
+                                                       : nullptr;
+                if (arr == nullptr || count == 0U) { return false; } // a bindless array that does not resolve — typed fail
+                b.frequency     = crd::gpu::BindingFrequency::Material;
+                b.kind          = crd::gpu::BindingKind::BindlessTextureArray;
+                b.texture_array = arr;
+                b.array_count   = count;
+            }
+            else if (oty.kind == TypeKind::Sampler)
+            {
+                // ⭐ CEIR-16-3a-3: a SAMPLER-typed binding operand is a STANDALONE sampler binding (no texture) — the shadow
+                // atlas's slot-5 companion to its slot-4 depth texture. `is_signed` on the CEIR Sampler type = a COMPARISON
+                // sampler (⛔⛔⛔ REN-40-D moment-shadow scar: a comparison sampler where the shader declared a plain one — or
+                // vice-versa — renders black). NO resolver: the sampler rides its KIND + slot; the device sampler object is
+                // the encoder's business (a default SamplerDesc, exactly as bind_atlas leaves it).
+                b.frequency = crd::gpu::BindingFrequency::Material;
+                b.kind = oty.is_signed ? crd::gpu::BindingKind::ComparisonSampler : crd::gpu::BindingKind::Sampler;
+            }
+            else
+            {
+                crd::gpu::IStorageBuffer* const buf =
+                    resolvers.storage != nullptr ? resolvers.storage(operand, resolvers.storage_user) : nullptr;
+                if (buf == nullptr) { return false; } // a 1-of-N-bound draw renders garbage from the wrong buffer — typed fail
+                b.frequency = crd::gpu::BindingFrequency::Object;
+                b.kind      = crd::gpu::BindingKind::StorageBuffer;
+                b.buffer    = buf;
+            }
             out.bindings.push_back(b);
         }
     }
     return true;
 }
 
-ExecuteError execute_render_lowered(const Context& ctx, containers::ConstSpan<LoweredCommand> commands,
-                                    crd::gpu::ICommandEncoder& encoder, RasterTargetResolveFn target_resolver,
-                                    void* target_user, RasterProgramResolveFn program_resolver, void* program_user,
-                                    RasterBindingResolveFn binding_resolver, void* binding_user)
+// ⭐ CEIR-16-mesh-2: expand a `render.mesh_dispatch_list` op over the HOST DrawList into N draws inside the CURRENT scope
+// (record_amplify_raster). The op is a TEMPLATE (0 operands): `primitive` picks the verb (meshlet → DispatchMesh / patches →
+// DrawPatches — ⛔ the render materializer had NO Patches vocabulary, added here); the per-item program/count/storage come
+// from `resolvers.draws`. draws.count==0 → the PROCEDURAL arm: ONE draw of `fallback_count` (0 ⇒ nothing). Mirrors the legacy
+// skip semantics EXACTLY: a zero-count item is SKIPPED (never dispatched as one), a per-item program beats the pass default,
+// a null-program item is skipped. Returns false on a missing resolver / an unknown `primitive` (a typed fail).
+[[nodiscard]] bool emit_amplify_list(const Context& ctx, const Operation* op, crd::gpu::ICommandEncoder& encoder,
+                                     const RenderResolvers& resolvers)
 {
+    if (resolvers.program == nullptr || resolvers.draws_count == nullptr || resolvers.draws_item == nullptr) { return false; }
+    const containers::StringView prim = str_attr(ctx, op, containers::StringView("primitive"));
+    const bool                   mesh = prim == containers::StringView("meshlet");
+    if (!mesh && prim != containers::StringView("patches")) { return false; }
+    crd::gpu::IRasterProgram* const def_prog = resolvers.program(op, resolvers.program_user);
+
+    const auto emit = [&](crd::gpu::IRasterProgram* prog, crd::u32 count, crd::gpu::IStorageBuffer* geo)
+    {
+        crd::gpu::RasterDrawPacket p;
+        p.program = prog;
+        if (mesh)
+        {
+            p.command                = crd::gpu::RasterCommandKind::DispatchMesh;
+            p.geometry.kind          = crd::gpu::GeometryKind::Meshlet;
+            p.geometry.group_count_x = count;
+        }
+        else
+        {
+            p.command              = crd::gpu::RasterCommandKind::DrawPatches;
+            p.geometry.kind        = crd::gpu::GeometryKind::Patches;
+            p.geometry.patch_count = count;
+        }
+        if (geo != nullptr)
+        {
+            p.bindings.push_back(crd::gpu::ResourceBinding{crd::gpu::BindingFrequency::Object,
+                                                          crd::gpu::BindingKind::StorageBuffer, 0U, geo});
+        }
+        encoder.draw(p);
+    };
+
+    const crd::u32 n = resolvers.draws_count(resolvers.draws_user);
+    if (n == 0U)
+    {
+        const crd::i64 fc = int_attr(ctx, op, containers::StringView("fallback_count"), 0);
+        if (fc > 0 && def_prog != nullptr) { emit(def_prog, static_cast<crd::u32>(fc), nullptr); }
+        return true;
+    }
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        RasterDrawItem it{};
+        resolvers.draws_item(resolvers.draws_user, i, it);
+        if (it.vertex_count == 0U) { continue; } // ⛔ a zero-count item is SKIPPED, never dispatched (record_amplify_raster)
+        crd::gpu::IRasterProgram* const prog = it.program != nullptr ? it.program : def_prog;
+        if (prog == nullptr) { continue; }
+        emit(prog, it.vertex_count, it.storage);
+    }
+    return true;
+}
+
+// ── CEIR-16d: the SCENE per-item sampled-texture binding — a byte-exact replica of record_scene_raster's
+// bind_map / bind_atlas / attach_textures. ⛔⛔ LAYERING: ceir-gpu cannot call render-graph's frame_graph.cpp, so the scar
+// surface is reproduced here; the two MUST bind identically for A/B parity. ⛔⛔⛔ atlas-by-SLOT-4 + its sampler COMPANION at
+// slot 5; the base-colour map at slot 1; ⛔⛔ REN-40-D: a COMPARISON sampler for a DEPTH atlas (a PCF shadow lookup), a PLAIN
+// filtering sampler for a moment/variance COLOUR array — the wrong one renders every moment shadow black.
+void scene_bind_map(crd::gpu::RasterDrawPacket& pk, crd::gpu::ITexture* tex)
+{
+    pk.bindings.push_back(crd::gpu::ResourceBinding{crd::gpu::BindingFrequency::Material,
+                                                    crd::gpu::BindingKind::SampledTexture, 1U, nullptr, tex});
+}
+void scene_bind_atlas(crd::gpu::RasterDrawPacket& pk, crd::gpu::ITexture* tex, bool comparison)
+{
+    pk.bindings.push_back(crd::gpu::ResourceBinding{crd::gpu::BindingFrequency::Material,
+                                                    crd::gpu::BindingKind::SampledTexture, 4U, nullptr, tex});
+    crd::gpu::ResourceBinding samp{};
+    samp.frequency = crd::gpu::BindingFrequency::Material;
+    samp.kind      = comparison ? crd::gpu::BindingKind::ComparisonSampler : crd::gpu::BindingKind::Sampler;
+    samp.slot      = 5U;
+    pk.bindings.push_back(samp);
+}
+void scene_attach_textures(crd::gpu::RasterDrawPacket& pk, crd::gpu::ITexture* item_tex, crd::gpu::ITexture* pass_tex,
+                           crd::gpu::ITexture* tex, bool combined, bool depth_tex, bool comparison)
+{
+    if (combined)
+    {
+        scene_bind_map(pk, item_tex);
+        scene_bind_atlas(pk, pass_tex, comparison);
+    }
+    else if (depth_tex)
+    {
+        scene_bind_atlas(pk, tex, comparison);
+    }
+    else if (tex != nullptr)
+    {
+        scene_bind_map(pk, tex);
+    }
+}
+
+// ⭐ CEIR-16d: expand a `render.scene_draw_list` op over the HOST DrawList into N raster packets inside the CURRENT scope —
+// a VERBATIM replica of record_scene_raster's single-colour draw loop (the mrt>=2 G-buffer arm is a SEPARATE representation).
+// The op is a TEMPLATE (0 operands): every per-item field (program/storage/texture/args/counts) is DrawList data resolved via
+// `resolvers.draws_*`; the pass-level atlas via `resolvers.pass_texture`; the colour-attachment presence via `scope_has_color`
+// (⛔ ADVISOR GAP-1: a DEPTH-ONLY pass binds NO textures — the walk hands the MATERIALIZED scope's colour count, never an op
+// attr). ⛔ the per-item VERB is chosen exactly as the live RasterGeometry selection: indirect → indexed-sampled → combined/
+// textured → PLAIN with a COALESCED run (⛔ ASYMMETRIES preserved: first_draw_index rides indirect/indexed/multi but NOT
+// combined-tex/single-plain; run>1||indexed → DrawMulti; i += run-1; the same-storage run predicate). Returns false only on a
+// missing required resolver (the program/draws accessors).
+[[nodiscard]] bool emit_scene_list(const Context& /*ctx*/, const Operation* op, crd::gpu::ICommandEncoder& encoder,
+                                   const RenderResolvers& resolvers, bool scope_has_color)
+{
+    if (resolvers.program == nullptr || resolvers.draws_count == nullptr || resolvers.draws_item == nullptr) { return false; }
+    crd::gpu::IRasterProgram* const def_prog = resolvers.program(op, resolvers.program_user);
+
+    // The PASS-level sampled atlas (shadow / moment), resolved once. pass_depth is meaningless without a pass_tex (a
+    // depth-only cascade reads NOTHING); batchable_pass: a pass that reads a texture never coalesces runs.
+    bool                      pass_is_depth = false;
+    bool                      pass_is_cmp   = false;
+    crd::gpu::ITexture* const pass_tex      = resolvers.pass_texture != nullptr
+                                                  ? resolvers.pass_texture(resolvers.pass_texture_user, pass_is_depth, pass_is_cmp)
+                                                  : nullptr;
+    const bool pass_depth     = pass_tex != nullptr && pass_is_depth;
+    const bool pass_cmp       = pass_is_cmp;
+    const bool batchable_pass = pass_tex == nullptr;
+
+    const crd::u32 n = resolvers.draws_count(resolvers.draws_user);
+    // count==0: the scope's Begin/End (materialized by the walk) still runs, so the pass CLEARS regardless; the legacy
+    // geometry-slot fullscreen-triangle fallback is a TEST-gate shape (no shipped scene pass records an empty draw list),
+    // deferred to the gpu-test conversion.
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        RasterDrawItem it{};
+        resolvers.draws_item(resolvers.draws_user, i, it);
+        if (it.storage == nullptr) { continue; }
+        crd::gpu::IRasterProgram* const prog = it.program != nullptr ? it.program : def_prog;
+        if (prog == nullptr) { continue; }
+
+        // A draw's OWN texture (base-colour map) beats the pass atlas; a pass depth read with no per-item map is a shadow
+        // lookup; a per-item map INSIDE a depth-reading pass is the COMBINED shape. ⛔ a DEPTH-ONLY pass (no colour) binds
+        // NO textures — a colour verb here would misrender or drop the depth write.
+        const bool                has_color = scope_has_color;
+        crd::gpu::ITexture* const item_map  = has_color ? it.texture : nullptr;
+        crd::gpu::ITexture*       tex        = nullptr;
+        if (has_color) { tex = item_map != nullptr ? item_map : pass_tex; }
+        const bool                     depth_tex = has_color && item_map == nullptr && pass_depth;
+        const bool                     combined  = has_color && item_map != nullptr && pass_tex != nullptr && pass_depth;
+        const crd::gpu::ResourceBinding sbind{crd::gpu::BindingFrequency::Object, crd::gpu::BindingKind::StorageBuffer, 0U,
+                                              it.storage};
+
+        // GPU-DRIVEN indirect (count in device memory): DrawIndex ROW = i; never falls to a CPU-count verb.
+        if (it.args != nullptr && it.index_count > 0U)
+        {
+            crd::gpu::RasterDrawPacket p;
+            p.program                   = prog;
+            p.command                   = crd::gpu::RasterCommandKind::DrawIndexedIndirect;
+            p.geometry.kind             = crd::gpu::GeometryKind::Indirect;
+            p.geometry.args_buffer      = it.args;
+            p.geometry.args_offset      = it.args_offset;
+            p.geometry.max_draws        = 1U;
+            p.geometry.first_draw_index = i;
+            p.bindings.push_back(sbind);
+            scene_attach_textures(p, it.texture, pass_tex, tex, combined, depth_tex, pass_cmp);
+            encoder.draw(p);
+            continue;
+        }
+        // INDEXED-PULL carrying per-draw texture state → the indexed SAMPLED verb (one verb, DrawIndex row = i).
+        if (it.index_count > 0U && (tex != nullptr || depth_tex))
+        {
+            crd::gpu::RasterDrawPacket p;
+            p.program                        = prog;
+            p.command                        = crd::gpu::RasterCommandKind::DrawIndexed;
+            p.geometry.kind                  = crd::gpu::GeometryKind::Indexed;
+            p.geometry.vertex_or_index_count = it.index_count;
+            p.geometry.instance_count        = it.instance_count;
+            p.geometry.first_index           = it.first_index;
+            p.geometry.first_draw_index      = i;
+            p.bindings.push_back(sbind);
+            scene_attach_textures(p, it.texture, pass_tex, tex, combined, depth_tex, pass_cmp);
+            encoder.draw(p);
+            continue;
+        }
+        // COMBINED / SHADOWED / TEXTURED (non-indexed) — a single StoragePull draw carrying the resolved textures.
+        if (combined || (tex != nullptr))
+        {
+            crd::gpu::RasterDrawPacket p;
+            p.program                        = prog;
+            p.command                        = crd::gpu::RasterCommandKind::Draw;
+            p.geometry.kind                  = crd::gpu::GeometryKind::StoragePull;
+            p.geometry.vertex_or_index_count = it.vertex_count;
+            p.bindings.push_back(sbind);
+            scene_attach_textures(p, it.texture, pass_tex, tex, combined, depth_tex, pass_cmp);
+            encoder.draw(p);
+            continue;
+        }
+
+        // PLAIN: coalesce a RUN of consecutive plain items (same program+storage, no texture, same indexed-ness) into ONE
+        // multi verb — the batching perf contract (one descriptor reset per run, not per draw).
+        crd::u32 run = 1U;
+        if (batchable_pass && it.texture == nullptr)
+        {
+            while (i + run < n && run < kMaxSceneRun)
+            {
+                RasterDrawItem nx{};
+                resolvers.draws_item(resolvers.draws_user, i + run, nx);
+                crd::gpu::IRasterProgram* const nprog = nx.program != nullptr ? nx.program : def_prog;
+                if (nx.storage == nullptr || nx.texture != nullptr || nx.args != nullptr || nprog != prog ||
+                    nx.indexed != it.indexed || (nx.index_count > 0U) != (it.index_count > 0U) || nx.storage != it.storage)
+                {
+                    break;
+                }
+                ++run;
+            }
+        }
+        if (it.index_count > 0U)
+        {
+            // an INDEXED-PULL run is ONE indexed-multi command; a run of one still routes here (the multi verb pushes the
+            // DrawIndex row a rebased indexed program needs).
+            crd::gpu::IRasterContext::IndexedDraw idraws[kMaxSceneRun];
+            for (crd::u32 k = 0; k < run; ++k)
+            {
+                RasterDrawItem nk{};
+                resolvers.draws_item(resolvers.draws_user, i + k, nk);
+                idraws[k] = {nk.index_count, nk.instance_count, nk.first_index};
+            }
+            crd::gpu::RasterDrawPacket p;
+            p.program                   = prog;
+            p.command                   = crd::gpu::RasterCommandKind::DrawMultiIndexed;
+            p.geometry.kind             = crd::gpu::GeometryKind::MultiIndexed;
+            p.geometry.multi_indexed    = static_cast<const crd::gpu::IRasterContext::IndexedDraw*>(idraws);
+            p.geometry.draw_count       = run;
+            p.geometry.first_draw_index = i;
+            p.bindings.push_back(sbind);
+            encoder.draw(p);
+            i += run - 1U;
+        }
+        else if (run > 1U || it.indexed)
+        {
+            // a non-indexed run (or a single item flagged `indexed` — its program rebases loads by DrawIndex, and only the
+            // multi verb pushes the row).
+            crd::u32 counts[kMaxSceneRun];
+            for (crd::u32 k = 0; k < run; ++k)
+            {
+                RasterDrawItem nk{};
+                resolvers.draws_item(resolvers.draws_user, i + k, nk);
+                counts[k] = nk.vertex_count;
+            }
+            crd::gpu::RasterDrawPacket p;
+            p.program                   = prog;
+            p.command                   = crd::gpu::RasterCommandKind::DrawMulti;
+            p.geometry.kind             = crd::gpu::GeometryKind::MultiStoragePull;
+            p.geometry.multi_counts     = static_cast<const crd::u32*>(counts);
+            p.geometry.draw_count       = run;
+            p.geometry.first_draw_index = i;
+            p.bindings.push_back(sbind);
+            encoder.draw(p);
+            i += run - 1U;
+        }
+        else
+        {
+            // a single plain item.
+            crd::gpu::RasterDrawPacket p;
+            p.program                        = prog;
+            p.command                        = crd::gpu::RasterCommandKind::Draw;
+            p.geometry.kind                  = crd::gpu::GeometryKind::StoragePull;
+            p.geometry.vertex_or_index_count = it.vertex_count;
+            p.bindings.push_back(sbind);
+            encoder.draw(p);
+        }
+    }
+    return true;
+}
+
+ExecuteError execute_render_lowered(const Context& ctx, containers::ConstSpan<LoweredCommand> commands,
+                                    crd::gpu::ICommandEncoder& encoder, const RenderResolvers& resolvers)
+{
+    // ⛔ ADVISOR GAP-1: the scene verb ladder's texture routing gates on COLOUR-attachment presence (a depth-only pass binds
+    // NO textures), but the Draw case has no scope state. Hoist it from the MATERIALIZED scope (rd.color.size()>0) at
+    // BeginRender — the scope is the source of truth, never a second op attr the builder could get wrong.
+    bool scope_has_color = false;
     for (crd::u32 i = 0; i < static_cast<crd::u32>(commands.size()); ++i)
     {
         const LoweredCommand& cmd = commands[i];
@@ -255,7 +606,7 @@ ExecuteError execute_render_lowered(const Context& ctx, containers::ConstSpan<Lo
         case LoweredKind::BeginRender:
         {
             crd::gpu::RenderingDesc rd;
-            if (!materialize_rendering_desc(ctx, cmd.op, target_resolver, target_user, rd))
+            if (!materialize_rendering_desc(ctx, cmd.op, resolvers.target, resolvers.target_user, rd))
             {
                 return ExecuteError::UnsupportedCommand;
             }
@@ -264,13 +615,32 @@ ExecuteError execute_render_lowered(const Context& ctx, containers::ConstSpan<Lo
                 if (rd.color[c].target == nullptr) { return ExecuteError::UnresolvedProgram; }
             }
             if (rd.depth.enabled && rd.depth.target == nullptr) { return ExecuteError::UnresolvedProgram; }
+            scope_has_color = rd.color.size() > 0U;
             encoder.begin_rendering(rd);
             break;
         }
         case LoweredKind::Draw:
         {
+            // ⭐ CEIR-16-mesh-2: a per-draw-item AMPLIFICATION (render.mesh_dispatch_list) expands over the host DrawList into
+            // N draws in THIS scope — its per-item program/count/storage are DrawList data, not op operands (a 0-operand op),
+            // so materialize_draw_packet (single-op-operands) does not apply.
+            if (ctx.op_name(cmd.op->kind()) == containers::StringView("render.mesh_dispatch_list"))
+            {
+                if (!emit_amplify_list(ctx, cmd.op, encoder, resolvers)) { return ExecuteError::UnsupportedCommand; }
+                break;
+            }
+            // ⭐ CEIR-16d: the SCENE per-draw-item verb ladder (render.scene_draw_list) — likewise a 0-operand TEMPLATE
+            // expanding over the host DrawList, but the verb is chosen per-item + it needs the scope's colour presence.
+            if (ctx.op_name(cmd.op->kind()) == containers::StringView("render.scene_draw_list"))
+            {
+                if (!emit_scene_list(ctx, cmd.op, encoder, resolvers, scope_has_color))
+                {
+                    return ExecuteError::UnsupportedCommand;
+                }
+                break;
+            }
             crd::gpu::RasterDrawPacket p;
-            if (!materialize_draw_packet(ctx, cmd.op, program_resolver, program_user, p, binding_resolver, binding_user))
+            if (!materialize_draw_packet(ctx, cmd.op, resolvers, p))
             {
                 return ExecuteError::UnsupportedCommand;
             }
@@ -279,6 +649,7 @@ ExecuteError execute_render_lowered(const Context& ctx, containers::ConstSpan<Lo
             break;
         }
         case LoweredKind::EndRender:
+            scope_has_color = false;
             encoder.end_rendering();
             break;
         case LoweredKind::Dispatch:
@@ -295,16 +666,11 @@ namespace
 // resolvers + the shared frame-recording encoder. Pointers live in a RESERVED array so they stay stable across execute().
 struct RenderFrameClosure
 {
-    const Context*             ctx              = nullptr;
-    const LoweredCommand*      begin            = nullptr; // the scope slice [begin, begin+count) = BeginRender…EndRender
-    crd::u32                   count            = 0U;
-    crd::gpu::ICommandEncoder* encoder          = nullptr;
-    RasterTargetResolveFn      target_resolver  = nullptr;
-    void*                      target_user      = nullptr;
-    RasterProgramResolveFn     program_resolver = nullptr;
-    void*                      program_user     = nullptr;
-    RasterBindingResolveFn     binding_resolver = nullptr;
-    void*                      binding_user     = nullptr;
+    const Context*             ctx     = nullptr;
+    const LoweredCommand*      begin   = nullptr; // the scope slice [begin, begin+count) = BeginRender…EndRender
+    crd::u32                   count   = 0U;
+    crd::gpu::ICommandEncoder* encoder = nullptr;
+    RenderResolvers            resolvers; // CEIR-16: the four bundled resolvers (was four separate fn/user pairs)
 };
 // The frame-graph pass callback: DURING the pass the raster context is in frame-recording mode, so driving the EXISTING
 // execute_render_lowered walk on this scope's slice records begin/draw/end into the frame's ONE command buffer (the
@@ -314,16 +680,13 @@ void ceir_render_pass_cb(crd::gpu::IFrameContext& /*fctx*/, void* user)
 {
     auto* const c = static_cast<RenderFrameClosure*>(user);
     (void)execute_render_lowered(*c->ctx, containers::ConstSpan<LoweredCommand>(c->begin, c->count), *c->encoder,
-                                 c->target_resolver, c->target_user, c->program_resolver, c->program_user,
-                                 c->binding_resolver, c->binding_user);
+                                 c->resolvers);
 }
 } // namespace
 
 ExecuteError execute_render_frame(const Context& ctx, containers::ConstSpan<LoweredCommand> commands,
                                   crd::gpu::IRasterContext& raster, crd::memory::IAllocator& alloc,
-                                  RasterTargetResolveFn target_resolver, void* target_user,
-                                  RasterProgramResolveFn program_resolver, void* program_user,
-                                  RasterBindingResolveFn binding_resolver, void* binding_user)
+                                  const RenderResolvers& resolvers)
 {
     auto fg = raster.create_frame_graph();
     if (fg == nullptr) { return ExecuteError::NoFrameGraph; }
@@ -360,7 +723,7 @@ ExecuteError execute_render_frame(const Context& ctx, containers::ConstSpan<Lowe
 
         // Materialize the scope's RenderingDesc to enumerate + import its targets (the raw targets via the caller's resolver).
         crd::gpu::RenderingDesc rd;
-        if (!materialize_rendering_desc(ctx, commands[begin_idx].op, target_resolver, target_user, rd))
+        if (!materialize_rendering_desc(ctx, commands[begin_idx].op, resolvers.target, resolvers.target_user, rd))
         {
             return ExecuteError::UnsupportedCommand;
         }
@@ -376,8 +739,7 @@ ExecuteError execute_render_frame(const Context& ctx, containers::ConstSpan<Lowe
             b.writes(fg->import_target(*rd.depth.target));
         }
 
-        closures.push_back(RenderFrameClosure{&ctx, &commands[begin_idx], slice_count, encoder.get(), target_resolver,
-                                              target_user, program_resolver, program_user, binding_resolver, binding_user});
+        closures.push_back(RenderFrameClosure{&ctx, &commands[begin_idx], slice_count, encoder.get(), resolvers});
         b.execute(&ceir_render_pass_cb, &closures[static_cast<crd::usize>(closures.size()) - 1U]);
         i = end_idx + 1U;
     }

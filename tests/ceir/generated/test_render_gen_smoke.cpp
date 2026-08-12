@@ -26,7 +26,7 @@ TEST_CASE("ceir render gen smoke: the dialect self-registers and reflects a cohe
     CHECK(dlt->name() == crd::containers::StringView("render"));
 
     const crd::containers::ConstSpan<OpSchema> schemas = render::render_op_schemas();
-    REQUIRE(schemas.size() == 9U);
+    REQUIRE(schemas.size() == 11U);
 
     crd::containers::StringView prev;
     for (const OpSchema& s : schemas)
@@ -111,6 +111,20 @@ TEST_CASE("ceir render gen smoke: every op builds through its generated builder 
         CHECK(ctx.verify(*op));
     }
 
+    // render.mesh_dispatch_list
+    {
+        Operation* const op = render::build_mesh_dispatch_list(ctx, ctx.attr_symbol("x"), ctx.attr_string("x"), ctx.attr_string("x"), ctx.type_i32());
+        CHECK(op != nullptr);
+        CHECK(ctx.verify(*op));
+    }
+
+    // render.scene_draw_list
+    {
+        Operation* const op = render::build_scene_draw_list(ctx, ctx.attr_symbol("x"), ctx.attr_string("x"), ctx.type_i32());
+        CHECK(op != nullptr);
+        CHECK(ctx.verify(*op));
+    }
+
     // render.scope
     {
         Operation* const src = ctx.create_operation(ctx.intern_op("smoke", "src"), {}, 1U, ctx.type_i32());
@@ -172,6 +186,18 @@ TEST_CASE("ceir render gen smoke: the generated verifier rejects a malformed con
     // render.mesh_dispatch_indirect
     {
         Operation* const bad = ctx.create_operation(render::mesh_dispatch_indirect_kind(ctx), {}, 0U, ctx.type_i32());
+        CHECK_FALSE(ctx.verify(*bad));
+    }
+
+    // render.mesh_dispatch_list
+    {
+        Operation* const bad = ctx.create_operation(render::mesh_dispatch_list_kind(ctx), {}, 0U, ctx.type_i32());
+        CHECK_FALSE(ctx.verify(*bad));
+    }
+
+    // render.scene_draw_list
+    {
+        Operation* const bad = ctx.create_operation(render::scene_draw_list_kind(ctx), {}, 0U, ctx.type_i32());
         CHECK_FALSE(ctx.verify(*bad));
     }
 

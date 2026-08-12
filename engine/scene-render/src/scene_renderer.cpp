@@ -864,6 +864,27 @@ struct SceneRenderer::Impl
     bool                            frame_overridden = false;
     crd::framecook::FrameRecorder   recorder;
     bool                            frame_ok = false;
+    // ⭐ CEIR-16-3c: the `frame` desc's per-migrated-pass CEIR REPLAY PLANS, rebuilt WITH the frame at EVERY install site
+    // (set_frame_graph_toml / default reparse / RAF-11 reload commit / set_soft_shadows tier-swap — the plan-table-per-
+    // install-site contract). A build FAILURE now marks the frame not-ok (fatal — a migrated pass with no plan cannot
+    // record); null only when the frame has no migrated pass at all. Non-movable → held by pointer.
+    std::unique_ptr<crd::framecook::FramePlans> frame_plans;
+    void rebuild_frame_plans()
+    {
+        frame_plans = std::make_unique<crd::framecook::FramePlans>(alloc);
+        crd::renderasset::DiagnosticList d(alloc);
+        if (!crd::framecook::build_frame_plans(frame, *frame_plans, d))
+        {
+            // ⛔ CEIR-16-3d-3: after record_fullscreen_raster was deleted, a fullscreen pass with no plan cannot record.
+            // A failed plan build is therefore a FATAL frame error, not a silent step-back to a C++ path that no longer
+            // exists — mark the frame not-ok so the record loop reports it (a named failure) instead of a black frame.
+            CRD_LOG_ERROR(g_log_scenerender,
+                          "CEIR-16-3d-3: build_frame_plans failed for frame '{}' — fullscreen passes cannot record; frame disabled",
+                          frame.name.c_str());
+            frame_plans.reset();
+            frame_ok = false;
+        }
+    }
     // REN-36.3-b: the World this renderer last synced. Borrowed — the caller owns it, and it is only read during
     // recording, inside the same frame that called `sync()`. Null before the first sync (a stub-raster test),
     // which the query path treats as "no filters apply" rather than as a failure.
@@ -906,7 +927,23 @@ struct SceneRenderer::Impl
     // tonemapped frame could never step down to its tonemapped shadows-off tier. Parsed once, cached by name.
     crd::containers::Array<crd::containers::String>                         fb_frame_names;
     crd::containers::Array<std::unique_ptr<crd::framecook::FrameGraphDesc>> fb_frame_descs;
+    // ⭐ CEIR-16-3d-3: each cached fallback desc's fullscreen REPLAY PLANS, built once alongside the desc (index-parallel
+    // with fb_frame_descs). After record_fullscreen_raster was deleted, a fallback the frame steps DOWN to records through
+    // record_ceir_render — forward_agx/forward_srgb each carry a fullscreen `post` pass, so the step-down needs its
+    // OWN plans, not the main frame's. `plans_for()` resolves the desc actually being recorded to the right table.
+    crd::containers::Array<std::unique_ptr<crd::framecook::FramePlans>>     fb_frame_plans;
     crd::u64                                                                stepdown_logged = 0U;
+
+    // The replay plans for the frame desc ACTUALLY being recorded: the main `frame`, or a cached fallback it stepped to.
+    [[nodiscard]] const crd::framecook::FramePlans* plans_for(const crd::framecook::FrameGraphDesc* authored) const noexcept
+    {
+        if (authored == &frame) { return frame_plans.get(); }
+        for (crd::usize i = 0; i < fb_frame_descs.size(); ++i)
+        {
+            if (fb_frame_descs[i].get() == authored) { return fb_frame_plans[i].get(); }
+        }
+        return nullptr;
+    }
 
     [[nodiscard]] const crd::framecook::FrameGraphDesc* resolve_frame_asset(crd::containers::StringView crd_name)
     {
@@ -941,6 +978,19 @@ struct SceneRenderer::Impl
         name_copy.append(crd_name.data(), crd_name.size());
         fb_frame_names.push_back(static_cast<crd::containers::String&&>(name_copy));
         fb_frame_descs.push_back(std::move(d));
+        // CEIR-16-3d-3: build this fallback's fullscreen replay plans NOW (static — once per fallback). A step-down records
+        // it directly through record_ceir_render, so its fullscreen passes need plans exactly as the main frame does.
+        // `raw` still points at the desc (now owned by fb_frame_descs.back()); keep the array index-parallel on failure too.
+        auto                             fp = std::make_unique<crd::framecook::FramePlans>(alloc);
+        crd::renderasset::DiagnosticList fpd(alloc);
+        if (!crd::framecook::build_frame_plans(*raw, *fp, fpd))
+        {
+            CRD_LOG_ERROR(g_log_scenerender,
+                          "CEIR-16-3d-3: build_frame_plans failed for fallback frame '{}' — its fullscreen passes cannot record",
+                          raw->name.c_str());
+            fp.reset();
+        }
+        fb_frame_plans.push_back(std::move(fp));
         return raw;
     }
 
@@ -1058,6 +1108,8 @@ struct SceneRenderer::Impl
         crd::memory::destroy(*self->alloc, self->reload_frame_staged);
         self->reload_frame_staged = nullptr;
         self->frame_ok            = true;
+        self->rebuild_frame_plans(); // ⛔ CEIR-16-3d-3: a reloaded frame needs its fullscreen replay plans rebuilt —
+                                     // the stale table (built for the PREVIOUS frame) would replay the wrong shape.
         self->reload_frame_iface  = self->reload_frame_staged_iface;
         self->reload_frame_gen.value += 1;
     }
@@ -3111,6 +3163,11 @@ void SceneRenderer::set_soft_shadows(SoftShadow mode, crd::u32 angle_x100) noexc
                 == crd::framecook::FrameCookError::Ok)
             {
                 m_impl->frame = std::move(d);
+                // ⛔ CEIR-16-3d-3: this swaps the ACTIVE frame (forward_csm ⇄ forward_csm_moment for the soft-shadow
+                // tier), so its fullscreen replay plans must be rebuilt — the moment tier adds three fullscreen passes
+                // (convert/blur_x/blur_y) the previous frame's plan table has no entry for. Without this the moment
+                // passes record with a null plan (record_ceir_render → ctx.fail()) and every moment shadow is black.
+                m_impl->rebuild_frame_plans();
             }
         }
     }
@@ -3382,6 +3439,7 @@ bool SceneRenderer::set_frame_graph_toml(const char* toml_text)
     impl.frame            = static_cast<crd::framecook::FrameGraphDesc&&>(d);
     impl.frame_ok         = true;
     impl.frame_overridden = true;
+    impl.rebuild_frame_plans(); // CEIR-16-3c: build the migrated passes' replay plans for the newly-installed frame
     return true;
 }
 
@@ -3430,6 +3488,7 @@ bool SceneRenderer::set_asset_root(const char* dir)
         return false;
     }
     impl.frame_ok = true;
+    impl.rebuild_frame_plans(); // CEIR-16-3c: build the migrated passes' replay plans for the (re)loaded default frame
     return true;
 }
 
@@ -6524,7 +6583,12 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
             }
             else if (missing == nullptr) { impl.stepdown_logged = 0U; }
         }
-        if (!impl.frame_ok || !impl.recorder.record(*authored, fg, *impl.raster, host, &ferr, &fwhere))
+        // CEIR-16-3d-3: thread the replay plans that match the desc ACTUALLY being recorded — resolved AFTER the fallback
+        // swap (plans follow `authored`, not `impl.frame`). Both the main frame AND any fallback it stepped down to carry
+        // their own plans now (record_fullscreen_raster is gone — a fullscreen pass with no plan fails loudly, never renders).
+        const crd::framecook::FramePlans* const authored_plans = impl.plans_for(authored);
+        if (!impl.frame_ok
+            || !impl.recorder.record(*authored, fg, *impl.raster, host, &ferr, &fwhere, authored_plans))
         {
             // ⛔ REPORTED, never a silent black frame. A graph that fails to record must say which pass, which
             // resource, and why — that is the whole point of the named rejections.

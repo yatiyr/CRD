@@ -24,6 +24,7 @@ target_link_libraries(crd-render-graph
         crd-render-asset-core   # dependency graph + diagnostics
         crd-render-pass         # executor schemas + payload validation
         crd-gpu-context         # ICommandEncoder + the canonical command model
+        crd-ceir-gpu            # CEIR-16-3c: execute_render_lowered / RenderResolvers (the CEIR replay executor); ADR-0109 §4.2 edge
 )
 
 target_compile_features(crd-render-graph PUBLIC cxx_std_20)

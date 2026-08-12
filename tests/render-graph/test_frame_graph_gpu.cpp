@@ -16,6 +16,8 @@
 
 #include <crd/rendergraph/frame_graph.hpp>
 
+#include <crd/ceir/context.hpp>                     // CEIR-16-3d: the plan's Context for the device A/B render
+#include <crd/ceir/gpu/render_fullscreen_build.hpp> // CEIR-16-3d: build_fullscreen_ceir — the CEIR-replay plan
 #include <crd/gpu/context.hpp>
 #include <crd/gpu/raster_context.hpp>
 #include <crd/gpu/vulkan_context.hpp>
@@ -114,8 +116,6 @@ void run_depth_float_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& 
     DiagnosticList d(&alloc);
     rp::ExecutorRegistry schemas(&alloc);
     REQUIRE(rp::register_builtin_executors(schemas, d) == 14U);
-    GraphExecutorTable records(&alloc);
-    REQUIRE(register_builtin_records(records, d) == 14U);
 
     const u64 r_col = rp::pass_param_id("col");
     const u64 r_in0 = rp::pass_param_id("dep");
@@ -137,18 +137,34 @@ void run_depth_float_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& 
     }
     CompiledFrameGraph compiled(&alloc);
     REQUIRE(compile(tmpl, schemas, dim, dim, compiled, d));
+    // ⭐ CEIR-16-3d-3: record the depth_as_float fullscreen pass through the GENERIC CEIR replay (record_ceir_render,
+    // driven by a build_fullscreen_ceir PLAIN plan — depth_as_float ⇒ a plain sampler, never the shadow atlas). This is the
+    // SOLE fullscreen record path now (record_fullscreen_raster deleted); the value check brackets the RAW-float read.
+    crd::ceir::Context                  cctx(&alloc);
+    crd::ceir::gpu::FullscreenBuildDesc bd;
+    bd.num_inputs             = 1U;
+    bd.inputs[0].source_param = rp::pass_param_id("input0");
+    bd.inputs[0].is_depth     = true;
+    bd.depth_as_float         = true;
+    crd::containers::Array<crd::ceir::gpu::LoweredCommand> cmds(&alloc);
+    REQUIRE(crd::ceir::gpu::build_fullscreen_ceir(cctx, bd, cmds));
+    CeirPlanTable plans(&alloc);
+    plans.bind(1U, CeirPassPlan{&cctx, cmds.data(), static_cast<u32>(cmds.size())}); // keyed by the pass name_hash (1U)
+    GraphExecutorTable records(&alloc);
+    REQUIRE(records.register_record(rp::executor_type_id("fullscreen.raster"), record_ceir_render, d));
     ResourceTable table(&alloc);
     table.bind(ResolvedResource{r_col, rp::SlotResourceKind::ColorTarget, color.get(), nullptr, nullptr, nullptr});
     table.bind(ResolvedResource{r_in0, rp::SlotResourceKind::Texture, nullptr, nullptr, nullptr, dtex.get()});
     PassPrograms programs;
     programs.raster = program.get();
     u32 submit_count = 0U;
-    REQUIRE(execute_frame(compiled, tmpl, records, table, programs, raster, alloc, d, &submit_count));
+    REQUIRE(execute_frame(compiled, tmpl, records, table, programs, raster, alloc, d, &submit_count, nullptr, nullptr,
+                          &plans));
     REQUIRE_FALSE(d.has_errors());
     CHECK(submit_count == 1U);
     const u32 px = color->read_pixel(dim / 2U, dim / 2U);
-    CHECK((px & 0xFFU) >= 100U); // R ≈ 128 (raw depth 0.5 sampled) — a comparison sampler or a dropped read would not
-    CHECK((px & 0xFFU) <= 160U); // ...land near mid-grey; this brackets the RAW-float read specifically.
+    CHECK((px & 0xFFU) >= 100U); // R ≈ 128 (raw depth 0.5 sampled)
+    CHECK((px & 0xFFU) <= 160U); // brackets the RAW-float read; a comparison sampler would not land near mid-grey
 }
 
 // Build + run the two-pass graph on a raster context; assert the copied output holds the rendered triangle.
@@ -936,7 +952,7 @@ void run_fullscreen_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& r
         rp::ExecutorRegistry schemas(&alloc);
         REQUIRE(rp::register_builtin_executors(schemas, d) == 14U);
         GraphExecutorTable records(&alloc);
-        REQUIRE(register_builtin_records(records, d) == 14U);
+        REQUIRE(records.register_record(rp::executor_type_id("fullscreen.raster"), record_ceir_render, d));
 
         const u64 r_col = rp::pass_param_id("col");
         const u64 r_in0 = rp::pass_param_id("in0");
@@ -957,13 +973,24 @@ void run_fullscreen_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& r
         }
         CompiledFrameGraph compiled(&alloc);
         REQUIRE(compile(tmpl, schemas, dim, dim, compiled, d));
+        // CEIR-16-3d-3: the SOLE fullscreen record path — a build_fullscreen_ceir PLAIN plan (1 input) replayed by
+        // record_ceir_render. The value check proves draw_textured sampled the magenta through the generic path.
+        crd::ceir::Context                  cctx(&alloc);
+        crd::ceir::gpu::FullscreenBuildDesc bd;
+        bd.num_inputs             = 1U;
+        bd.inputs[0].source_param = rp::pass_param_id("input0");
+        crd::containers::Array<crd::ceir::gpu::LoweredCommand> cmds(&alloc);
+        REQUIRE(crd::ceir::gpu::build_fullscreen_ceir(cctx, bd, cmds));
+        CeirPlanTable plans(&alloc);
+        plans.bind(1U, CeirPassPlan{&cctx, cmds.data(), static_cast<u32>(cmds.size())});
         ResourceTable table(&alloc);
         table.bind(ResolvedResource{r_col, rp::SlotResourceKind::ColorTarget, color.get(), nullptr, nullptr, nullptr});
         table.bind(ResolvedResource{r_in0, rp::SlotResourceKind::Texture, nullptr, nullptr, nullptr, in0.get()});
         PassPrograms programs;
         programs.raster = program.get();
         u32 submit_count = 0U;
-        REQUIRE(execute_frame(compiled, tmpl, records, table, programs, raster, alloc, d, &submit_count));
+        REQUIRE(execute_frame(compiled, tmpl, records, table, programs, raster, alloc, d, &submit_count, nullptr, nullptr,
+                              &plans));
         REQUIRE_FALSE(d.has_errors());
         CHECK(submit_count == 1U);
         const u32 px = color->read_pixel(dim / 2U, dim / 2U);
@@ -1009,7 +1036,7 @@ void run_fullscreen_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& r
         rp::ExecutorRegistry schemas(&alloc);
         REQUIRE(rp::register_builtin_executors(schemas, d) == 14U);
         GraphExecutorTable records(&alloc);
-        REQUIRE(register_builtin_records(records, d) == 14U);
+        REQUIRE(records.register_record(rp::executor_type_id("fullscreen.raster"), record_ceir_render, d));
 
         const u64 r_col = rp::pass_param_id("col");
         const u64 r_in0 = rp::pass_param_id("in0");
@@ -1034,6 +1061,17 @@ void run_fullscreen_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& r
         }
         CompiledFrameGraph compiled(&alloc);
         REQUIRE(compile(tmpl, schemas, dim, dim, compiled, d));
+        // CEIR-16-3d-3: the SOLE fullscreen record path — a build_fullscreen_ceir BINDLESS plan (2 inputs ⇒ one
+        // resource_table(image)) replayed by record_ceir_render. The value check proves both slots bound in order.
+        crd::ceir::Context                  cctx(&alloc);
+        crd::ceir::gpu::FullscreenBuildDesc bd;
+        bd.num_inputs             = 2U;
+        bd.inputs[0].source_param = rp::pass_param_id("input0");
+        bd.inputs[1].source_param = rp::pass_param_id("input1");
+        crd::containers::Array<crd::ceir::gpu::LoweredCommand> cmds(&alloc);
+        REQUIRE(crd::ceir::gpu::build_fullscreen_ceir(cctx, bd, cmds));
+        CeirPlanTable plans(&alloc);
+        plans.bind(1U, CeirPassPlan{&cctx, cmds.data(), static_cast<u32>(cmds.size())});
         ResourceTable table(&alloc);
         table.bind(ResolvedResource{r_col, rp::SlotResourceKind::ColorTarget, color.get(), nullptr, nullptr, nullptr});
         table.bind(ResolvedResource{r_in0, rp::SlotResourceKind::Texture, nullptr, nullptr, nullptr, in0.get()});
@@ -1041,7 +1079,8 @@ void run_fullscreen_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& r
         PassPrograms programs;
         programs.raster = program.get();
         u32 submit_count = 0U;
-        REQUIRE(execute_frame(compiled, tmpl, records, table, programs, raster, alloc, d, &submit_count));
+        REQUIRE(execute_frame(compiled, tmpl, records, table, programs, raster, alloc, d, &submit_count, nullptr, nullptr,
+                              &plans));
         REQUIRE_FALSE(d.has_errors());
         CHECK(submit_count == 1U);
         // build_two_texture_composite_fs → out.r = input0.r, out.g = input1.g (proves both bindless slots bound in order)

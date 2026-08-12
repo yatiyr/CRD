@@ -13,10 +13,11 @@
 
 #include <crd/framecook/frame_asset.hpp>
 
+#include <crd/ceir/gpu/lower.hpp> // CEIR-16-3c: LoweredCommand — the per-pass CEIR replay plans built at load (FramePlans)
 #include <crd/gpu/frame_graph.hpp>
 #include <crd/gpu/program.hpp> // REN-38-A2: IGpuProgram — a compute kernel is a single stage, not a linked pair
 #include <crd/gpu/raster_context.hpp>
-#include <crd/rendergraph/frame_graph.hpp> // ⭐⭐ RAF-10: PassRecordFn — an app registers a custom pass executor here
+#include <crd/rendergraph/frame_graph.hpp> // ⭐⭐ RAF-10: PassRecordFn; CEIR-16-3c: CeirPlanTable / CeirPassPlan
 
 namespace crd::framecook
 {
@@ -301,6 +302,35 @@ struct FrameExecResult
 [[nodiscard]] const char* frame_exec_error_text(FrameExecError e) noexcept;
 [[nodiscard]] const char* frame_exec_status_text(FrameExecStatus s) noexcept;
 
+// ⭐ CEIR-16-3c: the per-frame-asset CEIR REPLAY PLANS — one CEIR composite plan per migrated (fullscreen.raster … later
+// scene.raster) pass, built ONCE when the FrameGraphDesc is finalized at load (NOT per-frame — the plan is topology-
+// deterministic and size-independent). A bad recipe FAILS AT LOAD with a diagnostic, never a black pass at frame N. The
+// owner (SceneRenderer) heap-holds one FramePlans next to each cached desc; `FrameRecorder::record` looks each pass's plan
+// up by name hash and threads it into the pass's RecordContext (the generic replay executor then drives it). ⛔ non-movable
+// (owns a heap ceir::Context whose ops the plan commands reference, plus a reserved storage the CeirPassPlans point into).
+struct FramePlans
+{
+    explicit FramePlans(crd::memory::IAllocator* a);
+    ~FramePlans();
+    FramePlans(const FramePlans&)            = delete;
+    FramePlans& operator=(const FramePlans&) = delete;
+    FramePlans(FramePlans&&)                 = delete;
+    FramePlans& operator=(FramePlans&&)      = delete;
+
+    // The lookup `record()` uses (reused across execute/execute_frame/record): pass name hash → CeirPassPlan.
+    crd::rendergraph::CeirPlanTable table;
+
+    // ── owned internals (do not touch directly) ── the CeirPassPlans in `table` point into these, so neither moves. ──
+    crd::ceir::Context* ctx = nullptr; // heap; holds every migrated pass's CEIR module (Context is non-movable → a pointer)
+    crd::containers::Array<crd::containers::Array<crd::ceir::gpu::LoweredCommand>> storage; // per-pass, reserved EXACTLY
+    crd::memory::IAllocator* alloc = nullptr;
+};
+
+// Build the CEIR replay plan for every migrated pass in `desc` (currently fullscreen.raster) into `out`, keyed by pass name
+// hash. Called ONCE at load, after the desc is finalized (flattened + CEIR-routed). Returns false (and reports into `diags`)
+// on a build/verify failure of any pass's composite — the load fails LOUD rather than shipping a pass that draws nothing.
+[[nodiscard]] bool build_frame_plans(const FrameGraphDesc& desc, FramePlans& out, crd::renderasset::DiagnosticList& diags);
+
 // ── REN-37.10: RECORD an authored graph into a CALLER-OWNED frame graph. ────────────────────────────────────
 // `execute_frame_graph` below creates a graph, records into it, builds and executes — fine for one view, and
 // structurally wrong for a frame that has several. A recorder lets a host reset ONE graph, record N authored
@@ -331,7 +361,8 @@ public:
 
     [[nodiscard]] bool record(const FrameGraphDesc& desc, crd::gpu::IFrameGraph& fg, crd::gpu::IRasterContext& raster,
                               IFrameGraphHost& host, FrameExecError* err = nullptr,
-                              crd::containers::String* where = nullptr);
+                              crd::containers::String* where = nullptr,
+                              const FramePlans* plans = nullptr); // CEIR-16-3c: the migrated passes' CEIR replay plans (null ⇒ none)
 
     // ⭐⭐ RAF-10: register an APPLICATION pass executor's record function under a canonical id (e.g. an
     // `app://executor/…` name a `kind = "custom"` pass names). It joins the SAME GraphExecutorTable a builtin uses, so
