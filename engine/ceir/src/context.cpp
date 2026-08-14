@@ -2779,13 +2779,20 @@ constexpr containers::StringView kLoadVocab[]  = {containers::StringView("clear"
                                                  containers::StringView("dontcare")};
 constexpr containers::StringView kStoreVocab[] = {containers::StringView("store"), containers::StringView("dontcare")};
 constexpr containers::StringView kClearKindVocab[] = {containers::StringView("float"), containers::StringView("uint")};
-constexpr containers::StringView kBlendVocab[]     = {containers::StringView("opaque"), containers::StringView("alpha"),
-                                                  containers::StringView("additive"),
-                                                  containers::StringView("premultiplied")};
+// ⛔ CEIR-16d-live-4a-1: the FULL BlendMode vocabulary (was opaque/alpha/additive/premultiplied). The WBOIT MRT modes
+// (multiply / revealage_multiply / reveal_composite) had no CEIR string — a deferred/WBOIT scene pass (mrt≥2) could not
+// name its per-attachment blend, so the reveal attachment silently materialized Opaque. Now the closed set = the whole enum.
+constexpr containers::StringView kBlendVocab[] = {
+    containers::StringView("opaque"),   containers::StringView("alpha"),      containers::StringView("additive"),
+    containers::StringView("premultiplied"), containers::StringView("multiply"), containers::StringView("revealage_multiply"),
+    containers::StringView("reveal_composite")};
 constexpr containers::StringView kCompareVocab[]   = {
     containers::StringView("never"),      containers::StringView("less"),          containers::StringView("equal"),
     containers::StringView("less_equal"), containers::StringView("greater"),       containers::StringView("not_equal"),
     containers::StringView("greater_equal"), containers::StringView("always")};
+// ⛔ CEIR-16z-2: the scene_draw_list GEOMETRY mode (§41 visbuffer dissolution). ABSENT ⇒ storage (the ordinary storage-pull
+// scene ladder). `procedural` = a visbuffer / gl_VertexIndex draw: GeometryKind::None, vertex_count only, NO storage binding.
+constexpr containers::StringView kGeometryVocab[] = {containers::StringView("storage"), containers::StringView("procedural")};
 
 // A CLOSED-vocabulary STRING attr on a render op: ABSENT ⇒ ok (unspecified is a valid default); else it must be a String
 // whose text is in `set` (a wrong KIND folds into "not ok" — one kind per attr). Mirrors ceir_intent_string_ok; reuses
@@ -2965,7 +2972,7 @@ RenderMisuse scan_render_region(const Context& ctx, const Region* r, bool in_sco
                     {
                         return {nullptr, op, RenderMisuseKind::ClearKindInvalid};
                     }
-                    if (!ceir_render_string_ok(ctx, op, containers::StringView("blend"), kBlendVocab, 4U))
+                    if (!ceir_render_string_ok(ctx, op, containers::StringView("blend"), kBlendVocab, 7U))
                     {
                         return {nullptr, op, RenderMisuseKind::BlendInvalid};
                     }
@@ -3027,6 +3034,14 @@ RenderMisuse scan_render_region(const Context& ctx, const Region* r, bool in_sco
                 if (!in_scope) { return {nullptr, op, RenderMisuseKind::DrawOutsideScope}; }
                 const RenderMisuse e = ceir_check_draw(ctx, op, dsh);
                 if (e.kind != RenderMisuseKind::None) { return e; }
+                // ⛔ CEIR-16z-2: the scene ladder's optional GEOMETRY mode (storage | procedural; absent = storage). A
+                // visbuffer (procedural) scene draws gl_VertexIndex geometry with NO storage — the closed vocab keeps the
+                // mode DECLARED, never inferred from a null storage buffer (which is the resolve-failure skip, not a mode).
+                if (nm == containers::StringView("render.scene_draw_list")
+                    && !ceir_render_string_ok(ctx, op, containers::StringView("geometry"), kGeometryVocab, 2U))
+                {
+                    return {nullptr, op, RenderMisuseKind::GeometryModeInvalid};
+                }
             }
             else if (in_scope && ceir_op_is_gpu_command(ctx, op->kind()))
             {
@@ -3073,6 +3088,7 @@ containers::StringView render_misuse_kind_name(RenderMisuseKind k) noexcept
     case RenderMisuseKind::IndirectArgsNotBuffer: return containers::StringView("indirect-args-not-buffer");
     case RenderMisuseKind::IndirectCountNotBuffer: return containers::StringView("indirect-count-not-buffer");
     case RenderMisuseKind::MaxDrawsInvalid: return containers::StringView("max-draws-invalid");
+    case RenderMisuseKind::GeometryModeInvalid: return containers::StringView("geometry-mode-invalid");
     }
     return containers::StringView("?");
 }

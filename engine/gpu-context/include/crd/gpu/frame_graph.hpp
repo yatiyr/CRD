@@ -137,6 +137,11 @@ enum class FgImageFormat : crd::u8
     return f == FgImageFormat::D32Float || f == FgImageFormat::D24S8 || f == FgImageFormat::D32FloatS8;
 }
 
+// CEIR-16z-3: is this an INTEGER (uint) colour format? The visibility-buffer id target (R32Uint) — a uint typed clear
+// (clear_kind=uint) is legal ONLY on such a target (RAH-1a.1), so the scene builder derives `clear_is_uint` from the write
+// format rather than an author boolean ("visibility is an ordinary typed attachment", §41). One home so no backend re-derives.
+[[nodiscard]] constexpr bool fg_format_is_uint(FgImageFormat f) noexcept { return f == FgImageFormat::R32Uint; }
+
 // The most array layers one transient may declare. A cap, and therefore stated rather than hidden: 4 CSM
 // cascades, 6 cube faces, 2 stereo views, 8 point-light faces-per-atlas all fit; `create_transient_image`
 // returns an INVALID handle above it (a checkable rejection, never a truncated allocation), and the asset

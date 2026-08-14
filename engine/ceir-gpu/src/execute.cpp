@@ -101,6 +101,8 @@ containers::StringView execute_error_name(ExecuteError e) noexcept
     case ExecuteError::UnresolvedProgram: return containers::StringView("UnresolvedProgram");
     case ExecuteError::NoFrameGraph: return containers::StringView("NoFrameGraph");
     case ExecuteError::FrameBuildFailed: return containers::StringView("FrameBuildFailed");
+    case ExecuteError::SceneChainMisuse: return containers::StringView("SceneChainMisuse");
+    case ExecuteError::UnresolvedSceneHandle: return containers::StringView("UnresolvedSceneHandle");
     }
     return containers::StringView("None");
 }

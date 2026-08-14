@@ -17,7 +17,7 @@ using crd::containers::StringView;
 
 namespace
 {
-// The 14 built-in mechanic NAMES (the strings that hash to the kExec* ids). The frame.pass `executor` SYMBOL carries the
+// The 13 built-in mechanic NAMES (the strings that hash to the kExec* ids). The frame.pass `executor` SYMBOL carries the
 // NAME; ExecutorTypeId is re-derived by fnv1a at the boundary (the cook==record gate). A custom pass uses p.executor.
 [[nodiscard]] StringView builtin_executor_name(crd::renderpass::ExecutorTypeId id) noexcept
 {
@@ -33,7 +33,6 @@ namespace
     if (id == kExecTessRaster) { return StringView("tess.raster"); }
     if (id == kExecMeshRaster) { return StringView("mesh.raster"); }
     if (id == kExecMeshIndirect) { return StringView("mesh.indirect"); }
-    if (id == kExecVisbufferRaster) { return StringView("visbuffer.raster"); }
     if (id == kExecPresent) { return StringView("present"); }
     return StringView();
 }

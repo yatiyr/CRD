@@ -1121,17 +1121,31 @@ FrameCookError pass_contract_diag(const FramePassDesc& p, crd::containers::Const
         // ⛔ Its target MUST be R32Uint. A primitive id written into an RGBA8 attachment is quantised to 8 bits
         // per channel, so ids beyond 255 alias onto each other and the deferred materialisation shades the WRONG
         // MESH — a plausible picture with the wrong materials, which is far worse than a black one.
-        if (pass_is_visbuffer(p))
+        // ⛔ CEIR-16z-3 (§41 dissolution): the visbuffer is now a scene.raster ROLE, so the trigger is RE-KEYED off the
+        // signals, never the deleted executor. (1) A PROCEDURAL scene pass (gl_VertexIndex draws) needs a draw_list to have
+        // any geometry. (2) The uint-clear INTENT — a declared `clear_id` — demands an R32Uint target (a primitive id in an
+        // RGBA8 attachment quantises to 8 bits, aliasing ids beyond 255 → the deferred pass shades the WRONG mesh). The
+        // clear_id trigger (not the procedural bit) is deliberate: procedural alone does not demand uint (advisor Q3).
+        if (pass_is_scene_raster(p) && pass_flag(p, crd::containers::StringView(pp::kProcedural))
+            && pass_str(p, crd::containers::StringView(pp::kDrawList)).empty())
         {
-            if (pass_str(p, crd::containers::StringView(pp::kDrawList)).empty())
-            {
-                set_where(where, std::string_view(p.name.c_str(), p.name.size()));
-                return FrameCookError::MissingDrawList;
-            }
+            set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+            return FrameCookError::MissingDrawList;
+        }
+        // ⛔ CEIR-16z-3b UNION trigger — two distinct author mistakes both demand an R32Uint id target: (procedural arm) a pass
+        // AUTHORED as a visbuffer (kind raster.visbuffer ⇒ pp::kProcedural — the ONLY procedural kind, so procedural ⟺ visbuffer
+        // intent) forgot the uint format (REN-38-A11); (clear_id arm) any scene pass DECLARED id semantics (`clear_id`) on a
+        // target that can't hold them. Procedural-only would drop the clear_id arm (a storage pass with clear_id on a float
+        // target silently no-ops); clear_id-only would drop the procedural arm (a visbuffer with no clear_id aliases ids).
+        if (pass_is_scene_raster(p)
+            && (pass_flag(p, crd::containers::StringView(pp::kProcedural)) || pass_has(p, crd::containers::StringView("clear_id"))))
+        {
             for (crd::usize w = 0; w < p.writes.size(); ++w)
             {
                 const FrameResourceDesc* rd = find_resource(p.writes[w].name);
-                if (rd != nullptr && rd->format != crd::gpu::FgImageFormat::R32Uint)
+                // a DEPTH write is not the id target (it routes to the depth attachment) — only colour writes carry the id.
+                if (rd == nullptr || crd::gpu::fg_format_has_depth(rd->format)) { continue; }
+                if (rd->format != crd::gpu::FgImageFormat::R32Uint)
                 {
                     set_where(where, std::string_view(p.writes[w].name.c_str(), p.writes[w].name.size()));
                     return FrameCookError::VisbufferNeedsUintTarget;
@@ -1690,26 +1704,30 @@ struct KindRow
     bool                            mrt;
     bool                            composite;
     bool                            indirect;
+    bool                            procedural; // CEIR-16z: a scene.raster pass with procedural (gl_VertexIndex) draws — the visbuffer role
 };
+// ⛔ CEIR-16z: `raster.visbuffer` is now a scene.raster ROLE (procedural draws + a uint id target), NOT a distinct executor —
+// exactly like raster.depth_only / raster.mrt name a scene.raster role. The kind STRING is preserved (zero asset churn); the
+// row maps it to kExecSceneRaster + procedural. record_visbuffer_raster + the visbuffer.raster executor are deleted (16z-3b).
 constexpr KindRow kKindTable[] = {
-    {"raster.geometry",      kExecSceneRaster,      false, false, false, false},
-    {"raster.depth_only",    kExecSceneRaster,      true,  false, false, false},
-    {"raster.mrt",           kExecSceneRaster,      false, true,  false, false},
-    {"raster.fullscreen",    kExecFullscreenRaster, false, false, false, false},
-    {"raster.composite",     kExecFullscreenRaster, false, false, true,  false},
-    {"compute",              kExecComputeDispatch,  false, false, false, false},
-    {"compute.indirect",     kExecComputeDispatch,  false, false, false, true },
-    {"raster.tess",          kExecTessRaster,       false, false, false, false},
-    {"raster.mesh",          kExecMeshRaster,       false, false, false, false},
-    {"raster.visbuffer",     kExecVisbufferRaster,  false, false, false, false},
-    {"raster.mesh.indirect", kExecMeshIndirect,     false, false, false, false},
-    {"raytrace",             kExecRaytraceDispatch, false, false, false, false},
-    {"raytrace.pipeline",    kExecRaytracePipeline, false, false, false, false},
-    {"clear",                kExecTransferClear,    false, false, false, false},
-    {"copy",                 kExecTransferCopy,     false, false, false, false},
-    {"blit",                 kExecTransferBlit,     false, false, false, false},
-    {"resolve",              kExecTransferResolve,  false, false, false, false},
-    {"present",              kExecPresent,          false, false, false, false},
+    {"raster.geometry",      kExecSceneRaster,      false, false, false, false, false},
+    {"raster.depth_only",    kExecSceneRaster,      true,  false, false, false, false},
+    {"raster.mrt",           kExecSceneRaster,      false, true,  false, false, false},
+    {"raster.fullscreen",    kExecFullscreenRaster, false, false, false, false, false},
+    {"raster.composite",     kExecFullscreenRaster, false, false, true,  false, false},
+    {"compute",              kExecComputeDispatch,  false, false, false, false, false},
+    {"compute.indirect",     kExecComputeDispatch,  false, false, false, true , false},
+    {"raster.tess",          kExecTessRaster,       false, false, false, false, false},
+    {"raster.mesh",          kExecMeshRaster,       false, false, false, false, false},
+    {"raster.visbuffer",     kExecSceneRaster,      false, false, false, false, true },
+    {"raster.mesh.indirect", kExecMeshIndirect,     false, false, false, false, false},
+    {"raytrace",             kExecRaytraceDispatch, false, false, false, false, false},
+    {"raytrace.pipeline",    kExecRaytracePipeline, false, false, false, false, false},
+    {"clear",                kExecTransferClear,    false, false, false, false, false},
+    {"copy",                 kExecTransferCopy,     false, false, false, false, false},
+    {"blit",                 kExecTransferBlit,     false, false, false, false, false},
+    {"resolve",              kExecTransferResolve,  false, false, false, false, false},
+    {"present",              kExecPresent,          false, false, false, false, false},
 };
 } // namespace
 
@@ -1732,6 +1750,7 @@ bool pass_mechanic_from_kind(crd::containers::StringView kind, FramePassDesc& ou
             set_pass_flag(out, SV(pp::kMrt), r.mrt);
             set_pass_flag(out, SV(pp::kComposite), r.composite);
             set_pass_flag(out, SV(pp::kIndirect), r.indirect);
+            set_pass_flag(out, SV(pp::kProcedural), r.procedural);
             return true;
         }
     }
@@ -1745,10 +1764,11 @@ const char* pass_kind_string(const FramePassDesc& p) noexcept
     const bool mrt        = pass_flag(p, SV(pp::kMrt));
     const bool composite  = pass_flag(p, SV(pp::kComposite));
     const bool indirect   = pass_flag(p, SV(pp::kIndirect));
+    const bool procedural = pass_flag(p, SV(pp::kProcedural));
     for (const KindRow& r : kKindTable)
     {
         if (p.executor_id == r.exec && depth_only == r.depth_only && mrt == r.mrt && composite == r.composite
-            && indirect == r.indirect)
+            && indirect == r.indirect && procedural == r.procedural)
         {
             return r.kind;
         }
@@ -1903,7 +1923,7 @@ bool is_folded_pass_param(crd::containers::StringView name) noexcept
         pp::kShader,        pp::kKernel,       pp::kDrawList,      pp::kView,          pp::kTechnique,
         pp::kRaygen,        pp::kMiss,         pp::kClosestHit,    pp::kAnyHit,        pp::kIntersection,
         pp::kCallable,      pp::kSharedDepth,  pp::kDepthOnly,     pp::kMrt,           pp::kComposite,
-        pp::kIndirect,      pp::kClearColor,   pp::kClearDepth,    pp::kDepthCompare,  pp::kMaterialPass,
+        pp::kIndirect,      pp::kProcedural,   pp::kClearColor,    pp::kClearDepth,    pp::kDepthCompare,  pp::kMaterialPass,
         pp::kBlendCount,    pp::kShadingRate,  pp::kRateCombiner,  pp::kConservative,  pp::kFilter,
         pp::kLoad,          pp::kLoadDepth,    pp::kDepthAsFloat,  pp::kUntracked,     pp::kHasSampler,
         pp::kSamplerMin,    pp::kSamplerMag,   pp::kSamplerMip,    pp::kSamplerAddr,   pp::kSamplerCompare,

@@ -5294,6 +5294,299 @@ TEST_CASE("REN-41 GATE: the cluster mesh shader unpacks a packed DAG to match th
     cluster_mesh_gate_body(*vk, *raster);
 }
 
+// ── ⭐⭐ CEIR-17d: GPU cull + INDIRECT as CEIR — the `gpu_cull_verify` CPU-vs-GPU verdict compare, FINALLY asserted on the
+// SHIPPED live config. ⛔ 17d is a PROOF slice, not a re-express: the GPU cull orchestration is ALREADY authored CEIR —
+// `forward_csm_gpu.frame.toml` records the cull as `kind="compute"` passes (`cull_reset`/`cull_view0..4`/`occlusion_*`)
+// whose kernels are host-resolved via `program_registry.register_kernel` (scene_renderer.cpp:2996-3016; NO inline
+// dispatch), `cull_args` is an `indirect_args` resource, and the raster passes draw off the device count (`DrawItem::args`)
+// — all through `record_ceir_render` since CEIR-16b migrated `compute.dispatch`. What was MISSING: the differential the
+// `read_gpu_cull_counts` readback was built for (`instances[v] == cpu_instances[v]`, scene_renderer.hpp:527-532) was only
+// INFO-logged (the occ A/B at REN-40-G3 asserts PIXELS on a bespoke inline graph) — CHECKed NOWHERE, on no shipped config.
+// This gate closes that: the device's camera-view survivor count must EQUAL the CPU frustum cull's, on the config the app
+// ships. ⛔ VIEW0 ONLY: the cascades' commands are zeroed post-frame by phase-2 `occlusion_reset` (forward_csm_gpu
+// L239-254), so their post-frame counts are legitimately 0 — asserting them would be a false gate.
+TEST_CASE("CEIR-17d GATE: the shipped GPU-cull config's device verdict EQUALS the CPU cull (Vulkan)",
+          "[scene-render][ceir][ceir17][ren40][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_17d_pack_", cube_id);
+    write_mesh_pack(pack.path, cube_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+
+    // ⭐⭐ UNOCCLUDED scene: near cubes IN the camera frustum, WELL SEPARATED so no cube sits behind another — every
+    // cube's screen rect shows the reverse-Z background clear, so the HZB test rejects NOTHING and phase-2 occlusion is a
+    // provable no-op on view0 (REN-40-G3 gates that no-op pixel-wise on this same fleet). ⇒ view0's post-frame count ==
+    // the frustum verdict, so the `==` below is sound. FAR cubes (x=1000, z=1000) are OUTSIDE the frustum ⇒ BOTH culls
+    // drop them, so the equality is not a trivial tie at `total`.
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+    constexpr u32 near_count = 8U;
+    constexpr u32 far_count  = 6U;
+    for (u32 i = 0; i < near_count + far_count; ++i)
+    {
+        const f32             x = i < near_count ? (static_cast<f32>(i) - 3.5F) * 1.5F : 1000.0F + static_cast<f32>(i);
+        const f32             z = i < near_count ? 0.0F : 1000.0F;
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.world = math::from_trs(math::Vec3f{x, 0.0F, z}, math::Quatf::identity(), math::Vec3f{1, 1, 1});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{cube_id, {}});
+    }
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    if (!renderer.init_programs(*vk)) { SKIP("shader compiler unavailable"); }
+    // ⛔ ORDERING (scene_renderer.hpp:714 scar): the cull + verify + shadow flags change which kernels the graph cooks, so
+    // set them BEFORE `set_frame_graph_toml`. `set_gpu_cull_verify` keeps the CPU cull running as the reference (without
+    // it, scene_renderer.cpp:5996 clears the CPU verdict and `cpu_instances` would be 0).
+    renderer.set_gpu_cull(true);
+    renderer.set_gpu_cull_verify(true);
+    if (!renderer.set_shadows_enabled(true))
+    {
+        SKIP("device cannot enable cascade shadows (forward_csm_gpu requires them)");
+    }
+    (void)renderer.sync(world);
+
+    auto target = raster->create_color_depth_target(256U, 256U);
+    REQUIRE(target != nullptr);
+    const math::Mat4f view = math::look_at(math::Vec3f{0, 8, 20}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+
+    containers::String graph(&galloc());
+    REQUIRE(read_shipped_asset("frame/forward_csm_gpu.frame.toml", graph));
+    REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
+    const auto r = renderer.render(*target, proj * view, math::Vec3f{0.4F, 1.0F, 0.2F}, gpu::ClearColor{0, 0, 0, 1});
+
+    // ⛔ STEP-DOWN PIN (the A==A / delete-ref scar): forward_csm_gpu carries requires=["shadows"] + fallback=forward_agx.
+    // A silent by-name step-down would make the "GPU cull" a CPU path and the compare A==A. forward_agx has NO compute
+    // passes, so a positive compute-dispatch count is the clean discriminator that the GPU-cull graph actually ENGAGED.
+    REQUIRE(r.draws > 0U);
+    REQUIRE(renderer.gpu_cull());
+    REQUIRE(raster->compute_dispatch_count() > 0U);
+
+    scenerender::SceneRenderer::GpuCullCounts gc{};
+    REQUIRE(renderer.read_gpu_cull_counts(gc));
+    REQUIRE(gc.groups > 0U);         // a mesh group with a device cull_args buffer was read back
+    REQUIRE(gc.bounds_checked > 0U); // ⛔ bounds_mismatch==0 with bounds_checked==0 is a pass that checked NOTHING
+    INFO("view0 gpu=" << gc.instances[0] << " cpu=" << gc.cpu_instances[0] << " groups=" << gc.groups
+         << " bounds_checked=" << gc.bounds_checked << " bounds_mismatch=" << gc.bounds_mismatch
+         << " dispatches=" << raster->compute_dispatch_count() << " draws=" << r.draws);
+
+    // ⭐⭐ THE DIFFERENTIAL, ASSERTED: the device's camera-view survivor count EQUALS the CPU frustum cull's, over the same
+    // boxes and the same planes — the compare `read_gpu_cull_counts` was built to make and no test made.
+    CHECK(gc.cpu_instances[0] >= 1U);         // the near cubes survived (not an empty cull)
+    CHECK(gc.cpu_instances[0] <= near_count); // the far cubes were frustum-culled (the tie is NOT at `total`)
+    CHECK(gc.instances[0] == gc.cpu_instances[0]);
+    CHECK(gc.instances[0] > 0U);
+    CHECK(gc.bounds_mismatch == 0U); // the device tested the SAME AABBs the CPU did
+}
+
+// ── ⭐⭐ CEIR-17e: SKINNED as CEIR — GPU skinning through the SHIPPED live config is bit-identical to CPU skinning. ⛔ 17e
+// is a PROOF slice like 17d: the palette compute is ALREADY authored CEIR (the `gpu_skin` CKIR kernel, host-resolved via
+// program_registry.register_kernel at scene_renderer.cpp:3014; a `kind="compute"` pass in forward_csm_gpu recorded through
+// record_ceir_render), and the skinned VARIANT selection is the resolve_program dimension (scene_renderer.cpp:6276-6305 —
+// skinned × {base/textured/shadowed}). REN-40-F already proves GPU==CPU palette bit-identical, but on a BESPOKE inline
+// TOML; this gate runs that differential on the SHIPPED forward_csm_gpu (the gates-run-configs scar), with a MIXED
+// skinned+rigid scene (what the config actually serves — an all-skinned world is another bespoke scene). ⛔ ONE-GRAPH-FLIP:
+// BOTH arms render forward_csm_gpu, so TAA + cull + occlusion are IDENTICAL across the A/B and the palette ORIGIN (CPU vs
+// the device gpu_skin pass) is the only variable — the two-shipped-config A/B (agx-vs-gpu) is REJECTED because agx has no
+// TAA and would diff on that, not on skinning. ⛔ ENGAGEMENT (A==A scar): arm B (set_gpu_skinning(true)) uploads NO CPU
+// palette — sync uploads skeleton/clip and the gpu_skin compute pass is the ONLY palette source — so diffs==0 proves the
+// device kernel RAN and matches CPU (a silent CPU-palette fallback would make it vacuous; gpu_skinning() effective +
+// compute_dispatch>0 pin against that). Cull COUNTS are NOT asserted here — that is 17d's gate; 17e's claim is narrow
+// (palette-origin parity on a shipped config).
+TEST_CASE("CEIR-17e GATE: GPU skinning through the shipped config is bit-identical to CPU skinning (Vulkan)",
+          "[scene-render][ceir][ceir17][ren40][skinning][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    // ── resources: a SKINNED mesh (1-joint translate clip, mirroring REN-40-F) + a RIGID cube ──
+    const resources::ResourceId mesh_id  = resources::ResourceId::mint_random();
+    const resources::ResourceId skel_id  = resources::ResourceId::mint_random();
+    const resources::ResourceId clip_id  = resources::ResourceId::mint_random();
+    const resources::ResourceId rigid_id = resources::ResourceId::mint_random();
+    const TempPack              mesh_pack("sr_17e_m_", mesh_id);
+    const TempPack              skel_pack("sr_17e_s_", skel_id);
+    const TempPack              clip_pack("sr_17e_c_", clip_id);
+    const TempPack              rigid_pack("sr_17e_r_", rigid_id);
+    {
+        auto art = build_skinned_cube_crdr(mesh_id);
+        write_resource_pack(mesh_pack.path, mesh_id, resources::kFourCC_MESH, art);
+    }
+    {
+        anim::SkeletonResource sk(&galloc());
+        sk.parents.push_back(-1);
+        const f32 rest[10] = {0, 0, 0, 0, 0, 0, 1, 1, 1, 1};
+        for (f32 v : rest) { sk.rest.push_back(v); }
+        const f32 ibm[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        for (f32 v : ibm) { sk.inverse_binds.push_back(v); }
+        sk.name_offsets.push_back(0);
+        const char jn[] = "root";
+        for (const char c : jn) { sk.name_pool.push_back(c); }
+        auto art = anim::skeleton_build(sk, skel_id, &galloc());
+        write_resource_pack(skel_pack.path, skel_id, anim::kFourCC_SKEL, art);
+    }
+    {
+        anim::AnimClipResource cl(&galloc());
+        cl.duration = 1.0F;
+        anim::AnimTrack trk{};
+        trk.target     = 0;
+        trk.channel    = static_cast<u8>(anim::AnimChannel::Translation);
+        trk.interp     = 1;
+        trk.components = 3;
+        trk.key_count  = 2;
+        trk.times_off  = 0;
+        trk.values_off = 2;
+        cl.tracks.push_back(trk);
+        const f32 d[8] = {0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 3.0F, 0.0F, 0.0F};
+        for (f32 v : d) { cl.data.push_back(v); }
+        auto art = anim::anim_clip_build(cl, clip_id, &galloc());
+        write_resource_pack(clip_pack.path, clip_id, anim::kFourCC_ANIM, art);
+    }
+    write_mesh_pack(rigid_pack.path, rigid_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    anim::register_anim_loaders(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(mesh_pack.path.generic()).is_valid());
+    REQUIRE(rm.mount_manifest(skel_pack.path.generic()).is_valid());
+    REQUIRE(rm.mount_manifest(clip_pack.path.generic()).is_valid());
+    REQUIRE(rm.mount_manifest(rigid_pack.path.generic()).is_valid());
+
+    // ── world: 2 skinned cubes (distinct anim times) + 1 rigid cube, well separated + in-frustum (unoccluded ⇒ cull is
+    // exact and occlusion a no-op — the CEIR-17d construction) ──
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+    const auto add_skinned = [&](math::Vec3f pos, f32 anim_time) {
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.translation = math::from_raw_vec<units::dim::Length>(pos);
+        t.scale       = {2.0F, 2.0F, 2.0F};
+        t.world       = math::from_trs(pos, math::Quatf::identity(), {2.0F, 2.0F, 2.0F});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{mesh_id, {}});
+        scene::SkeletonAnimator sa{};
+        sa.skeleton = skel_id;
+        sa.clip     = clip_id;
+        sa.time     = anim_time;
+        sa.speed    = 0.0F;
+        world.add_component(e, sa);
+    };
+    add_skinned({-4.0F, 0.0F, 0.0F}, 0.0F);
+    add_skinned({4.0F, 0.0F, 0.0F}, 0.5F);
+    {
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.world = math::from_trs(math::Vec3f{0.0F, 0.0F, 0.0F}, math::Quatf::identity(), {1.0F, 1.0F, 1.0F});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{rigid_id, {}});
+    }
+
+    const math::Mat4f view = math::look_at(math::Vec3f{0.0F, 6.0F, 16.0F}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Vec3f light{0.3F, 1.0F, 0.2F};
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+    constexpr u32     dim = 256U;
+
+    // ⛔ TWO renderer instances, each rendering its FIRST frame — forward_csm_gpu carries PERSISTENT taa_history and a
+    // per-frame TAA jitter, so flipping the flag on ONE renderer makes arm A frame N and arm B frame N+1 (different jitter
+    // + carried history → ~2k silhouette-edge diffs that are NOTHING to do with skinning). Two fresh renderers each at
+    // frame 0 share the same empty history + frame-0 jitter, so TAA is identical and the palette ORIGIN is the only
+    // variable — the REN-40-G3 occ A/B (ref_renderer + occ_renderer) uses exactly this shape. flags before the graph cooks
+    // (ordering scar); gpu_cull + shadows ON in BOTH so cull/occlusion also cancel.
+    const auto render_arm = [&](scenerender::SceneRenderer& r, bool gpu_skin, gpu::IRasterTarget& out) {
+        REQUIRE(r.init(*raster, rm));
+        REQUIRE(r.init_programs(*vk));
+        r.set_gpu_cull(true);
+        REQUIRE(r.set_shadows_enabled(true));
+        r.set_gpu_skinning(gpu_skin);
+        containers::String graph(&galloc());
+        REQUIRE(read_shipped_asset("frame/forward_csm_gpu.frame.toml", graph));
+        REQUIRE(r.set_frame_graph_toml(graph.c_str()));
+        REQUIRE(r.sync(world).total_instances == 3U);
+        return r.render(out, proj * view, light, clear);
+    };
+
+    // ⚠ shadow-capability probe on a throwaway renderer: if the device can't enable cascade shadows, forward_csm_gpu steps
+    // down and the whole gate is moot — SKIP rather than gate a fallback path.
+    {
+        scenerender::SceneRenderer probe(&galloc());
+        REQUIRE(probe.init(*raster, rm));
+        if (!probe.init_programs(*vk)) { SKIP("shader compiler unavailable"); }
+        if (!probe.set_shadows_enabled(true))
+        {
+            SKIP("device cannot enable cascade shadows (forward_csm_gpu requires them)");
+        }
+    }
+
+    // ── ARM A: CPU palette (the proven reference — sync fills the palette on the CPU) ──
+    auto ref = raster->create_color_depth_target(dim, dim);
+    REQUIRE(ref != nullptr);
+    scenerender::SceneRenderer renderer_cpu(&galloc());
+    const auto                 r_cpu = render_arm(renderer_cpu, false, *ref);
+    REQUIRE(r_cpu.draws > 0U);
+
+    // ── ARM B: GPU palette (sync uploads skeleton/clip; the gpu_skin compute pass is the ONLY palette source) ──
+    auto tgt = raster->create_color_depth_target(dim, dim);
+    REQUIRE(tgt != nullptr);
+    scenerender::SceneRenderer renderer_gpu(&galloc());
+    const auto                 r_gpu = render_arm(renderer_gpu, true, *tgt);
+    // ⛔ ENGAGEMENT (A==A scar): the GPU-skin path must be effective + the device compute must have dispatched — otherwise
+    // both arms would be CPU palette and diffs==0 would be vacuous. arm B uploads NO CPU palette, so a live gpu_skin
+    // dispatch is the only way its palette is correct; diffs==0 THEN proves the device kernel ran and equals CPU.
+    REQUIRE(r_gpu.draws > 0U);
+    REQUIRE(renderer_gpu.gpu_skinning());
+    REQUIRE(raster->compute_dispatch_count() > 0U);
+
+    // ── BIT-IDENTICAL pixels + non-trivial coverage — GPU skinning == CPU skinning on the SHIPPED config ──
+    // ⛔ forward_csm_gpu clears to [0.09,0.10,0.13] (tonemapped) — the whole frame is non-black, so "non-zero RGB" is a
+    // VACUOUS coverage proxy. Count pixels that DIFFER from the corner background instead: that is the drawn geometry.
+    const u32 bg      = tgt->read_pixel(0U, 0U) & 0x00FFFFFFU;
+    u32       diffs   = 0U;
+    u32       covered = 0U;
+    for (u32 y = 0; y < dim; ++y)
+    {
+        for (u32 x = 0; x < dim; ++x)
+        {
+            const u32 a = ref->read_pixel(x, y);
+            const u32 b = tgt->read_pixel(x, y);
+            if (a != b) { ++diffs; }
+            if ((b & 0x00FFFFFFU) != bg) { ++covered; }
+        }
+    }
+    INFO("diffs=" << diffs << " covered=" << covered << " bg=" << bg << " draws=" << r_gpu.draws
+         << " dispatches=" << raster->compute_dispatch_count());
+    CHECK(diffs == 0U);
+    CHECK(covered > 500U); // the skinned + rigid cubes are actually on screen (not an empty/background frame)
+}
+
 #ifdef _WIN32
 TEST_CASE("REN-40-G1 GATE (DX12): depth prepass with shared_depth is pixel-identical to forward-only",
           "[scene-render][ren40][depth-prepass][gpu][dx12]")

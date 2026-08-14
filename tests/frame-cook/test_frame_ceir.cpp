@@ -727,6 +727,8 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches VisbufferNeedsUintTarget (progr
     const crd::u32 vb = fb.add_pass("visbuffer", "raster.visbuffer");
     fb.pass_draw_list(vb, "opaque"); // has a draw list (so NOT MissingDrawList) …
     fb.pass_writes(vb, "vis");       // … but the target is not R32Uint
+    fb.pass_param(vb, "clear_id", 7.0); // ⛔ CEIR-16z-3b: exercises the CLEAR_ID arm of the union trigger (a scene pass DECLARING
+                                        // id semantics on a non-uint target); REN-38-A11 (gpu-context) covers the PROCEDURAL arm.
 
     ceir::Context       ctx(&alloc);
     ceir::Module* const m = to_ceir_frame(fb.desc(), ctx);

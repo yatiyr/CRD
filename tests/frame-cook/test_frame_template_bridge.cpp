@@ -217,7 +217,7 @@ void gate_shipped_asset(const char* stem, crd::memory::IAllocator& alloc)
 
     crd::renderasset::DiagnosticList diags(&alloc);
     rp::ExecutorRegistry             schemas(&alloc);
-    REQUIRE(rp::register_builtin_executors(schemas, diags) == 14U);
+    REQUIRE(rp::register_builtin_executors(schemas, diags) == 13U);
     ab_template_fidelity(desc, schemas, alloc);
 }
 
@@ -263,7 +263,7 @@ TEST_CASE("RAF-8: a forward_csm frame bridges to a render-graph template and com
 
     crd::renderasset::DiagnosticList diags(&alloc);
     rp::ExecutorRegistry schemas(&alloc);
-    REQUIRE(rp::register_builtin_executors(schemas, diags) == 14U);
+    REQUIRE(rp::register_builtin_executors(schemas, diags) == 13U);
 
     rg::FrameGraphTemplate tmpl(&alloc);
     REQUIRE(fc::build_frame_graph_template(builder.desc(), four_cascades, nullptr, schemas, tmpl, diags));
@@ -339,7 +339,7 @@ TEST_CASE("CEIR-15d-5: the ceir round-trip lowers to an IDENTICAL render-graph t
 
     crd::renderasset::DiagnosticList diags(&alloc);
     rp::ExecutorRegistry             schemas(&alloc);
-    REQUIRE(rp::register_builtin_executors(schemas, diags) == 14U);
+    REQUIRE(rp::register_builtin_executors(schemas, diags) == 13U);
 
     // (A) lower the DIRECT desc.
     rg::FrameGraphTemplate tmpl_a(&alloc);
@@ -404,9 +404,9 @@ TEST_CASE("CEIR-15e: shipped frame assets lower identically through the CEIR pat
     SECTION("forward_csm_gpu") { gate_shipped_asset("forward_csm_gpu", alloc); }
     SECTION("forward_csm_gpu_srgb") { gate_shipped_asset("forward_csm_gpu_srgb", alloc); }
     SECTION("scene_cull") { gate_shipped_asset("scene_cull", alloc); }
-    // (scene_gpu_cull is EXCLUDED: it is a compute-only GPU-cull FRAGMENT — produces the instances/cull_args buffers a forward
-    //  pass consumes, writes no @output, so it is not a standalone renderable frame [NoOutputPass]. Its CEIR fidelity rides
-    //  the frames that consume its output; the standalone-frame gate does not apply to a fragment.)
+    // (scene_gpu_cull was a compute-only GPU-cull FRAGMENT [no @output] — DELETED at CEIR-17z: it referenced the unregistered
+    //  `engine://scene/cull_compact` [the superseded per-desc cull design] and had zero consumers. The live GPU cull is
+    //  forward_csm_gpu's cooked per-view `cull_view0..4` variants, gated above.)
     SECTION("scene_mesh") { gate_shipped_asset("scene_mesh", alloc); }
     SECTION("scene_tess") { gate_shipped_asset("scene_tess", alloc); }
     SECTION("scene_visbuffer") { gate_shipped_asset("scene_visbuffer", alloc); }
@@ -426,7 +426,7 @@ TEST_CASE("RAF-8: an amplification pass kind now MAPS (the RAF-8 tail closed the
 
     crd::renderasset::DiagnosticList diags(&alloc);
     rp::ExecutorRegistry schemas(&alloc);
-    REQUIRE(rp::register_builtin_executors(schemas, diags) == 14U);
+    REQUIRE(rp::register_builtin_executors(schemas, diags) == 13U);
     rg::FrameGraphTemplate tmpl(&alloc);
     REQUIRE(fc::build_frame_graph_template(builder.desc(), four_cascades, nullptr, schemas, tmpl, diags));
     REQUIRE_FALSE(diags.has_errors());
@@ -446,7 +446,7 @@ TEST_CASE("RAF-8: a malformed mapped pass still fails the bridge LOUDLY", "[fram
 
     crd::renderasset::DiagnosticList diags(&alloc);
     rp::ExecutorRegistry schemas(&alloc);
-    REQUIRE(rp::register_builtin_executors(schemas, diags) == 14U);
+    REQUIRE(rp::register_builtin_executors(schemas, diags) == 13U);
     rg::FrameGraphTemplate tmpl(&alloc);
     REQUIRE_FALSE(fc::build_frame_graph_template(builder.desc(), four_cascades, nullptr, schemas, tmpl, diags));
     CHECK(diags.contains(crd::renderasset::DiagCode::InvalidSlot));
@@ -474,7 +474,7 @@ TEST_CASE("RAF-8: a compute pass that reads a TEXTURE routes it to the sampled s
 
     crd::renderasset::DiagnosticList diags(&alloc);
     rp::ExecutorRegistry schemas(&alloc);
-    REQUIRE(rp::register_builtin_executors(schemas, diags) == 14U);
+    REQUIRE(rp::register_builtin_executors(schemas, diags) == 13U);
     rg::FrameGraphTemplate tmpl(&alloc);
     REQUIRE(fc::build_frame_graph_template(builder.desc(), four_cascades, nullptr, schemas, tmpl, diags));
     REQUIRE_FALSE(diags.has_errors());
@@ -509,7 +509,7 @@ TEST_CASE("RAF-8: an MRT depth-prepass routes the depth write to depth and the c
 
     crd::renderasset::DiagnosticList diags(&alloc);
     rp::ExecutorRegistry schemas(&alloc);
-    REQUIRE(rp::register_builtin_executors(schemas, diags) == 14U);
+    REQUIRE(rp::register_builtin_executors(schemas, diags) == 13U);
     rg::FrameGraphTemplate tmpl(&alloc);
     REQUIRE(fc::build_frame_graph_template(builder.desc(), four_cascades, nullptr, schemas, tmpl, diags));
     REQUIRE_FALSE(diags.has_errors());
@@ -554,7 +554,7 @@ TEST_CASE("RAF-12.2: a TRUE multi-colour MRT emits per-attachment blend params (
 
     crd::renderasset::DiagnosticList diags(&alloc);
     rp::ExecutorRegistry             schemas(&alloc);
-    REQUIRE(rp::register_builtin_executors(schemas, diags) == 14U);
+    REQUIRE(rp::register_builtin_executors(schemas, diags) == 13U);
     rg::FrameGraphTemplate tmpl(&alloc);
     REQUIRE(fc::build_frame_graph_template(builder.desc(), four_cascades, nullptr, schemas, tmpl, diags));
     REQUIRE_FALSE(diags.has_errors());
@@ -601,7 +601,7 @@ TEST_CASE("RAF-8: an unresolved for_each fails the bridge LOUDLY", "[framecook][
 
     crd::renderasset::DiagnosticList diags(&alloc);
     rp::ExecutorRegistry schemas(&alloc);
-    REQUIRE(rp::register_builtin_executors(schemas, diags) == 14U);
+    REQUIRE(rp::register_builtin_executors(schemas, diags) == 13U);
     rg::FrameGraphTemplate tmpl(&alloc);
     // a NULL resolver ⇒ the host cannot answer the cascade count ⇒ UnresolvedForEach, not a silent skip.
     REQUIRE_FALSE(fc::build_frame_graph_template(builder.desc(), nullptr, nullptr, schemas, tmpl, diags));
@@ -664,6 +664,81 @@ TEST_CASE("ceir 16-mesh-1: build_frame_plans builds a mesh.indirect pass's CEIR 
     CHECK(plan->ctx != nullptr);
     CHECK(plan->commands != nullptr);
     CHECK(plan->count == 3U);
+}
+
+TEST_CASE("ceir 16d-live-2: build_frame_plans builds scene.raster plans (forward + depth-only + mrt>=2 via 16d-live-4a-4)",
+          "[framecook][ceir][frame]")
+{
+    using SV = crd::containers::StringView;
+    SECTION("a forward scene pass (raster.geometry) gets a single-colour CEIR scene plan")
+    {
+        crd::memory::TlsfAllocator       alloc(2U << 20U, nullptr, "16d-live-2-fwd");
+        fc::FrameGraphBuilder            b(&alloc, SV("scene_fwd"));
+        b.add_image(SV("scene_color"), crd::gpu::FgImageFormat::RGBA16F, 1920U, 1080U, /*sampled*/ true);
+        const u32 fwd = b.add_pass(SV("forward"), SV("raster.geometry"));
+        b.pass_writes(fwd, SV("scene_color"));
+        fc::FramePlans                   plans(&alloc);
+        crd::renderasset::DiagnosticList diags(&alloc);
+        REQUIRE(fc::build_frame_plans(b.desc(), plans, diags));
+        REQUIRE_FALSE(diags.has_errors());
+        const rg::CeirPassPlan* const plan = plans.table.find(rp::pass_param_id(SV("forward")));
+        REQUIRE(plan != nullptr);
+        CHECK(plan->count == 3U); // Begin(scope: colour + a depth TEMPLATE) / Draw(scene_draw_list) / End
+    }
+    SECTION("a depth-only cascade pass (raster.depth_only) gets a 0-colour depth-only scene plan")
+    {
+        crd::memory::TlsfAllocator       alloc(2U << 20U, nullptr, "16d-live-2-depth");
+        fc::FrameGraphBuilder            b(&alloc, SV("scene_depth"));
+        b.add_image(SV("shadow_atlas"), crd::gpu::FgImageFormat::D32Float, 1024U, 1024U, /*sampled*/ true, 4U);
+        const u32 csm = b.add_pass(SV("cascade"), SV("raster.depth_only"));
+        b.pass_writes(csm, SV("shadow_atlas"), /*indexed*/ true);
+        fc::FramePlans                   plans(&alloc);
+        crd::renderasset::DiagnosticList diags(&alloc);
+        REQUIRE(fc::build_frame_plans(b.desc(), plans, diags));
+        REQUIRE_FALSE(diags.has_errors());
+        const rg::CeirPassPlan* const plan = plans.table.find(rp::pass_param_id(SV("cascade")));
+        REQUIRE(plan != nullptr);
+        CHECK(plan->count == 3U); // a 0-colour depth-only scope still lowers Begin / Draw / End
+    }
+    SECTION("an mrt>=2 scene pass (raster.mrt, 2 colour writes) BUILDS an N-colour CEIR plan (16d-live-4a-4 un-skip)")
+    {
+        // ⛔ gap iii: 16d-live-2 SKIPPED an mrt>=2 pass; now build_scene_ceir handles mrt>=2 (4a-2/3), so the skip is INVERTED
+        // — the pass builds the N-colour scene plan (mrt_n=2, per-attachment blends) + records via record_ceir_render.
+        crd::memory::TlsfAllocator       alloc(2U << 20U, nullptr, "16d-live-4a-4-mrt");
+        fc::FrameGraphBuilder            b(&alloc, SV("scene_mrt"));
+        b.add_image(SV("accum"), crd::gpu::FgImageFormat::RGBA16F, 1920U, 1080U, true);
+        b.add_image(SV("revealage"), crd::gpu::FgImageFormat::R16F, 1920U, 1080U, true);
+        const u32 acc = b.add_pass(SV("accumulate"), SV("raster.mrt"));
+        b.pass_writes(acc, SV("accum"));     // colour 0
+        b.pass_writes(acc, SV("revealage")); // colour 1 -> 2 colour attachments = mrt>=2
+        fc::set_pass_enum(b.desc().passes[acc], SV(fc::pp::kBlendSlot[0]), static_cast<crd::u32>(crd::gpu::BlendMode::Additive));
+        fc::set_pass_enum(b.desc().passes[acc], SV(fc::pp::kBlendSlot[1]),
+                          static_cast<crd::u32>(crd::gpu::BlendMode::RevealageMultiply));
+        fc::FramePlans                   plans(&alloc);
+        crd::renderasset::DiagnosticList diags(&alloc);
+        REQUIRE(fc::build_frame_plans(b.desc(), plans, diags));
+        REQUIRE_FALSE(diags.has_errors());
+        const rg::CeirPassPlan* const plan = plans.table.find(rp::pass_param_id(SV("accumulate")));
+        REQUIRE(plan != nullptr); // ⭐ mrt>=2 now BUILDS a plan (was nullptr/skipped)
+        CHECK(plan->count == 3U); // Begin(scope: 2 colour attachments) / Draw(scene_draw_list) / End
+    }
+    SECTION("a velocity-style raster.mrt (ONE colour + ONE depth) is NOT mrt>=2 — the depth write is excluded")
+    {
+        crd::memory::TlsfAllocator       alloc(2U << 20U, nullptr, "16d-live-2-vel");
+        fc::FrameGraphBuilder            b(&alloc, SV("scene_vel"));
+        b.add_image(SV("velocity"), crd::gpu::FgImageFormat::RGBA16F, 1920U, 1080U, true);
+        b.add_image(SV("scene_depth"), crd::gpu::FgImageFormat::D32Float, 1920U, 1080U, true);
+        const u32 vel = b.add_pass(SV("velocity_pass"), SV("raster.mrt"));
+        b.pass_writes(vel, SV("velocity"));    // colour
+        b.pass_writes(vel, SV("scene_depth")); // depth-format -> routes to depth_target, NOT a 2nd colour attachment
+        fc::FramePlans                   plans(&alloc);
+        crd::renderasset::DiagnosticList diags(&alloc);
+        REQUIRE(fc::build_frame_plans(b.desc(), plans, diags));
+        REQUIRE_FALSE(diags.has_errors());
+        const rg::CeirPassPlan* const plan = plans.table.find(rp::pass_param_id(SV("velocity_pass")));
+        REQUIRE(plan != nullptr); // 1 colour + 1 depth = mrt_n=1 -> a normal single-colour scene plan, never skipped
+        CHECK(plan->count == 3U);
+    }
 }
 
 TEST_CASE("ceir 16-3c-5 prereq: build_frame_plans succeeds on every shipped frame asset's fullscreen passes",

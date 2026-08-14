@@ -275,7 +275,11 @@ enum class FrameExecError : crd::u8
     PresentSourceInvalid, // a present pass's source is not a target that outlives the graph
     // ── REN-38-A9 / A10. Appended at the END of the enum. ──
     UnresolvedAccel,      // a raytrace pass names an acceleration structure the host could not resolve
-    UnresolvedArgs        // an indirect pass names an args buffer the graph did not create
+    UnresolvedArgs,       // an indirect pass names an args buffer the graph did not create
+    // ── CEIR-17z. Appended at the END of the enum. ──
+    MissingCeirPlan       // a MIGRATED executor (scene/fullscreen/mesh/tess/mesh.indirect → record_ceir_render) got no CEIR
+                          // replay plan — the caller passed no FramePlans (or omitted this pass). §128 deleted the imperative
+                          // fallback, so this is a LOUD load-path bug, never a silent no-record: build_frame_plans + pass them.
 };
 
 // WHICH graph actually ran. ⛔ A caller must be able to tell "my graph ran" from "something else ran instead" —

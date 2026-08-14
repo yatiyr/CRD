@@ -115,7 +115,7 @@ void run_depth_float_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& 
 
     DiagnosticList d(&alloc);
     rp::ExecutorRegistry schemas(&alloc);
-    REQUIRE(rp::register_builtin_executors(schemas, d) == 14U);
+    REQUIRE(rp::register_builtin_executors(schemas, d) == 13U);
 
     const u64 r_col = rp::pass_param_id("col");
     const u64 r_in0 = rp::pass_param_id("dep");
@@ -213,20 +213,21 @@ void run_graph_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& raster
 
     DiagnosticList d(&alloc);
     rp::ExecutorRegistry schemas(&alloc);
-    REQUIRE(rp::register_builtin_executors(schemas, d) == 14U);
+    REQUIRE(rp::register_builtin_executors(schemas, d) == 13U);
     GraphExecutorTable records(&alloc);
-    REQUIRE(register_builtin_records(records, d) == 14U);
+    REQUIRE(register_builtin_records(records, d) == 13U);
 
     const u64 r_scene = rp::pass_param_id("scene");
     const u64 r_geo = rp::pass_param_id("geo");
     const u64 r_copy = rp::pass_param_id("copy");
 
+    (void)r_geo; // ⛔ CEIR-16d-live-4b: the geometry-slot single-draw fallback is GONE — the triangle rides a resolved
+                 // DrawList now (the shipped shape; emit_scene_list expands over the list, it has no geometry-slot fallback).
     FrameGraphTemplate tmpl(&alloc);
     tmpl.add_resource(GraphResource{r_scene, rp::SlotResourceKind::ColorTarget, ResourceLifetime::Transient, 1U});
-    tmpl.add_resource(GraphResource{r_geo, rp::SlotResourceKind::StorageBuffer, ResourceLifetime::Persistent, 1U});
     tmpl.add_resource(GraphResource{r_copy, rp::SlotResourceKind::ColorTarget, ResourceLifetime::Persistent, 1U});
 
-    // Pass 1 — scene.raster: draw the storage-pulled triangle into `scene`.
+    // Pass 1 — scene.raster: draw the storage-pulled triangle (a 1-item DrawList) into `scene`.
     {
         GraphPass p;
         p.name_hash = 1U;
@@ -238,8 +239,6 @@ void run_graph_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& raster
         p.payload.params.push_back(rp::ParamValue{rp::pass_param_id("depth_compare"), tv_enum(3U)}); // LessEqual
         p.payload.resources.push_back(
             rp::ResourceRef{rp::pass_param_id("color"), rp::SlotResourceKind::ColorTarget, rp::SlotAccess::Write, r_scene});
-        p.payload.resources.push_back(rp::ResourceRef{rp::pass_param_id("geometry"), rp::SlotResourceKind::StorageBuffer,
-                                                      rp::SlotAccess::Read, r_geo});
         tmpl.add_pass(p);
     }
     // Pass 2 — transfer.copy: copy `scene` → `copy`.
@@ -264,15 +263,37 @@ void run_graph_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& raster
 
     ResourceTable table(&alloc);
     table.bind(ResolvedResource{r_scene, rp::SlotResourceKind::ColorTarget, scene_target.get(), nullptr, nullptr});
-    table.bind(ResolvedResource{r_geo, rp::SlotResourceKind::StorageBuffer, nullptr, geo_buf.get(), nullptr});
     table.bind(ResolvedResource{r_copy, rp::SlotResourceKind::ColorTarget, copy_target.get(), nullptr, nullptr});
+
+    // ⛔ CEIR-16d-live-4b: the triangle rides a 1-item DrawList (the shipped shape); route scene.raster through the CEIR
+    // replay (record_ceir_render + a build_scene_ceir plan) — the durable form 4c makes the sole path. Proves the
+    // scene.raster → transfer.copy CHAIN works through CEIR on device (the single-colour pixel A/B is run_scene_drawlist_gpu).
+    const RenderDrawItem items[1] = {RenderDrawItem{geo_buf.get(), nullptr, nullptr, 3U, false, 0U, 0U, 0U, nullptr, 0U}};
+    DrawList list;
+    list.items = static_cast<const RenderDrawItem*>(items);
+    list.count = 1U;
+    DrawListTable draw_lists(&alloc);
+    draw_lists.bind(1U, list);
+
+    crd::ceir::gpu::SceneBuildDesc bd;
+    bd.has_color     = true;
+    bd.has_depth     = true; // a plain colour target (no bundled depth) ⇒ fs_target drops the depth template
+    bd.clear         = crd::gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F};
+    bd.depth_compare = crd::gpu::DepthCompare::LessEqual;
+    crd::ceir::Context                                    cctx(&alloc);
+    crd::containers::Array<crd::ceir::gpu::LoweredCommand> cmds(&alloc);
+    REQUIRE(crd::ceir::gpu::build_scene_ceir(cctx, bd, cmds));
+    CeirPlanTable plans(&alloc);
+    plans.bind(1U, CeirPassPlan{&cctx, cmds.data(), static_cast<u32>(cmds.size())});
+    records.replace_record(rp::executor_type_id("scene.raster"), record_ceir_render);
 
     PassPrograms programs;
     programs.raster = program.get();
     // RAF-7 (one-submission): execute_frame runs the compiled graph as a real frame via a gpu-context frame graph —
     // ONE command buffer, cross-pass barriers + readback owned by it. Gate 7's "one submission where expected".
     u32 submit_count = 0U;
-    REQUIRE(execute_frame(compiled, tmpl, records, table, programs, raster, alloc, d, &submit_count));
+    REQUIRE(execute_frame(compiled, tmpl, records, table, programs, raster, alloc, d, &submit_count, &draw_lists, nullptr,
+                          &plans));
     REQUIRE_FALSE(d.has_errors());
     CHECK(submit_count == 1U);
 
@@ -368,7 +389,7 @@ void run_mrt_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& raster, 
 
     DiagnosticList d(&alloc);
     rp::ExecutorRegistry schemas(&alloc);
-    REQUIRE(rp::register_builtin_executors(schemas, d) == 14U);
+    REQUIRE(rp::register_builtin_executors(schemas, d) == 13U);
     rp::PassExecutorDesc mrt{};
     mrt.id = rp::executor_type_id("test.mrt");
     mrt.name = "test.mrt";
@@ -383,7 +404,7 @@ void run_mrt_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& raster, 
     REQUIRE(schemas.register_executor(mrt, d));
 
     GraphExecutorTable records(&alloc);
-    REQUIRE(register_builtin_records(records, d) == 14U);
+    REQUIRE(register_builtin_records(records, d) == 13U);
     REQUIRE(records.register_record(rp::executor_type_id("test.mrt"), record_test_mrt, d));
 
     const u64 r_c0 = rp::pass_param_id("c0");
@@ -524,7 +545,7 @@ void run_bindless_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& ras
 
     DiagnosticList d(&alloc);
     rp::ExecutorRegistry schemas(&alloc);
-    REQUIRE(rp::register_builtin_executors(schemas, d) == 14U);
+    REQUIRE(rp::register_builtin_executors(schemas, d) == 13U);
     rp::PassExecutorDesc bl{};
     bl.id = rp::executor_type_id("test.bindless");
     bl.name = "test.bindless";
@@ -539,7 +560,7 @@ void run_bindless_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& ras
     REQUIRE(schemas.register_executor(bl, d));
 
     GraphExecutorTable records(&alloc);
-    REQUIRE(register_builtin_records(records, d) == 14U);
+    REQUIRE(register_builtin_records(records, d) == 13U);
     REQUIRE(records.register_record(rp::executor_type_id("test.bindless"), record_test_bindless, d));
 
     const u64 r_col = rp::pass_param_id("col");
@@ -691,7 +712,7 @@ void run_shadow_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& raste
 
     DiagnosticList d(&alloc);
     rp::ExecutorRegistry schemas(&alloc);
-    REQUIRE(rp::register_builtin_executors(schemas, d) == 14U);
+    REQUIRE(rp::register_builtin_executors(schemas, d) == 13U);
     rp::PassExecutorDesc sh{};
     sh.id = rp::executor_type_id("test.shadow");
     sh.name = "test.shadow";
@@ -706,7 +727,7 @@ void run_shadow_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& raste
     REQUIRE(schemas.register_executor(sh, d));
 
     GraphExecutorTable records(&alloc);
-    REQUIRE(register_builtin_records(records, d) == 14U);
+    REQUIRE(register_builtin_records(records, d) == 13U);
     REQUIRE(records.register_record(rp::executor_type_id("test.shadow"), record_test_shadow, d));
 
     const u64 r_cd = rp::pass_param_id("cd");
@@ -851,7 +872,7 @@ void run_indirect_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& ras
 
     DiagnosticList d(&alloc);
     rp::ExecutorRegistry schemas(&alloc);
-    REQUIRE(rp::register_builtin_executors(schemas, d) == 14U);
+    REQUIRE(rp::register_builtin_executors(schemas, d) == 13U);
     rp::PassExecutorDesc in{};
     in.id = rp::executor_type_id("test.indirect");
     in.name = "test.indirect";
@@ -866,7 +887,7 @@ void run_indirect_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& ras
     REQUIRE(schemas.register_executor(in, d));
 
     GraphExecutorTable records(&alloc);
-    REQUIRE(register_builtin_records(records, d) == 14U);
+    REQUIRE(register_builtin_records(records, d) == 13U);
     REQUIRE(records.register_record(rp::executor_type_id("test.indirect"), record_test_indirect, d));
 
     const u64 r_cd = rp::pass_param_id("cd");
@@ -950,7 +971,7 @@ void run_fullscreen_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& r
 
         DiagnosticList d(&alloc);
         rp::ExecutorRegistry schemas(&alloc);
-        REQUIRE(rp::register_builtin_executors(schemas, d) == 14U);
+        REQUIRE(rp::register_builtin_executors(schemas, d) == 13U);
         GraphExecutorTable records(&alloc);
         REQUIRE(records.register_record(rp::executor_type_id("fullscreen.raster"), record_ceir_render, d));
 
@@ -1034,7 +1055,7 @@ void run_fullscreen_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& r
 
         DiagnosticList d(&alloc);
         rp::ExecutorRegistry schemas(&alloc);
-        REQUIRE(rp::register_builtin_executors(schemas, d) == 14U);
+        REQUIRE(rp::register_builtin_executors(schemas, d) == 13U);
         GraphExecutorTable records(&alloc);
         REQUIRE(records.register_record(rp::executor_type_id("fullscreen.raster"), record_ceir_render, d));
 
@@ -1165,7 +1186,7 @@ void run_multidraw_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& ra
 
     DiagnosticList d(&alloc);
     rp::ExecutorRegistry schemas(&alloc);
-    REQUIRE(rp::register_builtin_executors(schemas, d) == 14U);
+    REQUIRE(rp::register_builtin_executors(schemas, d) == 13U);
     rp::PassExecutorDesc md{};
     md.id = rp::executor_type_id("test.multidraw");
     md.name = "test.multidraw";
@@ -1177,7 +1198,7 @@ void run_multidraw_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& ra
                                                    rp::SlotAccess::Read, true});
     REQUIRE(schemas.register_executor(md, d));
     GraphExecutorTable records(&alloc);
-    REQUIRE(register_builtin_records(records, d) == 14U);
+    REQUIRE(register_builtin_records(records, d) == 13U);
     REQUIRE(records.register_record(rp::executor_type_id("test.multidraw"), record_test_multidraw, d));
 
     const u64 r_cd = rp::pass_param_id("cd");
@@ -1266,9 +1287,9 @@ void run_scene_drawlist_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContex
 
     DiagnosticList d(&alloc);
     rp::ExecutorRegistry schemas(&alloc);
-    REQUIRE(rp::register_builtin_executors(schemas, d) == 14U);
+    REQUIRE(rp::register_builtin_executors(schemas, d) == 13U);
     GraphExecutorTable records(&alloc);
-    REQUIRE(register_builtin_records(records, d) == 14U);
+    REQUIRE(register_builtin_records(records, d) == 13U);
 
     const u64 r_col = rp::pass_param_id("col");
     FrameGraphTemplate tmpl(&alloc);
@@ -1306,14 +1327,34 @@ void run_scene_drawlist_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContex
 
     PassPrograms programs;
     programs.raster = program.get();
+
+    // ⛔ CEIR-16d-live-4c: scene.raster records UNCONDITIONALLY through record_ceir_render (register_builtin_records) over a
+    // build_scene_ceir plan matching this pass. Render on device and assert ABSOLUTE pixels — the STRONGEST device gate now
+    // that record_scene_raster is deleted: two SEPARATE items in the left/right thirds, a background gap down the centre.
+    crd::ceir::gpu::SceneBuildDesc bd;
+    bd.has_color     = true;
+    bd.has_depth     = true; // the color_depth target's bundled depth resolves via fs_target mode-2
+    bd.clear         = crd::gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F};
+    bd.depth_compare = crd::gpu::DepthCompare::LessEqual;
+    crd::ceir::Context                                    cctx(&alloc);
+    crd::containers::Array<crd::ceir::gpu::LoweredCommand> cmds(&alloc);
+    REQUIRE(crd::ceir::gpu::build_scene_ceir(cctx, bd, cmds));
+    CeirPlanTable plans(&alloc);
+    plans.bind(pass_hash, CeirPassPlan{&cctx, cmds.data(), static_cast<u32>(cmds.size())});
+
     u32 submit_count = 0U;
-    REQUIRE(execute_frame(compiled, tmpl, records, table, programs, raster, alloc, d, &submit_count, &draw_lists));
+    REQUIRE(execute_frame(compiled, tmpl, records, table, programs, raster, alloc, d, &submit_count, &draw_lists, nullptr,
+                          &plans));
     REQUIRE_FALSE(d.has_errors());
     CHECK(submit_count == 1U);
-    // both thirds rendered by SEPARATE items, and the centre gap stayed background (two draws, not one).
-    CHECK((color->read_pixel(dim / 4U, dim / 2U) & 0xFFU) >= 250U);       // left third: item 0 drew
-    CHECK((color->read_pixel((dim * 3U) / 4U, dim / 2U) & 0xFFU) >= 250U); // right third: item 1 drew
-    CHECK((color->read_pixel(dim / 2U, dim / 2U) & 0xFFU) < 32U);          // centre column: background (a real gap)
+    const u32 a0 = color->read_pixel(dim / 4U, dim / 2U);
+    const u32 a1 = color->read_pixel((dim * 3U) / 4U, dim / 2U);
+    const u32 a2 = color->read_pixel(dim / 2U, dim / 2U);
+
+    // ABSOLUTE shape: two SEPARATE items rendered, the centre gap stayed background (two draws, not one coalesced write).
+    CHECK((a0 & 0xFFU) >= 250U); // left third: item 0 drew
+    CHECK((a1 & 0xFFU) >= 250U); // right third: item 1 drew
+    CHECK((a2 & 0xFFU) < 32U);   // centre column: background (a real gap)
 }
 // ⭐⭐ RAF-12.2 prereq-0: a sub-1 two-output FS for the MRT BLEND gate. out0 (accum source) and out1 (revealage source)
 // are BELOW 1 so an ADDITIVE accumulation of two overlapping draws (2× = 0.2 / 0.1 / 0.05) is DISTINGUISHABLE from an
@@ -1384,9 +1425,9 @@ void run_mrt_blend_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& ra
 
     DiagnosticList       d(&alloc);
     rp::ExecutorRegistry schemas(&alloc);
-    REQUIRE(rp::register_builtin_executors(schemas, d) == 14U);
+    REQUIRE(rp::register_builtin_executors(schemas, d) == 13U);
     GraphExecutorTable records(&alloc);
-    REQUIRE(register_builtin_records(records, d) == 14U);
+    REQUIRE(register_builtin_records(records, d) == 13U);
 
     const u64 r_c0 = rp::pass_param_id("c0");
     const u64 r_c1 = rp::pass_param_id("c1");
@@ -1430,15 +1471,36 @@ void run_mrt_blend_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& ra
 
     PassPrograms programs;
     programs.raster = program.get();
+
+    // ⛔ CEIR-16d-live-4c: scene.raster records UNCONDITIONALLY through record_ceir_render (register_builtin_records) over a
+    // build_scene_ceir(mrt_n=2) plan → emit_scene_list_mrt's per-item MRT scope. The ABSOLUTE per-attachment blend values
+    // below are the STRONGEST device gate now that record_scene_raster's MRT arm is deleted — this is the test that caught the
+    // color_slot bug (attachment 1 unwritten), and its teeth are the absolute reveal check on c1. ⛔ has_depth=true is a
+    // TEMPLATE: no depth target is bound, so fs_target drops it. reveal's clear-to-1 is draw_storage_mrt's job (the
+    // RevealageMultiply blend), NOT the desc clear.
+    crd::ceir::gpu::SceneBuildDesc bd;
+    bd.has_color = true;
+    bd.has_depth = true;
+    bd.mrt_n     = 2U;
+    bd.blend[0]  = crd::gpu::BlendMode::Additive;
+    bd.blend[1]  = crd::gpu::BlendMode::RevealageMultiply;
+    bd.clear     = crd::gpu::ClearColor{0.0F, 0.0F, 0.0F, 0.0F};
+    crd::ceir::Context                                    cctx(&alloc);
+    crd::containers::Array<crd::ceir::gpu::LoweredCommand> cmds(&alloc);
+    REQUIRE(crd::ceir::gpu::build_scene_ceir(cctx, bd, cmds));
+    CeirPlanTable plans(&alloc);
+    plans.bind(pass_hash, CeirPassPlan{&cctx, cmds.data(), static_cast<u32>(cmds.size())});
+
     u32 submit_count = 0U;
-    REQUIRE(execute_frame(compiled, tmpl, records, table, programs, raster, alloc, d, &submit_count, &draw_lists));
+    REQUIRE(execute_frame(compiled, tmpl, records, table, programs, raster, alloc, d, &submit_count, &draw_lists, nullptr,
+                          &plans));
     REQUIRE_FALSE(d.has_errors());
     CHECK(submit_count == 1U);
-
     const u32 a = c0->read_pixel(dim / 2U, dim / 2U); // accum (Additive) — TWO overlapping draws accumulate
     const u32 r = c1->read_pixel(dim / 2U, dim / 2U); // reveal (RevealageMultiply, cleared to 1)
-    // accum: additive 2× of (0.1,0.05,0.025) → (51,26,13). ⛔ R≈51 (not ≈26) is the additive proof; a dropped
-    // attachment-1 or an opaque blend would break one of these three.
+
+    // ABSOLUTE per-attachment blend values. accum: additive 2× of (0.1,0.05,0.025) → (51,26,13). ⛔ R≈51 (not ≈26) is the
+    // additive proof; a dropped attachment-1 or an opaque blend would break one of these three.
     CHECK((a & 0xFFU) >= 44U);
     CHECK((a & 0xFFU) <= 58U);          // R ≈ 51 (0.2) — ADDITIVE, not opaque (which would be ≈26)
     CHECK(((a >> 8U) & 0xFFU) >= 20U);

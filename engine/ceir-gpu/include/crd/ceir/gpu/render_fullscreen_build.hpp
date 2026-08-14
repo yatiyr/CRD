@@ -98,8 +98,10 @@ struct AmplifyBuildDesc
 // OPTIONAL colour attachment (absent ⇒ a DEPTH-ONLY shadow cascade / depth-prepass — a 0-COLOUR scope) + an OPTIONAL depth
 // attachment, containing ONE `render.scene_draw_list` the record-time walk EXPANDS over the host DrawList into the per-item
 // verb ladder (indirect / indexed-sampled / combined-tex / plain-coalesced). No operands, no binding tail — every per-item
-// field (program/storage/texture/args/counts) + the pass atlas are DrawList/resolver data at record. ⛔ the mrt>=2 G-buffer
-// arm (n_writes>1) is a SEPARATE representation (a later sub-slice), NOT built here.
+// field (program/storage/texture/args/counts) + the pass atlas are DrawList/resolver data at record.
+// ⛔ CEIR-16d-live-4a: mrt_n>=2 builds the MULTI-COLOUR G-BUFFER / WBOIT scope — N `render.color_attachment` ops with
+// per-attachment `blend`. It is the SAME `render.scope` + `render.scene_draw_list` op (op-mode, no dialect change); the
+// per-item MRT begin/draw/end SHAPE is a record-time LOWERING artifact (emit_scene_list, 4a-3), NOT in the IR.
 struct SceneBuildDesc
 {
     bool                   has_color     = true;                              // a colour attachment (false ⇒ depth-only: 0-colour scope)
@@ -109,6 +111,23 @@ struct SceneBuildDesc
     bool                   load_depth    = false;                             // depth LoadOp: load (a depth-prepass consumer) vs clear
     crd::f32               clear_depth   = 1.0F;                              // the depth clear (a reverse-Z scene clears to 0)
     crd::gpu::DepthCompare depth_compare = crd::gpu::DepthCompare::LessEqual; // ⛔ the live scene is REVERSE-Z (GreaterEqual): a PARAM, not a constant
+    // ⛔ CEIR-16d-live-4a: the MULTI-COLOUR MRT set (a deferred G-buffer / WBOIT accumulate). mrt_n = the COLOUR attachment
+    // count (1 = the ordinary single-colour scene, byte-identical to before; 2..4 = the G-buffer/WBOIT scope). blend[k] is
+    // color k's per-attachment BlendMode (blend[0] = color0). Legacy record_scene_raster MRT arm hardcodes LoadOp::Clear for
+    // every attachment + applies these blends (draw_storage_mrt). mrt_n<=1 emits NO `blend` attr (Opaque), staying identical.
+    crd::u32             mrt_n    = 1U;
+    crd::gpu::BlendMode  blend[4] = {crd::gpu::BlendMode::Opaque, crd::gpu::BlendMode::Opaque, crd::gpu::BlendMode::Opaque,
+                                     crd::gpu::BlendMode::Opaque};
+    // ⛔ CEIR-16z-1: the VISIBILITY-BUFFER typed clear (RAH-1a.1). A visbuffer pass (dissolved onto scene.raster, §41) writes an
+    // R32_UINT id target whose typed clear IS the whole semantics: clear_is_uint ⇒ the colour attachment is a UINT-format image
+    // (type_int(32,false) — the verifier's ClearKindFormatMismatch scar REQUIRES it) with clear_kind="uint" + clear_uint (the
+    // background id), NOT the float clear_r/g/b/a. Single-colour only (a uint MRT G-buffer is not authored). Default = float.
+    bool     clear_is_uint = false;
+    crd::u32 clear_uint    = 0U;
+    // ⛔ CEIR-16z-2: the PROCEDURAL geometry mode (the §41 visbuffer dissolution). false ⇒ the ordinary storage-pull scene
+    // ladder (byte-identical). true ⇒ each host draw item is a plain gl_VertexIndex Draw (GeometryKind::None, vertex_count
+    // only, NO storage binding, no textures, no coalescing) — a byte-exact port of the deleted record_visbuffer_raster loop.
+    bool procedural = false;
 };
 
 // Build the scene composite described by `desc` into `ctx` (a FRESH caller-owned Context; same lifetime contract as

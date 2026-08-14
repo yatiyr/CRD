@@ -197,6 +197,7 @@ public:
     [[nodiscard]] AttrId program() const noexcept { return m_op->attr("program"); }
     [[nodiscard]] AttrId access() const noexcept { return m_op->attr("access"); }
     [[nodiscard]] AttrId program_interface() const noexcept { return m_op->attr("program_interface"); }
+    [[nodiscard]] AttrId geometry() const noexcept { return m_op->attr("geometry"); }
 
 private:
     Operation* m_op;

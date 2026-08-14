@@ -79,7 +79,7 @@ there are **14**.
 
 | # | Executor (queue) | Schema line | `record_*` line | CEIR op → dialect | §§ |
 |---|---|---|---|---|---|
-| 1 | `scene.raster` (Graphics) | :85 | `record_scene_raster`:283 | `render.draw_list` → `ceir.render` | §40 §128 |
+| 1 | `scene.raster` (Graphics) | :85 | ✅ MIGRATED 16d (2026-08-14): the generic `record_ceir_render` replays a `build_scene_ceir` plan (single-colour ladder + mrt≥2 per-item scope); `record_scene_raster` + its `bind_map`/`bind_atlas`/`attach_textures` scar helpers DELETED | `render.scope`+`render.scene_draw_list` → `ceir.render` | §40 §128 |
 | 2 | `fullscreen.raster` (Graphics) | :130 | ✅ MIGRATED 16b (2026-08-12): the generic `record_ceir_render` replays a `build_fullscreen_ceir` plan; `record_fullscreen_raster` DELETED | `render.scope`+`render.draw` → `ceir.render` | §40 |
 | 3 | `compute.dispatch` (Compute) | :154 | `record_compute_dispatch`:705 | `compute.dispatch` (+ indirect) → `ceir.compute` | §42 |
 | 4 | `transfer.clear` (Transfer) | :180 | `record_transfer_clear`:786 | `transfer.clear` → `ceir.transfer` | §50 |

@@ -376,6 +376,8 @@ enum class RenderMisuseKind : u8
     IndirectArgsNotBuffer,    // an indirect draw's %args operand is not a Buffer nor a View of a Buffer
     IndirectCountNotBuffer,   // render.draw_indirect_count's %count operand is not a Buffer nor a View of a Buffer
     MaxDrawsInvalid,          // an indirect draw's `max_draws` attr is < 1 (or a non-Int) — the DrawIndex range must be >= 1
+    // CEIR-16z-2 scene geometry mode (append at end).
+    GeometryModeInvalid,      // render.scene_draw_list `geometry` is not in {storage, procedural} (or a non-String value)
 };
 [[nodiscard]] containers::StringView render_misuse_kind_name(RenderMisuseKind k) noexcept;
 

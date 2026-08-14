@@ -10,6 +10,7 @@
 #include <crd/ceir/gen/resource_ops.hpp>
 #include <crd/ceir/gen/transfer_ops.hpp>
 #include <crd/ceir/render.hpp> // CEIR-14b: the render.scope region-recursion lowering + the hazard-hole
+#include <crd/ceir/scene.hpp> // CEIR-17b: the scene dialect (build_resolve_*, type_*, find_scene_misuse) for evaluate_scene_resolve
 #include <crd/ceir/exec.hpp> // CEIR-13z-4 leg 1b: the core Interpreter REFUSES a dispatch (typed NoSemantics)
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/gpu/execute.hpp>
@@ -946,6 +947,135 @@ TEST_CASE("ceir 14z-1: materialize_rendering_desc maps the scope + attachments (
     CHECK(rd.depth.clear_depth == 0.5F);
 }
 
+TEST_CASE("ceir 16d-live-4a-1: the FULL BlendMode vocabulary (incl. the WBOIT MRT modes) verifies + materializes",
+          "[ceir][ceir-gpu][render]")
+{
+    // The CEIR `blend` vocabulary was closed at 4 (opaque/alpha/additive/premultiplied) — the WBOIT MRT modes
+    // (multiply / revealage_multiply / reveal_composite) had NO string, so a deferred/WBOIT scene pass's reveal
+    // attachment silently materialized Opaque. 4a-1 opens the closed set to the whole BlendMode enum. This proves BOTH
+    // directions: the verifier (find_render_misuse / kBlendVocab) ACCEPTS each of the 7, blend_of maps each to its enum,
+    // and a garbage string is REJECTED (BlendInvalid) — the gate the mrt>=2 representation (4a-2/3) depends on.
+    crd::memory::MallocAllocator root;
+    int                          tgt = 0;
+    const auto                   check_blend = [&](StringView bstr, crd::gpu::BlendMode expect, bool valid) {
+        Context      ctx(&root);
+        const Kit    k(ctx);
+        Module* const m = ctx.create_module();
+        Block*        b = m->body()->first_block();
+        if (b == nullptr)
+        {
+            b = ctx.create_block(0U);
+            m->body()->append(b);
+        }
+        Value* const     img   = declimg(ctx, k, b);
+        Value*           fo[1]  = {img};
+        Operation* const fc     = ctx.create_operation(k.col, ConstSpan<Value*>(fo, 1U), 1U,
+                                                       render::type_color_attachment(ctx, img->type()));
+        ctx.set_attr(fc, "blend", ctx.attr_string(bstr));
+        b->append(fc);
+        Value*           atts[1] = {fc->result(0U)};
+        Operation* const sc      = scope_op(ctx, k, b, atts, 1U, 8, 8);
+        const auto       misuse  = ctx.find_render_misuse(*m);
+        if (valid)
+        {
+            CHECK(misuse.kind != crd::ceir::RenderMisuseKind::BlendInvalid); // the verifier ACCEPTS the blend
+            crd::gpu::RenderingDesc rd;
+            REQUIRE(materialize_rendering_desc(ctx, sc, resolve_target, &tgt, rd));
+            REQUIRE(rd.color.size() == 1U);
+            CHECK(rd.color[0].blend == expect); // blend_of maps the string to the enum
+        }
+        else
+        {
+            CHECK(misuse.kind == crd::ceir::RenderMisuseKind::BlendInvalid); // a non-vocab string is REJECTED
+        }
+    };
+    check_blend(StringView("opaque"), crd::gpu::BlendMode::Opaque, true);
+    check_blend(StringView("alpha"), crd::gpu::BlendMode::Alpha, true);
+    check_blend(StringView("additive"), crd::gpu::BlendMode::Additive, true);
+    check_blend(StringView("premultiplied"), crd::gpu::BlendMode::PremultipliedAlpha, true);
+    check_blend(StringView("multiply"), crd::gpu::BlendMode::Multiply, true);                     // ⭐ new
+    check_blend(StringView("revealage_multiply"), crd::gpu::BlendMode::RevealageMultiply, true);  // ⭐ new (WBOIT reveal)
+    check_blend(StringView("reveal_composite"), crd::gpu::BlendMode::RevealComposite, true);      // ⭐ new
+    check_blend(StringView("bogus_blend"), crd::gpu::BlendMode::Opaque, false);                   // ⛔ rejected
+}
+
+TEST_CASE("ceir 16d-live-4a-2: build_scene_ceir emits an N-colour MRT scope with per-attachment blend",
+          "[ceir][ceir-gpu][render]")
+{
+    // The mrt≥2 scope (a deferred G-buffer / WBOIT accumulate) = the SAME render.scope + render.scene_draw_list, but with N
+    // color_attachment ops each carrying its `blend`. 4a-2 proves the BUILDER: build_scene_ceir(mrt_n=2) VERIFIES
+    // (find_render_misuse accepts a ≥2-colour scope containing scene_draw_list — GAP ii) and MATERIALIZES to 2 attachments
+    // with the right blends (Additive accum + RevealageMultiply reveal, the WBOIT pair) all LoadOp::Clear (legacy MRT arm).
+    crd::memory::MallocAllocator  root;
+    Context                       ctx(&root);
+    Array<LoweredCommand>         plan(&root);
+    SceneBuildDesc                bd;
+    bd.has_color = true;
+    bd.has_depth = false;
+    bd.mrt_n     = 2U;
+    bd.blend[0]  = crd::gpu::BlendMode::Additive;          // color0 = accum
+    bd.blend[1]  = crd::gpu::BlendMode::RevealageMultiply; // color1 = revealage (the mode no generic blend expresses)
+    REQUIRE(build_scene_ceir(ctx, bd, plan)); // ⭐ GAP ii: find_render_misuse accepts the 2-colour scope + scene_draw_list
+
+    REQUIRE(plan.size() >= 1U);
+    FakeRTarget             tgt(64U, 64U);
+    crd::gpu::RenderingDesc rd;
+    REQUIRE(materialize_rendering_desc(ctx, plan[0].op, resolve_target, &tgt, rd));
+    REQUIRE(rd.color.size() == 2U); // ⭐ TWO colour attachments materialized
+    CHECK(rd.color[0].blend == crd::gpu::BlendMode::Additive);
+    CHECK(rd.color[1].blend == crd::gpu::BlendMode::RevealageMultiply);
+    CHECK(rd.color[0].load == crd::gpu::LoadOp::Clear); // the MRT arm hardcodes Clear on every attachment
+    CHECK(rd.color[1].load == crd::gpu::LoadOp::Clear);
+
+    // ⛔ the SINGLE-colour path stays byte-identical (mrt_n default 1 ⇒ NO blend attr ⇒ Opaque, honours load).
+    Context               ctx1(&root);
+    Array<LoweredCommand> plan1(&root);
+    SceneBuildDesc        single; // mrt_n=1 default
+    REQUIRE(build_scene_ceir(ctx1, single, plan1));
+    crd::gpu::RenderingDesc rd1;
+    REQUIRE(materialize_rendering_desc(ctx1, plan1[0].op, resolve_target, &tgt, rd1));
+    REQUIRE(rd1.color.size() == 1U);
+    CHECK(rd1.color[0].blend == crd::gpu::BlendMode::Opaque);
+}
+
+TEST_CASE("ceir 16z-1: build_scene_ceir emits a UINT typed clear (the visbuffer id target, RAH-1a.1)",
+          "[ceir][ceir-gpu][render]")
+{
+    // A visbuffer pass (dissolved onto scene.raster, §41) writes an R32_UINT id target whose typed clear IS the whole
+    // semantics. 16z-1 proves the BUILDER: build_scene_ceir(clear_is_uint) VERIFIES (find_render_misuse — the colour image is
+    // UINT-format, so the RAH-1a.1 ClearKindFormatMismatch scar does NOT fire) and MATERIALIZES to ClearKind::Uint + the id.
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    Array<LoweredCommand>        plan(&root);
+    SceneBuildDesc               bd;
+    bd.has_color     = true;
+    bd.has_depth     = false;
+    bd.clear_is_uint = true;
+    bd.clear_uint    = 7U; // the background id (the shipped scene_visbuffer asset's clear_id)
+    REQUIRE(build_scene_ceir(ctx, bd, plan)); // ⭐ verifies: a uint clear on a uint-format attachment is accepted
+
+    REQUIRE(plan.size() >= 1U);
+    FakeRTarget             tgt(64U, 64U);
+    crd::gpu::RenderingDesc rd;
+    REQUIRE(materialize_rendering_desc(ctx, plan[0].op, resolve_target, &tgt, rd));
+    REQUIRE(rd.color.size() == 1U);
+    CHECK(rd.color[0].clear_kind == crd::gpu::ClearKind::Uint); // ⭐ the typed clear
+    CHECK(rd.color[0].clear_uint == 7U);
+    CHECK(rd.color[0].load == crd::gpu::LoadOp::Clear); // clears the id (later draws load — encoder derives it)
+
+    // ⛔ the FLOAT path stays byte-identical (clear_is_uint default false ⇒ ClearKind::Float + the float clears).
+    Context               ctxf(&root);
+    Array<LoweredCommand> planf(&root);
+    SceneBuildDesc        flt;
+    flt.clear = crd::gpu::ClearColor{0.25F, 0.0F, 0.0F, 1.0F};
+    REQUIRE(build_scene_ceir(ctxf, flt, planf));
+    crd::gpu::RenderingDesc rdf;
+    REQUIRE(materialize_rendering_desc(ctxf, planf[0].op, resolve_target, &tgt, rdf));
+    REQUIRE(rdf.color.size() == 1U);
+    CHECK(rdf.color[0].clear_kind == crd::gpu::ClearKind::Float);
+    CHECK(rdf.color[0].clear.r == 0.25F);
+}
+
 TEST_CASE("ceir 16-3c-4: extent_from_target overrides the scope width/height with the RESOLVED target size",
           "[ceir][ceir-gpu][render]")
 {
@@ -1515,6 +1645,9 @@ struct SceneCapEncoder : crd::gpu::ICommandEncoder
 {
     int                                                 begins = 0, ends = 0;
     bool                                                had_color = false; // rd.color non-empty at the last begin
+    bool                                                had_depth = false; // rd.depth.enabled at the last begin
+    crd::gpu::IRasterTarget*                            depth_target = nullptr; // rd.depth.target at the last begin
+    crd::u32                                            rd_width = 0U, rd_height = 0U; // the resolved render area
     crd::containers::Array<crd::gpu::RasterCommandKind> cmds;
     crd::containers::Array<crd::gpu::GeometryKind>      gkinds;
     crd::containers::Array<crd::gpu::IRasterProgram*>   progs;
@@ -1526,7 +1659,15 @@ struct SceneCapEncoder : crd::gpu::ICommandEncoder
         : cmds(a), gkinds(a), progs(a), draw_counts(a), first_rows(a), nbinds(a), tex_slots(a)
     {
     }
-    void begin_rendering(const crd::gpu::RenderingDesc& rd) override { ++begins; had_color = rd.color.size() > 0U; }
+    void begin_rendering(const crd::gpu::RenderingDesc& rd) override
+    {
+        ++begins;
+        had_color    = rd.color.size() > 0U;
+        had_depth    = rd.depth.enabled;
+        depth_target = rd.depth.target;
+        rd_width     = rd.width;
+        rd_height    = rd.height;
+    }
     void draw(const crd::gpu::RasterDrawPacket& p) override
     {
         cmds.push_back(p.command);
@@ -1567,12 +1708,31 @@ crd::gpu::ITexture* resolve_pass_texture(void* user, bool& out_is_depth, bool& o
     out_comparison = s->comparison;
     return s->tex;
 }
+// CEIR-16d LIVE (16d-live-1a): a KIND-BRANCHING target resolver — the device-free analogue of frame_graph.cpp's fs_target.
+// A color_attachment op resolves to `color`; a depth_attachment op resolves to `depth` (which may be NULL to model a forward
+// pass whose colour target carries no bundled depth — the materializer must then DROP the depth attachment, not fail).
+struct SceneTargetState
+{
+    const Context*           ctx   = nullptr;
+    crd::gpu::IRasterTarget* color = nullptr;
+    crd::gpu::IRasterTarget* depth = nullptr;
+};
+crd::gpu::IRasterTarget* resolve_scene_target(const Operation* op, void* user)
+{
+    auto* const s = static_cast<SceneTargetState*>(user);
+    return s->ctx->op_name(op->kind()) == crd::containers::StringView("render.depth_attachment") ? s->depth : s->color;
+}
 
 TEST_CASE("ceir 16d: build_scene_ceir + execute_render_lowered expand scene_draw_list into the per-item verb ladder",
           "[ceir][ceir-gpu][render]")
 {
     crd::memory::MallocAllocator    root;
-    int                             def_s = 0, item_s = 0, s0 = 0, s1 = 0, tx = 0, args_s = 0;
+    int                             def_s  = 0;
+    int                             item_s = 0;
+    int                             s0     = 0;
+    int                             s1     = 0;
+    int                             tx     = 0;
+    int                             args_s = 0;
     crd::gpu::IRasterProgram* const def_prog = reinterpret_cast<crd::gpu::IRasterProgram*>(&def_s);
     (void)item_s;
     crd::gpu::IStorageBuffer* const buf0 = reinterpret_cast<crd::gpu::IStorageBuffer*>(&s0);
@@ -1680,6 +1840,168 @@ TEST_CASE("ceir 16d: build_scene_ceir + execute_render_lowered expand scene_draw
         CHECK(enc.nbinds[0] == 1U);           // ONLY the storage bind — scope_has_color=false suppresses ALL textures
         CHECK(enc.tex_slots[0] == 0xFFFFU);
     }
+    SECTION("16z-2 PROCEDURAL mode (the visbuffer form): items render GeometryKind::None, ZERO bindings, no coalescing")
+    {
+        // A visbuffer (dissolved onto scene.raster, §41) draws gl_VertexIndex geometry — GeometryKind::None, vertex_count only,
+        // NO storage binding. ⛔ the procedural skip is on vertex_count==0 (NOT storage): items[0]/[1] have NO storage yet MUST
+        // render (the storage-null skip is the storage-ladder's RESOLVE-FAILURE guard, a DIFFERENT concern). nbinds==0
+        // discriminates the procedural ladder from the storage ladder (which binds the per-item storage buffer).
+        SceneBuildDesc proc; // has_color=true default
+        proc.procedural = true;
+        RasterDrawItem arr[3] = {
+            {.program = def_prog, .vertex_count = 3U}, // no storage — procedural
+            {.program = nullptr, .vertex_count = 6U},  // null program -> the pass default; still no storage
+            {.program = def_prog, .vertex_count = 0U}, // vertex_count 0 -> SKIP
+        };
+        SceneCapEncoder enc(&root);
+        run(proc, ConstSpan<RasterDrawItem>(arr, 3U), no_tex, enc);
+        REQUIRE(enc.cmds.size() == 2U); // ⭐ the zero-vertex item skipped; NO coalescing (2 separate procedural draws)
+        for (crd::usize i = 0; i < 2U; ++i)
+        {
+            CHECK(enc.cmds[i] == crd::gpu::RasterCommandKind::Draw);
+            CHECK(enc.gkinds[i] == crd::gpu::GeometryKind::None); // ⭐ procedural VS (gl_VertexIndex)
+            CHECK(enc.nbinds[i] == 0U);                           // ⭐ ZERO bindings (no storage pull) — the discriminator
+            CHECK(enc.draw_counts[i] == 0U);                      // never coalesced
+            CHECK(enc.tex_slots[i] == 0xFFFFU);                   // no textures
+        }
+        CHECK(enc.progs[0] == def_prog);
+        CHECK(enc.progs[1] == def_prog); // the null-program item resolved to the pass default
+    }
+}
+
+TEST_CASE("ceir 16d-live-4a-3: the MRT scene list expands to a SCOPE PER ITEM (begin/draw/end each, no coalesce)",
+          "[ceir][ceir-gpu][render]")
+{
+    // The ≥2-colour scene list is the DEFERRED MRT expansion (a deferred G-buffer / WBOIT accumulate): execute_render_lowered
+    // DEFERS the scope's begin_rendering, and emit_scene_list_mrt opens a SCOPE PER ITEM (begin/StoragePull-draw/end each) —
+    // the legacy record_scene_raster MRT arm. ⛔ TWO same-storage plain items that COALESCE into ONE DrawMulti on the
+    // single-colour path stay TWO separate per-item draws here (MRT = no coalescing, no textures). This is the shape 4b's
+    // converted run_mrt_blend_gpu pixel-proves on device.
+    crd::memory::MallocAllocator    root;
+    int                             def_s = 0;
+    int                             s0    = 0;
+    crd::gpu::IRasterProgram* const def_prog = reinterpret_cast<crd::gpu::IRasterProgram*>(&def_s);
+    crd::gpu::IStorageBuffer* const buf0     = reinterpret_cast<crd::gpu::IStorageBuffer*>(&s0);
+    FakeRTarget                     tgt(64U, 64U);
+    RasterDrawItem                  arr[2] = {{.program = def_prog, .storage = buf0, .vertex_count = 3U},
+                                             {.program = def_prog, .storage = buf0, .vertex_count = 6U}};
+    ConstSpan<RasterDrawItem>       items(arr, 2U);
+    PassTexState                    no_tex;
+
+    Context               ctx(&root);
+    Array<LoweredCommand> plan(&root);
+    SceneBuildDesc        bd;
+    bd.mrt_n    = 2U;
+    bd.blend[0] = crd::gpu::BlendMode::Additive;
+    bd.blend[1] = crd::gpu::BlendMode::RevealageMultiply;
+    REQUIRE(build_scene_ceir(ctx, bd, plan));
+    RenderResolvers r;
+    r.target            = resolve_target;
+    r.target_user       = &tgt;
+    r.program           = resolve_rprog;
+    r.program_user      = def_prog;
+    r.draws_count       = resolve_draws_count;
+    r.draws_item        = resolve_draws_item;
+    r.draws_user        = &items;
+    r.pass_texture      = resolve_pass_texture;
+    r.pass_texture_user = &no_tex;
+    SceneCapEncoder enc(&root);
+    REQUIRE(execute_render_lowered(ctx, ConstSpan<LoweredCommand>(plan.data(), plan.size()), enc, r) == ExecuteError::None);
+    CHECK(enc.begins == 2);          // ⭐ ONE scope PER ITEM (not one scope for the whole list)
+    CHECK(enc.ends == 2);
+    REQUIRE(enc.cmds.size() == 2U);  // ⭐ TWO draws — NO coalescing (the single-colour path would emit ONE DrawMulti)
+    CHECK(enc.cmds[0] == crd::gpu::RasterCommandKind::Draw);
+    CHECK(enc.cmds[1] == crd::gpu::RasterCommandKind::Draw);
+    CHECK(enc.gkinds[0] == crd::gpu::GeometryKind::StoragePull);
+    CHECK(enc.nbinds[0] == 1U);      // only the storage bind (a G-buffer/WBOIT item binds no textures)
+    CHECK(enc.had_color);            // a 2-colour scope
+}
+
+TEST_CASE("ceir 16d-live-1a: materialize GATES the depth attachment (null-drop, extent fallback, zero-attach fail)",
+          "[ceir][ceir-gpu][render]")
+{
+    // The depth attachment build_scene_ceir emits is a TEMPLATE the record-time target resolver GATES. This proves the
+    // materializer's three record-parity behaviours device-free (fs_target's own 3-mode logic is tested in render-graph):
+    //   (1) a depth op that resolves to NULL (a forward pass whose colour target carries no bundled depth) DROPS the depth
+    //       attachment — depth stays disabled — matching legacy record_scene_raster's runtime-dynamic `color->has_depth()`;
+    //   (2) extent_from_target falls back to the DEPTH target for a 0-colour depth-only scope (legacy `dims = color ?: depth`);
+    //   (3) a scope with ZERO resolved attachments FAILS materialize (never begin_rendering an empty scope).
+    crd::memory::MallocAllocator    root;
+    int                             def_s = 0;
+    int                             s0    = 0;
+    crd::gpu::IRasterProgram* const def_prog = reinterpret_cast<crd::gpu::IRasterProgram*>(&def_s);
+    crd::gpu::IStorageBuffer* const buf0     = reinterpret_cast<crd::gpu::IStorageBuffer*>(&s0);
+    FakeRTarget                     color_tgt(100U, 50U); // distinct sizes prove WHICH target the extent came from
+    FakeRTarget                     depth_tgt(200U, 80U);
+    RasterDrawItem                  arr[1] = {{.program = def_prog, .storage = buf0, .vertex_count = 3U}};
+    ConstSpan<RasterDrawItem>       arr_span(arr, 1U); // resolve_draws_* cast void* -> ConstSpan* (non-const)
+    PassTexState                    no_tex;
+
+    const auto run = [&](const SceneBuildDesc& bd, crd::gpu::IRasterTarget* color, crd::gpu::IRasterTarget* depth,
+                         SceneCapEncoder& enc) -> ExecuteError {
+        Context               ctx(&root);
+        Array<LoweredCommand> plan(&root);
+        REQUIRE(build_scene_ceir(ctx, bd, plan));
+        SceneTargetState st{&ctx, color, depth};
+        RenderResolvers  r;
+        r.target            = resolve_scene_target;
+        r.target_user       = &st;
+        r.program           = resolve_rprog;
+        r.program_user      = def_prog;
+        r.draws_count       = resolve_draws_count;
+        r.draws_item        = resolve_draws_item;
+        r.draws_user        = &arr_span;
+        r.pass_texture      = resolve_pass_texture;
+        r.pass_texture_user = &no_tex;
+        return execute_render_lowered(ctx, ConstSpan<LoweredCommand>(plan.data(), plan.size()), enc, r);
+    };
+
+    SECTION("forward + bundled depth: depth ENABLED (target == the resolved depth), extent from the COLOUR target")
+    {
+        SceneBuildDesc bd; // has_color=true, has_depth=false default
+        bd.has_depth = true;
+        SceneCapEncoder enc(&root);
+        REQUIRE(run(bd, &color_tgt, &depth_tgt, enc) == ExecuteError::None);
+        CHECK(enc.begins == 1);
+        CHECK(enc.had_color);
+        CHECK(enc.had_depth);
+        CHECK(enc.depth_target == static_cast<crd::gpu::IRasterTarget*>(&depth_tgt));
+        CHECK(enc.rd_width == 100U); // colour target, NOT depth
+        CHECK(enc.rd_height == 50U);
+    }
+    SECTION("forward + NO bundled depth (depth resolves NULL): depth DROPPED, colour still renders")
+    {
+        SceneBuildDesc bd;
+        bd.has_depth = true;
+        SceneCapEncoder enc(&root);
+        REQUIRE(run(bd, &color_tgt, nullptr, enc) == ExecuteError::None); // NOT an error — the null depth is dropped
+        CHECK(enc.begins == 1);
+        CHECK(enc.had_color);
+        CHECK_FALSE(enc.had_depth); // ⭐ the key: a null depth resolve leaves depth DISABLED, matching legacy
+        CHECK(enc.rd_width == 100U);
+    }
+    SECTION("depth-only (0-colour) scope: extent falls back to the DEPTH target, not the 1x1 placeholder")
+    {
+        SceneBuildDesc bd;
+        bd.has_color = false;
+        bd.has_depth = true;
+        SceneCapEncoder enc(&root);
+        REQUIRE(run(bd, nullptr, &depth_tgt, enc) == ExecuteError::None);
+        CHECK(enc.begins == 1);
+        CHECK_FALSE(enc.had_color);
+        CHECK(enc.had_depth);
+        CHECK(enc.rd_width == 200U); // ⭐ the DEPTH target's size (legacy `dims = color ?: depth`), never the 1x1 attr
+        CHECK(enc.rd_height == 80U);
+    }
+    SECTION("zero resolved attachments (depth-only whose depth resolves NULL): materialize FAILS, no empty begin")
+    {
+        SceneBuildDesc bd;
+        bd.has_color = false;
+        bd.has_depth = true;
+        SceneCapEncoder enc(&root);
+        CHECK(run(bd, nullptr, nullptr, enc) == ExecuteError::UnsupportedCommand); // never begin_rendering an empty scope
+        CHECK(enc.begins == 0);
+    }
 }
 
 TEST_CASE("ceir 14z-2: execute_render_lowered walks BeginRender/Draw/EndRender into the encoder (device-free FakeEncoder)",
@@ -1730,4 +2052,324 @@ TEST_CASE("ceir 14z-2: execute_render_lowered walks BeginRender/Draw/EndRender i
         CHECK(enc.begins == 1); // the scope began (target resolved) before the draw's null program was hit
         CHECK(enc.draws == 0);
     }
+}
+
+// ── CEIR-17b: the scene.resolve_* chain evaluator (device-free, SENTINEL callbacks) ──────────────────────────────────
+namespace
+{
+// SENTINEL resolvers — each ENCODES its inputs into the result so the chain THREADING is verifiable (UNEQUAL derivation
+// per stage: a pass-through bug that fed the wrong upstream handle yields a different number). No user state needed.
+SceneResolveHandle sen_material(void* /*user*/, SceneResolveHandle draw) { return draw * 10U + 1U; }
+SceneResolveHandle sen_technique(void* /*user*/, SceneResolveHandle material, StringView phase)
+{
+    return material * 10U + 2U
+           + (phase.size() > 0U ? static_cast<SceneResolveHandle>(static_cast<unsigned char>(phase[0])) : 0U);
+}
+SceneResolveHandle sen_program(void* /*user*/, SceneResolveHandle technique, SceneResolveHandle draw)
+{
+    return technique * 100U + draw * 10U + 3U;
+}
+SceneResolveHandle sen_geometry(void* /*user*/, SceneResolveHandle draw) { return draw * 10U + 4U; }
+
+// a main func body block (the resolve chain lives here — find_scene_misuse / the evaluator recurse into the func region).
+Block* scene_mkmain(Context& ctx, Module& m)
+{
+    Block* top = m.body()->first_block();
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m.body()->append(top);
+    }
+    Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
+    top->append(f);
+    return func::func_body_block(f);
+}
+// a seed VALUE of scene type `t` (a resource.declare with the Extern result type — the mkimage pattern).
+Value* scene_seed(Context& ctx, Block* b, TypeId t)
+{
+    Operation* const d = ctx.create_operation(ctx.intern_op("resource", "declare"), {}, 1U, t);
+    b->append(d);
+    return d->result(0U);
+}
+} // namespace
+
+TEST_CASE("ceir 17b: evaluate_scene_resolve THREADS a resolve chain through the host callbacks", "[ceir][ceir-gpu][scene]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    (void)func::register_dialect(ctx);
+    (void)resource::register_resource_ops(ctx);
+    (void)scene::register_dialect(ctx);
+    Module* const m = ctx.create_module();
+    Block* const  b = scene_mkmain(ctx, *m);
+
+    Value* const     draw = scene_seed(ctx, b, scene::type_draw(ctx));
+    Operation* const mat  = scene::build_resolve_material(ctx, draw, scene::type_material(ctx));
+    b->append(mat);
+    Operation* const tech = scene::build_resolve_technique(ctx, mat->result(0U), ctx.attr_string(StringView("opaque")),
+                                                           scene::type_technique(ctx));
+    b->append(tech);
+    Operation* const prog = scene::build_resolve_program(ctx, tech->result(0U), draw, scene::type_program(ctx));
+    b->append(prog);
+    Operation* const geo = scene::build_resolve_geometry(ctx, draw, scene::type_geometry(ctx));
+    b->append(geo);
+
+    RenderResolvers r;
+    r.resolve_material  = &sen_material;
+    r.resolve_technique = &sen_technique;
+    r.resolve_program   = &sen_program;
+    r.resolve_geometry  = &sen_geometry;
+
+    SceneResolvedHandles     out;
+    const SceneResolveHandle dh = 7U;
+    REQUIRE(evaluate_scene_resolve(ctx, *m, r, draw, dh, out) == ExecuteError::None);
+
+    const SceneResolveHandle exp_mat  = dh * 10U + 1U;                                         // material from draw
+    const SceneResolveHandle exp_tech = exp_mat * 10U + 2U + static_cast<SceneResolveHandle>('o'); // technique from mat + 'o'
+    const SceneResolveHandle exp_prog = exp_tech * 100U + dh * 10U + 3U;                       // program from technique + draw
+    const SceneResolveHandle exp_geo  = dh * 10U + 4U;                                         // geometry from draw
+    CHECK(out.material == exp_mat);
+    CHECK(out.technique == exp_tech); // threading: technique received EXACTLY material's output, not the draw
+    CHECK(out.program == exp_prog);   // program received technique AND draw — both upstream handles
+    CHECK(out.geometry == exp_geo);
+
+    // per-PHASE distinct: a `shadow` technique resolves a DIFFERENT handle than `opaque` (the phase attr reaches the
+    // callback — the evaluator read it from the op, not the caller).
+    Context ctx2(&root);
+    (void)func::register_dialect(ctx2);
+    (void)resource::register_resource_ops(ctx2);
+    (void)scene::register_dialect(ctx2);
+    Module* const    m2       = ctx2.create_module();
+    Block* const     b2       = scene_mkmain(ctx2, *m2);
+    Value* const     seed_mat = scene_seed(ctx2, b2, scene::type_material(ctx2)); // seed a material directly
+    Operation* const t2       = scene::build_resolve_technique(ctx2, seed_mat, ctx2.attr_string(StringView("shadow")),
+                                                         scene::type_technique(ctx2));
+    b2->append(t2);
+    SceneResolvedHandles out2;
+    REQUIRE(evaluate_scene_resolve(ctx2, *m2, r, seed_mat, exp_mat, out2) == ExecuteError::None);
+    CHECK(out2.technique != exp_tech); // 'shadow' != 'opaque'
+    CHECK(out2.technique == exp_mat * 10U + 2U + static_cast<SceneResolveHandle>('s'));
+}
+
+TEST_CASE("ceir 17b: evaluate_scene_resolve REFUSES a mistyped chain + an unwired/0 callback", "[ceir][ceir-gpu][scene]")
+{
+    crd::memory::MallocAllocator root;
+    RenderResolvers              all;
+    all.resolve_material  = &sen_material;
+    all.resolve_technique = &sen_technique;
+    all.resolve_program   = &sen_program;
+    all.resolve_geometry  = &sen_geometry;
+
+    // SceneChainMisuse: resolve_technique fed a DRAW (not a material) — find_scene_misuse rejects BEFORE any callback runs.
+    {
+        Context ctx(&root);
+        (void)func::register_dialect(ctx);
+        (void)resource::register_resource_ops(ctx);
+        (void)scene::register_dialect(ctx);
+        Module* const    m    = ctx.create_module();
+        Block* const     b    = scene_mkmain(ctx, *m);
+        Value* const     draw = scene_seed(ctx, b, scene::type_draw(ctx));
+        Operation* const t    = scene::build_resolve_technique(ctx, draw, ctx.attr_string(StringView("opaque")),
+                                                            scene::type_technique(ctx));
+        b->append(t);
+        SceneResolvedHandles out;
+        CHECK(evaluate_scene_resolve(ctx, *m, all, draw, 7U, out) == ExecuteError::SceneChainMisuse);
+        CHECK(out.technique == 0U); // nothing resolved — the verifier gate refused
+    }
+    // UnresolvedSceneHandle: a well-typed chain but the resolve_material callback is NULL (an unwired seam).
+    {
+        Context ctx(&root);
+        (void)func::register_dialect(ctx);
+        (void)resource::register_resource_ops(ctx);
+        (void)scene::register_dialect(ctx);
+        Module* const    m    = ctx.create_module();
+        Block* const     b    = scene_mkmain(ctx, *m);
+        Value* const     draw = scene_seed(ctx, b, scene::type_draw(ctx));
+        Operation* const mat  = scene::build_resolve_material(ctx, draw, scene::type_material(ctx));
+        b->append(mat);
+        RenderResolvers      none; // resolve_material == nullptr
+        SceneResolvedHandles out;
+        CHECK(evaluate_scene_resolve(ctx, *m, none, draw, 7U, out) == ExecuteError::UnresolvedSceneHandle);
+    }
+    // UnresolvedSceneHandle: a callback that RETURNS 0 (an unresolvable handle) is an error, not a silent 0-bind.
+    {
+        Context ctx(&root);
+        (void)func::register_dialect(ctx);
+        (void)resource::register_resource_ops(ctx);
+        (void)scene::register_dialect(ctx);
+        Module* const    m    = ctx.create_module();
+        Block* const     b    = scene_mkmain(ctx, *m);
+        Value* const     draw = scene_seed(ctx, b, scene::type_draw(ctx));
+        Operation* const mat  = scene::build_resolve_material(ctx, draw, scene::type_material(ctx));
+        b->append(mat);
+        RenderResolvers r;
+        r.resolve_material = [](void*, SceneResolveHandle) -> SceneResolveHandle { return 0U; };
+        SceneResolvedHandles out;
+        CHECK(evaluate_scene_resolve(ctx, *m, r, draw, 7U, out) == ExecuteError::UnresolvedSceneHandle);
+    }
+}
+
+// ── CEIR-17c: the whole-DrawList phase-discriminating parity ORACLE (device-free — the oracle is pointer-opaque) ──────
+// ⛔ ADVISOR DOUBLE-RETRACTION (2026-08-14): the earlier "real scene's resolved DrawList + a scene-render DEVICE test"
+// prescription is DROPPED against two pieces of evidence — (a) UNIFORMITY: fill() passes the program twins through verbatim
+// (scene_renderer.cpp:5726-5727) and the C++ selection is the uniform 3-line branch at frame_runtime.cpp:192-193, so real
+// items vary twin VALUES, never selection LOGIC (SceneHost is .cpp-file-local — a test cannot even name it); (b) POINTER
+// OPACITY: neither path dereferences a program (add_draws_scene null-tests + copies pointers, these callbacks map
+// pointer↔u64 through a host table, the assertion is pointer EQUALITY), so distinct sentinel IRasterProgram* serve
+// identically to real device programs. ⇒ DEVICE-FREE, exhaustive over phases × fallback arms. The GROUND TRUTH is the
+// DrawItem twin FIELDS (192-193), asserted INDEPENDENTLY of the callback's selection; distinct-per-twin sentinels + BOTH
+// fallback arms catch any one-sided transcription error (the residual double-transcription of 3 cited lines is the accepted
+// floor). resolve_geometry has a REAL ground truth for free (storage is attested by the C++ path — ad.storage).
+namespace
+{
+struct C17Item
+{
+    crd::gpu::IRasterProgram* program          = nullptr;
+    crd::gpu::IRasterProgram* program_depth     = nullptr; // null ⇒ the 192-193 fallback to `program`
+    crd::gpu::IRasterProgram* program_velocity  = nullptr; // null ⇒ the 192-193 fallback to `program`
+    crd::gpu::IStorageBuffer* storage           = nullptr;
+};
+// the INDEPENDENT ground truth — add_draws_scene's per-phase twin selection (frame_runtime.cpp:192-193), NOT the callback's
+// copy: depth_only(depth/shadow) → program_depth?:program; mrt(velocity) → program_velocity?:program; else → program.
+crd::gpu::IRasterProgram* c17_expected(const C17Item& it, StringView phase)
+{
+    if (phase == StringView("depth") || phase == StringView("shadow"))
+    {
+        return it.program_depth != nullptr ? it.program_depth : it.program;
+    }
+    if (phase == StringView("velocity")) { return it.program_velocity != nullptr ? it.program_velocity : it.program; }
+    return it.program; // opaque / transparent / forward
+}
+// the host resolve tables (the 17c callbacks' backing). draw_handle = item index+1 (0=null). program→u64 + storage→u64
+// tables (index+1) — the HOST owns the mapping; the test decodes back to the pointer (nothing smuggled through CEIR).
+struct C17Host
+{
+    const C17Item*                                    items  = nullptr;
+    crd::u32                                          count  = 0U;
+    crd::containers::Array<crd::gpu::IRasterProgram*>* progs  = nullptr;
+    crd::containers::Array<crd::gpu::IStorageBuffer*>* stores = nullptr;
+    static crd::u32 phase_idx(StringView p) noexcept
+    {
+        if (p == StringView("shadow") || p == StringView("depth")) { return 1U; }
+        if (p == StringView("velocity")) { return 2U; }
+        return 0U; // opaque / transparent
+    }
+    SceneResolveHandle prog_handle(crd::gpu::IRasterProgram* p)
+    {
+        for (crd::u32 i = 0; i < progs->size(); ++i)
+        {
+            if ((*progs)[i] == p) { return i + 1U; }
+        }
+        progs->push_back(p);
+        return static_cast<SceneResolveHandle>(progs->size());
+    }
+    SceneResolveHandle store_handle(crd::gpu::IStorageBuffer* s)
+    {
+        for (crd::u32 i = 0; i < stores->size(); ++i)
+        {
+            if ((*stores)[i] == s) { return i + 1U; }
+        }
+        stores->push_back(s);
+        return static_cast<SceneResolveHandle>(stores->size());
+    }
+    [[nodiscard]] crd::gpu::IRasterProgram* prog_of(SceneResolveHandle h) const noexcept
+    {
+        return (h >= 1U && h <= progs->size()) ? (*progs)[static_cast<crd::u32>(h) - 1U] : nullptr;
+    }
+    [[nodiscard]] crd::gpu::IStorageBuffer* store_of(SceneResolveHandle h) const noexcept
+    {
+        return (h >= 1U && h <= stores->size()) ? (*stores)[static_cast<crd::u32>(h) - 1U] : nullptr;
+    }
+};
+SceneResolveHandle c17_material(void* /*u*/, SceneResolveHandle draw) { return draw; } // material identity = the draw
+SceneResolveHandle c17_technique(void* /*u*/, SceneResolveHandle material, StringView phase)
+{
+    return material * 8U + C17Host::phase_idx(phase); // encode (draw, phase) — a distinct id per (draw, phase)
+}
+SceneResolveHandle c17_program(void* u, SceneResolveHandle technique, SceneResolveHandle draw)
+{
+    auto* const h = static_cast<C17Host*>(u);
+    if (draw < 1U || draw > h->count) { return 0U; }
+    const C17Item& it   = h->items[static_cast<crd::u32>(draw) - 1U];
+    const crd::u32 pidx = static_cast<crd::u32>(technique % 8U);
+    crd::gpu::IRasterProgram* twin = it.program;
+    if (pidx == 1U) { twin = it.program_depth != nullptr ? it.program_depth : it.program; }
+    else if (pidx == 2U) { twin = it.program_velocity != nullptr ? it.program_velocity : it.program; }
+    return h->prog_handle(twin);
+}
+SceneResolveHandle c17_geometry(void* u, SceneResolveHandle draw)
+{
+    auto* const h = static_cast<C17Host*>(u);
+    if (draw < 1U || draw > h->count) { return 0U; }
+    return h->store_handle(h->items[static_cast<crd::u32>(draw) - 1U].storage);
+}
+} // namespace
+
+TEST_CASE("ceir 17c: the CEIR resolve chain reproduces add_draws_scene's per-phase twin selection (parity oracle)",
+          "[ceir][ceir-gpu][scene]")
+{
+    crd::memory::MallocAllocator root;
+    // distinct sentinel programs / buffers (pointer-opaque — NEVER dereferenced; the reinterpret-cast-of-locals pattern).
+    int        ps[8]  = {0};
+    int        bs[4]  = {0};
+    const auto pr     = [&](int i) { return reinterpret_cast<crd::gpu::IRasterProgram*>(&ps[i]); };
+    const auto bf     = [&](int i) { return reinterpret_cast<crd::gpu::IStorageBuffer*>(&bs[i]); };
+
+    // items EXHAUST the fallback space × distinct twins:
+    C17Item items[4];
+    items[0] = {pr(0), pr(1), pr(2), bf(0)};    // both twins set
+    items[1] = {pr(3), nullptr, pr(4), bf(1)};  // program_depth NULL → depth/shadow FALL BACK to program
+    items[2] = {pr(5), pr(6), nullptr, bf(2)};  // program_velocity NULL → velocity FALLS BACK to program
+    items[3] = {pr(7), nullptr, nullptr, bf(3)}; // both NULL → EVERY phase resolves to program
+
+    crd::containers::Array<crd::gpu::IRasterProgram*> progs(&root);
+    crd::containers::Array<crd::gpu::IStorageBuffer*> stores(&root);
+    C17Host                                          host;
+    host.items  = items;
+    host.count  = 4U;
+    host.progs  = &progs;
+    host.stores = &stores;
+
+    RenderResolvers r;
+    r.resolve_material      = &c17_material;
+    r.resolve_technique     = &c17_technique;
+    r.resolve_program       = &c17_program;
+    r.resolve_program_user  = &host;
+    r.resolve_geometry      = &c17_geometry;
+    r.resolve_geometry_user = &host;
+
+    const char* const phases[] = {"opaque", "transparent", "shadow", "depth", "velocity"};
+    crd::u32          checked   = 0U;
+    for (crd::u32 i = 0; i < 4U; ++i)
+    {
+        for (const char* ph : phases)
+        {
+            Context ctx(&root);
+            (void)func::register_dialect(ctx);
+            (void)resource::register_resource_ops(ctx);
+            (void)scene::register_dialect(ctx);
+            Module* const    m    = ctx.create_module();
+            Block* const     b    = scene_mkmain(ctx, *m);
+            Value* const     draw = scene_seed(ctx, b, scene::type_draw(ctx));
+            Operation* const mat  = scene::build_resolve_material(ctx, draw, scene::type_material(ctx));
+            b->append(mat);
+            Operation* const tech = scene::build_resolve_technique(ctx, mat->result(0U), ctx.attr_string(StringView(ph)),
+                                                                   scene::type_technique(ctx));
+            b->append(tech);
+            Operation* const prog = scene::build_resolve_program(ctx, tech->result(0U), draw, scene::type_program(ctx));
+            b->append(prog);
+            Operation* const geo = scene::build_resolve_geometry(ctx, draw, scene::type_geometry(ctx));
+            b->append(geo);
+
+            SceneResolvedHandles out;
+            REQUIRE(evaluate_scene_resolve(ctx, *m, r, draw, static_cast<SceneResolveHandle>(i + 1U), out)
+                    == ExecuteError::None);
+            // ⭐ PROGRAM parity vs the INDEPENDENT ground truth (frame_runtime.cpp:192-193 twin selection).
+            CHECK(host.prog_of(out.program) == c17_expected(items[i], StringView(ph)));
+            // ⭐ GEOMETRY parity — storage is attested by the C++ path (ad.storage).
+            CHECK(host.store_of(out.geometry) == items[i].storage);
+            ++checked;
+        }
+    }
+    CHECK(checked == 20U); // 4 items × 5 phases — EVERY item, per phase (no silent sampling)
 }

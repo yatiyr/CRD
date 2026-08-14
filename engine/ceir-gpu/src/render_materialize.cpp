@@ -1,6 +1,7 @@
 #include <crd/ceir/gpu/render_materialize.hpp>
 
 #include <crd/ceir/attr.hpp>
+#include <crd/ceir/scene.hpp> // CEIR-17b: scene::find_scene_misuse (the verifier-first contract for evaluate_scene_resolve)
 
 #include <crd/containers/array.hpp> // CEIR-14z-4a: the reserved per-scope pass-closure array
 
@@ -62,6 +63,12 @@ namespace
     if (s == containers::StringView("alpha")) { return crd::gpu::BlendMode::Alpha; }
     if (s == containers::StringView("additive")) { return crd::gpu::BlendMode::Additive; }
     if (s == containers::StringView("premultiplied")) { return crd::gpu::BlendMode::PremultipliedAlpha; }
+    // ⛔ CEIR-16d-live-4a-1: the WBOIT MRT modes — without these the reveal attachment silently folded to Opaque (the
+    // materializer's default), so a WBOIT accumulate pass rendered wrong. RevealageMultiply is the ONE the set exists for
+    // (dst·(1−src.rgb), which no generic mode expresses); Multiply + RevealComposite complete the enum.
+    if (s == containers::StringView("multiply")) { return crd::gpu::BlendMode::Multiply; }
+    if (s == containers::StringView("revealage_multiply")) { return crd::gpu::BlendMode::RevealageMultiply; }
+    if (s == containers::StringView("reveal_composite")) { return crd::gpu::BlendMode::RevealComposite; }
     return crd::gpu::BlendMode::Opaque;
 }
 [[nodiscard]] crd::gpu::DepthCompare compare_of(const Context& ctx, const Operation* op)
@@ -127,27 +134,48 @@ bool materialize_rendering_desc(const Context& ctx, const Operation* scope_op, R
         }
         else if (nm == containers::StringView("render.depth_attachment"))
         {
-            out.depth.enabled     = true;
-            out.depth.target      = resolver(att, user);
-            out.depth.load        = load_op_of(ctx, att);
-            out.depth.store       = store_op_of(ctx, att);
-            out.depth.clear_depth = float_attr(ctx, att, containers::StringView("clear_depth"), 1.0F);
-            out.depth.compare     = compare_of(ctx, att);
-            // ⛔ `read_only` → the per-draw depth-WRITE disable (RasterState), a draw-state concern; named-forward.
+            // ⛔ CEIR-16d LIVE PATH: the depth attachment is a TEMPLATE the record-time target resolver GATES. A forward
+            // scene pass whose resolved colour target carries NO bundled depth (and has no explicit/shared depth) resolves
+            // to null here — and legacy record_scene_raster leaves `depth` null in exactly that case ⇒ NO depth attachment
+            // (it is runtime-dynamic on color->has_depth()). So a NULL resolve DROPS the attachment (depth stays disabled);
+            // it is NOT an error. Only a genuinely misconfigured pass — no colour AND no depth — fails, at the
+            // zero-attachment guard below. (execute_render_lowered's `depth.enabled && target==nullptr` guard then never
+            // fires from this path, because enabled is set only alongside a non-null target.)
+            crd::gpu::IRasterTarget* const dt = resolver(att, user);
+            if (dt != nullptr)
+            {
+                out.depth.enabled     = true;
+                out.depth.target      = dt;
+                out.depth.load        = load_op_of(ctx, att);
+                out.depth.store       = store_op_of(ctx, att);
+                out.depth.clear_depth = float_attr(ctx, att, containers::StringView("clear_depth"), 1.0F);
+                out.depth.compare     = compare_of(ctx, att);
+                // ⛔ `read_only` → the per-draw depth-WRITE disable (RasterState), a draw-state concern; named-forward.
+            }
         }
         else
         {
             return false;
         }
     }
-    // ⭐ CEIR-16-3c: a FULLSCREEN composite renders to whatever target it is bound to (a per-cascade shadow atlas, a half-res
-    // buffer, the swapchain), whose size is known only at RECORD. `extent_from_target` overrides the authored placeholder
-    // width/height with the RESOLVED colour target's size (record_fullscreen_raster parity: rd.width = color->width()).
-    if (bool_attr(ctx, scope_op, containers::StringView("extent_from_target")) && out.color.size() > 0U
-        && out.color[0].target != nullptr)
+    // ⛔ CEIR-16d: a scope with ZERO resolved attachments (a depth-only pass whose depth did not resolve, or an empty scope)
+    // must NEVER reach begin_rendering — legacy record_scene_raster returns early on `color == nullptr && depth == nullptr`.
+    // Fail materialize LOUD (the caller returns UnsupportedCommand) rather than record an empty scope onto the encoder.
+    if (out.color.size() == 0U && !out.depth.enabled) { return false; }
+    // ⭐ CEIR-16-3c: a composite renders to whatever target it is bound to (a per-cascade shadow atlas, a half-res buffer,
+    // the swapchain), whose size is known only at RECORD. `extent_from_target` overrides the authored placeholder width/
+    // height with the RESOLVED target's size (record parity: `dims = color != nullptr ? color : depth` — the colour target
+    // when present, else the depth target for a DEPTH-ONLY shadow-cascade / prepass scope).
+    if (bool_attr(ctx, scope_op, containers::StringView("extent_from_target")))
     {
-        out.width  = out.color[0].target->width();
-        out.height = out.color[0].target->height();
+        const crd::gpu::IRasterTarget* ext = nullptr;
+        if (out.color.size() > 0U && out.color[0].target != nullptr) { ext = out.color[0].target; }
+        else if (out.depth.enabled && out.depth.target != nullptr) { ext = out.depth.target; }
+        if (ext != nullptr)
+        {
+            out.width  = ext->width();
+            out.height = ext->height();
+        }
     }
     return true;
 }
@@ -425,11 +453,35 @@ void scene_attach_textures(crd::gpu::RasterDrawPacket& pk, crd::gpu::ITexture* i
 // textured → PLAIN with a COALESCED run (⛔ ASYMMETRIES preserved: first_draw_index rides indirect/indexed/multi but NOT
 // combined-tex/single-plain; run>1||indexed → DrawMulti; i += run-1; the same-storage run predicate). Returns false only on a
 // missing required resolver (the program/draws accessors).
-[[nodiscard]] bool emit_scene_list(const Context& /*ctx*/, const Operation* op, crd::gpu::ICommandEncoder& encoder,
+[[nodiscard]] bool emit_scene_list(const Context& ctx, const Operation* op, crd::gpu::ICommandEncoder& encoder,
                                    const RenderResolvers& resolvers, bool scope_has_color)
 {
     if (resolvers.program == nullptr || resolvers.draws_count == nullptr || resolvers.draws_item == nullptr) { return false; }
     crd::gpu::IRasterProgram* const def_prog = resolvers.program(op, resolvers.program_user);
+
+    // ⛔ CEIR-16z-2: PROCEDURAL mode (the §41 visbuffer dissolution) — a byte-exact port of the deleted record_visbuffer_raster
+    // draw loop. Each item is a plain gl_VertexIndex Draw (GeometryKind::None, vertex_count, NO storage binding, no textures,
+    // no coalescing). ⛔ the skip is on vertex_count==0 (NOT storage — a procedural draw HAS no storage, and the storage-null
+    // skip below is the RESOLVE-FAILURE guard, a different concern). The pass-texture / scope_has_color routing is STORAGE-only.
+    if (str_attr(ctx, op, containers::StringView("geometry")) == containers::StringView("procedural"))
+    {
+        const crd::u32 np = resolvers.draws_count(resolvers.draws_user);
+        for (crd::u32 i = 0; i < np; ++i)
+        {
+            RasterDrawItem it{};
+            resolvers.draws_item(resolvers.draws_user, i, it);
+            if (it.vertex_count == 0U) { continue; }
+            crd::gpu::IRasterProgram* const prog = it.program != nullptr ? it.program : def_prog;
+            if (prog == nullptr) { continue; }
+            crd::gpu::RasterDrawPacket p;
+            p.program                        = prog;
+            p.command                        = crd::gpu::RasterCommandKind::Draw;
+            p.geometry.kind                  = crd::gpu::GeometryKind::None; // a procedural VS (gl_VertexIndex); the id target IS the scope
+            p.geometry.vertex_or_index_count = it.vertex_count;
+            encoder.draw(p); // ZERO bindings — the visbuffer VS pulls nothing
+        }
+        return true;
+    }
 
     // The PASS-level sampled atlas (shadow / moment), resolved once. pass_depth is meaningless without a pass_tex (a
     // depth-only cascade reads NOTHING); batchable_pass: a pass that reads a texture never coalesces runs.
@@ -589,6 +641,40 @@ void scene_attach_textures(crd::gpu::RasterDrawPacket& pk, crd::gpu::ITexture* i
     return true;
 }
 
+// ⛔ CEIR-16d-live-4a-3: the MULTI-COLOUR MRT expansion (a deferred G-buffer / WBOIT accumulate). A DIFFERENT record SHAPE
+// from the single-colour scene ladder: the legacy record_scene_raster MRT arm (frame_graph.cpp L365-399) opens a SCOPE PER
+// ITEM — begin(rd) / one clearing StoragePull draw / end each (the encoder's clear-once makes item 0 clear + the rest load, so
+// Additive accum + RevealageMultiply reveal accumulate). NO textures, NO coalescing — a G-buffer/WBOIT item is a plain
+// StoragePull. The IR is unchanged (ONE render.scope); this per-item begin/end is a record-time LOWERING artifact, which is
+// why the walk DEFERS the scope's begin_rendering to here (execute_render_lowered, ≥2-colour BeginRender). `rd` is the
+// materialized ≥2-colour scope (all Clear — the MRT arm IGNORES load, gap iv). Byte-identical to legacy L377-398.
+[[nodiscard]] bool emit_scene_list_mrt(const Operation* op, crd::gpu::ICommandEncoder& encoder,
+                                       const RenderResolvers& resolvers, const crd::gpu::RenderingDesc& rd)
+{
+    if (resolvers.program == nullptr || resolvers.draws_count == nullptr || resolvers.draws_item == nullptr) { return false; }
+    crd::gpu::IRasterProgram* const def_prog = resolvers.program(op, resolvers.program_user);
+    const crd::u32                  n        = resolvers.draws_count(resolvers.draws_user);
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        RasterDrawItem it{};
+        resolvers.draws_item(resolvers.draws_user, i, it);
+        if (it.storage == nullptr) { continue; }
+        crd::gpu::IRasterProgram* const prog = it.program != nullptr ? it.program : def_prog;
+        if (prog == nullptr) { continue; }
+        encoder.begin_rendering(rd);
+        crd::gpu::RasterDrawPacket p;
+        p.program                        = prog;
+        p.command                        = crd::gpu::RasterCommandKind::Draw;
+        p.geometry.kind                  = crd::gpu::GeometryKind::StoragePull;
+        p.geometry.vertex_or_index_count = it.vertex_count;
+        p.bindings.push_back(crd::gpu::ResourceBinding{crd::gpu::BindingFrequency::Object,
+                                                       crd::gpu::BindingKind::StorageBuffer, 0U, it.storage});
+        encoder.draw(p);
+        encoder.end_rendering();
+    }
+    return true;
+}
+
 ExecuteError execute_render_lowered(const Context& ctx, containers::ConstSpan<LoweredCommand> commands,
                                     crd::gpu::ICommandEncoder& encoder, const RenderResolvers& resolvers)
 {
@@ -596,6 +682,24 @@ ExecuteError execute_render_lowered(const Context& ctx, containers::ConstSpan<Lo
     // NO textures), but the Draw case has no scope state. Hoist it from the MATERIALIZED scope (rd.color.size()>0) at
     // BeginRender — the scope is the source of truth, never a second op attr the builder could get wrong.
     bool scope_has_color = false;
+    // ⛔ CEIR-16d-live-4a-3: MRT deferral state. A ≥2-colour scope (a deferred G-buffer / WBOIT accumulate) opens a scope PER
+    // ITEM (emit_scene_list_mrt — the legacy record_scene_raster MRT shape), so its begin_rendering is DEFERRED from
+    // BeginRender to the draw. `deferred_rd` stashes the materialized scope; `outer_begin_open` tracks whether an OUTER
+    // begin_rendering is open + needs an EndRender close (single-colour scopes, and the deferred-then-non-scene-draw fallback).
+    bool                    deferred         = false;
+    bool                    outer_begin_open = false;
+    crd::gpu::RenderingDesc deferred_rd;
+    // Issue a DEFERRED (≥2-colour MRT) scope's begin_rendering NOW — used when a NON-scene-draw op (an amplify list, or the
+    // 14z-4c gbuffer single render.draw) records inside a ≥2-colour scope: those keep the ONE-scope-N-draws shape, so the
+    // deferred begin must open before they record (⛔ mandatory or the 14z-4c single-draw MRT device tests break).
+    const auto flush_deferred = [&]() {
+        if (deferred)
+        {
+            encoder.begin_rendering(deferred_rd);
+            deferred         = false;
+            outer_begin_open = true;
+        }
+    };
     for (crd::u32 i = 0; i < static_cast<crd::u32>(commands.size()); ++i)
     {
         const LoweredCommand& cmd = commands[i];
@@ -616,6 +720,33 @@ ExecuteError execute_render_lowered(const Context& ctx, containers::ConstSpan<Lo
             }
             if (rd.depth.enabled && rd.depth.target == nullptr) { return ExecuteError::UnresolvedProgram; }
             scope_has_color = rd.color.size() > 0U;
+            // ⛔ CEIR-16d-live-4a-3: a ≥2-colour MRT scope DEFERS its begin_rendering — emit_scene_list_mrt runs the per-item
+            // begin/draw/end at the Draw (the legacy MRT arm's scope-per-item shape). GAP (iv): the MRT arm hardcodes Clear
+            // (IGNORES load), so force_load is NOT applied here — the 4a-2 builder already baked Clear. force_load stays a
+            // SINGLE-colour concern.
+            if (rd.color.size() >= 2U)
+            {
+                deferred         = true;
+                deferred_rd      = rd;
+                outer_begin_open = false;
+                break;
+            }
+            // ⛔ CEIR-16d-live-2b: the PER-INSTANCE load override. The static plan baked only the AUTHORED base load (kLoad);
+            // the FRAME-VARYING per-for_each-instance `load_override` (a cached shadow cascade PRESERVES its atlas layer,
+            // REN-40-E2) rides via resolvers.force_load. Force every colour + the depth LoadOp to Load — MONOTONE
+            // (Clear→Load only; Store + the clear values UNTOUCHED), matching legacy record_scene_raster (colour load =
+            // `load`; depth load = `load ‖ load_depth`, so depth loads whenever colour does). Idempotent when the base
+            // already baked Load (static kLoad / kComposite).
+            if (resolvers.force_load)
+            {
+                for (crd::u32 c = 0; c < static_cast<crd::u32>(rd.color.size()); ++c)
+                {
+                    rd.color[c].load = crd::gpu::LoadOp::Load;
+                }
+                if (rd.depth.enabled) { rd.depth.load = crd::gpu::LoadOp::Load; }
+            }
+            deferred         = false;
+            outer_begin_open = true;
             encoder.begin_rendering(rd);
             break;
         }
@@ -626,6 +757,7 @@ ExecuteError execute_render_lowered(const Context& ctx, containers::ConstSpan<Lo
             // so materialize_draw_packet (single-op-operands) does not apply.
             if (ctx.op_name(cmd.op->kind()) == containers::StringView("render.mesh_dispatch_list"))
             {
+                flush_deferred(); // an amplify list keeps the one-scope-N-draws shape (never a per-item MRT scope)
                 if (!emit_amplify_list(ctx, cmd.op, encoder, resolvers)) { return ExecuteError::UnsupportedCommand; }
                 break;
             }
@@ -633,12 +765,25 @@ ExecuteError execute_render_lowered(const Context& ctx, containers::ConstSpan<Lo
             // expanding over the host DrawList, but the verb is chosen per-item + it needs the scope's colour presence.
             if (ctx.op_name(cmd.op->kind()) == containers::StringView("render.scene_draw_list"))
             {
+                // ⛔ CEIR-16d-live-4a-3: a DEFERRED (≥2-colour MRT) scene list is the per-item MRT expansion (begin/draw/end
+                // per item — the legacy record_scene_raster MRT arm); it opens + closes its OWN scopes, so `outer_begin_open`
+                // stays false (EndRender emits nothing). The single-colour scene ladder is unchanged.
+                if (deferred)
+                {
+                    if (!emit_scene_list_mrt(cmd.op, encoder, resolvers, deferred_rd))
+                    {
+                        return ExecuteError::UnsupportedCommand;
+                    }
+                    deferred = false; // consumed; the per-item scopes self-closed (no outer begin/end)
+                    break;
+                }
                 if (!emit_scene_list(ctx, cmd.op, encoder, resolvers, scope_has_color))
                 {
                     return ExecuteError::UnsupportedCommand;
                 }
                 break;
             }
+            flush_deferred(); // a single materialized draw (14z-4c gbuffer single MRT) keeps the one-scope shape
             crd::gpu::RasterDrawPacket p;
             if (!materialize_draw_packet(ctx, cmd.op, resolvers, p))
             {
@@ -649,8 +794,13 @@ ExecuteError execute_render_lowered(const Context& ctx, containers::ConstSpan<Lo
             break;
         }
         case LoweredKind::EndRender:
-            scope_has_color = false;
-            encoder.end_rendering();
+            // ⛔ CEIR-16d-live-4a-3: close the OUTER scope only if one is open — a consumed MRT scene list (per-item scopes
+            // self-closed) and an UNRESOLVED deferral (a ≥2-colour scope with 0 items — matches legacy's 0-iteration loop:
+            // no begin, no end) both leave outer_begin_open false, so nothing is emitted here.
+            if (outer_begin_open) { encoder.end_rendering(); }
+            scope_has_color  = false;
+            deferred         = false;
+            outer_begin_open = false;
             break;
         case LoweredKind::Dispatch:
         case LoweredKind::Transfer:
@@ -747,5 +897,107 @@ ExecuteError execute_render_frame(const Context& ctx, containers::ConstSpan<Lowe
     if (!fg->build()) { return ExecuteError::FrameBuildFailed; }
     fg->execute(); // ONE submission — barriers + end-of-frame readback owned by the frame graph
     return ExecuteError::None;
+}
+
+// ── CEIR-17b: the scene.resolve_* chain evaluator ─────────────────────────────────────────────────────────────────
+namespace
+{
+// the value→handle binding map for a resolve chain (the seed draw + each resolved result). A chain is a handful of ops,
+// so a small fixed map (no allocator needed) — the emit_scene_list stack-array precedent.
+struct SceneEvalMap
+{
+    struct Bind
+    {
+        const Value*       v = nullptr;
+        SceneResolveHandle h = 0;
+    };
+    static constexpr crd::u32 kMax = 64U;
+    Bind                      binds[kMax];
+    crd::u32                  n = 0U;
+
+    [[nodiscard]] SceneResolveHandle lookup(const Value* v) const noexcept
+    {
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            if (binds[i].v == v) { return binds[i].h; }
+        }
+        return 0U; // an unbound operand ⇒ 0 (an unresolvable upstream — the callback receives 0)
+    }
+    void bind(const Value* v, SceneResolveHandle h) noexcept
+    {
+        if (n < kMax) { binds[n++] = {v, h}; }
+    }
+};
+
+// The pre-order walk: for each scene.resolve_* op, look up its RESOLVED upstream operand handle(s), call the matching
+// callback, bind the op-result. A null callback the chain needs ⇒ UnresolvedSceneHandle; a 0 return (an unresolvable
+// handle) likewise. The op order is SSA (defs precede uses), so a linear walk resolves the chain in one pass.
+ExecuteError eval_scene_region(const Context& ctx, const Region* r, const RenderResolvers& res, SceneEvalMap& map,
+                               SceneResolvedHandles& out) // NOLINT(misc-no-recursion)
+{
+    if (r == nullptr) { return ExecuteError::None; }
+    for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
+    {
+        for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+        {
+            const containers::StringView nm = ctx.op_name(op->kind());
+            if (nm == containers::StringView("scene.resolve_material"))
+            {
+                if (res.resolve_material == nullptr) { return ExecuteError::UnresolvedSceneHandle; }
+                const SceneResolveHandle mh = res.resolve_material(res.resolve_material_user, map.lookup(op->operand(0U)));
+                if (mh == 0U) { return ExecuteError::UnresolvedSceneHandle; }
+                map.bind(op->result(0U), mh);
+                out.material = mh;
+            }
+            else if (nm == containers::StringView("scene.resolve_technique"))
+            {
+                if (res.resolve_technique == nullptr) { return ExecuteError::UnresolvedSceneHandle; }
+                const SceneResolveHandle th = res.resolve_technique(res.resolve_technique_user, map.lookup(op->operand(0U)),
+                                                                    str_attr(ctx, op, containers::StringView("phase")));
+                if (th == 0U) { return ExecuteError::UnresolvedSceneHandle; }
+                map.bind(op->result(0U), th);
+                out.technique = th;
+            }
+            else if (nm == containers::StringView("scene.resolve_program"))
+            {
+                if (res.resolve_program == nullptr) { return ExecuteError::UnresolvedSceneHandle; }
+                const SceneResolveHandle pg = res.resolve_program(res.resolve_program_user, map.lookup(op->operand(0U)),
+                                                                  map.lookup(op->operand(1U)));
+                if (pg == 0U) { return ExecuteError::UnresolvedSceneHandle; }
+                map.bind(op->result(0U), pg);
+                out.program = pg;
+            }
+            else if (nm == containers::StringView("scene.resolve_geometry"))
+            {
+                if (res.resolve_geometry == nullptr) { return ExecuteError::UnresolvedSceneHandle; }
+                const SceneResolveHandle gh = res.resolve_geometry(res.resolve_geometry_user, map.lookup(op->operand(0U)));
+                if (gh == 0U) { return ExecuteError::UnresolvedSceneHandle; }
+                map.bind(op->result(0U), gh);
+                out.geometry = gh;
+            }
+            for (crd::u32 i = 0; i < op->num_regions(); ++i)
+            {
+                const ExecuteError e = eval_scene_region(ctx, op->region(i), res, map, out);
+                if (e != ExecuteError::None) { return e; }
+            }
+        }
+    }
+    return ExecuteError::None;
+}
+} // namespace
+
+ExecuteError evaluate_scene_resolve(Context& ctx, const Module& m, const RenderResolvers& resolvers,
+                                    const Value* draw_seed, SceneResolveHandle draw_handle, SceneResolvedHandles& out)
+{
+    out = SceneResolvedHandles{};
+    // ⛔ VERIFIER-FIRST: a mis-typed chain refuses BEFORE any callback runs (never a garbage handle) — the same contract
+    // execute_render_lowered assumes (find_render_misuse passed).
+    if (crd::ceir::scene::find_scene_misuse(ctx, m).kind != crd::ceir::scene::SceneMisuseKind::None)
+    {
+        return ExecuteError::SceneChainMisuse;
+    }
+    SceneEvalMap map;
+    map.bind(draw_seed, draw_handle); // the chain's scene.draw INPUT resolves to the caller's draw handle
+    return eval_scene_region(ctx, m.body(), resolvers, map, out);
 }
 } // namespace crd::ceir::gpu

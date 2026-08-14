@@ -41,7 +41,7 @@ render.color_attachment(%image) {load, store, clear_kind, clear_r/g/b/a | clear_
 | `clear_b` | `float` | no | float clear blue (absent = 0.0) |
 | `clear_a` | `float` | no | float clear alpha (absent = 0.0) |
 | `clear_uint` | `int` | no | uint clear id (clear_kind=uint; the R32_UINT background id -- RAH-1a.1 clear_uint; absent = 0) |
-| `blend` | `string` | no | sec-40 the per-attachment BlendMode: opaque \| alpha \| additive \| premultiplied (absent = opaque). CLOSED vocabulary, enforced. (The blend STATE surface beyond these presets is CEIR-14b pipeline state.) |
+| `blend` | `string` | no | sec-40 the per-attachment BlendMode: opaque \| alpha \| additive \| premultiplied \| multiply \| revealage_multiply \| reveal_composite (absent = opaque). CLOSED vocabulary, enforced. The last three are the WBOIT MRT modes (CEIR-16d-live-4a: revealage_multiply is dst*(1-src.rgb), which no generic mode expresses). (The blend STATE surface beyond these presets is CEIR-14b pipeline state.) |
 
 ## `render.depth_attachment`
 
@@ -289,7 +289,7 @@ render.mesh_dispatch_list() {program=@p, primitive="meshlet"|"patches", fallback
 
 The scene per-draw-item verb ladder: ONE render.scope, N packets over the host DrawList; each item's fields (args/index_count/texture/storage) select its verb (indirect/indexed/storage-pull/coalesced-multi).
 
-render.scene_draw_list() {program=@p, access=""}. The scene per-draw-item verb ladder (record_scene_raster single-colour arm): ONE render.scope, the walk expands it over the host DrawList (ctx.draws()) into N raster packets whose verb is chosen PER ITEM (DrawIndexedIndirect | DrawIndexed | Draw StoragePull | DrawMulti/DrawMultiIndexed run-coalesced), RESULTLESS, legal ONLY inside a render.scope. Effects: GPUCommand + ambient MemoryReadWrite. find_render_misuse: ZERO operands (access arity 0); program a Symbol.
+render.scene_draw_list() {program=@p, access="", geometry?}. The scene per-draw-item verb ladder: ONE render.scope, the walk expands it over the host DrawList (ctx.draws()) into N raster packets. In the default `storage` mode the verb is chosen PER ITEM (DrawIndexedIndirect | DrawIndexed | Draw StoragePull | DrawMulti/DrawMultiIndexed run-coalesced); in `procedural` mode (the §41 visbuffer form) each item is a plain procedural Draw (GeometryKind::None, vertex_count, no storage/textures/coalescing). RESULTLESS, legal ONLY inside a render.scope. Effects: GPUCommand + ambient MemoryReadWrite. find_render_misuse: ZERO operands (access arity 0); program a Symbol; geometry in {storage, procedural}.
 
 - **Version:** 1
 - **Traits:** _none_
@@ -307,6 +307,7 @@ render.scene_draw_list() {program=@p, access=""}. The scene per-draw-item verb l
 | `program` | `symbol` | yes | the scene @program PLACEHOLDER (the pass's raster program resolves at record; a per-item program beats it) |
 | `access` | `string` | yes | per-binding access; ZERO bindings here (arity 0) |
 | `program_interface` | `int` | no | CEIR-13c the EXPECTED §107 interface hash (a PIN; absent = unpinned) |
+| `geometry` | `string` | no | CEIR-16z the geometry mode: storage \| procedural (absent = storage). CLOSED vocabulary, find_render_misuse enforces it. `storage` = the ordinary storage-pull scene ladder; `procedural` = a visbuffer / gl_VertexIndex draw (GeometryKind::None, vertex_count only, NO storage binding, no textures, no coalescing) — the §41 visbuffer dissolution onto scene.raster. |
 
 ## `render.scope`
 

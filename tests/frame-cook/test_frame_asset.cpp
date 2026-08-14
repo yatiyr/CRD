@@ -35,7 +35,7 @@ TEST_CASE("frame-graph pass executor ids match the runtime hash", "[framecook][r
     CHECK(fc::kExecTessRaster       == rp::executor_type_id(SV("tess.raster")));
     CHECK(fc::kExecMeshRaster       == rp::executor_type_id(SV("mesh.raster")));
     CHECK(fc::kExecMeshIndirect     == rp::executor_type_id(SV("mesh.indirect")));
-    CHECK(fc::kExecVisbufferRaster  == rp::executor_type_id(SV("visbuffer.raster")));
+    // ⛔ CEIR-16z-3b: kExecVisbufferRaster DELETED (§41) — a visbuffer is now a scene.raster procedural role.
     CHECK(fc::kExecPresent          == rp::executor_type_id(SV("present")));
 }
 

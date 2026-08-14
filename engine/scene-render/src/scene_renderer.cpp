@@ -2693,9 +2693,17 @@ struct SceneRenderer::Impl
         const int anim_off    = loadu(ku(kHdrAnimStateOff));
         const int palette_off = loadu(ku(26U));
         const int jc          = loadu(ku(27U));
+        // ⛔⛔ REN-40-F / CEIR-17e: gate the WHOLE kernel on kHdrGpuSkinActive, EXACTLY as `palette_snapshot` does
+        // (2859-2881). Without it, under a cull graph the cull path sets dispatch_groups>0 (5753) even when GPU skinning is
+        // OFF, so this pass DISPATCHES, reads the UN-uploaded skeleton/clip (that upload is gated on gpu_skinning_on at
+        // 5181), and CLOBBERS the CPU-uploaded palette → the reference render is wrong. The whole-class gate belonged on
+        // BOTH device skin passes, not just palette_snapshot; the bespoke REN-40-F TOML has no cull (dispatch_groups==0) so
+        // it masked the omission — the CEIR-17e shipped-config gate surfaced it.
+        const int active      = loadu(ku(kHdrGpuSkinActive));
 
-        const int in_range = g.binary(KOp::CmpLt, instance, inst_count);
-        const int if_valid = g.stmt_if_begin(in_range);
+        const int in_range  = g.binary(KOp::CmpLt, instance, inst_count);
+        const int if_active = g.stmt_if_begin(g.binary(KOp::CmpNe, active, ku(0U)));
+        const int if_valid  = g.stmt_if_begin(in_range);
 
         const int as_base    = add(anim_off, mul(instance, ku(2U)));
         const int clip_local = loadu(as_base);
@@ -2816,6 +2824,7 @@ struct SceneRenderer::Impl
         g.stmt_for_end(for2);
 
         g.stmt_if_end(if_valid);
+        g.stmt_if_end(if_active); // ⛔ mirror palette_snapshot: close the kHdrGpuSkinActive guard around the whole body
 
         KEntry e{};
         e.stage             = KStage::Compute;

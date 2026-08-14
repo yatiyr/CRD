@@ -512,6 +512,36 @@ TEST_CASE("ceir 14b: find_render_misuse rejects every malformed draw + region mi
         (void)mkdrawi(ctx, k, rb, ic, ic, img, ConstSpan<Value*>(none, 0U), "prog", "");
         CHECK(ctx.find_render_misuse(*m).kind == RenderMisuseKind::DrawIndexBufferNotBuffer);
     }
+    // CEIR-16z-2 GeometryModeInvalid: a scene_draw_list whose `geometry` attr is outside {storage, procedural}.
+    {
+        Context       ctx(&root);
+        const Kit     k(ctx);
+        Module* const m  = ctx.create_module();
+        Block*        rb = nullptr;
+        scope_fixture(ctx, k, *m, rb);
+        const OpId       sdl = ctx.intern_op("render", "scene_draw_list");
+        Operation* const d   = ctx.create_operation(sdl, {}, 0U);
+        ctx.set_attr(d, "program", ctx.attr_symbol(StringView("scene")));
+        ctx.set_attr(d, "access", ctx.attr_string(StringView("")));
+        ctx.set_attr(d, "geometry", ctx.attr_string(StringView("bogus")));
+        rb->append(d);
+        CHECK(ctx.find_render_misuse(*m).kind == RenderMisuseKind::GeometryModeInvalid);
+    }
+    // CEIR-16z-2: geometry="procedural" (and absent = storage default) are BOTH accepted.
+    {
+        Context       ctx(&root);
+        const Kit     k(ctx);
+        Module* const m  = ctx.create_module();
+        Block*        rb = nullptr;
+        scope_fixture(ctx, k, *m, rb);
+        const OpId       sdl = ctx.intern_op("render", "scene_draw_list");
+        Operation* const d   = ctx.create_operation(sdl, {}, 0U);
+        ctx.set_attr(d, "program", ctx.attr_symbol(StringView("scene")));
+        ctx.set_attr(d, "access", ctx.attr_string(StringView("")));
+        ctx.set_attr(d, "geometry", ctx.attr_string(StringView("procedural")));
+        rb->append(d);
+        CHECK(ctx.find_render_misuse(*m).kind == RenderMisuseKind::None);
+    }
 }
 
 TEST_CASE("ceir 14c: well-formed indirect + mesh draws inside a scope pass find_render_misuse", "[ceir][render]")

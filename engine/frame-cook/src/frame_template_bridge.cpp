@@ -325,6 +325,13 @@ bool map_raster(const FramePassDesc& d, bool fullscreen, rp::PassPayload& pl, co
         {
             pl.params.push_back(rp::ParamValue{slot_id("load_depth"), tv_bool(true)});
         }
+        // ⛔ CEIR-16z-3b (§41 dissolution): a visbuffer scene pass declares `clear_id` (the background id of its R32Uint id
+        // target). It rides the payload as an ordinary optional scene.raster param for cook==record round-trip fidelity — the
+        // CEIR plan (build_frame_plans) bakes the actual typed uint clear from the target format + this id.
+        if (pass_has(d, SV("clear_id")))
+        {
+            pl.params.push_back(rp::ParamValue{slot_id("clear_id"), tv_u32(pass_u32(d, SV("clear_id"), 0U))});
+        }
     }
 
     crd::u32 color_i = 0U;
@@ -625,25 +632,9 @@ bool map_rt_common(const FramePassDesc& d, rp::PassPayload& pl, const rg::FrameG
     return true;
 }
 
-// ── visbuffer.raster: writes → the R32_UINT id target; `clear_id` param (the background id). Draws come from the
-// resolved draw list (bound at record). ──
-bool map_visbuffer(const FramePassDesc& d, rp::PassPayload& pl, DiagnosticList& diags)
-{
-    crd::u32 clear_id = 0U;
-    for (crd::usize i = 0; i < d.params.size(); ++i)
-    {
-        if (name_is(d.params[i].name, "clear_id")) { clear_id = static_cast<crd::u32>(d.params[i].v[0]); }
-    }
-    pl.params.push_back(rp::ParamValue{slot_id("clear_id"), tv_u32(clear_id)});
-    if (d.writes.empty())
-    {
-        diags.emit(crd::renderasset::Severity::Error, DiagCode::InvalidSlot, "a visbuffer pass declares no id target",
-                   view_of(d.name));
-        return false;
-    }
-    return push_ref(pl, slot_id("color"), rp::SlotResourceKind::ColorTarget, rp::SlotAccess::Write,
-                    name_hash(d.writes[0].name), d.name, diags);
-}
+// ⛔ CEIR-16z-3b: map_visbuffer DELETED (§41 dissolution) — a visbuffer pass is now an ordinary scene.raster pass (procedural
+// geometry + a uint id target), so it maps through map_raster (below) like every scene pass; its `clear_id` rides the scene
+// payload as an ordinary optional param.
 
 // ── mesh.raster / tess.raster: writes → colour; `clear_color` + optional `amplify_count` (the procedural draw count).
 // The per-draw amplification counts + storage-pull buffers come from the resolved draw list at record. ──
@@ -772,7 +763,6 @@ bool build_frame_graph_template(const FrameGraphDesc& desc, ForEachCountFn for_e
 
             bool pass_ok = true;
             if (pass_is_scene_raster(d)) { pass_ok = map_raster(d, /*fullscreen*/ false, gp.payload, out, diags); }
-            else if (pass_is_visbuffer(d)) { pass_ok = map_visbuffer(d, gp.payload, diags); }
             else if (pass_is_fullscreen(d)) { pass_ok = map_raster(d, /*fullscreen*/ true, gp.payload, out, diags); }
             else if (pass_is_compute(d)) { pass_ok = map_compute(d, desc, gp.payload, out, diags); }
             else if (pass_is_transfer(d)) { pass_ok = map_transfer(d, gp.payload, diags); }

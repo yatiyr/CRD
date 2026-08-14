@@ -216,6 +216,11 @@ bool GraphExecutorTable::register_record(ExecutorTypeId id, PassRecordFn fn, Dia
     }
     return true;
 }
+void GraphExecutorTable::replace_record(ExecutorTypeId id, PassRecordFn fn) noexcept
+{
+    const usize idx = lower_bound(id);
+    if (idx < m_entries.size() && m_entries[idx].id == id) { m_entries[idx].fn = fn; }
+}
 
 // ── built-in record functions: payload + resources → the canonical command model ──
 namespace
@@ -250,363 +255,6 @@ u32 enum_param(const PassPayload& payload, StringView name, u32 fallback)
 {
     const TypedValue* v = find_param(payload, pass_param_id(name));
     return (v != nullptr && v->type == ExecutorParamType::Enum) ? v->e : fallback;
-}
-
-// One CPU multi-draw verb's cap — a run longer than this splits into consecutive multi commands (mirrors the
-// frame-cook `kMaxDrawItems`). ⛔ SINGLE SOURCE OF TRUTH: aliased from ceir-gpu's render_materialize.hpp so the CEIR scene
-// template (emit_scene_list) and this legacy recorder coalesce on IDENTICAL run boundaries — A/B pixel parity depends on it.
-constexpr crd::u32 kMaxSceneRun = crd::ceir::gpu::kMaxSceneRun;
-
-// Bind a base-colour MAP (a non-depth SampledTexture, no comparison sampler) — the encoder's `map_texture` reads it.
-void bind_map(RasterDrawPacket& pk, ITexture* tex)
-{
-    pk.bindings.push_back(ResourceBinding{BindingFrequency::Material, BindingKind::SampledTexture, 1U, nullptr, tex});
-}
-// Bind a shadow/moment ATLAS at slot 4/5. ⛔⛔ REN-40-D: the SAMPLER at slot 5 is a COMPARISON sampler for a DEPTH
-// atlas (a PCF shadow lookup) but a PLAIN filtering sampler for a COLOUR-ARRAY atlas (the moment/variance tiers read
-// the stored moments, not a compare result). Binding a comparison sampler where the moment shader declares a plain
-// `sampler2DArray` made the moment sample return garbage → EVERY moment shadow rendered black (the failure mode this
-// distinction exists to prevent; it regressed when RAF-8 flipped the live RasterGeometry sampler selection into here).
-void bind_atlas(RasterDrawPacket& pk, ITexture* tex, bool comparison)
-{
-    pk.bindings.push_back(ResourceBinding{BindingFrequency::Material, BindingKind::SampledTexture, 4U, nullptr, tex});
-    ResourceBinding samp{};
-    samp.frequency = BindingFrequency::Material;
-    samp.kind      = comparison ? BindingKind::ComparisonSampler : BindingKind::Sampler;
-    samp.slot      = 5U;
-    pk.bindings.push_back(samp);
-}
-// Attach the per-item sampled state (map / atlas / combined) exactly as the live RasterGeometry selection does.
-void attach_textures(RasterDrawPacket& pk, ITexture* item_tex, ITexture* pass_tex, ITexture* tex, bool combined,
-                     bool depth_tex, bool comparison)
-{
-    if (combined)
-    {
-        bind_map(pk, item_tex);
-        bind_atlas(pk, pass_tex, comparison);
-    }
-    else if (depth_tex)
-    {
-        bind_atlas(pk, tex, comparison);
-    }
-    else if (tex != nullptr)
-    {
-        bind_map(pk, tex);
-    }
-}
-
-void record_scene_raster(const PassPayload& payload, RecordContext& ctx, ICommandEncoder& encoder)
-{
-    // `color` is OPTIONAL: a DEPTH-ONLY geometry pass (a shadow cascade, a depth prepass) has no colour attachment —
-    // it renders into `depth` alone (the encoder routes a colour-less scope to the depth-only verbs).
-    IRasterTarget* color = ctx.has(pass_param_id("color")) ? ctx.color_target(pass_param_id("color")) : nullptr;
-    IRasterTarget* depth = ctx.has(pass_param_id("depth")) ? ctx.depth_target(pass_param_id("depth")) : nullptr;
-    // A scene pass into a color-DEPTH target uses that target's BUNDLED depth as its own depth-stencil (the live scene
-    // verbs read depth off the colour target) — so a depth test works, and the multi-item load-vs-clear across draws
-    // takes the depth-aware storage verbs (which respect load) rather than the always-clearing plain `draw_storage`.
-    if (depth == nullptr && color != nullptr && color->has_depth())
-    {
-        depth = color;
-    }
-    if (!ctx.ok() || (color == nullptr && depth == nullptr))
-    {
-        return;
-    }
-
-    // ⭐⭐ RAF-12.2: a TRUE MULTI-COLOUR MRT G-BUFFER (n_writes>1) — a deferred G-buffer, or the WBOIT ACCUMULATE pass
-    // (accum + revealage). This is the ONE live shape the executor path historically did NOT bind (it dropped every
-    // attachment past color0), so the inline `record_pass` MRT arm was its only coverage; closing it here is the
-    // prerequisite for retiring that arm in the 12.2 swap. Gather the extra colour attachments (color1..color3, filled
-    // contiguously by the bridge / a host) and their per-attachment blend (blend0..blend3), then record ONE clearing
-    // storage-pull draw per item into all N attachments. The encoder lowers a >=2-colour StoragePull scope to
-    // draw_storage_mrt, which clears a Multiply / RevealageMultiply attachment to the multiplicative identity 1 (never
-    // the pass clear colour) and applies the per-attachment blend — so `Additive` accum + `RevealageMultiply` reveal
-    // are authorable as one ordinary pass. Depth (when present) RIDES color0 the same way the single-colour path and
-    // the retired inline arm do: draw_storage_mrt keys the depth attachment off color0->has_depth().
-    if (color != nullptr)
-    {
-        IRasterTarget* mrt_color[4] = {color, nullptr, nullptr, nullptr};
-        u32 mrt_n = 1U;
-        static constexpr StringView kExtraColor[3] = {StringView("color1"), StringView("color2"),
-                                                      StringView("color3")};
-        for (u32 k = 0; k < 3U; ++k)
-        {
-            const u64 eslot = pass_param_id(kExtraColor[k]);
-            if (!ctx.has(eslot))
-            {
-                break; // color1..3 are filled in order; the first absent one ends the MRT set (contiguous by construction)
-            }
-            IRasterTarget* const c = ctx.color_target(eslot);
-            if (c == nullptr)
-            {
-                return; // a DECLARED MRT attachment that does not resolve ABORTS — never a partial G-buffer down a slot
-            }
-            mrt_color[mrt_n++] = c;
-        }
-        if (mrt_n >= 2U)
-        {
-            static constexpr StringView kBlendName[4] = {StringView("blend0"), StringView("blend1"),
-                                                         StringView("blend2"), StringView("blend3")};
-            BlendMode mblend[4]{};
-            for (u32 k = 0; k < mrt_n; ++k)
-            {
-                mblend[k] = static_cast<BlendMode>(enum_param(payload, kBlendName[k], static_cast<u32>(BlendMode::Opaque)));
-            }
-            const ClearColor  mclear = clear_from(payload);
-            const TypedValue* mcd = find_param(payload, pass_param_id("clear_depth"));
-            const f32 mclear_depth = (mcd != nullptr && mcd->type == ExecutorParamType::F32) ? mcd->f : 1.0F;
-            const TypedValue* mdcp = find_param(payload, pass_param_id("depth_compare"));
-            const DepthCompare mcmp = (mdcp != nullptr && mdcp->type == ExecutorParamType::Enum)
-                                          ? static_cast<DepthCompare>(mdcp->e)
-                                          : DepthCompare::LessEqual;
-            IRasterProgram* const mdef = ctx.programs().raster;
-            const DrawList        mdraws = ctx.draws();
-            for (crd::u32 i = 0; i < mdraws.count; ++i)
-            {
-                const RenderDrawItem& it = mdraws.items[i];
-                if (it.storage == nullptr)
-                {
-                    continue;
-                }
-                IRasterProgram* const prog = it.program != nullptr ? it.program : mdef;
-                if (prog == nullptr)
-                {
-                    continue;
-                }
-                RenderingDesc mrt;
-                mrt.width = mrt_color[0]->width();
-                mrt.height = mrt_color[0]->height();
-                for (u32 k = 0; k < mrt_n; ++k)
-                {
-                    mrt.color.push_back(
-                        ColorAttachmentDesc{mrt_color[k], LoadOp::Clear, StoreOp::Store, mclear, mblend[k]});
-                }
-                if (depth != nullptr)
-                {
-                    mrt.depth = DepthStencilAttachmentDesc{depth, true, LoadOp::Clear, StoreOp::Store, mclear_depth, true,
-                                                           mcmp};
-                }
-                encoder.begin_rendering(mrt);
-                RasterDrawPacket pk;
-                pk.program = prog;
-                pk.command = RasterCommandKind::Draw;
-                pk.geometry.kind = GeometryKind::StoragePull;
-                pk.geometry.vertex_or_index_count = it.vertex_count;
-                pk.bindings.push_back(ResourceBinding{BindingFrequency::Object, BindingKind::StorageBuffer, 0U, it.storage});
-                encoder.draw(pk);
-                encoder.end_rendering();
-            }
-            return;
-        }
-    }
-
-    // The rendering SCOPE. A pass declaring `load = true` STACKS on the previous pass (never clears) — the encoder's
-    // `m_first` tracks the clear-once, so every packet below just records in order; and a depth-prepass consumer
-    // (`load_depth`) LOADS depth while colour still clears (REN-40-G1).
-    const bool load = bool_param(payload, "load", false);
-    IRasterTarget* const dims = color != nullptr ? color : depth; // depth-only takes its extent from the depth target
-    RenderingDesc rd;
-    rd.width = dims->width();
-    rd.height = dims->height();
-    if (color != nullptr)
-    {
-        rd.color.push_back(ColorAttachmentDesc{color, load ? LoadOp::Load : LoadOp::Clear, StoreOp::Store,
-                                               clear_from(payload), BlendMode::Opaque});
-    }
-    if (depth != nullptr)
-    {
-        const TypedValue* cd = find_param(payload, pass_param_id("clear_depth"));
-        const f32 clear_depth = (cd != nullptr && cd->type == ExecutorParamType::F32) ? cd->f : 1.0F;
-        const bool load_depth = load || bool_param(payload, "load_depth", false);
-        // ⛔ the DEPTH COMPARE is a PARAM, not a constant: the live scene is REVERSE-Z (GreaterEqual), so a hardcoded
-        // LessEqual would fail every depth test and render an empty (or z-fighting) frame. Default LessEqual only when
-        // the pass declared none.
-        const TypedValue* dcp = find_param(payload, pass_param_id("depth_compare"));
-        const DepthCompare cmp =
-            (dcp != nullptr && dcp->type == ExecutorParamType::Enum) ? static_cast<DepthCompare>(dcp->e)
-                                                                     : DepthCompare::LessEqual;
-        rd.depth = DepthStencilAttachmentDesc{depth, true, load_depth ? LoadOp::Load : LoadOp::Clear,
-                                              StoreOp::Store, clear_depth, true, cmp};
-    }
-
-    const DrawList draws = ctx.draws();
-    encoder.begin_rendering(rd);
-
-    if (draws.count == 0U)
-    {
-        // Legacy single-draw contract (the pass's `geometry` slot) — a full-screen triangle pull. Kept for the
-        // graph-shape gates that record a scene pass without a resolved draw list.
-        IStorageBuffer* geo = ctx.has(pass_param_id("geometry")) ? ctx.storage(pass_param_id("geometry")) : nullptr;
-        RasterDrawPacket p;
-        p.program = ctx.programs().raster;
-        p.command = RasterCommandKind::Draw;
-        p.geometry.kind = GeometryKind::StoragePull;
-        p.geometry.vertex_or_index_count = 3U;
-        if (geo != nullptr)
-        {
-            p.bindings.push_back(ResourceBinding{BindingFrequency::Object, BindingKind::StorageBuffer, 0U, geo});
-        }
-        encoder.draw(p);
-        encoder.end_rendering();
-        return;
-    }
-
-    // ── RAF-8: the RESOLVED scene draw list → canonical packets — the live RasterGeometry selection, exactly. ──
-    IRasterProgram* const def_prog = ctx.programs().raster;
-    ITexture* const pass_tex = draws.pass_texture;      // the pass's sampled read (e.g. a shadow atlas), if any
-    // ⛔ a depth (shadow) read requires the atlas to actually EXIST: `pass_texture_is_depth` is meaningless without a
-    // `pass_texture`. A DEPTH-ONLY pass (a shadow cascade) reads NOTHING, so `pass_tex == nullptr` — and its plain
-    // draws must NOT be routed down the sampled/shadow arm (that binds a null atlas and renders garbage).
-    const bool pass_depth = pass_tex != nullptr && draws.pass_texture_is_depth;
-    const bool pass_cmp   = draws.pass_texture_comparison; // REN-40-D: comparison sampler for depth, plain for a moment array
-    const bool batchable_pass = pass_tex == nullptr;     // a pass that reads a texture never coalesces runs
-
-    for (crd::u32 i = 0; i < draws.count; ++i)
-    {
-        const RenderDrawItem& it = draws.items[i];
-        if (it.storage == nullptr)
-        {
-            continue;
-        }
-        IRasterProgram* prog = it.program != nullptr ? it.program : def_prog;
-        if (prog == nullptr)
-        {
-            continue;
-        }
-        // A draw's OWN texture (base-colour map) beats the pass's sampled read; a pass depth read with no per-item
-        // map is a shadow lookup for this draw; a per-item map INSIDE a depth-reading pass is the COMBINED shape.
-        // ⛔ A DEPTH-ONLY pass (no colour attachment — a shadow cascade / depth prepass) binds NO textures: it renders
-        // geometry into depth alone. A per-item albedo map or the pass atlas is IRRELEVANT here, so it must NOT route
-        // the draw down the sampled/shadow arm (which is a COLOUR verb and would misrender or drop the depth write).
-        const bool      has_color = color != nullptr;
-        ITexture* const item_map  = has_color ? it.texture : nullptr;
-        ITexture*       tex       = nullptr;
-        if (has_color)
-        {
-            tex = item_map != nullptr ? item_map : pass_tex;
-        }
-        const bool depth_tex = has_color && item_map == nullptr && pass_depth;
-        const bool combined = has_color && item_map != nullptr && pass_tex != nullptr && pass_depth;
-        const ResourceBinding sbind{BindingFrequency::Object, BindingKind::StorageBuffer, 0U, it.storage};
-
-        // GPU-DRIVEN indirect (count in device memory): geometry routes like the depth-only indirect, textures follow
-        // the classic arms, DrawIndex ROW = i. It must never fall to a CPU-count verb (the count is not knowable here).
-        if (it.args != nullptr && it.index_count > 0U)
-        {
-            RasterDrawPacket p;
-            p.program = prog;
-            p.command = RasterCommandKind::DrawIndexedIndirect;
-            p.geometry.kind = GeometryKind::Indirect;
-            p.geometry.args_buffer = it.args;
-            p.geometry.args_offset = it.args_offset;
-            p.geometry.max_draws = 1U;
-            p.geometry.first_draw_index = i;
-            p.bindings.push_back(sbind);
-            attach_textures(p, it.texture, pass_tex, tex, combined, depth_tex, pass_cmp);
-            encoder.draw(p);
-            continue;
-        }
-        // INDEXED-PULL carrying per-draw texture state → the indexed SAMPLED verb (one verb, DrawIndex row = i).
-        if (it.index_count > 0U && (tex != nullptr || depth_tex))
-        {
-            RasterDrawPacket p;
-            p.program = prog;
-            p.command = RasterCommandKind::DrawIndexed;
-            p.geometry.kind = GeometryKind::Indexed;
-            p.geometry.vertex_or_index_count = it.index_count;
-            p.geometry.instance_count = it.instance_count;
-            p.geometry.first_index = it.first_index;
-            p.geometry.first_draw_index = i;
-            p.bindings.push_back(sbind);
-            attach_textures(p, it.texture, pass_tex, tex, combined, depth_tex, pass_cmp);
-            encoder.draw(p);
-            continue;
-        }
-        // COMBINED / SHADOWED / TEXTURED (non-indexed) — a single StoragePull draw carrying the resolved textures.
-        if (combined || (tex != nullptr))
-        {
-            RasterDrawPacket p;
-            p.program = prog;
-            p.command = RasterCommandKind::Draw;
-            p.geometry.kind = GeometryKind::StoragePull;
-            p.geometry.vertex_or_index_count = it.vertex_count;
-            p.bindings.push_back(sbind);
-            attach_textures(p, it.texture, pass_tex, tex, combined, depth_tex, pass_cmp);
-            encoder.draw(p);
-            continue;
-        }
-
-        // PLAIN: coalesce a RUN of consecutive plain items (same program+storage, no texture, same indexed-ness) into
-        // ONE multi verb — the batching perf contract (one descriptor reset per run, not per draw).
-        crd::u32 run = 1U;
-        if (batchable_pass && it.texture == nullptr)
-        {
-            while (i + run < draws.count && run < kMaxSceneRun)
-            {
-                const RenderDrawItem& nx = draws.items[i + run];
-                IRasterProgram* nprog = nx.program != nullptr ? nx.program : def_prog;
-                if (nx.storage == nullptr || nx.texture != nullptr || nx.args != nullptr || nprog != prog ||
-                    nx.indexed != it.indexed || (nx.index_count > 0U) != (it.index_count > 0U) ||
-                    nx.storage != it.storage)
-                {
-                    break;
-                }
-                ++run;
-            }
-        }
-        if (it.index_count > 0U)
-        {
-            // an INDEXED-PULL run is ONE indexed-multi command; a run of one still routes here (the multi verb pushes
-            // the DrawIndex row a rebased indexed program needs).
-            crd::gpu::IRasterContext::IndexedDraw idraws[kMaxSceneRun];
-            for (crd::u32 k = 0; k < run; ++k)
-            {
-                const RenderDrawItem& nk = draws.items[i + k];
-                idraws[k] = {nk.index_count, nk.instance_count, nk.first_index};
-            }
-            RasterDrawPacket p;
-            p.program = prog;
-            p.command = RasterCommandKind::DrawMultiIndexed;
-            p.geometry.kind = GeometryKind::MultiIndexed;
-            p.geometry.multi_indexed = static_cast<const crd::gpu::IRasterContext::IndexedDraw*>(idraws);
-            p.geometry.draw_count = run;
-            p.geometry.first_draw_index = i;
-            p.bindings.push_back(sbind);            encoder.draw(p);
-            i += run - 1U;
-        }
-        else if (run > 1U || it.indexed)
-        {
-            // a non-indexed run (or a single item flagged `indexed` — its program rebases loads by DrawIndex, and only
-            // the multi verb pushes the row).
-            crd::u32 counts[kMaxSceneRun];
-            for (crd::u32 k = 0; k < run; ++k)
-            {
-                counts[k] = draws.items[i + k].vertex_count;
-            }
-            RasterDrawPacket p;
-            p.program = prog;
-            p.command = RasterCommandKind::DrawMulti;
-            p.geometry.kind = GeometryKind::MultiStoragePull;
-            p.geometry.multi_counts = static_cast<const crd::u32*>(counts);
-            p.geometry.draw_count = run;
-            p.geometry.first_draw_index = i;
-            p.bindings.push_back(sbind);
-            encoder.draw(p);
-            i += run - 1U;
-        }
-        else
-        {
-            // a single plain item.
-            RasterDrawPacket p;
-            p.program = prog;
-            p.command = RasterCommandKind::Draw;
-            p.geometry.kind = GeometryKind::StoragePull;
-            p.geometry.vertex_or_index_count = it.vertex_count;
-            p.bindings.push_back(sbind);
-            encoder.draw(p);
-        }
-    }
-    encoder.end_rendering();
 }
 
 void record_compute_dispatch(const PassPayload& payload, RecordContext& ctx, ICommandEncoder& encoder)
@@ -801,54 +449,9 @@ void record_raytrace_pipeline(const PassPayload& payload, RecordContext& ctx, IC
     encoder.trace_rays(t);
 }
 
-// visbuffer.raster — HW-raster a VS→FS program into an R32_UINT visibility target, clearing the id to `clear_id`. Each
-// resolved draw writes its primitive ids; the first clears, every later one LOADS (the one image keeps EVERY id).
-void record_visbuffer_raster(const PassPayload& payload, RecordContext& ctx, ICommandEncoder& encoder)
-{
-    IRasterTarget* color = ctx.color_target(pass_param_id("color"));
-    if (!ctx.ok() || color == nullptr)
-    {
-        return;
-    }
-    RenderingDesc rd;
-    rd.width = color->width();
-    rd.height = color->height();
-    // ⭐ RAH-1: visibility is an ORDINARY TYPED ATTACHMENT — an R32_UINT id target whose typed clear (`clear_kind == Uint`,
-    // `clear_uint` = the background id) IS the whole visbuffer semantics. No `rd.visbuffer` boolean; the encoder derives
-    // the id-write draw (clear-once/load-rest) from the attachment. LoadOp::Clear ⇒ FIRST draw clears, later draws load.
-    ColorAttachmentDesc att{color, LoadOp::Clear, StoreOp::Store, clear_from(payload), BlendMode::Opaque};
-    att.clear_kind = ClearKind::Uint;
-    att.clear_uint = u32_param(payload, "clear_id", 0U);
-    rd.color.push_back(att);
-    IRasterProgram* const def_prog = ctx.programs().raster;
-    const DrawList draws = ctx.draws();
-    encoder.begin_rendering(rd);
-    if (draws.count == 0U)
-    {
-        encoder.end_rendering();
-        return;
-    }
-    for (u32 i = 0; i < draws.count; ++i)
-    {
-        const RenderDrawItem& it = draws.items[i];
-        if (it.vertex_count == 0U)
-        {
-            continue;
-        }
-        IRasterProgram* prog = it.program != nullptr ? it.program : def_prog;
-        if (prog == nullptr)
-        {
-            continue;
-        }
-        RasterDrawPacket p;
-        p.program = prog;
-        p.command = RasterCommandKind::Draw;
-        p.geometry.kind = GeometryKind::None; // a procedural VS (gl_VertexIndex); the id target is the visbuffer scope
-        p.geometry.vertex_or_index_count = it.vertex_count;
-        encoder.draw(p);
-    }
-    encoder.end_rendering();
-}
+// ⛔ CEIR-16z-3b: record_visbuffer_raster DELETED — the visibility buffer dissolved into scene.raster (§41). A visbuffer pass
+// is now an ordinary scene.raster pass with a PROCEDURAL geometry mode (gl_VertexIndex draws) + a uint typed clear (RAH-1a.1),
+// records through the generic record_ceir_render over a build_scene_ceir(procedural, clear_is_uint) plan. The-deletion-is-the-proof.
 
 void record_present(const PassPayload& /*payload*/, RecordContext& ctx, ICommandEncoder& /*encoder*/)
 {
@@ -883,9 +486,44 @@ u64 fs_source_of(const crd::ceir::Context& cctx, const crd::ceir::Value* operand
     const crd::ceir::AttrValue v = cctx.attr_value(a);
     return v.kind == crd::ceir::AttrKind::Int ? static_cast<u64>(v.i) : 0U;
 }
-IRasterTarget* fs_target(const crd::ceir::Operation*, void* user)
+IRasterTarget* fs_target(const crd::ceir::Operation* op, void* user)
 {
-    return static_cast<FsResolverBundle*>(user)->rctx->color_target(pass_param_id("color")); // single color ⇒ the "color" slot
+    auto* const          b  = static_cast<FsResolverBundle*>(user);
+    RecordContext* const rc = b->rctx;
+    // ⭐ CEIR-16d LIVE: materialize_rendering_desc calls this resolver ONCE PER attachment op, so BRANCH ON THE OP KIND. A
+    // colour attachment resolves the "color" slot (fullscreen + the scene colour target — unchanged). A depth attachment
+    // resolves the depth target through the legacy scene-raster 3-mode fall-through (preserved verbatim from the deleted
+    // record_scene_raster): the explicit "depth" slot FIRST (a depth-only shadow cascade / depth prepass), and if that is
+    // absent OR resolves null, the colour
+    // target's BUNDLED depth — its own create_color_depth_target OR a shared_depth ImageWithDepth companion (REN-40-G3), both
+    // of which surface as color->has_depth(). A forward pass whose colour target carries no depth returns null here, and the
+    // materializer then DROPS the depth attachment (runtime-dynamic, exactly like legacy leaving `depth` null).
+    if (b->cctx->op_name(op->kind()) == crd::containers::StringView("render.depth_attachment"))
+    {
+        IRasterTarget* depth = rc->has(pass_param_id("depth")) ? rc->depth_target(pass_param_id("depth")) : nullptr;
+        if (depth == nullptr)
+        {
+            IRasterTarget* const color =
+                rc->has(pass_param_id("color")) ? rc->color_target(pass_param_id("color")) : nullptr;
+            if (color != nullptr && color->has_depth()) { depth = color; }
+        }
+        return depth;
+    }
+    // ⛔ CEIR-16d-live-4b: a colour attachment resolves its PER-ATTACHMENT slot by the `color_slot` index build_scene_ceir
+    // baked (0 = "color", 1..3 = "color1".."color3" for an MRT G-buffer / WBOIT scope; absent ⇒ 0, the single-colour path).
+    // Without this every MRT attachment resolved to "color" (color1..3 stayed unwritten). The slot NAMES live host-side here
+    // (ceir-gpu has no pass_param_id); the plan carries only the index (the binding `source`-attr convention).
+    static constexpr crd::containers::StringView kColorSlots[4] = {
+        crd::containers::StringView("color"), crd::containers::StringView("color1"), crd::containers::StringView("color2"),
+        crd::containers::StringView("color3")};
+    crd::u32                     cslot = 0U;
+    const crd::ceir::AttrId      ca    = op->attr(crd::containers::StringView("color_slot"));
+    if (ca.valid())
+    {
+        const crd::ceir::AttrValue v = b->cctx->attr_value(ca);
+        if (v.kind == crd::ceir::AttrKind::Int && v.i >= 0 && v.i < 4) { cslot = static_cast<crd::u32>(v.i); }
+    }
+    return rc->color_target(pass_param_id(kColorSlots[cslot]));
 }
 IRasterProgram* fs_program(const crd::ceir::Operation*, void* user)
 {
@@ -961,7 +599,7 @@ ITexture* fs_pass_texture(void* user, bool& out_is_depth, bool& out_comparison)
 }
 } // namespace
 
-void record_ceir_render(const PassPayload& /*payload*/, RecordContext& ctx, ICommandEncoder& encoder)
+void record_ceir_render(const PassPayload& payload, RecordContext& ctx, ICommandEncoder& encoder)
 {
     const CeirPassPlan* const plan = ctx.plan();
     if (plan == nullptr || plan->ctx == nullptr || plan->commands == nullptr || plan->count == 0U)
@@ -991,6 +629,10 @@ void record_ceir_render(const PassPayload& /*payload*/, RecordContext& ctx, ICom
     r.draws_user         = &bundle;
     r.pass_texture       = &fs_pass_texture;
     r.pass_texture_user  = &bundle;
+    // ⛔ CEIR-16d-live-2b: the PER-INSTANCE load. The static plan baked only the AUTHORED base load (kLoad); a for_each
+    // instance's `load_override` (a cached shadow cascade, REN-40-E2) is FRAME-VARYING and rides the payload — to_authored_pass
+    // set the "load" param = kLoad ‖ load_override PER INSTANCE. Forwarding it forces the LoadOps to Load (see RenderResolvers).
+    r.force_load         = bool_param(payload, StringView("load"), false);
     (void)crd::ceir::gpu::execute_render_lowered(
         *plan->ctx, crd::containers::ConstSpan<crd::ceir::gpu::LoweredCommand>(plan->commands, plan->count), encoder, r);
 }
@@ -999,7 +641,11 @@ u32 register_builtin_records(GraphExecutorTable& table, DiagnosticList& diags)
 {
     using crd::renderpass::executor_type_id;
     u32 n = 0;
-    n += table.register_record(executor_type_id("scene.raster"), record_scene_raster, diags) ? 1U : 0U;
+    // ⛔⛔ CEIR-16d-live-4c: scene.raster records UNCONDITIONALLY through the generic CEIR replay (record_ceir_render over the
+    // per-pass build_scene_ceir plan built at frame load). record_scene_raster + its scar helpers (bind_map/bind_atlas/
+    // attach_textures) + the temporary CRD_SCENE_VIA_CEIR A/B flag are DELETED — the-deletion-is-the-proof (the whole
+    // scene-render suite + sandbox smoke render through CEIR, both backends, with no flag). Count stays 14.
+    n += table.register_record(executor_type_id("scene.raster"), record_ceir_render, diags) ? 1U : 0U;
     // ⭐ CEIR-16-3d-3: fullscreen.raster records through the GENERIC CEIR replay (record_ceir_render, driven by the
     // per-pass plan built at frame load). The imperative record_fullscreen_raster is DELETED — the composite is DATA now.
     n += table.register_record(executor_type_id("fullscreen.raster"), record_ceir_render, diags) ? 1U : 0U;
@@ -1017,7 +663,8 @@ u32 register_builtin_records(GraphExecutorTable& table, DiagnosticList& diags)
     // ⭐ CEIR-16-mesh-1: mesh.indirect records through the GENERIC CEIR replay (a build_mesh_indirect_ceir plan built at
     // frame load); the imperative record_mesh_indirect is DELETED — descriptor-parity proven, deletion-is-the-proof.
     n += table.register_record(executor_type_id("mesh.indirect"), record_ceir_render, diags) ? 1U : 0U;
-    n += table.register_record(executor_type_id("visbuffer.raster"), record_visbuffer_raster, diags) ? 1U : 0U;
+    // ⛔ CEIR-16z-3b: visbuffer.raster DELETED (§41 dissolution) — a visbuffer is now a scene.raster PROCEDURAL pass, so it
+    // records through the scene.raster registration (record_ceir_render) above. The builtin record count is 13.
     n += table.register_record(executor_type_id("present"), record_present, diags) ? 1U : 0U;
     return n;
 }

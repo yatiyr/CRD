@@ -79,7 +79,8 @@ inline constexpr crd::renderpass::ExecutorTypeId kExecRaytracePipeline = detail:
 inline constexpr crd::renderpass::ExecutorTypeId kExecTessRaster       = detail::exec_id("tess.raster");
 inline constexpr crd::renderpass::ExecutorTypeId kExecMeshRaster       = detail::exec_id("mesh.raster");
 inline constexpr crd::renderpass::ExecutorTypeId kExecMeshIndirect     = detail::exec_id("mesh.indirect");
-inline constexpr crd::renderpass::ExecutorTypeId kExecVisbufferRaster  = detail::exec_id("visbuffer.raster");
+// ⛔ CEIR-16z-3b: kExecVisbufferRaster DELETED (§41 dissolution) — a visbuffer is now a scene.raster procedural role, not a
+// distinct executor. The engine has 13 built-in mechanics.
 inline constexpr crd::renderpass::ExecutorTypeId kExecPresent          = detail::exec_id("present");
 
 // REN-38-A6: how `kind = "blit"` filters while it rescales.
@@ -294,6 +295,7 @@ inline constexpr const char* kDepthOnly     = "depth_only";
 inline constexpr const char* kMrt           = "mrt";
 inline constexpr const char* kComposite     = "composite";
 inline constexpr const char* kIndirect      = "indirect";
+inline constexpr const char* kProcedural    = "procedural"; // CEIR-16z: a scene.raster pass whose draws are procedural (gl_VertexIndex, no storage) — the visbuffer role
 inline constexpr const char* kClearColor    = "clear_color";
 inline constexpr const char* kClearDepth    = "clear_depth";
 inline constexpr const char* kDepthCompare  = "depth_compare";
@@ -377,7 +379,7 @@ void set_pass_vec4(FramePassDesc& p, crd::containers::StringView name, const flo
 [[nodiscard]] inline bool pass_is_tess(const FramePassDesc& p) noexcept { return p.executor_id == kExecTessRaster; }
 [[nodiscard]] inline bool pass_is_mesh(const FramePassDesc& p) noexcept { return p.executor_id == kExecMeshRaster; }
 [[nodiscard]] inline bool pass_is_mesh_indirect(const FramePassDesc& p) noexcept { return p.executor_id == kExecMeshIndirect; }
-[[nodiscard]] inline bool pass_is_visbuffer(const FramePassDesc& p) noexcept { return p.executor_id == kExecVisbufferRaster; }
+// ⛔ CEIR-16z-3b: pass_is_visbuffer DELETED (§41). A visbuffer is pass_is_scene_raster + pass_flag(pp::kProcedural).
 [[nodiscard]] inline bool pass_is_present(const FramePassDesc& p) noexcept { return p.executor_id == kExecPresent; }
 [[nodiscard]] inline bool pass_is_transfer_clear(const FramePassDesc& p) noexcept { return p.executor_id == kExecTransferClear; }
 [[nodiscard]] inline bool pass_is_transfer_copy(const FramePassDesc& p) noexcept { return p.executor_id == kExecTransferCopy; }
@@ -392,12 +394,20 @@ void set_pass_vec4(FramePassDesc& p, crd::containers::StringView name, const flo
 {
     return pass_is_scene_raster(p) || pass_is_tess(p) || pass_is_mesh(p);
 }
+// ⛔⛔ CEIR-17z: the executors that record through the GENERIC CEIR replay (record_ceir_render) — they REQUIRE a per-pass
+// CEIR plan (build_frame_plans). A null plan for one of these is a LOUD, NAMED MissingCeirPlan, never a silent no-record:
+// 16d-live-4c deleted the imperative recorders that used to mask a missing plan. MUST match build_frame_plans' count set.
+[[nodiscard]] inline bool pass_is_migrated_ceir(const FramePassDesc& p) noexcept
+{
+    return pass_is_scene_raster(p) || pass_is_fullscreen(p) || pass_is_tess(p) || pass_is_mesh(p)
+           || pass_is_mesh_indirect(p);
+}
 // compute.dispatch OR inline raytrace.dispatch — the mechanics that bind a CKIR kernel + a storage set + a grid.
 [[nodiscard]] inline bool pass_dispatches_kernel(const FramePassDesc& p) noexcept
 {
     return pass_is_compute(p) || pass_is_raytrace_dispatch(p);
 }
-// Is `id` one of the 14 engine built-in mechanics? (A custom pass' id is not.) Defined in frame_asset.cpp.
+// Is `id` one of the 13 engine built-in mechanics? (A custom pass' id is not.) Defined in frame_asset.cpp.
 [[nodiscard]] bool is_builtin_executor(crd::renderpass::ExecutorTypeId id) noexcept;
 // A CUSTOM (app-defined) pass — its executor is not an engine built-in.
 [[nodiscard]] inline bool pass_is_custom(const FramePassDesc& p) noexcept { return !is_builtin_executor(p.executor_id); }

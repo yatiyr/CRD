@@ -74,6 +74,19 @@ using RasterPassTextureFn = crd::gpu::ITexture* (*)(void* user, bool& out_is_dep
 // by this, so it also bounds that stack footprint.
 inline constexpr crd::u32 kMaxSceneRun = 256U;
 
+// ⛔ CEIR-17b: the SCENE-RESOLVE host-callback family — the host impl of the scene.resolve_* intrinsics (17a). The
+// currency is an OPAQUE u64 HANDLE (`SceneResolveHandle`), NOT a device pointer: the values are ids (§22-18 id-keyed —
+// a material is a 128-bit ResourceId table-INDEXED host-side; a resolved program's u64 is reinterpreted to
+// IRasterProgram* AT THE SEAM by the host callback, never by CEIR — I3/I4). A chain callback takes the RESOLVED UPSTREAM
+// handle(s) (material→technique→program), never the op / value-map — evaluate_scene_resolve owns the op-attr reading (the
+// .valid() scar in ONE place) + the value→handle binding. 0 is the NULL/unresolvable handle. ⛔ crd-ceir core never sees
+// these — they live here on the ceir-gpu (handles) side.
+using SceneResolveHandle = crd::u64;
+using SceneResolveMaterialFn  = SceneResolveHandle (*)(void* user, SceneResolveHandle draw);
+using SceneResolveTechniqueFn = SceneResolveHandle (*)(void* user, SceneResolveHandle material, crd::containers::StringView phase);
+using SceneResolveProgramFn   = SceneResolveHandle (*)(void* user, SceneResolveHandle technique, SceneResolveHandle draw);
+using SceneResolveGeometryFn  = SceneResolveHandle (*)(void* user, SceneResolveHandle draw);
+
 // CEIR-16 (14z-5/6): the render resolvers bundled — one struct threaded through materialize/execute instead of a growing
 // tail of (fn,user) pairs. Each resolver keeps its OWN `user` (the device objects differ per resolver). `storage` resolves a
 // BUFFER-typed binding operand → IStorageBuffer; `texture` resolves an IMAGE-typed one → ITexture — the CEIR-3c TYPE of the
@@ -98,6 +111,34 @@ struct RenderResolvers
     // CEIR-16d: the PASS-level sampled atlas a `render.scene_draw_list` binds per-draw (null ⇒ untextured pass).
     RasterPassTextureFn         pass_texture       = nullptr;
     void*                       pass_texture_user  = nullptr;
+    // ⛔ CEIR-16d-live-2b: the PER-INSTANCE load override. A cooked scene plan bakes only the AUTHORED base load (kLoad);
+    // the FRAME-VARYING per-for_each-instance `load_override` (shadow-cascade caching REN-40-E2) cannot be baked, so the
+    // record fn passes it here. When true, execute_render_lowered forces every colour + the depth LoadOp to Load at
+    // BeginRender (MONOTONE Clear→Load; never Store, never the clear values) — matching legacy record_scene_raster's
+    // `load` / `load ‖ load_depth`. Idempotent when the base already baked Load. The depth's kLoadDepth arm has NO
+    // force-side read (only `load` rides here), so the baked plan's depth load stays load-bearing — never strip it.
+    bool                        force_load         = false;
+    // ⛔ CEIR-17b: the SCENE-RESOLVE host-callback family — evaluate_scene_resolve invokes these to run a scene.resolve_*
+    // chain through the host (17a's intrinsics). Each keeps its own `user`. A null callback that the chain needs ⇒
+    // ExecuteError::UnresolvedSceneHandle (the seam is unwired) — never a garbage handle.
+    SceneResolveMaterialFn      resolve_material   = nullptr;
+    void*                       resolve_material_user = nullptr;
+    SceneResolveTechniqueFn     resolve_technique  = nullptr;
+    void*                       resolve_technique_user = nullptr;
+    SceneResolveProgramFn       resolve_program    = nullptr;
+    void*                       resolve_program_user = nullptr;
+    SceneResolveGeometryFn      resolve_geometry   = nullptr;
+    void*                       resolve_geometry_user = nullptr;
+};
+
+// ⛔ CEIR-17b: the resolved handles of a scene.resolve_* chain (0 = a kind the chain did not resolve). The output of
+// evaluate_scene_resolve — the currency the migrated scene draw-build (17c) will read INSTEAD of pre-resolving in C++.
+struct SceneResolvedHandles
+{
+    SceneResolveHandle material  = 0;
+    SceneResolveHandle technique = 0;
+    SceneResolveHandle program   = 0;
+    SceneResolveHandle geometry  = 0;
 };
 
 // Materialize a render.scope op into a RenderingDesc: width/height/sample_count from the scope attrs; each attachment
@@ -128,6 +169,18 @@ struct RenderResolvers
 // cannot const-fold → UnsupportedCommand. ⛔ assumes find_render_misuse passed (the verifier-first contract).
 [[nodiscard]] ExecuteError execute_render_lowered(const Context& ctx, containers::ConstSpan<LoweredCommand> commands,
                                                   crd::gpu::ICommandEncoder& encoder, const RenderResolvers& resolvers);
+
+// ⛔ CEIR-17b: EVALUATE a scene.resolve_* chain (17a) through the host. Walk the resolve ops in `m` (pre-order, recursing
+// regions), binding each op-result → an opaque host handle by calling the matching RenderResolvers callback with the
+// RESOLVED upstream handle(s) (material→technique→program). The chain's scene.draw-typed INPUT value `draw_seed` maps to
+// `draw_handle`. Fills `out` (0 for a kind the chain omits). ⛔ VERIFIER-FIRST: runs scene::find_scene_misuse first →
+// SceneChainMisuse on a mis-typed chain (refuse — never a garbage handle). A null callback the chain NEEDS ⇒
+// UnresolvedSceneHandle. The evaluator owns the phase-attr read (the .valid() scar, ONE place) + the value→handle map;
+// the callbacks are pure host lookups. (17b is the SEAM + evaluator + sentinel tests; the REAL REN-37 ladder + the
+// draw-handle table are 17c — this proves the CHAIN THREADS, not yet "== the C++ path's handles".)
+[[nodiscard]] ExecuteError evaluate_scene_resolve(Context& ctx, const Module& m, const RenderResolvers& resolvers,
+                                                  const Value* draw_seed, SceneResolveHandle draw_handle,
+                                                  SceneResolvedHandles& out);
 
 // CEIR-14z-4a (the GOLD-STANDARD drive): execute a render-lowered command list through the raster context's FRAME-RECORDING
 // mode (ADR-0126 / the user-ratified gold-standard pull-forward 2026-08-11), NOT a standalone synchronous encoder. Each

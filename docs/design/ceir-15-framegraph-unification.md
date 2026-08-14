@@ -168,7 +168,7 @@ STRIKES ADR-0106 in place @ 15f.
   through the CEIR path (`parse → to_ceir_frame → from_ceir_frame → build_frame_graph_template`), pass-for-pass + schedule,
   read from the REAL `.frame.toml` files (CMake `CRD_FRAME_ASSETS_DIR`). Since the CEIR path REUSES the existing runtime
   (Fork E), a byte-equivalent template + the same deterministic runtime ⇒ identical pixels — so pixel A/B (15e-b, below) is
-  belt-and-suspenders, catching only execution-state a template comparison cannot. `scene_gpu_cull` EXCLUDED: a compute-only
+  belt-and-suspenders, catching only execution-state a template comparison cannot. `scene_gpu_cull` was excluded here, then DELETED at CEIR-17z (stale — unregistered `cull_compact`, zero consumers): a compute-only
   cull FRAGMENT (no `@output`), covered by the frames that consume its buffers. ⚠️ the CEIR model requires DECLARED draw lists
   (15d-5 finding) — every shipped asset already declares them (only the test FIXTURE had taken the shortcut).
   **✅ 15e-b ON-DEVICE A/B PARITY LANDED 2026-08-11 (4-config):** the live renderer's single cook path now optionally routes

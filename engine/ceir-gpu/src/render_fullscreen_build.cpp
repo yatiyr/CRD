@@ -310,6 +310,23 @@ containers::StringView depth_compare_str(crd::gpu::DepthCompare c)
     }
     return containers::StringView("less_equal");
 }
+// ⛔ CEIR-16d-live-4a: the render.color_attachment `blend` string — 1:1 with the gpu BlendMode enum (materialize's blend_of
+// maps it back; the CEIR verifier's kBlendVocab is the closed set). The WBOIT MRT modes complete the enum so a G-buffer /
+// WBOIT scene pass can name its per-attachment blend (revealage_multiply is the one no generic mode expresses).
+containers::StringView blend_str(crd::gpu::BlendMode b)
+{
+    switch (b)
+    {
+    case crd::gpu::BlendMode::Opaque:             return containers::StringView("opaque");
+    case crd::gpu::BlendMode::Alpha:              return containers::StringView("alpha");
+    case crd::gpu::BlendMode::PremultipliedAlpha: return containers::StringView("premultiplied");
+    case crd::gpu::BlendMode::Additive:           return containers::StringView("additive");
+    case crd::gpu::BlendMode::Multiply:           return containers::StringView("multiply");
+    case crd::gpu::BlendMode::RevealageMultiply:  return containers::StringView("revealage_multiply");
+    case crd::gpu::BlendMode::RevealComposite:    return containers::StringView("reveal_composite");
+    }
+    return containers::StringView("opaque");
+}
 } // namespace
 
 bool build_scene_ceir(Context& ctx, const SceneBuildDesc& desc, containers::Array<LoweredCommand>& out_plan)
@@ -335,28 +352,57 @@ bool build_scene_ceir(Context& ctx, const SceneBuildDesc& desc, containers::Arra
         m->body()->append(bb);
     }
 
-    Value*   atts[2];
+    Value*   atts[5]; // ⛔ up to kMaxColorAttachments (4) colour + 1 depth (CEIR-16d-live-4a MRT)
     crd::u32 natt = 0U;
 
-    // ── the OPTIONAL colour attachment. load=true STACKS (LoadOp::Load — a `load` pass never clears); else CLEAR carrying
+    // ── the OPTIONAL colour attachment(s). load=true STACKS (LoadOp::Load — a `load` pass never clears); else CLEAR carrying
     // the clear colour (a scene draw can leave pixels uncovered, so the clear MUST ride, like the mesh/amplify builders). The
-    // device target resolves at record via the target resolver keyed on the OP KIND (colour_attachment → the colour slot). ──
+    // device target resolves at record via the target resolver keyed on the OP KIND (colour_attachment → the colour slot).
+    // ⛔ CEIR-16d-live-4a: mrt_n>=2 (a deferred G-buffer / WBOIT accumulate) emits N colour attachments (color0..colorN-1),
+    // each with its per-attachment `blend`, and — matching the legacy record_scene_raster MRT arm — HARDCODES LoadOp::Clear on
+    // every one. The single-colour path (ncol==1) honours desc.load + emits NO blend attr (Opaque), byte-identical to before. ──
     if (desc.has_color)
     {
-        Operation* const timg = ctx.create_operation(k_decl, {}, 1U, ctx.type_image(ImageDim::Dim2D, ctx.type_f32()));
-        bb->append(timg);
-        Value*           imgv[1] = {timg->result(0U)};
-        Operation* const col =
-            ctx.create_operation(k_col, containers::ConstSpan<Value*>(imgv, 1U), 1U,
-                                 render::type_color_attachment(ctx, timg->result(0U)->type()));
-        ctx.set_attr(col, "load",
-                     ctx.attr_string(desc.load ? containers::StringView("load") : containers::StringView("clear")));
-        ctx.set_attr(col, "clear_r", ctx.attr_float(desc.clear.r));
-        ctx.set_attr(col, "clear_g", ctx.attr_float(desc.clear.g));
-        ctx.set_attr(col, "clear_b", ctx.attr_float(desc.clear.b));
-        ctx.set_attr(col, "clear_a", ctx.attr_float(desc.clear.a));
-        bb->append(col);
-        atts[natt++] = col->result(0U);
+        crd::u32 ncol = desc.mrt_n;
+        if (ncol < 1U) { ncol = 1U; }
+        if (ncol > 4U) { ncol = 4U; } // kMaxColorAttachments
+        const bool mrt = ncol >= 2U;
+        // ⛔ CEIR-16z-1: a visbuffer (clear_is_uint) target is a UINT-format image — the verifier's RAH-1a.1 scar rejects a
+        // uint clear on a non-uint attachment. Single-colour only (uint MRT is not authored); the float scene stays f32.
+        const auto elem = desc.clear_is_uint ? ctx.type_int(32U, false) : ctx.type_f32();
+        for (crd::u32 c = 0; c < ncol; ++c)
+        {
+            Operation* const timg = ctx.create_operation(k_decl, {}, 1U, ctx.type_image(ImageDim::Dim2D, elem));
+            bb->append(timg);
+            Value*           imgv[1] = {timg->result(0U)};
+            Operation* const col =
+                ctx.create_operation(k_col, containers::ConstSpan<Value*>(imgv, 1U), 1U,
+                                     render::type_color_attachment(ctx, timg->result(0U)->type()));
+            const bool clear = mrt || !desc.load; // MRT ⇒ always clear (legacy); single ⇒ desc.load
+            ctx.set_attr(col, "load",
+                         ctx.attr_string(clear ? containers::StringView("clear") : containers::StringView("load")));
+            if (desc.clear_is_uint)
+            {
+                // the visbuffer typed clear: the background id (RAH-1a.1). No float clears on a uint target.
+                ctx.set_attr(col, "clear_kind", ctx.attr_string(containers::StringView("uint")));
+                ctx.set_attr(col, "clear_uint", ctx.attr_int(static_cast<crd::i64>(desc.clear_uint)));
+            }
+            else
+            {
+                ctx.set_attr(col, "clear_r", ctx.attr_float(desc.clear.r));
+                ctx.set_attr(col, "clear_g", ctx.attr_float(desc.clear.g));
+                ctx.set_attr(col, "clear_b", ctx.attr_float(desc.clear.b));
+                ctx.set_attr(col, "clear_a", ctx.attr_float(desc.clear.a));
+            }
+            // ⛔ CEIR-16d-live-4b: the COLOUR ATTACHMENT INDEX (0=color, 1..3=color1..3). fs_target reads it to resolve the
+            // right per-attachment target slot — without it EVERY MRT attachment resolved to the "color" slot (both wrote
+            // color0, color1 stayed unwritten). The undeclared-int-attr convention (like the binding `source` attr); the
+            // slot NAMES live host-side in fs_target (ceir-gpu has no pass_param_id). Single-colour bakes 0 ⇒ "color".
+            ctx.set_attr(col, "color_slot", ctx.attr_int(static_cast<crd::i64>(c)));
+            if (mrt) { ctx.set_attr(col, "blend", ctx.attr_string(blend_str(desc.blend[c]))); }
+            bb->append(col);
+            atts[natt++] = col->result(0U);
+        }
     }
     // ── the OPTIONAL depth attachment (a forward pass's depth-test, or the SOLE attachment of a depth-only shadow cascade —
     // a 0-COLOUR scope). load_depth STACKS depth (a depth-prepass consumer); compare is the reverse-Z DepthCompare. The device
@@ -392,6 +438,9 @@ bool build_scene_ceir(Context& ctx, const SceneBuildDesc& desc, containers::Arra
     Operation* const draw = ctx.create_operation(k_list, {}, 0U);
     ctx.set_attr(draw, "program", ctx.attr_symbol(containers::StringView("scene")));
     ctx.set_attr(draw, "access", ctx.attr_string(containers::StringView("")));
+    // ⛔ CEIR-16z-2: procedural mode (the §41 visbuffer form) — each item is a plain gl_VertexIndex Draw (GeometryKind::None,
+    // no storage/textures/coalescing). Absent ⇒ storage (the ordinary storage-pull ladder), so the storage path is untouched.
+    if (desc.procedural) { ctx.set_attr(draw, "geometry", ctx.attr_string(containers::StringView("procedural"))); }
     rb->append(draw);
 
     if (ctx.find_render_misuse(*m).kind != RenderMisuseKind::None) { return false; }

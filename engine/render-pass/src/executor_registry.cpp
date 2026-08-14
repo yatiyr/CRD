@@ -96,6 +96,9 @@ u32 register_builtin_executors(ExecutorRegistry& registry, DiagnosticList& diags
         d.schema.params.push_back(param("blend1", ExecutorParamType::Enum, false));
         d.schema.params.push_back(param("blend2", ExecutorParamType::Enum, false));
         d.schema.params.push_back(param("blend3", ExecutorParamType::Enum, false));
+        // ⛔ CEIR-16z: the VISIBILITY-BUFFER background id (the §41 dissolution — a procedural scene pass into an R32Uint id
+        // target). Optional — absent ⇒ an ordinary float-clear scene pass; present ⇒ the typed uint clear (RAH-1a.1).
+        d.schema.params.push_back(param("clear_id", ExecutorParamType::U32, false));
         // ⭐ RAF-8: OPTIONAL. A DEPTH-ONLY geometry pass (a shadow cascade, a depth prepass) writes only `depth` — no
         // colour — so `color` cannot be required; the executor renders depth-only when `color` is absent.
         d.schema.slots.push_back(slot("color", SlotResourceKind::ColorTarget, SlotAccess::Write, false));
@@ -264,15 +267,9 @@ u32 register_builtin_executors(ExecutorRegistry& registry, DiagnosticList& diags
         d.schema.slots.push_back(slot("args", SlotResourceKind::StorageBuffer, SlotAccess::Read));
         count += registry.register_executor(d, diags) ? 1U : 0U;
     }
-    // visbuffer.raster — the HW-raster half of a Nanite split: draw a VS→FS program into an R32_UINT visibility target,
-    // clearing the id to `clear_id`. Each draw (the resolved list) writes its primitive ids; the first clears, every
-    // later one LOADS (draw_visbuffer_load) so the one image holds EVERY visible primitive's id.
-    {
-        PassExecutorDesc d = make_executor("visbuffer.raster", QueueKind::Graphics);
-        d.schema.params.push_back(param("clear_id", ExecutorParamType::U32));
-        d.schema.slots.push_back(slot("color", SlotResourceKind::ColorTarget, SlotAccess::Write));
-        count += registry.register_executor(d, diags) ? 1U : 0U;
-    }
+    // ⛔ CEIR-16z-3b: visbuffer.raster DELETED (§41 dissolution). A visibility buffer is now an ordinary scene.raster pass with
+    // a PROCEDURAL geometry mode + a uint id target (its `clear_id` is an optional scene.raster param); no distinct executor.
+    // The builtin executor count is 13.
     // present — present a source image.
     {
         PassExecutorDesc d = make_executor("present", QueueKind::Graphics);

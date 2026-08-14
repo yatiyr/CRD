@@ -332,6 +332,10 @@ class GraphExecutorTable
 public:
     explicit GraphExecutorTable(memory::IAllocator* alloc) noexcept : m_entries(alloc) {}
     bool register_record(ExecutorTypeId id, PassRecordFn fn, DiagnosticList& diags);
+    // ⛔ CEIR-16d-live-4b: OVERWRITE an already-registered executor's record fn (register_record rejects a duplicate). The
+    // count-preserving A/B seam the scene.raster gpu-test conversion uses: build the builtin table (14, count invariant held)
+    // then swap ONE fn to record_ceir_render for the CEIR arm of the legacy-vs-CEIR device pixel A/B. No-op if `id` is absent.
+    void replace_record(ExecutorTypeId id, PassRecordFn fn) noexcept;
     [[nodiscard]] PassRecordFn find(ExecutorTypeId id) const noexcept;
     [[nodiscard]] u32 size() const noexcept { return static_cast<u32>(m_entries.size()); }
 
@@ -344,9 +348,9 @@ private:
     [[nodiscard]] usize lower_bound(ExecutorTypeId id) const noexcept;
     Array<Entry> m_entries; // sorted by id
 };
-// Register record functions for the built-in executors (scene.raster · fullscreen.raster · compute.dispatch ·
-// transfer.{clear,copy,blit,resolve} · raytrace.dispatch [inline ray query] · raytrace.pipeline · mesh.raster ·
-// tess.raster · mesh.indirect · visbuffer.raster · present).
+// Register record functions for the 13 built-in executors (scene.raster [incl. the procedural visbuffer role, CEIR-16z] ·
+// fullscreen.raster · compute.dispatch · transfer.{clear,copy,blit,resolve} · raytrace.dispatch [inline ray query] ·
+// raytrace.pipeline · mesh.raster · tess.raster · mesh.indirect · present).
 u32 register_builtin_records(GraphExecutorTable& table, DiagnosticList& diags);
 
 // ⭐ CEIR-16-3c: the GENERIC CEIR replay record function — drives `execute_render_lowered` on the pass's `CeirPassPlan`

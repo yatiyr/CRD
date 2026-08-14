@@ -92,6 +92,217 @@
 > gate for free (its scene arm fires on every shipped asset).
 > NEXT (locked order) = 16c (item-view + resolver registrations + compute-cull-list) → 16d (template op + expansion + parity + delete; advisor before 16d code) → 16z (delete all + visbuffer dissolution).
 
+> **⛔⛔ STATUS 2026-08-14 — 16d-live-1 (the DEPTH BRANCH — the TWICE-BITTEN class) DONE + gated 2 Win + 2 Linux + tidy.**
+> Advisor-consulted before writing (the 3-mode fork). The "3 depth-acquisition modes" collapse to TWO record-time queries
+> (verified vs `record_scene_raster` head L302-310): mode 1 = the explicit `"depth"` slot (a depth-only shadow cascade /
+> prepass); modes 2+3 = the colour target's BUNDLED depth (its own `create_color_depth_target` OR a shared_depth
+> `ImageWithDepth` companion, REN-40-G3 — both surface as `color->has_depth()`).
+> - **1a (ceir-gpu `materialize_rendering_desc`):** a `render.depth_attachment` op whose target resolver returns NULL DROPS
+>   the attachment (depth stays disabled — runtime-dynamic, matching legacy leaving `depth` null); `extent_from_target` falls
+>   back to `out.depth.target` for a 0-colour depth-only scope (`dims = color ?: depth`); a ZERO-attachment scope FAILS
+>   materialize (never `begin_rendering` empty). Device-free test `ceir 16d-live-1a` (4 cases via a kind-branching resolver).
+> - **1b (render-graph `fs_target`):** branches on the attachment OP KIND; the depth branch mirrors legacy's EXACT
+>   fall-through (`"depth"` slot first, else `color->has_depth()`). Gate = a REAL-vs-REAL command-parity A/B
+>   (`ceir 16d-live-1b`, 49 asserts): `record_ceir_render` (build_scene_ceir plan) == `record_scene_raster` for the depth
+>   desc across forward+bundled-depth / forward+no-depth / depth-only. `FakeTarget` gained a `bundled_depth` ctor arg;
+>   `CapturedDraw` gained `depth_tgt`/`depth_load`/`depth_cmp`.
+> - Gate: crd-ceir-gpu 448/31 + crd-render-graph 165/12 GREEN on win-debug + win-asan + linux-gcc-debug + linux-gcc-asan;
+>   tidy clean on all 4 changed files. ⚠ TOOLING: `scripts/run-ctest.bat` hardcodes the **14.50** ASan DLL but the toolset
+>   is **14.51** → a win-asan ctest run crashes-on-load (false red); run the exe with the matching 14.51 DLL on PATH (what
+>   per-slice-check.ps1 does). Small stale-path fix owed to run-ctest.bat.
+> **⛔⛔ STATUS 2026-08-14 — 16d-live-2 (the `build_frame_plans` SCENE ARM) DONE + gated 2 Win + 2 Linux + tidy + the
+> real-GPU consumer.** The scene arm in `build_frame_plans` (frame_runtime.cpp) classifies `pass_is_scene_raster` (all of
+> `raster.geometry` / `raster.depth_only` / `raster.mrt` = kExecSceneRaster) and populates `SceneBuildDesc` from the authored
+> `FramePassDesc`: `has_color=!depth_only`, `has_depth=true` ALWAYS (the depth op is a TEMPLATE `fs_target` gates at record),
+> `load`=kLoad BASE ONLY (⛔ NOT `load_override` — per-for_each-instance frame-varying, 16d-live-2b), `load_depth`=kLoad‖kLoadDepth,
+> clear/clear_depth/depth_compare from the authored params.
+> - ⛔ `pass_is_scene_raster` added to the STORAGE-RESERVE COUNT LOOP + the `nfs==0` early-out (advisor: else `out.storage`
+>   relocates mid-build and dangles every earlier `CeirPassPlan`'s `cmds.data()` pointer).
+> - **mrt reject = SKIP-the-plan, NOT a LOUD `return false`** (decision refined WITH the advisor's rule after confirming the
+>   antecedent): a `false` return DISABLES the whole frame (scene_renderer L876-885 FATAL), which would break a working
+>   C++-path mrt≥2 asset flag-OFF. So a scene pass with ≥2 COLOUR attachments (count excludes buffer writes + depth-format
+>   writes — matching the resolver's routing, so a velocity `[colour, depth]` = 1 colour) SKIPS its plan (records via
+>   `record_scene_raster`, which handles mrt≥2) + an INFO diag (`UnsupportedPassKind`, never silent). No shipped asset or test
+>   drives mrt≥2 through `build_frame_plans` (WBOIT uses `build_frame_graph_template`); a null-plan mrt≥2 pass fails loud at
+>   record only once the flag flips scene.raster→record_ceir_render — correct, mrt≥2 is migrated at 16d-live-4 before then.
+> - Tests: `ceir 16d-live-2` (forward / depth-only / mrt≥2-skip / velocity-not-mrt, 15 asserts) + the **3c-5 prereq** now
+>   builds scene plans on all 8 shipped assets (62 asserts). Gate: crd-frame-cook 2751/96 on win-debug + win-asan +
+>   linux-gcc-debug + linux-gcc-asan; tidy clean; **consumer crd-scene-render 1539/72 on the real GPU** (build_frame_plans at
+>   frame-install disables NO shipped frame; rendering unchanged — the plans are INERT until the flag dance).
+> - **⛔ NEXT (locked): 16d-live-2b** = per-instance `load_override` at record. Shadow-cascade caching (REN-40-E2,
+>   `for_each_load`) is FRAME-VARYING per-instance (a cached cascade LOADs its atlas layer + records 0 draws / 0 program) → a
+>   static plan cannot bake it. `record_ceir_render` must read the effective per-instance `load` from the RecordContext/payload
+>   (`to_authored_pass` sets it = kLoad‖load_override per instance) and force the materialized colour+depth LoadOps to Load.
+
+> **⛔⛔ STATUS 2026-08-14 — 16d-live-2b (per-instance load override at record) DONE + gated 2 Win + 2 Linux + tidy + the
+> real-GPU consumer.** Advisor-consulted before writing. ⭐ DOCTRINE this establishes: **the plan bakes AUTHORED STATICS; the
+> payload carries PER-INSTANCE RUNTIME DELTAS.** Impl: `RenderResolvers` gained `bool force_load`; `record_ceir_render` reads
+> `bool_param(payload, "load")` (= kLoad‖load_override, set per-for_each-instance by to_authored_pass L219) → `r.force_load`;
+> `execute_render_lowered`'s BeginRender forces every colour + the depth LoadOp to Load when set — MONOTONE (Clear→Load only;
+> Store + clear values untouched; idempotent when the base baked Load). Boolean algebra verified vs legacy (colour load =
+> `load`; depth load = `load ‖ load_depth`); the depth's kLoadDepth arm has NO force-side read, so the baked plan's depth load
+> stays load-bearing (never strip it). ⛔ The `"load"` payload is set on only TWO arms — scene (L219) + fullscreen composite
+> (L267, same predicate as its bake ⇒ provably idempotent on the already-live fullscreen path).
+> - **Cached-cascade parity RESOLVED (do NOT reproduce the fallback — record nothing):** legacy's `draws.count==0` fallback
+>   (a graph-shape-gate remnant) records ONE NULL-program packet, which `detail::CommandEncoder::draw` SKIPS
+>   (command_lowering.hpp L130-132 — VERIFIED at the consumption point, not assumed) → a device no-op. The CEIR path records
+>   the semantically-correct 0 draws; both open a Load-only scope that PRESERVES the atlas layer ⇒ pixel-identical. §4b already
+>   demoted command-parity to structural sanity for this class; reproducing the fallback would special-case around
+>   `execute_render_lowered`'s own null-program correctness guard.
+> - Tests: `ceir 16d-live-2b` extends the real-vs-real A/B — a cached section (payload load=true, 0 draws, null program →
+>   BOTH depth_load==Load; CEIR 0 draws, legacy 1 NULL-program draw = the KNOWN pixel-safe delta, `a.prog==nullptr` asserted)
+>   + a no-clobber section (payload load absent → baked Clear survives). Gate: crd-ceir-gpu 448/31 + crd-render-graph 196/13 on
+>   win-debug + win-asan + linux-gcc-debug + linux-gcc-asan; tidy clean; **consumer crd-scene-render 1539/72 real GPU** (the
+>   advisor's point 1: record_ceir_render is on the LIVE fullscreen path today, so the device suite MUST re-run — green).
+ **⛔⛔ STATUS 2026-08-14 — 16d-live-3a (N-draw COMMAND-PARITY) DONE + gated (test-only, no engine change).** A new
+> `SceneParityEncoder` (per-draw capture: command/geometry/draw_count/first_draw_index/program/binding-count/first-tex-slot)
+> drives the real-vs-real A/B `ceir 16d-live-3a` across the FULL verb ladder and asserts `record_ceir_render`'s stream is
+> field-by-field identical to `record_scene_raster`: plain-COALESCE (3 same prog+storage → ONE DrawMulti — the REN-38
+> command-STRUCTURE gate, not pixels), storage-break (2 draws), GPU-indirect (DrawIndexedIndirect, first_draw_index=i),
+> shadow-atlas (atlas@4 + comparison@5, no coalesce), depth-only 0-colour (plain, no textures), indexed-sampled (DrawIndexed +
+> map@1). Gate: crd-render-graph 333/14 on win-debug + win-asan + linux-gcc-debug + linux-gcc-asan; tidy clean. (No consumer
+> re-run needed — no engine touch; the device-free ceir 16d test already covers emit_scene_list's ladder in isolation.)
+> - ✅ **16d-live-3b DONE (RECLASSIFICATION + the null-program coverage gap) — advisor-confirmed, gated.** See the E1
+>   reclassification decision block in §5: the variant ladder is ALREADY host-side (fork c / §4b), so 16z deletes the executor
+>   not the ladder; the one code deliverable was the record-time null→default fallback A/B section (`emit_scene_list` already
+>   matched legacy — locked). `scene.resolve_program`'s 0d-registry declaration named-forward (registry not built yet).
+> - ✅ **16d-live-3c DONE (the FLAG DANCE `CRD_SCENE_VIA_CEIR`) — gated + the LARGEST-BLAST-RADIUS device proof PASSED.**
+>   `register_builtin_records` (frame_graph.cpp) now swaps scene.raster's recorder record_scene_raster (flag-OFF, default) ⇄
+>   record_ceir_render (flag-ON, env `CRD_SCENE_VIA_CEIR` present) — a runtime env read (`_dupenv_s`/`getenv`, the
+>   CRD_FRAME_VIA_CEIR precedent), swapping WHICH fn not the count. **PROOF:** count==14 both flag states (raf7 47/5);
+>   **the WHOLE crd-scene-render suite flag-ON == flag-OFF = 1539/72 on the real GPU (both Vulkan+DX12** — REN-36 pixel
+>   asserts, CSM, RAF-10 app-composed, RAF-11 reload); **`crd-sandbox --smoke-test 2` flag-ON PASS** (the shipped
+>   `forward_csm_agx` frame — 11 passes, 4 PCSS cascades, 5446 instances — EXIT=0). ⇒ every shipped scene pass
+>   (forward/csm/prepass/velocity) records through the CEIR replay behaviour-identically; the plan-table rebuilds at every
+>   frame-install site for scene plans (the twice-bitten scar clean); no shipped asset trips the mrt≥2 skip. Gate:
+>   crd-render-graph 363/14 on win-debug + win-asan + linux-gcc-debug (+ flag-ON count) + linux-gcc-asan; tidy clean. ⚠ the
+>   flag DEFAULT stays OFF (legacy shipped) — the flip to UNCONDITIONAL CEIR + the record_scene_raster deletion + the flag
+>   removal happen at 16d-live-4/16z, AFTER the mrt≥2 N-scope representation lands (a null-plan mrt≥2 pass would ctx.fail()
+>   under unconditional CEIR).
+> - **⛔ NEXT (locked): 16d-live-4 → 16z.** (1) The **mrt≥2 sub-slice** — its own N-colour-scope CEIR representation (the
+>   16d-live-2 skip currently keeps mrt≥2 on C++; ⛔ ADVISOR before its code; a DELETION prerequisite proven via the gpu-test
+>   2-colour scopes). (2) Convert the ~8 `run_*_gpu` scene.raster device tests to the CEIR path (run_shadow_gpu = the 0-colour
+>   device proof). (3) **DELETE `record_scene_raster` + the frame_graph.cpp scar helpers** (bind_map/bind_atlas/attach_textures)
+>   + flip scene.raster to record_ceir_render UNCONDITIONALLY + delete the `CRD_SCENE_VIA_CEIR` flag (the-deletion-is-the-proof).
+>   Then **16z**: the legacy composite-executor path deleted; `crd-sandbox --smoke-test` + REN-38-F6 green through CEIR;
+>   visbuffer.raster dissolution (§b: re-author onto scene.raster + a uint attachment, delete record_visbuffer_raster).
+
+> **⛔⛔ STATUS 2026-08-14 — 16d-live-4 STARTED (the deletion slice). ADVISOR-LOCKED PLAN (option a: BUILD mrt≥2, do NOT
+> defer).** mrt≥2 scene is an AUTHORABLE shipped capability (the cooker schema carries blend_count/blend0..3; 15c enforces
+> CompositeNeedsBlend; `run_mrt_blend_gpu` device-tests it on the REAL scene.raster) — deleting record_scene_raster's MRT arm
+> without a CEIR replacement would be a capability regression ("unreachable library" class). So 16d-live-4 builds it.
+> **REPRESENTATION = op-mode, NO dialect change:** ONE `render.scope` with N `color_attachment` ops (blend = the existing
+> per-attachment attr) + depth template + the SAME `scene_draw_list`. The per-item begin/draw/end is a LOWERING artifact (same
+> class as the slot-4 atlas ruling, §4b — never in the IR): at BeginRender, if materialized rd has ≥2 colours DEFER the
+> `begin_rendering` (stash rd); at the Draw, `scene_draw_list` → the per-item MRT expansion (begin(rd)/StoragePull-draw/end per
+> item, byte-identical to legacy L377-398 — skip null storage, null→default program, no textures, NO coalescing); ⛔ ANY OTHER
+> draw op → issue the deferred begin + proceed (mandatory — else the 14z-4c gbuffer single-draw MRT tests break); EndRender →
+> expansion ran ⇒ skip, deferral unresolved (0 items) ⇒ emit nothing (matches legacy's 0-iteration loop). Reproduce the
+> IDENTICAL command stream; let the converted `run_mrt_blend_gpu` pixel-prove.
+> **⛔ FOUR GAPS (advisor):** (i) ✅ **4a-1 DONE + gated** — `blend_of` vocabulary was alpha/additive/premultiplied only, so
+> RevealageMultiply/Multiply silently folded to Opaque; the full 7-mode `BlendMode` enum is now the closed CEIR `blend` vocab
+> both directions (materializer `blend_of` + verifier `kBlendVocab`/7 + op-def doc regen drift-clean), proven by
+> `ceir 16d-live-4a-1` (7 verify+map, garbage rejects); crd-ceir-gpu 477/32 + crd-ceir 3317/433 + opgen-drift on
+> win-debug/asan + linux-gcc-debug/asan, tidy clean. (ii) verify `find_render_misuse` accepts a ≥2-colour scope containing
+> `scene_draw_list` (the builder never emitted one — extend + test if a rule rejects). (iii) the 16d-live-2 "mrt≥2 SKIPS the
+> plan" logic + its test section INVERT when the skip is deleted + `SceneBuildDesc` extended (colour count + per-attachment
+> blend, read from `blend0..3` like `to_authored_pass`) — flip deliberately. (iv) legacy MRT IGNORES the `load` param (descs
+> hardcode Clear) — `force_load` must NOT apply on the MRT expansion; add a parity section (mrt + load=true → still Clear).
+> **SEQUENCING:** ✅ 4a-1 blend vocab → ✅ **4a-2 desc/builder DONE** (`blend_str` forward emitter + `SceneBuildDesc`
+> mrt_n/blend[4]; `build_scene_ceir` emits N color_attachment ops with per-attachment `blend`, all Clear, when mrt_n≥2 — SAME
+> render.scope + scene_draw_list [op-mode]; single-colour path byte-identical; ⭐ GAP ii CLEAR — `find_render_misuse` ACCEPTS
+> a ≥2-colour scope containing scene_draw_list, no verifier change needed; `ceir 16d-live-4a-2`; crd-ceir-gpu 489/33 4-config)
+> → ✅ **4a-3 walk expansion DONE** (execute_render_lowered DEFERS a ≥2-colour scope's begin_rendering; emit_scene_list_mrt
+> opens a scope PER ITEM at the Draw = the legacy MRT arm, no textures/no coalescing; a non-scene-draw op flushes the deferred
+> begin first [14z-4c single-draw preserved]; force_load NOT applied to MRT [gap iv]; `ceir 16d-live-4a-3` device-free +
+> render-graph real-vs-real A/B record_ceir_render==record_scene_raster MRT structural [begins==2/item]; crd-ceir-gpu 499/34 +
+> crd-render-graph 384/15 4-config) → ✅ **4a-4 un-skip build_frame_plans DONE** (sets SceneBuildDesc.mrt_n = the colour-write
+> count + reads blend0..3; the 16d-live-2 mrt≥2-SKIP is INVERTED [gap iii] — an mrt≥2 pass now BUILDS its N-colour plan;
+> shipped assets stay mrt_n=1; crd-frame-cook 2752/96 4-config + scene-render 1539/72 consumer). ⭐⭐ **4a COMPLETE — the
+> mrt≥2 CEIR representation is DONE (authorable G-buffer / WBOIT scene passes now render through CEIR).** → ✅ **4b DONE
+> (advisor-hybrid: on-device legacy-vs-CEIR A/B, the strongest deletion proof).** Only **3** tests use scene.raster
+> (run_scene_drawlist_gpu / run_mrt_blend_gpu / run_graph_gpu; the rest use bespoke test executors — left alone). A
+> `GraphExecutorTable::replace_record` seam swaps scene.raster→record_ceir_render in a builtin table (count-preserving); each
+> converted test runs execute_frame with a `build_scene_ceir` plan. run_scene_drawlist_gpu + run_mrt_blend_gpu run BOTH paths
+> into separate targets + assert IDENTICAL pixels (record_ceir_render == record_scene_raster, both backends); run_graph_gpu
+> drops the geometry-slot fallback for a DrawList (⛔ 4c note: the count==0 geometry-slot fallback loses its only consumer —
+> deleted with zero replacement, a test-only shape). ⭐⭐ **The A/B CAUGHT A REAL BUG the device-free tests missed:**
+> `fs_target` resolved EVERY colour attachment to the "color" slot, so MRT color1..3 stayed UNWRITTEN — fixed with a
+> `build_scene_ceir` `color_slot` index attr (the undeclared-int convention, like binding `source`) fs_target maps to
+> color/color1..3 (slot names host-side; ceir-gpu has no pass_param_id). Gate: crd-render-graph 384/15 + crd-ceir-gpu 499/34 +
+> gpu-tests raf7 395/2 (real GPU both backends) + llvmpipe 197/1; **scene-render flag-ON 1539/72** (color_slot safe on the
+> live path); win-debug + win-asan + linux-gcc-debug + linux-gcc-asan; tidy. → ✅✅ **4c DONE (THE DELETION — the-deletion-is-
+> the-proof).** `record_scene_raster` + its scar helpers (`bind_map`/`bind_atlas`/`attach_textures`) + the orphaned
+> `kMaxSceneRun` constexpr + the `scene_via_ceir()` helper + the `CRD_SCENE_VIA_CEIR` flag + the now-unused `#include <cstdlib>`
+> are DELETED from frame_graph.cpp; `register_builtin_records` maps scene.raster → `record_ceir_render` UNCONDITIONALLY (count
+> still 14). ⭐ **The 4 device-free A/B tests (1b/2b/3a/4a-3) + the 2 on-device A/B tests (run_scene_drawlist_gpu /
+> run_mrt_blend_gpu) were converted single-path with ABSOLUTE asserts** — post-deletion the "legacy" arm would be a vacuous
+> CEIR-vs-CEIR (an A==A can't-fail gate; run_mrt_blend_gpu is the color_slot-bug catcher, so its teeth had to become absolute
+> per-attachment blend values, not `==` the sibling). 3a/4a-3 transcribe emit_scene_list's exact verb ladder (command kind /
+> geometry kind / coalesce factor / DrawIndex row / binding count / texture slot); run_graph_gpu was already single-path.
+> **PROOF (no flag):** crd-render-graph device-free 309/15 + gpu raf7 363/2 (Vulkan+DX12) / 181/1 (llvmpipe); the WHOLE
+> **scene-render suite 1539/72 UNCONDITIONALLY** + `crd-sandbox --smoke-test 2` PASS (forward_csm_agx, 11 passes) + frame-cook
+> 2752/96 + ceir-gpu 499/34; win-debug + win-asan + linux-gcc-debug + linux-gcc-asan; tidy clean. **scene.raster is now a pure
+> CEIR-authored executor — the §128 migration is COMPLETE.** → 16z (visbuffer.raster dissolution).
+
+> **⛔ STATUS 2026-08-14 — 16z STARTED (visbuffer.raster §41 dissolution). ADVISOR-LOCKED sub-slicing (fork-b is settled at
+> §b: fold into scene.raster + uint attachment + typed clear, DELETE executor #13, count 14→13).** The one open design point —
+> how a procedural (no-storage) draw is signalled — is DECIDED: a **DECLARED scope-level mode**, never inferred from
+> `storage == nullptr` (that null-skip is the resolve-failure guard gated at 1539/72; inferring would turn a resolve failure
+> into a wrong draw — the `varying decl contract` scar: declared > inferred). Sub-slices, each independently gated
+> (2 Win + 2 Linux + tidy):
+> - ✅ **16z-1 DONE + gated — UINT CLEAR through the scene builder.** `SceneBuildDesc` gained `clear_is_uint` + `clear_uint`;
+>   `build_scene_ceir` emits the colour attachment with a **u32-format** image (`type_int(32,false)`) + `clear_kind="uint"` +
+>   `clear_uint` when uint, the float `clear_r/g/b/a` otherwise (the materializer already reads them, RAH-1a.1; the verifier's
+>   `ClearKindFormatMismatch` scar REQUIRES the uint image type — build_scene_ceir runs find_render_misuse, so the u32 image is
+>   mandatory). `ceir 16z-1` device-free test (build_scene_ceir(clear_is_uint) → materialize → `ClearKind::Uint`+id, float
+>   companion stays Float). Gate: ceir-gpu 511/35 win-debug + win-asan + linux-gcc-debug + linux-gcc-asan; tidy clean.
+> - ✅ **16z-2 DONE + gated — PROCEDURAL scope-mode (CEIR representation).** A closed-vocab attr on `render.scene_draw_list`
+>   (`geometry = "storage" | "procedural"`, absent = storage), wired the 4a-1 way: `render.ceirop.toml` + `ceir_opgen.py` regen
+>   (crd-ceir-opgen-drift #634 clean) + `kGeometryVocab` + `RenderMisuseKind::GeometryModeInvalid` (append-at-end enum + the
+>   name switch — the `-Werror=switch` discipline) enforced in `scan_render_region`'s draw arm; `ceir_render_string_ok` returns
+>   true when absent ⇒ storage default (the `.valid()`-safe reader). `SceneBuildDesc.procedural` + `build_scene_ceir` sets the
+>   attr. `emit_scene_list` procedural branch transcribes legacy `record_visbuffer_raster` EXACTLY: skip `vertex_count==0` (NOT
+>   storage — the storage-null skip is the RESOLVE-FAILURE guard, a different concern), null→def_prog, `command=Draw`,
+>   `GeometryKind::None`, `vertex_or_index_count=vertex_count`, **ZERO bindings**, no textures, no coalescing, one scope. Storage
+>   mode byte-identical. Tests: `ceir 16d` procedural section (nbinds==0 discriminates the ladders) + `ceir 14a` GeometryMode
+>   verifier (bogus→GeometryModeInvalid; procedural/absent accepted). Gate: ceir-gpu 528/35 + ceir 128/13 + opgen-drift on
+>   win-debug + win-asan + linux-gcc-debug + linux-gcc-asan; tidy clean.
+>   - ⛔ **DEFERRED to 16z-3 (coupled to the re-author):** the host DrawList-build trace — a re-authored SCENE pass's procedural
+>     items must SURVIVE the scene draw-build arm (the null-storage skip recurs at frame_runtime ~L185/448/1165; the visbuffer
+>     arm L321-330 that sets `has_storage=false` dissolves). Only testable end-to-end once the asset is `raster.scene`.
+> - ◧ **16z-3a DONE (win-debug) — the RE-AUTHOR / FLIP (A-wiring), legacy still in-tree.** Advisor-decided design: (Q1) uint
+>   clear DERIVES from the R32Uint target format (`fg_format_is_uint`, RAH-1 — not an author boolean); `clear_uint = clear_id`
+>   param. (Q2) the kind STRING `raster.visbuffer` is KEPT and its KindRow row REMAPPED to `kExecSceneRaster` + a new
+>   `procedural` role bit (+ `pp::kProcedural`), exactly like `raster.depth_only`/`raster.mrt` — zero asset churn. (Q3) the 15c
+>   `VisbufferNeedsUintTarget` contract is RE-KEYED off a UNION trigger (`pass_is_scene_raster && (pp::kProcedural ‖
+>   pass_has("clear_id")) ⇒ the R32Uint colour write`, depth writes skipped), NOT `pass_is_visbuffer`. ⛔ Two arms guard two
+>   author mistakes: the **procedural arm** (`procedural ⟺ visbuffer` — the ONLY procedural kind) catches "authored a visbuffer,
+>   forgot the uint format" (REN-38-A11's `raster.visbuffer` writing RGBA with NO clear_id); the **clear_id arm** catches "any
+>   scene pass declared id semantics on a target that can't hold them" (a storage pass with `clear_id` on a float target —
+>   `clear_is_uint` would derive false from the format and the id semantics silently vanish). The advisor's initial Q3
+>   (clear_id-only) was corrected against REN-38-A11: procedural-only reopens the clear_id hole, clear_id-only drops the
+>   procedural arm. `MissingDrawList` stays keyed on procedural alone. Wired: `add_draws_scene(procedural)` carries
+>   no-storage gl_VertexIndex draws (`has_storage=false`); `build_frame_plans` scene arm sets `sbd.procedural/clear_is_uint`
+>   (from colour-0's format)/`clear_uint`; scene.raster schema gains an optional `clear_id`; the scene `to_authored_pass` arm
+>   carries clear_id. **FLIP GATE (the shipped asset now routes scene+CEIR, legacy dead-but-present):** frame-cook 2752/96 (the
+>   shipped `scene_visbuffer` cooks as scene+procedural; the re-keyed contract test green with a clear_id added) + **scene-render
+>   1539/72 incl. the DEVICE id read-back** (test_scene_render_gpu §1483: the re-authored asset renders two primitives → two
+>   different non-background ids through the CEIR procedural path) + render-graph 309/15 (count still 14). win-debug proven.
+> - ✅✅ **16z-3b DONE — executor #13 DELETED, FULL gate green, §128 CLOSED (14→13).** The now-dead legacy is deleted:
+>   `record_visbuffer_raster` + its record registration; the `visbuffer.raster` **schema** registration (`register_builtin_executors`
+>   14→13 TOO, not just records); `map_visbuffer`; the visbuffer `to_authored_pass` arm (frame_runtime L321-333); `pass_is_visbuffer`;
+>   `kExecVisbufferRaster`; the frame_asset.cpp `{"raster.visbuffer", kExecVisbufferRaster,…}` row is already remapped (keep it);
+>   frame_ceir.cpp `builtin_executor_name` visbuffer line + the "14 built-in NAMES" comment → 13. Repo-wide `== 14U` → `== 13U`
+>   sweep across BOTH `register_builtin_executors` AND `register_builtin_records` asserts (grep every `14U`). Fix test_frame_asset.cpp:38
+>   (`kExecVisbufferRaster == executor_type_id("visbuffer.raster")` — delete). ⛔ KEEP the gpu-context `draw_visbuffer`/
+>   `create_visbuffer_target` verbs (B4-vis-4 raster-context consumers — scope discipline). Verify the gpu-context dx12/vulkan
+>   frame-graph visbuffer tests (author `raster.visbuffer` + `clear_id` — should stay green post-remap+re-key). FULL GATE 2 Win +
+>   2 Linux + tidy: render-graph device-free + gpu [raf7] both backends + frame-cook + scene-render (device id read-back) +
+>   sandbox --smoke-test 2 + the count sweep. CLOSE-OUT: project_ceir16_live_position memory + context.md (strip stale
+>   CRD_SCENE_VIA_CEIR/16c/16d) + docs/sessions/2026-08-14-ceir-16d-scene-raster-migration.md + mark CEIR-16 ✅ + a
+>   Conventional-Commits msg (NO AI trailer).
+
 ## 0. Band contract (§127/§128, tracker CEIR-16)
 
 Inventory every executor **from source** (§127: "do not assume the current executor list from old docs"); classify
@@ -155,8 +366,10 @@ per-attachment blend → record clearing storage-pull draws) — i.e. begin/reso
 
 - **The graph-level pass** (`frame.pass executor="scene.raster"`) = atomic (one verb, already a `ceir.frame` op — band 15).
 - **The `record_*` internal loop** = the composite that §128 makes a `ceir.render` program.
-- **The scene_renderer `render()` program-variant ladder** (block 7, `scene_renderer.cpp:6169–6260`) = the OTHER composite
-  half (`scene.resolve_program`).
+- **The scene_renderer `render()` program-variant ladder** (block 7, `scene_renderer.cpp` group-consolidation loop
+  ~L6280–6379: the `program_[skinned_][textured_][shadowed]` + `_idx` twin selection filling `SceneDraw.program`) = the
+  OTHER composite half (`scene.resolve_program`). ⛔ ANCHOR CORRECTED 2026-08-14 (was `:6169–6260`, which drifted onto the
+  REN-40 GPU-cull params). **This ladder is HOST-side (in `render()`) BY DESIGN** — see the 16d-live-3b reclassification note.
 
 ⭐ **THE CLASSIFICATION CRITERION (advisor — disposition, distinct from size-order):** an executor's `record_*` is
 **ATOMIC** iff its body maps **1:1 onto one existing `ceir.*` op's canonical lowering** (a copy, a dispatch, a single
@@ -221,11 +434,35 @@ landed); it is the same class of decision as the Option-A pull-forwards the user
 
 ## 5. The 16z deletion list = 0h §3 E-table (per-item proof gates ALREADY WRITTEN)
 
-E1 (variant ladder :6169–6260) → `scene.resolve_program` + authored `ceir.frame`, proof = §128 scene.raster pixel-parity
-both backends incl bindless/multi-draw = **16d**; E2 (`render()` fg assembly + cull) → `ceir.frame` + `ceir.scene`
-resolvers, proof = `crd-sandbox --smoke-test` + REN-38-F6 green through CEIR; E5 (`SceneRenderer::render` composite) →
-orchestrator only, no private C++ render path (§128) — all deleted at **16z**. RAF-12 scar governs: **coverage before
-inline deletion** — the E-table IS that coverage inventory.
+E1 (variant ladder, `scene_renderer.cpp` ~L6280–6379 — ⛔ ANCHOR CORRECTED, was `:6169–6260`) → `scene.resolve_program`,
+proof = §128 scene.raster pixel-parity both backends incl bindless/multi-draw = **16d**; E2 (`render()` fg assembly + cull) →
+`ceir.frame` + `ceir.scene` resolvers, proof = `crd-sandbox --smoke-test` + REN-38-F6 green through CEIR; E5
+(`SceneRenderer::render` composite) → orchestrator only, no private C++ render path (§128) — all deleted at **16z**. RAF-12
+scar governs: **coverage before inline deletion** — the E-table IS that coverage inventory.
+
+> **⛔⛔ E1 MEANING RECLASSIFIED 2026-08-14 (16d-live-3b, advisor-confirmed — a decision-record change of the same class as the
+> §4b parity-doctrine change, recorded LOUD not silent).** Investigating 16d-live-3b (`scene.resolve_program`) found the
+> variant ladder is ALREADY the ratified architecture: fork (c) (2026-08-12) says `scene.resolve_*` is "IMPLEMENTED host-side
+> behind the `IFrameGraphHost` seam; currency = pre-resolved handles, NEVER ECS types," and the §4b doctrine says "the resolve
+> chain is host-side behind the seam, the DrawList carries pre-resolved handles." The ladder at ~L6280–6379 runs in the scene
+> renderer's `render()` (the host = `IFrameGraphHost`) during scene consolidation and fills `SceneDraw.program` with the
+> resolved FS-variant twin; `to_authored_pass` selects program/program_depth/program_velocity by pass role; so the DrawList's
+> `RenderDrawItem.program` reaching BOTH recorders is PRE-RESOLVED, and neither `record_scene_raster` nor `record_ceir_render`
+> re-resolves per-draw (both read `it.program`). **∴ E1 is NOT "delete the ladder"** — the ladder is `scene.resolve_program`'s
+> host implementation and STAYS behind the seam; **16z deletes the EXECUTOR (`record_scene_raster`), not the ladder**, and
+> verifies the ladder sits behind the host seam (which it does). 16d-live-3b is therefore a RECLASSIFICATION, NOT a code move,
+> and it does NOT block 16d-live-3c (both recorders consume the same pre-resolved DrawList; the flag flip never touches the
+> ladder). **3b's ONE code deliverable = the record-time TAIL of resolution, which WAS untested:** the `it.program == nullptr →
+> pass default` fallback is LIVE on every shadow cascade (`add_draws_scene` nulls per-item programs when `program_is_instance`
+> — the PRECEDENCE scar, frame_runtime L105-108), and its interaction with the coalesce predicate (`nprog = nx.program ?:
+> def_prog`) had never been A/B'd for scene. `emit_scene_list` (render_materialize.cpp L453/475/545) already matches legacy
+> (null→def_prog, coalesce compares resolved programs) — now LOCKED by a `ceir 16d-live-3a` section (two null-program items +
+> non-null default → ONE coalesced DrawMulti, resolved program non-null, both paths) + a universal `progs[i] != nullptr`
+> invariant. Gate: crd-render-graph 363/14 (167 in the 3a case) on win-debug + win-asan + linux-gcc-debug + linux-gcc-asan;
+> tidy clean. **Named-forward:** `scene.resolve_program`'s formal DECLARATION in the CEIR-0d native-intrinsic registry
+> (ADR-0110) is deferred — that registry is NOT built as code yet (grep: only `engine/ceir/ops/README.md` names it); building
+> a registry for one entry is speculative infra, so the declaration lands WHEN the 0d registry lands (a later band). Until
+> then the ladder IS the host resolver behind `IFrameGraphHost` — the ratified fork-(c) shape.
 
 ## 6. Parity gate (per slice) = ADR-0106 Decision #4 (harness FOUND, not invented)
 

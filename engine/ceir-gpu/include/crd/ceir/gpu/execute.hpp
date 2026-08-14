@@ -41,6 +41,9 @@ enum class ExecuteError : crd::u8
     UnresolvedProgram,  // CEIR-14z-2: a render program/target resolver returned nullptr (a draw's @program or an attachment target)
     NoFrameGraph,       // CEIR-14z-4a: the raster context has no frame graph (create_frame_graph()/create_command_encoder() == nullptr) — a capability absence
     FrameBuildFailed,   // CEIR-14z-4a: the gpu-context frame graph failed to build (an unwritten transient / a cycle in the declared reads/writes)
+    // CEIR-17b (scene resolve chain) — append at end.
+    SceneChainMisuse,      // a scene.resolve_* chain failed find_scene_misuse (the verifier-first contract — refuse, never a garbage handle)
+    UnresolvedSceneHandle, // a scene resolve callback is null (an unwired seam) or returned 0 (an unresolvable handle)
 };
 [[nodiscard]] containers::StringView execute_error_name(ExecuteError e) noexcept;
 

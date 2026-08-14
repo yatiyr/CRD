@@ -75,7 +75,7 @@
           "name": "blend",
           "kind": "string",
           "required": false,
-          "doc": "sec-40 the per-attachment BlendMode: opaque | alpha | additive | premultiplied (absent = opaque). CLOSED vocabulary, enforced. (The blend STATE surface beyond these presets is CEIR-14b pipeline state.)"
+          "doc": "sec-40 the per-attachment BlendMode: opaque | alpha | additive | premultiplied | multiply | revealage_multiply | reveal_composite (absent = opaque). CLOSED vocabulary, enforced. The last three are the WBOIT MRT modes (CEIR-16d-live-4a: revealage_multiply is dst*(1-src.rgb), which no generic mode expresses). (The blend STATE surface beyond these presets is CEIR-14b pipeline state.)"
         }
       ],
       "traits": [
@@ -645,7 +645,7 @@
       "qualified": "render.scene_draw_list",
       "version": 1,
       "summary": "The scene per-draw-item verb ladder: ONE render.scope, N packets over the host DrawList; each item's fields (args/index_count/texture/storage) select its verb (indirect/indexed/storage-pull/coalesced-multi).",
-      "docs": "render.scene_draw_list() {program=@p, access=\"\"}. The scene per-draw-item verb ladder (record_scene_raster single-colour arm): ONE render.scope, the walk expands it over the host DrawList (ctx.draws()) into N raster packets whose verb is chosen PER ITEM (DrawIndexedIndirect | DrawIndexed | Draw StoragePull | DrawMulti/DrawMultiIndexed run-coalesced), RESULTLESS, legal ONLY inside a render.scope. Effects: GPUCommand + ambient MemoryReadWrite. find_render_misuse: ZERO operands (access arity 0); program a Symbol.",
+      "docs": "render.scene_draw_list() {program=@p, access=\"\", geometry?}. The scene per-draw-item verb ladder: ONE render.scope, the walk expands it over the host DrawList (ctx.draws()) into N raster packets. In the default `storage` mode the verb is chosen PER ITEM (DrawIndexedIndirect | DrawIndexed | Draw StoragePull | DrawMulti/DrawMultiIndexed run-coalesced); in `procedural` mode (the \u00a741 visbuffer form) each item is a plain procedural Draw (GeometryKind::None, vertex_count, no storage/textures/coalescing). RESULTLESS, legal ONLY inside a render.scope. Effects: GPUCommand + ambient MemoryReadWrite. find_render_misuse: ZERO operands (access arity 0); program a Symbol; geometry in {storage, procedural}.",
       "operands": [],
       "results": [],
       "attributes": [
@@ -666,6 +666,12 @@
           "kind": "int",
           "required": false,
           "doc": "CEIR-13c the EXPECTED \u00a7107 interface hash (a PIN; absent = unpinned)"
+        },
+        {
+          "name": "geometry",
+          "kind": "string",
+          "required": false,
+          "doc": "CEIR-16z the geometry mode: storage | procedural (absent = storage). CLOSED vocabulary, find_render_misuse enforces it. `storage` = the ordinary storage-pull scene ladder; `procedural` = a visbuffer / gl_VertexIndex draw (GeometryKind::None, vertex_count only, NO storage binding, no textures, no coalescing) \u2014 the \u00a741 visbuffer dissolution onto scene.raster."
         }
       ],
       "traits": [],

@@ -8,6 +8,7 @@
 
 #include <crd/framecook/frame_asset.hpp>   // REN-36.2: the cooked frame-graph asset
 #include <crd/framecook/frame_runtime.hpp> // REN-36.2: executing it through IFrameGraph
+#include <crd/renderasset/diagnostic.hpp>  // CEIR-17z: DiagnosticList for build_frame_plans at a direct rec.record site
 #include <crd/gpu/frame_graph.hpp>
 #include <crd/gpu/command_model.hpp> // RAF-12.4: DispatchDesc for enc_dispatch
 #include <verb_packet_helpers.hpp>   // RAF-12.4: gputest::enc_draw{,_textured,_shadow,_bindless}/enc_dispatch (shared)
@@ -2509,8 +2510,14 @@ TEST_CASE("REN-38-A5 GATE: an authored PRESENT pass hands the frame to a surface
     REQUIRE(fgraph != nullptr);
     framecook::FrameRecorder rec(&alloc);
     rec.begin_frame();
+    // ⛔ CEIR-17z: the triangle raster pass is a MIGRATED executor (record_ceir_render) — build + pass its CEIR replay plan,
+    // exactly as the engine-path caller execute_frame_graph does. A direct rec.record with no plan is a loud MissingCeirPlan
+    // (never a silent no-record), so this call-site conforms to the contract it exercises.
+    crd::renderasset::DiagnosticList plan_diags(&alloc);
+    framecook::FramePlans            plans(&alloc);
+    REQUIRE(framecook::build_frame_plans(desc, plans, plan_diags));
     framecook::FrameExecError err = framecook::FrameExecError::Ok;
-    REQUIRE(rec.record(desc, *fgraph, raster, host, &err, &where));
+    REQUIRE(rec.record(desc, *fgraph, raster, host, &err, &where, &plans));
     CHECK(err == framecook::FrameExecError::Ok);
     REQUIRE(fgraph->build());
     fgraph->execute();
@@ -2532,7 +2539,7 @@ TEST_CASE("REN-38-A5 GATE: an authored PRESENT pass hands the frame to a surface
     // a SECOND frame through the same graph presents again — the counters are per-execute, not cumulative-once.
     fgraph->reset();
     rec.begin_frame();
-    REQUIRE(rec.record(desc, *fgraph, raster, host, &err, &where));
+    REQUIRE(rec.record(desc, *fgraph, raster, host, &err, &where, &plans)); // CEIR-17z: reuse the same replay plan
     REQUIRE(fgraph->build());
     fgraph->execute();
     CHECK(fgraph->last_present_count() == 1U);
@@ -4855,6 +4862,12 @@ TEST_CASE("REN-38-B1 GATE: an authored PING-PONG history survives the frame and 
     REQUIRE(fgraph != nullptr);
     framecook::FrameRecorder  rec(&alloc);
     framecook::FrameExecError err = framecook::FrameExecError::Ok;
+    // ⛔ CEIR-17z: the TAA graph's fullscreen pass is a MIGRATED executor (record_ceir_render) — build its CEIR replay plan
+    // ONCE and pass it to both frames' record calls. A direct rec.record with no plan is a loud MissingCeirPlan (never the
+    // silent render-0 this test's err/submit/transient checks would have missed).
+    crd::renderasset::DiagnosticList plan_diags(&alloc);
+    framecook::FramePlans            plans(&alloc);
+    REQUIRE(framecook::build_frame_plans(desc, plans, plan_diags));
     // ⭐⭐ TWO FRAMES THROUGH ONE GRAPH. The pass READS `history` and WRITES `history` in the same frame — which is
     // only legal because the two resolve to DIFFERENT images. ⛔ Were they the same handle the graph would see a
     // read-after-write on one node and either serialise against itself or reject the graph as a CYCLE; that it
@@ -4863,7 +4876,7 @@ TEST_CASE("REN-38-B1 GATE: an authored PING-PONG history survives the frame and 
     {
         fgraph->reset();
         rec.begin_frame();
-        REQUIRE(rec.record(desc, *fgraph, raster, host, &err, &where));
+        REQUIRE(rec.record(desc, *fgraph, raster, host, &err, &where, &plans));
         CHECK(err == framecook::FrameExecError::Ok);
         REQUIRE(fgraph->build());
         fgraph->execute();
@@ -7828,7 +7841,7 @@ TEST_CASE("REN-40-A GATE: the compacting cull kernel reproduces the CPU frustum 
         tp.cull  = kern.get();
         // ⛔⛔ TWO WRITERS OF ONE RESOURCE KEEP DECLARATION ORDER — that is the graph's stated tie-break and
         // the only defensible one (reordering two writes would silently change the result). So `cull_reset` is
-        // declared FIRST, exactly as `scene_gpu_cull.frame.toml` lists it. The DATA edge does the rest: `cull`
+        // declared FIRST, exactly as `forward_csm_gpu.frame.toml` lists it. The DATA edge does the rest: `cull`
         // READS what `cull_reset` WROTE, so the sort places reset first and emits the barrier between them.
         // ⭐ The graph REFUSED to build when this was declared the other way round — cull-writes-args plus
         // cull-reads-args made a cycle with reset-writes-args. A frame graph that accepts an ambiguous order and

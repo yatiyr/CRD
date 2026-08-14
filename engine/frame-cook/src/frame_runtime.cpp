@@ -177,12 +177,15 @@ void to_authored_pass(const PassRec& p, rg::AuthoredPass& out)
     const auto bind_prim = [&](const char* slot, rp::SlotResourceKind kind, rp::SlotAccess access) {
         bind(slot, kind, access, prim, p.target, g::FgBuffer{}, nullptr, p.depth_target, p.layer);
     };
-    const auto add_draws_scene = [&](bool depth_only) {
+    const auto add_draws_scene = [&](bool depth_only, bool procedural) {
         out.draws.reserve(p.draws.count());
         for (crd::u32 i = 0; i < p.draws.count(); ++i)
         {
             const DrawItem it = p.draws.at(i);
-            if (it.storage == nullptr) { continue; }
+            // ⛔ CEIR-16z-3 (§41): a PROCEDURAL (visbuffer) draw has NO storage (gl_VertexIndex geometry). The storage-null
+            // skip is the STORAGE ladder's resolve-failure guard, so it must NOT drop a procedural draw (which legitimately
+            // carries no storage). Storage mode is byte-identical to before.
+            if (!procedural && it.storage == nullptr) { continue; }
             g::IRasterProgram* twin = nullptr;
             if (!p.program_is_instance)
             {
@@ -191,10 +194,19 @@ void to_authored_pass(const PassRec& p, rg::AuthoredPass& out)
                 else                                       { twin = it.program; }
             }
             rg::AuthoredDraw ad{};
-            ad.has_storage = true; ad.storage = p.storage_of[i]; ad.program = twin; ad.texture = it.texture;
-            ad.vertex_count = it.vertex_count; ad.indexed = it.indexed; ad.index_count = it.index_count;
-            ad.instance_count = it.instance_count; ad.first_index = it.first_index; ad.args = it.args;
-            ad.args_offset = it.args_offset;
+            if (procedural)
+            {
+                // a plain gl_VertexIndex draw: program + vertex_count only (no storage/texture/args) — emit_scene_list's
+                // procedural branch (16z-2) records it as GeometryKind::None with ZERO bindings.
+                ad.has_storage = false; ad.program = twin; ad.vertex_count = it.vertex_count;
+            }
+            else
+            {
+                ad.has_storage = true; ad.storage = p.storage_of[i]; ad.program = twin; ad.texture = it.texture;
+                ad.vertex_count = it.vertex_count; ad.indexed = it.indexed; ad.index_count = it.index_count;
+                ad.instance_count = it.instance_count; ad.first_index = it.first_index; ad.args = it.args;
+                ad.args_offset = it.args_offset;
+            }
             out.draws.push_back(ad);
         }
     };
@@ -210,6 +222,7 @@ void to_authored_pass(const PassRec& p, rg::AuthoredPass& out)
         out.programs.raster = p.program;
         const bool depth_only = pass_flag(d, SV(pp::kDepthOnly));
         const bool mrt        = pass_flag(d, SV(pp::kMrt)) && p.n_writes > 1U;
+        const bool procedural = pass_flag(d, SV(pp::kProcedural)); // ⛔ CEIR-16z-3: the visbuffer role (gl_VertexIndex draws)
         bind_prim(depth_only ? "depth" : "color",
                   depth_only ? rp::SlotResourceKind::DepthTarget : rp::SlotResourceKind::ColorTarget,
                   depth_only ? rp::SlotAccess::ReadWrite : rp::SlotAccess::Write);
@@ -232,7 +245,10 @@ void to_authored_pass(const PassRec& p, rg::AuthoredPass& out)
                 p_enum(kBlend[k], pass_u32(d, SV(pp::kBlendSlot[k]), static_cast<crd::u32>(g::BlendMode::Opaque)));
             }
         }
-        add_draws_scene(depth_only);
+        // ⛔ CEIR-16z-3: a visbuffer (procedural) scene pass carries the background id into the payload (cook==record parity;
+        // the CEIR plan bakes the typed uint clear from the R32Uint target, and the payload mirrors the authored id).
+        if (procedural) { p_u32("clear_id", p.clear_id); }
+        add_draws_scene(depth_only, procedural);
         // the pass's sampled read (shadow atlas / moment array) — the scene executor's atlas/sampler routing.
         if (p.n_sampled > 0U)
         {
@@ -318,20 +334,8 @@ void to_authored_pass(const PassRec& p, rg::AuthoredPass& out)
             out.draws.push_back(ad);
         }
     }
-    else if (pass_is_visbuffer(d))
-    {
-        out.payload.queue = rp::QueueKind::Graphics;
-        out.programs.raster = p.program;
-        bind_prim("color", rp::SlotResourceKind::ColorTarget, rp::SlotAccess::Write);
-        p_u32("clear_id", p.clear_id);
-        for (crd::u32 i = 0; i < p.draws.count(); ++i)
-        {
-            const DrawItem it = p.draws.at(i);
-            rg::AuthoredDraw ad{}; // ⛔ visbuffer draws are PROCEDURAL (no storage-pull) — has_storage stays false
-            ad.program = p.program_is_instance ? nullptr : it.program; ad.vertex_count = it.vertex_count;
-            out.draws.push_back(ad);
-        }
-    }
+    // ⛔ CEIR-16z-3b: the visbuffer to_authored_pass arm DELETED (§41 dissolution). A visbuffer is now a scene.raster PROCEDURAL
+    // pass, handled by the scene arm above (add_draws_scene(procedural) carries the no-storage gl_VertexIndex draws + clear_id).
     else if (pass_is_mesh_indirect(d))
     {
         out.payload.queue = rp::QueueKind::Graphics;
@@ -1242,6 +1246,11 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
                       ? plans->table.find(crd::renderpass::pass_param_id(
                             crd::containers::StringView(d.name.c_str(), d.name.size())))
                       : nullptr;
+        // ⛔⛔ CEIR-17z: a MIGRATED executor (record_ceir_render) with NO plan is a LOUD, NAMED failure — never the silent
+        // no-record the 16d-live-4c deletion could otherwise produce (the imperative fallback that masked it is GONE). The
+        // caller MUST build_frame_plans and pass them (the scene renderer does; execute_frame_graph does; direct callers
+        // must). Fires BEFORE any device work. This is the doctrine the L1243 comment promised and nothing implemented.
+        if (ap.plan == nullptr && pass_is_migrated_ceir(d)) { return fail(FrameExecError::MissingCeirPlan, &d.name); }
         ap.device_kind = dev_kind;
         ap.has_sampler = pass_flag(d, SV(pp::kHasSampler));
         ap.sampler     = pass_sampler(d);
@@ -1287,9 +1296,22 @@ bool execute_frame_graph(const FrameGraphDesc& desc, g::IRasterContext& raster, 
         if (err != nullptr) { *err = FrameExecError::NoOutput; }
         return false;
     }
+    // ⛔⛔ CEIR-17z: the migrated executors (scene/fullscreen/mesh/tess/mesh.indirect → record_ceir_render) need a per-pass
+    // CEIR replay plan. This synchronous wrapper owns record→build→execute in ONE scope, so a STACK FramePlans has exactly
+    // the right lifetime — it outlives the fgraph->execute() below and dies on return (no Impl member, no reuse, no UAF).
+    // build_frame_plans no-ops for a graph with no migrated pass; a build FAILURE is a real, NAMED load-path error, never
+    // the silent no-record §128's deletion could otherwise produce.
+    crd::renderasset::DiagnosticList plan_diags(desc.resources.allocator());
+    FramePlans                       plans(desc.resources.allocator());
+    if (!build_frame_plans(desc, plans, plan_diags))
+    {
+        if (err != nullptr) { *err = FrameExecError::MissingCeirPlan; }
+        if (where != nullptr) { *where = desc.name; }
+        return false;
+    }
     FrameRecorder rec(desc.resources.allocator());
     rec.begin_frame();
-    if (!rec.record(desc, *fgraph, raster, host, err, where)) { return false; }
+    if (!rec.record(desc, *fgraph, raster, host, err, where, &plans)) { return false; }
     if (!fgraph->build())
     {
         if (err != nullptr) { *err = FrameExecError::BuildRejected; }
@@ -1317,6 +1339,7 @@ const char* frame_exec_error_text(FrameExecError e) noexcept
     case FrameExecError::PresentSourceInvalid:  return "a present pass's source is not a target that outlives the graph";
     case FrameExecError::UnresolvedAccel:       return "a raytrace pass names an acceleration structure the host does not know";
     case FrameExecError::UnresolvedArgs:        return "an indirect pass names an args buffer the graph did not create";
+    case FrameExecError::MissingCeirPlan:       return "a migrated executor (record_ceir_render) got no CEIR replay plan — the caller must build_frame_plans and pass them";
     }
     return "unknown error";
 }
@@ -1430,11 +1453,16 @@ bool build_frame_plans(const FrameGraphDesc& desc, FramePlans& out, crd::rendera
     static const char* const kIn[8] = {"input0", "input1", "input2", "input3", "input4", "input5", "input6", "input7"};
     // Reserve storage to the EXACT fullscreen-pass count: the CeirPassPlans bind pointers INTO `storage`, so it must never
     // relocate (the reserved-arena discipline the recorder itself uses).
+    // ⛔ CEIR-16d-live-2: scene.raster (raster.scene / raster.depth_only / raster.mrt — all kExecSceneRaster) joins the
+    // COUNT loop, not only the build loop: `out.storage` is reserved to EXACTLY this count and every CeirPassPlan binds a
+    // `cmds.data()` pointer INTO it, so an under-count relocates the Array mid-build and dangles every earlier plan pointer.
+    // A scene pass that will SKIP its plan (mrt>=2, below) is still counted — over-reserving a slot is harmless; the
+    // reserve must be an UPPER bound on the pushes.
     crd::u32 nfs = 0U;
     for (crd::usize i = 0; i < desc.passes.size(); ++i)
     {
         if (pass_is_fullscreen(desc.passes[i]) || pass_is_mesh_indirect(desc.passes[i]) || pass_is_tess(desc.passes[i])
-            || pass_is_mesh(desc.passes[i]))
+            || pass_is_mesh(desc.passes[i]) || pass_is_scene_raster(desc.passes[i]))
         {
             ++nfs;
         }
@@ -1445,11 +1473,36 @@ bool build_frame_plans(const FrameGraphDesc& desc, FramePlans& out, crd::rendera
 
     for (crd::usize pi = 0; pi < desc.passes.size(); ++pi)
     {
-        const FramePassDesc& d       = desc.passes[pi];
-        const bool           is_fs   = pass_is_fullscreen(d);
-        const bool           is_mind = !is_fs && pass_is_mesh_indirect(d);
-        const bool           is_amp  = !is_fs && !is_mind && (pass_is_tess(d) || pass_is_mesh(d));
-        if (!is_fs && !is_mind && !is_amp) { continue; }
+        const FramePassDesc& d        = desc.passes[pi];
+        const bool           is_fs    = pass_is_fullscreen(d);
+        const bool           is_mind  = !is_fs && pass_is_mesh_indirect(d);
+        const bool           is_amp   = !is_fs && !is_mind && (pass_is_tess(d) || pass_is_mesh(d));
+        const bool           is_scene = !is_fs && !is_mind && !is_amp && pass_is_scene_raster(d);
+        if (!is_fs && !is_mind && !is_amp && !is_scene) { continue; }
+
+        // ⛔ CEIR-16d-live-4a-4: the scene COLOUR-attachment count = the build_scene_ceir `mrt_n`. Count COLOUR writes exactly
+        // as the record-time resolver routes them (frame_runtime L1032-1085): a buffer write is not an attachment, and a
+        // depth-format write routes to depth_target (excluded) — so a velocity pass's [colour, depth] is ONE colour (mrt_n=1,
+        // the single-colour scene), and a deferred G-buffer / WBOIT accumulate is mrt_n>=2. build_scene_ceir now handles
+        // mrt>=2 (4a-2/3: N colour_attachment ops + emit_scene_list_mrt's per-item scope) — so NO more skip; the N-colour plan
+        // is built + the pass records via record_ceir_render like every migrated scene pass (the mrt>=2-skip of 16d-live-2 is
+        // INVERTED, gap iii). ⛔ ORDER: d.writes is visited in authored order excluding depth/buffer, so colour 0 = the primary
+        // write (color), colour 1..3 = the extra ColorTarget writes (color1..3) — the order fs_target/record_scene_raster expect.
+        crd::u32 scene_colour_writes    = 0U;
+        bool     scene_first_col_is_uint = false; // ⛔ CEIR-16z-3: colour-0's format R32Uint ⇒ the visbuffer typed uint clear
+        if (is_scene)
+        {
+            for (crd::usize w = 0; w < d.writes.size(); ++w)
+            {
+                const FrameResourceDesc* const res = fs_find_resource(desc, d.writes[w].name);
+                if (res == nullptr || fs_read_is_buffer(res->kind) || crd::gpu::fg_format_has_depth(res->format))
+                {
+                    continue;
+                }
+                if (scene_colour_writes == 0U) { scene_first_col_is_uint = crd::gpu::fg_format_is_uint(res->format); }
+                ++scene_colour_writes;
+            }
+        }
 
         out.storage.push_back(crd::containers::Array<crd::ceir::gpu::LoweredCommand>(out.alloc));
         crd::containers::Array<crd::ceir::gpu::LoweredCommand>& cmds  = out.storage[out.storage.size() - 1U];
@@ -1501,7 +1554,7 @@ bool build_frame_plans(const FrameGraphDesc& desc, FramePlans& out, crd::rendera
             mbd.clear = crd::gpu::ClearColor{cc[0], cc[1], cc[2], cc[3]};
             built     = crd::ceir::gpu::build_mesh_indirect_ceir(*out.ctx, mbd, cmds);
         }
-        else
+        else if (is_amp)
         {
             // ── CEIR-16-mesh-2: the AMPLIFY composite (record_amplify_raster) — mesh.raster (meshlet) or tess.raster
             // (patches); the record-time walk expands mesh_dispatch_list over ctx.draws(). fallback_count = the procedural
@@ -1520,6 +1573,45 @@ bool build_frame_plans(const FrameGraphDesc& desc, FramePlans& out, crd::rendera
             pass_vec4(d, SV(pp::kClearColor), cc);
             abd.clear = crd::gpu::ClearColor{cc[0], cc[1], cc[2], cc[3]};
             built     = crd::ceir::gpu::build_amplify_ceir(*out.ctx, abd, cmds);
+        }
+        else // is_scene (single-colour): the §128 scene.raster template — build_scene_ceir mirrors record_scene_raster's
+        {    // begin/scene_draw_list/end. The colour + depth attachments are TEMPLATES fs_target resolves at record.
+            crd::ceir::gpu::SceneBuildDesc sbd;
+            const bool                     depth_only = pass_flag(d, SV(pp::kDepthOnly));
+            sbd.has_color = !depth_only;                    // a depth-only shadow cascade / prepass has NO colour attachment
+            sbd.has_depth = true;                           // ALWAYS a template; fs_target drops it when the target has no depth
+            // ⛔ BASE load ONLY. `load_override` is per-for_each-INSTANCE and FRAME-VARYING (cascade caching REN-40-E2), so a
+            // static plan cannot bake it — it is OR-ed into the LoadOps at record (16d-live-2b). Depth LOADs when colour does
+            // (legacy `load_depth = load || load_depth`), so the base depth load = kLoad || kLoadDepth.
+            sbd.load       = pass_flag(d, SV(pp::kLoad));
+            sbd.load_depth = pass_flag(d, SV(pp::kLoad)) || pass_flag(d, SV(pp::kLoadDepth));
+            float cc[4] = {0.0F, 0.0F, 0.0F, 1.0F};
+            pass_vec4(d, SV(pp::kClearColor), cc);
+            sbd.clear         = crd::gpu::ClearColor{cc[0], cc[1], cc[2], cc[3]};
+            sbd.clear_depth   = pass_f32(d, SV(pp::kClearDepth), 1.0F);
+            sbd.depth_compare = static_cast<crd::gpu::DepthCompare>(
+                pass_u32(d, SV(pp::kDepthCompare), static_cast<crd::u32>(crd::gpu::DepthCompare::LessEqual)));
+            // ⛔ CEIR-16z-3 (§41 visbuffer dissolution): the procedural + typed-uint-clear role. `procedural` ⇒ emit_scene_list
+            // emits gl_VertexIndex draws (GeometryKind::None, no storage). `clear_is_uint` is DERIVED from an R32Uint colour
+            // target (RAH-1a.1 "visibility is an ordinary typed attachment", NOT an author boolean); clear_uint = the authored
+            // background id. The cook contract (VisbufferNeedsUintTarget) already guaranteed a declared clear_id ⇒ R32Uint.
+            sbd.procedural    = pass_flag(d, SV(pp::kProcedural));
+            sbd.clear_is_uint = scene_first_col_is_uint;
+            sbd.clear_uint    = pass_u32(d, SV("clear_id"), 0U);
+            // ⛔ CEIR-16d-live-4a-4: the MULTI-COLOUR MRT set. mrt_n = the COLOUR-write count (1 = single-colour, byte-identical;
+            // >=2 = a deferred G-buffer / WBOIT). Per-attachment blends read from blend0..3 — the SAME the to_authored_pass scene
+            // MRT arm reads (this file ~L232), so record_scene_raster's payload blends and the baked CEIR blends AGREE. A
+            // depth-only pass has 0 colour writes ⇒ mrt_n clamps to 1 but has_color=false emits no colour attachment anyway.
+            sbd.mrt_n = scene_colour_writes >= 1U ? scene_colour_writes : 1U; // build_scene_ceir clamps to kMaxColorAttachments
+            if (sbd.mrt_n >= 2U)
+            {
+                for (crd::u32 bk = 0; bk < sbd.mrt_n && bk < 4U; ++bk)
+                {
+                    sbd.blend[bk] = static_cast<crd::gpu::BlendMode>(
+                        pass_u32(d, SV(pp::kBlendSlot[bk]), static_cast<crd::u32>(crd::gpu::BlendMode::Opaque)));
+                }
+            }
+            built = crd::ceir::gpu::build_scene_ceir(*out.ctx, sbd, cmds);
         }
         if (!built)
         {
