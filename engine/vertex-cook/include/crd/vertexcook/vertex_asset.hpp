@@ -325,6 +325,17 @@ struct RtDesc
     double   callable_scale = 2.0; // Callable: cd.m0 = cd.m0 * scale + bias — a transform a gate can verify
     double   callable_bias  = 1.0;
     bool     use_callable   = false; // RayGen: after the trace, run the callable over the payload and store ITS result
+    // ── CEIR-19b (hybrid RT shadows) appended. A shadow RayGen reads its ray ORIGIN per-launch from a buffer (the
+    // worldpos handoff — the raster depth reconstructed into a buffer) and traces toward a FIXED point light. ⛔ emit
+    // MUST round-trip these (the inert-copy-rot scar) — a lost field silently reverts a shadow raygen to the F6 primary ray.
+    bool     to_light       = false; // RayGen: trace a SHADOW ray — origin from `origin_binding`[LaunchId] (vec4 stride),
+                                     // direction toward (light_x,light_y,light_z), tmax = the light distance; false = the primary +Z ray
+    crd::u32 origin_binding = 1U;    // RayGen (to_light): the storage-buffer binding holding per-launch world-space origins
+    double   light_x        = 0.0;   // RayGen (to_light): the fixed point-light position the shadow ray targets
+    double   light_y        = 0.0;
+    double   light_z        = 0.0;
+    double   miss_value     = -1.0;  // Miss: the payload[0] value on a MISS (shadow: 1.0 = LIT); default -1.0 (the F6 primary marker)
+    double   hit_value      = 1.0;   // ClosestHit: the payload[0] value on a HIT (shadow: 0.0 = SHADOWED); default 1.0
 };
 
 // F4 GPU-driven culling: a compute program that tests each instance and writes the surviving indirect args.

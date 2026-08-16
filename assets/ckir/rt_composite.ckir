@@ -1,0 +1,68 @@
+# .ckir - an authored CKIR program (node graph). A node editor reads this and turns it into CKIR.
+schema = 1
+
+[[entry]]
+stage = "Fragment"
+inputs = 0
+position = -1
+frag_depth = -1
+discard_cond = -1
+early_fragment_tests = false
+depth_mode = "Any"
+shading_rate = -1
+storage_write_index = -1
+storage_write_value = -1
+interlock = false
+n_out = 1
+local_size = [1, 1, 1]
+kernel_body_begin = -1
+kernel_body_count = 0
+mesh_vertices = 0
+mesh_primitives = 0
+mesh_prim = -1
+task_emit = -1
+task_payload = [-1, -1, -1, -1]
+n_task_payload = 0
+tess_patch_size = 0
+tess_inner = -1
+tess_outer = -1
+mesh_payload_in = false
+storage_read_only = false
+
+[[out]]
+node = "n3"
+location = 0
+interp = "Smooth"
+
+[[node]]
+id = "n0"
+op = "StageIn"
+tkind = "Vec"
+trows = 2
+shape = [1]
+
+[[node]]
+id = "n1"
+op = "Texture"
+tkind = "Texture"
+trows = 2
+tcols = 0
+shape = [1]
+iidx = 1
+
+[[node]]
+id = "n2"
+op = "Sampler"
+tkind = "Sampler"
+trows = 0
+tcols = 0
+shape = [1]
+iidx = 2
+
+[[node]]
+id = "n3"
+op = "TexSample"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n1", "n2", "n0"]

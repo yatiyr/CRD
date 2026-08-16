@@ -217,6 +217,9 @@ LightingCookError parse_lighting_toml(crd::containers::StringView toml_text, Lig
         w("light_off", out.header.light_off);
         w("decal_off", out.header.decal_off);
         w("cluster_off", out.header.cluster_off);
+        w("viewport_w", out.header.viewport_w);
+        w("viewport_h", out.header.viewport_h);
+        w("slice_bounds_off", out.header.slice_bounds_off);
     }
 
     if (const auto* r = root["record"].as_table())
@@ -449,6 +452,20 @@ LightingCookError validate_lighting(const LightingDesc& d, crd::containers::Stri
         {
             return LightingCookError::BadCluster;
         }
+        // ⭐⭐ CEIR-18a-2 Stage 2: clustering NEEDS the viewport-dims header words to normalize FragCoord.xy into
+        // [0,1). Unset (0) would make the FS divide by header word 0 — a silent garbage froxel index. Reject at cook.
+        if (d.header.viewport_w == 0U || d.header.viewport_h == 0U || d.header.cluster_off == 0U)
+        {
+            return LightingCookError::BadCluster;
+        }
+        // ⭐⭐ CEIR-18b: a grid WITH DEPTH (grid[2] > 1) bins by the published exponential z-boundary table — it MUST
+        // declare where that table lives (slice_bounds_off). Unset (0) would make the FS Step against header word 0
+        // (view_proj's first element) — a silent garbage z-slice. ⛔ CONDITIONAL on grid[2] > 1 so the 2D tiled crdl
+        // (grid[2] == 1, no depth words) keeps cooking byte-identical — the 18a byte-stability contract.
+        if (d.cluster.grid[2] > 1U && d.header.slice_bounds_off == 0U)
+        {
+            return LightingCookError::BadCluster;
+        }
     }
     if (d.decal.count > 0U)
     {
@@ -497,6 +514,20 @@ crd::u64 lighting_variant_id(const LightingDesc& d) noexcept
     hash_u64(h, d.ibl.specular ? 1ULL : 0ULL);
     hash_u64(h, d.cluster.enabled ? d.cluster.max_per_cluster + 1ULL : 0ULL);
     for (crd::u32 i = 0; i < 3U; ++i) { hash_u64(h, d.cluster.grid[i]); }
+    // ⭐⭐ CEIR-18a-2 Stage 2: the clustered FS BAKES these header words (the list offset + the two viewport-dims words
+    // it normalizes FragCoord against) into the emitted code, so a variant reading different words is a different cook.
+    // Guarded on `enabled` (the max_per_cluster precedent above): a non-clustered desc never emits them, so its id is
+    // unchanged. The rest of the header map stays out of the id — those offsets are fixed conventions no variant moves.
+    if (d.cluster.enabled)
+    {
+        hash_u64(h, d.header.cluster_off);
+        hash_u64(h, d.header.viewport_w);
+        hash_u64(h, d.header.viewport_h);
+        // ⭐⭐ CEIR-18b: the z-boundary table offset joins the id ONLY for a 3D grid — the FS bakes it into the Step-sum.
+        // ⛔ GUARDED on grid[2] > 1: the 2D tiled config never emits the z-code, so its id (and cook) stays byte-identical
+        // (the 18a byte-stability contract) — hashing a defaulted 0 here would churn every existing forward-clustered id.
+        if (d.cluster.grid[2] > 1U) { hash_u64(h, d.header.slice_bounds_off); }
+    }
     hash_u64(h, d.decal.count);
     hash_u64(h, d.decal.stride);
     hash_u64(h, d.decal.projection);
@@ -547,6 +578,9 @@ crd::containers::String emit_lighting_toml(const LightingDesc& d, crd::memory::I
     kv(o, "light_off", d.header.light_off);
     kv(o, "decal_off", d.header.decal_off);
     kv(o, "cluster_off", d.header.cluster_off);
+    kv(o, "viewport_w", d.header.viewport_w);
+    kv(o, "viewport_h", d.header.viewport_h);
+    kv(o, "slice_bounds_off", d.header.slice_bounds_off);
 
     app(o, "\n[record]\n");
     kv(o, "stride", d.record.stride);
@@ -780,13 +814,49 @@ int cook_lighting(const LightingDesc& d, KGraph& g, const LightingInputs& in, co
     int cluster_index = -1;
     if (d.cluster.enabled)
     {
-        const int sx = c.mul(g.swizzle(frag_xy, 0), c.kf(static_cast<double>(d.cluster.grid[0])));
-        const int sy = c.mul(g.swizzle(frag_xy, 1), c.kf(static_cast<double>(d.cluster.grid[1])));
-        const int wz = b.cluster_grid >= 0 ? b.cluster_grid : c.kf(1.0);
-        const int sz = nd::clamp(g, c.mul(wz, c.kf(static_cast<double>(d.cluster.grid[2]))), c.kf(0.0),
-                                 c.kf(static_cast<double>(d.cluster.grid[2] - 1U)));
-        const int fi = c.add(c.add(g.unary(KOp::Floor, sx),
-                                   c.mul(g.unary(KOp::Floor, sy), c.kf(static_cast<double>(d.cluster.grid[0])))),
+        // ⭐⭐ CEIR-18a-2 Stage 2: `frag_xy` is PIXEL coords — NORMALIZE by the viewport dims (header words) into [0,1)
+        // before scaling by the froxel grid, so the tile index lands in [0,grid). Reading the dims from the header
+        // keeps the FS resolution-agnostic (a resize moves the word value, never a recompile). Before this the FS
+        // multiplied raw pixels by the grid → indices in the thousands → OOB list reads (the E5 first-device defect).
+        const int vw = g.cast(c.hdru(d.header.viewport_w), DType::F32);
+        const int vh = g.cast(c.hdru(d.header.viewport_h), DType::F32);
+        const int sx = c.mul(c.dvd(g.swizzle(frag_xy, 0), vw), c.kf(static_cast<double>(d.cluster.grid[0])));
+        const int sy = c.mul(c.dvd(g.swizzle(frag_xy, 1), vh), c.kf(static_cast<double>(d.cluster.grid[1])));
+        // ⛔ CLAMP each floored axis to [0,grid-1]: a fragment exactly on the far edge floors to `grid` (one past the
+        // last froxel) and would index the list section OUT OF BOUNDS. Only `sz` was clamped before (the depth axis).
+        const int fx = nd::clamp(g, g.unary(KOp::Floor, sx), c.kf(0.0),
+                                 c.kf(static_cast<double>(d.cluster.grid[0] - 1U)));
+        const int fy = nd::clamp(g, g.unary(KOp::Floor, sy), c.kf(0.0),
+                                 c.kf(static_cast<double>(d.cluster.grid[1] - 1U)));
+        // ⭐⭐ CEIR-18b: the z-slice. 2D TILED (grid[2] == 1) keeps the BYTE-IDENTICAL stub — `sz` clamps to 0 regardless of
+        // the `wz` binding, so the 18a cook is unchanged. A 3D grid bins by the published EXPONENTIAL BOUNDARY TABLE: count
+        // how many INTERIOR clip.w boundaries the fragment exceeds (the branchless Step-sum, the csm_select_cascade form),
+        // which cuts at the SAME boundaries the froxel AABBs use — bit-consistent binning BY CONSTRUCTION (a table, never a
+        // dual formula — the discipline that kills the frag_xy / Y-flip / viewport drift class). clip.w = row 3 of view_proj
+        // · (world_pos, 1) (the contact-shadow clip precedent, ~995); NO per-backend flip — depth conventions match across
+        // backends (unlike the FragCoord Y the x/y tiles need). ⛔ The whole branch is COOK-TIME on the constant grid[2], so
+        // exactly one arm is emitted — no runtime branch in the shader.
+        int sz = -1;
+        if (d.cluster.grid[2] > 1U)
+        {
+            int cw = c.hdrf(d.header.view_proj + 3U * 4U + 3U); // row 3 · w(=1) — the homogeneous term
+            cw     = c.add(cw, c.mul(c.hdrf(d.header.view_proj + 0U * 4U + 3U), g.swizzle(in.world_pos, 0)));
+            cw     = c.add(cw, c.mul(c.hdrf(d.header.view_proj + 1U * 4U + 3U), g.swizzle(in.world_pos, 1)));
+            cw     = c.add(cw, c.mul(c.hdrf(d.header.view_proj + 2U * 4U + 3U), g.swizzle(in.world_pos, 2)));
+            int slice = c.kf(0.0);
+            for (crd::u32 s = 1U; s < d.cluster.grid[2]; ++s) // interior boundaries b_1 .. b_{N-1}
+            {
+                slice = c.add(slice, g.binary(KOp::Step, c.hdrf(d.header.slice_bounds_off + s), cw));
+            }
+            sz = nd::clamp(g, slice, c.kf(0.0), c.kf(static_cast<double>(d.cluster.grid[2] - 1U)));
+        }
+        else
+        {
+            const int wz = b.cluster_grid >= 0 ? b.cluster_grid : c.kf(1.0);
+            sz = nd::clamp(g, c.mul(wz, c.kf(static_cast<double>(d.cluster.grid[2]))), c.kf(0.0),
+                           c.kf(static_cast<double>(d.cluster.grid[2] - 1U)));
+        }
+        const int fi = c.add(c.add(fx, c.mul(fy, c.kf(static_cast<double>(d.cluster.grid[0])))),
                              c.mul(g.unary(KOp::Floor, sz),
                                    c.kf(static_cast<double>(d.cluster.grid[0] * d.cluster.grid[1]))));
         cluster_index = g.cast(fi, DType::U32);
@@ -794,14 +864,6 @@ int cook_lighting(const LightingDesc& d, KGraph& g, const LightingInputs& in, co
 
     // ── the light loop, per type, unrolled over the DECLARED count.
     int acc = g.vec3(c.kf(0.0), c.kf(0.0), c.kf(0.0));
-    const auto record_of = [&](crd::u32 flat_index) {
-        if (cluster_index < 0) { return c.add(light_base, c.ku(flat_index * d.record.stride)); }
-        // ⭐ Clustered: the slot holds an INDEX into the light array, read from this pixel's cluster run.
-        const int slot = c.loadu(c.add(c.add(c.hdru(d.header.cluster_off),
-                                             c.mul(cluster_index, c.ku(d.cluster.max_per_cluster))),
-                                       c.ku(flat_index)));
-        return c.add(light_base, g.binary(KOp::Mul, slot, c.ku(d.record.stride)));
-    };
 
     const int nrm  = in.normal;
     const int view = in.view_dir;
@@ -816,7 +878,25 @@ int cook_lighting(const LightingDesc& d, KGraph& g, const LightingInputs& in, co
         if (clustered) { n = n < d.cluster.max_per_cluster ? n : d.cluster.max_per_cluster; }
         for (crd::u32 i = 0; i < n; ++i)
         {
-            const int rec   = clustered ? record_of(i) : c.add(light_base, c.ku((first + i) * d.record.stride));
+            // ⭐⭐ CEIR-18a-2 Stage 2b: under clustering the slot is a 0-based POINT-ARRAY index (the light-cull
+            // producer's natural output), so the record is `light_base + (first + slot)*stride` — SYMMETRIC with the
+            // non-clustered `(first + i)` path (the cull stays generic; it never learns the directional-first layout).
+            // ⛔ GUARD `slot < count` (cook-time constant): the padding `null_index = count` is rejected. The mask is
+            // the CONTRACT (not a magic sentinel value). ⛔ NaN LANDMINE: mask-by-MUL would keep a NaN from a wild
+            // record read — so CLAMP the slot for the ADDRESS (read a valid light) and SELECT-ZERO the contribution.
+            int       cluster_mask = -1; // per-i select mask when clustered; -1 = no mask (non-clustered)
+            const int rec = [&] {
+                if (!clustered) { return c.add(light_base, c.ku((first + i) * d.record.stride)); }
+                const int slot = c.loadu(c.add(c.add(c.hdru(d.header.cluster_off),
+                                                     c.mul(cluster_index, c.ku(d.cluster.max_per_cluster))),
+                                               c.ku(i)));
+                cluster_mask       = g.binary(KOp::CmpLt, slot, c.ku(d.set.count[ti]));
+                const crd::u32 hi  = d.set.count[ti] > 0U ? d.set.count[ti] - 1U : 0U;
+                const int      cs  = g.cast(nd::clamp(g, g.cast(slot, DType::F32), c.kf(0.0),
+                                                      c.kf(static_cast<double>(hi))),
+                                            DType::U32);
+                return c.add(light_base, c.mul(c.add(c.ku(first), cs), c.ku(d.record.stride)));
+            }();
             const int color = c.v3_at(rec, d.record.color);
             int       contrib = -1;
             int       l_dir   = -1; // the unit vector surface → light, for contact shadows
@@ -990,6 +1070,12 @@ int cook_lighting(const LightingDesc& d, KGraph& g, const LightingInputs& in, co
                     vis = c.mul(vis, nd::clamp01(g, c.sub(c.kf(1.0), occl)));
                 }
                 contrib = nd::detail::bin(g, KOp::Mul, contrib, g.splat(vis, 3));
+            }
+            // ⭐⭐ CEIR-18a-2 Stage 2b: reject a padding slot (`slot >= count`) — SELECT, not multiply, so a NaN from a
+            // clamped-but-still-unwanted record read cannot leak (`NaN*0=NaN`). Non-clustered lights keep mask == -1.
+            if (cluster_mask >= 0)
+            {
+                contrib = g.select(cluster_mask, contrib, g.vec3(c.kf(0.0), c.kf(0.0), c.kf(0.0)));
             }
             acc = nd::detail::bin(g, KOp::Add, acc, contrib);
         }

@@ -1,0 +1,1165 @@
+# .ckir - an authored CKIR program (node graph). A node editor reads this and turns it into CKIR.
+schema = 1
+
+[[entry]]
+stage = "Fragment"
+inputs = 0
+position = -1
+frag_depth = -1
+discard_cond = -1
+early_fragment_tests = false
+depth_mode = "Any"
+shading_rate = -1
+storage_write_index = -1
+storage_write_value = -1
+interlock = false
+n_out = 1
+local_size = [1, 1, 1]
+kernel_body_begin = -1
+kernel_body_count = 0
+mesh_vertices = 0
+mesh_primitives = 0
+mesh_prim = -1
+task_emit = -1
+task_payload = [-1, -1, -1, -1]
+n_task_payload = 0
+tess_patch_size = 0
+tess_inner = -1
+tess_outer = -1
+mesh_payload_in = false
+storage_read_only = false
+
+[[out]]
+node = "n166"
+location = 0
+interp = "Smooth"
+
+[[node]]
+id = "n0"
+op = "StageIn"
+tkind = "Vec"
+trows = 2
+shape = [1]
+
+[[node]]
+id = "n1"
+op = "Texture"
+tkind = "Texture"
+trows = 2
+tcols = 0
+tcount = 3
+shape = [1]
+iidx = 16
+
+[[node]]
+id = "n2"
+op = "Sampler"
+tkind = "Sampler"
+trows = 0
+tcols = 0
+shape = [1]
+iidx = 2
+
+[[node]]
+id = "n3"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+[[node]]
+id = "n4"
+op = "SampleIndexed"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n1", "n2", "n0", "n3"]
+
+[[node]]
+id = "n5"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n6"
+op = "SampleIndexed"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n1", "n2", "n0", "n5"]
+
+[[node]]
+id = "n7"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4000000000000000"
+
+[[node]]
+id = "n8"
+op = "SampleIndexed"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n1", "n2", "n0", "n7"]
+
+[[node]]
+id = "n9"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n10"
+op = "Const"
+shape = [1]
+
+[[node]]
+id = "n11"
+op = "Vec3"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n10", "n10", "n9"]
+
+[[node]]
+id = "n12"
+op = "Const"
+shape = [1]
+cval = "0xbff0000000000000"
+
+[[node]]
+id = "n13"
+op = "Const"
+shape = [1]
+cval = "0x3fc999999999999a"
+
+[[node]]
+id = "n14"
+op = "Const"
+shape = [1]
+cval = "0x3fd3333333333333"
+
+[[node]]
+id = "n15"
+op = "Vec3"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n14", "n13", "n12"]
+
+[[node]]
+id = "n16"
+op = "Vec3"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n9", "n9", "n9"]
+
+[[node]]
+id = "n17"
+op = "Swizzle"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n4"]
+perm = [0, 1, 2, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n18"
+op = "Swizzle"
+shape = [1]
+in = ["n4"]
+perm = [3, 0, 0, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n19"
+op = "Swizzle"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n6"]
+perm = [0, 1, 2, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n20"
+op = "Swizzle"
+shape = [1]
+in = ["n6"]
+perm = [3, 0, 0, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n21"
+op = "Swizzle"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n8"]
+perm = [0, 1, 2, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n22"
+op = "Const"
+shape = [1]
+cval = "0x4000000000000000"
+
+[[node]]
+id = "n23"
+op = "Splat"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n22"]
+
+[[node]]
+id = "n24"
+op = "Mul"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n19", "n23"]
+
+[[node]]
+id = "n25"
+op = "Splat"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n9"]
+
+[[node]]
+id = "n26"
+op = "Sub"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n24", "n25"]
+
+[[node]]
+id = "n27"
+op = "Normalize"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n26"]
+
+[[node]]
+id = "n28"
+op = "Neg"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n15"]
+
+[[node]]
+id = "n29"
+op = "Normalize"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n28"]
+
+[[node]]
+id = "n30"
+op = "Const"
+shape = [1]
+cval = "0x3fa47ae147ae147b"
+
+[[node]]
+id = "n31"
+op = "Splat"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n30"]
+
+[[node]]
+id = "n32"
+op = "Splat"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n18"]
+
+[[node]]
+id = "n33"
+op = "Mix"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n31", "n17", "n32"]
+
+[[node]]
+id = "n34"
+op = "Sub"
+shape = [1]
+in = ["n9", "n18"]
+
+[[node]]
+id = "n35"
+op = "Splat"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n34"]
+
+[[node]]
+id = "n36"
+op = "Mul"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n17", "n35"]
+
+[[node]]
+id = "n37"
+op = "Const"
+shape = [1]
+cval = "0x4030800000000000"
+
+[[node]]
+id = "n38"
+op = "Splat"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n37"]
+
+[[node]]
+id = "n39"
+op = "Dot"
+shape = [1]
+in = ["n33", "n38"]
+
+[[node]]
+id = "n40"
+op = "Clamp"
+shape = [1]
+in = ["n39", "n10", "n9"]
+
+[[node]]
+id = "n41"
+op = "Mul"
+shape = [1]
+in = ["n20", "n20"]
+
+[[node]]
+id = "n42"
+op = "Add"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n11", "n29"]
+
+[[node]]
+id = "n43"
+op = "Normalize"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n42"]
+
+[[node]]
+id = "n44"
+op = "Dot"
+shape = [1]
+in = ["n27", "n43"]
+
+[[node]]
+id = "n45"
+op = "Clamp"
+shape = [1]
+in = ["n44", "n10", "n9"]
+
+[[node]]
+id = "n46"
+op = "Const"
+shape = [1]
+cval = "0x3ee4f8b588e368f1"
+
+[[node]]
+id = "n47"
+op = "Dot"
+shape = [1]
+in = ["n27", "n11"]
+
+[[node]]
+id = "n48"
+op = "Abs"
+shape = [1]
+in = ["n47"]
+
+[[node]]
+id = "n49"
+op = "Add"
+shape = [1]
+in = ["n48", "n46"]
+
+[[node]]
+id = "n50"
+op = "Dot"
+shape = [1]
+in = ["n27", "n29"]
+
+[[node]]
+id = "n51"
+op = "Clamp"
+shape = [1]
+in = ["n50", "n10", "n9"]
+
+[[node]]
+id = "n52"
+op = "Dot"
+shape = [1]
+in = ["n29", "n43"]
+
+[[node]]
+id = "n53"
+op = "Clamp"
+shape = [1]
+in = ["n52", "n10", "n9"]
+
+[[node]]
+id = "n54"
+op = "Mul"
+shape = [1]
+in = ["n45", "n41"]
+
+[[node]]
+id = "n55"
+op = "Mul"
+shape = [1]
+in = ["n45", "n45"]
+
+[[node]]
+id = "n56"
+op = "Sub"
+shape = [1]
+in = ["n9", "n55"]
+
+[[node]]
+id = "n57"
+op = "Mul"
+shape = [1]
+in = ["n54", "n54"]
+
+[[node]]
+id = "n58"
+op = "Add"
+shape = [1]
+in = ["n56", "n57"]
+
+[[node]]
+id = "n59"
+op = "Const"
+shape = [1]
+cval = "0x407c580000000000"
+
+[[node]]
+id = "n60"
+op = "Div"
+shape = [1]
+in = ["n41", "n58"]
+
+[[node]]
+id = "n61"
+op = "Min"
+shape = [1]
+in = ["n60", "n59"]
+
+[[node]]
+id = "n62"
+op = "Const"
+shape = [1]
+cval = "0x3fd45f306dc9c709"
+
+[[node]]
+id = "n63"
+op = "Mul"
+shape = [1]
+in = ["n61", "n62"]
+
+[[node]]
+id = "n64"
+op = "Mul"
+shape = [1]
+in = ["n61", "n63"]
+
+[[node]]
+id = "n65"
+op = "Mul"
+shape = [1]
+in = ["n41", "n41"]
+
+[[node]]
+id = "n66"
+op = "Mul"
+shape = [1]
+in = ["n65", "n49"]
+
+[[node]]
+id = "n67"
+op = "Sub"
+shape = [1]
+in = ["n49", "n66"]
+
+[[node]]
+id = "n68"
+op = "Mul"
+shape = [1]
+in = ["n67", "n49"]
+
+[[node]]
+id = "n69"
+op = "Add"
+shape = [1]
+in = ["n68", "n65"]
+
+[[node]]
+id = "n70"
+op = "Sqrt"
+shape = [1]
+in = ["n69"]
+
+[[node]]
+id = "n71"
+op = "Mul"
+shape = [1]
+in = ["n51", "n70"]
+
+[[node]]
+id = "n72"
+op = "Mul"
+shape = [1]
+in = ["n65", "n51"]
+
+[[node]]
+id = "n73"
+op = "Sub"
+shape = [1]
+in = ["n51", "n72"]
+
+[[node]]
+id = "n74"
+op = "Mul"
+shape = [1]
+in = ["n73", "n51"]
+
+[[node]]
+id = "n75"
+op = "Add"
+shape = [1]
+in = ["n74", "n65"]
+
+[[node]]
+id = "n76"
+op = "Sqrt"
+shape = [1]
+in = ["n75"]
+
+[[node]]
+id = "n77"
+op = "Mul"
+shape = [1]
+in = ["n49", "n76"]
+
+[[node]]
+id = "n78"
+op = "Const"
+shape = [1]
+cval = "0x3ee025e7f1158172"
+
+[[node]]
+id = "n79"
+op = "Add"
+shape = [1]
+in = ["n71", "n77"]
+
+[[node]]
+id = "n80"
+op = "Max"
+shape = [1]
+in = ["n79", "n78"]
+
+[[node]]
+id = "n81"
+op = "Const"
+shape = [1]
+cval = "0x3fe0000000000000"
+
+[[node]]
+id = "n82"
+op = "Div"
+shape = [1]
+in = ["n81", "n80"]
+
+[[node]]
+id = "n83"
+op = "Sub"
+shape = [1]
+in = ["n9", "n53"]
+
+[[node]]
+id = "n84"
+op = "Mul"
+shape = [1]
+in = ["n83", "n83"]
+
+[[node]]
+id = "n85"
+op = "Mul"
+shape = [1]
+in = ["n84", "n84"]
+
+[[node]]
+id = "n86"
+op = "Mul"
+shape = [1]
+in = ["n85", "n83"]
+
+[[node]]
+id = "n87"
+op = "Splat"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n40"]
+
+[[node]]
+id = "n88"
+op = "Sub"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n87", "n33"]
+
+[[node]]
+id = "n89"
+op = "Splat"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n86"]
+
+[[node]]
+id = "n90"
+op = "Mul"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n88", "n89"]
+
+[[node]]
+id = "n91"
+op = "Add"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n33", "n90"]
+
+[[node]]
+id = "n92"
+op = "Mul"
+shape = [1]
+in = ["n64", "n82"]
+
+[[node]]
+id = "n93"
+op = "Splat"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n92"]
+
+[[node]]
+id = "n94"
+op = "Mul"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n93", "n91"]
+
+[[node]]
+id = "n95"
+op = "Mul"
+shape = [1]
+in = ["n53", "n53"]
+
+[[node]]
+id = "n96"
+op = "Mul"
+shape = [1]
+in = ["n22", "n41"]
+
+[[node]]
+id = "n97"
+op = "Mul"
+shape = [1]
+in = ["n96", "n95"]
+
+[[node]]
+id = "n98"
+op = "Add"
+shape = [1]
+in = ["n81", "n97"]
+
+[[node]]
+id = "n99"
+op = "Sub"
+shape = [1]
+in = ["n9", "n51"]
+
+[[node]]
+id = "n100"
+op = "Mul"
+shape = [1]
+in = ["n99", "n99"]
+
+[[node]]
+id = "n101"
+op = "Mul"
+shape = [1]
+in = ["n100", "n100"]
+
+[[node]]
+id = "n102"
+op = "Mul"
+shape = [1]
+in = ["n101", "n99"]
+
+[[node]]
+id = "n103"
+op = "Sub"
+shape = [1]
+in = ["n98", "n9"]
+
+[[node]]
+id = "n104"
+op = "Mul"
+shape = [1]
+in = ["n103", "n102"]
+
+[[node]]
+id = "n105"
+op = "Add"
+shape = [1]
+in = ["n9", "n104"]
+
+[[node]]
+id = "n106"
+op = "Sub"
+shape = [1]
+in = ["n9", "n49"]
+
+[[node]]
+id = "n107"
+op = "Mul"
+shape = [1]
+in = ["n106", "n106"]
+
+[[node]]
+id = "n108"
+op = "Mul"
+shape = [1]
+in = ["n107", "n107"]
+
+[[node]]
+id = "n109"
+op = "Mul"
+shape = [1]
+in = ["n108", "n106"]
+
+[[node]]
+id = "n110"
+op = "Mul"
+shape = [1]
+in = ["n103", "n109"]
+
+[[node]]
+id = "n111"
+op = "Add"
+shape = [1]
+in = ["n9", "n110"]
+
+[[node]]
+id = "n112"
+op = "Mul"
+shape = [1]
+in = ["n105", "n111"]
+
+[[node]]
+id = "n113"
+op = "Mul"
+shape = [1]
+in = ["n112", "n62"]
+
+[[node]]
+id = "n114"
+op = "Splat"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n113"]
+
+[[node]]
+id = "n115"
+op = "Mul"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n36", "n114"]
+
+[[node]]
+id = "n116"
+op = "Const"
+shape = [1]
+cval = "0x3f96872b020c49ba"
+
+[[node]]
+id = "n117"
+op = "Const"
+shape = [1]
+cval = "0xbfe24dd2f1a9fbe7"
+
+[[node]]
+id = "n118"
+op = "Const"
+shape = [1]
+cval = "0xbf9c28f5c28f5c29"
+
+[[node]]
+id = "n119"
+op = "Vec3"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n12", "n118", "n117"]
+
+[[node]]
+id = "n120"
+op = "VecConcat"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n119", "n116"]
+
+[[node]]
+id = "n121"
+op = "Const"
+shape = [1]
+cval = "0xbfa47ae147ae147b"
+
+[[node]]
+id = "n122"
+op = "Const"
+shape = [1]
+cval = "0x3ff0a3d70a3d70a4"
+
+[[node]]
+id = "n123"
+op = "Const"
+shape = [1]
+cval = "0x3fa5c28f5c28f5c3"
+
+[[node]]
+id = "n124"
+op = "Vec3"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n9", "n123", "n122"]
+
+[[node]]
+id = "n125"
+op = "VecConcat"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n124", "n121"]
+
+[[node]]
+id = "n126"
+op = "Splat"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n20"]
+
+[[node]]
+id = "n127"
+op = "Mul"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n126", "n120"]
+
+[[node]]
+id = "n128"
+op = "Add"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n127", "n125"]
+
+[[node]]
+id = "n129"
+op = "Swizzle"
+shape = [1]
+in = ["n128"]
+
+[[node]]
+id = "n130"
+op = "Swizzle"
+shape = [1]
+in = ["n128"]
+perm = [1, 0, 0, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n131"
+op = "Const"
+shape = [1]
+cval = "0xc0228f5c28f5c28f"
+
+[[node]]
+id = "n132"
+op = "Mul"
+shape = [1]
+in = ["n131", "n49"]
+
+[[node]]
+id = "n133"
+op = "Exp2"
+shape = [1]
+in = ["n132"]
+
+[[node]]
+id = "n134"
+op = "Mul"
+shape = [1]
+in = ["n129", "n129"]
+
+[[node]]
+id = "n135"
+op = "Min"
+shape = [1]
+in = ["n134", "n133"]
+
+[[node]]
+id = "n136"
+op = "Mul"
+shape = [1]
+in = ["n135", "n129"]
+
+[[node]]
+id = "n137"
+op = "Add"
+shape = [1]
+in = ["n136", "n130"]
+
+[[node]]
+id = "n138"
+op = "Swizzle"
+shape = [1]
+in = ["n128"]
+perm = [2, 0, 0, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n139"
+op = "Const"
+shape = [1]
+cval = "0xbff0a3d70a3d70a4"
+
+[[node]]
+id = "n140"
+op = "Mul"
+shape = [1]
+in = ["n139", "n137"]
+
+[[node]]
+id = "n141"
+op = "Add"
+shape = [1]
+in = ["n140", "n138"]
+
+[[node]]
+id = "n142"
+op = "Swizzle"
+shape = [1]
+in = ["n128"]
+perm = [3, 0, 0, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n143"
+op = "Mul"
+shape = [1]
+in = ["n122", "n137"]
+
+[[node]]
+id = "n144"
+op = "Add"
+shape = [1]
+in = ["n143", "n142"]
+
+[[node]]
+id = "n145"
+op = "Vec2"
+tkind = "Vec"
+trows = 2
+shape = [1]
+in = ["n141", "n144"]
+
+[[node]]
+id = "n146"
+op = "Swizzle"
+shape = [1]
+in = ["n145"]
+perm = [1, 0, 0, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n147"
+op = "Const"
+shape = [1]
+cval = "0x3f50624dd2f1a9fc"
+
+[[node]]
+id = "n148"
+op = "Max"
+shape = [1]
+in = ["n146", "n147"]
+
+[[node]]
+id = "n149"
+op = "Div"
+shape = [1]
+in = ["n9", "n148"]
+
+[[node]]
+id = "n150"
+op = "Sub"
+shape = [1]
+in = ["n149", "n9"]
+
+[[node]]
+id = "n151"
+op = "Splat"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n150"]
+
+[[node]]
+id = "n152"
+op = "Mul"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n33", "n151"]
+
+[[node]]
+id = "n153"
+op = "Add"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n25", "n152"]
+
+[[node]]
+id = "n154"
+op = "Mul"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n94", "n153"]
+
+[[node]]
+id = "n155"
+op = "Add"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n115", "n154"]
+
+[[node]]
+id = "n156"
+op = "Splat"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n51"]
+
+[[node]]
+id = "n157"
+op = "Mul"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n155", "n156"]
+
+[[node]]
+id = "n158"
+op = "Mul"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n157", "n16"]
+
+[[node]]
+id = "n159"
+op = "Add"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n158", "n21"]
+
+[[node]]
+id = "n160"
+op = "Splat"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n10"]
+
+[[node]]
+id = "n161"
+op = "Clamp"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n159", "n160", "n25"]
+
+[[node]]
+id = "n162"
+op = "Swizzle"
+shape = [1]
+in = ["n161"]
+perm = [2, 0, 0, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n163"
+op = "Swizzle"
+shape = [1]
+in = ["n161"]
+perm = [1, 0, 0, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n164"
+op = "Swizzle"
+shape = [1]
+in = ["n161"]
+
+[[node]]
+id = "n165"
+op = "Vec3"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n164", "n163", "n162"]
+
+[[node]]
+id = "n166"
+op = "VecConcat"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n165", "n9"]

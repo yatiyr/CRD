@@ -23,6 +23,7 @@ spot_offset = 11
 
 [counts]
 directional = 1
+point       = 4
 
 [shadow]
 directional = "csm"

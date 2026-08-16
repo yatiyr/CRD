@@ -30,6 +30,15 @@ consumers. The architecture serves all of them; no domain is privileged.
 - **Authoring text, runtime binary.** Human-edited data is text (TOML / JSON
   / glTF). Engine-consumed data is cooked binary. Runtime never imports
   source assets.
+- **Everything executable is an authorable asset.** The rule above covers
+  DATA; this covers CODE. Every algorithm the engine runs — rendering,
+  culling, lighting, post, GI, compute, numerical — is an authorable CEIR
+  program asset: cooked disk-first, loaded by default, partially modifiable
+  or completely replaceable by an application WITHOUT recompiling the engine.
+  The host/renderer knows nothing about the algorithms it executes; it cooks
+  and runs assets. A C++ graph-builder is a cooker *mechanism*, never the
+  shipping form. (AGENTS.md §Agent Conduct pins the enforcement + the
+  `scene_renderer` hand-built-`ensure_*` scar.)
 - **One-way module dependencies.** Cycles are bugs. The dependency graph is
   reviewed at every module boundary change.
 - **Real workload before optimization.** No SIMD, fiber, GPU-allocator, ECS

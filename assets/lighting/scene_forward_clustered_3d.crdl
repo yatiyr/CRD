@@ -1,0 +1,57 @@
+# scene_forward_clustered_3d.crdl - CEIR-18b: the CLUSTERED 3D-FROXEL (Forward+) scene lighting technique.
+#
+# The SIBLING of scene_forward_clustered.crdl (2D tiled, grid[2]=1). Identical record layout / counts / CSM shadow,
+# but the froxel grid gains DEPTH: grid = [4,4,4] = 64 clusters (Doom-2016 exponential z-slicing). The forward FS then
+# bins each fragment into a z-slice by its view depth — clip.w (= row 3 of view_proj · world_pos) counted against the
+# N+1 EXPONENTIAL boundary TABLE the renderer publishes to header words 115..119 (the branchless Step-sum). The froxel
+# AABBs (compute_froxel_slices) are cut at the SAME boundaries, so binning is bit-consistent BY CONSTRUCTION.
+#
+# ⛔ A SEPARATE FILE (not a flag on the 2D crdl): grid[2] bakes the FS z-code + the variant id, and the cook REJECTS a
+# 3D grid without slice_bounds_off (the FS would Step against a garbage word). The 2D tiled crdl keeps its own
+# declaration (grid[2]=1 cooks byte-identical, no z-code). Selected by name via set_shadow_technique; its device
+# producer is engine://scene/light_cull_3d (64 clusters), installed by forward_clustered_3d_gpu.frame.toml.
+
+schema = 1
+name   = "crd://lighting/scene_forward_clustered_3d"
+
+[header]
+view_proj   = 6
+csm_splits  = 28
+light_off   = 99
+# ⭐⭐ CEIR-18a-2 Stage 2: the per-tile/cluster light-list word offset. kHdrClusterOff (110).
+cluster_off = 110
+# ⭐⭐ CEIR-18a-2 Stage 2: the VIEWPORT pixel dims (kHdrViewportW=111, kHdrViewportH=112) — the FS normalizes FragCoord.xy.
+viewport_w = 111
+viewport_h = 112
+# ⭐⭐ CEIR-18b: the word offset of the N+1 EXPONENTIAL z-slice boundary table (kHdrSliceBoundsOff=115; words 115..119 = the
+# free band below the LOD table at 120, so N=4 is the header ceiling). The 3D FS Steps its clip.w against these; the cook
+# REJECTS a 3D grid (grid[2] > 1) if this is 0.
+slice_bounds_off = 115
+
+[record]
+stride      = 16
+position    = 0
+color       = 4
+direction   = 8
+falloff     = 3
+spot_scale  = 7
+spot_offset = 11
+
+[counts]
+directional = 1
+point       = 4
+
+# ⭐⭐ CEIR-18b: the 3D froxel grid. grid = [tiles_x, tiles_y, z_slices]; 4x4x4 = 64 clusters (matches the committed
+# scene_light_cull_3d.ckir's baked cluster count AND the light-cull workgroup size, so cluster=LocalInvocationIndex covers
+# every cluster with one dispatch). grid[2] = 4 > 1 activates the exponential z-slice binning. max_per_cluster = the
+# per-cluster light-list stride (survivors, then the null_index=num_lights sentinel).
+[cluster]
+enabled         = true
+grid            = [4, 4, 4]
+max_per_cluster = 8
+
+[shadow]
+directional = "csm"
+filter      = "pcf"
+taps        = 4
+cascades    = 4

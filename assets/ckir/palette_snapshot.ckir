@@ -1,0 +1,233 @@
+# .ckir - an authored CKIR program (node graph). A node editor reads this and turns it into CKIR.
+schema = 1
+
+[[entry]]
+stage = "Compute"
+inputs = 0
+position = -1
+frag_depth = -1
+discard_cond = -1
+early_fragment_tests = false
+depth_mode = "Any"
+shading_rate = -1
+storage_write_index = -1
+storage_write_value = -1
+interlock = false
+n_out = 0
+local_size = [64, 1, 1]
+kernel_body_begin = 0
+kernel_body_count = 4
+mesh_vertices = 0
+mesh_primitives = 0
+mesh_prim = -1
+task_emit = -1
+task_payload = [-1, -1, -1, -1]
+n_task_payload = 0
+tess_patch_size = 0
+tess_inner = -1
+tess_outer = -1
+mesh_payload_in = false
+storage_read_only = false
+
+[[node]]
+id = "n0"
+op = "BufferDecl"
+dtype = "U32"
+shape = [1]
+axes = 1
+
+[[node]]
+id = "n1"
+op = "Builtin"
+dtype = "U32"
+tkind = "Vec"
+trows = 3
+shape = [1]
+
+[[node]]
+id = "n2"
+op = "Swizzle"
+dtype = "U32"
+shape = [1]
+in = ["n1"]
+
+[[node]]
+id = "n3"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x405b400000000000"
+
+[[node]]
+id = "n4"
+op = "BufferLoad"
+dtype = "U32"
+shape = [1]
+in = ["n0", "n3"]
+
+[[node]]
+id = "n5"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4059000000000000"
+
+[[node]]
+id = "n6"
+op = "BufferLoad"
+dtype = "U32"
+shape = [1]
+in = ["n0", "n5"]
+
+[[node]]
+id = "n7"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x403a000000000000"
+
+[[node]]
+id = "n8"
+op = "BufferLoad"
+dtype = "U32"
+shape = [1]
+in = ["n0", "n7"]
+
+[[node]]
+id = "n9"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x405b000000000000"
+
+[[node]]
+id = "n10"
+op = "BufferLoad"
+dtype = "U32"
+shape = [1]
+in = ["n0", "n9"]
+
+[[node]]
+id = "n11"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x403b000000000000"
+
+[[node]]
+id = "n12"
+op = "BufferLoad"
+dtype = "U32"
+shape = [1]
+in = ["n0", "n11"]
+
+[[node]]
+id = "n13"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+[[node]]
+id = "n14"
+op = "CmpNe"
+dtype = "Bool"
+shape = [1]
+in = ["n4", "n13"]
+
+[[node]]
+id = "n15"
+op = "CmpLt"
+dtype = "Bool"
+shape = [1]
+in = ["n2", "n6"]
+
+[[node]]
+id = "n16"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4030000000000000"
+
+[[node]]
+id = "n17"
+op = "Mul"
+dtype = "U32"
+shape = [1]
+in = ["n12", "n16"]
+
+[[node]]
+id = "n18"
+op = "Mul"
+dtype = "U32"
+shape = [1]
+in = ["n2", "n17"]
+
+[[node]]
+id = "n19"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n8", "n18"]
+
+[[node]]
+id = "n20"
+op = "Mul"
+dtype = "U32"
+shape = [1]
+in = ["n2", "n17"]
+
+[[node]]
+id = "n21"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n10", "n20"]
+
+[[node]]
+id = "n22"
+op = "KernelLoopVar"
+dtype = "U32"
+shape = [1]
+in = ["n2"]
+
+[[node]]
+id = "n23"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n19", "n22"]
+
+[[node]]
+id = "n24"
+op = "BufferLoad"
+dtype = "U32"
+shape = [1]
+in = ["n0", "n23"]
+
+[[node]]
+id = "n25"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n21", "n22"]
+
+[[stmt]]
+kind = "If"
+value = "n14"
+body = [1, 3]
+
+[[stmt]]
+kind = "If"
+value = "n15"
+body = [2, 2]
+
+[[stmt]]
+kind = "For"
+value = "n17"
+body = [3, 1]
+
+[[stmt]]
+kind = "BufferStore"
+target = "n0"
+index = "n25"
+value = "n24"

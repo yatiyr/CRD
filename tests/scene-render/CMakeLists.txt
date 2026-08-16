@@ -17,6 +17,7 @@ target_link_libraries(crd-scene-render-tests PRIVATE
     crd-geometry-primitives
     crd-geometry-spatial
     crd-geometry-mesh-processing # REN-41 Stage 4: cook_cluster_dag + unpack_selected_clusters (the cluster-mesh gate oracle)
+    crd-meshgen                  # CEIR-18p impostor STEP 0.5: make_icosphere — a mesh dense enough to build a real LOD chain
     crd-scene
     crd-resources
     crd-scene-render

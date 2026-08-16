@@ -8,6 +8,7 @@
 #include <crd/gpu/vulkan_context.hpp>
 #include <crd/gpu/vulkan_raster_context.hpp>
 #include <crd/gpu/vulkan_ray_tracing_context.hpp>
+#include <crd/gpu/vulkan_validation_capture.hpp> // CEIR-18c diag: the validation-layer oracle
 #if defined(_WIN32) // the D3D12 backend exists only on Windows; the DX12 twin gates ride the same guard
 #include <crd/gpu/dx12_context.hpp>
 #include <crd/gpu/dx12_raster_context.hpp>
@@ -34,6 +35,7 @@
 #include <crd/anim/anim_resources.hpp> // REN-40-F: skeleton + clip builders for the GPU skinning gate
 #include <crd/geometry/mesh_processing/cluster_dag_cook.hpp> // REN-41 Stage 4: the packed cluster DAG
 #include <crd/geometry/mesh_processing/cluster_unpack.hpp>   // REN-41 Stage 4: the CPU unpack oracle
+#include <crd/meshgen/meshgen.hpp> // CEIR-18p impostor STEP 0.5: an icosphere dense enough to build a real LOD chain
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -133,6 +135,33 @@ void copy_tree(const platform::fs::Path& src, const platform::fs::Path& dst)
     resources::CrdrWriter w(a, id, resources::kFourCC_MESH);
     w.add_chunk(resources::kFourCC_VERT, containers::as_const_span(verts));
     w.add_chunk(resources::kFourCC_INDX, containers::as_const_span(indices));
+    w.add_chunk(resources::kFourCC_PRIM, containers::as_const_span(prim));
+    return w.finish();
+}
+
+// ⭐⭐ CEIR-18p impostor STEP 0.5: a subdivision-4 icosphere (5120 faces, welded/indexed → manifold) serialised as a
+// .crdr MESH. A 12-triangle cube CANNOT build a LOD chain (`source_faces <= min_triangles`, floor 64 → single level →
+// no impostor); 5120 faces decimate to a full 6-level chain, so `group.lod_count > 1` and the impostor slot engages.
+// meshgen writes the same 48-byte vertex stride (pos3/normal3/uv2/tangent4) the mesh loader expects, so the PRIM
+// header mirrors the cube's exactly (prim_count, vertex_count, index_count, then zeroed per-prim fields).
+[[nodiscard]] containers::Array<u8> build_icosphere_mesh_crdr(const resources::ResourceId& id)
+{
+    auto*      a    = &galloc();
+    auto       mesh = meshgen::make_icosphere(a, 1.0F, 4U);
+    const u32  vc   = static_cast<u32>(mesh.vertices.size() / resources::kMeshVertexStride);
+    const u32  ic   = static_cast<u32>(mesh.indices.size() / 4U);
+
+    containers::Array<u8> prim(a);
+    prim.resize(4U + 32U);
+    std::memset(prim.data(), 0, prim.size());
+    const u32 prim_count = 1U;
+    std::memcpy(prim.data(), &prim_count, 4U);
+    std::memcpy(prim.data() + 4U, &vc, 4U);
+    std::memcpy(prim.data() + 8U, &ic, 4U);
+
+    resources::CrdrWriter w(a, id, resources::kFourCC_MESH);
+    w.add_chunk(resources::kFourCC_VERT, containers::as_const_span(mesh.vertices));
+    w.add_chunk(resources::kFourCC_INDX, containers::as_const_span(mesh.indices));
     w.add_chunk(resources::kFourCC_PRIM, containers::as_const_span(prim));
     return w.finish();
 }
@@ -291,6 +320,45 @@ struct CubeExtractor final : scene::IAabbExtractor
                                          {0.9F, -0.9F, 0, 0, 0, 1, 1, 0, 1, 0, 0, 1},
                                          {-0.9F, 0.9F, 0, 0, 0, 1, 0, 1, 1, 0, 0, 1},
                                          {0.9F, 0.9F, 0, 0, 0, 1, 1, 1, 1, 0, 0, 1}};
+    containers::Array<u8> verts(a);
+    for (u32 cnr = 0; cnr < 4U; ++cnr)
+    {
+        const auto* b = reinterpret_cast<const u8*>(quad[cnr]);
+        for (u32 k = 0; k < 48U; ++k) { verts.push_back(b[k]); }
+    }
+    const u32             idx[6] = {0, 1, 2, 2, 1, 3};
+    containers::Array<u8> indices(a);
+    for (u32 v : idx)
+    {
+        const auto* b = reinterpret_cast<const u8*>(&v);
+        for (u32 k = 0; k < 4U; ++k) { indices.push_back(b[k]); }
+    }
+    containers::Array<u8> prim(a);
+    prim.resize(4U + 32U);
+    std::memset(prim.data(), 0, prim.size());
+    const u32 pc = 1U;
+    const u32 vc = 4U;
+    const u32 ic = 6U;
+    std::memcpy(prim.data(), &pc, 4U);
+    std::memcpy(prim.data() + 4U, &vc, 4U);
+    std::memcpy(prim.data() + 8U, &ic, 4U);
+    resources::CrdrWriter w(a, id, resources::kFourCC_MESH);
+    w.add_chunk(resources::kFourCC_VERT, containers::as_const_span(verts));
+    w.add_chunk(resources::kFourCC_INDX, containers::as_const_span(indices));
+    w.add_chunk(resources::kFourCC_PRIM, containers::as_const_span(prim));
+    return w.finish();
+}
+// ⭐⭐ CEIR-18a-2 Stage 2: a screen-facing quad with WHITE base color (vs build_quad_mesh_crdr's red) — a red albedo
+// reflects NOTHING from a green light, so the clustered-lighting gate (RED tile vs GREEN tile) needs a neutral surface.
+// Same layout [pos3, normal3, uv2, color4]: flat at z=0, normal (0,0,1) toward the camera so a front point light lights
+// it uniformly, spanning [-1,1] so a modest transform scale fills the viewport (every froxel tile gets surface).
+[[nodiscard]] containers::Array<u8> build_white_quad_mesh_crdr(const resources::ResourceId& id)
+{
+    auto*                 a = &galloc();
+    const f32             quad[4][12] = {{-1.0F, -1.0F, 0, 0, 0, 1, 0, 0, 1, 1, 1, 1},
+                                         {1.0F, -1.0F, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1},
+                                         {-1.0F, 1.0F, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1},
+                                         {1.0F, 1.0F, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1}};
     containers::Array<u8> verts(a);
     for (u32 cnr = 0; cnr < 4U; ++cnr)
     {
@@ -612,6 +680,217 @@ TEST_CASE("REN-2 Half B GATE: the SceneRenderer forward pass SAMPLES a material 
     (void)platform::fs::remove_file(tex_path);
     (void)platform::fs::remove_file(mtl_path);
 }
+
+// ── ⭐⭐ CEIR-18c GATE: the AUTHORED engine://frame/deferred renderer shades a scene through a G-buffer. ───────
+// The DEFERRED render path is an AUTHORED ASSET (deferred.frame.toml), not C++: a G-buffer MRT pass packs each
+// material's OpenPBR surface (material_pass = "GBuffer" → material::pack_gbuffer, 4 RGBA8 attachments), then a
+// full-screen pass DECODES it and shades with render::deferred_shade + a fixed key light, writing the swapchain.
+// This gate drives the SHIPPED asset (read from CRD_ASSETS_DIR — the gates-run-configs rule, NOT a bespoke inline
+// graph) through the FULL SceneRenderer on a deterministic one-quad scene, on a real device, and probes locked
+// pixels: the covered centre carries the material's albedo HUE through the G-buffer round-trip (r > g > b for an
+// orange base colour — a cross-comparison immune to overall brightness), the corner stays at the clear.
+TEST_CASE("CEIR-18c GATE: the authored engine://frame/deferred renderer shades a scene via the G-buffer (Vulkan)",
+          "[scene-render][ceir18][deferred][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+    if (!raster->supports_bindless()) { SKIP("device does not support bindless texture arrays (the G-buffer read heap)"); }
+
+    // ── the SHIPPED deferred asset (gates-run-configs: the shipped file from CRD_ASSETS_DIR, not an inline graph) ──
+    containers::String graph(&galloc());
+    REQUIRE(read_shipped_asset("frame/deferred.frame.toml", graph));
+
+    // cook + mount: a UV QUAD mesh + a solid ORANGE OpenPBR material (base colour 0.8/0.4/0.2, no texture).
+    memory::TlsfAllocator       a2(4U << 20U);
+    const resources::ResourceId mesh_id = resources::ResourceId::mint_random();
+    const resources::ResourceId mtl_id  = resources::ResourceId::mint_random();
+    const platform::fs::Path    mesh_path(containers::StringView("sr_ceir18c_mesh.crdr"));
+    const platform::fs::Path    mtl_path(containers::StringView("sr_ceir18c_mtl.crdr"));
+    write_one_pack(mesh_path, mesh_id, resources::kFourCC_MESH, build_quad_mesh_crdr(mesh_id), "quad");
+    resources::PbrmParams params;
+    params.base_color[0] = 0.8F;
+    params.base_color[1] = 0.4F;
+    params.base_color[2] = 0.2F;
+    params.base_alpha    = 1.0F;
+    resources::PbrmTextures textures; // no texture slots — the surface's base colour comes from params
+    auto mtl_bytes = resources::pbrm_build(params, textures, mtl_id, &a2);
+    write_one_pack(mtl_path, mtl_id, resources::kFourCC_PBRM, mtl_bytes, "mtl");
+
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    resources::register_texture_loader(&rm);
+    resources::register_openpbr_material_loader(&rm);
+    REQUIRE(rm.mount_manifest(mesh_path.generic()).is_valid());
+    REQUIRE(rm.mount_manifest(mtl_path.generic()).is_valid());
+
+    // the world: ONE quad facing the camera
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait(), scene::SpatialBVH{});
+    scene::register_render_components(world);
+    const scene::EntityId e = world.spawn();
+    scene::Transform      t;
+    t.translation = math::from_raw_vec<units::dim::Length>(math::Vec3f{0.0F, 0.0F, 0.0F});
+    t.world       = math::from_trs(math::Vec3f{0, 0, 0}, math::Quatf::identity(), math::Vec3f{1, 1, 1});
+    world.add_component(e, t);
+    world.add_component(e, scene::MeshRenderer{mesh_id, mtl_id});
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    REQUIRE(renderer.init_programs(*vk));
+    REQUIRE(renderer.set_frame_graph_toml(graph.c_str())); // ← the AUTHORED deferred path
+    const auto s1 = renderer.sync(world);
+    CHECK(s1.total_instances == 1U);
+
+    auto target = raster->create_color_depth_target(64U, 64U);
+    REQUIRE(target != nullptr);
+
+    const math::Mat4f     view = math::look_at(math::Vec3f{0.0F, 0.0F, 2.2F}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f     proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Vec3f     light{0.0F, 0.0F, 1.0F};
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+    // ⭐ CEIR-18c: the validation layer is the ORACLE for correct MRT recording (the REN-38-A4 pattern) — the indexed
+    // G-buffer draw binds N colour attachments; a mismatch (the FS's outputs vs the scope) is a device-side kill that
+    // must fail the gate LOUD, never silently. `error_count() == 0` is the permanent assertion.
+    gpu::ValidationCapture capture(*vk);
+    const auto            r = renderer.render(*target, proj * view, light, clear, nullptr);
+    UNSCOPED_INFO("CEIR-18c: r.draws=" << r.draws << " r.drawn_instances=" << r.drawn_instances
+                                       << " val_err=" << capture.error_count() << " val_warn=" << capture.warning_count());
+    {
+        const auto msgs = capture.messages();
+        for (usize i = 0; i < msgs.size(); ++i)
+        {
+            if (msgs[i].severity == gpu::ValidationSeverity::Info) { continue; }
+            WARN("[18c capture] " << msgs[i].message_text.c_str());
+        }
+    }
+    CHECK(r.draws > 0U);
+    CHECK(r.drawn_instances == 1U);
+    CHECK(capture.error_count() == 0U);
+
+    const u32 centre = target->read_pixel(32U, 32U);
+    const u32 corner = target->read_pixel(2U, 2U);
+    const u32 cr = centre & 0xFFU;
+    const u32 cg = (centre >> 8U) & 0xFFU;
+    const u32 cb = (centre >> 16U) & 0xFFU;
+    UNSCOPED_INFO("deferred centre rgb=" << cr << "," << cg << "," << cb
+                                         << " | corner=" << (corner & 0xFFFFFFU));
+    // ⛔ ABSOLUTE verdict: the deterministic scene (orange material 0.8/0.4/0.2 + fixed white key light + fixed camera)
+    // shades to a LOCKED lit colour ≈ (135,105,89) through the full G-buffer round-trip. The bands (±25) absorb
+    // cross-device Cook-Torrance FP (NVIDIA vs llvmpipe) while still catching a gross regression (black / wrong hue /
+    // dropped attachment). The HUE cross-comparison (r > g > b) is the brightness-immune claim the pack→decode preserves.
+    CHECK(cr >= 110U);
+    CHECK(cr <= 160U);
+    CHECK(cg >= 80U);
+    CHECK(cg <= 130U);
+    CHECK(cb >= 64U);
+    CHECK(cb <= 114U);
+    CHECK(cr > cg); // the albedo HUE survives the pack→decode
+    CHECK(cg > cb);
+    // background corner: no geometry, the black clear shows → black (deferred_shade of a zero surface).
+    CHECK((corner & 0xFFFFFFU) < 0x080808U);
+
+    (void)platform::fs::remove_file(mesh_path);
+    (void)platform::fs::remove_file(mtl_path);
+}
+
+#if defined(_WIN32)
+// ── ⭐⭐ CEIR-18c GATE (DX12): the SAME authored deferred renderer joins on the OTHER backend. ────────────────
+// ⛔ The Vulkan twin alone leaves the entire DX12 deferred path — draw_storage_indexed_mrt's N-RTV PSO (PSO-fmt=RT),
+// the DrawIndex ROOT CONSTANT, the explicit-DSV binding — UNEXECUTED (the "compiled" ≠ "ran" scar). This runs it.
+TEST_CASE("CEIR-18c GATE (DX12): the authored engine://frame/deferred renderer shades a scene via the G-buffer",
+          "[scene-render][ceir18][deferred][gpu][dx12]")
+{
+    auto gctx = gpu::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto raster = gpu::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+
+    containers::String graph(&galloc());
+    REQUIRE(read_shipped_asset("frame/deferred.frame.toml", graph));
+
+    memory::TlsfAllocator       a2(4U << 20U);
+    const resources::ResourceId mesh_id = resources::ResourceId::mint_random();
+    const resources::ResourceId mtl_id  = resources::ResourceId::mint_random();
+    const platform::fs::Path    mesh_path(containers::StringView("sr_ceir18c_dx_mesh.crdr"));
+    const platform::fs::Path    mtl_path(containers::StringView("sr_ceir18c_dx_mtl.crdr"));
+    write_one_pack(mesh_path, mesh_id, resources::kFourCC_MESH, build_quad_mesh_crdr(mesh_id), "quad");
+    resources::PbrmParams params;
+    params.base_color[0] = 0.8F;
+    params.base_color[1] = 0.4F;
+    params.base_color[2] = 0.2F;
+    params.base_alpha    = 1.0F;
+    resources::PbrmTextures textures;
+    auto                    mtl_bytes = resources::pbrm_build(params, textures, mtl_id, &a2);
+    write_one_pack(mtl_path, mtl_id, resources::kFourCC_PBRM, mtl_bytes, "mtl");
+
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    resources::register_texture_loader(&rm);
+    resources::register_openpbr_material_loader(&rm);
+    REQUIRE(rm.mount_manifest(mesh_path.generic()).is_valid());
+    REQUIRE(rm.mount_manifest(mtl_path.generic()).is_valid());
+
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait(), scene::SpatialBVH{});
+    scene::register_render_components(world);
+    const scene::EntityId e = world.spawn();
+    scene::Transform      t;
+    t.translation = math::from_raw_vec<units::dim::Length>(math::Vec3f{0.0F, 0.0F, 0.0F});
+    t.world       = math::from_trs(math::Vec3f{0, 0, 0}, math::Quatf::identity(), math::Vec3f{1, 1, 1});
+    world.add_component(e, t);
+    world.add_component(e, scene::MeshRenderer{mesh_id, mtl_id});
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    if (!renderer.init_programs(*gctx)) { SKIP("dxc/DXIL unavailable"); }
+    REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
+    const auto s1 = renderer.sync(world);
+    CHECK(s1.total_instances == 1U);
+
+    auto target = raster->create_color_depth_target(64U, 64U);
+    REQUIRE(target != nullptr);
+
+    const math::Mat4f     view = math::look_at(math::Vec3f{0.0F, 0.0F, 2.2F}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f     proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Vec3f     light{0.0F, 0.0F, 1.0F};
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+    const auto            r = renderer.render(*target, proj * view, light, clear, nullptr);
+    UNSCOPED_INFO("CEIR-18c DX12: r.draws=" << r.draws << " drawn_instances=" << r.drawn_instances);
+    CHECK(r.draws > 0U);
+    CHECK(r.drawn_instances == 1U);
+
+    const u32 centre = target->read_pixel(32U, 32U);
+    const u32 corner = target->read_pixel(2U, 2U);
+    const u32 cr     = centre & 0xFFU;
+    const u32 cg     = (centre >> 8U) & 0xFFU;
+    const u32 cb     = (centre >> 16U) & 0xFFU;
+    UNSCOPED_INFO("CEIR-18c DX12 deferred centre rgb=" << cr << "," << cg << "," << cb << " | corner="
+                                                       << (corner & 0xFFFFFFU));
+    // the SAME absolute verdict as the Vulkan twin — the deferred G-buffer path must match (±band for cross-backend FP).
+    CHECK(cr >= 110U);
+    CHECK(cr <= 160U);
+    CHECK(cg >= 80U);
+    CHECK(cg <= 130U);
+    CHECK(cb >= 64U);
+    CHECK(cb <= 114U);
+    CHECK(cr > cg);
+    CHECK(cg > cb);
+    CHECK((corner & 0xFFFFFFU) < 0x080808U);
+
+    (void)platform::fs::remove_file(mesh_path);
+    (void)platform::fs::remove_file(mtl_path);
+}
+#endif // _WIN32 (the CEIR-18c DX12 twin)
 
 // ── REN-3.2-b GATE: the SceneRenderer actually CASTS a shadow. ───────────────────────────────────────────────
 // The compile gate above proves the cascade shaders build; it says nothing about whether a shadow appears. This
@@ -1488,6 +1767,10 @@ TEST_CASE("REN-38-F6 GATE: TESS, MESH and VISBUFFER families render through auth
         CHECK(a != 0U);
         CHECK(b != 0U);
         CHECK(a != b); // two primitives, two ids, two greys
+        // ⛔ CEIR-18d (falsifiability): a covered probe must NOT read the authored clear_id=7 background — else a
+        // triangle that FAILED to draw would still satisfy a!=b/a!=0/b!=0 (the delete-ref->A==A can't-fail hole).
+        CHECK(a != 7U);
+        CHECK(b != 7U);
     }
 }
 
@@ -1731,6 +2014,9 @@ TEST_CASE("REN-38-F6 GATE (DX12): TESS, MESH and VISBUFFER families render throu
         CHECK(a != 0U);
         CHECK(b != 0U);
         CHECK(a != b);
+        // ⛔ CEIR-18d (falsifiability): a covered probe must NOT read the authored clear_id=7 background.
+        CHECK(a != 7U);
+        CHECK(b != 7U);
     }
 }
 
@@ -5587,6 +5873,929 @@ TEST_CASE("CEIR-17e GATE: GPU skinning through the shipped config is bit-identic
     CHECK(covered > 500U); // the skinned + rigid cubes are actually on screen (not an empty/background frame)
 }
 
+// ── ⭐⭐ CEIR-18e: the GPU-DRIVEN renderer as an authored asset — the ABSOLUTE image verdict on the shipped config. ⛔ 18e is
+// the GPU-driven renderer of the CEIR-18 proof band: `forward_csm_gpu.frame.toml` is the authored asset that runs the WHOLE
+// pipeline on the device — cull_reset/cull_view0..4/occlusion_* compute passes host-resolved as CEIR (CEIR-16b/17d), a
+// `cull_args` indirect_args resource, and raster passes that draw off the DEVICE count via the (Indirect × 1-colour) verb
+// `draw_storage_multi_indexed_indirect` (command_lowering.hpp:458, which pushes `first_draw_index` so the rebased scene VS
+// reads its per-draw region from device memory). The verb-existence CELL check (feedback_rhi_verb_vocabulary...): this
+// contract is FORWARD-shaped (single RTV) so the verb EXISTS — no new sibling needed (an indexed-MRT-INDIRECT verb would be
+// 18e-only if a GPU-driven DEFERRED asset existed; none does — it stays the recorded boundary in the 18e tracker row).
+// ⛔ WHAT WAS MISSING (the real 18e work): every device proof on the shipped GPU-driven config is DIFFERENTIAL — 17d asserts
+// the cull COUNT equals the CPU cull (the counts are read back from the args buffer: they prove the cull WROTE args, NOT that
+// the multidraw CONSUMED them and rasterized — a wrong args_offset or a stale DrawIndex row shows clean counts and garbage
+// pixels), and 17e / REN-40-G3 are CEIR-vs-CEIR A/Bs (palette-origin parity; occ-vs-forward on a BESPOKE inline TOML). There
+// is NO image-level ABSOLUTE verdict anywhere that the GPU-driven indirect multidraw produced correct LIT geometry on the
+// shipped config. This gate is that: a deterministic scene, the shipped asset, LOCKED lit pixels (never CEIR-vs-CEIR — the
+// delete-ref→A==A scar). ⛔ TAA (forward→taa): a FRESH renderer's first frame is deterministic (frame_index/csm_frame start
+// at 0 — the basis of 17e/G3's bit-identical A/B), so an absolute lock is reproducible; but jitter softens EDGES, so probe
+// only FLAT INTERIORS of the cube top faces (brightest under the near-vertical key light), never an edge. Cross-device
+// (NVIDIA vs llvmpipe) shadow-filter/raster FP is absorbed by a band measured on NVIDIA + verified tight on llvmpipe (never a
+// silent widen — a large divergence is a finding). Two DISTINCT-object probes make the DrawIndex-row correctness load-bearing
+// (a stale row garbages one cube's pull → its probe drops to background and fails the lock).
+TEST_CASE("CEIR-18e GATE: the shipped GPU-driven config renders correct LIT geometry on the device (Vulkan)",
+          "[scene-render][ceir][ceir18][ren40][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_18e_pack_", cube_id);
+    write_mesh_pack(pack.path, cube_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+
+    // ⭐⭐ UNOCCLUDED scene (the CEIR-17d construction): near cubes IN the frustum, WELL SEPARATED so no cube occludes
+    // another (HZB rejects nothing ⇒ occlusion is a provable view0 no-op ⇒ the cull count == the frustum verdict), each
+    // scaled LARGE so its top face is a big flat interior to probe; FAR cubes (x/z=1000) are frustum-culled ⇒ both culls
+    // drop them, so the cull tie is NOT trivial at `total`.
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+    constexpr u32 near_count = 3U;
+    constexpr u32 far_count  = 3U;
+    const f32     near_x[near_count] = {-6.0F, 0.0F, 6.0F};
+    for (u32 i = 0; i < near_count; ++i)
+    {
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.world = math::from_trs(math::Vec3f{near_x[i], 0.0F, 0.0F}, math::Quatf::identity(),
+                                 math::Vec3f{2.5F, 2.5F, 2.5F});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{cube_id, {}});
+    }
+    for (u32 i = 0; i < far_count; ++i)
+    {
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.world = math::from_trs(math::Vec3f{1000.0F + static_cast<f32>(i), 0.0F, 1000.0F}, math::Quatf::identity(),
+                                 math::Vec3f{1, 1, 1});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{cube_id, {}});
+    }
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    if (!renderer.init_programs(*vk)) { SKIP("shader compiler unavailable"); }
+    // ⛔ ORDERING (scar): cull + verify + shadow flags change which kernels the graph cooks — set them BEFORE the graph.
+    renderer.set_gpu_cull(true);
+    renderer.set_gpu_cull_verify(true);
+    if (!renderer.set_shadows_enabled(true))
+    {
+        SKIP("device cannot enable cascade shadows (forward_csm_gpu requires them)");
+    }
+    (void)renderer.sync(world);
+
+    constexpr u32 dim = 256U;
+    auto target = raster->create_color_depth_target(dim, dim);
+    REQUIRE(target != nullptr);
+    const math::Mat4f     view = math::look_at(math::Vec3f{0, 9, 20}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f     proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Vec3f     light{0.4F, 1.0F, 0.2F};
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+
+    containers::String graph(&galloc());
+    REQUIRE(read_shipped_asset("frame/forward_csm_gpu.frame.toml", graph));
+    REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
+
+    // ⭐ the validation layer is the ORACLE (18c pattern) — a device-side kill on the indirect MRT/args path must fail LOUD.
+    gpu::ValidationCapture capture(*vk);
+    const auto r = renderer.render(*target, proj * view, light, clear);
+
+    // ⛔ STEP-DOWN PIN (the A==A / delete-ref scar): forward_csm_gpu carries requires=["shadows"] + fallback=forward_agx (NO
+    // compute passes). A silent by-name step-down would make "GPU-driven" a CPU path — a positive compute-dispatch count is
+    // the clean discriminator that the device cull/indirect graph actually ENGAGED.
+    REQUIRE(r.draws > 0U);
+    REQUIRE(renderer.gpu_cull());
+    REQUIRE(raster->compute_dispatch_count() > 0U);
+    CHECK(capture.error_count() == 0U);
+
+    // ── the cull VERDICT (17d's claim, re-verified here so 18e is self-contained — the device survivor count == the CPU
+    // frustum cull's, and the cull actually REJECTED the far cubes) ──
+    scenerender::SceneRenderer::GpuCullCounts gc{};
+    REQUIRE(renderer.read_gpu_cull_counts(gc));
+    REQUIRE(gc.groups > 0U);         // a device cull_args buffer was read back (the GPU cull graph ran)
+    REQUIRE(gc.bounds_checked > 0U); // bounds_mismatch==0 with bounds_checked==0 would be a pass that checked nothing
+    CHECK(gc.cpu_instances[0] >= 1U);
+    CHECK(gc.cpu_instances[0] <= near_count);        // far cubes frustum-culled: the tie is NOT at `total`
+    CHECK(gc.instances[0] == gc.cpu_instances[0]);
+    CHECK(gc.bounds_mismatch == 0U);
+
+    // ⛔ ABSOLUTE image verdict (never CEIR-vs-CEIR — the delete-ref→A==A scar): the deterministic scene (3 large cubes at
+    // world x∈{-6,0,+6}, a fixed camera + key light) renders through the SHIPPED GPU-driven config to three LIT cube tops
+    // at their expected screen columns (left≈64 / centre≈128 / right≈192), each a FLAT-INTERIOR grey of luma ≈198 — measured
+    // on NVIDIA to (205,197,196). The absolute band [185,215] absorbs cross-device shadow/raster FP (verified TIGHT on
+    // llvmpipe; a large divergence is a finding, never a silent widen). The per-cube "brighter than the ≈169 sky" contrast
+    // is the brightness-immune claim that geometry actually rasterized here (both read the SAME frame, so device FP cancels
+    // in the delta). THREE distinct-object probes make the DrawIndex-row correct-pull load-bearing (a stale row garbles ONE
+    // cube's device pull → its top drops to the sky and fails its lit lock, while the others pass — a targeted catch).
+    const auto luma = [&](u32 px, u32 py) {
+        const u32 p = target->read_pixel(px, py);
+        return static_cast<i32>(((p & 0xFFU) + ((p >> 8U) & 0xFFU) + ((p >> 16U) & 0xFFU)) / 3U);
+    };
+    const i32 bg_luma = (luma(2U, 2U) + luma(128U, 210U)) / 2; // the sky control, top-corner + bottom-centre (≈169-175)
+    UNSCOPED_INFO("[18e] bg_luma=" << bg_luma << " draws=" << r.draws << " val_err=" << capture.error_count()
+                                   << " gc_v0=" << gc.instances[0] << " cpu_v0=" << gc.cpu_instances[0]);
+    CHECK(bg_luma >= 150);
+    CHECK(bg_luma <= 185);
+
+    const u32 probe_x[3] = {64U, 128U, 192U}; // the three near cubes' flat top-face interiors (left / centre / right)
+    for (u32 i = 0; i < 3U; ++i)
+    {
+        const i32 pl = luma(probe_x[i], 124U);
+        UNSCOPED_INFO("[18e] cube " << i << " x=" << probe_x[i] << " luma=" << pl << " bg=" << bg_luma);
+        CHECK(pl >= 185);            // ABSOLUTE lit top-face brightness (measured ≈198)
+        CHECK(pl <= 215);
+        CHECK(pl > bg_luma + 15);    // a cube DID rasterize here — its top is brighter than the sky (DrawIndex pull correct)
+    }
+
+    // lit-coverage extent: count pixels distinctly brighter than the sky (the drawn cube tops/faces) — a "3 cubes' worth of
+    // geometry, not empty and not a runaway full-frame draw" band, independent of the sky gradient. Measured ≈2898.
+    u32 lit_px = 0U;
+    for (u32 y = 0; y < dim; ++y)
+    {
+        for (u32 x = 0; x < dim; ++x)
+        {
+            if (luma(x, y) > bg_luma + 15) { ++lit_px; }
+        }
+    }
+    UNSCOPED_INFO("[18e] lit_px=" << lit_px);
+    CHECK(lit_px >= 1200U);
+    CHECK(lit_px <= 8000U);
+}
+
+// ── ⭐⭐ CEIR-18p IMPOSTOR STEP 0.5: the OCTAHEDRAL-IMPOSTOR path, gated on a real device (both backends). ──────────
+// ⛔ WHY THIS GATE EXISTS. `ensure_impostor_program` is the last hand-built program in scene_renderer awaiting
+// conversion to an authored .ckir asset (CEIR-18p). The convert-blind ban: a builder may only be DELETED once its
+// live path is proven ENGAGED on a real device — and NO scene-render test had ever installed a LOD policy, so the
+// shipped impostor path (cull routes a sub-12px instance into the impostor slot; the mesh draw SKIPS it at
+// scene_renderer.cpp:6189; the impostor pass draws a billboard) had never rendered under test. This gate proves
+// engagement on the CURRENT hand-built code FIRST, so the STEP-1 refactor has a green baseline to hold.
+//
+// ⛔ THE MESH IS AN ICOSPHERE, NOT A CUBE. The impostor engages only when `group.lod_count > 1` (scene_renderer.cpp
+// :4358) — a chain with at least one decimated level. `build_lod_chain` refuses a chain when `source_faces <=
+// min_triangles` (lod_chain.cpp:383): the shipped policy's floor is 64 and a 12-triangle cube is BELOW it, so a cube
+// gets a single-level chain and NO impostor. A subdivision-4 icosphere is 5120 faces → decimates to a full 6-level
+// mesh chain (5120→2560→1280→512→205→77, each ≥64) → the impostor lands at group index 6 == `impl.lod_slots - 1`
+// (the slot the draw path reads at 6184), so the CPU emit and the GPU routing agree on the same slot.
+//
+// ⛔ SIZING. An r=1 sphere at distance 60 in a 256-px / 60°-fov target projects a ~7.4-px diameter — below the
+// impostor threshold (the coarsest mesh level's 12-px switch height) even past the 15% hysteresis edge (~10.2 px) —
+// so the cull kernel routes every instance into the impostor slot. The billboard albedo is a constant grey
+// (204,204,204; impostor_atlas.cpp:351), unmistakably NOT the ~169 tonemapped sky forward_csm_gpu clears to.
+void impostor_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster)
+{
+    const resources::ResourceId sphere_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_impostor_pack_", sphere_id);
+    write_resource_pack(pack.path, sphere_id, resources::kFourCC_MESH, build_icosphere_mesh_crdr(sphere_id));
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+
+    // A 5×5 cluster of icospheres at z=0, centred on the view axis, each ~7.4 px → all impostor-routed. The dense
+    // overlap guarantees the screen-centre probe lands on a billboard regardless of sub-pixel jitter; the corners
+    // stay sky.
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+    for (i32 gy = -2; gy <= 2; ++gy)
+    {
+        for (i32 gx = -2; gx <= 2; ++gx)
+        {
+            const scene::EntityId e = world.spawn();
+            scene::Transform      t;
+            t.world = math::from_trs(math::Vec3f{static_cast<f32>(gx), static_cast<f32>(gy), 0.0F},
+                                     math::Quatf::identity(), math::Vec3f{1, 1, 1});
+            world.add_component(e, t);
+            world.add_component(e, scene::MeshRenderer{sphere_id, {}});
+        }
+    }
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(raster, rm));
+    // ⛔⛔ ORDER (sandbox main.cpp:757 — the canonical sequence): the LOD policy installs BEFORE `init_programs`,
+    // because `init_programs` cooks the per-LOD-slot pull/cull programs from `impl.lod_slots`. Installing the policy
+    // AFTER init_programs leaves those programs cooked for the DEFAULT slot count — the GPU-cull graph then SILENTLY
+    // dispatches nothing (0 compute) and the impostor never routes, with no error (the failure this gate caught on its
+    // first run). `set_gpu_cull` / `set_shadows_enabled` stay AFTER init_programs (they only flip flags read at the
+    // frame-graph cook, exactly as 17d/18e and the sandbox order them).
+    REQUIRE(renderer.set_lod_policy_asset("lod/scene_default.crdlod")); // impostor_grid=8 → the impostor slot exists
+    if (!renderer.init_programs(ctx)) { SKIP("shader backend unavailable"); }
+    renderer.set_gpu_cull(true);
+    renderer.set_gpu_cull_verify(true);
+    if (!renderer.set_shadows_enabled(true))
+    {
+        SKIP("device cannot enable cascade shadows (forward_csm_gpu requires them)");
+    }
+    (void)renderer.sync(world);
+
+    // ⛔ NON-VACUOUS PREREQUISITE: the icosphere built a MULTI-LEVEL chain (a cube would fail here) — without it the
+    // impostor slot is never populated and every pin below would be a vacuous pass on a single-LOD mesh.
+    const auto chain = renderer.lod_chain_info();
+    UNSCOPED_INFO("[impostor] groups_with_lod=" << chain.groups_with_lod << " levels_max=" << chain.levels_max
+                                                << " tris_l0=" << chain.tris_level0
+                                                << " tris_coarse=" << chain.tris_coarsest);
+    REQUIRE(chain.groups_with_lod >= 1U);
+    REQUIRE(chain.levels_max >= 2U);
+
+    auto target = raster.create_color_depth_target(256U, 256U);
+    REQUIRE(target != nullptr);
+    const math::Mat4f view = math::look_at(math::Vec3f{0, 0, 60}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+
+    containers::String graph(&galloc());
+    REQUIRE(read_shipped_asset("frame/forward_csm_gpu.frame.toml", graph));
+    REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
+    const auto r =
+        renderer.render(*target, proj * view, math::Vec3f{0.4F, 1.0F, 0.2F}, gpu::ClearColor{0, 0, 0, 1});
+
+    // ⛔ ENGAGEMENT (backend-agnostic — compute_dispatch_count() is a VULKAN-ONLY diagnostic, base-class 0 on DX12; the
+    // READBACK is the portable discriminator). read_gpu_cull_counts reads the device cull_args buffer the GPU cull WROTE:
+    // gc.groups>0 proves the GPU-cull graph ran (NOT the compute-less forward_agx step-down forward_csm_gpu names as its
+    // shadows-off fallback — past the set_shadows_enabled SKIP that is not the active config), and gc.instances[0]>0
+    // proves the cull produced survivors (it ran + routed, not a zero-init readback).
+    scenerender::SceneRenderer::GpuCullCounts gc{};
+    REQUIRE(renderer.read_gpu_cull_counts(gc));
+    REQUIRE(gc.groups > 0U);
+    CHECK(gc.instances[0] > 0U);
+    // ⛔ THE AUTHORED GRAPH ACTUALLY RECORDED (1 == recorded; 100+err == a pass named a shader the host could not resolve).
+    // This is the DIRECT guard against the defect STEP 0.5 first exposed: a cook failure (the cull kernel that failed
+    // create_program) left forward_csm_gpu recording 0 compute passes while render() still returned a normal-looking
+    // draws=7. `fill_record_ok` is the backend-agnostic record-success signal; pin it so a silent step-down/cook-fail can
+    // never read as a pass on either backend.
+    REQUIRE(gc.fill_record_ok == 1U);
+
+    // ⛔ EMISSION: the CPU draw-list build emitted an impostor draw (has_impostor + a valid impostor_slot, 6220). This
+    // proves the LOD chain reached the impostor slot; it does NOT prove the GPU drew it — that is the pixel pin.
+    REQUIRE(r.draws > 0U);
+    CHECK(r.impostor_draws > 0U);
+
+    // ⛔ ROUTING + RENDER: the far spheres are skipped by every MESH slot (6189), so the only thing that can draw at
+    // screen centre is the impostor billboard. A centre region that DIFFERS from the sky proves the GPU routed the
+    // sub-12px instances into the impostor list AND the impostor pass rasterised them. Sign-agnostic: the 204-grey
+    // billboard may tonemap brighter or darker than the ~169 sky, but it is not the sky.
+    constexpr u32 dim  = 256U;
+    const auto    luma = [&](u32 px, u32 py) {
+        const u32 p = target->read_pixel(px, py);
+        return static_cast<i32>(((p & 0xFFU) + ((p >> 8U) & 0xFFU) + ((p >> 16U) & 0xFFU)) / 3U);
+    };
+    const auto block = [&](i32 cx, i32 cy) {
+        i32 s = 0;
+        for (i32 dy = -2; dy <= 2; ++dy)
+        {
+            for (i32 dx = -2; dx <= 2; ++dx) { s += luma(static_cast<u32>(cx + dx), static_cast<u32>(cy + dy)); }
+        }
+        return s / 25;
+    };
+    const i32 centre = block(static_cast<i32>(dim / 2U), static_cast<i32>(dim / 2U));
+    const i32 sky =
+        (luma(3U, 3U) + luma(dim - 4U, 3U) + luma(3U, dim - 4U) + luma(dim - 4U, dim - 4U)) / 4;
+    const i32 delta = centre > sky ? centre - sky : sky - centre;
+    UNSCOPED_INFO("[impostor] centre=" << centre << " sky=" << sky << " delta=" << delta
+                                       << " impostor_draws=" << r.impostor_draws << " draws=" << r.draws
+                                       << " groups=" << gc.groups << " v0=" << gc.instances[0]
+                                       << " cpu_v0=" << gc.cpu_instances[0]
+                                       << " vk_dispatches=" << raster.compute_dispatch_count());
+    // Measured on NVIDIA: centre≈133 (the 204-grey billboard, lit+tonemapped) vs sky≈169 → delta≈36. The billboard
+    // reads DARKER than the sky here, which is exactly why the pin is sign-agnostic; a directional centre>sky would be
+    // wrong. The band clears 20 with wide margin and stays non-vacuous (an empty/stepped-down frame gives delta≈0).
+    CHECK(delta > 20);
+}
+
+TEST_CASE("CEIR-18p IMPOSTOR STEP 0.5 GATE: the shipped octahedral-impostor path engages on a real device (Vulkan)",
+          "[scene-render][ceir][ceir18][impostor][lod][ren40][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+    // ⭐ the validation layer is the ORACLE (18c pattern): a device-side kill on the never-before-tested impostor
+    // path must fail LOUD. The capture spans the whole body — init, sync, and the render.
+    gpu::ValidationCapture capture(*vk);
+    impostor_gate_body(*vk, *raster);
+    CHECK(capture.error_count() == 0U);
+}
+
+// ── ⭐⭐ CEIR-18a-2 STAGE 1 (B8-m): the scene POINT-LIGHT array is CONSUMED by the LIVE forward pass. ──────────────
+// The point-light loop in the forward FS (lighting_asset.cpp:809-843, non-clustered path) has NEVER executed with a
+// nonzero input on any device — every prior frame null-filled the 4 point records (provably-zero). This gate is its
+// FIRST real run: `set_point_lights` places a bright point light in FRONT of a cube whose camera-facing (+Z) face the
+// KEY light (from above) only GRAZES, so the point light is the dominant signal on that face. ⛔ CONSUMPTION PROOF
+// (never CEIR-vs-CEIR, never decorative): arm A (point ON) lights the face measurably brighter than arm B (point
+// CLEARED) — the delta IS the point light, and the absolute band pins it landed as real radiance. forward_csm has NO
+// TAA, so the two arms on one renderer cannot bleed (advisor's Stage-1 lock). ⛔ if arm A ≈ arm B on current code, the
+// live point path is a pre-existing defect (never device-run) → fix FORWARD (impostor STEP 0.5 precedent).
+void point_light_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster)
+{
+    // ⛔ an ICOSPHERE, not write_mesh_pack's cube — the cube has ALL-(0,1,0) normals (build_cube_mesh_crdr), so a
+    // point light off any non-top face grazes it (N·L=0) and the delta is a false 0. The icosphere's normals are its
+    // positions, so the camera-facing +Z pole has N=(0,0,1) — a real surface for a front point light to light.
+    const resources::ResourceId sphere_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_ptlight_pack_", sphere_id);
+    write_resource_pack(pack.path, sphere_id, resources::kFourCC_MESH, build_icosphere_mesh_crdr(sphere_id));
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+    const scene::EntityId e = world.spawn();
+    scene::Transform      t;
+    t.world = math::from_trs(math::Vec3f{0, 0, 0}, math::Quatf::identity(), math::Vec3f{2, 2, 2});
+    world.add_component(e, t);
+    world.add_component(e, scene::MeshRenderer{sphere_id, {}});
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(raster, rm));
+    // ⛔⛔ the forward FS is NOT taken from the frame graph pass's `technique` field — the renderer cooks TWO variants
+    // per-draw: fs_flat from `forward_technique` (no shadows) and fs_shadowed from `shadow_technique` (scene_renderer.cpp
+    // :3101/3460). This gate runs with shadows ON, so the DRAWN FS is fs_shadowed = shadow_technique — which defaults to
+    // "forward_csm" (body_forward_csm: directional + CSM, NO point loop). Select the point-light-aware CEIR technique for
+    // BOTH variants; `forward_authored` (cook_lighting from scene_forward.crdl) does CSM shadows AND the point loop.
+    renderer.set_forward_technique("forward_authored");
+    renderer.set_shadow_technique("forward_authored");
+    if (!renderer.init_programs(ctx)) { SKIP("shader backend unavailable"); }
+    if (!renderer.set_shadows_enabled(true))
+    {
+        SKIP("device cannot enable cascade shadows (forward_csm requires them)");
+    }
+    (void)renderer.sync(world);
+
+    auto target = raster.create_color_depth_target(256U, 256U);
+    REQUIRE(target != nullptr);
+    const math::Mat4f view = math::look_at(math::Vec3f{0, 0, 5}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    // the KEY light comes from the SIDE ({1,0.3,0}) so at the camera-facing +Z pole (N=(0,0,1)) N·L≈0 — the key
+    // grazes there, leaving the point light in front as the dominant signal (tonemap headroom for the delta).
+    const math::Vec3f key{1.0F, 0.3F, 0.0F};
+
+    // ⛔ forward_plus (CEIR-18a) — the ONLY frame graph whose forward pass names `forward_authored`, the point-light-
+    // aware CEIR forward FS. The shipped forward_csm technique is directional-only (body_forward_csm), so it would
+    // read the point records not at all — this gate MUST render through forward_plus or it proves nothing.
+    containers::String graph(&galloc());
+    REQUIRE(read_shipped_asset("frame/forward_plus.frame.toml", graph));
+    REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
+
+    const auto luma = [&](u32 px, u32 py) {
+        const u32 p = target->read_pixel(px, py);
+        return static_cast<i32>(((p & 0xFFU) + ((p >> 8U) & 0xFFU) + ((p >> 16U) & 0xFFU)) / 3U);
+    };
+    const auto block = [&](i32 cx, i32 cy) {
+        i32 s = 0;
+        for (i32 dy = -3; dy <= 3; ++dy)
+        {
+            for (i32 dx = -3; dx <= 3; ++dx) { s += luma(static_cast<u32>(cx + dx), static_cast<u32>(cy + dy)); }
+        }
+        return s / 49;
+    };
+    const auto sky = [&]() { return (luma(4U, 4U) + luma(251U, 4U) + luma(4U, 251U) + luma(251U, 251U)) / 4; };
+
+    using PL = scenerender::SceneRenderer::ScenePointLight;
+    // ── ARM A: a bright point light just in front of the +Z face ──
+    const PL pl{{0.0F, 0.0F, 4.0F}, 5.0F, {4.0F, 4.0F, 4.0F}}; // a bright HDR point light 2 units in front of the +Z pole
+    REQUIRE(renderer.set_point_lights(containers::ConstSpan<PL>(&pl, 1U)));
+    const auto ra = renderer.render(*target, proj * view, key, gpu::ClearColor{0, 0, 0, 1});
+    REQUIRE(ra.draws > 0U); // the authored forward graph RECORDED + drew (a failed record ⇒ delta=0 for the wrong reason)
+    const i32 face_on = block(128, 128);
+    const i32 side_on = block(185, 128); // the +X side the KEY light hits — proves the directional (record 0) works
+    const i32 sky_on  = sky();
+
+    // ── ARM B: point lights CLEARED — same graph, same key, provably-null point records ──
+    REQUIRE(renderer.set_point_lights(containers::ConstSpan<PL>{}));
+    (void)renderer.render(*target, proj * view, key, gpu::ClearColor{0, 0, 0, 1});
+    const i32 face_off = block(128, 128);
+    const i32 sky_off  = sky();
+
+    const i32 delta = face_on - face_off;
+    UNSCOPED_INFO("[ptlight] face_on=" << face_on << " face_off=" << face_off << " delta=" << delta
+                                       << " side_on=" << side_on << " sky_on=" << sky_on << " sky_off=" << sky_off);
+    // ⛔ CONSUMPTION (never CEIR-vs-CEIR, never decorative): the point light measurably lit the +Z pole the key only
+    // grazes — the scene point-light array is READ by the live forward pass. Measured 138 on NVIDIA; the delta IS the
+    // whole point contribution (arm B's pole is black).
+    CHECK(delta > 40);
+    // ⛔ ABSOLUTE band — the point-lit pole lands as REAL radiance (a decorative/dropped point would read the grazed ~0,
+    // outside this band). [95,190] absorbs cross-device Cook-Torrance/tonemap FP (verified on llvmpipe); a large
+    // divergence is a finding, never a silent widen.
+    CHECK(face_on >= 95);
+    CHECK(face_on <= 190);
+    // the pole is BLACK without the point light (the side key grazes it, N·L≈0): the delta is unambiguous.
+    CHECK(face_off < 20);
+    // the DIRECTIONAL still works — the +X side the key hits is lit — so a wholesale-dark forward_authored can't pass.
+    CHECK(side_on > 60);
+    // the point light is LOCAL — the background is unchanged between the two arms.
+    CHECK((sky_on > sky_off ? sky_on - sky_off : sky_off - sky_on) < 8);
+}
+
+TEST_CASE("CEIR-18a-2 STAGE 1 GATE: the live forward pass consumes the scene point-light array (Vulkan)",
+          "[scene-render][ceir][ceir18][ceir18a][light][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+    gpu::ValidationCapture capture(*vk); // the validation layer is the oracle on this never-before-run point path
+    point_light_gate_body(*vk, *raster);
+    CHECK(capture.error_count() == 0U);
+}
+
+// ⭐⭐ CEIR-18a-2 STAGE 2a: the CLUSTERED (Forward+) forward pass consumes the PER-TILE light list. ⛔ DISCRIMINATING +
+// ABSOLUTE (never CEIR-vs-CEIR): a screen-filling WHITE quad, TWO point lights both at (0,0,3) with radius 10 (each fully
+// covers the quad), color RED and GREEN. The froxel grid is 4×4×1; the CPU-written cluster list assigns tile-COLUMN 1 →
+// the RED light (record 1), column 2 → GREEN (record 2), column 0 → row-alternating RED/GREEN, else the null (black)
+// record. The clustering PROOF is the OFF channel: at a column-1 pixel GREEN is EXCLUDED (g≈0) though a radius-10 green
+// light physically reaches it — if the FS ignored the list and lit with every point record, that pixel would be RED+GREEN
+// (g high). Column striping is Y-FLIP IMMUNE (an origin flip cannot swap columns); one row-alternating column proves the
+// floor(v)*grid row term (sign-agnostic: the two row probes must differ, either orientation). ⛔ EXPECTED an E5 first-
+// device defect (fixed forward: frag_xy was a const 0.5 → every pixel one froxel; now FragCoord normalized by the
+// viewport-dims header words). Probe cluster indices computed from the SAME floor formula the FS bakes.
+void point_cluster_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster)
+{
+    const resources::ResourceId quad_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_cluster_pack_", quad_id);
+    write_resource_pack(pack.path, quad_id, resources::kFourCC_MESH, build_white_quad_mesh_crdr(quad_id));
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+    const scene::EntityId e = world.spawn();
+    scene::Transform      t;
+    // scale 3.2: the quad ([-1,1]) covers [-3.2,3.2] at z=0, past the ~[-2.89,2.89] visible extent — the quad fills the
+    // whole viewport so EVERY froxel tile has surface (the column-0 and column-3 tiles included).
+    t.world = math::from_trs(math::Vec3f{0, 0, 0}, math::Quatf::identity(), math::Vec3f{3.2F, 3.2F, 3.2F});
+    world.add_component(e, t);
+    world.add_component(e, scene::MeshRenderer{quad_id, {}});
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(raster, rm));
+    // the CLUSTERED technique for BOTH per-draw variants (shadows ON ⇒ the drawn FS is fs_shadowed = shadow_technique).
+    renderer.set_forward_technique("forward_authored_clustered");
+    renderer.set_shadow_technique("forward_authored_clustered");
+    if (!renderer.init_programs(ctx)) { SKIP("shader backend unavailable"); }
+    if (!renderer.set_shadows_enabled(true))
+    {
+        SKIP("device cannot enable cascade shadows (the clustered technique carries CSM)");
+    }
+    (void)renderer.sync(world);
+
+    auto target = raster.create_color_depth_target(256U, 256U);
+    REQUIRE(target != nullptr);
+    const math::Mat4f view = math::look_at(math::Vec3f{0, 0, 5}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    // the directional KEY comes from BEHIND (+face normal is (0,0,1); L points to -Z) so N·L≤0 — the directional is
+    // dark on the visible face and the point lights are the ONLY signal (channel purity; Stage 1 already proved the sun).
+    const math::Vec3f key{0.0F, 0.0F, -1.0F};
+
+    containers::String graph(&galloc());
+    REQUIRE(read_shipped_asset("frame/forward_plus.frame.toml", graph));
+    REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
+
+    // ── the two point lights: RED and GREEN, BOTH at (0,0,3), radius 10 (each reaches every probe). set_point_lights
+    // fills records [1..N]; RED is record 1, GREEN record 2. Records 3,4 stay NULL (color 0) ⇒ record 4 is the black
+    // sentinel the empty list slots point at. (The 2b canonical 0xFFFFFFFF+guard sentinel is a filed follow-up.)
+    using PL = scenerender::SceneRenderer::ScenePointLight;
+    const PL red{{0.0F, 0.0F, 3.0F}, 10.0F, {5.0F, 0.0F, 0.0F}};
+    const PL grn{{0.0F, 0.0F, 3.0F}, 10.0F, {0.0F, 5.0F, 0.0F}};
+    const PL pls[2] = {red, grn};
+    REQUIRE(renderer.set_point_lights(containers::ConstSpan<PL>(pls, 2U)));
+
+    // ── the per-tile list: grid-linear (cluster * max_per_cluster + slot); max_per_cluster = 8. Fill ALL words; each
+    // cluster's read slots [0..3] = its light's POINT-ARRAY INDEX (Stage 2b contract — slot is a 0-based point index,
+    // record = light_base + (first_point + slot)*stride), then padding to `null` = count.point (the FS guard
+    // `slot < count.point` rejects it). RED is point 0, GREEN point 1; count.point = 4 (crdl), so null = 4.
+    constexpr u32          grid_n   = 4U;
+    constexpr u32          cap_n    = 8U;
+    constexpr u32          red_rec  = 0U; // RED  = the FIRST point light (set_point_lights index 0)
+    constexpr u32          grn_rec  = 1U; // GREEN = the SECOND point light (index 1)
+    constexpr u32          null_rec = 4U; // == count.point ⇒ guard-rejected padding
+    containers::Array<u32> list(&galloc());
+    // ⭐⭐ CEIR-18b: the 2D tiled list is grid*grid*cap = 4*4*8 = 128 — a PREFIX of the now-512-word section (sized for the 3D
+    // 64-cluster max). set_cluster_light_list refuses only ABOVE the capacity, so a 128-word 2D list fits and the FS reads
+    // clusters [0,16) → words [0,128).
+    const usize list_words = static_cast<usize>(grid_n) * grid_n * cap_n; // 128
+    list.resize(list_words);
+    REQUIRE(list.size() <= static_cast<usize>(scenerender::kSceneClusterListWords));
+    for (u32 cy = 0; cy < grid_n; ++cy)
+    {
+        for (u32 cx = 0; cx < grid_n; ++cx)
+        {
+            const u32 cluster  = cx + cy * grid_n;
+            u32       lightrec = null_rec;
+            if (cx == 1U) { lightrec = red_rec; }                        // column 1 → RED
+            else if (cx == 2U) { lightrec = grn_rec; }                   // column 2 → GREEN
+            else if (cx == 0U) { lightrec = (cy % 2U == 0U) ? red_rec : grn_rec; } // column 0 → row-alternating
+            for (u32 s = 0; s < cap_n; ++s) { list[cluster * cap_n + s] = (s == 0U) ? lightrec : null_rec; }
+        }
+    }
+    REQUIRE(renderer.set_cluster_light_list(containers::ConstSpan<u32>(list.data(), list.size())));
+
+    const auto ok = renderer.render(*target, proj * view, key, gpu::ClearColor{0, 0, 0, 1});
+    REQUIRE(ok.draws > 0U); // the clustered forward graph RECORDED + drew
+
+    // channel-wise 5×5 block averages (packed RGBA is 0xAABBGGRR).
+    const auto chan = [&](u32 px, u32 py, u32 shift) {
+        i32 s = 0;
+        for (i32 dy = -2; dy <= 2; ++dy)
+        {
+            for (i32 dx = -2; dx <= 2; ++dx)
+            {
+                const u32 p = target->read_pixel(static_cast<u32>(static_cast<i32>(px) + dx),
+                                                 static_cast<u32>(static_cast<i32>(py) + dy));
+                s += static_cast<i32>((p >> shift) & 0xFFU);
+            }
+        }
+        return s / 25;
+    };
+    // probe pixels → froxel indices via floor((coord+0.5)/256 * 4): A(96,128)=col1row2=cl9=RED; B(160,128)=col2row2=cl10
+    // =GREEN; C(32,32)=col0row0=cl0=RED; D(32,96)=col0row1=cl4=GREEN.
+    const i32 r_a = chan(96U, 128U, 0U);
+    const i32 g_a = chan(96U, 128U, 8U);
+    const i32 r_b = chan(160U, 128U, 0U);
+    const i32 g_b = chan(160U, 128U, 8U);
+    const i32 r_c = chan(32U, 32U, 0U);
+    const i32 g_c = chan(32U, 32U, 8U);
+    const i32 r_d = chan(32U, 96U, 0U);
+    const i32 g_d = chan(32U, 96U, 8U);
+    UNSCOPED_INFO("[cluster] A(r=" << r_a << ",g=" << g_a << ") B(r=" << r_b << ",g=" << g_b << ") C(r=" << r_c
+                                   << ",g=" << g_c << ") D(r=" << r_d << ",g=" << g_d << ")");
+    // ⛔ COLUMN 1 = RED only: the red light lands as real radiance AND green is EXCLUDED though a radius-10 green light
+    // physically reaches this pixel — the g≈0 IS the clustering proof (an all-lights FS would read g high here).
+    CHECK(r_a > 40);
+    CHECK(g_a < 25);
+    // ⛔ COLUMN 2 = GREEN only: symmetric — green present, red excluded.
+    CHECK(g_b > 40);
+    CHECK(r_b < 25);
+    // ⛔ the ROW term: column 0 alternates by row, so C and D must land on DIFFERENT colours (sign-agnostic — a Y-flip
+    // swaps which is which but they still differ). The `!=` IS the row-term proof; the magnitude floor is anti-vacuous
+    // (a washed-both pixel has ~0 separation). ⛔ Band 12, not 20: probe C is the screen-corner froxel (0,0) where the
+    // CENTERED point light grazes — measured 20 there, well above a washed ~0; 12 leaves cross-device margin.
+    CHECK((r_c > g_c) != (r_d > g_d));
+    CHECK((r_c > g_c ? r_c - g_c : g_c - r_c) > 12);
+    CHECK((r_d > g_d ? r_d - g_d : g_d - r_d) > 12);
+}
+
+TEST_CASE("CEIR-18a-2 STAGE 2a GATE: the clustered forward pass consumes the per-tile light list (Vulkan)",
+          "[scene-render][ceir][ceir18][ceir18a][ceir18a2][cluster][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+    gpu::ValidationCapture capture(*vk); // the validation layer is the oracle on this never-before-run clustered path
+    point_cluster_gate_body(*vk, *raster);
+    CHECK(capture.error_count() == 0U);
+}
+
+// ⭐⭐ CEIR-18b: compute_froxel_slices' per-slice AABBs AGREE with the published z-boundary table — the DRIFT-catching CPU
+// test (no device). NON-CIRCULAR: a world point's clip.w is computed the SAME way the 3D FS does (row 3 of view_proj ·
+// world_pos — INDEPENDENT of the fill's internal 1/h.w), its slice via the Step-sum against the published table, and the
+// point MUST lie inside that (tile, slice) AABB (a point in the frustum wedge is inside the wedge's conservative box). If the
+// fill's boundary table (built from 1/h.w) disagreed with the FS's clip.w (matrix row 3), the point would land in the wrong
+// slice's box and FAIL — exactly the 2-derivation drift that bit frag_xy / the Y-flip / the viewport words.
+TEST_CASE("CEIR-18b: compute_froxel_slices AABBs agree with the published z-boundary table (CPU)",
+          "[scene-render][ceir18b]")
+{
+    const math::Mat4f view = math::look_at(math::Vec3f{0, 0, 5}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Mat4f vp   = proj * view;
+    constexpr u32     gx = 4U;
+    constexpr u32     gy = 4U;
+    constexpr u32     gz = 4U;
+    f32               aabb[gx * gy * gz * 6U] = {};
+    f32               bounds[gz + 1U]         = {};
+    scenerender::compute_froxel_slices(vp, gx, gy, gz, 0.01F, /*flip_y*/ false, aabb, bounds);
+
+    // (1) the boundary table is MONOTONIC increasing and EXPONENTIAL (constant ratio) — the Doom z-slicing.
+    for (u32 i = 0; i < gz; ++i) { CHECK(bounds[i] < bounds[i + 1U]); }
+    const f32 r0 = bounds[1] / bounds[0];
+    for (u32 i = 1; i < gz; ++i) { CHECK(std::fabs(bounds[i + 1U] / bounds[i] - r0) < r0 * 0.01F); }
+
+    // (2) NON-CIRCULAR containment: world points spanning the frustum; clip.w via the matrix's row 3 (the FS formula).
+    const math::Vec3f pts[5] = {{0, 0, 4.5F}, {0, 0, 3.0F}, {0, 0, 0.0F}, {0, 0, -3.0F}, {1.0F, 1.0F, 0.0F}};
+    u32  tested   = 0U;
+    u32  distinct = 0U;
+    bool seen[gz] = {};
+    for (const math::Vec3f& pw : pts)
+    {
+        const math::Vec4f clip = vp * math::Vec4f{pw.x, pw.y, pw.z, 1.0F};
+        if (clip.w <= 0.0F) { continue; }
+        const f32 ndc_x = clip.x / clip.w;
+        const f32 ndc_y = clip.y / clip.w;
+        const f32 cw    = clip.w;
+        if (ndc_x < -1.0F || ndc_x > 1.0F || ndc_y < -1.0F || ndc_y > 1.0F) { continue; } // outside the frustum
+        u32 s = 0U;                                                                       // slice = the Step-sum
+        for (u32 i = 1; i < gz; ++i) { if (cw >= bounds[i]) { ++s; } }
+        const f32 u = (ndc_x + 1.0F) * 0.5F; // flip_y=false ⇒ ny=2v-1 ⇒ v=(ndc_y+1)/2
+        const f32 v = (ndc_y + 1.0F) * 0.5F;
+        u32       tx = static_cast<u32>(u * static_cast<f32>(gx));
+        u32       ty = static_cast<u32>(v * static_cast<f32>(gy));
+        if (tx >= gx) { tx = gx - 1U; }
+        if (ty >= gy) { ty = gy - 1U; }
+        const u32 c   = s * gx * gy + ty * gx + tx;
+        const f32 eps = 1.0e-3F;
+        CHECK(pw.x >= aabb[c * 6U + 0U] - eps);
+        CHECK(pw.x <= aabb[c * 6U + 3U] + eps);
+        CHECK(pw.y >= aabb[c * 6U + 1U] - eps);
+        CHECK(pw.y <= aabb[c * 6U + 4U] + eps);
+        CHECK(pw.z >= aabb[c * 6U + 2U] - eps);
+        CHECK(pw.z <= aabb[c * 6U + 5U] + eps);
+        if (!seen[s]) { seen[s] = true; ++distinct; }
+        ++tested;
+    }
+    CHECK(tested >= 3U);   // non-vacuous
+    CHECK(distinct >= 2U); // the points actually span MULTIPLE z-slices (the depth term is genuinely exercised)
+}
+
+// ⭐⭐ CEIR-18a-2 STAGE 2b-iv: the DEVICE light-cull IMAGE gate — forward_plus_gpu's `light_cull` COMPUTE pass PRODUCES the
+// per-tile list on the device (⛔ NO set_cluster_light_list), the clustered FS consumes it. ⛔ DISCRIMINATING + end-to-end:
+// TIGHT-radius lights placed to project to DISTINCT tiles — RED left, GREEN right, BLUE top. The device cull must bin each
+// light into only the froxels its small sphere overlaps, so a probe at RED's lit spot reads RED-not-green (RED was binned
+// there, GREEN elsewhere). The BLUE(world-up) probe is ORIENTATION-PINNED: a world-up light must light the SCREEN-TOP tile —
+// a wrong froxel ndc-y flip bins it to the bottom tile ⇒ BLUE excluded from the top pixel's list ⇒ the top stays dark
+// (catches the NDC±Y mirror). ⛔ EXPECT a first-device Y-flip; the fix is one ndc_y sign in compute_froxel_aabbs.
+void point_light_cull_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster)
+{
+    const resources::ResourceId quad_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_lightcull_pack_", quad_id);
+    write_resource_pack(pack.path, quad_id, resources::kFourCC_MESH, build_white_quad_mesh_crdr(quad_id));
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+    const scene::EntityId e = world.spawn();
+    scene::Transform      t;
+    t.world = math::from_trs(math::Vec3f{0, 0, 0}, math::Quatf::identity(), math::Vec3f{3.2F, 3.2F, 3.2F});
+    world.add_component(e, t);
+    world.add_component(e, scene::MeshRenderer{quad_id, {}});
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(raster, rm));
+    renderer.set_forward_technique("forward_authored_clustered");
+    renderer.set_shadow_technique("forward_authored_clustered");
+    if (!renderer.init_programs(ctx)) { SKIP("shader backend unavailable"); }
+    if (!renderer.set_shadows_enabled(true)) { SKIP("device cannot enable cascade shadows"); }
+    (void)renderer.sync(world);
+
+    auto target = raster.create_color_depth_target(256U, 256U);
+    REQUIRE(target != nullptr);
+    const math::Mat4f view = math::look_at(math::Vec3f{0, 0, 5}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Vec3f key{0.0F, 0.0F, -1.0F}; // directional from behind ⇒ dark on the +Z face (channel purity)
+
+    // ⛔ forward_plus_gpu — the ONLY graph with the device light_cull compute pass. Its precedence makes the device own the
+    // cluster section, so this gate proves the DEVICE-produced list (not a CPU hand-written one).
+    containers::String graph(&galloc());
+    REQUIRE(read_shipped_asset("frame/forward_plus_gpu.frame.toml", graph));
+    REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
+
+    using PL = scenerender::SceneRenderer::ScenePointLight;
+    const PL red{{-1.4F, 0.0F, 0.5F}, 0.8F, {6.0F, 0.0F, 0.0F}}; // projects LEFT
+    const PL grn{{1.4F, 0.0F, 0.5F}, 0.8F, {0.0F, 6.0F, 0.0F}};  // projects RIGHT
+    const PL blu{{0.0F, 1.4F, 0.5F}, 0.8F, {0.0F, 0.0F, 6.0F}};  // projects TOP (world-up) — the orientation pin
+    const PL pls[3] = {red, grn, blu};
+    REQUIRE(renderer.set_point_lights(containers::ConstSpan<PL>(pls, 3U)));
+
+    const auto ok = renderer.render(*target, proj * view, key, gpu::ClearColor{0, 0, 0, 1});
+    REQUIRE(ok.draws > 0U); // the forward_plus_gpu graph (cull compute + forward) recorded + drew
+
+    const auto chan = [&](u32 px, u32 py, u32 shift) {
+        i32 s = 0;
+        for (i32 dy = -2; dy <= 2; ++dy)
+        {
+            for (i32 dx = -2; dx <= 2; ++dx)
+            {
+                const u32 p = target->read_pixel(static_cast<u32>(static_cast<i32>(px) + dx),
+                                                 static_cast<u32>(static_cast<i32>(py) + dy));
+                s += static_cast<i32>((p >> shift) & 0xFFU);
+            }
+        }
+        return s / 25;
+    };
+    // probes at each light's lit spot (from the device-produced list): RED left (~63,128), GREEN right (~193,128), BLUE
+    // top (~128,63). ⛔ CHANNEL PURITY = the cull PROOF: each spot has ONLY its light (the cull binned RED to the left
+    // froxels, GREEN to the right, BLUE to the top — an all-lights list would leak the others). BLUE at screen-TOP is the
+    // ORIENTATION pin (world +y ⇒ top): a wrong froxel ndc-y would bin BLUE to the bottom ⇒ top dark, bottom blue.
+    const i32 red_r = chan(63U, 128U, 0U);
+    const i32 red_g = chan(63U, 128U, 8U);
+    const i32 red_b = chan(63U, 128U, 16U);
+    const i32 grn_r = chan(193U, 128U, 0U);
+    const i32 grn_g = chan(193U, 128U, 8U);
+    const i32 grn_b = chan(193U, 128U, 16U);
+    const i32 top_r = chan(128U, 63U, 0U);
+    const i32 top_g = chan(128U, 63U, 8U);
+    const i32 top_b = chan(128U, 63U, 16U);
+    const i32 bot_r = chan(128U, 193U, 0U);
+    const i32 bot_g = chan(128U, 193U, 8U);
+    const i32 bot_b = chan(128U, 193U, 16U);
+    UNSCOPED_INFO("[2biv] RED(" << red_r << "," << red_g << "," << red_b << ") GRN(" << grn_r << "," << grn_g << ","
+                                << grn_b << ") TOP-b=" << top_b << " BOT-b=" << bot_b);
+    // ⛔ RED tile = RED only (device cull binned RED here, GREEN+BLUE elsewhere).
+    CHECK(red_r > 60);
+    CHECK(red_g < 25);
+    CHECK(red_b < 25);
+    // ⛔ GREEN tile = GREEN only.
+    CHECK(grn_g > 60);
+    CHECK(grn_r < 25);
+    CHECK(grn_b < 25);
+    // ⛔ BLUE (world-up) lights EXACTLY ONE vertical extreme — the one its GEOMETRY renders to (screen-top on a ndc-y-down
+    // backend, bottom on the mirror; the froxel's per-backend `flip_y` = `!ndc_y_points_down()` makes the cull MATCH the
+    // rendered position). ⛔ This IS the orientation pin: a wrong froxel ndc-y bins BLUE to the tile OPPOSITE where it
+    // illuminates ⇒ BLUE INVISIBLE (neither extreme lit) ⇒ the XOR fails. Sign-agnostic because the absolute top/bottom is
+    // a per-backend geometry-Y convention (⛔ FOLLOW-UP: whether DX12's forward renders world-up at screen-bottom is a
+    // pre-existing NDC±Y question — the CULL correctly follows it either way; filed for CEIR-18a-2 close).
+    const bool blue_top = top_b > 60 && top_r < 25 && top_g < 25;
+    const bool blue_bot = bot_b > 60 && bot_r < 25 && bot_g < 25;
+    CHECK(blue_top != blue_bot); // EXACTLY one vertical extreme is pure-blue (never neither = the froxel-mirror failure)
+}
+
+TEST_CASE("CEIR-18a-2 STAGE 2b-iv GATE: the device light-cull produces the per-tile list (Vulkan)",
+          "[scene-render][ceir][ceir18][ceir18a][ceir18a2][cluster][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+    gpu::ValidationCapture capture(*vk); // the validation layer is the oracle on this never-before-run device-cull path
+    point_light_cull_gate_body(*vk, *raster);
+    CHECK(capture.error_count() == 0U);
+}
+
+// ⭐⭐ CEIR-18b: the 3D CLUSTERED TWO-DEPTH device IMAGE gate — proves the FS CONSUMES the z-slice term. forward_clustered_3d_gpu's
+// `light_cull_3d` compute pass produces the per-CLUSTER list; the 3D FS bins each fragment by its clip.w against the published
+// exponential boundary table. ⛔ A single full-screen quad puts every fragment in ONE slice and tests NOTHING in z, so this scene
+// has GEOMETRY AT TWO DEPTHS inside ONE screen tile: a NEAR quad (d=2 → slice 2) covering the LEFT of tile col 1, a FAR
+// full-screen quad (d=7 → slice 3) behind it. Two point lights, each confined to ONE slice by its sphere's DEPTH SPAN [d-r,d+r]:
+// RED in slice 2 (lights the near quad), GREEN in slice 3 (lights the far quad). Probe A (near quad) reads RED; probe B (far
+// quad, SAME tile) reads GREEN — a DEAD z-term makes B read slice-0's (empty) list ⇒ B goes dark. ⛔ X-SEPARATION (X has no
+// per-backend flip); the lights + probe row STRADDLE the tile-row boundary at y=128 ⇒ backend-SYMMETRIC (no Y-orientation claim —
+// 2b-iv owns that; a DX12-only failure here is a REAL bug). ⛔ This gate does NOT prove a z-blind CULL (attenuation self-selects
+// — that is the step-2 list-parity + CPU-drift's job); it proves FS CONSUMPTION of the z-term. ⛔ FIRST DEVICE EMIT of the 3D FS
+// (step 1 gated cook_size only): the z-code (Step-sum + hdrf(115..119)) first hits the raster emitters + shaderc/dxc HERE — a
+// dark/skip render → check the init_programs/variant error log FIRST (the raster-emitters-lag class).
+void point_light_cull_3d_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster)
+{
+    const resources::ResourceId quad_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_lightcull3d_pack_", quad_id);
+    write_resource_pack(pack.path, quad_id, resources::kFourCC_MESH, build_white_quad_mesh_crdr(quad_id));
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+    // FAR quad: full-screen at z=-2 (d=7 → slice 3). scale 4.2 ≥ 7·tan(fov/2)=4.04 ⇒ fills ndc [-1,1].
+    {
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.world = math::from_trs(math::Vec3f{0.0F, 0.0F, -2.0F}, math::Quatf::identity(), math::Vec3f{4.2F, 4.2F, 1.0F});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{quad_id, {}});
+    }
+    // NEAR quad: at z=3 (d=2 → slice 2), x∈[-0.58,-0.28] ⇒ ndc_x∈[-0.50,-0.24] ⇒ pixels x∈[64,97] = LEFT of tile col 1; full
+    // height of the probe band. (x_view = ndc_x·d·tan(fov/2); tan(0.5236)=0.577.)
+    {
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.world = math::from_trs(math::Vec3f{-0.43F, 0.0F, 3.0F}, math::Quatf::identity(), math::Vec3f{0.15F, 0.6F, 1.0F});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{quad_id, {}});
+    }
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(raster, rm));
+    // ⛔ BOTH techniques → the 3D clustered FS: shadows ON ⇒ the DRAWN FS is the SHADOW technique; setting only forward silently
+    // draws the non-3D FS and the far probe dies mysteriously.
+    renderer.set_forward_technique("forward_authored_clustered_3d");
+    renderer.set_shadow_technique("forward_authored_clustered_3d");
+    if (!renderer.init_programs(ctx)) { SKIP("shader backend unavailable"); }
+    if (!renderer.set_shadows_enabled(true)) { SKIP("device cannot enable cascade shadows"); }
+    (void)renderer.sync(world);
+
+    auto target = raster.create_color_depth_target(256U, 256U);
+    REQUIRE(target != nullptr);
+    const math::Mat4f view = math::look_at(math::Vec3f{0, 0, 5}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Vec3f key{0.0F, 0.0F, -1.0F}; // directional from behind ⇒ dark on the +Z faces (channel purity)
+
+    containers::String graph(&galloc());
+    REQUIRE(read_shipped_asset("frame/forward_clustered_3d_gpu.frame.toml", graph));
+    REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
+
+    // RED in SLICE 2 only (sphere d-span [1.25,2.15] ⊂ [1,3.162)), lights the near quad (0.3 < r). GREEN in SLICE 3 only
+    // (d-span [5.7,7.3] ⊂ [3.162,10)), lights the far quad (0.5 < r). Both straddle tile rows 1&2 in y ⇒ backend-symmetric. The
+    // crdl gives point lights NO shadow mode, so the near quad cannot shadow the far surface (no interference). Slots 2,3 null.
+    using PL = scenerender::SceneRenderer::ScenePointLight;
+    const PL red{{-0.43F, 0.0F, 3.3F}, 0.45F, {6.0F, 0.0F, 0.0F}}; // slice 2 · near quad
+    const PL grn{{-0.5F, 0.0F, -1.5F}, 0.8F, {0.0F, 6.0F, 0.0F}};  // slice 3 · far quad
+    const PL pls[2] = {red, grn};
+    REQUIRE(renderer.set_point_lights(containers::ConstSpan<PL>(pls, 2U)));
+
+    const auto ok = renderer.render(*target, proj * view, key, gpu::ClearColor{0, 0, 0, 1});
+    REQUIRE(ok.draws > 0U); // the forward_clustered_3d_gpu graph (cull_3d compute + forward) recorded + drew
+
+    const auto chan = [&](u32 px, u32 py, u32 shift) {
+        i32 s = 0;
+        for (i32 dy = -2; dy <= 2; ++dy)
+        {
+            for (i32 dx = -2; dx <= 2; ++dx)
+            {
+                const u32 p = target->read_pixel(static_cast<u32>(static_cast<i32>(px) + dx),
+                                                 static_cast<u32>(static_cast<i32>(py) + dy));
+                s += static_cast<i32>((p >> shift) & 0xFFU);
+            }
+        }
+        return s / 25;
+    };
+    // probe A = NEAR quad (80,128) → RED; probe B = FAR quad (112,128) → GREEN. SAME tile col 1, ≥15px clear of the near quad's
+    // right edge (~97), chan() ±2 never crosses a surface edge.
+    const i32 a_r = chan(80U, 128U, 0U);
+    const i32 a_g = chan(80U, 128U, 8U);
+    const i32 a_b = chan(80U, 128U, 16U);
+    const i32 b_r = chan(112U, 128U, 0U);
+    const i32 b_g = chan(112U, 128U, 8U);
+    const i32 b_b = chan(112U, 128U, 16U);
+    UNSCOPED_INFO("[18b-img] A/near(" << a_r << "," << a_g << "," << a_b << ") B/far(" << b_r << "," << b_g << "," << b_b << ")");
+    // ⛔ NEAR quad (slice 2) = RED only (RED binned into slice-2 froxels; GREEN lives in slice 3 ⇒ absent from this list).
+    CHECK(a_r > 60);
+    CHECK(a_g < 25);
+    CHECK(a_b < 25);
+    // ⛔⛔ FAR quad (slice 3) = GREEN only — THE z-term proof: a dead z-term makes this fragment read slice-0's EMPTY list ⇒ B
+    // goes dark (not GREEN). RED absent proves no cross-slice leak (RED is slice-2 only).
+    CHECK(b_g > 60);
+    CHECK(b_r < 25);
+    CHECK(b_b < 25);
+}
+
+TEST_CASE("CEIR-18b GATE: the 3D clustered two-depth image proves the FS consumes the z-slice (Vulkan)",
+          "[scene-render][ceir][ceir18][ceir18b][cluster][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+    gpu::ValidationCapture capture(*vk); // the validation layer is the oracle on this first-ever 3D-FS device emit
+    point_light_cull_3d_gate_body(*vk, *raster);
+    CHECK(capture.error_count() == 0U);
+}
+
 #ifdef _WIN32
 TEST_CASE("REN-40-G1 GATE (DX12): depth prepass with shared_depth is pixel-identical to forward-only",
           "[scene-render][ren40][depth-prepass][gpu][dx12]")
@@ -5821,6 +7030,133 @@ TEST_CASE("REN-40-G3 GATE (DX12): GPU occlusion culling produces pixel-identical
     CHECK(covered > 500U);
 }
 
+// ── ⭐⭐ CEIR-18e GATE (DX12): the SAME GPU-driven renderer joins on the OTHER backend. ─────────────────────────────
+// ⛔ The Vulkan 18e gate alone leaves the DX12 GPU-driven path — the device cull compute, the (Indirect × 1-colour)
+// `draw_storage_multi_indexed_indirect` verb's DX12 form (its N-command indirect argument buffer + the DrawIndex ROOT
+// CONSTANT pushed per command), CSM + TAA under device cull — UNEXECUTED as an ABSOLUTE image ("compiled" ≠ "ran"). This
+// runs it: the SHIPPED forward_csm_gpu, on the device, to the SAME locked lit-cube verdict + the SAME cull parity. ⛔ The
+// engagement discriminator DIFFERS from Vulkan's: compute_dispatch_count() is a VULKAN-only diagnostic (base-class default
+// 0, unwired on DX12), so DX12 uses the READBACK — read_gpu_cull_counts (which DOES work on DX12: gc.groups>0 proves the
+// device cull graph ran + wrote its args buffer, and the device survivor count EQUALS the CPU frustum cull). Full strength.
+TEST_CASE("CEIR-18e GATE (DX12): the shipped GPU-driven config renders correct LIT geometry on the device",
+          "[scene-render][ceir][ceir18][ren40][gpu][dx12]")
+{
+    auto gctx = gpu::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto raster = gpu::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+
+    const resources::ResourceId cube_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_18ed_pack_", cube_id);
+    write_mesh_pack(pack.path, cube_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+
+    // the CEIR-17d unoccluded construction — 3 large well-separated near cubes (flat tops to probe) + 3 far frustum-culled.
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+    constexpr u32 near_count = 3U;
+    constexpr u32 far_count  = 3U;
+    const f32     near_x[near_count] = {-6.0F, 0.0F, 6.0F};
+    for (u32 i = 0; i < near_count; ++i)
+    {
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.world = math::from_trs(math::Vec3f{near_x[i], 0.0F, 0.0F}, math::Quatf::identity(),
+                                 math::Vec3f{2.5F, 2.5F, 2.5F});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{cube_id, {}});
+    }
+    for (u32 i = 0; i < far_count; ++i)
+    {
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.world = math::from_trs(math::Vec3f{1000.0F + static_cast<f32>(i), 0.0F, 1000.0F}, math::Quatf::identity(),
+                                 math::Vec3f{1, 1, 1});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{cube_id, {}});
+    }
+
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(*raster, rm));
+    if (!renderer.init_programs(*gctx)) { SKIP("dxc/DXIL unavailable"); }
+    renderer.set_gpu_cull(true);
+    renderer.set_gpu_cull_verify(true);
+    if (!renderer.set_shadows_enabled(true))
+    {
+        SKIP("device cannot enable cascade shadows (forward_csm_gpu requires them)");
+    }
+    (void)renderer.sync(world);
+
+    constexpr u32 dim = 256U;
+    auto target = raster->create_color_depth_target(dim, dim);
+    REQUIRE(target != nullptr);
+    const math::Mat4f     view = math::look_at(math::Vec3f{0, 9, 20}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 1, 0});
+    const math::Mat4f     proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    const math::Vec3f     light{0.4F, 1.0F, 0.2F};
+    const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
+
+    containers::String graph(&galloc());
+    REQUIRE(read_shipped_asset("frame/forward_csm_gpu.frame.toml", graph));
+    REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
+    const auto r = renderer.render(*target, proj * view, light, clear);
+
+    REQUIRE(r.draws > 0U);
+    REQUIRE(renderer.gpu_cull());
+
+    // ⛔ ENGAGEMENT + PARITY on DX12 — the READBACK is the discriminator (compute_dispatch_count() is a VULKAN-only
+    // diagnostic: base-class default 0, not overridden on DX12, so it reads 0 here and proves nothing). read_gpu_cull_counts
+    // reads the device args buffer the GPU cull WROTE — gc.groups>0 (a device cull_args group was read back) is the clean
+    // "the device cull graph ENGAGED" signal, and the device survivor count EQUALS the CPU frustum cull. Past the
+    // set_shadows_enabled SKIP, forward_csm_gpu (NOT the compute-less forward_agx fallback) is the active config, so this is
+    // the real GPU-driven path, not a silent CPU step-down.
+    scenerender::SceneRenderer::GpuCullCounts gc{};
+    REQUIRE(renderer.read_gpu_cull_counts(gc));
+    REQUIRE(gc.groups > 0U);         // a device cull_args buffer was read back — the GPU cull graph ran
+    REQUIRE(gc.bounds_checked > 0U); // bounds_mismatch==0 with bounds_checked==0 would be a pass that checked nothing
+    UNSCOPED_INFO("[18e-dx] gc_v0=" << gc.instances[0] << " cpu_v0=" << gc.cpu_instances[0] << " groups=" << gc.groups
+                                    << " bchk=" << gc.bounds_checked << " bmis=" << gc.bounds_mismatch);
+    CHECK(gc.cpu_instances[0] >= 1U);
+    CHECK(gc.cpu_instances[0] <= near_count); // the far cubes were frustum-culled — the tie is NOT at `total`
+    CHECK(gc.instances[0] == gc.cpu_instances[0]);
+    CHECK(gc.bounds_mismatch == 0U);
+
+    // ⛔ the SAME ABSOLUTE image verdict as the Vulkan twin — 3 lit cube tops at their expected screen columns, each a flat
+    // interior of luma ≈198 distinctly brighter than the ≈169 sky. TWO+ distinct-object probes make the DrawIndex root
+    // constant load-bearing (a stale row garbles one cube's device pull → its top drops to the sky, failing its lit lock).
+    const auto luma = [&](u32 px, u32 py) {
+        const u32 p = target->read_pixel(px, py);
+        return static_cast<i32>(((p & 0xFFU) + ((p >> 8U) & 0xFFU) + ((p >> 16U) & 0xFFU)) / 3U);
+    };
+    const i32 bg_luma = (luma(2U, 2U) + luma(128U, 210U)) / 2;
+    CHECK(bg_luma >= 150);
+    CHECK(bg_luma <= 185);
+
+    const u32 probe_x[3] = {64U, 128U, 192U};
+    for (u32 i = 0; i < 3U; ++i)
+    {
+        const i32 pl = luma(probe_x[i], 124U);
+        UNSCOPED_INFO("[18e-dx] cube " << i << " x=" << probe_x[i] << " luma=" << pl << " bg=" << bg_luma);
+        CHECK(pl >= 185);            // ABSOLUTE lit top-face brightness (measured ≈198, matches Vulkan ±1)
+        CHECK(pl <= 215);
+        CHECK(pl > bg_luma + 15);    // a cube DID rasterize here — its top is brighter than the sky (DrawIndex pull correct)
+    }
+
+    u32 lit_px = 0U;
+    for (u32 y = 0; y < dim; ++y)
+    {
+        for (u32 x = 0; x < dim; ++x)
+        {
+            if (luma(x, y) > bg_luma + 15) { ++lit_px; }
+        }
+    }
+    UNSCOPED_INFO("[18e-dx] lit_px=" << lit_px);
+    CHECK(lit_px >= 1200U);
+    CHECK(lit_px <= 8000U);
+}
+
 TEST_CASE("REN-41 GATE (DX12): velocity is zero for static instances and matches the screen delta for movers",
           "[scene-render][ren41][velocity][gpu][dx12]")
 {
@@ -5842,5 +7178,55 @@ TEST_CASE("REN-41 GATE (DX12): the cluster mesh shader unpacks a packed DAG to m
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     cluster_mesh_gate_body(*gctx, *raster); // SKIPs inside if no mesh-shader support / DXIL unavailable
+}
+
+TEST_CASE("CEIR-18p IMPOSTOR STEP 0.5 GATE (DX12): the shipped octahedral-impostor path engages on a real device",
+          "[scene-render][ceir][ceir18][impostor][lod][ren40][gpu][dx12]")
+{
+    auto gctx = gpu::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto raster = gpu::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+    impostor_gate_body(*gctx, *raster); // SKIPs inside if dxc/DXIL is unavailable
+}
+
+TEST_CASE("CEIR-18a-2 STAGE 1 GATE (DX12): the live forward pass consumes the scene point-light array",
+          "[scene-render][ceir][ceir18][ceir18a][light][gpu][dx12]")
+{
+    auto gctx = gpu::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto raster = gpu::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+    point_light_gate_body(*gctx, *raster); // SKIPs inside if dxc/DXIL is unavailable
+}
+
+TEST_CASE("CEIR-18a-2 STAGE 2a GATE (DX12): the clustered forward pass consumes the per-tile light list",
+          "[scene-render][ceir][ceir18][ceir18a][ceir18a2][cluster][gpu][dx12]")
+{
+    auto gctx = gpu::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto raster = gpu::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+    point_cluster_gate_body(*gctx, *raster); // SKIPs inside if dxc/DXIL is unavailable
+}
+
+TEST_CASE("CEIR-18a-2 STAGE 2b-iv GATE (DX12): the device light-cull produces the per-tile list",
+          "[scene-render][ceir][ceir18][ceir18a][ceir18a2][cluster][gpu][dx12]")
+{
+    auto gctx = gpu::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto raster = gpu::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+    point_light_cull_gate_body(*gctx, *raster); // SKIPs inside if dxc/DXIL is unavailable
+}
+
+TEST_CASE("CEIR-18b GATE (DX12): the 3D clustered two-depth image proves the FS consumes the z-slice",
+          "[scene-render][ceir][ceir18][ceir18b][cluster][gpu][dx12]")
+{
+    auto gctx = gpu::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto raster = gpu::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+    point_light_cull_3d_gate_body(*gctx, *raster); // SKIPs inside if dxc/DXIL is unavailable
 }
 #endif // _WIN32 (the REN-40-G DX12 gates)

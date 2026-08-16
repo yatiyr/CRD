@@ -1,0 +1,90 @@
+# forward_clustered_3d_gpu.frame.toml — CEIR-18b: the AUTHORED clustered 3D-FROXEL renderer WITH the device light-cull.
+#
+# ⛔⛔ SIBLING of forward_plus_gpu.frame.toml (the 2D tiled variant). Identical shape — the cascade atlas + the `instances`
+# external buffer + a light-cull COMPUTE pass before the shadowed forward pass — but the froxel grid is 3D (4×4×4 = 64
+# clusters): the compute pass runs engine://scene/light_cull_3d (the 64-cluster kernel) and the forward pass selects the 3D
+# clustered technique (forward_authored_clustered_3d → scene_forward_clustered_3d.crdl), which bins each fragment into a
+# z-slice by its clip.w against the published exponential boundary table. The device pass OWNS the cluster section (the
+# locked precedence); the CPU set_cluster_light_list is skipped.
+#
+# ⛔ WHY A SEPARATE FILE: the 3D kernel + 3D technique bake 64 clusters + the z-slice code; the 2D graph must keep its own
+# 16-cluster declaration (the regression floor).
+
+schema   = 1
+name     = "engine://frame/forward_clustered_3d_gpu"
+requires = ["shadows"]
+fallback = "engine://frame/forward_basic"
+
+[[resource]]
+name = "instances"
+kind = "external_buffer"
+
+# ── the cascade atlas ───────────────────────────────────────────────────────────────────────────────────────
+[[resource]]
+name    = "shadow_atlas"
+kind    = "persistent_image"
+format  = "D32Float"
+width   = 2048
+height  = 2048
+layers  = 4
+sampled = true
+
+[[draw_list]]
+name = "shadow_casters"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "front_to_back"
+
+[[draw_list]]
+name = "visible_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "material"
+
+[[draw_list]]
+name = "impostor_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+
+# ── ⭐⭐ CEIR-18b: the DEVICE 3D light-cull. One dispatch per group, workgroup 64 (= the 64 clusters, one thread each).
+# Reads the 64 PER-SLICE froxel-AABB boxes + light-input (via header words), writes the per-cluster list into `instances`.
+# Ordered BEFORE the forward pass by the write→read edge on `instances`. Same shape as light_cull, num_clusters 16→64.
+[[pass]]
+name      = "light_cull_3d"
+kind      = "compute"
+kernel    = "engine://scene/light_cull_3d"
+draw_list = "visible_geometry"
+writes    = ["instances"]
+
+[[pass]]
+name             = "csm_cascade"
+kind             = "raster.depth_only"
+draw_list        = "shadow_casters"
+for_each         = "light.0.cascades"
+writes           = ["shadow_atlas[$index]"]
+material_pass    = "Shadow"
+clear_depth      = 1.0
+depth            = "LessEqual"
+depth_bias_slope = 1.5
+
+# ── the shadowed + 3D-clustered forward pass ────────────────────────────────────────────────────────────────
+[[pass]]
+name          = "forward"
+kind          = "raster.geometry"
+draw_list     = "visible_geometry"
+reads         = ["shadow_atlas", "instances"]
+writes        = ["@output"]
+technique     = "forward_authored_clustered_3d"
+material_pass = "Forward"
+clear_color   = [0.09, 0.10, 0.13, 1.0]
+clear_depth   = 0.0
+depth         = "GreaterEqual"
+
+[[pass]]
+name      = "impostor"
+kind      = "raster.geometry"
+draw_list = "impostor_geometry"
+writes    = ["@output"]
+shader    = "engine://scene/impostor"
+load      = true
+depth     = "GreaterEqual"

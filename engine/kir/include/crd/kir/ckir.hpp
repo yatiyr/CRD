@@ -1687,6 +1687,20 @@ public:
     [[nodiscard]] int          n_inputs() const noexcept { return m_ninput; }
     [[nodiscard]] const KNode& node(int i) const noexcept { return m_nodes[static_cast<crd::usize>(i)]; }
 
+    // D12/CEIR-18p: HOST specialization knob. Set the DEFAULT (cval) of every spec constant with the given id. The
+    // emitted default IS the pipeline value on both backends (Vulkan `layout(constant_id=N)` default / DX12 baked
+    // literal — there is no VkSpecializationInfo path), so the host turns this AFTER ckir_read and BEFORE create_program
+    // to specialize one authored asset per variant (e.g. the moment atlas cascade layer / blur direction). Returns count.
+    int set_spec_const(crd::u32 id, crd::f64 value) noexcept
+    {
+        int patched = 0;
+        for (crd::usize i = 0; i < m_nodes.size(); ++i)
+        {
+            if (is_spec_const(m_nodes[i]) && spec_const_id(m_nodes[i]) == id) { m_nodes[i].cval = value; ++patched; }
+        }
+        return patched;
+    }
+
     // ── D1: RAW POOL access for (de)serialization — the cook artifact is a versioned container of these POD pools (all
     //    trivially-copyable). Read side: expose the five pools + n_inputs; restore side: overwrite them from deserialized data.
     //    A rebuilt graph is byte-identical to the original ⇒ re-emit is bit-identical (the whole point of IR-as-crdr, ADR-0101).

@@ -1,0 +1,94 @@
+# .ckir - an authored CKIR program (node graph). A node editor reads this and turns it into CKIR.
+schema = 1
+
+[[entry]]
+stage = "Fragment"
+inputs = 0
+position = -1
+frag_depth = -1
+discard_cond = -1
+early_fragment_tests = false
+depth_mode = "Any"
+shading_rate = -1
+storage_write_index = -1
+storage_write_value = -1
+interlock = false
+n_out = 1
+local_size = [1, 1, 1]
+kernel_body_begin = -1
+kernel_body_count = 0
+mesh_vertices = 0
+mesh_primitives = 0
+mesh_prim = -1
+task_emit = -1
+task_payload = [-1, -1, -1, -1]
+n_task_payload = 0
+tess_patch_size = 0
+tess_inner = -1
+tess_outer = -1
+mesh_payload_in = false
+storage_read_only = false
+
+[[out]]
+node = "n8"
+location = 0
+interp = "Smooth"
+
+[[node]]
+id = "n0"
+op = "Builtin"
+dtype = "I32"
+shape = [1]
+iidx = 10
+
+[[node]]
+id = "n1"
+op = "Cast"
+shape = [1]
+in = ["n0"]
+
+[[node]]
+id = "n2"
+op = "Const"
+shape = [1]
+cval = "0x3fd0000000000000"
+
+[[node]]
+id = "n3"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n4"
+op = "Add"
+shape = [1]
+in = ["n1", "n3"]
+
+[[node]]
+id = "n5"
+op = "Mul"
+shape = [1]
+in = ["n4", "n2"]
+
+[[node]]
+id = "n6"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n7"
+op = "Vec3"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n5", "n5", "n5"]
+
+[[node]]
+id = "n8"
+op = "VecConcat"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n7", "n6"]

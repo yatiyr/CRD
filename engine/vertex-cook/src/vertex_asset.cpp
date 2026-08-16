@@ -493,6 +493,14 @@ VertexCookError parse_vertex_toml(crd::containers::StringView toml_text, VertexP
         out.rt.callable_scale = (*r)["callable_scale"].value_or<double>(2.0);
         out.rt.callable_bias  = (*r)["callable_bias"].value_or<double>(1.0);
         out.rt.use_callable   = (*r)["use_callable"].value_or<bool>(false);
+        // CEIR-19b (hybrid RT shadows): the shadow-ray raygen params + the miss/hit payload values.
+        out.rt.to_light       = (*r)["to_light"].value_or<bool>(false);
+        out.rt.origin_binding = static_cast<crd::u32>((*r)["origin_binding"].value_or<int64_t>(1));
+        out.rt.light_x        = (*r)["light_x"].value_or<double>(0.0);
+        out.rt.light_y        = (*r)["light_y"].value_or<double>(0.0);
+        out.rt.light_z        = (*r)["light_z"].value_or<double>(0.0);
+        out.rt.miss_value     = (*r)["miss_value"].value_or<double>(-1.0);
+        out.rt.hit_value      = (*r)["hit_value"].value_or<double>(1.0);
     }
     if (const auto* cu = root["cull"].as_table())
     {
@@ -1624,6 +1632,21 @@ crd::containers::String emit_vertex_toml(const VertexProgramDesc& desc, crd::mem
         app_f64(o, desc.rt.callable_bias);
         app(o, "\nuse_callable   = ");
         app(o, desc.rt.use_callable ? "true" : "false");
+        // CEIR-19b (hybrid RT shadows): round-trip the shadow-ray raygen params + miss/hit payload values.
+        app(o, "\nto_light       = ");
+        app(o, desc.rt.to_light ? "true" : "false");
+        app(o, "\norigin_binding = ");
+        app_u32(o, desc.rt.origin_binding);
+        app(o, "\nlight_x        = ");
+        app_f64(o, desc.rt.light_x);
+        app(o, "\nlight_y        = ");
+        app_f64(o, desc.rt.light_y);
+        app(o, "\nlight_z        = ");
+        app_f64(o, desc.rt.light_z);
+        app(o, "\nmiss_value     = ");
+        app_f64(o, desc.rt.miss_value);
+        app(o, "\nhit_value      = ");
+        app_f64(o, desc.rt.hit_value);
         app(o, "\n");
         break;
     case StageKind::Vertex:
@@ -1844,20 +1867,64 @@ namespace
         const int pl  = g.ray_payload_decl(words);
         const int mk  = g.kernel_stmt_mark();
         const int idx = g.cast(g.swizzle(g.builtin(crd::kir::KBuiltin::LaunchId), 0), DType::U32);
-        // One ray per launch index along +Z. ⛔ tmin is 0.001, not 0: a ray starting exactly ON the surface
-        // self-intersects at t=0 and every pixel reports a hit against its own geometry.
-        g.stmt_trace_ray_pipeline(as, pl, c.kf(0.0), c.kf(0.0), c.kf(0.0), c.kf(0.0), c.kf(0.0), c.kf(1.0),
-                                  c.kf(0.001), c.kf(1.0e30));
-        // ⭐ REN-38-F13: `use_callable` routes the traced payload THROUGH the SBT's callable — what lands in
-        // the output is the callable's transform of it, so the gate can prove the fourth table dispatched.
-        if (desc.rt.use_callable)
+        if (desc.rt.to_light)
         {
-            const int cd = g.callable_data_decl(words);
-            g.stmt_payload_store(cd, 0, g.payload_load(pl, 0));
-            g.stmt_execute_callable(c.ku(0U), cd);
-            g.stmt_buffer_store(out, idx, g.payload_load(cd, 0));
+            // ⭐ CEIR-19b SHADOW ray: the ORIGIN + a VALIDITY flag come per-launch from worldpos_buf[idx] (the compute
+            // prepass reconstructed the surface world-pos from the raster depth; the .w component is > 0 for a real
+            // surface, <= 0 for a SKY / no-geometry pixel). ⛔ materialize the buffer-loaded components — each is reused
+            // across the direction math AND the two sibling guard blocks (the dither / if-block shared-temp scar).
+            const int ob   = g.buffer_decl(DType::F32, static_cast<int>(desc.rt.as_set),
+                                           static_cast<int>(desc.rt.origin_binding), false);
+            const int base = c.mul(idx, c.ku(4U)); // vec4 stride per launch (x, y, z, valid)
+            g.stmt_materialize(base);
+            const int ox    = g.buffer_load(ob, c.add(base, c.ku(0U)));
+            const int oy    = g.buffer_load(ob, c.add(base, c.ku(1U)));
+            const int oz    = g.buffer_load(ob, c.add(base, c.ku(2U)));
+            const int valid = g.buffer_load(ob, c.add(base, c.ku(3U)));
+            g.stmt_materialize(ox);
+            g.stmt_materialize(oy);
+            g.stmt_materialize(oz);
+            g.stmt_materialize(valid);
+            // the DIRECTION toward the fixed light; tmax = the light distance ×0.999 so the light itself is not an occluder.
+            const int lx   = c.sub(c.kf(desc.rt.light_x), ox);
+            const int ly   = c.sub(c.kf(desc.rt.light_y), oy);
+            const int lz   = c.sub(c.kf(desc.rt.light_z), oz);
+            int       len  = g.unary(KOp::Sqrt, c.add(c.add(c.mul(lx, lx), c.mul(ly, ly)), c.mul(lz, lz)));
+            g.stmt_materialize(len);
+            const int inv  = c.dvd(c.kf(1.0), g.binary(KOp::Max, len, c.kf(1.0e-6)));
+            const int dx   = c.mul(lx, inv);
+            const int dy   = c.mul(ly, inv);
+            const int dz   = c.mul(lz, inv);
+            const int tmax = c.mul(len, c.kf(0.999));
+            // ⛔⛔ a SKY pixel (validity <= 0) has NO surface — reconstructing the cleared far depth through the
+            // infinite-far inverse-VP yields a homogeneous w == 0 (a NaN/inf origin) that would NaN the trace + spike
+            // val_err. GUARD it: valid → trace the shadow ray + store the term; sky → store 1.0 (LIT). ⛔ tmin 0.001,
+            // not 0 (a ray ON the surface self-intersects at t=0). Two sibling if-blocks share idx/valid (materialized).
+            const int okf = g.stmt_if_begin(g.binary(KOp::CmpGt, valid, c.kf(0.0)));
+            g.stmt_trace_ray_pipeline(as, pl, ox, oy, oz, dx, dy, dz, c.kf(0.001), tmax);
+            g.stmt_buffer_store(out, idx, g.payload_load(pl, 0));
+            g.stmt_if_end(okf);
+            const int skf = g.stmt_if_begin(g.binary(KOp::CmpLe, valid, c.kf(0.0)));
+            g.stmt_buffer_store(out, idx, c.kf(1.0));
+            g.stmt_if_end(skf);
         }
-        else { g.stmt_buffer_store(out, idx, g.payload_load(pl, 0)); }
+        else
+        {
+            // the F6 PRIMARY ray (byte-identical to REN-38-F3): one ray per launch along +Z from the origin. ⛔ tmin is
+            // 0.001, not 0: a ray starting exactly ON the surface self-intersects at t=0 and reports a hit against itself.
+            g.stmt_trace_ray_pipeline(as, pl, c.kf(0.0), c.kf(0.0), c.kf(0.0), c.kf(0.0), c.kf(0.0), c.kf(1.0),
+                                      c.kf(0.001), c.kf(1.0e30));
+            // ⭐ REN-38-F13: `use_callable` routes the traced payload THROUGH the SBT's callable — what lands in the
+            // output is the callable's transform of it, so the gate can prove the fourth table dispatched.
+            if (desc.rt.use_callable)
+            {
+                const int cd = g.callable_data_decl(words);
+                g.stmt_payload_store(cd, 0, g.payload_load(pl, 0));
+                g.stmt_execute_callable(c.ku(0U), cd);
+                g.stmt_buffer_store(out, idx, g.payload_load(cd, 0));
+            }
+            else { g.stmt_buffer_store(out, idx, g.payload_load(pl, 0)); }
+        }
         ve.stage             = crd::kir::KStage::RayGen;
         ve.kernel_body_begin = mk;
         ve.kernel_body_count = g.stmt_count() - mk;
@@ -1931,7 +1998,10 @@ namespace
     // hit/miss pair. ⛔ A miss shader that wrote nothing would leave the payload at whatever the last ray left.
     const int pl = g.ray_payload_decl(words);
     const int mk = g.kernel_stmt_mark();
-    g.stmt_payload_store(pl, 0, c.kf(desc.stage == StageKind::Miss ? -1.0 : 1.0));
+    // CEIR-19b: the payload values are authored (miss_value / hit_value). Shadow: miss = 1.0 (LIT), hit = 0.0 (SHADOWED);
+    // the F6 primary default stays miss = -1.0 / hit = 1.0. ⛔ a miss shader that wrote nothing would leave the payload
+    // at whatever the last ray left.
+    g.stmt_payload_store(pl, 0, c.kf(desc.stage == StageKind::Miss ? desc.rt.miss_value : desc.rt.hit_value));
     ve.stage             = desc.stage == StageKind::Miss ? crd::kir::KStage::Miss : crd::kir::KStage::ClosestHit;
     ve.kernel_body_begin = mk;
     ve.kernel_body_count = g.stmt_count() - mk;
@@ -2561,6 +2631,18 @@ namespace
         sec_vis  = c.mul(vis, in_band_u); // 1 only for in-band survivors
         sec_slot = g.select(g.binary(KOp::CmpNe, has_prev, c.ku(0U)), c.sub(lslot, c.ku(1U)), c.ku(0U));
         sec_val  = pack_fine;
+        // ⛔⛔ SCOPE (the if-block shared-temp scar, feedback_ckir_if_block_shared_temp_scope_materialize): the PRIMARY
+        // store (`primary_val`, inside the `keep` stmt_if below) and the SECONDARY write (`sec_val`/`sec_vis`, in the
+        // sibling stmt_if after `keep` closes) SHARE multi-use nodes — `in_band_u`, `alpha_fine` (fed into both the
+        // coarse alpha the primary packs AND the fine alpha the secondary packs). The lazy emitter would declare each
+        // shared temp at its FIRST emitted use — inside `keep` — leaving the secondary write reading them out of scope
+        // (`'tN' undeclared`, a real-backend-only failure: the CPU oracle runs the same graph). Freeze the two stored
+        // values + the secondary atomic operand into the ENCLOSING scope here, so every shared leaf is declared before
+        // either sibling block. ⛔ All three are u32 (never the bool `in_band`) — the corollary forbids materialising a
+        // bool guard (no bool temp type); materialise the stored u32 values, whose subtrees carry the shared leaves.
+        g.stmt_materialize(primary_val);
+        g.stmt_materialize(sec_vis);
+        g.stmt_materialize(sec_val);
     }
     // ⭐⭐ ONE COMMAND PER (view, slot). The view is baked into `draw_arg_off`; the slot walks it by whole
     // commands, so a survivor accumulates into exactly the draw that will render its level.

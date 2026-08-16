@@ -184,6 +184,12 @@ bool materialize_draw_packet(const Context& ctx, const Operation* draw_op, const
                              crd::gpu::RasterDrawPacket& out)
 {
     out         = crd::gpu::RasterDrawPacket{};
+    // ⛔ CEIR-17z: forward the pass's VRS + conservative state onto the draw (the record set these on the resolvers from the
+    // payload — shading_rate / conservative). command_lowering reads packet.state for VRS/conservative; a default packet drew
+    // at 1x1 regardless of the authored shading_rate. Defaults 1x1/Keep/Off keep ordinary draws byte-identical.
+    out.state.vrs_pipeline_rate      = resolvers.vrs_pipeline_rate;
+    out.state.vrs_primitive_combiner = resolvers.vrs_primitive_combiner;
+    out.state.conservative           = resolvers.conservative;
     out.program = resolvers.program(draw_op, resolvers.program_user);
     crd::gpu::GeometrySource&     g  = out.geometry;
     const containers::StringView  nm = ctx.op_name(draw_op->kind());
@@ -653,7 +659,20 @@ void scene_attach_textures(crd::gpu::RasterDrawPacket& pk, crd::gpu::ITexture* i
 {
     if (resolvers.program == nullptr || resolvers.draws_count == nullptr || resolvers.draws_item == nullptr) { return false; }
     crd::gpu::IRasterProgram* const def_prog = resolvers.program(op, resolvers.program_user);
-    const crd::u32                  n        = resolvers.draws_count(resolvers.draws_user);
+    // ⛔⛔ CEIR-18c: a ≥2-colour MRT scene list is a DEFERRED G-BUFFER — its items are the SAME DrawList shapes the
+    // single-colour ladder draws (REN-39 INDEXED-PULL, REN-40 GPU-indirect, textured), NOT only the non-indexed
+    // storage-pull the WBOIT / 14z-4c single-draw cases used. The original arm hardcoded `Draw` + `vertex_count`,
+    // so an INDEXED G-buffer item (index_count>0, vertex_count IGNORED=0) drew ZERO vertices → 0 fragments, and the
+    // whole G-buffer stayed at its clear. Select the per-item verb exactly as emit_scene_list (minus coalescing —
+    // the MRT arm opens a scope PER ITEM). The non-indexed branch below is byte-identical to the legacy MRT arm.
+    bool                      pass_is_depth = false;
+    bool                      pass_is_cmp   = false;
+    crd::gpu::ITexture* const pass_tex      = resolvers.pass_texture != nullptr
+                                                  ? resolvers.pass_texture(resolvers.pass_texture_user, pass_is_depth, pass_is_cmp)
+                                                  : nullptr;
+    const bool     pass_depth = pass_tex != nullptr && pass_is_depth;
+    const bool     pass_cmp   = pass_is_cmp;
+    const crd::u32 n          = resolvers.draws_count(resolvers.draws_user);
     for (crd::u32 i = 0; i < n; ++i)
     {
         RasterDrawItem it{};
@@ -661,14 +680,45 @@ void scene_attach_textures(crd::gpu::RasterDrawPacket& pk, crd::gpu::ITexture* i
         if (it.storage == nullptr) { continue; }
         crd::gpu::IRasterProgram* const prog = it.program != nullptr ? it.program : def_prog;
         if (prog == nullptr) { continue; }
+        // a G-buffer scope always has colour; a per-item base-colour map beats the (usually absent) pass atlas.
+        crd::gpu::ITexture* const item_map = it.texture;
+        crd::gpu::ITexture* const tex      = item_map != nullptr ? item_map : pass_tex;
+        const bool                depth_tex = item_map == nullptr && pass_depth;
+        const bool                combined  = item_map != nullptr && pass_tex != nullptr && pass_depth;
+        const crd::gpu::ResourceBinding sbind{crd::gpu::BindingFrequency::Object, crd::gpu::BindingKind::StorageBuffer, 0U,
+                                              it.storage};
         encoder.begin_rendering(rd);
         crd::gpu::RasterDrawPacket p;
-        p.program                        = prog;
-        p.command                        = crd::gpu::RasterCommandKind::Draw;
-        p.geometry.kind                  = crd::gpu::GeometryKind::StoragePull;
-        p.geometry.vertex_or_index_count = it.vertex_count;
-        p.bindings.push_back(crd::gpu::ResourceBinding{crd::gpu::BindingFrequency::Object,
-                                                       crd::gpu::BindingKind::StorageBuffer, 0U, it.storage});
+        p.program = prog;
+        if (it.args != nullptr && it.index_count > 0U)
+        {
+            // GPU-driven indirect (the command count is in device memory; DrawIndex row = i).
+            p.command                   = crd::gpu::RasterCommandKind::DrawIndexedIndirect;
+            p.geometry.kind             = crd::gpu::GeometryKind::Indirect;
+            p.geometry.args_buffer      = it.args;
+            p.geometry.args_offset      = it.args_offset;
+            p.geometry.max_draws        = 1U;
+            p.geometry.first_draw_index = i;
+        }
+        else if (it.index_count > 0U)
+        {
+            // INDEXED-PULL (the DrawIndex row a rebased indexed program needs rides `first_draw_index`).
+            p.command                        = crd::gpu::RasterCommandKind::DrawIndexed;
+            p.geometry.kind                  = crd::gpu::GeometryKind::Indexed;
+            p.geometry.vertex_or_index_count = it.index_count;
+            p.geometry.instance_count        = it.instance_count;
+            p.geometry.first_index           = it.first_index;
+            p.geometry.first_draw_index      = i;
+        }
+        else
+        {
+            // NON-INDEXED storage-pull (the WBOIT / 14z-4c legacy MRT shape) — byte-identical to before.
+            p.command                        = crd::gpu::RasterCommandKind::Draw;
+            p.geometry.kind                  = crd::gpu::GeometryKind::StoragePull;
+            p.geometry.vertex_or_index_count = it.vertex_count;
+        }
+        p.bindings.push_back(sbind);
+        if (tex != nullptr || depth_tex || combined) { scene_attach_textures(p, it.texture, pass_tex, tex, combined, depth_tex, pass_cmp); }
         encoder.draw(p);
         encoder.end_rendering();
     }

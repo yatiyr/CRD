@@ -388,7 +388,30 @@ public:
             break;
 
         case GeometryKind::Indexed:
-            if (buf != nullptr && color0 != nullptr)
+            if (r.color.size() >= 2 && buf != nullptr)
+            {
+                // ⛔⛔ CEIR-18c: the INDEXED MRT branch — a deferred G-buffer over REN-39 indexed-pull geometry. It MUST
+                // precede the single-colour arm (a G-buffer pass IS an MRT pass): the arm below binds only color0, so the
+                // FS's outputs 1..N-1 get no attachment (validation) and the pack is dropped. One verb, nullable map/atlas
+                // (textured G-buffer rides it); EXPLICIT depth (a bare colour transient has no bundled companion).
+                IRasterTarget*  targets[kMaxColorAttachments];
+                AttachmentClear attaches[kMaxColorAttachments];
+                const crd::u32  cc = static_cast<crd::u32>(r.color.size());
+                for (crd::u32 i = 0; i < cc; ++i)
+                {
+                    targets[i]             = r.color[i].target;
+                    attaches[i].kind       = r.color[i].clear_kind;
+                    attaches[i].color      = r.color[i].clear;
+                    attaches[i].uint_value = r.color[i].clear_uint;
+                    attaches[i].blend      = r.color[i].blend;
+                }
+                m_ctx.draw_storage_indexed_mrt(targets, cc, prog, attaches,
+                                               r.depth.enabled ? r.depth.target : nullptr, clear_depth, compare, *buf,
+                                               static_cast<crd::u32>(g.index_offset), count, g.instance_count,
+                                               g.first_index, map_texture(packet.bindings),
+                                               shadow_atlas_from(packet.bindings), !clears, g.first_draw_index);
+            }
+            else if (buf != nullptr && color0 != nullptr)
             {
                 // ⭐⭐ RAF-8 / REN-39-C1: an INDEXED-PULL item carrying per-draw texture state (a base-colour MAP @1/2
                 // and/or a shadow ATLAS @4/5) takes the indexed SAMPLED verb — ONE verb, the shape chosen by which

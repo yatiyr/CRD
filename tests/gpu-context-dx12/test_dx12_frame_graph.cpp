@@ -20,6 +20,7 @@
 
 #include <crd/framecook/frame_asset.hpp>   // REN-36.2: the cooked frame-graph asset
 #include <crd/framecook/frame_runtime.hpp> // REN-36.2: executing it through IFrameGraph
+#include <crd/renderasset/diagnostic.hpp>  // CEIR-18c: DiagnosticList for build_frame_plans at the direct rec.record site
 #include <crd/kir/ckir.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
@@ -1720,6 +1721,14 @@ TEST_CASE("REN-38-A5 GATE (DX12): an authored PRESENT pass hands the frame to a 
         CHECK(w2 == "to_screen"); // by PASS NAME — the author is told which pass, not merely that something failed
     }
 
+    // ⛔ CEIR-18c (a PRE-EXISTING §128 DX12 hole caught by the CEIR-18c blast-radius gate — the CEIR-17z fix landed on
+    // the VULKAN REN-38-A5 twin but CEIR-17's gate ran gpu-context-vulkan ONLY, so this DX12 twin's MissingCeirPlan
+    // went uncaught): the migrated PRESENT executor needs a CEIR replay plan; a direct rec.record with no plan is a
+    // loud MissingCeirPlan. Build it ONCE (exactly as execute_frame_graph does) and pass it to BOTH frames' records.
+    crd::renderasset::DiagnosticList plan_diags(&alloc);
+    crd::framecook::FramePlans       plans(&alloc);
+    REQUIRE(crd::framecook::build_frame_plans(desc, plans, plan_diags));
+
     // ── 2) WITH a surface: the frame actually goes up, and the graph still submits ONCE. ──
     PresentHostDx host(*dst, *buf, *prog, surface.get());
     auto        fgraph = raster.create_frame_graph();
@@ -1727,7 +1736,7 @@ TEST_CASE("REN-38-A5 GATE (DX12): an authored PRESENT pass hands the frame to a 
     crd::framecook::FrameRecorder rec(&alloc);
     rec.begin_frame();
     crd::framecook::FrameExecError err = crd::framecook::FrameExecError::Ok;
-    REQUIRE(rec.record(desc, *fgraph, raster, host, &err, &where));
+    REQUIRE(rec.record(desc, *fgraph, raster, host, &err, &where, &plans));
     CHECK(err == crd::framecook::FrameExecError::Ok);
     REQUIRE(fgraph->build());
     fgraph->execute();
@@ -1749,7 +1758,7 @@ TEST_CASE("REN-38-A5 GATE (DX12): an authored PRESENT pass hands the frame to a 
     // a SECOND frame through the same graph presents again — the counters are per-execute, not cumulative-once.
     fgraph->reset();
     rec.begin_frame();
-    REQUIRE(rec.record(desc, *fgraph, raster, host, &err, &where));
+    REQUIRE(rec.record(desc, *fgraph, raster, host, &err, &where, &plans)); // CEIR-18c: reuse the one replay plan
     REQUIRE(fgraph->build());
     fgraph->execute();
     CHECK(fgraph->last_present_count() == 1U);

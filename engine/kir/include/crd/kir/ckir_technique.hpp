@@ -1102,6 +1102,21 @@ inline constexpr TechniqueOption kForwardCsmOptions[] = {
 // the depth→moment CONVERT: read the raw depth atlas layer, emit this soft mode's 4-channel moment vector.
 // `soft_mode` is 2 (EVSM) or 3 (MSM) — the same declared option axis the resolve in `body_forward_csm` reads,
 // so the convert and the resolve cannot disagree about what the atlas holds.
+// CEIR-18p: the moment programs are LOAD-TIME SPECIALIZED — cascade layer, blur direction, and blur tap-spacing
+// (1/map_size) are D12 SPEC-CONSTANT nodes (they round-trip through the `.ckir` form via axes+iidx, default-elided), and
+// the host sets each per moment_prog[kind][index] slot via KGraph::set_spec_const after ckir_read + before create_program.
+// ⛔ inv_size is a SPEC-CONST fed from the LIVE csm.map_size, NOT a baked constant (which would freeze the config — the
+// §128 class) and NOT a TexSize derive: the atlas is a sampler2DArray whose GLSL textureSize is ivec3, but KOp::TexSize
+// types a Tex2D as ivec2 — a rank mismatch that miscompiles on materialization. These ids name the three runtime knobs;
+// ⛔ keep them in sync with the host patch sites in ensure_moment_program.
+inline constexpr crd::u32 kMomentLayerSpec = 0U; // the cascade layer — the array texture's z coordinate
+inline constexpr crd::u32 kMomentDirSpec   = 1U; // blur direction: 1.0 = horizontal (offset in x), 0.0 = vertical (y)
+inline constexpr crd::u32 kMomentInvSpec   = 2U; // blur tap spacing = 1/map_size — host sets from the LIVE csm config
+
+// CEIR-18p: the velocity FS's backend-dependent clip-Y sign is a SPEC-CONST so the ONE asset serves both backends
+// (host patches it per backend after ckir_read, like the TAA sgn). Its own program ⇒ its own constant_id space.
+inline constexpr crd::u32 kVelocityVsgnSpec = 0U; // -0.5 on a y-up backend (DX12), +0.5 on y-down (Vulkan)
+
 [[nodiscard]] inline int body_moment_convert(KGraph& g, int soft_mode, crd::u32 layer)
 {
     const auto sh1 = make_shape({1});
@@ -1116,8 +1131,8 @@ inline constexpr TechniqueOption kForwardCsmOptions[] = {
     // `depth_as_float = true`, which routes the read through draw_textured's plain sampler at (0,2).
     const int tex  = g.texture(0, 1, DType::F32, TexDim::Tex2D, /*arrayed=*/true, /*ms=*/false, /*shadow=*/false);
     const int samp = g.sampler(0, 2, /*shadow=*/false);
-    const int d    = g.swizzle(g.tex_sample(tex, samp, g.vec3(g.swizzle(uv, 0), g.swizzle(uv, 1),
-                                                              kf(static_cast<double>(layer)))), 0);
+    const int lay  = g.spec_constant(kMomentLayerSpec, static_cast<double>(layer), DType::F32); // host patches per cascade
+    const int d    = g.swizzle(g.tex_sample(tex, samp, g.vec3(g.swizzle(uv, 0), g.swizzle(uv, 1), lay)), 0);
     const auto mul = [&](int a, int b) { return g.binary(KOp::Mul, a, b); };
     if (soft_mode == 3) // MSM: the four power moments
     {
@@ -1147,16 +1162,22 @@ inline constexpr TechniqueOption kForwardCsmOptions[] = {
     const int samp = g.sampler(0, 2, /*shadow=*/false);
     static constexpr double kW[9] = {0.01897808, 0.05589817, 0.12092091, 0.19211605, 0.22417357,
                                      0.19211605, 0.12092091, 0.05589817, 0.01897808};
-    const int lay = kf(static_cast<double>(layer));
-    int       acc = -1;
+    // CEIR-18p: layer, direction (1=horizontal), and inv_size (1/map_size) are SPEC-CONSTS — the host patches each per
+    // slot from the LIVE csm config (see kMoment*Spec). The direction spec gates which axis carries the tap offset:
+    // su = uv.x + off*dir, sv = uv.y + off*(1-dir); dir=1 => horizontal, dir=0 => vertical.
+    const int lay  = g.spec_constant(kMomentLayerSpec, static_cast<double>(layer), DType::F32);
+    const int dir  = g.spec_constant(kMomentDirSpec, horizontal ? 1.0 : 0.0, DType::F32);
+    const int inv  = g.spec_constant(kMomentInvSpec, inv_size, DType::F32);
+    const int ndir = g.binary(KOp::Sub, kf(1.0), dir); // the complementary axis weight (1 - dir)
+    int       acc  = -1;
     for (int i = 0; i < 9; ++i)
     {
-        const double off = static_cast<double>(i - 4) * inv_size;
-        const int    su  = g.binary(KOp::Add, g.swizzle(uv, 0), kf(horizontal ? off : 0.0));
-        const int    sv  = g.binary(KOp::Add, g.swizzle(uv, 1), kf(horizontal ? 0.0 : off));
-        const int    m   = g.tex_sample(tex, samp, g.vec3(su, sv, lay));
-        const int    w   = nodes::detail::bin(g, KOp::Mul, m, g.splat(kf(kW[i]), 4));
-        acc              = acc < 0 ? w : nodes::detail::bin(g, KOp::Add, acc, w);
+        const int off = g.binary(KOp::Mul, kf(static_cast<double>(i - 4)), inv); // (i-4)/map_size
+        const int su  = g.binary(KOp::Add, g.swizzle(uv, 0), g.binary(KOp::Mul, off, dir));
+        const int sv  = g.binary(KOp::Add, g.swizzle(uv, 1), g.binary(KOp::Mul, off, ndir));
+        const int m   = g.tex_sample(tex, samp, g.vec3(su, sv, lay));
+        const int w   = nodes::detail::bin(g, KOp::Mul, m, g.splat(kf(kW[i]), 4));
+        acc           = acc < 0 ? w : nodes::detail::bin(g, KOp::Add, acc, w);
     }
     return acc;
 }

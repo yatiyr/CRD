@@ -1,0 +1,2824 @@
+# .ckir - an authored CKIR program (node graph). A node editor reads this and turns it into CKIR.
+schema = 1
+
+[[entry]]
+stage = "Fragment"
+inputs = 0
+position = -1
+frag_depth = -1
+discard_cond = -1
+early_fragment_tests = false
+depth_mode = "Any"
+shading_rate = -1
+storage_write_index = -1
+storage_write_value = -1
+interlock = false
+n_out = 1
+local_size = [1, 1, 1]
+kernel_body_begin = -1
+kernel_body_count = 0
+mesh_vertices = 0
+mesh_primitives = 0
+mesh_prim = -1
+task_emit = -1
+task_payload = [-1, -1, -1, -1]
+n_task_payload = 0
+tess_patch_size = 0
+tess_inner = -1
+tess_outer = -1
+mesh_payload_in = false
+storage_read_only = false
+
+[[out]]
+node = "n429"
+location = 0
+interp = "Smooth"
+
+[[node]]
+id = "n0"
+op = "StageIn"
+tkind = "Vec"
+trows = 2
+shape = [1]
+
+[[node]]
+id = "n1"
+op = "Texture"
+tkind = "Texture"
+trows = 2
+tcols = 0
+tcount = 4
+shape = [1]
+iidx = 16
+
+[[node]]
+id = "n2"
+op = "Sampler"
+tkind = "Sampler"
+trows = 0
+tcols = 0
+shape = [1]
+iidx = 2
+
+[[node]]
+id = "n3"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4030000000000000"
+
+[[node]]
+id = "n4"
+op = "StorageLoad"
+dtype = "U32"
+shape = [1]
+in = ["n3"]
+
+[[node]]
+id = "n5"
+op = "Cast"
+dtype = "I32"
+shape = [1]
+in = ["n4"]
+
+[[node]]
+id = "n6"
+op = "IntBitsToFloat"
+shape = [1]
+in = ["n5"]
+
+[[node]]
+id = "n7"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4031000000000000"
+
+[[node]]
+id = "n8"
+op = "StorageLoad"
+dtype = "U32"
+shape = [1]
+in = ["n7"]
+
+[[node]]
+id = "n9"
+op = "Cast"
+dtype = "I32"
+shape = [1]
+in = ["n8"]
+
+[[node]]
+id = "n10"
+op = "IntBitsToFloat"
+shape = [1]
+in = ["n9"]
+
+[[node]]
+id = "n11"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4032000000000000"
+
+[[node]]
+id = "n12"
+op = "StorageLoad"
+dtype = "U32"
+shape = [1]
+in = ["n11"]
+
+[[node]]
+id = "n13"
+op = "Cast"
+dtype = "I32"
+shape = [1]
+in = ["n12"]
+
+[[node]]
+id = "n14"
+op = "IntBitsToFloat"
+shape = [1]
+in = ["n13"]
+
+[[node]]
+id = "n15"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4033000000000000"
+
+[[node]]
+id = "n16"
+op = "StorageLoad"
+dtype = "U32"
+shape = [1]
+in = ["n15"]
+
+[[node]]
+id = "n17"
+op = "Cast"
+dtype = "I32"
+shape = [1]
+in = ["n16"]
+
+[[node]]
+id = "n18"
+op = "IntBitsToFloat"
+shape = [1]
+in = ["n17"]
+
+[[node]]
+id = "n19"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+[[node]]
+id = "n20"
+op = "SampleIndexed"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n1", "n2", "n0", "n19"]
+
+[[node]]
+id = "n21"
+op = "Const"
+shape = [1]
+cval = "0xbff0000000000000"
+
+[[node]]
+id = "n22"
+op = "Mul"
+shape = [1]
+in = ["n21", "n10"]
+
+[[node]]
+id = "n23"
+op = "Swizzle"
+shape = [1]
+in = ["n0"]
+perm = [1, 0, 0, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n24"
+op = "Add"
+shape = [1]
+in = ["n23", "n22"]
+
+[[node]]
+id = "n25"
+op = "Const"
+shape = [1]
+cval = "0xbff0000000000000"
+
+[[node]]
+id = "n26"
+op = "Mul"
+shape = [1]
+in = ["n25", "n6"]
+
+[[node]]
+id = "n27"
+op = "Swizzle"
+shape = [1]
+in = ["n0"]
+
+[[node]]
+id = "n28"
+op = "Add"
+shape = [1]
+in = ["n27", "n26"]
+
+[[node]]
+id = "n29"
+op = "Vec2"
+tkind = "Vec"
+trows = 2
+shape = [1]
+in = ["n28", "n24"]
+
+[[node]]
+id = "n30"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+[[node]]
+id = "n31"
+op = "SampleIndexed"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n1", "n2", "n29", "n30"]
+
+[[node]]
+id = "n32"
+op = "Min"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n20", "n31"]
+
+[[node]]
+id = "n33"
+op = "Max"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n20", "n31"]
+
+[[node]]
+id = "n34"
+op = "Const"
+shape = [1]
+cval = "0xbff0000000000000"
+
+[[node]]
+id = "n35"
+op = "Mul"
+shape = [1]
+in = ["n34", "n10"]
+
+[[node]]
+id = "n36"
+op = "Swizzle"
+shape = [1]
+in = ["n0"]
+perm = [1, 0, 0, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n37"
+op = "Add"
+shape = [1]
+in = ["n36", "n35"]
+
+[[node]]
+id = "n38"
+op = "Const"
+shape = [1]
+
+[[node]]
+id = "n39"
+op = "Mul"
+shape = [1]
+in = ["n38", "n6"]
+
+[[node]]
+id = "n40"
+op = "Swizzle"
+shape = [1]
+in = ["n0"]
+
+[[node]]
+id = "n41"
+op = "Add"
+shape = [1]
+in = ["n40", "n39"]
+
+[[node]]
+id = "n42"
+op = "Vec2"
+tkind = "Vec"
+trows = 2
+shape = [1]
+in = ["n41", "n37"]
+
+[[node]]
+id = "n43"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+[[node]]
+id = "n44"
+op = "SampleIndexed"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n1", "n2", "n42", "n43"]
+
+[[node]]
+id = "n45"
+op = "Min"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n32", "n44"]
+
+[[node]]
+id = "n46"
+op = "Max"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n33", "n44"]
+
+[[node]]
+id = "n47"
+op = "Const"
+shape = [1]
+cval = "0xbff0000000000000"
+
+[[node]]
+id = "n48"
+op = "Mul"
+shape = [1]
+in = ["n47", "n10"]
+
+[[node]]
+id = "n49"
+op = "Swizzle"
+shape = [1]
+in = ["n0"]
+perm = [1, 0, 0, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n50"
+op = "Add"
+shape = [1]
+in = ["n49", "n48"]
+
+[[node]]
+id = "n51"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n52"
+op = "Mul"
+shape = [1]
+in = ["n51", "n6"]
+
+[[node]]
+id = "n53"
+op = "Swizzle"
+shape = [1]
+in = ["n0"]
+
+[[node]]
+id = "n54"
+op = "Add"
+shape = [1]
+in = ["n53", "n52"]
+
+[[node]]
+id = "n55"
+op = "Vec2"
+tkind = "Vec"
+trows = 2
+shape = [1]
+in = ["n54", "n50"]
+
+[[node]]
+id = "n56"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+[[node]]
+id = "n57"
+op = "SampleIndexed"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n1", "n2", "n55", "n56"]
+
+[[node]]
+id = "n58"
+op = "Min"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n45", "n57"]
+
+[[node]]
+id = "n59"
+op = "Max"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n46", "n57"]
+
+[[node]]
+id = "n60"
+op = "Const"
+shape = [1]
+
+[[node]]
+id = "n61"
+op = "Mul"
+shape = [1]
+in = ["n60", "n10"]
+
+[[node]]
+id = "n62"
+op = "Swizzle"
+shape = [1]
+in = ["n0"]
+perm = [1, 0, 0, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n63"
+op = "Add"
+shape = [1]
+in = ["n62", "n61"]
+
+[[node]]
+id = "n64"
+op = "Const"
+shape = [1]
+cval = "0xbff0000000000000"
+
+[[node]]
+id = "n65"
+op = "Mul"
+shape = [1]
+in = ["n64", "n6"]
+
+[[node]]
+id = "n66"
+op = "Swizzle"
+shape = [1]
+in = ["n0"]
+
+[[node]]
+id = "n67"
+op = "Add"
+shape = [1]
+in = ["n66", "n65"]
+
+[[node]]
+id = "n68"
+op = "Vec2"
+tkind = "Vec"
+trows = 2
+shape = [1]
+in = ["n67", "n63"]
+
+[[node]]
+id = "n69"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+[[node]]
+id = "n70"
+op = "SampleIndexed"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n1", "n2", "n68", "n69"]
+
+[[node]]
+id = "n71"
+op = "Min"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n58", "n70"]
+
+[[node]]
+id = "n72"
+op = "Max"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n59", "n70"]
+
+[[node]]
+id = "n73"
+op = "Const"
+shape = [1]
+
+[[node]]
+id = "n74"
+op = "Mul"
+shape = [1]
+in = ["n73", "n10"]
+
+[[node]]
+id = "n75"
+op = "Swizzle"
+shape = [1]
+in = ["n0"]
+perm = [1, 0, 0, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n76"
+op = "Add"
+shape = [1]
+in = ["n75", "n74"]
+
+[[node]]
+id = "n77"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n78"
+op = "Mul"
+shape = [1]
+in = ["n77", "n6"]
+
+[[node]]
+id = "n79"
+op = "Swizzle"
+shape = [1]
+in = ["n0"]
+
+[[node]]
+id = "n80"
+op = "Add"
+shape = [1]
+in = ["n79", "n78"]
+
+[[node]]
+id = "n81"
+op = "Vec2"
+tkind = "Vec"
+trows = 2
+shape = [1]
+in = ["n80", "n76"]
+
+[[node]]
+id = "n82"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+[[node]]
+id = "n83"
+op = "SampleIndexed"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n1", "n2", "n81", "n82"]
+
+[[node]]
+id = "n84"
+op = "Min"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n71", "n83"]
+
+[[node]]
+id = "n85"
+op = "Max"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n72", "n83"]
+
+[[node]]
+id = "n86"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n87"
+op = "Mul"
+shape = [1]
+in = ["n86", "n10"]
+
+[[node]]
+id = "n88"
+op = "Swizzle"
+shape = [1]
+in = ["n0"]
+perm = [1, 0, 0, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n89"
+op = "Add"
+shape = [1]
+in = ["n88", "n87"]
+
+[[node]]
+id = "n90"
+op = "Const"
+shape = [1]
+cval = "0xbff0000000000000"
+
+[[node]]
+id = "n91"
+op = "Mul"
+shape = [1]
+in = ["n90", "n6"]
+
+[[node]]
+id = "n92"
+op = "Swizzle"
+shape = [1]
+in = ["n0"]
+
+[[node]]
+id = "n93"
+op = "Add"
+shape = [1]
+in = ["n92", "n91"]
+
+[[node]]
+id = "n94"
+op = "Vec2"
+tkind = "Vec"
+trows = 2
+shape = [1]
+in = ["n93", "n89"]
+
+[[node]]
+id = "n95"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+[[node]]
+id = "n96"
+op = "SampleIndexed"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n1", "n2", "n94", "n95"]
+
+[[node]]
+id = "n97"
+op = "Min"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n84", "n96"]
+
+[[node]]
+id = "n98"
+op = "Max"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n85", "n96"]
+
+[[node]]
+id = "n99"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n100"
+op = "Mul"
+shape = [1]
+in = ["n99", "n10"]
+
+[[node]]
+id = "n101"
+op = "Swizzle"
+shape = [1]
+in = ["n0"]
+perm = [1, 0, 0, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n102"
+op = "Add"
+shape = [1]
+in = ["n101", "n100"]
+
+[[node]]
+id = "n103"
+op = "Const"
+shape = [1]
+
+[[node]]
+id = "n104"
+op = "Mul"
+shape = [1]
+in = ["n103", "n6"]
+
+[[node]]
+id = "n105"
+op = "Swizzle"
+shape = [1]
+in = ["n0"]
+
+[[node]]
+id = "n106"
+op = "Add"
+shape = [1]
+in = ["n105", "n104"]
+
+[[node]]
+id = "n107"
+op = "Vec2"
+tkind = "Vec"
+trows = 2
+shape = [1]
+in = ["n106", "n102"]
+
+[[node]]
+id = "n108"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+[[node]]
+id = "n109"
+op = "SampleIndexed"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n1", "n2", "n107", "n108"]
+
+[[node]]
+id = "n110"
+op = "Min"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n97", "n109"]
+
+[[node]]
+id = "n111"
+op = "Max"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n98", "n109"]
+
+[[node]]
+id = "n112"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n113"
+op = "Mul"
+shape = [1]
+in = ["n112", "n10"]
+
+[[node]]
+id = "n114"
+op = "Swizzle"
+shape = [1]
+in = ["n0"]
+perm = [1, 0, 0, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n115"
+op = "Add"
+shape = [1]
+in = ["n114", "n113"]
+
+[[node]]
+id = "n116"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n117"
+op = "Mul"
+shape = [1]
+in = ["n116", "n6"]
+
+[[node]]
+id = "n118"
+op = "Swizzle"
+shape = [1]
+in = ["n0"]
+
+[[node]]
+id = "n119"
+op = "Add"
+shape = [1]
+in = ["n118", "n117"]
+
+[[node]]
+id = "n120"
+op = "Vec2"
+tkind = "Vec"
+trows = 2
+shape = [1]
+in = ["n119", "n115"]
+
+[[node]]
+id = "n121"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+[[node]]
+id = "n122"
+op = "SampleIndexed"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n1", "n2", "n120", "n121"]
+
+[[node]]
+id = "n123"
+op = "Min"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n110", "n122"]
+
+[[node]]
+id = "n124"
+op = "Max"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n111", "n122"]
+
+[[node]]
+id = "n125"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4034000000000000"
+
+[[node]]
+id = "n126"
+op = "StorageLoad"
+dtype = "U32"
+shape = [1]
+in = ["n125"]
+
+[[node]]
+id = "n127"
+op = "Cast"
+dtype = "I32"
+shape = [1]
+in = ["n126"]
+
+[[node]]
+id = "n128"
+op = "IntBitsToFloat"
+shape = [1]
+in = ["n127"]
+
+[[node]]
+id = "n129"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n130"
+op = "SampleIndexed"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n1", "n2", "n0", "n129"]
+
+[[node]]
+id = "n131"
+op = "Swizzle"
+shape = [1]
+in = ["n130"]
+
+[[node]]
+id = "n132"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4008000000000000"
+
+[[node]]
+id = "n133"
+op = "SampleIndexed"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n1", "n2", "n0", "n132"]
+
+[[node]]
+id = "n134"
+op = "Const"
+shape = [1]
+cval = "0x4000000000000000"
+
+[[node]]
+id = "n135"
+op = "Swizzle"
+shape = [1]
+in = ["n133"]
+
+[[node]]
+id = "n136"
+op = "Mul"
+shape = [1]
+in = ["n135", "n134"]
+
+[[node]]
+id = "n137"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n138"
+op = "Const"
+shape = [1]
+cval = "0x4000000000000000"
+
+[[node]]
+id = "n139"
+op = "Swizzle"
+shape = [1]
+in = ["n0"]
+
+[[node]]
+id = "n140"
+op = "Mul"
+shape = [1]
+in = ["n139", "n138"]
+
+[[node]]
+id = "n141"
+op = "Sub"
+shape = [1]
+in = ["n140", "n137"]
+
+[[node]]
+id = "n142"
+op = "Add"
+shape = [1]
+in = ["n141", "n136"]
+
+[[node]]
+id = "n143"
+op = "Const"
+shape = [1]
+cval = "0x4000000000000000"
+
+[[node]]
+id = "n144"
+op = "Mul"
+shape = [1]
+in = ["n143", "n128"]
+
+[[node]]
+id = "n145"
+op = "Swizzle"
+shape = [1]
+in = ["n133"]
+perm = [1, 0, 0, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n146"
+op = "Mul"
+shape = [1]
+in = ["n145", "n144"]
+
+[[node]]
+id = "n147"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n148"
+op = "Const"
+shape = [1]
+cval = "0x4000000000000000"
+
+[[node]]
+id = "n149"
+op = "Swizzle"
+shape = [1]
+in = ["n0"]
+perm = [1, 0, 0, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n150"
+op = "Mul"
+shape = [1]
+in = ["n149", "n148"]
+
+[[node]]
+id = "n151"
+op = "Sub"
+shape = [1]
+in = ["n150", "n147"]
+
+[[node]]
+id = "n152"
+op = "Mul"
+shape = [1]
+in = ["n128", "n151"]
+
+[[node]]
+id = "n153"
+op = "Add"
+shape = [1]
+in = ["n152", "n146"]
+
+[[node]]
+id = "n154"
+op = "Swizzle"
+shape = [1]
+in = ["n133"]
+perm = [2, 0, 0, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n155"
+op = "Add"
+shape = [1]
+in = ["n131", "n154"]
+
+[[node]]
+id = "n156"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n157"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+[[node]]
+id = "n158"
+op = "StorageLoad"
+dtype = "U32"
+shape = [1]
+in = ["n157"]
+
+[[node]]
+id = "n159"
+op = "Cast"
+dtype = "I32"
+shape = [1]
+in = ["n158"]
+
+[[node]]
+id = "n160"
+op = "IntBitsToFloat"
+shape = [1]
+in = ["n159"]
+
+[[node]]
+id = "n161"
+op = "Mul"
+shape = [1]
+in = ["n160", "n142"]
+
+[[node]]
+id = "n162"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4010000000000000"
+
+[[node]]
+id = "n163"
+op = "StorageLoad"
+dtype = "U32"
+shape = [1]
+in = ["n162"]
+
+[[node]]
+id = "n164"
+op = "Cast"
+dtype = "I32"
+shape = [1]
+in = ["n163"]
+
+[[node]]
+id = "n165"
+op = "IntBitsToFloat"
+shape = [1]
+in = ["n164"]
+
+[[node]]
+id = "n166"
+op = "Mul"
+shape = [1]
+in = ["n165", "n153"]
+
+[[node]]
+id = "n167"
+op = "Add"
+shape = [1]
+in = ["n161", "n166"]
+
+[[node]]
+id = "n168"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4020000000000000"
+
+[[node]]
+id = "n169"
+op = "StorageLoad"
+dtype = "U32"
+shape = [1]
+in = ["n168"]
+
+[[node]]
+id = "n170"
+op = "Cast"
+dtype = "I32"
+shape = [1]
+in = ["n169"]
+
+[[node]]
+id = "n171"
+op = "IntBitsToFloat"
+shape = [1]
+in = ["n170"]
+
+[[node]]
+id = "n172"
+op = "Mul"
+shape = [1]
+in = ["n171", "n155"]
+
+[[node]]
+id = "n173"
+op = "Add"
+shape = [1]
+in = ["n167", "n172"]
+
+[[node]]
+id = "n174"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4028000000000000"
+
+[[node]]
+id = "n175"
+op = "StorageLoad"
+dtype = "U32"
+shape = [1]
+in = ["n174"]
+
+[[node]]
+id = "n176"
+op = "Cast"
+dtype = "I32"
+shape = [1]
+in = ["n175"]
+
+[[node]]
+id = "n177"
+op = "IntBitsToFloat"
+shape = [1]
+in = ["n176"]
+
+[[node]]
+id = "n178"
+op = "Mul"
+shape = [1]
+in = ["n177", "n156"]
+
+[[node]]
+id = "n179"
+op = "Add"
+shape = [1]
+in = ["n173", "n178"]
+
+[[node]]
+id = "n180"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n181"
+op = "StorageLoad"
+dtype = "U32"
+shape = [1]
+in = ["n180"]
+
+[[node]]
+id = "n182"
+op = "Cast"
+dtype = "I32"
+shape = [1]
+in = ["n181"]
+
+[[node]]
+id = "n183"
+op = "IntBitsToFloat"
+shape = [1]
+in = ["n182"]
+
+[[node]]
+id = "n184"
+op = "Mul"
+shape = [1]
+in = ["n183", "n142"]
+
+[[node]]
+id = "n185"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4014000000000000"
+
+[[node]]
+id = "n186"
+op = "StorageLoad"
+dtype = "U32"
+shape = [1]
+in = ["n185"]
+
+[[node]]
+id = "n187"
+op = "Cast"
+dtype = "I32"
+shape = [1]
+in = ["n186"]
+
+[[node]]
+id = "n188"
+op = "IntBitsToFloat"
+shape = [1]
+in = ["n187"]
+
+[[node]]
+id = "n189"
+op = "Mul"
+shape = [1]
+in = ["n188", "n153"]
+
+[[node]]
+id = "n190"
+op = "Add"
+shape = [1]
+in = ["n184", "n189"]
+
+[[node]]
+id = "n191"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4022000000000000"
+
+[[node]]
+id = "n192"
+op = "StorageLoad"
+dtype = "U32"
+shape = [1]
+in = ["n191"]
+
+[[node]]
+id = "n193"
+op = "Cast"
+dtype = "I32"
+shape = [1]
+in = ["n192"]
+
+[[node]]
+id = "n194"
+op = "IntBitsToFloat"
+shape = [1]
+in = ["n193"]
+
+[[node]]
+id = "n195"
+op = "Mul"
+shape = [1]
+in = ["n194", "n155"]
+
+[[node]]
+id = "n196"
+op = "Add"
+shape = [1]
+in = ["n190", "n195"]
+
+[[node]]
+id = "n197"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x402a000000000000"
+
+[[node]]
+id = "n198"
+op = "StorageLoad"
+dtype = "U32"
+shape = [1]
+in = ["n197"]
+
+[[node]]
+id = "n199"
+op = "Cast"
+dtype = "I32"
+shape = [1]
+in = ["n198"]
+
+[[node]]
+id = "n200"
+op = "IntBitsToFloat"
+shape = [1]
+in = ["n199"]
+
+[[node]]
+id = "n201"
+op = "Mul"
+shape = [1]
+in = ["n200", "n156"]
+
+[[node]]
+id = "n202"
+op = "Add"
+shape = [1]
+in = ["n196", "n201"]
+
+[[node]]
+id = "n203"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4000000000000000"
+
+[[node]]
+id = "n204"
+op = "StorageLoad"
+dtype = "U32"
+shape = [1]
+in = ["n203"]
+
+[[node]]
+id = "n205"
+op = "Cast"
+dtype = "I32"
+shape = [1]
+in = ["n204"]
+
+[[node]]
+id = "n206"
+op = "IntBitsToFloat"
+shape = [1]
+in = ["n205"]
+
+[[node]]
+id = "n207"
+op = "Mul"
+shape = [1]
+in = ["n206", "n142"]
+
+[[node]]
+id = "n208"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4018000000000000"
+
+[[node]]
+id = "n209"
+op = "StorageLoad"
+dtype = "U32"
+shape = [1]
+in = ["n208"]
+
+[[node]]
+id = "n210"
+op = "Cast"
+dtype = "I32"
+shape = [1]
+in = ["n209"]
+
+[[node]]
+id = "n211"
+op = "IntBitsToFloat"
+shape = [1]
+in = ["n210"]
+
+[[node]]
+id = "n212"
+op = "Mul"
+shape = [1]
+in = ["n211", "n153"]
+
+[[node]]
+id = "n213"
+op = "Add"
+shape = [1]
+in = ["n207", "n212"]
+
+[[node]]
+id = "n214"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4024000000000000"
+
+[[node]]
+id = "n215"
+op = "StorageLoad"
+dtype = "U32"
+shape = [1]
+in = ["n214"]
+
+[[node]]
+id = "n216"
+op = "Cast"
+dtype = "I32"
+shape = [1]
+in = ["n215"]
+
+[[node]]
+id = "n217"
+op = "IntBitsToFloat"
+shape = [1]
+in = ["n216"]
+
+[[node]]
+id = "n218"
+op = "Mul"
+shape = [1]
+in = ["n217", "n155"]
+
+[[node]]
+id = "n219"
+op = "Add"
+shape = [1]
+in = ["n213", "n218"]
+
+[[node]]
+id = "n220"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x402c000000000000"
+
+[[node]]
+id = "n221"
+op = "StorageLoad"
+dtype = "U32"
+shape = [1]
+in = ["n220"]
+
+[[node]]
+id = "n222"
+op = "Cast"
+dtype = "I32"
+shape = [1]
+in = ["n221"]
+
+[[node]]
+id = "n223"
+op = "IntBitsToFloat"
+shape = [1]
+in = ["n222"]
+
+[[node]]
+id = "n224"
+op = "Mul"
+shape = [1]
+in = ["n223", "n156"]
+
+[[node]]
+id = "n225"
+op = "Add"
+shape = [1]
+in = ["n219", "n224"]
+
+[[node]]
+id = "n226"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4008000000000000"
+
+[[node]]
+id = "n227"
+op = "StorageLoad"
+dtype = "U32"
+shape = [1]
+in = ["n226"]
+
+[[node]]
+id = "n228"
+op = "Cast"
+dtype = "I32"
+shape = [1]
+in = ["n227"]
+
+[[node]]
+id = "n229"
+op = "IntBitsToFloat"
+shape = [1]
+in = ["n228"]
+
+[[node]]
+id = "n230"
+op = "Mul"
+shape = [1]
+in = ["n229", "n142"]
+
+[[node]]
+id = "n231"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x401c000000000000"
+
+[[node]]
+id = "n232"
+op = "StorageLoad"
+dtype = "U32"
+shape = [1]
+in = ["n231"]
+
+[[node]]
+id = "n233"
+op = "Cast"
+dtype = "I32"
+shape = [1]
+in = ["n232"]
+
+[[node]]
+id = "n234"
+op = "IntBitsToFloat"
+shape = [1]
+in = ["n233"]
+
+[[node]]
+id = "n235"
+op = "Mul"
+shape = [1]
+in = ["n234", "n153"]
+
+[[node]]
+id = "n236"
+op = "Add"
+shape = [1]
+in = ["n230", "n235"]
+
+[[node]]
+id = "n237"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4026000000000000"
+
+[[node]]
+id = "n238"
+op = "StorageLoad"
+dtype = "U32"
+shape = [1]
+in = ["n237"]
+
+[[node]]
+id = "n239"
+op = "Cast"
+dtype = "I32"
+shape = [1]
+in = ["n238"]
+
+[[node]]
+id = "n240"
+op = "IntBitsToFloat"
+shape = [1]
+in = ["n239"]
+
+[[node]]
+id = "n241"
+op = "Mul"
+shape = [1]
+in = ["n240", "n155"]
+
+[[node]]
+id = "n242"
+op = "Add"
+shape = [1]
+in = ["n236", "n241"]
+
+[[node]]
+id = "n243"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x402e000000000000"
+
+[[node]]
+id = "n244"
+op = "StorageLoad"
+dtype = "U32"
+shape = [1]
+in = ["n243"]
+
+[[node]]
+id = "n245"
+op = "Cast"
+dtype = "I32"
+shape = [1]
+in = ["n244"]
+
+[[node]]
+id = "n246"
+op = "IntBitsToFloat"
+shape = [1]
+in = ["n245"]
+
+[[node]]
+id = "n247"
+op = "Mul"
+shape = [1]
+in = ["n246", "n156"]
+
+[[node]]
+id = "n248"
+op = "Add"
+shape = [1]
+in = ["n242", "n247"]
+
+[[node]]
+id = "n249"
+op = "Const"
+shape = [1]
+cval = "0x3eb0c6f7a0b5ed8d"
+
+[[node]]
+id = "n250"
+op = "Max"
+shape = [1]
+in = ["n248", "n249"]
+
+[[node]]
+id = "n251"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n252"
+op = "Div"
+shape = [1]
+in = ["n251", "n250"]
+
+[[node]]
+id = "n253"
+op = "Const"
+shape = [1]
+cval = "0x3fe0000000000000"
+
+[[node]]
+id = "n254"
+op = "Const"
+shape = [1]
+cval = "0x3fe0000000000000"
+
+[[node]]
+id = "n255"
+op = "Mul"
+shape = [1]
+in = ["n179", "n252"]
+
+[[node]]
+id = "n256"
+op = "Mul"
+shape = [1]
+in = ["n255", "n254"]
+
+[[node]]
+id = "n257"
+op = "Add"
+shape = [1]
+in = ["n256", "n253"]
+
+[[node]]
+id = "n258"
+op = "Const"
+shape = [1]
+cval = "0x3fe0000000000000"
+
+[[node]]
+id = "n259"
+op = "Const"
+shape = [1]
+cval = "0x3fe0000000000000"
+
+[[node]]
+id = "n260"
+op = "Mul"
+shape = [1]
+in = ["n202", "n252"]
+
+[[node]]
+id = "n261"
+op = "Mul"
+shape = [1]
+in = ["n260", "n259"]
+
+[[node]]
+id = "n262"
+op = "Mul"
+shape = [1]
+in = ["n261", "n128"]
+
+[[node]]
+id = "n263"
+op = "Add"
+shape = [1]
+in = ["n262", "n258"]
+
+[[node]]
+id = "n264"
+op = "Vec2"
+tkind = "Vec"
+trows = 2
+shape = [1]
+in = ["n257", "n263"]
+
+[[node]]
+id = "n265"
+op = "Const"
+shape = [1]
+cval = "0x3e112e0be826d695"
+
+[[node]]
+id = "n266"
+op = "Max"
+shape = [1]
+in = ["n6", "n265"]
+
+[[node]]
+id = "n267"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n268"
+op = "Div"
+shape = [1]
+in = ["n267", "n266"]
+
+[[node]]
+id = "n269"
+op = "Const"
+shape = [1]
+cval = "0x3e112e0be826d695"
+
+[[node]]
+id = "n270"
+op = "Max"
+shape = [1]
+in = ["n10", "n269"]
+
+[[node]]
+id = "n271"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n272"
+op = "Div"
+shape = [1]
+in = ["n271", "n270"]
+
+[[node]]
+id = "n273"
+op = "Swizzle"
+shape = [1]
+in = ["n264"]
+
+[[node]]
+id = "n274"
+op = "Mul"
+shape = [1]
+in = ["n273", "n268"]
+
+[[node]]
+id = "n275"
+op = "Swizzle"
+shape = [1]
+in = ["n264"]
+perm = [1, 0, 0, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n276"
+op = "Mul"
+shape = [1]
+in = ["n275", "n272"]
+
+[[node]]
+id = "n277"
+op = "Const"
+shape = [1]
+cval = "0x3fe0000000000000"
+
+[[node]]
+id = "n278"
+op = "Const"
+shape = [1]
+cval = "0x3fe0000000000000"
+
+[[node]]
+id = "n279"
+op = "Sub"
+shape = [1]
+in = ["n274", "n278"]
+
+[[node]]
+id = "n280"
+op = "Floor"
+shape = [1]
+in = ["n279"]
+
+[[node]]
+id = "n281"
+op = "Add"
+shape = [1]
+in = ["n280", "n277"]
+
+[[node]]
+id = "n282"
+op = "Const"
+shape = [1]
+cval = "0x3fe0000000000000"
+
+[[node]]
+id = "n283"
+op = "Const"
+shape = [1]
+cval = "0x3fe0000000000000"
+
+[[node]]
+id = "n284"
+op = "Sub"
+shape = [1]
+in = ["n276", "n283"]
+
+[[node]]
+id = "n285"
+op = "Floor"
+shape = [1]
+in = ["n284"]
+
+[[node]]
+id = "n286"
+op = "Add"
+shape = [1]
+in = ["n285", "n282"]
+
+[[node]]
+id = "n287"
+op = "Sub"
+shape = [1]
+in = ["n274", "n281"]
+
+[[node]]
+id = "n288"
+op = "Sub"
+shape = [1]
+in = ["n276", "n286"]
+
+[[node]]
+id = "n289"
+op = "Const"
+shape = [1]
+cval = "0xbfe0000000000000"
+
+[[node]]
+id = "n290"
+op = "Mul"
+shape = [1]
+in = ["n289", "n287"]
+
+[[node]]
+id = "n291"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n292"
+op = "Add"
+shape = [1]
+in = ["n291", "n290"]
+
+[[node]]
+id = "n293"
+op = "Mul"
+shape = [1]
+in = ["n287", "n292"]
+
+[[node]]
+id = "n294"
+op = "Const"
+shape = [1]
+cval = "0xbfe0000000000000"
+
+[[node]]
+id = "n295"
+op = "Add"
+shape = [1]
+in = ["n294", "n293"]
+
+[[node]]
+id = "n296"
+op = "Mul"
+shape = [1]
+in = ["n287", "n295"]
+
+[[node]]
+id = "n297"
+op = "Const"
+shape = [1]
+cval = "0x3ff8000000000000"
+
+[[node]]
+id = "n298"
+op = "Mul"
+shape = [1]
+in = ["n297", "n287"]
+
+[[node]]
+id = "n299"
+op = "Const"
+shape = [1]
+cval = "0xc004000000000000"
+
+[[node]]
+id = "n300"
+op = "Add"
+shape = [1]
+in = ["n299", "n298"]
+
+[[node]]
+id = "n301"
+op = "Mul"
+shape = [1]
+in = ["n287", "n287"]
+
+[[node]]
+id = "n302"
+op = "Mul"
+shape = [1]
+in = ["n301", "n300"]
+
+[[node]]
+id = "n303"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n304"
+op = "Add"
+shape = [1]
+in = ["n303", "n302"]
+
+[[node]]
+id = "n305"
+op = "Const"
+shape = [1]
+cval = "0xbff8000000000000"
+
+[[node]]
+id = "n306"
+op = "Mul"
+shape = [1]
+in = ["n305", "n287"]
+
+[[node]]
+id = "n307"
+op = "Const"
+shape = [1]
+cval = "0x4000000000000000"
+
+[[node]]
+id = "n308"
+op = "Add"
+shape = [1]
+in = ["n307", "n306"]
+
+[[node]]
+id = "n309"
+op = "Mul"
+shape = [1]
+in = ["n287", "n308"]
+
+[[node]]
+id = "n310"
+op = "Const"
+shape = [1]
+cval = "0x3fe0000000000000"
+
+[[node]]
+id = "n311"
+op = "Add"
+shape = [1]
+in = ["n310", "n309"]
+
+[[node]]
+id = "n312"
+op = "Mul"
+shape = [1]
+in = ["n287", "n311"]
+
+[[node]]
+id = "n313"
+op = "Const"
+shape = [1]
+cval = "0x3fe0000000000000"
+
+[[node]]
+id = "n314"
+op = "Mul"
+shape = [1]
+in = ["n313", "n287"]
+
+[[node]]
+id = "n315"
+op = "Const"
+shape = [1]
+cval = "0xbfe0000000000000"
+
+[[node]]
+id = "n316"
+op = "Add"
+shape = [1]
+in = ["n315", "n314"]
+
+[[node]]
+id = "n317"
+op = "Mul"
+shape = [1]
+in = ["n287", "n287"]
+
+[[node]]
+id = "n318"
+op = "Mul"
+shape = [1]
+in = ["n317", "n316"]
+
+[[node]]
+id = "n319"
+op = "Const"
+shape = [1]
+cval = "0xbfe0000000000000"
+
+[[node]]
+id = "n320"
+op = "Mul"
+shape = [1]
+in = ["n319", "n288"]
+
+[[node]]
+id = "n321"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n322"
+op = "Add"
+shape = [1]
+in = ["n321", "n320"]
+
+[[node]]
+id = "n323"
+op = "Mul"
+shape = [1]
+in = ["n288", "n322"]
+
+[[node]]
+id = "n324"
+op = "Const"
+shape = [1]
+cval = "0xbfe0000000000000"
+
+[[node]]
+id = "n325"
+op = "Add"
+shape = [1]
+in = ["n324", "n323"]
+
+[[node]]
+id = "n326"
+op = "Mul"
+shape = [1]
+in = ["n288", "n325"]
+
+[[node]]
+id = "n327"
+op = "Const"
+shape = [1]
+cval = "0x3ff8000000000000"
+
+[[node]]
+id = "n328"
+op = "Mul"
+shape = [1]
+in = ["n327", "n288"]
+
+[[node]]
+id = "n329"
+op = "Const"
+shape = [1]
+cval = "0xc004000000000000"
+
+[[node]]
+id = "n330"
+op = "Add"
+shape = [1]
+in = ["n329", "n328"]
+
+[[node]]
+id = "n331"
+op = "Mul"
+shape = [1]
+in = ["n288", "n288"]
+
+[[node]]
+id = "n332"
+op = "Mul"
+shape = [1]
+in = ["n331", "n330"]
+
+[[node]]
+id = "n333"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n334"
+op = "Add"
+shape = [1]
+in = ["n333", "n332"]
+
+[[node]]
+id = "n335"
+op = "Const"
+shape = [1]
+cval = "0xbff8000000000000"
+
+[[node]]
+id = "n336"
+op = "Mul"
+shape = [1]
+in = ["n335", "n288"]
+
+[[node]]
+id = "n337"
+op = "Const"
+shape = [1]
+cval = "0x4000000000000000"
+
+[[node]]
+id = "n338"
+op = "Add"
+shape = [1]
+in = ["n337", "n336"]
+
+[[node]]
+id = "n339"
+op = "Mul"
+shape = [1]
+in = ["n288", "n338"]
+
+[[node]]
+id = "n340"
+op = "Const"
+shape = [1]
+cval = "0x3fe0000000000000"
+
+[[node]]
+id = "n341"
+op = "Add"
+shape = [1]
+in = ["n340", "n339"]
+
+[[node]]
+id = "n342"
+op = "Mul"
+shape = [1]
+in = ["n288", "n341"]
+
+[[node]]
+id = "n343"
+op = "Const"
+shape = [1]
+cval = "0x3fe0000000000000"
+
+[[node]]
+id = "n344"
+op = "Mul"
+shape = [1]
+in = ["n343", "n288"]
+
+[[node]]
+id = "n345"
+op = "Const"
+shape = [1]
+cval = "0xbfe0000000000000"
+
+[[node]]
+id = "n346"
+op = "Add"
+shape = [1]
+in = ["n345", "n344"]
+
+[[node]]
+id = "n347"
+op = "Mul"
+shape = [1]
+in = ["n288", "n288"]
+
+[[node]]
+id = "n348"
+op = "Mul"
+shape = [1]
+in = ["n347", "n346"]
+
+[[node]]
+id = "n349"
+op = "Add"
+shape = [1]
+in = ["n304", "n312"]
+
+[[node]]
+id = "n350"
+op = "Add"
+shape = [1]
+in = ["n334", "n342"]
+
+[[node]]
+id = "n351"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n352"
+op = "Sub"
+shape = [1]
+in = ["n281", "n351"]
+
+[[node]]
+id = "n353"
+op = "Mul"
+shape = [1]
+in = ["n352", "n6"]
+
+[[node]]
+id = "n354"
+op = "Const"
+shape = [1]
+cval = "0x4000000000000000"
+
+[[node]]
+id = "n355"
+op = "Add"
+shape = [1]
+in = ["n281", "n354"]
+
+[[node]]
+id = "n356"
+op = "Mul"
+shape = [1]
+in = ["n355", "n6"]
+
+[[node]]
+id = "n357"
+op = "Div"
+shape = [1]
+in = ["n312", "n349"]
+
+[[node]]
+id = "n358"
+op = "Add"
+shape = [1]
+in = ["n281", "n357"]
+
+[[node]]
+id = "n359"
+op = "Mul"
+shape = [1]
+in = ["n358", "n6"]
+
+[[node]]
+id = "n360"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n361"
+op = "Sub"
+shape = [1]
+in = ["n286", "n360"]
+
+[[node]]
+id = "n362"
+op = "Mul"
+shape = [1]
+in = ["n361", "n10"]
+
+[[node]]
+id = "n363"
+op = "Const"
+shape = [1]
+cval = "0x4000000000000000"
+
+[[node]]
+id = "n364"
+op = "Add"
+shape = [1]
+in = ["n286", "n363"]
+
+[[node]]
+id = "n365"
+op = "Mul"
+shape = [1]
+in = ["n364", "n10"]
+
+[[node]]
+id = "n366"
+op = "Div"
+shape = [1]
+in = ["n342", "n350"]
+
+[[node]]
+id = "n367"
+op = "Add"
+shape = [1]
+in = ["n286", "n366"]
+
+[[node]]
+id = "n368"
+op = "Mul"
+shape = [1]
+in = ["n367", "n10"]
+
+[[node]]
+id = "n369"
+op = "Mul"
+shape = [1]
+in = ["n349", "n326"]
+
+[[node]]
+id = "n370"
+op = "Mul"
+shape = [1]
+in = ["n296", "n350"]
+
+[[node]]
+id = "n371"
+op = "Mul"
+shape = [1]
+in = ["n349", "n350"]
+
+[[node]]
+id = "n372"
+op = "Mul"
+shape = [1]
+in = ["n318", "n350"]
+
+[[node]]
+id = "n373"
+op = "Mul"
+shape = [1]
+in = ["n349", "n348"]
+
+[[node]]
+id = "n374"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4000000000000000"
+
+[[node]]
+id = "n375"
+op = "Vec2"
+tkind = "Vec"
+trows = 2
+shape = [1]
+in = ["n359", "n362"]
+
+[[node]]
+id = "n376"
+op = "SampleIndexed"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n1", "n2", "n375", "n374"]
+
+[[node]]
+id = "n377"
+op = "Mul"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n376", "n369"]
+
+[[node]]
+id = "n378"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4000000000000000"
+
+[[node]]
+id = "n379"
+op = "Vec2"
+tkind = "Vec"
+trows = 2
+shape = [1]
+in = ["n353", "n368"]
+
+[[node]]
+id = "n380"
+op = "SampleIndexed"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n1", "n2", "n379", "n378"]
+
+[[node]]
+id = "n381"
+op = "Mul"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n380", "n370"]
+
+[[node]]
+id = "n382"
+op = "Add"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n377", "n381"]
+
+[[node]]
+id = "n383"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4000000000000000"
+
+[[node]]
+id = "n384"
+op = "Vec2"
+tkind = "Vec"
+trows = 2
+shape = [1]
+in = ["n359", "n368"]
+
+[[node]]
+id = "n385"
+op = "SampleIndexed"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n1", "n2", "n384", "n383"]
+
+[[node]]
+id = "n386"
+op = "Mul"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n385", "n371"]
+
+[[node]]
+id = "n387"
+op = "Add"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n382", "n386"]
+
+[[node]]
+id = "n388"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4000000000000000"
+
+[[node]]
+id = "n389"
+op = "Vec2"
+tkind = "Vec"
+trows = 2
+shape = [1]
+in = ["n356", "n368"]
+
+[[node]]
+id = "n390"
+op = "SampleIndexed"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n1", "n2", "n389", "n388"]
+
+[[node]]
+id = "n391"
+op = "Mul"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n390", "n372"]
+
+[[node]]
+id = "n392"
+op = "Add"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n387", "n391"]
+
+[[node]]
+id = "n393"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4000000000000000"
+
+[[node]]
+id = "n394"
+op = "Vec2"
+tkind = "Vec"
+trows = 2
+shape = [1]
+in = ["n359", "n365"]
+
+[[node]]
+id = "n395"
+op = "SampleIndexed"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n1", "n2", "n394", "n393"]
+
+[[node]]
+id = "n396"
+op = "Mul"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n395", "n373"]
+
+[[node]]
+id = "n397"
+op = "Add"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n392", "n396"]
+
+[[node]]
+id = "n398"
+op = "Add"
+shape = [1]
+in = ["n369", "n370"]
+
+[[node]]
+id = "n399"
+op = "Add"
+shape = [1]
+in = ["n398", "n371"]
+
+[[node]]
+id = "n400"
+op = "Add"
+shape = [1]
+in = ["n399", "n372"]
+
+[[node]]
+id = "n401"
+op = "Add"
+shape = [1]
+in = ["n400", "n373"]
+
+[[node]]
+id = "n402"
+op = "Const"
+shape = [1]
+cval = "0x3ee4f8b588e368f1"
+
+[[node]]
+id = "n403"
+op = "Max"
+shape = [1]
+in = ["n401", "n402"]
+
+[[node]]
+id = "n404"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n405"
+op = "Div"
+shape = [1]
+in = ["n404", "n403"]
+
+[[node]]
+id = "n406"
+op = "Mul"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n397", "n405"]
+
+[[node]]
+id = "n407"
+op = "Clamp"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n406", "n123", "n124"]
+
+[[node]]
+id = "n408"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n409"
+op = "Step"
+shape = [1]
+in = ["n263", "n408"]
+
+[[node]]
+id = "n410"
+op = "Const"
+shape = [1]
+
+[[node]]
+id = "n411"
+op = "Step"
+shape = [1]
+in = ["n410", "n263"]
+
+[[node]]
+id = "n412"
+op = "Mul"
+shape = [1]
+in = ["n411", "n409"]
+
+[[node]]
+id = "n413"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n414"
+op = "Step"
+shape = [1]
+in = ["n257", "n413"]
+
+[[node]]
+id = "n415"
+op = "Const"
+shape = [1]
+
+[[node]]
+id = "n416"
+op = "Step"
+shape = [1]
+in = ["n415", "n257"]
+
+[[node]]
+id = "n417"
+op = "Mul"
+shape = [1]
+in = ["n416", "n414"]
+
+[[node]]
+id = "n418"
+op = "Mul"
+shape = [1]
+in = ["n417", "n412"]
+
+[[node]]
+id = "n419"
+op = "Mul"
+shape = [1]
+in = ["n418", "n18"]
+
+[[node]]
+id = "n420"
+op = "Mul"
+shape = [1]
+in = ["n419", "n14"]
+
+[[node]]
+id = "n421"
+op = "Sub"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n407", "n20"]
+
+[[node]]
+id = "n422"
+op = "Mul"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n421", "n420"]
+
+[[node]]
+id = "n423"
+op = "Add"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n20", "n422"]
+
+[[node]]
+id = "n424"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n425"
+op = "Swizzle"
+shape = [1]
+in = ["n423"]
+perm = [2, 0, 0, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n426"
+op = "Swizzle"
+shape = [1]
+in = ["n423"]
+perm = [1, 0, 0, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n427"
+op = "Swizzle"
+shape = [1]
+in = ["n423"]
+
+[[node]]
+id = "n428"
+op = "Vec3"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n427", "n426", "n425"]
+
+[[node]]
+id = "n429"
+op = "VecConcat"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n428", "n424"]

@@ -1,0 +1,54 @@
+# scene_forward_clustered.crdl - CEIR-18a-2 Stage 2: the CLUSTERED (Forward+) scene lighting technique.
+#
+# Identical to scene_forward.crdl (same record layout, same counts, same CSM shadow) EXCEPT the [cluster] section
+# is ENABLED: the forward FS then walks a PER-TILE light-index run (the E5 clustered path, lighting_asset.cpp:795-816)
+# instead of the whole point array. The per-tile list lives in the group buffer at word header[cluster_off]; the
+# renderer writes cluster_off = kHdrClusterOff (110) into the header and provisions the list (Stage 2a: CPU-written
+# via set_cluster_light_list; Stage 2b: a light-cull compute pass).
+#
+# ⛔ A SEPARATE FILE (not a flag on scene_forward.crdl) because cluster.enabled bakes the FS unroll — a clustered FS
+# reads header[cluster_off] every fragment and renders garbage if no list is provisioned, so the NON-clustered
+# forward (every other pass) must keep its own declaration. Selected by name via set_shadow_technique.
+
+schema = 1
+name   = "crd://lighting/scene_forward_clustered"
+
+[header]
+view_proj   = 6
+csm_splits  = 28
+light_off   = 99
+# ⭐⭐ CEIR-18a-2 Stage 2: the per-tile light-list word offset (into the group buffer). kHdrClusterOff (110) — a free
+# header word; the default 21 COLLIDED with view_proj. The renderer writes the list section's offset here each frame.
+cluster_off = 110
+# ⭐⭐ CEIR-18a-2 Stage 2: the header words that carry the VIEWPORT pixel dims (kHdrViewportW=111, kHdrViewportH=112 —
+# the free band beside cluster_off). The clustered FS reads them to normalize FragCoord.xy into [0,1) before scaling by
+# the froxel grid, so `frag_xy` stays PIXEL coords (its PCF/ign meaning). The cook REJECTS clustering if either is 0.
+viewport_w = 111
+viewport_h = 112
+
+[record]
+stride      = 16
+position    = 0
+color       = 4
+direction   = 8
+falloff     = 3
+spot_scale  = 7
+spot_offset = 11
+
+[counts]
+directional = 1
+point       = 4
+
+# ⭐⭐ CEIR-18a-2 Stage 2: the froxel grid. grid = [tiles_x, tiles_y, z_slices]; 4x4x1 = 16 clusters (matches the
+# committed scene_light_cull.ckir's baked cluster count). grid[2] = 1 keeps the z term INERT (2D tiles) for the first
+# device gate. max_per_cluster = the per-tile light-list stride (survivors, then the null_index=num_lights sentinel).
+[cluster]
+enabled         = true
+grid            = [4, 4, 1]
+max_per_cluster = 8
+
+[shadow]
+directional = "csm"
+filter      = "pcf"
+taps        = 4
+cascades    = 4

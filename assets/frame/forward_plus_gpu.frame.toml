@@ -1,0 +1,105 @@
+# forward_plus_gpu.frame.toml — CEIR-18a-2 Stage 2b: the AUTHORED Forward+ renderer WITH the DEVICE light-cull producer.
+#
+# ⛔⛔ SIBLING of forward_plus.frame.toml, exactly as forward_csm_gpu is the sibling of forward_csm. forward_plus provides
+# the per-tile cluster light list from the CPU (SceneRenderer::set_cluster_light_list — the Stage 2a adversarial-list
+# gate uses it); THIS graph adds a `light_cull` COMPUTE pass that PRODUCES that list on the device each frame from the
+# froxel-AABB table + the light-input the renderer provisions (scene_renderer.cpp Stage 2b). When this graph is
+# installed the device pass OWNS the cluster section and the CPU upload is SKIPPED (the locked precedence) — so a scene
+# whose lights actually PROJECT to distinct tiles gets a correct per-tile list with no CPU work.
+#
+# ⛔ WHY A SEPARATE FILE (not a flag on forward_plus): the device pass's precedence would skip forward_plus's hand-written
+# CPU list, breaking the Stage 2a adversarial-list gate. The two coexist — 2a installs forward_plus, 2b-iv installs this.
+# WHICH becomes the shipped default is an 18a-2-close decision, not made here.
+#
+# Everything else mirrors forward_plus (the cascade atlas + the shadowed forward pass + the impostor pass); the ONLY adds
+# are the `instances` external buffer, the `light_cull` compute pass, and the forward pass's `instances` read (the edge).
+
+schema   = 1
+name     = "engine://frame/forward_plus_gpu"
+requires = ["shadows"]
+fallback = "engine://frame/forward_basic"
+
+# ⭐⭐ CEIR-18a-2 Stage 2b: the group buffer, as the frame graph sees it — the light_cull compute pass WRITES the cluster
+# list into it and the forward pass READS it (the ordering edge). `external_buffer` = host-owned, resolved per draw_list
+# group at record time (the forward_csm_gpu `instances` precedent).
+[[resource]]
+name = "instances"
+kind = "external_buffer"
+
+# ── the cascade atlas ───────────────────────────────────────────────────────────────────────────────────────
+[[resource]]
+name    = "shadow_atlas"
+kind    = "persistent_image"
+format  = "D32Float"
+width   = 2048
+height  = 2048
+layers  = 4
+sampled = true
+
+[[draw_list]]
+name = "shadow_casters"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "front_to_back"
+
+[[draw_list]]
+name = "visible_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "material"
+
+[[draw_list]]
+name = "impostor_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+
+# ── ⭐⭐ CEIR-18a-2 Stage 2b: the DEVICE light-cull. One dispatch per group (draw_list = visible_geometry, so `instances`
+# resolves to each group's buffer — the private-buffer path the gate takes), workgroup 64. Reads the froxel-AABB +
+# light-input sections (via header words), writes the per-tile cluster list into `instances` in place. Ordered BEFORE the
+# forward pass by the write→read edge on `instances`. ⛔ Mirrors palette_snapshot's compute-pass shape verbatim.
+# ⛔ MULTI-INSTANCE follow-up: the dispatch is per-group; if a group has >64 instances the pass runs multiple workgroups,
+# each re-computing the SAME 16-cluster list (an identical-inputs→identical-values write race, harmless but wasteful).
+[[pass]]
+name      = "light_cull"
+kind      = "compute"
+kernel    = "engine://scene/light_cull"
+draw_list = "visible_geometry"
+writes    = ["instances"]
+
+[[pass]]
+name             = "csm_cascade"
+kind             = "raster.depth_only"
+draw_list        = "shadow_casters"
+for_each         = "light.0.cascades"
+writes           = ["shadow_atlas[$index]"]
+material_pass    = "Shadow"
+clear_depth      = 1.0
+depth            = "LessEqual"
+depth_bias_slope = 1.5
+
+# ── the shadowed + clustered forward pass ──────────────────────────────────────────────────────────────────
+# ⛔ `reads = ["shadow_atlas", "instances"]`: the atlas read makes it SHADOWED (the comparison-sampler bind); the
+# `instances` read is the ORDERING EDGE that places this pass AFTER `light_cull` (the graph orders by declared reads/
+# writes). `instances` is an external_buffer (NOT indirect_args), so it does NOT switch the draw to indirect — the draws
+# stay direct (no cull_args in this graph). The clustered FS is selected by set_shadow_technique("forward_authored_clustered"),
+# same aspirational-`technique`-field caveat as forward_plus (CEIR-18a-3).
+[[pass]]
+name          = "forward"
+kind          = "raster.geometry"
+draw_list     = "visible_geometry"
+reads         = ["shadow_atlas", "instances"]
+writes        = ["@output"]
+technique     = "forward_authored_clustered"
+material_pass = "Forward"
+clear_color   = [0.09, 0.10, 0.13, 1.0]
+clear_depth   = 0.0
+depth         = "GreaterEqual"
+
+[[pass]]
+name      = "impostor"
+kind      = "raster.geometry"
+draw_list = "impostor_geometry"
+writes    = ["@output"]
+shader    = "engine://scene/impostor"
+load      = true
+depth     = "GreaterEqual"

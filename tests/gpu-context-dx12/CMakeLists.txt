@@ -33,4 +33,7 @@ crd_enable_default_pch(crd-gpu-context-dx12-tests)
 
 # Shares the crd_gpu_device RESOURCE_LOCK with the Vulkan GPU tests (see that CMakeLists): GPU-device tests
 # serialize under `ctest --parallel` to avoid cross-process driver/cook contention, non-GPU tests still parallelize.
+# CEIR-18a-1: the repo root, so the shared cull gate loads assets/compute/scene_light_cull.ckir (the retired builder's asset).
+target_compile_definitions(crd-gpu-context-dx12-tests PRIVATE CRD_REPO_DIR="${CMAKE_SOURCE_DIR}")
+
 catch_discover_tests(crd-gpu-context-dx12-tests DISCOVERY_MODE PRE_TEST PROPERTIES RESOURCE_LOCK crd_gpu_device)

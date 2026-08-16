@@ -1,0 +1,10 @@
+# scene_rt_shadow_chit.crdv — CEIR-19b hybrid RT shadows: the shadow-ray CLOSEST-HIT.
+# An occluder blocked the ray before the light ⇒ the pixel is SHADOWED ⇒ payload[0] = 0.0. ⛔ payload_words MUST match
+# the raygen (the shared pipeline payload signature).
+stage = "closest_hit"
+schema = 1
+name   = "crd://vertex/scene_rt_shadow"
+
+[rt]
+payload_words = 1
+hit_value     = 0.0

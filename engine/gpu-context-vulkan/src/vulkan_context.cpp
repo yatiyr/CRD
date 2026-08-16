@@ -12,6 +12,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string_view.hpp> // to_view
+#include <crd/log/log.hpp> // loud-failure doctrine: name WHICH create_program link failed + the shaderc error text
 #include <crd/memory/allocator.hpp>
 
 #include <cstdint>
@@ -19,6 +20,7 @@
 
 namespace crd::gpu
 {
+CRD_DEFINE_LOG_CHANNEL(g_log_vkctx, "VkContext", crd::log::LogLevel::Info)
 namespace
 {
 
@@ -126,16 +128,29 @@ public:
     {
         crd::memory::IAllocator* a = crd::memory::default_allocator();
 
+        // ⛔ LOUD FAILURE (the loud-failure doctrine): create_program has several silent `return nullptr` exits — a GLSL
+        // emit that cannot lower, or a shaderc/SPIR-V compile error whose `error_message` the code otherwise DISCARDS.
+        // The caller only ever sees a bare nullptr, so a real cook failure (e.g. an emitter scope bug that references an
+        // undeclared temp at a high LOD-slot count) surfaces upstream as "create_program failed" with no cause. Name
+        // WHICH link failed, the emitted-GLSL size, and the shaderc error text so the next failure is diagnosable at a
+        // glance instead of over a full instrumentation session.
+        auto diag = [&](const char* where, const crd::kir::GlslKernel* k, const ShaderCompileResult* s) {
+            CRD_LOG_ERROR(g_log_vkctx, "create_program failed at '{}' (stage={}, kernel={}, glsl_bytes={}): {}", where,
+                          static_cast<int>(entry.stage), static_cast<int>(entry.is_kernel()),
+                          k != nullptr ? k->source.size() : static_cast<crd::usize>(0),
+                          s != nullptr ? s->error_message.c_str() : "(emit produced no source)");
+        };
+
         // B3-c: raster stages behind the SAME seam. `entry_valid` first — e.g. a `FragCoord` in a vertex entry is rejected.
         if (entry.stage == crd::kir::KStage::Vertex || entry.stage == crd::kir::KStage::Fragment)
         {
-            if (!crd::kir::entry_valid(graph, entry)) { return nullptr; }
+            if (!crd::kir::entry_valid(graph, entry)) { diag("vtx.entry_valid", nullptr, nullptr); return nullptr; }
             crd::kir::GlslKernel kern(a);
-            if (!crd::kir::emit_stage_glsl(graph, entry, a, kern)) { return nullptr; }
+            if (!crd::kir::emit_stage_glsl(graph, entry, a, kern)) { diag("vtx.emit", &kern, nullptr); return nullptr; }
             const ShaderStage stage =
                 (entry.stage == crd::kir::KStage::Vertex) ? ShaderStage::Vertex : ShaderStage::Fragment;
             const auto spv = compile_glsl_to_spirv(stage, crd::containers::to_view(kern.source), "ckir_stage", a);
-            if (!spv.ok) { return nullptr; }
+            if (!spv.ok) { diag("vtx.spv", &kern, &spv); return nullptr; }
             return create_program(stage, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()));
         }
 
@@ -204,9 +219,9 @@ public:
         if (entry.stage == crd::kir::KStage::Compute && entry.is_kernel())
         {
             crd::kir::GlslKernel kern(a);
-            if (!crd::kir::emit_compute_kernel_glsl(graph, entry, a, kern)) { return nullptr; }
+            if (!crd::kir::emit_compute_kernel_glsl(graph, entry, a, kern)) { diag("cmpk.emit", &kern, nullptr); return nullptr; }
             const auto spv = compile_glsl_to_spirv(ShaderStage::Compute, crd::containers::to_view(kern.source), "ckir_kernel", a);
-            if (!spv.ok) { return nullptr; }
+            if (!spv.ok) { diag("cmpk.spv", &kern, &spv); return nullptr; }
             return create_program(ShaderStage::Compute, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()));
         }
 
@@ -219,10 +234,10 @@ public:
         const bool           ok = crd::kir::graph_uses_vec(graph, output, a)
                                       ? crd::kir::emit_vec_glsl(graph, output, a, kern)
                                       : crd::kir::emit_elementwise_glsl(graph, output, a, kern);
-        if (!ok) { return nullptr; } // a compute class this backend's emitter does not lower yet
+        if (!ok) { diag("elem.emit", &kern, nullptr); return nullptr; } // a compute class this backend's emitter does not lower yet
 
         const auto spv = compile_glsl_to_spirv(ShaderStage::Compute, crd::containers::to_view(kern.source), "ckir", a);
-        if (!spv.ok) { return nullptr; }
+        if (!spv.ok) { diag("elem.spv", &kern, &spv); return nullptr; }
         return create_program(ShaderStage::Compute,
                               crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()));
     }

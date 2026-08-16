@@ -814,7 +814,7 @@ TEST_CASE("ceir 16-mesh-2: record_ceir_render EXPANDS mesh_dispatch_list over ct
     CHECK(eb.nbinds[1] == 0U);
 }
 
-TEST_CASE("ceir 16d-live-1b: scene.raster depth attachment — record_ceir_render ABSOLUTE 3-mode fs_target resolution")
+TEST_CASE("ceir 16d-live-1b: scene.raster depth attachment -- record_ceir_render ABSOLUTE 3-mode fs_target resolution")
 {
     // scene.raster records UNCONDITIONALLY through record_ceir_render (16d-live-4c); fs_target resolves the depth target
     // through the 3-mode fall-through it inherited from the deleted record_scene_raster. This drives the CEIR replay through a
@@ -933,7 +933,7 @@ TEST_CASE("ceir 16d-live-1b: scene.raster depth attachment — record_ceir_rende
     }
 }
 
-TEST_CASE("ceir 16d-live-2b: per-instance load override (cached cascade) — record_ceir_render force_load ABSOLUTE")
+TEST_CASE("ceir 16d-live-2b: per-instance load override (cached cascade) -- record_ceir_render force_load ABSOLUTE")
 {
     // The cooked scene plan bakes only the AUTHORED base load. A for_each instance's load_override (a cached shadow cascade,
     // REN-40-E2 — FRAME-VARYING) rides the payload "load" param, which record_ceir_render forwards as resolvers.force_load.
@@ -1028,7 +1028,7 @@ TEST_CASE("ceir 16d-live-2b: per-instance load override (cached cascade) — rec
     }
 }
 
-TEST_CASE("ceir 16d-live-3a: scene verb-ladder ABSOLUTE command-structure — record_ceir_render (N draws)")
+TEST_CASE("ceir 16d-live-3a: scene verb-ladder ABSOLUTE command-structure -- record_ceir_render (N draws)")
 {
     // scene.raster records through record_ceir_render (emit_scene_list, the verb ladder in render_materialize.cpp). This LOCKS
     // the ABSOLUTE command stream it emits for each resolved-DrawList shape — command kind, geometry kind, coalesce factor,
@@ -1259,7 +1259,7 @@ TEST_CASE("ceir 16d-live-3a: scene verb-ladder ABSOLUTE command-structure — re
     }
 }
 
-TEST_CASE("ceir 16d-live-4a-3: MRT scene per-item scope — record_ceir_render ABSOLUTE structure (2 colours)")
+TEST_CASE("ceir 16d-live-4a-3: MRT scene per-item scope -- record_ceir_render ABSOLUTE structure (2 colours)")
 {
     // A ≥2-colour scene pass (a deferred G-buffer / WBOIT accumulate) records a SCOPE PER ITEM (emit_scene_list_mrt, the CEIR
     // replay's deferred-begin per-item expansion). This LOCKS the ABSOLUTE structure: 2 items → 2 begins/ends (not one

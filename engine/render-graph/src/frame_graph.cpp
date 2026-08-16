@@ -633,6 +633,14 @@ void record_ceir_render(const PassPayload& payload, RecordContext& ctx, ICommand
     // instance's `load_override` (a cached shadow cascade, REN-40-E2) is FRAME-VARYING and rides the payload — to_authored_pass
     // set the "load" param = kLoad ‖ load_override PER INSTANCE. Forwarding it forces the LoadOps to Load (see RenderResolvers).
     r.force_load         = bool_param(payload, StringView("load"), false);
+    // ⛔⛔ CEIR-17z: VRS + conservative rasterization are record-time per-draw state (the payload carries them; to_authored_pass
+    // folds shading_rate / conservative). The CEIR fullscreen/scene migration DROPPED them (build_fullscreen_ceir emits no plan
+    // attr; PassRasterState carries no VRS), so a pass declaring shading_rate=2x2 rendered at 1x1. Forward from the payload like
+    // force_load — the established seam for per-pass record-time params; materialize_draw_packet copies them onto the draw.
+    r.vrs_pipeline_rate  = static_cast<crd::gpu::ShadingRate>(
+        enum_param(payload, StringView("shading_rate"), static_cast<u32>(crd::gpu::ShadingRate::Rate1x1)));
+    r.conservative       = static_cast<crd::gpu::ConservativeMode>(
+        enum_param(payload, StringView("conservative"), static_cast<u32>(crd::gpu::ConservativeMode::Off)));
     (void)crd::ceir::gpu::execute_render_lowered(
         *plan->ctx, crd::containers::ConstSpan<crd::ceir::gpu::LoweredCommand>(plan->commands, plan->count), encoder, r);
 }

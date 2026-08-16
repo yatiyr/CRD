@@ -118,6 +118,18 @@ struct LightingHeaderMap
     crd::u32 light_off  = 23U; // word offset of the light section
     crd::u32 decal_off  = 24U;
     crd::u32 cluster_off = 21U;
+    // ⭐⭐ CEIR-18a-2 Stage 2 (Forward+): the header words that hold the VIEWPORT pixel dimensions (width, height). The
+    // clustered FS reads them to normalize FragCoord.xy into [0,1) before scaling by the froxel grid — so `frag_xy`
+    // stays pixel coords (its PCF/ign meaning). Only consumed when [cluster] is enabled; 0 means "unset" (the cook
+    // rejects clustering without them, rather than dividing by a garbage word).
+    crd::u32 viewport_w = 0U;
+    crd::u32 viewport_h = 0U;
+    // ⭐⭐ CEIR-18b (clustered 3D): the word offset of the N+1 EXPONENTIAL z-slice boundaries (clip.w terms, f32 bits). The
+    // clustered FS bins a fragment's depth by counting how many interior boundaries its `clip.w` exceeds (Step-sum) — the
+    // froxel AABBs are cut at the SAME table, so binning is bit-consistent by construction. Only consumed when the grid has
+    // depth (grid[2] > 1); 0 means "unset" (the cook rejects a 3D grid without it, rather than reading a garbage word). The
+    // 2D tiled path (grid[2] == 1) never reads it and cooks byte-identical.
+    crd::u32 slice_bounds_off = 0U;
 };
 
 struct LightSetDesc

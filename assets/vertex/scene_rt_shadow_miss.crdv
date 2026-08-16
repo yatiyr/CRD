@@ -1,0 +1,10 @@
+# scene_rt_shadow_miss.crdv — CEIR-19b hybrid RT shadows: the shadow-ray MISS.
+# The ray reached the light unobstructed ⇒ the pixel is LIT ⇒ payload[0] = 1.0. ⛔ payload_words MUST match the raygen
+# (the shared pipeline payload signature); a mismatch reads the neighbouring slot.
+stage = "miss"
+schema = 1
+name   = "crd://vertex/scene_rt_shadow"
+
+[rt]
+payload_words = 1
+miss_value    = 1.0

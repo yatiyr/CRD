@@ -125,6 +125,24 @@
   engine-side** — eliminate the miscompiled construct for all consumers (here: drop the in-loop `1 << level`, iterate by
   heap id), never mask by lowering the *test's* optimization; (5) strip every marker + the temp job before close (grep).
 
+### 11. Suspect your own instrument before you claim a defect. (Verify the harness, not the vibe.)
+- **Scar (2026-08-15):** in ONE session I manufactured **four phantom "failures"** and reported them as real — a PowerShell
+  `| Select-Object -First` that closed the pipe and killed the exe (fake exit **255**); a healthy but SLOW whole-repo `ctest`
+  I misread as "hung" (I queried the WRONG process name and never computed the ~3 h expected duration), then KILLED it at
+  4175/6384 and wrote a **fabricated "2-hour ASan deadlock"** into four docs and told the user; a win-asan binary run without
+  the ASan DLL on PATH (fake `0xC0000135`); and a raw `clang-tidy` over an MSVC PCH that FALSE-CLEANED (`0 warnings` — it never
+  parsed). Zero were real; `B14-c`, the "hung" test, passes in **3.5 s**.
+- **Rule:** a surprising failure is YOUR TOOLING until proven otherwise. Never state a defect — failed / hung / broken /
+  timeout — to the user or in a doc before ruling out the harness. An unverified defect written as fact is a lie, and in a
+  repo whose first rule is never-disguise-failure it is worse than the original misread.
+- **Check:** *slow ≠ hung* — before "hung", compute expected duration (tests × per-test), confirm CPU-climb / last-completion
+  times on the RIGHT process, and never kill a run you haven't proven wedged (this is the 2026-07-02 ledger rule, re-broken).
+  `$LASTEXITCODE` after a native pipe is valid ONLY if nothing downstream early-closes it (no `Select-Object -First`; use
+  `-Last` / collect-then-filter / `Out-Null`). win-asan exe ⇒ MSVC ASan DLL dir on PATH (`0xC0000135` = missing DLL,
+  BUILDING.md §win-asan). A tidy "0 warnings" is real ONLY if it PARSED — confirm "N warnings generated" (raw clang-tidy on an
+  MSVC PCH errors and false-cleans; pass `/Y-`). And **whole-repo build/test is CI's job** — locally build+run only what you
+  changed + its blast radius; a whole-repo sweep is a multi-hour job you must not launch on the host.
+
 ---
 
 ## How to contribute to sanity (a little at a time)
@@ -141,6 +159,13 @@ the point — the core gets to A++ by accretion, not by a heroic pass.
 ---
 
 ## Sanity Ledger (append-only; dated; one line each; *actions*, not philosophy)
+
+- 2026-08-15 — **Added rule #11 (suspect your own instrument)** after manufacturing FOUR phantom failures in one session:
+  a `Select-Object -First` fake-255; a healthy ~3 h whole-repo win-asan `ctest` misread as "hung" then KILLED at 4175/6384,
+  with a fabricated "2-hour ASan deadlock" written into four docs and told to the user (all retracted — `B14-c` passes in
+  3.5 s); a win-asan run without the ASan DLL PATH (fake `0xC0000135`); a raw clang-tidy over an MSVC PCH that false-cleaned.
+  Reinforced the user directive **whole-repo build/test = CI's job** (AGENTS.md conduct + BUILDING.md §Per-slice banner) and
+  scrubbed the four false records.
 
 - 2026-08-07 — **Repository-wide doc-hygiene pass (rules #2/#6 applied to the docs themselves):** `context.md`
   2,012 → 108 lines (history moved VERBATIM to `docs/sessions/2026-08-07-context-md-history-archive.md` — the

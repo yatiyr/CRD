@@ -79,6 +79,13 @@ struct DrawItem
     // per-group selection as `program_depth` (rigid vs skinned twin), but writing the motion vector instead of
     // colour-only. Null keeps the fallback to `program` (so the field is inert until the renderer populates it).
     crd::gpu::IRasterProgram* program_velocity = nullptr;
+    // ── ⭐⭐ CEIR-18c (appended at END): this item's DEFERRED G-BUFFER program — what a `raster.mrt` +
+    // material_pass="GBuffer" pass draws each group with, PACKING the surface (material::pack_gbuffer → 4 MRT
+    // outputs) instead of shading it. Forward-shaped (consumes the surface: a textured vs untextured twin), NOT
+    // the velocity/depth per-group shape. ⛔⛔ NO fallback to `program`: a GBuffer pass that fell back would run
+    // the FORWARD FS and write shaded colour as "albedo" — a silent-wrong the deferred lighting then decodes as a
+    // surface (the §128 class). Null ⇒ the record path refuses the draw rather than degrade.
+    crd::gpu::IRasterProgram* program_gbuffer = nullptr;
 };
 
 inline constexpr crd::u32 kMaxDrawItems = 256; // stated cap; `resolved` reports what was actually filled

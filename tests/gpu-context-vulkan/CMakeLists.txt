@@ -47,4 +47,7 @@ crd_enable_default_pch(crd-gpu-context-vulkan-tests)
 # the wrong unique count). A shared RESOURCE_LOCK serializes every GPU-device test (across the vulkan + dx12
 # binaries) while non-GPU tests keep parallelizing. (REN-1 close 2026-07-24: the sweep flaked D3/D5/D10 cook +
 # AS-4 under --parallel though all pass standalone; this is the fix, not a code bug.)
+# CEIR-18a-1: the repo root, so the shared cull gate loads assets/compute/scene_light_cull.ckir (the retired builder's asset).
+target_compile_definitions(crd-gpu-context-vulkan-tests PRIVATE CRD_REPO_DIR="${CMAKE_SOURCE_DIR}")
+
 catch_discover_tests(crd-gpu-context-vulkan-tests PROPERTIES RESOURCE_LOCK crd_gpu_device)

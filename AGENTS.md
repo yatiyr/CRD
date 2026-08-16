@@ -36,6 +36,7 @@ Pinned in `docs/PRINCIPLES.md`. Don't re-litigate; deviations require an ADR.
 
 Rules for AI agents working on Cerid. As binding as the engineering principles.
 
+- **⛔⛔⛔ FOLLOW THE PURPOSE — RE-ANCHOR EVERY PROMPT (user 2026-08-15, in anger).** Every task serves a purpose; NAME it before you act and RE-READ it each prompt. The purpose of the entire CEIR line is one thing: **everything executable is an authorable asset CEIR** — the host/renderer knows NOTHING about the algorithms it runs. You may drift against the purpose mid-task; the discipline is to CATCH AND CORRECT yourself every prompt, never to finish the wrong thing well. (Scar: I built a Forward+ light cull as a hand-written C++ `KGraph` under a slice literally titled "as an authored asset" — see the authored-programs rule below + `feedback_everything_is_an_authorable_asset_ceir`.)
 - **Never silently reduce a slice's scope.** The phase doc row + relevant ADR sections + the prior session log's "Next" pointers define the contract. If you think a deliverable should be deferred, surface it as a scope-check question to the user BEFORE writing code. Wait for confirmation.
 - **Treat "elite" / "no shortcuts" as a quality multiplier, not a scope reducer.** Ship the proper architectural choice even when the slice could ship with less.
 - **NEVER defer failures to debt — SOLVE them.** A red test/config blocks the slice. Bisect, root-cause, fix. "Pre-existing" is not a defense. (Memory: `feedback_never_defer_solve`.)
@@ -68,6 +69,29 @@ Rules for AI agents working on Cerid. As binding as the engineering principles.
   engine?* If no, it is not done. A step that genuinely cannot be expressed is a missing **`FramePassKind`**: add
   the kind with its own gate, then author the technique on top of it. Never route around the system.
 
+- **⛔⛔⛔ THE SAME LAW BINDS THE PROGRAMS, NOT JUST THE GRAPHS (user 2026-08-15, in anger).** The authored-frame-graph
+  rule above governs pass STRUCTURE; this one governs the PROGRAM each pass runs.
+  **⛔ FORM (2026-08-15, ESCALATED — user: "CEIR AND CKIR must be authorable"):** the authorable form is the IR
+  ITSELF — a CEIR program (`crd::ceir` `parse`/`print`) or a CKIR `.ckir` NODE-GRAPH asset (`ckir_write`/`ckir_read` — a node-editor-readable TOML `[[node]]`/`[[stmt]]` graph) plus
+  the KGPH `ckir_serialize` blob). Cookers/declarations (`.crdl`/`.crdv`/`.crdp`) and C++ builders are NON-PRIVILEGED
+  FRONTENDS that all emit the SAME canonical IR (tracker §38-39); a C++ builder may exist ONLY as a BOOTSTRAP whose
+  PRINTED output is committed as the asset, NEVER as the runtime source. **"Declaration + cooker" as the TERMINAL bar
+  is RETRACTED.** Every rendering/compute ALGORITHM —
+  lighting, culling, deferred, post, TAA, HZB, GI, skinning, Forward+/clustered — ships as an **authorable CEIR/CKIR
+  asset cooked disk-first** (a declaration on disk + a reusable cooker that builds the graph + a memoized disk-first
+  cook in the host), **loaded by default for every application, and partially modifiable OR completely replaceable by
+  an app asset that shadows its name — without recompiling the engine.** `scene_renderer` (and any host) KNOWS NOTHING
+  ABOUT RENDERING: it cooks-from-disk and executes; it NEVER hand-builds an algorithm graph. A `ensure_*_program` /
+  `ensure_*_kernel` that writes `KGraph` nodes in C++ is the anti-pattern (exemplar: `ensure_deferred_lighting_program`);
+  every one is a conversion+deletion target (DELETION IS THE PROOF). C++ / CEIR-from-C++ is allowed only as the COOKER
+  MECHANISM, never as the shipping form. **The test before "done":** can an application replace this algorithm by
+  editing or shadowing an asset, WITHOUT recompiling the engine? If no, it is not done.
+  **⛔⛔⛔ THIS IS THE GOLD-STANDARD DoD FOR EVERY CEIR SLICE + THE LOOP (user, reaffirmed relentlessly 2026-08-15):** every
+  C++-written CEIR and CKIR is CONVERTED to a disk-read asset (a `.ckir` NODE-GRAPH kernel via `ckir_write`/`ckir_read`, a
+  CEIR program via `.frame.toml` / `crd::ceir` `parse`) and the hand-written builder is DELETED. A CEIR slice does NOT
+  close, and a loop tick does NOT advance past it, while any program is still hand-built in engine C++. (Memory:
+  `feedback_everything_is_an_authorable_asset_ceir`.)
+
   **Why this is not negotiable:** the entire REN-36 investment exists so applications, tools, and agents can
   invent rendering techniques (deferred, Forward+, NPR, whatever) without engine changes. Every technique
   hardcoded in C++ is one the authoring system provably cannot express, and it turns the contract into a lie.
@@ -76,7 +100,8 @@ Rules for AI agents working on Cerid. As binding as the engineering principles.
 - **Stub targets are not integration.** A consumer (e.g. `IPresetTarget`) must consume at least one real field that drives observable behaviour. "Display the value in ImGui" is observability, not integration.
 - **Phase doc deliverables are the contract.** Aspirational-sounding lines remain in scope until the user explicitly defers them. Author the TOML, wire the cooker, ship the UI.
 - **Call `advisor` on every non-trivial slice plan before implementing.** Catches silent-narrowing reliably.
-- **Iterate locally; close globally.** During iteration, build + run only the affected module's tests. Reserve `scripts/per-slice-check.ps1` (full per-slice DoD) for slice CLOSE. (Memory: `feedback_iterate_local_test_only`.)
+- **⛔⛔ Iterate locally; the WHOLE-REPO sweep is CI's job (user, 2026-08-15, after I burned hours on it).** Build + run ONLY the module(s) you changed + their blast radius (`build-target.bat build/win-debug <target>` → the specific `[tags]`/named tests + the WSL Linux legs for GPU code). **Never** run `per-slice-check.ps1` / `full-sweep.ps1` over the whole repo on this host — a whole-repo sweep is a multi-hour job CI parallelizes on dedicated hardware. Still FIX every bug you see (the scope rule is about not re-running untouched modules, never about ignoring a defect). Bound any local GPU run with `ctest --timeout N`. (Memory: `feedback_whole_repo_build_and_test_is_cis_job_not_local`; BUILDING.md §Per-slice.)
+- **⛔⛔ Verify your instrument before you claim a defect (user, 2026-08-15, after I FABRICATED one).** A surprising failure is YOUR harness until proven otherwise — never report failed / hung / broken / timeout, to the user OR in a doc, before ruling out the tooling; an unverified defect written as fact is a lie (worse than the misread, in a never-disguise-failure repo). *Slow ≠ hung*: compute expected duration (tests × per-test) and check CPU-climb on the RIGHT process before calling a hang; never kill a run you haven't proven wedged. Known phantoms: `Select-Object -First` → fake exit 255; win-asan exe w/o the ASan DLL PATH → `0xC0000135`; raw clang-tidy on an MSVC PCH → false "0 warnings". (SANITY #11; Memory: `feedback_powershell_select_first_kills_native_exe_exit_code`.)
 
 ## Tech Stack
 
@@ -101,12 +126,12 @@ clang-format -i <file>
 clang-tidy -p build/win-debug <file>
 ```
 
-Per-slice DoD helper:
+Per-slice DoD helper — ⛔ **this is the CI recipe; do NOT run whole-repo on this host** (see Agent Conduct "Iterate locally"). Locally use `build-target.bat build/win-debug <target>` + only the tests you changed:
 
 ```powershell
-.\scripts\per-slice-check.ps1 -Parallel                  # 4-config (CPU slices)
-.\scripts\per-slice-check.ps1 -IncludeRelease -Parallel  # 5-config (GPU / LTCG-sensitive)
-.\scripts\full-sweep.ps1                                 # 18-config (cluster close)
+.\scripts\per-slice-check.ps1 -Parallel                  # 4-config (CPU slices)   — CI
+.\scripts\per-slice-check.ps1 -IncludeRelease -Parallel  # 5-config (GPU-sensitive) — CI
+.\scripts\full-sweep.ps1                                 # 18-config (cluster close) — CI
 ```
 
 ## Project Structure

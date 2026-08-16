@@ -38,6 +38,14 @@ clang-tidy -p build/win-debug <file>
 
 ## Per-slice verification (Definition of Done)
 
+> ⛔⛔ **WHOLE-REPO verification is CI's job, NOT the local host (user directive 2026-08-15; SANITY #11).** Locally, build +
+> run ONLY the module(s) you changed + their blast radius — e.g. `scripts/build-target.bat build/win-debug <target>` then the
+> specific `[tags]`/named tests you touched, plus the WSL Linux legs for GPU code. Do **NOT** run `per-slice-check.ps1` /
+> `full-sweep.ps1` over the whole repo on this machine: a whole-repo sweep is a **multi-hour** job (e.g. win-asan ctest ≈ 3 h
+> over 6384 ASan-instrumented tests) that CI runs in parallel on dedicated hardware. The commands below are the **CI recipe**,
+> kept here for reference. Still FIX every bug you see — the scope rule is about not re-running untouched modules, never about
+> looking away from a defect. If a local GPU test must run, bound it (`ctest --timeout N`) so it can never wedge the session.
+
 ```powershell
 # 4-config DoD (debug + asan + shipping + tidy) — default for CPU-only slices.
 # Run SEQUENTIALLY (no -Parallel) and Ninja-capped — see "Host instability" below.
@@ -148,3 +156,12 @@ Diagnose: `ninja -t deps <obj>` → `#deps 0` = broken; audit `CMakeCache.txt` `
   registration (tags only).
 - Transient MSVC LTCG `C1001` / clang-tidy AV crashes that clear on a retry-clean are known upstream
   bugs: close on retry-PASS, file as debt, do not re-sweep.
+- **PowerShell `native.exe | … | Select-Object -First N` KILLS the exe mid-run** (StopUpstreamCommands) →
+  `$LASTEXITCODE` reads a phantom **255/-1** even when every assertion passed. Read the true exit with
+  `-Last`, `Out-Null`, or `$out = & exe args 2>&1; $LASTEXITCODE` (collect-then-filter). `ctest` runs each
+  test to completion, so a `-First`-induced 255 in a manual harness does NOT mean the gate fails. (SANITY #11)
+- **Single-file `clang-tidy` on a PCH build false-cleans:** raw `clang-tidy -p build/win-tidy <file>` can't
+  read the MSVC-generated `cmake_pch.cxx.pch` (`not a valid precompiled PCH … doesn't start with AST file
+  magic`) → it errors out and reports **0 warnings** (the unparsed-file false-clean). Pass `--extra-arg=/Y-`
+  (ignore PCH) `--extra-arg=-Wno-unused-command-line-argument`, and CONFIRM it actually parsed via the
+  "N warnings generated." / "Suppressed N warnings" footer — an empty output is a non-analysis, not a pass.

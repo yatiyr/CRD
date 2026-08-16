@@ -1,0 +1,90 @@
+# deferred.frame.toml — the ENGINE'S authored DEFERRED renderer (CEIR-18c).
+#
+# ⛔⛔⛔ TOP RULE: WE WILL ONLY USE OUR AUTHORED FRAME GRAPHS. This file IS the deferred render path — the
+# technique lives here, as DATA, not in C++. It is a PROMOTION, not a new algorithm: every ingredient already
+# ships and is gated green — `material::pack_gbuffer` (the B5 G-buffer packing, `material_pass = "GBuffer"`),
+# `render::deferred_shade` (B8-l Cook-Torrance decode + shade), the MRT frame graph (the depth-prepass precedent),
+# and the full-screen resolve (the HZB/TAA precedent). CEIR-18c ASSEMBLES them into an authored asset.
+#
+# ── how it composes ─────────────────────────────────────────────────────────────────────────────────────────
+#   PHASE 1  gbuffer   raster.mrt        each material's GBuffer variant packs its OpenPBR surface into 4 RGBA8
+#                                        attachments (+ a D32Float depth). material_pass = "GBuffer" selects the
+#                                        variant; no `technique` (a G-buffer pass packs the surface, it does not
+#                                        light it) — exactly as the depth prepass uses material_pass = "Shadow".
+#   PHASE 2  lighting  raster.fullscreen a full-screen pass DECODES gbuffer0..2 (`render::deferred_shade`: base +
+#                                        metallic, encoded normal + roughness, emissive) and shades with a fixed
+#                                        key light, writing the swapchain directly. It READS what phase 1 WROTE, so
+#                                        the dependency sort places the G-buffer pass FIRST automatically. THREE
+#                                        reads ⇒ the bindless heap path (NOT the single-texture 1-read path).
+#
+# ⭐ SMALLEST-FIRST (CEIR-18c): `deferred_shade` returns clamp01, so the lighting pass writes @output directly in
+# LDR — deterministic, no tonemap hue-shift. WIDEN (next): an HDR `scene_hdr` target + a tonemap `post` pass +
+# the scene light array (B8-m) replacing the fixed key. The forward twin is engine://frame/forward_csm.
+
+schema = 1
+name   = "engine://frame/deferred"
+
+# ── the compact G-buffer: 4 RGBA8 attachments in the material::pack_gbuffer layout, plus the depth target ──────
+#   gbuffer0 (base_color.rgb, metallic) · gbuffer1 (normal·0.5+0.5, roughness) · gbuffer2 (emissive.rgb, occlusion)
+#   gbuffer3 (opacity, shading_model, alpha_mode, 1)   ← written by the pack; the smallest-first lighting decodes 0..2
+[[resource]]
+name    = "gbuffer0"
+kind    = "transient_image"
+format  = "RGBA8Unorm"
+scale   = 1.0
+sampled = true          # read (sampled) by the deferred lighting pass
+
+[[resource]]
+name    = "gbuffer1"
+kind    = "transient_image"
+format  = "RGBA8Unorm"
+scale   = 1.0
+sampled = true
+
+[[resource]]
+name    = "gbuffer2"
+kind    = "transient_image"
+format  = "RGBA8Unorm"
+scale   = 1.0
+sampled = true
+
+[[resource]]
+name    = "gbuffer3"
+kind    = "transient_image"
+format  = "RGBA8Unorm"
+scale   = 1.0           # written by the pack (4 outputs); unread by the smallest-first lighting
+
+[[resource]]
+name    = "scene_depth"
+kind    = "transient_image"
+format  = "D32Float"
+scale   = 1.0
+
+# ── what the renderer draws ───────────────────────────────────────────────────────────────────────────────────
+[[draw_list]]
+name = "visible_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "material"        # batch by material to minimise state changes in the G-buffer pass
+
+# ── PHASE 1: the G-buffer MRT pass ────────────────────────────────────────────────────────────────────────────
+# The depth-format write (`scene_depth`) routes to the depth slot; the four RGBA8 writes are colour attachments
+# 0..3 in declaration order — the same order material::pack_gbuffer emits (out[0..3]).
+[[pass]]
+name          = "gbuffer"
+kind          = "raster.mrt"
+draw_list     = "visible_geometry"
+writes        = ["gbuffer0", "gbuffer1", "gbuffer2", "gbuffer3", "scene_depth"]
+material_pass = "GBuffer"
+clear_color   = [0.0, 0.0, 0.0, 0.0]
+clear_depth   = 0.0
+depth         = "GreaterEqual"   # reverse-Z, like the forward twin
+
+# ── PHASE 2: deferred lighting → swapchain ────────────────────────────────────────────────────────────────────
+# reads gbuffer0..2 → the bindless heap (indices 0/1/2); `render::deferred_shade` decodes + shades (clamp01 → LDR).
+[[pass]]
+name   = "lighting"
+kind   = "raster.fullscreen"
+reads  = ["gbuffer0", "gbuffer1", "gbuffer2"]
+writes = ["@output"]
+shader = "engine://scene/deferred_lighting"

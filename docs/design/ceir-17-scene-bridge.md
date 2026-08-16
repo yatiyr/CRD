@@ -89,6 +89,38 @@ Each row gates 2 Win (win-debug + win-asan) + 2 Linux (linux-gcc-debug + linux-g
 
 ## STATUS
 
+> **✅✅✅ 2026-08-15 — CEIR-17 BAND CLOSED + 4-config gated (17a-e + 17z all ✅).** Scene/query/resource resolver
+> semantics DECLARED (the `scene.resolve_*` intrinsic family over an EXTENDED `RenderResolvers` seam — no second seam,
+> ADR-0106 #3 held: ECS extract stays HOST, CEIR sees handles/ids only) and rigid / skinned / indirect / GPU-cull PROVEN
+> as CEIR (a PROMOTION, SANITY #8 — the machinery was already authored CEIR; the band gave it declared identity + proof).
+> ⭐⭐ **17z band-close = a REGRESSION HUNT** (deletion-gate RE-RUN + a HEAD `git stash` baseline — the GATE-reverifies-rows
+> discipline): re-running the gate against a clean HEAD surfaced **3 latent CEIR-replay drops that EVERY per-slice gate
+> missed** — all fixed forward:
+> 1. **§128 null-plan (silent render-0):** a migrated executor that got no CEIR replay plan rendered NOTHING silently
+>    (the imperative fallback that used to cover it is deleted). FIX: `FrameExecError::MissingCeirPlan` raised LOUD at the
+>    `ap.plan == nullptr && pass_is_migrated_ceir(d)` install site + `execute_frame_graph` now stack-builds `FramePlans`
+>    via `build_frame_plans` and fails closed. (Also caught REN-38-B1's 2-frame loop silently rendering 0.)
+> 2. **WBOIT composite-blend drop:** `build_fullscreen_ceir` set the composite attachment's `load` attr but DROPPED its
+>    `blend` (→ Opaque composite = the asymmetric-transparency scar re-opened). FIX: emit the `blend` attr when
+>    `desc.blend != Opaque` (anon-namespace `blend_str`; fixed the C2668 with a scoped forward-decl).
+> 3. **VRS shading_rate / conservative drop:** post-migration the pipeline shading-rate + conservative mode were dropped.
+>    FIX: payload-forward exactly like `force_load` — RenderResolvers fields → `record_ceir_render` enum_param reads →
+>    `materialize_draw_packet` writes `out.state` → `command_lowering` dispatches `draw_vrs`/`draw_conservative`. NO new
+>    CEIR dialect attr (the plan/payload split is settled — VRS is record-time state, not IR).
+>
+> Deleted stale `scene_gpu_cull.frame.toml` (+3 stale refs: bridge test, template-bridge comment, ceir-15 design). GATE:
+> **gpu-context-vulkan 260/0 win-debug + win-asan (ASan-clean); 259/1skip linux-gcc-debug + linux-gcc-asan** (the 1 skip
+> = VRS caps-guard on llvmpipe = CORRECT skip, not a hole); blast radius **frame-cook 2751/96 + render-graph 309/15 +
+> scene-render 1587/74** + tidy GREEN on all 4 configs; band-proof matrix (rigid/skinned/indirect × Vulkan/DX12) +
+> sandbox `--gpu-skin --gpu-cull-verify` smoke (185 frames, 5031 instances drawn). 3 memory scars filed
+> ([[feedback_device_skin_passes_both_need_khdrgpuskinactive_gate]], [[feedback_deleting_the_imperative_fallback_unmasks_a_migrated_null_plan_hole]],
+> + the WBOIT/VRS forward-drops recorded in the rows below). ⛔ **NEXT = CEIR-18** (renderer proof suite:
+> Forward+/Clustered/Deferred/Visibility/GPU-driven as CEIR assets — no new pass algorithm; reuse technique/material +
+> B8 lighting; base exists: cull=17d, visibility=16z, B8-deferred green; advisor at band-open, expand sub-slices). Only **7 files
+> uncommitted** — VRS+WBOIT code (`render_materialize.hpp`/`.cpp`, `frame_graph.cpp`, `render_fullscreen_build.cpp`) + 3
+> band-close docs; the §128 fix + REN-38 test plan-builds + `scene_gpu_cull.frame.toml` deletion + 17a-e all landed at
+> **8c019fc**, CEIR-16 at c44adbf (user commits). Slice-by-slice detail follows.
+>
 > **⛔ 2026-08-14 — CEIR-17 BAND OPEN.** Advisor-led decomposition (above) locked; the three band-open verifications
 > done: (1) the intrinsic registry EXISTS (CEIR-7a `op_info.intrinsic`/`native_provider`; ADR-0110 schema fixed) ⇒ 17a
 > is DECLARE not build; (2) CEIR-0z sized CEIR-1…13 in aggregate (≈34–55 KLOC) — CEIR-17 (old CEIR-14) inherits the
@@ -405,3 +437,20 @@ Each row gates 2 Win (win-debug + win-asan) + 2 Linux (linux-gcc-debug + linux-g
 >   257/2-fail/1-skip (llvmpipe SKIPs one feature; 2 environmental fail — a SUBSET of the win-debug 3, NO new regression).
 >   PENDING (background, ASan slow): linux-gcc-asan (bdccybu8k) + win-asan gpu-context (bqj45ofjh) — expect ≤3 environmental,
 >   no MissingCeirPlan. Then task #15 DONE → resume 17z close.
+> - **✅ linux-gcc-asan COMPLETE (2026-08-15): matches linux-debug** — fc 2751/96 + rg 309/15 + sr [ceir17][skinning] 67/3 +
+>   gpu-context 257/2-fail/1-skip (same environmental subset, NO MissingCeirPlan, ASan-clean). ⇒ the §128 null-plan fix is
+>   verified on win-debug + win-asan (blast radius) + BOTH Linux configs; only win-asan gpu-context (bqj45ofjh) still finishing
+>   (expect 3 environmental, no new). **Task #15 effectively DONE** (pending that last confirm).
+>
+> **✅ 17z BAND-PROOF MATRIX (row-per-claim, each RE-RUN at close — GATE-reverifies discipline, not inherited):**
+>
+> | claim | Vulkan | DX12 | re-run at close |
+> |---|---|---|---|
+> | **rigid** render as CEIR | 17c parity oracle + scene-render suite green | scene-render `[dx12]` 285/17 | ✅ re-run |
+> | **skinned** as CEIR | 17e shipped-config bit-identical (30/1) + REN-40-F Vulkan | REN-40-F DX12 (in `[dx12]` 285/17) | ✅ re-run |
+> | **indirect** (GPU cull) as CEIR | 17d verdict-compare gate + occ A/B (Vulkan) | occ pixel-A/B `k40gOccCullToml` (in `[dx12]` 285/17) | ✅ re-run |
+> | **end-to-end smoke** | sandbox `--gpu-skin --gpu-cull-verify`: 185 frames / 3.01s, 61.5 fps, **5031 instances drawn** (real geometry, NOT pixel-blind), full 22-pass authored GPU graph (palette_snapshot→gpu_skin→cull_view0..4→occlusion→forward→TAA), exit 0 | (same shipped binary, DX12 selectable) | ✅ re-run |
+>
+> ⇒ rigid/skinned/indirect all render through CEIR on BOTH backends + the live 1M sandbox path presents real geometry with
+> gpu-skin + gpu-cull + CPU-vs-GPU verify engaged. Band proof COMPLETE. ⛔ OWED before flip: win-asan gpu-context confirm +
+> MEMORY.md compaction + the §128 memory entry + commit proposal; task #16 (the 3 environmental) for "everything green".

@@ -190,6 +190,15 @@ void to_authored_pass(const PassRec& p, rg::AuthoredPass& out)
             if (!p.program_is_instance)
             {
                 if (depth_only)                            { twin = it.program_depth != nullptr ? it.program_depth : it.program; }
+                // ⛔⛔ CEIR-18c: a G-buffer pass PACKS the surface (material_pass="GBuffer") — it must be checked
+                // BEFORE the MRT-velocity arm (a G-buffer pass IS an MRT pass) and must NOT fall back to `program`:
+                // the forward FS as "albedo" is a silent-wrong the deferred lighting then decodes as a surface (the
+                // §128 class). Null twin ⇒ the draw is refused (twin stays null), never degraded to forward.
+                // ⛔⛔ CEIR-18c: a G-buffer pass PACKS the surface (material_pass="GBuffer") — checked BEFORE the
+                // MRT-velocity arm (a G-buffer pass IS an MRT pass) and NEVER falling back to `program` (the forward
+                // FS as "albedo" is the §128 silent-wrong). Null twin ⇒ the draw is refused, never degraded.
+                else if (pass_u32(d, SV(pp::kMaterialPass), 0U)
+                         == static_cast<crd::u32>(crd::framecook::FrameMaterialPass::GBuffer)) { twin = it.program_gbuffer; }
                 else if (pass_flag(d, SV(pp::kMrt)))       { twin = it.program_velocity != nullptr ? it.program_velocity : it.program; }
                 else                                       { twin = it.program; }
             }

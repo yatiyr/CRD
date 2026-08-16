@@ -14,6 +14,14 @@
 
 namespace crd::ceir::gpu
 {
+namespace
+{
+// CEIR-17z: forward decl — the composite colour attachment must BAKE its non-Opaque blend (the WBOIT resolve's
+// reveal_composite) into the plan, so the CEIR plan never lies about the blend. Defined in this anon namespace below,
+// shared with the MRT emitter (blend_str is TU-local).
+containers::StringView blend_str(crd::gpu::BlendMode b);
+} // namespace
+
 bool build_fullscreen_ceir(Context& ctx, const FullscreenBuildDesc& desc, containers::Array<LoweredCommand>& out_plan)
 {
     out_plan.clear();
@@ -49,6 +57,14 @@ bool build_fullscreen_ceir(Context& ctx, const FullscreenBuildDesc& desc, contai
         ctx.create_operation(k_col, containers::ConstSpan<Value*>(imgv, 1U), 1U,
                              render::type_color_attachment(ctx, timg->result(0U)->type()));
     ctx.set_attr(col, "load", ctx.attr_string(desc.load ? containers::StringView("load") : containers::StringView("clear")));
+    // ⛔⛔ CEIR-17z (WBOIT regression): a composite with a NON-Opaque blend (the WBOIT resolve's reveal_composite) must BAKE
+    // that blend onto its colour attachment. record_fullscreen_raster set it; build_fullscreen_ceir dropped it, so the CEIR
+    // plan silently composited Opaque. Mirror the MRT emitter (build_scene_ceir uses blend_str the same way). Bounded blast
+    // radius: only a non-Opaque single-colour composite (the WBOIT resolve is the only shipped one).
+    if (desc.blend != crd::gpu::BlendMode::Opaque)
+    {
+        ctx.set_attr(col, "blend", ctx.attr_string(blend_str(desc.blend)));
+    }
     bb->append(col);
 
     // ── the SCOPE. width/height are a 1x1 PLACEHOLDER: find_render_misuse requires >= 1, but a fullscreen pass's real

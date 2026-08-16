@@ -46,6 +46,7 @@ add_executable(crd-kir-tests
     test_ckir_hair_lod.cpp
     test_ckir_emitter_completeness.cpp
     test_ckir_serialize_determinism.cpp
+    test_ckir_asset.cpp     # CEIR-18q: the .ckir serialized-asset form (ckir_write/ckir_read) round-trip gate
     test_ckir_hair_render.cpp
     test_ckir_lss.cpp
     test_ckir_curve_rt.cpp
@@ -59,6 +60,10 @@ target_link_libraries(crd-kir-tests PRIVATE
     crd-kir
     Catch2::Catch2WithMain
 )
+
+# CEIR-18q/18a-1: the repo root, so the .ckir emitter/identity tests reach assets/compute/scene_light_cull.ckir (a
+# string compile-def — does NOT break the ADR-0098 link-isolation smoke; no new link).
+target_compile_definitions(crd-kir-tests PRIVATE CRD_REPO_DIR="${CMAKE_SOURCE_DIR}")
 
 crd_enable_default_pch(crd-kir-tests)
 

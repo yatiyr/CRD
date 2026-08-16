@@ -171,6 +171,10 @@ AssetType infer_type(StringView first_segment) noexcept
     {
         return AssetType::Sampler;
     }
+    if (first_segment == "ckir") // CEIR-18p: authored CKIR programs are first-class assets (later: "chir" for CHIR)
+    {
+        return AssetType::Program;
+    }
     return AssetType::Unknown;
 }
 
@@ -183,6 +187,7 @@ StringView asset_extension(StringView folder) noexcept
     if (folder == "lighting") { return ".crdl"; }
     if (folder == "technique") { return ".crdt"; }
     if (folder == "lod") { return ".crdlod"; }
+    if (folder == "ckir") { return ".ckir"; } // CEIR-18p: authored CKIR programs — their own engine path (later: "chir")
     return {};
 }
 

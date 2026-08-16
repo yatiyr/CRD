@@ -412,6 +412,13 @@ TEST_CASE("CEIR-15e: shipped frame assets lower identically through the CEIR pat
     SECTION("scene_visbuffer") { gate_shipped_asset("scene_visbuffer", alloc); }
     SECTION("scene_rt") { gate_shipped_asset("scene_rt", alloc); }
     SECTION("velocity_debug") { gate_shipped_asset("velocity_debug", alloc); }
+    // ⭐⭐ CEIR-18z (band close): the Forward+ (tiled) + clustered 3D-froxel frame graphs had NEVER been through this A/B gate
+    // (the SECTION list is hardcoded; 18a-2/18b added them). forward_plus = CPU-list (raster only); forward_plus_gpu +
+    // forward_clustered_3d_gpu add a light_cull(_3d) COMPUTE pass + the `instances` external_buffer — the same compute-pass +
+    // requires/fallback shape forward_csm_gpu already proves here. The exact latent-drop class 17z existed to catch.
+    SECTION("forward_plus") { gate_shipped_asset("forward_plus", alloc); }
+    SECTION("forward_plus_gpu") { gate_shipped_asset("forward_plus_gpu", alloc); }
+    SECTION("forward_clustered_3d_gpu") { gate_shipped_asset("forward_clustered_3d_gpu", alloc); }
 }
 
 TEST_CASE("RAF-8: an amplification pass kind now MAPS (the RAF-8 tail closed the gap)", "[framecook][raf8][bridge]")
@@ -755,4 +762,10 @@ TEST_CASE("ceir 16-3c-5 prereq: build_frame_plans succeeds on every shipped fram
     SECTION("forward_csm_moment") { gate_frame_plans("forward_csm_moment", alloc); }
     SECTION("forward_csm_gpu") { gate_frame_plans("forward_csm_gpu", alloc); }
     SECTION("forward_csm_gpu_srgb") { gate_frame_plans("forward_csm_gpu_srgb", alloc); }
+    // ⭐⭐ CEIR-18z (band close): the Forward+ / clustered 3D-froxel frame graphs must build a CEIR replay plan for every
+    // fullscreen pass too (18a-2/18b never ran here — the hardcoded list). The light_cull(_3d) compute pass + `instances`
+    // external_buffer is the forward_csm_gpu compute shape.
+    SECTION("forward_plus") { gate_frame_plans("forward_plus", alloc); }
+    SECTION("forward_plus_gpu") { gate_frame_plans("forward_plus_gpu", alloc); }
+    SECTION("forward_clustered_3d_gpu") { gate_frame_plans("forward_clustered_3d_gpu", alloc); }
 }

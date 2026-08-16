@@ -118,6 +118,14 @@ struct RenderResolvers
     // `load` / `load ‖ load_depth`. Idempotent when the base already baked Load. The depth's kLoadDepth arm has NO
     // force-side read (only `load` rides here), so the baked plan's depth load stays load-bearing — never strip it.
     bool                        force_load         = false;
+    // ⛔⛔ CEIR-17z: VRS + conservative rasterization are record-time per-draw STATE (like force_load). to_authored_pass folds
+    // them onto the payload (shading_rate / conservative), but the CEIR fullscreen/scene migration never forwarded them — the
+    // plan carries command STRUCTURE, these are per-pass PARAMS the record applies (the 16d-live-2b force_load seam). So a pass
+    // declaring shading_rate=2x2 rendered at 1x1. record_ceir_render sets these from the payload; materialize_draw_packet copies
+    // them onto the draw's RasterState (which command_lowering reads). Defaults 1x1/Keep/Off ⇒ ordinary passes byte-identical.
+    crd::gpu::ShadingRate         vrs_pipeline_rate      = crd::gpu::ShadingRate::Rate1x1;
+    crd::gpu::ShadingRateCombiner vrs_primitive_combiner = crd::gpu::ShadingRateCombiner::Keep;
+    crd::gpu::ConservativeMode    conservative           = crd::gpu::ConservativeMode::Off;
     // ⛔ CEIR-17b: the SCENE-RESOLVE host-callback family — evaluate_scene_resolve invokes these to run a scene.resolve_*
     // chain through the host (17a's intrinsics). Each keeps its own `user`. A null callback that the chain needs ⇒
     // ExecuteError::UnresolvedSceneHandle (the seam is unwired) — never a garbage handle.

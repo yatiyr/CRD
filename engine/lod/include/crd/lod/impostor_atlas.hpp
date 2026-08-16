@@ -40,6 +40,12 @@ namespace crd::lod
     for (crd::u32 t = tile; t >= 1U; t >>= 1U) { ++n; if (t == 1U) { break; } }
     return n == 0U ? 1U : n;
 }
+// ⛔ THE MIP-CHAIN CEILING. `impostor_num_mips = log2(tile)+1`, so tile ≤ 32768 (2^15) ⇒ ≤ 16 levels. The authored
+// impostor FS PINS its per-level select chain at this length (a fixed 16-way chain of D12 spec-const offsets) so the
+// program's STRUCTURE is independent of the live LOD policy — only the offset VALUES are patched per config. A tile
+// above this cap has more mips than the chain can address, so the FS builder REFUSES it (loud) rather than sampling a
+// level whose offset spec-const does not exist. 16 is the exact bound for every legal power-of-two tile.
+inline constexpr crd::u32 kImpostorMaxMips = 16U;
 // texel offset (into the packed RGBA8-per-u32 atlas) of level `m`'s first texel.
 [[nodiscard]] constexpr crd::u32 impostor_level_offset(crd::u32 grid, crd::u32 tile, crd::u32 m) noexcept
 {

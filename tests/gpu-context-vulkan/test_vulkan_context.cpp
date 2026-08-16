@@ -69,6 +69,7 @@
 #include <ckir_visbuffer_test.hpp>  // B4-vis: the SHARED software-rasterizer scene + oracle + mixed-dtype dispatch
 #include <ckir_oit_test.hpp>        // B17: the SHARED order-independent-transparency shaders + CPU oracle (WBOIT/...)
 #include <ckir_abuffer_test.hpp>    // B17-c: the SHARED exact-reference A-buffer OIT scene + oracle + 2-kernel dispatch
+#include <ckir_light_cull_test.hpp> // CEIR-18a-1: the SHARED Forward+/clustered light-cull producer scene + oracle + dispatch
 
 #include <crd/containers/span.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
@@ -5254,6 +5255,218 @@ TEST_CASE("v17 NRC: CKIR fused-MLP FP32 forward DISPATCHES on Vulkan == CPU orac
     int bad = 0;
     for (int i = 0; i < n_in; ++i) { if (out32[static_cast<crd::usize>(i)] != static_cast<float>(out64[static_cast<crd::usize>(i)])) { ++bad; } }
     CHECK(bad == 0);
+}
+
+// ── CEIR-18a-1: the FORWARD+ / clustered light-cull PRODUCER (build_cluster_light_cull) — the compute pass B8-l disclaimed.
+// A DETERMINISTIC 4x4-tile froxel scene is culled on the device and the per-cluster light LIST (count + ascending indices)
+// is compared to the CPU oracle BIT-FOR-BIT (== — serial, no atomics ⇒ construction-ordered), AND to the analytic
+// `expected[]` (so (1) is not GPU==buggy-oracle). The tile AABBs are shared verbatim GPU+oracle (the 17d bounds discipline).
+TEST_CASE("CEIR-18a-1 GATE: the Forward+ cull producer's per-cluster light lists match the CPU oracle (Vulkan)",
+          "[gpu-context][vulkan][gpu][ceir][ceir18][lightcull][compute]")
+{
+    namespace kir = crd::kir;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    using Scene      = crd::kir_test::ClusterCullScene;
+    const auto scene = crd::kir_test::make_cluster_cull_scene();
+
+    // ⭐ CEIR-18a-1: the cull kernel is LOADED from its committed `.ckir` asset (assets/ckir/scene_light_cull.ckir) —
+    // the C++ builder is retired; the device parity below (list==oracle==analytic) stays ABSOLUTE (provenance-independent).
+    kir::KGraph g(&alloc);
+    kir::KEntry e;
+    REQUIRE(crd::kir_test::read_cull_ckir(g, e, alloc));
+
+    bool       emit_ok   = true;
+    const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
+        kir::GlslKernel kern(&alloc);
+        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source),
+                                                    "ckir_light_cull", &alloc);
+        if (!spv.ok) { emit_ok = false; }
+        return compute.create_pipeline_from_spirv(
+            crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nbufs, 0U);
+    };
+
+    crd::containers::Array<crd::u32> oracle_list(&alloc);
+    crd::containers::Array<crd::u32> oracle_cnt(&alloc);
+    crd::containers::Array<crd::u32> gpu_list(&alloc);
+    crd::containers::Array<crd::u32> gpu_cnt(&alloc);
+    crd::kir_test::cull_oracle(g, e, scene, alloc, oracle_list, oracle_cnt);
+    crd::kir_test::cull_dispatch(compute, make_pipe, g, e, scene, gpu_list, gpu_cnt);
+    REQUIRE(emit_ok);
+    REQUIRE(gpu_list.size() == oracle_list.size());
+    REQUIRE(gpu_list.size() == static_cast<crd::usize>(Scene::list_len));
+    REQUIRE(gpu_cnt.size() == static_cast<crd::usize>(Scene::count_len));
+
+    // (1) the DEVICE list AND count buffers == the CPU oracle, EXACTLY.
+    crd::u32 diffs = 0U;
+    for (crd::usize i = 0; i < gpu_list.size(); ++i) { if (gpu_list[i] != oracle_list[i]) { ++diffs; } }
+    for (crd::usize i = 0; i < gpu_cnt.size(); ++i) { if (gpu_cnt[i] != oracle_cnt[i]) { ++diffs; } }
+    INFO("18a-1 GPU-vs-oracle diffs (list+count) = " << diffs);
+    CHECK(diffs == 0U);
+
+    // (2) the ORACLE == the analytic expected list + count per cluster (the layout the cooked FS reads: stride cap, survivors
+    // then null_index padding; NON-VACUOUS shape). Locks the reference.
+    crd::u32 empty = 0U;
+    for (int c = 0; c < Scene::num_clusters; ++c)
+    {
+        CHECK(static_cast<int>(oracle_cnt[static_cast<crd::usize>(c)]) == scene.expected_count[c]);
+        for (int k = 0; k < Scene::cap; ++k)
+        {
+            CHECK(static_cast<int>(oracle_list[static_cast<crd::usize>(c * Scene::cap + k)]) == scene.expected_list[c][k]);
+        }
+        if (scene.expected_count[c] == 0) { ++empty; }
+    }
+    CHECK(empty >= 1U);                                        // ≥1 empty cluster
+    CHECK(empty < static_cast<crd::u32>(Scene::num_clusters)); // and ≥1 populated cluster
+}
+
+// ── CEIR-18a-2: the cull-producer device SEAM — the shipped scene_light_cull.ckir on REAL device buffers over the ported
+// 4-light 4×4 synthetic-group-buffer scene, the device list == the analytic answer. ⛔ The standalone CONSUMPTION (cooked-FS shade) gate
+// was ABANDONED (advisor scoping correction 2026-08-15): dispatching the cooked lighting FS standalone requires reimplementing
+// the LIVE forward-pass dispatch inside the test (gates-run-configs class — the cooked FS reads via StorageLoad, a FRAGMENT op
+// inseparable from its frame plumbing; the compute-wrap wall confirmed the finding). Consumption now proves through the LIVE
+// forward pass in 18a-2 (B8-m plumbing → cull pass in the frame graph → probes). This half stays as a standing regression.
+TEST_CASE("CEIR-18a-2 GATE: the cull producer's device list matches the analytic answer (Vulkan)",
+          "[gpu-context][vulkan][gpu][ceir][ceir18][lightcull][forwardplus]")
+{
+    namespace kir = crd::kir;
+    namespace gp  = crd::gpu;
+    gp::GpuContextConfig cfg;
+    cfg.backend  = gp::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gp::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gp::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    crd::memory::TlsfAllocator alloc(48U << 20U);
+
+    // ⭐ the SHIPPED cull asset on real device buffers, via the ported SYNTHETIC-GROUP-BUFFER harness: the device list ==
+    // the ANALYTIC answer DIRECTLY (the SEAM — scene_light_cull.ckir wrote what build_cluster_light_cull proved). The CPU
+    // ORACLE leg lives in the gate above (device==oracle==analytic); this one locks device==analytic on its own.
+    using Scene      = crd::kir_test::ClusterCullScene;
+    const auto scene = crd::kir_test::make_cluster_cull_scene();
+    kir::KGraph cg(&alloc);
+    kir::KEntry ce;
+    REQUIRE(crd::kir_test::read_cull_ckir(cg, ce, alloc));
+    bool       emit_ok   = true;
+    const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
+        kir::GlslKernel kern(&alloc);
+        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        const auto spv = gp::compile_glsl_to_spirv(gp::ShaderStage::Compute, crd::containers::to_view(kern.source), "cull2", &alloc);
+        if (!spv.ok) { emit_ok = false; }
+        return compute.create_pipeline_from_spirv(
+            crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nbufs, 0U);
+    };
+    crd::containers::Array<crd::u32> gpu_list(&alloc);
+    crd::containers::Array<crd::u32> gpu_cnt(&alloc);
+    crd::kir_test::cull_dispatch(compute, make_pipe, cg, ce, scene, gpu_list, gpu_cnt);
+    REQUIRE(emit_ok);
+    REQUIRE(gpu_list.size() == static_cast<crd::usize>(Scene::list_len));
+    for (int c = 0; c < Scene::num_clusters; ++c)
+    {
+        for (int k = 0; k < Scene::cap; ++k)
+        {
+            CHECK(static_cast<int>(gpu_list[static_cast<crd::usize>(c * Scene::cap + k)]) == scene.expected_list[c][k]);
+        }
+    }
+}
+
+// ── CEIR-18b: the 3D CLUSTERED cull producer — scene_light_cull_3d.ckir (64 = 4×4×4 clusters) over a froxel scene with REAL
+// per-slice z-bounds, device == CPU oracle == analytic. This is 18b's PRIMARY proof: pixels can't fully discriminate z-binning
+// (a far light mis-binned near contributes nothing there anyway), so the LIST is where the depth term is provable. The scene's
+// lights DISCRIMINATE by depth — L0/L1 share a screen tile but different slices; a dead z-term would merge them into slice 0.
+TEST_CASE("CEIR-18b GATE: the 3D clustered cull producer's per-cluster lists match oracle + analytic (Vulkan)",
+          "[gpu-context][vulkan][gpu][ceir][ceir18b][lightcull][clustered3d]")
+{
+    namespace kir = crd::kir;
+    namespace gp  = crd::gpu;
+    gp::GpuContextConfig cfg;
+    cfg.backend  = gp::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gp::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto*                          vk = static_cast<gp::VulkanGpuContext*>(ctx.get());
+    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    crd::memory::TlsfAllocator alloc(48U << 20U);
+
+    using Scene      = crd::kir_test::ClusterCullScene3D;
+    const auto scene = crd::kir_test::make_cluster_cull_scene_3d();
+
+    // the 3D asset — the SAME builder re-parameterized to 64 clusters (num_clusters is the only on-disk difference).
+    kir::KGraph g(&alloc);
+    kir::KEntry e;
+    REQUIRE(crd::kir_test::read_cull_ckir(g, e, alloc, CRD_REPO_DIR "/assets/ckir/scene_light_cull_3d.ckir"));
+
+    bool       emit_ok   = true;
+    const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
+        kir::GlslKernel kern(&alloc);
+        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        const auto spv = gp::compile_glsl_to_spirv(gp::ShaderStage::Compute, crd::containers::to_view(kern.source),
+                                                   "ckir_light_cull_3d", &alloc);
+        if (!spv.ok) { emit_ok = false; }
+        return compute.create_pipeline_from_spirv(
+            crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nbufs, 0U);
+    };
+
+    crd::containers::Array<crd::u32> oracle_list(&alloc);
+    crd::containers::Array<crd::u32> oracle_cnt(&alloc);
+    crd::containers::Array<crd::u32> gpu_list(&alloc);
+    crd::containers::Array<crd::u32> gpu_cnt(&alloc);
+    crd::kir_test::cull_oracle(g, e, scene, alloc, oracle_list, oracle_cnt);
+    crd::kir_test::cull_dispatch(compute, make_pipe, g, e, scene, gpu_list, gpu_cnt);
+    REQUIRE(emit_ok);
+    REQUIRE(gpu_list.size() == oracle_list.size());
+    REQUIRE(gpu_list.size() == static_cast<crd::usize>(Scene::list_len));
+    REQUIRE(gpu_cnt.size() == static_cast<crd::usize>(Scene::count_len));
+
+    // (1) device list AND count == the CPU oracle, EXACTLY (serial compaction ⇒ bit-identical, no atomics).
+    crd::u32 diffs = 0U;
+    for (crd::usize i = 0; i < gpu_list.size(); ++i) { if (gpu_list[i] != oracle_list[i]) { ++diffs; } }
+    for (crd::usize i = 0; i < gpu_cnt.size(); ++i) { if (gpu_cnt[i] != oracle_cnt[i]) { ++diffs; } }
+    INFO("18b GPU-vs-oracle diffs (list+count) = " << diffs);
+    CHECK(diffs == 0U);
+
+    // (2) oracle == the analytic expected list/count per cluster (locks the reference). 60/64 clusters empty (non-vacuous).
+    crd::u32 empty = 0U;
+    for (int c = 0; c < Scene::num_clusters; ++c)
+    {
+        CHECK(static_cast<int>(oracle_cnt[static_cast<crd::usize>(c)]) == scene.expected_count[c]);
+        for (int k = 0; k < Scene::cap; ++k)
+        {
+            CHECK(static_cast<int>(oracle_list[static_cast<crd::usize>(c * Scene::cap + k)]) == scene.expected_list[c][k]);
+        }
+        if (scene.expected_count[c] == 0) { ++empty; }
+    }
+    CHECK(empty >= 1U);
+    CHECK(empty < static_cast<crd::u32>(Scene::num_clusters));
+
+    // (3) ⭐⭐ Z-DISCRIMINATION (loud): L0 and L1 share screen tile (0,0) at DIFFERENT depths ⇒ c0 (slice0) vs c32 (slice2). A
+    // z-blind cull would bin BOTH into c0 (same x,y). Prove the depth term is live: c0 has L0 but NOT L1, c32 has L1 but NOT L0.
+    const crd::usize c0_base   = 0U;                                                               // cluster 0 (tile 0,0, slice 0)
+    const crd::usize c32_base  = static_cast<crd::usize>(32) * static_cast<crd::usize>(Scene::cap); // cluster 32 (tile 0,0, slice 2)
+    bool             c0_has_l1  = false;
+    bool             c32_has_l0 = false;
+    for (int k = 0; k < Scene::cap; ++k)
+    {
+        const crd::usize kk = static_cast<crd::usize>(k);
+        if (static_cast<int>(gpu_list[c0_base + kk]) == 1) { c0_has_l1 = true; }
+        if (static_cast<int>(gpu_list[c32_base + kk]) == 0) { c32_has_l0 = true; }
+    }
+    CHECK(static_cast<int>(gpu_list[c0_base]) == 0);  // c0 slot0 = L0
+    CHECK(static_cast<int>(gpu_list[c32_base]) == 1); // c32 slot0 = L1
+    CHECK_FALSE(c0_has_l1);
+    CHECK_FALSE(c32_has_l0);
 }
 
 TEST_CASE("B14-c: CKIR SVGF a-trous denoiser DISPATCHES on Vulkan == CPU oracle (ULP-tol, transcendental weights)",

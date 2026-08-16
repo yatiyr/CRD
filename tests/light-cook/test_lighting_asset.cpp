@@ -96,8 +96,12 @@ struct Rig
 [[nodiscard]] containers::String make(memory::IAllocator* a, const char* sections)
 {
     containers::String t(a);
+    // ⭐ CEIR-18a-2: viewport_w/h are in the shared header so any clustered section a test appends cooks (the cluster
+    // cook REQUIRES them). ⭐ CEIR-18b: slice_bounds_off likewise, so a 3D grid (grid[2] > 1) cooks — the cluster cook
+    // REQUIRES it too. Non-clustered sections ignore all three; a 2D grid (grid[2] == 1) ignores slice_bounds_off (never
+    // hashed or read there — the 18a byte-stability contract holds).
     t.append("schema = 1\nname   = \"crd://lighting/gate\"\n\n[header]\nview_proj = 6\ncsm_splits = 28\n"
-             "light_off = 23\ndecal_off = 24\ncluster_off = 21\n");
+             "light_off = 23\ndecal_off = 24\ncluster_off = 21\nviewport_w = 111\nviewport_h = 112\nslice_bounds_off = 115\n");
     t.append(kRecord);
     t.append(sections);
     return t;
@@ -461,15 +465,71 @@ TEST_CASE("REN-38-E4: DECALS are a projected material", "[light-cook][ren38]")
     CHECK(lc::cook_lighting(d, r.g, r.in, r.b) < 0);
 }
 
+TEST_CASE("CEIR-18b: the clustered 3D froxel z-slice is an authored boundary table", "[light-cook][ceir18b]")
+{
+    memory::TlsfAllocator alloc(256U << 20U);
+
+    // ⭐⭐ A 3D grid (grid[2] > 1) cooks the EXPONENTIAL z-slice — clip.w (view_proj row 3 · world_pos) counted against the
+    // published boundary table (the branchless Step-sum). It adds nodes OVER the 2D tiled grid (which bins slice 0): if it
+    // did NOT, the depth term was declared and ignored and every fragment in a screen column would share one froxel (distant
+    // lights leaking into the foreground — the exact failure the 3D dimension exists to kill). Both cook; 3D is strictly larger.
+    const int tiled_2d = cook_size(&alloc, "\n[counts]\npoint = 4\n"
+                                           "\n[cluster]\nenabled = true\ngrid = [4, 4, 1]\nmax_per_cluster = 4\n");
+    const int clustered_3d = cook_size(&alloc, "\n[counts]\npoint = 4\n"
+                                               "\n[cluster]\nenabled = true\ngrid = [4, 4, 4]\nmax_per_cluster = 4\n");
+    CHECK(tiled_2d > 0);
+    CHECK(clustered_3d > 0);
+    CHECK(clustered_3d > tiled_2d);
+
+    // ⭐⭐ BYTE-STABILITY (the 18a contract). A 2D grid's identity is IDENTICAL regardless of slice_bounds_off — grid[2] == 1
+    // never hashes or reads it. ⛔ If this drifts, every existing forward-clustered variant id churns and the whole 2D cook
+    // moves. Prove it by MUTATING the word on a parsed 2D desc: the id must not budge.
+    lc::LightingDesc d2(&alloc);
+    REQUIRE(parse(&alloc, "\n[counts]\npoint = 4\n\n[cluster]\nenabled = true\ngrid = [4, 4, 1]\nmax_per_cluster = 4\n", d2)
+            == lc::LightingCookError::Ok);
+    const u64 id_2d = lc::lighting_variant_id(d2);
+    d2.header.slice_bounds_off = 0U;   // as if undeclared
+    CHECK(lc::lighting_variant_id(d2) == id_2d);
+    d2.header.slice_bounds_off = 987U; // any other location
+    CHECK(lc::lighting_variant_id(d2) == id_2d);
+
+    // ⭐⭐ …and the MIRROR: a 3D grid BAKES the table location into the FS (it reads header[slice_bounds_off + i]), so moving
+    // the word is a different cooked program — the id MUST move, or the variant cache serves a 3D FS that Steps against the
+    // wrong words.
+    lc::LightingDesc d3(&alloc);
+    REQUIRE(parse(&alloc, "\n[counts]\npoint = 4\n\n[cluster]\nenabled = true\ngrid = [4, 4, 4]\nmax_per_cluster = 4\n", d3)
+            == lc::LightingCookError::Ok);
+    const u64 id_3d = lc::lighting_variant_id(d3);
+    d3.header.slice_bounds_off = 200U;
+    CHECK(lc::lighting_variant_id(d3) != id_3d);
+
+    // ⛔ A 3D grid with NO slice_bounds_off is REFUSED — the FS would Step against header word 0 (view_proj[0]), mis-binning
+    // every fragment. Built RAW (bypassing make(), which now injects slice_bounds_off) so the word is genuinely absent (0).
+    // ⛔ CONDITIONAL: a 2D grid (grid[2] == 1) with the same absent word cooks fine (proven above) — the reject is 3D-only.
+    {
+        lc::LightingDesc   bad(&alloc);
+        containers::String wb(&alloc);
+        CHECK(lc::parse_lighting_toml(
+                  containers::StringView("schema = 1\nname = \"nb\"\n\n[header]\nview_proj = 6\ncluster_off = 21\n"
+                                         "viewport_w = 111\nviewport_h = 112\n\n[counts]\npoint = 4\n"
+                                         "\n[cluster]\nenabled = true\ngrid = [4, 4, 4]\nmax_per_cluster = 4\n"),
+                  bad, &wb)
+              == lc::LightingCookError::BadCluster);
+    }
+}
+
 TEST_CASE("REN-38-E5: CLUSTERED culling bounds the unrolled loop", "[light-cook][ren38]")
 {
     memory::TlsfAllocator alloc(256U << 20U);
     // ⭐⭐ THE POINT OF CLUSTERING is that the unrolled bound stops being the SCENE's light count. Sixteen point
     // lights culled to four per froxel must cook a SMALLER program than sixteen walked directly — if it did not,
     // the cluster list was declared and ignored, and the only symptom would be a frame-time nobody expected.
-    const int direct    = cook_size(&alloc, "\n[counts]\npoint = 16\n");
-    const int clustered = cook_size(&alloc, "\n[counts]\npoint = 16\n\n[cluster]\nenabled = true\n"
-                                            "grid = [16, 9, 24]\nmax_per_cluster = 4\n");
+    const int direct = cook_size(&alloc, "\n[counts]\npoint = 16\n");
+    // ⭐ CEIR-18a-2: clustering now REQUIRES the viewport-dims header words (the FS normalizes FragCoord by them); the
+    // shared header (make()) declares them, so a clustered section cooks. They add a handful of nodes, far fewer than
+    // the 16→4 light savings.
+    const int clustered = cook_size(&alloc, "\n[counts]\npoint = 16\n"
+                                            "\n[cluster]\nenabled = true\ngrid = [16, 9, 24]\nmax_per_cluster = 4\n");
     CHECK(direct > 0);
     CHECK(clustered > 0);
     CHECK(clustered < direct);
@@ -481,6 +541,17 @@ TEST_CASE("REN-38-E5: CLUSTERED culling bounds the unrolled loop", "[light-cook]
           == lc::LightingCookError::BadCluster);
     CHECK(parse(&alloc, "\n[counts]\npoint = 4\n\n[cluster]\nenabled = true\nmax_per_cluster = 999\n", bad)
           == lc::LightingCookError::BadCluster);
+    // ⛔ CEIR-18a-2: a VALID froxel grid + cap but NO viewport-dims header words is still refused — the clustered FS
+    // divides FragCoord by those words, and word 0 (unset) is garbage. ⛔ Built RAW (bypassing make()'s shared header,
+    // which now declares viewport_w/h) so the words are genuinely absent (default 0). The cook rejects the incomplete desc.
+    {
+        containers::String w2(&alloc);
+        CHECK(lc::parse_lighting_toml(
+                  containers::StringView("schema = 1\nname = \"nv\"\n\n[counts]\npoint = 4\n"
+                                         "\n[cluster]\nenabled = true\ngrid = [4, 4, 1]\nmax_per_cluster = 4\n"),
+                  bad, &w2)
+              == lc::LightingCookError::BadCluster);
+    }
 }
 
 TEST_CASE("REN-38-E1: the VARIANT IDENTITY covers every axis", "[light-cook][ren38]")

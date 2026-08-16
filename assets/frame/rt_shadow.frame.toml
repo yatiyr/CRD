@@ -1,0 +1,121 @@
+# rt_shadow.frame.toml — the ENGINE'S authored HYBRID RT-SHADOW renderer (CEIR-19b, §133).
+#
+# ⛔⛔⛔ TOP RULE: WE WILL ONLY USE OUR AUTHORED FRAME GRAPHS. This file IS the hybrid render path — raster-primary
+# lighting + a RAY-TRACED shadow term, composed as DATA, not C++. §133 hybrid-RT: raster is primary, RT contributes
+# ONE effect (shadows). It is a PROMOTION + assembly, not a new renderer class — the raytrace.pipeline pass mechanic
+# (F6-proven both backends), the scene TLAS (RtScene / set_scene_accel), and the fullscreen composite all already ship.
+#
+# ⛔ THE ceir.rt DIALECT (CEIR-19a) IS NOT CONSUMED HERE — the RT pass runs through the EXISTING raytrace.pipeline
+# frame.pass (already authored-CEIR: a frame.pass op + a cook_stage_named .crdv shader loader + a registered executor).
+# The ceir.rt→gpu execution bridge is CEIR-19c's (its real consumer = the §134 wavefront path tracer). See D-007 19b/19c.
+#
+# ── how it composes (the DEPTH-HANDOFF is a TWO-PASS split — RT/compute bindings decide it) ────────────────────────
+#   1 forward     raster.geometry    the scene, flat-lit (NO shadow term yet) → scene_hdr (color) + scene_depth (depth).
+#   2 shadow_prepass compute         reads scene_depth (SAMPLED — a compute pass binds a sampled texture; an RT pass does
+#                                     NOT) → reconstructs per-pixel WORLD POSITION (inverse view_proj) → worldpos_buf.
+#                                     ⛔ this pass exists ONLY because RT kernels bind accel + storage buffers, never a
+#                                     sampled depth image — so the raster depth must become a BUFFER before RT can use it.
+#   3 rt_shadow   raytrace.pipeline   reads worldpos_buf + scene_tlas → for each pixel casts a shadow ray toward the FIXED
+#                                     light; miss = LIT (1.0), hit = SHADOWED (0.0) → shadow_mask_buf. (F6-proven mechanic.)
+#   4 composite   raster.fullscreen   scene_hdr × shadow_mask → @output (the RT shadow term darkens the flat-lit color).
+#
+# ⛔ PROOF (CEIR-19b gate, ABSOLUTE — never CEIR-vs-CEIR): a deterministic fixed occluder + fixed light; the RAW
+# shadow_mask is asserted FIRST (an occluded probe ≈ 0 vs an unoccluded probe ≈ 1, analytic), the composited darkening
+# second. Both backends caps-SKIP (supports_rt_pipeline); llvmpipe has no RT so the Linux legs are cook + dialect + oracle.
+
+schema   = 1
+name     = "engine://frame/rt_shadow"
+fallback = "engine://frame/forward_basic"
+
+# ── the primary raster render: flat-lit HDR colour + the depth the shadow term is reconstructed from ──────────────
+[[resource]]
+name    = "scene_hdr"
+kind    = "transient_image"
+format  = "RGBA8Unorm"   # LDR smallest-first (deterministic, no tonemap hue-shift — the 18c precedent)
+scale   = 1.0
+sampled = true           # read (sampled) by the composite pass
+
+[[resource]]
+name    = "scene_depth"
+kind    = "transient_image"
+format  = "D32Float"
+scale   = 1.0
+sampled = true           # ⛔ read (sampled, explicit-LOD) by the worldpos compute pass — the depth-handoff source
+
+# the scene TLAS — host-built (RtScene / set_scene_accel), read-only for the whole frame (REN-38-B4: not graph-tracked).
+[[resource]]
+name = "scene_tlas"
+kind = "acceleration_structure"
+
+# the reconstruction constants: inverse(view_proj) (16 f32) + screen (w, h) + the PER-BACKEND ndc_y_sign (the froxel-vs-
+# FragCoord scar — the renderer provisions +1/-1 from ndc_y_points_down(), so the kernel stays backend-agnostic). Host-owned.
+[[resource]]
+name = "rt_constants"
+kind = "external_buffer"
+
+# per-pixel world position: the compute pass WRITES it, the RT pass READS it. Host-owned + host-sized (w*h*vec4), the
+# scene_rt `hits` external_buffer precedent — the renderer provisions it (like the froxel/light-input buffers for 18a-2).
+[[resource]]
+name = "worldpos_buf"
+kind = "external_buffer"
+
+# per-pixel shadow mask (f32 0/1): the RT pass WRITES it, the composite READS it. Host-owned + host-sized (w*h).
+[[resource]]
+name = "shadow_mask_buf"
+kind = "external_buffer"
+
+[[draw_list]]
+name = "visible_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "material"
+
+# ── 1. the primary raster leg → scene_hdr + scene_depth (flat-lit, no shadow term) ────────────────────────────────
+[[pass]]
+name          = "forward"
+kind          = "raster.geometry"
+draw_list     = "visible_geometry"
+writes        = ["scene_hdr", "scene_depth"]  # the D32Float write routes to the depth slot
+material_pass = "Forward"
+clear_color   = [0.09, 0.10, 0.13, 1.0]
+clear_depth   = 0.0
+depth         = "GreaterEqual"                # reverse-Z, like every forward twin
+
+# ── 2. reconstruct per-pixel world position from the raster depth (compute binds the SAMPLED depth) ───────────────
+# ⛔ NDC±Y mirror + depth-as-float + reverse-Z scars live in the worldpos kernel's inverse-projection math (per-backend
+# ndc_y). The kernel samples scene_depth at LOD 0 (tex_sample_lod — legal in a compute stage, no derivatives).
+# ⛔ depth_as_float = true: WITHOUT it a sampled DEPTH image binds as a comparison/shadow sampler (sampled_is_depth,
+# frame_runtime ~1164), not a plain float texture — the depth-as-float scar's exact landing point.
+# ⛔ 1D LAUNCH (advisor): the raygen indexes LaunchId.x only, so BOTH dispatching passes are pinned 1D (the flat pixel
+# index). groups_x = ceil(W*H / workgroup) for the 64×64 gate target (4096 / 64 = 64); the renderer sizes worldpos_buf +
+# may override groups to the actual target. Static params here avoid the REN-38-A16 {1,1,1} one-ray default.
+[[pass]]
+name           = "shadow_prepass"
+kind           = "compute"
+kernel         = "engine://scene/rt_worldpos"
+reads          = ["scene_depth", "rt_constants"]
+writes         = ["worldpos_buf"]
+depth_as_float = true
+params         = { groups_x = 64, groups_y = 1 }
+
+# ── 3. the ray-traced shadow term: cast one shadow ray per pixel toward the fixed light (F6-proven pipeline path) ──
+# raygen reads worldpos_buf[LaunchId] as the ray origin, traces toward the light; miss = lit, closest-hit = shadowed.
+# ⛔ 1D LAUNCH: groups_x = W*H rays (raytrace.pipeline traces groups_x × groups_y = the ray count, not workgroups; the F6
+# scene_rt precedent), groups_y = 1 — so LaunchId.x is the flat pixel index matching the compute prepass's worldpos_buf[idx].
+[[pass]]
+name        = "rt_shadow"
+kind        = "raytrace.pipeline"
+raygen      = "engine://scene/rt/shadow_raygen"
+miss        = "engine://scene/rt/shadow_miss"
+closest_hit = "engine://scene/rt/shadow_chit"
+reads       = ["scene_tlas", "worldpos_buf"]
+writes      = ["shadow_mask_buf"]
+params      = { groups_x = 4096, groups_y = 1 }
+
+# ── 4. composite: the flat-lit colour × the shadow mask → swapchain ───────────────────────────────────────────────
+[[pass]]
+name   = "composite"
+kind   = "raster.fullscreen"
+reads  = ["scene_hdr", "shadow_mask_buf"]
+writes = ["@output"]
+shader = "engine://scene/rt_composite"

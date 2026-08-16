@@ -113,7 +113,12 @@ inline constexpr crd::u32 kClusterMaxPrims = 128U;
 // ⛔ APPENDED, never renumbered — every existing word index is unchanged, the same discipline the header has
 // followed since it grew from 32 to 96. A renumbered header silently feeds every pull shader the wrong field.
 inline constexpr crd::u32 kHdrLightOff        = 99U;  // holds the word offset of the light section
-inline constexpr crd::u32 kLightSectionWords  = 16U;  // one record: position@0 falloff@3 color@4 direction@8
+// ⭐ CEIR-18a-2 (B8-m): the light section holds 1 directional + kMaxScenePointLights point records. Point counts are
+// COOK-TIME (they bake the FS unroll — scene_forward.crdl [counts]), so the runtime declares a FIXED capacity and
+// null-fills the unused slots. The section still sits at the END of the header (kHeaderWords − kLightSectionWords).
+inline constexpr crd::u32 kMaxScenePointLights = 4U;  // the forward FS's declared point-light capacity (scene_forward.crdl)
+inline constexpr crd::u32 kLightRecordWords    = 16U; // one record's stride — MUST match scene_forward.crdl [record] stride
+inline constexpr crd::u32 kLightSectionWords   = (1U + kMaxScenePointLights) * kLightRecordWords; // 1 directional + N point
 // ⭐ REN-38-F6+: the header grows 116 → 120 (4-word aligned). The LIGHT SECTION is derived
 // (`header[99] = kHeaderWords − 16`), so the record slides to [104..119] and every consumer follows the offset
 // word; the freed [100] holds the group's TOTAL INSTANCE COUNT — the GPU cull kernel's range guard (threads
@@ -148,6 +153,51 @@ inline constexpr crd::u32 kHdrPrevPaletteOff  = 108U; // per-instance previous b
 // palette_off → prev_palette_off ONLY when this is set — under CPU skinning the renderer already CPU-uploads
 // prev_palette, and an unconditional device copy would clobber that with the current pose (prev == cur, no motion).
 inline constexpr crd::u32 kHdrGpuSkinActive   = 109U;
+// ⭐⭐ CEIR-18a-2 Stage 2 (Forward+ clustered): the word offset (into the group buffer) of the per-tile/cluster
+// LIGHT-INDEX LIST — the E5 clustered forward FS reads its per-pixel run at `header[kHdrClusterOff] +
+// cluster_index*max_per_cluster + flat_index` (lighting_asset.cpp:800; `LightingDesc.header.cluster_off`, whose default
+// 21 COLLIDED with view_proj). A FREE word (110) in the 107..119 band — kHeaderWords is unchanged, no section moves.
+inline constexpr crd::u32 kHdrClusterOff      = 110U;
+// ⭐⭐ CEIR-18a-2 Stage 2 (Forward+): the VIEWPORT dimensions in PIXELS (the render target's width/height), written raw
+// each frame. The clustered forward FS reads them to NORMALIZE FragCoord.xy into [0,1) before multiplying by the froxel
+// grid (lighting_asset.cpp cluster block) — `frag_xy` stays PIXEL coords (its documented meaning; the PCF/ign rotation
+// needs the per-pixel value), so the tile index divides by these here instead of corrupting frag_xy's unit. Words 111
+// (pre-reserved above for a cluster dims word) and 112 — both in the free 107..119 band, nothing below 120 moves.
+inline constexpr crd::u32 kHdrViewportW       = 111U;
+inline constexpr crd::u32 kHdrViewportH       = 112U;
+// ⭐⭐ CEIR-18a-2 Stage 2b (Forward+ GPU producer): the ABSOLUTE bases of the two light-cull INPUT sections in the group
+// buffer — the froxel-AABB table (per-cluster view→world AABBs, min.xyz/max.xyz) and the light-input ({position,radius}
+// per point light). The `engine://scene/light_cull` compute kernel reads them through THESE header words (the same
+// header-indirection the FS uses for the list). 113/114 are the last free words below the LOD table (120).
+inline constexpr crd::u32 kHdrFroxelAabbOff   = 113U;
+inline constexpr crd::u32 kHdrLightViewOff    = 114U;
+// ⭐⭐ CEIR-18b (clustered 3D froxel): the N+1 EXPONENTIAL z-slice boundaries, in clip.w (view-depth) terms, f32 BITS.
+// The renderer computes them CPU-side each frame (unproject near/far, pick `w_i = w_near·(w_far/w_near)^(i/N)`) and the
+// clustered FS bins each fragment by counting how many INTERIOR boundaries its `clip.w` exceeds — the froxel AABBs are cut
+// at the SAME boundaries, so binning is bit-consistent by CONSTRUCTION (the "publish a table, never a formula" discipline
+// that kills the 2-derivation drift that bit frag_xy / the Y-flip / the viewport words). Words 115..119 are the LAST free
+// band below the LOD table (120) — exactly N+1=5 slots, which HARD-CAPS N=4 (grid[2]≤4) on the current header. Only the 3D
+// clustered technique writes/reads them; the 2D tiled path (grid[2]==1) never touches them and cooks byte-identical.
+inline constexpr crd::u32 kHdrSliceBoundsOff  = 115U;
+inline constexpr crd::u32 kNumSliceBounds     = 5U;  // N+1 = 5 (grid[2] up to 4 slices)
+// ⭐⭐ CEIR-18a-2 Stage 2 / CEIR-18b: the MAX cluster count the group buffer reserves for — 4×4×4 = 64 (the 3D clustered
+// grid; also = the light-cull workgroup size, so `cluster = LocalInvocationIndex` covers every cluster with ONE dispatch).
+// ⛔ The 2D tiled config (grid 4×4×1 = 16) uses a PREFIX of the same sections — it writes/reads only its first 16 clusters,
+// leaving the tail unread. A grid > 64 forces the cluster-id restructure (a named follow-up), which this pins as the ceiling.
+inline constexpr crd::u32 kMaxSceneClusters = 64U;
+// ⭐⭐ CEIR-18a-2 Stage 2: the size (u32 words) of the per-group cluster LIGHT-LIST section — kMaxSceneClusters ×
+// max_per_cluster (64 × 8 = 512). ⛔ Sized for the 3D MAX; the 2D crdl (4×4×1) fills only its 128-word prefix. A value
+// spec-const can't change the FS's unroll, so `cap` stays compile-time until the cull-asset generalization slice
+// (unroll → stmt_for). The renderer reserves this in every group buffer; header [kHdrClusterOff] points at it, and Stage 2a
+// fills it CPU-side (set_cluster_light_list), Stage 2b via the cull.
+inline constexpr crd::u32 kSceneClusterListWords = kMaxSceneClusters * 8U;
+// ⭐⭐ CEIR-18a-2 Stage 2b / CEIR-18b: the light-cull INPUT sections. The froxel-AABB table is one min.xyz/max.xyz box per
+// cluster (kMaxSceneClusters × 6 = 384; the 2D config writes its first 16 = 96-word prefix, the 3D config all 64 per-slice
+// boxes), CPU-computed each frame by unprojecting the tile corners; the light-input is {position.xyz, radius} per point
+// light (kMaxScenePointLights × 4 = 16). Both reserved INSIDE the region (after the cluster list), published at
+// kHdrFroxelAabbOff / kHdrLightViewOff.
+inline constexpr crd::u32 kSceneFroxelAabbWords = kMaxSceneClusters * 6U;
+inline constexpr crd::u32 kSceneLightViewWords  = kMaxScenePointLights * 4U;
 // ⭐⭐ REN-40-A: the PARAMS BLOCK at the head of a group's `cull_args` buffer, before the indirect commands.
 // ⛔⛔ IT EXISTS BECAUSE A CONSOLIDATED GROUP'S HEADER IS NOT AT WORD 0. Under REN-38 scene-buffer consolidation
 // a group's region sits at `region_base` and its header offsets are region-RELATIVE — the vertex programs add the
@@ -184,6 +234,10 @@ inline constexpr crd::u32 kCullArgsBaseRow    = 6U;
 // entries — the scene would go black and the cause would look like a lighting bug.
 inline constexpr crd::u32 kMaxLodSlots      = 8U;
 inline constexpr crd::u32 kHdrLodCount      = 120U; // levels in the chain (0 or 1 = no chain)
+// ⛔⛔ CEIR-18b: the z-slice boundary band [115..119] must stay strictly BELOW the LOD table — growing grid[2] past 4 (or
+// sliding the band up) would overwrite kHdrLodCount and the scene would read a slice boundary as its LOD level. A grid > 64
+// (the cluster-id restructure) is a named follow-up; this pins the header budget that makes N=4 the current ceiling.
+static_assert(kHdrSliceBoundsOff + kNumSliceBounds <= kHdrLodCount, "z-slice boundary band must fit below the LOD table");
 inline constexpr crd::u32 kHdrLodTable      = 121U; // kMaxLodSlots x (first_index, index_count)
 inline constexpr crd::u32 kHdrLodHeight     = 137U; // kMaxLodSlots x screen height, f32 BITS
 // ⭐⭐ REN-40-C2: the word offset of the per-instance LOD-OVERRIDE section (2 words each: the screen bias as
@@ -195,8 +249,13 @@ inline constexpr crd::u32 kHdrLodOverrideOff = 145U;
 // ⭐⭐ REN-40-C5: the impostor atlas section — packed RGBA8 texels in the buffer.
 inline constexpr crd::u32 kHdrAtlasOff       = 146U;
 inline constexpr crd::u32 kHdrAtlasDims      = 147U; // (grid << 16) | tile
-// the 16-word light record then occupies 148..163.
-inline constexpr crd::u32 kHeaderWords        = 164U;
+// the light section (1 directional + kMaxScenePointLights point records) occupies [kLightSectionStart, kHeaderWords).
+// ⛔⛔ kLightSectionStart is LOAD-BEARING: every non-light header word lives BELOW it (the highest is kHdrAtlasDims=147),
+// so growing kMaxScenePointLights grows the header UPWARD only — nothing below 148 moves. The static_assert pins the
+// invariant (`header[kHdrLightOff] = kHeaderWords − kLightSectionWords` must still land on kLightSectionStart).
+inline constexpr crd::u32 kLightSectionStart  = 148U;
+inline constexpr crd::u32 kHeaderWords        = kLightSectionStart + kLightSectionWords;
+static_assert(kHeaderWords - kLightSectionWords == kLightSectionStart, "light section must start at kLightSectionStart");
 inline constexpr crd::u32 kHdrCsmSplits       = 28U; // 4 floats
 inline constexpr crd::u32 kHdrCsmLightVp      = 32U; // 4 x 16 floats
 // ⭐ REN-37.3: the camera position, appended at 96. `shade_forward`'s `view_dir` was a PLACEHOLDER CONSTANT
@@ -239,6 +298,15 @@ inline constexpr crd::u32 kSceneDrawTableWords = kSceneDrawRows * kSceneDrawRowW
 inline constexpr crd::u32 kImpostorTableOff    = kSceneDrawTableOff + kSceneDrawTableWords;
 inline constexpr crd::u32 kImpostorDrawRows    = 64U;
 inline constexpr crd::u32 kImpostorTableWords  = kImpostorDrawRows * kSceneDrawRowWords;
+// ⭐⭐ CEIR-18p: the AUTHORED impostor FS's D12 SPEC-CONSTANT ids. The FS structure is config-independent (a fixed
+// `kImpostorMaxMips`-way select chain); these carry the live LOD-policy VALUES, set via `KGraph::set_spec_const` after
+// `ckir_read` and BEFORE `lower_entry`/`create_program`. `gt` (F32) = grid*tile (level-0 atlas edge); `mips_m1` (F32) =
+// live mip count − 1 (the trilinear clamp, one node, two clamp sites); `lvl0..15` (U32) = each level's texel offset
+// (`impostor_level_offset`), the unreachable tail (k ≥ live mips) patched to 0. Ids are per-program → no cross-program
+// collision. The VS needs NONE — it reads grid/tile from the `kHdrAtlasDims` header word at runtime.
+inline constexpr crd::u32 kImpostorGtSpec      = 0U;
+inline constexpr crd::u32 kImpostorMipsM1Spec  = 1U;
+inline constexpr crd::u32 kImpostorLvl0Spec    = 2U; // ids 2..17 = the 16 level offsets (kImpostorLvl0Spec + level)
 // ⛔⛔ DERIVED TOO. This was the literal 384 (= the old 120-word header + 256), so growing the header for the LOD
 // table slid the draw table forward INTO the first group's region: every rebased group would have read a draw-table
 // row as its geometry and drawn noise, and the frame would still have rendered. Three constants, one arithmetic.
@@ -360,6 +428,17 @@ struct MeshGroup
     // the current palette overwrites palette_off — the CPU-skin analog of the GPU snapshot. First frame seeds it
     // with the current palette (prev == cur → zero velocity on spawn).
     crd::containers::Array<crd::f32> prev_palette;
+    // ⭐⭐ CEIR-18a-2 Stage 2 (Forward+): the PER-TILE light-index run (kSceneClusterListWords, grid-linear:
+    // cluster_index * max_per_cluster + flat, survivors then null_index=num_lights). Lives in the group buffer at
+    // `cluster_list_off`; the header publishes it as `header[kHdrClusterOff]` and the clustered forward FS walks it
+    // per fragment. Provisioned by the CPU (Stage 2a: set_cluster_light_list) or a light-cull compute pass (2b).
+    crd::u32 cluster_list_off = 0;
+    // ⭐⭐ CEIR-18a-2 Stage 2b (Forward+ GPU producer): the light-cull INPUT sections, chained after the cluster list
+    // (also INSIDE the consolidated region). froxel_aabb = per-cluster view→world AABB (kSceneFroxelAabbWords), light_view
+    // = {position,radius} per point light (kSceneLightViewWords), CPU-filled each frame; the light-cull kernel reads them
+    // through kHdrFroxelAabbOff / kHdrLightViewOff and writes the cluster list in place.
+    crd::u32 froxel_aabb_off = 0;
+    crd::u32 light_view_off  = 0;
     // REN-40-F: GPU skinning sections — uploaded once with geometry, read by the compute kernel.
     crd::u32 skel_off      = 0; // parents[jc] + inverse_binds[jc*16] + rest_pose[jc*10]
     crd::u32 clip_off      = 0; // pre-baked uniform-rate TRS frames
@@ -408,6 +487,7 @@ struct RenderStats
 {
     crd::u32 draws            = 0;
     crd::u32 drawn_instances  = 0;
+    crd::u32 impostor_draws   = 0; // REN-40-C5 / CEIR-18p: groups drawn through the impostor pass (billboard VS + impostor FS)
     crd::u32 culled_instances = 0;
     crd::u64 uploaded_bytes   = 0; // per-frame header + visible-list bytes
     // REN-8: what the DEVICE actually spent, from frame-graph timestamp queries, vs the CPU wall-clock of the
@@ -485,6 +565,31 @@ public:
     // samples → FK → IBM → writes the palette section. Default OFF.
     void set_gpu_skinning(bool on) noexcept;
     [[nodiscard]] bool gpu_skinning() const noexcept;
+
+    // ⭐⭐ CEIR-18a-2 (B8-m): install the scene's POINT LIGHTS. The forward FS loops over the declared point count
+    // (kMaxScenePointLights) every fragment; these fill records [1..N] of the per-frame light section (record 0 is the
+    // directional key), and the rest stay NULL (provably-zero: far position + zero colour). `radius` is the light's
+    // REACH — the FS derives Filament's smooth-window falloff = 1/radius² from it, and STAGE 2's cluster cull will use
+    // the SAME radius directly (one source ⇒ the cull and the shading can never disagree on a light's extent; a
+    // radius ≤ 0 renders the slot null). ⛔ More than kMaxScenePointLights is REFUSED (false + a logged error): the
+    // point count is a COOK-TIME declared constant, not a runtime capacity, so an overflow could only be silently
+    // dropped. This is per-frame header state, NOT cook state — any call before `render()` takes effect that frame;
+    // there is no init/sync ordering hazard.
+    struct ScenePointLight
+    {
+        crd::math::Vec3f position{0.0F, 0.0F, 0.0F};
+        crd::f32         radius = 1.0F; // reach; falloff = 1/radius² (≤ 0 ⇒ the slot renders null)
+        crd::math::Vec3f color{1.0F, 1.0F, 1.0F};
+    };
+    [[nodiscard]] bool set_point_lights(crd::containers::ConstSpan<ScenePointLight> lights);
+
+    // ⭐⭐ CEIR-18a-2 Stage 2a (Forward+): install the CPU-written per-tile light-index run consumed by the CLUSTERED
+    // forward technique (scene_forward_clustered.crdl). Layout is grid-linear: `cluster_index * max_per_cluster + flat`,
+    // holding light-array indices for the survivors in each tile, then the sentinel `null_index = point-light count`.
+    // The words are uploaded into the group buffer's cluster section each frame; the clustered FS reads them through
+    // `hdru(cluster_off)`. ⛔ This is the Stage-2a CPU stand-in; Stage 2b replaces it with a light-cull compute pass
+    // writing the SAME layout. Refuses (LOUD) above kSceneClusterListWords. Only the clustered technique reads it.
+    [[nodiscard]] bool set_cluster_light_list(crd::containers::ConstSpan<crd::u32> list);
 
     // ⭐⭐ REN-40-C2: install an authored `.crdlod` policy BY NAME and start building
     // LOD chains. Returns false and changes nothing if the asset is missing or the
@@ -816,5 +921,25 @@ void frustum_planes(const crd::math::Mat4f& view_proj, crd::math::Vec4f out_plan
 // The world-space AABB of the frustum (the BVH broad-phase query box): the 8 clip corners through the inverse
 // view-projection. Degenerate matrices yield an everything-box (the broad phase then prunes nothing — safe).
 [[nodiscard]] crd::geometry::primitives::AABB3<crd::f32> frustum_aabb(const crd::math::Mat4f& view_proj);
+
+// ⭐⭐ CEIR-18a-2 Stage 2b (Forward+ GPU producer): the FROXEL-AABB table — the world-space AABB of each screen tile's
+// frustum wedge, filled into `out` (gx*gy*6 floats: per tile min.xyz then max.xyz, cluster index = ty*gx + tx). Each
+// tile's 4 screen corners are unprojected at TWO ndc depths through inverse(view_proj): the near plane (ndc_z = 1, the
+// reverse-Z convention) and a FINITE far (ndc_z = `ndc_z_far`) — a substitute for perspective_reverse_z's INFINITE far
+// (ndc_z = 0 there unprojects to a degenerate w≈0), so `ndc_z_far` must be a small positive value whose world far plane
+// lies beyond the scene's lights. ⛔⛔ THE BACKEND NDC±Y MIRROR: the FS tiles by FragCoord (post-viewport), whose y↔ndc
+// sign DIFFERS per backend (Vulkan ndc_y=-1 top, DX12 ndc_y=+1 top), so the froxel's tile→ndc-y mapping needs the SAME
+// per-backend sign — `flip_y` negates it (pass `!IRasterContext::ndc_y_points_down()`, the velocity-spec-const precedent).
+// The 2b-iv DX12 gate PROVED it: one sign lit the top on Vulkan and the bottom on DX12. X is consistent (no flip there).
+void compute_froxel_aabbs(const crd::math::Mat4f& view_proj, crd::u32 gx, crd::u32 gy, crd::f32 ndc_z_far, bool flip_y,
+                          crd::f32* out) noexcept;
+
+// ⭐⭐ CEIR-18b: the 3D CLUSTERED extension — per-slice froxel AABBs (out_aabb: gx*gy*gz*6 floats, cluster c = tz*gx*gy +
+// ty*gx + tx) PLUS the N+1 EXPONENTIAL z-slice boundary table (out_bounds: gz+1 floats, in clip.w terms) the renderer
+// publishes to header words kHdrSliceBoundsOff..+gz. The FS bins by counting how many interior boundaries its clip.w exceeds
+// (the Step-sum), so the AABB cuts and the FS binning use the SAME table BY CONSTRUCTION. z needs NO per-backend flip (clip.w
+// is backend-neutral); x/y carry the SAME flip_y as compute_froxel_aabbs. See the .cpp for the clip.w-lerp construction.
+void compute_froxel_slices(const crd::math::Mat4f& view_proj, crd::u32 gx, crd::u32 gy, crd::u32 gz, crd::f32 ndc_z_far,
+                           bool flip_y, crd::f32* out_aabb, crd::f32* out_bounds) noexcept;
 
 } // namespace crd::scenerender

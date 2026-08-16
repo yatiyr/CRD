@@ -4445,6 +4445,119 @@ public:
         vkCmdEndRendering(cmd);
     }
 
+    // ── ⭐⭐ CEIR-18c: the INDEXED MRT scene draw — a DEFERRED G-BUFFER over REAL (REN-39 indexed-pull) geometry. ──
+    // The MRT verbs (draw_storage_mrt) were StoragePull/non-indexed only (the B5 G-buffer / WBOIT accumulate were all
+    // plain-vertex); the Indexed verbs were single-colour only. This is their join: N colour attachments (per-attachment
+    // typed clear + blend, like draw_storage_mrt) + an INDEXED draw (index buffer + vkCmdDrawIndexed) that PUSHES the
+    // DrawIndex row (⛔ the rebased scene VS reads table[DrawIndex]; without the push it pulls another item's region —
+    // the exact stale-row trap draw_storage_indexed_depth falls into). Depth is EXPLICIT (a bare G-buffer colour
+    // transient has no bundled companion, so t0.has_depth() finds none — the graph resolves scene_depth separately).
+    // One verb, nullable map/atlas (write_scene_textured) so a TEXTURED G-buffer material rides it too.
+    void draw_storage_indexed_mrt(IRasterTarget* const* targets, crd::u32 count, IRasterProgram& program,
+                                  const AttachmentClear* attachments, IRasterTarget* depth, float clear_depth,
+                                  DepthCompare compare, IStorageBuffer& storage, crd::u32 index_offset_bytes,
+                                  crd::u32 index_count, crd::u32 instance_count, crd::u32 first_index, ITexture* texture,
+                                  ITexture* atlas, bool load_target, crd::u32 first_draw_index)
+    {
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        auto& s = static_cast<VulkanStorageBuffer&>(storage);
+        if (!m_api.valid() || !p.valid() || !frame_recording() || targets == nullptr || attachments == nullptr ||
+            count == 0U)
+        {
+            return;
+        }
+        if ((index_offset_bytes & 3U) != 0U || index_count == 0U || instance_count == 0U ||
+            static_cast<crd::u64>(index_offset_bytes) + (static_cast<crd::u64>(first_index) + index_count) * 4U >
+                s.size_bytes())
+        {
+            return;
+        }
+        const crd::u32  n   = count < kMaxGBuffer ? count : kMaxGBuffer;
+        auto&           t0  = static_cast<VulkanRasterTarget&>(*targets[0]);
+        VkCommandBuffer cmd = m_frame_rec.cmd;
+        VkDescriptorSet dset = frame_alloc_storage_set(s);
+        if (dset == VK_NULL_HANDLE) { return; }
+        // storage@0 + (nullable) base-colour map @1/2 + atlas @4/5 — the same combined write the sampled scene draw uses.
+        auto* tex = static_cast<VulkanTexture*>(texture);
+        auto* atl = static_cast<VulkanTexture*>(atlas);
+        write_scene_textured(m_device, dset, s.buf(), tex != nullptr ? tex->view() : VK_NULL_HANDLE,
+                             tex != nullptr ? active_sampler() : VK_NULL_HANDLE,
+                             atl != nullptr ? atl->view() : VK_NULL_HANDLE, atlas_sampler_for(atl),
+                             atl != nullptr ? m_depth_sampler : VK_NULL_HANDLE);
+        frame_self_barrier_if_needed(t0);
+
+        VkRenderingAttachmentInfo att[kMaxGBuffer]{};
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            const AttachmentClear& a    = attachments[i];
+            const bool             mult = a.blend == BlendMode::Multiply || a.blend == BlendMode::RevealageMultiply;
+            att[i] = colour_clear_attachment(static_cast<VulkanRasterTarget&>(*targets[i]).view(),
+                                             mult ? ClearColor{1.0F, 1.0F, 1.0F, 1.0F} : a.color);
+            att[i].loadOp = load_target ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+            if (!mult && a.kind == ClearKind::Uint)
+            {
+                att[i].clearValue.color.uint32[0] = a.uint_value;
+                att[i].clearValue.color.uint32[1] = 0U;
+                att[i].clearValue.color.uint32[2] = 0U;
+                att[i].clearValue.color.uint32[3] = 0U;
+            }
+        }
+        // ⛔ EXPLICIT depth: a bare G-buffer colour transient has no bundled depth companion; the graph resolves the
+        // depth (scene_depth) as its OWN target, passed here.
+        VkRenderingAttachmentInfo dep{};
+        bool                      has_depth = false;
+        if (depth != nullptr)
+        {
+            auto& dt = static_cast<VulkanRasterTarget&>(*depth);
+            if (dt.has_depth())
+            {
+                has_depth                         = true;
+                dep.sType                         = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                dep.imageView                     = dt.depth_view();
+                dep.imageLayout                   = dt.depth_attach_layout();
+                dep.loadOp                        = load_target ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+                dep.storeOp                       = VK_ATTACHMENT_STORE_OP_STORE;
+                dep.clearValue.depthStencil.depth = clear_depth;
+            }
+        }
+
+        VkRenderingInfo ri{};
+        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent    = {t0.width(), t0.height()};
+        ri.layerCount           = 1U;
+        ri.colorAttachmentCount = n;
+        ri.pColorAttachments    = att;
+        ri.pDepthAttachment     = has_depth ? &dep : nullptr;
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t0.width(), t0.height(), 1U, has_depth, to_vk_compare(compare), n);
+        // per-attachment blend (a G-buffer is Opaque, but carry the payload faithfully — the WBOIT precedent).
+        if (m_api.set_color_blend_enable != nullptr && m_api.set_color_blend_equation != nullptr)
+        {
+            VkBool32                en[kMaxGBuffer]{};
+            VkColorBlendEquationEXT eq[kMaxGBuffer]{};
+            bool                    any = false;
+            for (crd::u32 i = 0; i < n; ++i)
+            {
+                en[i] = attachments[i].blend != BlendMode::Opaque ? VK_TRUE : VK_FALSE;
+                eq[i] = blend_equation(attachments[i].blend);
+                any   = any || en[i] == VK_TRUE;
+            }
+            if (any)
+            {
+                m_api.set_color_blend_enable(cmd, 0U, n, static_cast<const VkBool32*>(en));
+                m_api.set_color_blend_equation(cmd, 0U, n, static_cast<const VkColorBlendEquationEXT*>(eq));
+            }
+        }
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        vkCmdPushConstants(cmd, p.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0U, 4U, &first_draw_index); // ⛔ the DrawIndex row
+        vkCmdBindIndexBuffer(cmd, s.buf(), index_offset_bytes, VK_INDEX_TYPE_UINT32);
+        const VkShaderStageFlagBits stages[2] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
+        const VkShaderEXT           objs[2]   = {p.vs(), p.fs()};
+        m_api.bind(cmd, 2U, stages, objs);
+        vkCmdDrawIndexed(cmd, index_count, instance_count, first_index, 0, 0U);
+        vkCmdEndRendering(cmd);
+    }
+
     // ── ⭐⭐ REN-40-A: the GEOMETRY half of the GPU-written draw. See IRasterContext for the contract. ─────────
     // A term-for-term mirror of `draw_storage_indexed_sampled_depth` above with ONE difference: the draw
     // parameters come from `args` and the COUNT from `count_buf`, so nothing about what is drawn touches the CPU.

@@ -1,0 +1,20 @@
+# scene_rt_shadow_raygen.crdv — CEIR-19b hybrid RT shadows: the SHADOW-RAY raygen.
+# For each launch index, read the per-pixel WORLD POSITION from worldpos_buf (binding 1 — the compute prepass
+# reconstructed it from the raster depth) as the ray ORIGIN, and trace a shadow ray toward the FIXED point light.
+# The miss shader writes 1.0 (LIT — the ray reached the light unobstructed); the closest-hit writes 0.0 (SHADOWED —
+# an occluder blocked it). The raygen stores payload[0] into shadow_mask_buf (binding 2).
+# ⛔ light_xyz is a shader constant → the CEIR-19b gate scene is designed around THIS light (an occluder between a
+# receiver point and (0,8,0) casts a shadow). tmax = the light distance (baked in cook_rt) so the light is not an occluder.
+stage = "raygen"
+schema = 1
+name   = "crd://vertex/scene_rt_shadow"
+
+[rt]
+payload_words  = 1
+as_binding     = 0
+origin_binding = 1
+out_binding    = 2
+to_light       = true
+light_x        = 0.0
+light_y        = 8.0
+light_z        = 0.0
