@@ -13,6 +13,17 @@
 #include <crd/kir/ckir_glsl.hpp>
 #include <crd/kir/ckir_kernel_eval.hpp>
 #include <crd/kir/ckir_rt.hpp>
+#include <crd/kir/ckir_asset.hpp> // CEIR-19c: load the AUTHORED rt_witness.ckir (ckir_read)
+
+// CEIR-19c: the ceir.rt->gpu execution bridge under test — an authored ceir.rt program lowered + driven onto this
+// VulkanRayTracingContext through the caller hooks (crd-ceir-gpu names no backend).
+#include <crd/ceir/context.hpp>
+#include <crd/ceir/func.hpp>
+#include <crd/ceir/gen/arith_ops.hpp>
+#include <crd/ceir/gen/resource_ops.hpp>
+#include <crd/ceir/gpu/execute.hpp>
+#include <crd/ceir/gpu/lower.hpp>
+#include <crd/ceir/rt.hpp>
 
 #include <crd/containers/array.hpp>
 #include <crd/math/cmath.hpp>
@@ -20,8 +31,16 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-namespace gpu = crd::gpu;
-namespace kir = crd::kir;
+#include <fstream> // CEIR-19c: read the committed .ckir asset
+
+namespace gpu  = crd::gpu;
+namespace kir  = crd::kir;
+namespace ceir = crd::ceir;      // CEIR-19c
+namespace cg   = crd::ceir::gpu; // CEIR-19c: lower_region / execute_rt_lowered / RtHooks
+
+#ifndef CRD_REPO_DIR
+#define CRD_REPO_DIR "."
+#endif
 
 namespace
 {
@@ -2090,4 +2109,976 @@ TEST_CASE("D-007 P5: portable scalable scene-build (cluster or standard-BLAS fal
         CHECK(got[1] > 1.0e29F); CHECK(got[2] > 1.0e29F);
         CHECK(crd::math::abs(static_cast<double>(got[3]) - 1.0) < 1.0e-4);
     }
+}
+
+// ── CEIR-19c STAGE-1 DEVICE GATE: the ceir.rt->gpu execution BRIDGE. ──────────────────────────────────────────────────
+// An AUTHORED ceir.rt program (blas_build -> instance_populate -> tlas_build -> ray_query) is lowered (lower_region) and
+// DRIVEN onto this VulkanRayTracingContext through execute_rt_lowered's caller HOOKS (crd-ceir-gpu names no backend). The
+// ray_query's kernel is the committed assets/ckir/rt_witness.ckir (mandate #1: the .ckir is the source; NO C++ builder). GPU
+// hit prim-id + hit/miss are BIT-EXACT vs eval_cpu_kernel's TraceRayHit oracle (SAME loaded graph, AS-slot = triangle soup)
+// AND vs KNOWN ANALYTIC values (t=[2,miss,miss,1], prim 0/miss/miss/0) — the analytic pin is MANDATORY: both sides run the
+// SAME graph, so a hand-authoring error is invisible to parity alone (the cf(node) symmetric-bug scar). t is tolerance-class
+// (the oracle traverses unrounded f64, the GPU f32 HW BVH). Axis-aligned exact-FP scene + clean-separation rays ⇒ hit/miss +
+// prim-id are reliably bit-exact.
+namespace
+{
+struct RtGateState
+{
+    gpu::VulkanRayTracingContext* rt         = nullptr;
+    const float*                  verts      = nullptr;
+    crd::u32                      ntris      = 0U;
+    std::unique_ptr<gpu::RtScene> scene;
+    const crd::u8*                spirv      = nullptr;
+    crd::usize                    spirv_size = 0U;
+    crd::u32                      last_gx    = 0U; // CEIR-19c stage 2: the last dispatch's grid.x — pins the count-driven dispatch
+};
+// CEIR-19c stage 2: the deterministic triple32 (Wellons) fold — the HOST-side decision-hash. u32 avalanche wraps mod 2^32 on
+// both host + oracle; fold ONLY decision ints (indices/counts/flags), NEVER a t-derived float (the stage-1 trap).
+crd::u32 rt_tri32(crd::u32 x)
+{
+    x ^= x >> 17U;
+    x *= 0xED5AD4BBU;
+    x ^= x >> 11U;
+    x *= 0xAC4C1B51U;
+    x ^= x >> 15U;
+    x *= 0x31848BABU;
+    x ^= x >> 14U;
+    return x;
+}
+crd::u32 rt_fold(crd::u32 h, crd::u32 v) { return rt_tri32(h ^ v); }
+cg::RtSceneHandle rt_gate_build_scene(const ceir::Operation* /*accel_op*/, void* user)
+{
+    auto* s = static_cast<RtGateState*>(user);
+    if (s->scene == nullptr) { s->scene = s->rt->build_scene(s->verts, s->ntris); } // fused: build once on the first AccelBuild
+    return (s->scene != nullptr) ? cg::RtSceneHandle{1U} : cg::RtSceneHandle{0U};
+}
+crd::containers::ConstSpan<crd::u8> rt_gate_kernel_bytes(const ceir::Operation* /*ray_query*/, void* user)
+{
+    auto* s = static_cast<RtGateState*>(user);
+    return crd::containers::ConstSpan<crd::u8>(s->spirv, s->spirv_size);
+}
+bool rt_gate_trace_dispatch(cg::RtSceneHandle tlas, crd::containers::ConstSpan<crd::u8> bytes,
+                            crd::containers::ConstSpan<cg::RtHostBinding> binds, crd::u32 gx, crd::u32 /*gy*/,
+                            crd::u32 /*gz*/, void* user)
+{
+    auto* s = static_cast<RtGateState*>(user);
+    if (tlas == 0U || s->scene == nullptr) { return false; }
+    s->last_gx = gx; // pin: the harness CHECKs the shade dispatch's gx == the compact's hit_count readback
+    gpu::VulkanRayTracingContext::Binding vb[8];
+    const crd::u32                        n = static_cast<crd::u32>(binds.size() < 8U ? binds.size() : 8U);
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        vb[i].upload   = binds[i].upload;
+        vb[i].readback = binds[i].readback;
+        vb[i].bytes    = binds[i].bytes;
+        vb[i].binding  = i + 1U; // the TLAS is implicit @ descriptor 0; SSBOs follow at 1,2,3 (REN-38-A9)
+    }
+    return s->rt->trace_dispatch(*s->scene, bytes,
+                                 crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(vb, n), gx);
+}
+} // namespace
+
+TEST_CASE("CEIR-19c: the ceir.rt->gpu bridge (execute_rt_lowered) traces the authored rt_witness.ckir == oracle + analytic (Vulkan)",
+          "[gpu-context][vulkan][gpu][rt][ceir19c]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->ray_query()) { WARN("adapter has no VK_KHR_ray_query; skipping"); return; }
+    gpu::VulkanRayTracingContext rt(*vk);
+    REQUIRE(rt.valid());
+
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+
+    // 1. Load + compile the AUTHORED rt_witness.ckir (the .ckir is the SOURCE; mandate #1).
+    std::ifstream f(CRD_REPO_DIR "/assets/ckir/rt_witness.ckir", std::ios::binary | std::ios::ate);
+    REQUIRE(f.good());
+    const std::streamsize sz = f.tellg();
+    REQUIRE(sz > 0);
+    f.seekg(0);
+    crd::containers::Array<char> src(&alloc);
+    src.resize(static_cast<crd::usize>(sz), '\0');
+    f.read(src.data(), sz);
+    kir::KGraph kg(&alloc);
+    kir::KEntry ke;
+    REQUIRE(kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), kg, ke).ok);
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(kg, ke, &alloc, kern));
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "rt_witness", &alloc);
+    INFO(spv.error_message.c_str());
+    REQUIRE(spv.ok);
+
+    // 2. The trivial scene: 1 axis-aligned tri @ z=2; 64 rays (one workgroup — the witness has no tail guard). First 4 = the
+    //    RT-1 rays (hit@2, miss, miss, hit@1); rays 4..63 = a guaranteed miss (origin z=100 behind, dir +z pointing away).
+    constexpr crd::u32 num_tris = 1U;
+    constexpr crd::u32 nrays    = 64U;
+    const float        verts[9] = {0.0F, 0.0F, 2.0F, 1.0F, 0.0F, 2.0F, 0.0F, 1.0F, 2.0F};
+    crd::containers::Array<float> rays(&alloc);
+    rays.resize(static_cast<crd::usize>(nrays) * 6U, 0.0F);
+    const float seed[4][6] = {
+        {0.2F, 0.2F, 0.0F, 0.0F, 0.0F, 1.0F},  // hit @ t=2, prim 0
+        {0.2F, 0.2F, 0.0F, 0.0F, 0.0F, -1.0F}, // miss (points away)
+        {5.0F, 5.0F, 0.0F, 0.0F, 0.0F, 1.0F},  // miss (outside the tri)
+        {0.1F, 0.1F, 1.0F, 0.0F, 0.0F, 1.0F},  // hit @ t=1, prim 0
+    };
+    for (crd::u32 r = 0; r < nrays; ++r)
+    {
+        if (r < 4U)
+        {
+            for (int col = 0; col < 6; ++col) { rays[r * 6U + static_cast<crd::u32>(col)] = seed[r][col]; }
+        }
+        else
+        {
+            rays[r * 6U + 2U] = 100.0F; // origin.z = 100 (behind the tri)
+            rays[r * 6U + 5U] = 1.0F;   // dir.z = +1 (away) -> miss
+        }
+    }
+    crd::containers::Array<float>    gpu_t(&alloc);
+    crd::containers::Array<crd::u32> gpu_prim(&alloc);
+    gpu_t.resize(nrays, 0.0F);
+    gpu_prim.resize(nrays, 0U);
+
+    // 3. The AUTHORED ceir.rt program: blas -> instance -> tlas -> ray_query(grid, %tlas, rays, hit_t, hit_prim).
+    ceir::Context c(&alloc);
+    (void)ceir::func::register_dialect(c);
+    (void)ceir::arith::register_arith_ops(c);
+    (void)ceir::resource::register_resource_ops(c);
+    (void)ceir::rt::register_dialect(c);
+    ceir::Block* const body  = c.create_block(0U);
+    const auto         mkbuf = [&]() {
+        ceir::Operation* const d =
+            c.create_operation(c.intern_op("resource", "declare"), {}, 1U, c.type_buffer(ceir::BufferMode::Plain, c.type_f32()));
+        body->append(d);
+        return d->result(0U);
+    };
+    const auto mkidx = [&](crd::i64 v) {
+        ceir::Operation* const o = c.create_operation(c.intern_op("arith", "const"), {}, 1U, c.type_index());
+        c.set_attr(o, "value", c.attr_int(v));
+        body->append(o);
+        return o->result(0U);
+    };
+    ceir::Value* const     geom = mkbuf();
+    ceir::Operation* const blas = ceir::rt::build_blas_build(c, geom, ceir::rt::type_blas(c));
+    body->append(blas);
+    ceir::Value* const     xf   = mkbuf();
+    ceir::Operation* const inst = ceir::rt::build_instance_populate(c, blas->result(0U), xf, c.attr_int(1), c.type_i32());
+    body->append(inst);
+    ceir::Operation* const tlas = ceir::rt::build_tlas_build(c, inst->result(0U), ceir::rt::type_tlas(c));
+    body->append(tlas);
+    ceir::Value* const rays_v  = mkbuf();
+    ceir::Value* const hit_t_v = mkbuf();
+    ceir::Value* const hit_p_v = mkbuf();
+    ceir::Value* const g1      = mkidx(1); // groups (1,1,1): 64 threads = one workgroup
+    ceir::Value*       rq_ops[7] = {g1, g1, g1, tlas->result(0U), rays_v, hit_t_v, hit_p_v};
+    ceir::Operation* const rq   = c.create_operation(c.intern_op("rt", "ray_query"),
+                                                     crd::containers::ConstSpan<ceir::Value*>(rq_ops, 7U), 0U, ceir::TypeId{}, 0U);
+    c.set_attr(rq, "kernel", c.attr_symbol(crd::containers::StringView("rt_witness")));
+    c.set_attr(rq, "access", c.attr_string(crd::containers::StringView("rww"))); // rays read, hit_t write, hit_prim write
+    body->append(rq);
+
+    crd::containers::Array<cg::LoweredCommand> cmds(&alloc);
+    cg::lower_region(c, *body, cmds);
+
+    // 4. Drive the lowered list through execute_rt_lowered's hooks onto the real RT context.
+    RtGateState st;
+    st.rt         = &rt;
+    st.verts      = verts;
+    st.ntris      = num_tris;
+    st.spirv      = spv.spirv.data();
+    st.spirv_size = spv.spirv.size();
+    cg::RtHooks hooks;
+    hooks.build_scene    = &rt_gate_build_scene;
+    hooks.kernel_bytes   = &rt_gate_kernel_bytes;
+    hooks.trace_dispatch = &rt_gate_trace_dispatch;
+    hooks.user           = &st;
+    cg::RtHostBinding binds[3];
+    binds[0] = {c.resource_root(rays_v), rays.data(), nullptr, static_cast<crd::u64>(nrays) * 6U * sizeof(float)};
+    binds[1] = {c.resource_root(hit_t_v), nullptr, gpu_t.data(), static_cast<crd::u64>(nrays) * sizeof(float)};
+    binds[2] = {c.resource_root(hit_p_v), nullptr, gpu_prim.data(), static_cast<crd::u64>(nrays) * sizeof(crd::u32)};
+    const cg::ExecuteError err =
+        cg::execute_rt_lowered(c, crd::containers::ConstSpan<cg::LoweredCommand>(cmds.data(), cmds.size()), hooks,
+                               crd::containers::ConstSpan<cg::RtHostBinding>(binds, 3U));
+    REQUIRE(err == cg::ExecuteError::None);
+
+    // 5. The oracle: eval_cpu_kernel on the SAME loaded graph, AS-slot bound as the triangle soup [ntri, v0..v2].
+    crd::containers::Array<crd::f64> geo(&alloc);
+    geo.resize(10U, 0.0);
+    geo[0] = static_cast<crd::f64>(num_tris);
+    for (int i = 0; i < 9; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
+    crd::containers::Array<crd::f64> rays64(&alloc);
+    rays64.resize(static_cast<crd::usize>(nrays) * 6U, 0.0);
+    for (crd::usize i = 0; i < rays64.size(); ++i) { rays64[i] = static_cast<crd::f64>(rays[i]); }
+    crd::containers::Array<crd::f64> ref_t(&alloc);
+    crd::containers::Array<crd::f64> ref_p(&alloc);
+    ref_t.resize(nrays, 0.0);
+    ref_p.resize(nrays, 0.0);
+    kir::KernelBuffer bufs[4] = {{geo.data(), static_cast<int>(geo.size()), 0, 0},
+                                 {rays64.data(), static_cast<int>(rays64.size()), 0, 1},
+                                 {ref_t.data(), static_cast<int>(nrays), 0, 2},
+                                 {ref_p.data(), static_cast<int>(nrays), 0, 3}};
+    kir::eval_cpu_kernel(kg, ke, bufs, 4, 64U, &alloc, 1U);
+
+    // 6. GPU == oracle over ALL 64 threads: prim-id + hit/miss BIT-EXACT, t within tolerance.
+    crd::u32 checked_hits = 0U;
+    for (crd::u32 r = 0; r < nrays; ++r)
+    {
+        const bool cpu_hit = ref_t[r] < 1.0e29;
+        const bool gpu_hit = static_cast<double>(gpu_t[r]) < 1.0e29;
+        INFO("ray " << r << ": gpu_prim=" << gpu_prim[r] << " ref_prim=" << static_cast<crd::u32>(ref_p[r]) << " gpu_t="
+                    << gpu_t[r] << " ref_t=" << ref_t[r]);
+        CHECK(gpu_hit == cpu_hit);                             // hit/miss decision BIT-EXACT
+        CHECK(gpu_prim[r] == static_cast<crd::u32>(ref_p[r])); // prim-id BIT-EXACT (the decision-derived integer)
+        if (cpu_hit) { CHECK(crd::math::abs(static_cast<double>(gpu_t[r]) - ref_t[r]) < 1.0e-3); ++checked_hits; }
+    }
+    CHECK(checked_hits >= 2U); // the two analytic hits actually exercised the tolerance compare
+
+    // 7. ANALYTIC pins (MANDATORY — parity alone is blind to a symmetric authoring error; the cf(node) scar).
+    CHECK(crd::math::abs(static_cast<double>(gpu_t[0]) - 2.0) < 1.0e-3); // ray 0 hits the tri @ t=2
+    CHECK(gpu_prim[0] == 0U);
+    CHECK(gpu_prim[1] == 0xFFFFFFFFU); // ray 1 miss
+    CHECK(gpu_prim[2] == 0xFFFFFFFFU); // ray 2 miss
+    CHECK(crd::math::abs(static_cast<double>(gpu_t[3]) - 1.0) < 1.0e-3); // ray 3 hits the tri @ t=1
+    CHECK(gpu_prim[3] == 0U);
+}
+
+// ── CEIR-19c STAGE 2: the SERIAL-COMPACT kernel, ISOLATED device gate (the first wavefront kernel, proven standalone). ──────
+// The authored wavefront_compact.ckir is dispatched via a ceir.rt ray_query (a DEAD TLAS@0 — the compact never traces) through
+// execute_rt_lowered. Synthetic hit_flags → the GPU compacted queue + count are BIT-EXACT vs eval_cpu_kernel (SAME graph —
+// which ALSO proves the oracle tolerates the dead AccelStructDecl, the advisor's 2-min check) AND vs the HAND-COMPUTED dense
+// queue (the mandatory analytic pin). groups=(1,1,1), the kernel is local_size=1 (one serial thread).
+TEST_CASE("CEIR-19c: the authored serial-compact kernel compacts hit-flags == oracle + analytic (Vulkan)",
+          "[gpu-context][vulkan][gpu][rt][ceir19c]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->ray_query()) { WARN("adapter has no VK_KHR_ray_query; skipping"); return; }
+    gpu::VulkanRayTracingContext rt(*vk);
+    REQUIRE(rt.valid());
+
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+
+    // 1. Load + compile the AUTHORED wavefront_compact.ckir.
+    std::ifstream f(CRD_REPO_DIR "/assets/ckir/wavefront_compact.ckir", std::ios::binary | std::ios::ate);
+    REQUIRE(f.good());
+    const std::streamsize sz = f.tellg();
+    REQUIRE(sz > 0);
+    f.seekg(0);
+    crd::containers::Array<char> src(&alloc);
+    src.resize(static_cast<crd::usize>(sz), '\0');
+    f.read(src.data(), sz);
+    kir::KGraph kg(&alloc);
+    kir::KEntry ke;
+    REQUIRE(kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), kg, ke).ok);
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(kg, ke, &alloc, kern));
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "wf_compact", &alloc);
+    INFO(spv.error_message.c_str());
+    REQUIRE(spv.ok);
+
+    // 2. Synthetic flags [1,0,1,1,0,0,1,0] -> compacted=[0,2,3,6], count=4 (hand-computed).
+    constexpr crd::u32 k_n         = 8U;
+    const crd::u32     flags[k_n]  = {1U, 0U, 1U, 1U, 0U, 0U, 1U, 0U};
+    crd::containers::Array<crd::u32> gpu_comp(&alloc);
+    crd::containers::Array<crd::u32> gpu_count(&alloc);
+    gpu_comp.resize(k_n, 0xEEEEEEEEU); // sentinel fill so an unwritten slot is visible
+    gpu_count.resize(1U, 0U);
+
+    // 3. The ceir.rt program: blas->instance->tlas->ray_query(grid, %tlas(DEAD), flags, compacted, count).
+    ceir::Context c(&alloc);
+    (void)ceir::func::register_dialect(c);
+    (void)ceir::arith::register_arith_ops(c);
+    (void)ceir::resource::register_resource_ops(c);
+    (void)ceir::rt::register_dialect(c);
+    ceir::Block* const body  = c.create_block(0U);
+    const auto         mkbuf = [&]() {
+        ceir::Operation* const d =
+            c.create_operation(c.intern_op("resource", "declare"), {}, 1U, c.type_buffer(ceir::BufferMode::Plain, c.type_f32()));
+        body->append(d);
+        return d->result(0U);
+    };
+    const auto mkidx = [&](crd::i64 v) {
+        ceir::Operation* const o = c.create_operation(c.intern_op("arith", "const"), {}, 1U, c.type_index());
+        c.set_attr(o, "value", c.attr_int(v));
+        body->append(o);
+        return o->result(0U);
+    };
+    ceir::Value* const     geom = mkbuf();
+    ceir::Operation* const blas = ceir::rt::build_blas_build(c, geom, ceir::rt::type_blas(c));
+    body->append(blas);
+    ceir::Value* const     xf   = mkbuf();
+    ceir::Operation* const inst = ceir::rt::build_instance_populate(c, blas->result(0U), xf, c.attr_int(1), c.type_i32());
+    body->append(inst);
+    ceir::Operation* const tlas = ceir::rt::build_tlas_build(c, inst->result(0U), ceir::rt::type_tlas(c));
+    body->append(tlas);
+    ceir::Value* const flags_v = mkbuf();
+    ceir::Value* const comp_v  = mkbuf();
+    ceir::Value* const count_v = mkbuf();
+    ceir::Value* const g1      = mkidx(1);
+    ceir::Value*       rq_ops[7] = {g1, g1, g1, tlas->result(0U), flags_v, comp_v, count_v};
+    ceir::Operation* const rq   = c.create_operation(c.intern_op("rt", "ray_query"),
+                                                     crd::containers::ConstSpan<ceir::Value*>(rq_ops, 7U), 0U, ceir::TypeId{}, 0U);
+    c.set_attr(rq, "kernel", c.attr_symbol(crd::containers::StringView("wavefront_compact")));
+    c.set_attr(rq, "access", c.attr_string(crd::containers::StringView("rww")));
+    body->append(rq);
+
+    crd::containers::Array<cg::LoweredCommand> cmds(&alloc);
+    cg::lower_region(c, *body, cmds);
+
+    // 4. Drive it. The scene is DEAD (the compact never traces) but build_scene still runs (a valid 1-tri soup).
+    const float verts[9] = {0.0F, 0.0F, 2.0F, 1.0F, 0.0F, 2.0F, 0.0F, 1.0F, 2.0F};
+    RtGateState st;
+    st.rt         = &rt;
+    st.verts      = verts;
+    st.ntris      = 1U;
+    st.spirv      = spv.spirv.data();
+    st.spirv_size = spv.spirv.size();
+    cg::RtHooks hooks;
+    hooks.build_scene    = &rt_gate_build_scene;
+    hooks.kernel_bytes   = &rt_gate_kernel_bytes;
+    hooks.trace_dispatch = &rt_gate_trace_dispatch;
+    hooks.user           = &st;
+    cg::RtHostBinding binds[3];
+    binds[0] = {c.resource_root(flags_v), &flags[0], nullptr, static_cast<crd::u64>(k_n) * sizeof(crd::u32)};
+    binds[1] = {c.resource_root(comp_v), nullptr, gpu_comp.data(), static_cast<crd::u64>(k_n) * sizeof(crd::u32)};
+    binds[2] = {c.resource_root(count_v), nullptr, gpu_count.data(), sizeof(crd::u32)};
+    const cg::ExecuteError err =
+        cg::execute_rt_lowered(c, crd::containers::ConstSpan<cg::LoweredCommand>(cmds.data(), cmds.size()), hooks,
+                               crd::containers::ConstSpan<cg::RtHostBinding>(binds, 3U));
+    REQUIRE(err == cg::ExecuteError::None);
+
+    // 5. Oracle: eval_cpu_kernel on the SAME graph — proves it tolerates the DEAD AccelStructDecl (no TraceRay reads it).
+    crd::containers::Array<crd::f64> geo(&alloc); // the dead AS binding (bufs[0]); the compact never reads it
+    geo.resize(1U, 0.0);
+    crd::containers::Array<crd::f64> flags64(&alloc);
+    flags64.resize(k_n, 0.0);
+    for (crd::u32 i = 0; i < k_n; ++i) { flags64[i] = static_cast<crd::f64>(flags[i]); }
+    crd::containers::Array<crd::f64> comp_ref(&alloc);
+    crd::containers::Array<crd::f64> count_ref(&alloc);
+    comp_ref.resize(k_n, 0.0);
+    count_ref.resize(1U, 0.0);
+    kir::KernelBuffer bufs[4] = {{geo.data(), static_cast<int>(geo.size()), 0, 0},
+                                 {flags64.data(), static_cast<int>(k_n), 0, 1},
+                                 {comp_ref.data(), static_cast<int>(k_n), 0, 2},
+                                 {count_ref.data(), 1, 0, 3}};
+    kir::eval_cpu_kernel(kg, ke, bufs, 4, 1U, &alloc, 1U);
+
+    // 6. GPU == oracle == analytic (the compacted queue + count are DECISION integers — bit-exact).
+    const crd::u32 expect_comp[4] = {0U, 2U, 3U, 6U};
+    CHECK(gpu_count[0] == 4U);                         // analytic count
+    CHECK(static_cast<crd::u32>(count_ref[0]) == 4U);  // oracle count
+    for (crd::u32 j = 0; j < 4U; ++j)
+    {
+        INFO("slot " << j << ": gpu=" << gpu_comp[j] << " oracle=" << static_cast<crd::u32>(comp_ref[j]) << " analytic="
+                     << expect_comp[j]);
+        CHECK(gpu_comp[j] == expect_comp[j]);                     // GPU == hand-computed (the mandatory analytic pin)
+        CHECK(gpu_comp[j] == static_cast<crd::u32>(comp_ref[j])); // GPU == oracle (bit-exact)
+    }
+}
+
+// ── CEIR-19c STAGE 2: the TRACE kernel, ISOLATED device gate. The authored wavefront_trace.ckir is dispatched via a ceir.rt
+// ray_query (REAL TLAS — it traces) through execute_rt_lowered. Known rays → GPU hit_flag[] is BIT-EXACT vs eval_cpu_kernel +
+// the ANALYTIC pin (hit rays flag=1, miss flag=0 — the DECISION int the compact consumes). hit_t is tolerance-class.
+TEST_CASE("CEIR-19c: the authored wavefront trace kernel writes hit-flags == oracle + analytic (Vulkan)",
+          "[gpu-context][vulkan][gpu][rt][ceir19c]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->ray_query()) { WARN("adapter has no VK_KHR_ray_query; skipping"); return; }
+    gpu::VulkanRayTracingContext rt(*vk);
+    REQUIRE(rt.valid());
+
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+
+    std::ifstream f(CRD_REPO_DIR "/assets/ckir/wavefront_trace.ckir", std::ios::binary | std::ios::ate);
+    REQUIRE(f.good());
+    const std::streamsize sz = f.tellg();
+    REQUIRE(sz > 0);
+    f.seekg(0);
+    crd::containers::Array<char> src(&alloc);
+    src.resize(static_cast<crd::usize>(sz), '\0');
+    f.read(src.data(), sz);
+    kir::KGraph kg(&alloc);
+    kir::KEntry ke;
+    REQUIRE(kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), kg, ke).ok);
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(kg, ke, &alloc, kern));
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "wf_trace", &alloc);
+    INFO(spv.error_message.c_str());
+    REQUIRE(spv.ok);
+
+    // 1 tri @ z=2; 64 rays (first 4 = the stage-1 rays: hit@2, miss, miss, hit@1; rays 4..63 = guaranteed miss).
+    constexpr crd::u32 num_tris = 1U;
+    constexpr crd::u32 nrays    = 64U;
+    const float        verts[9] = {0.0F, 0.0F, 2.0F, 1.0F, 0.0F, 2.0F, 0.0F, 1.0F, 2.0F};
+    crd::containers::Array<float> rays(&alloc);
+    rays.resize(static_cast<crd::usize>(nrays) * 6U, 0.0F);
+    const float seed[4][6] = {{0.2F, 0.2F, 0.0F, 0.0F, 0.0F, 1.0F},
+                              {0.2F, 0.2F, 0.0F, 0.0F, 0.0F, -1.0F},
+                              {5.0F, 5.0F, 0.0F, 0.0F, 0.0F, 1.0F},
+                              {0.1F, 0.1F, 1.0F, 0.0F, 0.0F, 1.0F}};
+    for (crd::u32 r = 0; r < nrays; ++r)
+    {
+        if (r < 4U)
+        {
+            for (int col = 0; col < 6; ++col) { rays[r * 6U + static_cast<crd::u32>(col)] = seed[r][col]; }
+        }
+        else
+        {
+            rays[r * 6U + 2U] = 100.0F;
+            rays[r * 6U + 5U] = 1.0F;
+        }
+    }
+    crd::containers::Array<crd::u32> gpu_flag(&alloc);
+    crd::containers::Array<float>    gpu_t(&alloc);
+    gpu_flag.resize(nrays, 0xEEEEEEEEU);
+    gpu_t.resize(nrays, 0.0F);
+
+    ceir::Context c(&alloc);
+    (void)ceir::func::register_dialect(c);
+    (void)ceir::arith::register_arith_ops(c);
+    (void)ceir::resource::register_resource_ops(c);
+    (void)ceir::rt::register_dialect(c);
+    ceir::Block* const body  = c.create_block(0U);
+    const auto         mkbuf = [&]() {
+        ceir::Operation* const d =
+            c.create_operation(c.intern_op("resource", "declare"), {}, 1U, c.type_buffer(ceir::BufferMode::Plain, c.type_f32()));
+        body->append(d);
+        return d->result(0U);
+    };
+    const auto mkidx = [&](crd::i64 v) {
+        ceir::Operation* const o = c.create_operation(c.intern_op("arith", "const"), {}, 1U, c.type_index());
+        c.set_attr(o, "value", c.attr_int(v));
+        body->append(o);
+        return o->result(0U);
+    };
+    ceir::Value* const     geom = mkbuf();
+    ceir::Operation* const blas = ceir::rt::build_blas_build(c, geom, ceir::rt::type_blas(c));
+    body->append(blas);
+    ceir::Value* const     xf   = mkbuf();
+    ceir::Operation* const inst = ceir::rt::build_instance_populate(c, blas->result(0U), xf, c.attr_int(1), c.type_i32());
+    body->append(inst);
+    ceir::Operation* const tlas = ceir::rt::build_tlas_build(c, inst->result(0U), ceir::rt::type_tlas(c));
+    body->append(tlas);
+    ceir::Value* const rays_v = mkbuf();
+    ceir::Value* const flag_v = mkbuf();
+    ceir::Value* const t_v    = mkbuf();
+    ceir::Value* const g1     = mkidx(1);
+    ceir::Value*       rq_ops[7] = {g1, g1, g1, tlas->result(0U), rays_v, flag_v, t_v};
+    ceir::Operation* const rq   = c.create_operation(c.intern_op("rt", "ray_query"),
+                                                     crd::containers::ConstSpan<ceir::Value*>(rq_ops, 7U), 0U, ceir::TypeId{}, 0U);
+    c.set_attr(rq, "kernel", c.attr_symbol(crd::containers::StringView("wavefront_trace")));
+    c.set_attr(rq, "access", c.attr_string(crd::containers::StringView("rww")));
+    body->append(rq);
+
+    crd::containers::Array<cg::LoweredCommand> cmds(&alloc);
+    cg::lower_region(c, *body, cmds);
+
+    RtGateState st;
+    st.rt         = &rt;
+    st.verts      = verts;
+    st.ntris      = num_tris;
+    st.spirv      = spv.spirv.data();
+    st.spirv_size = spv.spirv.size();
+    cg::RtHooks hooks;
+    hooks.build_scene    = &rt_gate_build_scene;
+    hooks.kernel_bytes   = &rt_gate_kernel_bytes;
+    hooks.trace_dispatch = &rt_gate_trace_dispatch;
+    hooks.user           = &st;
+    cg::RtHostBinding binds[3];
+    binds[0] = {c.resource_root(rays_v), rays.data(), nullptr, static_cast<crd::u64>(nrays) * 6U * sizeof(float)};
+    binds[1] = {c.resource_root(flag_v), nullptr, gpu_flag.data(), static_cast<crd::u64>(nrays) * sizeof(crd::u32)};
+    binds[2] = {c.resource_root(t_v), nullptr, gpu_t.data(), static_cast<crd::u64>(nrays) * sizeof(float)};
+    const cg::ExecuteError err =
+        cg::execute_rt_lowered(c, crd::containers::ConstSpan<cg::LoweredCommand>(cmds.data(), cmds.size()), hooks,
+                               crd::containers::ConstSpan<cg::RtHostBinding>(binds, 3U));
+    REQUIRE(err == cg::ExecuteError::None);
+
+    // Oracle: eval_cpu_kernel on the SAME graph, AS-slot = the triangle soup.
+    crd::containers::Array<crd::f64> geo(&alloc);
+    geo.resize(10U, 0.0);
+    geo[0] = static_cast<crd::f64>(num_tris);
+    for (int i = 0; i < 9; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
+    crd::containers::Array<crd::f64> rays64(&alloc);
+    rays64.resize(static_cast<crd::usize>(nrays) * 6U, 0.0);
+    for (crd::usize i = 0; i < rays64.size(); ++i) { rays64[i] = static_cast<crd::f64>(rays[i]); }
+    crd::containers::Array<crd::f64> flag_ref(&alloc);
+    crd::containers::Array<crd::f64> t_ref(&alloc);
+    flag_ref.resize(nrays, 0.0);
+    t_ref.resize(nrays, 0.0);
+    kir::KernelBuffer bufs[4] = {{geo.data(), static_cast<int>(geo.size()), 0, 0},
+                                 {rays64.data(), static_cast<int>(rays64.size()), 0, 1},
+                                 {flag_ref.data(), static_cast<int>(nrays), 0, 2},
+                                 {t_ref.data(), static_cast<int>(nrays), 0, 3}};
+    kir::eval_cpu_kernel(kg, ke, bufs, 4, 64U, &alloc, 1U);
+
+    // GPU hit_flag == oracle (bit-exact, all 64) + the ANALYTIC pin (rays 0,3 hit; 1,2 + fillers miss).
+    for (crd::u32 r = 0; r < nrays; ++r)
+    {
+        INFO("ray " << r << ": gpu_flag=" << gpu_flag[r] << " ref_flag=" << static_cast<crd::u32>(flag_ref[r]));
+        CHECK(gpu_flag[r] == static_cast<crd::u32>(flag_ref[r]));
+        CHECK((gpu_flag[r] == 0U || gpu_flag[r] == 1U)); // a decision int, never garbage
+    }
+    CHECK(gpu_flag[0] == 1U); // hit @ t=2
+    CHECK(gpu_flag[1] == 0U); // miss
+    CHECK(gpu_flag[2] == 0U); // miss
+    CHECK(gpu_flag[3] == 1U); // hit @ t=1
+    CHECK(crd::math::abs(static_cast<double>(gpu_t[0]) - 2.0) < 1.0e-3); // hit_t tolerance (feeds shade only)
+    CHECK(crd::math::abs(static_cast<double>(gpu_t[3]) - 1.0) < 1.0e-3);
+}
+
+// ── CEIR-19c STAGE 2: the SHADE kernel, ISOLATED device gate. The authored wavefront_shade.ckir is dispatched via a ceir.rt
+// ray_query (REAL TLAS = the occluder; shadow rays) through execute_rt_lowered, groups=count (the count-driven dispatch). A
+// deterministic occluder + synthetic hit points (one under the occluder, one clear) → GPU lit/shadowed decision[] BIT-EXACT vs
+// eval_cpu_kernel + the ANALYTIC pin. Clean separation: the shadow rays cross the occluder plane at an INTERIOR point / a
+// clearly-OUTSIDE point (no grazing edge — decisions robust).
+TEST_CASE("CEIR-19c: the authored wavefront shade kernel writes lit/shadowed == oracle + analytic (Vulkan)",
+          "[gpu-context][vulkan][gpu][rt][ceir19c]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->ray_query()) { WARN("adapter has no VK_KHR_ray_query; skipping"); return; }
+    gpu::VulkanRayTracingContext rt(*vk);
+    REQUIRE(rt.valid());
+
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+
+    std::ifstream f(CRD_REPO_DIR "/assets/ckir/wavefront_shade.ckir", std::ios::binary | std::ios::ate);
+    REQUIRE(f.good());
+    const std::streamsize sz = f.tellg();
+    REQUIRE(sz > 0);
+    f.seekg(0);
+    crd::containers::Array<char> src(&alloc);
+    src.resize(static_cast<crd::usize>(sz), '\0');
+    f.read(src.data(), sz);
+    kir::KGraph kg(&alloc);
+    kir::KEntry ke;
+    REQUIRE(kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), kg, ke).ok);
+    kir::GlslKernel kern(&alloc);
+    REQUIRE(kir::emit_compute_kernel_glsl(kg, ke, &alloc, kern));
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "wf_shade", &alloc);
+    INFO(spv.error_message.c_str());
+    REQUIRE(spv.ok);
+
+    // Occluder = ONE triangle at y=4 {(-1,4,-1),(1,4,-1),(0,4,1)}; light L=(0,8,0) (baked in the kernel). Synthetic hits:
+    // slot 0 -> ray 0 -> hitpos (0,0,0): shadow ray up hits the occluder interior @ (0,4,0) -> SHADOWED (0).
+    // slot 1 -> ray 1 -> hitpos (3,0,0): shadow ray L-P crosses y=4 @ (1.5,4,0), OUTSIDE the triangle -> LIT (1).
+    const float    verts[9]     = {-1.0F, 4.0F, -1.0F, 1.0F, 4.0F, -1.0F, 0.0F, 4.0F, 1.0F};
+    const crd::u32 compacted[2] = {0U, 1U};
+    const float    rays_in[12]  = {0.0F, 10.0F, 0.0F, 0.0F, -1.0F, 0.0F, 3.0F, 10.0F, 0.0F, 0.0F, -1.0F, 0.0F};
+    const float    hitt_in[2]   = {10.0F, 10.0F};
+    crd::containers::Array<crd::u32> gpu_dec(&alloc);
+    gpu_dec.resize(2U, 0xEEEEEEEEU);
+
+    ceir::Context c(&alloc);
+    (void)ceir::func::register_dialect(c);
+    (void)ceir::arith::register_arith_ops(c);
+    (void)ceir::resource::register_resource_ops(c);
+    (void)ceir::rt::register_dialect(c);
+    ceir::Block* const body  = c.create_block(0U);
+    const auto         mkbuf = [&]() {
+        ceir::Operation* const d =
+            c.create_operation(c.intern_op("resource", "declare"), {}, 1U, c.type_buffer(ceir::BufferMode::Plain, c.type_f32()));
+        body->append(d);
+        return d->result(0U);
+    };
+    const auto mkidx = [&](crd::i64 v) {
+        ceir::Operation* const o = c.create_operation(c.intern_op("arith", "const"), {}, 1U, c.type_index());
+        c.set_attr(o, "value", c.attr_int(v));
+        body->append(o);
+        return o->result(0U);
+    };
+    ceir::Value* const     geom = mkbuf();
+    ceir::Operation* const blas = ceir::rt::build_blas_build(c, geom, ceir::rt::type_blas(c));
+    body->append(blas);
+    ceir::Value* const     xf   = mkbuf();
+    ceir::Operation* const inst = ceir::rt::build_instance_populate(c, blas->result(0U), xf, c.attr_int(1), c.type_i32());
+    body->append(inst);
+    ceir::Operation* const tlas = ceir::rt::build_tlas_build(c, inst->result(0U), ceir::rt::type_tlas(c));
+    body->append(tlas);
+    ceir::Value* const comp_v = mkbuf();
+    ceir::Value* const rays_v = mkbuf();
+    ceir::Value* const hitt_v = mkbuf();
+    ceir::Value* const dec_v  = mkbuf();
+    ceir::Value* const g2     = mkidx(2); // groups = count (2 compacted slots) — the count-driven dispatch
+    ceir::Value* const g1     = mkidx(1);
+    ceir::Value*       rq_ops[8] = {g2, g1, g1, tlas->result(0U), comp_v, rays_v, hitt_v, dec_v};
+    ceir::Operation* const rq   = c.create_operation(c.intern_op("rt", "ray_query"),
+                                                     crd::containers::ConstSpan<ceir::Value*>(rq_ops, 8U), 0U, ceir::TypeId{}, 0U);
+    c.set_attr(rq, "kernel", c.attr_symbol(crd::containers::StringView("wavefront_shade")));
+    c.set_attr(rq, "access", c.attr_string(crd::containers::StringView("rrrw"))); // compacted r, rays r, hit_t r, decision w
+    body->append(rq);
+
+    crd::containers::Array<cg::LoweredCommand> cmds(&alloc);
+    cg::lower_region(c, *body, cmds);
+
+    RtGateState st;
+    st.rt         = &rt;
+    st.verts      = verts;
+    st.ntris      = 1U;
+    st.spirv      = spv.spirv.data();
+    st.spirv_size = spv.spirv.size();
+    cg::RtHooks hooks;
+    hooks.build_scene    = &rt_gate_build_scene;
+    hooks.kernel_bytes   = &rt_gate_kernel_bytes;
+    hooks.trace_dispatch = &rt_gate_trace_dispatch;
+    hooks.user           = &st;
+    cg::RtHostBinding binds[4];
+    binds[0] = {c.resource_root(comp_v), &compacted[0], nullptr, 2U * sizeof(crd::u32)};
+    binds[1] = {c.resource_root(rays_v), &rays_in[0], nullptr, 12U * sizeof(float)};
+    binds[2] = {c.resource_root(hitt_v), &hitt_in[0], nullptr, 2U * sizeof(float)};
+    binds[3] = {c.resource_root(dec_v), nullptr, gpu_dec.data(), 2U * sizeof(crd::u32)};
+    const cg::ExecuteError err =
+        cg::execute_rt_lowered(c, crd::containers::ConstSpan<cg::LoweredCommand>(cmds.data(), cmds.size()), hooks,
+                               crd::containers::ConstSpan<cg::RtHostBinding>(binds, 4U));
+    REQUIRE(err == cg::ExecuteError::None);
+
+    // Oracle: eval_cpu_kernel on the SAME graph, AS-slot = the occluder soup [ntri, v0..v2].
+    crd::containers::Array<crd::f64> geo(&alloc);
+    geo.resize(10U, 0.0);
+    geo[0] = 1.0;
+    for (int i = 0; i < 9; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
+    crd::containers::Array<crd::f64> comp64(&alloc);
+    crd::containers::Array<crd::f64> rays64(&alloc);
+    crd::containers::Array<crd::f64> hitt64(&alloc);
+    crd::containers::Array<crd::f64> dec_ref(&alloc);
+    comp64.resize(2U, 0.0);
+    for (crd::u32 i = 0; i < 2U; ++i) { comp64[i] = static_cast<crd::f64>(compacted[i]); }
+    rays64.resize(12U, 0.0);
+    for (crd::u32 i = 0; i < 12U; ++i) { rays64[i] = static_cast<crd::f64>(rays_in[i]); }
+    hitt64.resize(2U, 0.0);
+    for (crd::u32 i = 0; i < 2U; ++i) { hitt64[i] = static_cast<crd::f64>(hitt_in[i]); }
+    dec_ref.resize(2U, 0.0);
+    kir::KernelBuffer bufs[5] = {{geo.data(), static_cast<int>(geo.size()), 0, 0},
+                                 {comp64.data(), 2, 0, 1},
+                                 {rays64.data(), 12, 0, 2},
+                                 {hitt64.data(), 2, 0, 3},
+                                 {dec_ref.data(), 2, 0, 4}};
+    kir::eval_cpu_kernel(kg, ke, bufs, 5, 1U, &alloc, 2U); // local_size=1, 2 groups (2 slots)
+
+    // GPU lit/shadowed == oracle (bit-exact) + the ANALYTIC pin: slot 0 shadowed (0), slot 1 lit (1).
+    INFO("gpu_dec=[" << gpu_dec[0] << ", " << gpu_dec[1] << "] oracle=[" << static_cast<crd::u32>(dec_ref[0]) << ", "
+                     << static_cast<crd::u32>(dec_ref[1]) << "]");
+    CHECK(gpu_dec[0] == static_cast<crd::u32>(dec_ref[0]));
+    CHECK(gpu_dec[1] == static_cast<crd::u32>(dec_ref[1]));
+    CHECK(gpu_dec[0] == 0U); // hitpos (0,0,0) is under the occluder -> SHADOWED
+    CHECK(gpu_dec[1] == 1U); // hitpos (3,0,0) is clear -> LIT
+}
+
+// ── CEIR-19c STAGE 2 — the §134 WAVEFRONT HOST-LOOP (the culmination): raygen(host) -> trace -> compact -> [readback] ->
+// shade -> compact, driven by a host while(count>0) loop through execute_rt_lowered per dispatch, all authored .ckir kernels,
+// ZERO bridge changes. Single-bounce direct lighting: the loop runs EXACTLY ONCE and TERMINATES via a count READBACK (the
+// second compact runs on host-zeroed continuation_flags -> next_count=0 by construction — the advisor's "shade emits a
+// continuation count, zero by construction" resolved as the compact-is-the-count-producer; multi-bounce later adds one store
+// to shade, nothing else). Per-iteration a HOST triple32 fold over DECISION INTS ONLY (hit_count, compacted[0..count-1],
+// decisions[0..count-1], next_count) is compared GPU==oracle; the oracle mirrors the SAME host loop (eval_cpu_kernel per
+// dispatch). ⛔ each execute_rt_lowered is submit+wait, so readback N is coherent before upload N+1 (the synchronous seam the
+// loop determinism rests on; GPU-indirect gives it up). ⛔ the TLAS holds receiver AND occluder, so tmin=0.001 skips the
+// receiver the shadow ray originates on (symmetric: rayQuery tMin == the oracle's t>tmin). ANALYTIC pin: decisions=[0,1,0,1].
+TEST_CASE("CEIR-19c: the AUTHORED wavefront host-loop (trace->compact->shade) == oracle + analytic (Vulkan)",
+          "[gpu-context][vulkan][gpu][rt][ceir19c]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->ray_query()) { WARN("adapter has no VK_KHR_ray_query; skipping"); return; }
+    gpu::VulkanRayTracingContext rt(*vk);
+    REQUIRE(rt.valid());
+
+    crd::memory::TlsfAllocator alloc(64U << 20U);
+
+    // Load + compile the 3 authored kernels (KGraph/KEntry for the oracle, SPIR-V blob for the GPU).
+    kir::KGraph                     kg_tr(&alloc);
+    kir::KGraph                     kg_co(&alloc);
+    kir::KGraph                     kg_sh(&alloc);
+    kir::KEntry                     ke_tr;
+    kir::KEntry                     ke_co;
+    kir::KEntry                     ke_sh;
+    crd::containers::Array<crd::u8> spv_tr(&alloc);
+    crd::containers::Array<crd::u8> spv_co(&alloc);
+    crd::containers::Array<crd::u8> spv_sh(&alloc);
+    const auto load_kernel = [&](const char* path, const char* name, kir::KGraph& kg, kir::KEntry& ke,
+                                 crd::containers::Array<crd::u8>& spv) {
+        std::ifstream f(path, std::ios::binary | std::ios::ate);
+        REQUIRE(f.good());
+        const std::streamsize sz = f.tellg();
+        REQUIRE(sz > 0);
+        f.seekg(0);
+        crd::containers::Array<char> src(&alloc);
+        src.resize(static_cast<crd::usize>(sz), '\0');
+        f.read(src.data(), sz);
+        REQUIRE(kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), kg, ke).ok);
+        kir::GlslKernel kern(&alloc);
+        REQUIRE(kir::emit_compute_kernel_glsl(kg, ke, &alloc, kern));
+        const auto r = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), name, &alloc);
+        INFO(r.error_message.c_str());
+        REQUIRE(r.ok);
+        spv.resize(r.spirv.size(), 0U);
+        for (crd::usize i = 0; i < r.spirv.size(); ++i) { spv[i] = r.spirv[i]; }
+    };
+    load_kernel(CRD_REPO_DIR "/assets/ckir/wavefront_trace.ckir", "wf_trace", kg_tr, ke_tr, spv_tr);
+    load_kernel(CRD_REPO_DIR "/assets/ckir/wavefront_compact.ckir", "wf_compact", kg_co, ke_co, spv_co);
+    load_kernel(CRD_REPO_DIR "/assets/ckir/wavefront_shade.ckir", "wf_shade", kg_sh, ke_sh, spv_sh);
+
+    // Scene: receiver quad @ y=0 (x,z in [-10,10], prims 0-1) + occluder triangle @ y=4 around x=2 (prim 2). Light L=(0,8,0)
+    // is baked in wavefront_shade. Camera straight down: the shadow ray from a hit (cx,0,0) crosses y=4 at x=0.5·cx while the
+    // camera crosses at x=cx, so an occluder at x≈2 shadows hits near x=4 without the camera ever hitting the occluder.
+    const float verts[27] = {-10.0F, 0.0F, -10.0F, 10.0F,  0.0F, -10.0F, 10.0F, 0.0F, 10.0F,   // receiver tri 0
+                             -10.0F, 0.0F, -10.0F, 10.0F,  0.0F, 10.0F,  -10.0F, 0.0F, 10.0F,  // receiver tri 1
+                             1.0F,   4.0F, -1.0F,  3.0F,   4.0F, -1.0F,  2.0F,   4.0F, 1.0F};  // occluder tri 2
+    constexpr crd::u32 num_tris = 3U;
+    constexpr crd::u32 nrays    = 8U;  // meaningful camera rays (== the compact's unrolled N — the wavefront queue size)
+    constexpr crd::u32 nbuf     = 64U; // buffer width = the trace kernel's workgroup (local_size=64) so no tail thread OOBs
+    // 8 meaningful camera rays: 0-3 hit the receiver (decisions [0,1,0,1]); 4-7 miss (x>10). Slots 8..63 = guaranteed-miss
+    // fillers (the trace has no tail guard) — the compact scans only [0..7] (its N), so the fillers never enter the queue.
+    const float seed[nrays * 6] = {4.0F,  20.0F, 0.0F,  0.0F, -1.0F, 0.0F,   // ray0 -> (4,0,0)    SHADOWED
+                                   -8.0F, 20.0F, 0.0F,  0.0F, -1.0F, 0.0F,   // ray1 -> (-8,0,0)   LIT
+                                   4.0F,  20.0F, 0.4F,  0.0F, -1.0F, 0.0F,   // ray2 -> (4,0,0.4)  SHADOWED
+                                   -6.0F, 20.0F, 0.0F,  0.0F, -1.0F, 0.0F,   // ray3 -> (-6,0,0)   LIT
+                                   15.0F, 20.0F, 0.0F,  0.0F, -1.0F, 0.0F,   // ray4 miss
+                                   16.0F, 20.0F, 0.0F,  0.0F, -1.0F, 0.0F,   // ray5 miss
+                                   17.0F, 20.0F, 0.0F,  0.0F, -1.0F, 0.0F,   // ray6 miss
+                                   18.0F, 20.0F, 0.0F,  0.0F, -1.0F, 0.0F};  // ray7 miss
+    float rays[nbuf * 6] = {};
+    for (crd::u32 r = 0; r < nbuf; ++r)
+    {
+        if (r < nrays)
+        {
+            for (int col = 0; col < 6; ++col) { rays[r * 6U + static_cast<crd::u32>(col)] = seed[r * 6U + static_cast<crd::u32>(col)]; }
+        }
+        else
+        {
+            rays[r * 6U + 0U] = 100.0F; // far origin
+            rays[r * 6U + 1U] = 100.0F;
+            rays[r * 6U + 2U] = 100.0F;
+            rays[r * 6U + 5U] = 1.0F; // dir +z -> misses the scene
+        }
+    }
+
+    // A ceir.rt program builder: blas->instance->tlas->ray_query(grid=(gx,1,1), %tlas, nbind bindings), kernel + access. The
+    // bindings' resource_root Value*s are returned (for the RtHostBinding match). ⛔ built in ONE shared Context `c` so all
+    // programs + their LoweredCommand `op` back-pointers stay alive through the loop.
+    ceir::Context c(&alloc);
+    (void)ceir::func::register_dialect(c);
+    (void)ceir::arith::register_arith_ops(c);
+    (void)ceir::resource::register_resource_ops(c);
+    (void)ceir::rt::register_dialect(c);
+    const auto build_prog = [&](const char* kernel, const char* access, crd::i64 gx, crd::u32 nbind,
+                                crd::containers::Array<cg::LoweredCommand>& out_cmds, const ceir::Value** out_roots) {
+        ceir::Block* const b     = c.create_block(0U);
+        const auto         mkbuf = [&]() {
+            ceir::Operation* const d = c.create_operation(c.intern_op("resource", "declare"), {}, 1U,
+                                                          c.type_buffer(ceir::BufferMode::Plain, c.type_f32()));
+            b->append(d);
+            return d->result(0U);
+        };
+        const auto mkidx = [&](crd::i64 v) {
+            ceir::Operation* const o = c.create_operation(c.intern_op("arith", "const"), {}, 1U, c.type_index());
+            c.set_attr(o, "value", c.attr_int(v));
+            b->append(o);
+            return o->result(0U);
+        };
+        ceir::Value* const     geom = mkbuf();
+        ceir::Operation* const blas = ceir::rt::build_blas_build(c, geom, ceir::rt::type_blas(c));
+        b->append(blas);
+        ceir::Value* const     xf   = mkbuf();
+        ceir::Operation* const inst = ceir::rt::build_instance_populate(c, blas->result(0U), xf, c.attr_int(1), c.type_i32());
+        b->append(inst);
+        ceir::Operation* const tlas = ceir::rt::build_tlas_build(c, inst->result(0U), ceir::rt::type_tlas(c));
+        b->append(tlas);
+        ceir::Value* const g1 = mkidx(1);
+        ceir::Value* const gg = mkidx(gx);
+        ceir::Value*       ops[12];
+        ops[0] = gg;
+        ops[1] = g1;
+        ops[2] = g1;
+        ops[3] = tlas->result(0U);
+        for (crd::u32 i = 0; i < nbind; ++i)
+        {
+            ceir::Value* const buf = mkbuf();
+            ops[4U + i]            = buf;
+            out_roots[i]           = c.resource_root(buf);
+        }
+        ceir::Operation* const rq = c.create_operation(c.intern_op("rt", "ray_query"),
+                                                       crd::containers::ConstSpan<ceir::Value*>(ops, 4U + nbind), 0U,
+                                                       ceir::TypeId{}, 0U);
+        c.set_attr(rq, "kernel", c.attr_symbol(crd::containers::StringView(kernel)));
+        c.set_attr(rq, "access", c.attr_string(crd::containers::StringView(access)));
+        b->append(rq);
+        cg::lower_region(c, *b, out_cmds);
+    };
+
+    // trace: grid=(1,1,1) (64 threads cover 8 rays); compact: grid=(1,1,1) local_size=1. Built ONCE (reused each iteration).
+    crd::containers::Array<cg::LoweredCommand> tr_cmds(&alloc);
+    crd::containers::Array<cg::LoweredCommand> co_cmds(&alloc);
+    const ceir::Value*                         tr_roots[3] = {nullptr, nullptr, nullptr};
+    const ceir::Value*                         co_roots[3] = {nullptr, nullptr, nullptr};
+    build_prog("wavefront_trace", "rww", 1, 3U, tr_cmds, tr_roots);   // rays r, hit_flag w, hit_t w
+    build_prog("wavefront_compact", "rww", 1, 3U, co_cmds, co_roots); // flags r, compacted w, count w
+
+    // Host arrays (carried in-out across the submit+wait dispatches).
+    crd::containers::Array<crd::u32> hit_flags(&alloc);
+    crd::containers::Array<float>    hit_t(&alloc);
+    crd::containers::Array<crd::u32> compacted(&alloc);
+    crd::containers::Array<crd::u32> decisions(&alloc);
+    crd::containers::Array<crd::u32> cont_flags(&alloc);
+    crd::containers::Array<crd::u32> next_queue(&alloc);
+    hit_flags.resize(nbuf, 0U);
+    hit_t.resize(nbuf, 0.0F);
+    compacted.resize(nbuf, 0xEEEEEEEEU);
+    decisions.resize(nbuf, 0xEEEEEEEEU);
+    cont_flags.resize(nbuf, 0U); // ⛔ host-ZEROED continuation flags: single-bounce writes none, so the 2nd compact -> 0
+    next_queue.resize(nbuf, 0xEEEEEEEEU);
+    crd::u32 hit_count  = 0U;
+    crd::u32 next_count = 0U;
+
+    // Oracle scene soup [ntri, v0..v2 per tri] (for trace + shade); the compact's AS is dead (unread).
+    crd::containers::Array<crd::f64> geo(&alloc);
+    geo.resize(1U + 27U, 0.0);
+    geo[0] = static_cast<crd::f64>(num_tris);
+    for (int i = 0; i < 27; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
+    crd::containers::Array<crd::f64> rays64(&alloc);
+    rays64.resize(static_cast<crd::usize>(nbuf) * 6U, 0.0);
+    for (crd::usize i = 0; i < rays64.size(); ++i) { rays64[i] = static_cast<crd::f64>(rays[i]); }
+    crd::containers::Array<crd::f64> hf_ref(&alloc);
+    crd::containers::Array<crd::f64> ht_ref(&alloc);
+    crd::containers::Array<crd::f64> comp_ref(&alloc);
+    crd::containers::Array<crd::f64> dec_ref(&alloc);
+    crd::containers::Array<crd::f64> cont_ref(&alloc);
+    crd::containers::Array<crd::f64> nq_ref(&alloc);
+    crd::containers::Array<crd::f64> hc_ref(&alloc);
+    crd::containers::Array<crd::f64> nc_ref(&alloc);
+    hf_ref.resize(nbuf, 0.0);
+    ht_ref.resize(nbuf, 0.0);
+    comp_ref.resize(nbuf, 0.0);
+    dec_ref.resize(nbuf, 0.0);
+    cont_ref.resize(nbuf, 0.0);
+    nq_ref.resize(nbuf, 0.0);
+    hc_ref.resize(1U, 0.0);
+    nc_ref.resize(1U, 0.0);
+
+    RtGateState st;
+    st.rt       = &rt;
+    st.verts    = verts;
+    st.ntris    = num_tris; // the scene is built ONCE on the first AccelBuild (guard) and reused by every program
+    cg::RtHooks hooks;
+    hooks.build_scene    = &rt_gate_build_scene;
+    hooks.kernel_bytes   = &rt_gate_kernel_bytes;
+    hooks.trace_dispatch = &rt_gate_trace_dispatch;
+    hooks.user           = &st;
+
+    const auto exec = [&](const crd::containers::Array<cg::LoweredCommand>& cmds, const crd::u8* spv, crd::usize spv_sz,
+                          const cg::RtHostBinding* binds, crd::u32 nb) {
+        st.spirv      = spv;
+        st.spirv_size = spv_sz;
+        return cg::execute_rt_lowered(c, crd::containers::ConstSpan<cg::LoweredCommand>(cmds.data(), cmds.size()), hooks,
+                                      crd::containers::ConstSpan<cg::RtHostBinding>(binds, nb));
+    };
+
+    crd::u32 queue_count = nrays;      // the raygen: N host-filled camera rays
+    int      iters       = 0;
+    crd::u32 gpu_hash    = 0x9E3779B9U; // shared seed; identical fold on both sides
+    crd::u32 oracle_hash = 0x9E3779B9U;
+    while (queue_count > 0U)
+    {
+        // GPU: trace -> hit_flags + hit_t.
+        const cg::RtHostBinding b_tr[3] = {{tr_roots[0], rays, nullptr, static_cast<crd::u64>(nbuf) * 6U * sizeof(float)},
+                                           {tr_roots[1], nullptr, hit_flags.data(), static_cast<crd::u64>(nbuf) * sizeof(crd::u32)},
+                                           {tr_roots[2], nullptr, hit_t.data(), static_cast<crd::u64>(nbuf) * sizeof(float)}};
+        REQUIRE(exec(tr_cmds, spv_tr.data(), spv_tr.size(), b_tr, 3U) == cg::ExecuteError::None);
+        // GPU: compact #1 (hit_flags -> compacted + hit_count).
+        const cg::RtHostBinding b_c1[3] = {{co_roots[0], hit_flags.data(), nullptr, static_cast<crd::u64>(nbuf) * sizeof(crd::u32)},
+                                           {co_roots[1], nullptr, compacted.data(), static_cast<crd::u64>(nbuf) * sizeof(crd::u32)},
+                                           {co_roots[2], nullptr, &hit_count, sizeof(crd::u32)}};
+        REQUIRE(exec(co_cmds, spv_co.data(), spv_co.size(), b_c1, 3U) == cg::ExecuteError::None);
+        // GPU: shade over the compacted hits — grid=hit_count (the COUNT-DRIVEN dispatch, rebuilt from the readback).
+        crd::containers::Array<cg::LoweredCommand> sh_cmds(&alloc);
+        const ceir::Value*                         sh_roots[4] = {nullptr, nullptr, nullptr, nullptr};
+        build_prog("wavefront_shade", "rrrw", static_cast<crd::i64>(hit_count), 4U, sh_cmds, sh_roots);
+        st.last_gx                      = 0U;
+        const cg::RtHostBinding b_sh[4] = {{sh_roots[0], compacted.data(), nullptr, static_cast<crd::u64>(nbuf) * sizeof(crd::u32)},
+                                           {sh_roots[1], rays, nullptr, static_cast<crd::u64>(nbuf) * 6U * sizeof(float)},
+                                           {sh_roots[2], hit_t.data(), nullptr, static_cast<crd::u64>(nbuf) * sizeof(float)},
+                                           {sh_roots[3], nullptr, decisions.data(), static_cast<crd::u64>(nbuf) * sizeof(crd::u32)}};
+        REQUIRE(exec(sh_cmds, spv_sh.data(), spv_sh.size(), b_sh, 4U) == cg::ExecuteError::None);
+        CHECK(st.last_gx == hit_count); // ⭐ the shade dispatch grid came from the compact's count readback (count-driven)
+        // GPU: compact #2 (host-zeroed continuation flags -> next_count). Single-bounce: next_count == 0 by construction.
+        const cg::RtHostBinding b_c2[3] = {{co_roots[0], cont_flags.data(), nullptr, static_cast<crd::u64>(nbuf) * sizeof(crd::u32)},
+                                           {co_roots[1], nullptr, next_queue.data(), static_cast<crd::u64>(nbuf) * sizeof(crd::u32)},
+                                           {co_roots[2], nullptr, &next_count, sizeof(crd::u32)}};
+        REQUIRE(exec(co_cmds, spv_co.data(), spv_co.size(), b_c2, 3U) == cg::ExecuteError::None);
+
+        // ORACLE: mirror the SAME loop on the CPU (eval_cpu_kernel per dispatch, same inputs).
+        kir::KernelBuffer bt[4] = {{geo.data(), static_cast<int>(geo.size()), 0, 0},
+                                   {rays64.data(), static_cast<int>(rays64.size()), 0, 1},
+                                   {hf_ref.data(), static_cast<int>(nbuf), 0, 2},
+                                   {ht_ref.data(), static_cast<int>(nbuf), 0, 3}};
+        kir::eval_cpu_kernel(kg_tr, ke_tr, bt, 4, 64U, &alloc, 1U);
+        kir::KernelBuffer bc1[4] = {{geo.data(), static_cast<int>(geo.size()), 0, 0},
+                                    {hf_ref.data(), static_cast<int>(nbuf), 0, 1},
+                                    {comp_ref.data(), static_cast<int>(nbuf), 0, 2},
+                                    {hc_ref.data(), 1, 0, 3}};
+        kir::eval_cpu_kernel(kg_co, ke_co, bc1, 4, 1U, &alloc, 1U);
+        const crd::u32 ohc = static_cast<crd::u32>(hc_ref[0]);
+        kir::KernelBuffer bs[5] = {{geo.data(), static_cast<int>(geo.size()), 0, 0},
+                                   {comp_ref.data(), static_cast<int>(nbuf), 0, 1},
+                                   {rays64.data(), static_cast<int>(rays64.size()), 0, 2},
+                                   {ht_ref.data(), static_cast<int>(nbuf), 0, 3},
+                                   {dec_ref.data(), static_cast<int>(nbuf), 0, 4}};
+        kir::eval_cpu_kernel(kg_sh, ke_sh, bs, 5, 1U, &alloc, ohc > 0U ? ohc : 1U);
+        kir::KernelBuffer bc2[4] = {{geo.data(), static_cast<int>(geo.size()), 0, 0},
+                                    {cont_ref.data(), static_cast<int>(nbuf), 0, 1},
+                                    {nq_ref.data(), static_cast<int>(nbuf), 0, 2},
+                                    {nc_ref.data(), 1, 0, 3}};
+        kir::eval_cpu_kernel(kg_co, ke_co, bc2, 4, 1U, &alloc, 1U);
+
+        // HOST triple32 fold over DECISION INTS ONLY, [0..count-1], identical order both sides.
+        gpu_hash    = rt_fold(gpu_hash, hit_count);
+        oracle_hash = rt_fold(oracle_hash, ohc);
+        for (crd::u32 j = 0; j < hit_count; ++j) { gpu_hash = rt_fold(gpu_hash, compacted[j]); }
+        for (crd::u32 j = 0; j < ohc; ++j) { oracle_hash = rt_fold(oracle_hash, static_cast<crd::u32>(comp_ref[j])); }
+        for (crd::u32 j = 0; j < hit_count; ++j) { gpu_hash = rt_fold(gpu_hash, decisions[j]); }
+        for (crd::u32 j = 0; j < ohc; ++j) { oracle_hash = rt_fold(oracle_hash, static_cast<crd::u32>(dec_ref[j])); }
+        gpu_hash    = rt_fold(gpu_hash, next_count);
+        oracle_hash = rt_fold(oracle_hash, static_cast<crd::u32>(nc_ref[0]));
+        CHECK(gpu_hash == oracle_hash); // ⭐ per-iteration decision-hash GPU == oracle
+
+        // Direct GPU==oracle + the ANALYTIC pin (parity alone is blind to a symmetric authoring error).
+        CHECK(hit_count == 4U);
+        CHECK(ohc == 4U);
+        for (crd::u32 j = 0; j < 4U; ++j)
+        {
+            INFO("slot " << j << ": gpu comp=" << compacted[j] << " dec=" << decisions[j] << " | oracle comp="
+                         << static_cast<crd::u32>(comp_ref[j]) << " dec=" << static_cast<crd::u32>(dec_ref[j]));
+            CHECK(compacted[j] == static_cast<crd::u32>(comp_ref[j]));
+            CHECK(decisions[j] == static_cast<crd::u32>(dec_ref[j]));
+        }
+        CHECK(decisions[0] == 0U); // (4,0,0)   under the occluder -> SHADOWED
+        CHECK(decisions[1] == 1U); // (-8,0,0)  clear -> LIT
+        CHECK(decisions[2] == 0U); // (4,0,0.4) under the occluder -> SHADOWED
+        CHECK(decisions[3] == 1U); // (-6,0,0)  clear -> LIT
+
+        CHECK(next_count == 0U);  // ⭐ single-bounce: the compact#2 readback IS zero (termination value PINNED, not inferred)
+        queue_count = next_count; // terminate via the compact#2 readback, NOT a hardcode
+        ++iters;
+    }
+    CHECK(iters == 1);        // the loop body ran EXACTLY once (single-bounce)
+    CHECK(queue_count == 0U); // and terminated via the count readback
 }

@@ -10,7 +10,9 @@
 #include <crd/ceir/gen/compute_ops.hpp>
 #include <crd/ceir/gen/resource_ops.hpp>
 #include <crd/ceir/gen/transfer_ops.hpp>
+#include <crd/ceir/gpu/execute.hpp> // CEIR-19c: validate_lowered — the compute surface REJECTS ceir.rt kinds
 #include <crd/ceir/gpu/lower.hpp>
+#include <crd/ceir/rt.hpp>          // CEIR-19c: the rt dialect builders (blas/instance/tlas build + ray_query)
 
 #include <crd/memory/allocators/malloc_allocator.hpp>
 
@@ -321,6 +323,210 @@ TEST_CASE("ceir 13d: the grid resolves all-or-nothing; indirect and dynamic neve
         CHECK(out[0].dispatch_kind == crd::gpu::DispatchKind::Indirect);
         CHECK_FALSE(out[0].dynamic_grid);
     }
+}
+
+// ── CEIR-19c: the ceir.rt lowering (RayQuery + AccelBuild) + the widen-closed-enum consumer audit ─────────────────────
+TEST_CASE("ceir 19c: lower_region emits AccelBuild + RayQuery for ceir.rt ops; the compute surface rejects them", "[ceir][ceir-gpu][rt]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const Kit                    k(ctx);
+    (void)rt::register_dialect(ctx); // the rt dialect (blas/instance/tlas build + ray_query) atop the Kit's arith/resource/...
+
+    // a well-formed blas -> instance -> tlas -> ray_query chain (the INLINE path: ray_query takes a %tlas, no SBT). The grid
+    // is CONST (konst = arith.const, Index-typed) so RayQuery resolves its groups; the declares/consts emit nothing.
+    Block* const     b    = ctx.create_block(0U);
+    Operation* const geom = declbuf(ctx, k, b);
+    Operation* const blas = rt::build_blas_build(ctx, geom->result(0U), rt::type_blas(ctx));
+    b->append(blas);
+    Operation* const xf   = declbuf(ctx, k, b);
+    Operation* const inst = rt::build_instance_populate(ctx, blas->result(0U), xf->result(0U), ctx.attr_int(1), ctx.type_i32());
+    b->append(inst);
+    Operation* const tlas = rt::build_tlas_build(ctx, inst->result(0U), rt::type_tlas(ctx));
+    b->append(tlas);
+    Value* const     gx   = konst(ctx, k, b, 8);
+    Value* const     gy   = konst(ctx, k, b, 4);
+    Value* const     gz   = konst(ctx, k, b, 1);
+    Operation* const bind = declbuf(ctx, k, b);
+    Operation* const rq   = rt::build_ray_query(ctx, gx, gy, gz, tlas->result(0U), bind->result(0U),
+                                                ctx.attr_symbol(StringView("rt_witness")), ctx.attr_string(StringView("w")));
+    b->append(rq);
+
+    Array<LoweredCommand> out(&root);
+    lower_region(ctx, *b, out);
+
+    // 3 AccelBuild (blas/instance/tlas) + 1 RayQuery, PLUS the handle-chain RAW barriers: instance reads blas's written
+    // handle, tlas reads instance's, ray_query reads tlas's — three real data deps → three interleaved barriers ([blas, Bar,
+    // inst, Bar, tlas, Bar, rq]). ⛔ AS builds go IN the list (the §162 no-silent-drop); barriers are INERT in
+    // execute_rt_lowered (each trace_dispatch is submit+wait) but the lowering faithfully emits them.
+    crd::u32              n_accel = 0U;
+    crd::u32              n_rq    = 0U;
+    crd::u32              n_bar   = 0U;
+    const LoweredCommand* rqc     = nullptr;
+    for (crd::u32 i = 0U; i < static_cast<crd::u32>(out.size()); ++i)
+    {
+        if (out[i].kind == LoweredKind::AccelBuild) { ++n_accel; }
+        else if (out[i].kind == LoweredKind::RayQuery) { ++n_rq; rqc = &out[i]; }
+        else if (out[i].kind == LoweredKind::Barrier) { ++n_bar; }
+    }
+    CHECK(n_accel == 3U);
+    CHECK(n_bar == 3U); // the blas->instance->tlas->ray_query handle-dependency RAW chain
+    REQUIRE(n_rq == 1U);
+    CHECK(rqc->op == rq);
+    CHECK(rqc->groups_x == 8U); // ⭐ the const grid resolved (the direct-dispatch precedent)
+    CHECK(rqc->groups_y == 4U);
+    CHECK(rqc->groups_z == 1U);
+    CHECK_FALSE(rqc->dynamic_grid);
+
+    // ⭐ THE AUDIT (widen-closed-enum): the compute IComputeContext executor REJECTS ceir.rt kinds TYPED — they target the RT
+    // executor (execute_rt_lowered), not this surface. The FIRST command (AccelBuild) trips it; validate never dereferences
+    // the (null) resolver. (render_materialize's exhaustive switch rejects them at COMPILE time via gcc -Werror=switch.)
+    const ExecuteError err =
+        validate_lowered(ctx, ConstSpan<LoweredCommand>(out.data(), out.size()), nullptr, nullptr, ConstSpan<ResolvedBinding>{});
+    CHECK(err == ExecuteError::UnsupportedCommand);
+}
+
+namespace
+{
+// A device-free recorder for the RT hooks: counts builds/traces + logs their order (0 = build, 1 = trace).
+struct RtRec
+{
+    int      builds    = 0;
+    int      traces    = 0;
+    crd::u64 last_tlas = 0U;
+    crd::u32 gx        = 0U;
+    crd::u32 gy        = 0U;
+    crd::u32 gz        = 0U;
+    int      order[8]  = {};
+    int      norder    = 0;
+};
+constexpr crd::u8 kRtSentinelBytes[4] = {1U, 2U, 3U, 4U}; // a non-empty kernel-bytes span (never dereferenced device-free)
+} // namespace
+
+// ── CEIR-19c: execute_rt_lowered drives the caller HOOKS (ceir-gpu names no backend). Device-free sentinel proof — the walk
+// builds the AS chain (3x) then dispatch_inline_ray_query (1x), threading the TERMINAL tlas handle, and rejects a foreign kind.
+TEST_CASE("ceir 19c: execute_rt_lowered walks the RT list through the caller hooks (build x3 -> trace x1)", "[ceir][ceir-gpu][rt]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const Kit                    k(ctx);
+    (void)rt::register_dialect(ctx);
+
+    Block* const     b    = ctx.create_block(0U);
+    Operation* const geom = declbuf(ctx, k, b);
+    Operation* const blas = rt::build_blas_build(ctx, geom->result(0U), rt::type_blas(ctx));
+    b->append(blas);
+    Operation* const xf   = declbuf(ctx, k, b);
+    Operation* const inst = rt::build_instance_populate(ctx, blas->result(0U), xf->result(0U), ctx.attr_int(1), ctx.type_i32());
+    b->append(inst);
+    Operation* const tlas = rt::build_tlas_build(ctx, inst->result(0U), rt::type_tlas(ctx));
+    b->append(tlas);
+    Value* const     gx   = konst(ctx, k, b, 8);
+    Value* const     gy   = konst(ctx, k, b, 4);
+    Value* const     gz   = konst(ctx, k, b, 1);
+    Operation* const bind = declbuf(ctx, k, b);
+    Operation* const rq   = rt::build_ray_query(ctx, gx, gy, gz, tlas->result(0U), bind->result(0U),
+                                                ctx.attr_symbol(StringView("rt_witness")), ctx.attr_string(StringView("w")));
+    b->append(rq);
+
+    Array<LoweredCommand> out(&root);
+    lower_region(ctx, *b, out);
+
+    RtRec   rec;
+    RtHooks hooks;
+    hooks.build_scene = [](const Operation*, void* u) -> RtSceneHandle {
+        auto* r               = static_cast<RtRec*>(u);
+        r->order[r->norder++] = 0;
+        return static_cast<RtSceneHandle>(++r->builds); // 1,2,3 — the tlas is the LAST build (handle 3)
+    };
+    hooks.kernel_bytes = [](const Operation*, void*) -> ConstSpan<crd::u8> {
+        return ConstSpan<crd::u8>(kRtSentinelBytes, 4U); // file-scope sentinel (a returned span must outlive the hook)
+    };
+    hooks.trace_dispatch = [](RtSceneHandle tlas_h, ConstSpan<crd::u8> bytes, ConstSpan<RtHostBinding> binds, crd::u32 dx,
+                              crd::u32 dy, crd::u32 dz, void* u) -> bool {
+        auto* r               = static_cast<RtRec*>(u);
+        r->order[r->norder++] = 1;
+        ++r->traces;
+        r->last_tlas = tlas_h;
+        r->gx        = dx;
+        r->gy        = dy;
+        r->gz        = dz;
+        (void)bytes;
+        (void)binds;
+        return true;
+    };
+    hooks.user = &rec;
+
+    RtHostBinding hb;
+    hb.resource = ctx.resource_root(bind->result(0U)); // the ray_query's one SSBO (operand 4)
+    hb.bytes    = 16U;
+    ConstSpan<RtHostBinding> binds(&hb, 1U);
+
+    const ExecuteError rerr = execute_rt_lowered(ctx, ConstSpan<LoweredCommand>(out.data(), out.size()), hooks, binds);
+    CHECK(rerr == ExecuteError::None);
+    CHECK(rec.builds == 3);     // blas + instance + tlas
+    CHECK(rec.traces == 1);     // the one ray_query
+    CHECK(rec.last_tlas == 3U); // ⭐ the ray_query bound the TERMINAL tlas handle (build #3), threaded from tlas_build's %result
+    CHECK(rec.gx == 8U);
+    CHECK(rec.gy == 4U);
+    CHECK(rec.gz == 1U);
+    REQUIRE(rec.norder == 4); // build, build, build, trace (the AS chain fully built before the dispatch)
+    CHECK(rec.order[0] == 0);
+    CHECK(rec.order[1] == 0);
+    CHECK(rec.order[2] == 0);
+    CHECK(rec.order[3] == 1);
+
+    // ⭐ a FOREIGN kind (a compute dispatch) on the RT surface → UnsupportedCommand (the mirror of execute_lowered rejecting RT).
+    Block* const cb = ctx.create_block(0U);
+    (void)ddispatch(ctx, k, cb, konst(ctx, k, cb, 1), nullptr, "", "x");
+    Array<LoweredCommand> cout(&root);
+    lower_region(ctx, *cb, cout);
+    CHECK(execute_rt_lowered(ctx, ConstSpan<LoweredCommand>(cout.data(), cout.size()), hooks, ConstSpan<RtHostBinding>{})
+          == ExecuteError::UnsupportedCommand);
+}
+
+// ── CEIR-19c: the DEFERRAL is a PIN, not prose — rt.trace + rt.sbt_build lower to NOTHING (DEFERRED to 19z). ────────────
+// 19c ships ray_query + AS-builds ONLY; rt.trace (the pipeline path) + rt.sbt_build are declared but not yet lowered. They
+// are NOT in lower_region's recognized set, so they `continue` (emit nothing) — this test makes that a COMMITTED behavior a
+// 19z implementer trips on purpose, closing the only untested branch the RT lowering added.
+TEST_CASE("ceir 19c: rt.trace + rt.sbt_build are DEFERRED to 19z (they lower to no command)", "[ceir][ceir-gpu][rt]")
+{
+    crd::memory::MallocAllocator root;
+    Context                      ctx(&root);
+    const Kit                    k(ctx);
+    (void)rt::register_dialect(ctx);
+
+    Block* const     b    = ctx.create_block(0U);
+    Operation* const geom = declbuf(ctx, k, b);
+    Operation* const blas = rt::build_blas_build(ctx, geom->result(0U), rt::type_blas(ctx));
+    b->append(blas);
+    Operation* const xf   = declbuf(ctx, k, b);
+    Operation* const inst = rt::build_instance_populate(ctx, blas->result(0U), xf->result(0U), ctx.attr_int(1), ctx.type_i32());
+    b->append(inst);
+    Operation* const tlas = rt::build_tlas_build(ctx, inst->result(0U), rt::type_tlas(ctx));
+    b->append(tlas);
+    Operation* const sbt = rt::build_sbt_build(ctx, ctx.attr_symbol(StringView("rgen")), rt::type_sbt(ctx));
+    b->append(sbt);
+    Value* const     bind = declbuf(ctx, k, b)->result(0U);
+    Operation* const tr   = rt::build_trace(ctx, konst(ctx, k, b, 1), konst(ctx, k, b, 1), konst(ctx, k, b, 1),
+                                            tlas->result(0U), sbt->result(0U), bind, ctx.attr_string(StringView("w")));
+    b->append(tr);
+
+    Array<LoweredCommand> out(&root);
+    lower_region(ctx, *b, out);
+
+    // The 3 AccelBuild (blas/instance/tlas) still lower; sbt_build + trace emit NOTHING (no command carries their op).
+    crd::u32 n_accel = 0U;
+    crd::u32 n_rq    = 0U;
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(out.size()); ++i)
+    {
+        if (out[i].kind == LoweredKind::AccelBuild) { ++n_accel; }
+        else if (out[i].kind == LoweredKind::RayQuery) { ++n_rq; }
+        CHECK(out[i].op != sbt); // ⛔ rt.sbt_build lowered to no command (DEFERRED)
+        CHECK(out[i].op != tr);  // ⛔ rt.trace lowered to no command (DEFERRED)
+    }
+    CHECK(n_accel == 3U);
+    CHECK(n_rq == 0U); // no ray_query in this chain — trace is the pipeline path, not the inline one
 }
 
 TEST_CASE("ceir 13d: lowering is deterministic (dispatches + a transfer, lower twice -> identical)", "[ceir][ceir-gpu]")

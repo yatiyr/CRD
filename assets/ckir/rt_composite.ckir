@@ -1,4 +1,14 @@
 # .ckir - an authored CKIR program (node graph). A node editor reads this and turns it into CKIR.
+# ⛔⛔ CEIR-19b/19z-3 (F2) COMPOSITE: the flat-lit scene_hdr MULTIPLIED by the ray-traced shadow mask → @output. The RT
+# shadow term is now VISIBLE (shadowed pixels darken). scene_hdr (input0 texture) is sampled at the fullscreen uv; the
+# shadow mask is shadow_mask_buf, bound to the fullscreen `constants` slot (map_raster routes a StorageBuffer read there;
+# frame_runtime binds fs_constants) and read per-pixel via StorageLoad — the taa_resolve precedent. The mask is a flat
+# f32 array indexed py*W+px (the SAME layout the RT pass wrote, matching worldpos_buf's GlobalInvocationId flat index):
+#   px,py = floor(FragCoord.xy)   (FragCoord = builtin 11, vec4; Cast→U32 truncates the +0.5 pixel centre)
+#   W     = TexSize(scene_hdr).x  (self-contained — no rt_constants/header word; the fullscreen pass has ONE buffer slot,
+#           already taken by shadow_mask_buf, so W comes from the colour texture's own size query)
+#   mask  = intBitsToFloat(shadow_mask_buf[py*W+px])   (0 = SHADOWED, 1 = LIT)
+#   @output = scene_hdr * mask
 schema = 1
 
 [[entry]]
@@ -30,7 +40,7 @@ mesh_payload_in = false
 storage_read_only = false
 
 [[out]]
-node = "n3"
+node = "n19"
 location = 0
 interp = "Smooth"
 
@@ -66,3 +76,119 @@ tkind = "Vec"
 trows = 4
 shape = [1]
 in = ["n1", "n2", "n0"]
+
+[[node]]
+id = "n4"
+op = "Builtin"
+tkind = "Vec"
+trows = 4
+shape = [1]
+iidx = 11
+
+[[node]]
+id = "n5"
+op = "VecComp"
+shape = [1]
+in = ["n4"]
+iidx = 0
+
+[[node]]
+id = "n6"
+op = "VecComp"
+shape = [1]
+in = ["n4"]
+iidx = 1
+
+[[node]]
+id = "n7"
+op = "Cast"
+dtype = "U32"
+shape = [1]
+in = ["n5"]
+
+[[node]]
+id = "n8"
+op = "Cast"
+dtype = "U32"
+shape = [1]
+in = ["n6"]
+
+[[node]]
+id = "n9"
+op = "Const"
+dtype = "I32"
+shape = [1]
+
+[[node]]
+id = "n10"
+op = "TexSize"
+tkind = "Vec"
+trows = 2
+dtype = "I32"
+shape = [1]
+in = ["n1", "n2", "", "n9"]
+
+[[node]]
+id = "n11"
+op = "VecComp"
+dtype = "I32"
+shape = [1]
+in = ["n10"]
+iidx = 0
+
+[[node]]
+id = "n12"
+op = "Cast"
+dtype = "U32"
+shape = [1]
+in = ["n11"]
+
+[[node]]
+id = "n13"
+op = "Mul"
+dtype = "U32"
+shape = [1]
+in = ["n8", "n12"]
+
+[[node]]
+id = "n14"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n13", "n7"]
+
+[[node]]
+id = "n15"
+op = "StorageLoad"
+dtype = "U32"
+shape = [1]
+in = ["n14"]
+
+[[node]]
+id = "n16"
+op = "Cast"
+dtype = "I32"
+shape = [1]
+in = ["n15"]
+
+[[node]]
+id = "n17"
+op = "IntBitsToFloat"
+shape = [1]
+in = ["n16"]
+
+[[node]]
+id = "n18"
+op = "Splat"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n17"]
+
+[[node]]
+id = "n19"
+op = "Mul"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n3", "n18"]

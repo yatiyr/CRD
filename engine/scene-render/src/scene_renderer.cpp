@@ -906,10 +906,13 @@ struct SceneRenderer::Impl
     // group index i once an empty group is skipped.
     crd::containers::Array<crd::containers::Array<crd::scene::EntityId>> groups_view;
 
-    // ── REN-37.2: the TECHNIQUE library + which techniques this renderer shades with. ──
-    // Both are NAMES, not code paths. Point them at a different `.crdt` and the whole scene re-shades; that is
-    // the top rule reaching the fragment shader, and it is why `set_forward_technique` is a one-line setter
-    // rather than a new renderer.
+    // ── REN-37.2 / CEIR-18a-3: the TECHNIQUE library + the FALLBACK technique names this renderer shades with. ──
+    // Both are NAMES, not code paths. ⭐⭐ CEIR-18a-3: the forward technique is now PRIMARILY named on the installed
+    // frame graph's forward pass (`technique`) — `init_programs` cooks the FS from THAT (two-tier: shadowed from the
+    // shadows-ON frame, flat from the shadows-OFF fallback). ~~`set_forward_technique` is how you pick the technique~~
+    // — these members are the FALLBACK, used only when the installed forward pass names NO technique (a field-less
+    // graph). Point the graph's `technique` (or, field-less, these) at a different `.crdt` and the whole scene
+    // re-shades; that is the top rule reaching the fragment shader.
     // ⭐ REN-37.7 IN THE RENDERER: the fragment-program cache, keyed by the CONTENT HASH of the LOWERED graph.
     // Every FS this renderer needs goes through `cook_fs`, so two variants that lower to the same IR share ONE
     // device program. That is where the free collapse becomes real work saved rather than a claim: the Shadow
@@ -1103,12 +1106,28 @@ struct SceneRenderer::Impl
     {
         auto* self = static_cast<Impl*>(user);
         // Install at the frame boundary: the render loop reads `frame` next `render`, so this IS the atomic swap.
+        // ⛔ Stash the previous frame for rollback (the FS re-cook below can fail — see CEIR-18a-3).
+        crd::framecook::FrameGraphDesc prev_frame(self->alloc);
+        prev_frame                = static_cast<crd::framecook::FrameGraphDesc&&>(self->frame);
         self->frame               = static_cast<crd::framecook::FrameGraphDesc&&>(*self->reload_frame_staged);
         crd::memory::destroy(*self->alloc, self->reload_frame_staged);
         self->reload_frame_staged = nullptr;
         self->frame_ok            = true;
         self->rebuild_frame_plans(); // ⛔ CEIR-16-3d-3: a reloaded frame needs its fullscreen replay plans rebuilt —
                                      // the stale table (built for the PREVIOUS frame) would replay the wrong shape.
+        // ⭐⭐ CEIR-18a-3: a hot-reloaded frame can name a DIFFERENT forward-pass `technique` — re-cook the FS so the
+        // swapped technique re-shades (owner->init_programs, RAF-11 re-runnable; SYMMETRIC with set_frame_graph_toml).
+        // Without this, editing `technique` in a frame file and hot-reloading it would re-shade NOTHING — the exact F2
+        // lie 18a-3 kills, on the reload axis. On failure (e.g. the reloaded graph names an unresolvable technique) ROLL
+        // BACK to the previous frame and re-cook it — a failed reload keeps the working frame, never a half-installed one.
+        if (self->owner != nullptr && self->ctx != nullptr && !self->owner->init_programs(*self->ctx))
+        {
+            CRD_LOG_ERROR(g_log_scenerender, "frame reload: FS re-cook failed for the reloaded frame — rolled back to the previous frame");
+            self->frame = static_cast<crd::framecook::FrameGraphDesc&&>(prev_frame);
+            self->rebuild_frame_plans();
+            (void)self->owner->init_programs(*self->ctx); // restore the previous frame's live programs
+            return; // ⛔ a rolled-back reload did NOT take — do NOT advance the iface/generation to the staged (bad) frame
+        }
         self->reload_frame_iface  = self->reload_frame_staged_iface;
         self->reload_frame_gen.value += 1;
     }
@@ -2848,6 +2867,11 @@ void SceneRenderer::set_soft_shadows(SoftShadow mode, crd::u32 angle_x100) noexc
                 // tier), so its fullscreen replay plans must be rebuilt — the moment tier adds three fullscreen passes
                 // (convert/blur_x/blur_y) the previous frame's plan table has no entry for. Without this the moment
                 // passes record with a null plan (record_ceir_render → ctx.fail()) and every moment shadow is black.
+                // ⛔⛔ CEIR-18a-3: this graph swap is technique-NAME-invariant — forward_csm.frame.toml AND
+                // forward_csm_moment.frame.toml both name `technique = "forward_csm"` on the forward pass, so the FS
+                // technique does not change and NO re-cook is needed here (the PCF↔moment FS variant is selected by
+                // `soft_mode`, a separate REN-40-D axis). ⛔ If a moment tier ever names a DIFFERENT technique, route
+                // this swap through the FS re-cook + rollback path (see set_frame_graph_toml) or the swap silently lies.
                 m_impl->rebuild_frame_plans();
             }
         }
@@ -3117,6 +3141,13 @@ bool SceneRenderer::set_frame_graph_toml(const char* toml_text)
                       crd::framecook::frame_cook_error_text(err), where.c_str());
         return false; // ⛔ KEEP the previous graph — never a half-installed frame
     }
+    // ⛔ ATOMIC INSTALL (the 3118 "never a half-installed frame" contract must hold on the re-cook path too): stash the
+    // previous frame + override flag BEFORE the swap, so an FS re-cook failure below restores a WORKING renderer rather
+    // than leaving the bad graph installed with its programs retired. This is the atomic-rollback scar applied to the
+    // frame-install site (settle the identity, then attempt the risky step, then either keep or fully unwind).
+    crd::framecook::FrameGraphDesc prev_frame(impl.alloc);
+    prev_frame                 = static_cast<crd::framecook::FrameGraphDesc&&>(impl.frame);
+    const bool prev_overridden = impl.frame_overridden;
     impl.frame            = static_cast<crd::framecook::FrameGraphDesc&&>(d);
     impl.frame_ok         = true;
     impl.frame_overridden = true;
@@ -3124,10 +3155,15 @@ bool SceneRenderer::set_frame_graph_toml(const char* toml_text)
     // ⭐⭐ CEIR-18a-3: RE-COOK the forward FS from the NEW frame's forward-pass `technique` (init_programs reads impl.frame +
     // is RAF-11 re-runnable). Gates install the frame AFTER init_programs, so without this a swapped `technique` re-shades
     // NOTHING (the F2 mechanism). Only when programs were already cooked (impl.ctx set); the first install precedes
-    // init_programs, which then reads the installed frame. A re-cook failure (e.g. an unresolvable technique) fails the install.
+    // init_programs, which then reads the installed frame. A re-cook failure (e.g. an unresolvable technique) ROLLS BACK to
+    // the previous frame and re-cooks IT, then fails the install — the caller keeps the graph it was already rendering.
     if (impl.ctx != nullptr && !init_programs(*impl.ctx))
     {
-        CRD_LOG_ERROR(g_log_scenerender, "set_frame_graph_toml: re-cook (init_programs) failed for the installed frame");
+        CRD_LOG_ERROR(g_log_scenerender, "set_frame_graph_toml: re-cook (init_programs) failed for the installed frame — rolled back");
+        impl.frame            = static_cast<crd::framecook::FrameGraphDesc&&>(prev_frame);
+        impl.frame_overridden = prev_overridden;
+        impl.rebuild_frame_plans();
+        (void)init_programs(*impl.ctx); // restore the previous frame's live programs (it cooked before, so it cooks now)
         return false;
     }
     return true;
@@ -3441,39 +3477,74 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
         m_impl->techniques.define(m_impl->app_techniques[i]);
     }
     // ⭐⭐ CEIR-18a-3: THE FRAME-GRAPH'S FORWARD PASS `technique` DRIVES THE FS COOK — the mandate ("the technique lives in
-    // the graph", forward_csm.frame.toml:12; the F2 defect this closes). Resolve the technique NAME from the installed
-    // frame's FORWARD pass (material_pass="Forward" — NOT Shadow/GBuffer/impostor; NOT "first non-empty", which a future
-    // graph could hijack from a non-forward pass). When present it drives BOTH the flat AND the shadowed cook (⛔ NOT
-    // flat-on-setter = the F2 split re-manufactured on the shadows-off axis: forward_authored_clustered's point loop would
-    // vanish the instant shadows step down). ABSENT ⇒ the C++ setters (byte-identical, the no-regression path for a
-    // field-less graph). ⛔ set_frame_graph_toml re-runs init_programs (RAF-11) so a frame swap re-cooks the FS.
-    crd::containers::StringView graph_tech{};
-    for (const crd::framecook::FramePassDesc& gp : m_impl->frame.passes)
-    {
-        if (crd::framecook::pass_str(gp, crd::containers::StringView(crd::framecook::pp::kMaterialPass))
-            == crd::containers::StringView("Forward"))
+    // the graph", forward_csm.frame.toml:12; the F2 defect this closes). The renderer cooks TWO forward variants: `fwd`
+    // (flat / shadows-OFF) and `csm` (shadowed). These are the two CAPABILITY TIERS of the same renderer — the shadows-ON
+    // frame (`requires=["shadows"]`, forward_csm) names the SHADOWED technique on its forward pass, and its shadows-OFF
+    // step-down (the fallback, forward_basic) names the FLAT one — so each variant is resolved from the frame that OWNS it:
+    //   · the main frame requires shadows → csm ← main.forward.technique, fwd ← fallback.forward.technique (the step-down);
+    //   · the main frame is already flat  → fwd ← main.forward.technique (csm is cooked but never selected — set = fwd).
+    // ⛔ NOT `csm = fwd` unconditionally: the default renderer's FLAT variant would then cook `forward_csm`, which samples
+    // an UNBOUND shadow atlas with shadows off — black/inverted shading (the exact regression the module suite caught).
+    // A FIELD-LESS forward pass leaves the name empty ⇒ the C++ setter drives that variant (byte-identical, no-regression).
+    // ⛔ A technique the GRAPH explicitly named that does not resolve FAILS — never a silent fallback to a default, which
+    // would render a plausible frame for the WRONG technique (the lie 18a-3 kills). set_frame_graph_toml re-runs this.
+    const auto forward_tech = [](const crd::framecook::FrameGraphDesc& f) -> crd::containers::StringView {
+        for (const crd::framecook::FramePassDesc& gp : f.passes)
         {
-            graph_tech = crd::framecook::pass_str(gp, crd::containers::StringView(crd::framecook::pp::kTechnique));
-            break;
+            // ⛔ `material_pass` is an ENUM (set_pass_enum at cook) → read with pass_u32 vs FrameMaterialPass, NOT pass_str
+            // (which reads empty and silently drops every pass to the setter fallback — the bug the 18a-3 gate first caught).
+            if (crd::framecook::pass_u32(gp, crd::containers::StringView(crd::framecook::pp::kMaterialPass), 0U)
+                == static_cast<crd::u32>(crd::framecook::FrameMaterialPass::Forward))
+            {
+                return crd::framecook::pass_str(gp, crd::containers::StringView(crd::framecook::pp::kTechnique)); // string
+            }
         }
+        return crd::containers::StringView{};
+    };
+    bool main_shadowed = false;
+    for (crd::usize i = 0; i < m_impl->frame.requires_caps.size(); ++i)
+    {
+        if (crd::containers::StringView(m_impl->frame.requires_caps[i].c_str(), m_impl->frame.requires_caps[i].size())
+            == crd::containers::StringView("shadows")) { main_shadowed = true; break; }
+    }
+    crd::containers::StringView fwd_name{};
+    crd::containers::StringView csm_name{};
+    if (main_shadowed)
+    {
+        csm_name = forward_tech(m_impl->frame);    // the shadowed tier owns the shadowed technique
+        fwd_name = forward_tech(m_impl->fallback); // its shadows-OFF step-down owns the flat one
+    }
+    else
+    {
+        fwd_name = forward_tech(m_impl->frame);    // the main frame IS the flat tier
+        csm_name = fwd_name;                       // shadows off: the shadowed variant is cooked but never selected
     }
     const crd::kir::technique::Technique* fwd = nullptr;
     const crd::kir::technique::Technique* csm = nullptr;
-    // ⛔ A named technique that does not resolve FAILS — never a silent fallback to a default/the setter, which would render
-    // a plausible frame for the WRONG technique (the graph-ignored lie 18a-3 exists to kill).
-    if (graph_tech.size() > 0U)
+    // fwd: a graph-named technique if the forward pass named one (a bad name is FATAL), else the C++ setter (field-less legacy).
+    if (fwd_name.size() > 0U)
     {
         crd::containers::String tn(m_impl->alloc);
-        tn.append(graph_tech);
+        tn.append(fwd_name);
         fwd = m_impl->techniques.find(tn.c_str());
-        csm = fwd; // ⭐ the graph named ONE technique → both the flat AND the shadowed variant cook it.
         if (fwd == nullptr) { CRD_LOG_ERROR(g_log_scenerender, "init_programs: forward-pass technique '{}' (from the installed frame graph) not found", tn.c_str()); return false; }
     }
     else
     {
         fwd = m_impl->techniques.find(m_impl->forward_technique);
-        csm = m_impl->techniques.find(m_impl->shadow_technique);
         if (fwd == nullptr) { CRD_LOG_ERROR(g_log_scenerender, "init_programs: forward technique '{}' not found", m_impl->forward_technique); return false; }
+    }
+    // csm: the shadowed variant — graph-named (a bad name is FATAL) or the C++ shadow setter for a field-less graph.
+    if (csm_name.size() > 0U)
+    {
+        crd::containers::String tn(m_impl->alloc);
+        tn.append(csm_name);
+        csm = m_impl->techniques.find(tn.c_str());
+        if (csm == nullptr) { CRD_LOG_ERROR(g_log_scenerender, "init_programs: shadowed forward-pass technique '{}' (from the installed frame graph) not found", tn.c_str()); return false; }
+    }
+    else
+    {
+        csm = m_impl->techniques.find(m_impl->shadow_technique);
     }
 
     // ONE vertex program feeds every fragment variant (normal@0 · tint@1 · worldpos+depth@2 · uv@3). Before

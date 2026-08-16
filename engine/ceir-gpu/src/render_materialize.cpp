@@ -854,6 +854,8 @@ ExecuteError execute_render_lowered(const Context& ctx, containers::ConstSpan<Lo
             break;
         case LoweredKind::Dispatch:
         case LoweredKind::Transfer:
+        case LoweredKind::RayQuery:   // CEIR-19c: ceir.rt kinds target execute_rt_lowered, not the raster surface
+        case LoweredKind::AccelBuild:
             return ExecuteError::UnsupportedCommand; // the render executor is render-only (a mixed program is CEIR-15/16)
         }
     }

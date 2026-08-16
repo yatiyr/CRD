@@ -1,0 +1,259 @@
+{
+  "schema_version": 1,
+  "dialect": "work",
+  "summary": "CEIR-20 sec-43 ceir.work: DYNAMIC / DEVICE-GENERATED WORK as authored CEIR. Represent semantic work generation independently of vendor APIs \u2014 the GPU produces/consumes work RECORDS into device-resident QUEUES whose dispatch counts are DEVICE-computed, so one authored algorithm chooses different target strategies (compute+indirect fallback FIRST, then D3D12 ExecuteIndirect / Work Graphs / VK device_generated_commands / VK_AMDX_shader_enqueue / CUDA device-graph). A FOUR-op vocabulary of NATIVE INTRINSICS (ADR-0110 [op.native] provider=host \u2014 the replaceable-capability tier: the sec-134 WAVEFRONT PATH TRACER's host while(count>0) loop becomes a CEIR PROGRAM built from these ops, retiring the C++ harness loop) that a LATER crd-ceir-gpu BRIDGE lowers onto the device at 20b/20c (crd-ceir core NEVER links gpu-context \u2014 I3/I4). This slice (20a) is DECLARE-only: types + ops + verifier + tests, ZERO renderer changes. \u26d4\u26d4 NOT ceir.async: `ceir.async` (sec-37, ADR-0109 HOST-ONLY) is host-side STRUCTURED CONCURRENCY (CPU task fork/join via crd-jobs, completion tokens, use-once) \u2014 a DIFFERENT TIER. `ceir.work` is DEVICE-side work GENERATION (records live in device memory; dispatch counts are device-written; lowered to indirect/DGC/Work-Graphs). A ceir.work program may run INSIDE an async region (host orchestration of device work), but the two NEVER share ops \u2014 no dual representation (the dialect-level drift class this note exists to prevent). \u26d4 CURRENCY RULE (the band spine, the 17a house pattern): the dialect declares the SEMANTIC work vocabulary (produce/consume/compact + queue/record TYPES \u2014 what future lowerings CITE), while sec-43 governs the concept set; each op's docs NAMES its lowering targets. \u26d4 2 Extern TYPE-CLASSES (8a; the ROLE rides the TYPE, so find_work_misuse verifies the CHAIN): work.queue (work_queue<T> \u2014 a device-resident record queue + its device count) / work.record (work_record<T> \u2014 the queue's element identity, the type-system companion; ops today operate at QUEUE granularity, a future produce_one/consume_one takes a %record). DISTINCT TypeIds (two zero-member Externs are DIFFERENT TypeIds \u2014 the ADR-0111 landmine; queue != record). \u26d4 NOT Pure: produce/consume/compact run USER SHADER KERNELS that do device-memory writes + device-computed dispatch counts (the compute.dispatch device-execute effect \u2014 GPUCommand + a conservative ambient MemoryReadWrite); queue_alloc provisions + zeroes a device queue. Determinism is ExternalNondeterminism (device dispatch counts + timings are externally nondeterministic, deterministic given host state that changes externally). Well-formedness rides the module-walk verifier Context::find_work_misuse (the find_dispatch_misuse / find_rt_misuse house pattern): each op's %queue operands are work.queue-typed, the launch grid Index-typed, the per-binding `access` tokens {r|w|rw} arity-matched, `kernel` a required SymbolRef, closed-vocab attrs. \u26d4 I6 \u2014 find_work_misuse switches on TypeId/traits, NEVER op.kind. \u26d4 NO-FOLLOW / DEFERRED (declared != implemented \u2014 DECLARED forward when a consumer needs them, the rt-at-6-ops discipline): persistent_worker / device_loop / bin / fanout / fanin / tail-launch / dispatch_graph regions + sec-44 device-side IF/SWITCH/WHILE = a LATER slice (20d) with a real consumer, never a silent subset. \u26d4 The ceir.work ORCHESTRATION program (20b) is an AUTHORED CEIR-IR artifact (the mandate-#1 line \u2014 .ckir/.crdv authored DIRECTLY), NEVER a C++ builder; the 19c test-harness C++ `while` loop is exactly what 20b retires.",
+  "ops": [
+    {
+      "name": "compact",
+      "qualified": "work.compact",
+      "version": 1,
+      "summary": "Stream-compaction: @kernel reads a %src queue + predicate and writes surviving records DENSELY into %dst (+ dst count); the wavefront hit-compaction.",
+      "docs": "work.compact(%src, %dst, %bindings...) {kernel=@k, access=\"...\", kernel_interface?}. Stream-compaction: @kernel scans %src's records and writes survivors DENSELY into %dst (+ dst count), RESULTLESS. Effects: GPUCommand + ambient MemoryReadWrite. CEIR-13c [op.kernel_ref] {kernel, kernel_interface}. LOWERING (20b+): the FALLBACK = a serial single-thread scan kernel (the sec-134 wavefront_compact.ckir); a device lowering (20c) = a parallel prefix-scan / a Work-Graph coalescing node. find_work_misuse (the find_dispatch_misuse mirror): operand(0) work.queue-typed AND operand(1) work.queue-typed (QueueTypeMismatch); each `access` token in {r,w,rw} (AccessTokenInvalid) with token-count == num bindings (== num_operands-2, AccessArityMismatch); each binding (operands 2..) resource-kinded (BindingNotResource). STRUCTURAL (>=2 operands, 0 results, `kernel` present+SymbolRef, `access` present+String): the generated verify_compact.",
+      "operands": [
+        {
+          "name": "src",
+          "doc": "the SOURCE work queue (a work.queue) whose records @kernel scans; read GPU-side (its device count bounds the scan)",
+          "variadic": false
+        },
+        {
+          "name": "dst",
+          "doc": "the DESTINATION work queue (a work.queue) the surviving records are written DENSELY into; its device count is set to the survivor total",
+          "variadic": false
+        },
+        {
+          "name": "bindings",
+          "doc": "the kernel's OTHER bound resources (the predicate/flag buffer, ...), in SLOT order; each binding's ACCESS is the matching `access` token",
+          "variadic": true
+        }
+      ],
+      "results": [],
+      "attributes": [
+        {
+          "name": "kernel",
+          "kind": "symbol",
+          "required": true,
+          "doc": "the compaction compute-kernel identity (@kernel; a CKIR scan kernel). CEIR-13c ckir_ref, resolved/pin-checked. \u26d4 absent/non-symbol rejected by verify_compact (required SymbolRef)."
+        },
+        {
+          "name": "access",
+          "kind": "string",
+          "required": true,
+          "doc": "per-binding access over the variadic bindings tail: comma-separated {r|w|rw}, one token per binding (empty = zero bindings)."
+        },
+        {
+          "name": "kernel_interface",
+          "kind": "int",
+          "required": false,
+          "doc": "CEIR-13c the EXPECTED sec-107 interface hash of @kernel (a PIN; absent = unpinned). Checked vs the resolved kernel at cook."
+        }
+      ],
+      "traits": [],
+      "regions": 0,
+      "effects": [
+        {
+          "family": "GPUCommand"
+        },
+        {
+          "family": "MemoryReadWrite"
+        }
+      ],
+      "determinism": "",
+      "domain": "",
+      "native": {
+        "provider": "host",
+        "determinism": "ExternalNondeterminism",
+        "thread_safe": null,
+        "hot_reload_safe": false,
+        "lifetime": "",
+        "cost": "",
+        "capabilities": []
+      }
+    },
+    {
+      "name": "consume",
+      "qualified": "work.consume",
+      "version": 1,
+      "summary": "An INDIRECT dispatch of @kernel over a %queue's records -- the grid is the queue's DEVICE count, not a host grid (the wavefront trace/shade halves).",
+      "docs": "work.consume(%queue, %bindings...) {kernel=@k, access=\"...\", kernel_interface?}. An INDIRECT dispatch of @kernel over %queue's records, RESULTLESS. \u26d4 the grid is the queue's DEVICE count (indirect) -- NO host grid operand; that device-computed launch is exactly what distinguishes ceir.work from compute.dispatch. Effects: GPUCommand + ambient MemoryReadWrite. CEIR-13c [op.kernel_ref] {kernel, kernel_interface}. LOWERING (20b+): the FALLBACK = an indirect compute dispatch whose {x,y,z} arg buffer is derived from the queue count (the RAF-8 args-slot indirect path); a device lowering (20c) = a DGC command stream / a Work-Graph node. find_work_misuse (the find_dispatch_misuse mirror): operand(0) work.queue-typed (QueueTypeMismatch); each `access` token in {r,w,rw} (AccessTokenInvalid) with token-count == num bindings (== num_operands-1, AccessArityMismatch); each binding (operands 1..) resource-kinded (BindingNotResource). NO DimNotIndex (no host grid). STRUCTURAL (>=1 operand, 0 results, `kernel` present+SymbolRef, `access` present+String): the generated verify_consume.",
+      "operands": [
+        {
+          "name": "queue",
+          "doc": "the work queue whose records @kernel consumes (a work.queue); its DEVICE count drives the indirect launch grid (one workgroup-set per record batch). \u26d4 NO host grid operand -- the count is device-read.",
+          "variadic": false
+        },
+        {
+          "name": "bindings",
+          "doc": "the kernel's bound resources (outputs, scene buffers, and typically a downstream produce/compact queue as a plain resource), in SLOT order; each binding's ACCESS is the matching `access` token",
+          "variadic": true
+        }
+      ],
+      "results": [],
+      "attributes": [
+        {
+          "name": "kernel",
+          "kind": "symbol",
+          "required": true,
+          "doc": "the consumer compute-kernel identity (@kernel; a CKIR kernel invoked once per queued record). CEIR-13c ckir_ref, resolved/pin-checked. \u26d4 absent/non-symbol rejected by verify_consume (required SymbolRef)."
+        },
+        {
+          "name": "access",
+          "kind": "string",
+          "required": true,
+          "doc": "per-binding access over the variadic bindings tail: comma-separated {r|w|rw}, one token per binding (empty = zero bindings)."
+        },
+        {
+          "name": "kernel_interface",
+          "kind": "int",
+          "required": false,
+          "doc": "CEIR-13c the EXPECTED sec-107 interface hash of @kernel (a PIN; absent = unpinned). Checked vs the resolved kernel at cook."
+        }
+      ],
+      "traits": [],
+      "regions": 0,
+      "effects": [
+        {
+          "family": "GPUCommand"
+        },
+        {
+          "family": "MemoryReadWrite"
+        }
+      ],
+      "determinism": "",
+      "domain": "",
+      "native": {
+        "provider": "host",
+        "determinism": "ExternalNondeterminism",
+        "thread_safe": null,
+        "hot_reload_safe": false,
+        "lifetime": "",
+        "cost": "",
+        "capabilities": []
+      }
+    },
+    {
+      "name": "produce",
+      "qualified": "work.produce",
+      "version": 1,
+      "summary": "A grid dispatch of @kernel that APPENDS records to a %queue (device-written count); the wavefront raygen half (~ compute.dispatch + a queue output).",
+      "docs": "work.produce(%gx, %gy, %gz, %queue, %bindings...) {kernel=@k, access=\"...\", kernel_interface?}. A grid dispatch of @kernel that appends records to %queue, RESULTLESS (compute.dispatch's sibling -- @kernel does device writes + atomic-appends). Effects: GPUCommand + ambient MemoryReadWrite. CEIR-13c [op.kernel_ref] {kernel, kernel_interface}. LOWERING (20b+): a plain compute.dispatch whose kernel atomic-appends into the queue's device buffer+count. find_work_misuse (the find_dispatch_misuse mirror, contractual order): operand(3) work.queue-typed (QueueTypeMismatch); grid (operands 0-2) Index-typed (DimNotIndex); each `access` token in {r,w,rw} (AccessTokenInvalid) with token-count == num bindings (== num_operands-4, AccessArityMismatch); each binding (operands 4..) resource-kinded (BindingNotResource). STRUCTURAL (>=4 operands, 0 results, `kernel` present+SymbolRef, `access` present+String): the generated verify_produce.",
+      "operands": [
+        {
+          "name": "grid_x",
+          "doc": "workgroup count in X (a runtime index -- the compute.dispatch grid shape; a compile-time size is an arith.const operand)",
+          "variadic": false
+        },
+        {
+          "name": "grid_y",
+          "doc": "workgroup count in Y",
+          "variadic": false
+        },
+        {
+          "name": "grid_z",
+          "doc": "workgroup count in Z",
+          "variadic": false
+        },
+        {
+          "name": "queue",
+          "doc": "the work queue @kernel APPENDS records into (a work.queue from work.queue_alloc); bound as the produce target, its device count grown atomically",
+          "variadic": false
+        },
+        {
+          "name": "bindings",
+          "doc": "the kernel's OTHER bound resources (input buffers/images), in SLOT order; each binding's ACCESS is the matching `access` token, KIND from its CEIR-3c type",
+          "variadic": true
+        }
+      ],
+      "results": [],
+      "attributes": [
+        {
+          "name": "kernel",
+          "kind": "symbol",
+          "required": true,
+          "doc": "the producer compute-kernel identity (@kernel; a CKIR kernel that atomic-appends into the queue). CEIR-13c: extracted as a ckir_ref + resolved/pin-checked. \u26d4 absent/non-symbol is rejected by the generated verify_produce (required SymbolRef)."
+        },
+        {
+          "name": "access",
+          "kind": "string",
+          "required": true,
+          "doc": "per-binding access over the variadic bindings tail: comma-separated {r|w|rw}, one token per binding (empty = zero bindings). find_work_misuse checks token-count == num bindings and each token in {r,w,rw}."
+        },
+        {
+          "name": "kernel_interface",
+          "kind": "int",
+          "required": false,
+          "doc": "CEIR-13c the EXPECTED sec-107 interface hash of @kernel (a PIN, the u64 as its i64 bit pattern; absent = unpinned). Checked vs the resolved kernel at cook."
+        }
+      ],
+      "traits": [],
+      "regions": 0,
+      "effects": [
+        {
+          "family": "GPUCommand"
+        },
+        {
+          "family": "MemoryReadWrite"
+        }
+      ],
+      "determinism": "",
+      "domain": "",
+      "native": {
+        "provider": "host",
+        "determinism": "ExternalNondeterminism",
+        "thread_safe": null,
+        "hot_reload_safe": false,
+        "lifetime": "",
+        "cost": "",
+        "capabilities": []
+      }
+    },
+    {
+      "name": "queue_alloc",
+      "qualified": "work.queue_alloc",
+      "version": 1,
+      "summary": "Allocate a device-resident work queue (capacity records x record_stride bytes + a zeroed device count); produces a work.queue handle.",
+      "docs": "work.queue_alloc() {capacity, record_stride} -> %queue. Allocate a device-resident work queue (a host-orchestrated device capability, ADR-0110 provider=host). Effects: GPUCommand + MemoryReadWrite (provisions the backing buffer, zeroes the device count). ExternalNondeterminism. LOWERING (20b+): the fallback provisions a device buffer + an atomic-counter (the wavefront queue provisioning); a device lowering (20c) maps it to the API's node/record storage. find_work_misuse: capacity >= 1 (CapacityInvalid), record_stride >= 1 (RecordStrideInvalid). STRUCTURAL (0 operands, 1 result, capacity+record_stride present+Int): the generated verify_queue_alloc.",
+      "operands": [],
+      "results": [
+        {
+          "name": "queue",
+          "doc": "the allocated device work queue (an 8a Extern of the work.queue class); flows into work.produce / work.consume / work.compact. Opaque -- the host lowering backs it with a device buffer + an atomic count (part of the provisioned wavefront queue set)."
+        }
+      ],
+      "attributes": [
+        {
+          "name": "capacity",
+          "kind": "int",
+          "required": true,
+          "doc": "the queue capacity in RECORDS (>=1). find_work_misuse: >=1 (CapacityInvalid). A compile-time bound (the backing buffer holds this many records; a wider produce truncates to it -- the bounded-queue contract)."
+        },
+        {
+          "name": "record_stride",
+          "kind": "int",
+          "required": true,
+          "doc": "the byte stride of one work RECORD (>=1). find_work_misuse: >=1 (RecordStrideInvalid). The device count multiplied by this is the byte extent a consume's indirect dispatch reads."
+        }
+      ],
+      "traits": [],
+      "regions": 0,
+      "effects": [
+        {
+          "family": "GPUCommand"
+        },
+        {
+          "family": "MemoryReadWrite"
+        }
+      ],
+      "determinism": "",
+      "domain": "",
+      "native": {
+        "provider": "host",
+        "determinism": "ExternalNondeterminism",
+        "thread_safe": null,
+        "hot_reload_safe": false,
+        "lifetime": "",
+        "cost": "",
+        "capabilities": []
+      }
+    }
+  ]
+}

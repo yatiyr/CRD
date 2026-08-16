@@ -402,18 +402,22 @@ struct Tok
         if (n.dset != 0U) { td::w_kv_u(s, "dset", n.dset); }
     }
 
-    // ── ext / struct-field / struct-begin pools (aggregate/variadic operand support). Rare; emit as raw arrays. ──
+    // ── ext / struct-field / struct-begin pools (aggregate/variadic operand support). ⛔ These are SECTIONS ([[ext]]/[[sbegin]]),
+    // NOT bare top-level `key = [...]` lines: a preceding [[node]]/[[stmt]]'s key-loop terminates only at a `[` (a section
+    // header), and `ext` is ALSO a node/stmt scalar key — so a bare `ext = [...]` here is greedily eaten as the LAST node's
+    // `ext` key ⇒ "expected integer" on the `[`. First surfaced by CEIR-19c's inline-ray-query kernel (the FIRST non-empty
+    // serial_ext pool authored through the text form — TraceRayHit's 9 global-ext operands). No committed asset had a pool. ──
     const auto& ext = g.serial_ext();
     if (ext.size() > 0)
     {
-        s.append("\next = [");
+        s.append("\n[[ext]]\nvalues = [");
         for (crd::usize i = 0; i < ext.size(); ++i) { if (i) { s.append(", "); } td::w_i64(s, ext[i]); }
         s.append("]\n");
     }
     const auto& sbegin = g.serial_sbegin();
     if (sbegin.size() > 0)
     {
-        s.append("sbegin = [");
+        s.append("\n[[sbegin]]\nvalues = [");
         for (crd::usize i = 0; i < sbegin.size(); ++i) { if (i) { s.append(", "); } td::w_u64(s, sbegin[i]); }
         s.append("]\n");
     }
@@ -636,17 +640,37 @@ struct CkirReadResult
                 }
                 if (t.ok && n_out_seen < kMaxStageOutputs) { en.out[n_out_seen++] = o; }
             }
+            else if (t.word_is(hb, he, "ext")) // CEIR-19c: the global ext-operand pool (a SECTION, not a bare key — see the writer note)
+            {
+                while (t.ok && !t.eof() && !t.at('['))
+                {
+                    crd::usize b = 0; crd::usize en2 = 0;
+                    if (!t.word(b, en2)) { break; }
+                    t.lit('=');
+                    if (t.word_is(b, en2, "values")) { read_int_array([&](crd::i64 v) { ext.push_back(static_cast<crd::i32>(v)); }); }
+                    else { t.pos = b; t.fail("unknown ext key"); }
+                }
+            }
+            else if (t.word_is(hb, he, "sbegin")) // CEIR-19c: the struct-begin pool (a SECTION, same collision fix as [[ext]])
+            {
+                while (t.ok && !t.eof() && !t.at('['))
+                {
+                    crd::usize b = 0; crd::usize en2 = 0;
+                    if (!t.word(b, en2)) { break; }
+                    t.lit('=');
+                    if (t.word_is(b, en2, "values")) { read_int_array([&](crd::i64 v) { sbegin.push_back(static_cast<crd::u32>(v)); }); }
+                    else { t.pos = b; t.fail("unknown sbegin key"); }
+                }
+            }
             else { t.fail("unknown [[section]]"); }
         }
         else
         {
-            // a top-level `key = value` (ext / sbegin arrays).
+            // a top-level `key = value` (only `schema` today — ext/sbegin are now [[ext]]/[[sbegin]] SECTIONS, see the writer note).
             crd::usize b = 0; crd::usize en2 = 0;
             if (!t.word(b, en2)) { break; }
             t.lit('=');
-            if (t.word_is(b, en2, "ext")) { read_int_array([&](crd::i64 v) { ext.push_back(static_cast<crd::i32>(v)); }); }
-            else if (t.word_is(b, en2, "sbegin")) { read_int_array([&](crd::i64 v) { sbegin.push_back(static_cast<crd::u32>(v)); }); }
-            else if (t.word_is(b, en2, "schema")) { (void)t.int_val(); }
+            if (t.word_is(b, en2, "schema")) { (void)t.int_val(); }
             else { t.pos = b; t.fail("unknown top-level key"); }
         }
     }

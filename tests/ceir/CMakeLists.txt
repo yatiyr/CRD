@@ -64,6 +64,7 @@ add_executable(crd-ceir-tests
     test_plugin.cpp      # CEIR-9h: U8 MANDATORY external-plugin PROOF - a full plugin dialect (type+attr+location+interface+ops+verifier+rewrite+lowering+provider) via public APIs only, ZERO central-enum edits (grep-gated), agent-discoverable
     test_reload_migration.cpp # CEIR-10a: the hot-reload state-migration core - collect_state_schema + contract_hash (the Reject/Migrate decision-table split) + Interpreter snapshot/restore-by-8d-stable-id (the cell value move)
     test_rt.cpp       # CEIR-19a: the ceir.rt dialect (sec 49) - the six RT orchestration ops (blas_build/instance_populate/tlas_build/sbt_build/trace/ray_query) over 8a blas/tlas/sbt Extern type-classes + find_rt_misuse (operand type-chain incl. ray_query-rejects-SBT, geometry_kind closed vocab, instance_count/max_recursion range); host-intrinsic reflection (ADR-0110 provider=host)
+    test_work.cpp     # CEIR-20a: the ceir.work dialect (sec 43) - the four device-work-generation ops (queue_alloc/produce/consume/compact) over 8a queue/record Extern type-classes + find_work_misuse (QueueTypeMismatch over produce op(3)/consume op(0)/compact op(0)+op(1), capacity/record_stride range, the dispatch-shape mirror: produce dims Index [consume/compact indirect], access tokens {r|w|rw} + arity, bindings resource-kinded); host-intrinsic reflection; NOT ceir.async
     ${CEIR_GENERATED_TESTS} # CEIR-2d: generated per-dialect smoke tests (auto-grow as dialects/ops are added)
 )
 

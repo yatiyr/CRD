@@ -44,6 +44,10 @@ enum class ExecuteError : crd::u8
     // CEIR-17b (scene resolve chain) — append at end.
     SceneChainMisuse,      // a scene.resolve_* chain failed find_scene_misuse (the verifier-first contract — refuse, never a garbage handle)
     UnresolvedSceneHandle, // a scene resolve callback is null (an unwired seam) or returned 0 (an unresolvable handle)
+    // CEIR-19c (ceir.rt execution — the execute_rt_lowered surface) — append at end.
+    AccelBuildFailed,    // a BuildSceneFn hook returned 0 (the acceleration-structure build failed)
+    UnresolvedTlas,      // a ray_query's %tlas operand maps to no earlier AccelBuild %result (an unbuilt / misordered scene)
+    TraceDispatchFailed, // a TraceDispatchFn hook returned false (the inline-rayQuery dispatch failed on the device)
 };
 [[nodiscard]] containers::StringView execute_error_name(ExecuteError e) noexcept;
 
@@ -63,4 +67,72 @@ enum class ExecuteError : crd::u8
 [[nodiscard]] ExecuteError execute_lowered(const Context& ctx, containers::ConstSpan<LoweredCommand> commands,
                                            crd::gpu::ComputeRecorder& rec, KernelResolveFn resolver, void* user,
                                            containers::ConstSpan<ResolvedBinding> bindings);
+
+// ── CEIR-19c: the ceir.rt EXECUTION seam (§134) ──────────────────────────────────────────────────────────────────────
+// A SECOND executor beside execute_lowered, consuming the SAME 13d-lowered list (the render_materialize precedent: ONE
+// lowering, surface-specific consumers). The RT surface is the STANDALONE vulkan/dx12 RayTracingContext (its own AS builds +
+// an inline-rayQuery trace_dispatch), which the ADR-0100 IComputeContext CANNOT bind (no TLAS descriptor). ⛔ ceir-gpu links
+// NO backend, so — exactly like KernelResolveFn — this executor takes CALLER HOOKS: the test/renderer supplies per-backend
+// lambdas over VulkanRayTracingContext / Dx12RayTracingContext. ⭐ Barriers are INERT here (each trace_dispatch is
+// submit+wait, so no cross-dispatch GPU hazard survives to replay). A portable IRayTracingContext unification (so the
+// executor could name one interface instead of hooks) is a FILED follow-up — not this slice.
+
+// An opaque, caller-owned acceleration-structure handle. ceir-gpu NEVER dereferences it — it only threads the handle a
+// BuildSceneFn returns (keyed by the AccelBuild op's %result) to the RayQuery that reads that %tlas. 0 ⇒ build failed.
+using RtSceneHandle = crd::u64;
+
+// One resolved ray_query SSBO binding: the operand's (resource_root-normalized) Value* → a HOST span (upload/readback) — the
+// trace_dispatch host-array model (ReSTIR's same-array in-out precedent, correct for the host-driven wavefront loop, §134
+// determinism). The executor orders these by the ray_query's binding-operand order and assigns SSBO slots 1,2,… (the TLAS is
+// implicit at descriptor 0, REN-38-A9's one-convention rule — the same kernel runs on the rig, the frame graph, and here).
+struct RtHostBinding
+{
+    const Value* resource = nullptr;
+    const void*  upload   = nullptr;
+    void*        readback = nullptr;
+    crd::u64     bytes    = 0;
+};
+
+// Build (a stage of) the acceleration structure named by `accel_op` (rt.blas_build / instance_populate / tlas_build). The
+// hook reads the op's geometry/instances operands (+ host buffers via `user`) and returns an opaque handle; the TERMINAL
+// tlas handle is what a ray_query binds. A FUSED build_scene backend returns a passthrough handle for blas/instance and the
+// real scene at tlas_build. 0 ⇒ AccelBuildFailed.
+using BuildSceneFn = RtSceneHandle (*)(const Operation* accel_op, void* user);
+
+// Resolve a ray_query's kernel_ref (its `kernel` symbol) to the COMPILED inline-rayQuery shader BLOB (SPIR-V on Vulkan, DXIL
+// on DX12) — NOT a ComputePipeline (the RT surface takes blobs; the trace_dispatch shaderc/dxc precedent). Empty ⇒
+// UnresolvedKernel. The pure validator may return a SENTINEL non-empty span (never dereferenced without a device).
+using KernelBytesFn = containers::ConstSpan<crd::u8> (*)(const Operation* ray_query, void* user);
+
+// Dispatch the inline-ray-query kernel `kernel_bytes` against `tlas` (bound implicitly at descriptor 0), binding each entry
+// of `binds` as an SSBO at slot 1+its-index (binding-operand order), `gx*gy*gz` workgroups. Returns false on failure. This
+// IS the `dispatch_inline_ray_query` action the 19a dialect doc names as ray_query's lowering target.
+using TraceDispatchFn = bool (*)(RtSceneHandle tlas, containers::ConstSpan<crd::u8> kernel_bytes,
+                                 containers::ConstSpan<RtHostBinding> binds, crd::u32 gx, crd::u32 gy, crd::u32 gz,
+                                 void* user);
+
+// The caller hooks bundled (the per-backend RT surface). ⛔ ceir-gpu names no backend — the caller wires these over its
+// VulkanRayTracingContext / Dx12RayTracingContext (the gate supplies per-backend lambdas, the KernelResolveFn precedent).
+struct RtHooks
+{
+    BuildSceneFn    build_scene    = nullptr;
+    KernelBytesFn   kernel_bytes   = nullptr;
+    TraceDispatchFn trace_dispatch = nullptr;
+    void*           user           = nullptr;
+};
+
+// PURE structural validation of the ceir.rt command list (the always-runs half, guarding the all-skip false-green — the
+// validate_lowered mirror). For each RayQuery: grid non-zero (ZeroDispatch), a dynamic grid is named-forward
+// (UnsupportedCommand — a const-grid witness at stage 1; host-readback drives groups later), kernel_bytes non-empty
+// (UnresolvedKernel), the %tlas operand resolves to an earlier AccelBuild %result (UnresolvedTlas). A compute/raster/transfer
+// kind here ⇒ UnsupportedCommand. Device-free (the hooks may return sentinels). Returns the FIRST non-None error (or None).
+[[nodiscard]] ExecuteError validate_rt_lowered(const Context& ctx, containers::ConstSpan<LoweredCommand> commands,
+                                               const RtHooks& hooks, containers::ConstSpan<RtHostBinding> bindings);
+
+// Validate, then EXECUTE each RT command via the hooks: AccelBuild → build_scene (the returned handle keyed by the op's
+// %result); RayQuery → dispatch_inline_ray_query (kernel_bytes + the %tlas handle + the ordered host SSBO bindings + the
+// resolved grid). A Barrier is INERT (submit+wait per trace_dispatch). ⛔ device-driving (THROUGH the caller hooks — ceir-gpu
+// itself never touches a queue). Returns the first ExecuteError (or None on success).
+[[nodiscard]] ExecuteError execute_rt_lowered(const Context& ctx, containers::ConstSpan<LoweredCommand> commands,
+                                              const RtHooks& hooks, containers::ConstSpan<RtHostBinding> bindings);
 } // namespace crd::ceir::gpu

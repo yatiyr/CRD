@@ -72,11 +72,10 @@ depth_bias_slope = 1.5
 # ⭐⭐ CEIR-18a: `technique = "forward_authored"` — the CEIR/cook_lighting forward FS. Same DECLARED contract as
 # `forward_csm` (same bindings, same ABI order; scene_renderer.cpp scene_authored_technique), so the resolver feeds
 # it identically — it just ALSO loops over the scene's point-light records. THIS is the swap the header describes.
-# ⛔⛔ ASPIRATIONAL TODAY (CEIR-18a-3, D-007): the renderer does NOT yet read this per-pass `technique` field — the
-# forward FS is cooked from `set_forward_technique`/`set_shadow_technique` (scene_renderer.cpp:3101/3460, a per-draw
-# fs_flat/fs_shadowed split), so a consumer of this graph MUST call `set_shadow_technique("forward_authored")`
-# (+ set_forward_technique) to actually get the point-lit FS. This field is the DECLARATION OF INTENT and becomes
-# load-bearing when the "frame-graph technique field drives the FS cook" slice lands. Until then it does nothing.
+# ⭐⭐ CEIR-18a-3 (LANDED): the renderer READS this per-pass `technique` and cooks the shadowed forward FS from it
+# (init_programs). ~~ASPIRATIONAL: the renderer does NOT read this field; a consumer MUST call
+# set_shadow_technique("forward_authored")~~ — struck: the field is LOAD-BEARING now, editing it re-shades, and NO
+# setter is required. (The flat / shadows-off variant is named by the fallback tier: forward_basic → standard_forward.)
 [[pass]]
 name          = "forward"
 kind          = "raster.geometry"

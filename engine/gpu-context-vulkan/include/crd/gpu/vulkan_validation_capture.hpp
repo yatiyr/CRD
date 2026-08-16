@@ -82,4 +82,10 @@ private:
     std::unique_ptr<Impl> m_impl;
 };
 
+// The loaded VK_LAYER_KHRONOS_validation's spec version (VK_MAKE_API_VERSION-packed), or 0 if the layer is ABSENT.
+// A gate that asserts error_count()==0 should REQUIRE this non-zero: with no validation layer present the capture
+// callback never fires and the count is trivially — falsely — zero (the "registered-default-empty reads as
+// provably-none" scar). It also lets a gate version-scope a known upstream-fixed benign VUID via whitelist().
+[[nodiscard]] crd::u32 validation_layer_spec_version() noexcept;
+
 } // namespace crd::gpu

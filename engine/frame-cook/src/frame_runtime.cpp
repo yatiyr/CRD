@@ -62,8 +62,9 @@ struct PassRec
     bool                 sampled_is_depth = false; // of sampled[0] — the shadow-lookup case
     bool                 sampled_is_array = false; // of sampled[0] — the ATLAS case (REN-40-D: depth OR moments)
     // ⭐⭐ REN-41 (TAA): a fullscreen pass's per-frame CONSTANTS buffer (the reproject matrix). A fullscreen pass
-    // that declares a buffer read which is NOT the indirect-args buffer captures it here; the executor binds it
-    // at set 0/binding 0 via draw_bindless_storage. Invalid for every pass that declares no such read.
+    // that declares a buffer read which is NOT the indirect-args buffer captures it here; the executor binds it at
+    // set 0/binding 0 via draw_bindless_storage (the multi-read TAA shape) or, since CEIR-19b-F2, draw_textured_storage
+    // (the single-texture RT-shadow COMPOSITE shape). Invalid for every pass that declares no such read.
     g::FgBuffer          fs_constants{};
     g::FgBuffer          storage{};
     g::IRasterProgram*   program = nullptr;
@@ -1075,14 +1076,18 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             if (w_buffer) { continue; }
             if (!resolve_image(d.writes[w].name, h, dummy_depth)) { return fail(FrameExecError::UnresolvedResource, &d.writes[w].name); }
             pb.writes(h);
-            // ── ⭐⭐ REN-41: a DEPTH-format write on an MRT pass is the DEPTH ATTACHMENT, not an extra colour RTV. ──
-            // The velocity prepass writes `["velocity", "scene_depth"]`: velocity is the one colour target and
-            // scene_depth is the depth it PRODUCES. It stays a graph WRITE (`pb.writes` above — so hzb_build and
-            // the forward pass, which read scene_depth, order after this prepass exactly as they did when the
-            // depth-only prepass wrote it) but routes to `rec.depth_target` so `image_with_depth` binds it as
-            // depth. ⛔ Gated to RasterMrt: a `raster.depth_only` pass's SOLE depth write is its PRIMARY target
-            // (rec.target) and `t = image(target)` must keep that shape — re-routing it would leave it targetless.
-            if (dummy_depth && pass_flag(d, SV(pp::kMrt)))
+            // ── ⭐⭐ REN-41 / CEIR-19b: a SECONDARY DEPTH-format write is the DEPTH ATTACHMENT, not an extra colour RTV. ──
+            // The velocity MRT prepass writes `["velocity", "scene_depth"]` and the hybrid forward pass writes
+            // `["scene_hdr", "scene_depth"]` (CEIR-19b): the colour is the primary target and scene_depth is the depth it
+            // PRODUCES (so a later pass — hzb_build, the forward pass, or the CEIR-19b compute worldpos prepass — that READS
+            // scene_depth orders after it). It stays a graph WRITE (`pb.writes` above) but routes to `rec.depth_target` so
+            // `image_with_depth` binds it as depth. ⛔⛔ CEIR-19b: gate on `!first_write`, NOT `pass_flag(kMrt)` — a plain
+            // `raster.geometry` forward pass that DECLARES a depth transient (for a compute pass to sample) is not MRT, and
+            // the old MRT gate silently DROPPED its scene_depth write, leaving the forward on a companion depth and the
+            // compute sampling a cleared (0) transient. `!first_write` keeps a `raster.depth_only` pass's SOLE (first) depth
+            // write as its PRIMARY target (rec.target) — re-routing that would leave it targetless — while routing a depth
+            // write that FOLLOWS a colour primary to the depth attachment.
+            if (dummy_depth && !first_write)
             {
                 rec.depth_target = h;
                 continue;

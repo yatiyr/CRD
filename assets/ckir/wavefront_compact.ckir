@@ -1,0 +1,391 @@
+# wavefront_compact.ckir - CEIR-19c STAGE 2 (the WAVEFRONT): the SERIAL stream-compaction kernel. Scans N=8 hit-flags and
+# writes the DENSE list of hit indices (compacted) + the hit count. AUTHORED (mandate #1: NO C++ builder; the .ckir is the
+# SOLE source, edited DIRECTLY). BRANCHLESS: unconditional store compacted[cursor]=i, then cursor += flag[i] (0/1) — a miss's
+# tentative write is overwritten by the next hit or sits harmlessly beyond count (no inner If => no if-block-shared-temp scar).
+# local_size=1 (ONE thread => serial deterministic, no race, no tid guard; the fixed queue order the §134 GPU==oracle
+# bit-exactness rests on). BINDING CONTRACT: TLAS@0 (DEAD — the bridge's rt.ray_query needs a %tlas operand at descriptor 0 +
+# the AccelStructDecl forces #version 460; the compact NEVER traces), hit_flags@1 (read, N u32), compacted@2 (write, N u32),
+# count@3 (write, 1 u32). The 18a per-workgroup prefix-sum is a PERF follow-up. The [[ext]] pool sections round-trip (19c fix).
+schema = 1
+
+[[entry]]
+stage = "Compute"
+inputs = 0
+position = -1
+frag_depth = -1
+discard_cond = -1
+early_fragment_tests = false
+depth_mode = "Any"
+shading_rate = -1
+storage_write_index = -1
+storage_write_value = -1
+interlock = false
+n_out = 0
+local_size = [1, 1, 1]
+kernel_body_begin = 0
+kernel_body_count = 18
+mesh_vertices = 0
+mesh_primitives = 0
+mesh_prim = -1
+task_emit = -1
+task_payload = [-1, -1, -1, -1]
+n_task_payload = 0
+tess_patch_size = 0
+tess_inner = -1
+tess_outer = -1
+mesh_payload_in = false
+storage_read_only = false
+
+[[node]]
+id = "n0"
+op = "AccelStructDecl"
+dtype = "U32"
+shape = [1]
+
+[[node]]
+id = "n1"
+op = "BufferDecl"
+dtype = "U32"
+shape = [1]
+iidx = 1
+
+[[node]]
+id = "n2"
+op = "BufferDecl"
+dtype = "U32"
+shape = [1]
+iidx = 2
+axes = 1
+
+[[node]]
+id = "n3"
+op = "BufferDecl"
+dtype = "U32"
+shape = [1]
+iidx = 3
+axes = 1
+
+[[node]]
+id = "n4"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+[[node]]
+id = "n5"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+[[node]]
+id = "n6"
+op = "BufferLoad"
+dtype = "U32"
+shape = [1]
+in = ["n1", "n5"]
+
+[[node]]
+id = "n7"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+[[node]]
+id = "n8"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n4", "n6"]
+
+[[node]]
+id = "n9"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n10"
+op = "BufferLoad"
+dtype = "U32"
+shape = [1]
+in = ["n1", "n9"]
+
+[[node]]
+id = "n11"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n12"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n8", "n10"]
+
+[[node]]
+id = "n13"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4000000000000000"
+
+[[node]]
+id = "n14"
+op = "BufferLoad"
+dtype = "U32"
+shape = [1]
+in = ["n1", "n13"]
+
+[[node]]
+id = "n15"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4000000000000000"
+
+[[node]]
+id = "n16"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n12", "n14"]
+
+[[node]]
+id = "n17"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4008000000000000"
+
+[[node]]
+id = "n18"
+op = "BufferLoad"
+dtype = "U32"
+shape = [1]
+in = ["n1", "n17"]
+
+[[node]]
+id = "n19"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4008000000000000"
+
+[[node]]
+id = "n20"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n16", "n18"]
+
+[[node]]
+id = "n21"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4010000000000000"
+
+[[node]]
+id = "n22"
+op = "BufferLoad"
+dtype = "U32"
+shape = [1]
+in = ["n1", "n21"]
+
+[[node]]
+id = "n23"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4010000000000000"
+
+[[node]]
+id = "n24"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n20", "n22"]
+
+[[node]]
+id = "n25"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4014000000000000"
+
+[[node]]
+id = "n26"
+op = "BufferLoad"
+dtype = "U32"
+shape = [1]
+in = ["n1", "n25"]
+
+[[node]]
+id = "n27"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4014000000000000"
+
+[[node]]
+id = "n28"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n24", "n26"]
+
+[[node]]
+id = "n29"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4018000000000000"
+
+[[node]]
+id = "n30"
+op = "BufferLoad"
+dtype = "U32"
+shape = [1]
+in = ["n1", "n29"]
+
+[[node]]
+id = "n31"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4018000000000000"
+
+[[node]]
+id = "n32"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n28", "n30"]
+
+[[node]]
+id = "n33"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x401c000000000000"
+
+[[node]]
+id = "n34"
+op = "BufferLoad"
+dtype = "U32"
+shape = [1]
+in = ["n1", "n33"]
+
+[[node]]
+id = "n35"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x401c000000000000"
+
+[[node]]
+id = "n36"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n32", "n34"]
+
+[[node]]
+id = "n37"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+[[stmt]]
+kind = "Materialize"
+value = "n4"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n2"
+index = "n4"
+value = "n7"
+
+[[stmt]]
+kind = "Materialize"
+value = "n8"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n2"
+index = "n8"
+value = "n11"
+
+[[stmt]]
+kind = "Materialize"
+value = "n12"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n2"
+index = "n12"
+value = "n15"
+
+[[stmt]]
+kind = "Materialize"
+value = "n16"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n2"
+index = "n16"
+value = "n19"
+
+[[stmt]]
+kind = "Materialize"
+value = "n20"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n2"
+index = "n20"
+value = "n23"
+
+[[stmt]]
+kind = "Materialize"
+value = "n24"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n2"
+index = "n24"
+value = "n27"
+
+[[stmt]]
+kind = "Materialize"
+value = "n28"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n2"
+index = "n28"
+value = "n31"
+
+[[stmt]]
+kind = "Materialize"
+value = "n32"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n2"
+index = "n32"
+value = "n35"
+
+[[stmt]]
+kind = "Materialize"
+value = "n36"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n3"
+index = "n37"
+value = "n36"
+

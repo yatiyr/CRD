@@ -1,0 +1,279 @@
+# rt_witness.ckir - CEIR-19c STAGE-1 WITNESS: the trivial one-ray_query inline-rayQuery kernel proving the ceir.rt->gpu
+# execution bridge (execute_rt_lowered + dispatch_inline_ray_query) end-to-end on the device. AUTHORED (mandate #1: NO C++
+# builder; the .ckir is the SOLE source, authored/edited DIRECTLY). Per launch index i: read ray i (6 f32: origin.xyz +
+# dir.xyz) from the rays SSBO, inline-ray-query the TLAS, write the closest-hit distance t (F32) + the primitive index (U32).
+# BINDING CONTRACT (REN-38-A9, dispatch_inline_ray_query): TLAS implicit @ descriptor 0; SSBOs by binding-operand order:
+#   rays @ 1 (read, 6 f32/thread), hit_t @ 2 (write, F32), hit_prim @ 3 (write, U32). hit_prim is a U32 buffer, NEVER F32:
+#   the 0xFFFFFFFF miss sentinel is unrepresentable in F32 (rounds to 2^32) and would break the bit-exact prim-id compare.
+# GATE: the AS slot binds the real TLAS on the GPU and the triangle-soup oracle buffer (data[0]=ntri, then 9 f32/tri) for
+# eval_cpu_kernel's TraceRayHit; hit-miss + prim-id are BIT-EXACT GPU==oracle, t is tolerance-class (unrounded-f64 oracle).
+schema = 1
+
+[[entry]]
+stage = "Compute"
+inputs = 0
+position = -1
+frag_depth = -1
+discard_cond = -1
+early_fragment_tests = false
+depth_mode = "Any"
+shading_rate = -1
+storage_write_index = -1
+storage_write_value = -1
+interlock = false
+n_out = 0
+local_size = [64, 1, 1]
+kernel_body_begin = 0
+kernel_body_count = 3
+mesh_vertices = 0
+mesh_primitives = 0
+mesh_prim = -1
+task_emit = -1
+task_payload = [-1, -1, -1, -1]
+n_task_payload = 0
+tess_patch_size = 0
+tess_inner = -1
+tess_outer = -1
+mesh_payload_in = false
+storage_read_only = false
+
+[[node]]
+id = "n0"
+op = "AccelStructDecl"
+dtype = "U32"
+shape = [1]
+
+[[node]]
+id = "n1"
+op = "BufferDecl"
+shape = [1]
+iidx = 1
+
+[[node]]
+id = "n2"
+op = "BufferDecl"
+shape = [1]
+iidx = 2
+axes = 1
+
+[[node]]
+id = "n3"
+op = "BufferDecl"
+dtype = "U32"
+shape = [1]
+iidx = 3
+axes = 1
+
+[[node]]
+id = "n4"
+op = "Builtin"
+dtype = "U32"
+shape = [1]
+iidx = 4
+
+[[node]]
+id = "n5"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4050000000000000"
+
+[[node]]
+id = "n6"
+op = "Builtin"
+dtype = "U32"
+shape = [1]
+iidx = 33
+
+[[node]]
+id = "n7"
+op = "Mul"
+dtype = "U32"
+shape = [1]
+in = ["n6", "n5"]
+
+[[node]]
+id = "n8"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n7", "n4"]
+
+[[node]]
+id = "n9"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4018000000000000"
+
+[[node]]
+id = "n10"
+op = "Mul"
+dtype = "U32"
+shape = [1]
+in = ["n8", "n9"]
+
+[[node]]
+id = "n11"
+op = "Const"
+shape = [1]
+cval = "0x46293e5939a08cea"
+
+[[node]]
+id = "n12"
+op = "Const"
+shape = [1]
+cval = "0x3f50624dd2f1a9fc"
+
+[[node]]
+id = "n13"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4014000000000000"
+
+[[node]]
+id = "n14"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n10", "n13"]
+
+[[node]]
+id = "n15"
+op = "BufferLoad"
+shape = [1]
+in = ["n1", "n14"]
+
+[[node]]
+id = "n16"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4010000000000000"
+
+[[node]]
+id = "n17"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n10", "n16"]
+
+[[node]]
+id = "n18"
+op = "BufferLoad"
+shape = [1]
+in = ["n1", "n17"]
+
+[[node]]
+id = "n19"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4008000000000000"
+
+[[node]]
+id = "n20"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n10", "n19"]
+
+[[node]]
+id = "n21"
+op = "BufferLoad"
+shape = [1]
+in = ["n1", "n20"]
+
+[[node]]
+id = "n22"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4000000000000000"
+
+[[node]]
+id = "n23"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n10", "n22"]
+
+[[node]]
+id = "n24"
+op = "BufferLoad"
+shape = [1]
+in = ["n1", "n23"]
+
+[[node]]
+id = "n25"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n26"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n10", "n25"]
+
+[[node]]
+id = "n27"
+op = "BufferLoad"
+shape = [1]
+in = ["n1", "n26"]
+
+[[node]]
+id = "n28"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+[[node]]
+id = "n29"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n10", "n28"]
+
+[[node]]
+id = "n30"
+op = "BufferLoad"
+shape = [1]
+in = ["n1", "n29"]
+
+[[node]]
+id = "n31"
+op = "RayHitResult"
+shape = [1]
+
+[[node]]
+id = "n32"
+op = "RayHitResult"
+dtype = "U32"
+shape = [1]
+
+[[ext]]
+values = [30, 27, 24, 21, 18, 15, 12, 11, 32]
+
+[[stmt]]
+kind = "TraceRayHit"
+target = "n0"
+result = "n31"
+ext = 0
+n_ext = 9
+
+[[stmt]]
+kind = "BufferStore"
+target = "n2"
+index = "n8"
+value = "n31"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n3"
+index = "n8"
+value = "n32"
+

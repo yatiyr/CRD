@@ -1220,21 +1220,29 @@ depth       = "GreaterEqual"
     REQUIRE(desc.passes[1].reads.size() == 1U);
 }
 
-// ── REN-37.2/37.4 GATE: THE TECHNIQUE IS A NAME, AND SWAPPING IT RE-SHADES THE SCENE. ───────────────────────
+// ── REN-37.2/37.4 + CEIR-18a-3 GATE: THE TECHNIQUE IS A NAME IN THE FRAME GRAPH, AND SWAPPING IT RE-SHADES. ──
 // ⛔⛔ This is the close test for the whole slice, and it is the shader-half of the top rule. Before REN-37 the
 // lighting was a fixed function nobody could name, swap or verify — which is exactly why cascaded shadow mapping
 // ended up as ~120 lines of hand-written C++ in `scene_renderer.cpp`.
 //
-// The claim, proven on a real device with one scene and one camera:
-//   (a) `standard_forward` shades with the Cook-Torrance BRDF -> a lit, non-uniform image;
-//   (b) `unlit` emits the surface with NO lighting -> the SAME geometry, DIFFERENT pixels;
-//   (c) `forward_csm` additionally attenuates by cascade visibility -> it DARKENS under a caster;
-//   (d) a technique name that resolves to nothing FAILS to build programs — it does NOT silently fall back,
-//       because a plausible frame rendered with the wrong technique is indistinguishable from a correct one.
+// ⭐⭐ CEIR-18a-3 closes the last gap: the technique is named on the forward pass OF THE INSTALLED GRAPH (the asset),
+// and `init_programs` cooks the forward FS from THAT — not from `set_forward_technique`, a C++ setter the asset could
+// not see (REN-37's F2 defect: changing `technique` in `forward_csm.frame.toml` re-shaded nothing). Every sample below
+// therefore INSTALLS a graph whose forward pass names the technique — zero mandatory setter calls.
 //
-// (d) is the assertion that makes (a)-(c) meaningful: without it a typo would look exactly like success.
-TEST_CASE("REN-37.2 GATE: swapping the LIGHTING TECHNIQUE by name re-shades the scene (Vulkan)",
-          "[scene-render][ren37][gpu][vulkan]")
+// The claim, proven on a real device with one scene and one camera:
+//   (a) a graph naming `standard_forward` shades with the Cook-Torrance BRDF -> a lit, non-uniform image;
+//   (b) a graph naming `unlit` emits the surface with NO lighting -> the SAME geometry, DIFFERENT pixels;
+//   (c) a graph naming `forward_csm` additionally attenuates by cascade visibility -> it DARKENS under a caster;
+//  (c2) `forward_authored` shades from a DECLARED light record (crd-light-cook), same shadowed shape;
+//   (e) ⛔ the ASSET OUTRANKS THE SETTER: a graph naming `unlit` + a setter naming `standard_forward` -> byte-identical
+//       to (b), because the graph decides the shader and the setter is ignored (the inverse pin);
+//   (d) a technique name that resolves to nothing FAILS to build programs — it does NOT silently fall back, at BOTH
+//       first cook (d-cold) and an atomic hot swap that rolls back to the previous good frame (d-hot).
+//
+// (d) is the assertion that makes (a)-(e) meaningful: without it a typo would look exactly like success.
+TEST_CASE("REN-37.2/CEIR-18a-3 GATE: the frame graph's forward technique NAME drives the FS cook (Vulkan)",
+          "[scene-render][ren37][ceir18a3][gpu][vulkan]")
 {
     gpu::GpuContextConfig cfg;
     cfg.backend           = gpu::GpuBackend::Vulkan;
@@ -1279,12 +1287,47 @@ TEST_CASE("REN-37.2 GATE: swapping the LIGHTING TECHNIQUE by name re-shades the 
     const math::Vec3f     light{0.0F, 1.0F, 0.0F};
     const gpu::ClearColor clear{0.0F, 0.0F, 0.0F, 1.0F};
 
-    // Sample the same grid for every technique so the comparison is pixel-for-pixel.
-    const auto sample = [&](const char* technique, bool shadows, containers::Array<u32>& out) -> bool {
+    // ⭐⭐ CEIR-18a-3: THE TECHNIQUE IS NAMED IN THE GRAPH, not set on the renderer. Build a frame whose forward pass
+    // names `technique` by taking the engine's OWN shipped default (forward_csm with shadows, forward_basic without)
+    // and swapping ONLY its forward-pass technique token — the same graph the engine ships, re-pointed. `"forward_csm"`
+    // and `"standard_forward"` (WITH quotes) each occur exactly once in their file — the technique value — so the swap
+    // is unambiguous. Returns false only if the asset root is unset or the token is absent (a shipped-file change).
+    const auto make_graph = [&](const char* technique, bool shadows, containers::String& out) -> bool {
+        const char* base = shadows ? "frame/forward_csm.frame.toml" : "frame/forward_basic.frame.toml";
+        const char* tok  = shadows ? "\"forward_csm\"" : "\"standard_forward\"";
+        containers::String text(&galloc());
+        if (!read_shipped_asset(base, text)) { return false; }
+        const char* hay = text.c_str();
+        const char* at  = std::strstr(hay, tok);
+        if (at == nullptr) { return false; }
+        const usize toklen = std::strlen(tok);
+        out.clear();
+        out.append(hay, static_cast<usize>(at - hay));
+        out.append("\"");
+        out.append(technique);
+        out.append("\"");
+        out.append(at + toklen, std::strlen(at + toklen));
+        return true;
+    };
+
+    // Sample the same grid for every technique so the comparison is pixel-for-pixel. The technique is selected BY THE
+    // INSTALLED GRAPH (18a-3), never a setter: install the graph, THEN init_programs cooks the FS from its forward-pass
+    // `technique`. `poison`, when set, additionally calls the C++ technique setter with a DIFFERENT name — and the
+    // frame must be identical to `poison == nullptr`, because the asset outranks the setter.
+    const auto sample = [&](const char* technique, bool shadows, containers::Array<u32>& out,
+                            const char* poison = nullptr) -> bool {
         scenerender::SceneRenderer r(&galloc());
         REQUIRE(r.init(*raster, rm));
-        r.set_forward_technique(technique);
-        r.set_shadow_technique(technique);
+        containers::String toml(&galloc());
+        REQUIRE(make_graph(technique, shadows, toml));
+        // Install BEFORE init_programs: ctx is null here, so set_frame_graph_toml installs without a premature re-cook;
+        // init_programs below then reads the installed frame's forward-pass technique and cooks the FS from it.
+        REQUIRE(r.set_frame_graph_toml(toml.c_str()));
+        if (poison != nullptr)
+        {
+            r.set_forward_technique(poison);
+            r.set_shadow_technique(poison);
+        }
         if (!r.init_programs(*vk)) { return false; }
         scenerender::CsmConfig ccfg;
         ccfg.cascade_count = 4;
@@ -1391,14 +1434,82 @@ TEST_CASE("REN-37.2 GATE: swapping the LIGHTING TECHNIQUE by name re-shades the 
     CHECK(a_dark > 20U);       // …and the declared CSM term actually occludes
     CHECK(a_bright == 0U);     // …in the right direction
 
+    // (e) ⛔⛔ THE ASSET OUTRANKS THE SETTER — the inverse pin, and the heart of 18a-3. The SAME `unlit` graph as (b),
+    // but with the C++ forward/shadow-technique setter POISONED to `standard_forward` (a different, LIT technique).
+    // 18a-3 makes the installed graph's `technique` win, so this frame is pixel-identical to (b)'s `flat`. Before
+    // 18a-3 the setter drove the FS cook and this frame would have been LIT — a field in the asset that changed
+    // nothing (the F2 defect). Exact equality is assertable because the ONLY difference from `flat` is the ignored
+    // setter: same graph, same scene, same camera, same frame_overridden path.
+    containers::Array<u32> poisoned(&galloc());
+    REQUIRE(sample("unlit", false, poisoned, "standard_forward"));
+    REQUIRE(poisoned.size() == flat.size());
+    u32 identical = 0U;
+    for (usize i = 0; i < flat.size(); ++i)
+    {
+        if ((poisoned[i] & 0x00FFFFFFU) == (flat[i] & 0x00FFFFFFU)) { ++identical; }
+    }
+    CHECK(identical == poisoned.size()); // the setter changed NOTHING — the installed graph's `unlit` decided the shader
+
     // (d) ⛔ AN UNRESOLVED TECHNIQUE NAME FAILS. It must not fall back to a default: rendering a plausible frame
     // with the WRONG technique is exactly the class of lie the magenta error graph exists to prevent, and it
-    // would make every assertion above meaningless (a typo would read as a pass).
+    // would make every assertion above meaningless (a typo would read as a pass). 18a-3 resolves the graph's
+    // technique in init_programs, so the failure surfaces at BOTH install points — first cook and hot swap:
     {
+        // (d-cold) A syntactically-valid graph that NAMES a missing technique INSTALLS (names are not validated at
+        // install time — no device to resolve them against yet), but the first init_programs that must cook it FAILS.
+        // There is no silent fallback to the setter or a default. Both the FLAT arm (a shadows-off graph names the
+        // missing technique → `fwd`) AND the SHADOWED arm (a `requires=["shadows"]` graph → `csm`) must fail:
         scenerender::SceneRenderer r(&galloc());
         REQUIRE(r.init(*raster, rm));
-        r.set_forward_technique("no_such_technique");
-        CHECK_FALSE(r.init_programs(*vk));
+        containers::String bad_flat(&galloc());
+        REQUIRE(make_graph("no_such_technique", false, bad_flat));
+        REQUIRE(r.set_frame_graph_toml(bad_flat.c_str())); // ctx null → installs, no re-cook yet
+        CHECK_FALSE(r.init_programs(*vk));                  // …the unresolved FLAT technique NAME fails the cook (fwd arm)
+
+        scenerender::SceneRenderer rs(&galloc());
+        REQUIRE(rs.init(*raster, rm));
+        containers::String bad_shadowed(&galloc());
+        REQUIRE(make_graph("no_such_technique", true, bad_shadowed)); // forward_csm-derived (requires shadows) → csm arm
+        REQUIRE(rs.set_frame_graph_toml(bad_shadowed.c_str()));
+        CHECK_FALSE(rs.init_programs(*vk));                 // …the unresolved SHADOWED technique NAME fails the cook (csm arm)
+    }
+    {
+        // (d-hot) ⛔⛔ THE ROLLBACK PIN. A bad graph HOT-SWAPPED onto a LIVE renderer (ctx set) must be refused
+        // ATOMICALLY: set_frame_graph_toml re-cooks, the re-cook fails, and it must restore the PREVIOUS good frame
+        // rather than leave the bad graph installed with its programs retired — a black screen from one typo. So the
+        // swap returns false AND the renderer still draws the previous frame, pixel-for-pixel.
+        scenerender::SceneRenderer r(&galloc());
+        REQUIRE(r.init(*raster, rm));
+        containers::String good(&galloc());
+        REQUIRE(make_graph("standard_forward", false, good));
+        REQUIRE(r.set_frame_graph_toml(good.c_str()));
+        REQUIRE(r.init_programs(*vk)); // programs now LIVE — impl.ctx is set, so the next swap re-cooks
+        (void)r.sync(world);
+        auto t0 = raster->create_color_depth_target(256U, 256U);
+        REQUIRE(t0 != nullptr);
+        REQUIRE(r.render(*t0, vp, light, clear, nullptr).draws > 0U);
+        containers::Array<u32> before(&galloc());
+        for (u32 y = 0; y < 256U; y += 4U)
+        {
+            for (u32 x = 0; x < 256U; x += 4U) { before.push_back(t0->read_pixel(x, y)); }
+        }
+        containers::String bad(&galloc());
+        REQUIRE(make_graph("no_such_technique", false, bad));
+        CHECK_FALSE(r.set_frame_graph_toml(bad.c_str())); // the poisoned swap is REFUSED (re-cook fails → rollback)
+        auto t1 = raster->create_color_depth_target(256U, 256U);
+        REQUIRE(t1 != nullptr);
+        REQUIRE(r.render(*t1, vp, light, clear, nullptr).draws > 0U); // …programs still LIVE (not retired by the swap)
+        u32   same = 0U;
+        usize idx  = 0U;
+        for (u32 y = 0; y < 256U; y += 4U)
+        {
+            for (u32 x = 0; x < 256U; x += 4U)
+            {
+                if ((t1->read_pixel(x, y) & 0x00FFFFFFU) == (before[idx] & 0x00FFFFFFU)) { ++same; }
+                ++idx;
+            }
+        }
+        CHECK(same == before.size()); // the good frame survived the failed swap, byte-for-byte
     }
 
     (void)platform::fs::remove_file(pack_path);
@@ -1923,6 +2034,254 @@ TEST_CASE("REN-38-F6 GATE: the authored RT PIPELINE graph traces the scene TLAS 
     CHECK(written == 4U);
 }
 
+// ── ⭐⭐⭐ CEIR-19b GATE: the AUTHORED HYBRID RT-SHADOW renderer casts a RAY-TRACED shadow, proven ANALYTICALLY. ──
+// The `rt_shadow.frame.toml` pipeline — raster forward (flat-lit) → COMPUTE worldpos-reconstruct → raytrace.pipeline
+// shadow → composite — runs on a REAL device over a DETERMINISTIC scene: a large flat receiver at y=0 (the ONLY
+// rasterized geometry) + a FIXED occluder quad at y=4 that lives ONLY in the TLAS (so there is zero ray self-intersection
+// and the camera reconstructs receiver worldpos at every pixel) + the raygen's BAKED light (0,8,0) (pinned from the
+// asset scene_rt_shadow_raygen.crdv, not a comment). The occluder is OFFSET off-axis (center 1.5, 0.8) so the shadow is
+// NOT mirror-symmetric — the ⛔ NDC±Y reconstruction-mirror scar cannot hide.
+// PROOF (ABSOLUTE, never CEIR-vs-CEIR):
+//   STAGE 1 — the compute prepass reconstructs per-pixel WORLD POSITION from the raster depth. Two independent checks:
+//     (a) every covered pixel is VALID (.w == 1; the asset writes Step(ε, depth) → 1 geometry / 0 sky) — a never-run
+//         prepass that never dispatched reads .w==0 everywhere and is caught HERE (REQUIRE), before any mask noise;
+//     (b) the INVERSE ROUND-TRIP — re-projecting each pixel's reconstructed worldpos through view_proj must land back at
+//         that pixel's OWN ndc. This is independent of the kernel's ndc_y-sign formula, so a mirrored reconstruction
+//         lands at the MIRRORED pixel and REQUIRE fails (the mirror the offset occluder alone could not catch).
+//   STAGE 2 — the RT shadow term matches a CPU ray-quad occlusion test on the SAME reconstructed origin, asserted over
+//     ALL 4096 pixels (a boundary band skipped) with non-empty lit + shadowed class floors so an all-lit mask can't pass.
+// Both backends caps-SKIP `supports_rt_pipeline`; llvmpipe has no RT pipeline, so the Linux legs are compile + skip.
+// The occluder quad (world space, y=4): center (1.5, 0.8) in (x,z), half-size 1.5 → x∈[0,3], z∈[-0.7,2.3] — shared by
+// both backends' TLAS builds (and mirrored by occ_cx/occ_cz/occ_h in the STAGE-2 analytic; they MUST stay in lockstep).
+static const float kRtShadowOccluderTris[18] = {
+    0.0F, 4.0F, -0.7F, 3.0F, 4.0F, -0.7F, 3.0F, 4.0F, 2.3F,  // tri 1
+    0.0F, 4.0F, -0.7F, 3.0F, 4.0F, 2.3F,  0.0F, 4.0F, 2.3F,  // tri 2
+};
+static const float kRtShadowIdentity12[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+
+static void rt_shadow_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster,
+                                gpu::IAccelerationStructure* scene_as, const math::Mat4f& view_proj)
+{
+    REQUIRE(scene_as != nullptr);
+    // the RECEIVER — a large flat box at y=0 (scale 20×0.1×20 → top face y≈0.05), the ONLY rasterized geometry.
+    const resources::ResourceId recv_id = resources::ResourceId::mint_random();
+    const TempPack              pack("sr_rtsh_pack_", recv_id);
+    write_mesh_pack(pack.path, recv_id);
+    resources::ResourceManager rm(&galloc());
+    resources::register_mesh_loader(&rm, nullptr);
+    REQUIRE(rm.mount_manifest(pack.path.generic()).is_valid());
+    scene::World world{&galloc()};
+    world.register_component<scene::Transform>(scene::transform_serialize_trait());
+    scene::register_render_components(world);
+    {
+        const scene::EntityId e = world.spawn();
+        scene::Transform      t;
+        t.world = math::from_trs(math::Vec3f{0, 0, 0}, math::Quatf::identity(), math::Vec3f{20.0F, 0.1F, 20.0F});
+        world.add_component(e, t);
+        world.add_component(e, scene::MeshRenderer{recv_id, {}});
+    }
+    scenerender::SceneRenderer renderer(&galloc());
+    REQUIRE(renderer.init(raster, rm));
+    if (!renderer.init_programs(ctx)) { SKIP("shader backend unavailable"); }
+    (void)renderer.sync(world);
+    renderer.set_scene_accel(scene_as);
+
+    constexpr u32 img_w = 64U;
+    constexpr u32 img_h = 64U; // PIN 64×64 — the frame's rt_shadow pass traces groups_x = 4096 = img_w*img_h rays (one per pixel).
+    auto          target = raster.create_color_depth_target(img_w, img_h);
+    REQUIRE(target != nullptr);
+
+    containers::String graph(&galloc());
+    REQUIRE(read_shipped_asset("frame/rt_shadow.frame.toml", graph));
+    REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
+    const auto ok = renderer.render(*target, view_proj, math::Vec3f{0.3F, 1.0F, 0.2F}, gpu::ClearColor{0, 0, 0, 1});
+    REQUIRE(ok.draws > 0U); // the hybrid graph RECORDED + drew the primary raster leg
+
+    gpu::IStorageBuffer* wp = renderer.debug_scene_buffer("worldpos_buf");
+    gpu::IStorageBuffer* sm = renderer.debug_scene_buffer("shadow_mask_buf");
+    REQUIRE(wp != nullptr);
+    REQUIRE(sm != nullptr);
+    REQUIRE(raster.download_storage(*wp));
+    REQUIRE(raster.download_storage(*sm));
+    const auto f32_of = [](u32 u) { float f; std::memcpy(&f, &u, sizeof(f)); return f; };
+    const auto wpx = [&](u32 px, u32 py) { return f32_of(wp->read_u32((py * img_w + px) * 4U + 0U)); };
+    const auto wpy = [&](u32 px, u32 py) { return f32_of(wp->read_u32((py * img_w + px) * 4U + 1U)); };
+    const auto wpz = [&](u32 px, u32 py) { return f32_of(wp->read_u32((py * img_w + px) * 4U + 2U)); };
+    const auto wpw = [&](u32 px, u32 py) { return f32_of(wp->read_u32((py * img_w + px) * 4U + 3U)); };
+    const auto mask = [&](u32 px, u32 py) { return f32_of(sm->read_u32(py * img_w + px)); };
+
+    // ── STAGE 1: worldpos reconstruction is VALID everywhere + inverts view_proj (mirror-proof). ──
+    u32 invalid = 0U;
+    for (u32 y = 0; y < img_h; ++y)
+    {
+        for (u32 x = 0; x < img_w; ++x) { if (wpw(x, y) < 0.5F) { ++invalid; } }
+    }
+    UNSCOPED_INFO("STAGE1 invalid (.w!=1) pixels: " << invalid);
+    REQUIRE(invalid == 0U); // the receiver fills the view; a no-dispatch prepass reads .w==0 everywhere and dies HERE
+
+    const float ysign = raster.ndc_y_points_down() ? 1.0F : -1.0F;
+    const auto  reproj_ok = [&](u32 px, u32 py) -> bool {
+        const math::Vec4f clip = view_proj * math::Vec4f{wpx(px, py), wpy(px, py), wpz(px, py), 1.0F};
+        if (clip.w <= 0.0F) { return false; }
+        const float ndc_x  = clip.x / clip.w;
+        const float ndc_y  = clip.y / clip.w;
+        const float true_x = 2.0F * (static_cast<float>(px) + 0.5F) / static_cast<float>(img_w) - 1.0F;
+        const float true_y = ysign * (2.0F * (static_cast<float>(py) + 0.5F) / static_cast<float>(img_h) - 1.0F);
+        UNSCOPED_INFO("reproj (" << px << "," << py << ") ndc=(" << ndc_x << "," << ndc_y << ") true=(" << true_x
+                                 << "," << true_y << ") wp=(" << wpx(px, py) << "," << wpy(px, py) << ","
+                                 << wpz(px, py) << ")");
+        return crd::math::abs(ndc_x - true_x) < 0.03F && crd::math::abs(ndc_y - true_y) < 0.03F;
+    };
+    // center + the four quadrant midpoints — a reconstruction mirror flips one axis' NDC and REQUIRE fails.
+    REQUIRE(reproj_ok(32U, 32U));
+    REQUIRE(reproj_ok(48U, 32U));
+    REQUIRE(reproj_ok(16U, 32U));
+    REQUIRE(reproj_ok(32U, 48U));
+    REQUIRE(reproj_ok(32U, 16U));
+    // the look-at center reconstructs to ~the origin on the receiver top (an absolute pin independent of re-projection).
+    REQUIRE(crd::math::abs(wpx(32U, 32U)) < 0.6F);
+    REQUIRE(crd::math::abs(wpz(32U, 32U)) < 0.6F);
+    REQUIRE(wpy(32U, 32U) > -0.2F);
+    REQUIRE(wpy(32U, 32U) < 0.3F);
+
+    // ── STAGE 2: the RT shadow term matches a CPU ray-quad test on the SAME reconstructed origin. ──
+    // occluder quad at y=4, center (1.5, 0.8) in (x,z), half-size 1. A ray from (x,y,z)→(0,8,0) reaches y=4 at
+    // t=(4-y)/(8-y); the hit point is (x(1-t), 4, z(1-t)). Occluded iff that lands inside the quad.
+    constexpr float occ_y  = 4.0F;
+    constexpr float occ_cx = 1.5F;
+    constexpr float occ_cz = 0.8F;
+    constexpr float occ_h  = 1.5F; // MUST match kRtShadowOccluderTris (x∈[0,3], z∈[-0.7,2.3])
+    constexpr float band   = 0.3F; // world-unit boundary band on the hit plane where device/CPU legitimately disagree
+    u32             disagree = 0U;
+    u32             shad_cnt = 0U;
+    u32             lit_cnt  = 0U;
+    for (u32 y = 0; y < img_h; ++y)
+    {
+        for (u32 x = 0; x < img_w; ++x)
+        {
+            const float wy    = wpy(x, y);
+            const float denom = 8.0F - wy;
+            if (denom <= 0.0F) { continue; }
+            const float t  = (occ_y - wy) / denom;
+            if (t <= 0.0F || t >= 1.0F) { continue; }
+            const float hx = wpx(x, y) * (1.0F - t);
+            const float hz = wpz(x, y) * (1.0F - t);
+            const float qx = crd::math::abs(hx - occ_cx) - occ_h; // <0 inside the x-extent, >0 outside
+            const float qz = crd::math::abs(hz - occ_cz) - occ_h;
+            // SKIP the ambiguous band hugging the rectangle border (near an x-edge while within/near z, or vice versa).
+            const bool near_boundary = (crd::math::abs(qx) < band && qz < band) || (crd::math::abs(qz) < band && qx < band);
+            if (near_boundary) { continue; }
+            const bool  occ = (qx < 0.0F) && (qz < 0.0F);
+            const float m   = mask(x, y);
+            if (occ) { ++shad_cnt; if (m >= 0.5F) { ++disagree; } }   // occluded ⇒ mask ≈ 0 (SHADOWED)
+            else { ++lit_cnt; if (m < 0.5F) { ++disagree; } }         // clear    ⇒ mask ≈ 1 (LIT)
+        }
+    }
+    UNSCOPED_INFO("STAGE2 shadowed=" << shad_cnt << " lit=" << lit_cnt << " disagree=" << disagree);
+    CHECK(disagree == 0U);      // the RT mask matches the analytic occlusion at every non-boundary pixel
+    CHECK(shad_cnt > 300U);     // …and the occluder actually casts a shadow (non-empty shadowed class — not all-lit)
+    CHECK(lit_cnt > 2000U);     // …over an otherwise-lit receiver (non-empty lit class)
+
+    // ── STAGE 3 (CEIR-19b-F2): the COMPOSITE multiplied scene_hdr × shadow_mask → @output, so the RT shadow is now
+    // VISIBLE. mask ∈ {0,1} exactly (miss=1 lit, hit=0 shadowed), so a shadowed pixel's composited colour is scene_hdr×0
+    // ≈ BLACK and a lit pixel keeps its flat-lit colour. This is a PER-PIXEL check keyed on STAGE-2's analytic occlusion
+    // (not an aggregate): the OFF-CENTRE occluder means a Y-flip or a wrong FragCoord→index in the authored composite
+    // would light the pixels that should be dark, so `shad_lit == 0` (no shadowed pixel stays bright) is the flip detector.
+    const auto lum = [&](u32 px, u32 py) -> u32 {
+        const u32 p = target->read_pixel(px, py);
+        return (p & 0xFFU) + ((p >> 8) & 0xFFU) + ((p >> 16) & 0xFFU); // Σ RGB (format-agnostic; black ⇒ 0)
+    };
+    u32      shad_lit = 0U;
+    u32      lit_dark = 0U;
+    u32      s3_shad  = 0U;
+    u32      s3_lit   = 0U;
+    crd::u64 shad_sum = 0U;
+    crd::u64 lit_sum  = 0U;
+    for (u32 y = 0; y < img_h; ++y)
+    {
+        for (u32 x = 0; x < img_w; ++x)
+        {
+            const float wy    = wpy(x, y);
+            const float denom = 8.0F - wy;
+            if (denom <= 0.0F) { continue; }
+            const float t = (occ_y - wy) / denom;
+            if (t <= 0.0F || t >= 1.0F) { continue; }
+            const float qx = crd::math::abs(wpx(x, y) * (1.0F - t) - occ_cx) - occ_h;
+            const float qz = crd::math::abs(wpz(x, y) * (1.0F - t) - occ_cz) - occ_h;
+            const bool  near_boundary = (crd::math::abs(qx) < band && qz < band) || (crd::math::abs(qz) < band && qx < band);
+            if (near_boundary) { continue; }
+            const u32 px_lum = lum(x, y);
+            if ((qx < 0.0F) && (qz < 0.0F)) { ++s3_shad; shad_sum += px_lum; if (px_lum > 48U) { ++shad_lit; } } // shad ⇒ black
+            else { ++s3_lit; lit_sum += px_lum; if (px_lum < 24U) { ++lit_dark; } }                              // lit ⇒ scene_hdr
+        }
+    }
+    const double shad_mean = s3_shad > 0U ? static_cast<double>(shad_sum) / s3_shad : 0.0;
+    const double lit_mean  = s3_lit > 0U ? static_cast<double>(lit_sum) / s3_lit : 0.0;
+    UNSCOPED_INFO("STAGE3 shad_mean=" << shad_mean << " lit_mean=" << lit_mean << " shad_lit=" << shad_lit
+                                      << " lit_dark=" << lit_dark << " (n_shad=" << s3_shad << " n_lit=" << s3_lit << ")");
+    CHECK(shad_lit == 0U);                    // ⛔ NO shadowed pixel stays lit — the multiply happened + is NOT Y-flipped
+    CHECK(lit_dark < s3_lit / 40U);           // lit pixels keep their colour (a few edge/AA pixels tolerated)
+    CHECK(lit_mean > 24.0);                   // the lit receiver is actually visible (not an all-black frame passing vacuously)
+    CHECK(shad_mean < 0.30 * lit_mean);       // the shadow term VISIBLY darkens the shadowed region
+
+    (void)platform::fs::remove_file(pack.path);
+}
+
+TEST_CASE("CEIR-19b GATE: the authored hybrid RT-shadow renderer casts a ray-traced shadow (Vulkan)",
+          "[scene-render][ceir19b][gpu][vulkan]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto  ctx = gpu::create_vulkan_gpu_context(cfg);
+    auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
+    if (vk == nullptr || !vk->graphics_capable() || !vk->shader_object())
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+    if (!raster->supports_rt_pipeline()) { SKIP("adapter has no ray-tracing pipeline"); }
+
+    gpu::ValidationCapture      capture(*vk); // the validation layer is the oracle on this never-before-run hybrid path
+
+    // ⛔⛔ CEIR-19b-F1 RESOLVED: VUID-vkCmdTraceRaysKHR-None-08608 on this hybrid frame is an UPSTREAM VVL FALSE POSITIVE,
+    // NOT an encoder bug. The composite is a shader-object graphics pass whose vkCmdSet* dynamic-state volley records AFTER
+    // the monolithic RT-pipeline bind in the SAME command buffer; a buggy VVL charges that graphics dynamic state to the RT
+    // bind point and flags the trace. Command-stream markers PROVED the bind→trace window is clean (BIND_RT immediately
+    // precedes TRACE, nothing between) — those graphics states cannot reach a trace. Two falsified hypotheses are on record
+    // (a shader-object null-bind fix; a bind-elision cache) — neither existed. Observed FIRING at VVL 1.3.275; observed
+    // CLEAN at VVL 1.4.313. Version-scope the benign id so the check SELF-ARMS as the environment upgrades: on a fixed
+    // validator a genuine TraceRays-08608 still FAILS. messageIdNumber 0x29056f6a is a hash of the FULL VUID string → it
+    // silences ONLY the vkCmdTraceRaysKHR variant; draw/dispatch 08608 stay live. The whitelist MUST be set BEFORE the work
+    // (it gates COUNTING at callback-fire time); the error-oracle REQUIRE waits until after the render (past the shader-
+    // backend SKIP). See scar feedback_ceir19b_hybrid_rt_frame_never_run_scars #3 for the fetch-VVL private-prefix recipe.
+    const crd::u32     vvl_ver               = gpu::validation_layer_spec_version();
+    constexpr crd::u32 vvl_08608_fix_version = (1U << 22) | (4U << 12) | 313U; // == VK_MAKE_API_VERSION(0,1,4,313)
+    if (vvl_ver < vvl_08608_fix_version) { capture.whitelist(0x29056f6a); }
+
+    gpu::VulkanRayTracingContext rt(*vk);
+    REQUIRE(rt.valid());
+    auto scene_as = rt.build_scene_instanced(kRtShadowOccluderTris, 2U, kRtShadowIdentity12, 1U, /*opaque=*/true);
+    REQUIRE(scene_as != nullptr);
+
+    // top-down camera → the look-at center pixel reconstructs to the receiver origin; reverse-Z like every forward twin.
+    const math::Mat4f view = math::look_at(math::Vec3f{0.0F, 10.0F, 0.001F}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 0, -1});
+    const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    rt_shadow_gate_body(*vk, *raster, scene_as.get(), proj * view);
+    // Reached ONLY when the frame actually rendered (a backend without a runtime shader compiler SKIPs inside the body,
+    // unwinding the whole case). The validation layer IS the oracle here — REQUIRE it is actually loaded, or error_count()
+    // ==0 is a trivial false green (no callback ever fires). The version print proves WHICH arm ran (whitelist vs strict).
+    std::fprintf(stderr, "[ceir19b] VK_LAYER_KHRONOS_validation spec %u.%u.%u\n", (vvl_ver >> 22) & 0x7FU,
+                 (vvl_ver >> 12) & 0x3FFU, vvl_ver & 0xFFFU);
+    REQUIRE(vvl_ver != 0U);
+    // No exception, no bound: the authored hybrid RT-shadow frame is Vulkan-CLEAN. error_count()==0 with the 08608
+    // benign-id version-scoped above means exactly "zero validation errors other than the one upstream-fixed false
+    // positive on validators older than 1.4.313" — on any current validator a genuine error, 08608 included, fails.
+    CHECK(capture.error_count() == 0U);
+}
+
 #if defined(_WIN32)
 // ── ⭐⭐ REN-38-F6 GATES (DX12): the SAME renderer joins on the OTHER backend. ────────────────────────────────
 // ⛔ A per-backend claim closed on the strength of the Vulkan gate alone leaves the entire DX12 dispatch path —
@@ -2085,6 +2444,27 @@ TEST_CASE("REN-38-F6 GATE (DX12): the authored CULL graph computes real frustum 
     UNSCOPED_INFO("marked " << marked);
     CHECK(marked == visible);
     CHECK(marked >= 1U);
+}
+
+// ── ⭐⭐⭐ CEIR-19b GATE (DX12): the SAME authored hybrid RT-shadow renderer on the OTHER backend. ──
+// The gate body is backend-agnostic (rt_shadow_gate_body): only the RT context + the per-backend NDC sign differ, both
+// resolved at runtime. This proves the never-run compute-worldpos + DXR-pipeline-shadow + composite chain on DXIL/D3D12.
+TEST_CASE("CEIR-19b GATE: the authored hybrid RT-shadow renderer casts a ray-traced shadow (DX12)",
+          "[scene-render][ceir19b][gpu][dx12]")
+{
+    auto gctx = gpu::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    auto raster = gpu::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+    if (!raster->supports_rt_pipeline()) { SKIP("adapter has no DXR ray-tracing pipeline"); }
+
+    gpu::Dx12RayTracingContext rt;
+    if (!rt.valid()) { SKIP("no DXR-capable device"); }
+    auto scene_as = rt.build_scene_instanced(kRtShadowOccluderTris, 2U, kRtShadowIdentity12, 1U, /*opaque=*/true);
+    REQUIRE(scene_as != nullptr);
+    const math::Mat4f view = math::look_at(math::Vec3f{0.0F, 10.0F, 0.001F}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 0, -1});
+    const math::Mat4f proj = math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+    rt_shadow_gate_body(*gctx, *raster, scene_as.get(), proj * view);
 }
 
 TEST_CASE("REN-38-F6 GATE (DX12): the authored RT PIPELINE graph traces the scene TLAS through the live host",
@@ -6227,13 +6607,10 @@ void point_light_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster)
 
     scenerender::SceneRenderer renderer(&galloc());
     REQUIRE(renderer.init(raster, rm));
-    // ⛔⛔ the forward FS is NOT taken from the frame graph pass's `technique` field — the renderer cooks TWO variants
-    // per-draw: fs_flat from `forward_technique` (no shadows) and fs_shadowed from `shadow_technique` (scene_renderer.cpp
-    // :3101/3460). This gate runs with shadows ON, so the DRAWN FS is fs_shadowed = shadow_technique — which defaults to
-    // "forward_csm" (body_forward_csm: directional + CSM, NO point loop). Select the point-light-aware CEIR technique for
-    // BOTH variants; `forward_authored` (cook_lighting from scene_forward.crdl) does CSM shadows AND the point loop.
-    renderer.set_forward_technique("forward_authored");
-    renderer.set_shadow_technique("forward_authored");
+    // ⭐⭐ CEIR-18a-3 (was the F2 defect): the shadowed forward FS IS now taken from the INSTALLED graph's forward-pass
+    // `technique`, not a C++ setter. forward_plus (installed below) names `forward_authored` (cook_lighting from
+    // scene_forward.crdl: CSM shadows AND the point loop), so no set_shadow_technique is needed — the asset selects it.
+    // This init cooks the default forward_csm; set_frame_graph_toml then re-cooks the FS from forward_plus's technique.
     if (!renderer.init_programs(ctx)) { SKIP("shader backend unavailable"); }
     if (!renderer.set_shadows_enabled(true))
     {
@@ -6358,9 +6735,8 @@ void point_cluster_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster)
 
     scenerender::SceneRenderer renderer(&galloc());
     REQUIRE(renderer.init(raster, rm));
-    // the CLUSTERED technique for BOTH per-draw variants (shadows ON ⇒ the drawn FS is fs_shadowed = shadow_technique).
-    renderer.set_forward_technique("forward_authored_clustered");
-    renderer.set_shadow_technique("forward_authored_clustered");
+    // ⭐⭐ CEIR-18a-3: the CLUSTERED technique is named IN THE GRAPH now (installed below), not via a setter — this init
+    // cooks the default forward_csm, and set_frame_graph_toml re-cooks the FS from the installed forward-pass technique.
     if (!renderer.init_programs(ctx)) { SKIP("shader backend unavailable"); }
     if (!renderer.set_shadows_enabled(true))
     {
@@ -6376,8 +6752,19 @@ void point_cluster_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster)
     // dark on the visible face and the point lights are the ONLY signal (channel purity; Stage 1 already proved the sun).
     const math::Vec3f key{0.0F, 0.0F, -1.0F};
 
+    // ⭐⭐ CEIR-18a-3: the CLUSTERED forward FS is now named ON THE GRAPH, not swapped in by a setter. forward_plus names
+    // the NON-clustered `forward_authored`; swap its forward-pass technique to `forward_authored_clustered` (the FS that
+    // walks the per-tile list). The 5-space-aligned `technique     = ` line is unique to the real pass — comments use a
+    // single space — so this cannot bite the header prose. A shipped-file reformat trips the REQUIRE (never a wrong FS).
+    containers::String base(&galloc());
+    REQUIRE(read_shipped_asset("frame/forward_plus.frame.toml", base));
+    const char* find = "technique     = \"forward_authored\"";
+    const char* at   = std::strstr(base.c_str(), find);
+    REQUIRE(at != nullptr);
     containers::String graph(&galloc());
-    REQUIRE(read_shipped_asset("frame/forward_plus.frame.toml", graph));
+    graph.append(base.c_str(), static_cast<usize>(at - base.c_str()));
+    graph.append("technique     = \"forward_authored_clustered\"");
+    graph.append(at + std::strlen(find), std::strlen(at + std::strlen(find)));
     REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
 
     // ── the two point lights: RED and GREEN, BOTH at (0,0,3), radius 10 (each reaches every probe). set_point_lights

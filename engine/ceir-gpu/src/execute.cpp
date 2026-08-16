@@ -103,6 +103,9 @@ containers::StringView execute_error_name(ExecuteError e) noexcept
     case ExecuteError::FrameBuildFailed: return containers::StringView("FrameBuildFailed");
     case ExecuteError::SceneChainMisuse: return containers::StringView("SceneChainMisuse");
     case ExecuteError::UnresolvedSceneHandle: return containers::StringView("UnresolvedSceneHandle");
+    case ExecuteError::AccelBuildFailed: return containers::StringView("AccelBuildFailed");
+    case ExecuteError::UnresolvedTlas: return containers::StringView("UnresolvedTlas");
+    case ExecuteError::TraceDispatchFailed: return containers::StringView("TraceDispatchFailed");
     }
     return containers::StringView("None");
 }
@@ -118,6 +121,12 @@ ExecuteError validate_lowered(const Context& ctx, containers::ConstSpan<LoweredC
         // CEIR-14b: render kinds (BeginRender/Draw/EndRender) target the 14z RASTER executor, not this IComputeContext
         // surface — reject them TYPED (the Transfer named-forward mirror), never fall through to check_dispatch.
         if (cmd.kind == LoweredKind::BeginRender || cmd.kind == LoweredKind::Draw || cmd.kind == LoweredKind::EndRender)
+        {
+            return ExecuteError::UnsupportedCommand;
+        }
+        // CEIR-19c: ceir.rt kinds (RayQuery/AccelBuild) target the RT executor (execute_rt_lowered, a caller-HOOK surface),
+        // NOT this IComputeContext — reject them TYPED (the render/Transfer named-forward mirror).
+        if (cmd.kind == LoweredKind::RayQuery || cmd.kind == LoweredKind::AccelBuild)
         {
             return ExecuteError::UnsupportedCommand;
         }
@@ -146,11 +155,116 @@ ExecuteError execute_lowered(const Context& ctx, containers::ConstSpan<LoweredCo
         {
             return ExecuteError::UnsupportedCommand;
         }
+        // CEIR-19c: ceir.rt kinds (RayQuery/AccelBuild) target the RT executor (execute_rt_lowered) — reject them TYPED here.
+        if (cmd.kind == LoweredKind::RayQuery || cmd.kind == LoweredKind::AccelBuild)
+        {
+            return ExecuteError::UnsupportedCommand;
+        }
         crd::gpu::ComputePipeline* pipe = nullptr;
         const ExecuteError         err  = check_dispatch(ctx, cmd, resolver, user, bindings, &pipe, &bufs);
         if (err != ExecuteError::None) { return err; }
         rec.dispatch(*pipe, containers::ConstSpan<crd::gpu::ComputeBuffer*>(bufs.data(), bufs.size()), nullptr, 0U,
                      cmd.groups_x, cmd.groups_y, cmd.groups_z);
+    }
+    return ExecuteError::None;
+}
+
+// ── CEIR-19c: the ceir.rt executor. Walks the SAME lowered list (the render_materialize precedent); AccelBuild → build_scene
+// (handle keyed by the op's %result); RayQuery → dispatch_inline_ray_query. Barriers inert (submit+wait per trace_dispatch).
+ExecuteError validate_rt_lowered(const Context& ctx, containers::ConstSpan<LoweredCommand> commands, const RtHooks& hooks,
+                                 containers::ConstSpan<RtHostBinding> bindings)
+{
+    (void)bindings; // the pure half checks STRUCTURE (grid/kernel/%tlas), not the host spans (those bind at execute)
+    containers::Array<const Value*> built(ctx.allocator()); // AccelBuild %results in program order (the %tlas candidates)
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(commands.size()); ++i)
+    {
+        const LoweredCommand& cmd = commands[i];
+        if (cmd.kind == LoweredKind::Barrier) { continue; } // inert (submit+wait per dispatch)
+        if (cmd.kind == LoweredKind::AccelBuild)
+        {
+            if (cmd.op != nullptr && cmd.op->num_results() > 0U) { built.push_back(cmd.op->result(0U)); }
+            continue;
+        }
+        if (cmd.kind == LoweredKind::RayQuery)
+        {
+            if (cmd.dynamic_grid) { return ExecuteError::UnsupportedCommand; } // const-grid witness (a host-readback grid is named-forward)
+            if (cmd.groups_x == 0U || cmd.groups_y == 0U || cmd.groups_z == 0U) { return ExecuteError::ZeroDispatch; }
+            const containers::ConstSpan<crd::u8> kb =
+                (hooks.kernel_bytes != nullptr) ? hooks.kernel_bytes(cmd.op, hooks.user) : containers::ConstSpan<crd::u8>{};
+            if (kb.size() == 0U) { return ExecuteError::UnresolvedKernel; }
+            const Operation* const op = cmd.op;
+            if (op == nullptr || op->num_operands() < 4U) { return ExecuteError::UnresolvedTlas; } // grid(0..2) + %tlas(3) minimum
+            bool found = false; // %tlas = operand 3, matched by SSA identity to an earlier AccelBuild %result (NOT resource_root:
+            for (crd::u32 j = 0; j < static_cast<crd::u32>(built.size()); ++j) // it is an rt.tlas Extern handle, not a buffer)
+            {
+                if (built[j] == op->operand(3U)) { found = true; break; }
+            }
+            if (!found) { return ExecuteError::UnresolvedTlas; }
+            continue;
+        }
+        return ExecuteError::UnsupportedCommand; // Dispatch/Transfer/render kinds are not the RT surface
+    }
+    return ExecuteError::None;
+}
+
+ExecuteError execute_rt_lowered(const Context& ctx, containers::ConstSpan<LoweredCommand> commands, const RtHooks& hooks,
+                                containers::ConstSpan<RtHostBinding> bindings)
+{
+    const ExecuteError verr = validate_rt_lowered(ctx, commands, hooks, bindings);
+    if (verr != ExecuteError::None) { return verr; }
+
+    containers::Array<const Value*>  keys(ctx.allocator());    // AccelBuild %result → handle (parallel arrays, program order)
+    containers::Array<RtSceneHandle> handles(ctx.allocator());
+    containers::Array<RtHostBinding> ordered(ctx.allocator()); // scratch: a ray_query's SSBO bindings in operand order
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(commands.size()); ++i)
+    {
+        const LoweredCommand& cmd = commands[i];
+        if (cmd.kind == LoweredKind::Barrier) { continue; } // inert
+        if (cmd.kind == LoweredKind::AccelBuild)
+        {
+            const RtSceneHandle h = (hooks.build_scene != nullptr) ? hooks.build_scene(cmd.op, hooks.user) : 0U;
+            if (h == 0U) { return ExecuteError::AccelBuildFailed; }
+            if (cmd.op != nullptr && cmd.op->num_results() > 0U)
+            {
+                keys.push_back(cmd.op->result(0U));
+                handles.push_back(h);
+            }
+            continue;
+        }
+        // RayQuery — validate already rejected foreign kinds + guaranteed the grid/kernel/%tlas structure.
+        const Operation* const op   = cmd.op;
+        RtSceneHandle          tlas = 0U;
+        for (crd::u32 j = 0; j < static_cast<crd::u32>(keys.size()); ++j)
+        {
+            if (keys[j] == op->operand(3U)) { tlas = handles[j]; break; }
+        }
+        if (tlas == 0U) { return ExecuteError::UnresolvedTlas; }
+        const containers::ConstSpan<crd::u8> kb =
+            (hooks.kernel_bytes != nullptr) ? hooks.kernel_bytes(op, hooks.user) : containers::ConstSpan<crd::u8>{};
+        if (kb.size() == 0U) { return ExecuteError::UnresolvedKernel; }
+        // SSBO bindings: operands 4+ (resource_root-normalized) → the caller's host spans, in operand order (slots 1,2,…).
+        ordered.clear();
+        const crd::u32 nops = op->num_operands();
+        for (crd::u32 b = 4U; b < nops; ++b)
+        {
+            const Value* const root  = ctx.resource_root(op->operand(b));
+            bool               found = false;
+            for (crd::u32 k = 0; k < static_cast<crd::u32>(bindings.size()); ++k)
+            {
+                if (bindings[k].resource == root)
+                {
+                    ordered.push_back(bindings[k]);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) { return ExecuteError::UnmappedBinding; }
+        }
+        const bool ok = (hooks.trace_dispatch != nullptr)
+                        && hooks.trace_dispatch(tlas, kb,
+                                                containers::ConstSpan<RtHostBinding>(ordered.data(), ordered.size()),
+                                                cmd.groups_x, cmd.groups_y, cmd.groups_z, hooks.user);
+        if (!ok) { return ExecuteError::TraceDispatchFailed; }
     }
     return ExecuteError::None;
 }

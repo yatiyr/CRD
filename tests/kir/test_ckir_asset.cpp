@@ -16,7 +16,6 @@
 #include <crd/kir/ckir_asset.hpp>
 #include <crd/kir/ckir_glsl.hpp>       // CEIR-18a-2 Stage 2b: GLSL emit check for the light-cull kernel
 #include <crd/kir/ckir_hlsl.hpp>       // CEIR-19b: HLSL emit check for the worldpos kernel (both-backend compute texture sample)
-#include <crd/kir/ckir_light_cull.hpp> // CEIR-18a-2: LightCullParams word indices for the .ckir device-parity setup (⛔ builder deletion pending — light_cull)
 #include <crd/kir/ckir_serialize.hpp>
 #include <crd/kir/ckir_technique.hpp> // CEIR-18p: body_moment_convert/blur — the library builders the moment bootstrap emits from
 
@@ -69,6 +68,150 @@ kir::KEntry build_raster_fs(kir::KGraph& g)
     e.stage  = kir::KStage::Fragment;
     e.n_out  = 1;
     e.out[0] = kir::KStageOutput{lit, 0, kir::Interp::Smooth};
+    return e;
+}
+
+// CEIR-19c: the inline INLINE-RAY-QUERY witness graph — for the SERIALIZER test ONLY (proves ckir_write/read round-trips the
+// RayHitResult node + the TraceRayHit stmt's 9 global-ext operands, the encodings every stage-2 wavefront kernel needs). ⛔
+// This is a SERIALIZER exercise (the test_lower.cpp precedent), NOT the source of assets/ckir/rt_witness.ckir — nothing
+// generates the committed asset from this, and no test compares the asset's emit to it (the mandate-#1 coupling line). The
+// authored .ckir is verified independently by its own load/roundtrip/emit gate. Binding contract: TLAS@0, rays@1 (6 f32/thread:
+// origin+dir), hit-t@2 (F32), prim@3 (U32 — 0xFFFFFFFF miss; NEVER an F32 buffer, the sentinel is unrepresentable in F32).
+kir::KEntry build_rt_witness_inline(kir::KGraph& g)
+{
+    const auto sh    = kir::make_shape({1});
+    const auto cf    = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const auto cu    = [&](crd::u32 v) { return g.constant(static_cast<double>(v), sh, kir::DType::U32); };
+    const int  as    = g.accel_struct_decl(0, 0);
+    const int  rays  = g.buffer_decl(kir::DType::F32, 0, 1, false);
+    const int  out_t = g.buffer_decl(kir::DType::F32, 0, 2, true);
+    const int  out_p = g.buffer_decl(kir::DType::U32, 0, 3, true);
+    const int  mark  = g.kernel_stmt_mark();
+    const int  tid   = g.binary(kir::KOp::Add,
+                                g.binary(kir::KOp::Mul, g.builtin(kir::KBuiltin::WorkgroupIndex), cu(64U)),
+                                g.builtin(kir::KBuiltin::LocalInvocationIndex));
+    const int  base  = g.binary(kir::KOp::Mul, tid, cu(6U));
+    const auto ld    = [&](crd::u32 k) { return g.buffer_load(rays, g.binary(kir::KOp::Add, base, cu(k))); };
+    const kir::KGraph::RtHit h = g.trace_ray_hit(as, ld(0U), ld(1U), ld(2U), ld(3U), ld(4U), ld(5U), cf(0.001), cf(1.0e30));
+    g.stmt_buffer_store(out_t, tid, h.t);    // F32 distance
+    g.stmt_buffer_store(out_p, tid, h.prim); // U32 primitive index (the bit-exact decision target)
+    kir::KEntry e;
+    e.stage             = kir::KStage::Compute;
+    e.local_size[0]     = 64U;
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
+    return e;
+}
+
+// CEIR-19c STAGE 2: the inline SERIAL-COMPACT witness graph (serializer test ONLY — decoupled from the committed asset, the
+// mandate-#1 coupling line). A BRANCHLESS stream-compaction over `n` hit-flags: an UNCONDITIONAL store to compacted[cursor],
+// then cursor += flag (0/1) — a miss's tentative write is overwritten by the next hit or sits harmlessly beyond count (no
+// inner If ⇒ no if-block-shared-temp scar). local_size=1 (ONE thread ⇒ serial, no race, no tid guard). ⛔ DEAD TLAS@0: the
+// bridge's rt.ray_query needs a %tlas operand at descriptor 0, but the compact never traces (the decl only forces #version
+// 460 + provides the binding). Bindings: TLAS@0 (dead), hit_flags@1 (read), compacted@2 (write), count@3 (write).
+kir::KEntry build_compact_inline(kir::KGraph& g, crd::u32 n)
+{
+    const auto sh        = kir::make_shape({1});
+    const auto cu        = [&](crd::u32 v) { return g.constant(static_cast<double>(v), sh, kir::DType::U32); };
+    const int  as        = g.accel_struct_decl(0, 0);                   // DEAD TLAS@0 — never traced
+    const int  flags     = g.buffer_decl(kir::DType::U32, 0, 1, false); // hit_flags@1 (read)
+    const int  compacted = g.buffer_decl(kir::DType::U32, 0, 2, true);  // compacted@2 (write)
+    const int  count     = g.buffer_decl(kir::DType::U32, 0, 3, true);  // count@3 (write)
+    (void)as;                                                           // bound at descriptor 0 by the bridge; unread here
+    const int mark   = g.kernel_stmt_mark();
+    int       cursor = cu(0U);
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        g.stmt_materialize(cursor);                        // freeze cursor_i (the scene_light_cull idiom)
+        const int fi = g.buffer_load(flags, cu(i));
+        g.stmt_buffer_store(compacted, cursor, cu(i));     // UNCONDITIONAL store at cursor (overwritten unless committed)
+        cursor = g.binary(kir::KOp::Add, cursor, fi);      // advance by flag (0/1) — only a hit commits the store
+    }
+    g.stmt_materialize(cursor);
+    g.stmt_buffer_store(count, cu(0U), cursor);
+    kir::KEntry e;
+    e.stage             = kir::KStage::Compute;
+    e.local_size[0]     = 1U; // ONE thread — serial deterministic compact
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
+    return e;
+}
+
+// CEIR-19c STAGE 2: the inline TRACE witness graph (serializer test ONLY — decoupled from assets/ckir/wavefront_trace.ckir).
+// The wavefront's PRIMARY-ray trace: one thread per ray, inline-ray-query the REAL TLAS, write hit_flag (U32: 1 hit / 0 miss,
+// derived from the prim sentinel — the DECISION int the compact consumes) + hit_t (F32 distance, for shade's o+t·d re-derive).
+// Bindings: TLAS@0 (REAL), rays@1 (read, 6 f32/thread: origin+dir), hit_flag@2 (write, U32), hit_t@3 (write, F32). local_size=64.
+kir::KEntry build_trace_inline(kir::KGraph& g)
+{
+    const auto sh   = kir::make_shape({1});
+    const auto cf   = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const auto cu   = [&](crd::u32 v) { return g.constant(static_cast<double>(v), sh, kir::DType::U32); };
+    const int  as   = g.accel_struct_decl(0, 0);                   // REAL TLAS@0 — traced
+    const int  rays = g.buffer_decl(kir::DType::F32, 0, 1, false); // rays@1 (read)
+    const int  flag = g.buffer_decl(kir::DType::U32, 0, 2, true);  // hit_flag@2 (write, 1/0)
+    const int  outt = g.buffer_decl(kir::DType::F32, 0, 3, true);  // hit_t@3 (write)
+    const int  mark = g.kernel_stmt_mark();
+    const int  tid  = g.binary(kir::KOp::Add,
+                               g.binary(kir::KOp::Mul, g.builtin(kir::KBuiltin::WorkgroupIndex), cu(64U)),
+                               g.builtin(kir::KBuiltin::LocalInvocationIndex));
+    const int  base = g.binary(kir::KOp::Mul, tid, cu(6U));
+    const auto ld   = [&](crd::u32 k) { return g.buffer_load(rays, g.binary(kir::KOp::Add, base, cu(k))); };
+    const kir::KGraph::RtHit h = g.trace_ray_hit(as, ld(0U), ld(1U), ld(2U), ld(3U), ld(4U), ld(5U), cf(0.001), cf(1.0e30));
+    // hit_flag = (prim != 0xFFFFFFFF) ? 1 : 0 — the decision int; u32 CmpNe wraps identically GPU/oracle.
+    const int hitflag = g.cast(g.binary(kir::KOp::CmpNe, h.prim, cu(0xFFFFFFFFU)), kir::DType::U32);
+    g.stmt_buffer_store(flag, tid, hitflag);
+    g.stmt_buffer_store(outt, tid, h.t);
+    kir::KEntry e;
+    e.stage             = kir::KStage::Compute;
+    e.local_size[0]     = 64U;
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
+    return e;
+}
+
+// CEIR-19c STAGE 2: the inline SHADE witness graph (serializer test ONLY — decoupled from assets/ckir/wavefront_shade.ckir).
+// One thread per COMPACTED hit slot: re-derive the hit position o+t·d from the ray buffer + hit_t (NO stored hitpos — smaller
+// queue; t crosses as an f32 but feeds only the shadow-ray ORIGIN, decision-robust on a clean-separation scene), cast a shadow
+// ray toward a BAKED light L=(0,8,0) as P + s·(L-P) with tmax<1 (so the light itself is not an occluder; no normalize/length),
+// and write the lit/shadowed DECISION (1 = a shadow-ray MISS = unshadowed). local_size=1 (slot = WorkgroupIndex; the harness
+// dispatches groups=count). Bindings: TLAS@0 (REAL), compacted@1 (read), rays@2 (read), hit_t@3 (read), decision@4 (write U32).
+kir::KEntry build_shade_inline(kir::KGraph& g)
+{
+    const auto sh    = kir::make_shape({1});
+    const auto cf    = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const auto cu    = [&](crd::u32 v) { return g.constant(static_cast<double>(v), sh, kir::DType::U32); };
+    const int  as    = g.accel_struct_decl(0, 0);                   // REAL TLAS@0 — shadow rays
+    const int  comp  = g.buffer_decl(kir::DType::U32, 0, 1, false); // compacted@1 (read: hit ray indices)
+    const int  rays  = g.buffer_decl(kir::DType::F32, 0, 2, false); // rays@2 (read: 6 f32/ray)
+    const int  hitt  = g.buffer_decl(kir::DType::F32, 0, 3, false); // hit_t@3 (read)
+    const int  dec   = g.buffer_decl(kir::DType::U32, 0, 4, true);  // decision@4 (write: 1 lit / 0 shadowed)
+    const int  mark  = g.kernel_stmt_mark();
+    const int  slot  = g.builtin(kir::KBuiltin::WorkgroupIndex);    // local_size=1 ⇒ slot = the workgroup index
+    const int  ridx  = g.buffer_load(comp, slot);                   // ray_idx
+    const int  base  = g.binary(kir::KOp::Mul, ridx, cu(6U));
+    const auto rload = [&](crd::u32 k) { return g.buffer_load(rays, g.binary(kir::KOp::Add, base, cu(k))); };
+    const int  ox = rload(0U);
+    const int  oy = rload(1U);
+    const int  oz = rload(2U);
+    const int  dx = rload(3U);
+    const int  dy = rload(4U);
+    const int  dz = rload(5U);
+    const int  t  = g.buffer_load(hitt, ridx);
+    const int  px = g.binary(kir::KOp::Add, ox, g.binary(kir::KOp::Mul, t, dx)); // hitpos = o + t·d
+    const int  py = g.binary(kir::KOp::Add, oy, g.binary(kir::KOp::Mul, t, dy));
+    const int  pz = g.binary(kir::KOp::Add, oz, g.binary(kir::KOp::Mul, t, dz));
+    const int  sdx = g.binary(kir::KOp::Sub, cf(0.0), px); // shadow-ray dir = L - P, L=(0,8,0) (unnormalized; P + s·(L-P))
+    const int  sdy = g.binary(kir::KOp::Sub, cf(8.0), py);
+    const int  sdz = g.binary(kir::KOp::Sub, cf(0.0), pz);
+    // tmin skips the surface, tmax=0.999 stops just before L (the light is not an occluder — the P + s·(L-P), s<1 idiom).
+    const kir::KGraph::RtHit s = g.trace_ray_hit(as, px, py, pz, sdx, sdy, sdz, cf(0.001), cf(0.999));
+    const int lit = g.cast(g.binary(kir::KOp::CmpEq, s.prim, cu(0xFFFFFFFFU)), kir::DType::U32); // MISS ⇒ unshadowed ⇒ lit=1
+    g.stmt_buffer_store(dec, slot, lit);
+    kir::KEntry e;
+    e.stage             = kir::KStage::Compute;
+    e.local_size[0]     = 1U; // one thread per compacted slot (the harness dispatches groups=count)
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
     return e;
 }
 
@@ -219,74 +362,37 @@ TEST_CASE("CEIR-18b: the committed scene_light_cull_3d.ckir parses, round-trips 
     CHECK(differs);
 }
 
-// ── CEIR-18a-2 Stage 2b: the RE-AUTHORED light-cull builder (build_cluster_light_cull) is well-formed + regen-stable. ──
-// ⛔ The 18a-1 C++ builder was lost (deleted inside an uncommitted batch — no git history). This one is re-authored from
-// the ckir_render.hpp froxel helpers, KEPT IN-TREE as the `[.emitckir]` regen source, and re-parameterized to the SCENE's
-// counts (16 clusters / 4 lights = kMaxScenePointLights / cap 8) + the palette_snapshot HEADER-INDIRECTION form (section
-// bases read from header words, not flat buffers). This gate compiles it, pins its shape, and proves ckir_write/read
-// round-trips it byte-exact (so the committed .ckir the scene loads is a faithful serialization of THIS builder).
-TEST_CASE("CEIR-18a-2 Stage 2b: build_cluster_light_cull is a Compute kernel + round-trips byte-exact",
+// ── CEIR-18a-2/18b: the light-cull kernels are AUTHORED `.ckir` assets (assets/ckir/scene_light_cull.ckir + _3d.ckir) — the
+// 2D tiled (16 clusters) + 3D clustered (64 = 4×4×4) forms. ⛔⛔ NO C++ BUILDER (the user's #1 mandate 2026-08-16: the
+// `.ckir` is the SOLE source, edited DIRECTLY; the [.emitckir] build→emit pattern is RETIRED). This gate LOADS both committed
+// assets + proves each is a Compute program (workgroup 64), round-trips byte-exact, AND emits GLSL (a kernel the emitter
+// refuses would null the pipeline). Device correctness (list==oracle==analytic, both backends) is the gpu-context
+// [lightcull]/[clustered3d] gates, which also LOAD the `.ckir` (read_cull_ckir).
+TEST_CASE("CEIR-18a-2/18b: the authored scene_light_cull{,_3d}.ckir are Compute programs that round-trip + emit GLSL",
           "[kir][asset][ceir18a2]")
 {
     crd::memory::TlsfAllocator a(8U << 20U);
-    kir::KGraph               g(&a);
-    kir::KEntry               e;
-    kir::LightCullParams      p; // scene defaults: 16 clusters, 4 lights, cap 8, null 4, words 110/113/114
-    REQUIRE(kir::build_cluster_light_cull(g, e, p));
-
-    CHECK(e.stage == kir::KStage::Compute);
-    CHECK(e.local_size[0] == 64U);
-    CHECK(g.size() > 0);
-    CHECK(g.stmt_count() > 0);
-    // ⛔ non-vacuous: a bad param is REFUSED (num_lights > cap, or null_index < num_lights).
+    for (const char* path : {CRD_REPO_DIR "/assets/ckir/scene_light_cull.ckir",
+                             CRD_REPO_DIR "/assets/ckir/scene_light_cull_3d.ckir"})
     {
-        kir::KGraph          gb(&a);
-        kir::KEntry          eb;
-        kir::LightCullParams bad;
-        bad.num_lights = 9U; // > cap 8
-        CHECK_FALSE(kir::build_cluster_light_cull(gb, eb, bad));
-    }
-    // regen-stable: the builder's graph survives ckir_write → ckir_read byte-exact (the .ckir is a faithful mirror).
-    CHECK(ckir_roundtrip_diff(g, e, &a) == -1);
-    UNSCOPED_INFO("[2b] light-cull nodes=" << g.size() << " stmts=" << g.stmt_count());
-    // ⛔ it must EMIT to GLSL (the device path) — a compute kernel the GLSL emitter refuses would null the pipeline.
-    kir::GlslKernel kern(&a);
-    const bool      glsl_ok = kir::emit_compute_kernel_glsl(g, e, &a, kern);
-    UNSCOPED_INFO("[2b] glsl_ok=" << glsl_ok << " src_len=" << kern.source.size());
-    CHECK(glsl_ok);
-}
-
-// HIDDEN GENERATOR ([.emitckir]): regenerate the committed scene_light_cull.ckir FROM build_cluster_light_cull. Run
-// explicitly: `crd-kir-tests.exe "[.emitckir]"`. This is the `[.emitckir]` regen path the tracker mandates — the builder
-// stays in-tree (uncommitted-delete-loses-source scar) and the asset is a faithful `ckir_write` of it. ⛔ Regenerate
-// whenever ckir_light_cull.hpp changes, then re-run the device cull gates (they load the committed asset).
-TEST_CASE("REGEN: emit scene_light_cull.ckir from build_cluster_light_cull", "[.emitckir]")
-{
-    crd::memory::TlsfAllocator a(8U << 20U);
-    // ⛔ CEIR-18b: the ONE builder emits BOTH the 2D tiled (16 clusters) and 3D clustered (64 = 4×4×4) assets — two
-    // PARAMETERIZATIONS of one source (num_clusters differs; threads stay 64 = the workgroup so cluster=LocalInvocationIndex
-    // still covers every cluster with one dispatch), NOT an inert copy. Re-run whenever ckir_light_cull.hpp changes, then
-    // re-run the device cull gates (they load the committed assets).
-    const auto emit = [&](const kir::LightCullParams& p, const char* path) {
+        std::ifstream f(path, std::ios::binary | std::ios::ate);
+        REQUIRE(f.good());
+        const std::streamsize sz = f.tellg();
+        REQUIRE(sz > 0);
+        f.seekg(0);
+        crd::containers::Array<char> src(&a);
+        src.resize(static_cast<crd::usize>(sz), '\0');
+        f.read(src.data(), sz);
         kir::KGraph g(&a);
         kir::KEntry e;
-        REQUIRE(kir::build_cluster_light_cull(g, e, p));
-        const crd::containers::String text = kir::ckir_write(g, e, &a);
-        FILE*                         f    = nullptr;
-#ifdef _MSC_VER
-        if (fopen_s(&f, path, "wb") != 0) { f = nullptr; }
-#else
-        f = std::fopen(path, "wb");
-#endif
-        REQUIRE(f != nullptr);
-        fwrite(text.c_str(), 1, text.size(), f);
-        fclose(f);
-    };
-    kir::LightCullParams p2d; // 16 clusters / 4 lights / cap 8 / null 4 / words 110,113,114
-    emit(p2d, CRD_REPO_DIR "/assets/ckir/scene_light_cull.ckir");
-    kir::LightCullParams p3d = p2d;
-    p3d.num_clusters         = 64U; // 4×4×4 — the ONLY change; threads stay 64 (one workgroup covers all 64 clusters)
-    emit(p3d, CRD_REPO_DIR "/assets/ckir/scene_light_cull_3d.ckir");
+        REQUIRE(kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), g, e).ok);
+        CHECK(e.stage == kir::KStage::Compute);
+        CHECK(e.local_size[0] == 64U);
+        CHECK(g.size() > 0);
+        CHECK(ckir_roundtrip_diff(g, e, &a) == -1);
+        kir::GlslKernel kern(&a);
+        CHECK(kir::emit_compute_kernel_glsl(g, e, &a, kern));
+    }
 }
 
 // ── CEIR-18p: the committed deferred_lighting.ckir parses, round-trips + is a fragment program. ──────────────────────
@@ -316,42 +422,9 @@ TEST_CASE("CEIR-18p: the committed deferred_lighting.ckir parses, round-trips + 
     CHECK(ckir_roundtrip_diff(g, e, &a) == -1);
 }
 
-// ── CEIR-18z: build the visibility-buffer FS graph (the id → graded-grey mapping the REN-38-F6 gate reads on the ordinary
-// colour output: (primId+1)·0.25). ⛔ This is the LAST hand-built KGraph in scene_renderer (the band-close ensure_* audit
-// found it — a builder, not a fixed pass-contract: it makes 3 authorable choices +1/·0.25/grey). The build body lives HERE
-// (the [.emitckir] regen source), IN-TREE until the user commits (the uncommitted-delete-loses-source scar); `ensure_visbuffer_fs`
-// is now a THIN resolve_program_text loader. create_program-native (NO lower — cast/add/mul/vec4), so ckir_read → create_program.
-inline void build_visbuffer_fs(crd::kir::KGraph& g, crd::kir::KEntry& e)
-{
-    const auto sh   = kir::make_shape({1});
-    const int  prim = g.cast(g.builtin(kir::KBuiltin::PrimitiveId), kir::DType::F32);
-    const int  grey = g.binary(kir::KOp::Mul,
-                               g.binary(kir::KOp::Add, prim, g.constant(1.0, sh, kir::DType::F32)),
-                               g.constant(0.25, sh, kir::DType::F32));
-    e        = kir::KEntry{};
-    e.stage  = kir::KStage::Fragment;
-    e.n_out  = 1;
-    e.out[0] = {g.vec4(grey, grey, grey, g.constant(1.0, sh, kir::DType::F32)), 0};
-}
-
-TEST_CASE("REGEN: emit visbuffer_fs.ckir from build_visbuffer_fs", "[.emitckir]")
-{
-    crd::memory::TlsfAllocator a(8U << 20U);
-    kir::KGraph               g(&a);
-    kir::KEntry               e;
-    build_visbuffer_fs(g, e);
-    const crd::containers::String text = kir::ckir_write(g, e, &a);
-    FILE*                         f    = nullptr;
-#ifdef _MSC_VER
-    if (fopen_s(&f, CRD_REPO_DIR "/assets/ckir/visbuffer_fs.ckir", "wb") != 0) { f = nullptr; }
-#else
-    f = std::fopen(CRD_REPO_DIR "/assets/ckir/visbuffer_fs.ckir", "wb");
-#endif
-    REQUIRE(f != nullptr);
-    fwrite(text.c_str(), 1, text.size(), f);
-    fclose(f);
-}
-
+// ── CEIR-18z: the visibility-buffer FS (id → graded-grey, (primId+1)·0.25) is an AUTHORED `.ckir` asset
+// (assets/ckir/visbuffer_fs.ckir). ⛔⛔ NO C++ BUILDER (the user's #1 mandate: the `.ckir` is the sole source, edited
+// directly). The load gate below is its only test here; the BEHAVIORAL verdict is the REN-38-F6 device gate.
 // ── CEIR-18z: the committed visbuffer_fs.ckir parses, round-trips + is a fragment program. ────────────────────────────
 // ensure_visbuffer_fs (scene_renderer.cpp) is now a THIN asset-load — the last hand-built FS is an authored asset. This gate
 // proves the COMMITTED asset parses + round-trips byte-exact + has the visbuffer FS shape; the BEHAVIORAL verdict (the
@@ -433,6 +506,35 @@ TEST_CASE("CEIR-19b: the authored rt_composite.ckir parses, round-trips + is a F
     REQUIRE(kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), g, e).ok);
     CHECK(e.stage == kir::KStage::Fragment);
     CHECK(e.n_out == 1);
+    // ⛔⛔ CEIR-19z-3 (F2): the shadow-multiply is now AUTHORED IN (was a 4-node passthrough) — scene_hdr is sampled AND
+    // shadow_mask_buf is read via StorageLoad (the fullscreen `constants` slot, the taa_resolve precedent) indexed
+    // py*TexSize(scene_hdr).x + px from FragCoord, then Splat×Mul darkens the shadowed pixels. Device correctness (the
+    // occluded pixel is DARKER than the lit one) is the CEIR-19b scene-render gate; here: it round-trips byte-exact.
+    CHECK(g.size() >= 18); // the F2 multiply chain (FragCoord + TexSize + StorageLoad + Splat/Mul), not the passthrough
+    CHECK(ckir_roundtrip_diff(g, e, &a) == -1); // the TexSize a/b/d operand gap + the Builtin vec4 survive the text form
+}
+
+// ── CEIR-19c: the SERIALIZER round-trips the inline-ray-query encodings (the RayHitResult node + the TraceRayHit stmt's 9
+// global-ext operands). A SERIALIZER proof over an INLINE graph (the test_lower.cpp precedent — NOT an asset builder;
+// assets/ckir/rt_witness.ckir is authored + verified separately, the mandate-#1 coupling line). It pins the text form every
+// stage-2 wavefront kernel needs BEFORE one is authored — these encodings were never exercised through the text form.
+TEST_CASE("CEIR-19c: ckir_write/read round-trips an inline-ray-query kernel (AccelStructDecl + TraceRayHit) + emits GLSL/HLSL",
+          "[kir][asset][ceir19c]")
+{
+    crd::memory::TlsfAllocator a(8U << 20U);
+    kir::KGraph                g(&a);
+    const kir::KEntry          e = build_rt_witness_inline(g);
+    CHECK(g.size() > 0);
+    CHECK(e.stage == kir::KStage::Compute);
+    // ⭐ the FORMAT PROOF: write -> read -> re-serialize is BYTE-IDENTICAL (the RayHitResult node + the TraceRayHit stmt's
+    // global-ext operand array survive the text round-trip — never exercised before this kernel).
+    CHECK(ckir_roundtrip_diff(g, e, &a) == -1);
+    // ⛔ it must EMIT on BOTH device paths — rayQuery needs GLSL #version 460 (the 450 scar) + HLSL cs_6_5 (SM 6.5 inline RayQuery).
+    kir::GlslKernel gk(&a);
+    CHECK(kir::emit_compute_kernel_glsl(g, e, &a, gk));
+    CHECK(std::strstr(gk.source.c_str(), "#version 460") != nullptr);
+    kir::GlslKernel hk(&a);
+    CHECK(kir::emit_compute_kernel_hlsl(g, e, &a, hk));
 }
 
 // ── CEIR-18p: the committed taa_resolve.ckir parses, round-trips + is a fragment program. ────────────────────────────
@@ -441,6 +543,188 @@ TEST_CASE("CEIR-19b: the authored rt_composite.ckir parses, round-trips + is a F
 // TAA FS shape, and exercises the ckir form's harder corners the small fixtures never hit: tex_sample_at's texture-INDEX
 // operand, int_bits_to_float, storage_load. Device correctness (the velocity/TAA render on both backends) is the REN-41
 // gate in tests/scene-render; the NDC±Y sign is a RUNTIME constant (word 20) so this ONE asset is backend-neutral.
+// ── CEIR-19c STAGE 2: the SERIALIZER round-trips the serial-compact kernel (Materialize + unconditional-BufferStore cursor
+// chains). A SERIALIZER proof over an INLINE graph — NOT the source of assets/ckir/wavefront_compact.ckir (the coupling line).
+TEST_CASE("CEIR-19c: ckir_write/read round-trips the serial-compact kernel + emits GLSL/HLSL", "[kir][asset][ceir19c]")
+{
+    crd::memory::TlsfAllocator a(8U << 20U);
+    kir::KGraph                g(&a);
+    const kir::KEntry          e = build_compact_inline(g, 8U);
+    CHECK(g.size() > 0);
+    CHECK(e.stage == kir::KStage::Compute);
+    CHECK(e.local_size[0] == 1U);
+    CHECK(ckir_roundtrip_diff(g, e, &a) == -1);
+    kir::GlslKernel gk(&a);
+    REQUIRE(kir::emit_compute_kernel_glsl(g, e, &a, gk));
+    CHECK(std::strstr(gk.source.c_str(), "#version 460") != nullptr); // the DEAD AccelStructDecl forces #version 460
+    kir::GlslKernel hk(&a);
+    CHECK(kir::emit_compute_kernel_hlsl(g, e, &a, hk));
+}
+
+// ── CEIR-19c STAGE 2: the AUTHORED wavefront_compact.ckir is the serial stream-compaction kernel. NO C++ BUILDER (mandate #1:
+// the .ckir is the SOLE source). Pins ASSET-INTRINSIC facts ONLY (never compares to a builder's output — the coupling line):
+// loads, is a Compute program (local_size=1, the serial single thread), round-trips byte-exact, emits GLSL (#version 460, the
+// dead AccelStructDecl forces it) + HLSL. Device correctness (GPU compacted+count == oracle == hand-computed) is the isolated
+// device gate in tests/gpu-context-{vulkan,dx12}.
+TEST_CASE("CEIR-19c: the authored wavefront_compact.ckir is a serial-compact Compute program that round-trips + emits GLSL+HLSL",
+          "[kir][asset][ceir19c]")
+{
+    std::ifstream f(CRD_REPO_DIR "/assets/ckir/wavefront_compact.ckir", std::ios::binary | std::ios::ate);
+    REQUIRE(f.good());
+    const std::streamsize sz = f.tellg();
+    REQUIRE(sz > 0);
+    f.seekg(0);
+    crd::memory::TlsfAllocator   a(8U << 20U);
+    crd::containers::Array<char> src(&a);
+    src.resize(static_cast<crd::usize>(sz), '\0');
+    f.read(src.data(), sz);
+    kir::KGraph g(&a);
+    kir::KEntry e;
+    REQUIRE(kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), g, e).ok);
+    CHECK(g.size() > 0);
+    CHECK(e.stage == kir::KStage::Compute);
+    CHECK(e.local_size[0] == 1U); // ONE thread — the serial deterministic compact
+    CHECK(ckir_roundtrip_diff(g, e, &a) == -1);
+    kir::GlslKernel gk(&a);
+    REQUIRE(kir::emit_compute_kernel_glsl(g, e, &a, gk));
+    CHECK(std::strstr(gk.source.c_str(), "#version 460") != nullptr);
+    kir::GlslKernel hk(&a);
+    CHECK(kir::emit_compute_kernel_hlsl(g, e, &a, hk));
+}
+
+// ── CEIR-19c STAGE 2: the SERIALIZER round-trips the wavefront TRACE kernel (TraceRayHit + a CmpNe/Cast hit_flag). A
+// SERIALIZER proof over an INLINE graph — NOT the source of assets/ckir/wavefront_trace.ckir (the coupling line).
+TEST_CASE("CEIR-19c: ckir_write/read round-trips the wavefront trace kernel + emits GLSL/HLSL", "[kir][asset][ceir19c]")
+{
+    crd::memory::TlsfAllocator a(8U << 20U);
+    kir::KGraph                g(&a);
+    const kir::KEntry          e = build_trace_inline(g);
+    CHECK(g.size() > 0);
+    CHECK(e.stage == kir::KStage::Compute);
+    CHECK(ckir_roundtrip_diff(g, e, &a) == -1);
+    kir::GlslKernel gk(&a);
+    REQUIRE(kir::emit_compute_kernel_glsl(g, e, &a, gk));
+    CHECK(std::strstr(gk.source.c_str(), "#version 460") != nullptr);
+    CHECK(std::strstr(gk.source.c_str(), "rayQuery") != nullptr);
+    kir::GlslKernel hk(&a);
+    CHECK(kir::emit_compute_kernel_hlsl(g, e, &a, hk));
+}
+
+// ── CEIR-19c STAGE 2: the AUTHORED wavefront_trace.ckir is the primary-ray trace kernel. NO C++ BUILDER (mandate #1). Pins
+// ASSET-INTRINSIC facts ONLY (never compares to a builder — the coupling line): loads, is a Compute program (local_size=64),
+// round-trips byte-exact, emits rayQuery on BOTH device paths. Device correctness (GPU hit_flag/hit_t == oracle + analytic) is
+// the isolated device gate in tests/gpu-context-{vulkan,dx12}.
+TEST_CASE("CEIR-19c: the authored wavefront_trace.ckir is a Compute inline-ray-query kernel that round-trips + emits GLSL+HLSL",
+          "[kir][asset][ceir19c]")
+{
+    std::ifstream f(CRD_REPO_DIR "/assets/ckir/wavefront_trace.ckir", std::ios::binary | std::ios::ate);
+    REQUIRE(f.good());
+    const std::streamsize sz = f.tellg();
+    REQUIRE(sz > 0);
+    f.seekg(0);
+    crd::memory::TlsfAllocator   a(8U << 20U);
+    crd::containers::Array<char> src(&a);
+    src.resize(static_cast<crd::usize>(sz), '\0');
+    f.read(src.data(), sz);
+    kir::KGraph g(&a);
+    kir::KEntry e;
+    REQUIRE(kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), g, e).ok);
+    CHECK(g.size() > 0);
+    CHECK(e.stage == kir::KStage::Compute);
+    CHECK(e.local_size[0] == 64U);
+    CHECK(ckir_roundtrip_diff(g, e, &a) == -1);
+    kir::GlslKernel gk(&a);
+    REQUIRE(kir::emit_compute_kernel_glsl(g, e, &a, gk));
+    CHECK(std::strstr(gk.source.c_str(), "#version 460") != nullptr);
+    CHECK(std::strstr(gk.source.c_str(), "rayQuery") != nullptr);
+    kir::GlslKernel hk(&a);
+    CHECK(kir::emit_compute_kernel_hlsl(g, e, &a, hk));
+}
+
+// ── CEIR-19c STAGE 2: the SERIALIZER round-trips the wavefront SHADE kernel (hitpos re-derive + shadow-ray + a CmpEq decision).
+// A SERIALIZER proof over an INLINE graph — NOT the source of assets/ckir/wavefront_shade.ckir (the coupling line).
+TEST_CASE("CEIR-19c: ckir_write/read round-trips the wavefront shade kernel + emits GLSL/HLSL", "[kir][asset][ceir19c]")
+{
+    crd::memory::TlsfAllocator a(8U << 20U);
+    kir::KGraph                g(&a);
+    const kir::KEntry          e = build_shade_inline(g);
+    CHECK(g.size() > 0);
+    CHECK(e.stage == kir::KStage::Compute);
+    CHECK(e.local_size[0] == 1U);
+    CHECK(ckir_roundtrip_diff(g, e, &a) == -1);
+    kir::GlslKernel gk(&a);
+    REQUIRE(kir::emit_compute_kernel_glsl(g, e, &a, gk));
+    CHECK(std::strstr(gk.source.c_str(), "#version 460") != nullptr);
+    CHECK(std::strstr(gk.source.c_str(), "rayQuery") != nullptr);
+    kir::GlslKernel hk(&a);
+    CHECK(kir::emit_compute_kernel_hlsl(g, e, &a, hk));
+}
+
+// ── CEIR-19c STAGE 2: the AUTHORED wavefront_shade.ckir is the shade kernel. NO C++ BUILDER (mandate #1). Pins ASSET-INTRINSIC
+// facts ONLY (the coupling line): loads, is a Compute program (local_size=1), round-trips byte-exact, emits rayQuery on BOTH
+// device paths. Device correctness (GPU lit/shadowed decision == oracle + analytic) is the isolated device gate + the wavefront.
+TEST_CASE("CEIR-19c: the authored wavefront_shade.ckir is a Compute shadow-ray kernel that round-trips + emits GLSL+HLSL",
+          "[kir][asset][ceir19c]")
+{
+    std::ifstream f(CRD_REPO_DIR "/assets/ckir/wavefront_shade.ckir", std::ios::binary | std::ios::ate);
+    REQUIRE(f.good());
+    const std::streamsize sz = f.tellg();
+    REQUIRE(sz > 0);
+    f.seekg(0);
+    crd::memory::TlsfAllocator   a(8U << 20U);
+    crd::containers::Array<char> src(&a);
+    src.resize(static_cast<crd::usize>(sz), '\0');
+    f.read(src.data(), sz);
+    kir::KGraph g(&a);
+    kir::KEntry e;
+    REQUIRE(kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), g, e).ok);
+    CHECK(g.size() > 0);
+    CHECK(e.stage == kir::KStage::Compute);
+    CHECK(e.local_size[0] == 1U);
+    CHECK(ckir_roundtrip_diff(g, e, &a) == -1);
+    kir::GlslKernel gk(&a);
+    REQUIRE(kir::emit_compute_kernel_glsl(g, e, &a, gk));
+    CHECK(std::strstr(gk.source.c_str(), "#version 460") != nullptr);
+    CHECK(std::strstr(gk.source.c_str(), "rayQuery") != nullptr);
+    kir::GlslKernel hk(&a);
+    CHECK(kir::emit_compute_kernel_hlsl(g, e, &a, hk));
+}
+
+// ── CEIR-19c: the AUTHORED rt_witness.ckir (assets/ckir/rt_witness.ckir) is the STAGE-1 bridge witness — the trivial
+// one-ray_query inline-rayQuery kernel. NO C++ BUILDER (mandate #1: the .ckir is the SOLE source, authored directly). This
+// gate LOADS the committed asset + proves it is a Compute program, round-trips byte-exact, AND emits rayQuery on BOTH device
+// paths (GLSL #version 460 + rayQueryEXT; HLSL cs_6_5). Pins ASSET-INTRINSIC facts ONLY — it never compares to a C++ builder's
+// output (the mandate coupling line). Device correctness (execute_rt_lowered + the oracle prim-id compare, both backends +
+// lavapipe) is the CEIR-19c stage-1 device gate.
+TEST_CASE("CEIR-19c: the authored rt_witness.ckir is a Compute inline-ray-query kernel that round-trips + emits GLSL+HLSL",
+          "[kir][asset][ceir19c]")
+{
+    std::ifstream f(CRD_REPO_DIR "/assets/ckir/rt_witness.ckir", std::ios::binary | std::ios::ate);
+    REQUIRE(f.good());
+    const std::streamsize sz = f.tellg();
+    REQUIRE(sz > 0);
+    f.seekg(0);
+    crd::memory::TlsfAllocator   a(8U << 20U);
+    crd::containers::Array<char> src(&a);
+    src.resize(static_cast<crd::usize>(sz), '\0');
+    f.read(src.data(), sz);
+    kir::KGraph g(&a);
+    kir::KEntry e;
+    REQUIRE(kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), g, e).ok);
+    CHECK(g.size() > 0);
+    CHECK(e.stage == kir::KStage::Compute);
+    CHECK(e.local_size[0] == 64U);
+    CHECK(ckir_roundtrip_diff(g, e, &a) == -1);
+    // ⛔ BOTH device paths — an AccelStructDecl forces GLSL #version 460 (the 450 rayQuery scar); the TraceRayHit lowers to
+    // rayQueryEXT. A refused RT op would null the pipeline (the compute-emitter-lag scar).
+    kir::GlslKernel gk(&a);
+    REQUIRE(kir::emit_compute_kernel_glsl(g, e, &a, gk));
+    CHECK(std::strstr(gk.source.c_str(), "#version 460") != nullptr);
+    CHECK(std::strstr(gk.source.c_str(), "rayQuery") != nullptr);
+    kir::GlslKernel hk(&a);
+    CHECK(kir::emit_compute_kernel_hlsl(g, e, &a, hk));
+}
+
 TEST_CASE("CEIR-18p: the committed taa_resolve.ckir parses, round-trips + is a fragment program",
           "[kir][asset][ckir18q]")
 {

@@ -419,6 +419,91 @@ TEST_CASE("CEIR-15e: shipped frame assets lower identically through the CEIR pat
     SECTION("forward_plus") { gate_shipped_asset("forward_plus", alloc); }
     SECTION("forward_plus_gpu") { gate_shipped_asset("forward_plus_gpu", alloc); }
     SECTION("forward_clustered_3d_gpu") { gate_shipped_asset("forward_clustered_3d_gpu", alloc); }
+    // ⛔⛔ CEIR-19z-2: rt_shadow is the FIRST shipped asset with a compute pass carrying a DISTINCT storage read + write
+    // (rt_constants READ + worldpos_buf WRITE), a raytrace.pipeline pass, AND a raster.geometry depth-transient — the exact
+    // shapes the bridge-vs-runtime slot-order + depth-format drift (scar #1/#2) lives in. Never A/B-gated before this slice.
+    SECTION("rt_shadow") { gate_shipped_asset("rt_shadow", alloc); }
+}
+
+// ── ⛔⛔ CEIR-19z-2: the bridge's compute/RT storage-slot order MUST be READS-FIRST, matching the RUNTIME kernel-binding
+// contract (frame_runtime.cpp ~L1200: "a COMPUTE pass's kernel bindings are its declared BUFFER reads then writes"). The
+// A/B gate above proves the bridge is STABLE across the ceir.frame round-trip, but it structurally CANNOT see bridge-vs-
+// runtime drift — both A and B go through the SAME bridge. This asserts the ABSOLUTE slot the bridge assigns each buffer,
+// so a regression to writes-first FAILS here. Oracle = the runtime contract (its reads-first order is stated at that line);
+// the 3-device CEIR-19b/19c gates prove the runtime side binds reads-first with the SAME assets. Parses the REAL
+// rt_shadow.frame.toml so the pass shapes can never drift from the shipped asset. A live bridge-EXECUTION vs runtime pixel
+// comparison is a real coverage gap (build_frame_graph_template has no device caller today) — DEFERRED to 19z-4's ledger. ──
+TEST_CASE("CEIR-19z-2: rt_shadow's compute + raytrace passes bind storage READS-FIRST and route the depth transient to depth",
+          "[framecook][ceir19z][bridge]")
+{
+    crd::memory::TlsfAllocator alloc(8U << 20U, nullptr, "ceir19z-slot-order");
+    crd::containers::String    path(&alloc);
+    path.append(CRD_FRAME_ASSETS_DIR);
+    path.append("/rt_shadow.frame.toml");
+    crd::containers::String toml(&alloc);
+    REQUIRE(crd::platform::fs::read_file_text(crd::platform::fs::Path{StringView(path.c_str(), path.size())}, toml));
+    fc::FrameGraphDesc      desc(&alloc);
+    crd::containers::String where(&alloc);
+    REQUIRE(fc::parse_frame_toml(StringView(toml.c_str(), toml.size()), desc, &where) == fc::FrameCookError::Ok);
+
+    crd::renderasset::DiagnosticList diags(&alloc);
+    rp::ExecutorRegistry             schemas(&alloc);
+    REQUIRE(rp::register_builtin_executors(schemas, diags) == 13U);
+    rg::FrameGraphTemplate tmpl(&alloc);
+    REQUIRE(fc::build_frame_graph_template(desc, four_cascades, nullptr, schemas, tmpl, diags));
+    REQUIRE_FALSE(diags.has_errors());
+
+    // ⛔ the bridge mixes a per-INSTANCE salt into the pass name_hash (frame_template_bridge.cpp: `name_hash(d.name) ^
+    // (inst+1)*0x9E3779B97F4A7C15`) so N for_each-expanded passes are distinct nodes. rt_shadow's passes are all single-
+    // instance (inst=0), so the salt is the golden-ratio constant once — mirror it to find a pass by its authored name.
+    const auto pass_by_name = [&](const char* n) -> const rg::GraphPass* {
+        const u64 h = rp::pass_param_id(StringView(n)) ^ 0x9E3779B97F4A7C15ULL;
+        for (u32 i = 0; i < tmpl.passes().size(); ++i)
+        {
+            if (tmpl.passes()[i].name_hash == h) { return &tmpl.passes()[i]; }
+        }
+        return nullptr;
+    };
+    // the ABSOLUTE slot a named resource is bound to in a pass (0 ⇒ not bound — pass_param_id is never 0 for a real slot).
+    const auto slot_of = [&](const rg::GraphPass& p, const char* res) -> u64 {
+        const u64 rh = rp::pass_param_id(StringView(res));
+        for (u32 i = 0; i < p.payload.resources.size(); ++i)
+        {
+            if (p.payload.resources[i].resource_id == rh) { return p.payload.resources[i].slot_name_hash; }
+        }
+        return 0U;
+    };
+    const u64 s0  = rp::pass_param_id(StringView("storage"));
+    const u64 s1  = rp::pass_param_id(StringView("storage1"));
+    const u64 smp = rp::pass_param_id(StringView("sampled"));
+    const u64 acc = rp::pass_param_id(StringView("accel"));
+    const u64 dep = rp::pass_param_id(StringView("depth"));
+
+    // 1) the COMPUTE prepass (map_compute) — READS-FIRST: rt_constants (buffer READ) → storage0, worldpos_buf (WRITE) →
+    //    storage1; scene_depth (a SAMPLED image) → the `sampled` slot, never a storage slot. This is the exact binding
+    //    rt_worldpos.ckir authors to (rt_constants @ n0, worldpos @ n1) — a writes-first bridge would swap them.
+    const rg::GraphPass* cp = pass_by_name("shadow_prepass");
+    REQUIRE(cp != nullptr);
+    CHECK(slot_of(*cp, "rt_constants") == s0);
+    CHECK(slot_of(*cp, "worldpos_buf") == s1);
+    CHECK(slot_of(*cp, "scene_depth") == smp);
+
+    // 2) the RAYTRACE.PIPELINE pass (map_rt_common — a SEPARATE code path, its own reads-first fix): worldpos_buf (READ)
+    //    → storage0, shadow_mask_buf (WRITE) → storage1; scene_tlas → the `accel` slot (descriptor 0), never storage.
+    const rg::GraphPass* rt = pass_by_name("rt_shadow");
+    REQUIRE(rt != nullptr);
+    CHECK(slot_of(*rt, "worldpos_buf") == s0);
+    CHECK(slot_of(*rt, "shadow_mask_buf") == s1);
+    CHECK(slot_of(*rt, "scene_tlas") == acc);
+
+    // 3) the raster.geometry forward pass (scar #2): its DECLARED depth transient scene_depth routes to the `depth` slot,
+    //    NOT a colour slot — a PLAIN geometry pass (not MRT) declaring a depth transient must still bind depth (the runtime's
+    //    old bug dropped it to a companion when it gated depth routing on pass_flag(kMrt); the bridge routes by format).
+    const rg::GraphPass* fwd = pass_by_name("forward");
+    REQUIRE(fwd != nullptr);
+    CHECK(slot_of(*fwd, "scene_depth") == dep);
+    CHECK(slot_of(*fwd, "scene_hdr") != dep);  // the colour primary is a colour slot, not depth
+    CHECK(slot_of(*fwd, "scene_hdr") != 0U);   // …and it IS bound (a colour write)
 }
 
 TEST_CASE("RAF-8: an amplification pass kind now MAPS (the RAF-8 tail closed the gap)", "[framecook][raf8][bridge]")

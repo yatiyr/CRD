@@ -6,6 +6,7 @@
 #include <vulkan/vulkan.h>
 
 #include <atomic>
+#include <cstring>
 #include <mutex>
 
 namespace crd::gpu
@@ -166,6 +167,25 @@ void ValidationCapture::reset() noexcept
     std::lock_guard<std::mutex> lk(m_impl->records_mu);
     m_impl->records.clear();
     m_impl->records_dropped = 0;
+}
+
+crd::u32 validation_layer_spec_version() noexcept
+{
+    // `vkEnumerateInstanceLayerProperties` is a global command (no instance needed). A fixed stack array avoids an
+    // allocator here (no hidden malloc); 64 covers any real machine's instance-layer count, and if the loader reports
+    // more (VK_INCOMPLETE) the validation layer sorts early, so scanning the first 64 still finds it.
+    crd::u32 count = 0U;
+    if (vkEnumerateInstanceLayerProperties(&count, nullptr) != VK_SUCCESS || count == 0U) { return 0U; }
+    constexpr crd::u32 max_layers = 64U;
+    if (count > max_layers) { count = max_layers; }
+    VkLayerProperties props[max_layers];
+    const VkResult    r = vkEnumerateInstanceLayerProperties(&count, props);
+    if (r != VK_SUCCESS && r != VK_INCOMPLETE) { return 0U; }
+    for (crd::u32 i = 0U; i < count; ++i)
+    {
+        if (std::strcmp(props[i].layerName, "VK_LAYER_KHRONOS_validation") == 0) { return props[i].specVersion; }
+    }
+    return 0U;
 }
 
 } // namespace crd::gpu

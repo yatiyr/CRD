@@ -81,8 +81,9 @@ depth_bias_slope = 1.5
 # ⛔ `reads = ["shadow_atlas", "instances"]`: the atlas read makes it SHADOWED (the comparison-sampler bind); the
 # `instances` read is the ORDERING EDGE that places this pass AFTER `light_cull` (the graph orders by declared reads/
 # writes). `instances` is an external_buffer (NOT indirect_args), so it does NOT switch the draw to indirect — the draws
-# stay direct (no cull_args in this graph). The clustered FS is selected by set_shadow_technique("forward_authored_clustered"),
-# same aspirational-`technique`-field caveat as forward_plus (CEIR-18a-3).
+# stay direct (no cull_args in this graph). ⭐⭐ CEIR-18a-3 (LANDED): the clustered FS is selected by the `technique`
+# field below — the renderer READS it (init_programs) and cooks the shadowed forward FS from it. ~~aspirational: the FS
+# is selected by set_shadow_technique("forward_authored_clustered")~~ — struck: the field is load-bearing now, no setter.
 [[pass]]
 name          = "forward"
 kind          = "raster.geometry"

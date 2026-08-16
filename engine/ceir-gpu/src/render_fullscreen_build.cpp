@@ -163,6 +163,19 @@ bool build_fullscreen_ceir(Context& ctx, const FullscreenBuildDesc& desc, contai
             push_access();
             ops[2U + nb++] = bimg->result(0U);
         }
+        // ⭐⭐ CEIR-19b-F2: the OPTIONAL constants buffer ALSO rides the PLAIN shape (not just bindless) — the RT-shadow
+        // COMPOSITE is a single sampled texture (scene_hdr) AND a per-pixel StorageBuffer (shadow_mask_buf) it StorageLoads.
+        // A StorageBuffer at slot 0 (Object frequency, its OWN set — no collision with the Material image slots). The
+        // encoder lowers this shape via draw_textured_storage (the verb bound to write_scene_textured's storage@0+image@1).
+        if (desc.constants_param != 0U)
+        {
+            Operation* const cbuf = ctx.create_operation(k_decl, {}, 1U, ctx.type_buffer(BufferMode::Plain, ctx.type_f32()));
+            ctx.set_attr(cbuf, "slot", ctx.attr_int(0));
+            ctx.set_attr(cbuf, "source", ctx.attr_int(static_cast<crd::i64>(desc.constants_param)));
+            rb->append(cbuf);
+            push_access();
+            ops[2U + nb++] = cbuf->result(0U);
+        }
     }
     Operation* const draw = ctx.create_operation(k_draw, containers::ConstSpan<Value*>(ops, 2U + nb), 0U);
     // ⛔ the @program symbol is a PLACEHOLDER (find_render_misuse: ProgramNotSymbol requires a Symbol) — the ACTUAL raster

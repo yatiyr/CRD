@@ -12,10 +12,10 @@
 #   * the LIGHTING itself -> `technique` on the forward pass (REN-37.2). Point it at a different `.crdt` and
 #                            every material re-shades: `standard_forward` (no shadows), `unlit`, a toon
 #                            technique someone authored. THAT is the frame graph reaching the fragment shader.
-#     ⛔⛔ ASPIRATIONAL TODAY (CEIR-18a F2, D-007): the renderer does NOT read this per-pass `technique` field — the
-#     forward FS is cooked from `set_forward_technique`/`set_shadow_technique` (scene_renderer.cpp:3101/3460), a
-#     per-draw fs_flat/fs_shadowed split the asset cannot see. Changing this field re-shades NOTHING until the
-#     "frame-graph technique field drives the FS cook" slice (CEIR-18a-3) lands. Filed so the claim stops costing days.
+#     ⭐⭐ CEIR-18a-3 (LANDED): the renderer READS this per-pass `technique` and cooks the shadowed forward FS from it
+#     (init_programs). ~~ASPIRATIONAL: the renderer does NOT read this field; the FS is cooked from
+#     set_forward_technique/set_shadow_technique, so changing this re-shades NOTHING~~ — struck: editing this field now
+#     re-shades the scene, no setter needed. The flat / shadows-off variant is named by the fallback (forward_basic).
 #
 # None of that requires recompiling the engine. That is the whole point of REN-36, and the reason this file
 # exists instead of the equivalent C++ in `scene_renderer.cpp`.

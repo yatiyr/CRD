@@ -4898,6 +4898,22 @@ public:
         draw_sampled(target, program, clear, static_cast<Dx12Texture&>(texture), 0U, vertex_count);
     }
 
+    // ⭐⭐ CEIR-19b-F2: a single sampled texture (scene_hdr, SRV t1) + a per-pixel STORAGE buffer (shadow_mask_buf, UAV u0)
+    // — the RT shadow composite. draw_textured binds only the SRV; this binds BOTH so the FS StorageLoads the mask. The
+    // storage table was ONLY ever bound on the bindless/TAA branch. Frame-recorded only; see record_textured_storage.
+    void draw_textured_storage(IRasterTarget& target, IRasterProgram& program, ClearColor clear, ITexture& texture,
+                               IStorageBuffer& storage, crd::u32 vertex_count)
+    {
+        if (!m_ok || m_uav_heap == nullptr || m_sampler_heap == nullptr || !frame_recording()) { return; }
+        auto&                t   = static_cast<Dx12RasterTarget&>(target);
+        auto&                p   = static_cast<Dx12RasterProgram&>(program);
+        auto&                s   = static_cast<Dx12StorageBuffer&>(storage);
+        ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U,
+                                            t.color_format());
+        if (!p.valid() || pso == nullptr) { return; }
+        record_textured_storage(t, p, pso, static_cast<Dx12Texture&>(texture), s, 0U, clear, vertex_count);
+    }
+
     [[nodiscard]] std::unique_ptr<ITexture> create_depth_texture(crd::u32 width, crd::u32 height,
                                                                  const float* depth) override
     {
@@ -6580,6 +6596,36 @@ private:
         // depth resource gets the comparison sampler at s2, but a moment-CONVERT pass needs the STORED depth,
         // which only a plain sampler can return. The slot is always valid, so binding it costs nothing.
         m_list->SetGraphicsRootDescriptorTable(8, plain_depth_tbl());
+        m_list->SetPipelineState(pso);
+        apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
+        m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        m_list->DrawInstanced(vertex_count, 1, 0, 0);
+    }
+
+    // ⭐⭐ CEIR-19b-F2: record_textured + the STORAGE UAV at table 0 — the composite samples scene_hdr (SRV t1) AND
+    // StorageLoads its per-pixel shadow_mask (UAV u0). COLOR-only (no depth), mirroring record_textured (which binds no
+    // storage); record_scene_textured has the same u0+t1+s2 shape but is depth-tested. Without the u0 table a 1-read
+    // fullscreen FS that StorageLoads read an UNBOUND descriptor → 0 (the storage was only ever bound on the bindless branch).
+    void record_textured_storage(Dx12RasterTarget& t, Dx12RasterProgram& p, ID3D12PipelineState* pso, Dx12Texture& tex,
+                                 Dx12StorageBuffer& s, UINT sampler_slot, ClearColor clear_color, crd::u32 vertex_count)
+    {
+        const D3D12_GPU_DESCRIPTOR_HANDLE uav_table = frame_alloc_storage_slot(s);
+        const D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu   = frame_alloc_srv_slot(tex);
+        D3D12_GPU_DESCRIPTOR_HANDLE       samp_gpu  = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
+        samp_gpu.ptr += static_cast<UINT64>(active_sampler_slot(sampler_slot)) * m_sampler_inc; // REN-38-B8
+        const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
+        m_list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+        const float rgba[4] = {clear_color.r, clear_color.g, clear_color.b, clear_color.a};
+        m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
+        const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
+        const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
+        m_list->RSSetViewports(1, &vp);
+        m_list->RSSetScissorRects(1, &sc);
+        m_list->SetGraphicsRootSignature(p.root());
+        m_list->SetGraphicsRootDescriptorTable(0, uav_table); // storage (u0)
+        m_list->SetGraphicsRootDescriptorTable(1, srv_gpu);   // scene_hdr SRV (t1)
+        m_list->SetGraphicsRootDescriptorTable(2, samp_gpu);  // sampler (s2)
+        m_list->SetGraphicsRootDescriptorTable(8, plain_depth_tbl()); // s6 rides along (REN-40-D, like record_textured)
         m_list->SetPipelineState(pso);
         apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);

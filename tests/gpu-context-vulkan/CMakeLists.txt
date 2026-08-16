@@ -31,6 +31,8 @@ target_link_libraries(crd-gpu-context-vulkan-tests PRIVATE
     # is that the GPU kernel matches the code the renderer ACTUALLY culls with.
     crd-scene-render
     crd-vertex-cook          # REN-40-A: the authored [cull] asset the gate cooks
+    crd-ceir                 # CEIR-19c: build the ceir.rt program (blas/tlas/ray_query) the bridge lowers
+    crd-ceir-gpu             # CEIR-19c: lower_region + execute_rt_lowered (the ceir.rt->gpu execution bridge under test)
     Catch2::Catch2WithMain
 )
 

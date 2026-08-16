@@ -34,6 +34,16 @@ enum class LoweredKind : crd::u8
     BeginRender,
     Draw,
     EndRender,
+    // ── CEIR-19c ceir.rt (§134): the RAY-TRACING surface. `RayQuery` is a dispatch-shaped inline-rayQuery command (its %tlas
+    // rides the `op` operands — TLAS implicit at binding 0, SSBOs by binding-operand order, REN-38-A9; grid reuses
+    // groups_x/y/z via the const-grid path). `AccelBuild` covers the blas_build/instance_populate/tlas_build trio — the `op`
+    // back-pointer discriminates WHICH build + carries the geometry operands. ⛔ These target the RT executor
+    // (`execute_rt_lowered`, a caller-HOOK surface — ceir-gpu never links a backend, so it takes build-scene/trace-dispatch
+    // callbacks the way `execute_lowered` takes a KernelResolveFn), NOT the IComputeContext (`execute_lowered`) nor the raster
+    // (`render_materialize`) surfaces — BOTH reject them TYPED (UnsupportedCommand, the Transfer/render named-forward mirror).
+    // ⛔ append at END. `rt.trace` (pipeline) + `rt.sbt_build` lowering is DEFERRED (19z) — the wavefront PT uses inline ray_query.
+    RayQuery,
+    AccelBuild,
 };
 
 // The lowered TRANSFER op (CEIR-13b §50). ⛔ this is our OWN enum — the 5 SHIPPED 13b ops — NOT crd::gpu::TransferKind

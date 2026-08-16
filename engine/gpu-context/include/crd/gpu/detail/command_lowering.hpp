@@ -252,7 +252,20 @@ public:
             }
             if (ITexture* tex = plain_sampled_texture(packet.bindings); tex != nullptr)
             {
-                m_ctx.draw_textured(*color0, prog, clear, *tex, count);
+                // ⭐⭐ CEIR-19b-F2: a fullscreen pass with a single sampled texture AND a per-pixel storage buffer — the RT
+                // shadow COMPOSITE (scene_hdr @1 + shadow_mask_buf @0). `draw_textured` binds only the texture; the storage
+                // was ONLY ever bound on the bindless branch (draw_bindless_storage, the TAA shape), so a 1-read fullscreen
+                // FS that StorageLoads its constants read set0/binding0 UNBOUND → 0. The textured+storage verb binds BOTH
+                // (texture @1 + sampler @2 + storage @0). Gated on plain_sampled_texture() so it inherits the comparison-
+                // sampler exclusion (a shadow lookup can't be stolen here).
+                if (IStorageBuffer* sbuf = first_storage(packet.bindings); sbuf != nullptr)
+                {
+                    m_ctx.draw_textured_storage(*color0, prog, clear, *tex, *sbuf, count);
+                }
+                else
+                {
+                    m_ctx.draw_textured(*color0, prog, clear, *tex, count);
+                }
                 break;
             }
             // A plain attributeless draw. With an enabled depth attachment it is the DEPTH-TESTED fullscreen draw

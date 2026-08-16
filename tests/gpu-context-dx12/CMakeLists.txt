@@ -23,6 +23,8 @@ target_link_libraries(crd-gpu-context-dx12-tests PRIVATE
     crd-gpu-context-dx12
     crd-vertex-cook # REN-38-F13: the authored RT stages the F13 gate cooks
     crd-shader-cook          # D-007 D2: the offline cook (CKIR graph -> .crdr bundle) — the DXIL run-the-cooked-bytecode gate
+    crd-ceir                 # CEIR-19c: build the ceir.rt program (blas/tlas/ray_query) the bridge lowers
+    crd-ceir-gpu             # CEIR-19c: lower_region + execute_rt_lowered (the ceir.rt->gpu execution bridge under test)
     Catch2::Catch2WithMain
 )
 

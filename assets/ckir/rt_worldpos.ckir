@@ -1,4 +1,10 @@
 # .ckir - an authored CKIR program (node graph). A node editor reads this and turns it into CKIR.
+# ⛔⛔ CEIR-19b/19z-2 BINDING CONTRACT: this kernel is authored against the UNIFIED compute-storage-slot order, which is
+# READS-FIRST (reads → storage/storage1 before writes). Both lowerings now AGREE: the RUNTIME executor (frame_runtime.cpp
+# ~L1200, where the contract is stated) and frame_template_bridge map_compute (CEIR-19z-2 flipped it from writes-first to
+# match — the drift scar #1 filed is resolved). So rt_constants (READ) = binding 0 (n0), worldpos_buf (WRITE) = binding 1
+# (n1, iidx=1, axes=1 ⇒ writable). If that order is ever changed, FLIP n0/n1's iidx in the SAME commit or this kernel
+# reads worldpos as the constants and writes nothing.
 schema = 1
 
 [[entry]]

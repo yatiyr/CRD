@@ -463,8 +463,15 @@ bool map_compute(const FramePassDesc& d, const FrameGraphDesc& desc, rp::PassPay
     pl.params.push_back(rp::ParamValue{slot_id("groups_y"), tv_u32(gy)});
     pl.params.push_back(rp::ParamValue{slot_id("groups_z"), tv_u32(gz)});
 
-    // every buffer the kernel touches (writes then reads) → storage slots (schema ReadWrite; over-declared access is
-    // safe — it only adds ordering). An `untracked_storage` read is deliberately NOT tracked (avoids a cull cycle).
+    // every buffer the kernel touches → storage slots (schema ReadWrite; over-declared access is safe — it only adds
+    // ordering). ⛔⛔ CEIR-19z-2: READS-FIRST — the declared BUFFER reads take the low storage slots, THEN the writes.
+    // This MATCHES the RUNTIME frame executor's binding CONTRACT (frame_runtime.cpp ~L1200: "a COMPUTE pass's kernel
+    // bindings are its declared BUFFER reads then writes, in that order" — the storage-slot order a kernel binds by
+    // iidx). The two lowerings had DRIFTED (this map was writes-first, invisible while every bridged compute pass had
+    // ≤1 distinct storage buffer); a kernel authored to the runtime order (e.g. rt_worldpos.ckir: rt_constants READ @
+    // n0, worldpos WRITE @ n1) would otherwise read its output as input on the bridge path. An indirect-args read →
+    // `args` and a sampled image read → `sampled` take NO storage slot (the runtime likewise excludes them from
+    // kernel_bufs), so the reads loop's routing is preserved verbatim — only its position (now before writes) changed.
     crd::u32 s_i = 0U;
     const auto put = [&](const crd::containers::String& n) -> bool
     {
@@ -479,10 +486,6 @@ bool map_compute(const FramePassDesc& d, const FrameGraphDesc& desc, rp::PassPay
         ++s_i;
         return ok;
     };
-    for (crd::usize i = 0; i < d.writes.size(); ++i)
-    {
-        if (!put(d.writes[i].name)) { return false; }
-    }
     for (crd::usize i = 0; i < d.reads.size(); ++i)
     {
         const crd::u64 res = name_hash(d.reads[i].name);
@@ -515,6 +518,10 @@ bool map_compute(const FramePassDesc& d, const FrameGraphDesc& desc, rp::PassPay
         {
             if (!put(d.reads[i].name)) { return false; }
         }
+    }
+    for (crd::usize i = 0; i < d.writes.size(); ++i)
+    {
+        if (!put(d.writes[i].name)) { return false; }
     }
     return true;
 }
@@ -567,8 +574,9 @@ bool map_present(const FramePassDesc& d, rp::PassPayload& pl, DiagnosticList& di
 }
 
 // ── the RAY-TRACING families. Both bind the acceleration structure read + the storage buffers the shaders touch
-// (writes then non-accel reads → storage · storage1..3). The inline dispatch reads groups_x/y/z; the pipeline reads
-// groups_x/y (the ray-gen width × height). A ray-trace with no acceleration structure is rejected LOUDLY. ──
+// (non-accel reads then writes → storage · storage1..3, READS-FIRST per the runtime contract — CEIR-19z-2). The inline
+// dispatch reads groups_x/y/z; the pipeline reads groups_x/y (the ray-gen width × height). A ray-trace with no
+// acceleration structure is rejected LOUDLY. ──
 bool map_rt_common(const FramePassDesc& d, rp::PassPayload& pl, const rg::FrameGraphTemplate& out, bool three_groups,
                    DiagnosticList& diags)
 {
@@ -588,7 +596,10 @@ bool map_rt_common(const FramePassDesc& d, rp::PassPayload& pl, const rg::FrameG
     {
         pl.params.push_back(rp::ParamValue{slot_id("groups_z"), tv_u32(gz)});
     }
-    // the storage buffers: writes first, then non-accel reads (the ray-hit output + scene buffers) → storage*.
+    // the storage buffers: ⛔⛔ CEIR-19z-2 READS-FIRST — non-accel reads (scene buffers) take the low storage slots, THEN
+    // the writes (the ray-hit output). This matches the RUNTIME kernel-binding contract (frame_runtime.cpp ~L1200; its
+    // `pass_is_raytrace_pipeline` arm shares the reads-then-writes order). The acceleration structure binds to its OWN
+    // `accel` slot (descriptor 0), never a storage slot — order-independent. Was writes-first (the drift scar #1 filed).
     crd::u32   s_i        = 0U;
     const auto put_storage = [&](crd::u64 res) -> bool
     {
@@ -603,10 +614,6 @@ bool map_rt_common(const FramePassDesc& d, rp::PassPayload& pl, const rg::FrameG
         ++s_i;
         return ok;
     };
-    for (crd::usize i = 0; i < d.writes.size(); ++i)
-    {
-        if (!put_storage(name_hash(d.writes[i].name))) { return false; }
-    }
     bool accel_found = false;
     for (crd::usize i = 0; i < d.reads.size(); ++i)
     {
@@ -622,6 +629,10 @@ bool map_rt_common(const FramePassDesc& d, rp::PassPayload& pl, const rg::FrameG
             continue;
         }
         if (!put_storage(res)) { return false; }
+    }
+    for (crd::usize i = 0; i < d.writes.size(); ++i)
+    {
+        if (!put_storage(name_hash(d.writes[i].name))) { return false; }
     }
     if (!accel_found)
     {

@@ -5152,6 +5152,33 @@ public:
         vkCmdEndRendering(cmd);
     }
 
+    // ⭐⭐ CEIR-19b-F2: record_textured + the STORAGE descriptor at set0/binding0 — the composite samples scene_hdr AND
+    // StorageLoads its per-pixel shadow_mask. write_scene_textured lays down storage@0 + sampled@1 + sampler@2 (the textured
+    // scene-draw descriptor mold, m_storage_set_layout), so the authored FS's TexSample(@1) and StorageLoad(sbuf@0) both
+    // resolve. Without this, a 1-read fullscreen FS that StorageLoads read set0/binding0 UNBOUND (draw_textured binds no
+    // buffer) → 0 — the exact defect this verb closes (the storage was only ever bound on the bindless/TAA branch).
+    void record_textured_storage(VulkanRasterTarget& t, VulkanRasterProgram& p, VkImageView view, VkSampler sampler,
+                                 VulkanStorageBuffer& s, ClearColor clear_color, crd::u32 vertex_count)
+    {
+        VkCommandBuffer             cmd = m_frame_rec.cmd;
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool     = m_frame_rec.pool;
+        dsai.descriptorSetCount = 1U;
+        dsai.pSetLayouts        = &m_storage_set_layout;
+        VkDescriptorSet dset = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return; }
+        write_scene_textured(m_device, dset, s.buf(), view, sampler); // storage@0 + sampled@1 + sampler@2
+        frame_self_barrier_if_needed(t);
+        VkRenderingAttachmentInfo att = colour_clear_attachment(t.view(), clear_color);
+        VkRenderingInfo           ri  = one_colour_rendering(t, att);
+        vkCmdBeginRendering(cmd, &ri);
+        set_draw_state(cmd, t.width(), t.height(), 1U, false, VK_COMPARE_OP_ALWAYS);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
+        bind_and_draw(cmd, p, vertex_count);
+        vkCmdEndRendering(cmd);
+    }
+
     // ⭐⭐ REN-40-D: the binding-5 sampler for an atlas draw, chosen by WHAT THE ATLAS IS — comparison for a
     // depth atlas (a shadow lookup), LINEAR/CLAMP for a colour one (the moment atlas, whose whole point is
     // ordinary filterable sampling). Keyed off the texture, so no call site can pick wrong.
@@ -5678,6 +5705,19 @@ public:
     {
         draw_sampled(target, program, clear_color, static_cast<VulkanTexture&>(texture).view(), active_sampler(), // REN-38-B8
                      vertex_count);
+    }
+
+    // ⭐⭐ CEIR-19b-F2: a single sampled texture (scene_hdr @1) + a per-pixel STORAGE buffer (shadow_mask_buf @0) — the RT
+    // shadow composite. Frame-recorded only (the composite always records into the shared cmd); see record_textured_storage.
+    void draw_textured_storage(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, ITexture& texture,
+                               IStorageBuffer& storage, crd::u32 vertex_count)
+    {
+        auto& t = static_cast<VulkanRasterTarget&>(target);
+        auto& p = static_cast<VulkanRasterProgram&>(program);
+        auto& s = static_cast<VulkanStorageBuffer&>(storage);
+        if (!m_api.valid() || !p.valid() || !frame_recording()) { return; }
+        record_textured_storage(t, p, static_cast<VulkanTexture&>(texture).view(), active_sampler(), s, clear_color,
+                                vertex_count);
     }
 
     [[nodiscard]] std::unique_ptr<ITexture> create_depth_texture(crd::u32 width, crd::u32 height,

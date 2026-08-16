@@ -192,9 +192,16 @@ void lower_region(const Context& ctx, const Block& block, containers::Array<Lowe
         const bool                   direct   = nm == containers::StringView("compute.dispatch");
         const bool                   indirect = nm == containers::StringView("compute.dispatch_indirect");
         const bool                   scope    = nm == containers::StringView("render.scope"); // CEIR-14b
+        const bool                   ray_query = nm == containers::StringView("rt.ray_query"); // CEIR-19c ceir.rt
+        const bool                   accel_build = nm == containers::StringView("rt.blas_build")
+                                                   || nm == containers::StringView("rt.instance_populate")
+                                                   || nm == containers::StringView("rt.tlas_build");
         LoweredTransferKind          tk       = LoweredTransferKind::Copy;
         const bool                   transfer = transfer_kind_of(nm, tk);
-        if (!(direct || indirect || transfer || scope)) { continue; } // Pure consts/declares emit nothing
+        // ⛔ CEIR-19c: rt.trace (pipeline) + rt.sbt_build are DEFERRED (19z) — the wavefront PT uses inline ray_query, so they
+        // never appear in a 19c program; they are intentionally NOT in the recognized set (and would `continue` = emit nothing
+        // like a pure declare — a deferred lowering, not a silent drop of a shipped verb; see the LoweredKind doc + tracker).
+        if (!(direct || indirect || transfer || scope || ray_query || accel_build)) { continue; } // Pure consts/declares emit nothing
 
         // BARRIER: PER-RESOURCE (⭐ CEIR-13z-3). For each ROOT resource `op` accesses (binding-operand order, deduped), the
         // strongest hazard from any earlier lowered op touching it + the NEAREST such op (the last writer, reverse scan). A
@@ -258,6 +265,38 @@ void lower_region(const Context& ctx, const Block& block, containers::Array<Lowe
             end.kind = LoweredKind::EndRender;
             end.op   = op;
             out.push_back(end);
+            earlier.push_back(op);
+            continue;
+        }
+
+        // ── CEIR-19c ceir.rt: a ray_query is a dispatch-shaped RT command; the blas/instance/tlas build trio is ONE
+        // AccelBuild (the `op` name discriminates WHICH build). The %tlas + SSBO bindings + kernel_ref ride the `op`
+        // back-pointer (resolved at execute by execute_rt_lowered's caller HOOKS — ceir-gpu names no backend). ray_query's
+        // grid resolves from operands 0..2 (the direct-dispatch precedent); a non-const grid → dynamic_grid (execute-time).
+        // AccelBuild carries no grid. Barriers were gathered above (inert in execute_rt_lowered: each trace_dispatch is submit+wait).
+        if (ray_query || accel_build)
+        {
+            LoweredCommand c;
+            c.op   = op;
+            c.kind = ray_query ? LoweredKind::RayQuery : LoweredKind::AccelBuild;
+            if (ray_query && op->num_operands() >= 3U)
+            {
+                crd::u32 gx = 0U;
+                crd::u32 gy = 0U;
+                crd::u32 gz = 0U;
+                if (resolve_const_u32(ctx, op->operand(0U), gx) && resolve_const_u32(ctx, op->operand(1U), gy)
+                    && resolve_const_u32(ctx, op->operand(2U), gz))
+                {
+                    c.groups_x = gx;
+                    c.groups_y = gy;
+                    c.groups_z = gz;
+                }
+                else
+                {
+                    c.dynamic_grid = true;
+                }
+            }
+            out.push_back(c);
             earlier.push_back(op);
             continue;
         }

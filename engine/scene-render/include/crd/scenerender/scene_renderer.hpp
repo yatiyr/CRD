@@ -692,12 +692,18 @@ public:
     void set_csm_config(const CsmConfig& cfg) noexcept;
     [[nodiscard]] const CsmCascades& cascades() const noexcept;
 
-    // ── REN-37.2: WHICH LIGHTING TECHNIQUE shades this scene. ──
+    // ── REN-37.2 / CEIR-18a-3: WHICH LIGHTING TECHNIQUE shades this scene. ──
     // A NAME, not a code path — the name of a `.crdt` technique asset ("standard_forward", "unlit",
-    // "forward_csm", or anything an app registers). Call before `init_programs`; the programs are cooked there.
-    // ⛔ A name that does not resolve makes `init_programs` FAIL. It does not fall back to a default: rendering a
-    // plausible frame with the WRONG technique is exactly the class of lie the magenta error graph exists to
-    // prevent, and it would make "swap the technique" untestable (a typo would look like success).
+    // "forward_csm", or anything an app registers). ⭐⭐ CEIR-18a-3: the PRIMARY source of the forward technique is the
+    // INSTALLED frame graph's forward pass `technique` field — `init_programs` reads it and cooks the forward FS from
+    // it (the shadowed variant from the shadows-ON tier, the flat variant from the shadows-OFF fallback). ~~these
+    // setters SELECT the technique~~ — they are now the FALLBACK, honoured ONLY when that forward pass names NO
+    // technique (a field-less graph): set_forward_technique feeds the flat / shadows-off variant, set_shadow_technique
+    // the shadowed one. Call before `init_programs`; the programs are cooked there.
+    // ⛔ A name that does not resolve (from the graph OR a setter fallback) makes `init_programs` FAIL. It does not
+    // fall back to a default: rendering a plausible frame with the WRONG technique is exactly the class of lie the
+    // magenta error graph exists to prevent, and it would make "swap the technique" untestable (a typo would look
+    // like success).
     void set_forward_technique(const char* name) noexcept;
     void set_shadow_technique(const char* name) noexcept;
 
@@ -754,7 +760,8 @@ public:
     [[nodiscard]] bool set_scene_material(const char* opaque_id, const char* textured_id);
     // ⭐⭐ RAF-10: register an APPLICATION shading TECHNIQUE — the SAME `crd::kir::technique::Technique` struct the engine
     // registers its own with. Replayed after the built-ins in `init_programs`, so a same-named app technique SHADOWS the
-    // engine's (the library resolves by last-match). Select it with `set_forward_technique(name)`. The `Technique`'s
+    // engine's (the library resolves by last-match). Select it by NAMING it on an installed frame graph's forward-pass
+    // `technique` (CEIR-18a-3), or via the `set_forward_technique(name)` fallback for a field-less graph. The `Technique`'s
     // `body`/`bindings`/`options` must outlive the renderer (static app data, exactly like the engine's). Call before
     // `init_programs`. Returns false if impl is unset or the technique is invalid (no name, or neither body nor blob).
     [[nodiscard]] bool define_technique(const crd::kir::technique::Technique& technique);

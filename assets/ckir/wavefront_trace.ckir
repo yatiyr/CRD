@@ -1,0 +1,297 @@
+# wavefront_trace.ckir - CEIR-19c STAGE 2 (the WAVEFRONT): the PRIMARY-ray TRACE kernel. One thread per ray inline-ray-queries
+# the REAL TLAS and writes hit_flag (U32: 1 hit / 0 miss, derived from TraceRayHit's prim sentinel — the DECISION int the
+# serial compact consumes) + hit_t (F32 distance, for the shade kernel's o+t*d hit-position re-derivation). AUTHORED (mandate
+# #1: NO C++ builder; the .ckir is the SOLE source). BINDING CONTRACT: TLAS@0 (REAL — traced), rays@1 (read, 6 f32/thread:
+# origin.xyz + dir.xyz), hit_flag@2 (write, U32), hit_t@3 (write, F32). local_size=64 (size the ray/flag/t buffers to a
+# workgroup multiple so no tail thread reads/writes out of bounds — the stage-1 rt_witness no-guard convention).
+schema = 1
+
+[[entry]]
+stage = "Compute"
+inputs = 0
+position = -1
+frag_depth = -1
+discard_cond = -1
+early_fragment_tests = false
+depth_mode = "Any"
+shading_rate = -1
+storage_write_index = -1
+storage_write_value = -1
+interlock = false
+n_out = 0
+local_size = [64, 1, 1]
+kernel_body_begin = 0
+kernel_body_count = 3
+mesh_vertices = 0
+mesh_primitives = 0
+mesh_prim = -1
+task_emit = -1
+task_payload = [-1, -1, -1, -1]
+n_task_payload = 0
+tess_patch_size = 0
+tess_inner = -1
+tess_outer = -1
+mesh_payload_in = false
+storage_read_only = false
+
+[[node]]
+id = "n0"
+op = "AccelStructDecl"
+dtype = "U32"
+shape = [1]
+
+[[node]]
+id = "n1"
+op = "BufferDecl"
+shape = [1]
+iidx = 1
+
+[[node]]
+id = "n2"
+op = "BufferDecl"
+dtype = "U32"
+shape = [1]
+iidx = 2
+axes = 1
+
+[[node]]
+id = "n3"
+op = "BufferDecl"
+shape = [1]
+iidx = 3
+axes = 1
+
+[[node]]
+id = "n4"
+op = "Builtin"
+dtype = "U32"
+shape = [1]
+iidx = 4
+
+[[node]]
+id = "n5"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4050000000000000"
+
+[[node]]
+id = "n6"
+op = "Builtin"
+dtype = "U32"
+shape = [1]
+iidx = 33
+
+[[node]]
+id = "n7"
+op = "Mul"
+dtype = "U32"
+shape = [1]
+in = ["n6", "n5"]
+
+[[node]]
+id = "n8"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n7", "n4"]
+
+[[node]]
+id = "n9"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4018000000000000"
+
+[[node]]
+id = "n10"
+op = "Mul"
+dtype = "U32"
+shape = [1]
+in = ["n8", "n9"]
+
+[[node]]
+id = "n11"
+op = "Const"
+shape = [1]
+cval = "0x46293e5939a08cea"
+
+[[node]]
+id = "n12"
+op = "Const"
+shape = [1]
+cval = "0x3f50624dd2f1a9fc"
+
+[[node]]
+id = "n13"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4014000000000000"
+
+[[node]]
+id = "n14"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n10", "n13"]
+
+[[node]]
+id = "n15"
+op = "BufferLoad"
+shape = [1]
+in = ["n1", "n14"]
+
+[[node]]
+id = "n16"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4010000000000000"
+
+[[node]]
+id = "n17"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n10", "n16"]
+
+[[node]]
+id = "n18"
+op = "BufferLoad"
+shape = [1]
+in = ["n1", "n17"]
+
+[[node]]
+id = "n19"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4008000000000000"
+
+[[node]]
+id = "n20"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n10", "n19"]
+
+[[node]]
+id = "n21"
+op = "BufferLoad"
+shape = [1]
+in = ["n1", "n20"]
+
+[[node]]
+id = "n22"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4000000000000000"
+
+[[node]]
+id = "n23"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n10", "n22"]
+
+[[node]]
+id = "n24"
+op = "BufferLoad"
+shape = [1]
+in = ["n1", "n23"]
+
+[[node]]
+id = "n25"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n26"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n10", "n25"]
+
+[[node]]
+id = "n27"
+op = "BufferLoad"
+shape = [1]
+in = ["n1", "n26"]
+
+[[node]]
+id = "n28"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+[[node]]
+id = "n29"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n10", "n28"]
+
+[[node]]
+id = "n30"
+op = "BufferLoad"
+shape = [1]
+in = ["n1", "n29"]
+
+[[node]]
+id = "n31"
+op = "RayHitResult"
+shape = [1]
+
+[[node]]
+id = "n32"
+op = "RayHitResult"
+dtype = "U32"
+shape = [1]
+
+[[node]]
+id = "n33"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x41efffffffe00000"
+
+[[node]]
+id = "n34"
+op = "CmpNe"
+dtype = "Bool"
+shape = [1]
+in = ["n32", "n33"]
+
+[[node]]
+id = "n35"
+op = "Cast"
+dtype = "U32"
+shape = [1]
+in = ["n34"]
+
+[[ext]]
+values = [30, 27, 24, 21, 18, 15, 12, 11, 32]
+
+[[stmt]]
+kind = "TraceRayHit"
+target = "n0"
+result = "n31"
+ext = 0
+n_ext = 9
+
+[[stmt]]
+kind = "BufferStore"
+target = "n2"
+index = "n8"
+value = "n35"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n3"
+index = "n8"
+value = "n31"
+
