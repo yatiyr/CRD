@@ -1,0 +1,94 @@
+# work_smoke_consume.ckir - CEIR-20b STEP 4 smoke: the CONSUME half. Dispatched INDIRECT over the queue's (count,1,1) header, so
+# it runs N=count workgroups (local_size=1) — N invocations. Each does atomicAdd(out[0], 1), so out[0] == the DEVICE count after
+# the run — PROVING the indirect dispatch was SIZED by the device-written count, not the host. AUTHORED .ckir (mandate #1). Each
+# invocation also stores out[1] = queue[0] (the count it read from the header) — keeps the queue descriptor LIVE (the every-
+# declared-buffer-live landmine) + a second count check (idempotent write, no race). BINDING CONTRACT: queue@0 (read: the
+# indirect-args source, also bound as a storage descriptor), out@1 (rw: out[0] the atomic invocation counter, out[1] the count).
+schema = 1
+
+[[entry]]
+stage = "Compute"
+inputs = 0
+position = -1
+frag_depth = -1
+discard_cond = -1
+early_fragment_tests = false
+depth_mode = "Any"
+shading_rate = -1
+storage_write_index = -1
+storage_write_value = -1
+interlock = false
+n_out = 0
+local_size = [1, 1, 1]
+kernel_body_begin = 0
+kernel_body_count = 3
+mesh_vertices = 0
+mesh_primitives = 0
+mesh_prim = -1
+task_emit = -1
+task_payload = [-1, -1, -1, -1]
+n_task_payload = 0
+tess_patch_size = 0
+tess_inner = -1
+tess_outer = -1
+mesh_payload_in = false
+storage_read_only = false
+
+# queue@0 (the indirect-args source; also read here to keep the descriptor live)
+[[node]]
+id = "n0"
+op = "BufferDecl"
+dtype = "U32"
+shape = [1]
+iidx = 0
+axes = 1
+
+# out@1 (out[0] = the atomic invocation counter, out[1] = the count readback)
+[[node]]
+id = "n1"
+op = "BufferDecl"
+dtype = "U32"
+shape = [1]
+iidx = 1
+axes = 1
+
+# index 0
+[[node]]
+id = "n2"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+# 1 (the atomicAdd increment AND the index of out[1]; cval = the f64 bit-pattern of 1.0)
+[[node]]
+id = "n3"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+# queue[0] (the device count, read to keep the queue descriptor live)
+[[node]]
+id = "n4"
+op = "BufferLoad"
+dtype = "U32"
+shape = [1]
+in = ["n0", "n2"]
+
+# atomicAdd(out[0], 1) -> out[0] accumulates the invocation count == the device count
+[[stmt]]
+kind = "BufferAtomicAdd"
+target = "n1"
+index = "n2"
+value = "n3"
+
+# materialize the queue[0] read, then out[1] = queue[0] (the count check + keeps queue live)
+[[stmt]]
+kind = "Materialize"
+value = "n4"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n1"
+index = "n3"
+value = "n4"

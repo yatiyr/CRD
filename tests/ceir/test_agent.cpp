@@ -14,7 +14,7 @@
 #include <crd/ceir/gen/arith_ops.hpp> // register_arith_ops + arith_op_schemas (the real generated registry)
 #include <crd/ceir/op_schema.hpp>     // OpSchema
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -71,7 +71,7 @@ Module* single_block(Context& ctx, Block*& top)
 
 TEST_CASE("ceir 9g: an agent discovers ops by property, authors and modifies a program, and commits", "[ceir][agent]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     (void)arith::register_arith_ops(ctx);
     Block*        top = nullptr;
@@ -127,7 +127,7 @@ TEST_CASE("ceir 9g: an agent discovers ops by property, authors and modifies a p
 
 TEST_CASE("ceir 9g: the agent module-wide sweep catches a defect and rolls back byte-identically", "[ceir][agent]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     (void)arith::register_arith_ops(ctx);
     Block*        top = nullptr;
@@ -178,7 +178,7 @@ TEST_CASE("ceir 9g: the agent module-wide sweep catches a defect and rolls back 
 
 TEST_CASE("ceir 9g: the op-local commit-verify backstop catches a lazy agent that skips the sweep", "[ceir][agent]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     (void)arith::register_arith_ops(ctx);
     Block*        top = nullptr;

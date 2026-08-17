@@ -9,7 +9,7 @@
 #include <crd/ceir/parse.hpp>
 #include <crd/ceir/print.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -31,7 +31,7 @@ namespace
 
 TEST_CASE("ceir malformed: bad TEXT is rejected, never a crash", "[ceir][malformed]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     auto rejects = [&root](const char* src) {
         Context    ctx(&root);
         const auto pr = parse(ctx, StringView(src));
@@ -105,7 +105,7 @@ TEST_CASE("ceir malformed: bad TEXT is rejected, never a crash", "[ceir][malform
 
 TEST_CASE("ceir malformed: bad BINARY is rejected, never a crash", "[ceir][malformed]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Array<u8>              good = serialize(ctx, *test::build_rich(ctx), &root);
 
@@ -158,7 +158,7 @@ TEST_CASE("ceir malformed: bad BINARY is rejected, never a crash", "[ceir][malfo
 
 TEST_CASE("ceir malformed: a single-byte corruption of any position never crashes a loader", "[ceir][malformed]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module&                      m = *test::build_rich(ctx);
 

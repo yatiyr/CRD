@@ -12,6 +12,8 @@ target_link_libraries(crd-frame-cook-tests PRIVATE
     crd-memory
     crd-platform          # CEIR-15e: read_file_text for the shipped-asset fidelity gate
     crd-frame-cook
+    crd-ceir              # CEIR-20b: the ceir Context for build_work_ceir(extract_work_desc(...))
+    crd-ceir-gpu          # CEIR-20b: build_work_ceir + WorkBuildDesc (extract_work_desc's output)
     crd-render-pass       # RAF-8: the executor registry the bridge fills payloads against
     crd-render-graph      # RAF-8: compile() the bridged template
     crd-render-asset-core # RAF-8: the diagnostics stream

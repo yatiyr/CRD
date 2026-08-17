@@ -82,6 +82,15 @@ inline constexpr crd::renderpass::ExecutorTypeId kExecMeshIndirect     = detail:
 // ⛔ CEIR-16z-3b: kExecVisbufferRaster DELETED (§41 dissolution) — a visbuffer is now a scene.raster procedural role, not a
 // distinct executor. The engine has 13 built-in mechanics.
 inline constexpr crd::renderpass::ExecutorTypeId kExecPresent          = detail::exec_id("present");
+// ⭐ CEIR-20b (§43): the ceir.work DEVICE-GENERATED-WORK mechanics. A `frame.pass` names one of these + a CKIR
+// `kernel`; `build_work_ceir` materializes it to ceir.work ops (queue_alloc/produce/consume/compact) and
+// `execute_work_lowered` lowers them (the compute.dispatch precedent — the executor NAME is the dialect op name, never
+// one-op-per-executor). produce = a grid dispatch that appends records to a queue; consume = an INDIRECT dispatch over
+// the queue's device count; compact = stream-compaction src→dst. NOT wired into the live frame RUNTIME here (20b's gate
+// is cook→execute_work_lowered).
+inline constexpr crd::renderpass::ExecutorTypeId kExecWorkProduce = detail::exec_id("work.produce");
+inline constexpr crd::renderpass::ExecutorTypeId kExecWorkConsume = detail::exec_id("work.consume");
+inline constexpr crd::renderpass::ExecutorTypeId kExecWorkCompact = detail::exec_id("work.compact");
 
 // REN-38-A6: how `kind = "blit"` filters while it rescales.
 // ⛔ Nearest is not a performance option, it is a CORRECTNESS one: interpolating two ids in a visibility or
@@ -381,6 +390,15 @@ void set_pass_vec4(FramePassDesc& p, crd::containers::StringView name, const flo
 [[nodiscard]] inline bool pass_is_mesh_indirect(const FramePassDesc& p) noexcept { return p.executor_id == kExecMeshIndirect; }
 // ⛔ CEIR-16z-3b: pass_is_visbuffer DELETED (§41). A visbuffer is pass_is_scene_raster + pass_flag(pp::kProcedural).
 [[nodiscard]] inline bool pass_is_present(const FramePassDesc& p) noexcept { return p.executor_id == kExecPresent; }
+// ⭐ CEIR-20b: the ceir.work device-work mechanics — a pass that binds a CKIR kernel + a queue set (materialized to
+// ceir.work ops by build_work_ceir). produce = grid append; consume = INDIRECT over the device count; compact = src→dst.
+[[nodiscard]] inline bool pass_is_work_produce(const FramePassDesc& p) noexcept { return p.executor_id == kExecWorkProduce; }
+[[nodiscard]] inline bool pass_is_work_consume(const FramePassDesc& p) noexcept { return p.executor_id == kExecWorkConsume; }
+[[nodiscard]] inline bool pass_is_work_compact(const FramePassDesc& p) noexcept { return p.executor_id == kExecWorkCompact; }
+[[nodiscard]] inline bool pass_is_work(const FramePassDesc& p) noexcept
+{
+    return pass_is_work_produce(p) || pass_is_work_consume(p) || pass_is_work_compact(p);
+}
 [[nodiscard]] inline bool pass_is_transfer_clear(const FramePassDesc& p) noexcept { return p.executor_id == kExecTransferClear; }
 [[nodiscard]] inline bool pass_is_transfer_copy(const FramePassDesc& p) noexcept { return p.executor_id == kExecTransferCopy; }
 [[nodiscard]] inline bool pass_is_blit(const FramePassDesc& p) noexcept { return p.executor_id == kExecTransferBlit; }
@@ -596,7 +614,9 @@ enum class FrameCookError : crd::u8
     UnknownStencilOp,         // a `stencil_*` op outside the closed eight
     BadStencilValue,          // a stencil ref/mask outside 0..255 — truncation would mark one value, test another
     // REN-38-F11 (appended)
-    LoadNeedsGeometry         // `load = true` on a kind without load draw verbs — it would silently clear
+    LoadNeedsGeometry,        // `load = true` on a kind without load draw verbs — it would silently clear
+    // CEIR-20b (appended) — the ceir.work cook (extract_work_desc)
+    WorkQueueNotOne // a work.produce/consume pass must reference EXACTLY 1 CounterBuffer queue (0 or >=2 is malformed)
 };
 
 // A human-readable message for `err`, plus the offending name when there is one.

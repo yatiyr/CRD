@@ -11,7 +11,7 @@
 #include <crd/ceir/parse.hpp>
 #include <crd/ceir/print.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -110,7 +110,7 @@ void check_symbol_resolves(Context& ctx, Module& m)
 
 TEST_CASE("ceir hello: the builder and the hand path produce byte-identical text", "[ceir][hello][band1]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ch(&root);
     Context                      cb(&root);
     CHECK(text_equal(print(ch, *build_hello_hand(ch), &root), print(cb, *build_hello_builder(cb), &root)));
@@ -118,7 +118,7 @@ TEST_CASE("ceir hello: the builder and the hand path produce byte-identical text
 
 TEST_CASE("ceir hello: round-trips text <=> binary <=> builder byte-identically", "[ceir][hello][band1]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module* const                m    = build_hello_hand(ctx);
     const String                 text = print(ctx, *m, &root);
@@ -144,7 +144,7 @@ TEST_CASE("ceir hello: round-trips text <=> binary <=> builder byte-identically"
 
 TEST_CASE("ceir hello: the callee symbol resolves after text parse and binary load", "[ceir][hello][band1][symbol]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
 
     // builder-native
     Context cbu(&root);

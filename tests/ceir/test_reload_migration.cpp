@@ -16,7 +16,7 @@
 #include <crd/ceir/gen/core_ops.hpp>
 #include <crd/ceir/program_asset.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -99,7 +99,7 @@ i64 run_once(Interpreter& in, Module& m)
 
 TEST_CASE("ceir 10a: collect_state_schema lists every cell sorted by stable id with type and depth", "[ceir][reload]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context   c(&root);
     const Reg r(c);
     Module*   m = c.create_module();
@@ -122,7 +122,7 @@ TEST_CASE("ceir 10a: collect_state_schema lists every cell sorted by stable id w
 
 TEST_CASE("ceir 10a: a body-only edit leaves BOTH interface_hash and contract_hash equal", "[ceir][reload]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context a(&root); const Reg ra(a); Module* ma = a.create_module(); (void)module_block(a, *ma);
     (void)mkfunc_counter(a, ra, *ma, "f", 7);
     Context b(&root); const Reg rb(b); Module* mb = b.create_module(); (void)module_block(b, *mb);
@@ -134,7 +134,7 @@ TEST_CASE("ceir 10a: a body-only edit leaves BOTH interface_hash and contract_ha
 
 TEST_CASE("ceir 10a: a signature edit changes BOTH interface_hash and contract_hash (Reject)", "[ceir][reload]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     // @f() -> i32 vs @f() -> i64 : the caller-visible result type changed -- callers break, a migration fn cannot help.
     Context a(&root); const Reg ra(a); Module* ma = a.create_module(); (void)module_block(a, *ma);
     Operation* const fa = func::create_func(a, *ma, "f", Visibility::Public, 0U, a.type_i32());
@@ -152,7 +152,7 @@ TEST_CASE("ceir 10a: a signature edit changes BOTH interface_hash and contract_h
 
 TEST_CASE("ceir 10a: a state-schema-only edit changes interface_hash but NOT contract_hash (Migrate)", "[ceir][reload]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     // The SAME signature/effects/body, differing ONLY in the state cell's depth (1 vs 2) -- the one delta a migration fn
     // may cover. contract_hash (signature + effects + caps, NO state schema) is IDENTICAL; interface_hash differs.
     Context a(&root); const Reg ra(a); Module* ma = a.create_module(); (void)module_block(a, *ma);
@@ -168,7 +168,7 @@ TEST_CASE("ceir 10a: a state-schema-only edit changes interface_hash but NOT con
 
 TEST_CASE("ceir 10a: a state cell VALUE migrates across a generation swap by stable id", "[ceir][reload]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     // OLD generation: run once -> returns 0 (init), the cell latches to 7.
     Context old_c(&root); const Reg old_r(old_c); Module* old_m = old_c.create_module(); (void)module_block(old_c, *old_m);
     (void)mkfunc_counter(old_c, old_r, *old_m, "f", 7);
@@ -200,7 +200,7 @@ TEST_CASE("ceir 10a: a state cell VALUE migrates across a generation swap by sta
 
 TEST_CASE("ceir 10a: an absent id and a depth mismatch are SKIPPED -> the new generation init-fills", "[ceir][reload]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context old_c(&root); const Reg old_r(old_c); Module* old_m = old_c.create_module(); (void)module_block(old_c, *old_m);
     (void)mkfunc_counter(old_c, old_r, *old_m, "f", 7, /*depth=*/1U);
     (void)collect_state_schema(old_c, *old_m, &root);

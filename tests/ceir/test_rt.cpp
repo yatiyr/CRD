@@ -11,7 +11,7 @@
 #include <crd/ceir/context.hpp>
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/gen/resource_ops.hpp> // register_resource_ops (resource.declare — the typed-value seed)
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -58,7 +58,7 @@ Value* mkbuf(Context& ctx, const RtKit& k, Block* b) { return mkval(ctx, k, b, c
 
 TEST_CASE("ceir 19a: a well-formed rt chain verifies (blas->instance->tlas->sbt->trace + ray_query)", "[ceir][rt]")
 {
-    memory::MallocAllocator root;
+    memory::GrowableTlsfAllocator root;
     Context                  ctx(&root);
     const RtKit              k(ctx);
     Module* const            m = ctx.create_module();
@@ -102,7 +102,7 @@ TEST_CASE("ceir 19a: a well-formed rt chain verifies (blas->instance->tlas->sbt-
 
 TEST_CASE("ceir 19a: the rt type-chain REJECTS every mistyped operand + bad vocab/counts", "[ceir][rt]")
 {
-    memory::MallocAllocator root;
+    memory::GrowableTlsfAllocator root;
 
     // BlasTypeMismatch: instance_populate fed a non-blas op(0).
     {

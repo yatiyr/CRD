@@ -9,6 +9,7 @@ endif()
 add_executable(crd-ceir-gpu-dx12-tests
     test_ceir_add_dx12.cpp
     test_ceir_render_dx12.cpp   # CEIR-14z-3: the DX12 mirror of the render DEVICE pixel proof
+    test_work_smoke_dx12.cpp    # CEIR-20b: execute_work_lowered DEVICE proof (DX12 twin) — produce writes the count, indirect consume reads it
 )
 
 target_link_libraries(crd-ceir-gpu-dx12-tests PRIVATE
@@ -22,6 +23,9 @@ target_link_libraries(crd-ceir-gpu-dx12-tests PRIVATE
     crd-gpu-context-dx12  # Dx12ComputeContext / create_pipeline_from_hlsl (its include dir isn't re-exported by crd-kir-dx12)
     Catch2::Catch2WithMain
 )
+
+# CEIR-20b: test_work_smoke_dx12 loads the authored assets/ckir/work_smoke_*.ckir from disk (the repo root).
+target_compile_definitions(crd-ceir-gpu-dx12-tests PRIVATE CRD_REPO_DIR="${CMAKE_SOURCE_DIR}")
 
 crd_enable_default_pch(crd-ceir-gpu-dx12-tests)
 catch_discover_tests(crd-ceir-gpu-dx12-tests DISCOVERY_MODE PRE_TEST PROPERTIES RESOURCE_LOCK crd_gpu_device)

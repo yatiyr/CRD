@@ -12,7 +12,7 @@
 #include <crd/ceir/ceir.hpp> // umbrella: context/ir/dialect/transaction/diagnostic
 #include <crd/containers/incremental_dag.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -194,7 +194,7 @@ struct DccGraph
 
 TEST_CASE("ceir 9c: initial evaluation computes every modifier exactly once", "[ceir][dcc]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     DccGraph                     g(ctx, &root);
     Array<Operation*>            c(&root);
@@ -208,7 +208,7 @@ TEST_CASE("ceir 9c: initial evaluation computes every modifier exactly once", "[
 
 TEST_CASE("ceir 9c: a subdivide edit re-evaluates exactly its downstream (tag set equals eval set)", "[ceir][dcc]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     DccGraph                     g(ctx, &root);
     Array<Operation*>            c(&root);
@@ -241,7 +241,7 @@ TEST_CASE("ceir 9c: a subdivide edit re-evaluates exactly its downstream (tag se
 
 TEST_CASE("ceir 9c: a cutter-branch edit does not re-evaluate the subdivide branch (precise upstream isolation)", "[ceir][dcc]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     DccGraph                     g(ctx, &root);
     Array<Operation*>            c(&root);
@@ -277,7 +277,7 @@ TEST_CASE("ceir 9c: a cutter-branch edit does not re-evaluate the subdivide bran
 
 TEST_CASE("ceir 9c: a topology-preserving deform edit early-outs its dependents (tag set exceeds eval set)", "[ceir][dcc]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     DccGraph                     g(ctx, &root);
     Array<Operation*>            c(&root);
@@ -303,7 +303,7 @@ TEST_CASE("ceir 9c: a topology-preserving deform edit early-outs its dependents 
 
 TEST_CASE("ceir 9c: a no-op parameter edit through a transaction re-evaluates nothing", "[ceir][dcc]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     DccGraph                     g(ctx, &root);
     Array<Operation*>            c(&root);

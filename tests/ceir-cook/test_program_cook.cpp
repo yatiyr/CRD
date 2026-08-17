@@ -19,7 +19,7 @@
 #include <crd/resources/crdr.hpp> // the test FORGES containers (missing-CDEP / wrong-type)
 #include <crd/resources/resource_id.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -151,7 +151,7 @@ Module* build_dispatch(Context& c, const CReg& r, const char* kernel_name, i64 p
 
 TEST_CASE("ceir 13c: the cook resolves ckir_refs and enforces the interface-hash contract", "[ceir][cook]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     // a stand-in KERNEL program cooked first; its §107 interface hash is the "actual" the resolver returns.
     u64 kernel_hash = 0;
     {
@@ -228,7 +228,7 @@ TEST_CASE("ceir 13c: the cook resolves ckir_refs and enforces the interface-hash
 
 TEST_CASE("ceir cook 7a: a module cooks and round-trips CROSS-CONTEXT with matching hashes", "[ceir][cook]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     // COOK in Context A.
     Context   a(&root);
     const Reg ra(a);
@@ -255,7 +255,7 @@ TEST_CASE("ceir cook 7a: a module cooks and round-trips CROSS-CONTEXT with match
 
 TEST_CASE("ceir cook 7a: an implementation-only edit keeps the interface hash but changes the content hash", "[ceir][cook]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context   a(&root);
     const Reg ra(a);
     const CookResult c5 = cook_program(a, *build_const_fn(a, ra, 5), 1U, &root, &root);
@@ -272,7 +272,7 @@ TEST_CASE("ceir cook 7a: an implementation-only edit keeps the interface hash bu
 
 TEST_CASE("ceir cook 7a: the dependency record survives the round-trip", "[ceir][cook]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context   a(&root);
     const Reg ra(a);
     Module*   m = a.create_module();
@@ -301,7 +301,7 @@ TEST_CASE("ceir cook 7a: the dependency record survives the round-trip", "[ceir]
 
 TEST_CASE("ceir cook 7a: cooking REJECTS an op of an unregistered dialect (EMPTY != UNKNOWN)", "[ceir][cook]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context   c(&root);
     const Reg r(c);
     Module*   m = c.create_module();
@@ -315,7 +315,7 @@ TEST_CASE("ceir cook 7a: cooking REJECTS an op of an unregistered dialect (EMPTY
 
 TEST_CASE("ceir cook 7a: cooking REJECTS a structurally-invalid module (source must be VERIFIED)", "[ceir][cook]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context   c(&root);
     const Reg r(c);
     Module*   m = c.create_module();
@@ -341,7 +341,7 @@ TEST_CASE("ceir cook 7a: cooking REJECTS a structurally-invalid module (source m
 
 TEST_CASE("ceir cook 7a: reading garbage bytes reports BadContainer, not a crash", "[ceir][cook]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context c(&root);
     const u8 junk[8] = {0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U};
     const ReadResult read = read_program(c, ConstSpan<u8>(junk, 8U), &root);
@@ -351,7 +351,7 @@ TEST_CASE("ceir cook 7a: reading garbage bytes reports BadContainer, not a crash
 
 TEST_CASE("ceir cook 7a: cooking from source TEXT matches cooking the builder module (no privileged path)", "[ceir][cook]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context   a(&root);
     const Reg ra(a);
     Module*   m = a.create_module();
@@ -369,7 +369,7 @@ TEST_CASE("ceir cook 7a: cooking from source TEXT matches cooking the builder mo
 
 TEST_CASE("ceir cook 7a: cooking REJECTS a None-declared function that recurses (declared-words-validated)", "[ceir][cook]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context   c(&root);
     const Reg r(c);
     Module*   m = c.create_module();
@@ -389,7 +389,7 @@ TEST_CASE("ceir cook 7a: cooking REJECTS a None-declared function that recurses 
 
 TEST_CASE("ceir cook 7a: a blob whose dependency chunk is MISSING reports BadDeps (never silent no-deps)", "[ceir][cook]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context   a(&root);
     const Reg ra(a);
     Module*   m = a.create_module();
@@ -420,7 +420,7 @@ TEST_CASE("ceir cook 7a: a blob whose dependency chunk is MISSING reports BadDep
 
 TEST_CASE("ceir cook 7a: reading a container of the WRONG type reports WrongType", "[ceir][cook]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context  c(&root);
     const u8 dummy[4] = {1U, 2U, 3U, 4U};
     crd::resources::CrdrWriter w(&root, crd::resources::ResourceId{0U, 1U}, crd::resources::kFourCC_PACK); // NOT a CEIR program

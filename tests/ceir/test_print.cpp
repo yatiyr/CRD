@@ -5,7 +5,7 @@
 #include <crd/ceir/ceir.hpp>
 #include <crd/ceir/print.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -35,7 +35,7 @@ Module* build_sample(Context& ctx)
 
 TEST_CASE("ceir print: the same graph prints byte-identical text (deterministic)", "[ceir][print]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module*                      m = build_sample(ctx);
 
@@ -47,7 +47,7 @@ TEST_CASE("ceir print: the same graph prints byte-identical text (deterministic)
 
 TEST_CASE("ceir print: canonical shape - value ids, sorted attrs, op name, types", "[ceir][print]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module*                      m = build_sample(ctx);
     const crd::containers::String s = print(ctx, *m, &root);
@@ -62,7 +62,7 @@ TEST_CASE("ceir print: canonical shape - value ids, sorted attrs, op name, types
 
 TEST_CASE("ceir print: an unregistered-dialect op prints opaquely by its interned name", "[ceir][print]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module*                      m     = ctx.create_module();
     Block*                       entry = ctx.create_block(0U);
@@ -75,7 +75,7 @@ TEST_CASE("ceir print: an unregistered-dialect op prints opaquely by its interne
 
 TEST_CASE("ceir print: float attributes are round-trippable and typed distinctly from ints", "[ceir][print]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module*                      m     = ctx.create_module();
     Block*                       entry = ctx.create_block(0U);

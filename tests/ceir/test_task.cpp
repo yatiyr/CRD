@@ -12,7 +12,7 @@
 #include <crd/ceir/gen/task_ops.hpp>
 #include <crd/ceir/semantics.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -76,7 +76,7 @@ i64 run_main(Context& ctx, Module& m)
 
 TEST_CASE("ceir task: spawn then fiber_wait round-trips a value (sequential reference)", "[ceir][task]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -96,7 +96,7 @@ TEST_CASE("ceir task: spawn then fiber_wait round-trips a value (sequential refe
 
 TEST_CASE("ceir task: a continuation runs after its antecedent, receiving its value", "[ceir][task]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -128,7 +128,7 @@ TEST_CASE("ceir task: a continuation runs after its antecedent, receiving its va
 
 TEST_CASE("ceir task: the 6a token verifier covers the new ops with ZERO edits (open-world)", "[ceir][task]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -155,7 +155,7 @@ TEST_CASE("ceir task: the 6a token verifier covers the new ops with ZERO edits (
 
 TEST_CASE("ceir task: a task op in an audio-real-time region is a domain violation (the sec 32 flip)", "[ceir][task]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -191,7 +191,7 @@ void count_post(const Operation& /*op*/, void* user) { ++static_cast<HookCounts*
 
 TEST_CASE("ceir task: the sec 112 step hooks fire pre/post per dispatched op (exact counts)", "[ceir][task]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -233,7 +233,7 @@ void tot_post(const Operation& /*op*/, void* u) { ++static_cast<HookTot*>(u)->po
 
 TEST_CASE("ceir 11a: the full host subset composes in one reference program", "[ceir][task]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     (void)async::register_async_ops(ctx);

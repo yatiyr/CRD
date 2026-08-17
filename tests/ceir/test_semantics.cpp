@@ -12,7 +12,7 @@
 #include <crd/ceir/parse.hpp>
 #include <crd/ceir/print.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -23,7 +23,7 @@ using crd::containers::ConstSpan;
 
 TEST_CASE("ceir semantics: op_determinism round-trips the 2a schema; EMPTY!=UNKNOWN", "[ceir][semantics]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     (void)arith::register_arith_ops(ctx);
     (void)test::register_test_ops(ctx);
@@ -70,7 +70,7 @@ TEST_CASE("ceir semantics: determinism_satisfies_mode is the full 6x4 legality m
 
 TEST_CASE("ceir semantics: find_mode_violation points at the first determinism offender under the active mode", "[ceir][semantics]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     (void)arith::register_arith_ops(ctx);
     func::register_dialect(ctx);
@@ -104,7 +104,7 @@ TEST_CASE("ceir semantics: find_mode_violation points at the first determinism o
 
 TEST_CASE("ceir semantics: find_mode_violation also enforces the numerics contract (sec 28)", "[ceir][semantics]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     (void)arith::register_arith_ops(ctx);
 
@@ -136,7 +136,7 @@ TEST_CASE("ceir semantics: find_mode_violation also enforces the numerics contra
 
 TEST_CASE("ceir semantics: the compiler mode is session state, never serialized (content purity)", "[ceir][semantics]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     (void)arith::register_arith_ops(ctx);
     Module* const m = ctx.create_module();
@@ -185,7 +185,7 @@ TEST_CASE("ceir semantics: numerics pack/unpack round-trips every field; rejects
 
 TEST_CASE("ceir semantics: numerics ride a per-op attr and survive text + binary round-trips", "[ceir][semantics]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     (void)arith::register_arith_ops(ctx);
 

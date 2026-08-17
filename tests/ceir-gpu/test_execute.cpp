@@ -20,7 +20,7 @@
 #include <crd/ceir/parse.hpp>
 #include <crd/ceir/print.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -293,7 +293,7 @@ Operation* dispatch_bufs(Context& c, const Kit& k, Block* b, Value* grid, Value*
 
 TEST_CASE("ceir 13z: execute seam validates a good dispatch and records it (device-free, fake recorder)", "[ceir][ceir-gpu]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     FakePipe                     pipe;
@@ -326,7 +326,7 @@ TEST_CASE("ceir 13z: execute seam validates a good dispatch and records it (devi
 
 TEST_CASE("ceir 13z: a resource.view binding normalizes to its root before the table lookup (13d part-3)", "[ceir][ceir-gpu]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     FakePipe                     pipe;
@@ -350,7 +350,7 @@ TEST_CASE("ceir 13z: a resource.view binding normalizes to its root before the t
 
 TEST_CASE("ceir 13z: the typed ExecuteError paths (device-free always-runs)", "[ceir][ceir-gpu]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     FakePipe                     pipe;
@@ -447,7 +447,7 @@ TEST_CASE("ceir 13z: the typed ExecuteError paths (device-free always-runs)", "[
 
 TEST_CASE("ceir 13z: execute_lowered refuses a bad program and records NOTHING", "[ceir][ceir-gpu]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     FakePipe                     pipe;
@@ -472,7 +472,7 @@ TEST_CASE("ceir 13z: execute_lowered refuses a bad program and records NOTHING",
 // attr with no definition is the unverified case. If this REQUIRE fails, 13z-2's text-authoring dimension is reshaped.
 TEST_CASE("ceir 13z-2 probe: a compute.dispatch module with a dangling @kernel symbol round-trips through text", "[ceir][ceir-gpu]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
 
@@ -520,7 +520,7 @@ TEST_CASE("ceir 13z-2: a text-authored reduce asset == the builder-authored asse
                                       "    %2 = resource.declare() : !buffer<plain,!f32>\n"
                                       "    compute.dispatch(%0, %0, %0, %1, %2) {access = \"r,w\", kernel = @reduce}\n"
                                       "}\n";
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
 
     // BUILDER path: the same reduce asset via the API (2 buffers, access r,w, kernel @reduce).
     Context       ctxb(&root);
@@ -562,7 +562,7 @@ TEST_CASE("ceir 13z-2: a text-authored reduce asset == the builder-authored asse
 // FakeRec (records barrier calls). A write-then-read on ONE buffer -> exactly one RAW barrier on that buffer.
 TEST_CASE("ceir 13z-3: execute_lowered replays a barrier as rec.barrier on the shared root (device-free)", "[ceir][ceir-gpu]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     FakePipe                     pipe;
@@ -596,7 +596,7 @@ TEST_CASE("ceir 13z-3: execute_lowered replays a barrier as rec.barrier on the s
 
 TEST_CASE("ceir 13z-3: execute_lowered emits PER-RESOURCE barriers (2 buffers from 2 writers -> 2 rec.barrier calls)", "[ceir][ceir-gpu]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     FakePipe                     pipe;
@@ -633,7 +633,7 @@ TEST_CASE("ceir 13z-3: execute_lowered emits PER-RESOURCE barriers (2 buffers fr
 // pre-empt §150. The buffer-level reference is the bridge/test side (execute_lowered_cpu, leg 1a).
 TEST_CASE("ceir 13z-4: the core Interpreter refuses a compute.dispatch with typed NoSemantics (I5 stays device-blind)", "[ceir][ceir-gpu]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
 
@@ -664,7 +664,7 @@ TEST_CASE("ceir 13z-4: the core Interpreter refuses a compute.dispatch with type
 
 TEST_CASE("ceir 14b: a render.scope with two draws lowers to BeginRender, Draw, Draw, EndRender", "[ceir][ceir-gpu][render]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     Block* const                 b   = ctx.create_block(0U);
@@ -692,7 +692,7 @@ TEST_CASE("ceir 14b: a render.scope with two draws lowers to BeginRender, Draw, 
 TEST_CASE("ceir 14b: a dispatch writing B then a scope-with-a-draw-binding-B emits a barrier before the scope (hazard hole)",
           "[ceir][ceir-gpu][render]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     Block* const                 b   = ctx.create_block(0U);
@@ -728,7 +728,7 @@ TEST_CASE("ceir 14b: a dispatch writing B then a scope-with-a-draw-binding-B emi
 TEST_CASE("ceir 14b: validate_lowered + execute_lowered reject render kinds typed (UnsupportedCommand, the Transfer mirror)",
           "[ceir][ceir-gpu][render]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     Block* const                 b   = ctx.create_block(0U);
@@ -757,7 +757,7 @@ TEST_CASE("ceir 14b: validate_lowered + execute_lowered reject render kinds type
 TEST_CASE("ceir 14c: a scope with draw + draw_indirect + mesh_dispatch lowers to BeginRender + 3 Draws + EndRender",
           "[ceir][ceir-gpu][render]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     Block* const                 b   = ctx.create_block(0U);
@@ -798,7 +798,7 @@ TEST_CASE("ceir 14c: a scope with draw + draw_indirect + mesh_dispatch lowers to
 TEST_CASE("ceir 14c: draw_indirect lowers preserving max_draws + args identity (the DrawIndex-scar IR half; the push is 14z)",
           "[ceir][ceir-gpu][render]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     Block* const                 b    = ctx.create_block(0U);
@@ -846,7 +846,7 @@ TEST_CASE("ceir 14c: draw_indirect lowers preserving max_draws + args identity (
 TEST_CASE("ceir 14d: a resource TABLE binding participates in the precise per-resource hazard (write-T then read-T = RAW on T)",
           "[ceir][ceir-gpu][render]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     Block* const                 b   = ctx.create_block(0U);
@@ -870,7 +870,7 @@ TEST_CASE("ceir 14d: a resource TABLE binding participates in the precise per-re
 TEST_CASE("ceir 14d: a table declare + a dispatch binding it verify + round-trip text == builder (the ResourceTable type)",
           "[ceir][ceir-gpu][render]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     Module* const                m   = ctx.create_module();
@@ -897,7 +897,7 @@ TEST_CASE("ceir 14d: a table declare + a dispatch binding it verify + round-trip
 TEST_CASE("ceir 14z-1: materialize_rendering_desc maps the scope + attachments (RAH-1a.1: uint clear = ClearKind::Uint)",
           "[ceir][ceir-gpu][render]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     int                          tgt_sentinel = 0;
@@ -955,7 +955,7 @@ TEST_CASE("ceir 16d-live-4a-1: the FULL BlendMode vocabulary (incl. the WBOIT MR
     // attachment silently materialized Opaque. 4a-1 opens the closed set to the whole BlendMode enum. This proves BOTH
     // directions: the verifier (find_render_misuse / kBlendVocab) ACCEPTS each of the 7, blend_of maps each to its enum,
     // and a garbage string is REJECTED (BlendInvalid) — the gate the mrt>=2 representation (4a-2/3) depends on.
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     int                          tgt = 0;
     const auto                   check_blend = [&](StringView bstr, crd::gpu::BlendMode expect, bool valid) {
         Context      ctx(&root);
@@ -1006,7 +1006,7 @@ TEST_CASE("ceir 16d-live-4a-2: build_scene_ceir emits an N-colour MRT scope with
     // color_attachment ops each carrying its `blend`. 4a-2 proves the BUILDER: build_scene_ceir(mrt_n=2) VERIFIES
     // (find_render_misuse accepts a ≥2-colour scope containing scene_draw_list — GAP ii) and MATERIALIZES to 2 attachments
     // with the right blends (Additive accum + RevealageMultiply reveal, the WBOIT pair) all LoadOp::Clear (legacy MRT arm).
-    crd::memory::MallocAllocator  root;
+    crd::memory::GrowableTlsfAllocator  root;
     Context                       ctx(&root);
     Array<LoweredCommand>         plan(&root);
     SceneBuildDesc                bd;
@@ -1044,7 +1044,7 @@ TEST_CASE("ceir 16z-1: build_scene_ceir emits a UINT typed clear (the visbuffer 
     // A visbuffer pass (dissolved onto scene.raster, §41) writes an R32_UINT id target whose typed clear IS the whole
     // semantics. 16z-1 proves the BUILDER: build_scene_ceir(clear_is_uint) VERIFIES (find_render_misuse — the colour image is
     // UINT-format, so the RAH-1a.1 ClearKindFormatMismatch scar does NOT fire) and MATERIALIZES to ClearKind::Uint + the id.
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Array<LoweredCommand>        plan(&root);
     SceneBuildDesc               bd;
@@ -1079,7 +1079,7 @@ TEST_CASE("ceir 16z-1: build_scene_ceir emits a UINT typed clear (the visbuffer 
 TEST_CASE("ceir 16-3c-4: extent_from_target overrides the scope width/height with the RESOLVED target size",
           "[ceir][ceir-gpu][render]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     Block* const                 b   = ctx.create_block(0U);
@@ -1109,7 +1109,7 @@ TEST_CASE("ceir 16-3c-4: extent_from_target overrides the scope width/height wit
 
 TEST_CASE("ceir 14z-1: materialize_draw_packet maps command + GeometryKind + counts per draw op", "[ceir][ceir-gpu][render]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     int                          prog_sentinel = 0;
@@ -1326,7 +1326,7 @@ TEST_CASE("ceir 14z-1: materialize_draw_packet maps command + GeometryKind + cou
 
 TEST_CASE("ceir 16-3b-1: build_fullscreen_ceir emits a verified, lowerable procedural/plain composite", "[ceir][ceir-gpu][render]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     SECTION("procedural (n=0 reads) -> BeginRender, Draw, EndRender; the draw is geometry-None with no bindings")
     {
         Context               ctx(&root); // a FRESH context (the builder registers its dialects)
@@ -1519,7 +1519,7 @@ TEST_CASE("ceir 16-3b-1: build_fullscreen_ceir emits a verified, lowerable proce
 TEST_CASE("ceir 16-mesh-1: build_mesh_indirect_ceir emits a verified, lowerable mesh-indirect composite",
           "[ceir][ceir-gpu][render]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root); // a FRESH context (the builder registers its dialects)
     MeshIndirectBuildDesc        desc;
     desc.args_param  = 222U; // pass_param_id("args") stand-in
@@ -1569,7 +1569,7 @@ TEST_CASE("ceir 16-mesh-1: build_mesh_indirect_ceir emits a verified, lowerable 
 TEST_CASE("ceir 16-mesh-2: execute_render_lowered EXPANDS mesh_dispatch_list over the host DrawList (skip/default/fallback)",
           "[ceir][ceir-gpu][render]")
 {
-    crd::memory::MallocAllocator     root;
+    crd::memory::GrowableTlsfAllocator     root;
     int                              def_s  = 0;
     int                              item_s = 0;
     int                              geo_s  = 0;
@@ -1726,7 +1726,7 @@ crd::gpu::IRasterTarget* resolve_scene_target(const Operation* op, void* user)
 TEST_CASE("ceir 16d: build_scene_ceir + execute_render_lowered expand scene_draw_list into the per-item verb ladder",
           "[ceir][ceir-gpu][render]")
 {
-    crd::memory::MallocAllocator    root;
+    crd::memory::GrowableTlsfAllocator    root;
     int                             def_s  = 0;
     int                             item_s = 0;
     int                             s0     = 0;
@@ -1877,7 +1877,7 @@ TEST_CASE("ceir 16d-live-4a-3: the MRT scene list expands to a SCOPE PER ITEM (b
     // the legacy record_scene_raster MRT arm. ⛔ TWO same-storage plain items that COALESCE into ONE DrawMulti on the
     // single-colour path stay TWO separate per-item draws here (MRT = no coalescing, no textures). This is the shape 4b's
     // converted run_mrt_blend_gpu pixel-proves on device.
-    crd::memory::MallocAllocator    root;
+    crd::memory::GrowableTlsfAllocator    root;
     int                             def_s = 0;
     int                             s0    = 0;
     crd::gpu::IRasterProgram* const def_prog = reinterpret_cast<crd::gpu::IRasterProgram*>(&def_s);
@@ -1926,7 +1926,7 @@ TEST_CASE("ceir 16d-live-1a: materialize GATES the depth attachment (null-drop, 
     //       attachment — depth stays disabled — matching legacy record_scene_raster's runtime-dynamic `color->has_depth()`;
     //   (2) extent_from_target falls back to the DEPTH target for a 0-colour depth-only scope (legacy `dims = color ?: depth`);
     //   (3) a scope with ZERO resolved attachments FAILS materialize (never begin_rendering an empty scope).
-    crd::memory::MallocAllocator    root;
+    crd::memory::GrowableTlsfAllocator    root;
     int                             def_s = 0;
     int                             s0    = 0;
     crd::gpu::IRasterProgram* const def_prog = reinterpret_cast<crd::gpu::IRasterProgram*>(&def_s);
@@ -2007,7 +2007,7 @@ TEST_CASE("ceir 16d-live-1a: materialize GATES the depth attachment (null-drop, 
 TEST_CASE("ceir 14z-2: execute_render_lowered walks BeginRender/Draw/EndRender into the encoder (device-free FakeEncoder)",
           "[ceir][ceir-gpu][render]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     int                          tgt_s  = 0;
@@ -2095,7 +2095,7 @@ Value* scene_seed(Context& ctx, Block* b, TypeId t)
 
 TEST_CASE("ceir 17b: evaluate_scene_resolve THREADS a resolve chain through the host callbacks", "[ceir][ceir-gpu][scene]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     (void)func::register_dialect(ctx);
     (void)resource::register_resource_ops(ctx);
@@ -2153,7 +2153,7 @@ TEST_CASE("ceir 17b: evaluate_scene_resolve THREADS a resolve chain through the 
 
 TEST_CASE("ceir 17b: evaluate_scene_resolve REFUSES a mistyped chain + an unwired/0 callback", "[ceir][ceir-gpu][scene]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     RenderResolvers              all;
     all.resolve_material  = &sen_material;
     all.resolve_technique = &sen_technique;
@@ -2308,7 +2308,7 @@ SceneResolveHandle c17_geometry(void* u, SceneResolveHandle draw)
 TEST_CASE("ceir 17c: the CEIR resolve chain reproduces add_draws_scene's per-phase twin selection (parity oracle)",
           "[ceir][ceir-gpu][scene]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     // distinct sentinel programs / buffers (pointer-opaque — NEVER dereferenced; the reinterpret-cast-of-locals pattern).
     int        ps[8]  = {0};
     int        bs[4]  = {0};

@@ -1,0 +1,97 @@
+# wavefront_work.frame.toml - CEIR-20b: the §134 WAVEFRONT PATH TRACER as an AUTHORED ceir.work orchestration. This asset IS the
+# thing that retires the 19c C++ `while(count>0)` host loop (mandate #1): the SEQUENCE (which kernel, which buffers, what order)
+# lives HERE, not in C++. A MIXED frame — trace is a plain kernel dispatch (compute mechanic; the wavefront_trace.ckir uses inline
+# ray_query, and the executor binds the TLAS as a runtime capability, so no acceleration-structure RESOURCE is declared), and the
+# three queue stages are ceir.work passes: compact#1/#2 = work.produce (they materialize a queue + its device-written count),
+# shade = work.consume (an indirect dispatch sized by the queue's count). The kernels are REUSED VERBATIM from 19c.
+#
+# ⛔ HEADLESS: this frame produces DEVICE BUFFERS (decisions, the counts) the gate reads back — no @output/swapchain (the CEIR-20b
+# no-raster relaxation). ⛔ QUEUE = the CounterBuffer resource (20a's declared intent): `count` (written by compact#1, read by
+# shade) + `next_count` (written by compact#2). extract_work_desc keys the %queue off the CounterBuffer kind; every other
+# referenced buffer is a binding, re-ordered to each kernel's SSBO slots by the record-time per-kernel binding table.
+schema = 1
+name   = "engine://frame/wavefront_work"
+
+# ── the ray/hit/decision buffers (plain) + the two device COUNTERS (the ceir.work queues) ──────────────────────────────────────
+[[resource]]
+name = "rays"
+kind = "external_buffer"      # host-owned: the seeded camera rays (6 f32/ray)
+
+[[resource]]
+name   = "hit_flags"
+kind   = "structured_buffer"  # per-ray hit flag (u32) — trace writes, compact#1 scans
+stride = 4
+count  = 64
+
+[[resource]]
+name   = "hit_t"
+kind   = "structured_buffer"  # per-ray hit distance (f32)
+stride = 4
+count  = 64
+
+[[resource]]
+name   = "compacted"
+kind   = "structured_buffer"  # the dense hit-index queue (u32) compact#1 writes, shade reads
+stride = 4
+count  = 64
+
+[[resource]]
+name   = "count"
+kind   = "counter_buffer"     # ⭐ the %queue: compact#1 writes the hit COUNT, shade's indirect dispatch is sized by it
+stride = 4
+count  = 1
+
+[[resource]]
+name   = "decisions"
+kind   = "structured_buffer"  # per-hit lit/shadowed decision (u32) shade writes — the gate's hash input
+stride = 4
+count  = 64
+
+[[resource]]
+name = "cont_flags"
+kind = "external_buffer"      # host-owned + host-ZEROED: the continuation flags compact#2 scans (→ next_count == 0, single-bounce)
+
+[[resource]]
+name   = "next_queue"
+kind   = "structured_buffer"  # the continuation queue (u32) compact#2 writes
+stride = 4
+count  = 64
+
+[[resource]]
+name   = "next_count"
+kind   = "counter_buffer"     # ⭐ the continuation %queue's count compact#2 writes
+stride = 4
+count  = 1
+
+# ── trace: a KERNEL DISPATCH (compute mechanic) — wavefront_trace.ckir traces the scene (inline ray_query, TLAS bound by the
+#    executor as a runtime capability) and writes per-ray hit flags + distances. NOT a ceir.work pass (extract_work_desc skips it).
+[[pass]]
+name   = "trace"
+kind   = "compute"
+kernel = "wavefront_trace"
+reads  = ["rays"]
+writes = ["hit_flags", "hit_t"]
+
+# ── compact#1 = work.produce: scan hit_flags → materialize the dense `compacted` queue + its device `count` (the queue). ──────────
+[[pass]]
+name   = "compact1"
+kind   = "work.produce"
+kernel = "wavefront_compact"
+reads  = ["hit_flags"]
+writes = ["count", "compacted"]
+
+# ── shade = work.consume: an INDIRECT dispatch sized by `count` — read the compacted hits + rays + hit_t, write the decisions. ──
+[[pass]]
+name   = "shade"
+kind   = "work.consume"
+kernel = "wavefront_shade"
+reads  = ["count", "compacted", "rays", "hit_t"]
+writes = ["decisions"]
+
+# ── compact#2 = work.produce: scan cont_flags → the continuation queue + next_count (host-zeroed input ⇒ next_count == 0). ───────
+[[pass]]
+name   = "compact2"
+kind   = "work.produce"
+kernel = "wavefront_compact"
+reads  = ["cont_flags"]
+writes = ["next_count", "next_queue"]

@@ -12,7 +12,7 @@
 #include <crd/ceir/print.hpp>
 #include <crd/ceir/program_asset.hpp> // interface_hash
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -68,7 +68,7 @@ void gather(Region* r, Array<Operation*>& out)
 
 TEST_CASE("ceir 8d: a fresh module gets pre-order stable ids 1..N; assign is idempotent", "[ceir][stable-id]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Operation*                   ops[3] = {};
     Module* const                m      = mod_with_ops(ctx, 3U, ops);
@@ -92,7 +92,7 @@ TEST_CASE("ceir 8d: a fresh module gets pre-order stable ids 1..N; assign is ide
 
 TEST_CASE("ceir 8d: stable ids ride the op through serialize/deserialize (not position)", "[ceir][stable-id]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Operation*                   ops[3] = {};
     Module* const                m      = mod_with_ops(ctx, 3U, ops);
@@ -113,7 +113,7 @@ TEST_CASE("ceir 8d: stable ids ride the op through serialize/deserialize (not po
 
 TEST_CASE("ceir 8d: a hostile STID chunk (zero id / duplicate id) is a graceful reject", "[ceir][stable-id]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Operation*                   ops[2] = {};
     Module* const                m      = mod_with_ops(ctx, 2U, ops);
@@ -141,7 +141,7 @@ TEST_CASE("ceir 8d: a hostile STID chunk (zero id / duplicate id) is a graceful 
 
 TEST_CASE("ceir 8d: the content hash is id-INDEPENDENT (stable_hash skips STID)", "[ceir][stable-id]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Operation*                   a_ops[2] = {};
     Module* const                a        = mod_with_ops(ctx, 2U, a_ops);
@@ -158,7 +158,7 @@ TEST_CASE("ceir 8d: the content hash is id-INDEPENDENT (stable_hash skips STID)"
 
 TEST_CASE("ceir 8d: a pre-8d blob's content hash is unchanged, and the blob is a pure function of content", "[ceir][stable-id]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     // "pre-8d" = a blob with no STID: it is exactly what stable_hash hashes (with_stid=false). Prove the content hash is
     // unchanged after a decode->serialize round-trip (the STID-skip fixpoint), and that the same graph in a clean vs a
     // pre-polluted Context serializes byte-equal (ids are content-pure — the gate a Context counter would have broken).
@@ -177,7 +177,7 @@ TEST_CASE("ceir 8d: a pre-8d blob's content hash is unchanged, and the blob is a
 
 TEST_CASE("ceir 8d: the state schema is reorder-invariant yet delete/re-add-sensitive (id values in the hash)", "[ceir][stable-id]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Dialect* const               d    = ctx.register_dialect("st");
     const OpId                   cell = d->register_op("cell", {.traits = flags_of(OpTrait::StateEdge)});
@@ -218,7 +218,7 @@ TEST_CASE("ceir 8d: the state schema is reorder-invariant yet delete/re-add-sens
 
 TEST_CASE("ceir 8d: an id freed by erase is NEVER reused (the watermark guards identity)", "[ceir][stable-id]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Operation*                   ops[3] = {};
     Module* const                m      = mod_with_ops(ctx, 3U, ops);
@@ -234,7 +234,7 @@ TEST_CASE("ceir 8d: an id freed by erase is NEVER reused (the watermark guards i
 
 TEST_CASE("ceir 8d: the id watermark survives serialize/load, preventing reuse across a round-trip", "[ceir][stable-id]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Operation*                   ops[3] = {};
     Module* const                m      = mod_with_ops(ctx, 3U, ops);
@@ -254,7 +254,7 @@ TEST_CASE("ceir 8d: the id watermark survives serialize/load, preventing reuse a
 
 TEST_CASE("ceir 8d: a genuine pre-8d blob (no STID chunk) decodes and re-serializes to a fixpoint", "[ceir][stable-id]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Operation*                   ops[3] = {};
     Module* const                m      = mod_with_ops(ctx, 3U, ops);
@@ -288,7 +288,7 @@ TEST_CASE("ceir 8d: the binary MODULE format is unchanged (no kBinaryVersion bum
 
 TEST_CASE("ceir 8d: a fresh module's text round-trip reproduces identical stable ids", "[ceir][stable-id]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Operation*                   ops[3] = {};
     Module* const                m      = mod_with_ops(ctx, 3U, ops);
@@ -313,7 +313,7 @@ TEST_CASE("ceir 8d: single-byte corruption of a stable-id blob never crashes a l
 {
     // The hostile-input guard extended over the STID decode arm (count, per-id read, dup/zero checks). ASan/UBSan is the
     // memory-safety proof; ok/!ok both acceptable, the ONLY invariant is no crash.
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Operation*                   ops[3] = {};
     Module* const                m      = mod_with_ops(ctx, 3U, ops);

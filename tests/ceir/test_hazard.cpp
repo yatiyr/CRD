@@ -7,7 +7,7 @@
 #include <crd/ceir/ceir.hpp>
 #include <crd/ceir/func.hpp> // func.call as a barrier op
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -106,7 +106,7 @@ TEST_CASE("ceir hazard: effect_access classifies every family (incl the RandomRe
 
 TEST_CASE("ceir hazard: the W->R / R->W / W->W / R->R quartet on a shared operand (sec 116)", "[ceir][hazard]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const HzOps                  hz(ctx);
     Module* const                m = ctx.create_module();
@@ -126,7 +126,7 @@ TEST_CASE("ceir hazard: the W->R / R->W / W->W / R->R quartet on a shared operan
 
 TEST_CASE("ceir hazard: range masks + distinct-Value non-aliasing gate a conflict", "[ceir][hazard]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const HzOps                  hz(ctx);
     Module* const                m = ctx.create_module();
@@ -147,7 +147,7 @@ TEST_CASE("ceir hazard: range masks + distinct-Value non-aliasing gate a conflic
 
 TEST_CASE("ceir hazard: a resource.view aliases its root -- write(buf) vs read(view(buf)) HAZARDS (CEIR-13d part 3)", "[ceir][hazard]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const HzOps                  hz(ctx);
     Module* const                m = ctx.create_module();
@@ -179,7 +179,7 @@ TEST_CASE("ceir hazard: a resource.view aliases its root -- write(buf) vs read(v
 
 TEST_CASE("ceir hazard: ambient effects, the RandomRead/Logging/TimeRead families", "[ceir][hazard]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const HzOps                  hz(ctx);
     Module* const                m = ctx.create_module();
@@ -201,7 +201,7 @@ TEST_CASE("ceir hazard: ambient effects, the RandomRead/Logging/TimeRead familie
 
 TEST_CASE("ceir hazard: barrier (func.call), unknown-op, Pure-op, and WAW>RAW>WAR precedence", "[ceir][hazard]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const HzOps                  hz(ctx);
     func::register_dialect(ctx);
@@ -228,7 +228,7 @@ TEST_CASE("ceir hazard: barrier (func.call), unknown-op, Pure-op, and WAW>RAW>WA
 
 TEST_CASE("ceir hazard: Result-targeted effects report RAW; lifecycle ordering is the WAR/UAF scar (sec 116)", "[ceir][hazard]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const HzOps                  hz(ctx);
     Module* const                m = ctx.create_module();
@@ -251,7 +251,7 @@ TEST_CASE("ceir hazard: Result-targeted effects report RAW; lifecycle ordering i
 
 TEST_CASE("ceir hazard: collect_block_hazards yields the exact edge list in list order", "[ceir][hazard]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const HzOps                  hz(ctx);
     Module* const                m = ctx.create_module();

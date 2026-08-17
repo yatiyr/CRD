@@ -10,7 +10,7 @@
 #include <crd/ceir/gen/core_ops.hpp>
 #include <crd/ceir/print.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -66,7 +66,7 @@ Module* legal_cycle(Context& ctx, const Ops& o, OpId sk)
 
 TEST_CASE("ceir state: a feedback cycle through a StateEdge op is legal (state, delay, history)", "[ceir][state]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     for (const OpId sk : {o.state, o.delay, o.history})
@@ -77,7 +77,7 @@ TEST_CASE("ceir state: a feedback cycle through a StateEdge op is legal (state, 
 
 TEST_CASE("ceir state: self-feedback (next = own result) is legal", "[ceir][state]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -91,7 +91,7 @@ TEST_CASE("ceir state: self-feedback (next = own result) is legal", "[ceir][stat
 
 TEST_CASE("ceir state: a normally-visible feedback operand (a pass-through register) is legal", "[ceir][state]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -105,7 +105,7 @@ TEST_CASE("ceir state: a normally-visible feedback operand (a pass-through regis
 
 TEST_CASE("ceir state: a combinational cycle with no state op is FeedbackWithoutState", "[ceir][state]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -123,7 +123,7 @@ TEST_CASE("ceir state: a combinational cycle with no state op is FeedbackWithout
 
 TEST_CASE("ceir state: a forward ref on the INIT (non-last) operand is FeedbackWithoutState", "[ceir][state]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -140,7 +140,7 @@ TEST_CASE("ceir state: a forward ref on the INIT (non-last) operand is FeedbackW
 
 TEST_CASE("ceir state: a feedback operand defined in a DIFFERENT block is UseBeforeDef", "[ceir][state]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m  = ctx.create_module();
@@ -157,7 +157,7 @@ TEST_CASE("ceir state: a feedback operand defined in a DIFFERENT block is UseBef
 
 TEST_CASE("ceir state: the history depth attr must be an Int >= 1", "[ceir][state]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = legal_cycle(ctx, o, o.history);
@@ -179,7 +179,7 @@ TEST_CASE("ceir state: the history depth attr must be an Int >= 1", "[ceir][stat
 
 TEST_CASE("ceir state: a legal feedback cycle round-trips through text and binary", "[ceir][state]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = legal_cycle(ctx, o, o.state);
@@ -211,7 +211,7 @@ TEST_CASE("ceir state: a legal feedback cycle round-trips through text and binar
 
 TEST_CASE("ceir state: the feedback exemption keys on the trait, not the op name (open-world)", "[ceir][state]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     // a HAND-registered non-core op carrying StateEdge -- the verifier must exempt its last operand just like core.state.

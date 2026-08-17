@@ -2,7 +2,7 @@
 
 #include <crd/ceir/func.hpp> // resolve_call (pre-flight callee walk)
 #include <crd/jobs/jobs.hpp> // crd::jobs::parallel_for / wait / Counter — the PRIVATE backend (never in a public header)
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <new>     // placement new
 #include <utility> // std::move
@@ -14,10 +14,10 @@ using exec::ExecError;
 // CEIR-11a stage 3: one jobs-backed launch's state — its OWN allocator (the worker's sub-interpreter + the result buffer),
 // the body's yields (filled by the worker BEFORE the counter decrements — the counter is the happens-before edge), the
 // job context, and the completion counter. ⛔ HEAP-owned by the provider (the growable pooled table never moves it — the
-// JobDecl captures &token by pointer; the push-back-UAF scar). A `MallocAllocator` member ⇒ non-movable ⇒ pointer-owned.
+// JobDecl captures &token by pointer; the push-back-UAF scar). A `GrowableTlsfAllocator` member ⇒ non-movable ⇒ pointer-owned.
 struct PooledToken
 {
-    crd::memory::MallocAllocator scratch;                 // this token's OWN allocator (worker sub + result)
+    crd::memory::GrowableTlsfAllocator scratch;                 // this token's OWN allocator (worker sub + result)
     containers::Array<crd::i64>  result;                  // the body's yields (valid after the counter reaches 0)
     const exec::Interpreter*     proto    = nullptr;      // the worker clones its sub from this
     const Module*                module   = nullptr;
@@ -167,7 +167,7 @@ ExecError run_parallel_map(exec::Interpreter& in, const Operation& op, ParallelC
         [rjp = &rj](crd::u32 begin, crd::u32 end) {
             for (crd::u32 idx = begin; idx < end; ++idx)
             {
-                crd::memory::MallocAllocator item_scratch; // this index's OWN scratch — never the shared Context arena
+                crd::memory::GrowableTlsfAllocator item_scratch; // this index's OWN scratch — never the shared Context arena
                 exec::Interpreter           sub(*rjp->proto, &item_scratch, rjp->sub_fuel);
                 sub.set_cancel_flag(rjp->cancel); // §30 cooperative cancel — ranges observe it in the step loop
                 const crd::i64              iv     = rjp->lo + static_cast<crd::i64>(idx) * rjp->step;
@@ -217,7 +217,7 @@ ExecError eval_map_reduce(exec::Interpreter& in, const Operation& op)
     if (!in.value_of(op.operand(3), acc)) { return in.fail(ExecError::UndefinedValue, &op); } // the init operand
 
     const Region* const           combine = op.region(1);
-    crd::memory::MallocAllocator  fold_scratch; // the fold's OWN scratch — never the shared Context arena or `in`'s frame
+    crd::memory::GrowableTlsfAllocator  fold_scratch; // the fold's OWN scratch — never the shared Context arena or `in`'s frame
     exec::Interpreter             fold(*pc->proto, &fold_scratch, pc->sub_fuel);
     fold.set_cancel_flag(pc->cancel); // §30: request_cancel also stops a long reduce
     for (crd::u32 i = 0; i < static_cast<crd::u32>(out.size()); ++i)

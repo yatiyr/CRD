@@ -3,7 +3,7 @@
 // no-op, reallocate-copies, and destructor-frees-every-chunk.
 
 #include <crd/memory/allocators/growable_linear_allocator.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -38,7 +38,7 @@ using crd::memory::GrowableLinearAllocator;
 
 TEST_CASE("GrowableLinearAllocator: basic allocate, owns, alignment", "[memory][arena]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     GrowableLinearAllocator      a(1024, &root);
 
     void* p = a.allocate(16, 8);
@@ -55,7 +55,7 @@ TEST_CASE("GrowableLinearAllocator: basic allocate, owns, alignment", "[memory][
 
 TEST_CASE("GrowableLinearAllocator: grows across chunks; each new chunk is exactly one parent alloc", "[memory][arena]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     CountingAllocator            counting(&root);
     GrowableLinearAllocator      a(1024, &counting); // ctor reserves the first chunk
 
@@ -76,7 +76,7 @@ TEST_CASE("GrowableLinearAllocator: grows across chunks; each new chunk is exact
 
 TEST_CASE("GrowableLinearAllocator: an oversized allocation gets its own right-sized chunk", "[memory][arena]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     GrowableLinearAllocator      a(1024, &root);
 
     void* big = a.allocate(4096, 16); // > chunk_bytes
@@ -88,7 +88,7 @@ TEST_CASE("GrowableLinearAllocator: an oversized allocation gets its own right-s
 
 TEST_CASE("GrowableLinearAllocator: exact fill-to-tail then one more grows (boundary)", "[memory][arena]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     GrowableLinearAllocator      a(1024, &root);
 
     // Fill the reserved bytes of the first chunk exactly to its tail, then one more byte forces a new chunk.
@@ -106,7 +106,7 @@ TEST_CASE("GrowableLinearAllocator: exact fill-to-tail then one more grows (boun
 
 TEST_CASE("GrowableLinearAllocator: reset() rewinds and REUSES the chunks (no new parent alloc)", "[memory][arena]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     CountingAllocator            counting(&root);
     GrowableLinearAllocator      a(1024, &counting);
 
@@ -126,7 +126,7 @@ TEST_CASE("GrowableLinearAllocator: reset() rewinds and REUSES the chunks (no ne
 
 TEST_CASE("GrowableLinearAllocator: deallocate is a no-op; reallocate copies", "[memory][arena]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     GrowableLinearAllocator      a(1024, &root);
 
     auto* p = static_cast<unsigned char*>(a.allocate(4, 1));
@@ -149,7 +149,7 @@ TEST_CASE("GrowableLinearAllocator: deallocate is a no-op; reallocate copies", "
 
 TEST_CASE("GrowableLinearAllocator: the destructor frees every chunk", "[memory][arena]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     CountingAllocator            counting(&root);
     {
         GrowableLinearAllocator a(1024, &counting);

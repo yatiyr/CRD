@@ -21,7 +21,7 @@
 #include <crd/framecook/frame_asset.hpp>
 #include <crd/lightcook/lighting_asset.hpp>
 #include <crd/matcook/material_asset.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/techniquecook/technique_asset.hpp>
 #include <crd/vertexcook/vertex_asset.hpp>

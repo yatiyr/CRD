@@ -13,7 +13,7 @@
 #include <crd/ceir/parse.hpp>
 #include <crd/ceir/print.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -47,7 +47,7 @@ Operation* konst(Context& ctx, const Ops& o, Block* b, crd::i64 v)
 
 TEST_CASE("ceir core: the structured ops build and verify; the region-arg contract is checked", "[ceir][core]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
 
@@ -81,7 +81,7 @@ TEST_CASE("ceir core: the structured ops build and verify; the region-arg contra
 
 TEST_CASE("ceir core: switch/match carry a variadic number of case regions", "[ceir][core]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     const OpId                   cswitch = ctx.intern_op("core", "switch");
@@ -135,7 +135,7 @@ Operation* build_if(Context& ctx, const Ops& o, Block* b, crd::i64 cond_value, O
 
 TEST_CASE("ceir core: fold_constant_if inlines the taken branch and erases the if", "[ceir][core]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -163,7 +163,7 @@ TEST_CASE("ceir core: fold_constant_if inlines the taken branch and erases the i
 
 TEST_CASE("ceir core: fold_constant_if bails (no mutation) on every unsound case", "[ceir][core]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -212,7 +212,7 @@ TEST_CASE("ceir core: fold_constant_if bails (no mutation) on every unsound case
 
 TEST_CASE("ceir core: fold_constant_if forwards a value-producing if's results (RAUW); count mismatch bails", "[ceir][core]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -260,7 +260,7 @@ TEST_CASE("ceir core: fold_constant_if forwards a value-producing if's results (
 
 TEST_CASE("ceir core: fold_constant_if(const-0) folds the ELSE contents and RAUWs from the else yield", "[ceir][core]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -294,7 +294,7 @@ TEST_CASE("ceir core: fold_constant_if(const-0) folds the ELSE contents and RAUW
 
 TEST_CASE("ceir core: while carries a condition region and a body region (structural)", "[ceir][core]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     const OpId                   cwhile = ctx.intern_op("core", "while");
@@ -317,7 +317,7 @@ TEST_CASE("ceir core: while carries a condition region and a body region (struct
 
 TEST_CASE("ceir core: a for with a typed entry-block arg round-trips through text", "[ceir][core]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();

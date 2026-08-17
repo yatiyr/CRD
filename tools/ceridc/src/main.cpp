@@ -4,7 +4,7 @@
 
 #include <crd/ceridc/verbs.hpp>
 #include <crd/cooker/cook_handler.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <cstdio>
 #include <cstdlib>
@@ -14,7 +14,7 @@ namespace
 {
 
 // NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
-crd::memory::MallocAllocator g_alloc;
+crd::memory::GrowableTlsfAllocator g_alloc;
 // NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
 [[nodiscard]] const char* flag_of(int argc, char** argv, const char* name, const char* def)

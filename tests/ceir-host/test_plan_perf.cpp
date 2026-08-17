@@ -13,7 +13,7 @@
 #include <crd/ceir/gen/core_ops.hpp>
 #include <crd/ceir/plan.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #if CRD_PERF_ENABLED
 #include <crd/perf/perf.hpp> // init/shutdown + counter readback
@@ -39,7 +39,7 @@ Operation* konst(Context& ctx, OpId cst, Block* b, i64 v)
 TEST_CASE("ceir 11c host: the perf bridge profiles a straight-line plan (exact dispatch counts + shape stats)",
           "[ceir][plan-perf]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const OpId                   cst  = ctx.intern_op("arith", "const");
     const OpId                   addi = ctx.intern_op("arith", "addi");
@@ -90,7 +90,7 @@ TEST_CASE("ceir 11c host: the perf bridge profiles a straight-line plan (exact d
 
 TEST_CASE("ceir 11c host: the perf bridge profiles a LOOP (nesting + granularity-proof self-time)", "[ceir][plan-perf]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const OpId                   cst  = ctx.intern_op("arith", "const");
     const OpId                   muli = ctx.intern_op("arith", "muli");
@@ -141,7 +141,7 @@ TEST_CASE("ceir 11c host: the perf bridge profiles a LOOP (nesting + granularity
 
 TEST_CASE("ceir 11c host: the perf bridge survives an ERRORING run (adapter parent-pause state, pre>post)", "[ceir][plan-perf]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const OpId                   cst = ctx.intern_op("arith", "const");
     (void)arith::register_arith_ops(ctx);

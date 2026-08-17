@@ -7,7 +7,7 @@
 
 #include <crd/ceir/ceir.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -26,7 +26,7 @@ const CostInterface kCheaperCost{&cheaper_cost};
 
 TEST_CASE("ceir 8e: an analysis dispatches through a TYPED op-interface, knowing nothing about the op-kind", "[ceir][interface]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Dialect* const               d    = ctx.register_dialect("test");
     const OpId                   kind = d->register_op("expensive", {});
@@ -52,7 +52,7 @@ TEST_CASE("ceir 8e: an analysis dispatches through a TYPED op-interface, knowing
 
 TEST_CASE("ceir 8e: a typed interface's compile-time kId equals the runtime intern of its name (the FNV model)", "[ceir][interface]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     // T::kId is a COMPILE-TIME constant (no registry scan); intern_interface computes the SAME FNV at runtime.
     CHECK(CostInterface::kId == ctx.intern_interface(CostInterface::kName));
@@ -95,7 +95,7 @@ TEST_CASE("ceir 8e: the closed core-trait vocabulary is exactly 8 contiguous bit
     CHECK(combined == kKnownTraitsMask); // ...and together they ARE the mask (no gap, no stray)
 
     // a registered op that SETS a known trait is fine (the allowed direction).
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Dialect* const               d = ctx.register_dialect("t");
     const OpId                   k = d->register_op("s", {.traits = flags_of(OpTrait::StateEdge)});

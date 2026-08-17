@@ -8,7 +8,7 @@
 #include <crd/ceir/ceir.hpp>
 #include <crd/ceir/binary.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -78,7 +78,7 @@ void check_same_edges(const Array<Hazard>& a, const Array<Hazard>& base)
 
 TEST_CASE("ceir gate4: the WAR-needs-lifetime scar - a read then a write over ONE buffer is ordered", "[ceir][gate4]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const G4                     g(ctx);
     Module* const                m = ctx.create_module();
@@ -99,7 +99,7 @@ TEST_CASE("ceir gate4: the WAR-needs-lifetime scar - a read then a write over ON
 
 TEST_CASE("ceir gate4: the curated module classifies every pair reorderable vs ordered", "[ceir][gate4]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const G4                     g(ctx);
     Module* const                m = ctx.create_module();
@@ -138,7 +138,7 @@ TEST_CASE("ceir gate4: the curated module classifies every pair reorderable vs o
 
 TEST_CASE("ceir gate4: the three band-4 axes are orthogonal - mode/domain moves leave the hazard list unchanged", "[ceir][gate4]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const G4                     g(ctx);
     Module* const                m = ctx.create_module();
@@ -188,7 +188,7 @@ TEST_CASE("ceir gate4: the three band-4 axes are orthogonal - mode/domain moves 
 
 TEST_CASE("ceir gate4: unknown-op is a barrier, a Pure op is reorderable (side block)", "[ceir][gate4]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const G4                     g(ctx);
     Module* const                m = ctx.create_module();
@@ -205,7 +205,7 @@ TEST_CASE("ceir gate4: unknown-op is a barrier, a Pure op is reorderable (side b
 
 TEST_CASE("ceir gate4: the hazard classification survives serialize + deserialize", "[ceir][gate4]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const G4                     g(ctx);
     Module* const                m = ctx.create_module();

@@ -48,7 +48,7 @@
 #include <crd/containers/string.hpp>
 #include <crd/containers/string_view.hpp>
 #include <crd/geometry/mesh/mesh_validate.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/resource_id.hpp>
 

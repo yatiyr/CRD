@@ -9,7 +9,7 @@
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/print.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -59,7 +59,7 @@ Module* build_kinds(Context& ctx)
 
 TEST_CASE("ceir binary: a rich graph serializes, deserializes, and re-serializes byte-exact", "[ceir][binary]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const ByteArray              blob1 = serialize(ctx, *build_rich(ctx), &root);
     REQUIRE(blob1.size() > 12U); // header + chunks
@@ -78,7 +78,7 @@ TEST_CASE("ceir binary: a rich graph serializes, deserializes, and re-serializes
 
 TEST_CASE("ceir binary: the blob is a pure function of module content, not of Context history", "[ceir][binary]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
 
     Context         clean(&root);
     const ByteArray a = serialize(clean, *build_rich(clean), &root);
@@ -101,7 +101,7 @@ TEST_CASE("ceir binary: the blob is a pure function of module content, not of Co
 
 TEST_CASE("ceir binary: region kinds and source locations survive a load into a dirty context", "[ceir][binary]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const ByteArray              blob = serialize(ctx, *build_kinds(ctx), &root);
 
@@ -130,7 +130,7 @@ TEST_CASE("ceir binary: region kinds and source locations survive a load into a 
 
 TEST_CASE("ceir binary: a func's symbol identity resolves after a binary load", "[ceir][binary][symbol]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const ByteArray              blob = serialize(ctx, *build_rich(ctx), &root);
 
@@ -146,7 +146,7 @@ TEST_CASE("ceir binary: a func's symbol identity resolves after a binary load", 
 
 TEST_CASE("ceir binary: an unknown chunk is forward-skipped", "[ceir][binary]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const ByteArray              blob = serialize(ctx, *build_rich(ctx), &root);
 
@@ -182,7 +182,7 @@ TEST_CASE("ceir binary: an unknown chunk is forward-skipped", "[ceir][binary]")
 
 TEST_CASE("ceir binary: malformed blobs are rejected with a byte offset", "[ceir][binary]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const ByteArray              blob = serialize(ctx, *build_rich(ctx), &root);
 
@@ -245,7 +245,7 @@ TEST_CASE("ceir binary: malformed blobs are rejected with a byte offset", "[ceir
 
 TEST_CASE("ceir binary: a structurally-invalid TYPE record is rejected", "[ceir][binary]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const ByteArray              blob = serialize(ctx, *build_rich(ctx), &root); // rich graph carries typed values
 
@@ -294,7 +294,7 @@ TEST_CASE("ceir binary: a keyword-mapped scalar out of range (image dim) is reje
     // A deterministic 2-record TYPE pool: an image<d2,!f32> value -> record 0 = f32 (child-first), record 1 = image.
     // Inflate the image's dim code (a keyword-table scalar) past Cube -> the decoder must reject (else the printer would
     // map it to nothing and the text form would be silently lossy).
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module* const                m   = ctx.create_module();
     Block* const                 top = ctx.create_block(0U);
@@ -338,7 +338,7 @@ TEST_CASE("ceir binary: an out-of-range ownership qualifier is rejected", "[ceir
     // A deterministic 2-record TYPE pool: qual<borrow,!f32> -> record 0 = f32 (child-first), record 1 = qualified with
     // count = BorrowedView (=2). Inflate the ownership code (a keyword-table scalar) past TransientArena -> the decoder
     // must reject (else the printer would map it to nothing and the text form would be silently lossy).
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module* const                m   = ctx.create_module();
     Block* const                 top = ctx.create_block(0U);
@@ -384,7 +384,7 @@ TEST_CASE("ceir binary: a NON-CANONICAL TYPE record (a name on an Int) is reject
     // non-empty), then i32's empty name (STRP[1]=""). The single TYPE record (i32) stores name_strp=1 (the ""). Repoint
     // it to STRP[0] -> the Int gains a name -> non-canonical (the printer ignores an Int's name, so it would print
     // identically to the canonical !i32 -> form-agreement broken) -> the decoder's canonical check must reject.
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module* const                m   = ctx.create_module();
     Block* const                 top = ctx.create_block(0U);

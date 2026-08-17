@@ -18,6 +18,7 @@ add_library(crd-frame-cook
     src/viewport.cpp        # REN-37.8/37.9: the FRAME-LEVEL graph composer + the budgeted viewport scheduler
     src/frame_template_bridge.cpp # RAF-8 (ADR-0106): FrameGraphDesc -> render-graph FrameGraphTemplate load bridge
     src/frame_ceir.cpp      # CEIR-15a (ADR-0127): FrameGraphDesc <-> ceir.frame converter (§126 step 1/2)
+    src/frame_work.cpp      # CEIR-20b: extract_work_desc — the frame's work passes -> a ceir.gpu::WorkBuildDesc
 )
 
 target_include_directories(crd-frame-cook PUBLIC include)

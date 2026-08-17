@@ -10,7 +10,7 @@
 #include <crd/containers/string_view.hpp>
 #include <crd/kir/ckir.hpp>
 #include <crd/kir/ckir_serialize.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/shadercook/cook.hpp>
@@ -20,7 +20,7 @@
 
 namespace
 {
-crd::memory::MallocAllocator g_alloc; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+crd::memory::GrowableTlsfAllocator g_alloc; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
 void usage()
 {

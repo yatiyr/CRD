@@ -13,7 +13,7 @@
 #include <crd/ceir/gen/test_ops.hpp> // the `test.dummy` op declares [op.native] -> the intrinsic dep-record vehicle
 #include <crd/ceir/program_asset.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -83,7 +83,7 @@ Block* module_block(Context& c, Module& m)
 
 TEST_CASE("ceir 7a: a body-only edit changes the content hash but NOT the interface hash", "[ceir][program-asset]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     // @f() -> i32 { return K }  --  two modules differing ONLY in the returned constant (an implementation edit).
     Context   a(&root);
     const Reg ra(a);
@@ -107,7 +107,7 @@ TEST_CASE("ceir 7a: a body-only edit changes the content hash but NOT the interf
 
 TEST_CASE("ceir 7a: a signature edit changes BOTH the interface and content hash", "[ceir][program-asset]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context   a(&root);
     const Reg ra(a);
     Module*   ma = a.create_module();
@@ -126,7 +126,7 @@ TEST_CASE("ceir 7a: a signature edit changes BOTH the interface and content hash
 
 TEST_CASE("ceir 7a: reordering function definitions changes NEITHER hash's interface (canonical by name)", "[ceir][program-asset]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context   a(&root);
     const Reg ra(a);
     Module*   ma = a.create_module();
@@ -146,7 +146,7 @@ TEST_CASE("ceir 7a: reordering function definitions changes NEITHER hash's inter
 
 TEST_CASE("ceir 7a: adding a state cell changes the interface hash (the migration schema)", "[ceir][program-asset]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     // @f() -> i32 { return 0 }  vs  the same PLUS a core.state cell in the body.
     Context   a(&root);
     const Reg ra(a);
@@ -174,7 +174,7 @@ TEST_CASE("ceir 7a: adding a state cell changes the interface hash (the migratio
 
 TEST_CASE("ceir 7a: the interface and content hashes are cross-Context stable", "[ceir][program-asset]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     // The SAME module built in two independent Contexts (different intern history) must hash EQUAL -- the projection is
     // structural (no TypeId ints leak), exactly like the 1f binary blob (the dirty-Context purity precedent).
     Context   a(&root);
@@ -200,7 +200,7 @@ TEST_CASE("ceir 7a: the interface and content hashes are cross-Context stable", 
 
 TEST_CASE("ceir 7a: dependency records list EXTERNAL calls, intrinsics, and providers", "[ceir][program-asset]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context   c(&root);
     const Reg r(c);
     Module*   m = c.create_module();
@@ -231,7 +231,7 @@ TEST_CASE("ceir 7a: dependency records list EXTERNAL calls, intrinsics, and prov
 
 TEST_CASE("ceir 7a: find_unregistered_op catches an op of an UNregistered dialect (EMPTY != UNKNOWN)", "[ceir][program-asset]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context   c(&root);
     const Reg r(c);
     Module*   m = c.create_module();

@@ -8,7 +8,7 @@
 #include <crd/ceir/binary.hpp>
 #include <crd/ceir/time.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -32,7 +32,7 @@ bool verify_one_member(const Context&, const Type& t) noexcept { return t.member
 
 TEST_CASE("ceir 8f: time domains are distinct 8a type-classes (wall != sim); a plugin domain works", "[ceir][time]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     time::register_dialect(ctx);
     const TypeClassId wall = time::domain(ctx, "wall");
@@ -54,7 +54,7 @@ TEST_CASE("ceir 8f: time domains are distinct 8a type-classes (wall != sim); a p
 
 TEST_CASE("ceir 8f: a time domain's verify hook rejects a 0- or 2-member type", "[ceir][time]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     time::register_dialect(ctx);
     const TypeClassId wall = time::domain(ctx, "wall");
@@ -73,7 +73,7 @@ TEST_CASE("ceir 8f: a time domain's verify hook rejects a 0- or 2-member type", 
 
 TEST_CASE("ceir 8f: a time-typed module round-trips text and binary byte-exact (U-56, inherited from 8a)", "[ceir][time]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     time::register_dialect(ctx);
     const TypeId  t_wall = time::time_type(ctx, time::domain(ctx, "wall"), ctx.type_f64());

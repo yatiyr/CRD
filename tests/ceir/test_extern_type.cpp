@@ -12,7 +12,7 @@
 #include <crd/ceir/print.hpp>
 #include <crd/ceir/program_asset.hpp> // interface_hash
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -68,7 +68,7 @@ Module* module_with_typed_arg(Context& ctx, TypeId ty)
 
 TEST_CASE("ceir 8a: a custom type interns/dedups, and a DIFFERENT class with identical params is a DIFFERENT type", "[ceir][extern-type]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const TypeClassId            topo = register_toposhape(ctx);
     // a SECOND class with the exact same param shape (one member) — the operator== landmine test.
@@ -105,7 +105,7 @@ TEST_CASE("ceir 8a: the type-class fields are Extern-only, and an Extern must na
 
 TEST_CASE("ceir 8a: a custom type round-trips text AND binary byte-exact (the generic form)", "[ceir][extern-type]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const TypeClassId            topo = register_toposhape(ctx);
     Module* const                m    = module_with_typed_arg(ctx, toposhape_of(ctx, topo, ctx.type_f32()));
@@ -133,7 +133,7 @@ TEST_CASE("ceir 8a: a custom type round-trips text AND binary byte-exact (the ge
 
 TEST_CASE("ceir 8a: THE U-56 headline - an unknown plugin type round-trips through an UNREGISTERED Context", "[ceir][extern-type]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const TypeClassId            topo = register_toposhape(ctx);
     Module* const                m    = module_with_typed_arg(ctx, toposhape_of(ctx, topo, ctx.type_f64()));
@@ -167,7 +167,7 @@ TEST_CASE("ceir 8a: THE U-56 headline - an unknown plugin type round-trips throu
 
 TEST_CASE("ceir 8a: the verify hook rejects at the decoder + parser (registered-invalid), preserves when unregistered", "[ceir][extern-type]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const TypeClassId            topo = register_toposhape(ctx);
     // Build a HAND-CRAFTED invalid instance (TWO members — the hook requires exactly one) by going around the factory:
@@ -204,7 +204,7 @@ TEST_CASE("ceir 8a: the verify hook rejects at the decoder + parser (registered-
 
 TEST_CASE("ceir 8a: the interface hash discriminates custom types by class", "[ceir][extern-type]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const TypeClassId            topo = register_toposhape(ctx);
     Dialect* const               d2   = ctx.register_dialect("testeda");
@@ -225,7 +225,7 @@ TEST_CASE("ceir 8a: the interface hash discriminates custom types by class", "[c
 
 TEST_CASE("ceir 8a: a blob written by a NEWER class schema version is rejected by an older loader", "[ceir][extern-type]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      enc(&root);
     const TypeClassId            topo5 = register_toposhape(enc, /*version*/ 5U); // encoder knows schema v5
     Module* const   m    = module_with_typed_arg(enc, toposhape_of(enc, topo5, enc.type_f32()));
@@ -249,7 +249,7 @@ TEST_CASE("ceir 8a: a blob written by a NEWER class schema version is rejected b
 
 TEST_CASE("ceir 8a: substitution rebuilds a generic custom type, preserving its class", "[ceir][extern-type]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const TypeClassId            topo = register_toposhape(ctx);
     const TypeId                 tp   = ctx.type_param("T", {});             // a generic param
@@ -263,7 +263,7 @@ TEST_CASE("ceir 8a: substitution rebuilds a generic custom type, preserving its 
 
 TEST_CASE("ceir 8a: a pre-8a module (no custom types) round-trips byte-exact (no format churn)", "[ceir][extern-type]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module* const                m     = module_with_typed_arg(ctx, ctx.type_vector(ctx.type_f32(), 4U));
     const ByteArray              blob1 = serialize(ctx, *m, &root);
@@ -279,7 +279,7 @@ TEST_CASE("ceir 8a: single-byte corruption of a custom-type blob never crashes a
     // The 1h hostile-input guard, EXTENDED over the Extern decode path (class-STRP index, version, verify) — the fuzz
     // that lands WITH the feature. ASan/UBSan is the memory-safety proof; ok/!ok are both acceptable, the ONLY invariant
     // is no crash. Swept BOTH registered (exercises the hook + version reject) and unregistered (the preserve path).
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const TypeClassId            topo = register_toposhape(ctx);
     Module* const                m    = module_with_typed_arg(ctx, toposhape_of(ctx, topo, ctx.type_f32()));

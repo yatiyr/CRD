@@ -8,7 +8,7 @@
 #include <crd/ceir/ceir.hpp>
 #include <crd/ceir/gen/resource_ops.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -19,7 +19,7 @@ using namespace crd::ceir;
 TEST_CASE("ceir resource gen smoke: the dialect self-registers and reflects a coherent schema",
           "[ceir][gen][smoke][resource]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Dialect* const               dlt = resource::register_resource_ops(ctx);
     REQUIRE(dlt != nullptr);
@@ -43,7 +43,7 @@ TEST_CASE("ceir resource gen smoke: the dialect self-registers and reflects a co
 TEST_CASE("ceir resource gen smoke: every op builds through its generated builder and the verifier accepts it",
           "[ceir][gen][smoke][resource]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     (void)resource::register_resource_ops(ctx);
 
@@ -81,7 +81,7 @@ TEST_CASE("ceir resource gen smoke: every op builds through its generated builde
 TEST_CASE("ceir resource gen smoke: the generated verifier rejects a malformed construction",
           "[ceir][gen][smoke][resource]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     (void)resource::register_resource_ops(ctx);
 

@@ -14,7 +14,7 @@
 #include <crd/resources/crdr.hpp> // the splice forge re-packages chunks directly
 #include <crd/resources/resource_id.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -72,7 +72,7 @@ Module* build_const_fn(Context& c, const Reg& r, i64 k)
 
 TEST_CASE("ceir runtime 7b: a cooked program loads (hash-validated) and installs a current handle", "[ceir][runtime]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context   a(&root);
     const Reg ra(a);
     const CookResult cooked = cook_program(a, *build_const_fn(a, ra, 5), 0x42U, &root, &root);
@@ -95,7 +95,7 @@ TEST_CASE("ceir runtime 7b: a cooked program loads (hash-validated) and installs
 
 TEST_CASE("ceir runtime 7b: a handle minted before a same-id re-install is detectably stale", "[ceir][runtime]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context   a(&root);
     const Reg ra(a);
     const CookResult c1 = cook_program(a, *build_const_fn(a, ra, 5), 1U, &root, &root);
@@ -124,7 +124,7 @@ TEST_CASE("ceir runtime 7b: a handle minted before a same-id re-install is detec
 
 TEST_CASE("ceir runtime 7b: two generations loaded in two Contexts coexist independently", "[ceir][runtime]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     // COOK two distinct generations.
     Context   ck(&root);
     const Reg rck(ck);
@@ -158,7 +158,7 @@ TEST_CASE("ceir runtime 7b: two generations loaded in two Contexts coexist indep
 
 TEST_CASE("ceir runtime 7b: a SPLICED blob (one header, another program) is a ContentHashMismatch", "[ceir][runtime]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context   a(&root);
     const Reg ra(a);
     const CookResult p1 = cook_program(a, *build_const_fn(a, ra, 5), 1U, &root, &root);
@@ -194,7 +194,7 @@ TEST_CASE("ceir runtime 7b: a SPLICED blob (one header, another program) is a Co
 
 TEST_CASE("ceir runtime 7b: loading into a Context without the dialects registered is UnregisteredOp", "[ceir][runtime]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context   a(&root);
     const Reg ra(a);
     const CookResult cooked = cook_program(a, *build_const_fn(a, ra, 5), 1U, &root, &root);
@@ -208,7 +208,7 @@ TEST_CASE("ceir runtime 7b: loading into a Context without the dialects register
 
 TEST_CASE("ceir runtime 7b: a corrupted interface-hash header word (content intact) is InterfaceHashMismatch", "[ceir][runtime]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context   a(&root);
     const Reg ra(a);
     const CookResult cooked = cook_program(a, *build_const_fn(a, ra, 5), 1U, &root, &root);

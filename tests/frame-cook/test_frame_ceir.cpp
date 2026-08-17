@@ -5,6 +5,9 @@
 
 #include <crd/framecook/frame_asset.hpp>
 #include <crd/framecook/frame_ceir.hpp>
+#include <crd/ceir/gpu/work_build.hpp> // CEIR-20b: WorkBuildDesc / build_work_ceir
+#include <crd/ceir/work.hpp>           // CEIR-20b: find_work_misuse
+#include <crd/framecook/frame_work.hpp> // CEIR-20b: extract_work_desc
 
 #include <crd/ceir/ceir.hpp>
 #include <crd/ceir/frame.hpp>
@@ -16,9 +19,14 @@
 
 #include <crd/gpu/frame_graph.hpp> // FgImageFormat
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+
+#include <fstream> // CEIR-20b: read the shipped wavefront_work.frame.toml
+#ifndef CRD_FRAME_ASSETS_DIR
+#define CRD_FRAME_ASSETS_DIR "assets/frame"
+#endif
 
 using namespace crd;             // NOLINT(google-build-using-namespace)
 using namespace crd::framecook;  // NOLINT(google-build-using-namespace)
@@ -27,6 +35,61 @@ using crd::containers::StringView;
 
 namespace
 {
+// round-trip through to_ceir_frame / from_ceir_frame exactly like a built-in mechanic (the compute.dispatch precedent).
+// The queues are the CEIR identity of the wavefront's ray/hit buffers: a counter buffer (device count in the first 4
+// bytes) + a structured hit queue.
+void build_wavefront_work(FrameGraphBuilder& fb, memory::IAllocator* a)
+{
+    fb.add_scaled_image("scene", gpu::FgImageFormat::RGBA8Unorm, 1.0F, /*sampled=*/true);
+    const crd::u32 dl = fb.add_draw_list("opaque");
+    fb.draw_list_all(dl, "Transform");
+    fb.draw_list_all(dl, "Mesh");
+
+    const auto add_buffer =
+        [&](const char* name, crd::u32 nlen, FrameResourceKind kind, crd::u32 stride, crd::u32 count)
+    {
+        FrameResourceDesc r(a);
+        r.name.append(name, nlen);
+        r.kind = kind;
+        r.stride = stride;
+        r.count = count;
+        fb.desc().resources.push_back(static_cast<FrameResourceDesc&&>(r));
+    };
+    add_buffer("rays", 4U, FrameResourceKind::ExternalBuffer, 0U, 0U);         // host-owned camera-ray input
+    add_buffer("ray_queue", 9U, FrameResourceKind::CounterBuffer, 24U, 64U);   // the produce target (count + records)
+    add_buffer("hit_queue", 9U, FrameResourceKind::StructuredBuffer, 4U, 64U); // the compacted queue consume reads
+    add_buffer("shade_out", 9U, FrameResourceKind::StructuredBuffer, 4U,
+               64U); // the decision buffer the gate reads back
+
+    const crd::u32 geo = fb.add_pass("gbuffer", "raster.geometry");
+    fb.pass_draw_list(geo, "opaque");
+    fb.pass_writes(geo, "scene");
+
+    // trace = work.produce (grid append into ray_queue); compact = work.compact (ray_queue -> hit_queue); shade =
+    // work.consume (an INDIRECT dispatch over hit_queue's DEVICE count). All three name a CKIR kernel (the 19c
+    // wavefront).
+    const crd::u32 tr = fb.add_pass("trace", "work.produce");
+    fb.pass_kernel(tr, "wavefront_trace");
+    fb.pass_reads(tr, "rays");
+    fb.pass_writes(tr, "ray_queue");
+
+    const crd::u32 co = fb.add_pass("compact", "work.compact");
+    fb.pass_kernel(co, "wavefront_compact");
+    fb.pass_reads(co, "ray_queue");
+    fb.pass_writes(co, "hit_queue");
+
+    const crd::u32 sh = fb.add_pass("shade", "work.consume");
+    fb.pass_kernel(sh, "wavefront_shade");
+    fb.pass_reads(sh, "hit_queue");
+    fb.pass_writes(sh, "shade_out");
+
+    // @output producer: a raster pass reads the scene + the work chain's decision buffer, writes the swapchain.
+    const crd::u32 pr = fb.add_pass("present_scene", "raster.geometry");
+    fb.pass_draw_list(pr, "opaque");
+    fb.pass_reads(pr, "scene");
+    fb.pass_reads(pr, "shade_out");
+    fb.pass_writes(pr, "@output");
+}
 // StringView has no find(); a small substring test (the module text contains a frame.history op iff the routing fired).
 [[nodiscard]] bool sv_contains(StringView hay, StringView needle)
 {
@@ -268,7 +331,7 @@ const FrameGraphDesc* resolve_composed_sub(StringView name, void* /*user*/)
 
 TEST_CASE("ceir 15a: a FrameGraphDesc converts to a find_frame_misuse-clean ceir.frame", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_frame");
     build_scene(fb);
 
@@ -280,7 +343,7 @@ TEST_CASE("ceir 15a: a FrameGraphDesc converts to a find_frame_misuse-clean ceir
 
 TEST_CASE("ceir 15a: a converted ceir.frame round-trips through CEIR text (print == parse-print)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_frame");
     build_scene(fb);
 
@@ -307,7 +370,7 @@ TEST_CASE("ceir 15a: a converted ceir.frame round-trips through CEIR text (print
 // precedent). It proves the FORWARD + BACKWARD converters are LOSSLESS: every field emit_frame_toml serializes survives.
 TEST_CASE("ceir 15a: the FrameGraphDesc<->ceir.frame round-trip is emit_frame_toml-identical", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_frame");
     build_scene(fb);
     const String toml_a = emit_frame_toml(fb.desc(), &alloc);
@@ -328,7 +391,7 @@ TEST_CASE("ceir 15a: the FrameGraphDesc<->ceir.frame round-trip is emit_frame_to
 // no privileged frontend — the CEIR representation is canonical regardless of how the graph was authored.
 TEST_CASE("ceir 15b: FrameGraphBuilder and .frame.toml end at byte-identical ceir.frame", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_frame");
     build_scene(fb);
 
@@ -361,7 +424,7 @@ TEST_CASE("ceir 15b: FrameGraphBuilder and .frame.toml end at byte-identical cei
 TEST_CASE("ceir 15e: a composed graph flattens to an anchor-free ordinary graph the converter round-trips",
           "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
 
     FrameGraphDesc sub(&alloc);
     REQUIRE(parse_frame_toml(StringView(kComposedSub), sub) == FrameCookError::Ok);
@@ -408,7 +471,7 @@ TEST_CASE("ceir 15e: a composed graph flattens to an anchor-free ordinary graph 
 // recovers the read name from the wrapped declare, so the FrameGraphDesc round-trips emit_frame_toml-identically.
 TEST_CASE("ceir 15c: a ping-pong history read routes through frame.history and round-trips", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_taa");
     build_taa(fb, &alloc);
     REQUIRE(fb.validate() == FrameCookError::Ok); // a round-trip lock on a cook-INVALID graph is a weak lock — this one is valid
@@ -449,7 +512,7 @@ TEST_CASE("ceir 15c: a ping-pong history read routes through frame.history and r
 // old last-char-wins token scanner collapsed rw->'w' and silently DROPPED the read half.
 TEST_CASE("ceir 15c: a hand-authored rw operand maps to both a read and a write", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_rw");
     build_scene(fb); // the `forward` pass: writes @output, reads scene, draw_list opaque -> operands [@output(w), scene(r), opaque(r)]
 
@@ -489,7 +552,7 @@ TEST_CASE("ceir 15c: a hand-authored rw operand maps to both a read and a write"
 // `d.contract == cook_verdict` (the SAME FrameCookError, no mapping table to desync). Family 1: the raster/fullscreen contracts.
 TEST_CASE("ceir 15c: validate_ceir_frame catches MissingDrawList (program-contract, oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_pc_dl");
     const crd::u32          geo = fb.add_pass("geometry", "raster.geometry");
     fb.pass_writes(geo, "@output"); // ⛔ a scene-raster pass with NO draw list
@@ -508,7 +571,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches MissingDrawList (program-contra
 
 TEST_CASE("ceir 15c: validate_ceir_frame catches MissingShader (program-contract, oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_pc_shader");
     const crd::u32          fs = fb.add_pass("post", "raster.fullscreen");
     fb.pass_writes(fs, "@output"); // ⛔ a fullscreen pass with NO shader
@@ -526,7 +589,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches MissingShader (program-contract
 
 TEST_CASE("ceir 15c: validate_ceir_frame catches LoadNeedsGeometry (program-contract, oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_pc_load");
     const crd::u32          fs = fb.add_pass("post", "raster.fullscreen");
     fb.pass_shader(fs, "fs_shader");                                        // has a shader (so NOT MissingShader)
@@ -549,7 +612,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches LoadNeedsGeometry (program-cont
 // RtPipelineNeedsThree != the expected RayTraceNeedsAccel (a loud failure), not a silent skip.
 TEST_CASE("ceir 15c: validate_ceir_frame catches RtPipelineNeedsThree (program-contract, oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_pc_rt3");
     const crd::u32          rt = fb.add_pass("trace", "raytrace.pipeline");
     set_pass_str(fb.desc().passes[rt], StringView(pp::kRaygen), StringView("rgen")); // ⛔ raygen only — miss + closest_hit absent
@@ -568,7 +631,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches RtPipelineNeedsThree (program-c
 
 TEST_CASE("ceir 15c: validate_ceir_frame catches RayTraceNeedsAccel (program-contract, oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_pc_rtaccel");
     const crd::u32          rt = fb.add_pass("trace", "raytrace.pipeline");
     set_pass_str(fb.desc().passes[rt], StringView(pp::kRaygen), StringView("rgen")); // all three programs present …
@@ -592,7 +655,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches RayTraceNeedsAccel (program-con
 // non-args resource" — different author mistakes with different fixes.
 TEST_CASE("ceir 15c: validate_ceir_frame catches IndirectNeedsArgs (program-contract, oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_pc_indargs");
     const crd::u32          ind = fb.add_pass("cull", "compute.indirect");
     fb.pass_kernel(ind, "cull_cs"); // has a kernel (so NOT MissingShader) …
@@ -611,7 +674,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches IndirectNeedsArgs (program-cont
 
 TEST_CASE("ceir 15c: validate_ceir_frame catches IndirectArgsNotArgs (program-contract, oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_pc_indwrong");
     fb.add_image("input", gpu::FgImageFormat::RGBA8Unorm, 64U, 64U, true); // an ordinary read, NOT an indirect_args buffer
     const crd::u32 ind = fb.add_pass("cull", "compute.indirect");
@@ -633,7 +696,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches IndirectArgsNotArgs (program-co
 // Family 4 — a UTILITY (transfer) contract. A copy/blit/resolve names EXACTLY ONE source; zero reads has nothing to copy.
 TEST_CASE("ceir 15c: validate_ceir_frame catches TransferNeedsOneRead (program-contract, oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_pc_copy0");
     const crd::u32          cp = fb.add_pass("blit", "copy");
     fb.pass_writes(cp, "@output"); // ⛔ a copy with a destination but NO source (reads == 0)
@@ -652,7 +715,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches TransferNeedsOneRead (program-c
 // A clear PRODUCES a target and consumes nothing; a declared read reads as intent and mis-orders the dependency sort.
 TEST_CASE("ceir 15c: validate_ceir_frame catches ClearReadsNothing (program-contract, oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_pc_clearread");
     fb.add_image("target", gpu::FgImageFormat::RGBA8Unorm, 64U, 64U, false);
     fb.add_image("src", gpu::FgImageFormat::RGBA8Unorm, 64U, 64U, true);
@@ -674,7 +737,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches ClearReadsNothing (program-cont
 // A present is a SINK: EXACTLY ONE read. Two ⇒ the executor picks one and the author never learns which.
 TEST_CASE("ceir 15c: validate_ceir_frame catches PresentNeedsOneRead (program-contract, oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_pc_present2");
     fb.add_image("a", gpu::FgImageFormat::RGBA8Unorm, 64U, 64U, true);
     fb.add_image("b", gpu::FgImageFormat::RGBA8Unorm, 64U, 64U, true);
@@ -697,7 +760,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches PresentNeedsOneRead (program-co
 // neither dispatches ZERO. Here: a shader (so NOT MissingShader) but no draw list and no count.
 TEST_CASE("ceir 15c: validate_ceir_frame catches AmplifyNeedsCount (program-contract, oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_pc_amplify");
     const crd::u32          t = fb.add_pass("tess", "raster.tess");
     fb.pass_shader(t, "tess_prog"); // has a program (so NOT MissingShader) …
@@ -717,7 +780,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches AmplifyNeedsCount (program-cont
 // A VISIBILITY-BUFFER pass MUST write R32Uint — an id in RGBA8 aliases past 255 and shades the WRONG mesh.
 TEST_CASE("ceir 15c: validate_ceir_frame catches VisbufferNeedsUintTarget (program-contract, oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_pc_visbuf");
     fb.add_image("vis", gpu::FgImageFormat::RGBA8Unorm, 64U, 64U, false); // ⛔ not R32Uint
     const crd::u32 dl = fb.add_draw_list("opaque");
@@ -745,7 +808,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches VisbufferNeedsUintTarget (progr
 // attr on the frame.pass op); a raster pass that asked for async cannot rasterise there.
 TEST_CASE("ceir 15c: validate_ceir_frame catches AsyncQueueNeedsCompute (program-contract, oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_pc_async");
     const crd::u32          dl = fb.add_draw_list("opaque");
     fb.draw_list_all(dl, "Transform");
@@ -771,7 +834,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches AsyncQueueNeedsCompute (program
 // self-verifies the `composite` flag round-trips: if it were lost, this reduces to a valid fullscreen pass (no diag).
 TEST_CASE("ceir 15c: validate_ceir_frame catches CompositeNeedsBlend (program-contract, oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_pc_composite");
     const crd::u32          c = fb.add_pass("composite", "raster.composite");
     fb.pass_shader(c, "comp_prog"); // has a program (so NOT MissingShader) …
@@ -813,7 +876,7 @@ crd::u32 clean_geo_with_dl(FrameGraphBuilder& fb)
 // assert validate_ceir_frame reports UnknownEnumParam carrying `expected`.
 void check_bad_vocab(crd::containers::StringView param, FrameCookError expected)
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_vocab");
     const crd::u32          g = clean_geo_with_dl(fb);
     set_pass_enum(fb.desc().passes[g], param, 42U); // ⛔ not a valid value for this vocab
@@ -831,7 +894,7 @@ void check_bad_vocab(crd::containers::StringView param, FrameCookError expected)
 // true and the accept path actually executes.
 void check_good_vocab(crd::containers::StringView param, crd::u32 max_valid)
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_vocab_ok");
     const crd::u32          g = clean_geo_with_dl(fb);
     set_pass_enum(fb.desc().passes[g], param, max_valid); // the highest in-range value
@@ -845,7 +908,7 @@ void check_good_vocab(crd::containers::StringView param, crd::u32 max_valid)
 void check_bad_str_vocab(crd::containers::StringView op_kind, crd::containers::StringView op_name, const char* attr,
                          FrameCookError expected)
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_6b_str");
     build_scene(fb);
     ceir::Context       ctx(&alloc);
@@ -864,7 +927,7 @@ void check_bad_str_vocab(crd::containers::StringView op_kind, crd::containers::S
 void check_good_str_vocab(crd::containers::StringView op_kind, crd::containers::StringView op_name, const char* attr,
                           const char* good)
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_6b_str_ok");
     build_scene(fb);
     ceir::Context       ctx(&alloc);
@@ -903,7 +966,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame closed-vocab range-checks (int-carried 
 // rejects it before the cast — this test would PASS falsely (no diag) without that guard.
 TEST_CASE("ceir 15c: closed-vocab range-check rejects a u8-wrapping enum int (256)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_vocab_wrap");
     const crd::u32          g = clean_geo_with_dl(fb);
     set_pass_enum(fb.desc().passes[g], StringView(pp::kBlendSlot[0]), 256U); // ⛔ wraps to 0=Opaque without the guard
@@ -920,7 +983,7 @@ TEST_CASE("ceir 15c: closed-vocab range-check rejects a u8-wrapping enum int (25
 // it — the frame is rejected as UnknownEnumParam, never mis-accepted as a valid composite.
 TEST_CASE("ceir 15c: a garbage blend does NOT satisfy CompositeNeedsBlend (vocab runs before the contract)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_vocab_composite");
     const crd::u32          c = fb.add_pass("composite", "raster.composite");
     fb.pass_shader(c, "comp_prog");
@@ -963,7 +1026,7 @@ TEST_CASE("ceir 15c: closed-vocab range-checks ACCEPT the max valid value (no fa
 // backward readers NORMALIZE a bad string to a default, so a desc-based check can't see the garbage. NO oracle. ──
 TEST_CASE("ceir 15c: 6b format closed-vocab (int on the resource op)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_6b_format");
     build_scene(fb);
     ceir::Context       ctx(&alloc);
@@ -991,7 +1054,7 @@ TEST_CASE("ceir 15c: 6b string-carried closed vocabs (sort/cull on draw_list, fo
 // is a SEPARATE semantic layer, so this confirms the vocab layer doesn't over-reject a legitimate async request).
 TEST_CASE("ceir 15c: 6b accepts a valid non-empty for_each string", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_6b_fe_ok");
     build_scene(fb);
     ceir::Context       ctx(&alloc);
@@ -1005,7 +1068,7 @@ TEST_CASE("ceir 15c: 6b accepts a valid non-empty for_each string", "[framecook]
 
 TEST_CASE("ceir 15c: 6b accepts queue=async on a compute pass (vocab layer does not over-reject)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_6b_queue_ok");
     const crd::u32          cs = fb.add_pass("cs", "compute");
     fb.pass_kernel(cs, "k");
@@ -1021,7 +1084,7 @@ TEST_CASE("ceir 15c: 6b accepts queue=async on a compute pass (vocab layer does 
 // missing last case would slip through. Author the MAX valid format (D32FloatS8 = 16) and assert it is NOT false-rejected.
 TEST_CASE("ceir 15c: 6b accepts the max valid format (D32FloatS8), catching a missing switch case", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_6b_format_ok");
     build_scene(fb);
     ceir::Context       ctx(&alloc);
@@ -1037,7 +1100,7 @@ TEST_CASE("ceir 15c: 6b accepts the max valid format (D32FloatS8), catching a mi
 // unreferenced ExternalTexture import (structurally fine — imports are exempt from producer rules) drives the IMPORT branch.
 TEST_CASE("ceir 15c: 6b format check fires on the resource.import branch too", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_6b_import_fmt");
     build_scene(fb);
     FrameResourceDesc ext(&alloc);
@@ -1069,7 +1132,7 @@ TEST_CASE("ceir 15c: 6b accepts the non-default valid string vocabs (round-trip 
 // frame.pass op, aligned with `access`.
 TEST_CASE("ceir 15c 2b: the [$index] subscript round-trips per operand", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_2b_indexed");
     build_scene(fb);
     fb.desc().passes[0].writes[0].indexed = true; // geometry writes scene[$index]
@@ -1093,7 +1156,7 @@ TEST_CASE("ceir 15c 2b: the [$index] subscript round-trips per operand", "[frame
 // 2d: the graph-level fields — requires_caps (a comma-joined string), fallback, memory_budget_bytes — as attrs on frame.graph.
 TEST_CASE("ceir 15c 2d: the graph-level caps/fallback/budget round-trip", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_2d_caps");
     build_scene(fb);
     fb.requires_capability("mesh_shader");
@@ -1120,7 +1183,7 @@ TEST_CASE("ceir 15c 2d: the graph-level caps/fallback/budget round-trip", "[fram
 // so they were dead). Both are ORACLE rows — emit writes `[$index]`, parse_ref reads it, so cook_verdict agrees.
 TEST_CASE("ceir 15c 2b: an indexed ref with no for_each is IndexWithoutForEach (now-live, oracle)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_idx_nofe");
     FrameResourceDesc       atlas(&alloc);
     atlas.name.append("atlas", 5);
@@ -1152,7 +1215,7 @@ TEST_CASE("ceir 15c 2b: an indexed ref with no for_each is IndexWithoutForEach (
 
 TEST_CASE("ceir 15c 2b: an indexed ref on a layers==1 image is SubscriptOnNonLayered (now-live, oracle)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_idx_flat");
     fb.add_image("tex", gpu::FgImageFormat::RGBA8Unorm, 256U, 256U, /*sampled=*/true); // layers defaults to 1
     const crd::u32 dl = fb.add_draw_list("opaque");
@@ -1182,7 +1245,7 @@ TEST_CASE("ceir 15c 2b: an indexed ref on a layers==1 image is SubscriptOnNonLay
 // ceir.frame would force composition special-cases into every 15d analysis, which is exactly what REN-37.6 exists to prevent.
 TEST_CASE("ceir 15c 2e: to_ceir_frame rejects a desc carrying composition (flatten-before-convert is the contract)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_2e_reject");
     build_scene(fb);
     FrameIncludeDesc inc(&alloc);
@@ -1199,7 +1262,7 @@ TEST_CASE("ceir 15c 2e: to_ceir_frame rejects a desc carrying composition (flatt
 // build_scene: geometry WRITES scene, forward READS it → exactly one RAW (was WAW under the pre-15d-1 ambient baseline).
 TEST_CASE("ceir 15d-1: build_scene derives one precise RAW (geometry->forward on scene)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_15d_scene");
     build_scene(fb);
     ceir::Context       ctx(&alloc);
@@ -1224,7 +1287,7 @@ TEST_CASE("ceir 15d-1: build_scene derives one precise RAW (geometry->forward on
 // class Gpu write + whole-class Memory), so a non-zero result here means GPUCommand leaked or a draw-list operand hazarded.
 TEST_CASE("ceir 15d-1: memory-disjoint passes sharing only a draw list derive ZERO hazards", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_15d_disjoint");
     fb.add_scaled_image("a", gpu::FgImageFormat::RGBA8Unorm, 1.0F, true);
     fb.add_scaled_image("b", gpu::FgImageFormat::RGBA8Unorm, 1.0F, true);
@@ -1253,7 +1316,7 @@ TEST_CASE("ceir 15d-1: memory-disjoint passes sharing only a draw list derive ZE
 // it → the scene RAW; taa's own read-of-prev-history vs write-of-curr-history does NOT manufacture extra hazards.
 TEST_CASE("ceir 15d-1: build_taa derives the scene RAW with a history resource present", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_15d_taa");
     build_taa(fb, &alloc);
     ceir::Context       ctx(&alloc);
@@ -1279,7 +1342,7 @@ TEST_CASE("ceir 15d-1: build_taa derives the scene RAW with a history resource p
 // wiring would derive a FALSE intra-frame RAW/WAR. The frame.history op fixes it STRUCTURALLY — proven here for the first time.
 TEST_CASE("ceir 15d-1: history read(prev) vs write(curr) on separate passes derives NO hazard (Fork B)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_15d_forkb");
     FrameResourceDesc       h(&alloc);
     h.name.append("history", 7);
@@ -1317,7 +1380,7 @@ TEST_CASE("ceir 15d-1: history read(prev) vs write(curr) on separate passes deri
 // use, not extended to every pass. ──
 TEST_CASE("ceir 15d-3: compute_block_lifetimes derives a precise range for a frame transient", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_15d3_scene");
     build_scene(fb);
     ceir::Context       ctx(&alloc);
@@ -1337,7 +1400,7 @@ TEST_CASE("ceir 15d-3: compute_block_lifetimes derives a precise range for a fra
 // at the final pass. So `a.last < b.last` is the precise-lifetime proof (the aliasing analogue of the disjoint-hazard test).
 TEST_CASE("ceir 15d-3: narrowing keeps disjoint transient lifetimes distinct (not ambient-tied)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_15d3_disjoint");
     fb.add_scaled_image("a", gpu::FgImageFormat::RGBA8Unorm, 1.0F, true);
     fb.add_scaled_image("b", gpu::FgImageFormat::RGBA8Unorm, 1.0F, true);
@@ -1382,7 +1445,7 @@ TEST_CASE("ceir 15d-3: narrowing keeps disjoint transient lifetimes distinct (no
 // WRITES y → edges A→B (x) and B→A (y), a Kahn topo-sort failure. ──
 TEST_CASE("ceir 15d-2: validate_ceir_frame catches a DependencyCycle (oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_15d2_cycle");
     fb.add_scaled_image("x", gpu::FgImageFormat::RGBA8Unorm, 1.0F, true);
     fb.add_scaled_image("y", gpu::FgImageFormat::RGBA8Unorm, 1.0F, true);
@@ -1418,7 +1481,7 @@ TEST_CASE("ceir 15d-2: validate_ceir_frame catches a DependencyCycle (oracle-agr
 // cycle. This is why the ping-pong case never false-positives.
 TEST_CASE("ceir 15d-2: a TAA history graph does NOT false-positive DependencyCycle", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_15d2_taa");
     build_taa(fb, &alloc);
     ceir::Context       ctx(&alloc);
@@ -1436,7 +1499,7 @@ TEST_CASE("ceir 15d-2: a TAA history graph does NOT false-positive DependencyCyc
 // is find_frame_misuse-clean AND validate_ceir_frame-clean (the two layers agree the frame is well-formed).
 TEST_CASE("ceir 15c: validate_ceir_frame accepts a well-formed frame", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     {
         FrameGraphBuilder fb(&alloc, "test_frame");
         build_scene(fb);
@@ -1459,7 +1522,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame accepts a well-formed frame", "[frameco
 // SEMANTIC defect validate_ceir_frame owns; the desc-side cook pipeline agrees (NoOutputPass).
 TEST_CASE("ceir 15c: validate_ceir_frame catches NoOutputPass (oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_no_output");
     build_no_output(fb);
 
@@ -1478,7 +1541,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches NoOutputPass (oracle-agrees)", 
 // owns the cross-op sweep, pointing at the SECOND collider; the desc-side cook pipeline agrees (parse-time DuplicateName).
 TEST_CASE("ceir 15c: validate_ceir_frame catches DuplicateName (oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_dup");
     build_scene(fb); // passes: "geometry" and "forward"
 
@@ -1503,7 +1566,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches DuplicateName (oracle-agrees)",
 // non-2D resource (the fixture-coverage scar). A 3-D froxel volume re-locks it. Needed by the dimension shape verifiers.
 TEST_CASE("ceir 15c: the REN-38-B2 shape (dimension + 3d depth) survives the round-trip", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_volume");
     // a 3-D froxel volume — pushed directly (the builder makes only 2-D images). kind_2d=Tex3D + depth are the carried shape.
     FrameResourceDesc vol(&alloc);
@@ -1534,7 +1597,7 @@ TEST_CASE("ceir 15c: the REN-38-B2 shape (dimension + 3d depth) survives the rou
 // rotate. validate_ceir_frame walks the pass operands, chasing frame.history back to the declare; the desc-side oracle agrees.
 TEST_CASE("ceir 15c: validate_ceir_frame catches PingPongNeedsBothWays (oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_pp_writeonly");
     build_pingpong_writeonly(fb, &alloc);
 
@@ -1553,7 +1616,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches PingPongNeedsBothWays (oracle-a
 // plus an unreferenced transient `orphan` — the only violation is that nothing writes it. persistent/history/import are exempt.
 TEST_CASE("ceir 15c: validate_ceir_frame catches ResourceNeverWritten (oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_orphan");
     build_scene(fb);
     fb.add_scaled_image("orphan", gpu::FgImageFormat::RGBA8Unorm, 0.5F, /*sampled=*/true); // a transient no pass writes
@@ -1574,7 +1637,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches ResourceNeverWritten (oracle-ag
 // uses a lone mis-shaped resource — the shape block fires before NoOutputPass on BOTH sides, so no pass/@output is needed.
 TEST_CASE("ceir 15c: validate_ceir_frame catches CubeNeedsSquare (oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_cube");
     FrameResourceDesc       c(&alloc);
     c.name.append("cubemap", 7);
@@ -1597,7 +1660,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches CubeNeedsSquare (oracle-agrees)
 
 TEST_CASE("ceir 15c: validate_ceir_frame catches VolumeNeedsDepth (oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_volume0");
     FrameResourceDesc       v(&alloc);
     v.name.append("froxels", 7);
@@ -1620,7 +1683,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches VolumeNeedsDepth (oracle-agrees
 
 TEST_CASE("ceir 15c: validate_ceir_frame catches BadMipCount (oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_badmip");
     FrameResourceDesc       r(&alloc);
     r.name.append("bloom", 5);
@@ -1642,7 +1705,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches BadMipCount (oracle-agrees)", "
 
 TEST_CASE("ceir 15c: validate_ceir_frame catches LayersOutOfRange (oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_layers");
     FrameResourceDesc       r(&alloc);
     r.name.append("atlas", 5);
@@ -1664,7 +1727,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches LayersOutOfRange (oracle-agrees
 
 TEST_CASE("ceir 15c: validate_ceir_frame catches StructuredNeedsStride (oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_stride0");
     FrameResourceDesc       r(&alloc);
     r.name.append("items", 5);
@@ -1684,7 +1747,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches StructuredNeedsStride (oracle-a
 
 TEST_CASE("ceir 15c: validate_ceir_frame catches StrideNotAligned (oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_stride6");
     FrameResourceDesc       r(&alloc);
     r.name.append("items", 5);
@@ -1706,7 +1769,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches StrideNotAligned (oracle-agrees
 // frame must not depend on), so giving it a size means the author believed the graph allocates one. Per-import check.
 TEST_CASE("ceir 15c: validate_ceir_frame catches AccelIsExternal (oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_accel");
     FrameResourceDesc       as(&alloc);
     as.name.append("tlas", 4);
@@ -1727,7 +1790,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches AccelIsExternal (oracle-agrees)
 // The pass is a raster.geometry WITH a draw list, so it dodges MissingDrawList — ExternalTextureIsReadOnly fires first.
 TEST_CASE("ceir 15c: validate_ceir_frame catches ExternalTextureIsReadOnly (oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_ext_write");
     FrameResourceDesc       ext(&alloc);
     ext.name.append("ui_atlas", 8);
@@ -1757,7 +1820,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches ExternalTextureIsReadOnly (orac
 // third leg (op pointer + name round-trip) compensates for the missing oracle by locking the KIND and the enum→name switch.
 TEST_CASE("ceir 15c: validate_ceir_frame catches KindLifetimeMismatch (frame_kind vs lifetime)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_klm");
     build_scene(fb);
 
@@ -1778,7 +1841,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches KindLifetimeMismatch (frame_kin
 // because the forward converter always sets lifetime (nothing to inject an absence into).
 TEST_CASE("ceir 15c: KindLifetimeMismatch also catches an ABSENT lifetime", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     ceir::Context           ctx(&alloc);
     (void)ceir::arith::register_arith_ops(ctx);
     (void)ceir::func::register_dialect(ctx);
@@ -1815,7 +1878,7 @@ TEST_CASE("ceir 15c: KindLifetimeMismatch also catches an ABSENT lifetime", "[fr
 
 TEST_CASE("ceir 15c: validate_ceir_frame catches UnknownDimension (garbage dimension int)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_unkdim");
     build_scene(fb);
 
@@ -1835,7 +1898,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches UnknownDimension (garbage dimen
 // and PersistentNeedsSize (a persistent image sized only by scale — its key must be stable across frames). Both oracle-backed.
 TEST_CASE("ceir 15c: validate_ceir_frame catches BadResourceSize (oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_nosize");
     FrameResourceDesc       r(&alloc);
     r.name.append("nosize", 6);
@@ -1854,7 +1917,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches BadResourceSize (oracle-agrees)
 
 TEST_CASE("ceir 15c: validate_ceir_frame catches PersistentNeedsSize (oracle-agrees)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_persist");
     FrameResourceDesc       p(&alloc);
     p.name.append("accum", 5);
@@ -1878,7 +1941,7 @@ TEST_CASE("ceir 15c: validate_ceir_frame catches PersistentNeedsSize (oracle-agr
 // false-greened (build_scene/build_taa set no params). This full-surface fixture (EVERY param type) re-locks it.
 TEST_CASE("ceir 15c: the full RAF-12.3 param bag survives the round-trip (Fork C-2)", "[framecook][ceir][frame]")
 {
-    memory::MallocAllocator alloc;
+    memory::GrowableTlsfAllocator alloc;
     FrameGraphBuilder       fb(&alloc, "test_params");
     build_scene(fb);
     // inject EVERY param type on the `forward` pass (build_scene's 2nd): a String (view, generic — not a special name), a
@@ -1913,4 +1976,185 @@ TEST_CASE("ceir 15c: the full RAF-12.3 param bag survives the round-trip (Fork C
     CHECK(pass_u32(q, StringView(pp::kBlendSlot[0]), 0U) == 1U);            // Enum (read v[0] type-blind)
     CHECK(pass_has(q, StringView(pp::kClearColor)));                       // Vec4 present
     CHECK(pass_has(q, StringView("exposure_ev100")));                      // authored param present
+}
+
+TEST_CASE("ceir 20b: the ceir.work executors round-trip through the frame dialect (emit-identical)",
+          "[framecook][ceir][frame][ceir20b]")
+{
+    memory::GrowableTlsfAllocator alloc;
+    FrameGraphBuilder fb(&alloc, "wavefront_work");
+    build_wavefront_work(fb, &alloc);
+    const String toml_a = emit_frame_toml(fb.desc(), &alloc);
+
+    ceir::Context ctx(&alloc);
+    ceir::Module* const m = to_ceir_frame(fb.desc(), ctx);
+    REQUIRE(m != nullptr);
+    CHECK(ctx.find_frame_misuse(*m).kind == ceir::FrameMisuseKind::None); // the converted work-frame is well-formed
+
+    FrameGraphDesc desc2(&alloc);
+    REQUIRE(from_ceir_frame(ctx, *m, &alloc, desc2)); // reconstruct the desc from the ceir.frame module
+    const String toml_b = emit_frame_toml(desc2, &alloc);
+    CHECK(StringView(toml_a.data(), toml_a.size()) ==
+          StringView(toml_b.data(), toml_b.size())); // desc == to->from(desc)
+
+    // the three work executors SURVIVED the round-trip (not silently coerced to `custom` or a raster mechanic).
+    bool saw_produce = false;
+    bool saw_consume = false;
+    bool saw_compact = false;
+    for (crd::usize i = 0; i < desc2.passes.size(); ++i)
+    {
+        saw_produce = saw_produce || pass_is_work_produce(desc2.passes[i]);
+        saw_consume = saw_consume || pass_is_work_consume(desc2.passes[i]);
+        saw_compact = saw_compact || pass_is_work_compact(desc2.passes[i]);
+    }
+    CHECK(saw_produce);
+    CHECK(saw_consume);
+    CHECK(saw_compact);
+}
+
+// CEIR-20b STEP 1: the .frame.toml TEXT frontend parses the work `kind`s + VALIDATES them (a work pass requires a CKIR
+// kernel, exactly like a compute dispatch) — the authoring path the wavefront_work asset rides.
+TEST_CASE("ceir 20b: a work-pass .frame.toml parses, validates, and lowers to a clean ceir.frame",
+          "[framecook][ceir][frame][ceir20b]")
+{
+    memory::GrowableTlsfAllocator alloc;
+    FrameGraphBuilder fb(&alloc, "wavefront_work");
+    build_wavefront_work(fb, &alloc);
+    const String toml = emit_frame_toml(fb.desc(), &alloc);
+
+    FrameGraphDesc parsed(&alloc);
+    REQUIRE(parse_frame_toml(StringView(toml.data(), toml.size()), parsed) == FrameCookError::Ok);
+
+    ceir::Context ctx(&alloc);
+    ceir::Module* const m = to_ceir_frame(parsed, ctx);
+    REQUIRE(m != nullptr);
+    CHECK(ctx.find_frame_misuse(*m).kind == ceir::FrameMisuseKind::None);
+}
+
+// ── CEIR-20b: extract_work_desc — the frame's work passes → a ceir.gpu::WorkBuildDesc (the wavefront_work cook seam).
+// ──────────
+namespace
+{
+void add_res(FrameGraphBuilder& fb, memory::IAllocator* a, const char* name, crd::u32 nlen, FrameResourceKind kind)
+{
+    FrameResourceDesc r(a);
+    r.name.append(name, nlen);
+    r.kind = kind;
+    r.stride = 4U;
+    r.count = 1U;
+    fb.desc().resources.push_back(static_cast<FrameResourceDesc&&>(r));
+}
+} // namespace
+
+TEST_CASE("ceir 20b: extract_work_desc cooks a produce+consume work frame (CounterBuffer = queue)",
+          "[framecook][ceir][work][ceir20b]")
+{
+    memory::GrowableTlsfAllocator alloc;
+    FrameGraphBuilder fb(&alloc, "work_frame");
+    add_res(fb, &alloc, "count", 5U,
+            FrameResourceKind::CounterBuffer); // the %queue (a counter's first 4 bytes = device count)
+    add_res(fb, &alloc, "recs", 4U, FrameResourceKind::StructuredBuffer);
+    add_res(fb, &alloc, "outb", 4U, FrameResourceKind::StructuredBuffer);
+    const crd::u32 pr = fb.add_pass("produce", "work.produce");
+    fb.pass_kernel(pr, "k_produce");
+    fb.pass_writes(pr, "count"); // the counter = the %queue produce appends into
+    fb.pass_writes(pr, "recs");  // a binding
+    const crd::u32 co = fb.add_pass("consume", "work.consume");
+    fb.pass_kernel(co, "k_consume");
+    fb.pass_reads(co, "count"); // the counter = the %queue consume sizes over
+    fb.pass_reads(co, "recs");  // a binding
+    fb.pass_writes(co, "outb"); // a binding
+
+    ceir::gpu::WorkBuildDesc wd;
+    const char* where = nullptr;
+    REQUIRE(extract_work_desc(fb.desc(), wd, &where) == FrameCookError::Ok);
+    REQUIRE(wd.num_stages == 2U);
+    REQUIRE(wd.num_queues == 1U); // `count` — written by produce, read by consume → ONE deduped queue
+    CHECK(wd.stages[0].kind == ceir::gpu::WorkStageKind::Produce);
+    CHECK(wd.stages[1].kind == ceir::gpu::WorkStageKind::Consume);
+    CHECK(wd.stages[0].queue == 0U);        // produce → the count queue
+    CHECK(wd.stages[1].queue == 0U);        // consume → the SAME count queue
+    CHECK(wd.stages[0].num_bindings == 1U); // recs (the non-queue write)
+    CHECK(wd.stages[1].num_bindings == 2U); // outb (write) + recs (read)
+
+    // the extracted desc builds a find_work_misuse-clean ceir.work program (the extractor → builder chain, end to end).
+    memory::GrowableTlsfAllocator croot;
+    ceir::Context ctx(&croot);
+    containers::Array<ceir::gpu::LoweredCommand> plan(&croot);
+    ceir::gpu::WorkAssetResources res;
+    ceir::Module* const m = ceir::gpu::build_work_ceir(ctx, wd, plan, res);
+    REQUIRE(m != nullptr);
+    CHECK(ceir::work::find_work_misuse(ctx, *m).kind == ceir::work::WorkMisuseKind::None);
+}
+
+TEST_CASE("ceir 20b: extract_work_desc rejects a produce with != 1 counter-buffer queue",
+          "[framecook][ceir][work][ceir20b]")
+{
+    memory::GrowableTlsfAllocator alloc;
+    SECTION("zero counter writes → WorkQueueNotOne")
+    {
+        FrameGraphBuilder fb(&alloc, "bad0");
+        add_res(fb, &alloc, "recs", 4U, FrameResourceKind::StructuredBuffer);
+        const crd::u32 pr = fb.add_pass("produce", "work.produce");
+        fb.pass_kernel(pr, "k_produce");
+        fb.pass_writes(pr, "recs"); // no counter written
+        ceir::gpu::WorkBuildDesc wd;
+        const char* where = nullptr;
+        CHECK(extract_work_desc(fb.desc(), wd, &where) == FrameCookError::WorkQueueNotOne);
+    }
+    SECTION("two counter writes → WorkQueueNotOne")
+    {
+        FrameGraphBuilder fb(&alloc, "bad2");
+        add_res(fb, &alloc, "count", 5U, FrameResourceKind::CounterBuffer);
+        add_res(fb, &alloc, "cnt2", 4U, FrameResourceKind::CounterBuffer);
+        const crd::u32 pr = fb.add_pass("produce", "work.produce");
+        fb.pass_kernel(pr, "k_produce");
+        fb.pass_writes(pr, "count");
+        fb.pass_writes(pr, "cnt2");
+        ceir::gpu::WorkBuildDesc wd;
+        const char* where = nullptr;
+        CHECK(extract_work_desc(fb.desc(), wd, &where) == FrameCookError::WorkQueueNotOne);
+    }
+}
+
+// CEIR-20b: the SHIPPED wavefront_work.frame.toml — the AUTHORED §134 wavefront orchestration that retires the 19c C++
+// host loop. It PARSES (headless — no @output, the no-raster relaxation) and extract_work_desc yields the 3 work stages
+// (trace=compute is skipped) → a find_work_misuse-clean ceir.work program. This is the mandate-#1 proof at the cook
+// layer (the device gate is step 6).
+TEST_CASE("ceir 20b: the shipped wavefront_work.frame.toml parses headless + extracts produce/consume/produce",
+          "[framecook][ceir][work][ceir20b]")
+{
+    std::ifstream f(CRD_FRAME_ASSETS_DIR "/wavefront_work.frame.toml", std::ios::binary | std::ios::ate);
+    REQUIRE(f.good());
+    const std::streamsize sz = f.tellg();
+    REQUIRE(sz > 0);
+    f.seekg(0);
+    memory::GrowableTlsfAllocator alloc;
+    crd::containers::Array<char> text(&alloc);
+    text.resize(static_cast<crd::usize>(sz), '\0');
+    f.read(text.data(), sz);
+
+    FrameGraphDesc desc(&alloc);
+    REQUIRE(parse_frame_toml(StringView(text.data(), static_cast<crd::usize>(sz)), desc) ==
+            FrameCookError::Ok); // headless: no @output
+
+    ceir::gpu::WorkBuildDesc wd;
+    const char* where = nullptr;
+    REQUIRE(extract_work_desc(desc, wd, &where) == FrameCookError::Ok);
+    REQUIRE(wd.num_stages == 3U); // compact1 + shade + compact2 (trace = compute is skipped)
+    REQUIRE(wd.num_queues == 2U); // count + next_count (the two CounterBuffer queues)
+    CHECK(wd.stages[0].kind == ceir::gpu::WorkStageKind::Produce); // compact1
+    CHECK(wd.stages[1].kind == ceir::gpu::WorkStageKind::Consume); // shade
+    CHECK(wd.stages[2].kind == ceir::gpu::WorkStageKind::Produce); // compact2
+    CHECK(wd.stages[0].kernel == StringView("wavefront_compact"));
+    CHECK(wd.stages[1].kernel == StringView("wavefront_shade"));
+
+    // the AUTHORED orchestration builds a find_work_misuse-clean ceir.work program (the cook → IR chain, end to end).
+    memory::GrowableTlsfAllocator croot;
+    ceir::Context ctx(&croot);
+    crd::containers::Array<ceir::gpu::LoweredCommand> plan(&croot);
+    ceir::gpu::WorkAssetResources res;
+    ceir::Module* const m = ceir::gpu::build_work_ceir(ctx, wd, plan, res);
+    REQUIRE(m != nullptr);
+    CHECK(ceir::work::find_work_misuse(ctx, *m).kind == ceir::work::WorkMisuseKind::None);
 }

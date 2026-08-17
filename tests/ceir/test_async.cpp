@@ -14,7 +14,7 @@
 #include <crd/ceir/print.hpp>
 #include <crd/ceir/semantics.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -87,7 +87,7 @@ Operation* konst(Context& ctx, const Ops& o, Block* b, i64 v)
 
 TEST_CASE("ceir async: well-formed token flows are sound", "[ceir][async]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
 
@@ -131,7 +131,7 @@ TEST_CASE("ceir async: well-formed token flows are sound", "[ceir][async]")
 
 TEST_CASE("ceir async: an unconsumed token is a leaked async op", "[ceir][async]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -145,7 +145,7 @@ TEST_CASE("ceir async: an unconsumed token is a leaked async op", "[ceir][async]
 
 TEST_CASE("ceir async: a token consumed twice is MultiplyConsumed (slots, not ops)", "[ceir][async]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
 
@@ -175,7 +175,7 @@ TEST_CASE("ceir async: a token consumed twice is MultiplyConsumed (slots, not op
 
 TEST_CASE("ceir async: a token used by a NON-consumer is ConsumedByNonConsumer (region/func confined)", "[ceir][async]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
 
@@ -217,7 +217,7 @@ TEST_CASE("ceir async: a token used by a NON-consumer is ConsumedByNonConsumer (
 
 TEST_CASE("ceir async: a token consumed in BOTH if-branches is flagged (no path-sensitivity)", "[ceir][async]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -238,7 +238,7 @@ TEST_CASE("ceir async: a token consumed in BOTH if-branches is flagged (no path-
 
 TEST_CASE("ceir async: the use-once discipline keys on the TRAIT, not the op name (open-world)", "[ceir][async]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     // a hand dialect: hw.spawn (TokenProducer) + hw.wait (TokenConsumer).
@@ -268,7 +268,7 @@ TEST_CASE("ceir async: the use-once discipline keys on the TRAIT, not the op nam
 
 TEST_CASE("ceir async: async ops are a Synchronization barrier (4d hazards)", "[ceir][async]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m  = ctx.create_module();
@@ -281,7 +281,7 @@ TEST_CASE("ceir async: async ops are a Synchronization barrier (4d hazards)", "[
 
 TEST_CASE("ceir async: a blocking wait is illegal in an audio-real-time region (the sec 32 flip)", "[ceir][async]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
 
@@ -316,7 +316,7 @@ TEST_CASE("ceir async: a blocking wait is illegal in an audio-real-time region (
 
 TEST_CASE("ceir async: race is Nondeterministic; async ops fail Deterministic compiler mode", "[ceir][async]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m  = ctx.create_module();
@@ -343,7 +343,7 @@ TEST_CASE("ceir async: verifying an UNREGISTERED module vacuously passes (regist
     // (noisy, safe); here an unregistered module has NO TokenProducer traits -> zero tokens tracked -> a leak passes
     // VACUOUSLY (a false NEGATIVE). Can't fix structurally (traits are registry state; name-sniffing breaks I6) -- the
     // consumer MUST register the dialect. Late binding works: OpId is a content hash, has_trait binds at query time.
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -363,7 +363,7 @@ TEST_CASE("ceir async: verifying an UNREGISTERED module vacuously passes (regist
 
 TEST_CASE("ceir async: a call to an async helper flags Synchronization in an audio region (5c effective-effects)", "[ceir][async]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -388,7 +388,7 @@ TEST_CASE("ceir async: a call to an async helper flags Synchronization in an aud
 
 TEST_CASE("ceir async: a token consumed inside a LOOP body is one static use (edge d, documented gap)", "[ceir][async]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -406,7 +406,7 @@ TEST_CASE("ceir async: a token consumed inside a LOOP body is one static use (ed
 
 TEST_CASE("ceir async: async is a SEPARATE installer -- builtin semantics alone leave it NoSemantics", "[ceir][async]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -422,7 +422,7 @@ TEST_CASE("ceir async: async is a SEPARATE installer -- builtin semantics alone 
 
 TEST_CASE("ceir async: SEQUENTIAL-reference execution -- launch runs its body, await returns the yield", "[ceir][async]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -453,7 +453,7 @@ TEST_CASE("ceir async: SEQUENTIAL-reference execution -- launch runs its body, a
 
 TEST_CASE("ceir async: awaiting a FORGED token (not a live session handle) is BadToken", "[ceir][async]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -474,7 +474,7 @@ TEST_CASE("ceir async: awaiting a FORGED token (not a live session handle) is Ba
 
 TEST_CASE("ceir async: a structured scope runs sequentially and forwards its yield", "[ceir][async]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     const OpId                   ascope = ctx.intern_op("async", "scope");
@@ -513,7 +513,7 @@ TEST_CASE("ceir async: a structured scope runs sequentially and forwards its yie
 
 TEST_CASE("ceir async: scope-confinement is LAYERED verification (5b escape + 6a leak), not new code", "[ceir][async]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     const OpId                   ascope = ctx.intern_op("async", "scope");
@@ -545,7 +545,7 @@ TEST_CASE("ceir async: scope-confinement is LAYERED verification (5b escape + 6a
 
 TEST_CASE("ceir async: a scope is a Synchronization join point -- flagged in an audio region", "[ceir][async]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     const OpId                   ascope = ctx.intern_op("async", "scope");
@@ -567,7 +567,7 @@ TEST_CASE("ceir async: a scope is a Synchronization join point -- flagged in an 
 
 TEST_CASE("ceir async: cooperative cancellation is distinct from fuel exhaustion", "[ceir][async]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     // @spin(): for(0, 1000000, 1) { } ; return -- a long loop.

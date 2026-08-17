@@ -19,7 +19,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/resource_id.hpp>
@@ -39,7 +39,7 @@ namespace
 {
 
 // NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
-crd::memory::MallocAllocator g_cook_alloc;
+crd::memory::GrowableTlsfAllocator g_cook_alloc;
 // NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
 // ── Path helpers ───────────────────────────────────────────────────────────

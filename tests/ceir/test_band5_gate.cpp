@@ -14,7 +14,7 @@
 #include <crd/ceir/exec.hpp>
 #include <crd/ceir/print.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -29,7 +29,7 @@ using crd::containers::String;
 
 TEST_CASE("ceir band5 gate: a pinned program executes identically builder-built and text-parsed", "[ceir][gate5]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
 
     // ---- BUILDER form (from the shared corpus builder) ----
     Context           ctx_a(&root);

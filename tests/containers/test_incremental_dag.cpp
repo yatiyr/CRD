@@ -5,7 +5,7 @@
 
 #include <crd/containers/incremental_dag.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -39,7 +39,7 @@ IncrementalDag diamond(crd::memory::IAllocator* a)
 
 TEST_CASE("incremental dag: topo order is deterministic (deps-first, ascending-id tie-break)", "[containers][incremental]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     IncrementalDag               dag = diamond(&root);
     Array<u64>                   order(&root);
     REQUIRE(dag.topo_order(order));
@@ -49,7 +49,7 @@ TEST_CASE("incremental dag: topo order is deterministic (deps-first, ascending-i
 
 TEST_CASE("incremental dag: affected_by yields the transitive dependents in topo order", "[containers][incremental]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     IncrementalDag               dag = diamond(&root);
     Array<u64>                   out(&root);
 
@@ -67,7 +67,7 @@ TEST_CASE("incremental dag: affected_by yields the transitive dependents in topo
 
 TEST_CASE("incremental dag: a cycle makes topo_order and affected_by return false", "[containers][incremental]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     IncrementalDag               dag(&root);
     dag.add_edge(1U, 2U);
     dag.add_edge(2U, 1U); // 1 <-> 2 cycle
@@ -78,7 +78,7 @@ TEST_CASE("incremental dag: a cycle makes topo_order and affected_by return fals
 
 TEST_CASE("incremental dag: the SEC-107 rule - interface change propagates, content-only does NOT", "[containers][incremental]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     IncrementalDag               dag = diamond(&root);
     // seed every node with a (content, interface) revision.
     for (u64 id = 1U; id <= 4U; ++id) { dag.set_revision(id, /*content*/ 100U + id, /*interface*/ 200U + id); }
@@ -108,7 +108,7 @@ TEST_CASE("incremental dag: the SEC-107 rule - interface change propagates, cont
 
 TEST_CASE("incremental dag: topo order is independent of insertion order", "[containers][incremental]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     IncrementalDag               dag(&root);
     // the SAME diamond, edges added in REVERSE order — the emitted order must be IDENTICAL (the determinism contract
     // that makes RAF-11 rebuilds reproducible "regardless of insertion order").

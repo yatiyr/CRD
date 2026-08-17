@@ -5,7 +5,7 @@
 
 #include <crd/ceir/ceir.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -23,7 +23,7 @@ TEST_CASE("ceir 8f: effect_safety classifies families; op_safety folds over an o
     CHECK(effect_safety(EffectFamily::TimeRead).realtime_safe());
     CHECK(effect_safety(EffectFamily::DocumentWrite).realtime_safe()); // a bounded domain write is RT-safe
 
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Dialect* const               d      = ctx.register_dialect("test");
     const EffectRecord           fio[1] = {{EffectFamily::FileIO, EffectTarget::None, 0U, 0U}};

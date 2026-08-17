@@ -9,7 +9,7 @@
 #include <crd/ceir/hazard.hpp>
 #include <crd/ceir/semantics.hpp>
 #include <crd/containers/array.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -96,7 +96,7 @@ bool has_family(Context& ctx, const Operation& op, const SymbolTable& table, Eff
 
 TEST_CASE("ceir calls: effective effects - static passthrough and a resolved call's callee set", "[ceir][calls]")
 {
-    memory::MallocAllocator root;
+    memory::GrowableTlsfAllocator root;
     Context                 ctx(&root);
     const Ops               o(ctx);
     Module* const           m = ctx.create_module();
@@ -115,7 +115,7 @@ TEST_CASE("ceir calls: effective effects - static passthrough and a resolved cal
 
 TEST_CASE("ceir calls: effects are unioned TRANSITIVELY and through nested regions", "[ceir][calls]")
 {
-    memory::MallocAllocator root;
+    memory::GrowableTlsfAllocator root;
     Context                 ctx(&root);
     const Ops               o(ctx);
     Module* const           m = ctx.create_module();
@@ -143,7 +143,7 @@ TEST_CASE("ceir calls: effects are unioned TRANSITIVELY and through nested regio
 
 TEST_CASE("ceir calls: recursion in the callee graph TERMINATES (cycle guard)", "[ceir][calls]")
 {
-    memory::MallocAllocator root;
+    memory::GrowableTlsfAllocator root;
     Context                 ctx(&root);
     const Ops               o(ctx);
     Module* const           m = ctx.create_module();
@@ -166,7 +166,7 @@ TEST_CASE("ceir calls: recursion in the callee graph TERMINATES (cycle guard)", 
 
 TEST_CASE("ceir calls: effects DEGRADE to an ExternalCall barrier on any unmodeled reach", "[ceir][calls]")
 {
-    memory::MallocAllocator root;
+    memory::GrowableTlsfAllocator root;
     Context                 ctx(&root);
     const Ops               o(ctx);
     Module* const           m = ctx.create_module();
@@ -188,7 +188,7 @@ TEST_CASE("ceir calls: effects DEGRADE to an ExternalCall barrier on any unmodel
 
 TEST_CASE("ceir calls: hazard A/B - a call is a barrier without a table, callee-precise with one", "[ceir][calls]")
 {
-    memory::MallocAllocator root;
+    memory::GrowableTlsfAllocator root;
     Context                 ctx(&root);
     const Ops               o(ctx);
     Module* const           m = ctx.create_module();
@@ -230,7 +230,7 @@ TEST_CASE("ceir calls: hazard A/B - a call is a barrier without a table, callee-
 
 TEST_CASE("ceir calls: domain legality - a call resolves to its callee's families (the 4c gap closed)", "[ceir][calls]")
 {
-    memory::MallocAllocator root;
+    memory::GrowableTlsfAllocator root;
     Context                 ctx(&root);
     const Ops               o(ctx);
     Module* const           m = ctx.create_module();
@@ -274,7 +274,7 @@ TEST_CASE("ceir calls: domain legality - a call resolves to its callee's familie
 
 TEST_CASE("ceir calls: recursion policy - declared promises are verified against the call graph", "[ceir][calls]")
 {
-    memory::MallocAllocator root;
+    memory::GrowableTlsfAllocator root;
     Context                 ctx(&root);
     const Ops               o(ctx);
 

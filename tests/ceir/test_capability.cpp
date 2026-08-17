@@ -9,7 +9,7 @@
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/program_asset.hpp> // interface_hash
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -52,7 +52,7 @@ Module* mod_with_ops(Context& ctx, ConstSpan<OpId> kinds)
 
 TEST_CASE("ceir 8f: an op's required capabilities round-trip; an UNREGISTERED op contributes external.process", "[ceir][capability]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Dialect* const               d      = ctx.register_dialect("test");
     const StringView             gpu[1] = {StringView{"gpu.compute"}};
@@ -76,7 +76,7 @@ TEST_CASE("ceir 8f: an op's required capabilities round-trip; an UNREGISTERED op
 
 TEST_CASE("ceir 8f: the program capability set is the module-wide sorted-UNIQUE union", "[ceir][capability]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Dialect* const               d     = ctx.register_dialect("test");
     const StringView             a[1]  = {StringView{"scene.read"}};
@@ -95,7 +95,7 @@ TEST_CASE("ceir 8f: the program capability set is the module-wide sorted-UNIQUE 
 
 TEST_CASE("ceir 8f: capabilities_satisfied is the host-grant check (required subset of granted)", "[ceir][capability]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const CapabilityId req[2]   = {ctx.intern_capability("scene.read"), ctx.intern_capability("gpu.compute")};
     const CapabilityId grant_a[2] = {ctx.intern_capability("scene.read"), ctx.intern_capability("gpu.compute")};
@@ -107,7 +107,7 @@ TEST_CASE("ceir 8f: capabilities_satisfied is the host-grant check (required sub
 
 TEST_CASE("ceir 8f: the required capability set joins the interface hash (reorder-invariant, membership-sensitive)", "[ceir][capability]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Dialect* const               d    = ctx.register_dialect("test");
     const StringView             a[1] = {StringView{"scene.read"}};
@@ -133,7 +133,7 @@ TEST_CASE("ceir 8f: an UNREGISTERED op's external.process capability reaches the
     // ⛔ the security-relevant leg: an unknown op-kind must not read as requiring-nothing. Two modules with a single op
     // of the SAME arity — one a registered effect-free/cap-free op, one an UNREGISTERED op — have DIFFERENT interface
     // hashes, because the unregistered op folds external.process into the program capability set.
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Dialect* const               d       = ctx.register_dialect("test");
     const OpId                   known   = d->register_op("known", {}); // registered, requires no capabilities
@@ -148,7 +148,7 @@ TEST_CASE("ceir 8f: a capability required by an op INSIDE a func body reaches th
 {
     // ⛔ pins the module-wide-walk-covers-func-bodies claim (funcs ARE ops in the body; the recursion visits their
     // regions) — the whole "no transitivity machinery" simplification rests on it.
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Dialect* const               d      = ctx.register_dialect("test");
     const StringView             gpu[1] = {StringView{"gpu.compute"}};
@@ -170,7 +170,7 @@ TEST_CASE("ceir 8f: capabilities are registration metadata - a cap-bearing modul
 {
     // ⛔ pins "capabilities are NOT in the module blob": a cap-bearing module serialize->deserialize->serialize is
     // BYTE-EXACT and its stable_hash is unchanged (caps live in the interface hash + registration, never the content).
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Dialect* const               d      = ctx.register_dialect("test");
     const StringView             cap[1] = {StringView{"file.write"}};

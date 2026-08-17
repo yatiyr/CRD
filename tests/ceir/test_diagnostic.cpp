@@ -6,7 +6,7 @@
 #include <crd/ceir/ceir.hpp>
 #include <crd/ceir/diagnostic.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -28,7 +28,7 @@ namespace
 
 TEST_CASE("ceir 8g: emit collects diagnostics; has_errors reflects Error/Fatal; render prints code + loc + message", "[ceir][diagnostic]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const crd::u32               file = ctx.register_file("src/a.ceir");
     DiagnosticEngine             eng(ctx, &root);
@@ -61,7 +61,7 @@ TEST_CASE("ceir 8g: emit collects diagnostics; has_errors reflects Error/Fatal; 
 
 TEST_CASE("ceir 8g: a Fatal diagnostic sets has_errors", "[ceir][diagnostic]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     DiagnosticEngine             eng(ctx, &root);
     eng.emit(Severity::Fatal, make_diagnostic_code("ceir.ice"), StringView("ceir.ice"), SourceLoc{},
@@ -82,7 +82,7 @@ TEST_CASE("ceir 8g: the engine COPIES emitted text - a diagnostic outlives the b
 {
     // ⛔ the alloc-outlives-borrowers probe: emit from a SCOPE-LOCAL String, let it die, then read the diagnostic. If
     // emit did not copy, this is a use-after-scope ASan catches on the money config.
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     DiagnosticEngine             eng(ctx, &root);
     {

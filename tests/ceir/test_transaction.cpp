@@ -11,7 +11,7 @@
 #include <crd/ceir/binary.hpp>        // serialize / stable_hash
 #include <crd/containers/incremental_dag.hpp> // the 8h seam consumer
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -67,7 +67,7 @@ void block_ops(Block* b, Array<Operation*>& out)
 
 TEST_CASE("ceir 8i: commit applies the edits and reports touched/removed", "[ceir][transaction]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Block*                       top = nullptr;
     Module* const                m   = single_block(ctx, top);
@@ -99,7 +99,7 @@ TEST_CASE("ceir 8i: commit applies the edits and reports touched/removed", "[cei
 
 TEST_CASE("ceir 8i: a poisoned edit rolls back to a byte-identical module (the A/B proof)", "[ceir][transaction]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Block*                       top = nullptr;
     Module* const                m   = single_block(ctx, top);
@@ -136,7 +136,7 @@ TEST_CASE("ceir 8i: a poisoned edit rolls back to a byte-identical module (the A
 
 TEST_CASE("ceir 8i: a duplicate-symbol commit fails and rolls back byte-identically", "[ceir][transaction]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Block*                       top = nullptr;
     Module* const                m   = single_block(ctx, top);
@@ -166,7 +166,7 @@ TEST_CASE("ceir 8i: a duplicate-symbol commit fails and rolls back byte-identica
 
 TEST_CASE("ceir 8i: reverse-order replay restores exact block order (both interleavings)", "[ceir][transaction]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
 
     // Variant 1: erase b, THEN insert x before c.
     {
@@ -216,7 +216,7 @@ TEST_CASE("ceir 8i: reverse-order replay restores exact block order (both interl
 
 TEST_CASE("ceir 8i: a replacement never reuses a freed id across a committed transaction", "[ceir][transaction]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Block*                       top = nullptr;
     Module* const                m   = single_block(ctx, top);
@@ -243,7 +243,7 @@ TEST_CASE("ceir 8i: a replacement never reuses a freed id across a committed tra
 
 TEST_CASE("ceir 8i: rollback restores the watermark even after a mid-transaction serialize", "[ceir][transaction]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Block*                       top = nullptr;
     Module* const                m   = single_block(ctx, top);
@@ -269,7 +269,7 @@ TEST_CASE("ceir 8i: rollback restores the watermark even after a mid-transaction
 
 TEST_CASE("ceir 8i: an erase with a live result is rejected, not asserted", "[ceir][transaction]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Block*                       top = nullptr;
     Module* const                m   = single_block(ctx, top);
@@ -289,7 +289,7 @@ TEST_CASE("ceir 8i: an erase with a live result is rejected, not asserted", "[ce
 
 TEST_CASE("ceir 8i: a rolled-back attr snapshot outlives the Transaction", "[ceir][transaction]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Block*                       top = nullptr;
     Module* const                m   = single_block(ctx, top);
@@ -314,7 +314,7 @@ TEST_CASE("ceir 8i: a rolled-back attr snapshot outlives the Transaction", "[cei
 
 TEST_CASE("ceir 8i: the touched set drives the 8h IncrementalDag rule", "[ceir][transaction]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Block*                       top = nullptr;
     Module* const                m   = single_block(ctx, top);
@@ -365,7 +365,7 @@ Operation* add_region_op(Context& ctx, Block* parent, const char* name, Block*& 
 
 TEST_CASE("ceir 8i: erasing a region-bearing op with a nested IN-edge is rejected", "[ceir][transaction]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Block*                       top = nullptr;
     Module* const                m   = single_block(ctx, top);
@@ -385,7 +385,7 @@ TEST_CASE("ceir 8i: erasing a region-bearing op with a nested IN-edge is rejecte
 
 TEST_CASE("ceir 8i: erasing a region-bearing op with a nested OUT-edge is rejected", "[ceir][transaction]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Block*                       top = nullptr;
     Module* const                m   = single_block(ctx, top);
@@ -406,7 +406,7 @@ TEST_CASE("ceir 8i: erasing a region-bearing op with a nested OUT-edge is reject
 
 TEST_CASE("ceir 8i: erasing a CLOSED region-bearing subtree commits, and rolls back byte-identically", "[ceir][transaction]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
 
     // Part A: a CLOSED subtree (nested edges all internal) commits — the whole subtree is gone.
     {

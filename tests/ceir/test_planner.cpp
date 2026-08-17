@@ -9,7 +9,7 @@
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/gen/resource_ops.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -74,7 +74,7 @@ const SlotAssignment* assign_of(const MemoryPlan& p, const Operation* d)
 TEST_CASE("ceir 12d: aliasing saves memory -- transient_physical < transient_logical (the REN-1 proof, IR edition)",
           "[ceir][planner]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     const TypeId                 buf = ctx.type_buffer(BufferMode::Plain, ctx.type_f32());
@@ -104,7 +104,7 @@ TEST_CASE("ceir 12d: aliasing saves memory -- transient_physical < transient_log
 
 TEST_CASE("ceir 12d: interval-coloring is minimal and the plan is consistent with resources_may_alias", "[ceir][planner]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     const TypeId                 buf = ctx.type_buffer(BufferMode::Plain, ctx.type_f32());
@@ -161,7 +161,7 @@ TEST_CASE("ceir 12d: interval-coloring is minimal and the plan is consistent wit
 // overlapped -> zero pooling. This is parity with the render-graph aliaser's `first_use` model (frame_graph.cpp L1200).
 TEST_CASE("ceir 15d-3b: a declared-early first-used-late transient pools with an early-and-done one", "[ceir][planner]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     const TypeId                 buf = ctx.type_buffer(BufferMode::Plain, ctx.type_f32());
@@ -216,7 +216,7 @@ TEST_CASE("ceir 15d-3b: a declared-early first-used-late transient pools with an
 TEST_CASE("ceir 12d: the Latency profile disables pooling (physical == logical == the Memory plan's logical)",
           "[ceir][planner]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     const TypeId                 buf = ctx.type_buffer(BufferMode::Plain, ctx.type_f32());
@@ -242,7 +242,7 @@ TEST_CASE("ceir 12d: the Latency profile disables pooling (physical == logical =
 
 TEST_CASE("ceir 12d: every dedicated SlotReason and the history ring depth are recorded (sec 162)", "[ceir][planner]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     const TypeId                 buf = ctx.type_buffer(BufferMode::Plain, ctx.type_f32());
@@ -284,7 +284,7 @@ TEST_CASE("ceir 12d: every dedicated SlotReason and the history ring depth are r
 
 TEST_CASE("ceir 12d: different size_class buckets never share; the plan is deterministic across runs", "[ceir][planner]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     const TypeId                 buf = ctx.type_buffer(BufferMode::Plain, ctx.type_f32());

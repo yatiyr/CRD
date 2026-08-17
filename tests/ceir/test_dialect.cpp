@@ -4,7 +4,7 @@
 
 #include <crd/ceir/ceir.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -29,7 +29,7 @@ const CallInterface kFuncCallInterface{&func_call_callee};
 
 TEST_CASE("ceir dialect: register a dialect + ops; traits and dialect_of resolve", "[ceir][dialect]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
 
     Dialect* d = fn::register_dialect(ctx);
@@ -52,7 +52,7 @@ TEST_CASE("ceir dialect: register a dialect + ops; traits and dialect_of resolve
 
 TEST_CASE("ceir dialect: an unregistered-dialect op is still a valid Operation (opaque preservation)", "[ceir][dialect]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
 
     // No register_dialect("plugin") — the dialect is UNKNOWN, yet its op is a first-class Operation.
@@ -70,7 +70,7 @@ TEST_CASE("ceir dialect: an unregistered-dialect op is still a valid Operation (
 
 TEST_CASE("ceir dialect: a verifier hook runs on its op-kind", "[ceir][dialect][verify]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     fn::register_dialect(ctx);
     Module*    m = ctx.create_module();
@@ -87,7 +87,7 @@ TEST_CASE("ceir dialect: a verifier hook runs on its op-kind", "[ceir][dialect][
 TEST_CASE("ceir dialect: an analysis dispatches through an op interface, not a switch on kind",
           "[ceir][dialect][interface]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     fn::register_dialect(ctx);
     Module* m = ctx.create_module();

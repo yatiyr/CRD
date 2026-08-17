@@ -6,7 +6,7 @@
 
 #include <crd/ceir/cook/plan_cache.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -49,7 +49,7 @@ u64 mock_resolve(AssetId a, void* user) { return static_cast<const MockIfaces*>(
 
 TEST_CASE("ceir 10b: put then get is a HIT; unknown key / version bump / new target all MISS", "[ceir][plancache]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     MockIfaces                   ifaces(&root);
     PlanCache                    cache(&root, &mock_resolve, &ifaces);
     const u8      plan[3] = {1U, 2U, 3U};
@@ -78,7 +78,7 @@ TEST_CASE("ceir 10b: put then get is a HIT; unknown key / version bump / new tar
 
 TEST_CASE("ceir 10b: a callee body-edit keeps the caller plan a HIT; an interface change is StaleDeps", "[ceir][plancache]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     MockIfaces                   ifaces(&root);
     const AssetId                a{1U};
     const AssetId                b{2U};
@@ -108,7 +108,7 @@ TEST_CASE("ceir 10b: a callee body-edit keeps the caller plan a HIT; an interfac
 
 TEST_CASE("ceir 10b: clear() and evict() drop entries - the cache never trusts itself", "[ceir][plancache]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     MockIfaces                   ifaces(&root);
     PlanCache                    cache(&root, &mock_resolve, &ifaces);
     const u8      plan[1] = {7U};

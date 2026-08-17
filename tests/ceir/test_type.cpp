@@ -6,7 +6,7 @@
 #include <crd/ceir/parse.hpp>
 #include <crd/ceir/print.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -37,7 +37,7 @@ Module* build_typed(Context& ctx, ConstSpan<TypeId> types)
 
 TEST_CASE("ceir type: identical types intern to one id; distinct types differ", "[ceir][type]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
 
     CHECK(ctx.type_i32() == ctx.type_int(32U, true));  // dedup: same structure -> same id
@@ -58,7 +58,7 @@ TEST_CASE("ceir type: identical types intern to one id; distinct types differ", 
 
 TEST_CASE("ceir type: type_of reads back the interned structure", "[ceir][type]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
 
     const Type u16 = ctx.type_of(ctx.type_int(16U, false));
@@ -79,7 +79,7 @@ TEST_CASE("ceir type: type_of reads back the interned structure", "[ceir][type]"
 
 TEST_CASE("ceir type: every scalar + aggregate kind prints canonically and round-trips byte-exact", "[ceir][type]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
 
     const TypeId     f32     = ctx.type_f32();
@@ -132,7 +132,7 @@ TEST_CASE("ceir type: every scalar + aggregate kind prints canonically and round
 
 TEST_CASE("ceir type: generics (param/trait/callable) intern, dedup, and round-trip byte-exact", "[ceir][type][generics]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
 
     const TypeId ord = ctx.type_trait("Ord", {});
@@ -176,7 +176,7 @@ TEST_CASE("ceir type: generics (param/trait/callable) intern, dedup, and round-t
 
 TEST_CASE("ceir type: trait conformance is transitive over supertraits", "[ceir][type][generics]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
 
     const TypeId eq     = ctx.type_trait("Eq", {});
@@ -194,7 +194,7 @@ TEST_CASE("ceir type: trait conformance is transitive over supertraits", "[ceir]
 
 TEST_CASE("ceir type: substitution binds params, checks constraints, keeps unbound generic", "[ceir][type][generics]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
 
     const TypeId ord   = ctx.type_trait("Ord", {});
@@ -264,7 +264,7 @@ TEST_CASE("ceir type: substitution binds params, checks constraints, keeps unbou
 
 TEST_CASE("ceir type: resource + view kinds intern, dedup, and round-trip byte-exact", "[ceir][type][resource]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const TypeId                 f32   = ctx.type_f32();
     const TypeId                 vec4f = ctx.type_vector(f32, 4U);
@@ -317,7 +317,7 @@ TEST_CASE("ceir type: resource + view kinds intern, dedup, and round-trip byte-e
 
 TEST_CASE("ceir type: view combinations are validated (legal accepted, illegal rejected)", "[ceir][type][resource]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const TypeId                 f32 = ctx.type_f32();
     const TypeId                 buf = ctx.type_buffer(BufferMode::Plain, f32);
@@ -345,7 +345,7 @@ TEST_CASE("ceir type: view combinations are validated (legal accepted, illegal r
 
 TEST_CASE("ceir type: dims, shapes, tensors intern, dedup, and round-trip byte-exact", "[ceir][type][shape]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const TypeId                 f32 = ctx.type_f32();
     const TypeId                 d4  = ctx.type_dim_static(4U);
@@ -388,7 +388,7 @@ TEST_CASE("ceir type: dims, shapes, tensors intern, dedup, and round-trip byte-e
 
 TEST_CASE("ceir type: shape broadcast + reshape compatibility is tri-state", "[ceir][type][shape]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const auto sh1 = [&](TypeId a) {
         const TypeId d[1] = {a};
@@ -444,7 +444,7 @@ TEST_CASE("ceir type: shape broadcast + reshape compatibility is tri-state", "[c
 
 TEST_CASE("ceir type: substitution flows a param through a tensor shape (3b x 3d seam)", "[ceir][type][shape][generics]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const TypeId                 ord  = ctx.type_trait("Ord", {});
     const TypeId                 con[1] = {ord};
@@ -489,7 +489,7 @@ TEST_CASE("ceir type: quantity dimension pack/unpack round-trips signed exponent
 
 TEST_CASE("ceir type: quantities intern, dedup, and round-trip byte-exact", "[ceir][type][quantity]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const TypeId                 f32 = ctx.type_f32();
 
@@ -534,7 +534,7 @@ TEST_CASE("ceir type: quantities intern, dedup, and round-trip byte-exact", "[ce
 
 TEST_CASE("ceir type: quantity dimension relations + composition", "[ceir][type][quantity]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const TypeId                 f32 = ctx.type_f32();
     QuantityDim                  len;
@@ -576,7 +576,7 @@ TEST_CASE("ceir type: quantity dimension relations + composition", "[ceir][type]
 TEST_CASE("ceir type: ownership qualifiers intern, dedup, and round-trip byte-exact (all nine kinds)",
           "[ceir][type][qualifier]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const TypeId                 f32 = ctx.type_f32();
 
@@ -626,7 +626,7 @@ TEST_CASE("ceir type: ownership qualifiers intern, dedup, and round-trip byte-ex
 TEST_CASE("ceir type: ownership-qualifier composition accepts value+resource types, rejects meta types",
           "[ceir][type][qualifier]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const TypeId                 f32 = ctx.type_f32();
 
@@ -650,7 +650,7 @@ TEST_CASE("ceir type: ownership-qualifier composition accepts value+resource typ
 TEST_CASE("ceir type: value_escapes_region tracks uses across the region tree (3f escape predicate)",
           "[ceir][type][qualifier]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const TypeId                 i32 = ctx.type_i32();
 
@@ -686,7 +686,7 @@ TEST_CASE("ceir type: value_escapes_region tracks uses across the region tree (3
 TEST_CASE("ceir type: substitution flows a param through an ownership qualifier (3b x 3f seam)",
           "[ceir][type][qualifier][generics]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const TypeId                 ord    = ctx.type_trait("Ord", {});
     const TypeId                 con[1] = {ord};
@@ -707,7 +707,7 @@ TEST_CASE("ceir type: substitution flows a param through an ownership qualifier 
 TEST_CASE("ceir type: substitution rejects a binding that breaks composition (a fourth construction path)",
           "[ceir][type][qualifier][generics]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const TypeId                 t   = ctx.type_param("T", {}); // no constraints -> any concrete binds
     const TypeId                 f32 = ctx.type_f32();
@@ -743,7 +743,7 @@ TEST_CASE("ceir type: substitution rejects a binding that breaks composition (a 
 TEST_CASE("ceir type: value_escapes_region walks a multi-level region nest (3f escape depth)",
           "[ceir][type][qualifier]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const TypeId                 i32 = ctx.type_i32();
 
@@ -777,7 +777,7 @@ TEST_CASE("ceir type: value_escapes_region walks a multi-level region nest (3f e
 
 TEST_CASE("ceir type: well-formedness rejects structurally-invalid records", "[ceir][type]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const TypeId                 i32   = ctx.type_i32();
     const TypeId                 m1[1] = {i32};
@@ -826,7 +826,7 @@ TEST_CASE("ceir type: well-formedness rejects structurally-invalid records", "[c
 
 TEST_CASE("ceir type: deeply nested aggregates round-trip byte-exact", "[ceir][type]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
 
     // option<result<vec<2x!f32>, array<3x!i32>>> - nesting through several kinds

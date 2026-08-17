@@ -12,7 +12,7 @@
 #include <crd/ceir/host/host_provider.hpp>
 #include <crd/ceir/semantics.hpp>
 #include <crd/jobs/jobs.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/reporters/catch_reporter_event_listener.hpp>
@@ -127,7 +127,7 @@ CATCH_REGISTER_LISTENER(HostJobsListener)
 
 TEST_CASE("ceir host: parallel_for maps iv*iv on the pool, num_jobs-independent", "[ceir][host]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     // @main(): parallel_for(0,6,1){ iv: yield iv*iv }
@@ -142,7 +142,7 @@ TEST_CASE("ceir host: parallel_for maps iv*iv on the pool, num_jobs-independent"
     const i64 expected[6] = {0, 1, 4, 9, 16, 25};
     for (const crd::u32 nj : {crd::u32{1}, crd::u32{8}}) // ⭐ num_jobs-INDEPENDENT (the 6z determinism seed)
     {
-        crd::memory::MallocAllocator palloc;
+        crd::memory::GrowableTlsfAllocator palloc;
         host::HostProvider          prov(&palloc, nj);
         const exec::ExecResult      r = prov.execute(ctx, *m, "main", {});
         REQUIRE(r.ok());
@@ -154,7 +154,7 @@ TEST_CASE("ceir host: parallel_for maps iv*iv on the pool, num_jobs-independent"
 
 TEST_CASE("ceir host: a parallel_for body may CALL a self-contained func", "[ceir][host]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     // @sq(%x): return x*x. @main(): parallel_for(0,5,1){ iv: %r = call sq(iv); yield %r }
@@ -174,7 +174,7 @@ TEST_CASE("ceir host: a parallel_for body may CALL a self-contained func", "[cei
     yield1(ctx, o, body, call->result(0U));
     mb->append(func::create_return(ctx, {}));
 
-    crd::memory::MallocAllocator palloc;
+    crd::memory::GrowableTlsfAllocator palloc;
     host::HostProvider          prov(&palloc, 4U);
     REQUIRE(prov.execute(ctx, *m, "main", {}).ok());
     const ConstSpan<i64> out = prov.map_output(pf);
@@ -185,7 +185,7 @@ TEST_CASE("ceir host: a parallel_for body may CALL a self-contained func", "[cei
 
 TEST_CASE("ceir host: empty range yields an empty map; a non-positive step is BadForStep", "[ceir][host]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
 
@@ -198,7 +198,7 @@ TEST_CASE("ceir host: empty range yields an empty map; a non-positive step is Ba
         Operation* const pf   = mk_pfor(ctx, o, mb, 0, body); // range [0,0) is empty
         yield1(ctx, o, body, konst(ctx, o, body, 7)->result(0U));
         mb->append(func::create_return(ctx, {}));
-        crd::memory::MallocAllocator palloc;
+        crd::memory::GrowableTlsfAllocator palloc;
         host::HostProvider          prov(&palloc, 4U);
         REQUIRE(prov.execute(ctx, *m, "main", {}).ok());
         CHECK(prov.map_output(pf).size() == 0U);
@@ -216,7 +216,7 @@ TEST_CASE("ceir host: empty range yields an empty map; a non-positive step is Ba
         pf->region(0)->append(body);
         yield1(ctx, o, body, konst(ctx, o, body, 1)->result(0U));
         mb->append(func::create_return(ctx, {}));
-        crd::memory::MallocAllocator palloc;
+        crd::memory::GrowableTlsfAllocator palloc;
         host::HostProvider          prov(&palloc, 4U);
         CHECK(prov.execute(ctx, *m, "main", {}).error == exec::ExecError::BadForStep);
     }
@@ -233,7 +233,7 @@ TEST_CASE("ceir host: empty range yields an empty map; a non-positive step is Ba
         yield1(ctx, o, cb, bin(ctx, o.addi, acc31, cb->arg(1U), cb)->result(0U)); // a well-formed combine (pre-flight still checks it)
         Value* rv[1] = {mr->result(0U)};
         mb->append(func::create_return(ctx, ConstSpan<Value*>(rv, 1U)));
-        crd::memory::MallocAllocator palloc;
+        crd::memory::GrowableTlsfAllocator palloc;
         host::HostProvider          prov(&palloc, 4U);
         const exec::ExecResult      r = prov.execute(ctx, *m, "main", {}); // the happy path with NO scope wrapper
         REQUIRE(r.ok());
@@ -245,7 +245,7 @@ TEST_CASE("ceir host: empty range yields an empty map; a non-positive step is Ba
 
 TEST_CASE("ceir host: a plain reference interpreter has no task semantics (NoSemantics)", "[ceir][host]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m  = ctx.create_module();
@@ -263,10 +263,10 @@ TEST_CASE("ceir host: a plain reference interpreter has no task semantics (NoSem
 
 TEST_CASE("ceir host: the parallel-purity pre-flight", "[ceir][host]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
-    crd::memory::MallocAllocator palloc;
+    crd::memory::GrowableTlsfAllocator palloc;
     host::HostProvider          prov(&palloc, 4U);
 
     SECTION("a stateful body is ParallelBodyStateful")
@@ -334,7 +334,7 @@ TEST_CASE("ceir host: the parallel-purity pre-flight", "[ceir][host]")
 
 TEST_CASE("ceir host: a runaway parallel body is FuelExhausted, not a hang", "[ceir][host]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     // body: for(0, 100000, 1) { } ; yield 0  -- burns fuel per iteration, exceeding a tiny sub-budget.
@@ -351,7 +351,7 @@ TEST_CASE("ceir host: a runaway parallel body is FuelExhausted, not a hang", "[c
     yield1(ctx, o, body, konst(ctx, o, body, 0)->result(0U));
     mb->append(func::create_return(ctx, {}));
 
-    crd::memory::MallocAllocator palloc;
+    crd::memory::GrowableTlsfAllocator palloc;
     host::HostProvider          prov(&palloc, /*num_jobs*/ 4U, /*sub_fuel*/ 1000U); // small per-index budget
     const exec::ExecResult      r = prov.execute(ctx, *m, "main", {});
     CHECK(r.error == exec::ExecError::FuelExhausted);
@@ -360,10 +360,10 @@ TEST_CASE("ceir host: a runaway parallel body is FuelExhausted, not a hang", "[c
 
 TEST_CASE("ceir host: num_jobs > count clamps; advertises; a captured body is UndefinedValue", "[ceir][host]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
-    crd::memory::MallocAllocator palloc;
+    crd::memory::GrowableTlsfAllocator palloc;
     host::HostProvider          prov(&palloc, /*num_jobs*/ 8U); // more jobs than items -> jobs clamps internally
 
     SECTION("num_jobs (8) > count (3) still maps correctly")
@@ -404,7 +404,7 @@ TEST_CASE("ceir host: num_jobs > count clamps; advertises; a captured body is Un
 
 TEST_CASE("ceir host: parallel_for is a Synchronization barrier, illegal in an audio region (6a flip)", "[ceir][host]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     const OpId                   scope = ctx.intern_op("core", "scope");
@@ -435,7 +435,7 @@ TEST_CASE("ceir host: RealtimeClass maps to a jobs dispatch Priority (sec 32)", 
 
 TEST_CASE("ceir host: request_cancel stops a running parallel_for (Cancelled, not FuelExhausted)", "[ceir][host]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     // body: for(0, 1000000, 1) { } ; yield 0  -- a long spin; with HUGE sub-fuel only cancellation can stop it.
@@ -452,7 +452,7 @@ TEST_CASE("ceir host: request_cancel stops a running parallel_for (Cancelled, no
     yield1(ctx, o, body, konst(ctx, o, body, 0)->result(0U));
     mb->append(func::create_return(ctx, {}));
 
-    crd::memory::MallocAllocator palloc;
+    crd::memory::GrowableTlsfAllocator palloc;
     host::HostProvider          prov(&palloc, /*num_jobs*/ 4U, /*sub_fuel*/ crd::u64{1} << 40U); // huge budget
     prov.request_cancel(); // §30 cooperative cancel, pre-requested -> the ranges observe it in their step loop
     CHECK(prov.execute(ctx, *m, "main", {}).error == exec::ExecError::Cancelled);
@@ -465,7 +465,7 @@ TEST_CASE("ceir host: request_cancel stops a running parallel_for (Cancelled, no
 // INDEPENDENT wrapping-u64 reference (the bit-exact-blind scar: cross-config identity alone would pass 16 identical wrongs).
 TEST_CASE("ceir host: map_reduce fixed-order fold is bit-identical across num_jobs 1..16 (the band-6 gate)", "[ceir][host]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     constexpr i64                elem_count = 37; // a PRIME >= 16 -> every num_jobs in {1..16} splits the range raggedly (no even divide)
@@ -491,11 +491,11 @@ TEST_CASE("ceir host: map_reduce fixed-order fold is bit-identical across num_jo
     for (i64 i = 0; i < elem_count; ++i) { ref = (ref * 31ULL) + (static_cast<crd::u64>(i) * static_cast<crd::u64>(i)); }
     const i64 expected = static_cast<i64>(ref);
 
-    crd::memory::MallocAllocator pin_root;
+    crd::memory::GrowableTlsfAllocator pin_root;
     containers::Array<crd::u8>   first(&pin_root); // num_jobs==1's byte-pinned result (the reference bytes)
     for (crd::u32 nj = 1U; nj <= 16U; ++nj)
     {
-        crd::memory::MallocAllocator palloc;
+        crd::memory::GrowableTlsfAllocator palloc;
         host::HostProvider          prov(&palloc, nj); // ⭐ the ONLY knob that changes -- the result must not
         const exec::ExecResult      r = prov.execute(ctx, *m, "main", {});
         REQUIRE(r.ok());
@@ -517,10 +517,10 @@ TEST_CASE("ceir host: map_reduce fixed-order fold is bit-identical across num_jo
 
 TEST_CASE("ceir host: map_reduce pre-flight -- the combine must be state-free and 2-arg", "[ceir][host]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
-    crd::memory::MallocAllocator palloc;
+    crd::memory::GrowableTlsfAllocator palloc;
     host::HostProvider          prov(&palloc, 4U);
 
     SECTION("a stateful combine is ParallelBodyStateful")
@@ -572,7 +572,7 @@ TEST_CASE("ceir host: map_reduce pre-flight -- the combine must be state-free an
 
 TEST_CASE("ceir 11a: the sequential reference AGREES with the HostProvider byte-for-byte (map_reduce)", "[ceir][host]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m  = ctx.create_module();
@@ -596,7 +596,7 @@ TEST_CASE("ceir 11a: the sequential reference AGREES with the HostProvider byte-
     const exec::ExecResult rs = seq.invoke(*m, "main", {});
     REQUIRE(rs.ok());
     REQUIRE(rs.values.size() == 1U);
-    crd::memory::MallocAllocator     pin_root;
+    crd::memory::GrowableTlsfAllocator     pin_root;
     const containers::Array<crd::u8> seq_bytes =
         exec::pin_values(ConstSpan<i64>(rs.values.data(), rs.values.size()), &pin_root);
     const ConstSpan<i64> seq_map = seq.map_output(mr);
@@ -605,7 +605,7 @@ TEST_CASE("ceir 11a: the sequential reference AGREES with the HostProvider byte-
     // 2. the PROVIDER across {1..16} -- byte-identical reduced value AND same index-order map_output as the reference.
     for (crd::u32 nj = 1U; nj <= 16U; ++nj)
     {
-        crd::memory::MallocAllocator palloc;
+        crd::memory::GrowableTlsfAllocator palloc;
         host::HostProvider          prov(&palloc, nj);
         const exec::ExecResult      rp = prov.execute(ctx, *m, "main", {});
         REQUIRE(rp.ok());
@@ -621,7 +621,7 @@ TEST_CASE("ceir 11a: the sequential reference AGREES with the HostProvider byte-
 
 TEST_CASE("ceir 11a: the sequential reference rejects a STATEFUL parallel body like the provider (shared pre-flight)", "[ceir][host]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m  = ctx.create_module();
@@ -644,7 +644,7 @@ TEST_CASE("ceir 11a: the sequential reference rejects a STATEFUL parallel body l
 
 TEST_CASE("ceir 11a: an OUTER-CAPTURE parallel body is UndefinedValue in the sequential reference (like the provider)", "[ceir][host]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m  = ctx.create_module();
@@ -661,7 +661,7 @@ TEST_CASE("ceir 11a: an OUTER-CAPTURE parallel body is UndefinedValue in the seq
     exec::install_builtin_semantics(seq);
     exec::install_task_semantics(seq);
     CHECK(seq.invoke(*m, "main", {}).error == exec::ExecError::UndefinedValue);
-    crd::memory::MallocAllocator palloc;
+    crd::memory::GrowableTlsfAllocator palloc;
     host::HostProvider          prov(&palloc, 4U);
     CHECK(prov.execute(ctx, *m, "main", {}).error == exec::ExecError::UndefinedValue); // the provider agrees
 }
@@ -690,7 +690,7 @@ Operation* mk_await(Context& ctx, OpId awaitk, Block* b, Value* tok)
 
 TEST_CASE("ceir 11a: jobs-backed launch/await -- N pure launches byte-match the sequential reference (pooled)", "[ceir][host]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     const OpId                   launch = ctx.intern_op("async", "launch");
@@ -714,7 +714,7 @@ TEST_CASE("ceir 11a: jobs-backed launch/await -- N pure launches byte-match the 
     REQUIRE(rs.values.size() == 1U);
     CHECK(rs.values[0] == 30);
 
-    crd::memory::MallocAllocator palloc;
+    crd::memory::GrowableTlsfAllocator palloc;
     host::HostProvider          prov(&palloc, 4U);
     const exec::ExecResult      rp = prov.execute(ctx, *m, "main", {});
     REQUIRE(rp.ok());
@@ -725,7 +725,7 @@ TEST_CASE("ceir 11a: jobs-backed launch/await -- N pure launches byte-match the 
 
 TEST_CASE("ceir 11a: a CAPTURING launch body falls back to sequential in-frame (correct, NOT pooled)", "[ceir][host]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     const OpId                   launch = ctx.intern_op("async", "launch");
@@ -743,7 +743,7 @@ TEST_CASE("ceir 11a: a CAPTURING launch body falls back to sequential in-frame (
     Value* rv[1] = {aw->result(0U)};
     mb->append(func::create_return(ctx, ConstSpan<Value*>(rv, 1U)));
 
-    crd::memory::MallocAllocator palloc;
+    crd::memory::GrowableTlsfAllocator palloc;
     host::HostProvider          prov(&palloc, 4U);
     const exec::ExecResult      rp = prov.execute(ctx, *m, "main", {});
     REQUIRE(rp.ok());
@@ -753,7 +753,7 @@ TEST_CASE("ceir 11a: a CAPTURING launch body falls back to sequential in-frame (
 
 TEST_CASE("ceir 11a: a STATEFUL launch body falls back to sequential (correct, NOT pooled)", "[ceir][host]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     const OpId                   launch = ctx.intern_op("async", "launch");
@@ -773,7 +773,7 @@ TEST_CASE("ceir 11a: a STATEFUL launch body falls back to sequential (correct, N
     Value* rv[1] = {aw->result(0U)};
     mb->append(func::create_return(ctx, ConstSpan<Value*>(rv, 1U)));
 
-    crd::memory::MallocAllocator palloc;
+    crd::memory::GrowableTlsfAllocator palloc;
     host::HostProvider          prov(&palloc, 4U);
     const exec::ExecResult      rp = prov.execute(ctx, *m, "main", {});
     REQUIRE(rp.ok());                   // a stateful body runs correctly via the fallback (never rejected)
@@ -782,7 +782,7 @@ TEST_CASE("ceir 11a: a STATEFUL launch body falls back to sequential (correct, N
 
 TEST_CASE("ceir 11a: a LEAKED pooled token is drained at execute() exit (no hang, no leak)", "[ceir][host]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     const OpId                   launch = ctx.intern_op("async", "launch");
@@ -791,7 +791,7 @@ TEST_CASE("ceir 11a: a LEAKED pooled token is drained at execute() exit (no hang
     Block* const                 mb = func::func_body_block(fm);
     (void)mk_launch(ctx, launch, o, mb, 5); // %t leaked -- never awaited / cancelled (an unverified program)
     mb->append(func::create_return(ctx, {}));
-    crd::memory::MallocAllocator palloc;
+    crd::memory::GrowableTlsfAllocator palloc;
     host::HostProvider          prov(&palloc, 4U);
     const exec::ExecResult      rp = prov.execute(ctx, *m, "main", {});
     CHECK(rp.ok());                     // the drain waits + frees the outstanding pooled token before returning
@@ -800,7 +800,7 @@ TEST_CASE("ceir 11a: a LEAKED pooled token is drained at execute() exit (no hang
 
 TEST_CASE("ceir 11a: join / race / cancel resolve POOLED tokens through the provider", "[ceir][host]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     const OpId                   launch = ctx.intern_op("async", "launch");
@@ -822,7 +822,7 @@ TEST_CASE("ceir 11a: join / race / cancel resolve POOLED tokens through the prov
         Operation* const aw = mk_await(ctx, awaitk, mb, j->result(0U)); // join -> [11,22]; await binds result0 = 11
         Value* rv[1] = {aw->result(0U)};
         mb->append(func::create_return(ctx, ConstSpan<Value*>(rv, 1U)));
-        crd::memory::MallocAllocator palloc;
+        crd::memory::GrowableTlsfAllocator palloc;
         host::HostProvider          prov(&palloc, 4U);
         const exec::ExecResult      rp = prov.execute(ctx, *m, "main", {});
         REQUIRE(rp.ok());
@@ -841,7 +841,7 @@ TEST_CASE("ceir 11a: join / race / cancel resolve POOLED tokens through the prov
         mb->append(rc); // race consumes both, yields the winning index (0)
         Value* rv[1] = {rc->result(0U)};
         mb->append(func::create_return(ctx, ConstSpan<Value*>(rv, 1U)));
-        crd::memory::MallocAllocator palloc;
+        crd::memory::GrowableTlsfAllocator palloc;
         host::HostProvider          prov(&palloc, 4U);
         const exec::ExecResult      rp = prov.execute(ctx, *m, "main", {});
         REQUIRE(rp.ok());
@@ -856,7 +856,7 @@ TEST_CASE("ceir 11a: join / race / cancel resolve POOLED tokens through the prov
         Value* ct[1] = {t1->result(0U)};
         mb->append(ctx.create_operation(cancelk, ConstSpan<Value*>(ct, 1U), 0U)); // cancel(%t) -- consume, no result
         mb->append(func::create_return(ctx, {}));
-        crd::memory::MallocAllocator palloc;
+        crd::memory::GrowableTlsfAllocator palloc;
         host::HostProvider          prov(&palloc, 4U);
         CHECK(prov.execute(ctx, *m, "main", {}).ok());
         CHECK(prov.pooled_count() == 1U);
@@ -865,7 +865,7 @@ TEST_CASE("ceir 11a: join / race / cancel resolve POOLED tokens through the prov
 
 TEST_CASE("ceir 11a: a main_thread-pinned task pooled + awaited from main completes (the pump path)", "[ceir][host]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     const OpId                   main_thread = ctx.intern_op("task", "main_thread");
@@ -885,7 +885,7 @@ TEST_CASE("ceir 11a: a main_thread-pinned task pooled + awaited from main comple
     Value* rv[1] = {fw->result(0U)};
     mb->append(func::create_return(ctx, ConstSpan<Value*>(rv, 1U)));
     // execute() runs on the MAIN thread (Catch) -> wait() pumps thread 0 so the pin_thread=0 job makes progress (VERIFY 2).
-    crd::memory::MallocAllocator palloc;
+    crd::memory::GrowableTlsfAllocator palloc;
     host::HostProvider          prov(&palloc, 4U);
     const exec::ExecResult      rp = prov.execute(ctx, *m, "main", {});
     REQUIRE(rp.ok()); // ⛔ completes (no deadlock — the pump path); the timeout≠hang scar is the guard if it regresses

@@ -15,7 +15,7 @@
 #include <crd/ceir/effect.hpp> // EffectRecord / EffectFamily::ConstraintRead
 #include <crd/containers/incremental_dag.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -240,7 +240,7 @@ struct CadGraph
 
 TEST_CASE("ceir 9d: a single dimension edit re-evaluates only its dependent subtree", "[ceir][cad]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     CadGraph                     g(ctx, &root);
     Array<Operation*>            c(&root);
@@ -262,7 +262,7 @@ TEST_CASE("ceir 9d: a single dimension edit re-evaluates only its dependent subt
 
 TEST_CASE("ceir 9d: multi-op edits in one transaction seed the eval from the whole touched-set", "[ceir][cad]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     // MULTI-OP: one transaction edits BOTH sketches -> both feature branches re-evaluate.
     {
         Context           ctx(&root);
@@ -300,7 +300,7 @@ TEST_CASE("ceir 9d: multi-op edits in one transaction seed the eval from the who
 
 TEST_CASE("ceir 9d: a no-op edit inside a multi-op transaction recomputes only the real edit subtree", "[ceir][cad]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     CadGraph                     g(ctx, &root);
     Array<Operation*>            c(&root);
@@ -324,7 +324,7 @@ TEST_CASE("ceir 9d: a no-op edit inside a multi-op transaction recomputes only t
 
 TEST_CASE("ceir 9d: a transactional edit rolls back the feature graph byte-identically", "[ceir][cad]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     CadGraph                     g(ctx, &root);
     Array<Operation*>            c(&root);
@@ -349,7 +349,7 @@ TEST_CASE("ceir 9d: a transactional edit rolls back the feature graph byte-ident
 
 TEST_CASE("ceir 9d: a constraint-violating commit is rejected and rolls back; a satisfying commit succeeds", "[ceir][cad]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     CadGraph                     g(ctx, &root);
     Array<Operation*>            c(&root);

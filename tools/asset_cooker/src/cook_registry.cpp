@@ -2,7 +2,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 namespace crd::cooker
 {
@@ -19,7 +19,7 @@ struct HandlerEntry
 
 crd::containers::Array<HandlerEntry>& registry()
 {
-    static crd::memory::MallocAllocator s_alloc;
+    static crd::memory::GrowableTlsfAllocator s_alloc;
     static crd::containers::Array<HandlerEntry> s_registry(&s_alloc);
     return s_registry;
 }

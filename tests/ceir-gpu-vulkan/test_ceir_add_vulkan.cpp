@@ -22,7 +22,7 @@
 #include <crd/gpu/vulkan_shader_compile.hpp>
 #include <crd/gpu/vulkan_validation_capture.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include "../gpu-shared/ceir_execute_1wg.hpp"
@@ -87,7 +87,7 @@ const char* const kReduceRmax = "module {\n"
 
 TEST_CASE("ceir 13z: the add CEIR asset lowers to one dispatch over 3 bindings (device-free always-runs)", "[ceir][ceir-gpu][vulkan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     ce::Context                  cctx(&root);
     const ce::Value*             binds[3];
     ce::Block* const             b = cgt::build_add_ceir_asset(cctx, binds);
@@ -130,7 +130,7 @@ TEST_CASE("ceir 13z: add CEIR asset on Vulkan == direct CKIR (byte-identical) + 
     REQUIRE(pipe != nullptr);
 
     // build + lower the CEIR asset
-    crd::memory::MallocAllocator croot;
+    crd::memory::GrowableTlsfAllocator croot;
     ce::Context                  cctx(&croot);
     const ce::Value*             binds[3];
     ce::Block* const             blk = cgt::build_add_ceir_asset(cctx, binds);
@@ -199,7 +199,7 @@ TEST_CASE("ceir 13z: reduce CEIR asset on Vulkan == direct CKIR (byte-identical)
     auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(cres.spirv.data(), cres.spirv.size()), 2, 0U);
     REQUIRE(pipe != nullptr);
 
-    crd::memory::MallocAllocator croot;
+    crd::memory::GrowableTlsfAllocator croot;
     ce::Context                  cctx(&croot);
     const cgt::CeirDispatchAsset asset = cgt::build_ceir_dispatch_asset(cctx, "reduce", "r,w", 2);
     crd::containers::Array<ceg::LoweredCommand> cmds(&croot);
@@ -266,7 +266,7 @@ TEST_CASE("ceir 13z: scan CEIR asset on Vulkan == direct CKIR (byte-identical) +
     auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(cres.spirv.data(), cres.spirv.size()), 3, 0U);
     REQUIRE(pipe != nullptr);
 
-    crd::memory::MallocAllocator croot;
+    crd::memory::GrowableTlsfAllocator croot;
     ce::Context                  cctx(&croot);
     const cgt::CeirDispatchAsset asset = cgt::build_ceir_dispatch_asset(cctx, "scan", "r,w,w", 3);
     crd::containers::Array<ceg::LoweredCommand> cmds(&croot);
@@ -351,7 +351,7 @@ TEST_CASE("ceir 13z: a TEXT-authored reduce asset (parsed) executes on Vulkan ==
                                       "    %2 = resource.declare() : !buffer<plain,!f32>\n"
                                       "    compute.dispatch(%0, %0, %0, %1, %2) {access = \"r,w\", kernel = @reduce}\n"
                                       "}\n";
-    crd::memory::MallocAllocator croot;
+    crd::memory::GrowableTlsfAllocator croot;
     ce::Context                  cctx(&croot);
     const ce::ParseResult        pr = ce::parse(cctx, crd::containers::StringView(k_reduce_text));
     REQUIRE(pr.ok);
@@ -396,7 +396,7 @@ TEST_CASE("ceir 13z: a TEXT-authored reduce asset (parsed) executes on Vulkan ==
 TEST_CASE("ceir 13z-4: a compute+resource CEIR asset hot-reloads through the 10a ReloadSet (HotSwap, device-free)", "[ceir][ceir-gpu][vulkan]")
 {
     namespace cook = crd::ceir::cook;
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     cook::ReloadSet              rs(&root, &ceir_gpu_registrar, nullptr);
     const cook::AssetId          id{1U};
 
@@ -484,7 +484,7 @@ TEST_CASE("ceir 13z-4: a hot-reloaded reduce asset re-executes on Vulkan add to 
     REQUIRE(pa != nullptr);
     REQUIRE(pm != nullptr);
 
-    crd::memory::MallocAllocator croot;
+    crd::memory::GrowableTlsfAllocator croot;
     cook::ReloadSet              rs(&croot, &ceir_gpu_registrar, nullptr);
     const cook::AssetId          id{7U};
     REQUIRE(rs.add_source(id, crd::containers::StringView(kReduceRadd)).ok());
@@ -625,7 +625,7 @@ TEST_CASE("ceir 13z: a 6-dispatch 2D FFT CEIR asset on Vulkan == CPU oracle (mul
         mp[pi].grid   = static_cast<int>(plan.passes[pi].num_workgroups);
         for (int k = 0; k < plan.passes[pi].nbind; ++k) { mp[pi].bind[k] = plan.passes[pi].bind[k]; }
     }
-    crd::memory::MallocAllocator  croot;
+    crd::memory::GrowableTlsfAllocator  croot;
     ce::Context                   cctx(&croot);
     const cgt::CeirMultiAsset     asset = cgt::build_ceir_multi_asset(cctx, plan.nbuffers, mp, plan.npasses);
     crd::containers::Array<ceg::LoweredCommand> cmds(&croot);
@@ -719,7 +719,7 @@ TEST_CASE("ceir 13z-4: the CPU reference executor of the lowered FFT list == run
         mp[pi].grid   = static_cast<int>(plan.passes[pi].num_workgroups);
         for (int k = 0; k < plan.passes[pi].nbind; ++k) { mp[pi].bind[k] = plan.passes[pi].bind[k]; }
     }
-    crd::memory::MallocAllocator                croot;
+    crd::memory::GrowableTlsfAllocator                croot;
     ce::Context                                 cctx(&croot);
     const cgt::CeirMultiAsset                   asset = cgt::build_ceir_multi_asset(cctx, plan.nbuffers, mp, plan.npasses);
     crd::containers::Array<ceg::LoweredCommand> cmds(&croot);

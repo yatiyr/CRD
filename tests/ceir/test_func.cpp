@@ -4,7 +4,7 @@
 
 #include <crd/ceir/ceir.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -13,7 +13,7 @@ namespace fn = crd::ceir::func;
 
 TEST_CASE("ceir func: define, lookup, and visibility are stored per symbol", "[ceir][func][symbol]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module*                      m = ctx.create_module();
     REQUIRE(m != nullptr);
@@ -41,7 +41,7 @@ TEST_CASE("ceir func: define, lookup, and visibility are stored per symbol", "[c
 
 TEST_CASE("ceir func: a duplicate symbol is rejected, never a silent overwrite", "[ceir][func][symbol]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module*                      m = ctx.create_module();
 
@@ -62,7 +62,7 @@ TEST_CASE("ceir func: a duplicate symbol is rejected, never a silent overwrite",
 
 TEST_CASE("ceir func: func.func body carries params; func.return terminates over them", "[ceir][func]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module*                      m = ctx.create_module();
 
@@ -90,7 +90,7 @@ TEST_CASE("ceir func: func.func body carries params; func.return terminates over
 
 TEST_CASE("ceir func: func.call resolves its callee within the module", "[ceir][func][symbol]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module*                      m = ctx.create_module();
 
@@ -110,7 +110,7 @@ TEST_CASE("ceir func: func.call resolves its callee within the module", "[ceir][
 TEST_CASE("ceir func: cross-module symbol resolution is by name, not by which module the call lives in",
           "[ceir][func][symbol]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module*                      a = ctx.create_module();
     Module*                      b = ctx.create_module();

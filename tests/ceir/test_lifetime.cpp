@@ -11,7 +11,7 @@
 #include <crd/ceir/gen/arith_ops.hpp>
 #include <crd/ceir/gen/resource_ops.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -87,7 +87,7 @@ const ResourceLifetime* find_lt(const Array<ResourceLifetime>& lts, const Operat
 
 TEST_CASE("ceir 12c: transient live ranges alias when disjoint and the WAR scar blocks overlap", "[ceir][lifetime]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     Module* const                m   = ctx.create_module();
@@ -134,7 +134,7 @@ TEST_CASE("ceir 12c: transient live ranges alias when disjoint and the WAR scar 
 
 TEST_CASE("ceir 12c: lifetime class gates aliasing (persistent, history, unspecified never pool)", "[ceir][lifetime]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     const TypeId                 buf = ctx.type_buffer(BufferMode::Plain, ctx.type_f32());
@@ -168,7 +168,7 @@ TEST_CASE("ceir 12c: lifetime class gates aliasing (persistent, history, unspeci
 
 TEST_CASE("ceir 12c: slot-size, exported, and the over-4d-effects ambient rule", "[ceir][lifetime]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     const TypeId                 buf = ctx.type_buffer(BufferMode::Plain, ctx.type_f32());
@@ -285,7 +285,7 @@ TEST_CASE("ceir 12c: slot-size, exported, and the over-4d-effects ambient rule",
 
 TEST_CASE("ceir 12c: nested-region and view-chain uses extend the root resource's live range", "[ceir][lifetime]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     const TypeId                 buf = ctx.type_buffer(BufferMode::Plain, ctx.type_f32());

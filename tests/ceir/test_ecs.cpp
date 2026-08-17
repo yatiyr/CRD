@@ -15,7 +15,7 @@
 #include <crd/ceir/hazard.hpp> // HazardKind
 #include <crd/ceir/semantics.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -104,7 +104,7 @@ Block* build_world(Context& ctx, const Systems& s, Operation** ops)
 
 TEST_CASE("ceir 9f: disjoint systems run in parallel; a shared component with a write is ordered", "[ceir][ecs]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Systems                s = register_ecs(ctx);
     Operation*                   op[5] = {};
@@ -128,7 +128,7 @@ TEST_CASE("ceir 9f: disjoint systems run in parallel; a shared component with a 
 
 TEST_CASE("ceir 9f: a structural mutation is a whole-store barrier against every system", "[ceir][ecs]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Systems                s = register_ecs(ctx);
     Operation*                   op[5] = {};
@@ -144,7 +144,7 @@ TEST_CASE("ceir 9f: a structural mutation is a whole-store barrier against every
 
 TEST_CASE("ceir 9f: the compiler infers the full ordering set from declared effects alone", "[ceir][ecs]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Systems                s = register_ecs(ctx);
     Operation*                   op[5] = {};
@@ -175,7 +175,7 @@ TEST_CASE("ceir 9f: the compiler infers the full ordering set from declared effe
 
 TEST_CASE("ceir 9f: an EcsComponent-located effect resolves whole-class (the conservative fallback)", "[ceir][ecs]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Systems                s = register_ecs(ctx);
     Operation*                   op[5] = {};

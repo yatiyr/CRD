@@ -3,7 +3,7 @@
 
 #include <crd/ceir/ceir.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -32,7 +32,7 @@ using namespace crd::ceir;
 
 TEST_CASE("ceir: build a graph and verify the def-use chains", "[ceir][ir]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
 
     const OpId k_const = ctx.intern_op("test", "const");
@@ -77,7 +77,7 @@ TEST_CASE("ceir: build a graph and verify the def-use chains", "[ceir][ir]")
 
 TEST_CASE("ceir: replace_all_uses_with splices the chains with zero allocation", "[ceir][ir]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const OpId                   k = ctx.intern_op("test", "v");
 
@@ -101,7 +101,7 @@ TEST_CASE("ceir: replace_all_uses_with splices the chains with zero allocation",
 
 TEST_CASE("ceir: set_operand rewires the use-lists", "[ceir][ir]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const OpId                   k = ctx.intern_op("test", "v");
 
@@ -121,7 +121,7 @@ TEST_CASE("ceir: set_operand rewires the use-lists", "[ceir][ir]")
 
 TEST_CASE("ceir: erase unlinks the op and drops its operands' uses", "[ceir][ir]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const OpId                   k = ctx.intern_op("test", "v");
 
@@ -145,7 +145,7 @@ TEST_CASE("ceir: erase unlinks the op and drops its operands' uses", "[ceir][ir]
 
 TEST_CASE("ceir: insert_before places an op mid-block (O(1))", "[ceir][ir]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const OpId                   k = ctx.intern_op("test", "v");
 
@@ -166,7 +166,7 @@ TEST_CASE("ceir: insert_before places an op mid-block (O(1))", "[ceir][ir]")
 
 TEST_CASE("ceir: boundary cases - empty region/block, no-result op", "[ceir][ir]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const OpId                   k = ctx.intern_op("test", "v");
 
@@ -191,7 +191,7 @@ TEST_CASE("ceir: boundary cases - empty region/block, no-result op", "[ceir][ir]
 
 TEST_CASE("ceir: building the IR does NOT malloc per op (arena)", "[ceir][ir][alloc]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     CountingAllocator            counting(&root);
     Context                      ctx(&counting);
 

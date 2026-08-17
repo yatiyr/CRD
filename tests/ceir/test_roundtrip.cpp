@@ -10,7 +10,7 @@
 #include <crd/ceir/parse.hpp>
 #include <crd/ceir/print.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -33,7 +33,7 @@ namespace
 
 TEST_CASE("ceir roundtrip: a rich graph prints, parses, and re-prints byte-exact", "[ceir][roundtrip]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module* const                m = build_rich(ctx);
 
@@ -59,7 +59,7 @@ TEST_CASE("ceir roundtrip: a rich graph prints, parses, and re-prints byte-exact
 
 TEST_CASE("ceir roundtrip: parsing is deterministic across two independent parses", "[ceir][roundtrip]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const String                 text = print(ctx, *build_rich(ctx), &root);
 
@@ -74,7 +74,7 @@ TEST_CASE("ceir roundtrip: parsing is deterministic across two independent parse
 
 TEST_CASE("ceir roundtrip: an unregistered-dialect op round-trips opaquely", "[ceir][roundtrip]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module* const                m     = ctx.create_module();
     Block* const                 entry = ctx.create_block(0U);
@@ -90,7 +90,7 @@ TEST_CASE("ceir roundtrip: an unregistered-dialect op round-trips opaquely", "[c
 
 TEST_CASE("ceir roundtrip: a func's symbol identity survives print then parse", "[ceir][roundtrip][symbol]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module* const                m   = ctx.create_module();
     Block* const                 top = ctx.create_block(0U);
@@ -125,7 +125,7 @@ TEST_CASE("ceir roundtrip: a func's symbol identity survives print then parse", 
 
 TEST_CASE("ceir roundtrip: malformed inputs are rejected with an offset", "[ceir][roundtrip]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
 
     auto rejects = [&root](const char* src) {
         Context     ctx(&root);

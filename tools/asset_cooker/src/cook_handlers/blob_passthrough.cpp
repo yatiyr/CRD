@@ -3,7 +3,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/resources/crdr.hpp>
 
 namespace crd::cooker

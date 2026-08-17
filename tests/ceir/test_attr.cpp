@@ -4,7 +4,7 @@
 
 #include <crd/ceir/ceir.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -13,7 +13,7 @@ namespace fn = crd::ceir::func;
 
 TEST_CASE("ceir attr: identical values intern to one AttrId; kind + value both matter", "[ceir][attr]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
 
     CHECK(ctx.attr_int(42) == ctx.attr_int(42));                     // dedup
@@ -29,7 +29,7 @@ TEST_CASE("ceir attr: identical values intern to one AttrId; kind + value both m
 
 TEST_CASE("ceir attr: typed values round-trip through the intern table", "[ceir][attr]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
 
     const AttrValue i = ctx.attr_value(ctx.attr_int(-7));
@@ -60,7 +60,7 @@ TEST_CASE("ceir attr: typed values round-trip through the intern table", "[ceir]
 
 TEST_CASE("ceir attr: an op's attribute dict - set, lookup by name, overwrite-in-place", "[ceir][attr]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
 
     Operation* op = ctx.create_operation(ctx.intern_op("test", "op"), {}, 0U);
@@ -90,7 +90,7 @@ TEST_CASE("ceir attr: an op's attribute dict - set, lookup by name, overwrite-in
 TEST_CASE("ceir attr: func.call's callee is a SymbolRef attribute (dissolves the CEIR-1b side-table)",
           "[ceir][attr][func]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module*                      m = ctx.create_module();
 
@@ -109,7 +109,7 @@ TEST_CASE("ceir attr: func.call's callee is a SymbolRef attribute (dissolves the
 TEST_CASE("ceir source-map: file registration dedups; ids stable; SourceLoc provenance round-trips",
           "[ceir][provenance]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
 
     const crd::u32 a = ctx.register_file("a.crd");

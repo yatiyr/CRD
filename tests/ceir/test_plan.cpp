@@ -15,7 +15,7 @@
 
 #include "corpus.hpp" // CEIR-11b stage 5: the SHARED corpus builder (5z/6z/async/tasks/composing)
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -83,7 +83,7 @@ Array<i64> differential(Context& ctx, Module& m, StringView entry, ConstSpan<i64
 
 TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on straight-line arith", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -105,7 +105,7 @@ TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on straight-li
 
 TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on cmpi predicates", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -127,7 +127,7 @@ TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on cmpi predic
 
 TEST_CASE("ceir 11b: the compiler REJECTS a not-yet-supported op with a typed CompileError", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -173,7 +173,7 @@ void yield1(Context& ctx, Block* b, Value* v)
 
 TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on core.if branch forwarding", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     const OpId                   cif = ctx.intern_op("core", "if");
@@ -203,7 +203,7 @@ TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on core.if bra
 
 TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on a bounded core.for (statement)", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     const OpId                   cfor = ctx.intern_op("core", "for");
@@ -223,7 +223,7 @@ TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on a bounded c
 
 TEST_CASE("ceir 11b: a runtime RunError (BadForStep / SelectorOutOfRange) agrees with the reference", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     SECTION("for step 0 -> BadForStep in both engines")
@@ -272,7 +272,7 @@ TEST_CASE("ceir 11b: a runtime RunError (BadForStep / SelectorOutOfRange) agrees
 
 TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on a state cell read (returns init)", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     const OpId                   statek = ctx.intern_op("core", "state");
@@ -290,7 +290,7 @@ TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on a state cel
 
 TEST_CASE("ceir 11b: a for+state accumulator's LATCHED cell agrees with the reference (cell inspection)", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     const OpId                   statek = ctx.intern_op("core", "state");
@@ -334,7 +334,7 @@ TEST_CASE("ceir 11b: a for+state accumulator's LATCHED cell agrees with the refe
 
 TEST_CASE("ceir 11b: a depth-2 state ring wraps in lockstep with the reference (delay-line witness)", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     const OpId                   statek = ctx.intern_op("core", "state");
@@ -377,7 +377,7 @@ TEST_CASE("ceir 11b: a depth-2 state ring wraps in lockstep with the reference (
 
 TEST_CASE("ceir 11b: core.delay and core.history route to the same cell mechanism as core.state", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     const OpId                   delayk = ctx.intern_op("core", "delay");
@@ -403,7 +403,7 @@ TEST_CASE("ceir 11b: core.delay and core.history route to the same cell mechanis
 
 TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on a basic func.call", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -424,7 +424,7 @@ TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on a basic fun
 
 TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on a nested func.call", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -455,7 +455,7 @@ TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on a nested fu
 
 TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on shallow RECURSION (sum n..1)", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     const OpId                   cif = ctx.intern_op("core", "if");
@@ -493,7 +493,7 @@ TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on shallow REC
 
 TEST_CASE("ceir 11b: a state cell in a callee called TWICE is GLOBAL per-op, agreeing with the reference", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     const OpId                   statek = ctx.intern_op("core", "state");
@@ -537,7 +537,7 @@ TEST_CASE("ceir 11b: a state cell in a callee called TWICE is GLOBAL per-op, agr
 
 TEST_CASE("ceir 11b: the compiler REJECTS an unresolved callee and a call/param arity mismatch", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     {
@@ -588,7 +588,7 @@ Operation* mktok(Context& ctx, const Ops& o, Block* b, StringView dialect, Strin
 
 TEST_CASE("ceir 11b: async.launch -> await round-trips a token's yields", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -606,7 +606,7 @@ TEST_CASE("ceir 11b: async.launch -> await round-trips a token's yields", "[ceir
 
 TEST_CASE("ceir 11b: a token launched in a CALLEE is awaited in the CALLER (run-global store witness)", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -631,7 +631,7 @@ TEST_CASE("ceir 11b: a token launched in a CALLEE is awaited in the CALLER (run-
 
 TEST_CASE("ceir 11b: a task.continuation binds the antecedent yields as its body args", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -656,7 +656,7 @@ TEST_CASE("ceir 11b: a task.continuation binds the antecedent yields as its body
 
 TEST_CASE("ceir 11b: async.join concatenates its input tokens' yields", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -678,7 +678,7 @@ TEST_CASE("ceir 11b: async.join concatenates its input tokens' yields", "[ceir][
 
 TEST_CASE("ceir 11b: async.race yields the deterministic winner index 0", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -695,7 +695,7 @@ TEST_CASE("ceir 11b: async.race yields the deterministic winner index 0", "[ceir
 
 TEST_CASE("ceir 11b: async.cancel consumes a token and no-ops (both engines)", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -711,7 +711,7 @@ TEST_CASE("ceir 11b: async.cancel consumes a token and no-ops (both engines)", "
 
 TEST_CASE("ceir 11b: task.spawn -> fiber_wait routes to the same launch/await mechanism as async", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -729,7 +729,7 @@ TEST_CASE("ceir 11b: task.spawn -> fiber_wait routes to the same launch/await me
 
 TEST_CASE("ceir 11b: await of an invalid token handle -> BadToken agrees with the reference", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -757,7 +757,7 @@ TEST_CASE("ceir 11b: await of an invalid token handle -> BadToken agrees with th
 
 TEST_CASE("ceir 11b: a continuation body-arity mismatch -> ContinuationArity agrees with the reference", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -811,7 +811,7 @@ Operation* mkdp(Context& ctx, const Ops& o, Block* b, StringView name, ConstSpan
 
 TEST_CASE("ceir 11b: a task.parallel_for's per-index map agrees with the reference (map inspection)", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -851,7 +851,7 @@ TEST_CASE("ceir 11b: a task.parallel_for's per-index map agrees with the referen
 
 TEST_CASE("ceir 11b: a NON-ASSOCIATIVE map_reduce folds in index order, agreeing with the reference", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -875,7 +875,7 @@ TEST_CASE("ceir 11b: a NON-ASSOCIATIVE map_reduce folds in index order, agreeing
 
 TEST_CASE("ceir 11b: an ISOLATED parallel_for body that reads an outer capture is a compile reject", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -899,7 +899,7 @@ TEST_CASE("ceir 11b: an ISOLATED parallel_for body that reads an outer capture i
 
 TEST_CASE("ceir 11b: a STATEFUL parallel_for body rejects in both engines (compile vs runtime)", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     const OpId                   statek = ctx.intern_op("core", "state");
@@ -933,7 +933,7 @@ TEST_CASE("ceir 11b: a STATEFUL parallel_for body rejects in both engines (compi
 
 TEST_CASE("ceir 11b: a parallel_for with step 0 -> BadForStep agrees with the reference (runtime)", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -963,7 +963,7 @@ TEST_CASE("ceir 11b: a parallel_for with step 0 -> BadForStep agrees with the re
 
 TEST_CASE("ceir 11b: an empty-range parallel_for yields an empty map in both engines", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -997,7 +997,7 @@ TEST_CASE("ceir 11b: an empty-range parallel_for yields an empty map in both eng
 
 TEST_CASE("ceir 11b: a parallel_for body has a FRESH token store -> await of a parent handle is BadToken", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -1034,7 +1034,7 @@ TEST_CASE("ceir 11b: a parallel_for body has a FRESH token store -> await of a p
 
 TEST_CASE("ceir 11b: a parallel_for body's launched-token handles number from 0 (fresh store), not parent-global", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -1139,7 +1139,7 @@ Array<i64> corpus_differential(Context& ctx, const corpus::Built& built, StringV
 
 TEST_CASE("ceir 11b corpus: the 5z band-5 gate (loop+match+if+calls+state) agrees end-to-end", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const corpus::Kit            o(ctx);
     const corpus::Built          g = corpus::build_5z(ctx, o);
@@ -1151,7 +1151,7 @@ TEST_CASE("ceir 11b corpus: the 5z band-5 gate (loop+match+if+calls+state) agree
 
 TEST_CASE("ceir 11b corpus: the 6z non-associative map_reduce agrees end-to-end", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const corpus::Kit            o(ctx);
     const corpus::Built          g = corpus::build_6z(ctx, o);
@@ -1160,7 +1160,7 @@ TEST_CASE("ceir 11b corpus: the 6z non-associative map_reduce agrees end-to-end"
 
 TEST_CASE("ceir 11b corpus: the async program (launch/await/join/continuation) agrees end-to-end", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const corpus::Kit            o(ctx);
     const corpus::Built          g = corpus::build_async(ctx, o);
@@ -1169,7 +1169,7 @@ TEST_CASE("ceir 11b corpus: the async program (launch/await/join/continuation) a
 
 TEST_CASE("ceir 11b corpus: the six task ops (spawn/main_thread/worker/group/fiber_wait/continuation) agree", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const corpus::Kit            o(ctx);
     const corpus::Built          g = corpus::build_tasks(ctx, o);
@@ -1178,7 +1178,7 @@ TEST_CASE("ceir 11b corpus: the six task ops (spawn/main_thread/worker/group/fib
 
 TEST_CASE("ceir 11b corpus: the COMPOSING program (all dialects: arith+cf+state+calls+async+task+dp) agrees", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const corpus::Kit            o(ctx);
     const corpus::Built          g = corpus::build_composing(ctx, o);
@@ -1189,7 +1189,7 @@ TEST_CASE("ceir 11b corpus: the COMPOSING program (all dialects: arith+cf+state+
 
 TEST_CASE("ceir 11b corpus: the sec-121 no-privileged-path property at the PLAN layer (cooked twin)", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     // â­ a cooked->loaded module compiles to BYTE-IDENTICAL results vs its builder-form twin. Compile BOTH twins, run both
     // through the COMPILED tier, compare values + cells + map_outputs ARRAYS. â›” NO handles â€” the loaded module's ops are
     // different pointers, but dense cell/map indices are assigned by COMPILE ORDER, so structurally-identical twins align.
@@ -1232,7 +1232,7 @@ TEST_CASE("ceir 11b corpus: the sec-121 no-privileged-path property at the PLAN 
 
 TEST_CASE("ceir 11b: a control-flow op NESTED in a control-flow op selects the right child (nested-cf regression)", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const corpus::Kit            o(ctx);
     Module* const                m = ctx.create_module();
@@ -1293,7 +1293,7 @@ void seam_post(crd::u8 /*op*/, void* u) { static_cast<SeamCount*>(u)->post++; }
 
 TEST_CASE("ceir 11c: the run seam fires pre/post per dispatched instr and is OBSERVATION-ONLY", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const corpus::Kit            o(ctx);
     const corpus::Built          g = corpus::build_composing(ctx, o); // the richest program (all dialects)
@@ -1325,7 +1325,7 @@ TEST_CASE("ceir 11c: the run seam fires pre/post per dispatched instr and is OBS
 
 TEST_CASE("ceir 11c: an erroring run leaves the seam UNBALANCED (pre > post)", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -1381,7 +1381,7 @@ private:
 
 TEST_CASE("ceir 11z: the compiled hot loop is ALLOCATION-FREE (alloc count independent of loop trip count)", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     // @main(){ for(0,M,1){ iv: muli(iv,iv) }; return const 0 } — a pure-arith loop body. The RUN allocates only its fixed
     // setup (the frame stack + the result array); the HOT LOOP does ZERO heap per iteration, so the alloc COUNT is
     // INDEPENDENT of M. ⛔ run with hooks NULL — the shipping path 11z audits. Compile uses `root` (uncounted); the RUN
@@ -1417,7 +1417,7 @@ TEST_CASE("ceir 11z: the compiled hot loop is ALLOCATION-FREE (alloc count indep
 
 TEST_CASE("ceir 11z: a compiled plan runs with NO Context -- the hot loop touches no string / attr table", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     plan::CompileResult          cr(&root); // outer scope — outlives the Context below
     {
         Context           ctx(&root);
@@ -1442,7 +1442,7 @@ TEST_CASE("ceir 11z: a compiled plan runs with NO Context -- the hot loop touche
 
 TEST_CASE("ceir 11z: cells + call frames are AMORTIZED-arena (steady-state zero-alloc across loop iterations)", "[ceir][plan]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     // @inc(%x){ return x + 1 }   @main(){ for(0,M,1){ iv: %c = call inc(iv); %acc = state(0, acc + c) }; return 0 }
     // ⭐ The §153 amortized-arena claim (ADR-0123 §2.2) — the interesting op classes the arith-only audit does NOT cover:
     // the FIRST iteration init-fills the state ring + grows the call-frame stack (one-time); STEADY STATE is ZERO

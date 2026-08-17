@@ -13,7 +13,7 @@
 #include <crd/ceir/gen/transfer_ops.hpp>
 #include <crd/ceir/print.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -104,7 +104,7 @@ Operation* find_op(const Context& ctx, Module& m, containers::StringView qual)
 TEST_CASE("ceir 13b: well-formed transfers (incl. buffer-image copy and view subresource) verify and round-trip",
           "[ceir][transfer]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     Module* const                m   = ctx.create_module();
@@ -160,7 +160,7 @@ TEST_CASE("ceir 13b: well-formed transfers (incl. buffer-image copy and view sub
 
 TEST_CASE("ceir 13b: find_transfer_misuse rejects every malformed transfer", "[ceir][transfer]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
 
     // OperandNotTransferable: copy dst is an i32 const.
     {
@@ -226,7 +226,7 @@ TEST_CASE("ceir 13b: find_transfer_misuse rejects every malformed transfer", "[c
 
 TEST_CASE("ceir 13b: static effects give a precise upload->readback RAW and no ambient lifetime bleed", "[ceir][transfer]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     const TypeId                 buf = ctx.type_buffer(BufferMode::Plain, ctx.type_f32());

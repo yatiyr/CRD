@@ -3,7 +3,7 @@
 #include <crd/cooker/cook_command.hpp>
 #include <crd/cooker/cook_db.hpp>
 #include <crd/cooker/cook_handler.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/resource_id.hpp>
@@ -14,7 +14,7 @@
 using namespace crd::resources;
 
 // NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
-static crd::memory::MallocAllocator g_alloc;
+static crd::memory::GrowableTlsfAllocator g_alloc;
 // NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
 // ── manifest_dump sub-command ─────────────────────────────────────────────

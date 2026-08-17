@@ -11,7 +11,7 @@
 #include <crd/ceir/context.hpp>
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/gen/resource_ops.hpp> // register_resource_ops (resource.declare — the typed-value seed)
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -59,7 +59,7 @@ Value* mkq(Context& ctx, const WorkKit& k, Block* b) { return mkval(ctx, k, b, w
 
 TEST_CASE("ceir 20a: a well-formed work chain verifies (queue_alloc->produce->consume->compact)", "[ceir][work]")
 {
-    memory::MallocAllocator root;
+    memory::GrowableTlsfAllocator root;
     Context                  ctx(&root);
     const WorkKit            k(ctx);
     Module* const            m = ctx.create_module();
@@ -98,7 +98,7 @@ TEST_CASE("ceir 20a: a well-formed work chain verifies (queue_alloc->produce->co
 
 TEST_CASE("ceir 20a: the work type-chain REJECTS every mistyped operand + bad counts", "[ceir][work]")
 {
-    memory::MallocAllocator root;
+    memory::GrowableTlsfAllocator root;
 
     // QueueTypeMismatch: produce fed a non-queue op(3).
     {

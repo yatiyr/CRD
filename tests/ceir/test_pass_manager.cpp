@@ -6,7 +6,7 @@
 #include <crd/ceir/ceir.hpp>
 #include <crd/ceir/pass_manager.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/memory/construct.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -74,7 +74,7 @@ void append_op(Context& ctx, Module& m) { m.body()->first_block()->append(ctx.cr
 
 TEST_CASE("ceir 8g: an analysis computes once and caches (never-redundant)", "[ceir][analysis]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module* const                m = empty_module(ctx);
     compute_counter()             = 0;
@@ -92,7 +92,7 @@ TEST_CASE("ceir 8g: an analysis computes once and caches (never-redundant)", "[c
 
 TEST_CASE("ceir 8g: invalidation forces recompute; a preserved analysis does not (never-stale + never-redundant)", "[ceir][analysis]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module* const                m = empty_module(ctx);
     compute_counter()             = 0;
@@ -119,7 +119,7 @@ TEST_CASE("ceir 8g: invalidation forces recompute; a preserved analysis does not
 
 TEST_CASE("ceir 8g: the PassManager drives invalidation; unchanged preserves all", "[ceir][pass]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module* const                m = empty_module(ctx);
     compute_counter()             = 0;
@@ -146,7 +146,7 @@ TEST_CASE("ceir 8g: invalidation serves FRESH data, not just a fresh compute-cou
 {
     // ⛔ pins the PROPERTY U-§73 names (never STALE), not merely the compute counter: after a real mutation +
     // invalidation, the analysis result reflects the new IR.
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module* const                m = empty_module(ctx); // 1 op
     compute_counter()             = 0;
@@ -161,7 +161,7 @@ TEST_CASE("ceir 8g: invalidation serves FRESH data, not just a fresh compute-cou
 
 TEST_CASE("ceir 8g: a Fatal diagnostic short-circuits the pass pipeline", "[ceir][pass]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module* const                m = empty_module(ctx);
     AnalysisManager              am(&root);

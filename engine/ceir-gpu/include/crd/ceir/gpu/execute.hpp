@@ -48,6 +48,9 @@ enum class ExecuteError : crd::u8
     AccelBuildFailed,    // a BuildSceneFn hook returned 0 (the acceleration-structure build failed)
     UnresolvedTlas,      // a ray_query's %tlas operand maps to no earlier AccelBuild %result (an unbuilt / misordered scene)
     TraceDispatchFailed, // a TraceDispatchFn hook returned false (the inline-rayQuery dispatch failed on the device)
+    // CEIR-20b (ceir.work execution — the execute_work_lowered surface) — append at end.
+    UnresolvedQueue,    // a DispatchIndirect's %queue resolve_queue hook is null / returned kQueueResolveFailed
+    WorkDispatchFailed, // a WorkDispatchFn hook returned false (the work dispatch failed on the device)
 };
 [[nodiscard]] containers::StringView execute_error_name(ExecuteError e) noexcept;
 
@@ -135,4 +138,99 @@ struct RtHooks
 // itself never touches a queue). Returns the first ExecuteError (or None on success).
 [[nodiscard]] ExecuteError execute_rt_lowered(const Context& ctx, containers::ConstSpan<LoweredCommand> commands,
                                               const RtHooks& hooks, containers::ConstSpan<RtHostBinding> bindings);
+// ── CEIR-20b: the ceir.work EXECUTION seam (§43) ─────────────────────────────────────────────────────────────────────
+// A THIRD executor beside execute_lowered / execute_rt_lowered, consuming the SAME 13d-lowered list (the
+// render_materialize precedent: ONE lowering, surface-specific consumers). It is the GENERIC host driver for a
+// DEVICE-GENERATED-WORK program: walk the plan, run each stage, and SIZE a consume/compact from the queue's DEVICE
+// count (read back to host — the 19c host while(count>0) loop, now data-driven from the authored ceir.work asset
+// instead of a hand-written C++ loop). ⛔ ceir-gpu links NO backend → caller HOOKS (the execute_rt_lowered precedent):
+// the gate/renderer supplies lambdas over its Vulkan/DX12 RT (or compute) context. Barriers are INERT (submit+wait per
+// stage lives in the caller's dispatch hook — the readback of stage N coherent before stage N+1, the §134 determinism
+// seam). NOTHING wavefront-specific lives here (the algorithm is the authored .frame.toml + .ckir kernels; this
+// executor runs ANY ceir.work program).
+
+// An opaque, caller-owned DEVICE-BUFFER handle (the RtSceneHandle precedent — ceir-gpu names no backend; it only
+// threads the handle the caller mapped a %queue / binding resource to a NAMED device buffer). ⛔ DEVICE-RESIDENT, not
+// host spans: the queue's count lives on-device (produce writes it, an indirect consume reads it), NEVER round-tripping
+// host — the ceir.work distinction (host spans would be the 19c host-driven loop 20b retires; the "generic
+// queue-buffer" 20c consumes). 0 ⇒ unresolved.
+using WorkBufferHandle = crd::u64;
+
+// One resolved resource: a CEIR resource `Value*` → the caller's NAMED device-buffer handle. The caller registers every
+// queue AND binding ONCE (the gate reads a named buffer back via debug_scene_buffer after the run);
+// execute_work_lowered looks each descriptor operand up here by `resource_root` (a work.queue Extern passes through
+// resource_root unchanged, so queues + buffers key uniformly — the ResolvedBinding precedent, DEVICE-RESIDENT).
+// Unmapped ⇒ UnmappedBinding.
+struct WorkResolvedBinding
+{
+    const Value*     resource = nullptr;
+    WorkBufferHandle buffer   = 0;
+};
+
+// Resolve a work op's kernel_ref (its `kernel` symbol) to the COMPILED shader BLOB (SPIR-V/DXIL — the KernelBytesFn
+// precedent). Empty ⇒ UnresolvedKernel. The pure validator may return a SENTINEL non-empty span (never dereferenced
+// without a device).
+using WorkKernelBytesFn = containers::ConstSpan<crd::u8> (*)(const Operation* work_op, void* user);
+
+// DIRECT dispatch (work.produce): run `kernel_bytes` over the const `gx*gy*gz` grid, binding `handles[i]` at descriptor
+// i (the op's RESOURCE operands in order — the queue THEN the other bindings; the queue IS a descriptor the producer
+// writes). ⛔ The caller's lambda binds a %tlas when `work_op` TRACES (the wavefront's produce=trace) — the `work_op`
+// back-pointer carries that (the RtHooks single-hook precedent, TLAS folded into the caller). Returns false on failure.
+using WorkDispatchFn = bool (*)(const Operation* work_op, containers::ConstSpan<crd::u8> kernel_bytes,
+                                containers::ConstSpan<WorkBufferHandle> handles, crd::u32 gx, crd::u32 gy, crd::u32 gz,
+                                void* user);
+
+// INDIRECT dispatch (work.consume / work.compact): the launch grid is the `queue` handle's DEVICE count — the caller
+// does an INDIRECT dispatch (vkCmdDispatchIndirect / ExecuteIndirect) reading the count from that buffer (its
+// (count,1,1) header at offset 0 doubles as the indirect args — advisor design-lock), so SIZING never round-trips to
+// host. `handles` are the op's resource descriptors in order (queue/src first). ⛔ ONLY dispatch sizing is
+// device-driven; LOOP TERMINATION stays host-read (submit+wait per stage — the §134 line-2789 seam), a multi-bounce
+// concern (declared-forward, not the single-bounce wavefront). The caller binds a %tlas when `work_op` traces
+// (consume=shade). false ⇒ failure.
+using WorkDispatchIndirectFn = bool (*)(const Operation* work_op, WorkBufferHandle queue,
+                                        containers::ConstSpan<crd::u8> kernel_bytes,
+                                        containers::ConstSpan<WorkBufferHandle> handles, void* user);
+
+// Record a memory barrier `from→to` on `buffer` into the caller's recorder (rec.barrier). ⛔ execute_work_lowered runs
+// the chain in ONE submit (the single-bounce body — the 6-dispatch FFT precedent; per-stage submits return only for
+// multi-bounce host-decision termination, ledgered), so the inter-stage hazards the plan carries (lower_region's
+// conservative whole-Memory gather) must be REPLAYED here — the RtHostBinding host-span model made them inert, the
+// DEVICE-RESIDENT model does not. Naming crd::gpu::ComputeAccess is fine (execute.hpp already names the abstract RHI —
+// the rule bars BACKENDS, not crd::gpu). Nullable ⇒ inert (a future per-stage-submit caller stays valid). The one
+// hazard the plan can't express — a produce-written queue read by vkCmdDispatchIndirect — the executor owns: it hooks
+// (queue, ShaderWrite, IndirectRead) before each indirect dispatch (the C5 pattern ComputeAccess::IndirectRead was
+// added for).
+using WorkBarrierFn = bool (*)(WorkBufferHandle buffer, crd::gpu::ComputeAccess from, crd::gpu::ComputeAccess to,
+                               void* user);
+
+// The caller hooks bundled (the per-backend work surface — the RtHooks shape). ⛔ TWO dispatch hooks: a DIRECT
+// (produce, const grid) and an INDIRECT (consume/compact, device-count) — the ceir.work distinction from
+// compute.dispatch is device-driven sizing. ⛔ Hooks RECORD into an already-begin()-ed recorder — the caller owns
+// begin()/submit_and_wait() + the boundary transitions (upload TransferDst→ShaderWrite on the queue since produce
+// WRITES it / →ShaderRead elsewhere; ShaderWrite→TransferSrc before readback — the dispatch_kernel_1wg mold); the
+// executor owns the INTER-STAGE barriers (via `barrier`).
+struct WorkHooks
+{
+    WorkKernelBytesFn      kernel_bytes      = nullptr;
+    WorkDispatchFn         dispatch          = nullptr; // DIRECT (produce)
+    WorkDispatchIndirectFn dispatch_indirect = nullptr; // INDIRECT (consume/compact) — device reads the queue count
+    WorkBarrierFn          barrier           = nullptr; // inter-stage memory barriers (nullable ⇒ inert)
+    void*                  user              = nullptr;
+};
+
+// PURE structural validation of the ceir.work command list (the always-runs half — the validate_rt_lowered mirror). For
+// each Dispatch/DispatchIndirect: it is a work op (work.produce/consume/compact — a non-work Dispatch is not this
+// surface), kernel_bytes non-empty (UnresolvedKernel), a DispatchIndirect has its %queue operand (operand 0, →
+// UnresolvedQueue). A Barrier is inert; a foreign kind (Transfer/render/RT) ⇒ UnsupportedCommand. Device-free (hooks
+// may return sentinels). First error (or None).
+[[nodiscard]] ExecuteError validate_work_lowered(const Context& ctx, containers::ConstSpan<LoweredCommand> commands,
+                                                 const WorkHooks& hooks, containers::ConstSpan<WorkResolvedBinding> bindings);
+
+// Validate, then DRIVE the work chain via the hooks: a `Dispatch` (produce) → the DIRECT dispatch hook (const grid); a
+// `DispatchIndirect` (consume/compact) → the INDIRECT dispatch hook over the %queue (operand 0) — the device reads the
+// count, the host never sizes it. Bindings (operands after the fixed queue prefix: produce 4, consume 1, compact 2)
+// resolve to host spans in operand order. ⛔ device-driving THROUGH the hooks (ceir-gpu never touches a queue). First
+// ExecuteError (or None).
+[[nodiscard]] ExecuteError execute_work_lowered(const Context& ctx, containers::ConstSpan<LoweredCommand> commands,
+                                                const WorkHooks& hooks, containers::ConstSpan<WorkResolvedBinding> bindings);
 } // namespace crd::ceir::gpu

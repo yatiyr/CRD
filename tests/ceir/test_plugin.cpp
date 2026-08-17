@@ -23,7 +23,7 @@
 #include <crd/ceir/provider.hpp>  // IExecutionProvider
 #include <crd/ceir/rewrite.hpp>   // RewritePattern / try_apply
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -134,7 +134,7 @@ using plugin_ext::Plugin;
 
 TEST_CASE("ceir 9h: the full external-plugin surface registers through the public open-world doors", "[ceir][plugin]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Plugin                 p = plugin_ext::register_plugin(ctx);
 
@@ -159,7 +159,7 @@ TEST_CASE("ceir 9h: the full external-plugin surface registers through the publi
 
 TEST_CASE("ceir 9h: the plugin custom type and attr preserve through an unregistered Context and fuzz-sweep clean", "[ceir][plugin]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Plugin                 p = plugin_ext::register_plugin(ctx);
 
@@ -210,7 +210,7 @@ TEST_CASE("ceir 9h: the plugin custom type and attr preserve through an unregist
 
 TEST_CASE("ceir 9h: the plugin rewrite A(B(x)) to C(x) fires through the 8g try_apply and mutates the IR", "[ceir][plugin]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Plugin                 p = plugin_ext::register_plugin(ctx);
 
@@ -246,7 +246,7 @@ TEST_CASE("ceir 9h: the plugin rewrite A(B(x)) to C(x) fires through the 8g try_
 
 TEST_CASE("ceir 9h: the 9g agent path discovers and authors a plugin op over a hand-built schema table", "[ceir][plugin]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Plugin                 p = plugin_ext::register_plugin(ctx);
     (void)p;
@@ -295,7 +295,7 @@ TEST_CASE("ceir 9h: the 9g agent path discovers and authors a plugin op over a h
 
 TEST_CASE("ceir 9h: the plugin provider advertises its ops and declines foreign ones", "[ceir][plugin]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Plugin                 p = plugin_ext::register_plugin(ctx);
 

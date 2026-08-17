@@ -11,7 +11,7 @@
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/program_asset.hpp> // interface_hash
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -57,7 +57,7 @@ bool verify_no_range(const Context&, const EffectRecord& e) noexcept { return e.
 
 TEST_CASE("ceir 8c: a >=bit-32 U-19 family survives the interface hash (the u32-truncation catcher)", "[ceir][effect-open]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Dialect* const               d = ctx.register_dialect("efx");
     // AgentAction is ordinal 34 (bit 34); MemoryReadWrite is ordinal 2 (bit 2). A u32 family mask would truncate
@@ -74,7 +74,7 @@ TEST_CASE("ceir 8c: a >=bit-32 U-19 family survives the interface hash (the u32-
 
 TEST_CASE("ceir 8c: the u64 mask carries a >=bit-32 family through effective_effects without truncation", "[ceir][effect-open]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Dialect* const               d = ctx.register_dialect("efx");
     const EffectRecord           agent[1] = {{EffectFamily::AgentAction, EffectTarget::None, 0U, 0U}};
@@ -112,7 +112,7 @@ TEST_CASE("ceir 8c: a >=bit-32 callee family lifts transitively into the caller'
         fn::func_body_block(caller)->append(fn::create_call(ctx, "callee", ConstSpan<Value*>{}, 0U));
         return m;
     };
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ca(&root);
     Context                      cb(&root);
     const auto ha = interface_hash(ca, *build(ca, /*callee_has_agent*/ true), &root);
@@ -122,7 +122,7 @@ TEST_CASE("ceir 8c: a >=bit-32 callee family lifts transitively into the caller'
 
 TEST_CASE("ceir 8c: an Extern location resolves to its registered class; UNREGISTERED is Universe (EMPTY!=UNKNOWN)", "[ceir][effect-open]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Dialect* const               fs = ctx.register_dialect("testfs");
     const LocationClassId io = fs->register_location_class("file_handle", {nullptr, ResourceClass::Io, 1U});
@@ -140,7 +140,7 @@ TEST_CASE("ceir 8c: an Extern location resolves to its registered class; UNREGIS
 
 TEST_CASE("ceir 8c: an UNREGISTERED Extern location refuses to reorder against everything; distinct classes do not hazard", "[ceir][effect-open]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Dialect* const               efx = ctx.register_dialect("efx");
     Dialect* const               fs  = ctx.register_dialect("testfs");
@@ -173,7 +173,7 @@ TEST_CASE("ceir 8c: an UNREGISTERED Extern location refuses to reorder against e
 
 TEST_CASE("ceir 8c: a registered location class's verify hook rejects an invalid record (the factory leg)", "[ceir][effect-open]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Dialect* const               fs = ctx.register_dialect("testfs");
     const LocationClassId strict = fs->register_location_class("strict", {&verify_no_range, ResourceClass::Io, 1U});
@@ -192,7 +192,7 @@ TEST_CASE("ceir 8c: AgentAction/TransactionBoundary are forbidden in an audio/de
     // The SECOND family consumer (§32 effect_legal_in_region): the audio-RT denylist. CEIR-8c's deliberate classification
     // forbids the two unbounded/blocking families (AgentAction ~ ExternalCall, TransactionBoundary ~ Synchronization) and
     // leaves the bounded domain read/writes legal (like SceneWrite/EcsWrite, already legal in an audio-RT region).
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Dialect* const               d = ctx.register_dialect("efx");
     const EffectRecord           agent[1] = {{EffectFamily::AgentAction, EffectTarget::None, 0U, 0U}};
@@ -230,7 +230,7 @@ TEST_CASE("ceir 8c: effects are registration metadata - a module blob round-trip
 {
     CHECK(kBinaryVersion == 2U); // ⛔ the module binary format is UNCHANGED by 8c (effects aren't serialized in it)
 
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Dialect* const               d = ctx.register_dialect("efx");
     const EffectRecord           agent[1] = {{EffectFamily::AgentAction, EffectTarget::None, 0U, 0U}};

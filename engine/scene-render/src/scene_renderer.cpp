@@ -6977,7 +6977,7 @@ void compute_froxel_slices(const crd::math::Mat4f& view_proj, crd::u32 gx, crd::
     for (crd::u32 i = 0; i <= gz; ++i)
     {
         const crd::f32 f = static_cast<crd::f32>(i) / static_cast<crd::f32>(gz);
-        out_bounds[i]    = ok ? w_near * std::pow(w_far / w_near, f) : (w_near + (w_far - w_near) * f);
+        out_bounds[i]    = ok ? w_near * crd::math::pow(w_far / w_near, f) : (w_near + (w_far - w_near) * f);
     }
     const crd::f32 wspan = w_far - w_near;
     const crd::f32 inv_span = (wspan != 0.0F && std::isfinite(wspan)) ? 1.0F / wspan : 0.0F;

@@ -44,6 +44,16 @@ enum class LoweredKind : crd::u8
     // ⛔ append at END. `rt.trace` (pipeline) + `rt.sbt_build` lowering is DEFERRED (19z) — the wavefront PT uses inline ray_query.
     RayQuery,
     AccelBuild,
+    // ── CEIR-20b ceir.work (§43): the DEVICE-GENERATED-WORK indirect dispatch. `DispatchIndirect` is a work.consume /
+    // work.compact command whose launch grid is the %queue's DEVICE count (NOT a host const grid + NOT a plain args
+    // buffer — the resolver reads the queue's count at execute). ⛔ It targets the WORK executor
+    // (`execute_work_lowered`, a caller-HOOK surface — the execute_rt_lowered precedent; ceir-gpu names no backend);
+    // the %queue(s) + SSBO bindings + kernel_ref ride the `op` back-pointer, resolved by WorkHooks.resolve_queue. The
+    // 13z/14z/19c executors (execute_lowered / render / execute_rt_lowered) REJECT it TYPED (UnsupportedCommand — the
+    // Transfer/RayQuery named-forward mirror). work.produce (a const-grid append) lowers to the ordinary `Dispatch`
+    // (its %queue rides the op back-pointer, bound by the work executor). ⛔ append at END (the closed-enum widen
+    // discipline — every consumer audited, not just total switches).
+    DispatchIndirect,
 };
 
 // The lowered TRANSFER op (CEIR-13b §50). ⛔ this is our OWN enum — the 5 SHIPPED 13b ops — NOT crd::gpu::TransferKind

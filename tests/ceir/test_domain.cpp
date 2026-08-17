@@ -12,7 +12,7 @@
 #include <crd/ceir/parse.hpp>
 #include <crd/ceir/print.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -50,7 +50,7 @@ Operation* tagged_region(Context& ctx, const IoOps& io, Block* parent, const Reg
 
 TEST_CASE("ceir domain: op_domain round-trips the 2a schema; EMPTY!=UNKNOWN", "[ceir][domain]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     (void)arith::register_arith_ops(ctx);
     (void)test::register_test_ops(ctx);
@@ -103,7 +103,7 @@ TEST_CASE("ceir domain: effect_legal_in_region enforces the sec 32 audio rule (m
 
 TEST_CASE("ceir domain: the region_exec tag is module CONTENT; the verifier re-fires after text + binary", "[ceir][domain]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const IoOps                  io(ctx);
     Module* const                m   = ctx.create_module();
@@ -141,7 +141,7 @@ TEST_CASE("ceir domain: the region_exec tag is module CONTENT; the verifier re-f
 
 TEST_CASE("ceir domain: find_domain_violation flags a forbidden effect in an audio region, spares a legal one", "[ceir][domain]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     (void)arith::register_arith_ops(ctx);
     const IoOps                  io(ctx);
@@ -167,7 +167,7 @@ TEST_CASE("ceir domain: find_domain_violation flags a forbidden effect in an aud
 
 TEST_CASE("ceir domain: an UNREGISTERED op in an audio region is flagged (maximally effectful)", "[ceir][domain]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const IoOps                  io(ctx);
 
@@ -196,7 +196,7 @@ TEST_CASE("ceir domain: an UNREGISTERED op in an audio region is flagged (maxima
 
 TEST_CASE("ceir domain: the tag is innermost-wins; a nested override can make a forbidden effect legal", "[ceir][domain]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const IoOps                  io(ctx);
 
@@ -220,7 +220,7 @@ TEST_CASE("ceir domain: the tag is innermost-wins; a nested override can make a 
 
 TEST_CASE("ceir domain: an untagged intermediate inherits the outer tag AND owner; a present-empty tag unconstrains", "[ceir][domain]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const IoOps                  io(ctx);
 
@@ -249,7 +249,7 @@ TEST_CASE("ceir domain: an untagged intermediate inherits the outer tag AND owne
 
 TEST_CASE("ceir domain: a corrupt region_exec attr is a violation pointing at the owner", "[ceir][domain]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const IoOps                  io(ctx);
 

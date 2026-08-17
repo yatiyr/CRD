@@ -17,7 +17,7 @@
 
 #include <crd/kir/ckir.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include "../gpu-shared/ceir_render_triangle.hpp" // the SHARED CEIR render program + the executor wrapper
@@ -36,7 +36,7 @@ namespace g   = crd::gpu;
 TEST_CASE("ceir 14z-3: the CEIR triangle render is clean and lowers to BeginRender Draw EndRender (device-free)",
           "[ceir][ceir-gpu][render][vulkan]")
 {
-    crd::memory::MallocAllocator      root;
+    crd::memory::GrowableTlsfAllocator      root;
     ce::Context                       ctx(&root);
     const cgt::CeirRenderProgram      prog = cgt::build_ceir_triangle_render(ctx, 32U);
     REQUIRE(prog.module != nullptr);
@@ -91,7 +91,7 @@ TEST_CASE("ceir 14z-3: the CEIR triangle renders RED on a Vulkan raster encoder 
     REQUIRE(target != nullptr);
 
     // build the CEIR render program (its resolvers return the REAL device target + program).
-    crd::memory::MallocAllocator croot;
+    crd::memory::GrowableTlsfAllocator croot;
     ce::Context                  cctx(&croot);
     const cgt::CeirRenderProgram rp = cgt::build_ceir_triangle_render(cctx, dim);
     CHECK(cctx.find_render_misuse(*rp.module).kind == ce::RenderMisuseKind::None);
@@ -155,7 +155,7 @@ TEST_CASE("ceir 14z-4a: the CEIR triangle renders RED through the Vulkan FRAME G
     auto               target = raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
 
-    crd::memory::MallocAllocator croot;
+    crd::memory::GrowableTlsfAllocator croot;
     ce::Context                  cctx(&croot);
     const cgt::CeirRenderProgram rp = cgt::build_ceir_triangle_render(cctx, dim);
     CHECK(cctx.find_render_misuse(*rp.module).kind == ce::RenderMisuseKind::None);
@@ -217,7 +217,7 @@ TEST_CASE("ceir 14z-4c: a TWO-SCOPE CEIR program renders into TWO targets throug
     REQUIRE(target_a != nullptr);
     REQUIRE(target_b != nullptr);
 
-    crd::memory::MallocAllocator   croot;
+    crd::memory::GrowableTlsfAllocator   croot;
     ce::Context                    cctx(&croot);
     const cgt::CeirTwoScopeProgram rp = cgt::build_ceir_two_scope_render(cctx, dim);
     CHECK(cctx.find_render_misuse(*rp.module).kind == ce::RenderMisuseKind::None);
@@ -301,7 +301,7 @@ TEST_CASE("ceir 14z-4c: a CEIR MRT program drives draw_storage_mrt RED@0/GREEN@1
     REQUIRE(geo != nullptr);
     REQUIRE(raster->upload_storage(*geo, 0U, verts, static_cast<crd::u32>(sizeof(verts))));
 
-    crd::memory::MallocAllocator croot;
+    crd::memory::GrowableTlsfAllocator croot;
     ce::Context                  cctx(&croot);
     const cgt::CeirMrtProgram    rp = cgt::build_ceir_mrt_render(cctx, dim);
     CHECK(cctx.find_render_misuse(*rp.module).kind == ce::RenderMisuseKind::None);
@@ -384,7 +384,7 @@ TEST_CASE("ceir 14z-4c: a CEIR uint MRT program drives distinct uint clears + id
     REQUIRE(geo != nullptr);
     REQUIRE(raster->upload_storage(*geo, 0U, verts, static_cast<crd::u32>(sizeof(verts))));
 
-    crd::memory::MallocAllocator croot;
+    crd::memory::GrowableTlsfAllocator croot;
     ce::Context                  cctx(&croot);
     const cgt::CeirMrtProgram    rp = cgt::build_ceir_mrt_uint_render(cctx, dim, 100U, 200U);
     CHECK(cctx.find_render_misuse(*rp.module).kind == ce::RenderMisuseKind::None);
@@ -459,7 +459,7 @@ TEST_CASE("ceir 14z-4c: a CEIR MIXED uint+float MRT program renders through the 
     REQUIRE(geo != nullptr);
     REQUIRE(raster->upload_storage(*geo, 0U, verts, static_cast<crd::u32>(sizeof(verts))));
 
-    crd::memory::MallocAllocator croot;
+    crd::memory::GrowableTlsfAllocator croot;
     ce::Context                  cctx(&croot);
     const cgt::CeirMrtProgram    rp = cgt::build_ceir_mrt_mixed_render(cctx, dim, 100U);
     CHECK(cctx.find_render_misuse(*rp.module).kind == ce::RenderMisuseKind::None); // ⭐ verifier accepts a MIXED-format scope
@@ -552,7 +552,7 @@ TEST_CASE("ceir 14z-5: a CEIR depth-only pass renders depth; a later scope occlu
     REQUIRE(geo != nullptr);
     REQUIRE(raster->upload_storage(*geo, 0U, verts, static_cast<crd::u32>(sizeof(verts))));
 
-    crd::memory::MallocAllocator croot;
+    crd::memory::GrowableTlsfAllocator croot;
     ce::Context                  cctx(&croot);
     const cgt::CeirDepthProgram  rp = cgt::build_ceir_depth_occlusion_render(cctx, dim);
     CHECK(cctx.find_render_misuse(*rp.module).kind == ce::RenderMisuseKind::None);
@@ -657,7 +657,7 @@ TEST_CASE("ceir 14z-6: a CEIR indexed-indirect draw pushes the per-sub-draw Draw
     REQUIRE(args_sb != nullptr);
     REQUIRE(raster->upload_storage(*args_sb, 0U, args_words, 2U * stride));
 
-    crd::memory::MallocAllocator  croot;
+    crd::memory::GrowableTlsfAllocator  croot;
     ce::Context                   cctx(&croot);
     const cgt::CeirIndirectProgram rp = cgt::build_ceir_draw_indirect_render(cctx, dim, index_offset);
     CHECK(cctx.find_render_misuse(*rp.module).kind == ce::RenderMisuseKind::None);
@@ -753,7 +753,7 @@ TEST_CASE("ceir 14z-6: a CEIR indexed-indirect-count draw gates sub-draws on the
     auto count_sb = raster->create_storage_buffer(4U);
     REQUIRE(count_sb != nullptr);
 
-    crd::memory::MallocAllocator        croot;
+    crd::memory::GrowableTlsfAllocator        croot;
     ce::Context                         cctx(&croot);
     const cgt::CeirIndirectCountProgram rp = cgt::build_ceir_draw_indirect_count_render(cctx, dim, index_offset);
     CHECK(cctx.find_render_misuse(*rp.module).kind == ce::RenderMisuseKind::None);
@@ -796,7 +796,7 @@ TEST_CASE("ceir 14z-6: a CEIR indexed-indirect-count draw gates sub-draws on the
 TEST_CASE("ceir 14z-7: the CEIR mesh dispatch is clean and lowers to BeginRender Draw EndRender (device-free)",
           "[ceir][ceir-gpu][render][vulkan]")
 {
-    crd::memory::MallocAllocator croot;
+    crd::memory::GrowableTlsfAllocator croot;
     ce::Context                  cctx(&croot);
     const cgt::CeirMeshProgram   rp = cgt::build_ceir_mesh_dispatch_render(cctx, 32U, 1U, 1U, 1U);
     REQUIRE(rp.module != nullptr);
@@ -850,7 +850,7 @@ TEST_CASE("ceir 14z-7: a CEIR mesh dispatch renders the shared triangle through 
     auto               target = raster->create_color_target(dim, dim);
     REQUIRE(target != nullptr);
 
-    crd::memory::MallocAllocator croot;
+    crd::memory::GrowableTlsfAllocator croot;
     ce::Context                  cctx(&croot);
     const cgt::CeirMeshProgram   rp = cgt::build_ceir_mesh_dispatch_render(cctx, dim, 1U, 1U, 1U);
     CHECK(cctx.find_render_misuse(*rp.module).kind == ce::RenderMisuseKind::None);

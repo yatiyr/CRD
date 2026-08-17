@@ -15,7 +15,7 @@
 #include <crd/ceir/print.hpp>
 #include <crd/ceir/program_asset.hpp> // interface_hash
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -107,7 +107,7 @@ String replace_first(const String& s, StringView from, StringView to, crd::memor
 }
 
 // Assert that an attr value round-trips byte-exact through both serial forms (binary + text), in a fresh Context.
-void check_attr_roundtrips(Context& ctx, AttrId v, crd::memory::MallocAllocator& root)
+void check_attr_roundtrips(Context& ctx, AttrId v, crd::memory::GrowableTlsfAllocator& root)
 {
     Module* const   m  = module_with_attr(ctx, v);
     const ByteArray b1 = serialize(ctx, *m, &root);
@@ -125,7 +125,7 @@ void check_attr_roundtrips(Context& ctx, AttrId v, crd::memory::MallocAllocator&
 
 TEST_CASE("ceir 8b: aggregates + wrappers intern/dedup; a DIFFERENT class/type with identical payload is DIFFERENT", "[ceir][extern-attr]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
 
     // Array: order is semantic; length matters; dedup by element sequence.
@@ -161,7 +161,7 @@ TEST_CASE("ceir 8b: aggregates + wrappers intern/dedup; a DIFFERENT class/type w
 
 TEST_CASE("ceir 8b: the aggregate/wrapper fields are kind-scoped, and Extern must name a class (canonicality)", "[ceir][extern-attr]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
 
     // junk `elems` on a scalar Int would print as `42` but intern DISTINCTLY - non-canonical, rejected.
@@ -196,7 +196,7 @@ TEST_CASE("ceir 8b: the aggregate/wrapper fields are kind-scoped, and Extern mus
 
 TEST_CASE("ceir 8b: every new attr kind round-trips text AND binary byte-exact, incl. NESTED (child-first pool)", "[ceir][extern-attr]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const AttrClassId            dim = register_dimension(ctx);
 
@@ -234,7 +234,7 @@ TEST_CASE("ceir 8b: every new attr kind round-trips text AND binary byte-exact, 
 
 TEST_CASE("ceir 8b: THE U-56 headline - an unknown-plugin Extern attr round-trips through an UNREGISTERED Context", "[ceir][extern-attr]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const AttrClassId            dim = register_dimension(ctx);
     Module* const                m   = module_with_attr(ctx, ctx.attr_extern(dim, ctx.attr_int(3)));
@@ -266,7 +266,7 @@ TEST_CASE("ceir 8b: THE U-56 headline - an unknown-plugin Extern attr round-trip
 
 TEST_CASE("ceir 8b: the class verify hook rejects at the decoder + parser (registered-invalid), preserves unregistered", "[ceir][extern-attr]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const AttrClassId            dim = register_dimension(ctx);
     // Build a HAND-CRAFTED invalid Extern (a String payload - the hook requires Int) by going around the factory: the
@@ -295,7 +295,7 @@ TEST_CASE("ceir 8b: the class verify hook rejects at the decoder + parser (regis
 
 TEST_CASE("ceir 8b: the wrapper-composition rule - a wrapper payload is rejected (no wrapper-on-wrapper)", "[ceir][extern-attr]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const AttrClassId            dim = register_dimension(ctx);
     const AttrId                 tc  = ctx.attr_typed(ctx.type_f32(), ctx.attr_int(1)); // a wrapper
@@ -310,7 +310,7 @@ TEST_CASE("ceir 8b: the wrapper-composition rule - a wrapper payload is rejected
 
 TEST_CASE("ceir 8b: an op attribute feeds the CONTENT hash but NOT the interface hash", "[ceir][extern-attr]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const AttrClassId            dim = register_dimension(ctx);
     Module* const a = func_module_with_body_attr(ctx, ctx.attr_extern(dim, ctx.attr_int(1)));
@@ -322,7 +322,7 @@ TEST_CASE("ceir 8b: an op attribute feeds the CONTENT hash but NOT the interface
 
 TEST_CASE("ceir 8b: a blob written by a NEWER attr-class schema version is rejected by an older loader", "[ceir][extern-attr]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      enc(&root);
     const AttrClassId            dim5 = register_dimension(enc, /*version*/ 5U);
     Module* const   m    = module_with_attr(enc, enc.attr_extern(dim5, enc.attr_int(1)));
@@ -354,7 +354,7 @@ TEST_CASE("ceir 8b: a blob written by a NEWER attr-class schema version is rejec
 
 TEST_CASE("ceir 8b: a pre-8b module (scalar attrs only) round-trips byte-exact (no format churn)", "[ceir][extern-attr]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module* const                m     = module_with_attr(ctx, ctx.attr_int(1234));
     const ByteArray              blob1 = serialize(ctx, *m, &root);
@@ -367,7 +367,7 @@ TEST_CASE("ceir 8b: a pre-8b module (scalar attrs only) round-trips byte-exact (
 
 TEST_CASE("ceir 8b: unsorted or duplicate dict keys in TEXT are rejected gracefully (never assert)", "[ceir][extern-attr]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const StringView             keys[2] = {StringView{"a"}, StringView{"b"}};
     const AttrId                 vals[2] = {ctx.attr_int(1), ctx.attr_int(2)};
@@ -397,7 +397,7 @@ TEST_CASE("ceir 8b: unsorted or duplicate dict keys in TEXT are rejected gracefu
 
 TEST_CASE("ceir 8b: empty aggregates round-trip text and binary", "[ceir][extern-attr]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     check_attr_roundtrips(ctx, ctx.intern_attr(AttrValue::of_array(ConstSpan<AttrId>())), root);          // []
     check_attr_roundtrips(ctx, ctx.attr_dict(ConstSpan<StringView>(), ConstSpan<AttrId>()), root);        // {}
@@ -405,7 +405,7 @@ TEST_CASE("ceir 8b: empty aggregates round-trip text and binary", "[ceir][extern
 
 TEST_CASE("ceir 8b: a pathologically nested attribute is rejected by the parser depth guard (no crash)", "[ceir][extern-attr]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     AttrId                       v = ctx.attr_int(1);
     for (u32 i = 0; i < 80U; ++i) // 80-deep nest (> kMaxTypeDepth=64); the factory + printer have no depth cap
@@ -425,7 +425,7 @@ TEST_CASE("ceir 8b: single-byte corruption of an aggregate-attr blob never crash
     // The hostile-input guard, EXTENDED over the aggregate/wrapper decode arms (element counts, child ATTR refs, the
     // class STRP index, version, the verify hook). ASan/UBSan is the memory-safety proof; ok/!ok both acceptable, the
     // ONLY invariant is no crash. Swept BOTH registered (the hook + version arms) and unregistered (the preserve arm).
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const AttrClassId            dim = register_dimension(ctx);
     const AttrId     e2[2] = {ctx.attr_typed(ctx.type_f32(), ctx.attr_int(1)), ctx.attr_extern(dim, ctx.attr_int(2))};

@@ -24,7 +24,7 @@
 
 #include <crd/math/cmath.hpp> // FFT twiddle tables
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include "../gpu-shared/ceir_execute_1wg.hpp"
@@ -40,7 +40,7 @@ namespace cgt = crd::ceir_gpu_test;
 
 TEST_CASE("ceir 13z: the add CEIR asset lowers to one dispatch over 3 bindings (cuda, device-free always-runs)", "[ceir][ceir-gpu][cuda]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     ce::Context                  cctx(&root);
     const ce::Value*             binds[3];
     ce::Block* const             b = cgt::build_add_ceir_asset(cctx, binds);
@@ -72,7 +72,7 @@ TEST_CASE("ceir 13z: add CEIR asset on CUDA == direct CKIR (byte-identical) + or
     auto pipe = compute.create_pipeline_from_cuda(crd::containers::to_view(kern.source), crd::containers::StringView("ckir"), 3, e.local_size[0], 0U, /*fmad*/ false);
     REQUIRE(pipe != nullptr);
 
-    crd::memory::MallocAllocator croot;
+    crd::memory::GrowableTlsfAllocator croot;
     ce::Context                  cctx(&croot);
     const ce::Value*             binds[3];
     ce::Block* const             blk = cgt::build_add_ceir_asset(cctx, binds);
@@ -127,7 +127,7 @@ TEST_CASE("ceir 13z: reduce CEIR asset on CUDA == direct CKIR (byte-identical) +
     auto pipe = compute.create_pipeline_from_cuda(crd::containers::to_view(kern.source), crd::containers::StringView("ckir"), 2, e.local_size[0], 0U, /*fmad*/ false);
     REQUIRE(pipe != nullptr);
 
-    crd::memory::MallocAllocator croot;
+    crd::memory::GrowableTlsfAllocator croot;
     ce::Context                  cctx(&croot);
     const cgt::CeirDispatchAsset asset = cgt::build_ceir_dispatch_asset(cctx, "reduce", "r,w", 2);
     crd::containers::Array<ceg::LoweredCommand> cmds(&croot);
@@ -181,7 +181,7 @@ TEST_CASE("ceir 13z: scan CEIR asset on CUDA == direct CKIR (byte-identical) + o
     auto pipe = compute.create_pipeline_from_cuda(crd::containers::to_view(kern.source), crd::containers::StringView("ckir"), 3, e.local_size[0], 0U, /*fmad*/ false);
     REQUIRE(pipe != nullptr);
 
-    crd::memory::MallocAllocator croot;
+    crd::memory::GrowableTlsfAllocator croot;
     ce::Context                  cctx(&croot);
     const cgt::CeirDispatchAsset asset = cgt::build_ceir_dispatch_asset(cctx, "scan", "r,w,w", 3);
     crd::containers::Array<ceg::LoweredCommand> cmds(&croot);
@@ -326,7 +326,7 @@ TEST_CASE("ceir 13z: a 6-dispatch 2D FFT CEIR asset on CUDA == direct dispatch_f
         mp[pi].grid   = static_cast<int>(plan.passes[pi].num_workgroups);
         for (int k = 0; k < plan.passes[pi].nbind; ++k) { mp[pi].bind[k] = plan.passes[pi].bind[k]; }
     }
-    crd::memory::MallocAllocator                croot;
+    crd::memory::GrowableTlsfAllocator                croot;
     ce::Context                                 cctx(&croot);
     const cgt::CeirMultiAsset                   asset = cgt::build_ceir_multi_asset(cctx, plan.nbuffers, mp, plan.npasses);
     crd::containers::Array<ceg::LoweredCommand> cmds(&croot);

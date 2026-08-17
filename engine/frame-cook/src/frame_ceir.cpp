@@ -34,6 +34,10 @@ namespace
     if (id == kExecMeshRaster) { return StringView("mesh.raster"); }
     if (id == kExecMeshIndirect) { return StringView("mesh.indirect"); }
     if (id == kExecPresent) { return StringView("present"); }
+    // ⭐ CEIR-20b: the ceir.work device-work mechanics — the executor SYMBOL is the ceir.work op name (build_work_ceir maps it).
+    if (id == kExecWorkProduce) { return StringView("work.produce"); }
+    if (id == kExecWorkConsume) { return StringView("work.consume"); }
+    if (id == kExecWorkCompact) { return StringView("work.compact"); }
     return StringView();
 }
 [[nodiscard]] bool kind_is_external(FrameResourceKind k) noexcept

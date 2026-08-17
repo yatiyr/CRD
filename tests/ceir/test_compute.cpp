@@ -14,7 +14,7 @@
 #include <crd/ceir/print.hpp>
 #include <crd/ceir/program_asset.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -97,7 +97,7 @@ Operation* find_op(const Context& ctx, Module& m, containers::StringView qual)
 
 TEST_CASE("ceir 13a: well-formed direct+indirect dispatches verify and survive round-trip", "[ceir][compute]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     Module* const                m  = ctx.create_module();
@@ -153,7 +153,7 @@ TEST_CASE("ceir 13a: well-formed direct+indirect dispatches verify and survive r
 
 TEST_CASE("ceir 13a: find_dispatch_misuse rejects every malformed dispatch", "[ceir][compute]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
 
     // GridNotIndex: grid_x is a buffer, not an index.
     {
@@ -259,7 +259,7 @@ TEST_CASE("ceir 13a: find_dispatch_misuse rejects every malformed dispatch", "[c
 TEST_CASE("ceir 13a: a dispatch hazards the export of its output and extends a prior transient (conservative baseline)",
           "[ceir][compute]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     const TypeId                 idx = ctx.type_index();
@@ -304,7 +304,7 @@ TEST_CASE("ceir 13a: a dispatch hazards the export of its output and extends a p
 TEST_CASE("ceir 13c: collect_dependencies extracts ckir_refs schema-driven (pin, unpinned, dedup, sorted, I6)",
           "[ceir][compute]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     // a hand-registered op in ANOTHER dialect carrying an attr literally named "kernel" -- but NO [op.kernel_ref] marker.

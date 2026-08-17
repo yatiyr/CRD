@@ -19,7 +19,7 @@
 #include <crd/ceir/gen/arith_ops.hpp>
 #include <crd/ceir/gen/resource_ops.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -160,7 +160,7 @@ Res build_band12(Context& ctx, const Kit& k, Block* bm, TypeId buf1, TypeId buf9
 
 TEST_CASE("ceir 12z band gate: the resource->memory pipeline composes and aliasing provably saves memory", "[ceir][band12]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     const TypeId                 buf1 = ctx.type_buffer(BufferMode::Plain, ctx.type_f32());

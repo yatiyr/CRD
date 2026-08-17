@@ -8,7 +8,7 @@
 #include <crd/ceir/func.hpp>        // the hand-registered func dialect (func.call's conservative barrier)
 #include <crd/ceir/gen/test_ops.hpp> // the generated full-surface `test` dialect (register_test_ops)
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -17,7 +17,7 @@ using crd::containers::ConstSpan;
 
 TEST_CASE("ceir effect: op_effects round-trips both declaration forms from the 2a schema", "[ceir][effect]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     (void)test::register_test_ops(ctx);
 
@@ -46,7 +46,7 @@ TEST_CASE("ceir effect: op_effects round-trips both declaration forms from the 2
 
 TEST_CASE("ceir effect: EMPTY != UNKNOWN - an unregistered kind is maximally effectful", "[ceir][effect]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     (void)test::register_test_ops(ctx);
 
@@ -64,7 +64,7 @@ TEST_CASE("ceir effect: EMPTY != UNKNOWN - an unregistered kind is maximally eff
 
 TEST_CASE("ceir effect: a hand-registered op carries effects, arena-copied to outlive the caller's span", "[ceir][effect]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Dialect* const               d = ctx.register_dialect("hw");
 
@@ -94,7 +94,7 @@ TEST_CASE("ceir effect: a hand-registered op carries effects, arena-copied to ou
 
 TEST_CASE("ceir effect: func.call declares a conservative ExternalCall barrier, not effect-free", "[ceir][effect]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     func::register_dialect(ctx);
 

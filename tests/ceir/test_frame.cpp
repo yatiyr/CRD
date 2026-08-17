@@ -15,7 +15,7 @@
 #include <crd/ceir/parse.hpp>
 #include <crd/ceir/print.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -106,7 +106,7 @@ Operation* mkpass(Context& ctx, const Kit& k, Block* rb, ConstSpan<Value*> resou
 
 TEST_CASE("ceir 15a: a well-formed frame graph passes find_frame_misuse", "[ceir][frame]")
 {
-    memory::MallocAllocator root;
+    memory::GrowableTlsfAllocator root;
     Context                 ctx(&root);
     const Kit               k(ctx);
     Module* const           m   = ctx.create_module();
@@ -127,7 +127,7 @@ TEST_CASE("ceir 15a: a well-formed frame graph passes find_frame_misuse", "[ceir
 
 TEST_CASE("ceir 15a: a frame graph round-trips text == builder (no privileged path, sec 121)", "[ceir][frame]")
 {
-    memory::MallocAllocator root;
+    memory::GrowableTlsfAllocator root;
     Context                 ctx(&root);
     const Kit               k(ctx);
     Module* const           m   = ctx.create_module();
@@ -159,7 +159,7 @@ TEST_CASE("ceir 15a: find_frame_misuse rejects every malformed frame", "[ceir][f
 
     SECTION("a frame.pass outside any frame.graph")
     {
-        memory::MallocAllocator root;
+        memory::GrowableTlsfAllocator root;
         Context                 ctx(&root);
         const Kit               k(ctx);
         Module* const           m   = ctx.create_module();
@@ -171,7 +171,7 @@ TEST_CASE("ceir 15a: find_frame_misuse rejects every malformed frame", "[ceir][f
     }
     SECTION("a frame.pass executor that is not a Symbol")
     {
-        memory::MallocAllocator root;
+        memory::GrowableTlsfAllocator root;
         Context                 ctx(&root);
         const Kit               k(ctx);
         Module* const           m  = ctx.create_module();
@@ -188,7 +188,7 @@ TEST_CASE("ceir 15a: find_frame_misuse rejects every malformed frame", "[ceir][f
     }
     SECTION("a frame.pass access token count != operand count")
     {
-        memory::MallocAllocator root;
+        memory::GrowableTlsfAllocator root;
         Context                 ctx(&root);
         const Kit               k(ctx);
         Module* const           m  = ctx.create_module();
@@ -203,7 +203,7 @@ TEST_CASE("ceir 15a: find_frame_misuse rejects every malformed frame", "[ceir][f
     }
     SECTION("a frame.pass access token outside {r,w,rw}")
     {
-        memory::MallocAllocator root;
+        memory::GrowableTlsfAllocator root;
         Context                 ctx(&root);
         const Kit               k(ctx);
         Module* const           m  = ctx.create_module();
@@ -217,7 +217,7 @@ TEST_CASE("ceir 15a: find_frame_misuse rejects every malformed frame", "[ceir][f
     }
     SECTION("a frame.pass operand that is not resource- nor draw_list-kinded")
     {
-        memory::MallocAllocator root;
+        memory::GrowableTlsfAllocator root;
         Context                 ctx(&root);
         const Kit               k(ctx);
         Module* const           m  = ctx.create_module();
@@ -232,7 +232,7 @@ TEST_CASE("ceir 15a: find_frame_misuse rejects every malformed frame", "[ceir][f
     }
     SECTION("a frame.pass queue outside {graphics, async}")
     {
-        memory::MallocAllocator root;
+        memory::GrowableTlsfAllocator root;
         Context                 ctx(&root);
         const Kit               k(ctx);
         Module* const           m  = ctx.create_module();
@@ -247,7 +247,7 @@ TEST_CASE("ceir 15a: find_frame_misuse rejects every malformed frame", "[ceir][f
     }
     SECTION("a frame.draw_list cull outside its vocabulary")
     {
-        memory::MallocAllocator root;
+        memory::GrowableTlsfAllocator root;
         Context                 ctx(&root);
         const Kit               k(ctx);
         Module* const           m  = ctx.create_module();
@@ -259,7 +259,7 @@ TEST_CASE("ceir 15a: find_frame_misuse rejects every malformed frame", "[ceir][f
     }
     SECTION("a frame.draw_list limit < 0")
     {
-        memory::MallocAllocator root;
+        memory::GrowableTlsfAllocator root;
         Context                 ctx(&root);
         const Kit               k(ctx);
         Module* const           m  = ctx.create_module();
@@ -273,7 +273,7 @@ TEST_CASE("ceir 15a: find_frame_misuse rejects every malformed frame", "[ceir][f
     }
     SECTION("a frame.history over a NON-history resource")
     {
-        memory::MallocAllocator root;
+        memory::GrowableTlsfAllocator root;
         Context                 ctx(&root);
         const Kit               k(ctx);
         Module* const           m  = ctx.create_module();
@@ -286,7 +286,7 @@ TEST_CASE("ceir 15a: find_frame_misuse rejects every malformed frame", "[ceir][f
     }
     SECTION("a frame.history frames_back < 1")
     {
-        memory::MallocAllocator root;
+        memory::GrowableTlsfAllocator root;
         Context                 ctx(&root);
         const Kit               k(ctx);
         Module* const           m  = ctx.create_module();
@@ -304,7 +304,7 @@ TEST_CASE("ceir 15a: find_frame_misuse rejects every malformed frame", "[ceir][f
     }
     SECTION("a foreign GPUCommand op directly in a frame.graph region")
     {
-        memory::MallocAllocator root;
+        memory::GrowableTlsfAllocator root;
         Context                 ctx(&root);
         const Kit               k(ctx);
         Module* const           m  = ctx.create_module();
@@ -324,7 +324,7 @@ TEST_CASE("ceir 15a: find_frame_misuse rejects every malformed frame", "[ceir][f
     // ── CEIR-15c-1a: the NEW-IN-CEIR structural guards (ceir.frame is a strict superset of FrameGraphDesc). ──
     SECTION("a frame.pass operand defined OUTSIDE the frame.graph region")
     {
-        memory::MallocAllocator root;
+        memory::GrowableTlsfAllocator root;
         Context                 ctx(&root);
         const Kit               k(ctx);
         Module* const           m  = ctx.create_module();
@@ -338,7 +338,7 @@ TEST_CASE("ceir 15a: find_frame_misuse rejects every malformed frame", "[ceir][f
     }
     SECTION("more than one frame.graph in the module")
     {
-        memory::MallocAllocator root;
+        memory::GrowableTlsfAllocator root;
         Context                 ctx(&root);
         const Kit               k(ctx);
         Module* const           m  = ctx.create_module();
@@ -351,7 +351,7 @@ TEST_CASE("ceir 15a: find_frame_misuse rejects every malformed frame", "[ceir][f
     }
     SECTION("a frame.pass READS a lifetime=history resource directly (not through frame.history)")
     {
-        memory::MallocAllocator root;
+        memory::GrowableTlsfAllocator root;
         Context                 ctx(&root);
         const Kit               k(ctx);
         Module* const           m  = ctx.create_module();
@@ -365,7 +365,7 @@ TEST_CASE("ceir 15a: find_frame_misuse rejects every malformed frame", "[ceir][f
     }
     SECTION("a frame.pass WRITES a frame.history result (writing the previous frame)")
     {
-        memory::MallocAllocator root;
+        memory::GrowableTlsfAllocator root;
         Context                 ctx(&root);
         const Kit               k(ctx);
         Module* const           m  = ctx.create_module();
@@ -381,7 +381,7 @@ TEST_CASE("ceir 15a: find_frame_misuse rejects every malformed frame", "[ceir][f
     // ── CEIR-15c-1c-2 §8/§9: the OTHER frame ops outside a graph + a draw-list write. ──
     SECTION("a frame.draw_list OUTSIDE any frame.graph")
     {
-        memory::MallocAllocator root;
+        memory::GrowableTlsfAllocator root;
         Context                 ctx(&root);
         const Kit               k(ctx);
         Module* const           m = ctx.create_module();
@@ -391,7 +391,7 @@ TEST_CASE("ceir 15a: find_frame_misuse rejects every malformed frame", "[ceir][f
     }
     SECTION("a frame.history OUTSIDE any frame.graph")
     {
-        memory::MallocAllocator root;
+        memory::GrowableTlsfAllocator root;
         Context                 ctx(&root);
         const Kit               k(ctx);
         Module* const           m    = ctx.create_module();
@@ -402,7 +402,7 @@ TEST_CASE("ceir 15a: find_frame_misuse rejects every malformed frame", "[ceir][f
     }
     SECTION("a frame.pass carries a WRITE token on a draw-list operand")
     {
-        memory::MallocAllocator root;
+        memory::GrowableTlsfAllocator root;
         Context                 ctx(&root);
         const Kit               k(ctx);
         Module* const           m  = ctx.create_module();

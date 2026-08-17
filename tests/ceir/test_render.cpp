@@ -15,7 +15,7 @@
 #include <crd/ceir/print.hpp>
 #include <crd/ceir/render.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -144,7 +144,7 @@ Operation* mkscope(Context& ctx, const Kit& k, Block* b, ConstSpan<Value*> atts,
 
 TEST_CASE("ceir 14a: a well-formed render scope with color + depth attachments passes find_render_misuse", "[ceir][render]")
 {
-    memory::MallocAllocator root;
+    memory::GrowableTlsfAllocator root;
     Context                 ctx(&root);
     const Kit               k(ctx);
     Module* const           m    = ctx.create_module();
@@ -171,7 +171,7 @@ TEST_CASE("ceir 14a: a well-formed render scope with color + depth attachments p
 
 TEST_CASE("ceir 14a: color and depth attachment TYPES are distinct (role-in-class, ADR-0111)", "[ceir][render]")
 {
-    memory::MallocAllocator root;
+    memory::GrowableTlsfAllocator root;
     Context                 ctx(&root);
     const Kit               k(ctx);
     const TypeId            img = ctx.type_image(ImageDim::Dim2D, ctx.type_f32());
@@ -184,7 +184,7 @@ TEST_CASE("ceir 14a: color and depth attachment TYPES are distinct (role-in-clas
 
 TEST_CASE("ceir 14a: a render scope round-trips text == builder (no privileged path, sec 121)", "[ceir][render]")
 {
-    memory::MallocAllocator root;
+    memory::GrowableTlsfAllocator root;
     Context                 ctx(&root);
     const Kit               k(ctx);
     Module* const           m    = ctx.create_module();
@@ -209,7 +209,7 @@ TEST_CASE("ceir 14a: a render scope round-trips text == builder (no privileged p
 
 TEST_CASE("ceir 14a: find_render_misuse rejects every malformed render", "[ceir][render]")
 {
-    memory::MallocAllocator root;
+    memory::GrowableTlsfAllocator root;
     const TypeId            dummy; // built per-context below
 
     // AttachmentNotImage: a color attachment whose OPERAND is a buffer (result type stays a valid image attachment).
@@ -348,7 +348,7 @@ TEST_CASE("ceir 14a: find_render_misuse rejects every malformed render", "[ceir]
 
 TEST_CASE("ceir 14b: well-formed render.draw + render.draw_indexed inside a scope pass find_render_misuse", "[ceir][render]")
 {
-    memory::MallocAllocator root;
+    memory::GrowableTlsfAllocator root;
     Context                 ctx(&root);
     const Kit               k(ctx);
     Module* const           m       = ctx.create_module();
@@ -370,7 +370,7 @@ TEST_CASE("ceir 14b: well-formed render.draw + render.draw_indexed inside a scop
 
 TEST_CASE("ceir 14b: a scope with a draw round-trips text == builder (no privileged path)", "[ceir][render]")
 {
-    memory::MallocAllocator root;
+    memory::GrowableTlsfAllocator root;
     Context                 ctx(&root);
     const Kit               k(ctx);
     Module* const           m       = ctx.create_module();
@@ -398,7 +398,7 @@ TEST_CASE("ceir 14b: a scope with a draw round-trips text == builder (no privile
 
 TEST_CASE("ceir 14b: find_render_misuse rejects every malformed draw + region misuse", "[ceir][render]")
 {
-    memory::MallocAllocator root;
+    memory::GrowableTlsfAllocator root;
     Value*                  none[1] = {nullptr};
 
     // A scope + its body block over one color attachment (the fixture for the in-scope negatives).
@@ -546,7 +546,7 @@ TEST_CASE("ceir 14b: find_render_misuse rejects every malformed draw + region mi
 
 TEST_CASE("ceir 14c: well-formed indirect + mesh draws inside a scope pass find_render_misuse", "[ceir][render]")
 {
-    memory::MallocAllocator root;
+    memory::GrowableTlsfAllocator root;
     Context                 ctx(&root);
     const Kit               k(ctx);
     Module* const           m       = ctx.create_module();
@@ -579,7 +579,7 @@ TEST_CASE("ceir 14c: well-formed indirect + mesh draws inside a scope pass find_
 
 TEST_CASE("ceir 14c: find_render_misuse rejects malformed indirect / mesh draws", "[ceir][render]")
 {
-    memory::MallocAllocator root;
+    memory::GrowableTlsfAllocator root;
     // A scope + body block over one color attachment; returns the region block.
     const auto scope_rb = [](Context& ctx, const Kit& k, Module& m) -> Block* {
         Block* const     b   = mkmain(ctx, m);

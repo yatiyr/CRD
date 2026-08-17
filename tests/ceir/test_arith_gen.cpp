@@ -6,7 +6,7 @@
 #include <crd/ceir/ceir.hpp>
 #include <crd/ceir/gen/arith_ops.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -15,7 +15,7 @@ using crd::containers::ConstSpan;
 
 TEST_CASE("ceir arith gen: the dialect self-registers with traits + verifier, no central edit", "[ceir][gen][arith]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Dialect* const               d = arith::register_arith_ops(ctx);
     REQUIRE(d != nullptr);
@@ -29,7 +29,7 @@ TEST_CASE("ceir arith gen: the dialect self-registers with traits + verifier, no
 
 TEST_CASE("ceir arith gen: builders + typed wrappers + verifier round-trip on well-formed ops", "[ceir][gen][arith]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     (void)arith::register_arith_ops(ctx);
 
@@ -55,7 +55,7 @@ TEST_CASE("ceir arith gen: builders + typed wrappers + verifier round-trip on we
 
 TEST_CASE("ceir arith gen: the generated verifier rejects malformed ops", "[ceir][gen][arith]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     (void)arith::register_arith_ops(ctx);
 
@@ -107,7 +107,7 @@ TEST_CASE("ceir arith gen: the reflection record is coherent with the generated 
     CHECK_FALSE(c->intrinsic);
 
     // reflection <-> codegen coherence: an op built via the generated builder has EXACTLY the reflected shape
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     (void)arith::register_arith_ops(ctx);
     Operation* const built = arith::build_const(ctx, ctx.attr_int(7), ctx.type_i32());

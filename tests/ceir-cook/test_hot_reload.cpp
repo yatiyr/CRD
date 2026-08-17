@@ -14,7 +14,7 @@
 #include <crd/ceir/gen/arith_ops.hpp>
 #include <crd/ceir/gen/core_ops.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -69,7 +69,7 @@ void module_block(Context& c, Module& m)
 ConstSpan<u8> span_of(const Array<u8>& b) { return ConstSpan<u8>(b.data(), b.size()); }
 
 // @fname() -> (i64|i32) { return k }  -- a leaf program exporting `fname`. Signature toggles via `i64_result`.
-Array<u8> cook_leaf(crd::memory::MallocAllocator& root, u64 asset_id, StringView fname, i64 k, bool i64_result)
+Array<u8> cook_leaf(crd::memory::GrowableTlsfAllocator& root, u64 asset_id, StringView fname, i64 k, bool i64_result)
 {
     Context   c(&root);
     const Reg r(c);
@@ -84,7 +84,7 @@ Array<u8> cook_leaf(crd::memory::MallocAllocator& root, u64 asset_id, StringView
     return std::move(cr.blob);
 }
 // @f() -> i32 { %i=0; %n=nextval; %s=state(%i,%n[,depth]); return %s }  -- same contract, state schema varies by depth.
-Array<u8> cook_counter(crd::memory::MallocAllocator& root, u64 asset_id, i64 nextval, u32 depth)
+Array<u8> cook_counter(crd::memory::GrowableTlsfAllocator& root, u64 asset_id, i64 nextval, u32 depth)
 {
     Context   c(&root);
     const Reg r(c);
@@ -105,7 +105,7 @@ Array<u8> cook_counter(crd::memory::MallocAllocator& root, u64 asset_id, i64 nex
     return std::move(cr.blob);
 }
 // @fname() -> i32 { call callee(); return 0 }  -- exports `fname`, imports `callee` (an external dependency edge).
-Array<u8> cook_caller(crd::memory::MallocAllocator& root, u64 asset_id, StringView fname, StringView callee)
+Array<u8> cook_caller(crd::memory::GrowableTlsfAllocator& root, u64 asset_id, StringView fname, StringView callee)
 {
     Context   c(&root);
     const Reg r(c);
@@ -150,7 +150,7 @@ i64 run_gen(Generation* g, Interpreter& in)
 StringView sv(const String& s) { return StringView(s.data(), s.size()); }
 
 // The SOURCE TEXT of @fname() -> (i64|i32) { return k } (via the printer — the §121 no-privileged-path form).
-String source_leaf(crd::memory::MallocAllocator& root, StringView fname, i64 k, bool i64_result)
+String source_leaf(crd::memory::GrowableTlsfAllocator& root, StringView fname, i64 k, bool i64_result)
 {
     Context   c(&root);
     const Reg r(c);
@@ -197,7 +197,7 @@ u64 reloadset_resolve(AssetId a, void* user)
 
 TEST_CASE("ceir 10a: a body-only edit HOT-SWAPS and the old handle goes stale", "[ceir][reload]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     ReloadSet set(&root, &registrar, nullptr);
     const Array<u8> b0 = cook_leaf(root, 100U, "foo", 5, false);
     REQUIRE(set.add(AssetId{100U}, span_of(b0)).ok());
@@ -217,7 +217,7 @@ TEST_CASE("ceir 10a: a body-only edit HOT-SWAPS and the old handle goes stale", 
 
 TEST_CASE("ceir 10a: a signature edit is a CONTRACT CHANGE - rejected, last-good kept", "[ceir][reload]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     ReloadSet set(&root, &registrar, nullptr);
     const Array<u8> b0 = cook_leaf(root, 200U, "foo", 5, false); // -> i32
     REQUIRE(set.add(AssetId{200U}, span_of(b0)).ok());
@@ -234,7 +234,7 @@ TEST_CASE("ceir 10a: a signature edit is a CONTRACT CHANGE - rejected, last-good
 
 TEST_CASE("ceir 10a: a state-schema-only edit is NEEDS-MIGRATION - rejected in stage 2", "[ceir][reload]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     ReloadSet set(&root, &registrar, nullptr);
     const Array<u8> b0 = cook_counter(root, 300U, 7, /*depth=*/1U);
     REQUIRE(set.add(AssetId{300U}, span_of(b0)).ok());
@@ -247,7 +247,7 @@ TEST_CASE("ceir 10a: a state-schema-only edit is NEEDS-MIGRATION - rejected in s
 
 TEST_CASE("ceir 10a: an identical reload is a NO-CHANGE no-op", "[ceir][reload]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     ReloadSet set(&root, &registrar, nullptr);
     const Array<u8> b0 = cook_leaf(root, 350U, "foo", 5, false);
     REQUIRE(set.add(AssetId{350U}, span_of(b0)).ok());
@@ -259,7 +259,7 @@ TEST_CASE("ceir 10a: an identical reload is a NO-CHANGE no-op", "[ceir][reload]"
 
 TEST_CASE("ceir 10a: the dep graph gives the affected set; dup-symbol and AssetId 0 are rejected", "[ceir][reload]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     ReloadSet set(&root, &registrar, nullptr);
     const Array<u8> ba = cook_caller(root, 400U, "use", "bar"); // A imports "bar"
     const Array<u8> bb = cook_leaf(root, 500U, "bar", 0, false); // B exports "bar"
@@ -286,7 +286,7 @@ TEST_CASE("ceir 10a: the dep graph gives the affected set; dup-symbol and AssetI
 
 TEST_CASE("ceir 10a: remove takes a program out of the set and the graph", "[ceir][reload]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     ReloadSet set(&root, &registrar, nullptr);
     const Array<u8> ba = cook_caller(root, 700U, "use", "bar");
     const Array<u8> bb = cook_leaf(root, 800U, "bar", 0, false);
@@ -308,7 +308,7 @@ TEST_CASE("ceir 10a: remove takes a program out of the set and the graph", "[cei
 
 TEST_CASE("ceir 10a: a registered fn INSTALLS a NeedsMigration reload and migrates the state value", "[ceir][reload]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     ReloadSet       set(&root, &registrar, nullptr);
     const Array<u8> b1 = cook_counter(root, 900U, 7, /*depth=*/1U);
     REQUIRE(set.add(AssetId{900U}, span_of(b1)).ok());
@@ -337,7 +337,7 @@ TEST_CASE("ceir 10a: a registered fn INSTALLS a NeedsMigration reload and migrat
 
 TEST_CASE("ceir 10a: a REFUSING migration fn restores nothing - the new generation init-fills", "[ceir][reload]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     ReloadSet       set(&root, &registrar, nullptr);
     const Array<u8> b1 = cook_counter(root, 910U, 7, /*depth=*/1U);
     REQUIRE(set.add(AssetId{910U}, span_of(b1)).ok());
@@ -361,7 +361,7 @@ TEST_CASE("ceir 10a: a REFUSING migration fn restores nothing - the new generati
 
 TEST_CASE("ceir 10a: migrate_state carries a cell VERBATIM on a HotSwap (fn == nullptr)", "[ceir][reload]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     ReloadSet       set(&root, &registrar, nullptr);
     const Array<u8> b0 = cook_counter(root, 950U, 7, /*depth=*/1U);
     REQUIRE(set.add(AssetId{950U}, span_of(b0)).ok());
@@ -386,7 +386,7 @@ TEST_CASE("ceir 10a: migrate_state carries a cell VERBATIM on a HotSwap (fn == n
 
 TEST_CASE("ceir 10a: add_source + reload_source drive the lifecycle from TEXT (a body edit hot-swaps)", "[ceir][reload]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     ReloadSet    set(&root, &registrar, nullptr);
     const String s0 = source_leaf(root, "foo", 5, false);
     REQUIRE(set.add_source(AssetId{1000U}, sv(s0)).ok());
@@ -402,7 +402,7 @@ TEST_CASE("ceir 10a: add_source + reload_source drive the lifecycle from TEXT (a
 
 TEST_CASE("ceir 10a: a BAD source edit is CookFailed - last-good keeps running", "[ceir][reload]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     ReloadSet    set(&root, &registrar, nullptr);
     const String s0 = source_leaf(root, "foo", 5, false);
     REQUIRE(set.add_source(AssetId{1100U}, sv(s0)).ok());
@@ -424,7 +424,7 @@ TEST_CASE("ceir 10a: a BAD source edit is CookFailed - last-good keeps running",
 
 TEST_CASE("ceir 10a: a source SIGNATURE edit is a ContractChange - rejected via the source path", "[ceir][reload]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     ReloadSet    set(&root, &registrar, nullptr);
     const String s0 = source_leaf(root, "foo", 5, false); // -> i32
     REQUIRE(set.add_source(AssetId{1300U}, sv(s0)).ok());
@@ -436,7 +436,7 @@ TEST_CASE("ceir 10a: a source SIGNATURE edit is a ContractChange - rejected via 
 
 TEST_CASE("ceir 10a: a REENTRANT reload from inside the registrar is rejected (RAF-11 guard)", "[ceir][reload]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     ReentrantProbe  probe{};
     ReloadSet       set(&root, &reentrant_registrar, &probe);
     const Array<u8> b0 = cook_leaf(root, 1400U, "foo", 5, false);
@@ -456,7 +456,7 @@ TEST_CASE("ceir 10a: a REENTRANT reload from inside the registrar is rejected (R
 
 TEST_CASE("ceir 10b: a callee interface change stales exactly the ReloadSet affected set of plans", "[ceir][plancache]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     ReloadSet set(&root, &registrar, nullptr);
     const Array<u8> ba = cook_caller(root, 2000U, "usea", "bar"); // A imports "bar"
     const Array<u8> bb = cook_leaf(root, 2100U, "bar", 0, false); // B exports bar()->i32

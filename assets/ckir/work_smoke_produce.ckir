@@ -1,0 +1,96 @@
+# work_smoke_produce.ckir - CEIR-20b STEP 4 smoke: the PRODUCE half. A 1-thread compute dispatch that writes the queue's DEVICE
+# (count,1,1) indirect-args header: queue[0]=N=5 (the device count the INDIRECT consume reads), queue[1]=1, queue[2]=1 (gy,gz).
+# AUTHORED .ckir (mandate #1: NO C++ builder; the .ckir is the SOLE source). ⛔ produce writes ALL THREE header words (not just
+# the count) so the executor's ShaderWrite→IndirectRead barrier makes the WHOLE header visible to vkCmdDispatchIndirect — a
+# host-init of gy/gz would need a separate TransferDst→IndirectRead availability chain. BINDING CONTRACT: queue@0 (write, U32 —
+# created STORAGE|INDIRECT: a storage descriptor AND the consume's indirect-args source). local_size=1.
+schema = 1
+
+[[entry]]
+stage = "Compute"
+inputs = 0
+position = -1
+frag_depth = -1
+discard_cond = -1
+early_fragment_tests = false
+depth_mode = "Any"
+shading_rate = -1
+storage_write_index = -1
+storage_write_value = -1
+interlock = false
+n_out = 0
+local_size = [1, 1, 1]
+kernel_body_begin = 0
+kernel_body_count = 3
+mesh_vertices = 0
+mesh_primitives = 0
+mesh_prim = -1
+task_emit = -1
+task_payload = [-1, -1, -1, -1]
+n_task_payload = 0
+tess_patch_size = 0
+tess_inner = -1
+tess_outer = -1
+mesh_payload_in = false
+storage_read_only = false
+
+# queue@0 (the device-resident work queue: [count, 1, 1, records...])
+[[node]]
+id = "n0"
+op = "BufferDecl"
+dtype = "U32"
+shape = [1]
+iidx = 0
+axes = 1
+
+# index 0 (the count slot)
+[[node]]
+id = "n1"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+# 5 (the device count N; cval = f64 bit-pattern of 5.0)
+[[node]]
+id = "n2"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4014000000000000"
+
+# 1 (used as BOTH index 1 AND the value 1 for queue[1]/queue[2]; cval = f64 bit-pattern of 1.0)
+[[node]]
+id = "n3"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+# 2 (index 2; cval = f64 bit-pattern of 2.0)
+[[node]]
+id = "n4"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4000000000000000"
+
+# queue[0] = 5 (the device count)
+[[stmt]]
+kind = "BufferStore"
+target = "n0"
+index = "n1"
+value = "n2"
+
+# queue[1] = 1 (gy)
+[[stmt]]
+kind = "BufferStore"
+target = "n0"
+index = "n3"
+value = "n3"
+
+# queue[2] = 1 (gz)
+[[stmt]]
+kind = "BufferStore"
+target = "n0"
+index = "n4"
+value = "n3"

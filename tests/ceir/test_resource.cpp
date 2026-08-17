@@ -10,7 +10,7 @@
 #include <crd/ceir/gen/resource_ops.hpp>
 #include <crd/ceir/print.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -103,7 +103,7 @@ Operation* main_declare(const Context& ctx, Module& m)
 
 TEST_CASE("ceir 12a: a declare+view+import+export module is well-formed and survives round-trip", "[ceir][resource]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     Module* const                m  = ctx.create_module();
@@ -150,7 +150,7 @@ TEST_CASE("ceir 12a: a declare+view+import+export module is well-formed and surv
 
 TEST_CASE("ceir 12a: find_resource_misuse rejects every malformed resource construction", "[ceir][resource]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     const TypeId                 dummy; // filled per case
     (void)dummy;
 
@@ -287,7 +287,7 @@ TEST_CASE("ceir 12a: find_resource_misuse rejects every malformed resource const
 
 TEST_CASE("ceir 12b: declare+export intent attrs are well-formed and survive round-trip", "[ceir][resource]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     Module* const                m  = ctx.create_module();
@@ -351,7 +351,7 @@ TEST_CASE("ceir 12b: declare+export intent attrs are well-formed and survive rou
 
 TEST_CASE("ceir 12b: find_resource_intent_misuse rejects every malformed intent attr", "[ceir][resource]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
 
     // positive A: lifetime=history with NO history_length (defaults to 1 -- the TAA prev-frame case) is well-formed.
     {

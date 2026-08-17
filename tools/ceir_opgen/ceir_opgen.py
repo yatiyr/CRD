@@ -817,12 +817,12 @@ def emit_smoke(model):
     d = model["dialect"]
     out = [_smoke_header(model), "\n",
            "#include <crd/ceir/ceir.hpp>\n#include <crd/ceir/gen/%s_ops.hpp>\n\n" % d,
-           "#include <crd/memory/allocators/malloc_allocator.hpp>\n\n",
+           "#include <crd/memory/allocators/growable_tlsf_allocator.hpp>\n\n",
            "#include <catch2/catch_test_macros.hpp>\n\n",
            "namespace\n{\nusing namespace crd::ceir;\n\n"]
     out.append('TEST_CASE("ceir %s gen smoke: the dialect self-registers and reflects a coherent schema",\n'
                '          "[ceir][gen][smoke][%s]")\n{\n' % (d, d))
-    out.append("    crd::memory::MallocAllocator root;\n    Context                      ctx(&root);\n")
+    out.append("    crd::memory::GrowableTlsfAllocator root;\n    Context                      ctx(&root);\n")
     out.append("    Dialect* const               dlt = %s::register_%s_ops(ctx);\n" % (d, d))
     out.append("    REQUIRE(dlt != nullptr);\n")
     out.append('    CHECK(dlt->name() == crd::containers::StringView("%s"));\n\n' % d)
@@ -839,7 +839,7 @@ def emit_smoke(model):
     out.append("    }\n}\n\n")
     out.append('TEST_CASE("ceir %s gen smoke: every op builds through its generated builder and the verifier accepts it",\n'
                '          "[ceir][gen][smoke][%s]")\n{\n' % (d, d))
-    out.append("    crd::memory::MallocAllocator root;\n    Context                      ctx(&root);\n")
+    out.append("    crd::memory::GrowableTlsfAllocator root;\n    Context                      ctx(&root);\n")
     out.append("    (void)%s::register_%s_ops(ctx);\n\n" % (d, d))
     for i, op in enumerate(model["ops"]):
         if i > 0:
@@ -854,7 +854,7 @@ def emit_smoke(model):
     if rejects:
         out.append('\nTEST_CASE("ceir %s gen smoke: the generated verifier rejects a malformed construction",\n'
                    '          "[ceir][gen][smoke][%s]")\n{\n' % (d, d))
-        out.append("    crd::memory::MallocAllocator root;\n    Context                      ctx(&root);\n")
+        out.append("    crd::memory::GrowableTlsfAllocator root;\n    Context                      ctx(&root);\n")
         out.append("    (void)%s::register_%s_ops(ctx);\n\n" % (d, d))
         for i, op in enumerate(rejects):
             if i > 0:

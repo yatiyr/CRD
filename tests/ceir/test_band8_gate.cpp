@@ -18,7 +18,7 @@
 #include <crd/ceir/program_asset.hpp> // interface_hash
 #include <crd/ceir/semantics.hpp>     // DeterminismClass / EvalDomain
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -101,7 +101,7 @@ Module* build_gate_module(Context& ctx, const GateReg& g)
 
 TEST_CASE("ceir 8z: the composed foundation program round-trips text and binary byte-identically", "[ceir][gate8]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const GateReg                g = register_gate(ctx);
     Module* const                m = build_gate_module(ctx, g);
@@ -125,7 +125,7 @@ TEST_CASE("ceir 8z: the composed foundation program round-trips text and binary 
 
 TEST_CASE("ceir 8z: the composed blob preserves through an unregistered Context and re-serializes byte-exact", "[ceir][gate8]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const GateReg                g = register_gate(ctx);
     Module* const                m = build_gate_module(ctx, g);
@@ -153,7 +153,7 @@ TEST_CASE("ceir 8z: the composed blob preserves through an unregistered Context 
 
 TEST_CASE("ceir 8z: re-registering unifies the preserved plugin type and the interface hash is cross-Context pure", "[ceir][gate8]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const GateReg                g  = register_gate(ctx);
     Module* const                m  = build_gate_module(ctx, g);
@@ -174,7 +174,7 @@ TEST_CASE("ceir 8z: re-registering unifies the preserved plugin type and the int
 
 TEST_CASE("ceir 8z: a transaction edits preserved plugin content in an unregistered Context", "[ceir][gate8]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const GateReg                g  = register_gate(ctx);
     Module* const                m  = build_gate_module(ctx, g);
@@ -221,7 +221,7 @@ TEST_CASE("ceir 8z: a transaction edits preserved plugin content in an unregiste
 
 TEST_CASE("ceir 8z: single-byte corruption of the composed foundation blob never crashes a loader", "[ceir][gate8]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const GateReg                g  = register_gate(ctx);
     Module* const                m  = build_gate_module(ctx, g);

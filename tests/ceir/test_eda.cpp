@@ -15,7 +15,7 @@
 #include <crd/ceir/effect.hpp> // EffectRecord / EffectFamily
 #include <crd/ceir/semantics.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -132,7 +132,7 @@ Module* build_pipeline(Context& ctx, const EdaOps& o, Operation** board_out, Ope
 
 TEST_CASE("ceir 9e: the external tools require host capabilities a GPU-only host cannot grant", "[ceir][eda]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const EdaOps                 o = register_eda(ctx);
     Module* const                m = build_pipeline(ctx, o, nullptr, nullptr);
@@ -165,7 +165,7 @@ TEST_CASE("ceir 9e: the external tools require host capabilities a GPU-only host
 
 TEST_CASE("ceir 9e: each external tool declares a queryable typed contract with content-addressed provenance", "[ceir][eda]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const EdaOps                 o = register_eda(ctx);
     Operation*                   route = nullptr;
@@ -192,7 +192,7 @@ TEST_CASE("ceir 9e: each external tool declares a queryable typed contract with 
 
 TEST_CASE("ceir 9e: a design-rule violation is rejected by the board verifier at commit", "[ceir][eda]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const EdaOps                 o = register_eda(ctx);
     Operation*                   board = nullptr;
@@ -226,7 +226,7 @@ TEST_CASE("ceir 9e: a design-rule violation is rejected by the board verifier at
 
 TEST_CASE("ceir 9e: a complete EDA pipeline uses zero render-flavored vocabulary (domain-neutral)", "[ceir][eda]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const EdaOps                 o = register_eda(ctx);
     Module* const                m = build_pipeline(ctx, o, nullptr, nullptr);

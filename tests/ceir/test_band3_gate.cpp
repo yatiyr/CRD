@@ -11,7 +11,7 @@
 
 #include <crd/ceir/ceir.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -20,7 +20,7 @@ using crd::containers::ConstSpan;
 
 TEST_CASE("ceir gate3: a dimensional mismatch points at the first clashing base (Length+Time)", "[ceir][gate3]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const TypeId                 f32 = ctx.type_f32();
 
@@ -52,7 +52,7 @@ TEST_CASE("ceir gate3: a dimensional mismatch points at the first clashing base 
 
 TEST_CASE("ceir gate3: an un-broadcastable shape pair points at the right-aligned bad dim", "[ceir][gate3]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const auto                   sh1 = [&](TypeId a) {
         const TypeId d[1] = {a};
@@ -91,7 +91,7 @@ struct EscapeOps
 
 TEST_CASE("ceir gate3: a borrowed value that escapes its region is flagged with the exact escaping use", "[ceir][gate3]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const EscapeOps              ops(ctx);
     const TypeId                 f32     = ctx.type_f32();
@@ -216,7 +216,7 @@ TEST_CASE("ceir gate3: a borrowed value that escapes its region is flagged with 
 
 TEST_CASE("ceir gate3: a generic-constraint violation points at the failing (param, trait)", "[ceir][gate3]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const TypeId                 ord    = ctx.type_trait("Ord", {});
     const TypeId                 con[1] = {ord};

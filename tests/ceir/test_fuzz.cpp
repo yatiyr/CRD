@@ -11,7 +11,7 @@
 #include <crd/ceir/parse.hpp>
 #include <crd/ceir/print.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -260,7 +260,7 @@ void check_roundtrips(Context& ctx, Module& m, crd::memory::IAllocator* root)
 
 TEST_CASE("ceir fuzz: random valid modules round-trip byte-exact through text and binary", "[ceir][fuzz]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     const u64 seeds[] = {1U, 2U, 3U, 7U, 42U, 0x1234U, 0xABCDEFU, 0xDEADBEEFU, 0xC0FFEEU, 99991U,
                          0x5A5A5A5AU, 123456789U, 0xFACEU, 0x8BADF00DU, 271828U, 314159U};
     for (u64 seed : seeds)
@@ -276,7 +276,7 @@ TEST_CASE("ceir fuzz: random valid modules round-trip byte-exact through text an
 
 TEST_CASE("ceir fuzz: the stable content hash is deterministic and content-derived", "[ceir][fuzz][hash]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
 
     // determinism: the same module hashes to the same value every time
     Context   ctx(&root);

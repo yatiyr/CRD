@@ -10,7 +10,7 @@
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/print.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -110,7 +110,7 @@ Module* build_via_hand(Context& ctx)
 
 TEST_CASE("ceir builder: a builder-made module is byte-identical to the hand-built one", "[ceir][builder]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      cb(&root);
     Context                      ch(&root);
     const String                 pb = print(cb, *build_via_builder(cb), &root);
@@ -120,7 +120,7 @@ TEST_CASE("ceir builder: a builder-made module is byte-identical to the hand-bui
 
 TEST_CASE("ceir builder: a builder-made module round-trips through the binary form", "[ceir][builder]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Module* const                m  = build_via_builder(ctx);
     const String                 p1 = print(ctx, *m, &root);
@@ -134,7 +134,7 @@ TEST_CASE("ceir builder: a builder-made module round-trips through the binary fo
 
 TEST_CASE("ceir builder: verify() dispatches the real per-kind verifier (no bypass)", "[ceir][builder]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Dialect* const               d = ctx.register_dialect("vtest");
     d->register_op("needsop", {.verify = &verify_needs_operand});
@@ -154,7 +154,7 @@ TEST_CASE("ceir builder: verify() dispatches the real per-kind verifier (no bypa
 
 TEST_CASE("ceir builder: a duplicate sym_name is rejected, build() returns nullptr", "[ceir][builder][symbol]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     ModuleBuilder                mb(ctx);
     (void)mb.add_block(0U);

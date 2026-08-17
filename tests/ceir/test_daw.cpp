@@ -17,7 +17,7 @@
 #include <crd/ceir/semantics.hpp> // RegionExec / effect_legal_in_region / DeterminismClass / EvalDomain / RealtimeClass
 #include <crd/ceir/time.hpp>      // the 8f time-domain dialect
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -85,7 +85,7 @@ AudioOps register_audio(Context& ctx)
 
 TEST_CASE("ceir 9b: sample-accurate audio time is a distinct type from wall and a plugin beat clock", "[ceir][daw]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     (void)time::register_dialect(ctx);
     const TypeId u        = ctx.type_i64();
@@ -103,7 +103,7 @@ TEST_CASE("ceir 9b: sample-accurate audio time is a distinct type from wall and 
 
 TEST_CASE("ceir 9b: feedback through a plugin delay is legal; a combinational loop is rejected", "[ceir][daw]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const AudioOps               a  = register_audio(ctx);
     (void)time::register_dialect(ctx);
@@ -149,7 +149,7 @@ TEST_CASE("ceir 9b: feedback through a plugin delay is legal; a combinational lo
 
 TEST_CASE("ceir 9b: a disk load in a realtime audio region is flagged; the offline render of the same graph is legal", "[ceir][daw]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const AudioOps               a     = register_audio(ctx);
     const TypeId                 audio = ctx.type_i64();
@@ -182,7 +182,7 @@ TEST_CASE("ceir 9b: a disk load in a realtime audio region is flagged; the offli
 
 TEST_CASE("ceir 9b: realtime-safe implies legal but not conversely (the two-oracles subset)", "[ceir][daw]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const AudioOps               a     = register_audio(ctx);
     const RegionExec             audio{EvalDomain::HostAudioTime, RealtimeClass::AudioRealTime};
@@ -214,7 +214,7 @@ TEST_CASE("ceir 9b: realtime-safe implies legal but not conversely (the two-orac
 
 TEST_CASE("ceir 9b: latency is a queryable interface summed along the chain; a missing interface is unknown", "[ceir][daw]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const AudioOps               a = register_audio(ctx);
 

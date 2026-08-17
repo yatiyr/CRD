@@ -20,7 +20,11 @@
 #include <crd/ceir/gen/resource_ops.hpp>
 #include <crd/ceir/gpu/execute.hpp>
 #include <crd/ceir/gpu/lower.hpp>
+#include <crd/ceir/gpu/work_build.hpp> // CEIR-20b: WorkBuildDesc / build_work_ceir (the authored wavefront orchestration)
 #include <crd/ceir/rt.hpp>
+
+#include <crd/framecook/frame_asset.hpp> // CEIR-20b: parse_frame_toml + FrameGraphDesc (the authored .frame.toml frontend)
+#include <crd/framecook/frame_work.hpp>  // CEIR-20b: extract_work_desc (the frame -> WorkBuildDesc cook)
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
@@ -36,6 +40,7 @@ namespace gpu  = crd::gpu;
 namespace kir  = crd::kir;
 namespace ceir = crd::ceir;      // CEIR-19c
 namespace cg   = crd::ceir::gpu; // CEIR-19c
+namespace fc   = crd::framecook; // CEIR-20b: parse_frame_toml / extract_work_desc (the authored .frame.toml frontend)
 
 #ifndef CRD_REPO_DIR
 #define CRD_REPO_DIR "."
@@ -1300,4 +1305,373 @@ TEST_CASE("CEIR-19c DX12: the AUTHORED wavefront host-loop (trace->compact->shad
     }
     CHECK(iters == 1);
     CHECK(queue_count == 0U);
+}
+
+// ── CEIR-20b DEVICE GATE (DX12 twin): the AUTHORED .frame.toml DRIVES the wavefront on the D3D12 device.
+// ────────────────── The DXR mirror of the Vulkan 20b gate (tests/gpu-context-vulkan/test_vulkan_rt.cpp). The
+// trace->compact->shade->compact SEQUENCE is READ from assets/frame/wavefront_work.frame.toml (extract_work_desc ->
+// build_work_ceir -> plan) and the three work stages are DRIVEN by execute_work_lowered over the caller's WorkHooks
+// (mandate #1). The kernels/scene/oracle/hash are the 19c DX12 harness VERBATIM; only the C++ `while(count>0)` loop is
+// replaced by the authored asset. ⛔ HONEST: the consume dispatch grid is HOST-READ from the produce-written count (the
+// fallback lowering); a DEVICE ExecuteIndirect is CEIR-20c.
+namespace
+{
+struct WfHostBuf
+{
+    crd::u64 sp = 0U;
+    void* host = nullptr;
+    crd::u64 bytes = 0U;
+};
+crd::u64
+wf_name_hash(crd::containers::StringView s) // FNV-1a — BYTE-IDENTICAL to crd::framecook's name_hash (source_param).
+{
+    crd::u64 h = 1469598103934665603ULL;
+    for (crd::usize i = 0; i < s.size(); ++i)
+    {
+        h ^= static_cast<crd::u8>(s[i]);
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+struct WfCtx
+{
+    RtGateStateDx* st = nullptr;
+    const ceir::Context* cctx = nullptr;
+    const crd::u8* dx_co = nullptr;
+    crd::usize co_sz = 0U; // wavefront_compact (produce)
+    const crd::u8* dx_sh = nullptr;
+    crd::usize sh_sz = 0U;  // wavefront_shade (consume)
+    crd::u32 shade_gx = 0U; // the count the consume dispatch used (== compact#1's readback — the count-driven pin)
+};
+cg::RtHostBinding wf_up(cg::WorkBufferHandle h)
+{
+    const auto* b = reinterpret_cast<const WfHostBuf*>(h); // NOLINT(performance-no-int-to-ptr)
+    return {nullptr, b->host, nullptr, b->bytes};
+}
+cg::RtHostBinding wf_rb(cg::WorkBufferHandle h)
+{
+    const auto* b = reinterpret_cast<const WfHostBuf*>(h); // NOLINT(performance-no-int-to-ptr)
+    return {nullptr, nullptr, b->host, b->bytes};
+}
+crd::containers::ConstSpan<crd::u8> wf_kernel_bytes(const ceir::Operation* op, void* user)
+{
+    auto* w = static_cast<WfCtx*>(user);
+    if (w->cctx->op_name(op->kind()) ==
+        crd::containers::StringView("work.consume")) // op_name is dialect-qualified (execute.cpp)
+    {
+        return crd::containers::ConstSpan<crd::u8>(w->dx_sh, w->sh_sz);
+    }
+    return crd::containers::ConstSpan<crd::u8>(w->dx_co, w->co_sz);
+}
+// produce = wavefront_compact: handles [count(queue), compacted(write), flags(read)] -> SSBO [flags, compacted, count]
+// = [h2,h1,h0].
+bool wf_dispatch(const ceir::Operation* /*op*/, crd::containers::ConstSpan<crd::u8> kb,
+                 crd::containers::ConstSpan<cg::WorkBufferHandle> h, crd::u32 gx, crd::u32 gy, crd::u32 gz, void* user)
+{
+    auto* w = static_cast<WfCtx*>(user);
+    if (h.size() != 3U)
+    {
+        return false;
+    }
+    const cg::RtHostBinding b[3] = {wf_up(h[2]), wf_rb(h[1]), wf_rb(h[0])};
+    return rt_gate_dx_trace_dispatch(cg::RtSceneHandle{1U}, kb, crd::containers::ConstSpan<cg::RtHostBinding>(b, 3U),
+                                     gx, gy, gz, w->st);
+}
+// consume = wavefront_shade: handles [count(queue), decisions(write), compacted, rays, hit_t] -> SSBO [compacted, rays,
+// hit_t, decisions] = [h2,h3,h4,h1]; the GRID is the produce-written count HOST-READ from the %queue buffer (fallback;
+// 20c = device).
+bool wf_dispatch_indirect(const ceir::Operation* /*op*/, cg::WorkBufferHandle queue,
+                          crd::containers::ConstSpan<crd::u8> kb, crd::containers::ConstSpan<cg::WorkBufferHandle> h,
+                          void* user)
+{
+    auto* w = static_cast<WfCtx*>(user);
+    if (h.size() != 5U)
+    {
+        return false;
+    }
+    const crd::u32 count = *static_cast<const crd::u32*>(
+        reinterpret_cast<const WfHostBuf*>(queue)->host); // NOLINT(performance-no-int-to-ptr)
+    w->shade_gx = count;
+    const cg::RtHostBinding b[4] = {wf_up(h[2]), wf_up(h[3]), wf_up(h[4]), wf_rb(h[1])};
+    return rt_gate_dx_trace_dispatch(cg::RtSceneHandle{1U}, kb, crd::containers::ConstSpan<cg::RtHostBinding>(b, 4U),
+                                     count, 1U, 1U, w->st);
+}
+} // namespace
+
+TEST_CASE(
+    "CEIR-20b DX12: the AUTHORED wavefront_work.frame.toml DRIVES the device wavefront == the 19c oracle + analytic",
+    "[gpu-context][dx12][gpu][rt][ceir20b]")
+{
+    gpu::Dx12RayTracingContext rt;
+    if (!rt.valid())
+    {
+        WARN("no D3D12 DXR-1.1 device available; skipping");
+        return;
+    }
+    crd::memory::TlsfAllocator alloc(64U << 20U);
+
+    // ── the 3 authored kernels (KGraph/KEntry for the oracle, DXIL for the GPU) — the 19c DX12 load, verbatim. ──
+    kir::KGraph kg_tr(&alloc);
+    kir::KGraph kg_co(&alloc);
+    kir::KGraph kg_sh(&alloc);
+    kir::KEntry ke_tr;
+    kir::KEntry ke_co;
+    kir::KEntry ke_sh;
+    crd::containers::Array<crd::u8> dx_tr(&alloc);
+    crd::containers::Array<crd::u8> dx_co(&alloc);
+    crd::containers::Array<crd::u8> dx_sh(&alloc);
+    const auto load_kernel =
+        [&](const char* path, kir::KGraph& kg, kir::KEntry& ke, crd::containers::Array<crd::u8>& dx)
+    {
+        std::ifstream f(path, std::ios::binary | std::ios::ate);
+        REQUIRE(f.good());
+        const std::streamsize sz = f.tellg();
+        REQUIRE(sz > 0);
+        f.seekg(0);
+        crd::containers::Array<char> src(&alloc);
+        src.resize(static_cast<crd::usize>(sz), '\0');
+        f.read(src.data(), sz);
+        REQUIRE(kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), kg, ke).ok);
+        dx = dxil_of(kg, ke, &alloc);
+        REQUIRE(dx.size() > 0U);
+    };
+    load_kernel(CRD_REPO_DIR "/assets/ckir/wavefront_trace.ckir", kg_tr, ke_tr, dx_tr);
+    load_kernel(CRD_REPO_DIR "/assets/ckir/wavefront_compact.ckir", kg_co, ke_co, dx_co);
+    load_kernel(CRD_REPO_DIR "/assets/ckir/wavefront_shade.ckir", kg_sh, ke_sh, dx_sh);
+
+    // ── scene + rays — the 19c setup, verbatim. ──
+    const float verts[27] = {-10.0F, 0.0F, -10.0F, 10.0F, 0.0F, -10.0F, 10.0F,  0.0F, 10.0F,
+                             -10.0F, 0.0F, -10.0F, 10.0F, 0.0F, 10.0F,  -10.0F, 0.0F, 10.0F,
+                             1.0F,   4.0F, -1.0F,  3.0F,  4.0F, -1.0F,  2.0F,   4.0F, 1.0F};
+    constexpr crd::u32 num_tris = 3U;
+    constexpr crd::u32 nrays = 8U;
+    constexpr crd::u32 nbuf = 64U;
+    const float seed[nrays * 6] = {4.0F,  20.0F, 0.0F, 0.0F, -1.0F, 0.0F, -8.0F, 20.0F, 0.0F, 0.0F, -1.0F, 0.0F,
+                                   4.0F,  20.0F, 0.4F, 0.0F, -1.0F, 0.0F, -6.0F, 20.0F, 0.0F, 0.0F, -1.0F, 0.0F,
+                                   15.0F, 20.0F, 0.0F, 0.0F, -1.0F, 0.0F, 16.0F, 20.0F, 0.0F, 0.0F, -1.0F, 0.0F,
+                                   17.0F, 20.0F, 0.0F, 0.0F, -1.0F, 0.0F, 18.0F, 20.0F, 0.0F, 0.0F, -1.0F, 0.0F};
+    float rays[nbuf * 6] = {};
+    for (crd::u32 r = 0; r < nbuf; ++r)
+    {
+        if (r < nrays)
+        {
+            for (int col = 0; col < 6; ++col)
+            {
+                rays[r * 6U + static_cast<crd::u32>(col)] = seed[r * 6U + static_cast<crd::u32>(col)];
+            }
+        }
+        else
+        {
+            rays[r * 6U + 0U] = 100.0F;
+            rays[r * 6U + 1U] = 100.0F;
+            rays[r * 6U + 2U] = 100.0F;
+            rays[r * 6U + 5U] = 1.0F;
+        }
+    }
+
+    // ── PARSE the AUTHORED asset -> extract_work_desc -> build_work_ceir -> the plan. ──
+    fc::FrameGraphDesc frame(&alloc);
+    {
+        std::ifstream f(CRD_REPO_DIR "/assets/frame/wavefront_work.frame.toml", std::ios::binary | std::ios::ate);
+        REQUIRE(f.good());
+        const std::streamsize sz = f.tellg();
+        REQUIRE(sz > 0);
+        f.seekg(0);
+        crd::containers::Array<char> src(&alloc);
+        src.resize(static_cast<crd::usize>(sz), '\0');
+        f.read(src.data(), sz);
+        REQUIRE(fc::parse_frame_toml(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), frame) ==
+                fc::FrameCookError::Ok);
+    }
+    cg::WorkBuildDesc wd;
+    const char* where = nullptr;
+    REQUIRE(fc::extract_work_desc(frame, wd, &where) == fc::FrameCookError::Ok);
+    REQUIRE(wd.num_stages == 3U);
+    REQUIRE(wd.num_queues == 2U);
+
+    ceir::Context wctx(&alloc);
+    crd::containers::Array<cg::LoweredCommand> plan(&alloc);
+    cg::WorkAssetResources res;
+    ceir::Module* const wm = cg::build_work_ceir(wctx, wd, plan, res);
+    REQUIRE(wm != nullptr);
+
+    // ── host arrays — the 19c layout, verbatim. ──
+    crd::containers::Array<crd::u32> hit_flags(&alloc);
+    crd::containers::Array<float> hit_t(&alloc);
+    crd::containers::Array<crd::u32> compacted(&alloc);
+    crd::containers::Array<crd::u32> decisions(&alloc);
+    crd::containers::Array<crd::u32> cont_flags(&alloc);
+    crd::containers::Array<crd::u32> next_queue(&alloc);
+    hit_flags.resize(nbuf, 0U);
+    hit_t.resize(nbuf, 0.0F);
+    compacted.resize(nbuf, 0xEEEEEEEEU);
+    decisions.resize(nbuf, 0xEEEEEEEEU);
+    cont_flags.resize(nbuf, 0U);
+    next_queue.resize(nbuf, 0xEEEEEEEEU);
+    crd::u32 hit_count = 0U;
+    crd::u32 next_count = 0U;
+
+    // ── the WfHostBuf table + the WorkResolvedBinding table (Value* -> handle), keyed by name_hash (== source_param).
+    // ──
+    const WfHostBuf bufs[9] = {
+        {wf_name_hash(crd::containers::StringView("rays")), rays, static_cast<crd::u64>(nbuf) * 6U * sizeof(float)},
+        {wf_name_hash(crd::containers::StringView("hit_flags")), hit_flags.data(),
+         static_cast<crd::u64>(nbuf) * sizeof(crd::u32)},
+        {wf_name_hash(crd::containers::StringView("hit_t")), hit_t.data(), static_cast<crd::u64>(nbuf) * sizeof(float)},
+        {wf_name_hash(crd::containers::StringView("compacted")), compacted.data(),
+         static_cast<crd::u64>(nbuf) * sizeof(crd::u32)},
+        {wf_name_hash(crd::containers::StringView("count")), &hit_count, sizeof(crd::u32)},
+        {wf_name_hash(crd::containers::StringView("decisions")), decisions.data(),
+         static_cast<crd::u64>(nbuf) * sizeof(crd::u32)},
+        {wf_name_hash(crd::containers::StringView("cont_flags")), cont_flags.data(),
+         static_cast<crd::u64>(nbuf) * sizeof(crd::u32)},
+        {wf_name_hash(crd::containers::StringView("next_queue")), next_queue.data(),
+         static_cast<crd::u64>(nbuf) * sizeof(crd::u32)},
+        {wf_name_hash(crd::containers::StringView("next_count")), &next_count, sizeof(crd::u32)}};
+    crd::containers::Array<cg::WorkResolvedBinding> table(&alloc);
+    for (crd::u32 i = 0; i < res.count; ++i)
+    {
+        const WfHostBuf* found = nullptr;
+        for (const auto& b : bufs)
+        {
+            if (b.sp == res.entries[i].source_param)
+            {
+                found = &b;
+                break;
+            }
+        }
+        REQUIRE(found != nullptr);
+        table.push_back(cg::WorkResolvedBinding{res.entries[i].value, reinterpret_cast<cg::WorkBufferHandle>(found)});
+    }
+
+    // ── DRIVE the sequence FROM THE FRAME: scene once, trace (plain dispatch), then the 3 work stages via
+    // execute_work_lowered. ──
+    RtGateStateDx st;
+    st.rt = &rt;
+    st.verts = verts;
+    st.ntris = num_tris;
+    REQUIRE(rt_gate_dx_build_scene(nullptr, &st) == cg::RtSceneHandle{1U});
+
+    const cg::RtHostBinding b_tr[3] = {
+        {nullptr, rays, nullptr, static_cast<crd::u64>(nbuf) * 6U * sizeof(float)},
+        {nullptr, nullptr, hit_flags.data(), static_cast<crd::u64>(nbuf) * sizeof(crd::u32)},
+        {nullptr, nullptr, hit_t.data(), static_cast<crd::u64>(nbuf) * sizeof(float)}};
+    REQUIRE(rt_gate_dx_trace_dispatch(cg::RtSceneHandle{1U},
+                                      crd::containers::ConstSpan<crd::u8>(dx_tr.data(), dx_tr.size()),
+                                      crd::containers::ConstSpan<cg::RtHostBinding>(b_tr, 3U), 1U, 1U, 1U, &st));
+
+    WfCtx wfc;
+    wfc.st = &st;
+    wfc.cctx = &wctx;
+    wfc.dx_co = dx_co.data();
+    wfc.co_sz = dx_co.size();
+    wfc.dx_sh = dx_sh.data();
+    wfc.sh_sz = dx_sh.size();
+    cg::WorkHooks hooks;
+    hooks.kernel_bytes = &wf_kernel_bytes;
+    hooks.dispatch = &wf_dispatch;
+    hooks.dispatch_indirect = &wf_dispatch_indirect;
+    hooks.barrier = nullptr; // per-stage submit+wait (rt.trace_dispatch is synchronous) — no inter-stage barrier needed
+    hooks.user = &wfc;
+    REQUIRE(cg::execute_work_lowered(wctx, crd::containers::ConstSpan<cg::LoweredCommand>(plan.data(), plan.size()),
+                                     hooks,
+                                     crd::containers::ConstSpan<cg::WorkResolvedBinding>(table.data(), table.size())) ==
+            cg::ExecuteError::None);
+    CHECK(wfc.shade_gx ==
+          hit_count); // the consume dispatch grid == compact#1's count readback (count-driven; host-read fallback)
+
+    // ── ORACLE (the 19c oracle, verbatim) — mirror the SAME 4-stage sequence on the CPU. ──
+    crd::containers::Array<crd::f64> geo(&alloc);
+    geo.resize(1U + 27U, 0.0);
+    geo[0] = static_cast<crd::f64>(num_tris);
+    for (int i = 0; i < 27; ++i)
+    {
+        geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]);
+    }
+    crd::containers::Array<crd::f64> rays64(&alloc);
+    rays64.resize(static_cast<crd::usize>(nbuf) * 6U, 0.0);
+    for (crd::usize i = 0; i < rays64.size(); ++i)
+    {
+        rays64[i] = static_cast<crd::f64>(rays[i]);
+    }
+    crd::containers::Array<crd::f64> hf_ref(&alloc);
+    crd::containers::Array<crd::f64> ht_ref(&alloc);
+    crd::containers::Array<crd::f64> comp_ref(&alloc);
+    crd::containers::Array<crd::f64> dec_ref(&alloc);
+    crd::containers::Array<crd::f64> cont_ref(&alloc);
+    crd::containers::Array<crd::f64> nq_ref(&alloc);
+    crd::containers::Array<crd::f64> hc_ref(&alloc);
+    crd::containers::Array<crd::f64> nc_ref(&alloc);
+    hf_ref.resize(nbuf, 0.0);
+    ht_ref.resize(nbuf, 0.0);
+    comp_ref.resize(nbuf, 0.0);
+    dec_ref.resize(nbuf, 0.0);
+    cont_ref.resize(nbuf, 0.0);
+    nq_ref.resize(nbuf, 0.0);
+    hc_ref.resize(1U, 0.0);
+    nc_ref.resize(1U, 0.0);
+
+    kir::KernelBuffer bt[4] = {{geo.data(), static_cast<int>(geo.size()), 0, 0},
+                               {rays64.data(), static_cast<int>(rays64.size()), 0, 1},
+                               {hf_ref.data(), static_cast<int>(nbuf), 0, 2},
+                               {ht_ref.data(), static_cast<int>(nbuf), 0, 3}};
+    kir::eval_cpu_kernel(kg_tr, ke_tr, bt, 4, 64U, &alloc, 1U);
+    kir::KernelBuffer bc1[4] = {{geo.data(), static_cast<int>(geo.size()), 0, 0},
+                                {hf_ref.data(), static_cast<int>(nbuf), 0, 1},
+                                {comp_ref.data(), static_cast<int>(nbuf), 0, 2},
+                                {hc_ref.data(), 1, 0, 3}};
+    kir::eval_cpu_kernel(kg_co, ke_co, bc1, 4, 1U, &alloc, 1U);
+    const crd::u32 ohc = static_cast<crd::u32>(hc_ref[0]);
+    kir::KernelBuffer bs[5] = {{geo.data(), static_cast<int>(geo.size()), 0, 0},
+                               {comp_ref.data(), static_cast<int>(nbuf), 0, 1},
+                               {rays64.data(), static_cast<int>(rays64.size()), 0, 2},
+                               {ht_ref.data(), static_cast<int>(nbuf), 0, 3},
+                               {dec_ref.data(), static_cast<int>(nbuf), 0, 4}};
+    kir::eval_cpu_kernel(kg_sh, ke_sh, bs, 5, 1U, &alloc, ohc > 0U ? ohc : 1U);
+    kir::KernelBuffer bc2[4] = {{geo.data(), static_cast<int>(geo.size()), 0, 0},
+                                {cont_ref.data(), static_cast<int>(nbuf), 0, 1},
+                                {nq_ref.data(), static_cast<int>(nbuf), 0, 2},
+                                {nc_ref.data(), 1, 0, 3}};
+    kir::eval_cpu_kernel(kg_co, ke_co, bc2, 4, 1U, &alloc, 1U);
+
+    // ── the triple32 decision-hash (GPU == oracle) + the ANALYTIC pin — the 19c gate, verbatim. ──
+    crd::u32 gpu_hash = 0x9E3779B9U;
+    crd::u32 oracle_hash = 0x9E3779B9U;
+    gpu_hash = rt_fold(gpu_hash, hit_count);
+    oracle_hash = rt_fold(oracle_hash, ohc);
+    for (crd::u32 j = 0; j < hit_count; ++j)
+    {
+        gpu_hash = rt_fold(gpu_hash, compacted[j]);
+    }
+    for (crd::u32 j = 0; j < ohc; ++j)
+    {
+        oracle_hash = rt_fold(oracle_hash, static_cast<crd::u32>(comp_ref[j]));
+    }
+    for (crd::u32 j = 0; j < hit_count; ++j)
+    {
+        gpu_hash = rt_fold(gpu_hash, decisions[j]);
+    }
+    for (crd::u32 j = 0; j < ohc; ++j)
+    {
+        oracle_hash = rt_fold(oracle_hash, static_cast<crd::u32>(dec_ref[j]));
+    }
+    gpu_hash = rt_fold(gpu_hash, next_count);
+    oracle_hash = rt_fold(oracle_hash, static_cast<crd::u32>(nc_ref[0]));
+    CHECK(gpu_hash == oracle_hash); // ⭐ the AUTHORED-asset-driven wavefront == the oracle (bit-exact decisions)
+
+    CHECK(hit_count == 4U);
+    CHECK(ohc == 4U);
+    for (crd::u32 j = 0; j < 4U; ++j)
+    {
+        INFO("slot " << j << ": gpu comp=" << compacted[j] << " dec=" << decisions[j] << " | oracle comp="
+                     << static_cast<crd::u32>(comp_ref[j]) << " dec=" << static_cast<crd::u32>(dec_ref[j]));
+        CHECK(compacted[j] == static_cast<crd::u32>(comp_ref[j]));
+        CHECK(decisions[j] == static_cast<crd::u32>(dec_ref[j]));
+    }
+    CHECK(decisions[0] == 0U); // (4,0,0)   under the occluder -> SHADOWED
+    CHECK(decisions[1] == 1U); // (-8,0,0)  clear -> LIT
+    CHECK(decisions[2] == 0U); // (4,0,0.4) under the occluder -> SHADOWED
+    CHECK(decisions[3] == 1U); // (-6,0,0)  clear -> LIT
+    CHECK(next_count ==
+          0U); // single-bounce: the authored compact#2 produces an EMPTY continuation queue (termination PINNED)
 }

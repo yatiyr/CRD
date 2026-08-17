@@ -196,12 +196,24 @@ void lower_region(const Context& ctx, const Block& block, containers::Array<Lowe
         const bool                   accel_build = nm == containers::StringView("rt.blas_build")
                                                    || nm == containers::StringView("rt.instance_populate")
                                                    || nm == containers::StringView("rt.tlas_build");
+        // ── CEIR-20b ceir.work (§43): produce = a const-grid append (→ Dispatch, grid from operands 0-2); COMPACT = the
+        // SERIAL fallback scan (→ Dispatch, grid 1,1,1 — the §134 wavefront_compact.ckir is local_size=1/one thread, NOT
+        // device-count sized; a parallel prefix-scan is a 20c device lowering, ledgered); CONSUME = the one INDIRECT
+        // dispatch over the %queue's device count (→ DispatchIndirect — the compute-surface smoke sizes it device-side;
+        // the RT wavefront's hook host-reads it). work.queue_alloc is NOT recognized → it `continue`s (emits nothing).
+        const bool                   work_produce = nm == containers::StringView("work.produce");
+        const bool                   work_compact = nm == containers::StringView("work.compact");
+        const bool                   work_consume = nm == containers::StringView("work.consume");
+        const bool                   work_direct  = work_produce || work_compact; // both a DIRECT dispatch
         LoweredTransferKind          tk       = LoweredTransferKind::Copy;
         const bool                   transfer = transfer_kind_of(nm, tk);
         // ⛔ CEIR-19c: rt.trace (pipeline) + rt.sbt_build are DEFERRED (19z) — the wavefront PT uses inline ray_query, so they
         // never appear in a 19c program; they are intentionally NOT in the recognized set (and would `continue` = emit nothing
         // like a pure declare — a deferred lowering, not a silent drop of a shipped verb; see the LoweredKind doc + tracker).
-        if (!(direct || indirect || transfer || scope || ray_query || accel_build)) { continue; } // Pure consts/declares emit nothing
+        if (!(direct || indirect || transfer || scope || ray_query || accel_build || work_direct || work_consume))
+        {
+            continue;
+        } // Pure consts/declares emit nothing (+ CEIR-20b: work.queue_alloc)
 
         // BARRIER: PER-RESOURCE (⭐ CEIR-13z-3). For each ROOT resource `op` accesses (binding-operand order, deduped), the
         // strongest hazard from any earlier lowered op touching it + the NEAREST such op (the last writer, reverse scan). A
@@ -280,6 +292,38 @@ void lower_region(const Context& ctx, const Block& block, containers::Array<Lowe
             c.op   = op;
             c.kind = ray_query ? LoweredKind::RayQuery : LoweredKind::AccelBuild;
             if (ray_query && op->num_operands() >= 3U)
+            {
+                crd::u32 gx = 0U;
+                crd::u32 gy = 0U;
+                crd::u32 gz = 0U;
+                if (resolve_const_u32(ctx, op->operand(0U), gx) && resolve_const_u32(ctx, op->operand(1U), gy)
+                    && resolve_const_u32(ctx, op->operand(2U), gz))
+                {
+                    c.groups_x = gx;
+                    c.groups_y = gy;
+                    c.groups_z = gz;
+                }
+                else
+                {
+                    c.dynamic_grid = true;
+                }
+            }
+            out.push_back(c);
+            earlier.push_back(op);
+            continue;
+        }
+
+        // ── CEIR-20b ceir.work: produce → a Dispatch (const grid resolved from operands 0..2, the direct-dispatch
+        // precedent); compact → a Dispatch too (the SERIAL fallback scan, grid 1,1,1 default — NO grid operands);
+        // consume → a DispatchIndirect (the grid is the %queue's DEVICE count, resolved by WorkHooks at execute). The
+        // %queue(s) + SSBO bindings + kernel_ref ride the `op` back-pointer (resolved by execute_work_lowered — ceir-gpu
+        // names no backend). Barriers were gathered above (conservative whole-Memory for the unregistered work shape).
+        if (work_direct || work_consume)
+        {
+            LoweredCommand c;
+            c.op   = op;
+            c.kind = work_consume ? LoweredKind::DispatchIndirect : LoweredKind::Dispatch;
+            if (work_produce && op->num_operands() >= 3U)
             {
                 crd::u32 gx = 0U;
                 crd::u32 gy = 0U;

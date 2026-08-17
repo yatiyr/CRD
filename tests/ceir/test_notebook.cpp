@@ -14,7 +14,7 @@
 #include <crd/ceir/gen/arith_ops.hpp> // arith::register_arith_ops (const/addi/muli)
 #include <crd/containers/incremental_dag.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -205,7 +205,7 @@ struct Notebook
 
 TEST_CASE("ceir 9a: initial evaluation computes every cell exactly once", "[ceir][notebook]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Notebook                     nb(ctx, &root);
     Array<Operation*>            c(&root);
@@ -221,7 +221,7 @@ TEST_CASE("ceir 9a: initial evaluation computes every cell exactly once", "[ceir
 
 TEST_CASE("ceir 9a: editing an input recomputes exactly its value-dependents; a stable node cuts propagation", "[ceir][notebook]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Notebook                     nb(ctx, &root);
     Array<Operation*>            c(&root);
@@ -249,7 +249,7 @@ TEST_CASE("ceir 9a: editing an input recomputes exactly its value-dependents; a 
 
 TEST_CASE("ceir 9a: the engine dependent-set is a conservative superset; the evaluator prunes the cut node", "[ceir][notebook]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Notebook                     nb(ctx, &root);
     Array<Operation*>            c(&root);
@@ -277,7 +277,7 @@ TEST_CASE("ceir 9a: the engine dependent-set is a conservative superset; the eva
 
 TEST_CASE("ceir 9a: editing a different input recomputes a precise partial set", "[ceir][notebook]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Notebook                     nb(ctx, &root);
     Array<Operation*>            c(&root);
@@ -306,7 +306,7 @@ TEST_CASE("ceir 9a: editing a different input recomputes a precise partial set",
 
 TEST_CASE("ceir 9a: a value-preserving formula edit hot-swaps its dependents (the section-107 cutoff)", "[ceir][notebook]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Notebook                     nb(ctx, &root);
     Array<Operation*>            c(&root);
@@ -335,7 +335,7 @@ TEST_CASE("ceir 9a: a value-preserving formula edit hot-swaps its dependents (th
 
 TEST_CASE("ceir 9a: a no-op edit recomputes nothing (content-addressed memo through the transaction seam)", "[ceir][notebook]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Notebook                     nb(ctx, &root);
     Array<Operation*>            c(&root);
@@ -355,7 +355,7 @@ TEST_CASE("ceir 9a: a no-op edit recomputes nothing (content-addressed memo thro
 
 TEST_CASE("ceir 9a: identical formulas hash equal regardless of cell identity or position", "[ceir][notebook]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     Notebook                     nb(ctx, &root);
     Array<Operation*>            c(&root);

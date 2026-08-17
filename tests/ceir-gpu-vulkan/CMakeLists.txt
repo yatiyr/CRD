@@ -5,6 +5,7 @@
 add_executable(crd-ceir-gpu-vulkan-tests
     test_ceir_add_vulkan.cpp
     test_ceir_render_vulkan.cpp   # CEIR-14z-3: the render DEVICE pixel proof (a CEIR render.scope{draw} → real encoder)
+    test_work_smoke_vulkan.cpp    # CEIR-20b: execute_work_lowered DEVICE proof — produce writes the count, indirect consume reads it
 )
 
 target_link_libraries(crd-ceir-gpu-vulkan-tests PRIVATE
@@ -18,6 +19,9 @@ target_link_libraries(crd-ceir-gpu-vulkan-tests PRIVATE
     crd-kir-vulkan    # the Vulkan backend (transitively: gpu-context-vulkan — VulkanComputeContext, compile_glsl_to_spirv, ValidationCapture)
     Catch2::Catch2WithMain
 )
+
+# CEIR-20b: test_work_smoke_vulkan loads the authored assets/ckir/work_smoke_*.ckir from disk (the repo root).
+target_compile_definitions(crd-ceir-gpu-vulkan-tests PRIVATE CRD_REPO_DIR="${CMAKE_SOURCE_DIR}")
 
 crd_enable_default_pch(crd-ceir-gpu-vulkan-tests)
 catch_discover_tests(crd-ceir-gpu-vulkan-tests PROPERTIES RESOURCE_LOCK crd_gpu_device)

@@ -5,7 +5,7 @@
 #include <crd/ceir/ceir.hpp>
 #include <crd/ceir/rewrite.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -22,7 +22,7 @@ bool legal_if_no_operands(const Context&, const Operation& op) noexcept { return
 
 TEST_CASE("ceir 8g: try_apply matches + rewrites one op, declines a non-matching op", "[ceir][rewrite]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     CHECK(ctx.intern_op("test", "target") == OpId{fnv1a_ct("test.target")}); // justifies the capture-free match hook
 
@@ -45,7 +45,7 @@ TEST_CASE("ceir 8g: try_apply matches + rewrites one op, declines a non-matching
 
 TEST_CASE("ceir 8g: ConversionTarget legality; an UNLISTED kind is Illegal (EMPTY!=UNKNOWN)", "[ceir][rewrite]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     ConversionTarget             target(&root);
     const OpId legal   = ctx.intern_op("test", "legal");

@@ -14,7 +14,7 @@
 #include <crd/ceir/gpu/lower.hpp>
 #include <crd/ceir/rt.hpp>          // CEIR-19c: the rt dialect builders (blas/instance/tlas build + ray_query)
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -95,7 +95,7 @@ Operation* unary_t(Context& c, Block* b, OpId kind, Value* v)
 
 TEST_CASE("ceir 13d: barriers derive from precise per-binding accesses (narrowing)", "[ceir][ceir-gpu]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
 
@@ -149,7 +149,7 @@ TEST_CASE("ceir 13d: barriers derive from precise per-binding accesses (narrowin
 
 TEST_CASE("ceir 13d: transfers lower and the upload->first-read barrier is by construction (discriminating)", "[ceir][ceir-gpu]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
 
@@ -214,7 +214,7 @@ TEST_CASE("ceir 13d: transfers lower and the upload->first-read barrier is by co
 
 TEST_CASE("ceir 13d: conservative pins (malformed access, unregistered op) and the CLOSED 12c view alias", "[ceir][ceir-gpu]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
 
@@ -272,7 +272,7 @@ TEST_CASE("ceir 13d: conservative pins (malformed access, unregistered op) and t
 
 TEST_CASE("ceir 13d: the grid resolves all-or-nothing; indirect and dynamic never partially fill", "[ceir][ceir-gpu]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
 
@@ -328,7 +328,7 @@ TEST_CASE("ceir 13d: the grid resolves all-or-nothing; indirect and dynamic neve
 // ── CEIR-19c: the ceir.rt lowering (RayQuery + AccelBuild) + the widen-closed-enum consumer audit ─────────────────────
 TEST_CASE("ceir 19c: lower_region emits AccelBuild + RayQuery for ceir.rt ops; the compute surface rejects them", "[ceir][ceir-gpu][rt]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     (void)rt::register_dialect(ctx); // the rt dialect (blas/instance/tlas build + ray_query) atop the Kit's arith/resource/...
@@ -407,7 +407,7 @@ constexpr crd::u8 kRtSentinelBytes[4] = {1U, 2U, 3U, 4U}; // a non-empty kernel-
 // builds the AS chain (3x) then dispatch_inline_ray_query (1x), threading the TERMINAL tlas handle, and rejects a foreign kind.
 TEST_CASE("ceir 19c: execute_rt_lowered walks the RT list through the caller hooks (build x3 -> trace x1)", "[ceir][ceir-gpu][rt]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     (void)rt::register_dialect(ctx);
@@ -491,7 +491,7 @@ TEST_CASE("ceir 19c: execute_rt_lowered walks the RT list through the caller hoo
 // 19z implementer trips on purpose, closing the only untested branch the RT lowering added.
 TEST_CASE("ceir 19c: rt.trace + rt.sbt_build are DEFERRED to 19z (they lower to no command)", "[ceir][ceir-gpu][rt]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     (void)rt::register_dialect(ctx);
@@ -531,7 +531,7 @@ TEST_CASE("ceir 19c: rt.trace + rt.sbt_build are DEFERRED to 19z (they lower to 
 
 TEST_CASE("ceir 13d: lowering is deterministic (dispatches + a transfer, lower twice -> identical)", "[ceir][ceir-gpu]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
     Block* const                 b   = ctx.create_block(0U);
@@ -559,7 +559,7 @@ TEST_CASE("ceir 13d: lowering is deterministic (dispatches + a transfer, lower t
 
 TEST_CASE("ceir 13d: a dispatch reading N buffers from N prior writers gets N per-resource barriers (13z-3 completion)", "[ceir][ceir-gpu]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Kit                    k(ctx);
 

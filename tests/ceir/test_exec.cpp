@@ -9,7 +9,7 @@
 #include <crd/ceir/gen/arith_ops.hpp>
 #include <crd/ceir/gen/core_ops.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -110,7 +110,7 @@ i64 run_ok(Context& ctx, Module& m, containers::StringView entry, ConstSpan<i64>
 
 TEST_CASE("ceir exec: arith const/addi/muli/cmpi reference semantics", "[ceir][exec]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -135,7 +135,7 @@ TEST_CASE("ceir exec: arith const/addi/muli/cmpi reference semantics", "[ceir][e
 
 TEST_CASE("ceir exec: addi wraps two's-complement (u64 cast, no signed UB)", "[ceir][exec]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m  = ctx.create_module();
@@ -149,7 +149,7 @@ TEST_CASE("ceir exec: addi wraps two's-complement (u64 cast, no signed UB)", "[c
 
 TEST_CASE("ceir exec: core.if selects the branch and forwards the yield to results", "[ceir][exec]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -172,7 +172,7 @@ TEST_CASE("ceir exec: core.if selects the branch and forwards the yield to resul
 
 TEST_CASE("ceir exec: a for loop with a state accumulator sums 0..n-1", "[ceir][exec]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -202,7 +202,7 @@ TEST_CASE("ceir exec: a for loop with a state accumulator sums 0..n-1", "[ceir][
 
 TEST_CASE("ceir exec: the state ring (history(1) is a plain register; history(3) delays by three)", "[ceir][exec]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     // build @main(): for(0,iters,1) { h = history(depth, init=-1); next = iv }, observe cell_value(h) after.
     const auto history_after = [&root](i64 iters, crd::u32 depth) -> i64 {
         Context    c(&root);
@@ -236,7 +236,7 @@ TEST_CASE("ceir exec: the state ring (history(1) is a plain register; history(3)
 
 TEST_CASE("ceir exec: a func.call binds args, returns, and a state cell persists across CALLS", "[ceir][exec]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m  = ctx.create_module();
@@ -260,7 +260,7 @@ TEST_CASE("ceir exec: a func.call binds args, returns, and a state cell persists
 
 TEST_CASE("ceir exec: switch selects a region; an out-of-range selector errors", "[ceir][exec]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m  = ctx.create_module();
@@ -292,7 +292,7 @@ TEST_CASE("ceir exec: switch selects a region; an out-of-range selector errors",
 
 TEST_CASE("ceir exec: the typed error modes", "[ceir][exec]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -368,7 +368,7 @@ TEST_CASE("ceir exec: the typed error modes", "[ceir][exec]")
 
 TEST_CASE("ceir exec: open-world -- a hand-registered dialect op evaluates via an installed EvalFn", "[ceir][exec]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     const OpId                   dbl = ctx.register_dialect("hw")->register_op("dbl", {}); // custom "double" op
@@ -397,7 +397,7 @@ TEST_CASE("ceir exec: a prototype clone runs correctly with independent per-clon
     // CEIR-6b: the parallel provider builds one installed PROTOTYPE, then constructs a fresh Interpreter per range from
     // it -- each with its OWN scratch allocator (so worker ranges never touch the shared Context arena) and INDEPENDENT
     // state cells / env / fuel. This pins that contract.
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     // @acc(%d): a cross-call state counter; @main(): acc(10); acc(5); return acc(0) == 15 on a FRESH session.
@@ -419,8 +419,8 @@ TEST_CASE("ceir exec: a prototype clone runs correctly with independent per-clon
     exec::Interpreter proto(ctx);
     exec::install_builtin_semantics(proto);
 
-    crd::memory::MallocAllocator sa; // clone A's own scratch
-    crd::memory::MallocAllocator sb; // clone B's own scratch
+    crd::memory::GrowableTlsfAllocator sa; // clone A's own scratch
+    crd::memory::GrowableTlsfAllocator sb; // clone B's own scratch
     exec::Interpreter            a(proto, &sa, crd::u64{1} << 20U);
     exec::Interpreter            b(proto, &sb, crd::u64{1} << 20U);
     CHECK(a.allocator() == &sa); // each clone uses its OWN scratch (not the Context arena)

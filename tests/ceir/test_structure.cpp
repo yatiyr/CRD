@@ -7,7 +7,7 @@
 #include <crd/ceir/gen/arith_ops.hpp>
 #include <crd/ceir/gen/core_ops.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -46,7 +46,7 @@ Operation* use2(Context& ctx, OpId k, Value* a, Value* b2, Block* b)
 
 TEST_CASE("ceir structure: a well-formed module has no structure error", "[ceir][structure]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -59,7 +59,7 @@ TEST_CASE("ceir structure: a well-formed module has no structure error", "[ceir]
 
 TEST_CASE("ceir structure: a rich nested valid module (captures + value-producing if + block args) is sound", "[ceir][structure]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -84,7 +84,7 @@ TEST_CASE("ceir structure: a rich nested valid module (captures + value-producin
 
 TEST_CASE("ceir structure: use-before-def (forward reference and self-reference)", "[ceir][structure]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
 
@@ -114,7 +114,7 @@ TEST_CASE("ceir structure: use-before-def (forward reference and self-reference)
 
 TEST_CASE("ceir structure: capture into a non-isolated region is legal; through isolation is not", "[ceir][structure]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
 
@@ -152,7 +152,7 @@ TEST_CASE("ceir structure: capture into a non-isolated region is legal; through 
 
 TEST_CASE("ceir structure: capturing a value defined AFTER the region owner is use-before-def", "[ceir][structure]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
@@ -178,7 +178,7 @@ TEST_CASE("ceir structure: capturing a value defined AFTER the region owner is u
 
 TEST_CASE("ceir structure: terminator rules by RegionKind", "[ceir][structure]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
 
@@ -219,7 +219,7 @@ TEST_CASE("ceir structure: terminator rules by RegionKind", "[ceir][structure]")
 
 TEST_CASE("ceir structure: the yield<->owner count contract", "[ceir][structure]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     Context                      ctx(&root);
     const Ops                    o(ctx);
 

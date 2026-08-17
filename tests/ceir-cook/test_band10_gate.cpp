@@ -16,7 +16,7 @@
 #include <crd/ceir/gen/arith_ops.hpp>
 #include <crd/ceir/gen/core_ops.hpp>
 
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -68,7 +68,7 @@ void module_block(Context& c, Module& m)
 ConstSpan<u8> span_of(const Array<u8>& b) { return ConstSpan<u8>(b.data(), b.size()); }
 
 // a leaf @fname() -> (i32|i64) { return k } — `k` toggles the BODY, `i64_result` toggles the SIGNATURE.
-Array<u8> cook_leaf(crd::memory::MallocAllocator& root, u64 asset_id, StringView fname, i64 k, bool i64_result)
+Array<u8> cook_leaf(crd::memory::GrowableTlsfAllocator& root, u64 asset_id, StringView fname, i64 k, bool i64_result)
 {
     Context   c(&root);
     const Reg r(c);
@@ -83,7 +83,7 @@ Array<u8> cook_leaf(crd::memory::MallocAllocator& root, u64 asset_id, StringView
     return std::move(cr.blob);
 }
 // a caller @fname() -> i32 { call callee(); return 0 } — imports `callee` (a dependency edge).
-Array<u8> cook_caller(crd::memory::MallocAllocator& root, u64 asset_id, StringView fname, StringView callee)
+Array<u8> cook_caller(crd::memory::GrowableTlsfAllocator& root, u64 asset_id, StringView fname, StringView callee)
 {
     Context   c(&root);
     const Reg r(c);
@@ -120,7 +120,7 @@ PlanStatus plan_of(PlanCache& cache, ReloadSet& set, u64 target, AssetId owner)
 
 TEST_CASE("ceir 10z: BAND-10 GATE - lifecycle + plan cache compose live across the three edit classes", "[ceir][gate10]")
 {
-    crd::memory::MallocAllocator root;
+    crd::memory::GrowableTlsfAllocator root;
     ReloadSet                    set(&root, &registrar, nullptr);
     const AssetId                id_a{1U};   // A — caller: imports "bar"
     const AssetId                id_b{2U};   // B — callee: exports bar()

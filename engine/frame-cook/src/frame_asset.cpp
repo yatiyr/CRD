@@ -433,6 +433,7 @@ const char* frame_cook_error_text(FrameCookError err) noexcept
     case FrameCookError::UnknownStencilOp:         return "unknown stencil op";
     case FrameCookError::BadStencilValue:          return "a stencil ref/mask outside 0..255";
     case FrameCookError::LoadNeedsGeometry:        return "`load = true` is only supported on raster.geometry passes";
+    case FrameCookError::WorkQueueNotOne:          return "a work produce/consume pass must reference exactly one counter_buffer queue";
     }
     return "unknown error";
 }
@@ -1096,6 +1097,12 @@ FrameCookError pass_contract_diag(const FramePassDesc& p, crd::containers::Const
             set_where(where, std::string_view(p.name.c_str(), p.name.size()));
             return FrameCookError::MissingShader;
         }
+        // ⭐ CEIR-20b: a ceir.work pass (produce/consume/compact) binds a CKIR kernel exactly like a compute dispatch.
+        if (pass_is_work(p) && pass_str(p, crd::containers::StringView(pp::kKernel)).empty())
+        {
+            set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+            return FrameCookError::MissingShader;
+        }
         // ── ⭐ REN-38-A14: only COMPUTE-SHAPED work can go on the async-compute queue. ──
         // ⛔ A compute queue cannot rasterise. A raster pass that asked for it would either be silently moved back
         // to graphics (a perf claim the frame never delivered) or submitted somewhere it cannot run. Rejected.
@@ -1642,7 +1649,20 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
             if (is_output(p.writes[i].name)) { wrote_output = true; }
         }
     }
-    if (!wrote_output && !composed) { return FrameCookError::NoOutputPass; }
+    // ⭐ CEIR-20b: a HEADLESS frame (only work/compute/raytrace/transfer passes — NO raster) produces DEVICE BUFFERS the
+    // app reads back, not a swapchain image, so it needs no `@output` endpoint (the wavefront_work.frame.toml case). Only
+    // require @output when the frame actually rasterises (a raster pass would else silently clear a canvas nobody presents).
+    bool has_raster = false;
+    for (crd::usize pi = 0; pi < desc.passes.size(); ++pi)
+    {
+        const FramePassDesc& rp = desc.passes[pi];
+        if (pass_draws_geometry(rp) || pass_is_fullscreen(rp) || pass_is_present(rp))
+        {
+            has_raster = true;
+            break;
+        }
+    }
+    if (!wrote_output && !composed && has_raster) { return FrameCookError::NoOutputPass; }
 
     // every DECLARED resource must be produced by some pass (an unwritten transient is dead weight and, more
     // importantly, a sign the author mistyped a name — `build()` already rejects it at runtime; we reject earlier)
@@ -1723,6 +1743,11 @@ constexpr KindRow kKindTable[] = {
     {"raster.mesh.indirect", kExecMeshIndirect,     false, false, false, false, false},
     {"raytrace",             kExecRaytraceDispatch, false, false, false, false, false},
     {"raytrace.pipeline",    kExecRaytracePipeline, false, false, false, false, false},
+    // ⭐ CEIR-20b (§43): the ceir.work device-generated-work mechanics (produce/consume/compact). No role bits — the op
+    // identity IS the executor (build_work_ceir maps each to its ceir.work op). consume/compact are INDIRECT at cook.
+    {"work.produce",         kExecWorkProduce,      false, false, false, false, false},
+    {"work.consume",         kExecWorkConsume,      false, false, false, false, false},
+    {"work.compact",         kExecWorkCompact,      false, false, false, false, false},
     {"clear",                kExecTransferClear,    false, false, false, false, false},
     {"copy",                 kExecTransferCopy,     false, false, false, false, false},
     {"blit",                 kExecTransferBlit,     false, false, false, false, false},

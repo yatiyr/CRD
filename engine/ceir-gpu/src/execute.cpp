@@ -106,6 +106,8 @@ containers::StringView execute_error_name(ExecuteError e) noexcept
     case ExecuteError::AccelBuildFailed: return containers::StringView("AccelBuildFailed");
     case ExecuteError::UnresolvedTlas: return containers::StringView("UnresolvedTlas");
     case ExecuteError::TraceDispatchFailed: return containers::StringView("TraceDispatchFailed");
+    case ExecuteError::UnresolvedQueue: return containers::StringView("UnresolvedQueue");
+    case ExecuteError::WorkDispatchFailed: return containers::StringView("WorkDispatchFailed");
     }
     return containers::StringView("None");
 }
@@ -127,6 +129,12 @@ ExecuteError validate_lowered(const Context& ctx, containers::ConstSpan<LoweredC
         // CEIR-19c: ceir.rt kinds (RayQuery/AccelBuild) target the RT executor (execute_rt_lowered, a caller-HOOK surface),
         // NOT this IComputeContext — reject them TYPED (the render/Transfer named-forward mirror).
         if (cmd.kind == LoweredKind::RayQuery || cmd.kind == LoweredKind::AccelBuild)
+        {
+            return ExecuteError::UnsupportedCommand;
+        }
+        // CEIR-20b: ceir.work's DispatchIndirect (a %queue-count-driven dispatch) targets the WORK executor
+        // (execute_work_lowered, the queue resolver), NOT this IComputeContext — reject it TYPED (the RayQuery/Transfer mirror).
+        if (cmd.kind == LoweredKind::DispatchIndirect)
         {
             return ExecuteError::UnsupportedCommand;
         }
@@ -157,6 +165,12 @@ ExecuteError execute_lowered(const Context& ctx, containers::ConstSpan<LoweredCo
         }
         // CEIR-19c: ceir.rt kinds (RayQuery/AccelBuild) target the RT executor (execute_rt_lowered) — reject them TYPED here.
         if (cmd.kind == LoweredKind::RayQuery || cmd.kind == LoweredKind::AccelBuild)
+        {
+            return ExecuteError::UnsupportedCommand;
+        }
+        // CEIR-20b: ceir.work's DispatchIndirect targets execute_work_lowered (the queue resolver), NOT this
+        // IComputeContext — reject it TYPED (the RayQuery/Transfer named-forward mirror).
+        if (cmd.kind == LoweredKind::DispatchIndirect)
         {
             return ExecuteError::UnsupportedCommand;
         }
@@ -268,4 +282,188 @@ ExecuteError execute_rt_lowered(const Context& ctx, containers::ConstSpan<Lowere
     }
     return ExecuteError::None;
 }
+// ── CEIR-20b: the ceir.work executor (the execute_rt_lowered mirror; see execute.hpp).
+// ──────────────────────────────────
+namespace
+{
+// The GRID-operand prefix of a work op — the operands to SKIP to reach the RESOURCE DESCRIPTORS. ⛔ The queue/src
+// operands are DESCRIPTORS (the producer WRITES its queue; compact reads src + writes dst), so only the launch grid is
+// skipped: produce = 3 (grid 0-2, then queue + bindings), consume = 0 (queue + bindings), compact = 0 (src + dst +
+// bindings). kNotWorkOp ⇒ not a work op.
+constexpr crd::u32 kNotWorkOp = 0xFFFFFFFFU;
+[[nodiscard]] crd::u32 work_grid_prefix(containers::StringView nm) noexcept
+{
+    if (nm == containers::StringView("work.produce"))
+    {
+        return 3U;
+    }
+    if (nm == containers::StringView("work.consume"))
+    {
+        return 0U;
+    }
+    if (nm == containers::StringView("work.compact"))
+    {
+        return 0U;
+    }
+    return kNotWorkOp;
+}
+// Look a descriptor operand up in the caller's WorkResolvedBinding table by resource_root (queues pass through
+// resource_root unchanged, so queues + buffers key uniformly). 0 ⇒ unmapped.
+[[nodiscard]] WorkBufferHandle work_lookup(const Context& ctx, const Value* operand,
+                                           containers::ConstSpan<WorkResolvedBinding> table)
+{
+    const Value* const root = ctx.resource_root(operand);
+    for (crd::u32 k = 0; k < static_cast<crd::u32>(table.size()); ++k)
+    {
+        if (table[k].resource == root)
+        {
+            return table[k].buffer;
+        }
+    }
+    return 0U;
+}
+} // namespace
+
+ExecuteError validate_work_lowered(const Context& ctx, containers::ConstSpan<LoweredCommand> commands,
+                                   const WorkHooks& hooks, containers::ConstSpan<WorkResolvedBinding> bindings)
+{
+    (void)bindings; // the pure half checks STRUCTURE (kind/kernel/%queue), not the resolved handles (those bind at
+                    // execute)
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(commands.size()); ++i)
+    {
+        const LoweredCommand& cmd = commands[i];
+        if (cmd.kind == LoweredKind::Barrier)
+        {
+            continue;
+        } // inert (submit+wait per stage)
+        if (cmd.kind != LoweredKind::Dispatch && cmd.kind != LoweredKind::DispatchIndirect)
+        {
+            return ExecuteError::UnsupportedCommand; // a Transfer/render/RT kind is not the work surface
+        }
+        const Operation* const op = cmd.op;
+        if (op == nullptr)
+        {
+            return ExecuteError::UnsupportedCommand;
+        }
+        const crd::u32 gp = work_grid_prefix(ctx.op_name(op->kind()));
+        if (gp == kNotWorkOp)
+        {
+            return ExecuteError::UnsupportedCommand;
+        } // a non-work Dispatch (a plain compute.dispatch)
+        // a DispatchIndirect sizes from its %queue (the first descriptor, operand `gp`) — guard it is present.
+        if (cmd.kind == LoweredKind::DispatchIndirect && op->num_operands() <= gp)
+        {
+            return ExecuteError::UnresolvedQueue;
+        }
+        const containers::ConstSpan<crd::u8> kb =
+            (hooks.kernel_bytes != nullptr) ? hooks.kernel_bytes(op, hooks.user) : containers::ConstSpan<crd::u8>{};
+        if (kb.size() == 0U)
+        {
+            return ExecuteError::UnresolvedKernel;
+        }
+    }
+    return ExecuteError::None;
+}
+
+ExecuteError execute_work_lowered(const Context& ctx, containers::ConstSpan<LoweredCommand> commands,
+                                  const WorkHooks& hooks, containers::ConstSpan<WorkResolvedBinding> bindings)
+{
+    const ExecuteError verr = validate_work_lowered(ctx, commands, hooks, bindings);
+    if (verr != ExecuteError::None)
+    {
+        return verr;
+    }
+
+    containers::Array<WorkBufferHandle> handles(
+        ctx.allocator()); // scratch: a stage's resource descriptors in operand order
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(commands.size()); ++i)
+    {
+        const LoweredCommand& cmd = commands[i];
+        if (cmd.kind == LoweredKind::Barrier)
+        {
+            // ⛔ REPLAY the inter-stage hazard (the DEVICE-RESIDENT model — the RtHostBinding host-span mirror made
+            // these inert; device-resident does NOT). lower_region's conservative whole-Memory gather emits a
+            // nullptr-resource barrier between every work-stage pair; hazard_access maps the kind → (from,to); a
+            // nullptr resource ⇒ barrier every table buffer.
+            if (hooks.barrier != nullptr)
+            {
+                crd::gpu::ComputeAccess from = crd::gpu::ComputeAccess::ShaderWrite;
+                crd::gpu::ComputeAccess to = crd::gpu::ComputeAccess::ShaderRead;
+                hazard_access(cmd.hazard, from, to);
+                if (cmd.resource == nullptr)
+                {
+                    for (crd::u32 k = 0; k < static_cast<crd::u32>(bindings.size()); ++k)
+                    {
+                        (void)hooks.barrier(bindings[k].buffer, from, to, hooks.user);
+                    }
+                }
+                else
+                {
+                    const WorkBufferHandle h = work_lookup(ctx, cmd.resource, bindings);
+                    if (h != 0U)
+                    {
+                        (void)hooks.barrier(h, from, to, hooks.user);
+                    }
+                }
+            }
+            continue;
+        }
+        const Operation* const op = cmd.op;
+        const crd::u32 gp = work_grid_prefix(ctx.op_name(op->kind()));
+
+        // the RESOURCE descriptors: operands `gp`.. (the queue/src, then the bindings) → the caller's named device
+        // buffers.
+        handles.clear();
+        const crd::u32 nops = op->num_operands();
+        for (crd::u32 b = gp; b < nops; ++b)
+        {
+            const WorkBufferHandle h = work_lookup(ctx, op->operand(b), bindings);
+            if (h == 0U)
+            {
+                return ExecuteError::UnmappedBinding;
+            }
+            handles.push_back(h);
+        }
+
+        const containers::ConstSpan<crd::u8> kb =
+            (hooks.kernel_bytes != nullptr) ? hooks.kernel_bytes(op, hooks.user) : containers::ConstSpan<crd::u8>{};
+        if (kb.size() == 0U)
+        {
+            return ExecuteError::UnresolvedKernel;
+        }
+        const containers::ConstSpan<WorkBufferHandle> hspan(handles.data(), handles.size());
+
+        bool ok = false;
+        if (cmd.kind == LoweredKind::Dispatch) // produce: a DIRECT dispatch over the authored const grid
+        {
+            ok = (hooks.dispatch != nullptr) &&
+                 hooks.dispatch(op, kb, hspan, cmd.groups_x, cmd.groups_y, cmd.groups_z, hooks.user);
+        }
+        else // DispatchIndirect: consume/compact — the DEVICE reads the %queue's (first-descriptor) count; the host
+             // never sizes it.
+        {
+            const WorkBufferHandle queue =
+                handles.size() > 0U ? handles[0] : 0U; // operand `gp` = the queue/src = handles[0]
+            if (queue == 0U)
+            {
+                return ExecuteError::UnresolvedQueue;
+            }
+            // ⛔ the one hazard the plan CAN'T express (no HazardKind maps to an indirect-args read): the
+            // produce-written queue count read by vkCmdDispatchIndirect — the executor OWNS it (the C5
+            // ComputeAccess::IndirectRead pattern, added for this).
+            if (hooks.barrier != nullptr)
+            {
+                (void)hooks.barrier(queue, crd::gpu::ComputeAccess::ShaderWrite, crd::gpu::ComputeAccess::IndirectRead,
+                                    hooks.user);
+            }
+            ok = (hooks.dispatch_indirect != nullptr) && hooks.dispatch_indirect(op, queue, kb, hspan, hooks.user);
+        }
+        if (!ok)
+        {
+            return ExecuteError::WorkDispatchFailed;
+        }
+    }
+    return ExecuteError::None;
+}
+
 } // namespace crd::ceir::gpu
