@@ -1,0 +1,292 @@
+# work_smoke_produce_dgc.ckir - CEIR-20c-2 (VK_EXT_device_generated_commands, cross-vendor) smoke: the PRODUCE half that authors
+# a DEVICE-GENERATED COMMAND STREAM. A 1-thread compute dispatch writes TWO buffers: (1) token@0 = FIVE VkDispatchIndirectCommand
+# payloads back-to-back, each (gx,gy,gz)=(1,1,1) -> token[0..14] all = 1; (2) count@1[0] = 5 = the device-written SEQUENCE COUNT.
+# vkCmdExecuteGeneratedCommandsEXT then reads count(=5) as the sequence count + token as the command stream and generates FIVE
+# separate DISPATCH commands of the consume kernel. This is the DGC-DISTINCTIVE shape: the DEVICE writes the command stream (the
+# NUMBER of commands AND every payload) - a thing vkCmdDispatchIndirect (20b) literally cannot express (it host-records ONE
+# dispatch, device-supplies only the grid). ⛔ SCOREBOARD: 20b = host-recorded dispatch + device grid · 20c-1 = GPU-scheduled node
+# launch · 20c-2 = device-GENERATED command stream. AUTHORED .ckir (mandate #1: NO C++ builder; the .ckir is the SOLE source).
+# count@1 doubles as the consume's queue@0 read source (count[0]=5 -> consume's out[1]=queue[0]=5). local_size=1. ⛔ node refs are
+# "n<POOL-INDEX>" (the id string is ignored; the position IS the identity), so nodes are declared in strict n0..n18 order.
+# BINDING CONTRACT: token@0 (write, U32 - the ExecuteGeneratedCommands indirectAddress), count@1 (write, U32 - the
+# sequenceCountAddress AND the consume's queue read source).
+schema = 1
+
+[[entry]]
+stage = "Compute"
+inputs = 0
+position = -1
+frag_depth = -1
+discard_cond = -1
+early_fragment_tests = false
+depth_mode = "Any"
+shading_rate = -1
+storage_write_index = -1
+storage_write_value = -1
+interlock = false
+n_out = 0
+local_size = [1, 1, 1]
+kernel_body_begin = 0
+kernel_body_count = 16
+mesh_vertices = 0
+mesh_primitives = 0
+mesh_prim = -1
+task_emit = -1
+task_payload = [-1, -1, -1, -1]
+n_task_payload = 0
+tess_patch_size = 0
+tess_inner = -1
+tess_outer = -1
+mesh_payload_in = false
+storage_read_only = false
+
+# n0: token@0 (the DGC command stream: five VkDispatchIndirectCommand {x,y,z} = 15 u32s, the indirectAddress source)
+[[node]]
+id = "n0"
+op = "BufferDecl"
+dtype = "U32"
+shape = [1]
+iidx = 0
+axes = 1
+
+# n1: count@1 (the device-written sequence count; also the consume's queue@0 read source)
+[[node]]
+id = "n1"
+op = "BufferDecl"
+dtype = "U32"
+shape = [1]
+iidx = 1
+axes = 1
+
+# n2: the value 1 (every dispatch payload word gx=gy=gz=1; cval = f64 bit-pattern of 1.0)
+[[node]]
+id = "n2"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+# n3: the value 5 (the device sequence count; cval = f64 bit-pattern of 5.0)
+[[node]]
+id = "n3"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4014000000000000"
+
+# n4: token index 0 (also the count[0] index)
+[[node]]
+id = "n4"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+# n5: token index 1
+[[node]]
+id = "n5"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+# n6: token index 2
+[[node]]
+id = "n6"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4000000000000000"
+
+# n7: token index 3
+[[node]]
+id = "n7"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4008000000000000"
+
+# n8: token index 4
+[[node]]
+id = "n8"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4010000000000000"
+
+# n9: token index 5
+[[node]]
+id = "n9"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4014000000000000"
+
+# n10: token index 6
+[[node]]
+id = "n10"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4018000000000000"
+
+# n11: token index 7
+[[node]]
+id = "n11"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x401c000000000000"
+
+# n12: token index 8
+[[node]]
+id = "n12"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4020000000000000"
+
+# n13: token index 9
+[[node]]
+id = "n13"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4022000000000000"
+
+# n14: token index 10
+[[node]]
+id = "n14"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4024000000000000"
+
+# n15: token index 11
+[[node]]
+id = "n15"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4026000000000000"
+
+# n16: token index 12
+[[node]]
+id = "n16"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4028000000000000"
+
+# n17: token index 13
+[[node]]
+id = "n17"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x402a000000000000"
+
+# n18: token index 14
+[[node]]
+id = "n18"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x402c000000000000"
+
+# ── token[0..14] = 1: five (1,1,1) dispatch payloads (the device authors every command's grid) ──
+[[stmt]]
+kind = "BufferStore"
+target = "n0"
+index = "n4"
+value = "n2"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n0"
+index = "n5"
+value = "n2"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n0"
+index = "n6"
+value = "n2"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n0"
+index = "n7"
+value = "n2"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n0"
+index = "n8"
+value = "n2"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n0"
+index = "n9"
+value = "n2"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n0"
+index = "n10"
+value = "n2"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n0"
+index = "n11"
+value = "n2"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n0"
+index = "n12"
+value = "n2"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n0"
+index = "n13"
+value = "n2"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n0"
+index = "n14"
+value = "n2"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n0"
+index = "n15"
+value = "n2"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n0"
+index = "n16"
+value = "n2"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n0"
+index = "n17"
+value = "n2"
+
+[[stmt]]
+kind = "BufferStore"
+target = "n0"
+index = "n18"
+value = "n2"
+
+# ── count[0] = 5: the DEVICE-written sequence count (how many commands ExecuteGeneratedCommands generates) ──
+[[stmt]]
+kind = "BufferStore"
+target = "n1"
+index = "n4"
+value = "n3"

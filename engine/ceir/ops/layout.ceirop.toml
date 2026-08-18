@@ -1,0 +1,31 @@
+schema_version = 1
+dialect = "layout"
+summary = "CEIR-21c sec-22 ceir.layout: OPTIONAL data-LAYOUT CONSTRAINTS on a tensor value. sec-22 governs abstract layout for tensors/matrices/images/structured buffers/AoS-SoA/blocked-tiled/swizzles: 'the compiler/provider CHOOSES the physical layout where possible; allow EXPLICIT layout constraints where interop or algorithms require them.' So layout is a CONSTRAINT the author asserts ONLY where needed (interop with a vendor library / a layout-sensitive algorithm) — NOT a mandatory property. ⛔ MECHANISM (advisor-locked at 21c): a CONSTRAINT OP, not a tensor-type member. `layout.constrain(%tensor) {kind, ...params} -> %tensor` is a Pure passthrough that ANNOTATES a tensor with a required layout; the tensor TYPE stays [element, shape] (3d), so the 21b tensor ops + their result-identity checks are UNTOUCHED (an optional 3rd type member would make tensor<f32,4x3> and tensor<f32,4x3,row_major> DISTINCT TypeIds — reopening every 21b identity check + rippling into type_is_canonical / the binary decoder / the grammar / the fuzz corpus; that is a type-system slice, not a declare slice). ⛔ Dxxx DECLARED DIVERGENCE: sec-23's `tensor<Shape,Element,Layout>` (layout as a TYPE parameter) is NAME-FORWARDED to the first consumer that needs layout IN the type IDENTITY (a sec-150 provider / a CEIR-22 interop boundary) — decided-with-reason (this rule), never silently dropped. ⛔ DECLARE-only, Pure + typed NoSemantics, NO kernel_ref (sec-70); crd-ceir NEVER links gpu-context; ZERO renderer changes. ⛔ the canonicalizer-must-not-fold-the-passthrough-to-identity contract is NAMED-FORWARD to CEIR-6 (the shape.assert precedent). ⛔ sparse / packed-quantized layout kinds are EXCLUDED (CEIR-23 ceir.sparse/ceir.quant own them — struck from 3d at the band-open). find_layout_misuse verifies the SEMANTIC chain (operand/result Tensor-kind, passthrough type identity, kind vocab, kind-gated + arity-checked params); the generated per-op verifier owns STRUCTURAL conformance (1 operand, 1 result, `kind` present+String)."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# layout.constrain -- constrain a tensor to an explicit abstract LAYOUT (sec-22). Pure passthrough: result == input (the same
+# tensor, now carrying the layout constraint a provider reads). `kind` a CLOSED vocab; the params are KIND-GATED (a param present
+# under the wrong kind is a MISUSE, not ignored -- the 12a nonsense-by-construction / 12b history_length-only-with-history rule).
+# `strides`/`block` are comma-separated int lists whose count == the tensor's RANK (always static -- sec-21 has no dynamic-rank
+# shape -- so arity is ALWAYS checkable; no Unknown path). find_layout_misuse: input+result Tensor-kinded (OperandNotTensor/
+# ResultNotTensor); result type == input type (ResultTypeMismatch, the passthrough); `kind` in-vocab (KindInvalid); a param under
+# the wrong kind (ParamKindMismatch); strides count == rank (StridesArityMismatch); block count == rank + each >=1 (BlockInvalid).
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "constrain"
+summary = "Constrain a tensor to an explicit abstract layout (kind + kind-gated params); a Pure passthrough."
+version = 1
+operands = [
+    { name = "input", type = "tensor", doc = "the tensor being layout-constrained (a 3d Tensor)." },
+]
+results = [
+    { name = "result", type = "tensor", doc = "= %input, now carrying the layout constraint (Pure PASSTHROUGH: result type == input type; a provider reads the constraint)." },
+]
+attributes = [
+    { name = "kind", kind = "string", required = true, doc = "the abstract layout, a CLOSED vocab: row_major | col_major | strided | blocked | aos | soa | swizzle. find_layout_misuse rejects any other token (KindInvalid). ⛔ `tiled` is FOLDED into `blocked` (§22 lists 'blocked/tiled layouts' as ONE item — the fold is spec-anchored, not taste); sparse/packed-quantized kinds are CEIR-23 (excluded here)." },
+    { name = "strides", kind = "string", required = false, doc = "ONLY with kind=strided (else ParamKindMismatch): comma-separated element strides, ONE per axis (count == the tensor's rank, else StridesArityMismatch). A string (ATTR_KINDS has no int-array), parsed like the work `access` tokens." },
+    { name = "block", kind = "string", required = false, doc = "ONLY with kind=blocked (else ParamKindMismatch): comma-separated block/tile extents, ONE per axis (count == rank AND each >= 1, else BlockInvalid). A string int-list." },
+    { name = "swizzle", kind = "string", required = false, doc = "ONLY with kind=swizzle (else ParamKindMismatch): the swizzle pattern (an OPEN string this slice — the pattern grammar is a future consumer's; presence + kind-gating is enforced, the value is not parsed)." },
+]
+traits = ["Pure"]
+docs = "layout.constrain(%input) {kind, strides?, block?, swizzle?} -> %result. Constrain a tensor to an explicit abstract layout (sec-22 'explicit layout constraints where interop/algorithms require'). Pure passthrough (result == input; the tensor TYPE is unchanged — layout is an OP annotation, NOT a type member; sec-23's tensor<S,E,L> is a Dxxx named-forward). ⛔ a canonicalizer must NOT fold it to identity (it carries the constraint) — named-forward to CEIR-6. find_layout_misuse: input+result Tensor-kinded (OperandNotTensor/ResultNotTensor); result type == input type (ResultTypeMismatch); `kind` in {row_major,col_major,strided,blocked,aos,soa,swizzle} (KindInvalid); each param present ONLY with its kind (ParamKindMismatch — the 12a nonsense-by-construction); `strides` count == tensor rank (StridesArityMismatch); `block` count == rank + each >=1 (BlockInvalid). STRUCTURAL (1 operand, 1 result, `kind` present+String): the generated verify_constrain."

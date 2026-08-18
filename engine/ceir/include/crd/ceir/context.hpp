@@ -595,6 +595,13 @@ public:
     // right-aligned position of the first incompatible dim; both take Shape TypeIds.
     [[nodiscard]] BroadcastResult shapes_broadcast(TypeId a, TypeId b) const noexcept;
     [[nodiscard]] ShapeCompat     shapes_reshape(TypeId a, TypeId b) const noexcept;
+    // CEIR-21b: the numpy-broadcast RESULT shape of two Shapes — the value-PRODUCING companion to shapes_broadcast (the
+    // producer the 3d row deferred: "rejected a broadcast-result constructor, no producer until 18"). Its consumer is
+    // ceir.tensor.elementwise/broadcast. Returns the interned result Shape TypeId when the broadcast is statically COMPATIBLE
+    // (each result dim = the non-1 dim of the pair); an INVALID TypeId when Incompatible OR Unknown (a symbolic/dynamic pair
+    // has no static result) OR the result rank exceeds the fixed cap. Callers gate on shapes_broadcast(a,b).compat (a
+    // Compatible pair within the cap always yields a valid result). ⛔ NON-const: it INTERNS the result Shape (type_shape).
+    [[nodiscard]] TypeId shapes_broadcast_result(TypeId a, TypeId b);
 
     // Physical quantities (CEIR-3e, §17/§18). A Quantity tags an underlying NUMERIC type with a physical DIMENSION
     // (8 SI base exponents, ADR-0078; §17 "dimensional errors caught before lowering"). `quantity_composition_valid` is

@@ -85,6 +85,7 @@ public:
     [[nodiscard]] crd::u32         coopvec_max_components() const noexcept override { return m_coopvec_max_components; }
     [[nodiscard]] crd::u32         coopvec_supported_stages() const noexcept override { return m_coopvec_stages; }
     [[nodiscard]] bool             device_generated_commands() const noexcept override { return m_dgc; } // C5: VK_NV_device_generated_commands(+compute)
+    [[nodiscard]] bool             device_generated_commands_ext() const noexcept override { return m_dgc_ext; } // CEIR-20c-2: VK_EXT_device_generated_commands (cross-vendor)
     [[nodiscard]] bool             shader_int64() const noexcept override { return m_int64; }
 
     [[nodiscard]] bool     graphics_capable() const noexcept override { return m_graphics_family != UINT32_MAX; }
@@ -380,10 +381,14 @@ private:
         bool has_coopvec   = false; // C6: VK_NV_cooperative_vector (per-invocation matrix×vector — the B10 neural-shading device half)
         bool has_dgc       = false; // C5: VK_NV_device_generated_commands (GPU-authored command streams)
         bool has_dgc_comp  = false; // C5: VK_NV_device_generated_commands_compute (compute dispatch + indirect-bindable pipelines)
+        bool has_dgc_ext   = false; // CEIR-20c-2: VK_EXT_device_generated_commands (CROSS-VENDOR device-generated command streams)
+        bool has_maint5    = false; // CEIR-20c-2: VK_KHR_maintenance5 (VkBufferUsageFlags2 — the DGC preprocess-buffer usage bit)
         for (std::uint32_t i = 0; i < ne; ++i)
         {
             if (std::strcmp(exts[i].extensionName, "VK_NV_device_generated_commands") == 0) { has_dgc = true; }
             if (std::strcmp(exts[i].extensionName, "VK_NV_device_generated_commands_compute") == 0) { has_dgc_comp = true; }
+            if (std::strcmp(exts[i].extensionName, "VK_EXT_device_generated_commands") == 0) { has_dgc_ext = true; } // CEIR-20c-2
+            if (std::strcmp(exts[i].extensionName, "VK_KHR_maintenance5") == 0) { has_maint5 = true; }             // CEIR-20c-2
             if (std::strcmp(exts[i].extensionName, "VK_EXT_opacity_micromap") == 0) { has_omm = true; }
             if (std::strcmp(exts[i].extensionName, "VK_KHR_ray_tracing_pipeline") == 0) { has_rtpipe = true; }
             if (std::strcmp(exts[i].extensionName, "VK_NV_ray_tracing_invocation_reorder") == 0) { has_ser = true; }
@@ -572,6 +577,15 @@ private:
         dgcc_feat.sType                          = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEVICE_GENERATED_COMMANDS_COMPUTE_FEATURES_NV;
         dgcc_feat.deviceGeneratedCompute         = VK_TRUE;
         dgcc_feat.deviceGeneratedComputePipelines = VK_TRUE;
+        // CEIR-20c-2: the CROSS-VENDOR device-generated-commands feature + VK_KHR_maintenance5 (its VkBufferUsageFlags2 dependency —
+        // the DGC preprocess buffer's usage bit is 64-bit-only). Only chained when m_dgc_ext. dynamicGeneratedPipelineLayout stays
+        // false: the indirect commands layout names an explicit pipeline layout (no runtime-generated layout).
+        VkPhysicalDeviceDeviceGeneratedCommandsFeaturesEXT dgce_feat{};
+        dgce_feat.sType                   = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEVICE_GENERATED_COMMANDS_FEATURES_EXT;
+        dgce_feat.deviceGeneratedCommands = VK_TRUE;
+        VkPhysicalDeviceMaintenance5Features maint5_feat{};
+        maint5_feat.sType        = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES;
+        maint5_feat.maintenance5 = VK_TRUE;
 
         // D-008 C1 chain (always): DYNAMIC RENDERING (core 1.3 feature, the modern no-render-pass raster path) + SHADER
         // OBJECTS (VK_EXT_shader_object) when present — the frontier pipeline model. The coopmat chain links in after.
@@ -733,6 +747,29 @@ private:
         // C5: device-generated commands need buffer-device-address (pipeline device addresses for the PIPELINE token). BDA is
         // queried in the RT block above; this adapter always has RT, so it is available when DGC is present.
         m_dgc = has_dgc && has_dgc_comp && bda_feat.bufferDeviceAddress == VK_TRUE;
+        // CEIR-20c-2: the CROSS-VENDOR device-generated-commands path (VK_EXT_device_generated_commands). The GPU authors the
+        // COMMAND STREAM (sequence count + per-sequence dispatch payloads) that vkCmdExecuteGeneratedCommandsEXT then generates —
+        // distinct from 20b (host-recorded dispatch + device grid) and 20c-1 (GPU-scheduled node launch). Needs BDA (indirect/
+        // count/preprocess buffers are device addresses) + VK_KHR_maintenance5 (the preprocess buffer's 64-bit usage flag). Confirm
+        // the feature bit AND that the adapter can GENERATE COMPUTE commands (supportedIndirectCommandsShaderStages). BDA is queried
+        // in the RT block above (this adapter always has RT); a device without it degrades to false ⇒ the DGC-EXT gate soft-skips.
+        if (has_dgc_ext && has_maint5 && bda_feat.bufferDeviceAddress == VK_TRUE)
+        {
+            VkPhysicalDeviceDeviceGeneratedCommandsFeaturesEXT df{};
+            df.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEVICE_GENERATED_COMMANDS_FEATURES_EXT;
+            VkPhysicalDeviceFeatures2 df2{};
+            df2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            df2.pNext = &df;
+            vkGetPhysicalDeviceFeatures2(m_physical, &df2);
+            VkPhysicalDeviceDeviceGeneratedCommandsPropertiesEXT dp{};
+            dp.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEVICE_GENERATED_COMMANDS_PROPERTIES_EXT;
+            VkPhysicalDeviceProperties2 dp2{};
+            dp2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+            dp2.pNext = &dp;
+            vkGetPhysicalDeviceProperties2(m_physical, &dp2);
+            m_dgc_ext = df.deviceGeneratedCommands == VK_TRUE
+                        && (dp.supportedIndirectCommandsShaderStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0U;
+        }
 
         // FA-1/2/3: vendor RT frontier feature bits (opacity micromap · RT pipeline · SER invocation-reorder · cluster-AS). Live
         // to vkCreateDevice (referenced by the chain). Confirm each bit, then keep ONLY it (so the struct is clean for creation).
@@ -781,8 +818,9 @@ private:
         if (m_coopmat2) { cm2.pNext = chain; cmk.pNext = &cm2; chain = &cmk; }
         if (m_coopvec) { cv.pNext = chain; chain = &cv; } // C6: cooperative-vector inference (+ training when supported)
         if (m_ray_query) { accel_feat.pNext = chain; chain = &accel_feat; rq_feat.pNext = chain; chain = &rq_feat; }
-        if (m_ray_query || m_dgc) { bda_feat.pNext = chain; chain = &bda_feat; } // BDA: RT (AS build) + DGC (pipeline device addrs) — chained ONCE
+        if (m_ray_query || m_dgc || m_dgc_ext) { bda_feat.pNext = chain; chain = &bda_feat; } // BDA: RT (AS build) + DGC/DGC-EXT (device addrs) — chained ONCE
         if (m_dgc) { dgc_feat.pNext = chain; chain = &dgc_feat; dgcc_feat.pNext = chain; chain = &dgcc_feat; } // C5
+        if (m_dgc_ext) { dgce_feat.pNext = chain; chain = &dgce_feat; maint5_feat.pNext = chain; chain = &maint5_feat; } // CEIR-20c-2
         if (m_opacity_micromap) { omm_feat.pNext = chain; chain = &omm_feat; }
         if (m_rt_pipeline) { rtp_feat.pNext = chain; chain = &rtp_feat; }
         if (m_invocation_reorder) { ser_feat.pNext = chain; chain = &ser_feat; }
@@ -801,6 +839,7 @@ private:
         }
         if (m_coopvec) { devexts[ndevext++] = "VK_NV_cooperative_vector"; } // C6: per-invocation MLP inference
         if (m_dgc) { devexts[ndevext++] = "VK_NV_device_generated_commands"; devexts[ndevext++] = "VK_NV_device_generated_commands_compute"; } // C5
+        if (m_dgc_ext) { devexts[ndevext++] = "VK_EXT_device_generated_commands"; devexts[ndevext++] = "VK_KHR_maintenance5"; } // CEIR-20c-2 (cross-vendor)
         if (m_shader_object) { devexts[ndevext++] = VK_EXT_SHADER_OBJECT_EXTENSION_NAME; }
         // RET-2: swapchain enablement follows AVAILABILITY (given the instance enabled VK_KHR_surface) — a headless
         // context presents to a headless surface, a windowed one to a window; one extension, both paths.
@@ -857,6 +896,7 @@ private:
     bool             m_coopvec         = false; // C6: VK_NV_cooperative_vector enabled (per-invocation MLP inference)
     bool             m_coopvec_train   = false; // C6: + the training ops (OuterProductAccumulate/ReduceSum) for B10 backprop
     bool             m_dgc             = false; // C5: VK_NV_device_generated_commands + _compute enabled (GPU-authored command streams)
+    bool             m_dgc_ext         = false; // CEIR-20c-2: VK_EXT_device_generated_commands + maintenance5 (cross-vendor command streams)
     crd::u32         m_coopvec_stages  = 0U;    // C6: shader stages that support coopvec (compute always; fragment on this HW)
     crd::u32         m_coopvec_max_components = 0U; // C6: max cooperative-vector component dimension
     bool             m_int64           = false;

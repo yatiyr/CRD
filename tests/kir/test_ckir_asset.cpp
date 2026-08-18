@@ -395,6 +395,41 @@ TEST_CASE("CEIR-18a-2/18b: the authored scene_light_cull{,_3d}.ckir are Compute 
     }
 }
 
+// ── CEIR-20b/20c: the authored work_smoke_*.ckir (device-generated-work smoke kernels) parse + round-trip + emit GLSL,
+// DEVICE-FREE. ───────────────────────────────────────────────────────────────────────────────────────────────────────
+// The three ceir.work smoke assets are otherwise parsed ONLY inside the DGC / Work-Graphs / executor DEVICE gates, each of
+// which cap-skips without the GPU/extension — so on a device-free machine their .ckir format was UNGATED. This gate closes
+// that hole (the mandate-#1 decoupled-load discipline, the 19z asset-inventory rule): each asset parses, round-trips
+// byte-exact, and emits GLSL, with NO device. produce writes the (count,1,1) queue header; consume atomically counts
+// invocations; produce_dgc authors the DGC command stream (five (1,1,1) payloads + count=5).
+TEST_CASE("CEIR-20b/20c: the authored work_smoke_*.ckir parse + round-trip + emit GLSL (device-free)",
+          "[kir][asset][ceir20b][ceir20c]")
+{
+    crd::memory::TlsfAllocator a(8U << 20U);
+    for (const char* path : {CRD_REPO_DIR "/assets/ckir/work_smoke_produce.ckir",
+                             CRD_REPO_DIR "/assets/ckir/work_smoke_consume.ckir",
+                             CRD_REPO_DIR "/assets/ckir/work_smoke_produce_dgc.ckir"})
+    {
+        std::ifstream f(path, std::ios::binary | std::ios::ate);
+        REQUIRE(f.good());
+        const std::streamsize sz = f.tellg();
+        REQUIRE(sz > 0);
+        f.seekg(0);
+        crd::containers::Array<char> src(&a);
+        src.resize(static_cast<crd::usize>(sz), '\0');
+        f.read(src.data(), sz);
+        kir::KGraph g(&a);
+        kir::KEntry e;
+        REQUIRE(kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), g, e).ok);
+        CHECK(e.stage == kir::KStage::Compute);
+        CHECK(e.local_size[0] == 1U); // 1-thread smoke kernels (the DEVICE count drives the grid, not local_size)
+        CHECK(g.size() > 0);
+        CHECK(ckir_roundtrip_diff(g, e, &a) == -1); // byte-exact serialize round-trip
+        kir::GlslKernel kern(&a);
+        CHECK(kir::emit_compute_kernel_glsl(g, e, &a, kern));
+    }
+}
+
 // ── CEIR-18p: the committed deferred_lighting.ckir parses, round-trips + is a fragment program. ──────────────────────
 // ensure_deferred_lighting_program (scene_renderer.cpp) is now a THIN asset-load — the hand-built FS is DELETED. This gate
 // proves the COMMITTED asset parses + round-trips byte-exact + has the deferred FS shape. Device correctness (the lit

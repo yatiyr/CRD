@@ -6,6 +6,10 @@ add_executable(crd-ceir-gpu-vulkan-tests
     test_ceir_add_vulkan.cpp
     test_ceir_render_vulkan.cpp   # CEIR-14z-3: the render DEVICE pixel proof (a CEIR render.scope{draw} → real encoder)
     test_work_smoke_vulkan.cpp    # CEIR-20b: execute_work_lowered DEVICE proof — produce writes the count, indirect consume reads it
+    test_vulkan_dgc.cpp           # CEIR-20c-2: VK_EXT_device_generated_commands — the GPU authors the command STREAM (count + payloads)
+    test_ceir_gemm_vulkan.cpp     # CEIR-22b: synth_gemm → a CKIR Contract run on Vulkan, bit-exact vs eval_cpu AND an independent triple loop
+    test_ceir_reduce_vulkan.cpp   # CEIR-22b: synth_reduce → a CKIR reduce run on Vulkan, bit-exact vs eval_cpu AND an independent serial sum
+    test_ceir_fft_vulkan.cpp      # CEIR-22b: synth_fft → a CKIR FFT (kernel tier, dispatch_kernel_1wg) vs eval_cpu_kernel AND an independent naive DFT
 )
 
 target_link_libraries(crd-ceir-gpu-vulkan-tests PRIVATE
@@ -17,6 +21,7 @@ target_link_libraries(crd-ceir-gpu-vulkan-tests PRIVATE
     crd-ceir-cook     # CEIR-13z-4 leg 2: the 10a ReloadSet (add_source/reload_source hot-reload)
     crd-kir           # the CKIR add kernel + the CPU dispatch harness
     crd-kir-vulkan    # the Vulkan backend (transitively: gpu-context-vulkan — VulkanComputeContext, compile_glsl_to_spirv, ValidationCapture)
+    crd-gpu-context-vulkan # CEIR-20c-2: VulkanDgcContext (VK_EXT_device_generated_commands) — explicit (used directly by test_vulkan_dgc)
     Catch2::Catch2WithMain
 )
 

@@ -8,6 +8,7 @@
 #include <crd/ceir/gpu/execute.hpp> // validate_lowered / validate_rt_lowered / ExecuteError / RtHooks (the typed-reject audit)
 #include <crd/ceir/gpu/lower.hpp> // LoweredCommand / LoweredKind
 #include <crd/ceir/gpu/work_build.hpp>
+#include <crd/ceir/gpu/work_graph.hpp> // CEIR-20c-1c: build_work_graph_plan (the desc -> Work Graph topology)
 #include <crd/ceir/work.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
@@ -129,6 +130,42 @@ bool stub_barrier(cg::WorkBufferHandle /*buffer*/, crd::gpu::ComputeAccess /*fro
     return true;
 }
 } // namespace
+
+// CEIR-20c-1c: the D3D12 Work Graph topology is DERIVED from the authored ceir.work desc (the same WorkBuildDesc the 20b
+// compute-indirect fallback consumes) — one semantic program, two lowerings. produce = the entry that emits a grid-launch
+// record; the consume reading the same queue is its downstream.
+TEST_CASE("ceir 20c-1: build_work_graph_plan derives the produce->consume topology from a ceir.work desc",
+          "[ceirgpu][work][ceir20c]")
+{
+    WorkBuildDesc d;
+    d.num_queues              = 1U;
+    d.queues[0].capacity      = 64U;
+    d.queues[0].record_stride = 4U;
+    d.queues[0].source_param  = 0xAAAAU;
+    d.num_stages              = 2U;
+    d.stages[0].kind          = WorkStageKind::Produce;
+    d.stages[0].kernel        = containers::StringView("work_smoke_produce");
+    d.stages[0].queue         = 0U;
+    d.stages[1].kind          = WorkStageKind::Consume;
+    d.stages[1].kernel        = containers::StringView("work_smoke_consume");
+    d.stages[1].queue         = 0U;
+
+    cg::WorkGraphPlan plan;
+    REQUIRE(cg::build_work_graph_plan(d, plan));
+    CHECK(plan.num_nodes == 2U);
+    CHECK(plan.entry == 0U);                                                     // the producer is the program entry
+    CHECK(plan.nodes[0].role == WorkStageKind::Produce);
+    CHECK(plan.nodes[0].downstream == 1U);                                       // produce -> consume (shared queue)
+    CHECK(plan.nodes[0].kernel == containers::StringView("work_smoke_produce"));
+    CHECK(plan.nodes[1].role == WorkStageKind::Consume);
+    CHECK(plan.nodes[1].downstream == cg::kNoWorkGraphNode);
+
+    // two producers, no consumer ⇒ != 1 entry ⇒ reject (the multi-entry / compact-fed shape is ledgered).
+    WorkBuildDesc     bad = d;
+    bad.stages[1].kind    = WorkStageKind::Produce;
+    cg::WorkGraphPlan p2;
+    CHECK(!cg::build_work_graph_plan(bad, p2));
+}
 
 TEST_CASE("ceir 20b: build_work_ceir emits a find_work_misuse-clean wavefront program + lowers it",
           "[ceirgpu][work][ceir20b]")

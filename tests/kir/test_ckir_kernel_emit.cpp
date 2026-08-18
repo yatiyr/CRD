@@ -93,6 +93,67 @@ kir::KEntry build_transcendental_probe(kir::KGraph& g, int ls)
 // B16-a-0: the full transcendental set (log/log2/tanh/atan2/atan/asin/acos/sinh/cosh) must EMIT on ALL FIVE compute backends —
 // they were only in the raster emitter. The oracle's apply_unary/apply_binary already handle them (verified in [ckir]); Vulkan
 // runs it bit-exact-to-ULP (tests/gpu-context-vulkan). This is the structural cross-backend proof they lower everywhere.
+// CEIR-20c-1 (D3D12 Work Graphs): emit_work_graph_node_hlsl wraps the SAME .ckir compute kernel in the Work Graph node ABI
+// (mandate #1 — cook-emitted boilerplate, never a hand-written .hlsl). STRUCTURAL gate (the dxc lib_6_8 compile + the
+// DispatchGraph run on the real 4070 Ti are the DX12 device gate): PRODUCE = program entry + fixed grid + a NodeOutput + the
+// grid-launch epilogue (read the queue header back, emit ONE launch record); CONSUME = NodeMaxDispatchGrid + the input record.
+TEST_CASE("CEIR-20c-1: emit_work_graph_node_hlsl wraps a .ckir kernel in the Work Graph node ABI", "[kir][kernel][hlsl][ceir20c]")
+{
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    kir::KGraph                g(&alloc);
+    const kir::KEntry          e = build_reverse(g, 64); // any compute kernel; the ABI wrap is body-agnostic (buf0 in, buf1 out)
+
+    kir::GlslKernel prod(&alloc);
+    REQUIRE(kir::emit_work_graph_node_hlsl(g, e, kir::WorkGraphNodeKind::Produce, 1U, crd::containers::StringView("wg_produce"),
+                                           crd::containers::StringView("wg_consume"), 64U, &alloc, prod));
+    CHECK(has(prod, "[Shader(\"node\")]"));
+    CHECK(has(prod, "struct CrdLaunchRec { uint3 grid : SV_DispatchGrid; };"));
+    CHECK(has(prod, "[NodeIsProgramEntry]"));
+    CHECK(has(prod, "[NodeDispatchGrid(1, 1, 1)]"));
+    CHECK(has(prod, "NodeOutput<CrdLaunchRec> crd_out"));
+    CHECK(has(prod, "void wg_produce("));
+    CHECK(has(prod, "GetThreadNodeOutputRecords(1)"));
+    CHECK(has(prod, "crd_rec.Get().grid = uint3(buf1.Load(0), buf1.Load(4), buf1.Load(8));")); // the queue (iidx 1) header
+    CHECK(has(prod, "crd_rec.OutputComplete();"));
+    CHECK(has(prod, "RWByteAddressBuffer buf0")); // the tested body's resource decls survive
+    CHECK(!has(prod, "void cs_main("));           // the compute prologue was swapped out
+
+    kir::GlslKernel cons(&alloc);
+    REQUIRE(kir::emit_work_graph_node_hlsl(g, e, kir::WorkGraphNodeKind::Consume, 1U, crd::containers::StringView("wg_consume"),
+                                           crd::containers::StringView(""), 64U, &alloc, cons));
+    CHECK(has(cons, "[NodeMaxDispatchGrid(64, 1, 1)]"));
+    CHECK(has(cons, "DispatchNodeInputRecord<CrdLaunchRec> crd_in"));
+    CHECK(has(cons, "void wg_consume("));
+    CHECK(!has(cons, "crd_rec.OutputComplete();")); // consume has no grid-launch epilogue
+    CHECK(!has(cons, "void cs_main("));
+
+    // the LIBRARY: two nodes share UAVs ⇒ the decls + the record struct are emitted ONCE (union, deduped), both functions present
+    const kir::WorkGraphNodeDesc lib_nodes[2] = {
+        {&g, &e, kir::WorkGraphNodeKind::Produce, 1U, crd::containers::StringView("wg_produce"),
+         crd::containers::StringView("wg_consume"), 64U},
+        {&g, &e, kir::WorkGraphNodeKind::Consume, 1U, crd::containers::StringView("wg_consume"),
+         crd::containers::StringView(""), 64U}};
+    kir::GlslKernel libk(&alloc);
+    REQUIRE(kir::emit_work_graph_library_hlsl(lib_nodes, 2U, &alloc, libk));
+    const auto count = [](const kir::GlslKernel& k, const char* n) {
+        crd::u32    c = 0;
+        const char* p = k.source.c_str();
+        while ((p = std::strstr(p, n)) != nullptr)
+        {
+            ++c;
+            ++p;
+        }
+        return c;
+    };
+    CHECK(has(libk, "void wg_produce("));
+    CHECK(has(libk, "void wg_consume("));
+    CHECK(count(libk, "struct CrdLaunchRec") == 1U);      // the record struct emitted ONCE for the whole library
+    CHECK(count(libk, "RWByteAddressBuffer buf0") == 1U); // shared UAVs deduped across nodes (not one per node)
+    CHECK(count(libk, "RWByteAddressBuffer buf1") == 1U);
+    CHECK(has(libk, "[NodeIsProgramEntry]"));            // produce is the program entry
+    CHECK(has(libk, "[NodeMaxDispatchGrid(64, 1, 1)]")); // consume sized by the launch record
+}
+
 TEST_CASE("B16-a-0: compute transcendentals emit on ALL backends", "[kir][kernel][ocean]")
 {
     crd::memory::TlsfAllocator alloc(8U << 20U);

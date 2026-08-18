@@ -10,6 +10,9 @@ add_executable(crd-ceir-gpu-dx12-tests
     test_ceir_add_dx12.cpp
     test_ceir_render_dx12.cpp   # CEIR-14z-3: the DX12 mirror of the render DEVICE pixel proof
     test_work_smoke_dx12.cpp    # CEIR-20b: execute_work_lowered DEVICE proof (DX12 twin) — produce writes the count, indirect consume reads it
+    test_ceir_gemm_dx12.cpp     # CEIR-22b: synth_gemm → a CKIR Contract run on D3D12, bit-exact vs eval_cpu AND an independent triple loop
+    test_ceir_reduce_dx12.cpp   # CEIR-22b: synth_reduce → a CKIR reduce run on D3D12, bit-exact vs eval_cpu AND an independent serial sum
+    test_ceir_fft_dx12.cpp      # CEIR-22b: synth_fft → a CKIR FFT (kernel tier, dispatch_kernel_1wg) vs eval_cpu_kernel AND an independent naive DFT
 )
 
 target_link_libraries(crd-ceir-gpu-dx12-tests PRIVATE

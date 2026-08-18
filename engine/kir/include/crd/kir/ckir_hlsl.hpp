@@ -778,6 +778,199 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
 }
 // NOLINTEND(readability-function-size)
 
+// CEIR-20c-1 (D3D12 Work Graphs): emit a broadcasting-NODE HLSL shader from the SAME .ckir kernel the compute path uses
+// (mandate #1 — the .ckir is the SOLE source; the node ABI is COOK-EMITTED boilerplate, NEVER a hand-written .hlsl). It
+// COMPOSES emit_compute_kernel_hlsl (the tested decls + helpers + DAG body) and swaps the `cs_main` prologue for the Work
+// Graph node ABI: a `CrdLaunchRec { uint3 grid : SV_DispatchGrid; }`, [Shader("node")]/[NodeLaunch("broadcasting")], and —
+// for PRODUCE — the GRID-LAUNCH epilogue: read the queue's (count,1,1) header back and emit ONE launch record carrying it,
+// so the GPU sizes the CONSUME node's SV_DispatchGrid from the DEVICE count with NO host round-trip (the record-PAYLOAD
+// flow is work.record's future slice; here the data stays in the explicit named UAVs). PRODUCE is the program entry (a
+// SERIAL fixed [NodeDispatchGrid(1,1,1)]/local_size=1 launch — a parallel produce that cooperatively writes the count is
+// ledgered — + a NodeOutput to `consumer_id`); CONSUME is [NodeMaxDispatchGrid(max_grid,1,1)] + a DispatchNodeInputRecord
+// (its grid IS the record). `queue_iidx` names the queue UAV (buf<iidx>) the produce epilogue reads.
+enum class WorkGraphNodeKind : crd::u8
+{
+    Produce,
+    Consume
+};
+inline bool emit_work_graph_node_hlsl(const KGraph& g, const KEntry& entry, WorkGraphNodeKind kind, crd::u32 queue_iidx,
+                                      crd::containers::StringView node_id, crd::containers::StringView consumer_id,
+                                      crd::u32 max_grid, crd::memory::IAllocator* scratch, GlslKernel& out)
+{
+    using namespace glsl_detail;
+    if (!emit_compute_kernel_hlsl(g, entry, scratch, out)) { return false; }
+    // The tested compute HLSL: <decls+helpers>[numthreads(A,B,C)]\nvoid cs_main(uint lidx : SV_GroupIndex, ...) {\n<body>}\n
+    crd::containers::String cs(scratch);
+    cs.append(out.source.data(), out.source.size()); // move aside; rebuild out.source in place
+    const char* const d = cs.data();
+    const crd::usize  N = cs.size();
+    const auto        find_fwd = [&](const char* pat, crd::usize patn, crd::usize from) -> crd::usize {
+        for (crd::usize i = from; i + patn <= N; ++i)
+        {
+            bool m = true;
+            for (crd::usize j = 0; j < patn; ++j)
+            {
+                if (d[i + j] != pat[j]) { m = false; break; }
+            }
+            if (m) { return i; }
+        }
+        return N;
+    };
+    const crd::usize cut1 = find_fwd("void cs_main(", 13U, 0U); // the compute entry
+    if (cut1 == N) { return false; }
+    crd::usize cut0 = cut1; // back up to the "[numthreads(" that precedes cs_main
+    for (crd::usize i = cut1; i > 0;)
+    {
+        --i;
+        if (i + 12U <= N)
+        {
+            bool m = true;
+            for (crd::usize j = 0; j < 12U; ++j)
+            {
+                if (d[i + j] != "[numthreads("[j]) { m = false; break; }
+            }
+            if (m)
+            {
+                cut0 = i;
+                break;
+            }
+        }
+    }
+    if (cut0 == cut1) { return false; }
+    crd::usize cut2 = N; // the first "{\n" after cs_main( — the body start
+    for (crd::usize i = cut1; i + 2U <= N; ++i)
+    {
+        if (d[i] == '{' && d[i + 1] == '\n')
+        {
+            cut2 = i + 2U;
+            break;
+        }
+    }
+    if (cut2 == N || N < 2U || d[N - 2U] != '}') { return false; } // source ends with the cs_main "}\n"
+    const crd::usize body_end = N - 2U;
+
+    crd::containers::String& s = out.source;
+    s.clear();
+    s.append(d, cut0); // decls + helpers (verbatim)
+    s.append("struct CrdLaunchRec { uint3 grid : SV_DispatchGrid; };\n");
+    s.append("[Shader(\"node\")]\n[NodeLaunch(\"broadcasting\")]\n");
+    if (kind == WorkGraphNodeKind::Produce) { s.append("[NodeIsProgramEntry]\n[NodeDispatchGrid(1, 1, 1)]\n"); }
+    else
+    {
+        s.append("[NodeMaxDispatchGrid(");
+        app_uint(s, static_cast<int>(max_grid));
+        s.append(", 1, 1)]\n");
+    }
+    s.append("[NumThreads(");
+    app_uint(s, static_cast<int>(entry.local_size[0]));
+    s.append(", ");
+    app_uint(s, static_cast<int>(entry.local_size[1]));
+    s.append(", ");
+    app_uint(s, static_cast<int>(entry.local_size[2]));
+    s.append(")]\nvoid ");
+    s.append(node_id.data(), node_id.size());
+    s.append("(");
+    if (kind == WorkGraphNodeKind::Produce)
+    {
+        s.append("[MaxRecords(1)] [NodeID(\"");
+        s.append(consumer_id.data(), consumer_id.size());
+        s.append("\")] NodeOutput<CrdLaunchRec> crd_out, ");
+    }
+    else { s.append("DispatchNodeInputRecord<CrdLaunchRec> crd_in, "); }
+    s.append("uint lidx : SV_GroupIndex, uint3 wgid3 : SV_GroupID, uint3 dtid : SV_DispatchThreadID) {\n");
+    s.append(d + cut2, body_end - cut2); // the tested DAG body (verbatim)
+    if (kind == WorkGraphNodeKind::Produce)
+    {
+        // ⭐ the grid-launch record: read the (count,1,1) header the body wrote + emit ONE launch record. SERIAL produce
+        // (local_size=1) ⇒ exactly one thread ⇒ one record; the DeviceMemoryBarrier makes the header visible to the read.
+        s.append("  DeviceMemoryBarrier();\n  ThreadNodeOutputRecords<CrdLaunchRec> crd_rec = "
+                 "crd_out.GetThreadNodeOutputRecords(1);\n  crd_rec.Get().grid = uint3(buf");
+        app_uint(s, static_cast<int>(queue_iidx));
+        s.append(".Load(0), buf");
+        app_uint(s, static_cast<int>(queue_iidx));
+        s.append(".Load(4), buf");
+        app_uint(s, static_cast<int>(queue_iidx));
+        s.append(".Load(8));\n  crd_rec.OutputComplete();\n");
+    }
+    s.append("}\n");
+    return true;
+}
+
+// CEIR-20c-1: one node of a Work Graph library (a .ckir kernel + its role + the queue slot + wiring names).
+struct WorkGraphNodeDesc
+{
+    const KGraph*               g           = nullptr;
+    const KEntry*               entry       = nullptr;
+    WorkGraphNodeKind           kind        = WorkGraphNodeKind::Produce;
+    crd::u32                    queue_iidx  = 0U;
+    crd::containers::StringView id;          // the node's HLSL function name (its [NodeID])
+    crd::containers::StringView consumer_id; // produce: the downstream node's [NodeID]; consume: unused
+    crd::u32                    max_grid    = 64U;
+};
+
+// CEIR-20c-1: emit a WORK GRAPH LIBRARY (multiple [Shader("node")] functions in ONE lib_6_8 translation unit) from a set
+// of authored .ckir kernels. A library SHARES its UAV resources across nodes (one global root signature), so the resource
+// decls + the CrdLaunchRec struct are emitted ONCE (the UNION of every node's buffers, deduped by register), followed by
+// each node's function body (reusing emit_work_graph_node_hlsl, minus its per-node decls/struct). Mandate #1: cook-emitted
+// from the .ckir, never a hand-written .hlsl. (Cross-node HELPER dedup — quat/slerp — is ledgered; the wavefront/smoke
+// kernels use none.)
+inline bool emit_work_graph_library_hlsl(const WorkGraphNodeDesc* nodes, crd::u32 num_nodes,
+                                         crd::memory::IAllocator* scratch, GlslKernel& out)
+{
+    using namespace glsl_detail;
+    if (num_nodes == 0U || nodes == nullptr) { return false; }
+    crd::containers::String& s = out.source;
+    s.clear();
+    // 1. the UNION of UAV decls across all nodes (deduped by register/iidx; globallycoherent if any node asks).
+    crd::u8 seen[64] = {};
+    for (crd::u32 ni = 0; ni < num_nodes; ++ni)
+    {
+        const KGraph& g = *nodes[ni].g;
+        for (int i = 0; i < g.size(); ++i)
+        {
+            const KNode& nd = g.node(i);
+            if (nd.op == KOp::BufferDecl && nd.iidx >= 0 && nd.iidx < 64 && seen[nd.iidx] == 0U)
+            {
+                seen[nd.iidx] = 1U;
+                if ((nd.axes & 2U) != 0U) { s.append("globallycoherent "); }
+                s.append("RWByteAddressBuffer buf");
+                app_uint(s, nd.iidx);
+                s.append(" : register(u");
+                app_uint(s, nd.iidx);
+                s.append(");\n");
+            }
+        }
+    }
+    // 2. the launch record, once.
+    s.append("struct CrdLaunchRec { uint3 grid : SV_DispatchGrid; };\n");
+    // 3. each node's FUNCTION (from "[Shader(\"node\")]" onward — emit_work_graph_node_hlsl's decls + struct are dropped).
+    for (crd::u32 ni = 0; ni < num_nodes; ++ni)
+    {
+        GlslKernel nk(scratch);
+        if (!emit_work_graph_node_hlsl(*nodes[ni].g, *nodes[ni].entry, nodes[ni].kind, nodes[ni].queue_iidx, nodes[ni].id,
+                                       nodes[ni].consumer_id, nodes[ni].max_grid, scratch, nk))
+        {
+            return false;
+        }
+        const char*                       d = nk.source.data();
+        const crd::usize                  N = nk.source.size();
+        const crd::containers::StringView needle("[Shader(\"node\")]");
+        crd::usize                        pos = N;
+        for (crd::usize i = 0; i + needle.size() <= N; ++i)
+        {
+            bool m = true;
+            for (crd::usize j = 0; j < needle.size(); ++j)
+            {
+                if (d[i + j] != needle.data()[j]) { m = false; break; }
+            }
+            if (m) { pos = i; break; }
+        }
+        if (pos == N) { return false; }
+        s.append(d + pos, N - pos);
+    }
+    return true;
+}
+
 // FA-2 (portable RT PIPELINE → DXR HLSL): emit a raygen / closest-hit / miss HLSL shader from a KEntry — the DX12 twin of
 // emit_rt_stage_glsl. Raygen: DispatchRaysIndex().x → read a ray → `TraceRay(as0, RAY_FLAG_NONE, …, ray, pl)` → store the payload;
 // closest-hit: `pl.m0 = RayTCurrent()`; miss: `pl.m0 = 1e30`. The SER reorder HINT is dropped here (a DX12 no-op fallback — DX12

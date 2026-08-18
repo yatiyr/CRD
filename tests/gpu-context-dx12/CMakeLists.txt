@@ -39,3 +39,32 @@ crd_enable_default_pch(crd-gpu-context-dx12-tests)
 target_compile_definitions(crd-gpu-context-dx12-tests PRIVATE CRD_REPO_DIR="${CMAKE_SOURCE_DIR}")
 
 catch_discover_tests(crd-gpu-context-dx12-tests DISCOVERY_MODE PRE_TEST PROPERTIES RESOURCE_LOCK crd_gpu_device)
+
+# ── CEIR-20c-1: the D3D12 Work Graphs device gate — ISOLATED in its OWN exe so the Work-Graphs-capable dxc it copies next
+#    to itself (lib_6_8 node attrs) does not change which dxcompiler.dll the other dx12 tests load (the advisor's isolation
+#    rule). Work Graphs run on the OS runtime (Win 11 24H2+) + the system d3d12.h — no Agility SDK fetch. ─────────────────
+add_executable(crd-gpu-context-dx12-work-graph-tests test_dx12_work_graph.cpp)
+target_link_libraries(crd-gpu-context-dx12-work-graph-tests PRIVATE
+    crd-core crd-containers crd-memory crd-kir crd-gpu-context crd-gpu-context-dx12
+    crd-ceir-gpu # CEIR-20c-1c: WorkBuildDesc + build_work_graph_plan (the module-driven topology, header-only inline)
+    Catch2::Catch2WithMain)
+crd_enable_default_pch(crd-gpu-context-dx12-work-graph-tests)
+target_compile_definitions(crd-gpu-context-dx12-work-graph-tests PRIVATE CRD_REPO_DIR="${CMAKE_SOURCE_DIR}")
+
+# Copy the NEWEST Windows SDK dxcompiler.dll + dxil.dll next to this exe: the backend's LoadLibraryW("dxcompiler.dll")
+# searches the exe dir before PATH, so this WG-capable dxc wins over the (possibly older) Vulkan-SDK dxc on PATH.
+file(GLOB _crd_wg_dxc_dirs "C:/Program Files (x86)/Windows Kits/10/bin/10.0.*/x64")
+if(_crd_wg_dxc_dirs)
+    list(SORT _crd_wg_dxc_dirs)
+    list(REVERSE _crd_wg_dxc_dirs) # highest SDK version first
+    list(GET _crd_wg_dxc_dirs 0 _crd_wg_dxc_dir)
+    foreach(_dll dxcompiler.dll dxil.dll)
+        if(EXISTS "${_crd_wg_dxc_dir}/${_dll}")
+            add_custom_command(TARGET crd-gpu-context-dx12-work-graph-tests POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_crd_wg_dxc_dir}/${_dll}"
+                        "$<TARGET_FILE_DIR:crd-gpu-context-dx12-work-graph-tests>/${_dll}")
+        endif()
+    endforeach()
+endif()
+
+catch_discover_tests(crd-gpu-context-dx12-work-graph-tests DISCOVERY_MODE PRE_TEST PROPERTIES RESOURCE_LOCK crd_gpu_device)

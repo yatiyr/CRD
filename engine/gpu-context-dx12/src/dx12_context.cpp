@@ -255,8 +255,11 @@ bool dx12_default_adapter_is_software() noexcept
     return false;
 }
 
-DxilCompileResult compile_hlsl_to_dxil(ShaderStage stage, crd::containers::StringView source,
-                                       crd::containers::StringView /*name*/, crd::memory::IAllocator* a)
+// The shared dxc HLSL->DXIL core: lazy-load dxcompiler.dll, compile `source` with the caller's `args` (the -T/-E flags),
+// and return the signed DXIL container (or ok=false + the dxc error blob). Both the stage-profile compile and the
+// CEIR-20c-1 Work Graph LIBRARY compile (lib_6_8, no -E) route through here — one dxc load, one error path.
+static DxilCompileResult compile_dxil_core(crd::containers::StringView source, const wchar_t** args, UINT32 nargs,
+                                           crd::memory::IAllocator* a)
 {
     DxilCompileResult result(a);
 
@@ -285,11 +288,9 @@ DxilCompileResult compile_hlsl_to_dxil(ShaderStage stage, crd::containers::Strin
     src.Ptr      = source.data();
     src.Size     = source.size();
     src.Encoding = DXC_CP_UTF8;
-    const wchar_t* args[] = {L"-T", dxil_profile(stage), L"-E", dxil_entry(stage)}; // no -spirv ⇒ signed DXIL
 
     ComPtr<IDxcResult> dxc_result;
-    if (FAILED(compiler->Compile(&src, args, static_cast<UINT32>(sizeof(args) / sizeof(args[0])), nullptr,
-                                 IID_PPV_ARGS(&dxc_result))))
+    if (FAILED(compiler->Compile(&src, args, nargs, nullptr, IID_PPV_ARGS(&dxc_result))))
     {
         result.error_message = crd::containers::String("dxc: Compile() failed", a);
         return result;
@@ -327,6 +328,24 @@ DxilCompileResult compile_hlsl_to_dxil(ShaderStage stage, crd::containers::Strin
     for (crd::usize i = 0U; i < size; ++i) { result.dxil[i] = bytes[i]; }
     result.ok = true;
     return result;
+}
+
+DxilCompileResult compile_hlsl_to_dxil(ShaderStage stage, crd::containers::StringView source,
+                                       crd::containers::StringView /*name*/, crd::memory::IAllocator* a)
+{
+    const wchar_t* args[] = {L"-T", dxil_profile(stage), L"-E", dxil_entry(stage)}; // no -spirv ⇒ signed DXIL
+    return compile_dxil_core(source, args, static_cast<UINT32>(sizeof(args) / sizeof(args[0])), a);
+}
+
+// CEIR-20c-1: compile a Work Graph NODE LIBRARY (the emit_work_graph_node_hlsl output — one or more [Shader("node")]
+// functions) to DXIL. `lib_6_8` target with NO -E (a library exports all its node shaders; the state object picks the
+// entry). Needs a Work-Graphs-capable dxcompiler.dll (SM 6.8 node attributes) on the DLL load path — the WG device gate
+// copies the Windows SDK dxc next to its exe so LoadLibraryW finds it ahead of an older PATH dxc.
+DxilCompileResult compile_work_graph_library_to_dxil(crd::containers::StringView source,
+                                                     crd::containers::StringView /*name*/, crd::memory::IAllocator* a)
+{
+    const wchar_t* args[] = {L"-T", L"lib_6_8"};
+    return compile_dxil_core(source, args, static_cast<UINT32>(sizeof(args) / sizeof(args[0])), a);
 }
 
 std::unique_ptr<IGpuProgram> make_dx12_program(ShaderStage stage, crd::containers::ConstSpan<crd::u8> cooked_dxil,

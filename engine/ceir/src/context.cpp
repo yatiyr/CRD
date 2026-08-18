@@ -1144,6 +1144,30 @@ ShapeCompat Context::shapes_reshape(TypeId a, TypeId b) const noexcept
     return pa == pb ? ShapeCompat::Compatible : ShapeCompat::Incompatible;
 }
 
+TypeId Context::shapes_broadcast_result(TypeId a, TypeId b)
+{
+    const Type sa = type_of(a);
+    const Type sb = type_of(b);
+    if (sa.kind != TypeKind::Shape || sb.kind != TypeKind::Shape) { return {}; }
+    const usize     ra = sa.members.size();
+    const usize     rb = sb.members.size();
+    const usize     n  = ra > rb ? ra : rb;
+    constexpr usize max_broadcast_rank = 16U; // beyond this the caller defers (no real tensor exceeds it); avoids a VLA
+    if (n > max_broadcast_rank) { return {}; }
+    TypeId       dims[max_broadcast_rank];
+    const TypeId one = type_dim_static(1U);
+    for (usize i = 0; i < n; ++i) // right-aligned: i = 0 is the innermost axis; the shorter rank pads with 1
+    {
+        const TypeId  ta = (i < ra) ? sa.members[ra - 1U - i] : one;
+        const TypeId  tb = (i < rb) ? sb.members[rb - 1U - i] : one;
+        const DimInfo da = dim_info(*this, ta);
+        const DimInfo db = dim_info(*this, tb);
+        if (broadcast_dim(da, db) != ShapeCompat::Compatible) { return {}; } // Incompatible / Unknown ⇒ no static result
+        dims[n - 1U - i] = dim_is_one(da) ? tb : ta; // the non-1 dim (both agree when neither is 1)
+    }
+    return type_shape(containers::ConstSpan<TypeId>(dims, n));
+}
+
 // ── Physical quantities (CEIR-3e, §17/§18) ──
 bool Context::quantity_composition_valid(TypeId underlying) const noexcept
 {

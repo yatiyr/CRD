@@ -1,0 +1,163 @@
+schema_version = 1
+dialect = "tensor"
+summary = "CEIR-21 sec-51 ceir.tensor: PRESERVE TENSOR SEMANTICS above raw dispatch — the high-level tensor value IR over the CEIR-3d Tensor TYPE (members = [element, shape]; declared since 3d). ⛔ sec-70: DO NOT prematurely lower a tensor op to a standalone kernel / flatten a tensor graph to 100 CKIR dispatches before the compiler decides whether the device runs it as ONE native graph program (D3D12 MLIR Programs / VK_ARM_data_graph / vendor NPU / CUDA Graphs) — so EVERY op is Pure + typed NoSemantics + carries NO kernel_ref, NO lowering hook. This slice (21b) declares the STRUCTURAL SIX (the 20a consumer-need subset — the ops that cover every distinct shape-semantics class, NOT all of sec-51's 13): elementwise · broadcast · reshape · transpose · reduce · matmul. ⛔ NO-FOLLOW / NAME-FORWARD (declared != implemented; a later band with a real consumer, never a silent subset): FFT is ADDED here in CEIR-22a (tensor.fft, c2c SPLIT re/im — the sec-59 fft leg); solve / decomposition-hooks -> ceir.linalg (CEIR-22, the sec-52 identities); gather/scatter / scans / sort-topk / convolution -> named-forward rows; sparse/ragged forms + quantized element types -> CEIR-23 (ceir.sparse / ceir.quant). The element type is a CEIR-3a scalar kind (f16/bf16/f32/f64/int/uint); fp8 + block-quantized dtypes are CEIR-23. ⛔ NO `tensor.constant` (a literal payload = blob serialization, a whole design; a tensor VALUE seeds from block args / a resource.import — data I/O rides the v14-I/O reuse at the consumer band). ⛔ THE TARGET SHAPE RIDES THE RESULT TYPE (not a Shape operand): a shape-changing op result is `!tensor<element, target_shape>`, and find_tensor_misuse VALIDATES that target against the inputs (the 21a shape.make result-identity precedent). ⛔ I6 — find_tensor_misuse switches on op NAME + TypeKind, never op.kind. crd-ceir NEVER links gpu-context (I3/I4); ZERO renderer changes."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# tensor.elementwise -- a binary elementwise op (`fn` a CLOSED vocab) with NUMPY BROADCAST: result element == both inputs'
+# element; result shape == shapes_broadcast(lhs.shape, rhs.shape) (the ⭐ 21b producer of shapes_broadcast_result the 3d
+# boundary lacked). Pure. find_tensor_misuse: operands + result Tensor-kinded; elements equal (TensorElementMismatch); `fn`
+# in {add,sub,mul,div,max,min,pow} (FnInvalid); result.shape == the exact broadcast (BroadcastResultMismatch) / Incompatible
+# inputs -> ShapeBroadcastIncompatible pointing / Unknown -> ACCEPT.
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "elementwise"
+summary = "A binary elementwise op (fn closed vocab) with numpy broadcast; result shape = broadcast(lhs, rhs)."
+version = 1
+operands = [
+    { name = "lhs", type = "tensor", doc = "the left tensor operand (a 3d Tensor: element + shape)." },
+    { name = "rhs", type = "tensor", doc = "the right tensor operand; its element MUST equal lhs's; its shape broadcasts with lhs's." },
+]
+results = [
+    { name = "result", type = "tensor", doc = "element == the inputs' element; shape == the numpy-broadcast of lhs.shape and rhs.shape (find_tensor_misuse checks exactness via shapes_broadcast_result)." },
+]
+attributes = [
+    { name = "fn", kind = "string", required = true, doc = "the binary op, a CLOSED vocab: add | sub | mul | div | max | min | pow. find_tensor_misuse rejects any other token (FnInvalid)." },
+]
+traits = ["Pure"]
+docs = "tensor.elementwise(%lhs, %rhs) {fn} -> %result. A binary elementwise op over broadcast-compatible tensors (sec-51 elementwise + broadcast). Pure. find_tensor_misuse: operands + result Tensor-kinded (OperandNotTensor / ResultNotTensor); lhs.element == rhs.element == result.element (TensorElementMismatch); `fn` in {add,sub,mul,div,max,min,pow} (FnInvalid); result.shape == shapes_broadcast_result(lhs.shape, rhs.shape) when Compatible (BroadcastResultMismatch), Incompatible -> ShapeBroadcastIncompatible pointing the 3z right-aligned position, Unknown -> ACCEPT (a shape.assert discharges). STRUCTURAL (2 operands, 1 result, `fn` present+String): the generated verify_elementwise."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# tensor.broadcast -- broadcast ONE tensor UP to the result's (larger) shape (sec-51 broadcast): result element == input;
+# input.shape must broadcast TO result.shape (each input axis is 1 or == the target). The target IS the result type. Pure.
+# find_tensor_misuse: elements equal; shapes_broadcast_result(input.shape, result.shape) == result.shape (else the input does
+# not broadcast up to it -> BroadcastResultMismatch); Unknown -> ACCEPT.
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "broadcast"
+summary = "Broadcast one tensor UP to the result's shape (input.shape broadcasts to the target result shape)."
+version = 1
+operands = [
+    { name = "input", type = "tensor", doc = "the tensor broadcast up (a 3d Tensor); each of its axes is 1 or == the target's." },
+]
+results = [
+    { name = "result", type = "tensor", doc = "element == input's; shape == the TARGET (a supershape input broadcasts to). find_tensor_misuse checks input broadcasts to it." },
+]
+attributes = []
+traits = ["Pure"]
+docs = "tensor.broadcast(%input) -> %result. Broadcast a tensor up to the result's (larger) shape (sec-51 broadcast); the target rides the result type. Pure. find_tensor_misuse: operand + result Tensor-kinded; input.element == result.element (TensorElementMismatch); the input broadcasts TO the target ⇒ shapes_broadcast_result(input.shape, result.shape) == result.shape (BroadcastResultMismatch), Unknown -> ACCEPT. STRUCTURAL (1 operand, 1 result, no attrs): the generated verify_broadcast."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# tensor.reshape -- reinterpret a tensor's elements under a new shape (sec-51 reshape): result element == input; total element
+# count preserved (shapes_reshape). The target IS the result type. Pure. find_tensor_misuse: elements equal; shapes_reshape(
+# input.shape, result.shape) != Incompatible (ShapeReshapeIncompatible / Unknown -> ACCEPT).
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "reshape"
+summary = "Reinterpret a tensor under a new shape with the same total element count (shapes_reshape)."
+version = 1
+operands = [
+    { name = "input", type = "tensor", doc = "the tensor being reshaped (a 3d Tensor)." },
+]
+results = [
+    { name = "result", type = "tensor", doc = "element == input's; shape == the TARGET (same total element count as input.shape)." },
+]
+attributes = []
+traits = ["Pure"]
+docs = "tensor.reshape(%input) -> %result. Reinterpret a tensor's elements under a new shape (sec-51 reshape); the target rides the result type. Pure. find_tensor_misuse: operand + result Tensor-kinded; input.element == result.element (TensorElementMismatch); shapes_reshape(input.shape, result.shape) != Incompatible (ShapeReshapeIncompatible), Unknown (dynamic/symbolic total) -> ACCEPT. STRUCTURAL (1 operand, 1 result, no attrs): the generated verify_reshape."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# tensor.transpose -- permute a tensor's axes by `perm` (sec-51 transpose): result element == input; result rank == input rank;
+# `perm` a TRUE PERMUTATION of [0, rank) (comma-separated axis indices -- ATTR_KINDS has no int-array, so a string, the access-
+# token precedent); result.shape == input.shape permuted by `perm`. Pure. find_tensor_misuse: elements equal; perm parses to a
+# permutation of the rank (PermInvalid); result.shape == permute(input.shape, perm) (TransposeResultMismatch).
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "transpose"
+summary = "Permute a tensor's axes by `perm` (a true permutation of [0,rank)); result shape = input shape permuted."
+version = 1
+operands = [
+    { name = "input", type = "tensor", doc = "the tensor whose axes are permuted (a 3d Tensor)." },
+]
+results = [
+    { name = "result", type = "tensor", doc = "element == input's; shape == input.shape with its member dims reordered by `perm`." },
+]
+attributes = [
+    { name = "perm", kind = "string", required = true, doc = "the axis permutation: comma-separated axis indices (e.g. \"0,2,1\"), one per axis, a TRUE permutation of [0, rank). find_tensor_misuse: parses to exactly `rank` distinct indices covering [0,rank) (PermInvalid). ⛔ a string (ATTR_KINDS has no int-array), parsed like the work `access` tokens." },
+]
+traits = ["Pure"]
+docs = "tensor.transpose(%input) {perm} -> %result. Permute a tensor's axes (sec-51 transpose). Pure. find_tensor_misuse: operand + result Tensor-kinded; input.element == result.element (TensorElementMismatch); `perm` parses to a TRUE permutation of [0, input rank) (PermInvalid, the declared-words scar); result.shape == input.shape permuted by `perm` (TransposeResultMismatch). STRUCTURAL (1 operand, 1 result, `perm` present+String): the generated verify_transpose."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# tensor.reduce -- reduce a tensor along `axis` with `fn` (sec-51 reductions): result element == input; `axis` in [0, rank);
+# result.shape == input.shape with `axis` REMOVED (rank-1 reduction; keepdim is name-forward). `fn` a CLOSED vocab. Pure.
+# find_tensor_misuse: elements equal; axis bounds (AxisInvalid); `fn` in {sum,prod,max,min,mean} (FnInvalid); result.shape ==
+# input.shape minus `axis` (ReduceResultMismatch).
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "reduce"
+summary = "Reduce a tensor along `axis` with `fn` (sum/prod/max/min/mean); result shape = input shape minus the axis."
+version = 1
+operands = [
+    { name = "input", type = "tensor", doc = "the tensor being reduced (a 3d Tensor)." },
+]
+results = [
+    { name = "result", type = "tensor", doc = "element == input's; shape == input.shape with `axis` removed (rank one less)." },
+]
+attributes = [
+    { name = "axis", kind = "int", required = true, doc = "the reduced axis (>=0, < input rank). find_tensor_misuse: present+Int+>=0 and < rank (AxisInvalid)." },
+    { name = "fn", kind = "string", required = true, doc = "the reduction, a CLOSED vocab: sum | prod | max | min | mean. find_tensor_misuse rejects any other token (FnInvalid)." },
+]
+traits = ["Pure"]
+docs = "tensor.reduce(%input) {axis, fn} -> %result. Reduce a tensor along one axis (sec-51 reductions). Pure. find_tensor_misuse: operand + result Tensor-kinded; input.element == result.element (TensorElementMismatch); `axis` present+Int+>=0 and < input rank (AxisInvalid); `fn` in {sum,prod,max,min,mean} (FnInvalid); result.shape == input.shape with `axis` removed (ReduceResultMismatch). ⛔ DETERMINISM: reductions are ORDER-SENSITIVE (float sum/mean/prod depend on accumulation order); the sec-27/sec-28 determinism CLASS rides the EXECUTING tier (a device reduction ≠ a serial one bit-for-bit) — the bit-exact contract is CEIR-22's ORACLE GATE (named-forward, ledger L9). STRUCTURAL (1 operand, 1 result, `axis` present+Int, `fn` present+String): the generated verify_reduce."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# tensor.matmul -- matrix multiply the two innermost axes (sec-51 matmul/batched matmul): lhs [..,M,K] x rhs [..,K,N] ->
+# [..,M,N]; result element == both inputs'. The CONTRACTION DIM must match (lhs's last == rhs's second-to-last). Pure.
+# find_tensor_misuse: elements equal; both ranks >= 2 (MatmulRankInvalid); the K axes match (ContractionMismatch); result.shape
+# == the [..,M,N] contraction (MatmulResultMismatch). Batch dims (leading) must be equal -- folded into the contraction check.
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "matmul"
+summary = "Matrix-multiply the two innermost axes: lhs [..,M,K] x rhs [..,K,N] -> [..,M,N] (the contraction dim must match)."
+version = 1
+operands = [
+    { name = "lhs", type = "tensor", doc = "the left matrix operand [.., M, K] (a 3d Tensor, rank >= 2); its element == rhs's." },
+    { name = "rhs", type = "tensor", doc = "the right matrix operand [.., K, N] (rank >= 2); its second-to-last axis K == lhs's last axis." },
+]
+results = [
+    { name = "result", type = "tensor", doc = "element == the inputs'; shape == [.., M, N] (the batch dims + M from lhs + N from rhs)." },
+]
+attributes = []
+traits = ["Pure"]
+docs = "tensor.matmul(%lhs, %rhs) -> %result. Matrix-multiply the innermost axes (sec-51 matmul/batched matmul). Pure. find_tensor_misuse: operands + result Tensor-kinded; lhs.element == rhs.element == result.element (TensorElementMismatch); both ranks >= 2 (MatmulRankInvalid); lhs's last axis == rhs's second-to-last axis (ContractionMismatch, the NEW contraction-dim check class); result.shape == [batch.., M, N] (MatmulResultMismatch). ⛔ DETERMINISM: contractions are ORDER-SENSITIVE (float accumulation order — a tiled/device GEMM ≠ a naive one bit-for-bit); the sec-27/sec-28 determinism CLASS rides the EXECUTING tier — the bit-exact contract is CEIR-22's ORACLE GATE (named-forward, ledger L9). STRUCTURAL (2 operands, 1 result, no attrs): the generated verify_matmul."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# tensor.fft -- CEIR-22a: a complex-to-complex FFT along `axis` (sec-59 `fft(x) -> ceir.tensor.fft`; the GEMM->FFT->reduction
+# charter's FFT leg). ⛔ COMPLEX = SPLIT re/im (advisor-locked): CEIR has NO complex element TypeKind, and adding one carries
+# the 21c identity-ripple cost (a true complex `TypeKind` is a Dxxx NAME-FORWARD). So a complex tensor is a PAIR of real
+# tensors (re, im) -- two operands -> two results -- MIRRORING the CKIR c2c kernel ABI (`ckir_fft.hpp`: separate in_re/in_im,
+# out_re/out_im split buffers, NOT interleaved pairs). A c2c FFT PRESERVES shape + element: re_out/im_out have re_in's shape
+# and element. Pure (forward+inverse share one graph, the caller applies the 1/N scale -- ckir keeps it out for bit-exactness).
+# find_tensor_misuse: all four Tensor-kinded; all four elements equal (TensorElementMismatch); re_in.shape == im_in.shape
+# (FftInputShapeMismatch); re_out.shape == im_out.shape == re_in.shape (FftResultShapeMismatch); `axis` in [0, rank) (AxisInvalid,
+# reused); `direction` in {forward,inverse} (FftDirectionInvalid). ⛔ element FLOAT-restriction + F32-only (the CKIR kernel is
+# F32) -> the 22b native PROVIDER (name-forward; declare stays element-agnostic, the 21b precedent). r2c/c2r/2d/batched -> named-forward.
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "fft"
+summary = "A complex-to-complex FFT along `axis` (direction forward/inverse); complex = SPLIT re/im (two real tensors in -> two out)."
+version = 1
+operands = [
+    { name = "re_in", type = "tensor", doc = "the REAL part of the complex input (a 3d Tensor; a float element at the provider tier)." },
+    { name = "im_in", type = "tensor", doc = "the IMAGINARY part; its element AND shape MUST equal re_in's (the split-complex convention)." },
+]
+results = [
+    { name = "re_out", type = "tensor", doc = "the REAL part of the transformed output; a c2c FFT PRESERVES shape+element, so == re_in's." },
+    { name = "im_out", type = "tensor", doc = "the IMAGINARY part of the output; == re_in's element + shape." },
+]
+attributes = [
+    { name = "direction", kind = "string", required = true, doc = "the transform direction, a CLOSED vocab: forward | inverse. find_tensor_misuse rejects any other token (FftDirectionInvalid)." },
+    { name = "axis", kind = "int", required = true, doc = "the transformed axis (>=0, < input rank). find_tensor_misuse: present+Int+>=0 and < rank (AxisInvalid, reused from reduce)." },
+]
+traits = ["Pure"]
+docs = "tensor.fft(%re_in, %im_in) {direction, axis} -> (%re_out, %im_out). A complex-to-complex FFT along one axis (sec-59 fft leg); complex is SPLIT re/im (two real tensors in, two out) MIRRORING the CKIR c2c split-buffer ABI (NO complex element TypeKind -- a true complex kind is a Dxxx name-forward). Pure (forward+inverse share the graph; the 1/N scale is the caller's, kept out for bit-exactness). find_tensor_misuse: all four operands+results Tensor-kinded (OperandNotTensor / ResultNotTensor); re_in.element == im_in.element == re_out.element == im_out.element (TensorElementMismatch); re_in.shape == im_in.shape (FftInputShapeMismatch); re_out.shape == im_out.shape == re_in.shape -- a c2c FFT preserves shape (FftResultShapeMismatch); `axis` present+Int+>=0 and < input rank (AxisInvalid); `direction` in {forward,inverse} (FftDirectionInvalid). ⛔ element FLOAT + F32-only restriction rides the 22b native provider (name-forward; declare stays element-agnostic like 21b). ⛔ DETERMINISM: an FFT is a reduction TREE -- ORDER-SENSITIVE; the bit-exact contract is CEIR-22's ORACLE GATE (ledger L9). STRUCTURAL (2 operands, 2 results, `direction` present+String, `axis` present+Int): the generated verify_fft."

@@ -1,0 +1,34 @@
+schema_version = 1
+dialect = "linalg"
+summary = "CEIR-22a sec-52 ceir.linalg: the NUMERICAL-ALGORITHM identities over the CEIR-3d Tensor TYPE — an OPTIONAL distinction from general tensor semantics (sec-52) that PRESERVES ALGORITHMIC INTENT for optimization + benchmarking, so a provider may realize it as CKIR / CRD-Hesap native CPU / a vendor library / D3D LinAlg / a native tensor-data-graph provider (sec-52's compiler choices) — the CEIR-22 charter (sec-59: 'A*B -> ceir.linalg.matmul', 'solve(A,b) -> ceir.linalg.solve'; 'no separate Hesap GPU scheduler — CEIR is the common orchestration substrate'). ⛔ sec-70: EVERY op is Pure + typed NoSemantics + carries NO kernel_ref / NO lowering hook — the compiler ingests the tensor+linalg graph WHOLE for a native backend; the ckir-provider mapping lands at 22b, NOT here. This slice (22a) declares the MINIMAL op set the sec-137 GEMM->FFT->reduction proof consumes: ONE op `gemm` (the BLAS3 identity). ⛔ NO-FOLLOW / NAME-FORWARD (declared != implemented; a later band with a real consumer, never a silent subset): GEMV / triangular solve / QR / LU / Cholesky / LDLT / SVD / eigensolvers / sparse matmul / sparse factorization / iterative-solver steps (the rest of sec-52) -> named-forward ceir.linalg rows; sparse/quantized forms -> CEIR-23. ⛔ gemm is DISTINCT from 21b tensor.matmul (matmul = the bare product [.., M, K] x [.., K, N]; gemm = the SCALED, TRANSPOSED, ACCUMULATING BLAS3 form — matmul == gemm with alpha=1, beta=0, no-trans, C ignored) — NOT a duplicate (op-unification debt). The element type is a CEIR-3a scalar kind; the F32-only + element-float restriction rides the 22b native provider (name-forward, the 21b precedent). ⛔ I6 — find_linalg_misuse switches on op NAME + TypeKind, never op.kind, and REUSES the 21b matmul shape machinery (contraction + batch, with the trans flags applied first). crd-ceir NEVER links gpu-context (I3/I4); ZERO renderer changes."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# linalg.gemm -- the BLAS3 general matrix-multiply identity: D = alpha * op(A) * op(B) + beta * C, where op(X) = X or X^T
+# (the innermost two axes swapped) per `trans_a`/`trans_b`. op(A) is [.., M, K], op(B) is [.., K, N]; C and the result D are
+# [.., M, N] (C is the accumulator -- BLAS gemm is in-place C := alpha*op(A)*op(B) + beta*C; here SSA-pure, D is a NEW result,
+# C the additive term). alpha/beta are compile-time float attrs (runtime-scalar alpha/beta -> name-forward); trans flags are
+# bool attrs. Pure. find_linalg_misuse: A,B,C,D Tensor-kinded (OperandNotTensor / ResultNotTensor); all four elements equal
+# (ElementMismatch); A,B ranks >= 2 (RankInvalid); apply trans -> op(A).last-axis (K) == op(B).second-to-last-axis (K)
+# (ContractionMismatch); D.shape == [batch.., M, N] (ResultShapeMismatch); C.shape == D.shape (AccumulatorShapeMismatch);
+# leading batch dims equal across A,B,C,D (BatchMismatch). The 21b matmul_shape logic REUSED, with op(A)/op(B) computed first.
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "gemm"
+summary = "The BLAS3 identity D = alpha*op(A)*op(B) + beta*C (op = optional transpose); the sec-52 GEMM, distinct from tensor.matmul."
+version = 1
+operands = [
+    { name = "a", type = "tensor", doc = "the left matrix A (a 3d Tensor, rank >= 2); op(A) = A or A^T (innermost two axes swapped) per `trans_a`, giving [.., M, K]." },
+    { name = "b", type = "tensor", doc = "the right matrix B (rank >= 2); op(B) = B or B^T per `trans_b`, giving [.., K, N]; op(B)'s K == op(A)'s K." },
+    { name = "c", type = "tensor", doc = "the accumulator C [.., M, N] (beta*C is added); its element == A/B's, its shape == the result D's (BLAS in-place term, SSA-pure here)." },
+]
+results = [
+    { name = "d", type = "tensor", doc = "the result D = alpha*op(A)*op(B) + beta*C; element == the inputs'; shape == [batch.., M, N]." },
+]
+attributes = [
+    { name = "alpha", kind = "float", required = true, doc = "the product scale (compile-time). matmul == gemm with alpha=1." },
+    { name = "beta", kind = "float", required = true, doc = "the accumulator scale (compile-time). beta=0 => C ignored (its TYPE must still be [.., M, N])." },
+    { name = "trans_a", kind = "bool", required = true, doc = "if true op(A) = A^T (the innermost two axes of A swapped) before the product." },
+    { name = "trans_b", kind = "bool", required = true, doc = "if true op(B) = B^T (the innermost two axes of B swapped) before the product." },
+]
+traits = ["Pure"]
+docs = "linalg.gemm(%a, %b, %c) {alpha, beta, trans_a, trans_b} -> %d. The BLAS3 general matrix-multiply identity D = alpha*op(A)*op(B) + beta*C, op(X) = X or X^T per the trans flags (sec-52; sec-59 'A*B -> ceir.linalg'). DISTINCT from 21b tensor.matmul (matmul == gemm alpha=1,beta=0,no-trans,C ignored). Pure, NO kernel_ref (sec-70; the ckir/hesap/vendor provider mapping is 22b). find_linalg_misuse (REUSES the 21b matmul shape machinery, trans applied first): a,b,c operands + d result Tensor-kinded (OperandNotTensor / ResultNotTensor); a.element == b.element == c.element == d.element (ElementMismatch); a,b ranks >= 2 (RankInvalid); op(A)'s last axis K == op(B)'s second-to-last axis K (ContractionMismatch); d.shape == [batch.., M, N] where M = op(A)'s second-to-last, N = op(B)'s last (ResultShapeMismatch); c.shape == d.shape (AccumulatorShapeMismatch); leading batch dims equal across a,b,c,d (BatchMismatch). ⛔ element FLOAT + F32-only restriction rides the 22b native provider (name-forward). ⛔ DETERMINISM: a tiled/device GEMM's accumulation order != a naive one bit-for-bit; the bit-exact contract is CEIR-22's ORACLE GATE (ledger L9). STRUCTURAL (3 operands, 1 result, alpha+beta present+Float, trans_a+trans_b present+Bool): the generated verify_gemm."

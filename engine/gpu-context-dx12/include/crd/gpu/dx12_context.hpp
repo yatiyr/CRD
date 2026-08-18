@@ -68,4 +68,11 @@ struct DxilCompileResult
     ShaderStage stage, crd::containers::StringView source, crd::containers::StringView name,
     crd::memory::IAllocator* a = crd::memory::default_allocator());
 
+// CEIR-20c-1 (D3D12 Work Graphs): compile a NODE LIBRARY (one or more [Shader("node")] functions — the
+// emit_work_graph_node_hlsl output) to signed DXIL. Target `lib_6_8`, no entry point (the state object names the entry).
+// Requires a Work-Graphs-capable dxcompiler.dll on the load path. `ok == false` + error_message if dxc is unavailable.
+[[nodiscard]] DxilCompileResult compile_work_graph_library_to_dxil(
+    crd::containers::StringView source, crd::containers::StringView name,
+    crd::memory::IAllocator* a = crd::memory::default_allocator());
+
 } // namespace crd::gpu

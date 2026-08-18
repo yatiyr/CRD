@@ -52,6 +52,11 @@ public:
     // C5: VK_NV_device_generated_commands (+ _compute) — the GPU authors a stream of varied compute commands (pipeline switch +
     // per-sequence push constants + dispatch), executed via `vkCmdExecuteGeneratedCommandsNV`. False when the extension is absent.
     [[nodiscard]] virtual bool             device_generated_commands() const noexcept = 0;
+    // CEIR-20c-2: VK_EXT_device_generated_commands — the CROSS-VENDOR device-generated-commands path (distinct from the NV
+    // extension above). The GPU authors the COMMAND STREAM itself (sequence count + per-sequence dispatch payloads), executed via
+    // `vkCmdExecuteGeneratedCommandsEXT` — the third lowering of a ceir.work program (20b fallback · 20c-1 Work Graphs · this).
+    // Gated on VK_KHR_maintenance5 (the preprocess buffer's 64-bit usage flag) + BDA + COMPUTE-capable generation. False otherwise.
+    [[nodiscard]] virtual bool             device_generated_commands_ext() const noexcept = 0;
     [[nodiscard]] virtual bool             shader_int64() const noexcept        = 0; // shaderInt64 enabled (geometry 60-bit)?
 
     // D-008 C1: the converged device is graphics-capable too (ADR-0099 "one device, both concerns"). A GRAPHICS queue +
