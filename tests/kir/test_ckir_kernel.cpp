@@ -3,6 +3,8 @@
 // semantics (a cross-thread shared read is only correct BECAUSE of the barrier before it).
 
 #include <crd/kir/ckir.hpp>
+#include <crd/kir/ckir_asset.hpp>       // CEIR-23d-1: ckir_write/ckir_read — the serialized-For round-trip proof
+#include <crd/kir/ckir_glsl.hpp>        // CEIR-23d-1: emit_compute_kernel_glsl — the For-kernel emit smoke
 #include <crd/kir/ckir_kernel_eval.hpp>
 
 #include <crd/memory/allocators/tlsf_allocator.hpp>
@@ -345,3 +347,89 @@ TEST_CASE("B-cmp: MATERIALIZE freezes a shared value across an overwrite (CPU or
     for (int i = 0; i < ls; ++i) { if (out[i] != in[ls - 1 - i]) { ++bad; } } // reversed, not 999
     CHECK(bad == 0);
 }
+
+// CEIR-23d-1 — the SpMV loop-shape micro-gate (the stmt_for "verify first" prerequisite): a per-thread reduction over a
+// RUNTIME-count range — y[gid] = sum vals[k], k in [starts[gid], starts[gid+1]) — is exactly the CSR SpMV inner loop minus the
+// col_idx indirection. Unlike the prefix-scan/transpose For tests (COMPILE-TIME count, built in C++, eval'd), this proves the
+// RUNTIME count (end-start) AND the SERIALIZED (text .ckir) round-trip: ckir_write -> ckir_read is byte-exact AND the
+// DESERIALIZED graph evals identically. Imperative For (U32 kernel_loop_var for integer indexing) + RMW-accumulate on the output
+// buffer (no F32 LoopIndex, no cross-thread, no barrier). Pins the loop contract 23e's authored SpMV .ckir depends on.
+TEST_CASE("ceir 23d-1: a runtime-count For reduction round-trips through .ckir + evals (the SpMV loop shape) + emits GLSL",
+          "[kir][kernel][ctrlflow][ceir]")
+{
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    kir::KGraph                g(&alloc);
+    kir::KEntry                e;
+    const kir::Shape           sh1 = kir::make_shape({1});
+    const auto                 ku  = [&](crd::u32 v) { return g.constant(static_cast<crd::f64>(v), sh1, kir::DType::U32); };
+
+    const int starts = g.buffer_decl(kir::DType::U32, 0, 0, false); // starts@0: the M+1 segment offsets (== CSR row_ptr)
+    const int vals   = g.buffer_decl(kir::DType::F32, 0, 1, false); // vals@1: the nnz values (== CSR values, no col_idx here)
+    const int ybuf   = g.buffer_decl(kir::DType::F32, 0, 2, true);  // y@2: the per-segment sums (write)
+    const int gid    = g.builtin(kir::KBuiltin::LocalInvocationIndex);
+
+    const int mark = g.kernel_stmt_mark();
+    g.stmt_buffer_store(ybuf, gid, g.constant(0.0, sh1, kir::DType::F32)); // y[gid] = 0
+    const int start = g.buffer_load(starts, gid);                          // starts[gid]
+    const int end   = g.buffer_load(starts, g.binary(kir::KOp::Add, gid, ku(1)));
+    const int count = g.binary(kir::KOp::Sub, end, start); // per-thread nnz in this segment (starts[gid+1] - starts[gid])
+    // ⛔ the eval (and the GPU) is LOCKSTEP/SIMT: the For BOUND is UNIFORM across the workgroup (eval reads active[0]'s count for
+    //    ALL threads). A per-thread DIVERGENT trip count is expressed as a UNIFORM upper bound + a per-thread ForBreakIf (the
+    //    while_loop / GPU-portable form) -- NOT a bare stmt_for(per-thread-count) (which the lockstep eval reads as thread-0's).
+    const int fid = g.stmt_for_begin(ku(8)); // UNIFORM upper bound >= the max segment length (8 > max 3)
+    const int it  = g.kernel_loop_var(fid);  // U32 iteration, uniform across active threads
+    g.stmt_for_break_if(g.binary(kir::KOp::CmpGe, it, count)); // drop this thread once its segment is exhausted (it >= count)
+    const int v   = g.buffer_load(vals, g.binary(kir::KOp::Add, start, it)); // vals[start + it]
+    const int cur = g.buffer_load(ybuf, gid);                        // RMW read of the accumulator
+    g.stmt_buffer_store(ybuf, gid, g.binary(kir::KOp::Add, cur, v)); // y[gid] += vals[start+it]
+    g.stmt_for_end(fid);
+
+    e.stage             = kir::KStage::Compute;
+    e.local_size[0]     = 4; // G = 4 segments, one workgroup
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
+
+    // segments of length 2,3,1,3 over 9 values -> sums 3, 12, 6, 24.
+    constexpr int gseg          = 4;
+    crd::f64      starts_d[gseg + 1] = {0.0, 2.0, 5.0, 6.0, 9.0};
+    crd::f64      vals_d[9]     = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0};
+    const crd::f64 ref[gseg]    = {3.0, 12.0, 6.0, 24.0};
+
+    // (A) the BUILT graph evals correctly (the runtime-count For + RMW accumulator).
+    crd::f64          y0[gseg] = {-1.0, -1.0, -1.0, -1.0};
+    kir::KernelBuffer b0[3]    = {{starts_d, gseg + 1, 0, 0}, {vals_d, 9, 0, 1}, {y0, gseg, 0, 2}};
+    kir::eval_cpu_kernel(g, e, b0, 3, static_cast<crd::u32>(gseg), &alloc);
+    for (int i = 0; i < gseg; ++i) { CHECK(y0[i] == ref[i]); }
+
+    // (B) the SERIALIZED form round-trips byte-exact AND the deserialized graph evals identically (the For survives text).
+    crd::containers::String text = kir::ckir_write(g, e, &alloc);
+    kir::KGraph             g2(&alloc);
+    kir::KEntry             e2;
+    const auto              rr = kir::ckir_read(crd::containers::StringView(text.c_str(), text.size()), g2, e2);
+    REQUIRE(rr.ok);
+    const crd::containers::String text2 = kir::ckir_write(g2, e2, &alloc);
+    CHECK(crd::containers::StringView(text2.c_str(), text2.size()) == crd::containers::StringView(text.c_str(), text.size()));
+    crd::f64          y1[gseg] = {-1.0, -1.0, -1.0, -1.0};
+    kir::KernelBuffer b1[3]    = {{starts_d, gseg + 1, 0, 0}, {vals_d, 9, 0, 1}, {y1, gseg, 0, 2}};
+    kir::eval_cpu_kernel(g2, e2, b1, 3, static_cast<crd::u32>(gseg), &alloc);
+    for (int i = 0; i < gseg; ++i) { CHECK(y1[i] == ref[i]); }
+
+    // (C) emit smoke: the runtime-For kernel compiles to GLSL (the device legs will).
+    kir::GlslKernel kern(&alloc);
+    CHECK(kir::emit_compute_kernel_glsl(g2, e2, &alloc, kern));
+}
+
+// CEIR-23e-a: the CSR SpMV kernel was bootstrapped here (build -> ckir_write) into assets/ckir/spmv_csr.ckir, then this builder
+// was DELETED (the 18a-1 write->commit->read->delete mold). The committed asset is the source, verified device-free by
+// test_ckir_viz.cpp's "ceir 23e-a" eval oracle (== the CPU CSR SpMV) and on-device by the Vulkan + DX12 gates.
+
+// CEIR-24b-1: the attention Q·Kᵀ TRANSPOSE kernel (K[Sk,D] -> Kt[D,Sk], one thread per output row + a uniform For over columns,
+// Div/Mod-free gather) was bootstrapped here (build -> eval-verify bit-exact -> ckir_write) into assets/ckir/transpose.ckir, then
+// this builder was DELETED (the 23e-a write->commit->read->delete mold). The committed asset is the source, verified device-free
+// by test_ckir_viz.cpp's "ceir 24b-1" eval oracle (== the CPU transpose) + GLSL emit smoke, and on-device by the 24b-4 gates.
+
+// CEIR-24b-2: the attention SCALED ROWWISE SOFTMAX kernel (probs[r,c] = exp(scale·scores[r,c] - m_r)/Σ, m_r = max_c scale·
+// scores[r,c]; scale = 1/√D a caller-uploaded 1-element buffer; Sk=3 unrolled straight-line; KOp::Exp) was bootstrapped here
+// (build -> eval-verify within derived tol -> ckir_write) into assets/ckir/softmax.ckir, then this builder was DELETED (the
+// 23e-a write->commit->read->delete mold). The committed asset is the source, verified device-free by test_ckir_viz.cpp's
+// "ceir 24b-2" eval oracle (== the CPU scaled softmax, derived tol) + GLSL/HLSL emit smoke, and on-device by the 24b-4 gates.

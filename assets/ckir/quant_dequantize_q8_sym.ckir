@@ -1,0 +1,225 @@
+# quant_dequantize_q8_sym.ckir - CEIR-23b-2a the SYMMETRIC (zero_point ≡ 0) Q8 dequant kernel: out[i] = int8(packed[i]) * scale.
+# The plan-path variant of quant_dequantize_q8.ckir (23b-1) with the zero_point buffer + subtract DROPPED — the symmetric floor
+# (the advisor's "fused = symmetric, drops the subtract"). Same u32-packed int8 storage + FLOAT sign-extend (logical Shr/BitAnd +
+# Cast; NO arithmetic-Shr, NO BitfieldExtract-zero-extend). 3 buffers: packed@0 (u32) · scale@1 (f32 [1]) · out@2 (f32 [N], write).
+# local_size = N (one workgroup, gid = LocalInvocationIndex); N%4==0. node refs POSITIONAL.
+schema = 1
+
+[[entry]]
+stage = "Compute"
+inputs = 0
+position = -1
+frag_depth = -1
+discard_cond = -1
+early_fragment_tests = false
+depth_mode = "Any"
+shading_rate = -1
+storage_write_index = -1
+storage_write_value = -1
+interlock = false
+n_out = 0
+local_size = [64, 1, 1]
+kernel_body_begin = 0
+kernel_body_count = 1
+mesh_vertices = 0
+mesh_primitives = 0
+mesh_prim = -1
+task_emit = -1
+task_payload = [-1, -1, -1, -1]
+n_task_payload = 0
+tess_patch_size = 0
+tess_inner = -1
+tess_outer = -1
+mesh_payload_in = false
+storage_read_only = false
+
+# packed@0 (u32-packed int8 weights, read)
+[[node]]
+id = "n0"
+op = "BufferDecl"
+dtype = "U32"
+shape = [1]
+axes = 1
+
+# scale@1 (f32 [1], read)
+[[node]]
+id = "n1"
+op = "BufferDecl"
+shape = [1]
+iidx = 1
+axes = 1
+
+# out@2 (f32 [N], write)
+[[node]]
+id = "n2"
+op = "BufferDecl"
+shape = [1]
+iidx = 2
+axes = 1
+
+# gid = gl_LocalInvocationIndex (KBuiltin 4; scalar uint)
+[[node]]
+id = "n3"
+op = "Builtin"
+dtype = "U32"
+shape = [1]
+iidx = 4
+
+# const u32 0 (scale[0] index)
+[[node]]
+id = "n4"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+# const u32 2 (gid >> 2)
+[[node]]
+id = "n5"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4000000000000000"
+
+# const u32 3 (gid & 3)
+[[node]]
+id = "n6"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4008000000000000"
+
+# const u32 7 (byte >> 7)
+[[node]]
+id = "n7"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x401c000000000000"
+
+# const u32 8 (lane * 8)
+[[node]]
+id = "n8"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4020000000000000"
+
+# const u32 255 (0xFF)
+[[node]]
+id = "n9"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x406fe00000000000"
+
+# const f32 256.0 (sign fold)
+[[node]]
+id = "n10"
+op = "Const"
+shape = [1]
+cval = "0x4070000000000000"
+
+# word index = gid >> 2
+[[node]]
+id = "n11"
+op = "Shr"
+dtype = "U32"
+shape = [1]
+in = ["n3", "n5"]
+
+# word = packed[gid >> 2]
+[[node]]
+id = "n12"
+op = "BufferLoad"
+dtype = "U32"
+shape = [1]
+in = ["n0", "n11"]
+
+# lane = gid & 3
+[[node]]
+id = "n13"
+op = "BitAnd"
+dtype = "U32"
+shape = [1]
+in = ["n3", "n6"]
+
+# lane * 8
+[[node]]
+id = "n14"
+op = "Mul"
+dtype = "U32"
+shape = [1]
+in = ["n13", "n8"]
+
+# word >> (lane*8)
+[[node]]
+id = "n15"
+op = "Shr"
+dtype = "U32"
+shape = [1]
+in = ["n12", "n14"]
+
+# byte = (...) & 0xFF
+[[node]]
+id = "n16"
+op = "BitAnd"
+dtype = "U32"
+shape = [1]
+in = ["n15", "n9"]
+
+# f32(byte)
+[[node]]
+id = "n17"
+op = "Cast"
+shape = [1]
+in = ["n16"]
+
+# sign bit = byte >> 7
+[[node]]
+id = "n18"
+op = "Shr"
+dtype = "U32"
+shape = [1]
+in = ["n16", "n7"]
+
+# f32(sign bit)
+[[node]]
+id = "n19"
+op = "Cast"
+shape = [1]
+in = ["n18"]
+
+# 256 * sign
+[[node]]
+id = "n20"
+op = "Mul"
+shape = [1]
+in = ["n10", "n19"]
+
+# signed = f32(byte) - 256*sign
+[[node]]
+id = "n21"
+op = "Sub"
+shape = [1]
+in = ["n17", "n20"]
+
+# scale[0]
+[[node]]
+id = "n22"
+op = "BufferLoad"
+shape = [1]
+in = ["n1", "n4"]
+
+# out = signed * scale
+[[node]]
+id = "n23"
+op = "Mul"
+shape = [1]
+in = ["n21", "n22"]
+
+# out[gid] = signed * scale
+[[stmt]]
+kind = "BufferStore"
+target = "n2"
+index = "n3"
+value = "n23"

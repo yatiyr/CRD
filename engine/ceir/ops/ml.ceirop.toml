@@ -1,0 +1,53 @@
+schema_version = 1
+dialect = "ml"
+summary = "CEIR-24 sec-55 ceir.ml: HIGH-LEVEL ML GRAPH SEMANTICS as first-class IR. Minimal op set THIS band: ml.mlp (a multi-layer perceptron) + ml.attention (single-head scaled dot-product attention) — the sec-138 ML PROOF headline (MLP first, then attention). ⛔ these are COMPOSITE ops that name the PARTITION UNIT (sec-69 heterogeneous execution providers): a provider either EXPANDS the op into the proven CEIR-22/23 vocabulary (ml.mlp -> dequant/gemm/relu; ml.attention -> gemm(QK^T)+softmax+gemm(.V)) consumed by the existing plan_tensor_pipeline, OR CLAIMS it WHOLE (a native coopvec/CUDA MLP) — the reason sec-55 lists BOTH `linear` and `MLP`: a fused native MLP needs an IR unit to claim. ⛔ NO new element TypeKind (the split-complex/quant/sparse precedent) — an MLP/attention is the composition of dense rank-2 tensors through this op. ⛔ Pure + typed NoSemantics + NO kernel_ref / NO lowering hook (sec-70) — the provider mapping is 24b/24c; declare stays element-agnostic (F32-only = a provider SynthReject, the 22a precedent). ⛔ MODE-FREE (sec-56): the ops carry NO inference/training mode — forward/backward graph + autodiff is a COMPILER TRANSFORM at CEIR-25 (sec-57), and types/effects here must not block it. ⛔ NO-FOLLOW / NAME-FORWARD (declared != implemented; a later band with a real consumer, never a silent subset): bias / dropout / layernorm-fused / gelu+other activations / MoE / conv / embedding / normalization / sampling / recurrent-state / KV-cache / MASK+CAUSAL / MULTI-HEAD attention / batched (rank>2) -> named-forward (the 12a rule; the sec-55 op list is the roadmap). ⛔ I6 — find_ml_misuse switches on op NAME + TypeKind, never op.kind. crd-ceir NEVER links gpu-context (I3/I4); ZERO renderer changes; ml.mlp/ml.attention are NOT tensor-pipeline plan ops (a module containing one hits PlanReject::UnsupportedOp — the provider EXPANDS them at 24b, it does not plan them directly)."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# ml.mlp -- a MULTI-LAYER PERCEPTRON: y = (x through n dense layers with `activation` between them). The per-layer weights
+# are the VARIADIC tail: operands = [input x, W_1, W_2, ..., W_n] (n = num_operands - 1 layers; ⛔ only the LAST operand may
+# be variadic -- opgen). Each layer is a dense matmul; the CLOSED-vocab `activation` is applied AFTER each layer EXCEPT the
+# final (a standard linear output layer; a 1-weight MLP is a plain linear x*W_1). Shapes: x [M,D0] · W_i [D_{i-1},D_i] ·
+# y [M,D_n]. find_ml_misuse: input/weights/result Tensor-kinded (OperandNotTensor/ResultNotTensor); all Float-kinded AND
+# EQUAL element (ElementMismatch); input+weights+result rank-2 (RankInvalid); >=1 weight (MlpArityInvalid); the WIDTH CHAIN
+# input.dim1==W_1.dim0, W_i.dim1==W_{i+1}.dim0, result.dim1==W_n.dim1, result.dim0==input.dim0 (MlpWidthMismatch, .count
+# arithmetic + both-static); `activation` in {relu} (MlpActivationInvalid). Pure, NoSemantics (the provider maps it 24b/24c).
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "mlp"
+summary = "A multi-layer perceptron: dense layers x*W_1..*W_n with `activation` between them (linear output layer)."
+version = 1
+operands = [
+    { name = "input", type = "tensor", doc = "the input activations x: a rank-2 Tensor [M, D0] (M rows, D0 input features)." },
+    { name = "weights", type = "tensor", variadic = true, doc = "the per-layer weight matrices W_1..W_n, each rank-2 [D_{i-1}, D_i] (the LAST operand, variadic). n = num_operands-1 layers; the WIDTH CHAIN is input.dim1==W_1.dim0, W_i.dim1==W_{i+1}.dim0, result.dim1==W_n.dim1." },
+]
+results = [
+    { name = "output", type = "tensor", doc = "the MLP output y: a rank-2 Tensor [M, D_n] (M rows preserved from x, D_n = the final weight's output width)." },
+]
+attributes = [
+    { name = "activation", kind = "string", required = true, doc = "the per-layer activation, a CLOSED vocab: relu (only, this band; applied after each layer except the final linear output). gelu/silu/tanh/... => name-forward -- find_ml_misuse rejects any other token as MlpActivationInvalid (the reduce-mean mold)." },
+]
+traits = ["Pure"]
+docs = "ml.mlp(%input, %weights...) {activation} -> %output. A multi-layer perceptron (sec-55/sec-138): y = dense layers x*W_1..*W_n with `activation` after each layer except the final (linear output). ⛔ NO new TypeKind (the composition of dense rank-2 tensors); ⛔ per-layer weights are the VARIADIC tail (opgen: only the last operand); Pure, NO kernel_ref (the CKIR-expansion / coopvec-native provider maps it at 24b/24c). find_ml_misuse: input,weights operands + output result Tensor-kinded (OperandNotTensor / ResultNotTensor); all Float-kinded AND equal element (MlpElementMismatch); input+every weight+output rank-2 (MlpRankInvalid); >=1 weight (MlpArityInvalid); the WIDTH CHAIN input.dim1==W_1.dim0 AND W_i.dim1==W_{i+1}.dim0 AND output.dim1==W_n.dim1 AND output.dim0==input.dim0 (MlpWidthMismatch, .count arithmetic + both-static); `activation` in {relu} (MlpActivationInvalid). ⛔ bias/dropout/layernorm/gelu+other-activations = name-forward. STRUCTURAL (>=1 operand [input] + a variadic tail, 1 result, `activation` present+String): the generated verify_mlp."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# ml.attention -- SINGLE-HEAD SCALED DOT-PRODUCT ATTENTION: out = softmax(Q*K^T / sqrt(D)) * V. Operands Q [Sq,D],
+# K [Sk,D], V [Sk,Dv] (all rank-2, single-head, no batch this band); out [Sq,Dv]. scale = 1/sqrt(D) is IMPLICIT (the
+# provider applies it -- an explicit scale attr is name-forward). find_ml_misuse: q/k/v/out Tensor-kinded + Float + EQUAL
+# element; rank-2; q.dim1==k.dim1 (the head dim D, AttnHeadDimMismatch); k.dim0==v.dim0 (the key/value seq Sk, AttnSeqMismatch);
+# out.dim0==q.dim0 (Sq) AND out.dim1==v.dim1 (Dv) (AttnOutShapeMismatch). ⛔ mask/causal/multi-head/KV-cache = name-forward.
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "attention"
+summary = "Single-head scaled dot-product attention: out = softmax(Q*K^T / sqrt(D)) * V."
+version = 1
+operands = [
+    { name = "query", type = "tensor", doc = "Q: a rank-2 Tensor [Sq, D] (Sq query positions, D head dim)." },
+    { name = "key", type = "tensor", doc = "K: a rank-2 Tensor [Sk, D] (Sk key positions, D head dim == Q's)." },
+    { name = "value", type = "tensor", doc = "V: a rank-2 Tensor [Sk, Dv] (Sk == K's key count, Dv value dim)." },
+]
+results = [
+    { name = "output", type = "tensor", doc = "out: a rank-2 Tensor [Sq, Dv] (Sq from Q, Dv from V)." },
+]
+attributes = []
+traits = ["Pure"]
+docs = "ml.attention(%query, %key, %value) -> %output. Single-head scaled dot-product attention (sec-55/sec-138): out = softmax(Q*K^T / sqrt(D)) * V. ⛔ NO new TypeKind; scale = 1/sqrt(D) IMPLICIT (the provider applies it; an explicit scale attr is name-forward); Pure, NO kernel_ref (the provider expands it to gemm(QK^T)+softmax+gemm(.V) at 24b). find_ml_misuse: query,key,value operands + output result Tensor-kinded (OperandNotTensor / ResultNotTensor); all Float-kinded AND equal element (AttnElementMismatch); all rank-2 (AttnRankInvalid); query.dim1==key.dim1 (the head dim D, AttnHeadDimMismatch); key.dim0==value.dim0 (the seq Sk, AttnSeqMismatch); output.dim0==query.dim0 AND output.dim1==value.dim1 (AttnOutShapeMismatch, .count arithmetic + both-static). ⛔ mask/causal/multi-head/KV-cache/batched = name-forward. STRUCTURAL (3 operands, 1 result, no attrs): the generated verify_attention."

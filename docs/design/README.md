@@ -34,6 +34,19 @@
 | **CEIR-0g** | [ceir-0g-maturity-and-manifest.md](ceir-0g-maturity-and-manifest.md) — reconciles the two maturity models (post-RAF L0–L7 vs CEIR L0–L8) into ONE forward model + a two-axis transition (`raf_level` = today's reality, `ceir_level` = the forward track, both honest); + the §174 manifest field set (adds `providers` + `determinism_tier`) + the registry-migration plan | ✅ accepted 2026-08-08 |
 | **CEIR-0h** | [ceir-0h-migration-and-deletion-tables.md](ceir-0h-migration-and-deletion-tables.md) — the migration + DELETION ledger built from CEIR-0a: what promotes vs deletes, every deletion with its parity gate named FIRST (frame-path F1–3 @ CEIR-12 · orchestration E1–5 @ CEIR-13 · residual special-cases R1–2 @ CEIR-11 · §PR-3 supersession @ 0f). CEIR-31 executes it verbatim | ✅ accepted 2026-08-08 |
 | **CEIR-0z** | [ceir-0z-close-report-and-sizing.md](ceir-0z-close-report-and-sizing.md) — the CEIR-0 close: the mission §184 fifteen-item report (each answered from 0a–0h evidence) + honest DERIVED sizing (CEIR-1…13 ≈ 34–55 KLOC with in-tree anchors + per-band confidence; ~4–8 mo dark period, very-low confidence) + the 5 unresolved-design-questions docket | ✅ accepted 2026-08-08 |
+| **CEIR-10a** | [ceir-10a-hot-reload-and-state-migration.md](ceir-10a-hot-reload-and-state-migration.md) — hot-reload + state-migration slice spec (ADR-0120) | ✅ closed |
+| **CEIR-10b** | [ceir-10b-execution-plan-cache.md](ceir-10b-execution-plan-cache.md) — execution-plan cache (ADR-0121) | ✅ closed |
+| **CEIR-11a** | [ceir-11a-reference-executor.md](ceir-11a-reference-executor.md) — the reference executor, full host subset (ADR-0122) | ✅ closed |
+| **CEIR-11b** | [ceir-11b-compiled-execution-plan.md](ceir-11b-compiled-execution-plan.md) — compiled execution plan (ADR-0123) | ✅ closed |
+| **CEIR-13z** | [ceir-13z-execution-proof.md](ceir-13z-execution-proof.md) — the §129 execution proof (the cornerstone flip) | ✅ closed |
+| **CEIR-14** | [ceir-14-render-dialect.md](ceir-14-render-dialect.md) — the `ceir.render`/`ceir.frame` dialect (ADR-0127) | ✅ closed |
+| **CEIR-14z** | [ceir-14z-render-execution-proof.md](ceir-14z-render-execution-proof.md) — render execution proof | ✅ closed |
+| **CEIR-15** | [ceir-15-framegraph-unification.md](ceir-15-framegraph-unification.md) — frame-graph unification | ✅ closed |
+| **CEIR-16** | [ceir-16-executor-migration.md](ceir-16-executor-migration.md) — executor migration | ✅ closed |
+| **CEIR-17** | [ceir-17-scene-bridge.md](ceir-17-scene-bridge.md) — the scene bridge (`scene_renderer` → authored assets) | ✅ closed |
+| RAF-0 | [raf-0-rendering-foundation-design.md](raf-0-rendering-foundation-design.md) — the RAF rendering foundation (ADR-0106) | ✅ closed |
+| RAF-12 | [raf12-verb-relocation.md](raf12-verb-relocation.md) — RAF-12 verb relocation | ✅ closed |
+| **CEIR-18…25** | _no separate spec files_ — bands 18-25 (`ceir.rt`/`work`/`shape`/`tensor`/`layout`/`linalg`/`quant`/`sparse`/`ml`/`autodiff` + provider partitioning) were design-locked INLINE in the tracker's per-band **BAND-OPEN LOCK** blocks (`docs/detours/D-007-ceir-tracker.md`) + the ADRs, not as standalone specs | 📋 see tracker |
 | REN-2 | [ren-2-rtt-and-material-textures.md](ren-2-rtt-and-material-textures.md) — RTT transients + sampled material textures | ✅ closed 2026-07-25 |
 | REN-3 | [ren-3-lighting-shadow-pipeline.md](ren-3-lighting-shadow-pipeline.md) — lighting · shadow · procedural sky · full AA, **sandbox-visible** | ◼ superseded — the pre-RAF REN band was superseded by RAF/post-RAF (2026-08-07 trim); the shipped parts (CSM atlas, sky) live in the `forward_csm` frames + session logs |
 | REN-3.1 | [ren-3-1-depth-rtt-transients.md](ren-3-1-depth-rtt-transients.md) — RTT **depth** transients + `draw_storage_depth_only` (the shadow-map substrate) | ✅ closed 2026-07-25 (gated both backends + bench) |

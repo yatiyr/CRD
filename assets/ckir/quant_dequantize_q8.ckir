@@ -1,0 +1,251 @@
+# quant_dequantize_q8.ckir - CEIR-23b-1 the AUTHORED per-tensor Q8 DEQUANT kernel: out[i] = (int8(packed[i]) - zp) * scale.
+# The int8 weights are stored U32-PACKED (4 int8 / u32, dense — NO VK_KHR_8bit_storage); the byte for lane (i&3) of word (i>>2)
+# is unpacked with LOGICAL shifts + BitAnd (unambiguous across GLSL/HLSL/eval), and SIGN-EXTENDED in FLOAT:
+#   byte = (word >> (8*lane)) & 0xFF            # unsigned [0,255], logical Shr on U32
+#   signed = f32(byte) - 256*f32(byte>>7)       # byte>=128 -> byte-256 (the sign fold; float, NO arithmetic-Shr — the
+#                                                 dx12-hlsl-masks scar: BitfieldExtract emits a ZERO-extend, avoided)
+#   out = (signed - zp) * scale
+# local_size = N (one workgroup, gid = LocalInvocationIndex — the eval-safe scalar builtin, == gid.x for one workgroup); N%4==0.
+# packed@0 (u32, N/4 words) · scale@1 (f32 [1]) · zp@2 (f32 [1], the zero_point) · out@3 (f32 [N], write). node refs POSITIONAL.
+schema = 1
+
+[[entry]]
+stage = "Compute"
+inputs = 0
+position = -1
+frag_depth = -1
+discard_cond = -1
+early_fragment_tests = false
+depth_mode = "Any"
+shading_rate = -1
+storage_write_index = -1
+storage_write_value = -1
+interlock = false
+n_out = 0
+local_size = [64, 1, 1]
+kernel_body_begin = 0
+kernel_body_count = 1
+mesh_vertices = 0
+mesh_primitives = 0
+mesh_prim = -1
+task_emit = -1
+task_payload = [-1, -1, -1, -1]
+n_task_payload = 0
+tess_patch_size = 0
+tess_inner = -1
+tess_outer = -1
+mesh_payload_in = false
+storage_read_only = false
+
+# packed@0 (u32-packed int8 weights, read)
+[[node]]
+id = "n0"
+op = "BufferDecl"
+dtype = "U32"
+shape = [1]
+axes = 1
+
+# scale@1 (f32 [1], read)
+[[node]]
+id = "n1"
+op = "BufferDecl"
+shape = [1]
+iidx = 1
+axes = 1
+
+# zp@2 (f32 [1], the zero_point, read)
+[[node]]
+id = "n2"
+op = "BufferDecl"
+shape = [1]
+iidx = 2
+axes = 1
+
+# out@3 (f32 [N], write)
+[[node]]
+id = "n3"
+op = "BufferDecl"
+shape = [1]
+iidx = 3
+axes = 1
+
+# gid = gl_LocalInvocationIndex (KBuiltin 4; scalar uint)
+[[node]]
+id = "n4"
+op = "Builtin"
+dtype = "U32"
+shape = [1]
+iidx = 4
+
+# const u32 0 (the scalar-buffer index for scale[0]/zp[0])
+[[node]]
+id = "n5"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+# const u32 2 (gid >> 2 = word index)
+[[node]]
+id = "n6"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4000000000000000"
+
+# const u32 3 (gid & 3 = lane)
+[[node]]
+id = "n7"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4008000000000000"
+
+# const u32 7 (byte >> 7 = sign bit)
+[[node]]
+id = "n8"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x401c000000000000"
+
+# const u32 8 (lane * 8 = bit offset)
+[[node]]
+id = "n9"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4020000000000000"
+
+# const u32 255 (0xFF byte mask)
+[[node]]
+id = "n10"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x406fe00000000000"
+
+# const f32 256.0 (the sign fold)
+[[node]]
+id = "n11"
+op = "Const"
+shape = [1]
+cval = "0x4070000000000000"
+
+# word index = gid >> 2
+[[node]]
+id = "n12"
+op = "Shr"
+dtype = "U32"
+shape = [1]
+in = ["n4", "n6"]
+
+# word = packed[gid >> 2]
+[[node]]
+id = "n13"
+op = "BufferLoad"
+dtype = "U32"
+shape = [1]
+in = ["n0", "n12"]
+
+# lane = gid & 3
+[[node]]
+id = "n14"
+op = "BitAnd"
+dtype = "U32"
+shape = [1]
+in = ["n4", "n7"]
+
+# bit offset = lane * 8
+[[node]]
+id = "n15"
+op = "Mul"
+dtype = "U32"
+shape = [1]
+in = ["n14", "n9"]
+
+# word >> (lane*8)
+[[node]]
+id = "n16"
+op = "Shr"
+dtype = "U32"
+shape = [1]
+in = ["n13", "n15"]
+
+# byte = (...) & 0xFF  (unsigned [0,255])
+[[node]]
+id = "n17"
+op = "BitAnd"
+dtype = "U32"
+shape = [1]
+in = ["n16", "n10"]
+
+# f32(byte)
+[[node]]
+id = "n18"
+op = "Cast"
+shape = [1]
+in = ["n17"]
+
+# sign bit = byte >> 7  (0 or 1)
+[[node]]
+id = "n19"
+op = "Shr"
+dtype = "U32"
+shape = [1]
+in = ["n17", "n8"]
+
+# f32(sign bit)
+[[node]]
+id = "n20"
+op = "Cast"
+shape = [1]
+in = ["n19"]
+
+# 256 * f32(sign bit)
+[[node]]
+id = "n21"
+op = "Mul"
+shape = [1]
+in = ["n11", "n20"]
+
+# signed = f32(byte) - 256*sign  (in [-128, 127])
+[[node]]
+id = "n22"
+op = "Sub"
+shape = [1]
+in = ["n18", "n21"]
+
+# scale[0]
+[[node]]
+id = "n23"
+op = "BufferLoad"
+shape = [1]
+in = ["n1", "n5"]
+
+# zp[0]
+[[node]]
+id = "n24"
+op = "BufferLoad"
+shape = [1]
+in = ["n2", "n5"]
+
+# signed - zp
+[[node]]
+id = "n25"
+op = "Sub"
+shape = [1]
+in = ["n22", "n24"]
+
+# out = (signed - zp) * scale
+[[node]]
+id = "n26"
+op = "Mul"
+shape = [1]
+in = ["n25", "n23"]
+
+# out[gid] = (signed - zp) * scale
+[[stmt]]
+kind = "BufferStore"
+target = "n3"
+index = "n4"
+value = "n26"

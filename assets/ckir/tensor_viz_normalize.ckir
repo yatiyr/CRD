@@ -1,0 +1,100 @@
+# tensor_viz_normalize.ckir - CEIR-22c-3 the sec-137 "viz-prep" NORMALIZE kernel: norm[i] = mag[i] / max, the display-ready
+# normalized spectrum (mag@0 read; max@1 a RANK-0 scalar buffer read at index 0; norm@2 write). local_size = L (=64), ONE
+# workgroup, LocalInvocationIndex in [0,L) is the element index -- the scalar builtin eval_cpu_kernel supports (== gid.x for a
+# single workgroup on-device). No bounds guard. AUTHORED .ckir DIRECT (mandate #1); the TERMINAL "viz-prep" stage (charter-literal
+# reduction->viz-prep: reduce(max) feeds this). node refs POSITIONAL; F32 default (elided); LocalInvocationIndex = KBuiltin 4.
+schema = 1
+
+[[entry]]
+stage = "Compute"
+inputs = 0
+position = -1
+frag_depth = -1
+discard_cond = -1
+early_fragment_tests = false
+depth_mode = "Any"
+shading_rate = -1
+storage_write_index = -1
+storage_write_value = -1
+interlock = false
+n_out = 0
+local_size = [64, 1, 1]
+kernel_body_begin = 0
+kernel_body_count = 1
+mesh_vertices = 0
+mesh_primitives = 0
+mesh_prim = -1
+task_emit = -1
+task_payload = [-1, -1, -1, -1]
+n_task_payload = 0
+tess_patch_size = 0
+tess_inner = -1
+tess_outer = -1
+mesh_payload_in = false
+storage_read_only = false
+
+# mag@0 (read)
+[[node]]
+id = "n0"
+op = "BufferDecl"
+shape = [1]
+axes = 1
+
+# max@1 (read -- a rank-0 / 1-element scalar buffer)
+[[node]]
+id = "n1"
+op = "BufferDecl"
+shape = [1]
+iidx = 1
+axes = 1
+
+# norm@2 (write -- inferred from the BufferStore target)
+[[node]]
+id = "n2"
+op = "BufferDecl"
+shape = [1]
+iidx = 2
+axes = 1
+
+# gid = gl_LocalInvocationIndex (KBuiltin 4; a SCALAR uint)
+[[node]]
+id = "n3"
+op = "Builtin"
+dtype = "U32"
+shape = [1]
+iidx = 4
+
+# index 0 (into the rank-0 max buffer)
+[[node]]
+id = "n4"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+# mag[gid]
+[[node]]
+id = "n5"
+op = "BufferLoad"
+shape = [1]
+in = ["n0", "n3"]
+
+# max[0]
+[[node]]
+id = "n6"
+op = "BufferLoad"
+shape = [1]
+in = ["n1", "n4"]
+
+# mag[gid] / max
+[[node]]
+id = "n7"
+op = "Div"
+shape = [1]
+in = ["n5", "n6"]
+
+# norm[gid] = mag[gid] / max
+[[stmt]]
+kind = "BufferStore"
+target = "n2"
+index = "n3"
+value = "n7"

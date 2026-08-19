@@ -1,0 +1,10 @@
+module {
+  ^bb0:
+    func.func() {sym_name = "main"} {
+      ^bb0:
+        %0 = resource.declare() : !tensor<!f32,!shape<!dim<2>,!dim<4>>>
+        %1 = resource.declare() : !tensor<!f32,!shape<!dim<3>,!dim<4>>>
+        %2 = resource.declare() : !tensor<!f32,!shape<!dim<3>,!dim<2>>>
+        %3 = ml.attention(%0, %1, %2) : !tensor<!f32,!shape<!dim<2>,!dim<2>>>
+    }
+}

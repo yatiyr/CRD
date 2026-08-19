@@ -1,0 +1,146 @@
+# transpose.ckir - CEIR-24b the attention Q·Kᵀ TRANSPOSE kernel (the ceir.ml.attention expansion): Kt[d, s] = K[s, d], i.e.
+# K[Sk, D] row-major -> Kt[D, Sk] row-major. A pure buffer->buffer GATHER (NO shared memory / NO barrier): one thread per OUTPUT
+# ROW d = LocalInvocationIndex in [0, D); a uniform For over s in [0, Sk) writes Kt[d*Sk + s] = K[s*D + d]. Div/Mod-FREE (index
+# math is Mul/Add on U32 only) => BIT-EXACT (a data-movement gather copies values, never computes them). This is the transposed
+# operand the plain gemm(Q, Kt)=scores[Sq, Sk] needs: ⛔ gemm stays PLAIN (trans_b is a synth/plan TYPED-REJECT) so the transpose
+# is an explicit authored kernel that rides the VizDispatch/compute.dispatch path (the @relu precedent — NO new StageKind).
+# Proof dims: Sk=3, D=4 (the 24b attention proof Sq=2, Sk=3, D=4, Dv=2); a dimension-general transpose = name-forward (relu.ckir /
+# spmv_csr.ckir are fixed-size authored assets too). Bootstrapped via ckir_write (build -> EVAL-VERIFY bit-exact -> round-trip
+# byte-exact -> commit -> reading-gate -> DELETE builder; the 23e-a mold). Node refs POSITIONAL; F32 is the default node dtype;
+# LocalInvocationIndex = KBuiltin 4. local_size = D = 4 (one workgroup, one thread per output row). 2 buffers: K@0 (read) . Kt@1
+# (write). Verified device-free by test_ckir_viz.cpp's "ceir 24b-1" eval oracle (== the CPU transpose) + GLSL/HLSL emit smoke.
+schema = 1
+
+[[entry]]
+stage = "Compute"
+inputs = 0
+position = -1
+frag_depth = -1
+discard_cond = -1
+early_fragment_tests = false
+depth_mode = "Any"
+shading_rate = -1
+storage_write_index = -1
+storage_write_value = -1
+interlock = false
+n_out = 0
+local_size = [4, 1, 1]
+kernel_body_begin = 0
+kernel_body_count = 2
+mesh_vertices = 0
+mesh_primitives = 0
+mesh_prim = -1
+task_emit = -1
+task_payload = [-1, -1, -1, -1]
+n_task_payload = 0
+tess_patch_size = 0
+tess_inner = -1
+tess_outer = -1
+mesh_payload_in = false
+storage_read_only = false
+
+# K@0 (f32 [Sk, D] row-major, read)
+[[node]]
+id = "n0"
+op = "BufferDecl"
+shape = [1]
+
+# Kt@1 (f32 [D, Sk] row-major, write -- inferred from the BufferStore target)
+[[node]]
+id = "n1"
+op = "BufferDecl"
+shape = [1]
+iidx = 1
+axes = 1
+
+# d = gl_LocalInvocationIndex (KBuiltin 4; the OUTPUT row in [0, D))
+[[node]]
+id = "n2"
+op = "Builtin"
+dtype = "U32"
+shape = [1]
+iidx = 4
+
+# const u32 3 = Sk (the uniform For bound; 0x4008... = f64 bits of 3.0)
+[[node]]
+id = "n3"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4008000000000000"
+
+# s = the For iteration (KernelLoopVar; the column of Kt / row of K)
+[[node]]
+id = "n4"
+op = "KernelLoopVar"
+dtype = "U32"
+shape = [1]
+in = ["n0"]
+
+# const u32 4 = D (0x4010... = f64 bits of 4.0)
+[[node]]
+id = "n5"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4010000000000000"
+
+# s * D
+[[node]]
+id = "n6"
+op = "Mul"
+dtype = "U32"
+shape = [1]
+in = ["n4", "n5"]
+
+# in_idx = s*D + d (the source K[s, d] linear index)
+[[node]]
+id = "n7"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n6", "n2"]
+
+# const u32 3 = Sk
+[[node]]
+id = "n8"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4008000000000000"
+
+# d * Sk
+[[node]]
+id = "n9"
+op = "Mul"
+dtype = "U32"
+shape = [1]
+in = ["n2", "n8"]
+
+# out_idx = d*Sk + s (the dest Kt[d, s] linear index)
+[[node]]
+id = "n10"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n9", "n4"]
+
+# K[s*D + d] (the gathered source value)
+[[node]]
+id = "n11"
+op = "BufferLoad"
+shape = [1]
+in = ["n0", "n7"]
+
+# for s in [0, Sk): body = the next 1 stmt (the transposed store)
+[[stmt]]
+kind = "For"
+value = "n3"
+body = [1, 1]
+
+# Kt[d*Sk + s] = K[s*D + d]
+[[stmt]]
+kind = "BufferStore"
+target = "n1"
+index = "n10"
+value = "n11"

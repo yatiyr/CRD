@@ -19,7 +19,7 @@ OpId Dialect::register_op(containers::StringView op, const OpSpec& spec)
                    "register_op: traits carry an out-of-vocabulary bit (dialects set core traits, never mint; see kKnownTraitsMask)");
     for (usize i = 0; i < spec.effects.size(); ++i) // hand-path bound: a stray cast can't slip an out-of-vocabulary code in
     {
-        const EffectRecord& e = spec.effects[i];
+        [[maybe_unused]] const EffectRecord& e = spec.effects[i]; // only the asserts read `e` — they compile out under NDEBUG
         CRD_ASSERT_MSG(e.family <= kLastEffectFamily && e.target <= kLastLocationKind,
                        "register_op: effect family/location-kind out of range");
         // CEIR-8c (ADR-0113) the junk-field guard (the 8a/8b canonicality discipline applied to EffectRecord):

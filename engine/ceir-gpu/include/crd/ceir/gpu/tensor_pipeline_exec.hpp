@@ -10,11 +10,33 @@
 
 #include <crd/ceir/gpu/execute.hpp>         // ExecuteError (reused — UnresolvedKernel / UnmappedBinding / BindingArity)
 #include <crd/ceir/gpu/tensor_pipeline.hpp> // TensorPipelinePlan / PlanStage
+#include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/gpu/compute.hpp> // ComputeRecorder / ComputePipeline / ComputeBuffer / ComputeAccess (ADR-0100)
 
 namespace crd::ceir::gpu
 {
+// §137 "profiling" — the STRUCTURAL per-stage profile, derived at RECORD time from the plan binds + the ResolvedStage grid (no
+// device timing here: the executor stays backend-free; the caller stamps the total submit WALL-time around submit_and_wait, and
+// per-stage GPU timestamp queries are a ledgered name-forward). One row per DISPATCHED stage, in execution order.
+struct TensorStageProfile
+{
+    StageKind kind       = StageKind::Gemm;
+    crd::u32  gx         = 1; // the resolved workgroup grid (the asset/emitter-derived dispatch dims)
+    crd::u32  gy         = 1;
+    crd::u32  gz         = 1;
+    crd::u64  workgroups = 0; // gx·gy·gz
+    crd::u64  bytes_in   = 0; // Σ bytes of the stage's INPUT binds (the first nbind−n_out)
+    crd::u64  bytes_out  = 0; // Σ bytes of the stage's OUTPUT binds (the trailing n_out)
+};
+// The inspectable §137 profile: the ordered per-stage rows. Total submit wall-time is CALLER-owned (kept out — the executor
+// records, it never times), so a consumer pairs this with its own around-submit clock.
+struct TensorPipelineProfile
+{
+    containers::Array<TensorStageProfile> stages;
+    explicit TensorPipelineProfile(memory::IAllocator* alloc) : stages(alloc) {}
+};
+
 // A plan stage resolved to a recordable dispatch (the caller's backend half). ⛔ `pipeline` nullptr ⇒ ExecuteError::UnresolvedKernel.
 struct ResolvedStage
 {
@@ -24,8 +46,8 @@ struct ResolvedStage
     crd::u32                   gz        = 1;
     // the stage's push blob INLINE (gemm {m,k,n,batch} 16B; reduce {nout,redsize,pad,pad} 16B; fft push_size 0) — inline so it
     // survives to the executor's rec.dispatch (a `const void*` to the resolver's local would DANGLE). push_size ≤ 16.
-    alignas(16) crd::u8 push[16] = {};
-    crd::u32            push_size = 0;
+    crd::u8  push[16] = {}; // ≤16B, naturally 4-aligned (u32 push structs); vkCmdPushConstants copies by-bytes
+    crd::u32 push_size = 0;
 };
 // The caller's per-stage resolver: a PlanStage → a ResolvedStage. Called ONCE per stage at record time (the KernelResolveFn mold).
 using StageResolveFn = ResolvedStage (*)(const PlanStage& stage, void* user);
@@ -40,7 +62,9 @@ using StageResolveFn = ResolvedStage (*)(const PlanStage& stage, void* user);
 // a `rec.barrier(out_buf, ShaderWrite, ShaderRead)` on each of the stage's `n_out` written outputs (the last n_out binds). ⛔
 // `buffers` is indexed by PLAN buffer index (one ComputeBuffer* per PlanBuffer — the caller created GpuOnly intermediates +
 // uploaded externals). ⛔ device-driving (records into the caller's already-begin()-ed recorder). First ExecuteError or None.
+// ⛔ `profile` (default nullptr) — when non-null, one TensorStageProfile row per stage is APPENDED (the §137 structural profile).
 [[nodiscard]] ExecuteError execute_tensor_pipeline(const TensorPipelinePlan& plan, crd::gpu::ComputeRecorder& rec,
                                                    StageResolveFn resolve, void* user,
-                                                   containers::ConstSpan<crd::gpu::ComputeBuffer*> buffers);
+                                                   containers::ConstSpan<crd::gpu::ComputeBuffer*> buffers,
+                                                   TensorPipelineProfile* profile = nullptr);
 } // namespace crd::ceir::gpu

@@ -1,0 +1,85 @@
+# relu.ckir - CEIR-23c the quantized-MLP activation: out[i] = max(in[i], 0), elementwise ReLU. The between-layers activation of
+# the crown quant-MLP (h1 = relu(x·W1)), authored as a compute.dispatch kernel that rides the VizDispatch path (like the §137 viz
+# kernels) — NO new StageKind. 2 buffers: in@0 (read) · out@1 (write). local_size = 32 (the MLP hidden width h1[4,8]=32), one
+# workgroup (grid 1,1,1), gid = LocalInvocationIndex in [0,32) (the SCALAR builtin eval_cpu_kernel supports). KOp::Max is wired in
+# every emitter (bloom/clouds/atmosphere/cuda use it). AUTHORED .ckir DIRECT (mandate #1); node refs POSITIONAL; F32 is default.
+schema = 1
+
+[[entry]]
+stage = "Compute"
+inputs = 0
+position = -1
+frag_depth = -1
+discard_cond = -1
+early_fragment_tests = false
+depth_mode = "Any"
+shading_rate = -1
+storage_write_index = -1
+storage_write_value = -1
+interlock = false
+n_out = 0
+local_size = [32, 1, 1]
+kernel_body_begin = 0
+kernel_body_count = 1
+mesh_vertices = 0
+mesh_primitives = 0
+mesh_prim = -1
+task_emit = -1
+task_payload = [-1, -1, -1, -1]
+n_task_payload = 0
+tess_patch_size = 0
+tess_inner = -1
+tess_outer = -1
+mesh_payload_in = false
+storage_read_only = false
+
+# in@0 (read)
+[[node]]
+id = "n0"
+op = "BufferDecl"
+shape = [1]
+axes = 1
+
+# out@1 (write -- inferred from the BufferStore target)
+[[node]]
+id = "n1"
+op = "BufferDecl"
+shape = [1]
+iidx = 1
+axes = 1
+
+# gid = gl_LocalInvocationIndex (KBuiltin 4; a SCALAR uint)
+[[node]]
+id = "n2"
+op = "Builtin"
+dtype = "U32"
+shape = [1]
+iidx = 4
+
+# const f32 0.0 (the relu threshold)
+[[node]]
+id = "n3"
+op = "Const"
+shape = [1]
+cval = "0x0000000000000000"
+
+# x = in[gid]
+[[node]]
+id = "n4"
+op = "BufferLoad"
+shape = [1]
+in = ["n0", "n2"]
+
+# max(x, 0)
+[[node]]
+id = "n5"
+op = "Max"
+shape = [1]
+in = ["n4", "n3"]
+
+# out[gid] = max(in[gid], 0)
+[[stmt]]
+kind = "BufferStore"
+target = "n1"
+index = "n2"
+value = "n5"

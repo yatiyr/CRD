@@ -39,7 +39,7 @@ historical and says so). Dated snapshots (session logs, archived context history
 | What is Cerid? | `README.md` (root) |
 | How do I work in this repo (rules, DoD, git policy, style)? | `AGENTS.md` (+ `docs/BUILDING.md` for build/verify) |
 | What is happening right now / what's next? | `context.md` |
-| What is the live front's plan + sub-slice status? | the active detour/phase doc it names (today: `docs/detours/D-007-gpu-program-system.md`, master subslice table) |
+| What is the live front's plan + sub-slice status? | the active detour it names (today: `docs/detours/D-007-ceir-tracker.md`, the master CEIR band table — the live-tracking role moved here at CEIR-0f; `D-007-gpu-program-system.md` is the historical pre-CEIR ledger) |
 | What must stay true / how do I not repeat a paid-for bug? | `docs/SANITY.md` (+ the memory index) |
 | What stable principles govern design? | `docs/PRINCIPLES.md` |
 | How does a landed subsystem work today? | `docs/systems/<module>.md` (retired modules have NO overview — deleted with the module; the index's Retired note points at successors, git history keeps the old text) |

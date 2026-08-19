@@ -13,6 +13,9 @@ add_executable(crd-ceir-gpu-dx12-tests
     test_ceir_gemm_dx12.cpp     # CEIR-22b: synth_gemm → a CKIR Contract run on D3D12, bit-exact vs eval_cpu AND an independent triple loop
     test_ceir_reduce_dx12.cpp   # CEIR-22b: synth_reduce → a CKIR reduce run on D3D12, bit-exact vs eval_cpu AND an independent serial sum
     test_ceir_fft_dx12.cpp      # CEIR-22b: synth_fft → a CKIR FFT (kernel tier, dispatch_kernel_1wg) vs eval_cpu_kernel AND an independent naive DFT
+    test_ceir_pipeline_dx12.cpp # CEIR-22c-3e: the parse-loaded design-B GEMM->FFT->mag->reduce->normalize pipeline on D3D12 (portable copy-readback) vs a composed ref
+    test_ceir_quant_dx12.cpp    # CEIR-23b-1: the authored Q8 dequant .ckir (u32-pack + float sign-extend) on a real D3D12 device vs the CPU ref (the HLSL/GLSL emitter-agreement check)
+    test_ceir_sparse_dx12.cpp   # CEIR-23e: the authored CSR spmv_csr.ckir (runtime For + ForBreakIf + col_idx indirection) on a real D3D12 device vs the CPU CSR SpMV ref (the HLSL loop-lowering agreement check)
 )
 
 target_link_libraries(crd-ceir-gpu-dx12-tests PRIVATE

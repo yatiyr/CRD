@@ -10,6 +10,9 @@ add_executable(crd-ceir-gpu-vulkan-tests
     test_ceir_gemm_vulkan.cpp     # CEIR-22b: synth_gemm → a CKIR Contract run on Vulkan, bit-exact vs eval_cpu AND an independent triple loop
     test_ceir_reduce_vulkan.cpp   # CEIR-22b: synth_reduce → a CKIR reduce run on Vulkan, bit-exact vs eval_cpu AND an independent serial sum
     test_ceir_fft_vulkan.cpp      # CEIR-22b: synth_fft → a CKIR FFT (kernel tier, dispatch_kernel_1wg) vs eval_cpu_kernel AND an independent naive DFT
+    test_ceir_pipeline_vulkan.cpp # CEIR-22c-2: the §137 GEMM->FFT->reduction pipeline plan_+execute_tensor_pipeline device-resident (one submit) vs a composed ref
+    test_ceir_quant_vulkan.cpp    # CEIR-23b-1: the authored Q8 dequant .ckir (u32-pack + float sign-extend) on a real Vulkan device vs the CPU (int8-zp)*scale ref
+    test_ceir_sparse_vulkan.cpp   # CEIR-23e: the authored CSR spmv_csr.ckir (runtime For + ForBreakIf + col_idx indirection) on a real Vulkan device vs the CPU CSR SpMV ref
 )
 
 target_link_libraries(crd-ceir-gpu-vulkan-tests PRIVATE

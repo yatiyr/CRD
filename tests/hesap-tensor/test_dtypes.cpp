@@ -187,6 +187,76 @@ TEST_CASE("v14-a dtypes: ggml Q8_0/Q4_0 quantization is byte-exact vs the refere
     }
 }
 
+// CEIR-23c-e — the quantize_q8_0 ROUNDING cross-check the CEIR-23 charter rides on 23c: a SELF-CONTAINED (no ggml corpus)
+// verification of the host f32→int8 quantizer's math — amax-based scale, HALF-AWAY-FROM-ZERO rounding, f16 scale encoding.
+// Complements the byte-exact-vs-ggml test above (which checks against ggml's OUTPUT) by checking against the MATHEMATICAL SPEC,
+// with CONTROLLED exact-.5 boundary cases the corpus does not specifically stress. (Per the 23c advisor lock the crown MLP uses
+// DIRECT int8 weights — block-32/f16-scale Q8_0 does not fit the per-tensor rank-0 plan path — so this gate is DECOUPLED from the
+// crown's weights: it proves the quantizer in isolation.)
+TEST_CASE("ceir 23c-e: quantize_q8_0 rounding cross-check - amax scale, half-away-from-zero, f16 encode (self-contained)",
+          "[hesap][tensor][quant][ceir]")
+{
+    const auto absf = [](crd::f32 v) { return v < 0.0F ? -v : v; };
+
+    // ── controlled block: amax = 127 ⇒ d = 1.0 (f16-exact, id = 1) ⇒ qs[j] = round_half_away(x[j]) at KNOWN half-boundaries ──
+    crd::f32 ctrl[32] = {};
+    ctrl[0]  = 127.0F;
+    ctrl[1]  = -127.0F; // set the block amax to 127 ⇒ d = amax/127 = 1.0
+    ctrl[2]  = 2.5F;
+    ctrl[3]  = -2.5F; // exact .5 ⇒ 3, -3 (rounded AWAY from zero, not to-even)
+    ctrl[4]  = 1.5F;
+    ctrl[5]  = -1.5F; // ⇒ 2, -2
+    ctrl[6]  = 0.5F;
+    ctrl[7]  = -0.5F; // ⇒ 1, -1
+    ctrl[8]  = 1.4F;
+    ctrl[9]  = 1.6F; // ⇒ 1, 2
+    ctrl[10] = 3.49F;
+    ctrl[11] = 3.51F; // ⇒ 3, 4
+    BlockQ8_0 cb[1];
+    quantize_q8_0({ctrl, 32U}, {cb, 1U});
+    CHECK(cb[0].d == f32_to_f16_bits(1.0F)); // d = amax/127 = 1.0, f16-exact
+    const crd::i8 exp[12] = {127, -127, 3, -3, 2, -2, 1, -1, 1, 2, 3, 4};
+    for (crd::u32 j = 0; j < 12U; ++j)
+    {
+        INFO("ctrl j=" << j);
+        CHECK(cb[0].qs[j] == exp[j]);
+    }
+    for (crd::u32 j = 12U; j < 32U; ++j) { CHECK(cb[0].qs[j] == 0); } // exact zeros stay zero
+
+    // ── varied blocks (distinct per-block amax) — the f16 scale encode is EXACT and the round-trip stays within the derived
+    //    quantization bound |x − qs·d_f16| ≤ d/2 + 127·|d − d_f16| (the ±½-step floor plus the f16 scale slack). ──
+    constexpr crd::u32 nblk = 3U;
+    constexpr crd::u32 n    = nblk * 32U;
+    crd::f32           x[n];
+    for (crd::u32 b = 0; b < nblk; ++b)
+    {
+        const crd::f32 amp = static_cast<crd::f32>(b + 1U) * 3.0F + 0.5F; // a distinct nonzero peak per block ⇒ d != 0
+        for (crd::u32 j = 0; j < 32U; ++j)
+        {
+            const crd::f32 t          = static_cast<crd::f32>(static_cast<crd::i32>((b * 32U + j) * 7U % 29U) - 14) / 14.0F;
+            x[b * 32U + j]            = amp * t; // spans [-amp, amp]; j==0 forces the peak below
+        }
+        x[b * 32U + 0] = (b % 2U == 0U) ? amp : -amp; // guarantee the block amax == amp
+    }
+    BlockQ8_0 blk[nblk];
+    quantize_q8_0({x, n}, {blk, nblk});
+    crd::f32 recon[n];
+    dequantize_q8_0({blk, nblk}, {recon, n});
+    for (crd::u32 b = 0; b < nblk; ++b)
+    {
+        crd::f32 amax = 0.0F;
+        for (crd::u32 j = 0; j < 32U; ++j) { amax = absf(x[b * 32U + j]) > amax ? absf(x[b * 32U + j]) : amax; }
+        const crd::f32 d = amax / 127.0F;
+        CHECK(blk[b].d == f32_to_f16_bits(d)); // the f16 scale encoding is exact (independent amax → d)
+        const crd::f32 df16 = f16_bits_to_f32(blk[b].d);
+        for (crd::u32 j = 0; j < 32U; ++j)
+        {
+            const crd::f32 bound = 0.5F * d + 127.0F * absf(d - df16) + 1e-6F;
+            CHECK(absf(recon[b * 32U + j] - x[b * 32U + j]) <= bound);
+        }
+    }
+}
+
 TEST_CASE("v14-a dtypes: deterministic SR - validity, unbiasedness, bit-identity", "[hesap][tensor][v14][dtypes]")
 {
     constexpr crd::u64 seed = 0xC0FFEE0123456789ULL;

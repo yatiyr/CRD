@@ -28,7 +28,8 @@ external request).
   `docs/detours/D-007-ceir-tracker.md`** (CEIR bands 0–32 + RAH); the landed-history ledger + pre-CEIR plan is
   `docs/detours/D-007-gpu-program-system.md`; live state also in `context.md`. Landmark state (2026-08-08):
   device+IR convergence ✅ · legacy rhi/renderer/shader RETIRED (ADR-0105) · full visual frontier ✅ · **RAF ✅
-  (ADR-0106)** · **CEIR-0 design phase ✅ accepted** (ADR-0108/0109/0110 + notes); CEIR-1a is the next code.
+  (ADR-0106)** · **CEIR-0 design phase ✅ accepted** (ADR-0108/0109/0110 + notes). Current (2026-08-18): CEIR
+  bands through **CEIR-24 ✅**; **CEIR-25 (`ceir.autodiff`) band-open** — the ceir-tracker has the live per-band status.
 
 <!-- Historical D-003 plan retained for reference; see Closed detours
      for the actual shipped state. Each slice has its own session log

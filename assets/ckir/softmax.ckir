@@ -1,0 +1,287 @@
+# softmax.ckir - CEIR-24b the attention SCALED ROWWISE SOFTMAX kernel (the ceir.ml.attention expansion, the softmax step of
+# out = softmax(Q·Kᵀ/√D)·V): probs[r, c] = exp(scale·scores[r, c] - m_r) / Σ_c exp(scale·scores[r, c] - m_r), where m_r =
+# max_c (scale·scores[r, c]) is the per-row max (numerically STABLE softmax). The scale = 1/√D rides as a CALLER-UPLOADED
+# 1-element buffer (scale@1) -- the quant_mlp.ceir dequant-scale precedent (a derived scalar as a resource.declare ExternalIn);
+# ⛔ NOT a spec-const (VizDispatch carries none) -> spec-const baking of the scale is name-forward. One thread per OUTPUT ROW
+# r = LocalInvocationIndex in [0, Sq); Sk=3 is UNROLLED (straight-line: no For / no accumulator / no div-mod) since the proof
+# dims are fixed. Uses KOp::Exp (wired eval + GLSL + HLSL emitters). ⛔ exp is float math -> NOT bit-exact -> the gates use a
+# DERIVED tol 1e-6·(1+|ref|). Proof dims: Sq=2, Sk=3 (the 24b attention proof Sq=2, Sk=3, D=4, Dv=2); a dimension-general
+# softmax = name-forward (relu.ckir / transpose.ckir are fixed-size authored assets too). Bootstrapped via ckir_write
+# (build -> EVAL-VERIFY within tol -> round-trip byte-exact -> commit -> reading-gate -> DELETE builder; the 23e-a mold). Node
+# refs POSITIONAL; F32 is the default node dtype; LocalInvocationIndex = KBuiltin 4. local_size = Sq = 2 (one workgroup, one
+# thread per row). 3 buffers: scores@0 (read) . scale@1 (read, [1]) . probs@2 (write). Verified device-free by test_ckir_viz.cpp's
+# "ceir 24b-2" eval oracle (== the CPU scaled softmax) + GLSL/HLSL emit smoke, and on-device by the 24b-4 attention gates.
+schema = 1
+
+[[entry]]
+stage = "Compute"
+inputs = 0
+position = -1
+frag_depth = -1
+discard_cond = -1
+early_fragment_tests = false
+depth_mode = "Any"
+shading_rate = -1
+storage_write_index = -1
+storage_write_value = -1
+interlock = false
+n_out = 0
+local_size = [2, 1, 1]
+kernel_body_begin = 0
+kernel_body_count = 3
+mesh_vertices = 0
+mesh_primitives = 0
+mesh_prim = -1
+task_emit = -1
+task_payload = [-1, -1, -1, -1]
+n_task_payload = 0
+tess_patch_size = 0
+tess_inner = -1
+tess_outer = -1
+mesh_payload_in = false
+storage_read_only = false
+
+# scores@0 (f32 [Sq, Sk] row-major, read)
+[[node]]
+id = "n0"
+op = "BufferDecl"
+shape = [1]
+
+# scale@1 (f32 [1] = 1/√D, read)
+[[node]]
+id = "n1"
+op = "BufferDecl"
+shape = [1]
+iidx = 1
+
+# probs@2 (f32 [Sq, Sk] row-major, write -- inferred from the BufferStore target)
+[[node]]
+id = "n2"
+op = "BufferDecl"
+shape = [1]
+iidx = 2
+axes = 1
+
+# r = gl_LocalInvocationIndex (KBuiltin 4; the OUTPUT row in [0, Sq))
+[[node]]
+id = "n3"
+op = "Builtin"
+dtype = "U32"
+shape = [1]
+iidx = 4
+
+# const u32 3 = Sk (0x4008... = f64 bits of 3.0)
+[[node]]
+id = "n4"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4008000000000000"
+
+# base = r*Sk (the row's first linear index)
+[[node]]
+id = "n5"
+op = "Mul"
+dtype = "U32"
+shape = [1]
+in = ["n3", "n4"]
+
+# const u32 1 (0x3ff... = f64 bits of 1.0)
+[[node]]
+id = "n6"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+# i1 = base + 1
+[[node]]
+id = "n7"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n5", "n6"]
+
+# const u32 2 (0x4000... = f64 bits of 2.0)
+[[node]]
+id = "n8"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4000000000000000"
+
+# i2 = base + 2
+[[node]]
+id = "n9"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n5", "n8"]
+
+# const u32 0 (the scale[0] index; empty cval = 0.0 bits)
+[[node]]
+id = "n10"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+# s = scale[0] = 1/√D
+[[node]]
+id = "n11"
+op = "BufferLoad"
+shape = [1]
+in = ["n1", "n10"]
+
+# scores[base]
+[[node]]
+id = "n12"
+op = "BufferLoad"
+shape = [1]
+in = ["n0", "n5"]
+
+# e0 = s * scores[base]
+[[node]]
+id = "n13"
+op = "Mul"
+shape = [1]
+in = ["n11", "n12"]
+
+# scores[i1]
+[[node]]
+id = "n14"
+op = "BufferLoad"
+shape = [1]
+in = ["n0", "n7"]
+
+# e1 = s * scores[i1]
+[[node]]
+id = "n15"
+op = "Mul"
+shape = [1]
+in = ["n11", "n14"]
+
+# scores[i2]
+[[node]]
+id = "n16"
+op = "BufferLoad"
+shape = [1]
+in = ["n0", "n9"]
+
+# e2 = s * scores[i2]
+[[node]]
+id = "n17"
+op = "Mul"
+shape = [1]
+in = ["n11", "n16"]
+
+# max(e0, e1)
+[[node]]
+id = "n18"
+op = "Max"
+shape = [1]
+in = ["n13", "n15"]
+
+# m = max(max(e0, e1), e2) (the per-row max, the stable-softmax shift)
+[[node]]
+id = "n19"
+op = "Max"
+shape = [1]
+in = ["n18", "n17"]
+
+# e0 - m
+[[node]]
+id = "n20"
+op = "Sub"
+shape = [1]
+in = ["n13", "n19"]
+
+# x0 = exp(e0 - m)
+[[node]]
+id = "n21"
+op = "Exp"
+shape = [1]
+in = ["n20"]
+
+# e1 - m
+[[node]]
+id = "n22"
+op = "Sub"
+shape = [1]
+in = ["n15", "n19"]
+
+# x1 = exp(e1 - m)
+[[node]]
+id = "n23"
+op = "Exp"
+shape = [1]
+in = ["n22"]
+
+# e2 - m
+[[node]]
+id = "n24"
+op = "Sub"
+shape = [1]
+in = ["n17", "n19"]
+
+# x2 = exp(e2 - m)
+[[node]]
+id = "n25"
+op = "Exp"
+shape = [1]
+in = ["n24"]
+
+# x0 + x1
+[[node]]
+id = "n26"
+op = "Add"
+shape = [1]
+in = ["n21", "n23"]
+
+# denom = x0 + x1 + x2 (the row's normalizer)
+[[node]]
+id = "n27"
+op = "Add"
+shape = [1]
+in = ["n26", "n25"]
+
+# probs[base] = x0 / denom
+[[node]]
+id = "n28"
+op = "Div"
+shape = [1]
+in = ["n21", "n27"]
+
+# probs[i1] = x1 / denom
+[[node]]
+id = "n29"
+op = "Div"
+shape = [1]
+in = ["n23", "n27"]
+
+# probs[i2] = x2 / denom
+[[node]]
+id = "n30"
+op = "Div"
+shape = [1]
+in = ["n25", "n27"]
+
+# probs[base] = x0 / denom
+[[stmt]]
+kind = "BufferStore"
+target = "n2"
+index = "n5"
+value = "n28"
+
+# probs[i1] = x1 / denom
+[[stmt]]
+kind = "BufferStore"
+target = "n2"
+index = "n7"
+value = "n29"
+
+# probs[i2] = x2 / denom
+[[stmt]]
+kind = "BufferStore"
+target = "n2"
+index = "n9"
+value = "n30"

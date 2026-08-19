@@ -21,6 +21,7 @@ add_executable(crd-kir-tests
     test_ckir_lighting.cpp
     test_ckir_kernel.cpp
     test_ckir_kernel_emit.cpp
+    test_ckir_viz.cpp       # CEIR-22c-3b: the authored viz-prep .ckir kernels (magnitude / normalize) device-free oracle
     test_ckir_fft.cpp
     test_ckir_reduce.cpp
     test_ckir_scan.cpp

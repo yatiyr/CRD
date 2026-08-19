@@ -17,7 +17,8 @@ ExecuteError validate_tensor_pipeline(const TensorPipelinePlan& plan, crd::u32 n
 }
 
 ExecuteError execute_tensor_pipeline(const TensorPipelinePlan& plan, crd::gpu::ComputeRecorder& rec, StageResolveFn resolve,
-                                     void* user, containers::ConstSpan<crd::gpu::ComputeBuffer*> buffers)
+                                     void* user, containers::ConstSpan<crd::gpu::ComputeBuffer*> buffers,
+                                     TensorPipelineProfile* profile)
 {
     const ExecuteError v = validate_tensor_pipeline(plan, static_cast<crd::u32>(buffers.size()));
     if (v != ExecuteError::None) { return v; }
@@ -33,6 +34,26 @@ ExecuteError execute_tensor_pipeline(const TensorPipelinePlan& plan, crd::gpu::C
         for (crd::u32 i = 0; i < st.nbind; ++i) { binds[i] = buffers[static_cast<usize>(st.bind[i])]; }
         rec.dispatch(*rs.pipeline, containers::ConstSpan<crd::gpu::ComputeBuffer*>(binds, st.nbind), rs.push, rs.push_size,
                      rs.gx, rs.gy, rs.gz);
+
+        // §137 STRUCTURAL PROFILE row (record-time; the grid from the resolved stage, the bytes from the plan buffers). Inputs
+        // are the first nbind−n_out binds, outputs the trailing n_out (the plan's positional-slot contract).
+        if (profile != nullptr)
+        {
+            TensorStageProfile sp;
+            sp.kind       = st.kind;
+            sp.gx         = rs.gx;
+            sp.gy         = rs.gy;
+            sp.gz         = rs.gz;
+            sp.workgroups = static_cast<crd::u64>(rs.gx) * rs.gy * rs.gz;
+            const crd::u32 n_in = st.nbind - st.n_out;
+            for (crd::u32 i = 0; i < st.nbind; ++i)
+            {
+                const crd::u64 b = plan.buffers[static_cast<usize>(st.bind[i])].bytes;
+                if (i < n_in) { sp.bytes_in += b; }
+                else { sp.bytes_out += b; }
+            }
+            profile->stages.push_back(sp);
+        }
 
         // inter-stage barrier: after every NON-final stage, ShaderWrite→ShaderRead on each written output (the last n_out binds)
         // — so the next stage reads device-resident data (no round-trip; the §137 chain). The caller owns the boundary

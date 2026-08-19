@@ -23,12 +23,17 @@ namespace crd::ceir::gpu
 enum class PlanReject : crd::u8
 {
     None = 0,
-    NotVerifyClean, // find_linalg_misuse / find_tensor_misuse flagged the module (the verify-first contract)
-    UnsupportedOp,  // an op is outside the pipeline vocab (linalg.gemm / tensor.fft / tensor.reduce / tensor.reshape / compute.dispatch)
+    NotVerifyClean, // find_linalg_misuse / find_tensor_misuse / find_dispatch_misuse flagged the module (the verify-first contract)
+    UnsupportedOp,  // an op is outside the pipeline vocab (linalg.gemm / tensor.fft / tensor.reduce / tensor.reshape / compute.dispatch / arith.const)
     SynthRejected,  // ckir_synth TYPED-REJECTED a stage (the offending PlanStage carries the SynthReject; e.g. non-F32, non-pow2 fft)
     ReshapeNotAlias, // a tensor.reshape whose total element count is NOT preserved (not a zero-copy alias — a real re-layout is name-forward)
     DanglingOperand, // a stage operand is neither a prior stage's result nor a module-declared external (resource.declare)
     NoOutput,        // the module has no terminal result (an empty / non-producing pipeline)
+    DispatchOutputsNotTrailing, // a compute.dispatch whose `w` (write) bindings are not a CONTIGUOUS TRAILING run — the executor's
+                                // "outputs = the last n_out binds" barrier contract needs writes last (author inputs then outputs)
+    UnsupportedQuantScheme,     // a quant.dequantize that is NOT symmetric-per-tensor (asymmetric zp, or a rank-1 per-axis scale)
+                                // — the plan-path Q8 kernels are symmetric-per-tensor only (read scale[0], drop zp). Name-forward
+                                // (an asymmetric/per-axis plan path is a future slice); ⛔ a TYPED reject, never a silent miscompile.
 };
 [[nodiscard]] containers::StringView plan_reject_name(PlanReject r) noexcept;
 
@@ -40,6 +45,11 @@ enum class StageKind : crd::u8
     Fft,         // tensor.fft → a kernel-tier radix-2 plan; binds in_re,in_im,tw_re,tw_im + out_re,out_im (the 22b 6-buffer contract)
     Reduce,      // tensor.reduce → a graph-tier reduce (emit_reduce_glsl); binds in + out
     VizDispatch, // compute.dispatch of the AUTHORED viz .ckir (magnitude/normalize) — the §137 "mixed high-level tensor + CKIR" stage
+    Dequant,     // quant.dequantize → the AUTHORED Q8 dequant .ckir (CEIR-23b); binds W_q8(int8, u32-packed device view), scale, zp + out
+    QuantGemm,   // ⭐ the FUSED dequantize→gemm collapse (CEIR-23b-2b): a quant.dequantize whose result is SINGLE-USE by a gemm's
+                 // weight (operand-1) is folded away (its output NEVER allocated); binds {A, W_q8(int8), scale, D} — the §54 fusion
+                 // win. ⛔ n_out=1 (D trailing). Symmetric (zp≡0). op = the GEMM; the resolver RE-DERIVES W_q8/scale via
+                 // fusable_dequant_into_gemm_weight (the ONE shared predicate — never a hand copy).
 };
 
 // A buffer's role in the device-resident plan — the §137 memory-plan visibility. ⛔ append at END.
@@ -100,5 +110,11 @@ struct TensorPipelinePlan
 // each supported op into a stage, and derive the device-resident buffer wiring from the SSA def-use edges + the fft
 // 6-buffer/reshape-alias contracts. PURE + device-free (no synth KGraph kept, no GPU). ⛔ Context& (non-const — synthesizability
 // checks may intern via the shape predicates). Returns the plan (its `reject` says None on success).
+// ⭐ CEIR-23b-2b — the ONE shared FUSION predicate: is `dequant_op` (a quant.dequantize) fusable into a following gemm's WEIGHT
+// operand? True iff its result has EXACTLY ONE use AND that use is a linalg.gemm's operand-1 (B/weight). ⛔ Called by the PLAN
+// (the dequant-skip + the gemm QuantGemm-detect) AND the executor's RESOLVER (the W_q8/scale re-derive) — three hand copies of
+// this predicate WOULD drift and reject a legal module (the advisor's shared-helper mandate). const-safe (reads the def-use graph).
+[[nodiscard]] bool fusable_dequant_into_gemm_weight(const Context& ctx, const Operation* dequant_op) noexcept;
+
 [[nodiscard]] TensorPipelinePlan plan_tensor_pipeline(Context& ctx, const Module& m, memory::IAllocator* alloc);
 } // namespace crd::ceir::gpu

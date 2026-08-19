@@ -1,0 +1,37 @@
+schema_version = 1
+dialect = "sparse"
+summary = "CEIR-23d sec-53 ceir.sparse: SPARSE LINEAR ALGEBRA as first-class IR. ONE op this band: sparse.spmv (CSR sparse-matrix x dense-vector, y = A*x). ⛔ the CSR triple is EXPLICIT-TRIPLE OPERANDS (row_ptr, col_idx, values) + the dense x -- FIRST-CLASS in the op vocabulary + verifier, NOT opaque buffers (so a provider maps the runtime-bound row loop, and a re-wired sparsity plans differently by construction). ⛔ NO new element TypeKind (the split-complex + quant precedent): a sparse matrix is NOT a type -- it is the composition of THREE dense rank-1 tensors through this op. ⛔ CSR-ONLY: the op NAME encodes the format (row_ptr/col_idx/values IS CSR); CSC/COO/block-sparse are FUTURE OPS (spmv_csc, ...), name-forward -- NO `format` attr (the lock names no attr; a format attr would be the scheme-precedent but the charter picks op-name-is-format). ⛔ NO attrs at all (SpMV is fully determined by its operands). ⛔ EVERY op is Pure + typed NoSemantics + carries NO kernel_ref / NO lowering hook (sec-70) -- the runtime-bound-loop SpMV KERNEL is an authored .ckir at 23e (For(count=row_ptr[i+1]-row_ptr[i]) reduction; the CKIR For/LoopAcc machinery), the u32-index/f32-value restriction rides 23e as a typed SynthReject (the 22a/22b + 23a-vs-23b split). ⛔ NO-FOLLOW / NAME-FORWARD (declared != implemented; a later band with a real consumer, never a silent subset): SpMM (sparse x dense-matrix) / batched / mixed-precision (index width x value width) / CSC / COO / block-sparse / a sparse-result (SpGEMM) -> named-forward (no consumer this band, the 12a rule). ⛔ I6 -- find_sparse_misuse switches on op NAME + TypeKind, never op.kind. crd-ceir NEVER links gpu-context (I3/I4); ZERO renderer changes; sparse.spmv is NOT a tensor-pipeline plan op this band (a module containing it correctly PlanReject::UnsupportedOp -- do NOT add find_sparse_misuse to the plan verify or a Spmv StageKind; quant had a plan consumer at 23b, sparse does not this band)."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# sparse.spmv -- CSR SPARSE-MATRIX x DENSE-VECTOR: y[i] = sum over k in [row_ptr[i], row_ptr[i+1]) of values[k] * x[col_idx[k]].
+# The CSR arrays are explicit rank-1 tensor operands: row_ptr (INTEGER, length M+1, the per-row start offsets), col_idx
+# (INTEGER, length nnz, the column of each nonzero), values (FLOAT, length nnz, the nonzero coefficients); x (FLOAT, length N,
+# the dense input); y (FLOAT, length M, the result). Element-AGNOSTIC but CONSISTENT (the value side is ONE float element across
+# values/x/y; indices are any Int width) -- the Q8/f32-specific restriction rides the 23e provider. Pure, NoSemantics (no hook).
+# find_sparse_misuse (STRUCTURAL 4-operand/1-result is the generated verify_spmv; this adds the SEMANTIC contract):
+#   OperandNotTensor / ResultNotTensor -- the 4 operands + the result are Tensor-kinded.
+#   RankInvalid              -- row_ptr, col_idx, values, x, y are ALL rank-1.
+#   IndexElementNotInt       -- row_ptr.element + col_idx.element are Int-kinded (the CSR index arrays).
+#   ValueElementMismatch     -- values.element, x.element, y.element are Float-kinded AND EQUAL (one value type; the scale-element precedent).
+#   NnzMismatch              -- col_idx.dim0 == values.dim0 (both name the same nnz nonzeros; both-static guard).
+#   RowPtrLengthMismatch     -- row_ptr.dim0 == y.dim0 + 1 (M+1 offsets for M output rows; .count ARITHMETIC + both-static guard, NOT a TypeId compare).
+# OUT OF VERIFIER SCOPE (DATA properties, not types -- documented, NEVER attempted here): row_ptr monotone-nondecreasing;
+# 0 <= col_idx[k] < N; row_ptr[0]==0 AND row_ptr[M]==nnz. x.dim0 (N) is statically UNCONSTRAINED by the other shapes -- x
+# DECLARES N (col_idx indexes into it at runtime). ⛔ the 23e device gate rides the 23b-1 direct-dispatch mold (one op deep).
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "spmv"
+summary = "CSR sparse-matrix x dense-vector: y[i] = sum_{k in [row_ptr[i],row_ptr[i+1])} values[k] * x[col_idx[k]]."
+version = 1
+operands = [
+    { name = "row_ptr", type = "tensor", doc = "the CSR row-start offsets: an INTEGER rank-1 tensor of length M+1 (row i spans nonzeros [row_ptr[i], row_ptr[i+1])). find_sparse_misuse: Int-kinded (IndexElementNotInt), rank-1 (RankInvalid), dim0 == y.dim0+1 (RowPtrLengthMismatch)." },
+    { name = "col_idx", type = "tensor", doc = "the CSR column indices: an INTEGER rank-1 tensor of length nnz (col_idx[k] = the column of nonzero k). find_sparse_misuse: Int-kinded (IndexElementNotInt), rank-1, dim0 == values.dim0 (NnzMismatch). 0 <= col_idx[k] < N is a runtime DATA property (not verified)." },
+    { name = "values", type = "tensor", doc = "the CSR nonzero coefficients: a FLOAT rank-1 tensor of length nnz. find_sparse_misuse: Float-kinded + element == x's + == y's (ValueElementMismatch), rank-1, dim0 == col_idx.dim0 (NnzMismatch)." },
+    { name = "x", type = "tensor", doc = "the dense input vector: a FLOAT rank-1 tensor of length N. find_sparse_misuse: Float-kinded + element == values'/y's (ValueElementMismatch), rank-1. N is UNCONSTRAINED by the other shapes (col_idx indexes into x at runtime)." },
+]
+results = [
+    { name = "y", type = "tensor", doc = "the dense result vector: a FLOAT rank-1 tensor of length M (M output rows == row_ptr length - 1). find_sparse_misuse: Float-kinded + element == values'/x's, rank-1; dim0+1 == row_ptr.dim0 (RowPtrLengthMismatch)." },
+]
+attributes = []
+traits = ["Pure"]
+docs = "sparse.spmv(%row_ptr, %col_idx, %values, %x) -> %y. CSR sparse-matrix x dense-vector product (sec-53): y[i] = sum over k in [row_ptr[i], row_ptr[i+1]) of values[k]*x[col_idx[k]]. ⛔ NO new TypeKind -- a sparse matrix is the composition of THREE dense rank-1 tensors through this op; ⛔ CSR-only (the op name encodes the format; CSC/COO/block = future ops, name-forward); ⛔ NO attrs (fully operand-determined); Pure, NO kernel_ref (the runtime-bound-loop kernel is an authored .ckir at 23e). find_sparse_misuse: row_ptr,col_idx,values,x operands + y result Tensor-kinded (OperandNotTensor / ResultNotTensor); all five rank-1 (RankInvalid); row_ptr + col_idx Int-kinded (IndexElementNotInt); values,x,y Float-kinded AND equal element (ValueElementMismatch); col_idx.dim0 == values.dim0 (NnzMismatch, both-static); row_ptr.dim0 == y.dim0 + 1 (RowPtrLengthMismatch, .count arithmetic + both-static). ⛔ row_ptr monotonicity, col_idx < N, and nnz == row_ptr[M] are runtime DATA properties, OUT of the type verifier (documented, never attempted). ⛔ the u32-index/f32-value + CSR-loop restriction rides the 23e provider (name-forward, the 22a precedent). STRUCTURAL (4 operands, 1 result, no attrs): the generated verify_spmv."

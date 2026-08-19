@@ -1,0 +1,22 @@
+module {
+  ^bb0:
+    func.func() {sym_name = "main"} {
+      ^bb0:
+        %0 = resource.declare() : !tensor<!f32,!shape<!dim<4>,!dim<8>>>
+        %1 = resource.declare() : !tensor<!i8,!shape<!dim<8>,!dim<8>>>
+        %2 = resource.declare() : !tensor<!f32,!shape<>>
+        %3 = resource.declare() : !tensor<!i8,!shape<>>
+        %4 = quant.dequantize(%1, %2, %3) {axis = 0, scheme = "symmetric"} : !tensor<!f32,!shape<!dim<8>,!dim<8>>>
+        %5 = resource.declare() : !tensor<!f32,!shape<!dim<4>,!dim<8>>>
+        %6 = linalg.gemm(%0, %4, %5) {alpha = 1.0, beta = 0.0, trans_a = false, trans_b = false} : !tensor<!f32,!shape<!dim<4>,!dim<8>>>
+        %7 = arith.const() {value = 1} : !index
+        %8 = resource.declare() : !tensor<!f32,!shape<!dim<4>,!dim<8>>>
+        compute.dispatch(%7, %7, %7, %6, %8) {access = "r,w", kernel = @relu}
+        %9 = resource.declare() : !tensor<!i8,!shape<!dim<8>,!dim<8>>>
+        %10 = resource.declare() : !tensor<!f32,!shape<>>
+        %11 = resource.declare() : !tensor<!i8,!shape<>>
+        %12 = quant.dequantize(%9, %10, %11) {axis = 0, scheme = "symmetric"} : !tensor<!f32,!shape<!dim<8>,!dim<8>>>
+        %13 = resource.declare() : !tensor<!f32,!shape<!dim<4>,!dim<8>>>
+        %14 = linalg.gemm(%8, %12, %13) {alpha = 1.0, beta = 0.0, trans_a = false, trans_b = false} : !tensor<!f32,!shape<!dim<4>,!dim<8>>>
+    }
+}

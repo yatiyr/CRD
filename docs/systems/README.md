@@ -3,7 +3,7 @@
 One short overview per shipped engine module. Plain English. "What is it, what does it do, how do I use it."
 Read this folder to remember what the engine *is*; read `docs/sessions/` to remember how it got that way.
 
-> Refreshed 2026-08-07 (doc-hygiene pass). Statuses here are honest as of that date — a row's ✅ means the
+> Refreshed 2026-08-07 (doc-hygiene pass); Known-gap list updated 2026-08-19 (added the `ceir`/`ceir-gpu` module family — CEIR bands 13z…24 shipped since). Statuses here are honest as of that date — a row's ✅ means the
 > module is shipped and its overview describes reality; docs written mid-phase carry their own historical
 > markers. When a new module ships, add a row; when a module dies, move its row to **Retired** (never delete
 > the overview — it becomes history).
@@ -17,10 +17,12 @@ Read this folder to remember what the engine *is*; read `docs/sessions/` to reme
 | [rah-0-canonical-model-audit.md](rah-0-canonical-model-audit.md) | **Design note (pending user review)** — the post-RAF canonical-command-model audit driving RAH-1…8. |
 
 ⚠ **Known gap (reported, not hidden):** the live GPU modules — `gpu-context` (+ `-vulkan`/`-dx12`/`-cuda`),
-`kir` (+ per-backend emitters), `render-graph`/`render-pass`/`render-program`/`render-material`/
-`render-asset-core`, `draw`, the five cookers (`frame/technique/vertex/light/material-cook`), `scene-render`,
-`anim`, `asset-io`, `lod`, `preset`, `timeline` — have **no per-module overview yet**; the docs above +
-`docs/detours/D-007-gpu-program-system.md` are authoritative for them.
+`kir` (+ per-backend emitters), **`ceir` (the CEIR IR + every dialect: arith/func/resource/compute/render/rt/work/
+shape/tensor/layout/linalg/quant/sparse/ml) + `ceir-gpu` (the CKIR native provider, `plan/execute_tensor_pipeline`,
+`expand_ml`/`partition_ml`/`coopvec_mlp` — CEIR-13z…24)**, `render-graph`/`render-pass`/`render-program`/
+`render-material`/`render-asset-core`, `draw`, the five cookers (`frame/technique/vertex/light/material-cook`),
+`scene-render`, `anim`, `asset-io`, `lod`, `preset`, `timeline` — have **no per-module overview yet**; the docs
+above + **the live `docs/detours/D-007-ceir-tracker.md`** (for the CEIR family) are authoritative for them.
 
 ## Foundation
 

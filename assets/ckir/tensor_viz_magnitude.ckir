@@ -1,0 +1,116 @@
+# tensor_viz_magnitude.ckir - CEIR-22c-3 the sec-137 "viz-prep" MAGNITUDE kernel: mag[i] = sqrt(re[i]^2 + im[i]^2), the
+# per-element magnitude of a split-complex FFT spectrum (re@0, im@1 read; mag@2 write). local_size = L (=64 for the proof),
+# dispatched as ONE workgroup (grid 1,1,1), so LocalInvocationIndex in [0,L) is the element index -- and equals
+# GlobalInvocationId.x for a single workgroup on-device, while being the SCALAR builtin eval_cpu_kernel supports (its Builtin
+# handles LocalInvocationIndex/WorkgroupIndex; a uvec3 GlobalInvocationId + Swizzle would ASSERT -- eval is scalar-only). NO
+# bounds guard (L threads map 1:1 onto L elements). AUTHORED .ckir DIRECT (mandate #1); the "mixed tensor + CKIR" viz stage.
+# node refs are POSITIONAL (n<index>, id cosmetic); F32 is the default node dtype (elided); LocalInvocationIndex = KBuiltin 4.
+schema = 1
+
+[[entry]]
+stage = "Compute"
+inputs = 0
+position = -1
+frag_depth = -1
+discard_cond = -1
+early_fragment_tests = false
+depth_mode = "Any"
+shading_rate = -1
+storage_write_index = -1
+storage_write_value = -1
+interlock = false
+n_out = 0
+local_size = [64, 1, 1]
+kernel_body_begin = 0
+kernel_body_count = 1
+mesh_vertices = 0
+mesh_primitives = 0
+mesh_prim = -1
+task_emit = -1
+task_payload = [-1, -1, -1, -1]
+n_task_payload = 0
+tess_patch_size = 0
+tess_inner = -1
+tess_outer = -1
+mesh_payload_in = false
+storage_read_only = false
+
+# re@0 (read)
+[[node]]
+id = "n0"
+op = "BufferDecl"
+shape = [1]
+axes = 1
+
+# im@1 (read)
+[[node]]
+id = "n1"
+op = "BufferDecl"
+shape = [1]
+iidx = 1
+axes = 1
+
+# mag@2 (write -- inferred from the BufferStore target)
+[[node]]
+id = "n2"
+op = "BufferDecl"
+shape = [1]
+iidx = 2
+axes = 1
+
+# gid = gl_LocalInvocationIndex (KBuiltin 4; a SCALAR uint, no swizzle)
+[[node]]
+id = "n3"
+op = "Builtin"
+dtype = "U32"
+shape = [1]
+iidx = 4
+
+# re[gid]
+[[node]]
+id = "n4"
+op = "BufferLoad"
+shape = [1]
+in = ["n0", "n3"]
+
+# im[gid]
+[[node]]
+id = "n5"
+op = "BufferLoad"
+shape = [1]
+in = ["n1", "n3"]
+
+# re*re
+[[node]]
+id = "n6"
+op = "Mul"
+shape = [1]
+in = ["n4", "n4"]
+
+# im*im
+[[node]]
+id = "n7"
+op = "Mul"
+shape = [1]
+in = ["n5", "n5"]
+
+# re^2 + im^2
+[[node]]
+id = "n8"
+op = "Add"
+shape = [1]
+in = ["n6", "n7"]
+
+# sqrt(re^2 + im^2)
+[[node]]
+id = "n9"
+op = "Sqrt"
+shape = [1]
+in = ["n8"]
+
+# mag[gid] = sqrt(re^2 + im^2)
+[[stmt]]
+kind = "BufferStore"
+target = "n2"
+index = "n3"
+value = "n9"

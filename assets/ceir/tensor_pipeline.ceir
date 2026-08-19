@@ -1,0 +1,20 @@
+module {
+  ^bb0:
+    func.func() {sym_name = "main"} {
+      ^bb0:
+        %0 = resource.declare() : !tensor<!f32,!shape<!dim<8>,!dim<8>>>
+        %1 = resource.declare() : !tensor<!f32,!shape<!dim<8>,!dim<8>>>
+        %2 = resource.declare() : !tensor<!f32,!shape<!dim<8>,!dim<8>>>
+        %3 = linalg.gemm(%0, %1, %2) {alpha = 1.0, beta = 0.0, trans_a = false, trans_b = false} : !tensor<!f32,!shape<!dim<8>,!dim<8>>>
+        %4 = tensor.reshape(%3) : !tensor<!f32,!shape<!dim<64>>>
+        %5 = resource.declare() : !tensor<!f32,!shape<!dim<64>>>
+        %6, %7 = tensor.fft(%4, %5) {axis = 0, direction = "forward"} : !tensor<!f32,!shape<!dim<64>>>
+        %8 = arith.const() {value = 1} : !index
+        %9 = arith.const() {value = 1} : !index
+        %10 = resource.declare() : !tensor<!f32,!shape<!dim<64>>>
+        compute.dispatch(%8, %9, %9, %6, %7, %10) {access = "r,r,w", kernel = @viz_magnitude}
+        %11 = tensor.reduce(%10) {axis = 0, fn = "max"} : !tensor<!f32,!shape<>>
+        %12 = resource.declare() : !tensor<!f32,!shape<!dim<64>>>
+        compute.dispatch(%8, %9, %9, %10, %11, %12) {access = "r,r,w", kernel = @viz_normalize}
+    }
+}

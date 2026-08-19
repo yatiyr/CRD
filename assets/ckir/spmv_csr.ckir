@@ -1,0 +1,228 @@
+# spmv_csr.ckir - CEIR-23e the CSR SPARSE-MATRIX x DENSE-VECTOR kernel (the ceir.sparse.spmv provider):
+#   y[i] = sum over k in [row_ptr[i], row_ptr[i+1]) of values[k] * x[col_idx[k]]
+# One thread per output ROW (gid = LocalInvocationIndex). 5 buffers: row_ptr@0 (u32 [M+1]) . col_idx@1 (u32 [nnz]) . values@2
+# (f32 [nnz]) . x@3 (f32 [N]) . y@4 (f32 [M], write). The per-row nonzero count (row_ptr[i+1]-row_ptr[i]) is a RUNTIME/divergent
+# bound, so the loop is a UNIFORM upper bound (baked MAX=3 = the gate matrix's max row length) + a per-thread ForBreakIf
+# (it>=count -> drop) -- the lockstep/GPU-portable form (a bare divergent stmt_for reads as thread-0's count in eval). Bootstrapped
+# via ckir_write (18a-1 mold); node refs POSITIONAL; F32 is the default node dtype; LocalInvocationIndex = KBuiltin 4. local_size
+# = M = 4 (one workgroup). Verified: ckir_read -> eval_cpu_kernel == the CPU CSR SpMV + emits GLSL/HLSL; runs Vulkan + DX12.
+schema = 1
+
+[[entry]]
+stage = "Compute"
+inputs = 0
+position = -1
+frag_depth = -1
+discard_cond = -1
+early_fragment_tests = false
+depth_mode = "Any"
+shading_rate = -1
+storage_write_index = -1
+storage_write_value = -1
+interlock = false
+n_out = 0
+local_size = [4, 1, 1]
+kernel_body_begin = 0
+kernel_body_count = 4
+mesh_vertices = 0
+mesh_primitives = 0
+mesh_prim = -1
+task_emit = -1
+task_payload = [-1, -1, -1, -1]
+n_task_payload = 0
+tess_patch_size = 0
+tess_inner = -1
+tess_outer = -1
+mesh_payload_in = false
+storage_read_only = false
+
+# row_ptr@0 (u32 M+1, read)
+[[node]]
+id = "n0"
+op = "BufferDecl"
+dtype = "U32"
+shape = [1]
+
+# col_idx@1 (u32 nnz, read)
+[[node]]
+id = "n1"
+op = "BufferDecl"
+dtype = "U32"
+shape = [1]
+iidx = 1
+
+# values@2 (f32 nnz, read)
+[[node]]
+id = "n2"
+op = "BufferDecl"
+shape = [1]
+iidx = 2
+
+# x@3 (f32 N, read)
+[[node]]
+id = "n3"
+op = "BufferDecl"
+shape = [1]
+iidx = 3
+
+# y@4 (f32 M, write)
+[[node]]
+id = "n4"
+op = "BufferDecl"
+shape = [1]
+iidx = 4
+axes = 1
+
+# gid = gl_LocalInvocationIndex (the output row i)
+[[node]]
+id = "n5"
+op = "Builtin"
+dtype = "U32"
+shape = [1]
+iidx = 4
+
+# const f32 0.0 (the y[gid] init)
+[[node]]
+id = "n6"
+op = "Const"
+shape = [1]
+
+# start = row_ptr[gid]
+[[node]]
+id = "n7"
+op = "BufferLoad"
+dtype = "U32"
+shape = [1]
+in = ["n0", "n5"]
+
+# const u32 1 (gid+1 index)
+[[node]]
+id = "n8"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+# gid + 1
+[[node]]
+id = "n9"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n5", "n8"]
+
+# end = row_ptr[gid+1]
+[[node]]
+id = "n10"
+op = "BufferLoad"
+dtype = "U32"
+shape = [1]
+in = ["n0", "n9"]
+
+# count = end - start (the per-row nnz)
+[[node]]
+id = "n11"
+op = "Sub"
+dtype = "U32"
+shape = [1]
+in = ["n10", "n7"]
+
+# const u32 3 (the UNIFORM loop bound MAX = max row length)
+[[node]]
+id = "n12"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4008000000000000"
+
+# it = the For loop iteration (KernelLoopVar of the For stmt below)
+[[node]]
+id = "n13"
+op = "KernelLoopVar"
+dtype = "U32"
+shape = [1]
+in = ["n1"]
+
+# it >= count (the per-thread break condition)
+[[node]]
+id = "n14"
+op = "CmpGe"
+dtype = "Bool"
+shape = [1]
+in = ["n13", "n11"]
+
+# k = start + it (the CSR nonzero index)
+[[node]]
+id = "n15"
+op = "Add"
+dtype = "U32"
+shape = [1]
+in = ["n7", "n13"]
+
+# col = col_idx[k]
+[[node]]
+id = "n16"
+op = "BufferLoad"
+dtype = "U32"
+shape = [1]
+in = ["n1", "n15"]
+
+# val = values[k]
+[[node]]
+id = "n17"
+op = "BufferLoad"
+shape = [1]
+in = ["n2", "n15"]
+
+# x[col] (the INDIRECTION)
+[[node]]
+id = "n18"
+op = "BufferLoad"
+shape = [1]
+in = ["n3", "n16"]
+
+# cur = y[gid] (RMW read of the accumulator)
+[[node]]
+id = "n19"
+op = "BufferLoad"
+shape = [1]
+in = ["n4", "n5"]
+
+# val * x[col]
+[[node]]
+id = "n20"
+op = "Mul"
+shape = [1]
+in = ["n17", "n18"]
+
+# cur + val*x[col]
+[[node]]
+id = "n21"
+op = "Add"
+shape = [1]
+in = ["n19", "n20"]
+
+# y[gid] = 0
+[[stmt]]
+kind = "BufferStore"
+target = "n4"
+index = "n5"
+value = "n6"
+
+# for it in [0, MAX): body = the next 2 stmts (ForBreakIf + the RMW store)
+[[stmt]]
+kind = "For"
+value = "n12"
+body = [2, 2]
+
+# break this row once its nonzeros are exhausted (it >= count)
+[[stmt]]
+kind = "ForBreakIf"
+value = "n14"
+
+# y[gid] += values[k] * x[col_idx[k]]
+[[stmt]]
+kind = "BufferStore"
+target = "n4"
+index = "n5"
+value = "n21"
