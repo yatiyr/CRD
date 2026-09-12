@@ -15,6 +15,7 @@ import urllib.request
 VERSION = '1.4.341.1'
 ARCHIVE = f'vulkansdk-linux-x86_64-{VERSION}.tar.xz'
 URL = f'https://sdk.lunarg.com/sdk/download/{VERSION}/linux/{ARCHIVE}'
+USER_AGENT = 'Cerid-SDK-Installer/1.0 (+https://github.com/yatiyr/CRD)'
 SHA256 = '3bf0f762afb6c79bc6a9d9fb5998745ccff928800a29619b501ed9de7fd9789b'
 MEMBERS = ('lib/libVkLayer_khronos_validation.so',
            'share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json')
@@ -27,7 +28,10 @@ def install(destination, archive):
         archive = destination / ARCHIVE
         if not archive.exists():
             partial = archive.with_suffix('.partial')
-            with urllib.request.urlopen(URL, timeout=60) as response, partial.open('wb') as output:
+            # The public SDK endpoint rejects Python's default user agent. Identify the actual client;
+            # archive identity still comes from the pinned SHA-256, never the HTTP response alone.
+            request = urllib.request.Request(URL, headers={'User-Agent': USER_AGENT})
+            with urllib.request.urlopen(request, timeout=60) as response, partial.open('wb') as output:
                 shutil.copyfileobj(response, output)
             partial.replace(archive)
     with archive.open('rb') as source:

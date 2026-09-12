@@ -1065,8 +1065,10 @@ def main(mode="hybrid"):
     print("// compiler heap in link-time pass 2 (fatal C1002 / LNK1257, hit 2026-07-05 in FftPlan::execute).")
     print("// MSVC therefore gets plain `inline` — its /O2 cost model declines bodies this size on its own,")
     print("// and one call into a straight-line kernel of thousands of instructions is noise. gcc/clang keep")
-    print("// always_inline: they compile it fine, and the recorded bench baselines were built with them.")
-    print("#if defined(_MSC_VER) && !defined(__clang__)")
+    print("// always_inline in optimized builds, preserving the recorded benchmark code generation.")
+    print("// Unoptimized clang-cl also needs ordinary calls: forced inlining merged the scalar leaves")
+    print("// into 2 MB execute_batched frames, exceeding the default 1 MB Windows stack (REPO.3c.8).")
+    print("#if (!defined(NDEBUG) && !defined(__OPTIMIZE__)) || (defined(_MSC_VER) && !defined(__clang__))")
     print("#define CRD_FFT_GEN_INLINE inline")
     print("#else")
     print("#define CRD_FFT_GEN_INLINE CRD_FORCEINLINE")
@@ -1119,6 +1121,13 @@ def main(mode="hybrid"):
 
 
 if __name__ == "__main__":
+    import contextlib
+    import io
     import sys
 
-    main(sys.argv[1] if len(sys.argv) > 1 else "hybrid2")  # "hybrid2" (tracked) | "hybrid" | "greedy" | "belady"
+    from fft_codegen_style import canonicalize
+
+    generated = io.StringIO()
+    with contextlib.redirect_stdout(generated):
+        main(sys.argv[1] if len(sys.argv) > 1 else "hybrid2")
+    sys.stdout.write(canonicalize(generated.getvalue()))

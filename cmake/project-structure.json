@@ -1,5 +1,15 @@
 {
-  "version": 1,
   "directories": [],
-  "targets": {}
+  "excluded_modules": [],
+  "targets": {
+    "crd-hesap-fft": {
+      "add": [
+        "engine/numerics/hesap-fft/include/crd/hesap/fft/detail/codelet_policy.hpp"
+      ],
+      "groups": {
+        "engine/numerics/hesap-fft/include/crd/hesap/fft/detail/codelet_policy.hpp": "include/crd/hesap/fft/detail"
+      }
+    }
+  },
+  "version": 1
 }

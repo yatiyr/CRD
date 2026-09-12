@@ -57,7 +57,8 @@ Browser qualification includes worker/event-loop scheduling, threaded and single
 asynchronous filesystem/fetch, persistence quotas, offline reopen, GPU loss, tab suspension, input/IME/accessibility,
 audio activation and secure transport. No native DLL, raw socket or x64-fiber assumption may leak into its public API.
 
-Use scoped local tests plus relevant guards and affected consumers. Broad compiler/hardware matrices run in CI or on
+Use one primary local configuration, relevant guards and affected consumers, adding local lanes only for a
+discriminating risk or reproduced failure ([BUILDING](../BUILDING.md)). Broad compiler/hardware matrices run in CI or on
 recorded target hardware. If required hardware is unavailable, keep that gate open and state exactly what evidence is
 missing. Platform-neutral design is mandatory now; later-target release evidence remains explicit rather than invented.
 

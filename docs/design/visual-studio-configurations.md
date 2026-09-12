@@ -83,5 +83,7 @@ profiling, debug/release, logging, ISA and NDEBUG values, CRT/ISA project proper
 [Structure tests](../../scripts/test-project-sync.py) cover partial exclusion rejection; the
 [compiler fixture](../../scripts/test-project-sync-native.py) performs source/IDE edits and compiles Debug and Release.
 CTest registers these gates; [CI](../../.github/workflows/ci.yml) runs portable Windows/Linux checks and the native
-VS 2022 fixture. Actual host/commands/results live in the [session](../sessions/2026-09-12-visual-studio-configurations.md).
+VS 2026 fixture on the explicit `windows-2025-vs2026` image family. Actual host/commands/results live in the
+[session](../sessions/2026-09-12-visual-studio-configurations.md); hosted generator-mismatch repair evidence is in
+[the repository CI session](../sessions/2026-09-12-repository-ci-environment.md).
 Whole-engine matrix qualification remains CI's responsibility; local fixtures are scoped build-tool evidence.

@@ -5,12 +5,13 @@
 
 This is the portable lesson index. **Current rules: [AGENTS](AGENTS.md). Current work: [context](context.md) →
 [ROADMAP](docs/ROADMAP.md).** Memory stores lessons, not another plan or an active loop grant.
-Universal entry: [START_HERE](START_HERE.md). Broader product/quality obligations:
-[system review](docs/research/2026-09-12-cerid-whole-system-review.md) and [quality contract](docs/design/system-quality-contract.md).
-The former host-specific index and all 457 source records were preserved in the reference corpus below.
+Entry: [START_HERE](START_HERE.md); [quality contract](docs/design/system-quality-contract.md).
+All 457 former host-specific records are preserved below.
 
 ## Read only what the task needs
 
+- One primary local configuration plus discriminating risk checks; full matrices in CI, exact revision evidence,
+  human-only commits/pushes → [BUILDING](docs/BUILDING.md#fast-local-workflow--one-primary-configuration).
 - Native VS configuration names require matching flags, headers, CRT and ISA; presets own the matrix →
   [configuration contract and evidence](docs/design/visual-studio-configurations.md).
 - Build, stale executables, PCH, sanitizer or tidy symptoms → [build/verification](docs/lessons/memory/build-and-verification.md).

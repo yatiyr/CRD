@@ -68,3 +68,9 @@ if(_crd_wg_dxc_dirs)
 endif()
 
 catch_discover_tests(crd-gpu-context-dx12-work-graph-tests DISCOVERY_MODE PRE_TEST PROPERTIES RESOURCE_LOCK crd_gpu_device)
+
+# A small independent probe keeps selected-device evidence in CI even when a later GPU case crashes.
+add_executable(crd-dx12-device-info device_info.cpp)
+target_link_libraries(crd-dx12-device-info PRIVATE crd-gpu-context-dx12 crd-memory)
+add_test(NAME crd-dx12-device-info COMMAND crd-dx12-device-info)
+set_tests_properties(crd-dx12-device-info PROPERTIES RESOURCE_LOCK crd_gpu_device TIMEOUT 30 SKIP_RETURN_CODE 77)

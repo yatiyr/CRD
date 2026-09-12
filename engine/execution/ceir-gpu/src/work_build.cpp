@@ -149,13 +149,19 @@ Module* build_work_ceir(Context& ctx, const WorkBuildDesc& desc, containers::Arr
             const containers::StringView tok = access_token(st.bindings[b].access);
             for (crd::usize c = 0U; c < tok.size(); ++c)
             {
-                acc[na++] = tok.data()[c];
+                acc[na++] = tok[c];
             }
         }
 
-        const OpId kind = st.kind == WorkStageKind::Produce   ? k_produce
-                          : st.kind == WorkStageKind::Consume ? k_consume
-                                                              : k_compact;
+        OpId kind = k_compact;
+        if (st.kind == WorkStageKind::Produce)
+        {
+            kind = k_produce;
+        }
+        else if (st.kind == WorkStageKind::Consume)
+        {
+            kind = k_consume;
+        }
         Operation* const op = ctx.create_operation(kind, containers::ConstSpan<Value*>(ops, n), 0U, TypeId{});
         ctx.set_attr(op, "kernel", ctx.attr_symbol(st.kernel));
         ctx.set_attr(op, "access", ctx.attr_string(containers::StringView(acc, na)));

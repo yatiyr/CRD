@@ -36,7 +36,8 @@ pointer, and inspect every affected contract, API example, index and orientation
 facts; retain still-correct text. Record measured full peer boards immediately and write recipes for implemented
 research. Preserve historical evidence instead of rewriting it as a new result. Unfinished work gets an honest handoff.
 
-Run affected platform/configuration checks and the documentation validator. Record unavailable hardware/configurations
+Use [BUILDING's local/CI decision table](docs/BUILDING.md#fast-local-workflow--one-primary-configuration), not every
+local configuration/platform. Run the documentation validator. Record unavailable hardware/configurations
 as unqualified, with an owning gate; do not turn an emitter, schema, compile or mock into a runtime support claim.
 No agent commits or pushes. The user owns the final commit.
 

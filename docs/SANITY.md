@@ -28,6 +28,7 @@ All unresolved work has an owner in [ROADMAP](ROADMAP.md); never maintain a seco
 10. **Investigate the failing configuration.** Capture its actual toolchain, generated code and runtime values. A
     config-specific failure may be code, undefined behaviour, environment or a compiler bug; prove which. Fix the
     source mechanism and remove diagnostic scaffolding. Do not lower optimization to make the test pass.
+    Normal local iteration uses one primary configuration plus risk-triggered checks; full matrices belong to CI.
 11. **Verify the harness before reporting a defect.** Missing ASan DLLs, zero matched tests, unparsed tidy input and
     PowerShell early-closing pipes can manufacture failures or false greens. Slow is not hung: inspect the right
     process, progress and expected duration. Preserve real exit codes; never kill a run merely on a guess.

@@ -64,9 +64,10 @@ are genuinely unresolved or an explicit design gate is still unaccepted. Never i
   authored assets, persistence/reload and relevant backend evidence; cooking alone is insufficient.
 - Keep warnings zero. Match surrounding hand formatting; **do not run `clang-format -i`**. Run the LLVM-20
   incremental tidy helper for changed C++ headers/TUs and confirm it parsed them. Full commands: BUILDING.
-- Locally build/test changed modules **and all affected consumers** using scoped CTest, not bare test-binary
-  success. Include relevant guards, GPU Windows/Linux legs, validation silence and CPU/reference comparisons.
-  Whole-repo/per-config sweeps belong to CI, never the local host. Preserve real exit codes and enforce timeouts.
+- Locally use one primary configuration for changed modules **and affected consumers**, scoped CTest/guards and
+  incremental tidy. Add configurations/platforms only for a discriminating risk or reproduced failure; use BUILDING's
+  decision table. CI owns broader Windows/Linux/backend and full-matrix qualification. Preserve validation/oracles,
+  nonzero execution counts, real exit codes and timeouts. Never run full repository/configuration sweeps locally.
 - Use testable invariants, adversarial boundaries and measured budgets. Do not claim a platform from its emitter
   or a completed feature from a schema. Parent completion requires every child and its evidence.
 - Every task, including fixes and investigations, ends with a session record and accurate affected documents.

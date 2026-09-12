@@ -1,90 +1,98 @@
 # Build and verification guide
 
 <!-- doc-role: rule -->
-> Current rule. Current work: [ROADMAP](ROADMAP.md); current rules: [AGENTS](../AGENTS.md).
+> Current rule. Current work: [ROADMAP](ROADMAP.md); conduct: [AGENTS](../AGENTS.md).
 
-Read before code. [Presets](../CMakePresets.json) and [CI](../.github/workflows/ci.yml) own tool/configuration pins.
-Stack: C++20, CMake 3.25+, Python 3.12+, Ninja/Visual Studio; Windows MSVC/clang-cl and Linux GCC. Inspect selected
-SDK/compiler paths. [Source/IDE layout](design/repository-layout.md) owns physical/target families and stable public names.
-Native VS 2026 requires CMake 4.2+. Reconfigure after moves; personal SDK/ISA choices belong in ignored `CMakeUserPresets.json`.
-Start native IDE development with `python scripts/project-sync.py open --preset win-vs`.
-Save All and wait for sync/reload. [Structure guide](design/project-structure-sync.md): Remove/Delete, module moves and
-recovery. `project-sync.py status` reports conflicts.
-[Configurations](design/visual-studio-configurations.md): File > Open > Folder exposes the full CMake preset matrix;
-the native solution offers eight MSVC configurations. Use `--config <name>` and CTest `-C <name>` together.
+[Presets](../CMakePresets.json) owns configurations; [CI](../.github/workflows/ci.yml) owns scheduling.
+C++20; CMake 3.25+ (VS 2026: 4.2+); Python 3.12+; MSVC/clang-cl/GCC.
+Local overrides: ignored `CMakeUserPresets.json`.
 
-## Local work — affected targets only
+## Fast local workflow — one primary configuration
 
-On Windows, use the standalone-CMake helpers. `build-target.bat` builds **one target per call**.
-Rebuild every affected executable; siblings do not relink themselves.
+**Build affected targets/consumers, run selected CTests/guards and tidy changed C++ on one primary configuration.**
+Add local lanes only for a discriminating risk/failure. CI owns broader qualification. This user-approved
+[policy](sessions/2026-09-12-large-cpp-research-and-loop-plan.md) supersedes local multi-platform rituals; REPO.DEV.5
+owns tier scheduling. Preserve existing CI obligations until its replacement qualifies.
+
+Windows helpers initialize the toolchain; `build-target.bat` takes one target per call. Rebuild affected executables:
+siblings do not relink themselves. Cap concurrency and serialize heavy jobs; all-core load has destabilized this host.
 
 ```powershell
-& .\scripts\configure-preset.bat win-debug
-& .\scripts\build-target.bat build/win-debug <target>
-$buildExit = $LASTEXITCODE
-if ($buildExit -ne 0) { throw "Build failed: $buildExit" }
-# The runner discovers MSVC runtime/dumpbin tools and preserves regex arguments.
-& .\scripts\run-ctest.ps1 --test-dir build/win-debug -R '<specific-test-regex>' --timeout 180 --no-tests=error --output-on-failure
+$env:CMAKE_BUILD_PARALLEL_LEVEL = '2'
+& ./scripts/configure-preset.bat win-debug
+if ($LASTEXITCODE -ne 0) { throw 'Configure failed' }
+& ./scripts/build-target.bat build/win-debug <target>
+if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+& ./scripts/run-ctest.ps1 --test-dir build/win-debug -R '<specific-test-regex>' --timeout 180 --no-tests=error --output-on-failure
 if ($LASTEXITCODE -ne 0) { throw 'CTest failed' }
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tidy-files.ps1 <changed.cpp> <changed.hpp>
+if ($LASTEXITCODE -ne 0) { throw 'Tidy failed' }
 ```
 
-Set the timeout to a justified workload bound; 180 seconds above is an example, not a universal budget.
-Inspect CTest discovery/summary and require nonzero matches. Include the relevant registered guard tests in the
-regex or run them as a separate scoped CTest invocation. Direct test binaries are diagnostic aids, never the
-slice-completion gate. `ctest --timeout N` is an equivalent explicit bound in an initialized environment.
+`python scripts/dev.py plan --build build/win-debug` explains scope without execution; [contract](design/developer-workflow.md).
+Configure only for changed inputs or stale builds. Require justified timeouts, nonzero CTest matches and guards.
 
-Windows/Linux GPU legs use the same changed-module/blast-radius scope. WSL builds live on native Linux storage
-where configured; inspect [wsl-build.ps1](../scripts/wsl-build.ps1) for paths, but its unfiltered build/test flow is
-**not** a scoped local command. Invoke the selected Linux target and CTest regex explicitly. Check each build exit
-before testing; `ninja | tail && ctest` can test a stale binary after a failed build.
+| Change | Local check beyond the primary build/tests | CI obligation |
+|---|---|---|
+| Docs only | Documentation validator; hygiene guard for layout changes; no engine build | Documentation/tooling guards |
+| Python/CMake/IDE | Changed-tool fixtures and representative generated target | Windows/Linux tooling; native profile fixtures when affected |
+| Private C++ | Incremental LLVM-20 tidy; affected linked consumers | Affected primary Windows/Linux targets |
+| Public/template headers, generated API, ABI | Reverse consumers and standalone header check where affected | Compiler diversity; relevant optimized/ISA/profile lanes |
+| Memory/lifetime/concurrency | Focused adversarial tests; applicable sanitizer instrument | Sanitizer/stress lanes; verify custom fiber instrumentation |
+| GPU/CEIR/CKIR/layout | Available affected provider, validation and declared CPU/image oracle | Affected backend/OS/device lanes; hardware truth retained |
+| Intrinsics/OS API/build flags/LTCG | Actual failing/risky configuration when locally available | Explicit matching compiler/ISA/optimized/platform checks |
 
-## Required evidence
+Analyze cross-platform risks now: sizes/alignment, endian/packing, path case, extensions/OS APIs, ISA and lifetime.
+Use CI. Scoped WSL selects one target/CTest regex on native Linux storage; the
+unfiltered [wsl-build](../scripts/wsl-build.ps1) is not scoped. WSL does not qualify native presentation hardware.
 
-- Zero compiler warnings; correct hand formatting; **LLVM-20 incremental tidy** for changed headers/TUs via
-  [tidy-files.ps1](../scripts/tidy-files.ps1). Confirm files were parsed. No automatic format rewrite.
-- Scoped debug and sanitizer checks plus appropriate shipping/release/LTCG evidence for affected paths. GPU work
-  also needs Windows/Linux provider execution and applicable validation, reference and failure-path tests.
-- `crd::gpu::ValidationCapture` (DX12 debug-layer counterpart) must show zero validation errors/warnings. Use CPU
-  bit/ULP or other declared quality oracles, three determinism repetitions when claimed, and saved performance budgets.
-- Source-to-cooked-to-executed asset proof; deletion proof for replaced builders; rollback and lifetime tests for reload.
-- Linux: [install matching validation](../scripts/install-vulkan-validation.py) and export its two printed paths;
-  `VULKAN_SDK` alone does not select runtime layers. Inspect startup diagnostics too.
-- Document exact commands/configuration/selected test counts/results. An unavailable lane is unqualified, not green.
-  No closure while a required lane or known verified failure remains unresolved.
+## Qualification
 
-## Whole-repository qualification — CI only
+Keep warnings zero and hand formatting consistent; **never run `clang-format -i`**. Run
+[LLVM-20 tidy](../scripts/tidy-files.ps1) on changed headers/TUs and confirm parsing. Unparsed files are ungated.
+GPU checks require `ValidationCapture` or the DX12 debug-layer counterpart, validation silence, bit/ULP or declared
+quality oracles, and three repetitions when claiming determinism. Asset changes need source/cook/execute,
+replacement/deletion and failure/reload lifetime proof. Save measured performance boards at measurement time.
 
-The CI recipes are [per-slice-check.ps1](../scripts/per-slice-check.ps1) and [full-sweep.ps1](../scripts/full-sweep.ps1).
-They retain debug/ASan/shipping/tidy, release/LTCG and cluster-close configuration obligations. **Do not run their
-whole-repo sweeps on this host.** CI owns broad coverage; local iteration stays affected targets plus consumers.
-Do not run unfiltered `cmake --build`/`ctest` locally as a convenient substitute.
+Record revision/tree identity, command, toolchain, selected/executed counts, exit and relevant adapter/driver.
+Distinguish executed, failed, skipped and unsupported; a compile/emitter/missing-device return is not runtime proof.
 
-This host has recorded instability under all-core load: cap concurrency and run heavyweight jobs sequentially.
-Verify current hardware/tooling; an old diagnosis is not a new hardware test. Never use host-wide `-Parallel` sweeps.
+CI failure: inspect exact job/revision, verify setup, reproduce narrowly, fix the mechanism/regression, and verify the
+next human-published revision. Never weaken checks, ignore older failures or substitute a retry-pass for diagnosis.
+**Agents never commit or push, directly or through automation/helpers.** Continue independent work while publication
+waits; local passes cannot qualify unpublished changes remotely. Missing required evidence keeps its gate open.
 
-## Troubleshooting — diagnose before retrying
+Never run [per-slice-check](../scripts/per-slice-check.ps1)/[full-sweep](../scripts/full-sweep.ps1) or unfiltered local
+build/test sweeps. CI tiers: preflight, affected Windows/Linux on changes, nightly/manual full matrix. Preserve all
+supported presets and cluster/release gates; a fast pass cannot close a full qualification obligation.
 
-- **No header dependencies / stale PCH:** VS-bundled CMake on this locale previously produced `#deps 0`.
-  Use standalone CMake through [configure](../scripts/configure-preset.bat)/[build](../scripts/build-target.bat).
-  Check `CMAKE_COMMAND` and [check-deps.bat](../scripts/check-deps.bat). Reconfigure only the proven affected build
-  directory after verifying its absolute path; do not wipe arbitrary computed paths.
-- **ASan 0xc0000135:** inspect DLL search paths; `msvc-env.bat` discovers the installed toolset rather than pinning
-  a developer-specific version. A missing runtime DLL is a harness problem, not an engine crash.
-- **Tidy reports zero without parsing:** use the LLVM-20 helper. Missing includes or incompatible MSVC PCH input
-  invalidate analysis. An empty diagnostic stream alone is not evidence either way.
-- **LTCG-only failure:** reproduce with the actual failing compiler/configuration, inspect emitted/runtime values,
-  and repair the mechanism. ASan without LTCG cannot validate it. Preserve required noinline/ABI boundaries.
-- **PowerShell phantom exit:** never pipe a running native tool to `Select-Object -First`; it can terminate the
-  producer. Capture completion/exit first, then filter output. Use UTF-8 file I/O, not legacy ANSI/BOM round trips.
-- **Allocator/resource hazards:** preserve unload-then-free resource destruction, one jobs-init owner per test
-  binary, String usable-capacity semantics and append-only virtual slots. Full scars are in MEMORY references.
+## Visual Studio
 
-Smoke executables supplement CTest. Discover the real current runtime targets; sandbox GPU smoke requires bounded
-duration and validation evidence. Old retired rhi/renderer/shader smoke names are historical. Adding a module also
-requires its CMake target, tests, appropriate consumer/smoke and a systems-index entry.
+`python scripts/project-sync.py open --preset win-vs` opens all eight native profiles and starts sync. Save All, wait
+for watching/reload; inspect `project-sync.py status`. Open Folder exposes all CMake presets. See
+[configurations](design/visual-studio-configurations.md) and [structure/recovery](design/project-structure-sync.md).
+Native build `--config` and CTest `-C` must match; pass PowerShell arguments explicitly:
 
-For documentation-only work run `python scripts/check-master-plan.py`; no engine build is implied.
-Repository cleanup additionally runs `python scripts/check-repository.py` and `python scripts/test-repository-tools.py`.
-These are CTest guards and Windows/Linux CI jobs. CI selects pinned LLVM 20.1.8 explicitly and treats warnings as errors.
-[Historical host notes](archive/2026-09-12-orientation-history.md#docs-building).
+```powershell
+./scripts/run-ctest.ps1 -CtestArguments @('--test-dir', 'build/win-vs-debug', '-C', 'Debug',
+    '-R', '<affected-test>', '--timeout', '180', '--no-tests=error', '--output-on-failure')
+```
+
+Linux: export the [validation installer](../scripts/install-vulkan-validation.py)'s layer/library paths; inspect startup
+diagnostics. `VULKAN_SDK` alone does not select runtime layers. Keep the system driver.
+
+## Troubleshooting
+
+- Stale PCH: inspect `CMAKE_COMMAND` and [check-deps](../scripts/check-deps.bat). VS-bundled CMake once produced
+  `#deps 0` on this locale; use standalone helpers. Verify absolute paths before scoped regeneration/deletion.
+- ASan `0xc0000135`: check runtime DLL paths via [msvc-env](../scripts/msvc-env.bat). Raw clang-tidy cannot consume
+  MSVC PCH; the tidy helper uses real compile flags and strips incompatible PCH inputs.
+- LTCG: diagnose the optimized artifact; ASan/non-LTCG cannot qualify it. Preserve ABI/noinline boundaries.
+- PowerShell: capture native completion/exit before filtering; never pipe to `Select-Object -First`. Use UTF-8.
+  Slow is not hung: check process/progress/duration before termination.
+- Resource unload/free order, single jobs-init owner, String capacity and append-only vtables: [MEMORY](../MEMORY.md).
+
+Docs: `python scripts/check-master-plan.py`. Tool/layout changes: also `python scripts/check-repository.py`,
+`python scripts/test-repository-tools.py` and affected fixtures.
+New modules need CMake/tests, a consumer and [systems](systems/README.md) route.
+[Historical evidence](archive/2026-09-12-orientation-history.md#docs-building).

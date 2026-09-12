@@ -27,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-2025-vs2026, ubuntu-24.04]
     steps:
       - uses: actions/checkout@v4
       - uses: seanmiddleditch/gha-setup-ninja@v5
@@ -51,16 +51,18 @@ jobs:
         run: python scripts/check-master-plan.py
       - name: Build tooling regression checks
         run: python scripts/test-repository-tools.py
+      - name: Affected workflow selection contracts
+        run: python scripts/test-dev-workflow.py
       - name: Project structure synchronization
         run: python scripts/test-project-sync.py
       - name: Canonical build profile contracts
         run: python scripts/test-native-build-profiles.py
       - name: Native MSVC profile compile and execution
         if: runner.os == 'Windows'
-        run: python scripts/test-native-build-profiles.py --generator "Visual Studio 17 2022"
+        run: python scripts/test-native-build-profiles.py --generator "Visual Studio 18 2026"
       - name: Native Visual Studio structure round trips
         if: runner.os == 'Windows'
-        run: python scripts/test-project-sync-native.py --generator "Visual Studio 17 2022"
+        run: python scripts/test-project-sync-native.py --generator "Visual Studio 18 2026"
       - name: Linux structure projection and compile
         if: runner.os == 'Linux'
         run: python scripts/test-project-sync-native.py --generator Ninja
@@ -136,7 +138,14 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }}
 
       - name: Test
-        run: ctest --preset ${{ matrix.preset }} --output-on-failure --no-tests=error
+        shell: pwsh
+        run: |
+          ctest --preset ${{ matrix.preset }} -R '^crd-dx12-device-info$' --verbose --timeout 30 --no-tests=error
+          $probeExit = $LASTEXITCODE
+          ctest --preset ${{ matrix.preset }} --output-on-failure --no-tests=error
+          $testExit = $LASTEXITCODE
+          if ($probeExit -ne 0) { exit $probeExit }
+          exit $testExit
 
       - name: Preserve CTest diagnostics
         if: always()
@@ -324,7 +333,14 @@ jobs:
       - name: Test
         env:
           CRD_PLATFORM_HEADLESS: '1'
-        run: ctest --preset win-clang-cl --output-on-failure --no-tests=error
+        shell: pwsh
+        run: |
+          ctest --preset win-clang-cl -R '^crd-dx12-device-info$' --verbose --timeout 30 --no-tests=error
+          $probeExit = $LASTEXITCODE
+          ctest --preset win-clang-cl --output-on-failure --no-tests=error
+          $testExit = $LASTEXITCODE
+          if ($probeExit -ne 0) { exit $probeExit }
+          exit $testExit
 
       - name: Preserve CTest diagnostics
         if: always()
@@ -490,7 +506,14 @@ jobs:
         run: cmake --build --preset win-shipping
 
       - name: Test
-        run: ctest --preset win-shipping --output-on-failure --no-tests=error
+        shell: pwsh
+        run: |
+          ctest --preset win-shipping -R '^crd-dx12-device-info$' --verbose --timeout 30 --no-tests=error
+          $probeExit = $LASTEXITCODE
+          ctest --preset win-shipping --output-on-failure --no-tests=error
+          $testExit = $LASTEXITCODE
+          if ($probeExit -ne 0) { exit $probeExit }
+          exit $testExit
 
       - name: Preserve CTest diagnostics
         if: always()
@@ -589,7 +612,14 @@ jobs:
         run: cmake --build --preset win-clang-cl-shipping
 
       - name: Test
-        run: ctest --preset win-clang-cl-shipping --output-on-failure --no-tests=error
+        shell: pwsh
+        run: |
+          ctest --preset win-clang-cl-shipping -R '^crd-dx12-device-info$' --verbose --timeout 30 --no-tests=error
+          $probeExit = $LASTEXITCODE
+          ctest --preset win-clang-cl-shipping --output-on-failure --no-tests=error
+          $testExit = $LASTEXITCODE
+          if ($probeExit -ne 0) { exit $probeExit }
+          exit $testExit
 
       - name: Preserve CTest diagnostics
         if: always()

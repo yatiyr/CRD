@@ -2,11 +2,13 @@
 """Regression checks for hygiene rejection and CMake's generated IDE model."""
 from pathlib import Path
 import importlib.util
+import io
 import re
 import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('hygiene', ROOT / 'scripts/check-repository.py')
@@ -15,6 +17,39 @@ spec.loader.exec_module(hygiene)
 
 
 class RepositoryTools(unittest.TestCase):
+    def test_fft_codegen_declarations_preserve_expression_commas(self):
+        from fft_codegen_style import canonicalize
+        original = '        const T re = std::fma(a, b, c), im = data[2].im;\n'
+        expected = '        const T re = std::fma(a, b, c);\n        const T im = data[2].im;\n'
+        self.assertEqual(canonicalize(original), expected)
+        self.assertEqual(canonicalize('    V re, im;\n'), '    V re;\n    V im;\n')
+        original = '    { const crd::usize hi_ = crd::usize{4} << shift, lo = f(a, b);\n'
+        expected = '    { const crd::usize high_im = crd::usize{4} << shift;\n      const crd::usize lo = f(a, b);\n'
+        self.assertEqual(canonicalize(original), expected)
+        self.assertEqual(canonicalize('void f(T a, T b);\n'), 'void f(T a, T b);\n')
+        original = '    const crd::f64* const tr = twr + n * 64, * const ti = twi + n * 64;\n'
+        expected = '    const crd::f64* const tr = twr + n * 64;\n    const crd::f64* const ti = twi + n * 64;\n'
+        self.assertEqual(canonicalize(original), expected)
+        original = 'CRD_FFT_GEN_INLINE void codelet() {}\n'
+        self.assertEqual(canonicalize(canonicalize(original)), canonicalize(original))
+        with self.assertRaisesRegex(ValueError, 'Unbalanced'):
+            canonicalize('const T a = f(x, b = 1;')
+
+    def test_validation_request_identifies_client_and_still_checks_bytes(self):
+        installer_spec = importlib.util.spec_from_file_location('validation', ROOT / 'scripts/install-vulkan-validation.py')
+        installer = importlib.util.module_from_spec(installer_spec)
+        installer_spec.loader.exec_module(installer)
+        with tempfile.TemporaryDirectory() as temp:
+            destination = Path(temp) / 'validation'
+            with patch.object(installer.urllib.request, 'urlopen', return_value=io.BytesIO(b'untrusted response')) as fetch:
+                with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
+                    installer.install(destination, None)
+            request = fetch.call_args.args[0]
+            self.assertEqual(request.full_url, installer.URL)
+            self.assertEqual(request.get_header('User-agent'), installer.USER_AGENT)
+            self.assertEqual(fetch.call_args.kwargs['timeout'], 60)
+            self.assertFalse((destination / 'lib').exists())
+
     def test_validation_download_rejects_wrong_checksum(self):
         installer_spec = importlib.util.spec_from_file_location('validation', ROOT / 'scripts/install-vulkan-validation.py')
         installer = importlib.util.module_from_spec(installer_spec)
