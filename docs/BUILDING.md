@@ -3,18 +3,20 @@
 <!-- doc-role: rule -->
 > Current rule. Current work: [ROADMAP](ROADMAP.md); current rules: [AGENTS](../AGENTS.md).
 
-Use this guide before code work. [CMake presets](../CMakePresets.json), [CI](../.github/workflows/ci.yml) and the
-linked helpers specify actual configuration/tool pins; do not infer them from an old session count.
-C++20, CMake 3.25+, Ninja/Visual Studio, Windows MSVC/clang-cl and Linux GCC form the build substrate. Vulkan SDK and
-CUDA requirements depend on the selected targets. Inspect the configured SDK/compiler paths before using them.
-Tests/tooling require Python 3.12+. [Source/IDE layout](design/repository-layout.md): physical family folders and
-CMake target folders agree; public include names, target names and existing binary directories remain stable.
-[VS solution](design/repository-layout.md#native-visual-studio-solution) requires CMake 4.2+. Reconfigure after source moves. Put personal SDK/ISA choices in ignored `CMakeUserPresets.json` or user settings.
+Read before code. [Presets](../CMakePresets.json) and [CI](../.github/workflows/ci.yml) own tool/configuration pins.
+Stack: C++20, CMake 3.25+, Python 3.12+, Ninja/Visual Studio; Windows MSVC/clang-cl and Linux GCC. Inspect selected
+SDK/compiler paths. [Source/IDE layout](design/repository-layout.md) owns physical/target families and stable public names.
+Native VS 2026 requires CMake 4.2+. Reconfigure after moves; personal SDK/ISA choices belong in ignored `CMakeUserPresets.json`.
+Start native IDE development with `python scripts/project-sync.py open --preset win-vs`.
+Save All and wait for sync/reload. [Structure guide](design/project-structure-sync.md): Remove/Delete, module moves and
+recovery. `project-sync.py status` reports conflicts.
+[Configurations](design/visual-studio-configurations.md): File > Open > Folder exposes the full CMake preset matrix;
+the native solution offers eight MSVC configurations. Use `--config <name>` and CTest `-C <name>` together.
 
 ## Local work — affected targets only
 
-On the Windows development host, use the standalone-CMake helpers. `build-target.bat` builds **one target per call**.
-Rebuild every executable affected by a changed library; a sibling executable does not relink itself.
+On Windows, use the standalone-CMake helpers. `build-target.bat` builds **one target per call**.
+Rebuild every affected executable; siblings do not relink themselves.
 
 ```powershell
 & .\scripts\configure-preset.bat win-debug
@@ -58,9 +60,8 @@ They retain debug/ASan/shipping/tidy, release/LTCG and cluster-close configurati
 whole-repo sweeps on this host.** CI owns broad coverage; local iteration stays affected targets plus consumers.
 Do not run unfiltered `cmake --build`/`ctest` locally as a convenient substitute.
 
-The development host has recorded instability under all-core load: cap build concurrency and run heavyweight jobs
-sequentially. Verify the current hardware/toolchain configuration instead of presenting the old diagnosis as a
-fresh hardware test. Never use `-Parallel` for these host-wide sweeps.
+This host has recorded instability under all-core load: cap concurrency and run heavyweight jobs sequentially.
+Verify current hardware/tooling; an old diagnosis is not a new hardware test. Never use host-wide `-Parallel` sweeps.
 
 ## Troubleshooting — diagnose before retrying
 

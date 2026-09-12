@@ -12,6 +12,8 @@ Existing dated decisions are amended explicitly, not silently rewritten as a dif
 
 | Reference | Purpose |
 |---|---|
+| [0132-visual-studio-configuration-matrix](0132-visual-studio-configuration-matrix.md) | Canonical presets plus complete native MSVC configurations; user-selected workflow |
+| [0131-project-structure-synchronization](0131-project-structure-synchronization.md) | Durable Visual Studio/source/CMake edits, selectable removal and physical module moves |
 | [0130-system-qualification-and-agent-driven-products](0130-system-qualification-and-agent-driven-products.md) | Confirmed whole-system directions, combined training/inference and separate authorities; detailed mechanism proposals |
 | [0001-build-language](0001-build-language.md) | ADR-0001 — Build & language |
 | [0002-logging](0002-logging.md) | ADR-0002 — Logging |

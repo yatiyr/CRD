@@ -12,6 +12,8 @@ and verification evidence in the linked note; its live status belongs only to th
 
 | Reference | Purpose |
 |---|---|
+| [Visual Studio configurations](visual-studio-configurations.md) | Full CMake preset selector, eight native MSVC profiles and configuration-aware synchronization gates |
+| [Project structure synchronization](project-structure-sync.md) | Transaction, IDE/CMake round-trip, conflict/recovery and physical path migration contract |
 | [Repository layout](repository-layout.md) | Physical/IDE families, hygiene, preservation and build/CI verification |
 | [System qualification contract](system-quality-contract.md) | Cross-platform, ownership, correctness, security, agent access and complete document/session close-out |
 | [ceir-0a-execution-path-inventory](ceir-0a-execution-path-inventory.md) | CEIR-0a — Execution-path inventory (FROM CODE) |

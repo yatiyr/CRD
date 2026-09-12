@@ -11,6 +11,8 @@ The former host-specific index and all 457 source records were preserved in the 
 
 ## Read only what the task needs
 
+- Native VS configuration names require matching flags, headers, CRT and ISA; presets own the matrix →
+  [configuration contract and evidence](docs/design/visual-studio-configurations.md).
 - Build, stale executables, PCH, sanitizer or tidy symptoms → [build/verification](docs/lessons/memory/build-and-verification.md).
 - GPU startup diagnostics can precede capture objects: select matching layers and inspect the complete log →
   [verified repair](docs/sessions/2026-09-12-repository-cleanup.md#linux-validation-tooling-repair).

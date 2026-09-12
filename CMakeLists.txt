@@ -16,6 +16,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(cmake/CrdIdeFolders.cmake)
+include(cmake/CrdProjectSync.cmake)
 
 option(CRD_BUILD_TESTS      "Build test executables"           ON)
 option(CRD_BUILD_BENCHMARKS "Build benchmark executable"       ON)
@@ -41,13 +42,14 @@ option(CRD_ENABLE_ASAN      "Enable Address Sanitizer"         OFF)
 option(CRD_ENABLE_UBSAN     "Enable Undefined Behavior San."   OFF)
 option(CRD_SHIPPING         "Maximum optimizations + debug symbol generation for crash diagnostics" OFF)
 option(CRD_ENABLE_CLANG_TIDY "Run clang-tidy during build" OFF)
-option(CRD_CLANG_TIDY_WARNINGS_AS_ERRORS "Treat clang-tidy warnings as build errors (local strict; CI relaxed via -DCRD_CLANG_TIDY_WARNINGS_AS_ERRORS=OFF)" ON)
+option(CRD_CLANG_TIDY_WARNINGS_AS_ERRORS "Treat clang-tidy warnings as build errors (OFF only for diagnostic preview)" ON)
 option(CRD_ENABLE_PCH       "Enable default precompiled headers" ON)
 
 # SIMD level + ADR-0063 deterministic-FP contract live in their own module.
 # Any target that links crd-math (everything, transitively) inherits the
 # /arch:AVX2 (or -mavx2 / NEON / scalar) flags + the determinism guarantees.
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(CrdBuildProfiles)
 include(CrdSimd)
 
 # ---- Log compile-time minimum level ---------------------------------------
@@ -81,7 +83,11 @@ elseif(CRD_LOG_MIN_LEVEL_RESOLVED STREQUAL "Critical")
 else()
     message(FATAL_ERROR "Invalid CRD_LOG_MIN_LEVEL: '${CRD_LOG_MIN_LEVEL_RESOLVED}'")
 endif()
-message(STATUS "[crd] Log compile-time min level: ${CRD_LOG_MIN_LEVEL_RESOLVED} (${CRD_LOG_MIN_LEVEL_NUM})")
+if(CRD_NATIVE_PROFILES AND CRD_LOG_MIN_LEVEL STREQUAL "")
+    message(STATUS "[crd] Log minimum follows each native profile: Trace for Debug/RelWithDebInfo; Info for Release/Shipping")
+else()
+    message(STATUS "[crd] Log compile-time min level: ${CRD_LOG_MIN_LEVEL_RESOLVED} (${CRD_LOG_MIN_LEVEL_NUM})")
+endif()
 
 # ---- NDEBUG for optimised configs ---------------------------------------
 # CMake's MSVC toolchain may leave CMAKE_CXX_FLAGS_RELEASE empty (unlike the
@@ -92,17 +98,26 @@ add_compile_definitions(
     $<$<CONFIG:Release>:NDEBUG>
     $<$<CONFIG:MinSizeRel>:NDEBUG>
 )
+if(CRD_NATIVE_PROFILES)
+    foreach(config IN LISTS CRD_NATIVE_CONFIGS)
+        if(NOT CRD_PROFILE_${config}_CMAKE_BUILD_TYPE STREQUAL "Debug")
+            add_compile_definitions($<$<CONFIG:${config}>:NDEBUG>)
+        endif()
+    endforeach()
+endif()
 
 # ---- Sanitizers ---------------------------------------------------------
 
-if(CRD_ENABLE_ASAN)
+crd_profile_condition(_crd_asan CRD_ENABLE_ASAN)
+if(CRD_ENABLE_ASAN OR CRD_NATIVE_PROFILES)
     if(MSVC)
-        add_compile_options(/fsanitize=address)
+        add_compile_options($<$<AND:${_crd_asan},$<COMPILE_LANGUAGE:C,CXX>>:/fsanitize=address>)
+        add_link_options($<${_crd_asan}:/INCREMENTAL:NO>)
     else()
         add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
         add_link_options(-fsanitize=address)
     endif()
-    message(STATUS "[crd] Address Sanitizer ENABLED")
+    message(STATUS "[crd] Address Sanitizer condition: ${_crd_asan}")
 endif()
 
 if(CRD_ENABLE_UBSAN)
@@ -117,7 +132,8 @@ endif()
 
 # ----- Shipping optimizations + debug symbols --------------------------------
 
-if(CRD_SHIPPING)
+crd_profile_condition(_crd_shipping CRD_SHIPPING)
+if(CRD_SHIPPING OR CRD_NATIVE_PROFILES)
     # Note: /arch:AVX2 / -march come from CrdSimd.cmake (CRD_SIMD_LEVEL).
     # Note: fast-math intentionally NOT used here — the eylem replay-hash CI
     #       (ADR-0063) requires bit-exact reproducibility, which fast-math
@@ -147,16 +163,16 @@ if(CRD_SHIPPING)
         # shipping correctness under the strictest LTO settings the
         # toolchain offers.
         add_compile_options(
-            $<$<COMPILE_LANGUAGE:CXX,C>:/Gw>
-            $<$<COMPILE_LANGUAGE:CXX,C>:/Gy>
-            $<$<COMPILE_LANGUAGE:CXX,C>:/Zc:inline>
-            $<$<COMPILE_LANGUAGE:CXX,C>:/Zi>
+            $<$<AND:${_crd_shipping},$<COMPILE_LANGUAGE:CXX,C>>:/Gw>
+            $<$<AND:${_crd_shipping},$<COMPILE_LANGUAGE:CXX,C>>:/Gy>
+            $<$<AND:${_crd_shipping},$<COMPILE_LANGUAGE:CXX,C>>:/Zc:inline>
+            $<$<AND:${_crd_shipping},$<COMPILE_LANGUAGE:CXX,C>>:/Zi>
         )
         # /DEBUG:FULL  — full PDB (not /DEBUG:FASTLINK), required for WinDbg post-mortem
         # /OPT:REF     — strip unreferenced functions (dead code elimination)
         # /OPT:ICF     — merge identical COMDATs (binary size reduction)
         # /LTCG        — link-time codegen (driven via CMAKE_INTERPROCEDURAL_OPTIMIZATION)
-        add_link_options(/DEBUG:FULL /OPT:REF /OPT:ICF)
+        add_link_options($<${_crd_shipping}:/DEBUG:FULL> $<${_crd_shipping}:/OPT:REF> $<${_crd_shipping}:/OPT:ICF>)
     else()
         # -g                       — always emit DWARF debug info for crash symbolication
         # -ffunction-sections      — each function in its own section
@@ -178,7 +194,7 @@ if(CRD_SHIPPING)
         )
         add_link_options(-Wl,--build-id -Wl,--gc-sections)
     endif()
-    message(STATUS "[crd] Shipping: max optimizations + debug symbols ON (determinism preserved per ADR-0063)")
+    message(STATUS "[crd] Shipping condition: ${_crd_shipping}; max optimizations + symbols, deterministic FP preserved")
 endif()
 
 # ----- Compiler Warnings (Cerid targets only — propagates via crd-core) -----
@@ -683,6 +699,16 @@ if(CRD_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
+crd_apply_project_structure()
+if(CRD_PROJECT_SYNC AND CMAKE_GENERATOR MATCHES "^Visual Studio")
+    add_custom_target(crd-project-sync-check
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/project-sync.py"
+                --root "${CMAKE_SOURCE_DIR}" verify --build "${CMAKE_BINARY_DIR}"
+        COMMENT "Verify durable source/CMake/Visual Studio project structure"
+        VERBATIM
+    )
+endif()
+crd_apply_native_profiles("${PROJECT_SOURCE_DIR}")
 crd_organize_targets("${CMAKE_CURRENT_SOURCE_DIR}")
 if(TARGET crd-sandbox)
     set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT crd-sandbox)

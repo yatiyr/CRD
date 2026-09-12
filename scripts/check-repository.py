@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Read-only repository hygiene and physical-layout gate (Windows/Linux, Python 3.12+)."""
 from pathlib import Path
+import json
 import re
 import subprocess
 import sys
@@ -46,6 +47,17 @@ def canonical_asset_errors(root):
 
 def check(root=ROOT):
     errors = canonical_asset_errors(root)
+    structure_file = root / 'cmake/project-structure.json'
+    try:
+        from project_sync.model import load_manifest
+        from project_sync.storage import Workspace, Conflict
+        structure = load_manifest(Workspace(root)) if structure_file.exists() else {}
+    except (Conflict, ValueError, TypeError, OSError) as error:
+        errors.append(f'Invalid project structure manifest: {error}')
+        structure = {}
+    excluded_modules = set(structure.get('excluded_modules', []))
+    authored_families = {name.split('/')[1] for name in structure.get('directories', [])
+                        if name.startswith('engine/') and len(name.split('/')) == 2}
     for path in root.iterdir():
         allowed = ROOT_DIRS if path.is_dir() else ROOT_FILES
         if path.name not in allowed and not (path.is_dir() and path.name.startswith('cmake-build-')):
@@ -55,11 +67,11 @@ def check(root=ROOT):
         errors.append('No engine modules found; layout scan did not exercise the source tree')
     cmake = (root / 'CMakeLists.txt').read_text(encoding='utf-8-sig')
     for family in (root / 'engine').iterdir():
-        if family.is_dir() and family.name not in SOURCE_FAMILIES:
+        if family.is_dir() and family.name not in SOURCE_FAMILIES | authored_families:
             errors.append(f'Unclassified engine directory: {family.relative_to(root)}')
     for module in modules:
         relative = module.parent.relative_to(root).as_posix()
-        if not re.search(r'add_subdirectory\(' + re.escape(relative) + r'(?:\s|\))', cmake):
+        if relative not in excluded_modules and not re.search(r'add_subdirectory\(' + re.escape(relative) + r'(?:\s|\))', cmake):
             errors.append(f'Module absent from build registration: {relative}')
     test_cmake = (root / 'tests/CMakeLists.txt').read_text(encoding='utf-8-sig')
     for source in re.findall(r'add_subdirectory\(([^\s)]+)', test_cmake):

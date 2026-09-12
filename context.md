@@ -4,7 +4,7 @@
 > Current-work pointer. Current work: [ROADMAP](docs/ROADMAP.md); current rules: [AGENTS](AGENTS.md).
 
 <!-- current-slice: REPO.3c -->
-**Current work:** [REPO.3c](docs/ROADMAP.md#slice-repo.3c), Windows DX12 CI repair and GPU qualification.
+**Current work:** [REPO.3c](docs/ROADMAP.md#slice-repo.3c), repository GPU/CI verification after the IDE configuration slice.
 **Only tracker:** [ROADMAP](docs/ROADMAP.md). Rules: [AGENTS](AGENTS.md); lessons: [MEMORY](MEMORY.md).
 
 ## Product direction
@@ -18,7 +18,8 @@ CHIR authors behaviour, CEIR executes, CKIR expresses device programs. Every shi
 
 Last engine milestone: [CEIR-35 close](docs/sessions/2026-09-11-ceir-35z-band-close.md). This establishes its recorded
 execution-foundation contract, not complete renderer/UI/editor quality. The old CEIR autonomous grant is complete.
-Latest session: [Visual Studio solution](docs/sessions/2026-09-12-visual-studio-solution.md).
+Latest session: [Visual Studio configurations](docs/sessions/2026-09-12-visual-studio-configurations.md).
+IDE workflow: [configurations](docs/design/visual-studio-configurations.md) and [structure/recovery](docs/design/project-structure-sync.md); CMake owns the matrix.
 Entry: [START_HERE](START_HERE.md). Architecture findings: [A01–A27](docs/research/2026-09-12-system-audit.md) and
 [G01–G30](docs/research/2026-09-12-cerid-whole-system-review.md). All owners are in ROADMAP.
 AI inference/training qualify together. Project collaboration and multiplayer have separate authoritative contracts

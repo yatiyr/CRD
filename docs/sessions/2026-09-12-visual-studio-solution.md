@@ -48,3 +48,12 @@ Final configure and incremental sandbox build also exited 0 after installing the
 Scoped CTest under `win-vs-debug` passed all three selected guards: `crd-repository-hygiene`, `crd-master-plan` and
 `crd-repository-tools` (nonempty selection, 60-second timeout; log `guards.log`). REPO.VS is closed; context returns to
 REPO.3c. Existing principles and memory rules remain applicable without edits.
+
+## Follow-up — adding items in the IDE
+
+The user asked whether new Visual Studio folders/files map back to actual source. Inspected the generated
+`crd-hesap-dense.vcxproj` and its filters: existing entries use absolute repository source paths, while filters are
+logical labels. Inspected `crd_collect_sources` and explicit test/sandbox source lists; discovery is target-dependent.
+Documented the distinction between generated-solution editing and native CMake Folder View in the layout contract,
+with Microsoft primary references. No UI add/rename operation or automatic custom-helper edit was tested or claimed.
+No build behavior changed and REPO.VS remains closed; the current CI repair pointer is unchanged.

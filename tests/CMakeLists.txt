@@ -8,8 +8,24 @@ add_test(NAME crd-master-plan
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-master-plan.py")
 add_test(NAME crd-repository-tools
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-repository-tools.py")
+add_test(NAME crd-project-structure-sync
+    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-project-sync.py")
+add_test(NAME crd-build-profiles
+    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-native-build-profiles.py")
 set_tests_properties(crd-repository-hygiene crd-master-plan crd-repository-tools
     PROPERTIES TIMEOUT 60 ENVIRONMENT "PYTHONUTF8=1")
+set_tests_properties(crd-project-structure-sync PROPERTIES TIMEOUT 90 ENVIRONMENT "PYTHONUTF8=1")
+set_tests_properties(crd-build-profiles PROPERTIES TIMEOUT 30 ENVIRONMENT "PYTHONUTF8=1")
+if(CMAKE_GENERATOR MATCHES "^Visual Studio")
+    add_test(NAME crd-project-structure-native
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-project-sync-native.py"
+                --generator "${CMAKE_GENERATOR}")
+    set_tests_properties(crd-project-structure-native PROPERTIES TIMEOUT 180 ENVIRONMENT "PYTHONUTF8=1")
+    add_test(NAME crd-native-build-profiles
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-native-build-profiles.py"
+                --generator "${CMAKE_GENERATOR}")
+    set_tests_properties(crd-native-build-profiles PROPERTIES TIMEOUT 240 ENVIRONMENT "PYTHONUTF8=1")
+endif()
 
 # Header-only test utilities (ULP compare, GPU determinism check) — must
 # come BEFORE any test target that links it.

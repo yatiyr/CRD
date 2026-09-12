@@ -10,6 +10,10 @@ Run commands from the repository root. Build/test rules and exact quality requir
   Do not send regex alternation through a `.bat` invocation from PowerShell: cmd reparses metacharacters.
 - Changed C++: `tidy-files.ps1`; `tidy-rename-helper.ps1 -LogFile <capture> -DryRun` previews mechanical fixes.
 - Repository/docs: `check-repository.py`, `check-master-plan.py`, `test-repository-tools.py`.
+- Native Visual Studio: `project-sync.py open --preset win-vs-debug` starts saved structure synchronization.
+  `status`, `stop`, `sync` preview and `edit --operations <json> --apply --regenerate` share one portable transaction path.
+  Read [structure/recovery](../docs/design/project-structure-sync.md) before module moves or Remove/Delete operations.
+  Regressions: `test-project-sync.py`; isolated real compile: `test-project-sync-native.py` (optional Windows `--ide`).
 - Linux Vulkan validation: `install-vulkan-validation.py --destination <ignored-directory>` installs the pinned,
   SHA-256-checked layer. Export the printed layer/library paths before GPU tests; it does not replace the driver.
 - Generators, oracle scripts and `bench_*`/`run_bench_*` helpers are reproducibility assets. Their matching

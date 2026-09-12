@@ -51,6 +51,19 @@ jobs:
         run: python scripts/check-master-plan.py
       - name: Build tooling regression checks
         run: python scripts/test-repository-tools.py
+      - name: Project structure synchronization
+        run: python scripts/test-project-sync.py
+      - name: Canonical build profile contracts
+        run: python scripts/test-native-build-profiles.py
+      - name: Native MSVC profile compile and execution
+        if: runner.os == 'Windows'
+        run: python scripts/test-native-build-profiles.py --generator "Visual Studio 17 2022"
+      - name: Native Visual Studio structure round trips
+        if: runner.os == 'Windows'
+        run: python scripts/test-project-sync-native.py --generator "Visual Studio 17 2022"
+      - name: Linux structure projection and compile
+        if: runner.os == 'Linux'
+        run: python scripts/test-project-sync-native.py --generator Ninja
       - name: Generated CEIR artifacts
         run: python tools/ceir_opgen/ceir_opgen.py --check
       - name: Capability source references

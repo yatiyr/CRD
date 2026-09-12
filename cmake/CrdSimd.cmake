@@ -80,12 +80,25 @@ endif()
 
 add_library(crd-simd-flags INTERFACE)
 
+# Native ISA variants share a solution but never inherit the AVX2 flag from another profile.
+set(_crd_default_isa "1")
+if(CRD_NATIVE_PROFILES)
+    set(_crd_isa_configs)
+    foreach(config IN LISTS CRD_NATIVE_CONFIGS)
+        if(NOT CRD_PROFILE_${config}_CRD_SIMD_LEVEL STREQUAL "auto")
+            list(APPEND _crd_isa_configs "${config}")
+        endif()
+    endforeach()
+    list(JOIN _crd_isa_configs "," _crd_isa_configs)
+    set(_crd_default_isa "$<NOT:$<CONFIG:${_crd_isa_configs}>>")
+endif()
+
 # Pick the integer macro + ISA flags per resolved level.
 if(_crd_simd_resolved STREQUAL "avx2")
     set(_crd_simd_target_value ${_CRD_SIMD_TARGET_AVX2})
     if(MSVC)
         target_compile_options(crd-simd-flags INTERFACE
-            $<$<COMPILE_LANGUAGE:CXX,C>:/arch:AVX2>)
+            $<$<AND:${_crd_default_isa},$<COMPILE_LANGUAGE:CXX,C>>:/arch:AVX2>)
     else()
         # -mfma is REQUIRED: crd-math's single-rounded simd::fma() (Vec8f/Vec4d,
         # used by the crd-hesap microkernels per ADR-0082) lowers to the
@@ -133,7 +146,7 @@ elseif(_crd_simd_resolved STREQUAL "native")
         # MSVC has no `-march=native`. Treat 'native' as 'avx2' on x64.
         if(_crd_arch_x64)
             target_compile_options(crd-simd-flags INTERFACE
-                $<$<COMPILE_LANGUAGE:CXX,C>:/arch:AVX2>)
+                $<$<AND:${_crd_default_isa},$<COMPILE_LANGUAGE:CXX,C>>:/arch:AVX2>)
         endif()
     else()
         target_compile_options(crd-simd-flags INTERFACE
@@ -145,8 +158,17 @@ else()
     message(FATAL_ERROR "[crd-simd] Unknown CRD_SIMD_LEVEL: '${_crd_simd_resolved}'")
 endif()
 
-target_compile_definitions(crd-simd-flags INTERFACE
-    CRD_SIMD_TARGET=${_crd_simd_target_value})
+set(_crd_simd_definition "${_crd_simd_target_value}")
+if(CRD_NATIVE_PROFILES)
+    foreach(config IN LISTS CRD_NATIVE_CONFIGS)
+        if(CRD_PROFILE_${config}_CRD_SIMD_LEVEL STREQUAL "scalar")
+            set(_crd_simd_definition "$<IF:$<CONFIG:${config}>,0,${_crd_simd_definition}>")
+        elseif(CRD_PROFILE_${config}_CRD_SIMD_LEVEL STREQUAL "sse2")
+            set(_crd_simd_definition "$<IF:$<CONFIG:${config}>,1,${_crd_simd_definition}>")
+        endif()
+    endforeach()
+endif()
+target_compile_definitions(crd-simd-flags INTERFACE CRD_SIMD_TARGET=${_crd_simd_definition})
 
 # ---- Determinism: ADR-0063 FP contract -------------------------------------
 #

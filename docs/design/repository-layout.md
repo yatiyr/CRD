@@ -22,22 +22,23 @@ dependency permissions. `docs/systems/README.md` remains the module API index.
 CMake sets target folders from source ownership; engine and test hierarchies match the physical tree.
 Source groups preserve paths beneath each module. External dependency and CMake utility targets have separate
 folders. Visual Studio Folder View shows physical families; CMake Targets View shows target families.
-Reconfigure existing presets after a checkout that moves sources. Do not hand-edit generated solutions.
+Reconfigure existing presets after a checkout that moves sources. Native structural edits use the
+[project synchronizer](project-structure-sync.md); CMake remains the build authority.
 
 ## Native Visual Studio solution
 
-`win-vs-debug` generates the native Visual Studio 2026 x64 Debug solution (`build/win-vs-debug/CRD.slnx`
+`win-vs` generates the native Visual Studio 2026 x64 solution with eight MSVC configurations (`build/win-vs-debug/CRD.slnx`
 with the verified CMake 4.3.2 installation). It requires CMake 4.2+
 ([generator reference](https://cmake.org/cmake/help/latest/generator/Visual%20Studio%2018%202026.html)); other presets
 retain their existing tool requirements. The full target tree remains visible; its build preset selects the sandbox
-and dependencies with two MSBuild workers. The sandbox is the startup project. Debugger working directory and cooked
-assets follow the executable's configuration directory, including Visual Studio's `Debug/` suffix.
+and dependencies with two MSBuild workers. [Configuration guide](visual-studio-configurations.md) covers the full
+CMake preset selector and native Debug/Release/RelWithDebInfo/ASan/Shipping/ShippingProfile/DebugScalar/DebugSSE2 profiles. The sandbox is the startup project. Debugger working directory and cooked
+assets follow the executable's configuration directory, including the selected native configuration suffix.
 The debugger sets `CRD_ASSETS_DIR` to the repository's `assets/` tree for disk-first authoring and overrides.
 
 ```powershell
-& ./scripts/configure-preset.bat win-vs-debug
+python scripts/project-sync.py open --preset win-vs
 cmake --build --preset win-vs-debug
-cmake --open build/win-vs-debug
 # For a selected additional target:
 cmake --build build/win-vs-debug --config Debug --target crd-math-tests --parallel 2
 ```
@@ -45,6 +46,22 @@ cmake --build build/win-vs-debug --config Debug --target crd-math-tests --parall
 The preset lets Visual Studio discover its compiler through the selected toolset. It does not inherit Ninja's
 bare `cl` override. Open the generated solution to inspect Solution Explorer; opening the repository folder uses
 Visual Studio's separate CMake/Folder View. Generated solution/project files stay under ignored `build/`.
+
+### Adding files and folders from Visual Studio
+
+Existing entries edit real source directly. With `project-sync.py open`, saved file/filter/solution edits also become
+durable source/CMake structure. Added build-directory items relocate into their owning source directory; module moves
+between families physically move source and migrate references. Remove retains disk bytes; Delete is an explicit
+separate operation. Empty authored directories persist. Save All, wait for synchronization and accept any VS reload
+prompt. The [synchronizer guide](project-structure-sync.md) specifies supported edits, commands, conflicts and recovery.
+
+**File > Open > Folder** still opens Visual Studio's separate CMake workspace. Physical source changes and agent/CLI
+operations project back into the native solution when its watcher runs. Compiler flags, dependencies and arbitrary
+custom build semantics belong in CMake. New modules require real CMake target definitions; source selection works for
+both `crd_collect_sources` and explicit lists through tracked membership overrides. Build affected consumers after moves.
+
+References: [Microsoft CMake project manipulation](https://learn.microsoft.com/en-us/cpp/build/cmake-projects-in-visual-studio?view=msvc-170#cmake-project-manipulation)
+and [logical project filters](https://learn.microsoft.com/en-us/cpp/build/reference/vcxproj-filters-files?view=msvc-170).
 
 ## Repository contents
 

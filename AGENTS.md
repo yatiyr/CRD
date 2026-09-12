@@ -82,5 +82,7 @@ are genuinely unresolved or an explicit design gate is still unaccepted. Never i
   AI co-author trailer. Do not bypass hooks/signing; solve the underlying issue.
 - Windows uses PowerShell. Use `rg` for searches, UTF-8 for text, absolute paths for executables, and verify
   deletion/move targets remain inside the intended directory. Never overwrite HOME/CODEX_HOME variables.
+- Source/project structure changes use the [synchronizer contract](docs/design/project-structure-sync.md).
+  Inspect its status before moving files; preserve saved IDE edits, tracked membership overrides and recovery journals.
 - Keep implementation within the current authorized scope. Repository organization does not authorize
   geometry/physics algorithm changes; retained work lives in ROADMAP. No automatic loop is active merely because a historical CEIR grant says so.
