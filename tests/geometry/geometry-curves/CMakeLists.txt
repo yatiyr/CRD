@@ -22,4 +22,4 @@ target_link_libraries(crd-geometry-curves-tests PRIVATE
 
 crd_enable_default_pch(crd-geometry-curves-tests)
 
-catch_discover_tests(crd-geometry-curves-tests)
+crd_discover_tests(crd-geometry-curves-tests)

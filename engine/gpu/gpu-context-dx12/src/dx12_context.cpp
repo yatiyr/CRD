@@ -4,6 +4,8 @@
 // gives the context an adapter identity + honours "a context is a live device foundation" (ADR-0099); DXIL itself is
 // device-independent, so program authoring needs only dxc.
 
+#include "dx12_adapter_classification.hpp"
+
 #include <crd/gpu/dx12_context.hpp>
 
 #include <crd/kir/ckir_hlsl.hpp> // emit_stage_hlsl (+ ckir.hpp: KGraph/KEntry/KStage, and ckir_glsl.hpp: GlslKernel)
@@ -11,6 +13,7 @@
 #include <cstring>
 
 #include <d3d12.h>
+#include <d3dkmthk.h>
 #include <dxcapi.h>
 #include <dxgi1_4.h>
 #include <windows.h>
@@ -23,6 +26,47 @@ using Microsoft::WRL::ComPtr;
 
 namespace
 {
+
+class KernelAdapter
+{
+public:
+    explicit KernelAdapter(LUID luid) noexcept
+    {
+        D3DKMT_OPENADAPTERFROMLUID request{};
+        request.AdapterLuid = luid;
+        if (D3DKMTOpenAdapterFromLuid(&request) >= 0) { m_handle = request.hAdapter; }
+    }
+
+    ~KernelAdapter() noexcept
+    {
+        if (m_handle != 0U)
+        {
+            D3DKMT_CLOSEADAPTER request{};
+            request.hAdapter = m_handle;
+            (void)D3DKMTCloseAdapter(&request);
+        }
+    }
+
+    KernelAdapter(const KernelAdapter&) = delete;
+    KernelAdapter& operator=(const KernelAdapter&) = delete;
+
+    [[nodiscard]] bool query_software(bool& software) const noexcept
+    {
+        if (m_handle == 0U) { return false; }
+        D3DKMT_ADAPTERTYPE type{};
+        D3DKMT_QUERYADAPTERINFO request{};
+        request.hAdapter = m_handle;
+        request.Type = KMTQAITYPE_ADAPTERTYPE;
+        request.pPrivateDriverData = &type;
+        request.PrivateDriverDataSize = sizeof(type);
+        if (D3DKMTQueryAdapterInfo(&request) < 0) { return false; }
+        software = type.SoftwareDevice != 0U;
+        return true;
+    }
+
+private:
+    D3DKMT_HANDLE m_handle = 0;
+};
 
 [[nodiscard]] const wchar_t* dxil_profile(ShaderStage stage) noexcept
 {
@@ -237,22 +281,41 @@ private:
 
 } // namespace
 
+Dx12AdapterKind detail::query_dx12_adapter_kind(u32 luid_low, i32 luid_high) noexcept
+{
+    const LUID luid{luid_low, luid_high};
+    detail::Dx12AdapterEvidence evidence{};
+    const KernelAdapter kernel(luid);
+    evidence.kernel_available = kernel.query_software(evidence.kernel_software);
+    ComPtr<IDXGIFactory4> factory;
+    if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))))
+    {
+        ComPtr<IDXGIAdapter1> adapter;
+        if (SUCCEEDED(factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&adapter))) && adapter != nullptr)
+        {
+            DXGI_ADAPTER_DESC1 desc{};
+            evidence.dxgi_available = SUCCEEDED(adapter->GetDesc1(&desc));
+            evidence.dxgi_software = (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0U;
+        }
+    }
+    return detail::classify_dx12_adapter(evidence);
+}
+
+Dx12AdapterKind dx12_default_adapter_kind() noexcept
+{
+    // Match the contexts' default device. Kernel identity resolves BasicRender's documented missing DXGI flag.
+    ComPtr<ID3D12Device> device;
+    if (FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device))))
+    {
+        return Dx12AdapterKind::Unknown;
+    }
+    const LUID luid = device->GetAdapterLuid();
+    return detail::query_dx12_adapter_kind(luid.LowPart, luid.HighPart);
+}
+
 bool dx12_default_adapter_is_software() noexcept
 {
-    // Match exactly what the contexts run on: create a device on the DEFAULT adapter, then read that adapter's
-    // DXGI_ADAPTER_FLAG_SOFTWARE (WARP). Mirrors Dx12GpuContext::capture_adapter_name.
-    ComPtr<ID3D12Device> device;
-    if (FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)))) { return false; }
-    ComPtr<IDXGIFactory4> factory;
-    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) { return false; }
-    ComPtr<IDXGIAdapter1> adapter;
-    const LUID            luid = device->GetAdapterLuid();
-    if (SUCCEEDED(factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&adapter))) && adapter != nullptr)
-    {
-        DXGI_ADAPTER_DESC1 desc{};
-        if (SUCCEEDED(adapter->GetDesc1(&desc))) { return (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0U; }
-    }
-    return false;
+    return dx12_default_adapter_kind() == Dx12AdapterKind::Software;
 }
 
 // The shared dxc HLSL->DXIL core: lazy-load dxcompiler.dll, compile `source` with the caller's `args` (the -T/-E flags),

@@ -1126,7 +1126,15 @@ FrameCookError pass_contract_diag(const FramePassDesc& p, crd::containers::Const
                     crd::u32        dk = 0U;
                     DeriveSpecField fk{};
                     if (!parse_derive_spec_param(crd::containers::StringView(p.params[k].name.c_str(), p.params[k].name.size()), dk, fk) || dk != did) { continue; }
-                    const FrameParam** slot = fk == DeriveSpecField::Read ? &pr : (fk == DeriveSpecField::Axis ? &pa : &po);
+                    const FrameParam** slot = &po;
+                    if (fk == DeriveSpecField::Read)
+                    {
+                        slot = &pr;
+                    }
+                    else if (fk == DeriveSpecField::Axis)
+                    {
+                        slot = &pa;
+                    }
                     if (*slot != nullptr)
                     {
                         set_where(where, std::string_view(p.name.c_str(), p.name.size()));

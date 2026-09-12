@@ -30,4 +30,4 @@ endif()
 
 crd_enable_default_pch(crd-audio-tests)
 
-catch_discover_tests(crd-audio-tests)
+crd_discover_tests(crd-audio-tests)

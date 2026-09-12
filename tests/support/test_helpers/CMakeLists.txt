@@ -30,4 +30,4 @@ target_link_libraries(crd-test-helpers-tests PRIVATE
 
 crd_enable_default_pch(crd-test-helpers-tests)
 
-catch_discover_tests(crd-test-helpers-tests)
+crd_discover_tests(crd-test-helpers-tests)

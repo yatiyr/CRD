@@ -22,4 +22,4 @@ target_link_libraries(crd-hesap-interp-tests PRIVATE
 
 crd_enable_default_pch(crd-hesap-interp-tests)
 
-catch_discover_tests(crd-hesap-interp-tests)
+crd_discover_tests(crd-hesap-interp-tests)

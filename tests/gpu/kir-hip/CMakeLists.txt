@@ -18,4 +18,4 @@ target_link_libraries(crd-kir-hip-tests PRIVATE
 
 crd_enable_default_pch(crd-kir-hip-tests)
 
-catch_discover_tests(crd-kir-hip-tests DISCOVERY_MODE PRE_TEST)
+crd_discover_tests(crd-kir-hip-tests DISCOVERY_MODE PRE_TEST)

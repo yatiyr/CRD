@@ -14,4 +14,4 @@ target_link_libraries(crd-render-material-tests PRIVATE
 
 crd_enable_default_pch(crd-render-material-tests)
 
-catch_discover_tests(crd-render-material-tests)
+crd_discover_tests(crd-render-material-tests)

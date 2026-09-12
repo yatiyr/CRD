@@ -12,4 +12,4 @@ target_link_libraries(crd-containers-tests PRIVATE
 
 crd_enable_default_pch(crd-containers-tests)
 
-catch_discover_tests(crd-containers-tests)
+crd_discover_tests(crd-containers-tests)

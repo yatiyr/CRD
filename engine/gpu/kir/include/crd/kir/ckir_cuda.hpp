@@ -8,6 +8,7 @@
 // + launches. Reuses the GLSL emitter's shared helpers + the GlslKernel carrier. ADR-0098.
 
 #include <crd/kir/ckir.hpp>
+#include <crd/kir/ckir_kernel_order.hpp>
 #include <crd/kir/ckir_glsl.hpp> // GlslKernel + glsl_detail::{app_uint,app_flit,is_fusable}
 #include <crd/kir/ckir_tile.hpp> // TileSchedule (the schedule IR the tiled emitter consumes)
 
@@ -129,6 +130,9 @@ inline bool emit_compute_kernel_cuda(const KGraph& g, const KEntry& entry, crd::
     out.n_inputs = 0;
 
     const auto cty = [](DType d) -> const char* { if (dt_is_uint(d)) { return "unsigned"; } return dt_is_int(d) ? "int" : "float"; };
+    const auto value_type = [&](DType dtype) -> const char* {
+        return dtype == DType::Bool ? "bool" : cty(dtype);
+    };
     crd::containers::Array<crd::u8> matd(scratch); // Materialized (frozen) nodes emit a `t<node>` reference, not their inline expr
     matd.resize(static_cast<crd::usize>(n), 0);
 
@@ -241,7 +245,14 @@ inline bool emit_compute_kernel_cuda(const KGraph& g, const KEntry& entry, crd::
         default: return false;
         }
     };
+    emit_detail::KernelEmissionOrder order(g, scratch);
+    bool in_hoist = false;
+    crd::containers::Array<crd::u8> declseen(scratch);
+    declseen.resize(static_cast<crd::usize>(n), 0U);
     const auto decl = [&](auto&& self, int node) -> void {
+        if (declseen[static_cast<crd::usize>(node)] != 0U) { return; }
+        if (in_hoist && order.must_defer(node)) { return; }
+        declseen[static_cast<crd::usize>(node)] = 1U;
         const KNode& nd = g.node(node);
         if (nd.op == KOp::BufferLoad || nd.op == KOp::SharedLoad) { self(self, nd.b); return; } // resource leaf: only the index carries temps
         if (nd.a >= 0) { self(self, nd.a); }
@@ -249,7 +260,7 @@ inline bool emit_compute_kernel_cuda(const KGraph& g, const KEntry& entry, crd::
         if (nd.c >= 0) { self(self, nd.c); }
         if (!is_inline_op(nd.op) && matd[static_cast<crd::usize>(node)] == 0U)
         {
-            s.append("  "); s.append(cty(nd.dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(node)); s.append(" = ");
+            s.append("  "); s.append(value_type(nd.dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(node)); s.append(" = ");
             ev(ev, node); // matd[node] still 0 ⇒ emits the one-level expr (children already materialized ⇒ temp refs)
             s.append(";\n");
             matd[static_cast<crd::usize>(node)] = 1U;
@@ -259,6 +270,8 @@ inline bool emit_compute_kernel_cuda(const KGraph& g, const KEntry& entry, crd::
     // this over an If body BEFORE the opening brace ensures that temps shared across sibling scopes are declared
     // at the ENCLOSING scope. Does NOT recurse into FOR bodies (loop variables would escape their scope).
     const auto hoist_decls = [&](auto&& self_h, int begin, int count) -> void {
+        const bool previous_hoist = in_hoist;
+        in_hoist = true;
         int i = begin;
         while (i < begin + count)
         {
@@ -267,7 +280,6 @@ inline bool emit_compute_kernel_cuda(const KGraph& g, const KEntry& entry, crd::
             {
             case KStmtKind::BufferStore: case KStmtKind::SharedStore: case KStmtKind::SharedAtomicAdd:
             case KStmtKind::BufferAtomicAdd: case KStmtKind::BufferAtomicMin:
-                decl(decl, st.index); decl(decl, st.value); ++i; break;
             case KStmtKind::BufferAtomicAddFetch: case KStmtKind::BufferAtomicExchange:
                 decl(decl, st.index); decl(decl, st.value); ++i; break;
             case KStmtKind::Materialize: decl(decl, st.value); ++i; break;
@@ -278,6 +290,7 @@ inline bool emit_compute_kernel_cuda(const KGraph& g, const KEntry& entry, crd::
             default: ++i; break;
             }
         }
+        in_hoist = previous_hoist;
     };
     const auto emit_body = [&](auto&& self_b, int begin, int count) -> void {
         int i = begin;
@@ -293,7 +306,7 @@ inline bool emit_compute_kernel_cuda(const KGraph& g, const KEntry& entry, crd::
                 decl(decl, st.value);
                 if (matd[static_cast<crd::usize>(st.value)] == 0U)
                 {
-                    s.append("  "); s.append(cty(g.node(st.value).dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(st.value)); s.append(" = ");
+                    s.append("  "); s.append(value_type(g.node(st.value).dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(st.value)); s.append(" = ");
                     ev(ev, st.value); s.append(";\n");
                     matd[static_cast<crd::usize>(st.value)] = 1U;
                 }

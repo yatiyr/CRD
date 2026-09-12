@@ -13,4 +13,4 @@ target_link_libraries(crd-perf-ui-tests PRIVATE
 
 crd_enable_default_pch(crd-perf-ui-tests)
 
-catch_discover_tests(crd-perf-ui-tests)
+crd_discover_tests(crd-perf-ui-tests)

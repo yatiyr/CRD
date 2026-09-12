@@ -14,4 +14,4 @@ target_link_libraries(crd-ceir-host-tests PRIVATE
 )
 
 crd_enable_default_pch(crd-ceir-host-tests)
-catch_discover_tests(crd-ceir-host-tests)
+crd_discover_tests(crd-ceir-host-tests)

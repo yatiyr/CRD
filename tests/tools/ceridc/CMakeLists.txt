@@ -20,6 +20,6 @@ endif()
 
 crd_enable_default_pch(crd-ceridc-tests)
 
-catch_discover_tests(crd-ceridc-tests
+crd_discover_tests(crd-ceridc-tests
     PROPERTIES ENVIRONMENT "CRD_CERIDC_EXE=$<TARGET_FILE:ceridc>"
 )

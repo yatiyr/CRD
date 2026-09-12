@@ -13,4 +13,4 @@ target_link_libraries(crd-meshgen-tests PRIVATE
 
 crd_enable_default_pch(crd-meshgen-tests)
 
-catch_discover_tests(crd-meshgen-tests)
+crd_discover_tests(crd-meshgen-tests)

@@ -14,4 +14,4 @@ target_link_libraries(crd-profile-tests PRIVATE
 
 crd_enable_default_pch(crd-profile-tests)
 
-catch_discover_tests(crd-profile-tests)
+crd_discover_tests(crd-profile-tests)

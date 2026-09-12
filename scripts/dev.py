@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Explain affected Cerid targets/tests without building or changing source/project state."""
+"""Cerid developer diagnostics and conservative affected-build planning."""
 from pathlib import Path
 import argparse
 import json
-import shutil
 import subprocess
 import sys
 
 from cerid_dev.selection import (SelectionError, buildable_targets, changes_from_git, content_identity, load_model, relative_name,
-                                 run_json, select_targets, select_tests)
+                                 select_targets)
+from cerid_dev.evidence import EvidenceError
+from project_sync.storage import Conflict
 
 
 def parser():
@@ -22,6 +23,28 @@ def parser():
     command.add_argument('--head', help='Actual CI checkout commit; must accompany --base')
     command.add_argument('--path', action='append', default=[], help='Explicit diagnostic scenario; not whole-tree coverage')
     command.add_argument('--full', action='store_true', help='Explain the full CI requirement; never execute it locally')
+    command.add_argument('--json', action='store_true')
+    command = commands.add_parser('check', help='Bounded focused local verification; never a whole-repository sweep')
+    command.add_argument('--build', type=Path, required=True)
+    command.add_argument('--config')
+    command.add_argument('--base')
+    command.add_argument('--head')
+    command.add_argument('--path', action='append', default=[], help='Explicit diagnostic paths, not whole-tree coverage')
+    command.add_argument('--target', action='append', default=[], help='Exact CMake target for a diagnostic subset')
+    command.add_argument('--full', action='store_true', help='Retain full CI requirement; execution needs explicit targets')
+    command.add_argument('--jobs', type=int, default=2)
+    command.add_argument('--build-timeout', type=float, default=900)
+    command.add_argument('--discovery-timeout', type=float, default=120)
+    command.add_argument('--test-timeout', type=float, default=180)
+    command.add_argument('--dry-run', action='store_true')
+    command.add_argument('--json', action='store_true')
+    command = commands.add_parser('doctor', help='Read-only toolchain, presets, runtime and synchronization diagnosis')
+    command.add_argument('--build', type=Path, required=True)
+    command.add_argument('--config')
+    command.add_argument('--inherit-env', action='store_true', help='Inspect the caller environment without vcvars setup')
+    command.add_argument('--json', action='store_true')
+    command = commands.add_parser('evidence', help='Verify and read a sealed local result without rerunning commands')
+    command.add_argument('--run', type=Path, required=True)
     command.add_argument('--json', action='store_true')
     return result
 
@@ -50,27 +73,13 @@ def make_plan(args):
                       'model_diagnostic': model_error, 'tests': [], 'test_discovery': 'not required',
                       'qualification': 'plan only; no checks executed'})
     if model and selection['scope'] != 'documentation':
-        ctest = model['cmake'].get('paths', {}).get('ctest') or shutil.which('ctest')
-        if not ctest:
-            selection['test_discovery'] = 'unavailable: CTest executable not found'
-        else:
-            command = [ctest, '--test-dir', str(build), '--show-only=json-v1']
-            if selection['configuration']:
-                command += ['-C', selection['configuration']]
-            selection['discovery_command'] = command
-            try:
-                inventory = run_json(command, root)
-                selection['tests'] = select_tests(inventory, model, selection['targets'], selection['scope'] == 'full')
-                selection['targets'] = sorted(set(selection['targets']) | {
-                    target for test in selection['tests'] for target in test['targets']})
-                selection['test_discovery'] = 'available'
-                selection['inventory_count'] = len(inventory['tests'])
-            except (SelectionError, OSError) as error:
-                selection['test_discovery'] = 'unavailable: ' + str(error)
-        if selection['test_discovery'].startswith('unavailable:'):
-            selection['reasons'].append(selection['test_discovery'])
-            selection['scope'] = 'full'
-            selection['targets'] = sorted(model['targets'])
+        # PRE_TEST can execute list-discovery programs and refresh files. Keep plan/dry-run read-only;
+        # check performs contained post-build discovery, then validates fixture ownership before execution.
+        selection['test_discovery'] = 'pending check: build, then contained CTest discovery and fixture expansion'
+        ctest = model['cmake'].get('paths', {}).get('ctest') or 'ctest'
+        selection['discovery_command'] = [ctest, '--test-dir', str(build), '--show-only=json-v1']
+        if selection['configuration']:
+            selection['discovery_command'] += ['-C', selection['configuration']]
     elif selection['scope'] != 'documentation':
         selection['test_discovery'] = 'unavailable: configure model first'
     selection['selected_test_count'] = len(selection['tests'])
@@ -83,6 +92,50 @@ def make_plan(args):
 def main(arguments=None):
     args = parser().parse_args(arguments)
     try:
+        if args.command == 'check':
+            from cerid_dev.check import check
+            report = check(args, make_plan)
+            if args.json:
+                print(json.dumps(report, indent=2))
+            else:
+                print(f"Check: {report['status']}; {report['qualification']}")
+                if report.get('error'):
+                    print(report['error'])
+                if report.get('evidence_directory'):
+                    print('Evidence: ' + report['evidence_directory'])
+                if report.get('plan'):
+                    print(json.dumps(report['plan'], indent=2))
+            return report['exit_code']
+        if args.command == 'evidence':
+            from cerid_dev.evidence import inspect
+            report = inspect(args.run)
+            if args.json:
+                print(json.dumps(report, indent=2))
+            else:
+                print(f"Integrity: {report['integrity']}; {report['artifact_count']} artifacts")
+                print(json.dumps(report['record'], indent=2))
+                print(report['qualification'])
+            return 0
+        if args.command == 'doctor':
+            from cerid_dev.environment import doctor
+            root = args.root.resolve(strict=True)
+            build = (args.build if args.build.is_absolute() else root / args.build).resolve()
+            report = doctor(root, build, args.config, not args.inherit_env)
+            if args.json:
+                print(json.dumps(report, indent=2))
+            else:
+                print(f"Host: {report['host']['system']} {report['host']['machine']}; "
+                      f"{report['generator']} / {report['configuration']}")
+                for name, value in report['tools'].items():
+                    print(f'{name}: {value or "unavailable"}')
+                print('Eligible presets: ' + ', '.join(report['eligible_configure_presets']))
+                print(f"Available RAM: {report['ram_bytes']['available']} bytes; "
+                      f"free build disk: {report['disk_bytes']['free']} bytes")
+                print('Environment: ' + report['environment_source'])
+                for issue in report['issues']:
+                    print('Needs attention: ' + issue)
+                print(report['qualification'])
+            return 0 if not report['issues'] else 2
         plan = make_plan(args)
         if args.json:
             print(json.dumps(plan, indent=2))
@@ -105,8 +158,12 @@ def main(arguments=None):
             if plan['scope'] == 'full':
                 print('Full scope belongs to CI. This command does not launch a local repository sweep.')
         return 0
-    except (SelectionError, OSError, UnicodeError, subprocess.TimeoutExpired) as error:
-        print('ERROR: ' + str(error), file=sys.stderr)
+    except (SelectionError, EvidenceError, Conflict, OSError, UnicodeError, subprocess.TimeoutExpired) as error:
+        if args.json:
+            print(json.dumps({'version': 1, 'kind': args.command, 'status': 'instrument_failure',
+                              'error': str(error), 'qualification': 'none'}))
+        else:
+            print('ERROR: ' + str(error), file=sys.stderr)
         return 2
 
 

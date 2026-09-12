@@ -7,9 +7,62 @@
 #include <cstring>
 
 #include <d3d12.h>
+#include <d3dkmthk.h>
 #include <dxgi1_4.h>
 #include <windows.h>
 #include <wrl/client.h>
+
+namespace
+{
+
+// Independent census of the native query, with its exact failure/cleanup statuses visible in the CI log.
+class KernelCensus
+{
+public:
+    explicit KernelCensus(LUID luid)
+    {
+        m_adapter.AdapterLuid = luid;
+        m_opened = D3DKMTOpenAdapterFromLuid(&m_adapter);
+        std::printf("DX12 census: kernel_open=0x%08lx\n", static_cast<unsigned long>(m_opened));
+    }
+
+    ~KernelCensus() noexcept
+    {
+        if (m_opened >= 0)
+        {
+            D3DKMT_CLOSEADAPTER request{};
+            request.hAdapter = m_adapter.hAdapter;
+            const NTSTATUS result = D3DKMTCloseAdapter(&request);
+            std::printf("DX12 census: kernel_close=0x%08lx\n", static_cast<unsigned long>(result));
+        }
+    }
+
+    KernelCensus(const KernelCensus&) = delete;
+    KernelCensus& operator=(const KernelCensus&) = delete;
+
+    [[nodiscard]] bool query(bool& software) const
+    {
+        if (m_opened < 0) { return false; }
+        D3DKMT_ADAPTERTYPE type{};
+        D3DKMT_QUERYADAPTERINFO request{};
+        request.hAdapter = m_adapter.hAdapter;
+        request.Type = KMTQAITYPE_ADAPTERTYPE;
+        request.pPrivateDriverData = &type;
+        request.PrivateDriverDataSize = sizeof(type);
+        const NTSTATUS result = D3DKMTQueryAdapterInfo(&request);
+        std::printf("DX12 census: kernel_query=0x%08lx flags=%08x software=%u render=%u\n",
+                    static_cast<unsigned long>(result), type.Value, type.SoftwareDevice, type.RenderSupported);
+        if (result < 0) { return false; }
+        software = type.SoftwareDevice != 0U;
+        return true;
+    }
+
+private:
+    D3DKMT_OPENADAPTERFROMLUID m_adapter{};
+    NTSTATUS m_opened = 0;
+};
+
+} // namespace
 
 int main()
 {
@@ -60,12 +113,18 @@ int main()
         return 1;
     }
     const bool software = (descriptor.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0U;
+    const KernelCensus kernel(luid);
+    bool kernel_software = false;
+    const bool kernel_available = kernel.query(kernel_software);
+    const auto engine_kind = crd::gpu::dx12_default_adapter_kind();
     const bool engine_software = crd::gpu::dx12_default_adapter_is_software();
     std::printf("DX12 census: adapter=\"%s\" engine_adapter=\"%s\" luid=%08lx:%08lx\n", name,
                 context->adapter_name(), static_cast<unsigned long>(luid.HighPart), luid.LowPart);
     std::printf("DX12 census: vendor=%04x device=%04x revision=%u flags=%u software=%d engine_software=%d nodes=%u\n",
                 descriptor.VendorId, descriptor.DeviceId, descriptor.Revision, descriptor.Flags,
                 static_cast<int>(software), static_cast<int>(engine_software), device->GetNodeCount());
+    std::printf("DX12 census: engine_kind=%u (0=unknown, 1=hardware, 2=software)\n",
+                static_cast<unsigned int>(engine_kind));
 
     // Query the package UMD version with IDXGIDevice, not an unsupported D3D12 interface GUID.
     LARGE_INTEGER driver{};
@@ -98,7 +157,10 @@ int main()
                 static_cast<unsigned int>(ray_tracing.RaytracingTier));
 
     // Unknown feature queries retain their HRESULT; zero-initialized values alone do not mean unsupported.
-    if (std::strcmp(name, context->adapter_name()) != 0 || software != engine_software)
+    const bool expected_software = kernel_available ? kernel_software : software;
+    if (std::strcmp(name, context->adapter_name()) != 0 || engine_kind == crd::gpu::Dx12AdapterKind::Unknown ||
+        expected_software != engine_software ||
+        (engine_kind == crd::gpu::Dx12AdapterKind::Software) != engine_software)
     {
         std::puts("DX12 census: the engine/default adapter identity or classification disagrees.");
         return 1;

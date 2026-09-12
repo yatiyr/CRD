@@ -21,4 +21,4 @@ target_link_libraries(crd-hesap-quadrature-tests PRIVATE
 
 crd_enable_default_pch(crd-hesap-quadrature-tests)
 
-catch_discover_tests(crd-hesap-quadrature-tests)
+crd_discover_tests(crd-hesap-quadrature-tests)

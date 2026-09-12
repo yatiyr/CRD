@@ -8,6 +8,7 @@
 // helpers + GlslKernel. Validated on real Apple silicon at Part C (GitHub Actions macOS). ADR-0098.
 
 #include <crd/kir/ckir.hpp>
+#include <crd/kir/ckir_kernel_order.hpp>
 #include <crd/kir/ckir_glsl.hpp> // GlslKernel + glsl_detail::{app_uint,app_flit,is_fusable}
 
 #include <crd/containers/array.hpp>
@@ -185,6 +186,9 @@ inline bool emit_compute_kernel_msl(const KGraph& g, const KEntry& entry, crd::m
     }
 
     bool                            ok = true;
+    const auto value_type = [&](DType dtype) -> const char* {
+        return dtype == DType::Bool ? "bool" : cty(dtype);
+    };
     crd::containers::Array<crd::u8> matd(scratch); // Materialized (frozen) nodes emit `t<node>`, not their inline expr
     matd.resize(static_cast<crd::usize>(n), 0);
     const auto ev = [&](auto&& self, int node) -> void {
@@ -264,7 +268,14 @@ inline bool emit_compute_kernel_msl(const KGraph& g, const KEntry& entry, crd::m
         default: return false;
         }
     };
+    emit_detail::KernelEmissionOrder order(g, scratch);
+    bool in_hoist = false;
+    crd::containers::Array<crd::u8> declseen(scratch);
+    declseen.resize(static_cast<crd::usize>(n), 0U);
     const auto decl = [&](auto&& self, int node) -> void {
+        if (declseen[static_cast<crd::usize>(node)] != 0U) { return; }
+        if (in_hoist && order.must_defer(node)) { return; }
+        declseen[static_cast<crd::usize>(node)] = 1U;
         const KNode& nd = g.node(node);
         if (nd.op == KOp::BufferLoad || nd.op == KOp::SharedLoad) { self(self, nd.b); return; } // resource leaf: only the index carries temps
         if (nd.a >= 0) { self(self, nd.a); }
@@ -272,13 +283,15 @@ inline bool emit_compute_kernel_msl(const KGraph& g, const KEntry& entry, crd::m
         if (nd.c >= 0) { self(self, nd.c); }
         if (!is_inline_op(nd.op) && matd[static_cast<crd::usize>(node)] == 0U)
         {
-            s.append("  "); s.append(cty(nd.dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(node)); s.append(" = ");
+            s.append("  "); s.append(value_type(nd.dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(node)); s.append(" = ");
             ev(ev, node); // matd[node] still 0 ⇒ one-level expr (children already materialized ⇒ temp refs)
             s.append(";\n");
             matd[static_cast<crd::usize>(node)] = 1U;
         }
     };
     const auto hoist_decls = [&](auto&& self_h, int begin, int count) -> void {
+        const bool previous_hoist = in_hoist;
+        in_hoist = true;
         int i = begin;
         while (i < begin + count)
         {
@@ -297,6 +310,7 @@ inline bool emit_compute_kernel_msl(const KGraph& g, const KEntry& entry, crd::m
             default: ++i; break;
             }
         }
+        in_hoist = previous_hoist;
     };
     const auto emit_body = [&](auto&& self_b, int begin, int count) -> void {
         int i = begin;
@@ -312,7 +326,7 @@ inline bool emit_compute_kernel_msl(const KGraph& g, const KEntry& entry, crd::m
                 decl(decl, st.value);
                 if (matd[static_cast<crd::usize>(st.value)] == 0U)
                 {
-                    s.append("  "); s.append(cty(g.node(st.value).dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(st.value)); s.append(" = ");
+                    s.append("  "); s.append(value_type(g.node(st.value).dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(st.value)); s.append(" = ");
                     ev(ev, st.value); s.append(";\n");
                     matd[static_cast<crd::usize>(st.value)] = 1U;
                 }

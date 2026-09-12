@@ -23,4 +23,4 @@ target_link_libraries(crd-geometry-delaunay-tests PRIVATE
 
 crd_enable_default_pch(crd-geometry-delaunay-tests)
 
-catch_discover_tests(crd-geometry-delaunay-tests)
+crd_discover_tests(crd-geometry-delaunay-tests)

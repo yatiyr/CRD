@@ -1,5 +1,5 @@
 include(CTest)
-include(Catch)
+include(CrdTestDiscovery)
 
 find_package(Python3 3.12 REQUIRED COMPONENTS Interpreter)
 add_test(NAME crd-repository-hygiene
@@ -8,6 +8,8 @@ add_test(NAME crd-master-plan
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-master-plan.py")
 add_test(NAME crd-repository-tools
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-repository-tools.py")
+add_test(NAME crd-developer-workflow
+    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-dev-workflow.py")
 add_test(NAME crd-project-structure-sync
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-project-sync.py")
 add_test(NAME crd-build-profiles
@@ -16,6 +18,7 @@ set_tests_properties(crd-repository-hygiene crd-master-plan crd-repository-tools
     PROPERTIES TIMEOUT 60 ENVIRONMENT "PYTHONUTF8=1")
 set_tests_properties(crd-project-structure-sync PROPERTIES TIMEOUT 90 ENVIRONMENT "PYTHONUTF8=1")
 set_tests_properties(crd-build-profiles PROPERTIES TIMEOUT 30 ENVIRONMENT "PYTHONUTF8=1")
+set_tests_properties(crd-developer-workflow PROPERTIES TIMEOUT 90 ENVIRONMENT "PYTHONUTF8=1")
 if(CMAKE_GENERATOR MATCHES "^Visual Studio")
     add_test(NAME crd-project-structure-native
         COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-project-sync-native.py"

@@ -1,4 +1,4 @@
-# Build and verification guide
+# Build and verification
 
 <!-- doc-role: rule -->
 > Current rule. Current work: [ROADMAP](ROADMAP.md); conduct: [AGENTS](../AGENTS.md).
@@ -14,8 +14,8 @@ Add local lanes only for a discriminating risk/failure. CI owns broader qualific
 [policy](sessions/2026-09-12-large-cpp-research-and-loop-plan.md) supersedes local multi-platform rituals; REPO.DEV.5
 owns tier scheduling. Preserve existing CI obligations until its replacement qualifies.
 
-Windows helpers initialize the toolchain; `build-target.bat` takes one target per call. Rebuild affected executables:
-siblings do not relink themselves. Cap concurrency and serialize heavy jobs; all-core load has destabilized this host.
+Check scope belongs to the [first unfinished slice](ROADMAP.md#strict-sequential-execution). Helpers initialize the
+toolchain; `build-target.bat` takes one target. Rebuild affected executables; cap concurrency and serialize heavy jobs.
 
 ```powershell
 $env:CMAKE_BUILD_PARALLEL_LEVEL = '2'
@@ -29,8 +29,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tidy-files.ps1 <chan
 if ($LASTEXITCODE -ne 0) { throw 'Tidy failed' }
 ```
 
-`python scripts/dev.py plan --build build/win-debug` explains scope without execution; [contract](design/developer-workflow.md).
-Configure only for changed inputs or stale builds. Require justified timeouts, nonzero CTest matches and guards.
+`dev.py doctor` diagnoses tools; `plan` explains scope. `check` qualification continues; `--dry-run` executes nothing.
+[Contract](design/developer-workflow.md).
+Configure for changed inputs or stale builds. Require timeouts, nonzero CTest matches and guards.
 
 | Change | Local check beyond the primary build/tests | CI obligation |
 |---|---|---|

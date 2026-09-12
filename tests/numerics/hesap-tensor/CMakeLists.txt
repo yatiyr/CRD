@@ -18,7 +18,7 @@ target_link_libraries(crd-hesap-tensor-tests PRIVATE
 
 crd_enable_default_pch(crd-hesap-tensor-tests)
 
-catch_discover_tests(crd-hesap-tensor-tests)
+crd_discover_tests(crd-hesap-tensor-tests)
 
 # --- v14-d permute gates (separate executable: keeps parallel work on the ---
 # --- main test target conflict-free)                                      ---
@@ -36,7 +36,7 @@ target_link_libraries(crd-hesap-tensor-permute-tests PRIVATE
 
 crd_enable_default_pch(crd-hesap-tensor-permute-tests)
 
-catch_discover_tests(crd-hesap-tensor-permute-tests)
+crd_discover_tests(crd-hesap-tensor-permute-tests)
 
 # --- v14-g hyper-optimizer gates (separate executable: keeps the large ---
 # --- planner suites out of the main target's compile time)             ---
@@ -56,7 +56,7 @@ target_link_libraries(crd-hesap-tensor-hyperopt-tests PRIVATE
 
 crd_enable_default_pch(crd-hesap-tensor-hyperopt-tests)
 
-catch_discover_tests(crd-hesap-tensor-hyperopt-tests)
+crd_discover_tests(crd-hesap-tensor-hyperopt-tests)
 
 # --- v14-l I/O gates (separate executable: links platform for filesystem) ---
 add_executable(crd-hesap-tensor-io-tests
@@ -77,7 +77,7 @@ target_link_libraries(crd-hesap-tensor-io-tests PRIVATE
 crd_enable_default_pch(crd-hesap-tensor-io-tests)
 
 # corpus path via test env: ctest working dirs differ from the repo root
-catch_discover_tests(crd-hesap-tensor-io-tests
+crd_discover_tests(crd-hesap-tensor-io-tests
     PROPERTIES ENVIRONMENT "CRD_IO_CORPUS=${CMAKE_CURRENT_SOURCE_DIR}/io_corpus"
 )
 
@@ -98,7 +98,7 @@ target_link_libraries(crd-hesap-tensor-tt-tests PRIVATE
 
 crd_enable_default_pch(crd-hesap-tensor-tt-tests)
 
-catch_discover_tests(crd-hesap-tensor-tt-tests)
+crd_discover_tests(crd-hesap-tensor-tt-tests)
 
 # --- v14-i sparse-tensor gates (separate executable; + the sparse-CP glue) ---
 add_executable(crd-hesap-tensor-sparse-tests
@@ -118,7 +118,7 @@ target_link_libraries(crd-hesap-tensor-sparse-tests PRIVATE
 
 crd_enable_default_pch(crd-hesap-tensor-sparse-tests)
 
-catch_discover_tests(crd-hesap-tensor-sparse-tests)
+crd_discover_tests(crd-hesap-tensor-sparse-tests)
 
 # --- v14-j decomposition gates (separate executable: links hesap-dense) ---
 add_executable(crd-hesap-tensor-decomp-tests
@@ -137,7 +137,7 @@ target_link_libraries(crd-hesap-tensor-decomp-tests PRIVATE
 
 crd_enable_default_pch(crd-hesap-tensor-decomp-tests)
 
-catch_discover_tests(crd-hesap-tensor-decomp-tests)
+crd_discover_tests(crd-hesap-tensor-decomp-tests)
 
 # --- v14-m NN-inference gates (separate executable: loads the safetensors ---
 # --- corpus via io.hpp => links platform)                                  ---
@@ -159,7 +159,7 @@ target_link_libraries(crd-hesap-tensor-nn-tests PRIVATE
 crd_enable_default_pch(crd-hesap-tensor-nn-tests)
 
 # corpus path via test env: ctest working dirs differ from the repo root
-catch_discover_tests(crd-hesap-tensor-nn-tests
+crd_discover_tests(crd-hesap-tensor-nn-tests
     PROPERTIES ENVIRONMENT "CRD_NN_CORPUS=${CMAKE_CURRENT_SOURCE_DIR}/nn_corpus"
 )
 
@@ -182,7 +182,7 @@ target_link_libraries(crd-hesap-tensor-cli-tests PRIVATE
 
 crd_enable_default_pch(crd-hesap-tensor-cli-tests)
 
-catch_discover_tests(crd-hesap-tensor-cli-tests)
+crd_discover_tests(crd-hesap-tensor-cli-tests)
 
 # --- v14-h batched-LA gates (separate executable: links hesap-dense + jobs) ---
 add_executable(crd-hesap-tensor-batched-tests
@@ -201,7 +201,7 @@ target_link_libraries(crd-hesap-tensor-batched-tests PRIVATE
 
 crd_enable_default_pch(crd-hesap-tensor-batched-tests)
 
-catch_discover_tests(crd-hesap-tensor-batched-tests)
+crd_discover_tests(crd-hesap-tensor-batched-tests)
 
 # --- v14-f einsum-execution gates (separate executable: einsum_exec.hpp is ---
 # --- header-only so only EXECUTING targets pay the hesap-dense link edge)  ---
@@ -222,4 +222,4 @@ target_link_libraries(crd-hesap-tensor-einsum-tests PRIVATE
 
 crd_enable_default_pch(crd-hesap-tensor-einsum-tests)
 
-catch_discover_tests(crd-hesap-tensor-einsum-tests)
+crd_discover_tests(crd-hesap-tensor-einsum-tests)

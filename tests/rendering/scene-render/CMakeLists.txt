@@ -51,7 +51,7 @@ endif()
 # [==[B]==], which set_tests_properties misparses so BOTH the 2nd var AND SKIP_RETURN_CODE are lost → RAF-10 skips and
 # the skip scores ***Failed). So: keep the ONE shipped-root var here (single-var ENVIRONMENT works + preserves the
 # skip-gate), and give RAF-10 its OWN app fixtures via a compiled path (CRD_RAF10_APP_ASSETS_DIR, env-overridable).
-catch_discover_tests(crd-scene-render-tests
+crd_discover_tests(crd-scene-render-tests
     PROPERTIES ENVIRONMENT "CRD_ASSETS_DIR=${CMAKE_SOURCE_DIR}/assets")
 # RAF-10's app_assets are this test's OWN fixtures (fixed source location) — a compiled path is robust + config-invariant;
 # the env var still wins if ctest/a dev sets it.

@@ -16,4 +16,4 @@ target_link_libraries(crd-eylem-viz-tests PRIVATE
 
 crd_enable_default_pch(crd-eylem-viz-tests)
 
-catch_discover_tests(crd-eylem-viz-tests)
+crd_discover_tests(crd-eylem-viz-tests)

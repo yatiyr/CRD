@@ -41,4 +41,4 @@ target_link_libraries(crd-hesap-autodiff-tests PRIVATE
 
 crd_enable_default_pch(crd-hesap-autodiff-tests)
 
-catch_discover_tests(crd-hesap-autodiff-tests)
+crd_discover_tests(crd-hesap-autodiff-tests)

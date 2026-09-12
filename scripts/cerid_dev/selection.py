@@ -174,6 +174,7 @@ def load_model(root, build, configuration=None):
             targets[target['name']] = {
                 'type': target['type'],
                 'directory': absolute(target['paths']['source'], root),
+                'binary_directory': absolute(target['paths']['build'], build),
                 'sources': {absolute(item['path'], root) for item in target.get('sources', [])},
                 'includes': {absolute(item['path'], root) for group in target.get('compileGroups', [])
                              for item in group.get('includes', [])},
@@ -275,13 +276,12 @@ def buildable_targets(targets, selected):
     return sorted(name for name in selected if targets[name]['type'] in kinds)
 
 
-def select_tests(inventory, model, target_names, full=False):
+def select_tests(inventory, model, target_names, full=False, allow_pending=False):
     if inventory.get('kind') != 'ctestInfo' or inventory.get('version', {}).get('major') != 1:
         raise SelectionError('Unsupported CTest JSON inventory')
     def normalized(path):
         return os.path.normcase(os.path.normpath(str(path)))
 
-    artifacts = {normalized(path) for name in target_names for path in model['targets'][name]['artifacts']}
     artifact_owners = defaultdict(set)
     for name, target in model['targets'].items():
         for path in target['artifacts']:
@@ -293,17 +293,56 @@ def select_tests(inventory, model, target_names, full=False):
             raise SelectionError(f'Duplicate CTest name: {name}')
         properties = {prop['name']: prop['value'] for prop in item.get('properties', [])}
         command = item.get('command', [])
-        if not command or name.endswith('_NOT_BUILT'):
-            raise SelectionError(f'CTest inventory is incomplete; build affected executables then rediscover: {name}')
+        labels = properties.get('LABELS', [])
+        pending = 'cerid.discovery.pending' in labels
+        if pending:
+            owners = [label.removeprefix('cerid.discovery.target=') for label in labels
+                      if label.startswith('cerid.discovery.target=')]
+            if len(owners) != 1 or owners[0] not in model['targets']:
+                raise SelectionError(f'Unbuilt CTest has no unique configured target owner: {name}')
+            owner = owners[0]
+            target = model['targets'][owner]
+            executables = [label.removeprefix('cerid.discovery.executable=') for label in labels
+                           if label.startswith('cerid.discovery.executable=')]
+            if (not name.startswith('cerid-pending-') or target['type'] != 'EXECUTABLE'
+                    or len(executables) != 1
+                    or normalized(executables[0]) not in {normalized(path) for path in target['artifacts']}
+                    or Path(executables[0]).exists()):
+                raise SelectionError(f'Unbuilt CTest annotation disagrees with the configured artifact: {name}')
+            tests[name] = {'properties': properties, 'targets': [owner], 'pending': True,
+                           'selected': full or owner in target_names, 'reason': 'unbuilt target artifact'}
+            continue
         cwd = Path(properties.get('WORKING_DIRECTORY', Path(model['index']).parents[4]))
         # Artifact arguments also cover CMake/environment/emulator wrappers around an executable.
         # Normalize text without stat/resolve on arbitrary Catch2 filter arguments (which may exceed path limits).
         invoked = {normalized(os.path.join(str(cwd), arg))
                    for arg in command if isinstance(arg, str) and not arg.startswith('-')}
-        bound = bool(invoked & artifact_owners.keys())
         target_owners = {owner for path in invoked for owner in artifact_owners.get(path, set())}
-        tests[name] = {'properties': properties, 'targets': sorted(target_owners),
-                       'selected': full or bool(invoked & artifacts) or not bound,
+        declared = {label.removeprefix('cerid.test.target=') for label in labels
+                    if label.startswith('cerid.test.target=')}
+        if any(owner not in model['targets'] or owner not in buildable_targets(model['targets'], [owner])
+               for owner in declared):
+            raise SelectionError(f'CTest declares an unknown/non-buildable owner: {name}')
+        direct = [label.removeprefix('cerid.test.executable=') for label in labels
+                  if label.startswith('cerid.test.executable=')]
+        if direct:
+            if len(direct) != 1 or len(declared) != 1:
+                raise SelectionError(f'Direct CTest requires one declared executable and target: {name}')
+            owner = next(iter(declared))
+            if (model['targets'][owner]['type'] != 'EXECUTABLE'
+                    or owner not in artifact_owners.get(normalized(direct[0]), set())
+                    or (command and normalized(direct[0]) not in invoked)):
+                raise SelectionError(f'Direct CTest annotation disagrees with the configured command/artifact: {name}')
+            if not Path(direct[0]).exists():
+                tests[name] = {'properties': properties, 'targets': [owner], 'pending': True,
+                               'selected': full or owner in target_names, 'reason': 'unbuilt direct executable'}
+                continue
+        if not command or '_NOT_BUILT' in name:
+            raise SelectionError(f'CTest inventory is incomplete; build affected executables then rediscover: {name}')
+        target_owners.update(declared)
+        bound = bool(target_owners)
+        tests[name] = {'properties': properties, 'targets': sorted(target_owners), 'pending': False,
+                       'selected': full or bool(target_owners & set(target_names)) or not bound,
                        'reason': 'full' if full else ('target artifact' if bound else 'global/unresolved guard')}
     chosen = {name for name, test in tests.items() if test['selected']}
     while True:
@@ -320,6 +359,10 @@ def select_tests(inventory, model, target_names, full=False):
         chosen = expanded
     if target_names and not any(set(tests[name]['targets']) & set(target_names) for name in chosen):
         raise SelectionError('Affected targets have no discovered tests; empty or guard-only runs cannot qualify them')
+    pending = sorted(name for name in chosen if tests[name]['pending'])
+    if pending and not allow_pending:
+        raise SelectionError('Selected CTests still need their executable build and fresh discovery: ' + ', '.join(pending))
     return [{'name': name, 'reason': tests[name]['reason'] if tests[name]['selected'] else 'fixture/dependency',
              'disabled': bool(tests[name]['properties'].get('DISABLED', False)),
+             'pending': tests[name]['pending'],
              'targets': tests[name]['targets'], 'properties': tests[name]['properties']} for name in sorted(chosen)]

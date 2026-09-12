@@ -18,4 +18,4 @@ target_link_libraries(crd-hesap-special-tests PRIVATE
 
 crd_enable_default_pch(crd-hesap-special-tests)
 
-catch_discover_tests(crd-hesap-special-tests)
+crd_discover_tests(crd-hesap-special-tests)

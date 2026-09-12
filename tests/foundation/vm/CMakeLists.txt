@@ -11,4 +11,4 @@ target_link_libraries(crd-vm-tests PRIVATE
 
 crd_enable_default_pch(crd-vm-tests)
 
-catch_discover_tests(crd-vm-tests)
+crd_discover_tests(crd-vm-tests)

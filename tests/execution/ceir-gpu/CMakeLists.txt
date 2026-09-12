@@ -27,4 +27,4 @@ target_link_libraries(crd-ceir-gpu-tests PRIVATE
 target_compile_definitions(crd-ceir-gpu-tests PRIVATE CRD_REPO_DIR="${CMAKE_SOURCE_DIR}")
 
 crd_enable_default_pch(crd-ceir-gpu-tests)
-catch_discover_tests(crd-ceir-gpu-tests)
+crd_discover_tests(crd-ceir-gpu-tests)

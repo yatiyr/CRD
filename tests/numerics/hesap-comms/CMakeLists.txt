@@ -20,4 +20,4 @@ target_link_libraries(crd-hesap-comms-tests PRIVATE
 
 crd_enable_default_pch(crd-hesap-comms-tests)
 
-catch_discover_tests(crd-hesap-comms-tests)
+crd_discover_tests(crd-hesap-comms-tests)

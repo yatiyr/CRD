@@ -42,4 +42,4 @@ target_link_libraries(crd-hesap-iterative-tests PRIVATE
 
 crd_enable_default_pch(crd-hesap-iterative-tests)
 
-catch_discover_tests(crd-hesap-iterative-tests)
+crd_discover_tests(crd-hesap-iterative-tests)

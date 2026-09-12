@@ -15,7 +15,7 @@ target_link_libraries(crd-render-graph-tests PRIVATE
 
 crd_enable_default_pch(crd-render-graph-tests)
 
-catch_discover_tests(crd-render-graph-tests)
+crd_discover_tests(crd-render-graph-tests)
 
 # RAF-7 live-GPU wiring: the frame graph executing on a real device via the command encoder (both backends).
 add_executable(crd-render-graph-gpu-tests
@@ -43,4 +43,4 @@ if(WIN32)
     target_link_libraries(crd-render-graph-gpu-tests PRIVATE crd-gpu-context-dx12)
 endif()
 
-catch_discover_tests(crd-render-graph-gpu-tests PROPERTIES RESOURCE_LOCK crd_gpu_device)
+crd_discover_tests(crd-render-graph-gpu-tests PROPERTIES RESOURCE_LOCK crd_gpu_device)

@@ -16,4 +16,4 @@ target_link_libraries(crd-hesap-ordering-tests PRIVATE
 
 crd_enable_default_pch(crd-hesap-ordering-tests)
 
-catch_discover_tests(crd-hesap-ordering-tests)
+crd_discover_tests(crd-hesap-ordering-tests)

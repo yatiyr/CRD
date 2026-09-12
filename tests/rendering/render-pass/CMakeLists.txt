@@ -13,4 +13,4 @@ target_link_libraries(crd-render-pass-tests PRIVATE
 
 crd_enable_default_pch(crd-render-pass-tests)
 
-catch_discover_tests(crd-render-pass-tests)
+crd_discover_tests(crd-render-pass-tests)

@@ -12,8 +12,11 @@ target_link_libraries(crd-gpu-context-cuda-tests PRIVATE
     crd-memory
     crd-gpu-context
     crd-gpu-context-cuda
+    crd-kir
     Catch2::Catch2WithMain
 )
+
+target_include_directories(crd-gpu-context-cuda-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../gpu-shared")
 
 crd_enable_default_pch(crd-gpu-context-cuda-tests)
 
@@ -24,8 +27,8 @@ crd_enable_default_pch(crd-gpu-context-cuda-tests)
 # checks stay ON, and the skip path never reaches our code. Windows debug+asan cover CUDA with the native driver (no
 # suppression). Mirrors tests/execution/ceir-gpu-cuda. See feedback_ctest_not_built_sentinel_axis_and_cuda_linux_asan_leak.
 if(UNIX)
-    catch_discover_tests(crd-gpu-context-cuda-tests DISCOVERY_MODE PRE_TEST
-        PROPERTIES RESOURCE_LOCK crd_gpu_device ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
+    crd_discover_tests(crd-gpu-context-cuda-tests DISCOVERY_MODE PRE_TEST
+        PROPERTIES RESOURCE_LOCK crd_gpu_device SKIP_RETURN_CODE 4 ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
 else()
-    catch_discover_tests(crd-gpu-context-cuda-tests DISCOVERY_MODE PRE_TEST PROPERTIES RESOURCE_LOCK crd_gpu_device)
+    crd_discover_tests(crd-gpu-context-cuda-tests DISCOVERY_MODE PRE_TEST PROPERTIES RESOURCE_LOCK crd_gpu_device SKIP_RETURN_CODE 4)
 endif()

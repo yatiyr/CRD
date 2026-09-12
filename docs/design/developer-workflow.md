@@ -25,17 +25,43 @@ generated inputs, stale/missing models and unavailable test discovery broaden th
 requirements belong to CI; the local frontend must not launch a whole-repository sweep automatically. An unavailable
 configuration remains unqualified. Narrow target selection cannot replace the full CI comparison gate.
 
-Use CTest JSON discovery, not human output. Rediscover after building because Catch2 inventories are generated at
-build time. Zero expected tests, missing executable commands, disabled/skipped tests and fixture expansion require
+Use CTest JSON discovery, not human output. Cerid's `crd_discover_tests` uses Catch PRE_TEST with configuration-specific
+inventories. Its pending annotations carry a validated target/artifact owner; object-consuming guards declare their
+owner with `cerid.test.target`. Preserve those guards for their affected targets. Rediscover after building.
+Zero expected tests, missing executable commands, disabled/skipped tests and fixture expansion require
 explicit accounting. Keep existing resource locks, timeouts, validation, precision and performance contracts.
+Direct CTest executable registrations use `crd_test_target` for CMake-owned artifact identity on fresh partial builds;
+missing commands without that proof remain errors. SIMD disassembly must preserve decoder failures. Insufficient native code permits
+an explicit CTest skip only for configured IPO; unsupported NEON checks remain unqualified, never green.
 
 ## Frontend and evidence
 
+Callable interfaces: `doctor`, `plan`, `check` and sealed `evidence` inspection. Full qualification remains owned by
+REPO.DEV.3b/3c; see [scoped execution evidence](../sessions/2026-09-12-scoped-check-and-native-discovery.md).
+
 `doctor` is read-only: actual tools, preset eligibility, cache/toolchain identity, runtime paths, disk/RAM and sync
-state. `plan` prints reasons, targets, tests/guards, risk lanes and exact commands as text or JSON. `check` executes
+state, including invalid empty native compiler defaults. `plan` prints reasons, targets, guards, risk lanes and pending
+discovery commands as text or JSON. It and `check --dry-run` never invoke PRE_TEST executables. `check` executes
 the reviewed scope with bounded jobs, real exit codes, dry-run support and no synchronization bypass. `evidence`
 records revision plus worktree content identity, model/configuration, commands, counts, durations and result files.
 Existing direct CMake/CTest helpers remain valid. Incomplete execution never becomes a successful qualification.
+
+Configure a new build with the canonical preset helper first. Check refreshes stale/missing File API replies through
+guarded configuration, retaining the existing toolchain. Local jobs are one/two; more than 32 selected targets requires
+a smaller explicitly diagnostic `--target` scope and CI. `--path`/`--target` never claim whole-tree coverage. It builds
+required fixture owners and requires exact selected/JUnit names and counts, with zero skipped/disabled requirements.
+Source/revision and model changes invalidate a run. Its OS-backed lock serializes checks; coordination with raw
+external builds and other hosts still requires qualification. Windows uses the existing LLVM-20 helper; portable
+strict-analysis execution retains REPO.DEV.3b.3. A Linux C++ check currently reports that gap rather than passing.
+
+Execution owns its process tree before starting native tools. Preserve native exits separately from supervisor
+cleanup; capture logs and stop descendants on explicit budget expiry/interruption. Unavailable containment is an
+instrument failure, not permission to launch an uncontained build. Seal each result without overwriting previous
+evidence; artifact integrity alone cannot establish runtime success or qualify a different revision/platform.
+
+Transient permission denial reading the atomic native-status publication permits a bounded read retry (one second
+inside the total command budget), never command re-execution. Record retries, preserve the native failure exit and
+keep persistent denial as instrument failure; [regression evidence](../sessions/2026-09-12-atomic-abuffer-emitter-repair.md#supervisor-status-read-repair).
 
 ## Verification
 

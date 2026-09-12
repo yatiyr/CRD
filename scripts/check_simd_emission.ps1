@@ -3,17 +3,18 @@
 # guards against regressions where /arch:AVX2 silently stops being passed
 # (e.g. CrdSimd.cmake refactor breaks the flag plumbing).
 #
-# Usage: check_simd_emission.ps1 -Obj <path> -Expect <avx2|sse2|neon|scalar>
+# Usage: check_simd_emission.ps1 -Obj <path> -Expect <avx2|sse2|neon|scalar> [-Ipo <0|1>]
 
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)] [string] $Obj,
-    [Parameter(Mandatory)] [ValidateSet('avx2', 'sse2', 'neon', 'scalar')] [string] $Expect
+    [Parameter(Mandatory)] [ValidateSet('avx2', 'sse2', 'neon', 'scalar')] [string] $Expect,
+    [ValidateSet('0', '1')] [string] $Ipo = '0'
 )
 
 $ErrorActionPreference = 'Stop'
 
-if (-not (Test-Path $Obj))
+if (-not (Test-Path -LiteralPath $Obj -PathType Leaf))
 {
     Write-Host "[check_simd_emission] FAIL: obj not found: $Obj"
     exit 2
@@ -22,7 +23,7 @@ if (-not (Test-Path $Obj))
 if ($Expect -eq 'neon')
 {
     Write-Host "[check_simd_emission] expect=neon - ARM disasm parity check not implemented; skipping"
-    exit 0
+    exit 77
 }
 
 $dumpbin = Get-Command dumpbin -ErrorAction SilentlyContinue
@@ -32,7 +33,25 @@ if (-not $dumpbin)
     exit 2
 }
 
-$disasm     = & dumpbin /disasm $Obj 2>&1
+$global:LASTEXITCODE = 0
+$savedPreference = $ErrorActionPreference
+try
+{
+    # Windows PowerShell otherwise throws on redirected native stderr before exposing the decoder exit code.
+    $ErrorActionPreference = 'Continue'
+    $disasm = & $dumpbin.Source /disasm $Obj 2>&1
+    $decoderExit = $LASTEXITCODE
+}
+finally
+{
+    $ErrorActionPreference = $savedPreference
+}
+if ($decoderExit -ne 0)
+{
+    Write-Host "[check_simd_emission] FAIL: dumpbin exited $decoderExit"
+    $disasm | Write-Host
+    exit 2
+}
 $instr_total = ($disasm | Select-String -Pattern '^[ \t]*[0-9A-F]{16}: [0-9A-F ]+\s+[a-z]' -AllMatches).Matches.Count
 $ymm_total  = ($disasm | Select-String -Pattern '\bymm\d+\b' -AllMatches).Matches.Count
 $ymm_fp     = ($disasm | Select-String -Pattern '\bv(add|sub|mul|div|sqrt|min|max)ps\s+ymm' -AllMatches).Matches.Count
@@ -43,14 +62,17 @@ Write-Host "[check_simd_emission] instr_total : $instr_total"
 Write-Host "[check_simd_emission] ymm_total   : $ymm_total"
 Write-Host "[check_simd_emission] ymm_fp_ops  : $ymm_fp"
 
-# LTCG (CMAKE_INTERPROCEDURAL_OPTIMIZATION=ON) emits IL-only objs; native
-# code only exists post-link. Detect by near-zero total instruction count
-# and skip — non-LTCG configs (win-debug / win-asan / win-clang-cl / scalar)
-# cover the same code path and catch the regression we care about.
+# Only the configured target can establish IPO. Empty output alone is not evidence of IL-only code.
+# Return CTest's explicit skip code for IPO; a non-IPO sibling still needs its own passing evidence.
 if ($instr_total -lt 100)
 {
-    Write-Host "[check_simd_emission] SKIP - obj appears IL-only (likely LTCG/IPO build); covered by non-LTCG configs"
-    exit 0
+    if ($Ipo -eq '1')
+    {
+        Write-Host "[check_simd_emission] SKIP - configured IPO object has insufficient native code; non-IPO proof required"
+        exit 77
+    }
+    Write-Host "[check_simd_emission] FAIL: insufficient disassembly in a configured non-IPO object"
+    exit 1
 }
 
 switch ($Expect)

@@ -16,4 +16,4 @@ target_link_libraries(crd-preset-tests PRIVATE
 
 crd_enable_default_pch(crd-preset-tests)
 
-catch_discover_tests(crd-preset-tests)
+crd_discover_tests(crd-preset-tests)

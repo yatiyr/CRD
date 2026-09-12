@@ -32,4 +32,4 @@ crd_enable_default_pch(crd-kir-cuda-tests)
 
 # PRE_TEST: enumerate at ctest time (not build time) — the exe needs the CUDA nvrtc DLL on PATH to start, which a
 # build-time discovery run doesn't have.
-catch_discover_tests(crd-kir-cuda-tests DISCOVERY_MODE PRE_TEST)
+crd_discover_tests(crd-kir-cuda-tests DISCOVERY_MODE PRE_TEST)

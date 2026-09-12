@@ -19,7 +19,7 @@ target_link_libraries(crd-math-tests PRIVATE
 
 crd_enable_default_pch(crd-math-tests)
 
-catch_discover_tests(crd-math-tests)
+crd_discover_tests(crd-math-tests)
 
 # ---- SIMD-emission regression check ---------------------------------------
 # Disassembles the test_simd.cpp obj and verifies the actual machine code
@@ -33,8 +33,26 @@ catch_discover_tests(crd-math-tests)
 # IL-only — those configs are guarded by the non-LTCG sibling configs
 # hitting the same code path.
 
-set(_simd_obj
-    "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/crd-math-tests.dir/test_simd.cpp${CMAKE_CXX_OUTPUT_EXTENSION}")
+# CMake supplies actual object paths for Ninja and native configurations; do not reconstruct generator internals.
+set(_simd_obj "$<FILTER:$<TARGET_OBJECTS:crd-math-tests>,INCLUDE,/test_simd(\\.cpp)?\\.(obj|o)$>")
+set(_simd_expect "${CRD_SIMD_LEVEL_RESOLVED}")
+set(_simd_ipo "$<BOOL:$<TARGET_PROPERTY:crd-math-tests,INTERPROCEDURAL_OPTIMIZATION>>")
+set(_simd_configs "${CMAKE_CONFIGURATION_TYPES};${CMAKE_BUILD_TYPE}")
+foreach(config IN LISTS _simd_configs)
+    string(TOUPPER "${config}" _upper)
+    get_property(_configured TARGET crd-math-tests PROPERTY INTERPROCEDURAL_OPTIMIZATION_${_upper} SET)
+    # Native profiles assign every per-config property after target creation; evaluate its final value at generation.
+    if(CRD_NATIVE_PROFILES OR _configured)
+        set(_simd_ipo "$<IF:$<CONFIG:${config}>,$<BOOL:$<TARGET_PROPERTY:crd-math-tests,INTERPROCEDURAL_OPTIMIZATION_${_upper}>>,${_simd_ipo}>")
+    endif()
+endforeach()
+if(CRD_NATIVE_PROFILES)
+    foreach(config IN LISTS CRD_NATIVE_CONFIGS)
+        if(CRD_PROFILE_${config}_CRD_SIMD_LEVEL MATCHES "^(scalar|sse2)$")
+            set(_simd_expect "$<IF:$<CONFIG:${config}>,${CRD_PROFILE_${config}_CRD_SIMD_LEVEL},${_simd_expect}>")
+        endif()
+    endforeach()
+endif()
 
 if(WIN32)
     add_test(
@@ -42,7 +60,8 @@ if(WIN32)
         COMMAND powershell -NoProfile -ExecutionPolicy Bypass
                 -File "${CMAKE_SOURCE_DIR}/scripts/check_simd_emission.ps1"
                 -Obj    "${_simd_obj}"
-                -Expect "${CRD_SIMD_LEVEL_RESOLVED}"
+                -Expect "${_simd_expect}"
+                -Ipo    "${_simd_ipo}"
     )
     add_test(
         NAME    crd-no-std-math-check
@@ -98,7 +117,8 @@ elseif(UNIX)
         NAME    crd-simd-emission-check
         COMMAND bash "${CMAKE_SOURCE_DIR}/scripts/check_simd_emission.sh"
                 --obj    "${_simd_obj}"
-                --expect "${CRD_SIMD_LEVEL_RESOLVED}"
+                --expect "${_simd_expect}"
+                --ipo    "${_simd_ipo}"
     )
     add_test(
         NAME    crd-no-std-math-check
@@ -145,4 +165,10 @@ elseif(UNIX)
         COMMAND bash "${CMAKE_SOURCE_DIR}/scripts/check_hesap_v13_no_exceptions.sh"
                 "${CMAKE_SOURCE_DIR}"
     )
+endif()
+
+if(TEST crd-simd-emission-check)
+    # This guard consumes this target's object code. Unrelated focused checks must not use an unbuilt/stale object.
+    set_tests_properties(crd-simd-emission-check PROPERTIES
+        LABELS "cerid.test.target=crd-math-tests" SKIP_RETURN_CODE 77)
 endif()

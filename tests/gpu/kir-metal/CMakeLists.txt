@@ -18,4 +18,4 @@ target_link_libraries(crd-kir-metal-tests PRIVATE
 
 crd_enable_default_pch(crd-kir-metal-tests)
 
-catch_discover_tests(crd-kir-metal-tests DISCOVERY_MODE PRE_TEST)
+crd_discover_tests(crd-kir-metal-tests DISCOVERY_MODE PRE_TEST)

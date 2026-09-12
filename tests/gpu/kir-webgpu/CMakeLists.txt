@@ -23,4 +23,4 @@ add_custom_command(TARGET crd-kir-webgpu-tests POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CRD_WGPU_DLL}" "$<TARGET_FILE_DIR:crd-kir-webgpu-tests>"
 )
 
-catch_discover_tests(crd-kir-webgpu-tests DISCOVERY_MODE PRE_TEST)
+crd_discover_tests(crd-kir-webgpu-tests DISCOVERY_MODE PRE_TEST)

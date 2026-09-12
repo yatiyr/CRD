@@ -97,7 +97,7 @@ target_compile_definitions(crd-ceir-tests PRIVATE CRD_REPO_DIR="${CMAKE_SOURCE_D
 
 crd_enable_default_pch(crd-ceir-tests)
 
-catch_discover_tests(crd-ceir-tests)
+crd_discover_tests(crd-ceir-tests)
 
 # CEIR-2: gate the op-definition generator (tools/ceir_opgen). The DRIFT test reruns `ceir_opgen.py --check` (the
 # committed generated C++ must be a byte-identical regen of the *.ceirop.toml); the VALIDATOR test runs the schema

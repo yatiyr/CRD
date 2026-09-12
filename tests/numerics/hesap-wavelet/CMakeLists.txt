@@ -20,4 +20,4 @@ target_link_libraries(crd-hesap-wavelet-tests PRIVATE
 
 crd_enable_default_pch(crd-hesap-wavelet-tests)
 
-catch_discover_tests(crd-hesap-wavelet-tests)
+crd_discover_tests(crd-hesap-wavelet-tests)

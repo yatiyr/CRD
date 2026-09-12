@@ -32,4 +32,4 @@ target_link_libraries(crd-perf-tests PRIVATE
 
 crd_enable_default_pch(crd-perf-tests)
 
-catch_discover_tests(crd-perf-tests)
+crd_discover_tests(crd-perf-tests)

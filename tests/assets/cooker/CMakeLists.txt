@@ -22,4 +22,4 @@ target_link_libraries(crd-cooker-tests PRIVATE
 
 crd_enable_default_pch(crd-cooker-tests)
 
-catch_discover_tests(crd-cooker-tests)
+crd_discover_tests(crd-cooker-tests)

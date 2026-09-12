@@ -19,4 +19,4 @@ target_link_libraries(crd-resources-tests PRIVATE
 
 crd_enable_default_pch(crd-resources-tests)
 
-catch_discover_tests(crd-resources-tests)
+crd_discover_tests(crd-resources-tests)

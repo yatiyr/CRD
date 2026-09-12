@@ -15,4 +15,4 @@ target_link_libraries(crd-scene-cooker-tests PRIVATE
 
 crd_enable_default_pch(crd-scene-cooker-tests)
 
-catch_discover_tests(crd-scene-cooker-tests)
+crd_discover_tests(crd-scene-cooker-tests)

@@ -71,6 +71,11 @@ generation inputs. Concurrent CMake and saved IDE changes still require reconcil
 
 ## Implementation and regression gates
 
+Catch discovery uses configuration-specific PRE_TEST inventories. Object-code guards consume CMake's actual
+TARGET_OBJECTS and the selected profile's ISA/IPO settings. The [scoped workflow contract](developer-workflow.md)
+and [native discovery/cache evidence](../sessions/2026-09-12-scoped-check-and-native-discovery.md) cover these checks,
+process-local runtime tools and rejection of empty compiler defaults in an existing native cache.
+
 [native_build_profiles.py](../../scripts/native_build_profiles.py) resolves first-parent-wins preset inheritance,
 validates the native subset and exports data to ignored build output. [CrdBuildProfiles](../../cmake/CrdBuildProfiles.cmake)
 handles flags, per-configuration headers/CRT/symbols and IPO exclusions. [CrdSimd](../../cmake/CrdSimd.cmake) gates ISA

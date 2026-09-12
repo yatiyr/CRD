@@ -15,4 +15,4 @@ target_link_libraries(crd-timeline-tests PRIVATE
 
 crd_enable_default_pch(crd-timeline-tests)
 
-catch_discover_tests(crd-timeline-tests)
+crd_discover_tests(crd-timeline-tests)

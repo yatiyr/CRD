@@ -58,4 +58,4 @@ target_link_libraries(crd-sandbox-showcase-tests PRIVATE
 # crd-jobs (root CMakeLists.txt §270).
 set_target_properties(crd-sandbox-showcase-tests PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
 
-catch_discover_tests(crd-sandbox-showcase-tests)
+crd_discover_tests(crd-sandbox-showcase-tests)

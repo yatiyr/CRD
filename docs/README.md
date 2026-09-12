@@ -37,16 +37,16 @@ python scripts/check-master-plan.py --memory stale_exe
 python scripts/check-master-plan.py
 ```
 
-Queries are read-only views of the Markdown table. They never create another status file. The validator checks
-all repository documentation links, master order/IDs/dependencies, evidence for completed work, current-pointer
-validity and orientation size budgets. Passing it establishes documentation structure, not engine correctness.
+Queries read the same table. The validator checks links, IDs/dependencies, completion evidence, size budgets and
+[strict order](ROADMAP.md#strict-sequential-execution): context is the first unfinished row; no later active or Done
+row is allowed. A blocked gate stops advancement. Passing establishes documentation structure, not engine correctness.
 
 ## Start a slice
 
 Read AGENTS → PRINCIPLES → SANITY → MEMORY index → context → the exact ROADMAP row. Open its detail/ADR and
 relevant source; read BUILDING/CODING before code. Name the purpose, inherited scope, prerequisites and evidence
-needed. A table summary never reduces its linked contract. Work under existing user authorization; surface real
-scope/design conflicts without inventing an approval. A query result is not authorization to start an autonomous loop.
+needed. Work only on the first unfinished row and finish its whole contract before the next. Existing authorization
+does not permit skipping a blocked row; a query cannot start a loop or accept a design decision.
 
 ## Track a bug or finding
 

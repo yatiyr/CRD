@@ -22,4 +22,4 @@ target_link_libraries(crd-units-tests PRIVATE
 
 crd_enable_default_pch(crd-units-tests)
 
-catch_discover_tests(crd-units-tests)
+crd_discover_tests(crd-units-tests)

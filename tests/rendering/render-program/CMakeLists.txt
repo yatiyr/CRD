@@ -13,4 +13,4 @@ target_link_libraries(crd-render-program-tests PRIVATE
 
 crd_enable_default_pch(crd-render-program-tests)
 
-catch_discover_tests(crd-render-program-tests)
+crd_discover_tests(crd-render-program-tests)

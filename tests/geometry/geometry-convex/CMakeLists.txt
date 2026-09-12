@@ -34,4 +34,4 @@ target_link_libraries(crd-geometry-convex-tests PRIVATE
 
 crd_enable_default_pch(crd-geometry-convex-tests)
 
-catch_discover_tests(crd-geometry-convex-tests)
+crd_discover_tests(crd-geometry-convex-tests)

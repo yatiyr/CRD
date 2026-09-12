@@ -9,6 +9,9 @@ point. The [inherited catalogue](rendering-ui-contracts.md) preserves the full r
 
 ## Purpose and sequence
 
+Execution obeys [strict master-row order](../ROADMAP.md#strict-sequential-execution). Finish each row's complete
+contract before the next; prerequisites and unavailable review/hardware/publication gates cannot be bypassed.
+
 Cerid is a modular application substrate for games, engineering, simulation, scientific computing and creative tools.
 CR-D007 is its first complete editor application. A later DAW, notebook host or CAD workbench assembles the same public
 modules; none requires a copy of the editor or a mandatory physics/3D dependency.

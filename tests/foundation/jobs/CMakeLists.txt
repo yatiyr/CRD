@@ -11,4 +11,4 @@ target_link_libraries(crd-jobs-tests PRIVATE
 
 crd_enable_default_pch(crd-jobs-tests)
 
-catch_discover_tests(crd-jobs-tests)
+crd_discover_tests(crd-jobs-tests)

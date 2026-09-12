@@ -22,5 +22,5 @@ target_compile_definitions(crd-draw-tests PRIVATE _CRT_SECURE_NO_WARNINGS)
 crd_enable_default_pch(crd-draw-tests)
 
 # REN-38-F7: the drift gate compares the embedded pack against the shipped assets
-catch_discover_tests(crd-draw-tests
+crd_discover_tests(crd-draw-tests
     PROPERTIES ENVIRONMENT "CRD_ASSETS_DIR=${CMAKE_SOURCE_DIR}/assets")

@@ -14,4 +14,4 @@ endif()
 
 crd_enable_default_pch(crd-app-tests)
 
-catch_discover_tests(crd-app-tests)
+crd_discover_tests(crd-app-tests)

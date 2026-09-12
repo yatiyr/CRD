@@ -5,6 +5,8 @@
 
 #include <crd/gpu/compute.hpp>
 #include <crd/gpu/cuda_compute_context.hpp>
+#include <crd/kir/ckir_cuda.hpp>
+#include <ckir_abuffer_test.hpp>
 
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
@@ -25,6 +27,42 @@ extern "C" __global__ void vecadd(const float* a, const float* b, float* out, un
 }
 )cuda";
 } // namespace
+
+TEST_CASE("CUDA atomic A-buffer snapshots preserve the exact composite", "[cuda][compute][gpu][oit]")
+{
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    auto context = g::create_cuda_compute_context(alloc);
+    REQUIRE(context != nullptr);
+    if (!context->valid()) { SKIP("CUDA device unavailable"); }
+    crd::kir::oit::AbufferConfig config;
+    config.width = 32U;
+    config.height = 32U;
+    config.layers = 4U;
+    config.local_size = 64U;
+    const auto scene = crd::gputest::make_oit_scene();
+    for (crd::usize index = 0; index < 3U; ++index) { config.bg[index] = scene.background[index]; }
+    const auto make_pipeline = [&](const crd::kir::KGraph& graph, const crd::kir::KEntry& entry, int bindings) {
+        crd::kir::GlslKernel kernel(&alloc);
+        REQUIRE(crd::kir::emit_compute_kernel_cuda(graph, entry, &alloc, kernel));
+        auto pipeline = context->create_pipeline_from_cuda(crd::containers::to_view(kernel.source),
+            crd::containers::StringView("ckir"), bindings, entry.local_size[0], 0U, false);
+        REQUIRE(pipeline != nullptr);
+        return pipeline;
+    };
+    crd::containers::Array<float> actual(&alloc);
+    crd::containers::Array<crd::f64> expected(&alloc);
+    crd::kir_test::abuffer_atomic_dispatch(*context, make_pipeline, config, scene, alloc, actual);
+    crd::kir_test::abuffer_oracle(config, scene, alloc, expected);
+    REQUIRE(actual.size() == 32U * 32U * 3U);
+    REQUIRE(actual.size() == expected.size());
+    bool exact = true;
+    for (crd::usize index = 0; index < actual.size(); ++index)
+    {
+        if (static_cast<crd::f64>(actual[index]) != expected[index]) { exact = false; }
+    }
+    CHECK(exact);
+    CHECK(actual[0] != scene.background[0]);
+}
 
 TEST_CASE("CUDA compute: vec-add through IComputeContext == CPU reference + last_gpu_ms > 0", "[cuda][compute][gpu]")
 {

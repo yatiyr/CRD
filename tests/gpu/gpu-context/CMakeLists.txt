@@ -11,7 +11,7 @@ target_link_libraries(crd-gpu-context-tests PRIVATE
 
 crd_enable_default_pch(crd-gpu-context-tests)
 
-catch_discover_tests(crd-gpu-context-tests)
+crd_discover_tests(crd-gpu-context-tests)
 
 # RAF-2b/2c: the canonical command ENCODER on real GPUs (both backends) + cross-backend + legacy-verb parity.
 # Separate target from the device-free structural gate above (this one links the backends + kir + gpu-shared).
@@ -39,4 +39,4 @@ if(WIN32) # the DX12 backend exists only on Windows
 endif()
 
 # GPU-device tests share a RESOURCE_LOCK so the sweep never runs two real devices concurrently (driver contention).
-catch_discover_tests(crd-gpu-context-encoder-gpu-tests PROPERTIES RESOURCE_LOCK crd_gpu_device)
+crd_discover_tests(crd-gpu-context-encoder-gpu-tests PROPERTIES RESOURCE_LOCK crd_gpu_device)

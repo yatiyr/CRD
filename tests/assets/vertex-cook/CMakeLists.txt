@@ -16,4 +16,4 @@ target_link_libraries(crd-vertex-cook-tests PRIVATE
 
 crd_enable_default_pch(crd-vertex-cook-tests)
 
-catch_discover_tests(crd-vertex-cook-tests)
+crd_discover_tests(crd-vertex-cook-tests)

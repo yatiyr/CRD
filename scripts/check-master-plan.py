@@ -147,6 +147,29 @@ def show_rows(rows):
         print(f'{cells[0]} {name} [{cells[2]}]\n  {cells[3]}\n  Requires: {cells[4]}\n  Sources: {cells[5]}\n')
 
 
+def first_unfinished(rows):
+    return next(((name, cells) for name, cells in rows if cells[2] not in COMPLETE), None)
+
+
+def sequence_errors(rows, current_ids):
+    """One sequential acceptance boundary; explicit dependencies never authorize bypassing it."""
+    first = first_unfinished(rows)
+    if first is None:
+        return ['Completed table must not retain a current-slice pointer'] if current_ids else []
+    errors = []
+    if current_ids != [first[0]]:
+        errors.append(f'Context must point exactly once to first unfinished row {first[0]}')
+    unfinished_seen = False
+    for name, cells in rows:
+        if cells[2] not in COMPLETE:
+            unfinished_seen = True
+        elif cells[2] == 'Done' and unfinished_seen:
+            errors.append(f'{name}: Done after unfinished {first[0]}; retain evidence as Partial until its turn')
+        if cells[2] == 'In progress' and name != first[0]:
+            errors.append(f'{name}: out-of-order In progress; only {first[0]} may be active')
+    return errors
+
+
 def query(args, rows):
     if args.memory:
         print('Reference lookup only: old state/schedules/grants defer to current AGENTS/context/ROADMAP.\n')
@@ -186,12 +209,16 @@ def query(args, rows):
         print(f'{len(selected)} matches; showing at most 30.')
         return 0 if selected else 1
     if args.next:
-        current = re.search(r'<!-- current-slice: ([^ ]+) -->', read(ROOT / 'context.md'))
-        print('Current context pointer: ' + (current[1] if current else 'MISSING'))
-        selected = [(key, value) for key, value in rows if value[2] not in COMPLETE][:1]
-        show_rows(selected)
-        print('First unfinished row in the default order; inspect its gate and user authorization before acting.')
-        return 0
+        current_ids = re.findall(r'<!-- current-slice: ([^\s]+) -->', read(ROOT / 'context.md'))
+        print('Current context pointer: ' + (', '.join(current_ids) or 'NONE'))
+        first = first_unfinished(rows)
+        show_rows([first] if first else [])
+        print('Strict order: finish this entire row before advancing. A blocked gate stops later work.'
+              if first else 'All rows are complete or historical records; no next work is authorized.')
+        errors = sequence_errors(rows, current_ids)
+        for error in errors:
+            print('ERROR: ' + error)
+        return 1 if errors else 0
     return None
 
 
@@ -283,11 +310,8 @@ def main():
     for archive in [snapshot['archive'], 'docs/archive/D-007-gpu-program-system.md']:
         if not (ROOT / archive).is_file():
             errors.append('Missing preserved source archive: ' + archive)
-    current = re.search(r'<!-- current-slice: ([^ ]+) -->', read(ROOT / 'context.md'))
-    if not current or current[1] not in index:
-        errors.append('Context must name one real current-slice ID')
-    elif rows[index[current[1]]][1][2] in COMPLETE:
-        errors.append('Context points to completed work; advance its pointer')
+    current_ids = re.findall(r'<!-- current-slice: ([^\s]+) -->', read(ROOT / 'context.md'))
+    errors.extend(sequence_errors(rows, current_ids))
     for name, limit in BUDGETS.items():
         if (ROOT / name).stat().st_size > limit:
             errors.append(f'Orientation budget exceeded: {name} > {limit} bytes')

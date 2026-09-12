@@ -25,6 +25,7 @@ target_link_libraries(crd-gpu-context-dx12
         dxgi
         dxguid
     PRIVATE
+        gdi32         # Selected-LUID kernel adapter classification, including BasicRender without the DXGI software flag.
         crd-core
         crd-memory
         crd-kir        # ADR-0103 / D-008 C4-b: create_program(KGraph, KEntry) emits HLSL via the crd-kir emitter (acyclic)

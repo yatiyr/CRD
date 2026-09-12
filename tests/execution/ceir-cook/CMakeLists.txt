@@ -17,4 +17,4 @@ target_link_libraries(crd-ceir-cook-tests PRIVATE
 )
 
 crd_enable_default_pch(crd-ceir-cook-tests)
-catch_discover_tests(crd-ceir-cook-tests)
+crd_discover_tests(crd-ceir-cook-tests)

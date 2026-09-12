@@ -35,4 +35,4 @@ target_link_libraries(crd-ceir-gpu-vulkan-tests PRIVATE
 target_compile_definitions(crd-ceir-gpu-vulkan-tests PRIVATE CRD_REPO_DIR="${CMAKE_SOURCE_DIR}")
 
 crd_enable_default_pch(crd-ceir-gpu-vulkan-tests)
-catch_discover_tests(crd-ceir-gpu-vulkan-tests PROPERTIES RESOURCE_LOCK crd_gpu_device)
+crd_discover_tests(crd-ceir-gpu-vulkan-tests PROPERTIES RESOURCE_LOCK crd_gpu_device)

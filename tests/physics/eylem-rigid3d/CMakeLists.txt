@@ -17,4 +17,4 @@ target_link_libraries(crd-eylem-rigid3d-tests PRIVATE
 
 crd_enable_default_pch(crd-eylem-rigid3d-tests)
 
-catch_discover_tests(crd-eylem-rigid3d-tests)
+crd_discover_tests(crd-eylem-rigid3d-tests)

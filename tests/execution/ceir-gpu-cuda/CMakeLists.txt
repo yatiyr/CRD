@@ -43,8 +43,8 @@ crd_enable_default_pch(crd-ceir-gpu-cuda-tests)
 # DEBUG run on the physical device (5/5, real GPU); Windows debug+asan cover CUDA with the native driver (no suppression
 # needed). ⛔ Do NOT broaden to skipping the target — the sentinel must stay so a CUDA-capable box still builds it.
 if(UNIX)
-    catch_discover_tests(crd-ceir-gpu-cuda-tests DISCOVERY_MODE PRE_TEST
+    crd_discover_tests(crd-ceir-gpu-cuda-tests DISCOVERY_MODE PRE_TEST
         PROPERTIES RESOURCE_LOCK crd_gpu_device ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
 else()
-    catch_discover_tests(crd-ceir-gpu-cuda-tests DISCOVERY_MODE PRE_TEST PROPERTIES RESOURCE_LOCK crd_gpu_device)
+    crd_discover_tests(crd-ceir-gpu-cuda-tests DISCOVERY_MODE PRE_TEST PROPERTIES RESOURCE_LOCK crd_gpu_device)
 endif()

@@ -18,4 +18,4 @@ target_link_libraries(crd-hesap-amg-tests PRIVATE
 
 crd_enable_default_pch(crd-hesap-amg-tests)
 
-catch_discover_tests(crd-hesap-amg-tests)
+crd_discover_tests(crd-hesap-amg-tests)

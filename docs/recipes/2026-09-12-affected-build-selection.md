@@ -14,9 +14,19 @@
 | `--path` | Repeatable diagnostic change scenario | All net tracked/untracked changes | Repository-relative files; cannot combine with CI revisions |
 | `--full` | Explain full qualification scope | False | Planning only; no automatic local sweep |
 | `--json` | Structured plan output | Human-readable text | Includes reasons, identity, targets and CTest properties |
+| Doctor `--inherit-env` | Diagnose the calling environment without vcvars capture | False | Read-only; missing tools remain reported |
+| Evidence `--run` | Directory of a sealed local result | Required | Existing envelope; reading never executes its commands |
+| Supervisor `timeout` | Explicit command execution budget, seconds | Required by caller | Finite and positive; fixture configure/build use 120 s, CTest uses 60 s |
+| Check `--target` | Repeatable explicit CMake target | Inferred affected targets | Diagnostic subset; only configured libraries/executables, at most 32 |
+| Check `--jobs` | Compile workers | 2 | 1 or 2; CTest uses one worker and retains resource locks |
+| Check `--build-timeout` | Configure/build/tidy budget, seconds | 900 | Finite and positive; exhaustion is not a hang diagnosis |
+| Check `--discovery-timeout` | Inventory-process budget, seconds | 120 | Finite and positive |
+| Check `--test-timeout` | Default per-test budget, seconds | 180 | Existing CTest TIMEOUT properties retain precedence |
+| Check `--dry-run` | Print plan without execution | False | No build, PRE_TEST discovery or evidence writes |
+| SIMD guard `-Ipo` / `--ipo` | Actual target IPO setting | `0` | `0` or `1`; only explicit IPO permits insufficient-code skip 77 |
 
 Paths/revisions/configurations are identifiers, not physical quantities. The planner has no timing or precision knob.
-Its discovery subprocesses are bounded; it does not execute test bodies or build targets.
+Plan is read-only. Check owns bounded discovery because PRE_TEST can execute programs and refresh generated files.
 
 ## Why a dependency graph is necessary
 
@@ -78,3 +88,100 @@ board. Full selector-versus-CI comparison and the executing frontend retain thei
 Code: [selection](../../scripts/cerid_dev/selection.py), [CLI](../../scripts/dev.py),
 [adversarial/real fixtures](../../scripts/test-dev-workflow.py). The existing synchronizer query writer is reused;
 the synchronizer remains the sole owner of structure transactions.
+
+## Owning execution and its evidence
+
+Killing only CMake can leave a compiler or test process alive. The [supervisor](../../scripts/cerid_dev/process.py)
+starts an isolated waiting Python process (`-I -S`), establishes containment, then grants permission to launch the
+native argument vector. The command runs without shell interpolation; spaces/metacharacters retain their literal
+argument meaning. Native exit and supervisor cleanup are separate results.
+
+Windows uses a [Job Object](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects) with
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, no breakaway flags and assignment before command startup. Cleanup queries the
+job's active-process count before returning. A failed assignment cannot fall through into native execution. Linux
+uses a new process group, keeps its leader unreaped until cleanup, and monitors the parent's pipe: owner death
+terminates the group. The native child result is written atomically before the supervisor waits for final cleanup.
+[Python subprocess](https://docs.python.org/3/library/subprocess.html) provides argument-vector execution and the
+session/pipe primitives; this deliberately targets ordinary build-tool descendants, not hostile processes.
+
+An explicit timeout records `budget_exhausted`, not an invented engine hang. Launch/containment/missing-status
+failures record `instrument_failure`. Preserve the original native exit even when it is nonzero; cleanup failure
+retains that outcome as context and prevents success. The tests exercise real descendants and parent death, plus
+real CMake/MSVC/GCC/CTest processes. Linux process-liveness evidence distinguishes killed zombies from executing
+children; the Windows-only assignment test remains explicitly not applicable on Linux.
+
+A transient access denial while reopening the atomically published native-status file need not mean the command
+failed. Retry only the read for at most one second within the overall command budget; retain retry/error metadata.
+Never execute the command again to recover missing status. Persistent denial is instrument failure with containment
+cleanup. Regressions use a command that writes once and exits 7, plus a persistent-denial case; the
+[observed repair](../sessions/2026-09-12-atomic-abuffer-emitter-repair.md#supervisor-status-read-repair) records both hosts.
+
+[Evidence envelopes](../../scripts/cerid_dev/evidence.py) hash process logs and metadata, reject path escapes and
+cannot be resealed over an existing result. Inspection checks missing/changed/extra files and the envelope hash.
+It preserves the recorded outcome: verified bytes can describe a failed run. This is local content integrity, not
+a signature, proof of broad test coverage or published-revision qualification. A partial write or owner death leaves
+incomplete evidence, which cannot pass inspection. The [check frontend](../../scripts/cerid_dev/check.py) binds inputs,
+selected/executed tests, JUnit, skips, guards and tidy into that envelope. Qualification remains in ROADMAP.
+
+Sort canonical relative POSIX names in both seal and inspection. Path-component ordering differs for directory
+`ctest/` and sibling file `ctest.xml`, and Windows Path ordering also folds case. Comparing these different orders
+can reject an unchanged artifact set. The regression uses shared prefixes and mixed case; it never rewrites outcomes.
+
+[Doctor diagnostics](../../scripts/cerid_dev/environment.py) use CMake's cached version to choose the matching compiler
+metadata, report absent tools as absent, and resolve DLLs as files rather than through executable PATHEXT rules.
+Its process-local Windows environment capture is never dumped into logs. Read-only doctor status does not claim
+that IDE buffers were inspected; execution must invoke the existing synchronization guard.
+
+[Execution evidence](../sessions/2026-09-12-developer-execution-foundation.md) records the qualified host tuples and
+tests. No performance improvement is claimed from these infrastructure changes.
+
+## Configuration-specific discovery and complete checks
+
+[Catch2's integration](https://github.com/catchorg/Catch2/blob/v3.7.1/extras/Catch.cmake) defaults to POST_BUILD,
+which shares a test-list path across native configurations. A reproduced Debug-after-Release query invoked Release.
+[The Cerid wrapper](../../cmake/CrdTestDiscovery.cmake) selects PRE_TEST, consumes Catch's actual include contribution,
+and generates a failing pending placeholder only while the exact configured executable is absent. Target, artifact
+and fixture properties are explicit metadata. The selector rejects unknown or contradictory annotations, builds
+selected pending owners, then rediscoveries must contain real executable commands. Unrelated pending targets do not
+force a repository build. List-valued properties are applied after Catch's TEST_LIST inclusion to avoid flattening.
+
+Direct `add_test` executables use [crd_test_target](../../cmake/CrdTestOwnership.cmake) after registration. It appends
+the target and generated executable path to labels without replacing commands or existing properties. Missing
+commands are pending only when the current model proves that exact absent artifact; built commands must agree with
+the declaration. Fixture/dependency closure still builds required owners. A real partial-build fixture leaves an
+unrelated direct test executable absent while the selected consumer completes discovery, CTest and evidence sealing.
+
+CTest's [index-file option](https://cmake.org/cmake/help/v3.25/manual/ctest.1.html#cmdoption-ctest-I) supports the CMake
+3.25 baseline. A singleton start/end range followed by explicit additional indices avoids the default all-tests range.
+The fresh inventory and selected names are saved; JUnit must report that exact set. A skipped/disabled requirement is
+incomplete, not passed. Guard tests consuming object code declare their build owner; CMake's
+[TARGET_OBJECTS](https://cmake.org/cmake/help/v3.25/manual/cmake-generator-expressions.7.html#genex:TARGET_OBJECTS)
+supplies paths for the selected generator/configuration instead of guessing Ninja/Visual Studio object directories.
+
+Doctor detects empty native compiler defaults before qualification: an existing cache with empty base C++ flags can
+lose exception-unwind and optimization settings even when a fresh generator is correct. Preserve a cache backup and
+reset only verified-invalid entries through guarded configuration; never erase arbitrary user toolchain settings.
+Source identity is measured around execution and the generated model must remain unchanged. The check lock is
+separate from the synchronizer writer lock so configure can acquire its own guard. A recorded lock-conflict snapshot
+may require a fresh authoritative state inspection; bypassing that guard is not a repair.
+For registered native builds, also ask the synchronization owner's `needs_generation` and pending-generation state.
+A readable File API reply alone does not prove its baseline finalized; route changed/unfinished projections through
+guarded configure before building, and refuse overlap with a live generation.
+
+[Scoped session](../sessions/2026-09-12-scoped-check-and-native-discovery.md) records fixture and real-consumer outcomes,
+including failures. Full portable analysis, external-build coordination and real-source qualification have explicit
+ROADMAP owners. Fixtures alone cannot establish those gates.
+
+Native generators may omit the compiler path from CMakeCache.txt while recording it in CMakeCXXCompiler.cmake.
+Read the matching generated metadata, initialize the process-local MSVC runtime tools, and report MSBuild rather
+than Ninja for a Visual Studio generator. MSBuild finding its compiler does not put dumpbin on CTest's PATH.
+
+Disassembler failures must retain a nonzero result; empty output cannot prove an LTO object. The SIMD guard receives
+the target's actual [configuration-specific IPO property](https://cmake.org/cmake/help/v3.25/prop_tgt/INTERPROCEDURAL_OPTIMIZATION_CONFIG.html).
+Only explicit IPO with insufficient native code, or the unimplemented NEON check, returns
+[CTest skip code 77](https://cmake.org/cmake/help/v3.25/prop_test/SKIP_RETURN_CODE.html). The scoped frontend counts that
+as incomplete. The non-IPO sibling requires actual passing evidence. Controlled decoder fixtures test failure,
+empty output, expected/missing YMM instructions and explicit skip reporting independently of compiler performance.
+Windows PowerShell can throw on redirected native stderr before the decoder exit is captured. Temporarily use
+Continue only around native invocation, capture its exit immediately, then restore the preference. The controlled
+batch decoder writes stderr and exits 9; both IPO settings must retain that diagnostic and report instrument failure.

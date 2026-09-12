@@ -33,6 +33,9 @@ are genuinely unresolved or an explicit design gate is still unaccepted. Never i
 
 ## Conduct — mandatory
 
+- **Strict slice order:** work only on ROADMAP's first unfinished row. Finish its entire contract before advancing.
+  A blocked gate stops advancement. Park later work; never skip/reorder rows to appear green. The
+  [sequence rule](docs/ROADMAP.md#strict-sequential-execution) binds every agent and loop.
 - Re-anchor to the task's purpose at every prompt. Never silently narrow a slice, drop an inherited requirement,
   weaken its tests or replace the requested quality bar with a smaller feature. Ask before a real scope reduction.
 - **Everything executable is an authorable asset.** Follow PRINCIPLES' exact form and deletion requirements.

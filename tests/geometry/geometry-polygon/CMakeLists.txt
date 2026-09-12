@@ -21,4 +21,4 @@ target_link_libraries(crd-geometry-polygon-tests PRIVATE
 
 crd_enable_default_pch(crd-geometry-polygon-tests)
 
-catch_discover_tests(crd-geometry-polygon-tests)
+crd_discover_tests(crd-geometry-polygon-tests)

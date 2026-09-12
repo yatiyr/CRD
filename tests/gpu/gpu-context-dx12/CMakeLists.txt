@@ -5,6 +5,7 @@ if(NOT TARGET crd-gpu-context-dx12)
 endif()
 
 add_executable(crd-gpu-context-dx12-tests
+    test_dx12_adapter.cpp
     test_dx12_compute.cpp
     test_dx12_frame_graph.cpp # REN-1 pt-2 (D-007 row 98): the DX12 frame graph — one submission + transient aliasing
     test_dx12_gsplat.cpp
@@ -12,6 +13,10 @@ add_executable(crd-gpu-context-dx12-tests
     test_dx12_rt.cpp
     ../gpu-shared/win32_test_window.cpp # RET-2: the isolated <windows.h> TU — a REAL window for the present gates
 )
+
+# Backend-private evidence policy; native Windows types remain outside every shared public interface.
+target_include_directories(crd-gpu-context-dx12-tests PRIVATE
+    "${PROJECT_SOURCE_DIR}/engine/gpu/gpu-context-dx12/src")
 
 target_link_libraries(crd-gpu-context-dx12-tests PRIVATE
     crd-frame-cook   # REN-36.2: the cooked frame-graph asset + its runtime
@@ -38,7 +43,7 @@ crd_enable_default_pch(crd-gpu-context-dx12-tests)
 # CEIR-18a-1: the repo root, so the shared cull gate loads assets/compute/scene_light_cull.ckir (the retired builder's asset).
 target_compile_definitions(crd-gpu-context-dx12-tests PRIVATE CRD_REPO_DIR="${CMAKE_SOURCE_DIR}")
 
-catch_discover_tests(crd-gpu-context-dx12-tests DISCOVERY_MODE PRE_TEST PROPERTIES RESOURCE_LOCK crd_gpu_device)
+crd_discover_tests(crd-gpu-context-dx12-tests DISCOVERY_MODE PRE_TEST PROPERTIES RESOURCE_LOCK crd_gpu_device)
 
 # ── CEIR-20c-1: the D3D12 Work Graphs device gate — ISOLATED in its OWN exe so the Work-Graphs-capable dxc it copies next
 #    to itself (lib_6_8 node attrs) does not change which dxcompiler.dll the other dx12 tests load (the advisor's isolation
@@ -67,10 +72,11 @@ if(_crd_wg_dxc_dirs)
     endforeach()
 endif()
 
-catch_discover_tests(crd-gpu-context-dx12-work-graph-tests DISCOVERY_MODE PRE_TEST PROPERTIES RESOURCE_LOCK crd_gpu_device)
+crd_discover_tests(crd-gpu-context-dx12-work-graph-tests DISCOVERY_MODE PRE_TEST PROPERTIES RESOURCE_LOCK crd_gpu_device)
 
 # A small independent probe keeps selected-device evidence in CI even when a later GPU case crashes.
 add_executable(crd-dx12-device-info device_info.cpp)
 target_link_libraries(crd-dx12-device-info PRIVATE crd-gpu-context-dx12 crd-memory)
 add_test(NAME crd-dx12-device-info COMMAND crd-dx12-device-info)
 set_tests_properties(crd-dx12-device-info PROPERTIES RESOURCE_LOCK crd_gpu_device TIMEOUT 30 SKIP_RETURN_CODE 77)
+crd_test_target(crd-dx12-device-info crd-dx12-device-info)

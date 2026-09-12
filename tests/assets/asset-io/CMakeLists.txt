@@ -39,6 +39,6 @@ set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/test_condition.cpp" PRO
 crd_enable_default_pch(crd-asset-io-tests)
 
 # fixture path via test env: ctest working dirs differ from the repo root (the io_corpus pattern)
-catch_discover_tests(crd-asset-io-tests
+crd_discover_tests(crd-asset-io-tests
     PROPERTIES ENVIRONMENT "CRD_ASSETIO_DATA=${CMAKE_CURRENT_SOURCE_DIR}/data"
 )

@@ -32,4 +32,4 @@ target_link_libraries(crd-hesap-sparse-tests PRIVATE
 
 crd_enable_default_pch(crd-hesap-sparse-tests)
 
-catch_discover_tests(crd-hesap-sparse-tests)
+crd_discover_tests(crd-hesap-sparse-tests)

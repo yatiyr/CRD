@@ -19,4 +19,4 @@ target_link_libraries(crd-geometry-viz-tests PRIVATE
 
 crd_enable_default_pch(crd-geometry-viz-tests)
 
-catch_discover_tests(crd-geometry-viz-tests)
+crd_discover_tests(crd-geometry-viz-tests)

@@ -22,7 +22,7 @@ using crd::containers::StringView;
     crd::u64 h = 1469598103934665603ULL; // FNV-1a
     for (crd::usize i = 0; i < s.size(); ++i)
     {
-        h ^= static_cast<crd::u8>(s.data()[i]);
+        h ^= static_cast<crd::u8>(s[i]);
         h *= 1099511628211ULL;
     }
     return h;
@@ -108,9 +108,18 @@ FrameCookError extract_work_desc(const FrameGraphDesc& desc, ceg::WorkBuildDesc&
 
         ceg::WorkStageDesc& st = out.stages[out.num_stages];
         st = ceg::WorkStageDesc{}; // default grid {1,1,1} (produce's serial fallback const grid)
-        st.kind = pass_is_work_produce(p)   ? ceg::WorkStageKind::Produce
-                  : pass_is_work_consume(p) ? ceg::WorkStageKind::Consume
-                                            : ceg::WorkStageKind::Compact;
+        if (pass_is_work_produce(p))
+        {
+            st.kind = ceg::WorkStageKind::Produce;
+        }
+        else if (pass_is_work_consume(p))
+        {
+            st.kind = ceg::WorkStageKind::Consume;
+        }
+        else
+        {
+            st.kind = ceg::WorkStageKind::Compact;
+        }
         st.kernel = pass_str(p, StringView(pp::kKernel)); // a StringView into `p` — `desc` must outlive `out`
 
         // ── identify the %queue(s) by CounterBuffer kind (the refined counter rule) + validate. ──

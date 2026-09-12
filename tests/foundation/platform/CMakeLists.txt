@@ -18,4 +18,4 @@ endif()
 
 crd_enable_default_pch(crd-platform-tests)
 
-catch_discover_tests(crd-platform-tests)
+crd_discover_tests(crd-platform-tests)

@@ -18,9 +18,10 @@ it cannot establish that arbitrary future code is bug-free or that untested hard
 
 Confirmed requirements are human-only commits/pushes, scoped local verification, continued cross-platform design,
 one roadmap and updated session/document evidence. The initial [REPO.DEV.1](../ROADMAP.md#slice-repo.dev.1) review subsequently approved tiered CI, existing hosted
-CI/workstation only, independent work while human publication waits, and a stop at repository closure before renderer
-review. The operational recommendations are the approved programme direction; unimplemented mechanisms remain
-proposals until their owning children qualify. The session records the explicit loop authorization.
+CI/workstation only and a stop at repository closure before renderer review. The initial independent-work permission
+was superseded by the user's [strict sequential order amendment](../ROADMAP.md#strict-sequential-execution): finish
+each row fully before the next, including publication/hardware gates. Unimplemented mechanisms remain proposals until
+their owning children qualify. The session records the original authorization; current sequencing lives in ROADMAP.
 
 ## Evidence boundary
 
@@ -99,6 +100,21 @@ The repository runner API returned zero registered self-hosted runners. This doe
 available to the project. Hosted software devices and this workstation cannot prove Intel/AMD/NVIDIA hardware
 coverage or native Linux desktop presentation. Hardware requirements need named resources and explicit owners.
 
+The later human-published `2ed89c4` census selected Microsoft Basic Render Driver (1414:008c), flags 0, driver
+10.0.26100.33296; the facade and independent default-device query agreed. Microsoft's
+[DirectStorage sample](https://github.com/microsoft/DirectStorage/blob/main/GDeflate/GDeflateDemo/main.cpp#L245-L266)
+explicitly handles this adapter with the software flag absent. Its
+[Basic Display/Render documentation](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/microsoft-basic-display-driver)
+identifies BasicRender as the kernel adapter exposing WARP. This establishes that the published flag-only classifier
+is insufficient for that documented case; it does not qualify altered precision thresholds or resolve a GPU crash.
+
+REPO.3c.4.a owns the selected-LUID query repair and explicit Unknown policy, now described in the
+[classification recipe](../recipes/2026-09-12-dx12-adapter-classification.md). REPO.3c.6 owns the independently
+reproduced atomic-resolve compiler expansion and [snapshot-ordering repair](../recipes/2026-09-12-kernel-snapshot-ordering.md).
+The [subsequent evidence](../sessions/2026-09-12-atomic-abuffer-emitter-repair.md) distinguishes actual local hardware/WARP
+dispatch from source emission and the exact hosted tuple. The [completed published census](../sessions/2026-09-12-dx12-adapter-classification.md#subsequent-qualification-and-completed-ci-census)
+records every lane, including the separate ASan failures. Live qualification remains solely in ROADMAP.
+
 ### Infrastructure observations
 
 | Observation at the inspected revision | Implication and owning work |
@@ -121,9 +137,11 @@ for dependency resolution. It describes the configured graph, not every conditio
 
 ### One short path for humans and agents
 
-`python scripts/dev.py plan` now provides read-only selection ([contract](../design/developer-workflow.md),
-[evidence](../sessions/2026-09-12-developer-selection.md)). `doctor`, `check` and `evidence` remain interface sketches
-until their owning rows qualify. Implement a thin Python frontend over the existing configure/build/CTest/tidy/synchronizer
+`python scripts/dev.py plan` provides read-only selection ([contract](../design/developer-workflow.md),
+[selection evidence](../sessions/2026-09-12-developer-selection.md)). `doctor` and sealed `evidence` inspection are also
+callable. `check` now composes build/discovery/JUnit/guards/evidence
+([scoped execution](../sessions/2026-09-12-scoped-check-and-native-discovery.md)); complete qualification remains in its
+owning rows. Implement a thin Python frontend over the existing configure/build/CTest/tidy/synchronizer
 helpers. Do not create a second build engine or separately authored module inventory. It must also work without an
 IDE, print exact underlying commands, support dry-run and machine-readable output, preserve exit codes, and let
 developers invoke CMake/CTest directly.
@@ -295,8 +313,9 @@ for provenance; that does not create a Git commit or publish changes. Human publ
 
 Every task is a child in the existing master table. The sequence is environment/tidy repairs, GPU diagnosis and
 repairs, fast local instructions, affected selection, module closure, CI tiers, dependency integrity, measured build
-speed, public consumers/instruments, documentation and exact-revision qualification. Work may continue on an
-independent child while another waits for hardware or publication; that gate remains open and visible.
+speed, public consumers/instruments, documentation and exact-revision qualification. The master table's Order column
+is binding: only its first unfinished row may receive work. Finish the whole contract before advancing. Publication,
+hardware and review gates stop advancement; later work/evidence is preserved and parked, not continued independently.
 
 The proposed unattended loop reads the current pointer and exact row, inspects workspace/synchronizer/CI state,
 performs one bounded increment, runs its scoped checks, writes evidence and updates affected docs. It re-anchors
@@ -305,9 +324,9 @@ never relax an oracle and never infer approval of ADR-0107/RAH-0. No purchases, 
 settings changes are inferred from a general quality goal. Avoid duplicate loops and overlapping writers.
 
 After initial decisions, routine implementation choices proceed without repeated questions. A new material boundary
-gets recorded; continue other authorized work. Quiet monitoring resumes CI inspection when the human publishes.
-An old revision's green result cannot qualify a changed working tree. If all remaining work requires publication,
-hardware or an explicit architectural decision, report that condition rather than manufacturing completion.
+gets recorded against the current row. Quiet monitoring resumes CI inspection when the human publishes.
+An old revision's green result cannot qualify a changed working tree. If the current row requires publication,
+hardware or an explicit decision, retain the gate and wait there; do not manufacture completion or skip to later work.
 
 Closure requires all current confirmed failures resolved with regressions; every selected supported preset assigned
 and exercised at its tier; selector safety tests and broad comparison; native configuration/synchronizer proofs;

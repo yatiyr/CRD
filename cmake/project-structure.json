@@ -9,6 +9,14 @@
       "groups": {
         "engine/numerics/hesap-fft/include/crd/hesap/fft/detail/codelet_policy.hpp": "include/crd/hesap/fft/detail"
       }
+    },
+    "crd-kir": {
+      "add": [
+        "engine/gpu/kir/include/crd/kir/ckir_kernel_order.hpp"
+      ],
+      "groups": {
+        "engine/gpu/kir/include/crd/kir/ckir_kernel_order.hpp": "include/crd/kir"
+      }
     }
   },
   "version": 1

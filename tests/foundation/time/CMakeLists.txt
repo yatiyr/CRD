@@ -18,4 +18,4 @@ target_link_libraries(crd-time-tests PRIVATE
 
 crd_enable_default_pch(crd-time-tests)
 
-catch_discover_tests(crd-time-tests)
+crd_discover_tests(crd-time-tests)

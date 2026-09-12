@@ -37,4 +37,4 @@ target_link_libraries(crd-hesap-dsp-tests PRIVATE
 
 crd_enable_default_pch(crd-hesap-dsp-tests)
 
-catch_discover_tests(crd-hesap-dsp-tests)
+crd_discover_tests(crd-hesap-dsp-tests)

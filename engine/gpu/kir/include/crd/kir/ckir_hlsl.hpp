@@ -8,6 +8,7 @@
 // Vulkan). Pure String production; the backend compiles + dispatches. Reuses the shared helpers + GlslKernel. ADR-0098.
 
 #include <crd/kir/ckir.hpp>
+#include <crd/kir/ckir_kernel_order.hpp>
 #include <crd/kir/ckir_glsl.hpp> // GlslKernel + glsl_detail::{app_uint,app_flit,is_fusable}
 
 #include <crd/containers/array.hpp>
@@ -301,59 +302,8 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
     // DAGs (B18-b Huang hung the emitter outright). Memoizing is behaviour-identical and makes emission linear.
     crd::containers::Array<crd::u8> declseen(scratch);
     declseen.resize(static_cast<crd::usize>(n), 0);
-    // ⛔⛔ READ-AFTER-WRITE ORDERING (the B18-e hair-filter scar) — see ckir_glsl.hpp for the full rationale. A node that
-    // consumes a value the author MATERIALIZED after a loop must NOT be hoisted: hoisting inlines the raw buffer read ABOVE
-    // the loop and reads the pre-loop zeros. `materialized` marks frozen nodes, `consumes_mat` their transitive consumers,
-    // and `in_hoist` makes `decl` DEFER those to their in-order statement point.
-    crd::containers::Array<crd::u8> materialized(scratch);
-    materialized.resize(static_cast<crd::usize>(n), 0);
-    crd::containers::Array<crd::u8> written_buf(scratch);
-    written_buf.resize(static_cast<crd::usize>(n), 0);
-    for (int si = 0; si < g.stmt_count(); ++si)
-    {
-        const KStmt& mst = g.stmt(si);
-        if (mst.kind == KStmtKind::Materialize && mst.value >= 0) { materialized[static_cast<crd::usize>(mst.value)] = 1U; }
-        // ⛔ RT-1: a value-returning statement (inline ray query / value-returning atomic) materialises its result at its
-        // in-order point (no pure rhs form) — mark it so a guarded store's `decl(result)` DEFERS instead of emitting it
-        // as an expression (ok=false). See ckir_glsl.hpp for the full rationale.
-        if ((mst.kind == KStmtKind::TraceRayClosest || mst.kind == KStmtKind::TraceRayHit
-             || mst.kind == KStmtKind::BufferAtomicAddFetch || mst.kind == KStmtKind::BufferAtomicExchange)
-            && mst.result >= 0)
-        {
-            materialized[static_cast<crd::usize>(mst.result)] = 1U;
-        }
-        if ((mst.kind == KStmtKind::BufferStore || mst.kind == KStmtKind::SharedStore
-             || mst.kind == KStmtKind::BufferAtomicAdd || mst.kind == KStmtKind::BufferAtomicMin
-             || mst.kind == KStmtKind::BufferAtomicAddFetch || mst.kind == KStmtKind::BufferAtomicExchange
-             || mst.kind == KStmtKind::SharedAtomicAdd)
-            && mst.target >= 0)
-        {
-            written_buf[static_cast<crd::usize>(mst.target)] = 1U;
-        }
-    }
-    crd::containers::Array<crd::i8> mat_memo(scratch);
-    mat_memo.resize(static_cast<crd::usize>(n), -1);
+    emit_detail::KernelEmissionOrder order(g, scratch);
     bool in_hoist = false;
-    // must_defer: (1) a materialized value (explicit freeze / value-returning statement result) OR (2) ⛔⛔ a load of a
-    // buffer/shared array WRITTEN in this kernel (read-after-write sensitive) — must emit at its in-order point, never
-    // hoisted above the producing loop/stores (the B18-e / IB-1 zero-output scars). See ckir_glsl.hpp.
-    const auto must_defer = [&](auto&& self, int node) -> bool {
-        if (node < 0) { return false; }
-        if (mat_memo[static_cast<crd::usize>(node)] >= 0) { return mat_memo[static_cast<crd::usize>(node)] != 0; }
-        const KNode& nd = g.node(node);
-        bool         r  = materialized[static_cast<crd::usize>(node)] != 0U;
-        if (!r && (nd.op == KOp::BufferLoad || nd.op == KOp::SharedLoad) && nd.a >= 0
-            && written_buf[static_cast<crd::usize>(nd.a)] != 0U)
-        {
-            r = true;
-        }
-        if (!r && nd.a >= 0) { r = self(self, nd.a); }
-        if (!r && nd.b >= 0) { r = self(self, nd.b); }
-        if (!r && nd.c >= 0) { r = self(self, nd.c); }
-        if (!r && nd.d >= 0) { r = self(self, nd.d); }
-        mat_memo[static_cast<crd::usize>(node)] = r ? static_cast<crd::i8>(1) : static_cast<crd::i8>(0);
-        return r;
-    };
     const auto is_inline_op = [](KOp op) -> bool {
         switch (op)
         {
@@ -559,7 +509,7 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
     const auto decl = [&](auto&& self, int node) -> void {
         if (declseen[static_cast<crd::usize>(node)] != 0U) { return; } // DAG memo — see declseen above
         // ⛔⛔ B18-e: during the hoist pre-pass, DEFER a node that consumes a materialized value to its in-order emission.
-        if (in_hoist && must_defer(must_defer, node)) { return; }
+        if (in_hoist && order.must_defer(node)) { return; }
         declseen[static_cast<crd::usize>(node)] = 1U;
         const KNode& nd = g.node(node);
         if (nd.op == KOp::BufferLoad || nd.op == KOp::SharedLoad) { self(self, nd.b); return; } // resource leaf: only the index carries temps
@@ -806,9 +756,9 @@ inline bool emit_work_graph_node_hlsl(const KGraph& g, const KEntry& entry, Work
     crd::containers::String cs(scratch);
     cs.append(out.source.data(), out.source.size()); // move aside; rebuild out.source in place
     const char* const d = cs.data();
-    const crd::usize  N = cs.size();
+    const crd::usize  source_size = cs.size();
     const auto        find_fwd = [&](const char* pat, crd::usize patn, crd::usize from) -> crd::usize {
-        for (crd::usize i = from; i + patn <= N; ++i)
+        for (crd::usize i = from; i + patn <= source_size; ++i)
         {
             bool m = true;
             for (crd::usize j = 0; j < patn; ++j)
@@ -817,15 +767,15 @@ inline bool emit_work_graph_node_hlsl(const KGraph& g, const KEntry& entry, Work
             }
             if (m) { return i; }
         }
-        return N;
+        return source_size;
     };
     const crd::usize cut1 = find_fwd("void cs_main(", 13U, 0U); // the compute entry
-    if (cut1 == N) { return false; }
+    if (cut1 == source_size) { return false; }
     crd::usize cut0 = cut1; // back up to the "[numthreads(" that precedes cs_main
     for (crd::usize i = cut1; i > 0;)
     {
         --i;
-        if (i + 12U <= N)
+        if (i + 12U <= source_size)
         {
             bool m = true;
             for (crd::usize j = 0; j < 12U; ++j)
@@ -840,8 +790,8 @@ inline bool emit_work_graph_node_hlsl(const KGraph& g, const KEntry& entry, Work
         }
     }
     if (cut0 == cut1) { return false; }
-    crd::usize cut2 = N; // the first "{\n" after cs_main( — the body start
-    for (crd::usize i = cut1; i + 2U <= N; ++i)
+    crd::usize cut2 = source_size; // the first "{\n" after cs_main( — the body start
+    for (crd::usize i = cut1; i + 2U <= source_size; ++i)
     {
         if (d[i] == '{' && d[i + 1] == '\n')
         {
@@ -849,8 +799,8 @@ inline bool emit_work_graph_node_hlsl(const KGraph& g, const KEntry& entry, Work
             break;
         }
     }
-    if (cut2 == N || N < 2U || d[N - 2U] != '}') { return false; } // source ends with the cs_main "}\n"
-    const crd::usize body_end = N - 2U;
+    if (cut2 == source_size || source_size < 2U || d[source_size - 2U] != '}') { return false; } // source ends with the cs_main "}\n"
+    const crd::usize body_end = source_size - 2U;
 
     crd::containers::String& s = out.source;
     s.clear();
@@ -956,20 +906,20 @@ inline bool emit_work_graph_library_hlsl(const WorkGraphNodeDesc* nodes, crd::u3
             return false;
         }
         const char*                       d = nk.source.data();
-        const crd::usize                  N = nk.source.size();
+        const crd::usize                  source_size = nk.source.size();
         const crd::containers::StringView needle("[Shader(\"node\")]");
-        crd::usize                        pos = N;
-        for (crd::usize i = 0; i + needle.size() <= N; ++i)
+        crd::usize                        pos = source_size;
+        for (crd::usize i = 0; i + needle.size() <= source_size; ++i)
         {
             bool m = true;
             for (crd::usize j = 0; j < needle.size(); ++j)
             {
-                if (d[i + j] != needle.data()[j]) { m = false; break; }
+                if (d[i + j] != needle[j]) { m = false; break; }
             }
             if (m) { pos = i; break; }
         }
-        if (pos == N) { return false; }
-        s.append(d + pos, N - pos);
+        if (pos == source_size) { return false; }
+        s.append(d + pos, source_size - pos);
     }
     return true;
 }

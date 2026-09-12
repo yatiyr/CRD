@@ -18,4 +18,4 @@ target_link_libraries(crd-geometry-decomposition-tests PRIVATE
 
 crd_enable_default_pch(crd-geometry-decomposition-tests)
 
-catch_discover_tests(crd-geometry-decomposition-tests)
+crd_discover_tests(crd-geometry-decomposition-tests)

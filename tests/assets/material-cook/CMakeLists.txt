@@ -15,4 +15,4 @@ target_link_libraries(crd-material-cook-tests PRIVATE
 
 crd_enable_default_pch(crd-material-cook-tests)
 
-catch_discover_tests(crd-material-cook-tests)
+crd_discover_tests(crd-material-cook-tests)

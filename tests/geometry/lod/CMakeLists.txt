@@ -18,4 +18,4 @@ target_link_libraries(crd-lod-tests PRIVATE
 
 crd_enable_default_pch(crd-lod-tests)
 
-catch_discover_tests(crd-lod-tests)
+crd_discover_tests(crd-lod-tests)

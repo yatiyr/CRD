@@ -42,6 +42,9 @@ the offline and real-time forms are genuinely different systems (as hair does).
 
 ## Index
 
+- [CKIR snapshots and bounded compute emission](2026-09-12-kernel-snapshot-ordering.md) — shared declaration ordering, live loads, Boolean value types and the atomic A-buffer regression.
+- [DX12 adapter classification](2026-09-12-dx12-adapter-classification.md) — selected-LUID evidence, BasicRender and explicit unknown query outcomes.
+
 - [2026-09-12-generated-codelet-stack-safety.md](2026-09-12-generated-codelet-stack-safety.md) — diagnose generated FFT stack frames, preserve optimized code generation and bound unoptimized leaf inlining.
 - **2026-09-04-ceir-reverse-mode-autodiff.md** — reverse-mode autodiff as a CEIR compiler transform: `build_gradient` rewrites a forward module into a backward one (VJP rules for gemm/reduce/mlp), which then plans + runs device-resident like any program. The composite-vs-expansion reframe (why you differentiate `ml.mlp`, not the lowered resultless ReLU), write-through-declare, two-output readback, forward-liveness, readonly GLSL-vs-HLSL codegen, recompute-as-checkpointing. Board: `docs/bench/2026-09-04-ceir25-autodiff-scoreboard.md`.
 - **2026-07-21-hair-offline-film.md** — physically-based path-traced hair, film/offline quality. The Marschner /

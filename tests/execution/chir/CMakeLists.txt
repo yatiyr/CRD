@@ -15,4 +15,4 @@ target_compile_definitions(crd-chir-tests PRIVATE CRD_REPO_DIR="${CMAKE_SOURCE_D
 
 crd_enable_default_pch(crd-chir-tests)
 
-catch_discover_tests(crd-chir-tests)
+crd_discover_tests(crd-chir-tests)

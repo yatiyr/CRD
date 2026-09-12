@@ -12,4 +12,4 @@ target_link_libraries(crd-eylem-tests PRIVATE
 
 crd_enable_default_pch(crd-eylem-tests)
 
-catch_discover_tests(crd-eylem-tests)
+crd_discover_tests(crd-eylem-tests)

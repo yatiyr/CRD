@@ -16,4 +16,4 @@ target_link_libraries(crd-hesap-fft-tests PRIVATE
 
 crd_enable_default_pch(crd-hesap-fft-tests)
 
-catch_discover_tests(crd-hesap-fft-tests)
+crd_discover_tests(crd-hesap-fft-tests)

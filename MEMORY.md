@@ -3,22 +3,23 @@
 <!-- doc-role: navigation -->
 > Navigation; no independent live queue. Current work: [ROADMAP](docs/ROADMAP.md); current rules: [AGENTS](AGENTS.md).
 
-This is the portable lesson index. **Current rules: [AGENTS](AGENTS.md). Current work: [context](context.md) →
-[ROADMAP](docs/ROADMAP.md).** Memory stores lessons, not another plan or an active loop grant.
-Entry: [START_HERE](START_HERE.md); [quality contract](docs/design/system-quality-contract.md).
-All 457 former host-specific records are preserved below.
+Portable lessons; [context](context.md) owns current work. Entry: [START_HERE](START_HERE.md).
+All 457 former host-specific records are preserved in the references below.
 
 ## Read only what the task needs
 
-- One primary local configuration plus discriminating risk checks; full matrices in CI, exact revision evidence,
-  human-only commits/pushes → [BUILDING](docs/BUILDING.md#fast-local-workflow--one-primary-configuration).
+- Finish the first unfinished row before advancing; gates stop the sequence → [strict order](docs/ROADMAP.md#strict-sequential-execution).
+- Scoped local checks, broad CI, human-only publication → [BUILDING](docs/BUILDING.md#fast-local-workflow--one-primary-configuration).
 - Native VS configuration names require matching flags, headers, CRT and ISA; presets own the matrix →
   [configuration contract and evidence](docs/design/visual-studio-configurations.md).
+- Exact test ownership, native sync readiness and truthful decoder outcomes →
+  [scoped verification recipe](docs/recipes/2026-09-12-affected-build-selection.md).
 - Build, stale executables, PCH, sanitizer or tidy symptoms → [build/verification](docs/lessons/memory/build-and-verification.md).
 - GPU startup diagnostics can precede capture objects: select matching layers and inspect the complete log →
   [verified repair](docs/sessions/2026-09-12-repository-cleanup.md#linux-validation-tooling-repair).
 - CEIR/CHIR compiler, optimizer or execution semantics → [execution IR](docs/lessons/memory/execution-ir.md).
-- CKIR, GPU providers and emitted programs → [device programs](docs/lessons/memory/device-programs.md).
+- CKIR/providers → [device programs](docs/lessons/memory/device-programs.md); expression growth/live loads →
+  [snapshot ordering](docs/recipes/2026-09-12-kernel-snapshot-ordering.md).
 - Frames, materials, lighting, reload and image correctness → [rendering](docs/lessons/memory/rendering.md).
 - Oracles, precision, numerical kernels and benchmark methodology → [numerics/performance](docs/lessons/memory/numerics-and-performance.md).
 - Scope, ownership, allocation and diagnostic discipline → [workflow/correctness](docs/lessons/memory/workflow-and-correctness.md).

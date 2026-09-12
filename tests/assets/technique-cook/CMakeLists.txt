@@ -17,4 +17,4 @@ target_link_libraries(crd-technique-cook-tests PRIVATE
 
 crd_enable_default_pch(crd-technique-cook-tests)
 
-catch_discover_tests(crd-technique-cook-tests)
+crd_discover_tests(crd-technique-cook-tests)

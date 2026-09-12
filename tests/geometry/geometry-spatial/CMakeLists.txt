@@ -28,4 +28,4 @@ target_link_libraries(crd-geometry-spatial-tests PRIVATE
 
 crd_enable_default_pch(crd-geometry-spatial-tests)
 
-catch_discover_tests(crd-geometry-spatial-tests)
+crd_discover_tests(crd-geometry-spatial-tests)

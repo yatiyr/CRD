@@ -23,6 +23,6 @@ endif()
 crd_enable_default_pch(crd-anim-tests)
 
 # the Fox fixture path (the io_corpus env pattern — ctest working dirs differ from the repo root)
-catch_discover_tests(crd-anim-tests
+crd_discover_tests(crd-anim-tests
     PROPERTIES ENVIRONMENT "CRD_ASSETS_SOURCE=${CMAKE_SOURCE_DIR}/assets/source"
 )

@@ -10,4 +10,4 @@ target_link_libraries(crd-log-tests PRIVATE
 
 crd_enable_default_pch(crd-log-tests)
 
-catch_discover_tests(crd-log-tests)
+crd_discover_tests(crd-log-tests)

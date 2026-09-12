@@ -22,4 +22,4 @@ endif()
 
 crd_enable_default_pch(crd-geometry-shader-helpers-tests)
 
-catch_discover_tests(crd-geometry-shader-helpers-tests)
+crd_discover_tests(crd-geometry-shader-helpers-tests)

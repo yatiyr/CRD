@@ -15,4 +15,4 @@ target_link_libraries(crd-light-cook-tests PRIVATE
 
 crd_enable_default_pch(crd-light-cook-tests)
 
-catch_discover_tests(crd-light-cook-tests)
+crd_discover_tests(crd-light-cook-tests)

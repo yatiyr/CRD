@@ -32,4 +32,4 @@ target_link_libraries(crd-geometry-mesh-processing-tests PRIVATE
 
 crd_enable_default_pch(crd-geometry-mesh-processing-tests)
 
-catch_discover_tests(crd-geometry-mesh-processing-tests)
+crd_discover_tests(crd-geometry-mesh-processing-tests)

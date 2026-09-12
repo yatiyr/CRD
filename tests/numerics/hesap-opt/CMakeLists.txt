@@ -44,4 +44,4 @@ target_link_libraries(crd-hesap-opt-tests PRIVATE
 
 crd_enable_default_pch(crd-hesap-opt-tests)
 
-catch_discover_tests(crd-hesap-opt-tests)
+crd_discover_tests(crd-hesap-opt-tests)

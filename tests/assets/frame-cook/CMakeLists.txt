@@ -25,4 +25,4 @@ target_compile_definitions(crd-frame-cook-tests PRIVATE CRD_FRAME_ASSETS_DIR="${
 
 crd_enable_default_pch(crd-frame-cook-tests)
 
-catch_discover_tests(crd-frame-cook-tests)
+crd_discover_tests(crd-frame-cook-tests)

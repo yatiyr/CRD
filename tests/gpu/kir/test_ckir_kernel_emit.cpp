@@ -13,6 +13,7 @@
 #include <crd/kir/ckir_hlsl.hpp>
 #include <crd/kir/ckir_msl.hpp>
 #include <crd/kir/ckir_ocean.hpp> // B16-a: the FFT-ocean kernels — cross-backend emit gate
+#include <crd/kir/ckir_oit.hpp>
 #include <crd/kir/ckir_serialize.hpp> // D1: serialize_graph/deserialize_graph + reflect (IR-as-crdr)
 #include <crd/kir/ckir_visbuffer.hpp> // B4-vis: the software-rasterizer kernel — cross-backend emit gate
 #include <crd/kir/ckir_wgsl.hpp>
@@ -25,6 +26,34 @@
 #include <catch2/catch_test_macros.hpp>
 
 namespace kir = crd::kir;
+
+TEST_CASE("Atomic A-buffer resolve has bounded source on every compute emitter", "[kir][kernel][oit][emission]")
+{
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    const crd::u32 layer_counts[] = {1U, 4U, kir::oit::kMaxAbufferLayers};
+    for (const crd::u32 layers : layer_counts)
+    {
+        kir::KGraph graph(&alloc);
+        kir::oit::AbufferConfig config;
+        config.width = 32U;
+        config.height = 32U;
+        config.layers = layers;
+        const kir::KEntry entry = kir::oit::build_abuffer_atomic_resolve(graph, config);
+        const auto check_emitter = [&](auto emit, const char* name) {
+            kir::GlslKernel kernel(&alloc);
+            INFO("emitter=" << name << " layers=" << layers);
+            REQUIRE(emit(graph, entry, &alloc, kernel));
+            // The sort network grows quadratically; its emitted text must stay proportional to its IR node count.
+            // Four unmaterialized layers produced 413,859 HLSL bytes and overflowed during WARP pipeline creation.
+            REQUIRE(kernel.source.size() < static_cast<crd::usize>(graph.size()) * 128U);
+        };
+        check_emitter(kir::emit_compute_kernel_glsl, "GLSL");
+        check_emitter(kir::emit_compute_kernel_hlsl, "HLSL");
+        check_emitter(kir::emit_compute_kernel_cuda, "CUDA");
+        check_emitter(kir::emit_compute_kernel_msl, "MSL");
+        check_emitter(kir::emit_compute_kernel_wgsl, "WGSL");
+    }
+}
 
 namespace
 {

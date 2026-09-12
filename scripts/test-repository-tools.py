@@ -8,12 +8,61 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('hygiene', ROOT / 'scripts/check-repository.py')
 hygiene = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(hygiene)
+master_spec = importlib.util.spec_from_file_location('master_plan', ROOT / 'scripts/check-master-plan.py')
+master = importlib.util.module_from_spec(master_spec)
+master_spec.loader.exec_module(master)
+
+
+class MasterPlanSequence(unittest.TestCase):
+    @staticmethod
+    def rows(*states):
+        return [(f'S{i}', [str(i), f'**S{i}**', state, 'Contract', '—', 'Evidence'])
+                for i, state in enumerate(states, 1)]
+
+    def test_blocked_review_and_partial_are_not_bypassed(self):
+        for state in ('Blocked', 'Review', 'Partial', 'Open', 'Later', 'In progress'):
+            with self.subTest(state=state):
+                rows = self.rows('Done', 'Recorded', state, 'Open')
+                self.assertEqual(master.first_unfinished(rows)[0], 'S3')
+                self.assertEqual(master.sequence_errors(rows, ['S3']), [])
+                self.assertTrue(master.sequence_errors(rows, ['S4']))
+
+    def test_later_completion_or_activity_cannot_jump_a_gap(self):
+        for state in ('Done', 'In progress'):
+            with self.subTest(state=state):
+                errors = master.sequence_errors(self.rows('Done', 'Blocked', state), ['S2'])
+                self.assertEqual(len(errors), 1)
+                self.assertIn('S3', errors[0])
+        self.assertEqual(master.sequence_errors(self.rows('Done', 'Blocked', 'Partial'), ['S2']), [])
+
+    def test_missing_duplicate_stale_and_unknown_pointers_fail(self):
+        rows = self.rows('Done', 'Open', 'Partial')
+        for current in ([], ['S1'], ['unknown'], ['S2', 'S2'], ['S2', 'S3']):
+            with self.subTest(current=current):
+                self.assertTrue(master.sequence_errors(rows, current))
+
+    def test_complete_table_has_no_active_pointer(self):
+        rows = self.rows('Done', 'Recorded')
+        self.assertIsNone(master.first_unfinished(rows))
+        self.assertEqual(master.sequence_errors(rows, []), [])
+        self.assertTrue(master.sequence_errors(rows, ['S1']))
+
+    def test_next_command_rejects_conflicting_context(self):
+        args = SimpleNamespace(memory=None, slice=None, find=None, next=True)
+        rows = self.rows('Done', 'Blocked', 'Partial')
+        for pointer, expected in (('S2', 0), ('S3', 1)):
+            with self.subTest(pointer=pointer), patch.object(master, 'read', return_value=
+                    f'<!-- current-slice: {pointer} -->'), patch('sys.stdout', new_callable=io.StringIO) as output:
+                self.assertEqual(master.query(args, rows), expected)
+                self.assertIn('S2 [Blocked]', output.getvalue())
+                self.assertIn('blocked gate stops later work', output.getvalue())
 
 
 class RepositoryTools(unittest.TestCase):

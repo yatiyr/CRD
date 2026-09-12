@@ -11,4 +11,4 @@ target_link_libraries(crd-imgui-tests PRIVATE
 
 crd_enable_default_pch(crd-imgui-tests)
 
-catch_discover_tests(crd-imgui-tests)
+crd_discover_tests(crd-imgui-tests)

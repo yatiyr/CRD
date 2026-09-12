@@ -44,4 +44,4 @@ target_link_libraries(crd-hesap-dense-tests PRIVATE
 
 crd_enable_default_pch(crd-hesap-dense-tests)
 
-catch_discover_tests(crd-hesap-dense-tests)
+crd_discover_tests(crd-hesap-dense-tests)

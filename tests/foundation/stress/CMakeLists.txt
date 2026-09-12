@@ -22,4 +22,4 @@ target_link_libraries(crd-stress-tests PRIVATE
 
 crd_enable_default_pch(crd-stress-tests)
 
-catch_discover_tests(crd-stress-tests)
+crd_discover_tests(crd-stress-tests)

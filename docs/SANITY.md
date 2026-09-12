@@ -44,7 +44,6 @@ consumer checks → evidence → close child → close parent only when all obli
 New lessons go in [MEMORY](../MEMORY.md)'s relevant reference or an educative recipe. This file stays short;
 historical stories do not grow back into the mandatory reading path.
 
-Cross-domain checks: prove allocation/task/device lifetime, actual target hardware, bounded untrusted input,
-unit/frame/time meaning and recovery after interruption. Test authority separately from transport encryption,
-collaboration validity separately from convergence, and model task quality separately from throughput. Use the
-[quality contract](design/system-quality-contract.md) for applicable gates and complete document/session close-out.
+**Sequence check:** context must name the first unfinished master row. Finish it fully before advancing; a blocked
+gate stops the sequence. No parallel later work or reordered rows to hide gaps. Follow the
+[strict rule](ROADMAP.md#strict-sequential-execution) and [cross-domain quality contract](design/system-quality-contract.md).

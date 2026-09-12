@@ -30,4 +30,4 @@ target_link_libraries(crd-geometry-primitives-tests PRIVATE
 
 crd_enable_default_pch(crd-geometry-primitives-tests)
 
-catch_discover_tests(crd-geometry-primitives-tests)
+crd_discover_tests(crd-geometry-primitives-tests)

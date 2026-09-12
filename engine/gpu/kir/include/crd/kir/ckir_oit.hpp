@@ -65,13 +65,13 @@ namespace crd::kir::oit
     const int z1 = sub(mul(g.unary(k::KOp::Neg, p), cf(0.5)), r);
     const int z2 = add(mul(g.unary(k::KOp::Neg, p), cf(0.5)), r);
 
-    const int caseA = g.binary(k::KOp::CmpLt, z2, z0);
-    const int caseB = g.binary(k::KOp::CmpLt, z1, z0);
-    // sw = caseA ? (z1,z0,1,1) : caseB ? (z0,z1,0,1) : (0,0,0,0)
-    const int sw0 = g.select(caseA, z1, g.select(caseB, z0, cf(0.0)));
-    const int sw1 = g.select(caseA, z0, g.select(caseB, z1, cf(0.0)));
-    const int sw2 = g.select(caseA, cf(1.0), g.select(caseB, cf(0.0), cf(0.0)));
-    const int sw3 = g.select(caseA, cf(1.0), g.select(caseB, cf(1.0), cf(0.0)));
+    const int case_a = g.binary(k::KOp::CmpLt, z2, z0);
+    const int case_b = g.binary(k::KOp::CmpLt, z1, z0);
+    // sw = case_a ? (z1,z0,1,1) : case_b ? (z0,z1,0,1) : (0,0,0,0)
+    const int sw0 = g.select(case_a, z1, g.select(case_b, z0, cf(0.0)));
+    const int sw1 = g.select(case_a, z0, g.select(case_b, z1, cf(0.0)));
+    const int sw2 = g.select(case_a, cf(1.0), g.select(case_b, cf(0.0), cf(0.0)));
+    const int sw3 = g.select(case_a, cf(1.0), g.select(case_b, cf(1.0), cf(0.0)));
 
     const int quotient  = dv(add(sub(mul(sw0, z2), mul(b0, add(sw0, z2))), b1), mul(sub(z2, sw1), sub(z0, z1)));
     const int intensity = add(sw2, mul(sw3, quotient));
@@ -108,8 +108,10 @@ namespace crd::kir::oit
     const int b5 = mul(m5, om);
     const int b6 = add(mul(m6, om), cf(bm / 7.0));
 
-    // Cholesky of the 4×4 Hankel M[i][j] = b_{i+j} (b0=1): M = L·Lᵀ (L00 = √M00 = 1, elided).
-    const int l10 = b1, l20 = b2, l30 = b3;
+    // Cholesky of the 4×4 Hankel M[i][j] = b_{i+j} (b0=1): M = layer_count·Lᵀ (L00 = √M00 = 1, elided).
+    const int l10 = b1;
+    const int l20 = b2;
+    const int l30 = b3;
     const int l11 = sqrtp(sub(b2, sq(l10)));
     const int l21 = dv(sub(b3, mul(l20, l10)), l11);
     const int l31 = dv(sub(b4, mul(l30, l10)), l11);
@@ -117,8 +119,10 @@ namespace crd::kir::oit
     const int l32 = dv(sub(sub(b5, mul(l30, l20)), mul(l31, l21)), l22);
     const int l33 = sqrtp(sub(sub(sub(b6, sq(l30)), sq(l31)), sq(l32)));
 
-    // Solve M·c = (1, z, z², z³): forward L·y = u, back Lᵀ·c = y.
-    const int u1 = z, u2 = sq(z), u3 = mul(u2, z);
+    // Solve M·c = (1, z, z², z³): forward layer_count·y = u, back Lᵀ·c = y.
+    const int u1 = z;
+    const int u2 = sq(z);
+    const int u3 = mul(u2, z);
     const int y0 = cf(1.0); // u0 / l00
     const int y1 = dv(sub(u1, mul(l10, y0)), l11);
     const int y2 = dv(sub(sub(u2, mul(l20, y0)), mul(l21, y1)), l22);
@@ -129,7 +133,9 @@ namespace crd::kir::oit
     const int c0 = sub(sub(sub(y0, mul(l10, c1)), mul(l20, c2)), mul(l30, c3)); // /l00 = 1
 
     // Cubic c3·x³ + c2·x² + c1·x + c0 = 0 → monic → depressed t³ + p·t + q (3 real roots via the trigonometric method).
-    const int aa = dv(c2, c3), bb = dv(c1, c3), cc = dv(c0, c3);
+    const int aa = dv(c2, c3);
+    const int bb = dv(c1, c3);
+    const int cc = dv(c0, c3);
     const int a3 = dv(aa, cf(3.0));
     const int p  = sub(bb, mul(aa, a3));                                      // B − A²/3
     const int q  = add(sub(mul(cf(2.0), mul(a3, sq(a3))), mul(a3, bb)), cc);  // 2(A/3)³ − (A/3)B + C
@@ -243,7 +249,7 @@ struct AbufferConfig
     const int out = g.buffer_decl(k::DType::F32, 0, 5, true);
 
     const crd::u32 wh = cfg.width * cfg.height;
-    const crd::u32 Q  = cfg.layers;
+    const crd::u32 layer_count  = cfg.layers;
 
     const int mark  = g.kernel_stmt_mark();
     const int pixel = uadd(umul(g.builtin(k::KBuiltin::WorkgroupIndex), cu(cfg.local_size)),
@@ -251,7 +257,7 @@ struct AbufferConfig
     const int guard = g.stmt_if_begin(g.binary(k::KOp::CmpLt, pixel, cu(wh)));
 
     // Gather the pixel's `layers` fragments (slot = pixel + q*W*H).
-    const crd::u32 nq = Q < kMaxAbufferLayers ? Q : kMaxAbufferLayers;
+    const crd::u32 nq = layer_count < kMaxAbufferLayers ? layer_count : kMaxAbufferLayers;
     int            dd[kMaxAbufferLayers] = {};
     int            rr[kMaxAbufferLayers] = {};
     int            gg[kMaxAbufferLayers] = {};
@@ -284,26 +290,26 @@ struct AbufferConfig
     }
 
     // Composite front-to-back: C += T·aᵢ·cᵢ ; T *= (1-aᵢ). Then over the background.
-    int tT = cf(1.0);
-    int cR = cf(0.0);
-    int cG = cf(0.0);
-    int cB = cf(0.0);
+    int t_t = cf(1.0);
+    int c_r = cf(0.0);
+    int c_g = cf(0.0);
+    int c_b = cf(0.0);
     for (crd::u32 qi = 0; qi < nq; ++qi)
     {
-        const int ta = fmul(tT, aa[qi]);       // T·aᵢ
-        cR           = fadd(cR, fmul(ta, rr[qi]));
-        cG           = fadd(cG, fmul(ta, gg[qi]));
-        cB           = fadd(cB, fmul(ta, bb[qi]));
-        tT           = fmul(tT, fsub(cf(1.0), aa[qi]));
+        const int ta = fmul(t_t, aa[qi]);       // T·aᵢ
+        c_r           = fadd(c_r, fmul(ta, rr[qi]));
+        c_g           = fadd(c_g, fmul(ta, gg[qi]));
+        c_b           = fadd(c_b, fmul(ta, bb[qi]));
+        t_t           = fmul(t_t, fsub(cf(1.0), aa[qi]));
     }
-    const int outR = fadd(cR, fmul(tT, cf(static_cast<double>(cfg.bg[0]))));
-    const int outG = fadd(cG, fmul(tT, cf(static_cast<double>(cfg.bg[1]))));
-    const int outB = fadd(cB, fmul(tT, cf(static_cast<double>(cfg.bg[2]))));
+    const int out_r = fadd(c_r, fmul(t_t, cf(static_cast<double>(cfg.bg[0]))));
+    const int out_g = fadd(c_g, fmul(t_t, cf(static_cast<double>(cfg.bg[1]))));
+    const int out_b = fadd(c_b, fmul(t_t, cf(static_cast<double>(cfg.bg[2]))));
 
     const int obase = umul(pixel, cu(3U));
-    g.stmt_buffer_store(out, uadd(obase, cu(0U)), outR);
-    g.stmt_buffer_store(out, uadd(obase, cu(1U)), outG);
-    g.stmt_buffer_store(out, uadd(obase, cu(2U)), outB);
+    g.stmt_buffer_store(out, uadd(obase, cu(0U)), out_r);
+    g.stmt_buffer_store(out, uadd(obase, cu(1U)), out_g);
+    g.stmt_buffer_store(out, uadd(obase, cu(2U)), out_b);
     g.stmt_if_end(guard);
 
     k::KEntry e;
@@ -400,28 +406,28 @@ struct AbufferConfig
     const int beta4 = fmul(m4, invb0);
 
     // Composite: Σ T(zᵢ)·αᵢ·cᵢ + exp(-b₀)·background, T(zᵢ) = exp(-b₀·(1 - vis(wᵢ))).
-    int cR = cf(0.0);
-    int cG = cf(0.0);
-    int cB = cf(0.0);
+    int c_r = cf(0.0);
+    int c_g = cf(0.0);
+    int c_b = cf(0.0);
     for (crd::u32 qi = 0; qi < nq; ++qi)
     {
         const int vis    = msm_hamburger_scalar(g, beta1, beta2, beta3, beta4, ww[qi], 6.0e-4); // fraction of light at wᵢ
         const int shadow = fsub(cf(1.0), vis);                                                   // fraction of absorbance in front (CDF at wᵢ)
         const int t      = g.unary(k::KOp::Exp, g.unary(k::KOp::Neg, fmul(b0, shadow)));          // T(zᵢ) = exp(-b₀·G(wᵢ))
         const int ta     = fmul(t, aa[qi]);
-        cR               = fadd(cR, fmul(ta, rr[qi]));
-        cG               = fadd(cG, fmul(ta, gg[qi]));
-        cB               = fadd(cB, fmul(ta, bb[qi]));
+        c_r               = fadd(c_r, fmul(ta, rr[qi]));
+        c_g               = fadd(c_g, fmul(ta, gg[qi]));
+        c_b               = fadd(c_b, fmul(ta, bb[qi]));
     }
-    const int tTotal = g.unary(k::KOp::Exp, g.unary(k::KOp::Neg, b0)); // = Π(1-αⱼ)
-    const int outR   = fadd(cR, fmul(tTotal, cf(static_cast<double>(cfg.bg[0]))));
-    const int outG   = fadd(cG, fmul(tTotal, cf(static_cast<double>(cfg.bg[1]))));
-    const int outB   = fadd(cB, fmul(tTotal, cf(static_cast<double>(cfg.bg[2]))));
+    const int t_total = g.unary(k::KOp::Exp, g.unary(k::KOp::Neg, b0)); // = Π(1-αⱼ)
+    const int out_r   = fadd(c_r, fmul(t_total, cf(static_cast<double>(cfg.bg[0]))));
+    const int out_g   = fadd(c_g, fmul(t_total, cf(static_cast<double>(cfg.bg[1]))));
+    const int out_b   = fadd(c_b, fmul(t_total, cf(static_cast<double>(cfg.bg[2]))));
 
     const int obase = umul(pixel, cu(3U));
-    g.stmt_buffer_store(out, uadd(obase, cu(0U)), outR);
-    g.stmt_buffer_store(out, uadd(obase, cu(1U)), outG);
-    g.stmt_buffer_store(out, uadd(obase, cu(2U)), outB);
+    g.stmt_buffer_store(out, uadd(obase, cu(0U)), out_r);
+    g.stmt_buffer_store(out, uadd(obase, cu(1U)), out_g);
+    g.stmt_buffer_store(out, uadd(obase, cu(2U)), out_b);
     g.stmt_if_end(guard);
 
     k::KEntry e;
@@ -480,7 +486,13 @@ struct AbufferConfig
         absb[qi]       = g.unary(k::KOp::Neg, g.unary(k::KOp::Log, fsub(cf(1.0), ac)));
     }
 
-    int b0 = cf(0.0), m1 = cf(0.0), m2 = cf(0.0), m3 = cf(0.0), m4 = cf(0.0), m5 = cf(0.0), m6 = cf(0.0);
+    int b0 = cf(0.0);
+    int m1 = cf(0.0);
+    int m2 = cf(0.0);
+    int m3 = cf(0.0);
+    int m4 = cf(0.0);
+    int m5 = cf(0.0);
+    int m6 = cf(0.0);
     for (crd::u32 qi = 0; qi < nq; ++qi)
     {
         const int w2 = fmul(ww[qi], ww[qi]);
@@ -504,26 +516,28 @@ struct AbufferConfig
     const int beta5 = fmul(m5, invb0);
     const int beta6 = fmul(m6, invb0);
 
-    int cR = cf(0.0), cG = cf(0.0), cB = cf(0.0);
+    int c_r = cf(0.0);
+    int c_g = cf(0.0);
+    int c_b = cf(0.0);
     for (crd::u32 qi = 0; qi < nq; ++qi)
     {
         const int vis    = msm_hamburger6_scalar(g, beta1, beta2, beta3, beta4, beta5, beta6, ww[qi], 1.0e-2);
         const int shadow = fsub(cf(1.0), vis);
         const int t      = g.unary(k::KOp::Exp, g.unary(k::KOp::Neg, fmul(b0, shadow)));
         const int ta     = fmul(t, aa[qi]);
-        cR               = fadd(cR, fmul(ta, rr[qi]));
-        cG               = fadd(cG, fmul(ta, gg[qi]));
-        cB               = fadd(cB, fmul(ta, bb[qi]));
+        c_r               = fadd(c_r, fmul(ta, rr[qi]));
+        c_g               = fadd(c_g, fmul(ta, gg[qi]));
+        c_b               = fadd(c_b, fmul(ta, bb[qi]));
     }
-    const int tTotal = g.unary(k::KOp::Exp, g.unary(k::KOp::Neg, b0));
-    const int outR   = fadd(cR, fmul(tTotal, cf(static_cast<double>(cfg.bg[0]))));
-    const int outG   = fadd(cG, fmul(tTotal, cf(static_cast<double>(cfg.bg[1]))));
-    const int outB   = fadd(cB, fmul(tTotal, cf(static_cast<double>(cfg.bg[2]))));
+    const int t_total = g.unary(k::KOp::Exp, g.unary(k::KOp::Neg, b0));
+    const int out_r   = fadd(c_r, fmul(t_total, cf(static_cast<double>(cfg.bg[0]))));
+    const int out_g   = fadd(c_g, fmul(t_total, cf(static_cast<double>(cfg.bg[1]))));
+    const int out_b   = fadd(c_b, fmul(t_total, cf(static_cast<double>(cfg.bg[2]))));
 
     const int obase = umul(pixel, cu(3U));
-    g.stmt_buffer_store(out, uadd(obase, cu(0U)), outR);
-    g.stmt_buffer_store(out, uadd(obase, cu(1U)), outG);
-    g.stmt_buffer_store(out, uadd(obase, cu(2U)), outB);
+    g.stmt_buffer_store(out, uadd(obase, cu(0U)), out_r);
+    g.stmt_buffer_store(out, uadd(obase, cu(1U)), out_g);
+    g.stmt_buffer_store(out, uadd(obase, cu(2U)), out_b);
     g.stmt_if_end(guard);
 
     k::KEntry e;
@@ -601,7 +615,7 @@ inline constexpr crd::u32 kAbufferEmpty = 0xFFFFFFFFU; // empty head / end-of-li
 // B17-c (scalable) RESOLVE: one thread per pixel WALKS its linked list (head → next → …, up to `layers` deep), gathers the
 // fragments, SORTS ascending by depth (the same fixed compare-exchange network as the static resolve), and composites
 // front-to-back over the background — the deterministic image the race-built list yields. Buffers: head (b0, u32, read) ·
-// node_next (b1, u32, read) · node_r/g/b/a/depth (b2..b6, read) · out (b7, rw — W*H*3 interleaved RGB).
+// node_next (b1, u32, read) · node_data (b2, f32, stride 5: r/g/b/a/depth) · out (b3, rw — W*H*3 interleaved RGB).
 [[nodiscard]] inline crd::kir::KEntry build_abuffer_atomic_resolve(crd::kir::KGraph& g, const AbufferConfig& cfg)
 {
     namespace k        = crd::kir;
@@ -631,17 +645,25 @@ inline constexpr crd::u32 kAbufferEmpty = 0xFFFFFFFFU; // empty head / end-of-li
     const int  empty  = cu(kAbufferEmpty);
     const int  maxidx = cu(total - 1U);
     const auto clampi = [&](int n) { return g.binary(k::KOp::Min, n, maxidx); }; // keep the load index in-bounds
+    // Snapshot the gathered list and each compare-exchange result in canonical IR. Emitters deliberately inline
+    // live loads/selects; without these snapshots the shared sort DAG expands exponentially during pipeline creation.
+    // Materialize inside the pixel guard, retaining load/store ordering and the exact compositing arithmetic.
     // Walk the list: node[0]=head[pixel]; node[qi]=next[node[qi-1]] (guarded — EMPTY once the list ends).
     int node[kMaxAbufferLayers] = {};
     node[0] = g.buffer_load(head, pixel);
+    g.stmt_materialize(node[0]);
     for (crd::u32 qi = 1; qi < nq; ++qi)
     {
         const int valid = g.binary(k::KOp::CmpNe, node[qi - 1], empty);
         node[qi]        = g.select(valid, g.buffer_load(nnext, clampi(node[qi - 1])), empty);
+        g.stmt_materialize(node[qi]);
     }
     // Gather (r,g,b,a,depth); an EMPTY node contributes nothing (alpha 0, depth 2 ⇒ sorts to the back).
-    int dd[kMaxAbufferLayers] = {}, rr[kMaxAbufferLayers] = {}, gg[kMaxAbufferLayers] = {};
-    int bb[kMaxAbufferLayers] = {}, aa[kMaxAbufferLayers] = {};
+    int dd[kMaxAbufferLayers] = {};
+    int rr[kMaxAbufferLayers] = {};
+    int gg[kMaxAbufferLayers] = {};
+    int bb[kMaxAbufferLayers] = {};
+    int aa[kMaxAbufferLayers] = {};
     for (crd::u32 qi = 0; qi < nq; ++qi)
     {
         const int v  = g.binary(k::KOp::CmpNe, node[qi], empty);
@@ -651,6 +673,8 @@ inline constexpr crd::u32 kAbufferEmpty = 0xFFFFFFFFU; // empty head / end-of-li
         bb[qi]       = g.select(v, g.buffer_load(nodedata, uadd(nb, cu(2U))), cf(0.0));
         aa[qi]       = g.select(v, g.buffer_load(nodedata, uadd(nb, cu(3U))), cf(0.0));
         dd[qi]       = g.select(v, g.buffer_load(nodedata, uadd(nb, cu(4U))), cf(2.0));
+        const int gathered[] = {rr[qi], gg[qi], bb[qi], aa[qi], dd[qi]};
+        for (const int value : gathered) { g.stmt_materialize(value); }
     }
     // Sort ascending by depth (front-to-back), then composite `C += T·aᵢ·cᵢ ; T *= (1-aᵢ)` over the background.
     for (crd::u32 i = 0; i + 1U < nq; ++i)
@@ -658,23 +682,34 @@ inline constexpr crd::u32 kAbufferEmpty = 0xFFFFFFFFU; // empty head / end-of-li
         for (crd::u32 j = 0; j + 1U + i < nq; ++j)
         {
             const int sw = g.binary(k::KOp::CmpGt, dd[j], dd[j + 1U]);
-            const auto cx = [&](int* vv) { const int lo = g.select(sw, vv[j + 1U], vv[j]); const int hi = g.select(sw, vv[j], vv[j + 1U]); vv[j] = lo; vv[j + 1U] = hi; };
+            g.stmt_materialize(sw);
+            const auto cx = [&](int* vv) {
+                const int lo = g.select(sw, vv[j + 1U], vv[j]);
+                const int hi = g.select(sw, vv[j], vv[j + 1U]);
+                g.stmt_materialize(lo);
+                g.stmt_materialize(hi);
+                vv[j] = lo;
+                vv[j + 1U] = hi;
+            };
             cx(dd); cx(rr); cx(gg); cx(bb); cx(aa);
         }
     }
-    int tT = cf(1.0), cR = cf(0.0), cG = cf(0.0), cB = cf(0.0);
+    int t_t = cf(1.0);
+    int c_r = cf(0.0);
+    int c_g = cf(0.0);
+    int c_b = cf(0.0);
     for (crd::u32 qi = 0; qi < nq; ++qi)
     {
-        const int ta = fmul(tT, aa[qi]);
-        cR           = fadd(cR, fmul(ta, rr[qi]));
-        cG           = fadd(cG, fmul(ta, gg[qi]));
-        cB           = fadd(cB, fmul(ta, bb[qi]));
-        tT           = fmul(tT, fsub(cf(1.0), aa[qi]));
+        const int ta = fmul(t_t, aa[qi]);
+        c_r           = fadd(c_r, fmul(ta, rr[qi]));
+        c_g           = fadd(c_g, fmul(ta, gg[qi]));
+        c_b           = fadd(c_b, fmul(ta, bb[qi]));
+        t_t           = fmul(t_t, fsub(cf(1.0), aa[qi]));
     }
     const int obase = umul(pixel, cu(3U));
-    g.stmt_buffer_store(out, uadd(obase, cu(0U)), fadd(cR, fmul(tT, cf(static_cast<double>(cfg.bg[0])))));
-    g.stmt_buffer_store(out, uadd(obase, cu(1U)), fadd(cG, fmul(tT, cf(static_cast<double>(cfg.bg[1])))));
-    g.stmt_buffer_store(out, uadd(obase, cu(2U)), fadd(cB, fmul(tT, cf(static_cast<double>(cfg.bg[2])))));
+    g.stmt_buffer_store(out, uadd(obase, cu(0U)), fadd(c_r, fmul(t_t, cf(static_cast<double>(cfg.bg[0])))));
+    g.stmt_buffer_store(out, uadd(obase, cu(1U)), fadd(c_g, fmul(t_t, cf(static_cast<double>(cfg.bg[1])))));
+    g.stmt_buffer_store(out, uadd(obase, cu(2U)), fadd(c_b, fmul(t_t, cf(static_cast<double>(cfg.bg[2])))));
     g.stmt_if_end(guard);
 
     k::KEntry e;
@@ -686,12 +721,12 @@ inline constexpr crd::u32 kAbufferEmpty = 0xFFFFFFFFU; // empty head / end-of-li
 }
 
 // ── B17-c (scalable) STOCHASTIC TRANSPARENCY (Enderton et al. 2010) ─────────────────────────────────────────────────────
-// The cheap UNBOUNDED-depth tier: no per-pixel list, no sort, no moment budget. Each of S sub-samples keeps the NEAREST
+// The cheap UNBOUNDED-depth tier: no per-pixel list, no sort, no moment budget. Each of sample_count sub-samples keeps the NEAREST
 // fragment that stochastically COVERS it (a deterministic hash < αᵢ is the screen-door test); averaging the sub-samples is
 // an UNBIASED Monte-Carlo estimate of the exact `over` composite — because P(fragment i is the nearest cover of a sample) =
 // αᵢ·Π_{j nearer}(1-αⱼ), whose expectation is exactly the front-to-back `over`. So E[stochastic] == the exact A-buffer, and
-// the estimate CONVERGES to it as S grows (~1/√S). The noise is the cost; in a real renderer ONE sample runs per frame and
-// TAA accumulates across frames (S == frames). Crucially the RNG is a DETERMINISTIC integer hash of (pixel, fragment, sample)
+// the estimate CONVERGES to it as sample_count grows (~1/√sample_count). The noise is the cost; in a real renderer ONE sample runs per frame and
+// TAA accumulates across frames (sample_count == frames). Crucially the RNG is a DETERMINISTIC integer hash of (pixel, fragment, sample)
 // ⇒ the "random" result is BIT-IDENTICAL across every backend and vs the CPU oracle — a portable, reproducible stochastic
 // tier (TAA history stays consistent). Buffers: scene (b0, read — layers*5 f32) · out (b1, read-write — W*H*3 f32 RGB).
 [[nodiscard]] inline crd::kir::KEntry build_stochastic_resolve(crd::kir::KGraph& g, const AbufferConfig& cfg)
@@ -725,8 +760,8 @@ inline constexpr crd::u32 kAbufferEmpty = 0xFFFFFFFFU; // empty head / end-of-li
     const int out   = g.buffer_decl(k::DType::F32, 0, 1, true);
 
     const crd::u32 wh = cfg.width * cfg.height;
-    const crd::u32 L  = cfg.layers;
-    const crd::u32 S  = cfg.samples;
+    const crd::u32 layer_count  = cfg.layers;
+    const crd::u32 sample_count  = cfg.samples;
 
     const int mark  = g.kernel_stmt_mark();
     const int pixel = uadd(umul(g.builtin(k::KBuiltin::WorkgroupIndex), cu(cfg.local_size)),
@@ -738,13 +773,15 @@ inline constexpr crd::u32 kAbufferEmpty = 0xFFFFFFFFU; // empty head / end-of-li
     g.stmt_buffer_store(out, uadd(obase, cu(1U)), cf(0.0));
     g.stmt_buffer_store(out, uadd(obase, cu(2U)), cf(0.0));
 
-    const int floop = g.stmt_for_begin(cu(S)); // S sub-samples (== TAA frames); the body is emitted ONCE, run S times
+    const int floop = g.stmt_for_begin(cu(sample_count)); // sample_count sub-samples (== TAA frames); the body is emitted ONCE, run sample_count times
     const int s     = g.kernel_loop_var(floop);
     const int sseed = umul(uadd(s, cu(1U)), cu(0x9E3779B9U)); // decorrelate the sample stream
-    // per-sample: keep the NEAREST fragment that stochastically covers this sample (L unrolled — small). No-cover ⇒ background.
-    int bestD = cf(2.0), bestR = cf(static_cast<double>(cfg.bg[0])), bestG = cf(static_cast<double>(cfg.bg[1])),
-        bestB = cf(static_cast<double>(cfg.bg[2]));
-    for (crd::u32 q = 0; q < L; ++q)
+    // per-sample: keep the NEAREST fragment that stochastically covers this sample (layer_count unrolled — small). No-cover ⇒ background.
+    int best_d = cf(2.0);
+    int best_r = cf(static_cast<double>(cfg.bg[0]));
+    int best_g = cf(static_cast<double>(cfg.bg[1]));
+    int best_b = cf(static_cast<double>(cfg.bg[2]));
+    for (crd::u32 q = 0; q < layer_count; ++q)
     {
         const int fb  = umul(cu(q), cu(5U));
         const int rv  = g.buffer_load(scene, uadd(fb, cu(0U)));
@@ -754,22 +791,22 @@ inline constexpr crd::u32 kAbufferEmpty = 0xFFFFFFFFU; // empty head / end-of-li
         const int dv  = g.buffer_load(scene, uadd(fb, cu(4U)));
         const int rnd  = hash01(uxor(umul(pixel, cu(0x632BE5ABU)), uadd(sseed, umul(cu(q + 1U), cu(0x85157AF5U)))));
         const int cov  = g.binary(k::KOp::CmpLt, rnd, av);      // screen-door coverage: hash < alpha
-        const int near = g.binary(k::KOp::CmpLt, dv, bestD);    // and strictly nearer than the current best
+        const int near = g.binary(k::KOp::CmpLt, dv, best_d);    // and strictly nearer than the current best
         // take = cov && near, expressed as a nested select (cov ? (near ? new : keep) : keep) — no bool constant needed
-        bestD = g.select(cov, g.select(near, dv, bestD), bestD);
-        bestR = g.select(cov, g.select(near, rv, bestR), bestR);
-        bestG = g.select(cov, g.select(near, gv, bestG), bestG);
-        bestB = g.select(cov, g.select(near, bv, bestB), bestB);
+        best_d = g.select(cov, g.select(near, dv, best_d), best_d);
+        best_r = g.select(cov, g.select(near, rv, best_r), best_r);
+        best_g = g.select(cov, g.select(near, gv, best_g), best_g);
+        best_b = g.select(cov, g.select(near, bv, best_b), best_b);
     }
-    g.stmt_buffer_store(out, uadd(obase, cu(0U)), fadd(g.buffer_load(out, uadd(obase, cu(0U))), bestR)); // accumulate
-    g.stmt_buffer_store(out, uadd(obase, cu(1U)), fadd(g.buffer_load(out, uadd(obase, cu(1U))), bestG));
-    g.stmt_buffer_store(out, uadd(obase, cu(2U)), fadd(g.buffer_load(out, uadd(obase, cu(2U))), bestB));
+    g.stmt_buffer_store(out, uadd(obase, cu(0U)), fadd(g.buffer_load(out, uadd(obase, cu(0U))), best_r)); // accumulate
+    g.stmt_buffer_store(out, uadd(obase, cu(1U)), fadd(g.buffer_load(out, uadd(obase, cu(1U))), best_g));
+    g.stmt_buffer_store(out, uadd(obase, cu(2U)), fadd(g.buffer_load(out, uadd(obase, cu(2U))), best_b));
     g.stmt_for_end(floop);
 
-    const int invS = cf(1.0 / static_cast<double>(S)); // mean over samples ⇒ the unbiased `over` estimate
-    g.stmt_buffer_store(out, uadd(obase, cu(0U)), fmul(g.buffer_load(out, uadd(obase, cu(0U))), invS));
-    g.stmt_buffer_store(out, uadd(obase, cu(1U)), fmul(g.buffer_load(out, uadd(obase, cu(1U))), invS));
-    g.stmt_buffer_store(out, uadd(obase, cu(2U)), fmul(g.buffer_load(out, uadd(obase, cu(2U))), invS));
+    const int inv_s = cf(1.0 / static_cast<double>(sample_count)); // mean over samples ⇒ the unbiased `over` estimate
+    g.stmt_buffer_store(out, uadd(obase, cu(0U)), fmul(g.buffer_load(out, uadd(obase, cu(0U))), inv_s));
+    g.stmt_buffer_store(out, uadd(obase, cu(1U)), fmul(g.buffer_load(out, uadd(obase, cu(1U))), inv_s));
+    g.stmt_buffer_store(out, uadd(obase, cu(2U)), fmul(g.buffer_load(out, uadd(obase, cu(2U))), inv_s));
     g.stmt_if_end(guard);
 
     k::KEntry e;
