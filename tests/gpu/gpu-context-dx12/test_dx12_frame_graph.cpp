@@ -7,8 +7,7 @@
 //    last buffer (all green). The red field surviving off-centre proves each recorded draw got its OWN heap slot.
 //  · TRANSIENT ALIASING: graph-owned transients whose lifetimes are DISJOINT share a placed-resource heap (physical <
 //    logical); OVERLAPPING-lifetime transients do NOT alias.
-// (DX12 has no ValidationCapture — Vulkan-only; the D3D12 debug layer breaks on error, and the bit-match + submit
-//  count are the observable proof.)
+// Focused regressions also use the explicit-ready DX12 capture through device teardown.
 
 #include <crd/gpu/dx12_raster_context.hpp>
 
@@ -28,6 +27,7 @@
 #include <ckir_raster_triangle.hpp> // REN-2: the shared triangle (offscreen) + textured/sample (compose) CKIR builders
 #include <ckir_vertex_pull.hpp>     // REN-40-A: the GEO-1 pull VS the indirect-count gate draws with
 #include <verb_packet_helpers.hpp>  // RAF-12.4: crd::gputest::enc_draw{,_textured,_shadow,_bindless} (shared)
+#include <dx12_validation.hpp>
 #include <win32_test_window.hpp>    // REN-38-A5: a REAL window — DXGI has no headless surface
 
 #include <catch2/catch_test_macros.hpp>
@@ -664,6 +664,68 @@ private:
 };
 } // namespace
 
+TEST_CASE("DX12 authored fullscreen clears survive cooking and reach uncovered pixels", "[dx12][validation][clear-hints]")
+{
+    namespace fc = crd::framecook;
+    using SV = crd::containers::StringView;
+    crd::memory::TlsfAllocator alloc(8U << 20U, nullptr, "authored-clears");
+    bool persistent = false;
+    SECTION("transient placed image") {}
+    SECTION("persistent committed image") { persistent = true; }
+    crd::gpu_test::qualify_dx12_workload(&alloc, [&]() {
+        auto gpu = g::create_dx12_gpu_context(&alloc);
+        auto raster = g::create_dx12_raster_context(&alloc);
+        REQUIRE(gpu != nullptr); REQUIRE(raster != nullptr);
+        kir::KGraph vertex(&alloc);
+        kir::KGraph fragment(&alloc);
+        kir::KEntry ve;
+        kir::KEntry fe;
+        crd::gputest::build_triangle_vs(vertex, ve); // Deliberately leaves the corner outside the primitive.
+        crd::gputest::build_triangle_fs(fragment, fe);
+        auto vs = gpu->create_program(vertex, ve);
+        auto fs = gpu->create_program(fragment, fe);
+        REQUIRE(vs != nullptr); REQUIRE(fs != nullptr);
+        auto program = raster->create_raster_program(*vs, *fs);
+        auto target = raster->create_color_target(32U, 32U);
+        auto graph = raster->create_frame_graph();
+        REQUIRE(program != nullptr); REQUIRE(target != nullptr); REQUIRE(graph != nullptr);
+        TestHostDx12 host(target.get(), nullptr, program.get(), nullptr);
+        fc::FrameGraphBuilder builder(&alloc, SV("authored_clear"));
+        builder.add_image(SV("paint"), g::FgImageFormat::RGBA8Unorm, 32U, 32U);
+        if (persistent) { builder.desc().resources[0].kind = fc::FrameResourceKind::PersistentImage; }
+        const auto draw = builder.add_pass(SV("paint_pass"), SV("raster.fullscreen"));
+        builder.pass_writes(draw, SV("paint"));
+        builder.pass_shader(draw, SV("test://triangle"));
+        builder.pass_clear_color(draw, 0.2F, 0.4F, 0.6F, 0.8F);
+        const auto copy = builder.add_pass(SV("copy_output"), SV("copy"));
+        builder.pass_reads(copy, SV("paint"));
+        builder.pass_writes(copy, SV("@output"));
+        REQUIRE(builder.validate() == fc::FrameCookError::Ok);
+        const auto bytes = fc::cook_frame_graph(builder.desc(), &alloc);
+        fc::FrameGraphDesc loaded(&alloc);
+        REQUIRE(fc::read_frame_graph({bytes.data(), bytes.size()}, loaded));
+        fc::FramePlans plans(&alloc);
+        crd::renderasset::DiagnosticList diags(&alloc);
+        REQUIRE(fc::build_frame_plans(loaded, plans, diags));
+        REQUIRE_FALSE(diags.has_errors());
+        fc::FrameRecorder recorder(&alloc);
+        for (crd::u32 frame = 0U; frame < 3U; ++frame)
+        {
+            graph->reset();
+            recorder.begin_frame();
+            REQUIRE(recorder.record(loaded, *graph, *raster, host, nullptr, nullptr, &plans));
+            REQUIRE(graph->build());
+            graph->execute();
+            REQUIRE(raster->valid());
+            CHECK(graph->last_submit_count() == 1U);
+            CHECK(target->read_pixel(0U, 0U) == 0xcc996633U);
+            CHECK(target->read_pixel(16U, 16U) == 0xff0000ffU);
+        }
+        // Retire callbacks before their borrowed recorder/plans leave scope.
+        graph->reset();
+    });
+}
+
 TEST_CASE("REN-36.2 GATE (DX12): the SAME cooked asset renders BIT-IDENTICALLY to the hand-written C++ frame",
           "[dx12][raster][frame-graph][ren36][gpu]")
 {
@@ -1256,7 +1318,7 @@ TEST_CASE("REN-1 GATE (DX12): build() REJECTS a dependency cycle", "[dx12][raste
 //
 // The DX12-specific hazard this pins: a persistent image is a COMMITTED resource, not a PLACED one in the
 // aliasing heap, and its RESOURCE STATE has to be carried across the frame boundary by hand. Reset the state at
-// frame start (which is right for every other node) and the barrier scheduler emits a transition FROM a state the
+// frame start while the native image is still live and the barrier scheduler emits a transition FROM a state the
 // resource is not in.
 TEST_CASE("REN-37.5 GATE (DX12): a PERSISTENT image keeps its contents across reset() and is never aliased",
           "[dx12][raster][frame-graph][ren37][gpu]")
@@ -1304,6 +1366,7 @@ TEST_CASE("REN-37.5 GATE (DX12): a PERSISTENT image keeps its contents across re
     pdesc.height  = dim;
     pdesc.format  = g::FgImageFormat::RGBA8Unorm;
     pdesc.sampled = true;
+    pdesc.optimized_clear.color[1] = 1.0F; // record_rtt_offscreen clears green.
 
     // ── FRAME 0: create the history and WRITE into it. ──
     {
@@ -1320,6 +1383,9 @@ TEST_CASE("REN-37.5 GATE (DX12): a PERSISTENT image keeps its contents across re
     }
 
     fgraph->reset(); // ⛔ the operation that destroys every transient
+    // An optimization-only hint change must not recreate a persistent image or erase the pixels below.
+    pdesc.optimized_clear.color[0] = 1.0F;
+    pdesc.optimized_clear.color[1] = 0.0F;
 
     // ── FRAME 1: same key, READ what frame 0 wrote. ──
     {

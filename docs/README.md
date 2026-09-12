@@ -38,15 +38,15 @@ python scripts/check-master-plan.py
 ```
 
 Queries read the same table. The validator checks links, IDs/dependencies, completion evidence, size budgets and
-[strict order](ROADMAP.md#strict-sequential-execution): context is the first unfinished row; no later active or Done
-row is allowed. A blocked gate stops advancement. Passing establishes documentation structure, not engine correctness.
+[order](ROADMAP.md#strict-sequential-execution): context is the earliest available work; CI-only waits stay visible
+without stopping it. No open work is silently skipped. Passing proves documentation structure, not engine correctness.
 
 ## Start a slice
 
 Read AGENTS → PRINCIPLES → SANITY → MEMORY index → context → the exact ROADMAP row. Open its detail/ADR and
 relevant source; read BUILDING/CODING before code. Name the purpose, inherited scope, prerequisites and evidence
-needed. Work only on the first unfinished row and finish its whole contract before the next. Existing authorization
-does not permit skipping a blocked row; a query cannot start a loop or accept a design decision.
+needed. Start with the earliest unfinished work unless the user explicitly directs a future slice. Needs CI never
+means Done; continue available work while retaining it. A query cannot start a loop or accept a design decision.
 
 ## Track a bug or finding
 

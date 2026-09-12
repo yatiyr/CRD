@@ -3,9 +3,13 @@
 // sub-allocated per dispatch; RAW (ByteAddressBuffer) UAVs so no element-type is baked into the interface. Mirrors the
 // Vulkan backend's recorder shape (copy / barrier / dispatch → submit_and_wait). D3D12 helpers mirror crd-kir-dx12.
 
+#include "dx12_device_scope.hpp"
+#include "dx12_execution.hpp"
+
 #include <crd/gpu/dx12_compute_context.hpp>
 
 #include <crd/containers/string.hpp>
+#include <crd/containers/hash_set.hpp>
 #include <crd/core/types.hpp>
 
 #include <cstring>
@@ -23,6 +27,22 @@ using Microsoft::WRL::ComPtr;
 namespace
 {
 constexpr crd::u32 kHeapDescriptors = 8192U; // UAV descriptors per begin() window (sub-allocated per dispatch)
+constexpr crd::u64 kPipelineCacheMagic = 0x3130435058445243ULL; // "CRDXPC01", little-endian envelope version 1.
+constexpr crd::usize kPipelineCacheHeader = 32U;
+constexpr crd::u64 kPipelineCacheKeys = 65536U;
+constexpr crd::u64 kPipelineCacheBytes = 256U << 20U;
+
+void cache_write_u64(crd::u8* bytes, crd::u64 value) noexcept
+{
+    for (crd::u32 index = 0; index < 8U; ++index) { bytes[index] = static_cast<crd::u8>(value >> (index * 8U)); }
+}
+
+crd::u64 cache_read_u64(const crd::u8* bytes) noexcept
+{
+    crd::u64 value = 0U;
+    for (crd::u32 index = 0; index < 8U; ++index) { value |= static_cast<crd::u64>(bytes[index]) << (index * 8U); }
+    return value;
+}
 
 D3D12_RESOURCE_STATES access_state(ComputeAccess a) noexcept
 {
@@ -104,6 +124,9 @@ struct PipelineImpl final : ComputePipeline
 // ── context + recorder (the Impl IS the recorder, like the Vulkan backend) ──────────────────────────────────────────
 struct Dx12ComputeContext::Impl final : ComputeRecorder
 {
+    explicit Impl(crd::memory::IAllocator* allocator) : alloc(allocator), lib_blob(allocator), pipe_keys(allocator) {}
+
+    detail::Dx12DeviceScope validation;
     crd::memory::IAllocator*          alloc = nullptr;
     ComPtr<ID3D12Device>              device;
     ComPtr<ID3D12CommandQueue>        queue;
@@ -114,8 +137,9 @@ struct Dx12ComputeContext::Impl final : ComputeRecorder
     ComPtr<ID3D12DescriptorHeap>      heap; // shader-visible CBV_SRV_UAV
     ComPtr<ID3D12CommandSignature>    dispatch_sig; // C5: lazily-created DISPATCH indirect command signature (ExecuteIndirect)
     ComPtr<ID3D12Device1>             device1;       // D4: for the pipeline library (the PSO cache)
-    ComPtr<ID3D12PipelineLibrary>     pipe_lib;      // D4: persistent PSO cache across runs (null ⇒ uncached fallback)
     crd::containers::Array<crd::u8>   lib_blob;      // D4: owns the warm-start blob — CreatePipelineLibrary does NOT copy it
+    crd::containers::HashSet<crd::u64> pipe_keys;    // Native library has no membership query; never probe a known miss.
+    ComPtr<ID3D12PipelineLibrary>     pipe_lib;      // Destroy before its borrowed lib_blob backing storage.
     UINT                              heap_incr = 0;
     UINT                              heap_next = 0; // sub-alloc cursor, reset each begin()
     HANDLE                            event     = nullptr;
@@ -145,6 +169,7 @@ struct Dx12ComputeContext::Impl final : ComputeRecorder
 
     void copy(ComputeBuffer& src, ComputeBuffer& dst, crd::u64 src_off, crd::u64 dst_off, crd::u64 bytes) override
     {
+        if (!ok) { return; }
         auto& s = static_cast<BufferImpl&>(src);
         auto& d = static_cast<BufferImpl&>(dst);
         ensure_state(s, D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -154,6 +179,7 @@ struct Dx12ComputeContext::Impl final : ComputeRecorder
 
     void barrier(ComputeBuffer& buf, ComputeAccess /*from*/, ComputeAccess to) override
     {
+        if (!ok) { return; }
         auto&      b    = static_cast<BufferImpl&>(buf);
         const auto want = access_state(to);
         if (b.fixed) { return; }
@@ -203,6 +229,7 @@ struct Dx12ComputeContext::Impl final : ComputeRecorder
     void dispatch(ComputePipeline& pipeline, crd::containers::ConstSpan<ComputeBuffer*> bindings, const void* push,
                   crd::u32 push_size, crd::u32 gx, crd::u32 gy, crd::u32 gz) override
     {
+        if (!ok) { return; }
         bind_compute(pipeline, bindings, push, push_size);
         list->Dispatch(gx > 0U ? gx : 1U, gy > 0U ? gy : 1U, gz > 0U ? gz : 1U);
     }
@@ -212,6 +239,7 @@ struct Dx12ComputeContext::Impl final : ComputeRecorder
     void dispatch_indirect(ComputePipeline& pipeline, crd::containers::ConstSpan<ComputeBuffer*> bindings, const void* push,
                            crd::u32 push_size, ComputeBuffer& args, crd::u64 args_offset) override
     {
+        if (!ok) { return; }
         if (!dispatch_sig)
         {
             D3D12_INDIRECT_ARGUMENT_DESC arg{};
@@ -229,11 +257,11 @@ struct Dx12ComputeContext::Impl final : ComputeRecorder
     }
 };
 
-Dx12ComputeContext::Dx12ComputeContext(crd::memory::IAllocator* alloc) : m_impl(std::make_unique<Impl>())
+Dx12ComputeContext::Dx12ComputeContext(crd::memory::IAllocator* alloc) : m_impl(std::make_unique<Impl>(alloc))
 {
     auto& impl = *m_impl;
     impl.alloc = alloc;
-    if (FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&impl.device)))) { return; }
+    if (FAILED(impl.validation.create(impl.device))) { return; }
     D3D12_COMMAND_QUEUE_DESC qd{};
     qd.Type = D3D12_COMMAND_LIST_TYPE_COMPUTE;
     if (FAILED(impl.device->CreateCommandQueue(&qd, IID_PPV_ARGS(&impl.queue)))) { return; }
@@ -260,7 +288,7 @@ Dx12ComputeContext::Dx12ComputeContext(crd::memory::IAllocator* alloc) : m_impl(
     }
     if (FAILED(impl.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE, IID_PPV_ARGS(&impl.cmd_alloc)))) { return; }
     if (FAILED(impl.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COMPUTE, impl.cmd_alloc.Get(), nullptr, IID_PPV_ARGS(&impl.list)))) { return; }
-    impl.list->Close();
+    if (FAILED(impl.list->Close())) { return; }
     if (FAILED(impl.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&impl.fence)))) { return; }
     impl.event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
 
@@ -292,7 +320,10 @@ Dx12ComputeContext::~Dx12ComputeContext()
     if (m_impl->event != nullptr) { CloseHandle(m_impl->event); }
 }
 
-bool Dx12ComputeContext::valid() const noexcept { return m_impl->ok; }
+bool Dx12ComputeContext::valid() const noexcept
+{
+    return m_impl->ok && SUCCEEDED(m_impl->device->GetDeviceRemovedReason());
+}
 bool Dx12ComputeContext::supports_shader_int64() const noexcept { return false; } // not queried in this slice
 // REN-38: the device truths the warp-synchronous kernels are built against. D3D12 pins compute-shader TGSM at
 // 32 KB by spec; the wave width comes from OPTIONS1 (WaveLaneCountMin — the width WaveGetLaneCount() delivers
@@ -306,32 +337,67 @@ crd::u32 Dx12ComputeContext::subgroup_size() const noexcept
 }
 crd::u32 Dx12ComputeContext::shared_memory_bytes() const noexcept { return 32768U; } // D3D12 CS TGSM spec limit
 
-// D4: serialize the pipeline library (the PSO cache) so it can be persisted to disk.
+// The indexed envelope avoids warning-producing LoadComputePipeline probes for absent names, including after reload.
+// All lengths are bounded and encoded explicitly; the checksum detects corruption, not malicious authentication.
 void Dx12ComputeContext::pipeline_cache_data(crd::containers::Array<crd::u8>& out) const
 {
     auto& impl = *m_impl;
     out.resize(0);
     if (!impl.pipe_lib) { return; }
     const SIZE_T sz = impl.pipe_lib->GetSerializedSize();
-    if (sz == 0) { return; }
-    out.resize(sz);
-    if (FAILED(impl.pipe_lib->Serialize(out.data(), sz))) { out.resize(0); }
+    if (sz == 0U || sz > kPipelineCacheBytes || impl.pipe_keys.size() > kPipelineCacheKeys) { return; }
+    const crd::usize offset = kPipelineCacheHeader + impl.pipe_keys.size() * 8U;
+    out.resize(offset + sz);
+    cache_write_u64(out.data(), kPipelineCacheMagic);
+    cache_write_u64(out.data() + 8U, impl.pipe_keys.size());
+    cache_write_u64(out.data() + 16U, sz);
+    crd::usize cursor = kPipelineCacheHeader;
+    for (const crd::u64 key : impl.pipe_keys)
+    {
+        cache_write_u64(out.data() + cursor, key);
+        cursor += 8U;
+    }
+    if (FAILED(impl.pipe_lib->Serialize(out.data() + offset, sz))) { out.resize(0); return; }
+    cache_write_u64(out.data() + 24U, crd::containers::fnv1a_64(out.data() + kPipelineCacheHeader,
+                                                              out.size() - kPipelineCacheHeader));
 }
 
-// D4: reseed the pipeline library from a persisted blob — call BEFORE creating pipelines for a warm start. The blob is COPIED
-// into lib_blob because CreatePipelineLibrary references it for the library's lifetime. A blob from another driver/adapter is
-// rejected (version/adapter mismatch) → fall back to an empty library so creation still works.
+// Construct a replacement independently. Failed/malformed/legacy input preserves the working library; an empty input
+// explicitly resets it. Release the old native library BEFORE replacing the storage it borrows.
 bool Dx12ComputeContext::warm_pipeline_cache(crd::containers::ConstSpan<crd::u8> blob)
 {
     auto& impl = *m_impl;
     if (!impl.device1) { return false; }
-    impl.lib_blob.resize(0);
-    for (crd::usize i = 0; i < blob.size(); ++i) { impl.lib_blob.push_back(blob[i]); }
+    crd::containers::Array<crd::u8> fresh_blob(impl.alloc);
+    crd::containers::HashSet<crd::u64> fresh_keys(impl.alloc);
+    if (!blob.empty())
+    {
+        if (blob.size() < kPipelineCacheHeader || cache_read_u64(blob.data()) != kPipelineCacheMagic) { return false; }
+        const crd::u64 count = cache_read_u64(blob.data() + 8U);
+        const crd::u64 bytes = cache_read_u64(blob.data() + 16U);
+        if (count > kPipelineCacheKeys || bytes == 0U || bytes > kPipelineCacheBytes) { return false; }
+        const crd::u64 offset = kPipelineCacheHeader + count * 8U;
+        if (offset > blob.size() || bytes != blob.size() - offset) { return false; }
+        if (cache_read_u64(blob.data() + 24U) != crd::containers::fnv1a_64(blob.data() + kPipelineCacheHeader,
+                                                                         blob.size() - kPipelineCacheHeader))
+        {
+            return false;
+        }
+        fresh_keys.reserve(static_cast<crd::usize>(count));
+        for (crd::u64 index = 0; index < count; ++index)
+        {
+            if (!fresh_keys.insert(cache_read_u64(blob.data() + kPipelineCacheHeader + index * 8U))) { return false; }
+        }
+        fresh_blob.resize(static_cast<crd::usize>(bytes));
+        std::memcpy(fresh_blob.data(), blob.data() + offset, static_cast<crd::usize>(bytes));
+    }
     ComPtr<ID3D12PipelineLibrary> fresh;
-    const bool seeded = !impl.lib_blob.empty()
-        && SUCCEEDED(impl.device1->CreatePipelineLibrary(impl.lib_blob.data(), impl.lib_blob.size(), IID_PPV_ARGS(&fresh)));
-    if (!seeded && FAILED(impl.device1->CreatePipelineLibrary(nullptr, 0, IID_PPV_ARGS(&fresh)))) { return false; }
-    impl.pipe_lib = fresh;
+    if (FAILED(impl.device1->CreatePipelineLibrary(fresh_blob.empty() ? nullptr : fresh_blob.data(), fresh_blob.size(),
+                                                  IID_PPV_ARGS(&fresh)))) { return false; }
+    impl.pipe_lib.Reset();
+    impl.lib_blob = std::move(fresh_blob);
+    impl.pipe_keys = std::move(fresh_keys);
+    impl.pipe_lib = std::move(fresh);
     return true;
 }
 
@@ -365,7 +431,8 @@ std::unique_ptr<ComputeBuffer> Dx12ComputeContext::create_buffer(crd::u64 bytes,
 
 // Build the root signature + compute PSO from a DXIL byte range. Shared by the HLSL (compile-then-build) and the pre-compiled
 // DXIL (D2 cooked-bundle load) entry points — root layout: [0] UAV table u0..u{n-1}; [1] 32-bit root constants at b0 (push>0).
-static std::unique_ptr<ComputePipeline> build_dxil_pipeline(ID3D12Device* device, ID3D12PipelineLibrary* lib, const void* code,
+static std::unique_ptr<ComputePipeline> build_dxil_pipeline(ID3D12Device* device, ID3D12PipelineLibrary* lib,
+                                                            crd::containers::HashSet<crd::u64>& keys, const void* code,
                                                             SIZE_T len, int n_bindings, crd::u32 push_size)
 {
     D3D12_DESCRIPTOR_RANGE range{};
@@ -404,15 +471,21 @@ static std::unique_ptr<ComputePipeline> build_dxil_pipeline(ID3D12Device* device
     bool made = false;
     if (lib != nullptr)
     {
-        crd::u64    h = 1469598103934665603ULL;
-        const auto* p = static_cast<const crd::u8*>(code);
-        for (SIZE_T i = 0; i < len; ++i) { h = (h ^ p[i]) * 1099511628211ULL; }
-        h = (h ^ static_cast<crd::u64>(n_bindings)) * 1099511628211ULL;
-        h = (h ^ push_size) * 1099511628211ULL;
+        const crd::u64 h = crd::containers::hash_u64(crd::containers::fnv1a_64(code, len)
+            ^ (static_cast<crd::u64>(n_bindings) << 32U) ^ push_size);
         wchar_t name[24];
         swprintf(name, 24, L"p%016llx", static_cast<unsigned long long>(h));
-        if (SUCCEEDED(lib->LoadComputePipeline(name, &pd, IID_PPV_ARGS(&pl->pso)))) { made = true; }
-        else if (SUCCEEDED(device->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pl->pso)))) { (void)lib->StorePipeline(name, pl->pso.Get()); made = true; }
+        if (keys.contains(h))
+        {
+            const HRESULT result = lib->LoadComputePipeline(name, &pd, IID_PPV_ARGS(&pl->pso));
+            if (FAILED(result)) { detail::dx12_execution_failure(result, "load indexed compute pipeline"); return nullptr; }
+            made = true;
+        }
+        else if (SUCCEEDED(device->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pl->pso))))
+        {
+            if (keys.size() < kPipelineCacheKeys && SUCCEEDED(lib->StorePipeline(name, pl->pso.Get()))) { keys.insert(h); }
+            made = true;
+        }
     }
     if (!made && FAILED(device->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pl->pso)))) { return nullptr; }
     pl->n_bindings = n_bindings;
@@ -429,7 +502,7 @@ std::unique_ptr<ComputePipeline> Dx12ComputeContext::create_pipeline_from_hlsl(c
     const crd::containers::String src(hlsl.data(), hlsl.size(), impl.alloc); // dxc needs a null-terminated buffer
     ComPtr<IDxcBlob>              dxil;
     if (!compile_dxil(impl.dxc.Get(), src.c_str(), dxil)) { return nullptr; }
-    return build_dxil_pipeline(impl.device.Get(), impl.pipe_lib.Get(), dxil->GetBufferPointer(), dxil->GetBufferSize(), n_bindings, push_size);
+    return build_dxil_pipeline(impl.device.Get(), impl.pipe_lib.Get(), impl.pipe_keys, dxil->GetBufferPointer(), dxil->GetBufferSize(), n_bindings, push_size);
 }
 
 std::unique_ptr<ComputePipeline> Dx12ComputeContext::create_pipeline_from_dxil(crd::containers::ConstSpan<crd::u8> dxil,
@@ -437,7 +510,7 @@ std::unique_ptr<ComputePipeline> Dx12ComputeContext::create_pipeline_from_dxil(c
 {
     auto& impl = *m_impl;
     if (!impl.ok || n_bindings <= 0 || dxil.empty()) { return nullptr; }
-    return build_dxil_pipeline(impl.device.Get(), impl.pipe_lib.Get(), dxil.data(), static_cast<SIZE_T>(dxil.size()), n_bindings, push_size);
+    return build_dxil_pipeline(impl.device.Get(), impl.pipe_lib.Get(), impl.pipe_keys, dxil.data(), static_cast<SIZE_T>(dxil.size()), n_bindings, push_size);
 }
 
 std::unique_ptr<ComputePipeline> Dx12ComputeContext::create_pipeline(crd::containers::StringView /*shader_dir*/,
@@ -452,8 +525,11 @@ std::unique_ptr<ComputePipeline> Dx12ComputeContext::create_pipeline(crd::contai
 ComputeRecorder& Dx12ComputeContext::begin()
 {
     auto& impl = *m_impl;
-    impl.cmd_alloc->Reset();
-    impl.list->Reset(impl.cmd_alloc.Get(), nullptr);
+    if (!valid() || FAILED(detail::dx12_reset(impl.cmd_alloc.Get(), impl.list.Get())))
+    {
+        impl.ok = false;
+        return impl;
+    }
     ID3D12DescriptorHeap* heaps[] = {impl.heap.Get()};
     impl.list->SetDescriptorHeaps(1, heaps);
     impl.heap_next = 0;
@@ -465,21 +541,21 @@ ComputeRecorder& Dx12ComputeContext::begin()
 void Dx12ComputeContext::submit_and_wait()
 {
     auto& impl = *m_impl;
+    if (!valid()) { impl.ok = false; return; }
     // CGP-0: end timestamp + resolve the two ticks into the READBACK buffer (both before Close).
     if (impl.ts_ok)
     {
         impl.list->EndQuery(impl.ts_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 1U);
         impl.list->ResolveQueryData(impl.ts_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0U, 2U, impl.ts_readback.Get(), 0U);
     }
-    impl.list->Close();
-    ID3D12CommandList* lists[] = {impl.list.Get()};
-    impl.queue->ExecuteCommandLists(1, lists);
-    ++impl.fence_val;
-    impl.queue->Signal(impl.fence.Get(), impl.fence_val);
-    if (impl.fence->GetCompletedValue() < impl.fence_val)
+    bool submitted = false;
+    if (FAILED(detail::dx12_submit(impl.device.Get(), impl.queue.Get(), impl.list.Get(), impl.fence.Get(),
+                                  impl.fence_val, submitted))
+        || FAILED(detail::dx12_wait(impl.device.Get(), impl.fence.Get(), impl.fence_val, impl.event)))
     {
-        impl.fence->SetEventOnCompletion(impl.fence_val, impl.event);
-        WaitForSingleObject(impl.event, INFINITE);
+        impl.ok = false;
+        impl.last_gpu_ms_v = 0.0;
+        return;
     }
     // CGP-0: read the resolved ticks now that the GPU has finished. end >= start ⇒ elapsed ms; otherwise leave 0.
     if (impl.ts_ok)

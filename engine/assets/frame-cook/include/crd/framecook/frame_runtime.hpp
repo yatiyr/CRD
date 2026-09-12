@@ -380,6 +380,15 @@ struct FramePlans
     // ── owned internals (do not touch directly) ── the CeirPassPlans in `table` point into these, so neither moves. ──
     crd::ceir::Context* ctx = nullptr; // heap; holds every migrated pass's CEIR module (Context is non-movable → a pointer)
     crd::containers::Array<crd::containers::Array<crd::ceir::gpu::LoweredCommand>> storage; // per-pass, reserved EXACTLY
+    // Resource-index parallel, derived once from the same CEIR attachment decoder as execution. First known
+    // Clear wins independently for color/depth; Load/DontCare and unknown/custom commands never invent a hint.
+    struct ClearHint
+    {
+        crd::gpu::FgClearHint value{};
+        bool color_set = false;
+        bool depth_set = false;
+    };
+    crd::containers::Array<ClearHint> clear_hints;
     crd::memory::IAllocator* alloc = nullptr;
 };
 

@@ -96,8 +96,8 @@ void bind_handles(gpu::ComputeBuffer** binds, crd::containers::ConstSpan<ceg::Wo
 {
     for (crd::u32 i = 0; i < static_cast<crd::u32>(handles.size()); ++i)
     {
-        binds[i] = reinterpret_cast<gpu::ComputeBuffer*>(
-            handles[i]); // NOLINT(performance-no-int-to-ptr) — the RtSceneHandle-as-pointer precedent
+        // WorkBufferHandle carries the caller-owned buffer pointer through the portable hook ABI.
+        binds[i] = reinterpret_cast<gpu::ComputeBuffer*>(handles[i]); // NOLINT(performance-no-int-to-ptr)
     }
 }
 bool smoke_dispatch(const ce::Operation* op, crd::containers::ConstSpan<crd::u8> /*kb*/,
@@ -144,8 +144,7 @@ TEST_CASE(
     auto ctx = gpu::create_vulkan_gpu_context(gcfg);
     if (ctx == nullptr)
     {
-        WARN("no Vulkan device available; skipping");
-        return;
+        SKIP("no Vulkan device available");
     }
     auto* vkctx = static_cast<gpu::VulkanGpuContext*>(ctx.get());
 
@@ -161,7 +160,7 @@ TEST_CASE(
 
     // (b) buffers (the portable dev/up/rb mold). queue = header (count,1,1) + records; out = [atomic counter, count
     // readback].
-    constexpr crd::u32 kN = 5U;
+    constexpr crd::u32 expected_count = 5U;
     constexpr crd::u64 q_bytes = (3U + 16U) * 4U; // (count,1,1) header + 16 record slots
     constexpr crd::u64 o_bytes = 2U * 4U;
     using gpu::compute_usage::indirect;
@@ -261,10 +260,10 @@ TEST_CASE(
     // multi-bounce, ledgered).
     auto* const qout = static_cast<crd::u32*>(q_rb->map());
     auto* const oout = static_cast<crd::u32*>(o_rb->map());
-    CHECK(qout[0] == kN); // produce wrote the DEVICE count into the queue header
-    CHECK(oout[0] == kN); // ⭐ consume ran N invocations — the INDIRECT dispatch was DEVICE-COUNT-sized, not host-sized
+    CHECK(qout[0] == expected_count); // produce wrote the DEVICE count into the queue header
+    CHECK(oout[0] == expected_count); // ⭐ consume ran N invocations — the INDIRECT dispatch was DEVICE-COUNT-sized, not host-sized
     CHECK(oout[1] ==
-          kN); // each invocation read queue[0] == the device count (the queue descriptor was live + coherent)
+          expected_count); // each invocation read queue[0] == the device count (the queue descriptor was live + coherent)
     q_rb->unmap();
     o_rb->unmap();
 }

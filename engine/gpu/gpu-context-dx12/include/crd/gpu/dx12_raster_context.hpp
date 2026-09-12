@@ -20,6 +20,7 @@ namespace crd::gpu
 
 // Create a D3D12 raster context. Returns nullptr if D3D12 / a graphics device is unavailable (non-Windows, no adapter).
 // The returned object is an `IRasterContext`; a consumer never sees D3D12.
+// The allocator owns frame-descriptor page metadata and must outlive the context and its graphs. Null is rejected.
 [[nodiscard]] std::unique_ptr<IRasterContext>
 create_dx12_raster_context(crd::memory::IAllocator* alloc = crd::memory::default_allocator());
 

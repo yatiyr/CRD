@@ -96,6 +96,48 @@ namespace
 }
 } // namespace
 
+bool materialize_color_attachment_desc(const Context& ctx, const Operation* attachment,
+                                       crd::gpu::ColorAttachmentDesc& out)
+{
+    out = crd::gpu::ColorAttachmentDesc{};
+    if (attachment == nullptr || ctx.op_name(attachment->kind()) != containers::StringView("render.color_attachment"))
+    {
+        return false;
+    }
+    out.load  = load_op_of(ctx, attachment);
+    out.store = store_op_of(ctx, attachment);
+    out.blend = blend_of(ctx, attachment);
+    if (str_attr(ctx, attachment, containers::StringView("clear_kind")) == containers::StringView("uint"))
+    {
+        out.clear_kind = crd::gpu::ClearKind::Uint;
+        out.clear_uint = static_cast<crd::u32>(int_attr(ctx, attachment, containers::StringView("clear_uint"), 0));
+    }
+    else
+    {
+        out.clear.r = float_attr(ctx, attachment, containers::StringView("clear_r"), 0.0F);
+        out.clear.g = float_attr(ctx, attachment, containers::StringView("clear_g"), 0.0F);
+        out.clear.b = float_attr(ctx, attachment, containers::StringView("clear_b"), 0.0F);
+        out.clear.a = float_attr(ctx, attachment, containers::StringView("clear_a"), 0.0F);
+    }
+    return true;
+}
+
+bool materialize_depth_attachment_desc(const Context& ctx, const Operation* attachment,
+                                       crd::gpu::DepthStencilAttachmentDesc& out)
+{
+    out = crd::gpu::DepthStencilAttachmentDesc{};
+    if (attachment == nullptr || ctx.op_name(attachment->kind()) != containers::StringView("render.depth_attachment"))
+    {
+        return false;
+    }
+    out.enabled     = true;
+    out.load        = load_op_of(ctx, attachment);
+    out.store       = store_op_of(ctx, attachment);
+    out.clear_depth = float_attr(ctx, attachment, containers::StringView("clear_depth"), 1.0F);
+    out.compare     = compare_of(ctx, attachment);
+    return true;
+}
+
 bool materialize_rendering_desc(const Context& ctx, const Operation* scope_op, RasterTargetResolveFn resolver, void* user,
                                 crd::gpu::RenderingDesc& out)
 {
@@ -112,24 +154,8 @@ bool materialize_rendering_desc(const Context& ctx, const Operation* scope_op, R
         {
             if (out.color.size() >= crd::gpu::kMaxColorAttachments) { return false; }
             crd::gpu::ColorAttachmentDesc c;
+            if (!materialize_color_attachment_desc(ctx, att, c)) { return false; }
             c.target = resolver(att, user);
-            c.load   = load_op_of(ctx, att);
-            c.store  = store_op_of(ctx, att);
-            c.blend  = blend_of(ctx, att);
-            // ⭐ RAH-1a.1 end-to-end: a `uint` typed-clear selects clear_uint (the R32_UINT id target) over the float clear.
-            if (str_attr(ctx, att, containers::StringView("clear_kind")) == containers::StringView("uint"))
-            {
-                c.clear_kind = crd::gpu::ClearKind::Uint;
-                c.clear_uint = static_cast<crd::u32>(int_attr(ctx, att, containers::StringView("clear_uint"), 0));
-            }
-            else
-            {
-                c.clear_kind = crd::gpu::ClearKind::Float;
-                c.clear.r    = float_attr(ctx, att, containers::StringView("clear_r"), 0.0F);
-                c.clear.g    = float_attr(ctx, att, containers::StringView("clear_g"), 0.0F);
-                c.clear.b    = float_attr(ctx, att, containers::StringView("clear_b"), 0.0F);
-                c.clear.a    = float_attr(ctx, att, containers::StringView("clear_a"), 0.0F);
-            }
             out.color.push_back(c);
         }
         else if (nm == containers::StringView("render.depth_attachment"))
@@ -144,12 +170,8 @@ bool materialize_rendering_desc(const Context& ctx, const Operation* scope_op, R
             crd::gpu::IRasterTarget* const dt = resolver(att, user);
             if (dt != nullptr)
             {
-                out.depth.enabled     = true;
+                if (!materialize_depth_attachment_desc(ctx, att, out.depth)) { return false; }
                 out.depth.target      = dt;
-                out.depth.load        = load_op_of(ctx, att);
-                out.depth.store       = store_op_of(ctx, att);
-                out.depth.clear_depth = float_attr(ctx, att, containers::StringView("clear_depth"), 1.0F);
-                out.depth.compare     = compare_of(ctx, att);
                 // ⛔ `read_only` → the per-draw depth-WRITE disable (RasterState), a draw-state concern; named-forward.
             }
         }

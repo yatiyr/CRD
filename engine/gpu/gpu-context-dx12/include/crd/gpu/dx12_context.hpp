@@ -44,8 +44,9 @@ enum class Dx12AdapterKind : u8
     Software
 };
 
-// Classify the actual DEFAULT device's LUID through DXGI and the kernel adapter-type query. BasicRender may omit
-// DXGI's software flag. Unknown includes failed/contradictory queries and never establishes hardware qualification.
+// Classify the actual DEFAULT device's LUID through DXGI and the kernel adapter-type query. The documented
+// BasicRender identity can omit both software flags; hardware needs positive kernel rendering evidence.
+// Unknown includes failed/contradictory queries and never establishes hardware qualification.
 [[nodiscard]] Dx12AdapterKind dx12_default_adapter_kind() noexcept;
 
 // Compatibility query for existing numerical consumers: true only for positively identified software execution.

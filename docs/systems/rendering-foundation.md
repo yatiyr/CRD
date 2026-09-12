@@ -7,6 +7,9 @@ The current rendering stack is gpu-context + CEIR/CKIR + the render-asset module
 modules are retired ([ADR-0105](../decisions/0105-retire-rhi-renderer-gpu-context-is-the-graphics-layer.md)).
 This overview describes ownership; [ROADMAP](../ROADMAP.md#master-table) alone tracks remaining work.
 
+Feature queries require behavioural evidence: the [inner-coverage recipe](../recipes/2026-09-13-dx12-inner-coverage.md)
+shows exact pixel probes and native provider isolation. Adapter identity alone never qualifies feature semantics.
+
 ## Asset to frame
 
 ```mermaid
@@ -69,3 +72,20 @@ The planned UiWorld and SceneWorld are separate consumers of common Canvas/rende
 [ADR-0107](../decisions/0107-ui-2d-architecture.md) and the
 [execution contract](../design/renderer-ui-execution-contract.md). The
 [older RAF overview](../archive/2026-09-12-superseded-plans.md#system-rendering-foundation) is retained as history.
+
+## Native DX12 diagnostic boundary
+
+[Bounded validation and checked execution](../recipes/2026-09-12-dx12-validation-and-command-lifetimes.md) covers the
+gpu-context-dx12 program, compute, raster, RT and work-graph context lifetimes. Construct capture before all native
+devices and assert actual workload oracles separately. Standalone kir-dx12 is outside that registry; RAH-6.b owns
+acyclic integration. [Evidence](../sessions/2026-09-12-dx12-validation-foundation.md); ROADMAP owns qualification.
+
+The DX12 [state/alias model](../recipes/2026-09-13-dx12-resource-states.md) retains actual image states across execution,
+activates placed-resource aliases and balances shared indirect-buffer roles. Graphics PSOs qualify actual pass
+attachments on use; owning shader bytes/root state alone does not qualify an attachment combination.
+The native [descriptor recording arena](../recipes/2026-09-13-dx12-frame-descriptors.md) reserves complete command
+tables, grows within explicit bounds and reuses pages after retirement. RAH-2 still owns authored resource tables.
+
+[Consumer contracts](../recipes/2026-09-13-dx12-consumer-contracts.md) defines HLSL interface ordering, native cache
+ownership and CEIR-derived clear hints. Fullscreen authored clears now survive plan construction; optimization
+metadata never initializes an image or invalidates temporal history by itself.

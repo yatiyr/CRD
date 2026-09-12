@@ -44,6 +44,6 @@ consumer checks → evidence → close child → close parent only when all obli
 New lessons go in [MEMORY](../MEMORY.md)'s relevant reference or an educative recipe. This file stays short;
 historical stories do not grow back into the mandatory reading path.
 
-**Sequence check:** context must name the first unfinished master row. Finish it fully before advancing; a blocked
-gate stops the sequence. No parallel later work or reordered rows to hide gaps. Follow the
+**Sequence check:** start at the earliest unfinished work unless explicitly directed otherwise. Needs CI retains the
+gate while available work continues; no skipped requirement or invented completion. Follow the
 [strict rule](ROADMAP.md#strict-sequential-execution) and [cross-domain quality contract](design/system-quality-contract.md).

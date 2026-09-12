@@ -2,6 +2,9 @@
 // Dx12RayTracingContext one-shot COMPUTE queue + fence pattern; the delta is the WORK-GRAPH state object (a DXIL node
 // library + a global root sig + a D3D12_WORK_GRAPH subobject) and DispatchGraph (the GPU self-schedules the node chain).
 
+#include "dx12_device_scope.hpp"
+#include "dx12_execution.hpp"
+
 #include <crd/gpu/dx12_work_graph_context.hpp>
 
 #include <d3d12.h>
@@ -60,6 +63,7 @@ void transition(ID3D12GraphicsCommandList* list, ID3D12Resource* r, D3D12_RESOUR
 
 struct Dx12WorkGraphContext::Impl
 {
+    detail::Dx12DeviceScope validation;
     ComPtr<ID3D12Device9>               device;
     ComPtr<ID3D12CommandQueue>          queue;
     ComPtr<ID3D12CommandAllocator>      cmd_alloc;
@@ -69,28 +73,27 @@ struct Dx12WorkGraphContext::Impl
     UINT64                              fence_val = 0;
     bool                                ok        = false;
 
-    void submit_and_wait()
+    [[nodiscard]] bool submit_and_wait()
     {
-        list->Close();
-        ID3D12CommandList* lists[] = {list.Get()};
-        queue->ExecuteCommandLists(1, lists);
-        ++fence_val;
-        queue->Signal(fence.Get(), fence_val);
-        if (fence->GetCompletedValue() < fence_val)
+        if (!ok) { return false; }
+        bool submitted = false;
+        if (FAILED(detail::dx12_submit(device.Get(), queue.Get(), list.Get(), fence.Get(), fence_val, submitted))
+            || FAILED(detail::dx12_wait(device.Get(), fence.Get(), fence_val, event))
+            || FAILED(detail::dx12_reset(cmd_alloc.Get(), list.Get())))
         {
-            fence->SetEventOnCompletion(fence_val, event);
-            WaitForSingleObject(event, INFINITE);
+            ok = false;
+            return false;
         }
-        cmd_alloc->Reset();
-        list->Reset(cmd_alloc.Get(), nullptr);
+        return true;
     }
+
 };
 
 Dx12WorkGraphContext::Dx12WorkGraphContext() : m_impl(std::make_unique<Impl>())
 {
     auto&                impl = *m_impl;
     ComPtr<ID3D12Device> dev0;
-    if (FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&dev0)))) { return; }
+    if (FAILED(impl.validation.create(dev0))) { return; }
     if (FAILED(dev0.As(&impl.device))) { return; } // ID3D12Device9: CreateStateObject(work graph) + OPTIONS21
     D3D12_FEATURE_DATA_D3D12_OPTIONS21 o21{};
     if (FAILED(impl.device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS21, &o21, sizeof(o21)))) { return; }
@@ -119,7 +122,7 @@ Dx12WorkGraphContext::~Dx12WorkGraphContext()
     if (m_impl->event != nullptr) { CloseHandle(m_impl->event); }
 }
 
-bool Dx12WorkGraphContext::valid() const noexcept { return m_impl->ok; }
+bool Dx12WorkGraphContext::valid() const noexcept { return m_impl->ok && SUCCEEDED(m_impl->device->GetDeviceRemovedReason()); }
 
 bool Dx12WorkGraphContext::dispatch_graph(crd::containers::ConstSpan<crd::u8> node_dxil, const char* program_name,
                                           crd::containers::ConstSpan<Binding> bindings)
@@ -245,7 +248,7 @@ bool Dx12WorkGraphContext::dispatch_graph(crd::containers::ConstSpan<crd::u8> no
         if (rb_bufs[i] == nullptr) { return false; }
         impl.list->CopyResource(rb_bufs[i].Get(), dev_bufs[i].Get());
     }
-    impl.submit_and_wait();
+    if (!impl.submit_and_wait()) { return false; }
     for (crd::u32 i = 0; i < nb; ++i)
     {
         if (bindings[i].readback == nullptr) { continue; }

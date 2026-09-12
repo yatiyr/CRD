@@ -15,7 +15,7 @@ from urllib.parse import unquote
 ROOT = Path(__file__).resolve().parents[1]
 BUDGETS = {'START_HERE.md': 4500, 'AGENTS.md': 8000, 'docs/PRINCIPLES.md': 6500, 'docs/SANITY.md': 4500,
            'docs/BUILDING.md': 7000, 'MEMORY.md': 3000, 'context.md': 2500, 'docs/README.md': 6000}
-STATES = {'Done', 'In progress', 'Blocked', 'Recorded', 'Review', 'Open', 'Partial', 'Later'}
+STATES = {'Done', 'In progress', 'Blocked', 'Needs CI', 'Recorded', 'Review', 'Open', 'Partial', 'Later'}
 COMPLETE = {'Done', 'Recorded'}
 
 
@@ -148,25 +148,40 @@ def show_rows(rows):
 
 
 def first_unfinished(rows):
-    return next(((name, cells) for name, cells in rows if cells[2] not in COMPLETE), None)
+    """Earliest work available locally; Needs CI retains an external gate without halting implementation."""
+    return next(((name, cells) for name, cells in rows if cells[2] not in COMPLETE | {'Needs CI'}), None)
+
+
+def user_order_overrides(rows):
+    """Explicit user-direction evidence lives in the owning row, never in a second queue."""
+    result = set()
+    for name, cells in rows:
+        matches = re.findall(r'<!-- user-order: (sessions/[\w./-]+\.md(?:#[\w.-]+)?) -->', cells[5])
+        if len(matches) == 1 and f'[User direction]({matches[0]})' in cells[5]:
+            result.add(name)
+    return result
 
 
 def sequence_errors(rows, current_ids):
-    """One sequential acceptance boundary; explicit dependencies never authorize bypassing it."""
+    """One implementation position; CI waits are visible exceptions, never completion claims."""
     first = first_unfinished(rows)
     if first is None:
         return ['Completed table must not retain a current-slice pointer'] if current_ids else []
     errors = []
-    if current_ids != [first[0]]:
+    overrides = user_order_overrides(rows)
+    chosen = current_ids[0] if len(current_ids) == 1 and current_ids[0] in overrides else first[0]
+    if current_ids != [chosen]:
         errors.append(f'Context must point exactly once to first unfinished row {first[0]}')
+    if any(name == chosen and cells[2] in COMPLETE | {'Needs CI'} for name, cells in rows):
+        errors.append('Context cannot select completed work or a CI-only wait')
     unfinished_seen = False
     for name, cells in rows:
-        if cells[2] not in COMPLETE:
+        if cells[2] not in COMPLETE | {'Needs CI'}:
             unfinished_seen = True
-        elif cells[2] == 'Done' and unfinished_seen:
+        elif cells[2] == 'Done' and unfinished_seen and name not in overrides:
             errors.append(f'{name}: Done after unfinished {first[0]}; retain evidence as Partial until its turn')
-        if cells[2] == 'In progress' and name != first[0]:
-            errors.append(f'{name}: out-of-order In progress; only {first[0]} may be active')
+        if cells[2] == 'In progress' and name != chosen:
+            errors.append(f'{name}: out-of-order In progress; only {chosen} may be active')
     return errors
 
 
@@ -212,9 +227,17 @@ def query(args, rows):
         current_ids = re.findall(r'<!-- current-slice: ([^\s]+) -->', read(ROOT / 'context.md'))
         print('Current context pointer: ' + (', '.join(current_ids) or 'NONE'))
         first = first_unfinished(rows)
-        show_rows([first] if first else [])
-        print('Strict order: finish this entire row before advancing. A blocked gate stops later work.'
-              if first else 'All rows are complete or historical records; no next work is authorized.')
+        overridden = len(current_ids) == 1 and current_ids[0] in user_order_overrides(rows)
+        if overridden:
+            print('Explicit user-directed work; earliest ordinary work remains ' + (first[0] if first else 'none'))
+            show_rows([(name, cells) for name, cells in rows if name == current_ids[0]])
+        else:
+            show_rows([first] if first else [])
+        waiting = [(name, cells) for name, cells in rows if cells[2] == 'Needs CI']
+        if waiting:
+            print('Needs CI output (not Done): ' + ', '.join(name for name, _ in waiting))
+        print('Work in order; CI-only waits do not stop available work. Other blocked gates remain binding.'
+              if first else 'No local work remains; retain any listed CI gates until their evidence arrives.')
         errors = sequence_errors(rows, current_ids)
         for error in errors:
             print('ERROR: ' + error)
@@ -253,6 +276,11 @@ def main():
             errors.append('Unknown state: ' + name)
         if cells[2] == 'Done' and not re.search(r'\]\((?:sessions|bench)/', cells[5]):
             errors.append('Done requires session/benchmark evidence: ' + name)
+        if cells[2] == 'Needs CI' and (not re.search(r'\]\(sessions/', cells[5]) or
+                not re.search(r'https://github\.com/[^/]+/[^/]+/actions/runs/\d+', cells[5])):
+            errors.append('Needs CI requires local evidence and the actual published run: ' + name)
+        if '<!-- user-order:' in cells[5] and name not in user_order_overrides([(name, cells)]):
+            errors.append('User order override requires exactly one marker and matching User direction link: ' + name)
         if int(cells[0]) != i + 1:
             errors.append('Non-contiguous order at ' + name)
         if f'id="slice-{name.lower()}"' not in cells[1]:

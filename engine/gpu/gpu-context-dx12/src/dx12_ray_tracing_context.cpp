@@ -3,6 +3,9 @@
 // The HLSL the CKIR RT kernels emit binds the TLAS at `register(t0)` (a root SRV) and each storage buffer at `register(uN)`
 // (a RAW UAV) — the root signature here matches exactly.
 
+#include "dx12_device_scope.hpp"
+#include "dx12_execution.hpp"
+
 #include <crd/gpu/dx12_ray_tracing_context.hpp>
 
 #include <crd/core/types.hpp>
@@ -63,6 +66,7 @@ void barrier(ID3D12GraphicsCommandList4* list, ID3D12Resource* res, D3D12_RESOUR
 
 struct Dx12RayTracingContext::Impl
 {
+    detail::Dx12DeviceScope validation;
     ComPtr<ID3D12Device5>              device;
     ComPtr<ID3D12CommandQueue>         queue;
     ComPtr<ID3D12CommandAllocator>     cmd_alloc;
@@ -73,28 +77,27 @@ struct Dx12RayTracingContext::Impl
     bool                               ok        = false;
 
     // Close + execute the recorded list, block for the GPU, then reopen it (the AS build and the trace dispatch are one-shot).
-    void submit_and_wait()
+    [[nodiscard]] bool submit_and_wait()
     {
-        list->Close();
-        ID3D12CommandList* lists[] = {list.Get()};
-        queue->ExecuteCommandLists(1, lists);
-        ++fence_val;
-        queue->Signal(fence.Get(), fence_val);
-        if (fence->GetCompletedValue() < fence_val)
+        if (!ok) { return false; }
+        bool submitted = false;
+        if (FAILED(detail::dx12_submit(device.Get(), queue.Get(), list.Get(), fence.Get(), fence_val, submitted))
+            || FAILED(detail::dx12_wait(device.Get(), fence.Get(), fence_val, event))
+            || FAILED(detail::dx12_reset(cmd_alloc.Get(), list.Get())))
         {
-            fence->SetEventOnCompletion(fence_val, event);
-            WaitForSingleObject(event, INFINITE);
+            ok = false;
+            return false;
         }
-        cmd_alloc->Reset();
-        list->Reset(cmd_alloc.Get(), nullptr);
+        return true;
     }
+
 };
 
 Dx12RayTracingContext::Dx12RayTracingContext() : m_impl(std::make_unique<Impl>())
 {
     auto&                  impl = *m_impl;
     ComPtr<ID3D12Device>   dev0;
-    if (FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&dev0)))) { return; }
+    if (FAILED(impl.validation.create(dev0))) { return; }
     if (FAILED(dev0.As(&impl.device))) { return; } // ID3D12Device5 carries the DXR entry points
     D3D12_FEATURE_DATA_D3D12_OPTIONS5 opt5{};
     if (FAILED(impl.device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &opt5, sizeof(opt5)))) { return; }
@@ -116,7 +119,7 @@ Dx12RayTracingContext::~Dx12RayTracingContext()
     if (m_impl->event != nullptr) { CloseHandle(m_impl->event); }
 }
 
-bool Dx12RayTracingContext::valid() const noexcept { return m_impl->ok; }
+bool Dx12RayTracingContext::valid() const noexcept { return m_impl->ok && SUCCEEDED(m_impl->device->GetDeviceRemovedReason()); }
 
 RtCapabilities Dx12RayTracingContext::capabilities() const noexcept
 {
@@ -173,13 +176,14 @@ std::unique_ptr<Dx12RtScene> Dx12RayTracingContext::build_scene_instanced(const 
     binputs.pGeometryDescs = &geom;
     D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO bpre{};
     impl.device->GetRaytracingAccelerationStructurePrebuildInfo(&binputs, &bpre);
-    ComPtr<ID3D12Resource> bscratch = make_buffer(impl.device.Get(), bpre.ScratchDataSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ComPtr<ID3D12Resource> bscratch = make_buffer(impl.device.Get(), bpre.ScratchDataSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON);
     scene->blas = make_buffer(impl.device.Get(), bpre.ResultDataMaxSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
     if (bscratch == nullptr || scene->blas == nullptr) { return nullptr; }
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC bbuild{};
     bbuild.Inputs                           = binputs;
     bbuild.ScratchAccelerationStructureData = bscratch->GetGPUVirtualAddress();
     bbuild.DestAccelerationStructureData    = scene->blas->GetGPUVirtualAddress();
+    barrier(impl.list.Get(), bscratch.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     impl.list->BuildRaytracingAccelerationStructure(&bbuild, 0, nullptr);
     D3D12_RESOURCE_BARRIER uav{};
     uav.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
@@ -215,17 +219,18 @@ std::unique_ptr<Dx12RtScene> Dx12RayTracingContext::build_scene_instanced(const 
     tinputs.InstanceDescs = ibuf->GetGPUVirtualAddress();
     D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO tpre{};
     impl.device->GetRaytracingAccelerationStructurePrebuildInfo(&tinputs, &tpre);
-    ComPtr<ID3D12Resource> tscratch = make_buffer(impl.device.Get(), tpre.ScratchDataSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ComPtr<ID3D12Resource> tscratch = make_buffer(impl.device.Get(), tpre.ScratchDataSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON);
     scene->tlas = make_buffer(impl.device.Get(), tpre.ResultDataMaxSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
     if (tscratch == nullptr || scene->tlas == nullptr) { return nullptr; }
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC tbuild{};
     tbuild.Inputs                           = tinputs;
     tbuild.ScratchAccelerationStructureData = tscratch->GetGPUVirtualAddress();
     tbuild.DestAccelerationStructureData    = scene->tlas->GetGPUVirtualAddress();
+    barrier(impl.list.Get(), tscratch.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     impl.list->BuildRaytracingAccelerationStructure(&tbuild, 0, nullptr);
     scene->tlas_va = scene->tlas->GetGPUVirtualAddress();
 
-    impl.submit_and_wait(); // vbuf / ibuf / scratch stay alive on this frame through the blocking wait
+    if (!impl.submit_and_wait()) { return nullptr; } // Retain uploads/scratch through completion.
     return scene;
 }
 
@@ -286,13 +291,14 @@ std::unique_ptr<Dx12RtScene> Dx12RayTracingContext::build_scene_curves(const flo
     binputs.pGeometryDescs = &geom;
     D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO bpre{};
     impl.device->GetRaytracingAccelerationStructurePrebuildInfo(&binputs, &bpre);
-    ComPtr<ID3D12Resource> bscratch = make_buffer(impl.device.Get(), bpre.ScratchDataSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ComPtr<ID3D12Resource> bscratch = make_buffer(impl.device.Get(), bpre.ScratchDataSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON);
     scene->blas = make_buffer(impl.device.Get(), bpre.ResultDataMaxSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
     if (bscratch == nullptr || scene->blas == nullptr) { return nullptr; }
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC bbuild{};
     bbuild.Inputs                           = binputs;
     bbuild.ScratchAccelerationStructureData = bscratch->GetGPUVirtualAddress();
     bbuild.DestAccelerationStructureData    = scene->blas->GetGPUVirtualAddress();
+    barrier(impl.list.Get(), bscratch.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     impl.list->BuildRaytracingAccelerationStructure(&bbuild, 0, nullptr);
     D3D12_RESOURCE_BARRIER uav{};
     uav.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
@@ -321,17 +327,18 @@ std::unique_ptr<Dx12RtScene> Dx12RayTracingContext::build_scene_curves(const flo
     tinputs.InstanceDescs = ibuf->GetGPUVirtualAddress();
     D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO tpre{};
     impl.device->GetRaytracingAccelerationStructurePrebuildInfo(&tinputs, &tpre);
-    ComPtr<ID3D12Resource> tscratch = make_buffer(impl.device.Get(), tpre.ScratchDataSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ComPtr<ID3D12Resource> tscratch = make_buffer(impl.device.Get(), tpre.ScratchDataSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON);
     scene->tlas = make_buffer(impl.device.Get(), tpre.ResultDataMaxSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
     if (tscratch == nullptr || scene->tlas == nullptr) { return nullptr; }
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC tbuild{};
     tbuild.Inputs                           = tinputs;
     tbuild.ScratchAccelerationStructureData = tscratch->GetGPUVirtualAddress();
     tbuild.DestAccelerationStructureData    = scene->tlas->GetGPUVirtualAddress();
+    barrier(impl.list.Get(), tscratch.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     impl.list->BuildRaytracingAccelerationStructure(&tbuild, 0, nullptr);
     scene->tlas_va = scene->tlas->GetGPUVirtualAddress();
 
-    impl.submit_and_wait(); // abuf / ibuf / scratch stay alive on this frame through the blocking wait
+    if (!impl.submit_and_wait()) { return nullptr; } // Retain uploads/scratch through completion.
     return scene;
 }
 
@@ -443,7 +450,7 @@ bool Dx12RayTracingContext::trace_dispatch(const Dx12RtScene& scene_base, crd::c
             impl.list->CopyResource(rb[i].Get(), def[i].Get());
         }
     }
-    impl.submit_and_wait();
+    if (!impl.submit_and_wait()) { return false; }
 
     for (crd::usize i = 0; i < nbuf; ++i) // read back
     {

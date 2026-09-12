@@ -19,8 +19,8 @@ it cannot establish that arbitrary future code is bug-free or that untested hard
 Confirmed requirements are human-only commits/pushes, scoped local verification, continued cross-platform design,
 one roadmap and updated session/document evidence. The initial [REPO.DEV.1](../ROADMAP.md#slice-repo.dev.1) review subsequently approved tiered CI, existing hosted
 CI/workstation only and a stop at repository closure before renderer review. The initial independent-work permission
-was superseded by the user's [strict sequential order amendment](../ROADMAP.md#strict-sequential-execution): finish
-each row fully before the next, including publication/hardware gates. Unimplemented mechanisms remain proposals until
+was refined by the user's [ordered-work amendment](../ROADMAP.md#strict-sequential-execution): earliest unfinished work
+unless explicitly directed otherwise; retain Needs CI gates while available work continues. Unimplemented mechanisms remain proposals until
 their owning children qualify. The session records the original authorization; current sequencing lives in ROADMAP.
 
 ## Evidence boundary
@@ -314,8 +314,8 @@ for provenance; that does not create a Git commit or publish changes. Human publ
 Every task is a child in the existing master table. The sequence is environment/tidy repairs, GPU diagnosis and
 repairs, fast local instructions, affected selection, module closure, CI tiers, dependency integrity, measured build
 speed, public consumers/instruments, documentation and exact-revision qualification. The master table's Order column
-is binding: only its first unfinished row may receive work. Finish the whole contract before advancing. Publication,
-hardware and review gates stop advancement; later work/evidence is preserved and parked, not continued independently.
+is the default: start with the earliest unfinished work unless explicitly directed to a future slice. Finish available
+work first; retain Needs CI gates while proceeding. Full acceptance, hardware and review requirements stay binding.
 
 The proposed unattended loop reads the current pointer and exact row, inspects workspace/synchronizer/CI state,
 performs one bounded increment, runs its scoped checks, writes evidence and updates affected docs. It re-anchors
@@ -325,8 +325,8 @@ settings changes are inferred from a general quality goal. Avoid duplicate loops
 
 After initial decisions, routine implementation choices proceed without repeated questions. A new material boundary
 gets recorded against the current row. Quiet monitoring resumes CI inspection when the human publishes.
-An old revision's green result cannot qualify a changed working tree. If the current row requires publication,
-hardware or an explicit decision, retain the gate and wait there; do not manufacture completion or skip to later work.
+An old revision's green result cannot qualify a changed working tree. A published CI-only wait is marked Needs CI,
+with its actual run and local evidence, while the next available work proceeds. Other blockers keep their contracts.
 
 Closure requires all current confirmed failures resolved with regressions; every selected supported preset assigned
 and exercised at its tier; selector safety tests and broad comparison; native configuration/synchronizer proofs;

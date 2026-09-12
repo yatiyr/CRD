@@ -40,6 +40,7 @@ target_link_libraries(crd-scene-render-tests PRIVATE crd-material-cook crd-verte
 target_link_libraries(crd-scene-render-tests PRIVATE crd-render-graph crd-render-pass) # RAF-10: the app's custom executor names RecordContext / PassPayload / pass_param_id directly
 if(WIN32) # REN-38-F6: the DX12 twins of the advanced-family render gates (the backend exists only on Windows)
     target_link_libraries(crd-scene-render-tests PRIVATE crd-gpu-context-dx12)
+    target_include_directories(crd-scene-render-tests PRIVATE "${CMAKE_SOURCE_DIR}/tests/gpu/gpu-shared")
 endif()
 
 # REN-38 audit: the DRIFT GATE reads the shipped authored assets — the root rides ctest, so the guard lives in

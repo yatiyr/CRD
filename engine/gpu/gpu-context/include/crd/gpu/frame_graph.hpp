@@ -171,6 +171,15 @@ enum class FgImageKind : crd::u8
     CubeArray,  // N probes at once
 };
 
+// Resource-creation optimization only: this does not initialize an image or replace a pass's clear command.
+// Backends without creation-time clear hints ignore it. Values use the attachment's float clear convention;
+// depth is in [0,1]. A persistent image keeps its original hint and contents when only this hint changes.
+struct FgClearHint
+{
+    float color[4] = {0.0F, 0.0F, 0.0F, 1.0F};
+    float depth    = 0.0F;
+};
+
 struct FgImageDesc
 {
     crd::u32      width   = 0;
@@ -199,6 +208,9 @@ struct FgImageDesc
     // transient's pixels appearing inside this one. An author who knows that needs a way to say so, and the
     // alternative (turning aliasing off globally) trades one correct frame for the whole memory win.
     bool          no_alias = false;
+    // Derived from the first statically known clearing attachment in an authored CEIR plan. Direct graph
+    // callers may supply their expected clear. Later different clears remain valid, potentially less efficient.
+    FgClearHint    optimized_clear{};
 };
 
 // The recording surface handed to a pass's execute callback. `raster()` is the raster context IN FRAME

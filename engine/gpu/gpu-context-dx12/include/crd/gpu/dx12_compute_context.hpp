@@ -62,6 +62,10 @@ public:
 
     // D-007 D4: persist/seed the pipeline library (the PSO cache) across runs — the D3D12 analog of VkPipelineCache. Serialize
     // with pipeline_cache_data() to a file; on the next run, warm_pipeline_cache(blob) BEFORE creating pipelines.
+    // Opaque versioned/indexed data, at most 65,536 entries / 256 MiB native data. Not a portable or authenticated asset.
+    // Malformed, legacy raw-native, incompatible driver/adapter data returns false and preserves the current cache.
+    // Empty input explicitly resets the cache. Serialized data is copied; the caller may release its input afterwards.
+    // Use from the context's recording owner; callers serialize cache operations and pipeline creation on this context.
     void               pipeline_cache_data(crd::containers::Array<crd::u8>& out) const;
     [[nodiscard]] bool warm_pipeline_cache(crd::containers::ConstSpan<crd::u8> blob);
 

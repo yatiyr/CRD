@@ -4,6 +4,8 @@
 // gives the context an adapter identity + honours "a context is a live device foundation" (ADR-0099); DXIL itself is
 // device-independent, so program authoring needs only dxc.
 
+#include "dx12_device_scope.hpp"
+
 #include "dx12_adapter_classification.hpp"
 
 #include <crd/gpu/dx12_context.hpp>
@@ -50,7 +52,7 @@ public:
     KernelAdapter(const KernelAdapter&) = delete;
     KernelAdapter& operator=(const KernelAdapter&) = delete;
 
-    [[nodiscard]] bool query_software(bool& software) const noexcept
+    [[nodiscard]] bool query_type(bool& software, bool& render) const noexcept
     {
         if (m_handle == 0U) { return false; }
         D3DKMT_ADAPTERTYPE type{};
@@ -61,6 +63,7 @@ public:
         request.PrivateDriverDataSize = sizeof(type);
         if (D3DKMTQueryAdapterInfo(&request) < 0) { return false; }
         software = type.SoftwareDevice != 0U;
+        render = type.RenderSupported != 0U;
         return true;
     }
 
@@ -162,7 +165,7 @@ class Dx12GpuContext final : public IGpuContext
 public:
     explicit Dx12GpuContext(crd::memory::IAllocator* alloc) : m_alloc(alloc)
     {
-        if (FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&m_device)))) { return; }
+        if (FAILED(m_validation.create(m_device))) { return; }
         capture_adapter_name();
         m_ok = true;
     }
@@ -273,6 +276,7 @@ private:
         }
     }
 
+    detail::Dx12DeviceScope m_validation;
     crd::memory::IAllocator* m_alloc = nullptr;
     ComPtr<ID3D12Device>     m_device;
     char                     m_adapter[192] = {};
@@ -286,7 +290,7 @@ Dx12AdapterKind detail::query_dx12_adapter_kind(u32 luid_low, i32 luid_high) noe
     const LUID luid{luid_low, luid_high};
     detail::Dx12AdapterEvidence evidence{};
     const KernelAdapter kernel(luid);
-    evidence.kernel_available = kernel.query_software(evidence.kernel_software);
+    evidence.kernel_available = kernel.query_type(evidence.kernel_software, evidence.kernel_render);
     ComPtr<IDXGIFactory4> factory;
     if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))))
     {
@@ -296,6 +300,8 @@ Dx12AdapterKind detail::query_dx12_adapter_kind(u32 luid_low, i32 luid_high) noe
             DXGI_ADAPTER_DESC1 desc{};
             evidence.dxgi_available = SUCCEEDED(adapter->GetDesc1(&desc));
             evidence.dxgi_software = (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0U;
+            evidence.dxgi_vendor = desc.VendorId;
+            evidence.dxgi_device = desc.DeviceId;
         }
     }
     return detail::classify_dx12_adapter(evidence);
@@ -303,9 +309,10 @@ Dx12AdapterKind detail::query_dx12_adapter_kind(u32 luid_low, i32 luid_high) noe
 
 Dx12AdapterKind dx12_default_adapter_kind() noexcept
 {
-    // Match the contexts' default device. Kernel identity resolves BasicRender's documented missing DXGI flag.
+    // Match the contexts' default device; classify its selected identity, not the computer's display hardware.
+    detail::Dx12DeviceScope validation;
     ComPtr<ID3D12Device> device;
-    if (FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device))))
+    if (FAILED(validation.create(device)))
     {
         return Dx12AdapterKind::Unknown;
     }

@@ -52,7 +52,7 @@ TEST_CASE("CEIR-20c-1: the authored ceir.work smoke runs as a D3D12 WORK GRAPH -
           "[gpu-context][dx12][gpu][work][ceir20c]")
 {
     gpu::Dx12WorkGraphContext wg;
-    if (!wg.valid()) { WARN("no D3D12 Work Graphs (WorkGraphsTier 1.0) adapter; skipping"); return; }
+    if (!wg.valid()) { SKIP("no D3D12 Work Graphs (WorkGraphsTier 1.0) adapter"); }
     crd::memory::TlsfAllocator alloc(16U << 20U);
 
     kir::KGraph pg(&alloc);
@@ -107,7 +107,7 @@ TEST_CASE("CEIR-20c-1: the authored ceir.work smoke runs as a D3D12 WORK GRAPH -
     REQUIRE(dxil.ok);
 
     // buffers: queue (reg 0 — the (count,1,1) header + record slots) + out (reg 1 — out[0]=atomic counter, out[1]=count).
-    constexpr crd::u32 kN         = 5U;
+    constexpr crd::u32 expected_count         = 5U;
     crd::u32           queue_rb[19] = {}; // (count,1,1) header + 16 record slots
     crd::u32           out_rb[2]    = {};
     const gpu::Dx12WorkGraphContext::Binding binds[2] = {{nullptr, queue_rb, sizeof(queue_rb), 0U},
@@ -115,7 +115,7 @@ TEST_CASE("CEIR-20c-1: the authored ceir.work smoke runs as a D3D12 WORK GRAPH -
     REQUIRE(wg.dispatch_graph(crd::containers::ConstSpan<crd::u8>(dxil.dxil.data(), dxil.dxil.size()), "wg_lib",
                               crd::containers::ConstSpan<gpu::Dx12WorkGraphContext::Binding>(binds, 2U)));
 
-    CHECK(queue_rb[0] == kN); // the producer wrote the device count header
-    CHECK(out_rb[0] == kN);   // ⭐ the consumer ran count invocations -- the GPU sized it from the launch record, no host round-trip
-    CHECK(out_rb[1] == kN);   // out[1] = queue[0], the count each invocation read back
+    CHECK(queue_rb[0] == expected_count); // the producer wrote the device count header
+    CHECK(out_rb[0] == expected_count);   // ⭐ the consumer ran count invocations -- the GPU sized it from the launch record, no host round-trip
+    CHECK(out_rb[1] == expected_count);   // out[1] = queue[0], the count each invocation read back
 }

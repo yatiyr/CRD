@@ -57,6 +57,10 @@ bool build_fullscreen_ceir(Context& ctx, const FullscreenBuildDesc& desc, contai
         ctx.create_operation(k_col, containers::ConstSpan<Value*>(imgv, 1U), 1U,
                              render::type_color_attachment(ctx, timg->result(0U)->type()));
     ctx.set_attr(col, "load", ctx.attr_string(desc.load ? containers::StringView("load") : containers::StringView("clear")));
+    ctx.set_attr(col, "clear_r", ctx.attr_float(desc.clear.r));
+    ctx.set_attr(col, "clear_g", ctx.attr_float(desc.clear.g));
+    ctx.set_attr(col, "clear_b", ctx.attr_float(desc.clear.b));
+    ctx.set_attr(col, "clear_a", ctx.attr_float(desc.clear.a));
     // ⛔⛔ CEIR-17z (WBOIT regression): a composite with a NON-Opaque blend (the WBOIT resolve's reveal_composite) must BAKE
     // that blend onto its colour attachment. record_fullscreen_raster set it; build_fullscreen_ceir dropped it, so the CEIR
     // plan silently composited Opaque. Mirror the MRT emitter (build_scene_ceir uses blend_str the same way). Bounded blast

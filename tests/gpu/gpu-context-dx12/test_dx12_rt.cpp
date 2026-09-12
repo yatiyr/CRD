@@ -33,6 +33,7 @@
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+#include <dx12_validation.hpp>
 
 #include <fstream> // CEIR-19c: read the committed .ckir asset
 
@@ -177,71 +178,74 @@ TEST_CASE("D-007 RT-3 DX12: path-tracing megakernel == CPU reference", "[gpu-con
 // D-007 RT-4 DX12: the NEE+MIS area-light path tracer (shadow rays + trace_ray_hit + MIS) on DX12 == CPU oracle (soft shadow).
 TEST_CASE("D-007 RT-4 DX12: NEE+MIS area-light path tracer == CPU reference", "[gpu-context][dx12][gpu][rt]")
 {
-    gpu::Dx12RayTracingContext rt;
-    if (!rt.valid()) { WARN("no D3D12 DXR-1.1 device available; skipping"); return; }
-
     crd::memory::TlsfAllocator  alloc(48U << 20U);
-    kir::rt::PathTraceNeeConfig pcfg;
-    pcfg.samples = 32U; pcfg.bounces = 2U;
-    pcfg.albedo[0] = 0.6F; pcfg.albedo[1] = 0.6F; pcfg.albedo[2] = 0.6F;
-    pcfg.light_p0[0] = -1.5F; pcfg.light_p0[1] = 3.0F; pcfg.light_p0[2] = -1.5F;
-    pcfg.light_eu[0] = 3.0F; pcfg.light_ev[2] = 3.0F; pcfg.light_nl[1] = -1.0F;
-    pcfg.light_le[0] = 8.0F; pcfg.light_le[1] = 8.0F; pcfg.light_le[2] = 8.0F;
-    pcfg.ntri = 4U; pcfg.light_prim0 = 2U; pcfg.light_ntri = 2U; pcfg.local_size = 64U;
-    kir::KGraph       g(&alloc);
-    const kir::KEntry e = kir::rt::build_pathtrace_nee_kernel(g, pcfg);
-    const auto        dxil = dxil_of(g, e, &alloc);
-
-    const float verts[36] = {
-        -0.5F, 2.0F, -0.5F, 0.5F, 2.0F, -0.5F, 0.5F, 2.0F, 0.5F, -0.5F, 2.0F, -0.5F, 0.5F, 2.0F, 0.5F, -0.5F, 2.0F, 0.5F,
-        -1.5F, 3.0F, -1.5F, 1.5F, 3.0F, -1.5F, 1.5F, 3.0F, 1.5F, -1.5F, 3.0F, -1.5F, 1.5F, 3.0F, 1.5F, -1.5F, 3.0F, 1.5F};
-    const float tri_nf[12] = {0.0F, 1.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, -1.0F, 0.0F, 0.0F, -1.0F, 0.0F};
-    constexpr crd::u32 k_n = 64U;
-    crd::containers::Array<float> ppos(&alloc);
-    crd::containers::Array<float> pnrm(&alloc);
-    ppos.resize(static_cast<crd::usize>(k_n) * 3U, 0.0F);
-    pnrm.resize(static_cast<crd::usize>(k_n) * 3U, 0.0F);
-    for (crd::u32 j = 0; j < 8U; ++j)
+    crd::gpu_test::qualify_dx12_workload(&alloc, [&]()
     {
-        for (crd::u32 i = 0; i < 8U; ++i)
-        {
-            const crd::u32 p = j * 8U + i;
-            ppos[p * 3U + 0U] = -3.0F + 6.0F / 7.0F * static_cast<float>(i);
-            ppos[p * 3U + 2U] = -3.0F + 6.0F / 7.0F * static_cast<float>(j);
-            pnrm[p * 3U + 1U] = 1.0F;
-        }
-    }
-    crd::containers::Array<crd::f64> geo(&alloc);
-    crd::containers::Array<crd::f64> pos64(&alloc);
-    crd::containers::Array<crd::f64> nrm64(&alloc);
-    crd::containers::Array<crd::f64> tn64(&alloc);
-    crd::containers::Array<crd::f64> refc(&alloc);
-    geo.resize(1U + 4U * 9U, 0.0);
-    geo[0] = 4.0;
-    for (int i = 0; i < 36; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
-    pos64.resize(ppos.size(), 0.0); nrm64.resize(pnrm.size(), 0.0); tn64.resize(12U, 0.0); refc.resize(static_cast<crd::usize>(k_n) * 3U, 0.0);
-    for (crd::usize i = 0; i < ppos.size(); ++i) { pos64[i] = static_cast<crd::f64>(ppos[i]); nrm64[i] = static_cast<crd::f64>(pnrm[i]); }
-    for (int i = 0; i < 12; ++i) { tn64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(tri_nf[i]); }
-    kir::KernelBuffer bufs[5] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {pos64.data(), static_cast<int>(pos64.size()), 0, 1}, {nrm64.data(), static_cast<int>(nrm64.size()), 0, 2}, {tn64.data(), static_cast<int>(tn64.size()), 0, 3}, {refc.data(), static_cast<int>(refc.size()), 0, 4}};
-    kir::eval_cpu_kernel(g, e, bufs, 5, pcfg.local_size, &alloc, 1U);
-    auto scene = rt.build_scene(verts, 4U);
-    REQUIRE(scene != nullptr);
-    crd::containers::Array<float> got(&alloc);
-    got.resize(static_cast<crd::usize>(k_n) * 3U, 0.0F);
-    B bind[4] = {{ppos.data(), nullptr, static_cast<crd::u64>(k_n) * 3U * sizeof(float), 1U}, {pnrm.data(), nullptr, static_cast<crd::u64>(k_n) * 3U * sizeof(float), 2U}, {tri_nf, nullptr, 12U * sizeof(float), 3U}, {nullptr, got.data(), static_cast<crd::u64>(k_n) * 3U * sizeof(float), 4U}};
-    REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(dxil.data(), dxil.size()), crd::containers::ConstSpan<B>(bind, 4), 1U));
+        gpu::Dx12RayTracingContext rt;
+        if (!rt.valid()) { SKIP("no D3D12 DXR-1.1 device available"); }
 
-    double worst = 0.0;
-    double lmin  = 1.0e30;
-    double lmax  = 0.0;
-    for (crd::u32 p = 0; p < k_n * 3U; ++p) { worst = crd::math::max(worst, crd::math::abs(static_cast<double>(got[p]) - refc[p])); }
-    for (crd::u32 p = 0; p < k_n; ++p) { lmin = crd::math::min(lmin, refc[p * 3U]); lmax = crd::math::max(lmax, refc[p * 3U]); }
-    INFO("DX12 nee/mis worst |GPU-ref|=" << worst << "  range=[" << lmin << ", " << lmax << "]");
-    // WARP (software; GitHub CI has no GPU) diverges from the fp64 oracle by ~0.05 on this MIS radiance (observed worst
-    // 0.0524, radiance range ~[0.18, 1.22]); relax the bar on WARP ONLY (a real dispatch error is O(0.1..1)), keep the
-    // tight 0.05 hardware bar.
-    CHECK(worst < (crd::gpu::dx12_default_adapter_is_software() ? 0.20 : 0.05)); // DX12 MIS radiance == CPU oracle
-    CHECK(lmax - lmin > 0.10);  // a real soft shadow
+        kir::rt::PathTraceNeeConfig pcfg;
+        pcfg.samples = 32U; pcfg.bounces = 2U;
+        pcfg.albedo[0] = 0.6F; pcfg.albedo[1] = 0.6F; pcfg.albedo[2] = 0.6F;
+        pcfg.light_p0[0] = -1.5F; pcfg.light_p0[1] = 3.0F; pcfg.light_p0[2] = -1.5F;
+        pcfg.light_eu[0] = 3.0F; pcfg.light_ev[2] = 3.0F; pcfg.light_nl[1] = -1.0F;
+        pcfg.light_le[0] = 8.0F; pcfg.light_le[1] = 8.0F; pcfg.light_le[2] = 8.0F;
+        pcfg.ntri = 4U; pcfg.light_prim0 = 2U; pcfg.light_ntri = 2U; pcfg.local_size = 64U;
+        kir::KGraph       g(&alloc);
+        const kir::KEntry e = kir::rt::build_pathtrace_nee_kernel(g, pcfg);
+        const auto        dxil = dxil_of(g, e, &alloc);
+
+        const float verts[36] = {
+            -0.5F, 2.0F, -0.5F, 0.5F, 2.0F, -0.5F, 0.5F, 2.0F, 0.5F, -0.5F, 2.0F, -0.5F, 0.5F, 2.0F, 0.5F, -0.5F, 2.0F, 0.5F,
+            -1.5F, 3.0F, -1.5F, 1.5F, 3.0F, -1.5F, 1.5F, 3.0F, 1.5F, -1.5F, 3.0F, -1.5F, 1.5F, 3.0F, 1.5F, -1.5F, 3.0F, 1.5F};
+        const float tri_nf[12] = {0.0F, 1.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, -1.0F, 0.0F, 0.0F, -1.0F, 0.0F};
+        constexpr crd::u32 k_n = 64U;
+        crd::containers::Array<float> ppos(&alloc);
+        crd::containers::Array<float> pnrm(&alloc);
+        ppos.resize(static_cast<crd::usize>(k_n) * 3U, 0.0F);
+        pnrm.resize(static_cast<crd::usize>(k_n) * 3U, 0.0F);
+        for (crd::u32 j = 0; j < 8U; ++j)
+        {
+            for (crd::u32 i = 0; i < 8U; ++i)
+            {
+                const crd::u32 p = j * 8U + i;
+                ppos[p * 3U + 0U] = -3.0F + 6.0F / 7.0F * static_cast<float>(i);
+                ppos[p * 3U + 2U] = -3.0F + 6.0F / 7.0F * static_cast<float>(j);
+                pnrm[p * 3U + 1U] = 1.0F;
+            }
+        }
+        crd::containers::Array<crd::f64> geo(&alloc);
+        crd::containers::Array<crd::f64> pos64(&alloc);
+        crd::containers::Array<crd::f64> nrm64(&alloc);
+        crd::containers::Array<crd::f64> tn64(&alloc);
+        crd::containers::Array<crd::f64> refc(&alloc);
+        geo.resize(1U + 4U * 9U, 0.0);
+        geo[0] = 4.0;
+        for (int i = 0; i < 36; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
+        pos64.resize(ppos.size(), 0.0); nrm64.resize(pnrm.size(), 0.0); tn64.resize(12U, 0.0); refc.resize(static_cast<crd::usize>(k_n) * 3U, 0.0);
+        for (crd::usize i = 0; i < ppos.size(); ++i) { pos64[i] = static_cast<crd::f64>(ppos[i]); nrm64[i] = static_cast<crd::f64>(pnrm[i]); }
+        for (int i = 0; i < 12; ++i) { tn64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(tri_nf[i]); }
+        kir::KernelBuffer bufs[5] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {pos64.data(), static_cast<int>(pos64.size()), 0, 1}, {nrm64.data(), static_cast<int>(nrm64.size()), 0, 2}, {tn64.data(), static_cast<int>(tn64.size()), 0, 3}, {refc.data(), static_cast<int>(refc.size()), 0, 4}};
+        kir::eval_cpu_kernel(g, e, bufs, 5, pcfg.local_size, &alloc, 1U);
+        auto scene = rt.build_scene(verts, 4U);
+        REQUIRE(scene != nullptr);
+        crd::containers::Array<float> got(&alloc);
+        got.resize(static_cast<crd::usize>(k_n) * 3U, 0.0F);
+        B bind[4] = {{ppos.data(), nullptr, static_cast<crd::u64>(k_n) * 3U * sizeof(float), 1U}, {pnrm.data(), nullptr, static_cast<crd::u64>(k_n) * 3U * sizeof(float), 2U}, {tri_nf, nullptr, 12U * sizeof(float), 3U}, {nullptr, got.data(), static_cast<crd::u64>(k_n) * 3U * sizeof(float), 4U}};
+        REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(dxil.data(), dxil.size()), crd::containers::ConstSpan<B>(bind, 4), 1U));
+
+        double worst = 0.0;
+        double lmin  = 1.0e30;
+        double lmax  = 0.0;
+        for (crd::u32 p = 0; p < k_n * 3U; ++p) { worst = crd::math::max(worst, crd::math::abs(static_cast<double>(got[p]) - refc[p])); }
+        for (crd::u32 p = 0; p < k_n; ++p) { lmin = crd::math::min(lmin, refc[p * 3U]); lmax = crd::math::max(lmax, refc[p * 3U]); }
+        INFO("DX12 nee/mis worst |GPU-ref|=" << worst << "  range=[" << lmin << ", " << lmax << "]");
+        // WARP (software; GitHub CI has no GPU) diverges from the fp64 oracle by ~0.05 on this MIS radiance (observed worst
+        // 0.0524, radiance range ~[0.18, 1.22]); relax the bar on WARP ONLY (a real dispatch error is O(0.1..1)), keep the
+        // tight 0.05 hardware bar.
+        CHECK(worst < (crd::gpu::dx12_default_adapter_is_software() ? 0.20 : 0.05)); // DX12 MIS radiance == CPU oracle
+        CHECK(lmax - lmin > 0.10);  // a real soft shadow
+    });
 }
 
 // D-007 RT-6 DX12: MULTI-INSTANCE TLAS — the DX12 mirror. One BLAS instanced at 3 translations via per-instance 3×4 transforms;

@@ -54,6 +54,29 @@ class MasterPlanSequence(unittest.TestCase):
         self.assertEqual(master.sequence_errors(rows, []), [])
         self.assertTrue(master.sequence_errors(rows, ['S1']))
 
+    def test_ci_wait_keeps_gate_without_stopping_earliest_work(self):
+        rows = self.rows('Done', 'Needs CI', 'Needs CI', 'Partial', 'Open')
+        self.assertEqual(master.first_unfinished(rows)[0], 'S4')
+        self.assertEqual(master.sequence_errors(rows, ['S4']), [])
+        self.assertTrue(master.sequence_errors(rows, ['S5']))
+        self.assertEqual(master.sequence_errors(self.rows('Needs CI', 'Done', 'Open'), ['S3']), [])
+        self.assertEqual(master.sequence_errors(self.rows('Done', 'Needs CI'), []), [])
+
+    def test_future_work_requires_explicit_referenced_user_direction(self):
+        rows = self.rows('Done', 'Partial', 'In progress')
+        self.assertTrue(master.sequence_errors(rows, ['S3']))
+        rows[2][1][5] += (' <!-- user-order: sessions/example.md -->'
+                          ' [User direction](sessions/example.md)')
+        self.assertEqual(master.sequence_errors(rows, ['S3']), [])
+        rows[1][1][2] = 'In progress'
+        self.assertTrue(master.sequence_errors(rows, ['S3']))
+        rows[1][1][2] = 'Partial'
+        rows[2][1][2] = 'Done'
+        self.assertTrue(master.sequence_errors(rows, ['S3']))
+        self.assertEqual(master.sequence_errors(rows, ['S2']), [])
+        rows[2][1][5] = '<!-- user-order: sessions/example.md -->'
+        self.assertTrue(master.sequence_errors(rows, ['S2']))
+
     def test_next_command_rejects_conflicting_context(self):
         args = SimpleNamespace(memory=None, slice=None, find=None, next=True)
         rows = self.rows('Done', 'Blocked', 'Partial')
@@ -62,7 +85,7 @@ class MasterPlanSequence(unittest.TestCase):
                     f'<!-- current-slice: {pointer} -->'), patch('sys.stdout', new_callable=io.StringIO) as output:
                 self.assertEqual(master.query(args, rows), expected)
                 self.assertIn('S2 [Blocked]', output.getvalue())
-                self.assertIn('blocked gate stops later work', output.getvalue())
+                self.assertIn('CI-only waits do not stop available work', output.getvalue())
 
 
 class RepositoryTools(unittest.TestCase):

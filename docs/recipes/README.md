@@ -34,14 +34,24 @@ working code, that understanding gets a recipe. This is a standing rule; see `AG
 
 ## Naming
 
+DX12 [consumer contracts](2026-09-13-dx12-consumer-contracts.md) connects stage interfaces, indexed pipeline caches,
+CEIR clear propagation and resource hints to the real renderer's validation and pixel gates.
+
 Developer tooling: [Conservative affected-build selection](2026-09-12-affected-build-selection.md) explains CMake
 ownership, generated aggregates, fixture expansion and safe fallback without automatic local sweeps.
+
+DX12 [resource states and alias activation](2026-09-13-dx12-resource-states.md) explains native ownership across
+indexed draws, repeated frames and placed memory, with validation and consumer evidence.
+Its [frame descriptor allocator](2026-09-13-dx12-frame-descriptors.md) covers contiguous tables, bounded growth,
+heap rebinding, explicit failure and retirement.
 
 `YYYY-MM-DD-<subject>.md` (e.g. `2026-07-21-hair-offline-film.md`). A subject may have more than one recipe when
 the offline and real-time forms are genuinely different systems (as hair does).
 
 ## Index
 
+- [DX12 inner-coverage qualification](2026-09-13-dx12-inner-coverage.md) — exact interior/edge pixels, native shader controls and SDK-only provider isolation.
+- [DX12 validation and command lifetimes](2026-09-12-dx12-validation-and-command-lifetimes.md) — bounded startup-to-teardown capture, checked submission and truthful fence failures.
 - [CKIR snapshots and bounded compute emission](2026-09-12-kernel-snapshot-ordering.md) — shared declaration ordering, live loads, Boolean value types and the atomic A-buffer regression.
 - [DX12 adapter classification](2026-09-12-dx12-adapter-classification.md) — selected-LUID evidence, BasicRender and explicit unknown query outcomes.
 

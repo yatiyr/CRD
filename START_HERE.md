@@ -13,9 +13,9 @@ replaceable assets. A working demo that bypasses those assets does not meet the 
 1. Read [AGENTS](AGENTS.md), [PRINCIPLES](docs/PRINCIPLES.md), [SANITY](docs/SANITY.md) and the [MEMORY index](MEMORY.md).
 2. Read [context](context.md), then its exact [ROADMAP](docs/ROADMAP.md) row, every child, and the linked contract/ADR.
    Check decision status. Historical sessions explain evidence; they cannot grant current approval or redefine scope.
-   Run `python scripts/check-master-plan.py --next`: the pointer must be the first unfinished row. Follow
-   [strict sequential execution](docs/ROADMAP.md#strict-sequential-execution); finish it fully before the next row.
-   Publication, hardware and review gates stop advancement. No later implementation or parallel slice is authorized.
+   Run `python scripts/check-master-plan.py --next`: start with the earliest unfinished work unless the user explicitly
+   selects a future slice. [Ordered execution](docs/ROADMAP.md#strict-sequential-execution) preserves Needs CI gates
+   while available work continues. Other hardware/review gates remain binding; no missing evidence becomes Done.
 3. Find source ownership in [systems](docs/systems/README.md); inspect the public API, implementation, callers and tests.
    Before code read [BUILDING](docs/BUILDING.md), [CODING](docs/CODING.md) and the relevant
    [quality contract](docs/design/system-quality-contract.md). Load performance mandates for hot-kernel work.

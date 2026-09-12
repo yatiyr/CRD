@@ -13,6 +13,7 @@
 #include <crd/gpu/dx12_context.hpp>
 #include <crd/gpu/dx12_raster_context.hpp>
 #include <crd/gpu/dx12_ray_tracing_context.hpp>
+#include <dx12_validation.hpp>
 #endif
 #include <crd/math/mat.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
@@ -7570,11 +7571,14 @@ TEST_CASE("REN-41 GATE (DX12): the cluster mesh shader unpacks a packed DAG to m
 TEST_CASE("CEIR-18p IMPOSTOR STEP 0.5 GATE (DX12): the shipped octahedral-impostor path engages on a real device",
           "[scene-render][ceir][ceir18][impostor][lod][ren40][gpu][dx12]")
 {
-    auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
-    auto raster = gpu::create_dx12_raster_context();
-    REQUIRE(raster != nullptr);
-    impostor_gate_body(*gctx, *raster); // SKIPs inside if dxc/DXIL is unavailable
+    crd::gpu_test::qualify_dx12_workload(&galloc(), [&]()
+    {
+        auto gctx = gpu::create_dx12_gpu_context();
+        if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+        auto raster = gpu::create_dx12_raster_context();
+        REQUIRE(raster != nullptr);
+        impostor_gate_body(*gctx, *raster); // SKIPs inside if dxc/DXIL is unavailable
+    });
 }
 
 TEST_CASE("CEIR-18a-2 STAGE 1 GATE (DX12): the live forward pass consumes the scene point-light array",

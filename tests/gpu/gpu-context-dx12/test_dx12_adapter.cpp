@@ -10,11 +10,11 @@ TEST_CASE("DX12 adapter classification requires positive execution evidence", "[
     using crd::gpu::Dx12AdapterKind;
     using crd::gpu::detail::classify_dx12_adapter;
 
-    // The published BasicRender case omits DXGI's software flag; its kernel software identity is decisive.
+    // Software evidence survives missing DXGI flags. A negative kernel software bit alone is not hardware proof.
     CHECK(classify_dx12_adapter({true, false, true, true}) == Dx12AdapterKind::Software);
     CHECK(classify_dx12_adapter({true, true, true, true}) == Dx12AdapterKind::Software);
-    CHECK(classify_dx12_adapter({true, false, true, false}) == Dx12AdapterKind::Hardware);
-    CHECK(classify_dx12_adapter({false, false, true, false}) == Dx12AdapterKind::Hardware);
+    CHECK(classify_dx12_adapter({true, false, true, false, true}) == Dx12AdapterKind::Hardware);
+    CHECK(classify_dx12_adapter({false, false, true, false, true}) == Dx12AdapterKind::Hardware);
     CHECK(classify_dx12_adapter({false, false, true, true}) == Dx12AdapterKind::Software);
 
     // DXGI's negative flag and a failed kernel query never establish hardware. Positive software remains useful.
@@ -22,7 +22,20 @@ TEST_CASE("DX12 adapter classification requires positive execution evidence", "[
     CHECK(classify_dx12_adapter({true, true, false, false}) == Dx12AdapterKind::Software);
     CHECK(classify_dx12_adapter({}) == Dx12AdapterKind::Unknown);
     CHECK(classify_dx12_adapter({false, true, false, true}) == Dx12AdapterKind::Unknown);
-    CHECK(classify_dx12_adapter({true, true, true, false}) == Dx12AdapterKind::Unknown);
+    CHECK(classify_dx12_adapter({true, true, true, false, true}) == Dx12AdapterKind::Unknown);
+    CHECK(classify_dx12_adapter({true, false, true, false, false}) == Dx12AdapterKind::Unknown);
+    CHECK(classify_dx12_adapter({false, false, true, false, false}) == Dx12AdapterKind::Unknown);
+    CHECK(classify_dx12_adapter({true, true, true, false, false}) == Dx12AdapterKind::Software);
+
+    // Actual 7201 hosted census: flags 0, kernel 0x10a (display but not render), exact BasicRender identity.
+    CHECK(classify_dx12_adapter({true, false, true, false, false, 0x1414U, 0x008cU}) == Dx12AdapterKind::Software);
+    CHECK(classify_dx12_adapter({true, false, false, false, false, 0x1414U, 0x008cU}) == Dx12AdapterKind::Software);
+    CHECK(classify_dx12_adapter({true, false, true, false, true, 0x1414U, 0x008cU}) == Dx12AdapterKind::Software);
+    // Similar vendor/device, unavailable descriptor or an unrelated display-only adapter cannot inherit that rule.
+    CHECK(classify_dx12_adapter({true, false, true, false, false, 0x1414U, 0x008dU}) == Dx12AdapterKind::Unknown);
+    CHECK(classify_dx12_adapter({true, false, true, false, false, 0x10deU, 0x008cU}) == Dx12AdapterKind::Unknown);
+    CHECK(classify_dx12_adapter({false, false, true, false, false, 0x1414U, 0x008cU}) == Dx12AdapterKind::Unknown);
+    CHECK(classify_dx12_adapter({true, false, true, false, true, 0x1414U, 0x008dU}) == Dx12AdapterKind::Hardware);
 }
 
 TEST_CASE("DX12 adapter classification queries the explicit WARP adapter", "[dx12][adapter]")

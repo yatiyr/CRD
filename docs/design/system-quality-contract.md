@@ -10,9 +10,9 @@ New architecture choices follow [ADR-0130](../decisions/0130-system-qualificatio
 
 ## Contract before implementation
 
-Apply [strict sequential execution](../ROADMAP.md#strict-sequential-execution): only the first unfinished row may be
-worked. Complete its full acceptance and documents before advancing; an external gate blocks the sequence, including
-the unattended loop. Later implementation/evidence stays preserved without receiving further work out of order.
+Apply [ordered execution](../ROADMAP.md#strict-sequential-execution): start with the earliest unfinished work unless
+the user explicitly directs a future slice. Finish available work and documents; retain CI-only waits as Needs CI
+while continuing the next available work. No gate disappears and no missing evidence is accepted as Done.
 
 Each slice's linked design states its complete behaviour, public owner, dependencies, reuse search, authorable assets,
 source/cooked/schema migration, deletion targets, failure/recovery cases, platforms, workload and oracle. Split work

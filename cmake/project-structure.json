@@ -2,6 +2,22 @@
   "directories": [],
   "excluded_modules": [],
   "targets": {
+    "crd-gpu-context-dx12": {
+      "add": [
+        "engine/gpu/gpu-context-dx12/include/crd/gpu/dx12_validation_capture.hpp",
+        "engine/gpu/gpu-context-dx12/src/dx12_device_scope.hpp",
+        "engine/gpu/gpu-context-dx12/src/dx12_frame_descriptors.cpp",
+        "engine/gpu/gpu-context-dx12/src/dx12_frame_descriptors.hpp",
+        "engine/gpu/gpu-context-dx12/src/dx12_validation_capture.cpp"
+      ],
+      "groups": {
+        "engine/gpu/gpu-context-dx12/include/crd/gpu/dx12_validation_capture.hpp": "include/crd/gpu",
+        "engine/gpu/gpu-context-dx12/src/dx12_device_scope.hpp": "src",
+        "engine/gpu/gpu-context-dx12/src/dx12_frame_descriptors.cpp": "src",
+        "engine/gpu/gpu-context-dx12/src/dx12_frame_descriptors.hpp": "src",
+        "engine/gpu/gpu-context-dx12/src/dx12_validation_capture.cpp": "src"
+      }
+    },
     "crd-hesap-fft": {
       "add": [
         "engine/numerics/hesap-fft/include/crd/hesap/fft/detail/codelet_policy.hpp"

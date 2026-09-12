@@ -9,7 +9,8 @@
 |---|---|---|
 | Device LUID | Identity of the device actually selected by `D3D12CreateDevice(nullptr, ...)` | Queried from that device; never inferred from a display-controller name |
 | DXGI evidence | Whether the descriptor query succeeded and its software flag | Unavailable / known flag; negative flag alone cannot establish hardware |
-| Kernel evidence | Whether adapter-type query succeeded and its SoftwareDevice bit | Unavailable / hardware / software |
+| Kernel evidence | Query availability, SoftwareDevice and RenderSupported bits | Unavailable / rendering hardware / software / display-only |
+| BasicRender identity | Exact successfully queried vendor 0x1414 **and** device 0x008c | Documented software provider, including its flagless primary-display form |
 | `Dx12AdapterKind` | Public backend classification | Unknown, Hardware, Software |
 | Compatibility boolean | Existing `dx12_default_adapter_is_software` result | True only for Software; Unknown retains stricter behavior |
 | Native status | HRESULT or NTSTATUS returned by the corresponding query | Log the raw status; zero-initialized output after failure is not evidence |
@@ -25,8 +26,12 @@ documents that Microsoft Basic Render Driver may omit `DXGI_ADAPTER_FLAG_SOFTWAR
 identifies its role exposing WARP through a kernel adapter. Cerid's published CI reproduced flags 0 for that provider.
 
 The [kernel adapter type](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/ns-d3dkmthk-_d3dkmt_adaptertype)
-contains a SoftwareDevice bit. Querying that bit by the selected LUID avoids name/vendor heuristics. It is a device
-classification; it does not establish any rendering feature, numerical accuracy or hardware performance result.
+contains separate SoftwareDevice and RenderSupported bits. The [published 7201 census](../sessions/2026-09-12-dx12-validation-foundation.md#published-ci-observation)
+proved that both software flags can be zero on a display-backed BasicRender device. A negative SoftwareDevice bit
+therefore cannot establish hardware rendering. The [DXGI overview](https://learn.microsoft.com/en-us/windows/win32/direct3ddxgi/d3d10-graphics-programming-guide-dxgi)
+documents BasicRender's exact 1414:008c identity and its flagless primary adapter. Use that full identity from the selected
+LUID; a vendor alone or a display name is insufficient. This corrects the original kernel-bit-only policy. It does not
+establish any rendering feature, numerical accuracy or hardware performance result.
 
 ## Assembly and evidence policy
 
@@ -34,11 +39,12 @@ classification; it does not establish any rendering feature, numerical accuracy 
 2. [Open the kernel adapter from that LUID](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/nf-d3dkmthk-d3dkmtopenadapterfromluid).
    An RAII owner closes every successfully opened handle on all paths.
 3. [Query adapter type](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/nf-d3dkmthk-d3dkmtqueryadapterinfo)
-   with `KMTQAITYPE_ADAPTERTYPE`, recording availability separately from the SoftwareDevice value.
+   with `KMTQAITYPE_ADAPTERTYPE`, recording availability separately from SoftwareDevice and RenderSupported.
 4. Resolve DXGI's descriptor for the same LUID. Pass both evidence sources to the backend-private policy.
-5. Known kernel software means Software, including the missing-DXGI-flag case. Known kernel hardware means Hardware
-   unless DXGI positively contradicts it, in which case return Unknown. If the kernel query is unavailable, a positive
-   DXGI software flag can still establish Software; a negative/unknown flag leaves Unknown.
+5. A successfully queried exact BasicRender identity means Software even if both software flags are absent. Otherwise,
+   positive kernel software means Software. Kernel hardware requires RenderSupported and a negative SoftwareDevice bit;
+   contradictory positive DXGI software then leaves Unknown. Without hardware evidence, a positive DXGI software flag
+   can establish Software. Display-only or unavailable evidence otherwise leaves Unknown; never infer hardware from absence.
 6. The compatibility boolean tests equality with Software. The independent CI census prints native query/status bits,
    rejects Unknown and compares the engine result with the observed device. Query failure cannot silently qualify hardware.
 
@@ -47,13 +53,15 @@ a shared public interface; other backends retain their existing dependencies and
 
 ## Traps and verification
 
-- A name or vendor ID is not the implementation oracle. The selected-device LUID and queried bits are the evidence.
+- A name or vendor alone is not an implementation oracle. The documented exact BasicRender pair is a provider rule;
+  qualify nearby vendor/device values as counterexamples, and never trust an unqueried descriptor.
 - Failure plus a zero-initialized structure does not mean hardware. Preserve the separate availability bit.
 - The explicitly enumerated WARP adapter and kernel BasicRender adapter need not be assumed to share a LUID on
   every system. Query the device that executes the workload.
 - A repaired classifier can activate an existing software-specific test contract. It must not enlarge that contract,
   remove workload assertions, convert skips to hardware passes or explain an unrelated crash without evidence.
-- Counterfactual policy tests cover missing flags, failed queries and conflicting reports. The native census and
+- Counterfactual policy tests cover both missing flags, display-only adapters, exact/nearby identities, failed queries
+  and conflicting reports. The native census and
   affected compute/raster/RT tests are separate gates; a synthetic descriptor is not a dispatch proof.
 - The backend-private LUID query is shared by default-device classification and explicit native adapter tests.
   Exercise a real WARP identity and a verified-unavailable identity without changing the application's default GPU.

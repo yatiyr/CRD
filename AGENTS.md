@@ -33,8 +33,8 @@ are genuinely unresolved or an explicit design gate is still unaccepted. Never i
 
 ## Conduct — mandatory
 
-- **Strict slice order:** work only on ROADMAP's first unfinished row. Finish its entire contract before advancing.
-  A blocked gate stops advancement. Park later work; never skip/reorder rows to appear green. The
+- **Ordered work:** start at the earliest unfinished work unless the user explicitly directs a future slice.
+  Record CI-only waits as Needs CI and continue available work; never close or drop the pending gate. The
   [sequence rule](docs/ROADMAP.md#strict-sequential-execution) binds every agent and loop.
 - Re-anchor to the task's purpose at every prompt. Never silently narrow a slice, drop an inherited requirement,
   weaken its tests or replace the requested quality bar with a smaller feature. Ask before a real scope reduction.
@@ -89,4 +89,4 @@ are genuinely unresolved or an explicit design gate is still unaccepted. Never i
 - Source/project structure changes use the [synchronizer contract](docs/design/project-structure-sync.md).
   Inspect its status before moving files; preserve saved IDE edits, tracked membership overrides and recovery journals.
 - Keep implementation within the current authorized scope. Repository organization does not authorize
-  geometry/physics algorithm changes; retained work lives in ROADMAP. No automatic loop is active merely because a historical CEIR grant says so.
+  geometry/physics algorithm changes; retained work lives in ROADMAP. Historical grants or roadmap order never restart a stopped loop.

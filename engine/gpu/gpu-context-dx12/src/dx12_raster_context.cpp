@@ -4,6 +4,10 @@
 // whole clear path; the texture→readback copy honours the 256-byte row-pitch alignment D3D12 demands (GetCopyableFootprints).
 // The shader DRAW path (a graphics PSO from a VS+FS DXIL pair + DrawInstanced) appends in C4-b.
 
+#include "dx12_device_scope.hpp"
+#include "dx12_execution.hpp"
+#include "dx12_frame_descriptors.hpp"
+
 #include <crd/gpu/detail/command_lowering.hpp> // RAF-12.4: CommandEncoder<Ctx> — this backend records through its own instantiation
 #include <crd/log/log_macros.hpp>
 #include <crd/gpu/dx12_raster_context.hpp>
@@ -39,6 +43,18 @@ namespace
 {
 constexpr DXGI_FORMAT kColorFormat  = DXGI_FORMAT_R8G8B8A8_UNORM;
 constexpr UINT        kBindlessMax  = 1024; // REN-38: the material-heap capacity (heap slots 2.. + the t3 SRV table) — mirrors Vulkan
+
+[[nodiscard]] D3D12_CLEAR_VALUE optimized_clear_value(DXGI_FORMAT format, bool depth, const FgClearHint& hint) noexcept
+{
+    D3D12_CLEAR_VALUE value{};
+    value.Format = format; // the typed attachment view, including when the resource itself is typeless
+    if (depth) { value.DepthStencil.Depth = hint.depth; }
+    else
+    {
+        for (crd::u32 i = 0; i < 4U; ++i) { value.Color[i] = hint.color[i]; }
+    }
+    return value;
+}
 
 // A host-visible READBACK buffer (the render target is copied here so the CPU can read pixels back).
 ComPtr<ID3D12Resource> make_readback_buffer(ID3D12Device* dev, UINT64 size)
@@ -195,7 +211,8 @@ ComPtr<ID3D12PipelineState> build_graphics_pso(ID3D12Device* dev, ID3D12RootSign
         }
     }
     ComPtr<ID3D12PipelineState> pso;
-    if (FAILED(dev->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&pso)))) { return nullptr; }
+    const HRESULT result = dev->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&pso));
+    if (FAILED(result)) { detail::dx12_execution_failure(result, "CreateGraphicsPipelineState"); return nullptr; }
     return pso;
 }
 
@@ -508,7 +525,7 @@ public:
         {
             return;
         }
-        m_list->Close();
+        if (FAILED(m_list->Close())) { return; }
         if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence)))) { return; }
         m_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         if (m_event == nullptr) { return; }
@@ -550,8 +567,7 @@ public:
         ComPtr<ID3D12Resource> bb;
         if (FAILED(m_swapchain->GetBuffer(idx, IID_PPV_ARGS(&bb)))) { return false; }
 
-        m_alloc->Reset();
-        m_list->Reset(m_alloc.Get(), nullptr);
+        if (FAILED(detail::dx12_reset(m_alloc.Get(), m_list.Get()))) { m_valid = false; return false; }
         barrier(bb.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST);
         barrier(t.copy_src(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE);
         m_list->CopyResource(bb.Get(), t.copy_src()); // same format + extent — the whole-resource copy
@@ -573,15 +589,25 @@ public:
         {
             barrier(bb.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
         }
-        m_list->Close();
-        ID3D12CommandList* lists[] = {m_list.Get()};
-        m_queue->ExecuteCommandLists(1, lists);
+        bool submitted = false;
+        if (FAILED(detail::dx12_submit(m_device, m_queue, m_list.Get(), m_fence.Get(), m_fence_value, submitted)))
+        {
+            m_valid = false;
+            return false;
+        }
 
         const UINT sync  = m_mode == PresentMode::Fifo ? 1U : 0U;
         const UINT flags = m_tearing ? DXGI_PRESENT_ALLOW_TEARING : 0U;
         const HRESULT pr = m_swapchain->Present(sync, flags);
+        // Include DXGI's queue work as well as our copy/overlay list in the surface's retirement fence.
+        if (FAILED(detail::dx12_signal(m_device, m_queue, m_fence.Get(), m_fence_value))) { m_valid = false; }
         wait_gpu(); // full per-frame serialization (v1 pacing — the frame graph takes over later)
-        if (FAILED(pr)) { return false; }
+        if (FAILED(pr))
+        {
+            detail::dx12_execution_failure(pr, "Present swapchain");
+            m_valid = false;
+        }
+        if (!m_valid) { return false; }
         ++m_frames;
         return true;
     }
@@ -594,6 +620,7 @@ public:
     {
         if (!m_valid) { return false; }
         wait_gpu();
+        if (!m_valid) { return false; }
         const UINT flags = m_tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0U;
         // REN-39-D2: ResizeBuffers hands back NEW backbuffer resources at the same indices — forget the RTVs or
         // the overlay would render into freed views (the class of bug the `m_bb_rtv_for` identity check exists for).
@@ -643,13 +670,7 @@ private:
     void wait_gpu()
     {
         if (m_fence == nullptr || m_event == nullptr) { return; }
-        const crd::u64 v = ++m_fence_value;
-        m_queue->Signal(m_fence.Get(), v);
-        if (m_fence->GetCompletedValue() < v)
-        {
-            m_fence->SetEventOnCompletion(v, m_event);
-            WaitForSingleObject(m_event, INFINITE);
-        }
+        if (FAILED(detail::dx12_wait(m_device, m_fence.Get(), m_fence_value, m_event))) { m_valid = false; }
     }
 
     ID3D12CommandQueue*               m_queue = nullptr;
@@ -698,7 +719,12 @@ public:
     Dx12RasterProgram(Dx12RasterProgram&&)                  = delete;
     Dx12RasterProgram& operator=(Dx12RasterProgram&&)       = delete;
 
-    [[nodiscard]] bool                 valid() const noexcept override { return m_pso1 != nullptr; }
+    // Shader/root ownership is complete here; the actual attachment/state combination is qualified by pso_for.
+    [[nodiscard]] bool valid() const noexcept override
+    {
+        return m_device != nullptr && m_root != nullptr && m_vs != nullptr && m_vs_size != 0U
+            && m_fs != nullptr && m_fs_size != 0U;
+    }
     [[nodiscard]] bool                 is_mesh() const noexcept { return m_is_mesh; } // B4: DispatchMesh vs DrawInstanced
     [[nodiscard]] bool                 is_tess() const noexcept { return m_is_tess; } // B4-tess: PATCH-list DrawInstanced
     [[nodiscard]] ID3D12RootSignature* root() const noexcept { return m_root.Get(); }
@@ -707,7 +733,7 @@ public:
     // whose PSO the standard pass_pso path bakes from the per-attachment BlendMode array.)
 
     // The PSO for a target of `samples` samples and depth/conservative config (a graphics PSO bakes ALL of them). The plain
-    // 1×/no-depth/non-conservative PSO is prebuilt (also gates valid()); every other combo is built + cached lazily in a
+    // 1×/no-depth/non-conservative PSO has a dedicated lazy slot; every other combo is built + cached lazily in a
     // small keyed cache (a handful of configs per program at most). `dsv == DXGI_FORMAT_UNKNOWN` ⇒ the depth-off colour path.
     [[nodiscard]] ID3D12PipelineState* pso_for(crd::u32 samples, DXGI_FORMAT dsv, D3D12_COMPARISON_FUNC depth_func,
                                                bool conservative, crd::u32 num_rts = 1U, DXGI_FORMAT rt_fmt = kColorFormat,
@@ -744,6 +770,13 @@ public:
         if (samples <= 1U && dsv == DXGI_FORMAT_UNKNOWN && !conservative && num_rts == 1U && all_default
             && blend_key == 0U && st == def_state)
         {
+            if (m_pso1 == nullptr)
+            {
+                m_pso1 = build_graphics_pso(m_device, m_root.Get(), D3D12_SHADER_BYTECODE{m_vs.get(), m_vs_size},
+                    D3D12_SHADER_BYTECODE{m_fs.get(), m_fs_size}, samples, dsv, depth_func, conservative, num_rts,
+                    D3D12_SHADER_BYTECODE{m_hs.get(), m_hs_size}, D3D12_SHADER_BYTECODE{m_ds.get(), m_ds_size},
+                    rt_fmt, blend, &st, fmts);
+            }
             return m_pso1.Get();
         }
         const crd::u32 key = (samples << 8U)
@@ -803,7 +836,7 @@ private:
     crd::usize                  m_hs_size = 0;
     std::unique_ptr<crd::u8[]>  m_ds; // B4-tess: owned DS (domain) DXIL copy
     crd::usize                  m_ds_size = 0;
-    ComPtr<ID3D12PipelineState> m_pso1;                // plain 1×/no-depth PSO (prebuilt; also gates valid())
+    ComPtr<ID3D12PipelineState> m_pso1;                // plain 1×/no-depth PSO, materialized for its actual use
     PsoCacheEntry               m_cache[kPsoCacheCap]; // lazily-built PSOs for MSAA / depth configs
     int                         m_cache_n = 0;
 };
@@ -958,9 +991,10 @@ public:
     {
         return std::make_unique<detail::CommandEncoder<Dx12RasterContext>>(*this);
     }
-    Dx12RasterContext()
+    explicit Dx12RasterContext(crd::memory::IAllocator* allocator) : m_allocator(allocator)
     {
-        if (FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&m_device)))) { return; }
+        if (allocator == nullptr) { return; }
+        if (FAILED(m_validation.create(m_device))) { return; }
         D3D12_COMMAND_QUEUE_DESC qd{};
         qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT; // graphics queue (vs the compute context's COMPUTE queue)
         if (FAILED(m_device->CreateCommandQueue(&qd, IID_PPV_ARGS(&m_queue)))) { return; }
@@ -976,7 +1010,7 @@ public:
                 for (crd::u32 k = 0; k <= s; ++k) { m_ring_list[k].Reset(); m_ring_alloc[k].Reset(); }
                 break;
             }
-            m_ring_list[s]->Close(); // created OPEN; frame_rec_begin Resets before recording
+            if (FAILED(m_ring_list[s]->Close())) { return; } // Created open; reset before recording.
         }
         if (FAILED(m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_cmd_alloc))))
         {
@@ -987,7 +1021,7 @@ public:
         {
             return;
         }
-        m_list->Close();
+        if (FAILED(m_list->Close())) { return; }
         if (FAILED(m_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence)))) { return; }
         m_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         m_ok    = m_event != nullptr;
@@ -1105,7 +1139,10 @@ public:
     Dx12RasterContext(Dx12RasterContext&&)                 = delete;
     Dx12RasterContext& operator=(Dx12RasterContext&&)      = delete;
 
-    [[nodiscard]] bool valid() const noexcept override { return m_ok; }
+    [[nodiscard]] bool valid() const noexcept override
+    {
+        return m_ok && SUCCEEDED(m_device->GetDeviceRemovedReason());
+    }
     [[nodiscard]] bool supports_vrs() const noexcept override // B1-e: Tier 2 = per-draw + per-primitive + image
     {
         return m_list5 != nullptr && m_vrs_tier >= D3D12_VARIABLE_SHADING_RATE_TIER_2;
@@ -1138,10 +1175,13 @@ public:
         rd.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
         rd.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
         ComPtr<ID3D12Resource> tex;
-        // No optimized clear value: the harness clears to arbitrary colours, so a baked value would only earn a
-        // clear-value-mismatch warning on every clear. nullptr is legal for a render target.
+        // The default clear is opaque black. A missing hint warns even for that default; arbitrary later clears
+        // remain legal and preserve their value. Authored non-default hints belong at image creation.
+        D3D12_CLEAR_VALUE clear_value{};
+        clear_value.Format = kColorFormat;
+        clear_value.Color[3] = 1.0F;
         if (FAILED(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COMMON,
-                                                     nullptr, IID_PPV_ARGS(&tex))))
+                                                     &clear_value, IID_PPV_ARGS(&tex))))
         {
             return nullptr;
         }
@@ -1325,20 +1365,24 @@ public:
         rd.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
         rd.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
         ComPtr<ID3D12Resource> tex;
-        if (FAILED(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COMMON, nullptr,
+        const D3D12_CLEAR_VALUE color_clear = optimized_clear_value(kColorFormat, false, FgClearHint{});
+        if (FAILED(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COMMON, &color_clear,
                                                      IID_PPV_ARGS(&tex))))
         {
             return nullptr;
         }
 
-        // D32 depth texture, created in DEPTH_WRITE (it is only ever a depth attachment, never copied). No optimized clear
-        // value: the harness clears to an arbitrary depth, so a baked value would only earn a clear-value-mismatch warning.
+        // Standalone targets use the public draw defaults (opaque black / depth 1). Authored graph images
+        // carry their own CEIR-derived hints. A hint is not initialization and never changes a requested clear.
         D3D12_RESOURCE_DESC dd = rd;
         dd.Format              = depth_fmt;
         dd.Flags               = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
         ComPtr<ID3D12Resource> depth;
+        FgClearHint depth_hint{};
+        depth_hint.depth = 1.0F;
+        const D3D12_CLEAR_VALUE depth_clear = optimized_clear_value(depth_fmt, true, depth_hint);
         if (FAILED(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &dd, D3D12_RESOURCE_STATE_DEPTH_WRITE,
-                                                     nullptr, IID_PPV_ARGS(&depth))))
+                                                     &depth_clear, IID_PPV_ARGS(&depth))))
         {
             return nullptr;
         }
@@ -1423,8 +1467,7 @@ public:
         for (crd::u32 row = 0; row < vh; ++row) { std::memset(base + row * vfp.Footprint.RowPitch, packed, vw); }
         upload->Unmap(0, nullptr);
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return nullptr; }
         transition(vrs.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
         D3D12_TEXTURE_COPY_LOCATION dst{};
         dst.pResource        = vrs.Get();
@@ -1436,7 +1479,7 @@ public:
         src.PlacedFootprint = vfp;
         m_list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
         transition(vrs.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_SHADING_RATE_SOURCE);
-        submit_and_wait();
+        if (!submit_and_wait()) { return nullptr; }
 
         static_cast<Dx12RasterTarget&>(*target).set_vrs(std::move(vrs)); // the target owns the rate image
         return target;
@@ -1504,8 +1547,7 @@ public:
             return;
         }
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return; }
 
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const float rgba[4] = {color.r, color.g, color.b, color.a};
@@ -1647,18 +1689,10 @@ public:
         auto fs_copy = std::make_unique<crd::u8[]>(fs.size());
         std::memcpy(fs_copy.get(), fs.data(), fs.size());
 
-        // An FS that reads SV_InnerCoverage links ONLY into a conservative PSO (the D3D12 rasterizer rejects it with
-        // conservative OFF — a build failure the debug layer flags). Such a program is drawn via draw_conservative, so
-        // prebuild its m_pso1 conservative directly. Every other program prebuilds the plain PSO.
-        const bool                  fs_conservative = static_cast<Dx12GpuProgram&>(fragment).wants_conservative_raster();
-        ComPtr<ID3D12PipelineState> pso1 = build_graphics_pso(
-            m_device.Get(), root.Get(), D3D12_SHADER_BYTECODE{vs.data(), vs.size()},
-            D3D12_SHADER_BYTECODE{fs.data(), fs.size()}, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS,
-            fs_conservative);
-        if (pso1 == nullptr) { return nullptr; }
-
+        // Attachments and conservative/depth state belong to the actual pass. An invented color-only PSO here
+        // warned for valid SV_Depth programs and guessed MRT formats before the author supplied their bindings.
         return std::make_unique<Dx12RasterProgram>(m_device.Get(), std::move(root), std::move(vs_copy), vs.size(),
-                                                   std::move(fs_copy), fs.size(), std::move(pso1));
+                                                   std::move(fs_copy), fs.size(), ComPtr<ID3D12PipelineState>{});
     }
 
     // --- B4: the MESH-shader device path (append-only — vtable-stable) ----------------------------------------------------
@@ -1923,8 +1957,7 @@ public:
         uav.Buffer.StructureByteStride = 4;
         m_device->CreateUnorderedAccessView(s2.buf(), nullptr, &uav, m_uav_heap->GetCPUDescriptorHandleForHeapStart());
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return; }
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
         m_list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
@@ -1998,8 +2031,7 @@ public:
             return;
         }
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return; }
 
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
@@ -2068,8 +2100,7 @@ public:
             return;
         }
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return; }
 
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
@@ -2143,8 +2174,7 @@ public:
             return;
         }
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return; }
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
         m_list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
@@ -2212,8 +2242,7 @@ public:
             if (FAILED(m_device->CreateCommandSignature(&csd, nullptr, IID_PPV_ARGS(&m_mesh_indirect_sig)))) { return; }
         }
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return; }
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         transition(args, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
@@ -2267,7 +2296,9 @@ public:
         // inside a frame.
         if (frame_recording())
         {
+            if (!frame_prepare(kBindlessMax)) { return; }
             const D3D12_GPU_DESCRIPTOR_HANDLE run = frame_alloc_bindless_run(textures, n);
+            if (run.ptr == 0U) { return; }
             record_mesh(t, p, pso, clear, group_count, true, clear_depth, &run, false, D3D12_SHADING_RATE_1X1,
                         nullptr, nullptr, 0U);
             return;
@@ -2285,8 +2316,7 @@ public:
         D3D12_GPU_DESCRIPTOR_HANDLE bindless_gpu = m_uav_heap->GetGPUDescriptorHandleForHeapStart();
         bindless_gpu.ptr += static_cast<UINT64>(2U) * m_srv_inc; // slot 2
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return; }
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv = t.dsv();
@@ -2344,6 +2374,7 @@ public:
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv       = t.rtv();
         const bool                        use_depth = depth_on && t.has_depth();
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv       = use_depth ? t.dsv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
+        if (!frame_prepare(storage != nullptr ? 1U : 0U)) { return; }
         m_list->OMSetRenderTargets(1, &rtv, FALSE, use_depth ? &dsv : nullptr);
         // ⛔ REN-38-A8: a CONTINUING mesh draw KEEPS the previous contents — on D3D12 "load" is simply not
         // issuing the clear, since OMSetRenderTargets never discards. Depth too: clearing it would let the second
@@ -2362,7 +2393,9 @@ public:
         // REN-38-F6+: the storage-bound form — the mesh stage PULLS its geometry (the GEO-1 seam)
         if (storage != nullptr)
         {
-            m_list->SetGraphicsRootDescriptorTable(0, frame_alloc_storage_slot(*storage));
+            const D3D12_GPU_DESCRIPTOR_HANDLE frame_table = frame_alloc_storage_slot(*storage);
+            if (frame_table.ptr == 0U) { return; }
+            m_list->SetGraphicsRootDescriptorTable(0, frame_table);
         }
         if (bindless != nullptr)
         {
@@ -2388,6 +2421,7 @@ public:
                                bool clear = true, Dx12StorageBuffer* storage = nullptr)
     {
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
+        if (!frame_prepare(storage != nullptr ? 1U : 0U)) { return; }
         m_list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
         if (clear) // REN-38-A7: a CONTINUING patch draw keeps what the previous patches wrote
         {
@@ -2402,7 +2436,9 @@ public:
         // REN-38-F6+: the storage-bound form — the tess VS PULLS its control points (the GEO-1 seam)
         if (storage != nullptr)
         {
-            m_list->SetGraphicsRootDescriptorTable(0, frame_alloc_storage_slot(*storage));
+            const D3D12_GPU_DESCRIPTOR_HANDLE frame_table = frame_alloc_storage_slot(*storage);
+            if (frame_table.ptr == 0U) { return; }
+            m_list->SetGraphicsRootDescriptorTable(0, frame_table);
         }
         m_list->SetPipelineState(pso);
         apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
@@ -2445,8 +2481,7 @@ public:
         if (!p.valid() || pso == nullptr) { return; }
         if (frame_recording()) { record_plain(t, p, pso, clear, false, 0.0F, vertex_count); return; }
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return; }
 
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
@@ -2591,9 +2626,12 @@ public:
         ComPtr<ID3D12GraphicsCommandList4> list4;
         if (FAILED(m_list.As(&list4))) { return; }
         const crd::u32 n = count < kMaxKernelBuffers ? count : kMaxKernelBuffers;
+        if (!frame_prepare(kMaxKernelBuffers)) { return; }
         list4->SetComputeRootSignature(rt_kernel_root());
         list4->SetComputeRootShaderResourceView(0, static_cast<D3D12_GPU_VIRTUAL_ADDRESS>(tlas_va));
-        list4->SetComputeRootDescriptorTable(1, alloc_kernel_uav_run(buffers, n));
+        const D3D12_GPU_DESCRIPTOR_HANDLE frame_table = alloc_kernel_uav_run(buffers, n);
+        if (frame_table.ptr == 0U) { return; }
+        list4->SetComputeRootDescriptorTable(1, frame_table);
         list4->SetPipelineState1(pipe->state.Get());
 
         D3D12_DISPATCH_RAYS_DESC drd{};
@@ -2886,12 +2924,11 @@ public:
         uav.Buffer.FirstElement        = first;
         uav.Buffer.NumElements         = n;
         m_device->CreateUnorderedAccessView(res, nullptr, &uav, m_clear_heap->GetCPUDescriptorHandleForHeapStart());
-        D3D12_CPU_DESCRIPTOR_HANDLE cpu = m_frame_rec.heap->GetCPUDescriptorHandleForHeapStart();
-        cpu.ptr += static_cast<SIZE_T>(m_frame_rec.cursor) * m_frame_rec.inc;
+        if (!frame_prepare(1U)) { return; }
+        D3D12_CPU_DESCRIPTOR_HANDLE cpu{};
+        D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
+        if (!frame_take(1U, cpu, gpu)) { return; }
         m_device->CreateUnorderedAccessView(res, nullptr, &uav, cpu);
-        D3D12_GPU_DESCRIPTOR_HANDLE gpu = m_frame_rec.heap->GetGPUDescriptorHandleForHeapStart();
-        gpu.ptr += static_cast<UINT64>(m_frame_rec.cursor) * m_frame_rec.inc;
-        ++m_frame_rec.cursor;
         const UINT vals[4] = {value, value, value, value};
         m_list->ClearUnorderedAccessViewUint(gpu, m_clear_heap->GetCPUDescriptorHandleForHeapStart(), res, vals, 0,
                                              nullptr);
@@ -2955,8 +2992,7 @@ public:
             return;
         }
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return; }
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
         m_list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
@@ -2997,8 +3033,7 @@ public:
         if (!p.valid() || pso == nullptr) { return; }
         if (frame_recording()) { record_plain(t, p, pso, clear, true, clear_depth, vertex_count); return; }
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return; }
 
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
@@ -3060,8 +3095,7 @@ public:
             return;
         }
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return; }
 
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
@@ -3124,8 +3158,7 @@ public:
         }
         if (!p.valid() || pso == nullptr) { return; }
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return; }
 
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
@@ -3180,7 +3213,7 @@ public:
         if (!m_ok || size_bytes == 0U) { return nullptr; }
         const UINT64 size = (static_cast<UINT64>(size_bytes) + 3U) & ~static_cast<UINT64>(3U); // round up to 4-byte words
 
-        // The DEFAULT-heap UAV buffer the FS writes (created COPY_DEST so it can be zero-filled, then parked in UAV state).
+        // DEFAULT buffers start in COMMON and promote to COPY_DEST for zero-fill, then park in UAV state.
         D3D12_HEAP_PROPERTIES hp{};
         hp.Type = D3D12_HEAP_TYPE_DEFAULT;
         D3D12_RESOURCE_DESC rd{};
@@ -3193,7 +3226,7 @@ public:
         rd.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         rd.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         ComPtr<ID3D12Resource> buf;
-        if (FAILED(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+        if (FAILED(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COMMON, nullptr,
                                                      IID_PPV_ARGS(&buf))))
         {
             return nullptr;
@@ -3210,11 +3243,10 @@ public:
         ComPtr<ID3D12Resource> readback = make_readback_buffer(m_device.Get(), size);
         if (readback == nullptr) { return nullptr; }
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return nullptr; }
         m_list->CopyBufferRegion(buf.Get(), 0, upload.Get(), 0, size);
         transition(buf.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        submit_and_wait();
+        if (!submit_and_wait()) { return nullptr; }
 
         void* mapped = nullptr;
         if (FAILED(readback->Map(0, nullptr, &mapped))) { return nullptr; }
@@ -3259,12 +3291,11 @@ public:
             return true;
         }
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return false; }
         transition(s.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST);
         m_list->CopyBufferRegion(s.buf(), byte_offset, upload.Get(), 0, size_bytes);
         transition(s.buf(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        submit_and_wait();
+        if (!submit_and_wait()) { return false; }
         return true;
     }
 
@@ -3293,8 +3324,7 @@ public:
         uav.Buffer.StructureByteStride = 4;
         m_device->CreateUnorderedAccessView(s.buf(), nullptr, &uav, m_uav_heap->GetCPUDescriptorHandleForHeapStart());
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return; }
 
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
@@ -3364,8 +3394,7 @@ public:
         uav.Buffer.StructureByteStride = 4;
         m_device->CreateUnorderedAccessView(s.buf(), nullptr, &uav, m_uav_heap->GetCPUDescriptorHandleForHeapStart());
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return; }
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv = t.dsv();
         m_list->OMSetRenderTargets(0, nullptr, FALSE, &dsv);
         m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr);
@@ -3431,8 +3460,7 @@ public:
         uav.Buffer.StructureByteStride = 4;
         m_device->CreateUnorderedAccessView(s.buf(), nullptr, &uav, m_uav_heap->GetCPUDescriptorHandleForHeapStart());
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return; }
 
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
@@ -3523,8 +3551,7 @@ public:
             atlas_gpu.ptr += static_cast<UINT64>(2U + kBindlessMax) * m_srv_inc;
         }
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return; }
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv = t.dsv();
@@ -3710,7 +3737,9 @@ public:
             std::memcpy(w + static_cast<crd::u64>(i) * kMultiStride, static_cast<const void*>(args), kMultiStride);
         }
 
+        if (!frame_prepare(1U)) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
+        if (table.ptr == 0U) { return; }
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv   = t.rtv();
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv   = t.dsv();
         m_list->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
@@ -3968,8 +3997,11 @@ public:
         }
 
         frame_transition(s.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kIndexedDrawStates);
+        if (!frame_prepare(2U)) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
+        if (table.ptr == 0U) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE ro = frame_alloc_storage_srv_slot(s); // t0 (REN-39-C1)
+        if (ro.ptr == 0U) { return; }
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv = depth_on ? t.dsv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
         m_list->OMSetRenderTargets(1, &rtv, FALSE, depth_on ? &dsv : nullptr);
@@ -4055,8 +4087,11 @@ public:
         }
 
         frame_transition(s.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kIndexedDrawStates);
+        if (!frame_prepare(2U)) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
+        if (table.ptr == 0U) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE ro = frame_alloc_storage_srv_slot(s); // t0 (REN-39-C1)
+        if (ro.ptr == 0U) { return; }
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv = t.dsv();
         m_list->OMSetRenderTargets(0, nullptr, FALSE, &dsv); // ⛔ zero RTVs: depth-only
         if (!load_target && !m_next_load_depth)
@@ -4117,8 +4152,11 @@ public:
         }
 
         frame_transition(s.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kIndexedDrawStates);
+        if (!frame_prepare(2U + (texture != nullptr ? 1U : 0U) + (atlas != nullptr ? 1U : 0U))) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
+        if (table.ptr == 0U) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE ro = frame_alloc_storage_srv_slot(s); // t0 (REN-39-C1)
+        if (ro.ptr == 0U) { return; }
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv = depth_on ? t.dsv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
         m_list->OMSetRenderTargets(1, &rtv, FALSE, depth_on ? &dsv : nullptr);
@@ -4143,6 +4181,7 @@ public:
         {
             auto& tex = static_cast<Dx12Texture&>(*texture);
             const D3D12_GPU_DESCRIPTOR_HANDLE srv_table = frame_alloc_srv_slot(tex);
+            if (srv_table.ptr == 0U) { return; }
             D3D12_GPU_DESCRIPTOR_HANDLE samp_gpu = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
             samp_gpu.ptr += static_cast<UINT64>(active_sampler_slot(0U)) * m_sampler_inc; // REN-38-B8
             m_list->SetGraphicsRootDescriptorTable(1, srv_table);                         // base-color SRV (t1)
@@ -4152,6 +4191,7 @@ public:
         {
             auto& atl = static_cast<Dx12Texture&>(*atlas);
             const D3D12_GPU_DESCRIPTOR_HANDLE atlas_table = frame_alloc_srv_slot(atl);
+            if (atlas_table.ptr == 0U) { return; }
             m_list->SetGraphicsRootDescriptorTable(4, atlas_table); // shadow atlas (t4)
             // REN-40-D: s5 keyed by WHAT the atlas is — comparison for depth, LINEAR/CLAMP for moments.
             m_list->SetGraphicsRootDescriptorTable(5, atlas_samp_tbl(atl));
@@ -4206,8 +4246,11 @@ public:
         if (!p.valid() || pso == nullptr) { return; }
 
         frame_transition(s.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kIndexedDrawStates);
+        if (!frame_prepare(2U + (texture != nullptr ? 1U : 0U) + (atlas != nullptr ? 1U : 0U))) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
+        if (table.ptr == 0U) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE ro    = frame_alloc_storage_srv_slot(s); // t0 (REN-39-C1)
+        if (ro.ptr == 0U) { return; }
         D3D12_CPU_DESCRIPTOR_HANDLE       rtvs[8]{};
         for (crd::u32 i = 0; i < n; ++i) { rtvs[i] = static_cast<Dx12RasterTarget&>(*targets[i]).rtv(); }
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv = depth_on ? dtp->dsv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
@@ -4238,6 +4281,7 @@ public:
         {
             auto&                             tex       = static_cast<Dx12Texture&>(*texture);
             const D3D12_GPU_DESCRIPTOR_HANDLE srv_table = frame_alloc_srv_slot(tex);
+            if (srv_table.ptr == 0U) { return; }
             D3D12_GPU_DESCRIPTOR_HANDLE       samp_gpu  = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
             samp_gpu.ptr += static_cast<UINT64>(active_sampler_slot(0U)) * m_sampler_inc;
             m_list->SetGraphicsRootDescriptorTable(1, srv_table); // base-color SRV (t1)
@@ -4247,6 +4291,7 @@ public:
         {
             auto&                             atl         = static_cast<Dx12Texture&>(*atlas);
             const D3D12_GPU_DESCRIPTOR_HANDLE atlas_table = frame_alloc_srv_slot(atl);
+            if (atlas_table.ptr == 0U) { return; }
             m_list->SetGraphicsRootDescriptorTable(4, atlas_table);
             m_list->SetGraphicsRootDescriptorTable(5, atlas_samp_tbl(atl));
             m_list->SetGraphicsRootDescriptorTable(8, plain_depth_tbl());
@@ -4299,8 +4344,7 @@ public:
         uav.Buffer.StructureByteStride = 4;
         m_device->CreateUnorderedAccessView(s.buf(), nullptr, &uav, m_uav_heap->GetCPUDescriptorHandleForHeapStart());
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return; }
 
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
@@ -4398,15 +4442,12 @@ public:
                      1U, t.color_format());
         if (!p.valid() || pso == nullptr || !ensure_multi_indexed(p.root())) { return; }
 
-        frame_transition(s.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kIndexedDrawStates);
-        frame_transition(a.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
-        if (cb != nullptr && cb != &a)
-        {
-            frame_transition(cb->buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                             D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
-        }
+        frame_indexed_indirect_transition(s, a, cb, false);
+        if (!frame_prepare(2U + (map != nullptr ? 1U : 0U) + (atlas != nullptr ? 1U : 0U))) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
+        if (table.ptr == 0U) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE ro    = frame_alloc_storage_srv_slot(s); // t0 (REN-39-C1)
+        if (ro.ptr == 0U) { return; }
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv   = t.rtv();
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv   = depth_on ? t.dsv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
         m_list->OMSetRenderTargets(1, &rtv, FALSE, depth_on ? &dsv : nullptr);
@@ -4429,6 +4470,7 @@ public:
         {
             auto&                             tex       = static_cast<Dx12Texture&>(*map);
             const D3D12_GPU_DESCRIPTOR_HANDLE srv_table = frame_alloc_srv_slot(tex);
+            if (srv_table.ptr == 0U) { return; }
             D3D12_GPU_DESCRIPTOR_HANDLE       samp_gpu  = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
             samp_gpu.ptr += static_cast<UINT64>(active_sampler_slot(0U)) * m_sampler_inc; // REN-38-B8
             m_list->SetGraphicsRootDescriptorTable(1, srv_table);                         // base-colour SRV (t1)
@@ -4438,6 +4480,7 @@ public:
         {
             auto&                             atl         = static_cast<Dx12Texture&>(*atlas);
             const D3D12_GPU_DESCRIPTOR_HANDLE atlas_table = frame_alloc_srv_slot(atl);
+            if (atlas_table.ptr == 0U) { return; }
             m_list->SetGraphicsRootDescriptorTable(4, atlas_table); // shadow atlas (t4)
             // REN-40-D: s5 keyed by WHAT the atlas is — comparison for depth, LINEAR/CLAMP for moments.
             m_list->SetGraphicsRootDescriptorTable(5, atlas_samp_tbl(atl));
@@ -4453,6 +4496,7 @@ public:
         m_list->IASetIndexBuffer(&ibv);
         m_list->ExecuteIndirect(m_multi_idx_sig.Get(), max_draws, a.buf(), args_offset_bytes,
                                 cb != nullptr ? cb->buf() : nullptr, cb != nullptr ? count_offset_bytes : 0U);
+        frame_indexed_indirect_transition(s, a, cb, true);
         ++m_multi_batches;
         ++m_multi_indexed_batches; // REN-39-C1: indexed
     }
@@ -4491,16 +4535,12 @@ public:
         ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false, /*num_rts*/ 0U);
         if (!p.valid() || pso == nullptr || !ensure_multi_indexed(p.root())) { return; }
 
-        frame_transition(s.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kIndexedDrawStates);
-        frame_transition(a.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                         D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
-        if (cb != nullptr && cb != &a)
-        {
-            frame_transition(cb->buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                             D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
-        }
+        frame_indexed_indirect_transition(s, a, cb, false);
+        if (!frame_prepare(2U)) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
+        if (table.ptr == 0U) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE ro    = frame_alloc_storage_srv_slot(s); // t0 (REN-39-C1)
+        if (ro.ptr == 0U) { return; }
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv   = t.dsv();
         m_list->OMSetRenderTargets(0, nullptr, FALSE, &dsv); // ⛔ zero RTVs: depth-only
         if (!load_target && !m_next_load_depth) { m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr); }
@@ -4523,14 +4563,7 @@ public:
         m_list->IASetIndexBuffer(&ibv);
         m_list->ExecuteIndirect(m_multi_idx_sig.Get(), max_draws, a.buf(), args_offset_bytes,
                                 cb != nullptr ? cb->buf() : nullptr, cb != nullptr ? count_offset_bytes : 0U);
-        if (cb != nullptr && cb != &a)
-        {
-            frame_transition(cb->buf(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
-                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        }
-        frame_transition(a.buf(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
-                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        frame_transition(s.buf(), kIndexedDrawStates, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        frame_indexed_indirect_transition(s, a, cb, true);
         ++m_multi_batches;
         ++m_multi_indexed_batches; // REN-39-C1: indexed
     }
@@ -4603,8 +4636,7 @@ public:
         ro_cpu.ptr += static_cast<SIZE_T>(3U + kBindlessMax) * m_srv_inc;
         m_device->CreateShaderResourceView(s.buf(), &ro, ro_cpu);
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return; }
 
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         transition(s.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kIndexedDrawStates);
@@ -4698,8 +4730,7 @@ public:
         }
         upload->Unmap(0, nullptr);
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return nullptr; }
         D3D12_TEXTURE_COPY_LOCATION dst{};
         dst.pResource        = tex.Get();
         dst.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
@@ -4710,7 +4741,7 @@ public:
         src.PlacedFootprint = fp;
         m_list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
         transition(tex.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        submit_and_wait();
+        if (!submit_and_wait()) { return nullptr; }
 
         D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
         srv.Format                  = kColorFormat;
@@ -4792,8 +4823,7 @@ public:
         }
         upload->Unmap(0, nullptr);
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return nullptr; }
         for (crd::u32 i = 0; i < mip_count; ++i)
         {
             D3D12_TEXTURE_COPY_LOCATION dst{};
@@ -4807,7 +4837,7 @@ public:
             m_list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
         }
         transition(tex.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        submit_and_wait();
+        if (!submit_and_wait()) { return nullptr; }
 
         D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
         srv.Format                  = fmt;
@@ -4886,8 +4916,7 @@ public:
         }
         upload->Unmap(0, nullptr);
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return nullptr; }
         for (UINT s = 0; s < nsub; ++s)
         {
             D3D12_TEXTURE_COPY_LOCATION d{};
@@ -4901,7 +4930,7 @@ public:
             m_list->CopyTextureRegion(&d, 0, 0, 0, &sr, nullptr);
         }
         transition(tex.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        submit_and_wait();
+        if (!submit_and_wait()) { return nullptr; }
 
         D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
         srv.Format                  = kColorFormat;
@@ -4981,8 +5010,7 @@ public:
         }
         upload->Unmap(0, nullptr);
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return nullptr; }
         D3D12_TEXTURE_COPY_LOCATION dst{};
         dst.pResource        = tex.Get();
         dst.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
@@ -4993,7 +5021,7 @@ public:
         src.PlacedFootprint = fp;
         m_list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
         transition(tex.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        submit_and_wait();
+        if (!submit_and_wait()) { return nullptr; }
         D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
         srv.Format                  = DXGI_FORMAT_R32_FLOAT;
         srv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -5049,8 +5077,7 @@ public:
         D3D12_GPU_DESCRIPTOR_HANDLE bindless_gpu = m_uav_heap->GetGPUDescriptorHandleForHeapStart();
         bindless_gpu.ptr += static_cast<UINT64>(2U) * m_srv_inc; // slot 2
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return; }
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
         m_list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
@@ -5261,7 +5288,9 @@ public:
     // descriptor the table covers is valid — the same rule every other table in this file follows.
     [[nodiscard]] D3D12_GPU_DESCRIPTOR_HANDLE alloc_kernel_uav_run(IStorageBuffer* const* buffers, crd::u32 n)
     {
-        const UINT base = m_frame_rec.cursor;
+        D3D12_CPU_DESCRIPTOR_HANDLE base{};
+        D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
+        if (!frame_take(kMaxKernelBuffers, base, gpu)) { return {}; }
         for (UINT i = 0; i < kMaxKernelBuffers; ++i)
         {
             IStorageBuffer&                  sb = *buffers[i < n ? i : 0U];
@@ -5270,13 +5299,10 @@ public:
             uav.ViewDimension              = D3D12_UAV_DIMENSION_BUFFER;
             uav.Buffer.NumElements         = dx_buffer_elems(sb);
             uav.Buffer.StructureByteStride = 4;
-            D3D12_CPU_DESCRIPTOR_HANDLE cpu = m_frame_rec.heap->GetCPUDescriptorHandleForHeapStart();
-            cpu.ptr += static_cast<SIZE_T>(base + i) * m_frame_rec.inc;
+            D3D12_CPU_DESCRIPTOR_HANDLE cpu = base;
+            cpu.ptr += static_cast<SIZE_T>(i) * m_frame_rec.inc;
             m_device->CreateUnorderedAccessView(dx_buffer_of(sb), nullptr, &uav, cpu);
         }
-        m_frame_rec.cursor += static_cast<UINT>(kMaxKernelBuffers);
-        D3D12_GPU_DESCRIPTOR_HANDLE gpu = m_frame_rec.heap->GetGPUDescriptorHandleForHeapStart();
-        gpu.ptr += static_cast<UINT64>(base) * m_frame_rec.inc;
         return gpu;
     }
 
@@ -5303,9 +5329,12 @@ public:
         if (pso == nullptr) { return; }
         const crd::u32 n = count < kMaxKernelBuffers ? count : kMaxKernelBuffers;
 
+        if (!frame_prepare(kMaxKernelBuffers)) { return; }
         m_list->SetComputeRootSignature(rt_kernel_root());
         m_list->SetComputeRootShaderResourceView(0, static_cast<D3D12_GPU_VIRTUAL_ADDRESS>(tlas_va));
-        m_list->SetComputeRootDescriptorTable(1, alloc_kernel_uav_run(buffers, n));
+        const D3D12_GPU_DESCRIPTOR_HANDLE frame_table = alloc_kernel_uav_run(buffers, n);
+        if (frame_table.ptr == 0U) { return; }
+        m_list->SetComputeRootDescriptorTable(1, frame_table);
         m_list->SetPipelineState(pso);
         apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->Dispatch(gx > 0U ? gx : 1U, gy > 0U ? gy : 1U, gz > 0U ? gz : 1U);
@@ -5324,15 +5353,14 @@ public:
         if (pso == nullptr) { return; }
         const crd::u32 n = count < kMaxKernelBuffers ? count : kMaxKernelBuffers;
 
+        if (!frame_prepare(kMaxKernelBuffers + 1U)) { return; }
         D3D12_GPU_DESCRIPTOR_HANDLE uav_gpu = alloc_kernel_uav_run(buffers, n);
+        if (uav_gpu.ptr == 0U) { return; }
         auto& dx_tex = static_cast<Dx12Texture&>(tex);
-        const UINT srv_base = m_frame_rec.cursor;
-        D3D12_CPU_DESCRIPTOR_HANDLE srv_cpu = m_frame_rec.heap->GetCPUDescriptorHandleForHeapStart();
-        srv_cpu.ptr += static_cast<SIZE_T>(srv_base) * m_frame_rec.inc;
+        D3D12_CPU_DESCRIPTOR_HANDLE srv_cpu{};
+        D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu{};
+        if (!frame_take(1U, srv_cpu, srv_gpu)) { return; }
         m_device->CreateShaderResourceView(dx_tex.tex(), &dx_tex.srv(), srv_cpu);
-        m_frame_rec.cursor += 1U;
-        D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu = m_frame_rec.heap->GetGPUDescriptorHandleForHeapStart();
-        srv_gpu.ptr += static_cast<UINT64>(srv_base) * m_frame_rec.inc;
 
         m_list->SetComputeRootSignature(sampled_kernel_root());
         m_list->SetComputeRootDescriptorTable(0, uav_gpu);
@@ -5362,8 +5390,11 @@ public:
         // ⛔ D3D12 requires INDIRECT_ARGUMENT state on the args buffer; a storage buffer lives in UNORDERED_ACCESS
         // between passes, so the move is made here and made BACK — the graph's own state tracking stays true.
         frame_transition(ab, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+        if (!frame_prepare(kMaxKernelBuffers)) { return; }
         m_list->SetComputeRootSignature(kernel_root());
-        m_list->SetComputeRootDescriptorTable(0, alloc_kernel_uav_run(buffers, n));
+        const D3D12_GPU_DESCRIPTOR_HANDLE frame_table = alloc_kernel_uav_run(buffers, n);
+        if (frame_table.ptr == 0U) { return; }
+        m_list->SetComputeRootDescriptorTable(0, frame_table);
         m_list->SetPipelineState(pso);
         apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->ExecuteIndirect(sig, 1U, ab, args_offset, nullptr, 0U);
@@ -5413,26 +5444,9 @@ public:
         if (pso == nullptr) { return; }
         const crd::u32 n = count < kMaxKernelBuffers ? count : kMaxKernelBuffers;
 
-        // A CONTIGUOUS run from the frame ring — a root descriptor table addresses N consecutive slots from one
-        // GPU handle, the same rule `frame_alloc_bindless_run` follows. Slots past `n` replicate slot 0 so every
-        // descriptor the table covers is valid.
-        const UINT base = m_frame_rec.cursor;
-        for (UINT i = 0; i < kMaxKernelBuffers; ++i)
-        {
-            IStorageBuffer&                  sb = *buffers[i < n ? i : 0U];
-            D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
-            uav.Format                     = DXGI_FORMAT_UNKNOWN;
-            uav.ViewDimension              = D3D12_UAV_DIMENSION_BUFFER;
-            uav.Buffer.NumElements         = dx_buffer_elems(sb);
-            uav.Buffer.StructureByteStride = 4;
-            D3D12_CPU_DESCRIPTOR_HANDLE cpu = m_frame_rec.heap->GetCPUDescriptorHandleForHeapStart();
-            cpu.ptr += static_cast<SIZE_T>(base + i) * m_frame_rec.inc;
-            m_device->CreateUnorderedAccessView(dx_buffer_of(sb), nullptr, &uav, cpu);
-        }
-        m_frame_rec.cursor += static_cast<UINT>(kMaxKernelBuffers);
-        D3D12_GPU_DESCRIPTOR_HANDLE gpu = m_frame_rec.heap->GetGPUDescriptorHandleForHeapStart();
-        gpu.ptr += static_cast<UINT64>(base) * m_frame_rec.inc;
-
+        if (!frame_prepare(kMaxKernelBuffers)) { return; }
+        const D3D12_GPU_DESCRIPTOR_HANDLE gpu = alloc_kernel_uav_run(buffers, n);
+        if (gpu.ptr == 0U) { return; }
         m_list->SetComputeRootSignature(kernel_root());
         m_list->SetComputeRootDescriptorTable(0, gpu);
         m_list->SetPipelineState(pso);
@@ -5480,6 +5494,7 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE rtvs[8]{};
         for (crd::u32 i = 0; i < n; ++i) { rtvs[i] = static_cast<Dx12RasterTarget&>(*targets[i]).rtv(); }
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv = has_depth ? t0.dsv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
+        if (!frame_prepare(1U)) { return; }
         m_list->OMSetRenderTargets(n, static_cast<const D3D12_CPU_DESCRIPTOR_HANDLE*>(rtvs), FALSE,
                                    has_depth ? &dsv : nullptr);
         for (crd::u32 i = 0; i < n; ++i)
@@ -5524,7 +5539,9 @@ public:
         m_list->RSSetViewports(1, &vp);
         m_list->RSSetScissorRects(1, &sc);
         m_list->SetGraphicsRootSignature(p.root());
-        m_list->SetGraphicsRootDescriptorTable(0, frame_alloc_storage_slot(sb));
+        const D3D12_GPU_DESCRIPTOR_HANDLE frame_table = frame_alloc_storage_slot(sb);
+        if (frame_table.ptr == 0U) { return; }
+        m_list->SetGraphicsRootDescriptorTable(0, frame_table);
         m_list->SetPipelineState(pso);
         apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -5589,8 +5606,7 @@ public:
         ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, n);
         if (!p.valid() || pso == nullptr) { return; }
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return; }
         for (crd::u32 i = 0; i < n; ++i) { transition(t.tex(i), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET); }
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv0 = t.rtv_start();
         m_list->OMSetRenderTargets(n, &rtv0, TRUE, nullptr); // TRUE: the N RTVs are contiguous in one heap
@@ -5648,8 +5664,7 @@ private:
         D3D12_GPU_DESCRIPTOR_HANDLE samp_gpu = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
         samp_gpu.ptr += static_cast<UINT64>(active_sampler_slot(sampler_slot)) * m_sampler_inc; // REN-38-B8
 
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return; }
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
         m_list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
@@ -5822,12 +5837,10 @@ private:
         srv.Texture2D.MipLevels     = 1;
         if (frame_ring)
         {
-            D3D12_CPU_DESCRIPTOR_HANDLE cpu = m_frame_rec.heap->GetCPUDescriptorHandleForHeapStart();
-            cpu.ptr += static_cast<SIZE_T>(m_frame_rec.cursor) * m_frame_rec.inc;
+            D3D12_CPU_DESCRIPTOR_HANDLE cpu{};
+            D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
+            if (!frame_take(1U, cpu, gpu)) { return {}; }
             m_device->CreateShaderResourceView(src, &srv, cpu);
-            D3D12_GPU_DESCRIPTOR_HANDLE gpu = m_frame_rec.heap->GetGPUDescriptorHandleForHeapStart();
-            gpu.ptr += static_cast<UINT64>(m_frame_rec.cursor) * m_frame_rec.inc;
-            ++m_frame_rec.cursor;
             return gpu;
         }
         D3D12_CPU_DESCRIPTOR_HANDLE cpu = m_uav_heap->GetCPUDescriptorHandleForHeapStart();
@@ -5877,14 +5890,16 @@ private:
             frame_transition(src.copy_src(), D3D12_RESOURCE_STATE_COPY_SOURCE,
                              D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             frame_transition(dst.tex(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_RENDER_TARGET);
-            emit_blit_draw(dst, blit_srv(src.copy_src(), true), filter);
+            if (!frame_prepare(1U)) { return; }
+            const D3D12_GPU_DESCRIPTOR_HANDLE table = blit_srv(src.copy_src(), true);
+            if (table.ptr == 0U) { return; }
+            emit_blit_draw(dst, table, filter);
             frame_transition(dst.tex(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_DEST);
             frame_transition(src.copy_src(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                              D3D12_RESOURCE_STATE_COPY_SOURCE);
             return;
         }
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return; }
         transition(src.copy_src(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         transition(dst.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         ID3D12DescriptorHeap* heaps[] = {m_uav_heap.Get()};
@@ -5901,8 +5916,7 @@ private:
     // the instant the call returns — the affordance every other synchronous verb provides.
     void sync_xfer(Dx12RasterTarget& dst, Dx12RasterTarget& src, bool resolve, BlitFilter /*filter*/)
     {
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return; }
         ID3D12Resource* src_res = resolve ? src.tex() : src.copy_src();
         transition(src_res, D3D12_RESOURCE_STATE_COMMON,
                    resolve ? D3D12_RESOURCE_STATE_RESOLVE_SOURCE : D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -5916,7 +5930,7 @@ private:
                    D3D12_RESOURCE_STATE_COPY_SOURCE);
         copy_to_readback(dst);
         transition(dst.tex(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
-        submit_and_wait();
+        (void)submit_and_wait();
     }
 
     // ── ⛔ REN-38-A10: `download_storage` was MISSING on DX12. ──
@@ -5932,12 +5946,11 @@ private:
         // memory with no host mapping, which is exactly why an authored pass writes its results to an
         // `external_buffer` when anything outside the frame needs to see them.
         if (src == nullptr || sb == nullptr || sb->readback() == nullptr) { return false; }
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
+        if (!reset_commands()) { return false; }
         transition(src, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
         m_list->CopyResource(sb->readback(), src);
         transition(src, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        submit_and_wait();
+        if (!submit_and_wait()) { return false; }
         return true;
     }
 
@@ -5970,28 +5983,37 @@ private:
 
     // REN-8: submit WITHOUT blocking. The caller decides when to wait — a presenting frame defers it to just
     // before the next frame resets this allocator/list, so the CPU builds frame N+1 while the GPU runs N.
-    void submit_no_wait()
+    [[nodiscard]] bool reset_commands()
     {
-        m_list->Close();
-        ID3D12CommandList* lists[] = {m_list.Get()};
-        m_queue->ExecuteCommandLists(1, lists);
-        ++m_fence_val;
-        m_queue->Signal(m_fence.Get(), m_fence_val);
-    }
-    // Block until everything submitted so far has completed.
-    void wait_submitted()
-    {
-        if (m_fence->GetCompletedValue() < m_fence_val)
+        if (!valid() || FAILED(detail::dx12_reset(m_cmd_alloc.Get(), m_list.Get())))
         {
-            m_fence->SetEventOnCompletion(m_fence_val, m_event);
-            WaitForSingleObject(m_event, INFINITE);
+            m_ok = false;
+            return false;
         }
+        return true;
     }
-    void submit_and_wait()
+    bool submit_no_wait()
     {
-        submit_no_wait();
-        wait_submitted();
+        m_last_submit_executed = false;
+        if (!valid() || FAILED(detail::dx12_submit(m_device.Get(), m_queue.Get(), m_list.Get(), m_fence.Get(),
+                                                  m_fence_val, m_last_submit_executed)))
+        {
+            m_ok = false;
+            return false;
+        }
+        return true;
     }
+    [[nodiscard]] bool wait_value(UINT64 value)
+    {
+        if (FAILED(detail::dx12_wait(m_device.Get(), m_fence.Get(), value, m_event)))
+        {
+            m_ok = false;
+            return false;
+        }
+        return true;
+    }
+    bool wait_submitted() { return wait_value(m_fence_val); }
+    bool submit_and_wait() { return submit_no_wait() && wait_submitted(); }
 
     // ── ⭐⭐ DX12 UPLOAD BATCHING — parity with Vulkan's 38-G1 fast path (the 40-B DX12 upload gap). ──────────────
     // Before this, every sync-phase upload took the SYNCHRONOUS `upload_storage` body: a fresh
@@ -6007,11 +6029,7 @@ private:
         UploadBatch& b = m_upload[m_upload_slot];
         if (b.submitted) // reclaim the slot from 2 batches ago (its submission has normally long completed)
         {
-            if (m_fence->GetCompletedValue() < b.fence_val)
-            {
-                m_fence->SetEventOnCompletion(b.fence_val, m_event);
-                WaitForSingleObject(m_event, INFINITE);
-            }
+            if (!wait_value(b.fence_val)) { return; }
             b.submitted = false;
         }
         if (b.ring == nullptr)
@@ -6038,8 +6056,7 @@ private:
         }
         else
         {
-            b.alloc->Reset();
-            b.list->Reset(b.alloc.Get(), nullptr);
+            if (FAILED(detail::dx12_reset(b.alloc.Get(), b.list.Get()))) { m_ok = false; return; }
         }
         b.used       = 0U;
         m_batch_open = true;
@@ -6050,11 +6067,13 @@ private:
         if (!m_batch_open) { return; }
         m_batch_open   = false;
         UploadBatch& b = m_upload[m_upload_slot];
-        b.list->Close();
-        ID3D12CommandList* lists[] = {b.list.Get()};
-        m_queue->ExecuteCommandLists(1U, lists);
-        ++m_fence_val;
-        m_queue->Signal(m_fence.Get(), m_fence_val); // ⛔ NO WAIT — that is the entire point
+        bool submitted = false;
+        if (FAILED(detail::dx12_submit(m_device.Get(), m_queue.Get(), b.list.Get(), m_fence.Get(),
+                                      m_fence_val, submitted)))
+        {
+            m_ok = false;
+            return;
+        }
         b.fence_val   = m_fence_val;
         b.submitted   = true;
         m_upload_slot = (m_upload_slot + 1U) % kUploadBatches;
@@ -6079,11 +6098,7 @@ private:
             // reopen on the next slot, retry. `b` still names the just-submitted slot after end advances the cursor.
             const crd::u32 want = (b.cap * 2U > b.used + aligned) ? b.cap * 2U : (b.used + aligned) * 2U;
             end_upload_batch();
-            if (m_fence->GetCompletedValue() < b.fence_val)
-            {
-                m_fence->SetEventOnCompletion(b.fence_val, m_event);
-                WaitForSingleObject(m_event, INFINITE);
-            }
+            if (!wait_value(b.fence_val)) { return false; }
             b.submitted = false;
             b.map       = nullptr;
             b.ring.Reset();
@@ -6125,29 +6140,68 @@ private:
         for (UploadBatch& b : m_upload)
         {
             if (!b.submitted) { continue; }
-            if (m_fence->GetCompletedValue() < b.fence_val)
-            {
-                m_fence->SetEventOnCompletion(b.fence_val, m_event);
-                WaitForSingleObject(m_event, INFINITE);
-            }
+            if (!wait_value(b.fence_val)) { return; }
             b.submitted = false;
         }
     }
 
-    // ── REN-1 pt-2 (D-007 row 98): the frame-graph RECORDING MODE ─────────────────────────────────────────────────
-    // When a frame graph is executing, the public draw_storage_depth / _load record into ONE shared open command
-    // list (m_list, already Reset) with a per-draw slot from the graph's frame descriptor heap — NO per-draw
-    // Reset/transition/copy/submit. The DX12 analog of the Vulkan frame descriptor pool: the single storage-UAV
-    // heap slot is consumed at EXECUTE time, so each recorded draw needs its OWN heap slot (else all draws read the
-    // last-written descriptor). The graph owns the frame heap + passes it in; the context bumps a per-frame cursor.
+    // Each native command reserves its whole descriptor range before setting roots. Pages belong to the
+    // graph and stay immutable until its submitted fence retires; the range cursor cannot grow or wrap.
     struct FrameRec
     {
-        ID3D12DescriptorHeap* heap   = nullptr; // the graph's shader-visible CBV/SRV/UAV heap (kFrameSlots UAVs)
-        UINT                  inc    = 0;        // descriptor increment size
-        UINT                  cursor = 0;        // next free slot (reset once per execute)
-        bool                  active = false;    // a frame graph is recording
+        detail::Dx12FrameDescriptors* arena = nullptr;
+        detail::Dx12DescriptorRange range{};
+        ID3D12DescriptorHeap* heap = nullptr;
+        UINT inc = 0U;
+        UINT cursor = 0U;
+        bool active = false;
     };
+    crd::memory::IAllocator* m_allocator = nullptr;
     FrameRec m_frame_rec{};
+
+    [[nodiscard]] bool frame_prepare(UINT count)
+    {
+        if (!m_ok) { return false; }
+        if (!frame_recording() || count == 0U) { return true; }
+        const HRESULT result = m_frame_rec.arena->reserve(count, m_frame_rec.range);
+        if (FAILED(result))
+        {
+            detail::dx12_execution_failure(result, "frame descriptor reservation");
+            m_ok = false; // Cancel the entire unsubmitted recording, never draw with a partial table.
+            return false;
+        }
+        m_frame_rec.cursor = 0U;
+        if (m_frame_rec.heap != m_frame_rec.range.heap)
+        {
+            m_frame_rec.heap = m_frame_rec.range.heap;
+            ID3D12DescriptorHeap* heaps[] = {m_frame_rec.heap, m_sampler_heap.Get()};
+            m_list->SetDescriptorHeaps(m_sampler_heap != nullptr ? 2U : 1U, heaps);
+            // Heap changes invalidate table state. Equal root layouts can share the same native signature;
+            // redundantly selecting it does not discard tables from the previous shader/page. Start both
+            // bind points afresh; each recording verb must set every argument used by its actual shader.
+            m_list->SetGraphicsRootSignature(nullptr);
+            m_list->SetComputeRootSignature(nullptr);
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool frame_take(UINT count, D3D12_CPU_DESCRIPTOR_HANDLE& cpu, D3D12_GPU_DESCRIPTOR_HANDLE& gpu)
+    {
+        cpu = {}; gpu = {};
+        if (!m_ok || !frame_recording() || count == 0U || m_frame_rec.cursor > m_frame_rec.range.count
+            || count > m_frame_rec.range.count - m_frame_rec.cursor)
+        {
+            detail::dx12_execution_failure(E_BOUNDS, "frame descriptor range exhausted");
+            m_ok = false;
+            return false;
+        }
+        cpu = m_frame_rec.range.cpu;
+        gpu = m_frame_rec.range.gpu;
+        cpu.ptr += static_cast<SIZE_T>(m_frame_rec.cursor) * m_frame_rec.inc;
+        gpu.ptr += static_cast<UINT64>(m_frame_rec.cursor) * m_frame_rec.inc;
+        m_frame_rec.cursor += count;
+        return true;
+    }
 
 public:
     // The graph brackets a frame's recording with these (defined out-of-line in Dx12FrameGraph). While recording,
@@ -6177,8 +6231,9 @@ public:
         m_list.As(&m_list6);
     }
 
-    void frame_rec_begin(ID3D12DescriptorHeap* heap, UINT inc)
+    [[nodiscard]] bool frame_rec_begin(detail::Dx12FrameDescriptors& arena)
     {
+        if (!valid()) { return false; }
         if (m_batch_open) { end_upload_batch(); } // never carry an open upload batch across a frame boundary
         // ── REN-8: FRAMES IN FLIGHT (the DX12 half). ────────────────────────────────────────────────────────
         // The frame graph records into its OWN ring of allocator+list pairs, swapped in here and restored in
@@ -6192,11 +6247,7 @@ public:
         if (m_ring_list[0] != nullptr)
         {
             m_ring_slot = (m_ring_slot + 1U) % kFrameRingSize;
-            if (m_fence->GetCompletedValue() < m_ring_val[m_ring_slot])
-            {
-                m_fence->SetEventOnCompletion(m_ring_val[m_ring_slot], m_event);
-                WaitForSingleObject(m_event, INFINITE);
-            }
+            if (!wait_value(m_ring_val[m_ring_slot])) { return false; }
             m_saved_alloc = m_cmd_alloc;
             m_saved_list  = m_list;
             m_cmd_alloc   = m_ring_alloc[m_ring_slot];
@@ -6204,15 +6255,19 @@ public:
         }
         // REN-39-D1: this slot's fence has retired above, so last cycle's in-frame staging buffers are dead.
         m_frame_uploads[m_ring_slot].clear();
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
-        m_frame_rec.heap   = heap;
-        m_frame_rec.inc    = inc;
-        m_frame_rec.cursor = 0U;
+        if (!reset_commands()) { return false; }
+        arena.reset_after_retirement();
+        m_frame_rec = FrameRec{};
+        m_frame_rec.arena = &arena;
+        m_frame_rec.inc = arena.increment();
         m_frame_rec.active = true;
-        // REN-2: bind BOTH the frame heap (SRV/UAV per-draw ring) and the context sampler heap (record_textured's s2).
-        ID3D12DescriptorHeap* heaps[] = {heap, m_sampler_heap.Get()};
-        m_list->SetDescriptorHeaps(m_sampler_heap != nullptr ? 2U : 1U, heaps);
+        // Bind the sampler heap even for a descriptor-free command. The first reservation adds its resource heap.
+        if (m_sampler_heap != nullptr)
+        {
+            ID3D12DescriptorHeap* heap = m_sampler_heap.Get();
+            m_list->SetDescriptorHeaps(1U, &heap);
+        }
+        return true;
     }
     void frame_rec_end() noexcept
     {
@@ -6229,6 +6284,26 @@ public:
         }
     }
     [[nodiscard]] bool frame_recording() const noexcept { return m_frame_rec.active; }
+
+    // A native buffer may supply several read-only roles in one indirect draw. Union those states once per
+    // resource, then restore the same union to UAV before subsequent dispatch/readback or another draw.
+    void frame_indexed_indirect_transition(Dx12StorageBuffer& scene, Dx12StorageBuffer& args,
+                                           Dx12StorageBuffer* count, bool restore)
+    {
+        ID3D12Resource* resources[3] = {scene.buf(), args.buf(), count != nullptr ? count->buf() : nullptr};
+        D3D12_RESOURCE_STATES states[3] = {kIndexedDrawStates, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
+                                         D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT};
+        for (crd::u32 i = 0; i != 3U; ++i)
+        {
+            if (resources[i] == nullptr) { continue; }
+            for (crd::u32 j = i + 1U; j != 3U; ++j)
+            {
+                if (resources[j] == resources[i]) { states[i] |= states[j]; resources[j] = nullptr; }
+            }
+            frame_transition(resources[i], restore ? states[i] : D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                              restore ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS : states[i]);
+        }
+    }
 
     // The graph's cross-pass barrier hook + end-of-frame readback (so read_pixel is bit-identical to the sync path).
     void frame_transition(ID3D12Resource* res, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
@@ -6293,9 +6368,11 @@ public:
     [[nodiscard]] ID3D12GraphicsCommandList* frame_cmd_list() const noexcept { return m_list.Get(); }
     [[nodiscard]] ID3D12CommandQueue*        frame_cmd_queue() const noexcept { return m_queue.Get(); }
     // REN-8: the deferred-wait pair — ONE ExecuteCommandLists, the block moved to the next frame's start.
-    void                  frame_submit_no_wait() { submit_no_wait(); }
-    void                  frame_wait_submitted() { wait_submitted(); }
+    [[nodiscard]] bool frame_submit_no_wait() { return submit_no_wait(); }
+    [[nodiscard]] bool frame_did_submit() const noexcept { return m_last_submit_executed; }
+    [[nodiscard]] bool frame_wait_submitted() { return wait_submitted(); }
     [[nodiscard]] ID3D12Device* dx_device() const noexcept { return m_device.Get(); }
+    [[nodiscard]] crd::memory::IAllocator* dx_allocator() const noexcept { return m_allocator; }
 
     // REN-1 pt-2: create a DX12 frame graph bound to this context (defined out-of-line after Dx12FrameGraph).
     [[nodiscard]] std::unique_ptr<IFrameGraph> create_frame_graph() override;
@@ -6310,12 +6387,10 @@ private:
         uav.Buffer.FirstElement        = 0;
         uav.Buffer.NumElements         = s.num_elements();
         uav.Buffer.StructureByteStride = 4;
-        D3D12_CPU_DESCRIPTOR_HANDLE cpu = m_frame_rec.heap->GetCPUDescriptorHandleForHeapStart();
-        cpu.ptr += static_cast<SIZE_T>(m_frame_rec.cursor) * m_frame_rec.inc;
+        D3D12_CPU_DESCRIPTOR_HANDLE cpu{};
+        D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
+        if (!frame_take(1U, cpu, gpu)) { return {}; }
         m_device->CreateUnorderedAccessView(s.buf(), nullptr, &uav, cpu);
-        D3D12_GPU_DESCRIPTOR_HANDLE gpu = m_frame_rec.heap->GetGPUDescriptorHandleForHeapStart();
-        gpu.ptr += static_cast<UINT64>(m_frame_rec.cursor) * m_frame_rec.inc;
-        ++m_frame_rec.cursor;
         return gpu;
     }
 
@@ -6331,12 +6406,10 @@ private:
         srv.Buffer.FirstElement = 0;
         srv.Buffer.NumElements = s.num_elements();
         srv.Buffer.StructureByteStride = 4;
-        D3D12_CPU_DESCRIPTOR_HANDLE cpu = m_frame_rec.heap->GetCPUDescriptorHandleForHeapStart();
-        cpu.ptr += static_cast<SIZE_T>(m_frame_rec.cursor) * m_frame_rec.inc;
+        D3D12_CPU_DESCRIPTOR_HANDLE cpu{};
+        D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
+        if (!frame_take(1U, cpu, gpu)) { return {}; }
         m_device->CreateShaderResourceView(s.buf(), &srv, cpu);
-        D3D12_GPU_DESCRIPTOR_HANDLE gpu = m_frame_rec.heap->GetGPUDescriptorHandleForHeapStart();
-        gpu.ptr += static_cast<UINT64>(m_frame_rec.cursor) * m_frame_rec.inc;
-        ++m_frame_rec.cursor;
         return gpu;
     }
 
@@ -6348,7 +6421,9 @@ private:
                       bool clear, ClearColor clear_color, float clear_depth, crd::u32 vertex_count,
                       crd::u32 first_vertex = 0U)
     {
+        if (!frame_prepare(1U)) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
+        if (table.ptr == 0U) { return; }
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv   = t.rtv();
         // ⭐ REN-38-A6: DEPTH IS OPTIONAL — the DX12 mirror of the Vulkan rule. A frame-graph COLOUR transient
         // has no depth texture (depth is a separate `D32Float` resource here), so a `raster.geometry` pass
@@ -6385,8 +6460,11 @@ private:
                               crd::u32 index_count, crd::u32 instance_count)
     {
         frame_transition(s.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kIndexedDrawStates);
+        if (!frame_prepare(2U)) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
+        if (table.ptr == 0U) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE ro = frame_alloc_storage_srv_slot(s); // t0 (REN-39-C1)
+        if (ro.ptr == 0U) { return; }
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
         const bool depth_on = t.has_depth(); // ⭐ REN-38-A6: depth is OPTIONAL
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv = depth_on ? t.dsv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
@@ -6425,7 +6503,9 @@ private:
     void record_depth_only(Dx12RasterTarget& t, Dx12RasterProgram& p, Dx12StorageBuffer& s,
                            ID3D12PipelineState* pso, bool clear, float clear_depth, crd::u32 vertex_count)
     {
+        if (!frame_prepare(1U)) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
+        if (table.ptr == 0U) { return; }
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv   = t.dsv();
         m_list->OMSetRenderTargets(0, nullptr, FALSE, &dsv); // ⛔ zero RTVs: depth-only
         // clear ⇒ the FIRST mesh of the shadow pass; otherwise every later mesh joins the SAME map (clearing per
@@ -6447,12 +6527,10 @@ private:
     [[nodiscard]] D3D12_GPU_DESCRIPTOR_HANDLE frame_alloc_srv_slot(Dx12Texture& tex)
     {
         const D3D12_SHADER_RESOURCE_VIEW_DESC srv = tex.srv();
-        D3D12_CPU_DESCRIPTOR_HANDLE           cpu = m_frame_rec.heap->GetCPUDescriptorHandleForHeapStart();
-        cpu.ptr += static_cast<SIZE_T>(m_frame_rec.cursor) * m_frame_rec.inc;
+        D3D12_CPU_DESCRIPTOR_HANDLE cpu{};
+        D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
+        if (!frame_take(1U, cpu, gpu)) { return {}; }
         m_device->CreateShaderResourceView(tex.tex(), &srv, cpu);
-        D3D12_GPU_DESCRIPTOR_HANDLE gpu = m_frame_rec.heap->GetGPUDescriptorHandleForHeapStart();
-        gpu.ptr += static_cast<UINT64>(m_frame_rec.cursor) * m_frame_rec.inc;
-        ++m_frame_rec.cursor;
         return gpu;
     }
 
@@ -6469,18 +6547,17 @@ private:
     // and the array would read whatever landed between them.
     [[nodiscard]] D3D12_GPU_DESCRIPTOR_HANDLE frame_alloc_bindless_run(ITexture* const* textures, crd::u32 n)
     {
-        const UINT base = m_frame_rec.cursor;
+        D3D12_CPU_DESCRIPTOR_HANDLE base{};
+        D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
+        if (!frame_take(kBindlessMax, base, gpu)) { return {}; }
         for (UINT i = 0; i < static_cast<UINT>(kBindlessMax); ++i)
         {
             auto&                                 tex = static_cast<Dx12Texture&>(*textures[i < n ? i : 0U]);
             const D3D12_SHADER_RESOURCE_VIEW_DESC srv = tex.srv();
-            D3D12_CPU_DESCRIPTOR_HANDLE           cpu = m_frame_rec.heap->GetCPUDescriptorHandleForHeapStart();
-            cpu.ptr += static_cast<SIZE_T>(base + i) * m_frame_rec.inc;
+            D3D12_CPU_DESCRIPTOR_HANDLE cpu = base;
+            cpu.ptr += static_cast<SIZE_T>(i) * m_frame_rec.inc;
             m_device->CreateShaderResourceView(tex.tex(), &srv, cpu);
         }
-        m_frame_rec.cursor += static_cast<UINT>(kBindlessMax);
-        D3D12_GPU_DESCRIPTOR_HANDLE gpu = m_frame_rec.heap->GetGPUDescriptorHandleForHeapStart();
-        gpu.ptr += static_cast<UINT64>(base) * m_frame_rec.inc;
         return gpu;
     }
 
@@ -6488,7 +6565,9 @@ private:
                          ITexture* const* textures, crd::u32 n, ClearColor clear_color, crd::u32 vertex_count,
                          bool clear = true)
     {
+        if (!frame_prepare(kBindlessMax)) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE bindless_gpu = frame_alloc_bindless_run(textures, n);
+        if (bindless_gpu.ptr == 0U) { return; }
         // ⛔ CEIR-31b-4-b-iii-2: HONOR THE PASS SAMPLER on the bindless run. This binding IGNORED it (heap-start = the
         // default s0 WRAP sampler) while EVERY non-bindless draw offsets by active_sampler_slot (REN-38-B8) — so a bindless
         // fullscreen pass could not clamp on DX12, and the frosted-glass composite's half-res upsample WRAPPED opposite-edge
@@ -6524,8 +6603,11 @@ private:
                                  ITexture* const* textures, crd::u32 n, Dx12StorageBuffer& s,
                                  ClearColor clear_color, crd::u32 vertex_count)
     {
+        if (!frame_prepare(kBindlessMax + 1U)) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE storage_gpu  = frame_alloc_storage_slot(s);          // u0, param 0
+        if (storage_gpu.ptr == 0U) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE bindless_gpu = frame_alloc_bindless_run(textures, n); // t3[], param 3
+        if (bindless_gpu.ptr == 0U) { return; }
         // ⛔ CEIR-31b-4-b-iii-2: HONOR THE PASS SAMPLER (REN-38-B8 offset, as :4086) — this bindless-storage path (TAA's
         // resolve) likewise IGNORED it (heap-start = s0 WRAP). Behaviour is unchanged until a pass sets `address` (default
         // slot 0), but it makes the knob work: TAA reprojects by UV, and a reprojection past the edge WRAPPED to the far
@@ -6574,7 +6656,9 @@ private:
                           ClearColor clear_color, crd::u32 vertex_count, LoadOp load = LoadOp::Clear,
                           crd::u32 first_vertex = 0U)
     {
+        if (!frame_prepare(1U)) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
+        if (table.ptr == 0U) { return; }
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv   = t.rtv();
         m_list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
         if (load == LoadOp::Clear) // CEIR-34 R2: LOAD composes over existing contents (overlay's colour-only bucket)
@@ -6599,7 +6683,9 @@ private:
     void record_textured(Dx12RasterTarget& t, Dx12RasterProgram& p, ID3D12PipelineState* pso, Dx12Texture& tex,
                          UINT sampler_slot, ClearColor clear_color, crd::u32 vertex_count)
     {
+        if (!frame_prepare(1U)) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu  = frame_alloc_srv_slot(tex);
+        if (srv_gpu.ptr == 0U) { return; }
         D3D12_GPU_DESCRIPTOR_HANDLE       samp_gpu = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
         samp_gpu.ptr += static_cast<UINT64>(active_sampler_slot(sampler_slot)) * m_sampler_inc; // REN-38-B8
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
@@ -6630,8 +6716,11 @@ private:
     void record_textured_storage(Dx12RasterTarget& t, Dx12RasterProgram& p, ID3D12PipelineState* pso, Dx12Texture& tex,
                                  Dx12StorageBuffer& s, UINT sampler_slot, ClearColor clear_color, crd::u32 vertex_count)
     {
+        if (!frame_prepare(2U)) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE uav_table = frame_alloc_storage_slot(s);
+        if (uav_table.ptr == 0U) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu   = frame_alloc_srv_slot(tex);
+        if (srv_gpu.ptr == 0U) { return; }
         D3D12_GPU_DESCRIPTOR_HANDLE       samp_gpu  = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
         samp_gpu.ptr += static_cast<UINT64>(active_sampler_slot(sampler_slot)) * m_sampler_inc; // REN-38-B8
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
@@ -6663,8 +6752,11 @@ private:
                                ID3D12PipelineState* pso, bool clear, ClearColor clear_color, float clear_depth,
                                crd::u32 vertex_count, crd::u32 sampler_slot = 0U, Dx12Texture* atlas = nullptr)
     {
+        if (!frame_prepare(2U + (atlas != nullptr ? 1U : 0U))) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE uav_table = frame_alloc_storage_slot(s);
+        if (uav_table.ptr == 0U) { return; }
         const D3D12_GPU_DESCRIPTOR_HANDLE srv_table = frame_alloc_srv_slot(tex);
+        if (srv_table.ptr == 0U) { return; }
         D3D12_GPU_DESCRIPTOR_HANDLE samp_gpu = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
         samp_gpu.ptr += static_cast<UINT64>(active_sampler_slot(sampler_slot)) * m_sampler_inc; // REN-38-B8
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv       = t.rtv();
@@ -6687,6 +6779,7 @@ private:
         if (atlas != nullptr)
         {
             const D3D12_GPU_DESCRIPTOR_HANDLE atlas_table = frame_alloc_srv_slot(*atlas);
+            if (atlas_table.ptr == 0U) { return; }
             m_list->SetGraphicsRootDescriptorTable(4, atlas_table); // shadow atlas (t4)
             // REN-40-D: s5 keyed by WHAT the atlas is — comparison for depth, LINEAR/CLAMP for moments.
             m_list->SetGraphicsRootDescriptorTable(5, atlas_samp_tbl(*atlas));
@@ -6698,6 +6791,7 @@ private:
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
     }
 
+    detail::Dx12DeviceScope m_validation;
     ComPtr<ID3D12Device>               m_device;
     ComPtr<ID3D12Device2>              m_device2; // B4: CreatePipelineState (stream PSO) for mesh — null on an old runtime
     ComPtr<ID3D12CommandQueue>         m_queue;
@@ -6817,6 +6911,7 @@ private:
     UINT                               m_srv_inc = 0;           // B2: CBV/SRV/UAV descriptor increment size
     UINT                               m_sampler_inc = 0;       // B2-b: sampler descriptor increment size
     bool                               m_ok            = false;
+    bool                               m_last_submit_executed = false;
     bool                               m_next_load_depth = false; // REN-40-G1: consumed by the next geometry verb
 
     void set_next_draw_load_depth(bool load) override { m_next_load_depth = load; }
@@ -6864,16 +6959,9 @@ crd::u32 dx_buffer_elems(IStorageBuffer& b) noexcept
 class Dx12FrameGraph final : public IFrameGraph, public IFrameContext
 {
 public:
-    explicit Dx12FrameGraph(Dx12RasterContext& rc) : m_rc(&rc), m_device(rc.dx_device())
+    explicit Dx12FrameGraph(Dx12RasterContext& rc)
+        : m_rc(&rc), m_device(rc.dx_device()), m_frame_descriptors(rc.dx_device(), rc.dx_allocator())
     {
-        // the graph's shader-visible frame descriptor heap: one storage UAV per recorded draw (reset each execute).
-        D3D12_DESCRIPTOR_HEAP_DESC hd{};
-        hd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        hd.NumDescriptors = kFrameSlots;
-        hd.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-        m_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&m_frame_heap));
-        m_srv_inc = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-
         // ── REN-8: per-pass GPU timestamps, the DX12 half of the attribution machinery. ──
         // A TIMESTAMP query heap + a READBACK buffer that `ResolveQueryData` writes ticks into. A queue whose
         // `GetTimestampFrequency` fails cannot timestamp at all — then `gpu_timing_available()` stays false and
@@ -7117,7 +7205,8 @@ public:
             D3D12_HEAP_PROPERTIES hp{};
             hp.Type = D3D12_HEAP_TYPE_DEFAULT;
             const D3D12_RESOURCE_STATES init = is_depth ? D3D12_RESOURCE_STATE_DEPTH_WRITE : D3D12_RESOURCE_STATE_COMMON;
-            if (FAILED(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &p.node.rdesc, init, nullptr,
+            const D3D12_CLEAR_VALUE clear_value = optimized_clear_value(p.node.fmt, is_depth, desc.optimized_clear);
+            if (FAILED(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &p.node.rdesc, init, &clear_value,
                                                          IID_PPV_ARGS(&p.node.resource))))
             {
                 return FgImage{0U};
@@ -7249,25 +7338,17 @@ private:
         ComPtr<ID3D12Heap> heap;
         UINT64             size       = 0;
         crd::i32           free_after  = -1; // the last pass index whose transient occupied this slot (-1 = free)
+        ID3D12Resource* active = nullptr; // borrowed from the live nodes; cleared with this slot
+        bool alias_allowed = true;
     };
-    // ⛔ WHO OWNS THIS, and FOR HOW LONG. This used to be a single `bool transient`, and that bool silently
-    // conflated THREE INDEPENDENT QUESTIONS:
-    //     · is the resource GRAPH-OWNED?   -> RTT barrier semantics, and NO end-of-frame readback (a borrowed
-    //                                         wrapper has no readback buffer to copy into)
-    //     · is it ALIASABLE?               -> the placed-resource heap, the free path
-    //     · is its state FRAME-LOCAL?      -> whether frame-start resets apply to it
-    // The third question has NO predicate on purpose: it is answered by WHERE THE STATE LIVES. A persistent
-    // image's live state is stored in the registry entry (`live_state()`), which the frame-start reset
-    // cannot reach, so "skip persistent here" is not a rule anyone has to remember.
-    // For a transient all three answers are "yes" and for an import all three are "no", so one bool served — right
-    // up until a PERSISTENT resource, which is graph-owned, NOT aliasable, and NOT frame-local. The enum + the
-    // three NAMED predicates make each site say which question it is asking. (Kept identical to the Vulkan side:
-    // the two backends must not diverge on what ownership MEANS.)
+    // Ownership, alias eligibility and state storage are separate contracts. Transient resources remain
+    // allocated across execute() calls until rebuild/reset, so their actual native state is retained too.
+    // Persistent resources keep state in the registry across reset(); imports return to COMMON after execution.
     enum class Own : crd::u8
     {
         Imported = 0, // the application owns it; the graph only tracks its access
-        Transient,    // the graph owns it for ONE frame: aliased, freed, reset
-        Persistent,   // the graph owns it ACROSS frames: never aliased, never freed, never reset
+        Transient,    // graph-owned placed resource, eligible for aliasing unless pinned
+        Persistent,   // registry-owned across reset; recreated or explicitly released by its lifetime contract
     };
     struct ImageNode
     {
@@ -7305,10 +7386,10 @@ private:
         crd::i32               last_pass  = -1;
         crd::i32               slot       = -1;
         bool                   has_write  = false;
-        D3D12_RESOURCE_STATES  state      = D3D12_RESOURCE_STATE_COMMON; // imported target's live state during execute
+        D3D12_RESOURCE_STATES  state      = D3D12_RESOURCE_STATE_COMMON; // actual resource state, retained until recreation
         // REN-37.5: >= 0 => this node BORROWS a persistent entry's device objects AND its LIVE STATE. The
         // resource state of a persistent image lives in the REGISTRY, never here — see `live_state()`. That is
-        // what makes the frame-start reset harmless for it BY CONSTRUCTION rather than by remembering a skip.
+        // what keeps reset() from losing persistent state while rebuilding frame-local nodes.
         crd::i32               persist_index = -1;
         bool     no_alias = false; // REN-38-B6: the author PINNED this transient out of the aliaser
         IRasterTarget* shared_depth_target = nullptr; // REN-40-G3: combined colour+external-depth target
@@ -7463,25 +7544,36 @@ private:
         m_logical_bytes  = 0U;
     }
 
-    static constexpr crd::u32 kFrameSlots = 256U;
 
     Dx12RasterContext*           m_rc     = nullptr;
     ID3D12Device*                m_device = nullptr;
-    ComPtr<ID3D12DescriptorHeap> m_frame_heap;
-    UINT                         m_srv_inc = 0;
+    detail::Dx12FrameDescriptors m_frame_descriptors;
 
     crd::containers::Array<ImageNode>  m_images{crd::memory::default_allocator()};
     crd::containers::Array<BufferNode> m_buffers{crd::memory::default_allocator()};
     // REN-37.5: the persistent registry - the ONE thing in this graph that outlives `reset()`.
     crd::containers::Array<Persistent> m_persist{crd::memory::default_allocator()};
 
-    // ⭐ THE LIVE RESOURCE STATE HAS EXACTLY ONE HOME. For a frame-local node that is the node's own field; for a
-    // PERSISTENT one it is the registry entry, which `reset()` and the frame-start reset never touch. Routing
-    // every read and write through here means there is nothing to copy back at end of frame and nothing to
-    // remember to skip at the start of one.
+    // Native state lives in the node until resource recreation. Persistent nodes route to their registry
+    // entry, which outlives reset(); there is no frame-start state reset for a still-live native image.
     [[nodiscard]] D3D12_RESOURCE_STATES& live_state(ImageNode& n) noexcept
     {
         return n.persist_index >= 0 ? m_persist[static_cast<crd::u32>(n.persist_index)].node.state : n.state;
+    }
+
+    [[nodiscard]] bool activate_alias(crd::i32 slot_index, ID3D12Resource* resource)
+    {
+        if (slot_index < 0 || resource == nullptr) { return false; }
+        auto& slot = m_slots[static_cast<crd::u32>(slot_index)];
+        if (slot.active == resource) { return false; }
+        D3D12_RESOURCE_BARRIER barrier{};
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_ALIASING;
+        barrier.Aliasing.pResourceBefore = slot.active;
+        barrier.Aliasing.pResourceAfter = resource;
+        m_rc->frame_cmd_list()->ResourceBarrier(1U, &barrier);
+        slot.active = resource;
+        ++m_barrier_count;
+        return true;
     }
 
     [[nodiscard]] bool materialize_image(ImageNode& n);
@@ -7722,12 +7814,13 @@ crd::u32 Dx12FrameGraph::alias_class(bool images)
             // offset 0 — the whole graph then refuses to build. Latent for as long as every same-class transient
             // happened to be the same size; the moment chain (three RGBA16F atlases beside the R32_TYPELESS
             // depth atlas, whose allocation infos differ by padding) is what finally hit it.
-            if (m_slots[si].free_after < fp && m_slots[si].size >= sz) { chosen = static_cast<crd::i32>(si); break; }
+            if (m_slots[si].alias_allowed && m_slots[si].free_after < fp && m_slots[si].size >= sz) { chosen = static_cast<crd::i32>(si); break; }
         }
         if (chosen < 0)
         {
             Slot s{};
             s.size = sz;
+            s.alias_allowed = !pinned;
             D3D12_HEAP_DESC hd{};
             hd.SizeInBytes           = sz;
             hd.Properties.Type       = D3D12_HEAP_TYPE_DEFAULT;
@@ -7748,10 +7841,12 @@ crd::u32 Dx12FrameGraph::alias_class(bool images)
             ImageNode& n = m_images[idx];
             n.slot = chosen;
             const D3D12_RESOURCE_STATES init = n.is_depth ? D3D12_RESOURCE_STATE_DEPTH_WRITE : D3D12_RESOURCE_STATE_COMMON;
-            if (FAILED(m_device->CreatePlacedResource(s.heap.Get(), 0, &n.rdesc, init, nullptr, IID_PPV_ARGS(&n.resource))))
+            const D3D12_CLEAR_VALUE clear_value = optimized_clear_value(n.fmt, n.is_depth, n.desc.optimized_clear);
+            if (FAILED(m_device->CreatePlacedResource(s.heap.Get(), 0, &n.rdesc, init, &clear_value, IID_PPV_ARGS(&n.resource))))
             {
                 return 0xFFFFFFFFU;
             }
+            n.state = init;
             if (!materialize_image(n)) { return 0xFFFFFFFFU; }
         }
         else
@@ -7834,12 +7929,8 @@ bool Dx12FrameGraph::materialize_image(ImageNode& n)
                 drd.SampleDesc.Count   = 1;
                 drd.Layout             = D3D12_TEXTURE_LAYOUT_UNKNOWN;
                 drd.Flags              = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-                // ⛔ An optimized clear value is REQUIRED for a depth resource that is cleared, or D3D12 warns and
-                // some drivers take a slow path. It must MATCH the clear the passes issue — reverse-Z clears to 0.
-                D3D12_CLEAR_VALUE dcv{};
-                dcv.Format               = DXGI_FORMAT_D32_FLOAT;
-                dcv.DepthStencil.Depth   = 0.0F;
-                dcv.DepthStencil.Stencil = 0;
+                const D3D12_CLEAR_VALUE dcv =
+                    optimized_clear_value(DXGI_FORMAT_D32_FLOAT, true, n.desc.optimized_clear);
                 if (FAILED(m_device->CreateCommittedResource(&dhp, D3D12_HEAP_FLAG_NONE, &drd,
                                                              D3D12_RESOURCE_STATE_DEPTH_WRITE, &dcv,
                                                              IID_PPV_ARGS(&n.depth_resource))))
@@ -7924,11 +8015,13 @@ void Dx12FrameGraph::execute()
     m_barrier_count = 0U;
     m_submit_count  = 0U;
     m_present_count = 0U;
-    m_rc->frame_rec_begin(m_frame_heap.Get(), m_srv_inc);
-    // Every FRAME-LOCAL node starts the frame at COMMON: a transient is a brand-new placed resource and an
-    // imported target's state is tracked by the raster context. This loop needs no exception for persistent
-    // images — their live state is not stored here at all (`live_state`), so clearing these fields cannot reach it.
-    for (ImageNode& n : m_images) { n.state = D3D12_RESOURCE_STATE_COMMON; }
+    if (!m_rc->frame_rec_begin(m_frame_descriptors))
+    {
+        m_rc->frame_rec_end();
+        return;
+    }
+    // execute() reuses the placed resources. Keep their actual last states; only resource creation initializes
+    // them. Imported targets are explicitly returned to COMMON below, and persistent states live in their registry.
 
     // REN-8: only the NAMES are cleared. m_timed_passes / m_gpu_ms_total belong to resolve_timestamps(), which
     // on the deferred path just published the PREVIOUS frame's numbers — zeroing them here would wipe exactly
@@ -7940,10 +8033,28 @@ void Dx12FrameGraph::execute()
     for (const crd::u32 pass_idx : m_order)
     {
         Pass& p = m_passes[pass_idx];
+        for (const Access& access : p.buf_access)
+        {
+            auto& buffer = m_buffers[access.handle - 1U];
+            (void)activate_alias(buffer.slot, buffer.resource.Get());
+        }
         for (const Access& a : p.img_access)
         {
             ImageNode& n = m_images[a.handle - 1U];
             if (n.target == nullptr) { continue; }
+            if (activate_alias(n.slot, n.resource.Get()))
+            {
+                // Activate the full placed resource before accessing its memory. RT/DS metadata must then be
+                // initialized; discard is generic and leaves the authored pass responsible for its clear/write.
+                const auto writable = n.is_depth ? D3D12_RESOURCE_STATE_DEPTH_WRITE : D3D12_RESOURCE_STATE_RENDER_TARGET;
+                if (live_state(n) != writable)
+                {
+                    m_rc->frame_transition(n.resource.Get(), live_state(n), writable);
+                    live_state(n) = writable;
+                    ++m_barrier_count;
+                }
+                m_rc->frame_cmd_list()->DiscardResource(n.resource.Get(), nullptr);
+            }
             const bool writes         = (a.access != FgAccess::Read && a.access != FgAccess::DepthRead);
             const bool depth_reattach = (a.access == FgAccess::DepthRead);
             if (graph_owned(n) && n.is_depth)
@@ -8084,11 +8195,13 @@ void Dx12FrameGraph::execute()
 
     // REN-8: same contract as Vulkan — readback on ⇒ wait now (gates read pixels the instant execute() returns);
     // readback off ⇒ ONE ExecuteCommandLists and the block deferred to the top of the next execute()/reset().
-    m_rc->frame_submit_no_wait(); // ONE ExecuteCommandLists
-    m_pending_submit = true;
+    const bool submitted_ok = m_rc->frame_submit_no_wait();
+    m_submit_count = m_rc->frame_did_submit() ? 1U : 0U;
+    m_pending_submit = submitted_ok;
     m_rc->frame_rec_end();
-    m_submit_count = 1U;
+    if (!submitted_ok) { return; }
     if (m_readback) { wait_pending_submit(); }
+    if (!m_rc->valid()) { return; }
 
     // ── ⭐ REN-38-A5: THE PRESENT PASS PRESENTS — the DXGI mirror of the Vulkan rule. ──
     // ⛔ `.present(surface)` was stored, read by the barrier scheduler to SKIP a transition, and then never acted
@@ -8121,9 +8234,9 @@ void Dx12FrameGraph::execute()
 void Dx12FrameGraph::wait_pending_submit() noexcept
 {
     if (!m_pending_submit) { return; }
-    m_rc->frame_wait_submitted();
+    const bool completed = m_rc->frame_wait_submitted();
     m_pending_submit = false;
-    resolve_timestamps();
+    if (completed) { resolve_timestamps(); }
 }
 
 // REN-8: the fence has been reached, so the resolved ticks are readable. Ticks → ms via the queue frequency.
@@ -8155,9 +8268,9 @@ std::unique_ptr<IFrameGraph> Dx12RasterContext::create_frame_graph()
     return std::make_unique<Dx12FrameGraph>(*this);
 }
 
-std::unique_ptr<IRasterContext> create_dx12_raster_context(crd::memory::IAllocator* /*alloc*/)
+std::unique_ptr<IRasterContext> create_dx12_raster_context(crd::memory::IAllocator* alloc)
 {
-    auto ctx = std::make_unique<Dx12RasterContext>();
+    auto ctx = std::make_unique<Dx12RasterContext>(alloc);
     if (!ctx->valid()) { return nullptr; }
     return ctx;
 }

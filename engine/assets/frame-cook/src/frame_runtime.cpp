@@ -4,6 +4,7 @@
 
 #include <crd/ceir/context.hpp>                     // CEIR-16-3c: the per-asset plan Context (build_frame_plans)
 #include <crd/ceir/gpu/render_fullscreen_build.hpp> // CEIR-16-3c: build_fullscreen_ceir + FullscreenBuildDesc
+#include <crd/ceir/gpu/render_materialize.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/gpu/command_model.hpp>
 #include <crd/log/log.hpp>
@@ -712,6 +713,10 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             pid.kind    = r.kind_2d;
             pid.depth   = r.depth;
             pid.mips    = r.mips;
+            if (plans != nullptr && plans->clear_hints.size() == desc.resources.size())
+            {
+                pid.optimized_clear = plans->clear_hints[i].value;
+            }
             const crd::u32 base = name_key(r.name);
             if (r.kind == FrameResourceKind::PersistentImage)
             {
@@ -769,6 +774,10 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         id.depth    = r.depth;
         id.mips     = r.mips;
         id.no_alias = r.no_alias;
+        if (plans != nullptr && plans->clear_hints.size() == desc.resources.size())
+        {
+            id.optimized_clear = plans->clear_hints[i].value;
+        }
         const g::FgImage h = fgraph->create_transient_image(id);
         if (!h.valid()) { return fail(FrameExecError::TransientFailed, &r.name); }
         images.push_back(h);
@@ -1565,15 +1574,96 @@ bool fs_read_is_buffer(FrameResourceKind k) noexcept
            || k == FrameResourceKind::CounterBuffer || k == FrameResourceKind::ExternalBuffer
            || k == FrameResourceKind::IndirectArgs;
 }
+
+// Follow the same authored slot routing as the recorder: color writes exclude buffers/depth; an explicit
+// shared depth wins over a depth write, then a primary color's companion is the fallback. Imported targets
+// belong to the host, so this load-time metadata never changes their allocation or contents.
+void collect_clear_hints(const FrameGraphDesc& desc, const FramePassDesc& pass, FramePlans& plans,
+                         const crd::containers::Array<crd::ceir::gpu::LoweredCommand>& commands)
+{
+    const FrameResourceDesc* colors[g::kMaxColorAttachments]{};
+    crd::u32 color_count = 0U;
+    const FrameResourceDesc* depth = nullptr;
+    for (const FrameResourceRef& write : pass.writes)
+    {
+        const FrameResourceDesc* resource = fs_find_resource(desc, write.name);
+        if (resource != nullptr && fs_read_is_buffer(resource->kind)) { continue; }
+        if (resource != nullptr && g::fg_format_has_depth(resource->format)) { depth = resource; }
+        else if (color_count < g::kMaxColorAttachments) { colors[color_count++] = resource; }
+    }
+    const SV shared_depth = pass_str(pass, SV(pp::kSharedDepth));
+    if (!shared_depth.empty())
+    {
+        for (const FrameResourceDesc& resource : desc.resources)
+        {
+            if (SV(resource.name.c_str(), resource.name.size()) == shared_depth) { depth = &resource; break; }
+        }
+    }
+    if (depth == nullptr && color_count > 0U && colors[0] != nullptr && colors[0]->depth_buffer) { depth = colors[0]; }
+    const crd::ceir::Context& ctx = *plans.ctx;
+    for (const crd::ceir::gpu::LoweredCommand& command : commands)
+    {
+        if (command.kind != crd::ceir::gpu::LoweredKind::BeginRender || command.op == nullptr) { continue; }
+        for (crd::u32 i = 0; i < command.op->num_operands(); ++i)
+        {
+            const crd::ceir::Operation* attachment = command.op->operand(i)->defining_op();
+            g::ColorAttachmentDesc color;
+            g::DepthStencilAttachmentDesc dep;
+            if (crd::ceir::gpu::materialize_color_attachment_desc(ctx, attachment, color))
+            {
+                if (color.load != g::LoadOp::Clear) { continue; }
+                crd::u32 slot = 0U;
+                const crd::ceir::AttrId attr = attachment->attr(SV("color_slot"));
+                if (attr.valid())
+                {
+                    const crd::ceir::AttrValue value = ctx.attr_value(attr);
+                    if (value.kind != crd::ceir::AttrKind::Int || value.i < 0
+                        || value.i >= static_cast<crd::i64>(g::kMaxColorAttachments)) { continue; }
+                    slot = static_cast<crd::u32>(value.i);
+                }
+                if (slot >= color_count || colors[slot] == nullptr) { continue; }
+                auto& hint = plans.clear_hints[static_cast<crd::usize>(colors[slot] - desc.resources.data())];
+                if (hint.color_set) { continue; }
+                hint.color_set = true;
+                // The public MRT clear contract gives multiplicative blends the identity clear. Uint uses
+                // the native attachment's value conversion, not a float bit reinterpretation.
+                if (color.blend == g::BlendMode::Multiply || color.blend == g::BlendMode::RevealageMultiply)
+                {
+                    for (float& value : hint.value.color) { value = 1.0F; }
+                }
+                else if (color.clear_kind == g::ClearKind::Uint)
+                {
+                    hint.value.color[0] = static_cast<float>(color.clear_uint);
+                    hint.value.color[1] = hint.value.color[2] = hint.value.color[3] = 0.0F;
+                }
+                else
+                {
+                    hint.value.color[0] = color.clear.r;
+                    hint.value.color[1] = color.clear.g;
+                    hint.value.color[2] = color.clear.b;
+                    hint.value.color[3] = color.clear.a;
+                }
+            }
+            else if (depth != nullptr && crd::ceir::gpu::materialize_depth_attachment_desc(ctx, attachment, dep)
+                     && dep.load == g::LoadOp::Clear)
+            {
+                auto& hint = plans.clear_hints[static_cast<crd::usize>(depth - desc.resources.data())];
+                if (!hint.depth_set) { hint.value.depth = dep.clear_depth; hint.depth_set = true; }
+            }
+        }
+    }
+}
 } // namespace
 
-FramePlans::FramePlans(crd::memory::IAllocator* a) : table(a), storage(a), alloc(a) {}
+FramePlans::FramePlans(crd::memory::IAllocator* a) : table(a), storage(a), clear_hints(a), alloc(a) {}
 FramePlans::~FramePlans() { delete ctx; }
 
 bool build_frame_plans(const FrameGraphDesc& desc, FramePlans& out, crd::renderasset::DiagnosticList& diags)
 {
     namespace rp = crd::renderpass;
     static const char* const kIn[8] = {"input0", "input1", "input2", "input3", "input4", "input5", "input6", "input7"};
+    out.clear_hints.clear();
+    out.clear_hints.resize(desc.resources.size());
     // Reserve storage to the EXACT fullscreen-pass count: the CeirPassPlans bind pointers INTO `storage`, so it must never
     // relocate (the reserved-arena discipline the recorder itself uses).
     // ⛔ CEIR-16d-live-2: scene.raster (raster.scene / raster.depth_only / raster.mrt — all kExecSceneRaster) joins the
@@ -1634,6 +1724,9 @@ bool build_frame_plans(const FrameGraphDesc& desc, FramePlans& out, crd::rendera
         {
             // ── extract the FULLSCREEN composite recipe from the pass (mirrors to_authored_pass's fullscreen payload). ──
             crd::ceir::gpu::FullscreenBuildDesc bd;
+            float cc[4] = {0.0F, 0.0F, 0.0F, 1.0F};
+            pass_vec4(d, SV(pp::kClearColor), cc);
+            bd.clear = g::ClearColor{cc[0], cc[1], cc[2], cc[3]};
             bd.depth_as_float = pass_flag(d, crd::containers::StringView(pp::kDepthAsFloat));
             bd.shading_rate   = static_cast<crd::gpu::ShadingRate>(pass_u32(
                 d, crd::containers::StringView(pp::kShadingRate), static_cast<crd::u32>(crd::gpu::ShadingRate::Rate1x1)));
@@ -1743,6 +1836,7 @@ bool build_frame_plans(const FrameGraphDesc& desc, FramePlans& out, crd::rendera
                         crd::containers::StringView(d.name.c_str(), d.name.size()));
             return false;
         }
+        collect_clear_hints(desc, d, out, cmds);
         out.table.bind(rp::pass_param_id(crd::containers::StringView(d.name.c_str(), d.name.size())),
                        crd::rendergraph::CeirPassPlan{out.ctx, cmds.data(), static_cast<crd::u32>(cmds.size())});
     }

@@ -149,6 +149,13 @@ struct SceneResolvedHandles
     SceneResolveHandle geometry  = 0;
 };
 
+// Decode verified attachment attributes without resolving a device object. These are also the resource-planning
+// source of creation-time clear hints. Output is overwritten, target stays null; false means the wrong op kind.
+[[nodiscard]] bool materialize_color_attachment_desc(const Context& ctx, const Operation* attachment,
+                                                     crd::gpu::ColorAttachmentDesc& out);
+[[nodiscard]] bool materialize_depth_attachment_desc(const Context& ctx, const Operation* attachment,
+                                                     crd::gpu::DepthStencilAttachmentDesc& out);
+
 // Materialize a render.scope op into a RenderingDesc: width/height/sample_count from the scope attrs; each attachment
 // operand's DEFINING color/depth_attachment op → a ColorAttachmentDesc / DepthStencilAttachmentDesc (LoadOp/StoreOp/
 // typed-clear[⭐ RAH-1a.1: clear_kind=uint → ClearKind::Uint + clear_uint]/blend/compare mapped from the CEIR string attrs;

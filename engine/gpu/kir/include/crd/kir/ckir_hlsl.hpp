@@ -1332,12 +1332,35 @@ inline bool emit_value_stmt_hlsl(const KGraph& g, int i, crd::containers::String
     }
 }
 
+namespace hlsl_detail
+{
+// Stage locations define the interface, not the order in which an author/cook appended outputs. DXIL packs
+// declarations into registers, so VS/DS/MS output declarations must use the same order as fragment inputs.
+inline bool stage_output_order(const KEntry& entry, int (&order)[kMaxStageOutputs]) noexcept
+{
+    if (entry.n_out < 0 || entry.n_out > kMaxStageOutputs) { return false; }
+    for (int index = 0; index < entry.n_out; ++index)
+    {
+        int slot = index;
+        while (slot > 0 && entry.out[order[slot - 1]].location > entry.out[index].location)
+        {
+            order[slot] = order[slot - 1];
+            --slot;
+        }
+        order[slot] = index;
+    }
+    return true;
+}
+} // namespace hlsl_detail
+
 // B3-d: emit a VERTEX or FRAGMENT HLSL shader from a stage `entry` — the DX12 mirror of `emit_stage_glsl`. Reuses
 // `emit_value_stmt_hlsl` for the value ops. HLSL raster I/O is STRUCT-based with `SV_` semantics; `[[vk::location(N)]]`
 // pins the SPIR-V location so it matches the GLSL emitter. The RASTER LEAF resolves stage values: `StageIn`→`i.aL`,
 // `Builtin`→`i.biN`, UBO `FieldGet`→a cbuffer member `uS_B_fN`. An unlowerable builtin/op returns false.
 inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
 {
+    int output_order[kMaxStageOutputs]{};
+    if (!hlsl_detail::stage_output_order(entry, output_order)) { return false; }
     using namespace glsl_detail;
     if (entry.stage != KStage::Vertex && entry.stage != KStage::Fragment) { return false; }
     const bool is_vertex = (entry.stage == KStage::Vertex);
@@ -1427,8 +1450,9 @@ inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::I
     // varyings first packs them at registers 0..N-1 on BOTH sides. (SPIR-V is immune — it matches by explicit vk::location
     // and Position is a no-location builtin — so the Vulkan HLSL gate is unaffected by the order.)
     s.append(is_vertex ? "struct VSOut {\n" : "struct PSOut {\n");
-    for (int k = 0; k < entry.n_out; ++k)
+    for (int index = 0; index < entry.n_out; ++index)
     {
+        const int k = output_order[index];
         const int nid = entry.out[k].node;
         if (nid < 0) { continue; }
         if (is_vertex) { s.append("  [[vk::location("); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(")]] "); s.append(hlsl_interp(entry.out[k].interp)); s.append(htype(g.node(nid).type)); s.append(" o"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(" : TEXCOORD"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(";\n"); }
@@ -1665,6 +1689,8 @@ inline bool emit_tesc_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
 // is emitted LAST in DSOut (the DXIL register-packing scar — same as VSOut).
 inline bool emit_tese_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
 {
+    int output_order[kMaxStageOutputs]{};
+    if (!hlsl_detail::stage_output_order(entry, output_order)) { return false; }
     using namespace glsl_detail;
     if (entry.stage != KStage::TessEval || entry.tess_patch_size == 0U || entry.position < 0) { return false; }
 
@@ -1696,8 +1722,9 @@ inline bool emit_tese_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     s.append("struct CP { float4 pos : SV_Position; };\n");
     s.append("struct HSConst { float edges[4] : SV_TessFactor; float inside[2] : SV_InsideTessFactor; };\n");
     s.append("struct DSOut {\n"); // user interpolants FIRST, SV_Position LAST (DXIL register-packing scar)
-    for (int k = 0; k < entry.n_out; ++k)
+    for (int index = 0; index < entry.n_out; ++index)
     {
+        const int k = output_order[index];
         const int nid = entry.out[k].node;
         if (nid < 0) { continue; }
         s.append("  [[vk::location("); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(")]] ");
@@ -1856,6 +1883,8 @@ inline bool emit_task_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
 
 inline bool emit_mesh_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
 {
+    int output_order[kMaxStageOutputs]{};
+    if (!hlsl_detail::stage_output_order(entry, output_order)) { return false; }
     using namespace glsl_detail;
     if (entry.stage != KStage::Mesh || entry.mesh_vertices == 0U || entry.position < 0 || entry.mesh_prim < 0) { return false; }
     const crd::u32 n_verts    = entry.mesh_vertices;
@@ -1888,8 +1917,9 @@ inline bool emit_mesh_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     crd::containers::String& s = out.source;
     s.clear();
     s.append("struct VOut {\n"); // per-VERTEX output (SV_Position LAST — DXIL register packing)
-    for (int k = 0; k < entry.n_out; ++k)
+    for (int index = 0; index < entry.n_out; ++index)
     {
+        const int k = output_order[index];
         const int nid = entry.out[k].node;
         if (nid < 0) { continue; }
         s.append("  [[vk::location("); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(")]] ");

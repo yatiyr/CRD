@@ -9,6 +9,7 @@
 // (Binding device resources + resolving the ECS draw lists is the host's job at record time — this gate is topology.)
 
 #include <crd/ceir/ceir.hpp>
+#include <crd/ceir/gpu/render_materialize.hpp>
 #include <crd/framecook/frame_asset.hpp>
 #include <crd/framecook/frame_ceir.hpp>
 #include <crd/framecook/frame_runtime.hpp> // CEIR-16-3c: FramePlans + build_frame_plans
@@ -831,6 +832,73 @@ TEST_CASE("ceir 16d-live-2: build_frame_plans builds scene.raster plans (forward
         REQUIRE(plan != nullptr); // 1 colour + 1 depth = mrt_n=1 -> a normal single-colour scene plan, never skipped
         CHECK(plan->count == 3U);
     }
+}
+
+TEST_CASE("Frame clear hints preserve authored CEIR clears and first-writer identity", "[framecook][ceir][clear-hints]")
+{
+    namespace g = crd::gpu;
+    crd::memory::TlsfAllocator alloc(4U << 20U, nullptr, "clear-hints");
+    fc::FrameGraphBuilder b(&alloc, StringView("clear_plan"));
+    b.add_image(StringView("color"), g::FgImageFormat::RGBA16F, 16U, 16U, true);
+    b.add_image(StringView("depth"), g::FgImageFormat::D32Float, 16U, 16U, true, 4U);
+    b.add_image(StringView("reveal"), g::FgImageFormat::R16F, 16U, 16U, true);
+    b.add_image(StringView("post"), g::FgImageFormat::RGBA8Unorm, 16U, 16U, true);
+    b.add_image(StringView("unknown"), g::FgImageFormat::RGBA8Unorm, 16U, 16U, true);
+    const u32 load = b.add_pass(StringView("load_only"), StringView("raster.geometry"));
+    b.pass_writes(load, StringView("color"));
+    fc::set_pass_flag(b.desc().passes[load], StringView(fc::pp::kLoad), true);
+    b.pass_clear_color(load, 0.9F, 0.8F, 0.7F, 0.6F); // A Load must not claim the first clear.
+    const u32 mrt = b.add_pass(StringView("mrt"), StringView("raster.mrt"));
+    b.pass_writes(mrt, StringView("color"));
+    b.pass_writes(mrt, StringView("depth")); // Excluded from color-slot numbering.
+    b.pass_writes(mrt, StringView("reveal"));
+    b.pass_clear_color(mrt, 0.2F, 0.4F, 0.6F, 0.0F);
+    b.pass_clear_depth(mrt, 0.75F);
+    fc::set_pass_enum(b.desc().passes[mrt], StringView(fc::pp::kBlendSlot[1]),
+                      static_cast<u32>(g::BlendMode::RevealageMultiply));
+    const u32 later = b.add_pass(StringView("later"), StringView("raster.geometry"));
+    b.pass_writes(later, StringView("color"));
+    b.pass_clear_color(later, 1.0F, 1.0F, 1.0F, 1.0F); // Valid later clear, not the creation hint.
+    const u32 post = b.add_pass(StringView("post_pass"), StringView("raster.fullscreen"));
+    b.pass_reads(post, StringView("color"));
+    b.pass_writes(post, StringView("post"));
+    b.pass_clear_color(post, 0.1F, 0.3F, 0.5F, 0.7F);
+    fc::FramePlans plans(&alloc);
+    crd::renderasset::DiagnosticList diags(&alloc);
+    REQUIRE(fc::build_frame_plans(b.desc(), plans, diags));
+    REQUIRE_FALSE(diags.has_errors());
+    REQUIRE(plans.clear_hints.size() == 5U);
+    CHECK(plans.clear_hints[0].color_set);
+    CHECK(plans.clear_hints[0].value.color[0] == 0.2F);
+    CHECK(plans.clear_hints[0].value.color[1] == 0.4F);
+    CHECK(plans.clear_hints[0].value.color[2] == 0.6F);
+    CHECK(plans.clear_hints[0].value.color[3] == 0.0F);
+    CHECK(plans.clear_hints[1].depth_set);
+    CHECK_FALSE(plans.clear_hints[1].color_set);
+    CHECK(plans.clear_hints[1].value.depth == 0.75F);
+    CHECK(plans.clear_hints[2].color_set);
+    for (float value : plans.clear_hints[2].value.color) { CHECK(value == 1.0F); }
+    CHECK_FALSE(plans.clear_hints[4].color_set);
+    CHECK_FALSE(plans.clear_hints[4].depth_set);
+    const auto* plan = plans.table.find(rp::pass_param_id(StringView("post_pass")));
+    REQUIRE(plan != nullptr);
+    REQUIRE(plan->count == 3U);
+    const auto* scope = plan->commands[0].op;
+    REQUIRE(scope != nullptr);
+    REQUIRE(scope->num_operands() == 1U);
+    g::ColorAttachmentDesc attachment;
+    REQUIRE(crd::ceir::gpu::materialize_color_attachment_desc(*plan->ctx,
+              scope->operand(0U)->defining_op(), attachment));
+    CHECK(attachment.target == nullptr);
+    CHECK(attachment.clear.r == 0.1F); CHECK(attachment.clear.g == 0.3F);
+    CHECK(attachment.clear.b == 0.5F); CHECK(attachment.clear.a == 0.7F);
+    CHECK(plans.clear_hints[3].value.color[0] == attachment.clear.r);
+    CHECK(plans.clear_hints[3].value.color[3] == attachment.clear.a);
+    CHECK_FALSE(crd::ceir::gpu::materialize_color_attachment_desc(*plan->ctx, scope, attachment));
+    CHECK_FALSE(crd::ceir::gpu::materialize_color_attachment_desc(*plan->ctx, nullptr, attachment));
+    g::DepthStencilAttachmentDesc depth;
+    CHECK_FALSE(crd::ceir::gpu::materialize_depth_attachment_desc(*plan->ctx, scope, depth));
+    CHECK_FALSE(crd::ceir::gpu::materialize_depth_attachment_desc(*plan->ctx, nullptr, depth));
 }
 
 TEST_CASE("ceir 16-3c-5 prereq: build_frame_plans succeeds on every shipped frame asset's fullscreen passes",

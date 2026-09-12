@@ -40,7 +40,7 @@ public:
     KernelCensus(const KernelCensus&) = delete;
     KernelCensus& operator=(const KernelCensus&) = delete;
 
-    [[nodiscard]] bool query(bool& software) const
+    [[nodiscard]] bool query(bool& software, bool& render) const
     {
         if (m_opened < 0) { return false; }
         D3DKMT_ADAPTERTYPE type{};
@@ -54,6 +54,7 @@ public:
                     static_cast<unsigned long>(result), type.Value, type.SoftwareDevice, type.RenderSupported);
         if (result < 0) { return false; }
         software = type.SoftwareDevice != 0U;
+        render = type.RenderSupported != 0U;
         return true;
     }
 
@@ -115,7 +116,10 @@ int main()
     const bool software = (descriptor.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0U;
     const KernelCensus kernel(luid);
     bool kernel_software = false;
-    const bool kernel_available = kernel.query(kernel_software);
+    bool kernel_render = false;
+    const bool kernel_available = kernel.query(kernel_software, kernel_render);
+    const bool basic_render = descriptor.VendorId == 0x1414U && descriptor.DeviceId == 0x008cU;
+    std::printf("DX12 census: documented_basic_render=%d\n", static_cast<int>(basic_render));
     const auto engine_kind = crd::gpu::dx12_default_adapter_kind();
     const bool engine_software = crd::gpu::dx12_default_adapter_is_software();
     std::printf("DX12 census: adapter=\"%s\" engine_adapter=\"%s\" luid=%08lx:%08lx\n", name,
@@ -157,9 +161,11 @@ int main()
                 static_cast<unsigned int>(ray_tracing.RaytracingTier));
 
     // Unknown feature queries retain their HRESULT; zero-initialized values alone do not mean unsupported.
-    const bool expected_software = kernel_available ? kernel_software : software;
+    const bool expected_software = basic_render || (kernel_available && kernel_software) || software;
+    const bool hardware_evidence = kernel_available && kernel_render && !kernel_software;
     if (std::strcmp(name, context->adapter_name()) != 0 || engine_kind == crd::gpu::Dx12AdapterKind::Unknown ||
         expected_software != engine_software ||
+        (engine_kind == crd::gpu::Dx12AdapterKind::Hardware && !hardware_evidence) ||
         (engine_kind == crd::gpu::Dx12AdapterKind::Software) != engine_software)
     {
         std::puts("DX12 census: the engine/default adapter identity or classification disagrees.");

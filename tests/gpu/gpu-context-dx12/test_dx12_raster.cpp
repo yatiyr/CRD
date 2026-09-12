@@ -19,6 +19,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <ckir_oit_test.hpp>        // B17: the SHARED order-independent-transparency shaders + CPU oracle (WBOIT/...)
 #include <ckir_raster_triangle.hpp> // B3-e: the SHARED, backend-neutral CKIR triangle (identical on Vulkan + DX12)
+#include <dx12_validation.hpp>
 #include <verb_packet_helpers.hpp>  // RAF-12.4: crd::gputest::enc_draw* (fullscreen verbs recorded via the encoder)
 #include <win32_test_window.hpp>    // RET-2: the isolated real-window helper for the present gate
 
@@ -1606,53 +1607,76 @@ TEST_CASE("D-007 B1-f: conservative OVERESTIMATE raster covers more pixels (DX12
 TEST_CASE("D-007 B1-f: inner coverage distinguishes fully-covered from edge pixels (DX12)", "[dx12][raster][gpu][ir]")
 {
     namespace kir = crd::kir;
-    auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
-    auto raster = g::create_dx12_raster_context();
-    REQUIRE(raster != nullptr);
-    if (!raster->supports_inner_coverage()) { WARN("adapter has no Tier-3 conservative raster (inner coverage); skipping"); return; }
-    crd::memory::TlsfAllocator alloc(4U << 20U);
-
-    kir::KGraph vg(&alloc);
-    kir::KEntry ve;
-    crd::gputest::build_small_triangle_vs(vg, ve);
-    kir::KGraph fg(&alloc);
-    kir::KEntry fe;
-    crd::gputest::build_inner_coverage_fs(fg, fe); // SV_InnerCoverage → white/black
-
-    auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
-    auto fs = gctx->create_program(fg, fe);
-    REQUIRE(fs != nullptr); // reads SV_InnerCoverage ⇒ must lower to valid DXIL
-    auto program = raster->create_raster_program(*vs, *fs);
-    REQUIRE(program != nullptr);
-
-    constexpr crd::u32 dim    = 64U;
-    auto               target = raster->create_color_target(dim, dim);
-    REQUIRE(target != nullptr);
-    crd::gputest::enc_draw_conservative(*raster,*target, *program, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, g::ConservativeMode::Overestimate,
-                              3U);
-
-    int white = 0;
-    int black = 0;
-    for (crd::u32 y = 0; y < dim; ++y)
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    crd::gpu_test::qualify_dx12_workload(&alloc, [&]
     {
-        for (crd::u32 x = 0; x < dim; ++x)
+        auto gctx = g::create_dx12_gpu_context(&alloc);
+        if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device/compiler available"); }
+        auto raster = g::create_dx12_raster_context(&alloc);
+        REQUIRE(raster != nullptr);
+        if (!raster->supports_inner_coverage()) { SKIP("adapter has no Tier-3 conservative raster"); }
+
+        kir::KGraph vg(&alloc);
+        kir::KEntry ve;
+        crd::gputest::build_small_triangle_vs(vg, ve);
+        auto vs = gctx->create_program(vg, ve);
+        REQUIRE(vs != nullptr);
+        std::unique_ptr<g::IGpuProgram> fs;
+        SECTION("CKIR fragment")
         {
-            const crd::u32 px = target->read_pixel(x, y);
-            const crd::u32 rr = px & 0xFFU;
-            const crd::u32 gg = (px >> 8U) & 0xFFU;
-            const crd::u32 bb = (px >> 16U) & 0xFFU;
-            if (rr > 200U && gg > 200U && bb > 200U) { ++white; }
-            else if (rr < 50U && gg < 50U && bb < 50U) { ++black; }
+            kir::KGraph fg(&alloc);
+            kir::KEntry fe;
+            const auto shape = kir::make_shape({1});
+            const int inner = fg.builtin(kir::KBuiltin::InnerCoverage);
+            const int bit = fg.constant(1.0, shape, kir::DType::U32);
+            const int full = fg.cast(fg.binary(kir::KOp::BitAnd, inner, bit), kir::DType::F32);
+            const int one = fg.constant(1.0, shape, kir::DType::F32);
+            fe.stage = kir::KStage::Fragment;
+            fe.n_out = 1;
+            fe.out[0] = {fg.vec4(one, full, full, one), 0}; // white interior, red edge, black background
+            fs = gctx->create_program(fg, fe);
         }
-    }
-    WARN("[inner coverage dx12] white=" << white << " black=" << black);
-    CHECK(white > 0);
-    // WARP (software; GitHub CI has no GPU) rasterizes this inner-coverage primitive fully-covered (black=0), so the
-    // "coverage VARIES" property is a real-hardware conservative-raster behavior — assert it on hardware ONLY. On WARP
-    // we still require that the primitive rendered (white > 0).
-    if (!g::dx12_default_adapter_is_software()) { CHECK(black > 0); } // inner coverage VARIES across the primitive
+        SECTION("Direct DXIL conformance fragment")
+        {
+            // Independent native-semantic oracle isolates CKIR emission from provider behaviour.
+            const auto result = g::compile_hlsl_to_dxil(g::ShaderStage::Fragment,
+                "float4 main(nointerpolation uint inner : SV_InnerCoverage) : SV_Target { "
+                "float full = float(inner & 1u); return float4(1, full, full, 1); }", "inner", &alloc);
+            INFO(result.error_message.c_str());
+            REQUIRE(result.ok);
+            fs = gctx->create_program(g::ShaderStage::Fragment,
+                crd::containers::ConstSpan<crd::u8>(result.dxil.data(), result.dxil.size()));
+        }
+        REQUIRE(fs != nullptr);
+        auto program = raster->create_raster_program(*vs, *fs);
+        REQUIRE(program != nullptr);
+        constexpr crd::u32 dim = 64U;
+        auto target = raster->create_color_target(dim, dim);
+        REQUIRE(target != nullptr);
+        crd::gputest::enc_draw_conservative(*raster, *target, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F},
+                                          g::ConservativeMode::Overestimate, 3U);
+        int white = 0;
+        int edge = 0;
+        int background = 0;
+        for (crd::u32 y = 0; y < dim; ++y)
+        {
+            for (crd::u32 x = 0; x < dim; ++x)
+            {
+                const crd::u32 pixel = target->read_pixel(x, y);
+                if (pixel == 0xffffffffU) { ++white; }
+                else if (pixel == 0xff0000ffU) { ++edge; }
+                else if (pixel == 0xff000000U) { ++background; }
+            }
+        }
+        INFO("inner coverage: interior=" << white << " edge=" << edge << " background=" << background);
+        CHECK(white > 0);
+        CHECK(edge > 0); // The same Tier-3 contract applies to hardware and software adapters.
+        CHECK(white + edge + background == static_cast<int>(dim * dim));
+        CHECK(target->read_pixel(32U, 30U) == 0xffffffffU);
+        // Horizontal edge is at y=20.8 pixels: [20,21] intersects it far beyond the 1/256 uncertainty region.
+        CHECK(target->read_pixel(32U, 20U) == 0xff0000ffU);
+        CHECK(target->read_pixel(0U, 0U) == 0xff000000U);
+    });
 }
 
 TEST_CASE("D-007 B1-f: fragment interlock RMW counter is deterministic (DX12)", "[dx12][raster][gpu][ir]")
